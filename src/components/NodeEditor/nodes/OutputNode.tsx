@@ -10,27 +10,30 @@ export const OutputNode = memo(function OutputNode({
   selected,
 }: NodeProps<OutputFlowNode>) {
   const def = NODE_REGISTRY.get('output')!;
+  const costLabel = `${data.cost} pts`;
 
   return (
-    <div
-      className={`output-node ${selected ? 'output-node--selected' : ''}`}
-    >
-      {def.inputs.map((port, i) => (
-        <TypedHandle
-          key={port.id}
-          type="target"
-          position={Position.Left}
-          id={port.id}
-          dataType={port.dataType}
-          label={port.label}
-          index={i}
-          total={def.inputs.length}
-        />
-      ))}
+    <div className={`output-node ${selected ? 'output-node--selected' : ''}`}>
+      {/* Header */}
+      <div className="output-node__header">
+        <span className="output-node__dot" />
+        <span className="output-node__title">Output</span>
+        <span className="output-node__cost">{costLabel}</span>
+      </div>
 
+      {/* Input port rows (outputs-only terminal node) */}
       <div className="output-node__body">
-        <div className="output-node__label">Output</div>
-        <div className="output-node__cost">{data.cost} pts total</div>
+        {def.inputs.map((port) => (
+          <div key={port.id} className="output-node__row">
+            <TypedHandle
+              type="target"
+              position={Position.Left}
+              id={port.id}
+              dataType={port.dataType}
+            />
+            <span className="output-node__port-label">{port.label}</span>
+          </div>
+        ))}
       </div>
     </div>
   );

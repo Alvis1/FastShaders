@@ -1,10 +1,12 @@
+/* ===== Node shell ===== */
 .shader-node {
-  background: var(--node-bg, var(--bg-surface));
+  min-width: var(--node-min-width);
+  background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
-  padding: var(--node-padding);
   box-shadow: var(--shadow-node);
-  position: relative;
+  font-family: var(--font-sans);
+  overflow: visible;
   transition: box-shadow var(--transition-normal), border-color var(--transition-normal);
 }
 
@@ -13,42 +15,145 @@
   border-color: var(--border-focus);
 }
 
-.shader-node__body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: 0 var(--space-4);
-}
-
+/* ===== Header ===== */
 .shader-node__header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  border-radius: var(--border-radius-md) var(--border-radius-md) 0 0;
 }
 
-.shader-node__label {
-  font-family: var(--font-sans);
-  font-size: var(--font-size-md);
+.shader-node__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.shader-node__title {
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--bg-app);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  color: var(--text-primary);
+  white-space: nowrap;
+  flex: 1;
 }
 
 .shader-node__cost {
-  font-family: var(--font-mono);
   font-size: var(--font-size-xs);
-  color: var(--bg-app);
-  opacity: 0.8;
-  background: rgba(0, 0, 0, 0.15);
-  padding: 1px 5px;
-  border-radius: var(--border-radius-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.shader-node__category {
+/* ===== Body (port rows) ===== */
+.shader-node__body {
+  padding: 4px 0;
+}
+
+/* Each port row is positioned so handles can be placed relative to it */
+.shader-node__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--node-row-height);
+  padding: 0 10px;
+  gap: 8px;
+}
+
+/* Override React Flow handle positioning to be relative to the row */
+.shader-node__row .react-flow__handle {
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+}
+
+.shader-node__row .react-flow__handle-left {
+  left: calc(var(--handle-size) / -2) !important;
+}
+
+.shader-node__row .react-flow__handle-right {
+  right: calc(var(--handle-size) / -2) !important;
+}
+
+/* ===== Left / Right sides ===== */
+.shader-node__left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.shader-node__right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+/* ===== Port label ===== */
+.shader-node__port-label {
   font-size: var(--font-size-xs);
-  color: var(--bg-app);
-  opacity: 0.6;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* ===== Inline number input ===== */
+.shader-node__input-num {
+  width: 52px;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  background: var(--bg-input);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.shader-node__input-num::-webkit-inner-spin-button,
+.shader-node__input-num::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.shader-node__input-num:focus {
+  border-color: var(--border-focus);
+}
+
+/* ===== Inline color picker ===== */
+.shader-node__color-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shader-node__input-color {
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  background: none;
+}
+
+.shader-node__input-color::-webkit-color-swatch-wrapper {
+  padding: 1px;
+}
+
+.shader-node__input-color::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.shader-node__color-hex {
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  color: var(--text-muted);
 }

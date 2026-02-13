@@ -1,12 +1,14 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import {
   ReactFlow,
   Background,
   Controls,
   MiniMap,
   addEdge,
+  reconnectEdge,
   type OnConnect,
   type Connection,
+  type Edge,
   BackgroundVariant,
 } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
@@ -34,18 +36,31 @@ export function NodeEditor() {
   const onNodesChange = useAppStore((s) => s.onNodesChange);
   const onEdgesChange = useAppStore((s) => s.onEdgesChange);
   const setEdges = useAppStore((s) => s.setEdges);
+  const removeEdge = useAppStore((s) => s.removeEdge);
   const openContextMenu = useAppStore((s) => s.openContextMenu);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const contextMenu = useAppStore((s) => s.contextMenu);
 
+  // Track whether a reconnect was successful (dropped on a valid handle)
+  const reconnectSuccessful = useRef(false);
+
   const onConnect: OnConnect = useCallback(
     (connection: Connection) => {
+      // Read fresh edges from store to avoid stale closure
+      const currentEdges = useAppStore.getState().edges;
+
+      // Enforce single-input: remove any existing edge to the same target handle
+      const filtered = currentEdges.filter(
+        (e) =>
+          !(e.target === connection.target && e.targetHandle === connection.targetHandle),
+      );
+
       const newEdge: AppEdge = {
         id: generateEdgeId(
           connection.source,
           connection.sourceHandle ?? 'out',
           connection.target,
-          connection.targetHandle ?? 'in'
+          connection.targetHandle ?? 'in',
         ),
         source: connection.source,
         target: connection.target,
@@ -55,9 +70,9 @@ export function NodeEditor() {
         animated: true,
         data: { dataType: 'any' },
       };
-      setEdges(addEdge(newEdge, edges) as AppEdge[]);
+      setEdges(addEdge(newEdge, filtered) as AppEdge[]);
     },
-    [edges, setEdges]
+    [setEdges],
   );
 
   const onPaneContextMenu = useCallback(
@@ -77,6 +92,40 @@ export function NodeEditor() {
     [openContextMenu]
   );
 
+  const onEdgeContextMenu = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      event.preventDefault();
+      openContextMenu(event.clientX, event.clientY, 'edge', undefined, edge.id);
+    },
+    [openContextMenu]
+  );
+
+  // Drag-to-delete: track reconnect start
+  const onReconnectStart = useCallback(() => {
+    reconnectSuccessful.current = false;
+  }, []);
+
+  // Drag-to-delete: handle successful reconnect
+  const onReconnect = useCallback(
+    (oldEdge: Edge, newConnection: Connection) => {
+      reconnectSuccessful.current = true;
+      const currentEdges = useAppStore.getState().edges;
+      setEdges(reconnectEdge(oldEdge, newConnection, currentEdges) as AppEdge[]);
+    },
+    [setEdges]
+  );
+
+  // Drag-to-delete: if reconnect failed (dropped on empty space), delete the edge
+  const onReconnectEnd = useCallback(
+    (_event: MouseEvent | TouchEvent, edge: Edge) => {
+      if (!reconnectSuccessful.current) {
+        removeEdge(edge.id);
+      }
+      reconnectSuccessful.current = true;
+    },
+    [removeEdge]
+  );
+
   return (
     <div className="node-editor">
       <ReactFlow
@@ -87,10 +136,16 @@ export function NodeEditor() {
         onConnect={onConnect}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
+        onEdgeContextMenu={onEdgeContextMenu}
         onPaneClick={closeContextMenu}
+        onReconnectStart={onReconnectStart}
+        onReconnect={onReconnect}
+        onReconnectEnd={onReconnectEnd}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         defaultEdgeOptions={{ type: 'typed', animated: true }}
+        deleteKeyCode={null}
+        edgesReconnectable
         fitView
         minZoom={0.1}
         maxZoom={3}
@@ -100,7 +155,7 @@ export function NodeEditor() {
           variant={BackgroundVariant.Dots}
           gap={20}
           size={1}
-          color="#333355"
+          color="#DDDDDD"
         />
         <Controls
           showInteractive={false}
@@ -109,7 +164,7 @@ export function NodeEditor() {
         <MiniMap
           nodeColor={(node) => getCostColor((node.data as { cost?: number }).cost ?? 0)}
           style={{ backgroundColor: 'var(--bg-panel)' }}
-          maskColor="rgba(0, 0, 0, 0.4)"
+          maskColor="rgba(255, 255, 255, 0.7)"
         />
       </ReactFlow>
 

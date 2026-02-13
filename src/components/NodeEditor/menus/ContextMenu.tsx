@@ -2,10 +2,11 @@ import { useAppStore } from '@/store/useAppStore';
 import { AddNodeMenu } from './AddNodeMenu';
 import { NodeSettingsMenu } from './NodeSettingsMenu';
 import { ShaderSettingsMenu } from './ShaderSettingsMenu';
+import { EdgeContextMenu } from './EdgeContextMenu';
 import './ContextMenu.css';
 
 export function ContextMenu() {
-  const { open, x, y, type, nodeId } = useAppStore((s) => s.contextMenu);
+  const { open, x, y, type, nodeId, edgeId } = useAppStore((s) => s.contextMenu);
 
   if (!open) return null;
 
@@ -19,6 +20,7 @@ export function ContextMenu() {
       {type === 'canvas' && <AddNodeMenu />}
       {type === 'node' && nodeId && <NodeSettingsMenu nodeId={nodeId} />}
       {type === 'shader' && <ShaderSettingsMenu />}
+      {type === 'edge' && edgeId && <EdgeContextMenu edgeId={edgeId} />}
     </div>
   );
 }

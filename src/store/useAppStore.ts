@@ -11,8 +11,9 @@ interface ContextMenuState {
   open: boolean;
   x: number;
   y: number;
-  type: 'canvas' | 'node' | 'shader';
+  type: 'canvas' | 'node' | 'shader' | 'edge';
   nodeId?: string;
+  edgeId?: string;
 }
 
 interface AppState {
@@ -42,6 +43,7 @@ interface AppState {
   onEdgesChange: (changes: EdgeChange<AppEdge>[]) => void;
   addNode: (node: AppNode) => void;
   removeNode: (nodeId: string) => void;
+  removeEdge: (edgeId: string) => void;
   updateNodeData: (nodeId: string, data: Partial<AppNode['data']>) => void;
 
   // Code actions
@@ -55,7 +57,7 @@ interface AppState {
   setSyncInProgress: (v: boolean) => void;
 
   // UI actions
-  openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader', nodeId?: string) => void;
+  openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader' | 'edge', nodeId?: string, edgeId?: string) => void;
   closeContextMenu: () => void;
   setSplitRatio: (ratio: number) => void;
 }
@@ -99,6 +101,12 @@ export const useAppStore = create<AppState>()((set) => ({
       syncSource: 'graph',
     })),
 
+  removeEdge: (edgeId) =>
+    set((state) => ({
+      edges: state.edges.filter((e) => e.id !== edgeId),
+      syncSource: 'graph',
+    })),
+
   updateNodeData: (nodeId, data) =>
     set((state) => ({
       nodes: state.nodes.map((n) =>
@@ -116,8 +124,8 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setSyncInProgress: (v) => set({ syncInProgress: v }),
 
-  openContextMenu: (x, y, type, nodeId) =>
-    set({ contextMenu: { open: true, x, y, type, nodeId } }),
+  openContextMenu: (x, y, type, nodeId, edgeId) =>
+    set({ contextMenu: { open: true, x, y, type, nodeId, edgeId } }),
 
   closeContextMenu: () =>
     set({ contextMenu: { open: false, x: 0, y: 0, type: 'canvas' } }),

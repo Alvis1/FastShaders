@@ -26,14 +26,13 @@ export function CodeEditor() {
 
   return (
     <div className="code-editor">
-      <div className="code-editor__header">
-        <span className="code-editor__title">TSL Code</span>
-        {codeErrors.length > 0 && (
+      {codeErrors.length > 0 && (
+        <div className="code-editor__header">
           <span className="code-editor__errors">
             {codeErrors.length} error{codeErrors.length > 1 ? 's' : ''}
           </span>
-        )}
-      </div>
+        </div>
+      )}
       <div className="code-editor__body">
         <Editor
           height="100%"
@@ -41,7 +40,7 @@ export function CodeEditor() {
           value={code}
           onChange={handleChange}
           onMount={handleMount}
-          theme="vs-dark"
+          theme="vs"
           options={{
             minimap: { enabled: false },
             fontSize: 14,

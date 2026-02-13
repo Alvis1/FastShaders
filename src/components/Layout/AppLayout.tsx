@@ -10,9 +10,17 @@ export function AppLayout() {
     <div className="app-layout">
       <CostBar />
       <SplitPane
-        left={<NodeEditor />}
+        left={
+          <div className="app-layout__left">
+            <div className="app-layout__panel-label">Node View</div>
+            <div className="app-layout__node-editor">
+              <NodeEditor />
+            </div>
+          </div>
+        }
         right={
           <div className="app-layout__right">
+            <div className="app-layout__panel-label app-layout__panel-label--right">TSL Code View</div>
             <div className="app-layout__code">
               <CodeEditor />
             </div>
