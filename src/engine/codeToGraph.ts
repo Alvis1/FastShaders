@@ -48,6 +48,8 @@ export function codeToGraph(
   const rawNodes: AppNode[] = [];
   const rawEdges: AppEdge[] = [];
 
+  let hasOutput = false;
+
   traverse(ast, {
     VariableDeclarator(path) {
       if (!t.isIdentifier(path.node.id)) return;
@@ -71,7 +73,46 @@ export function codeToGraph(
         processCall(init, varName, rawNodes, rawEdges, varToNodeId);
       }
     },
+
+    // Handle "return x;" to create the Output node and wire the color input
+    ReturnStatement(path) {
+      if (hasOutput) return;
+      const arg = path.node.argument;
+      if (!arg) return;
+
+      const outputDef = NODE_REGISTRY.get('output');
+      if (!outputDef) return;
+
+      const outputId = generateId();
+      rawNodes.push(createNode(outputId, outputDef, 'Output'));
+      hasOutput = true;
+
+      // Wire the returned value → output.color
+      if (t.isIdentifier(arg)) {
+        const sourceId = varToNodeId.get(arg.name);
+        if (sourceId) {
+          rawEdges.push({
+            id: `e-${sourceId}-${outputId}-color`,
+            source: sourceId,
+            sourceHandle: 'out',
+            target: outputId,
+            targetHandle: 'color',
+            type: 'typed' as const,
+            animated: true,
+            data: { dataType: 'any' as const },
+          });
+        }
+      }
+    },
   });
+
+  // If no return statement produced an output node, add an unconnected one
+  if (!hasOutput) {
+    const outputDef = NODE_REGISTRY.get('output');
+    if (outputDef) {
+      rawNodes.push(createNode(generateId(), outputDef, 'Output'));
+    }
+  }
 
   // Auto-layout
   const layoutedNodes = autoLayout(rawNodes, rawEdges, 'LR');
@@ -128,6 +169,8 @@ function processCall(
         sourceHandle: 'out',
         target: nodeId,
         targetHandle: def.inputs[0].id,
+        type: 'typed' as const,
+        animated: true,
         data: { dataType: def.inputs[0].dataType },
       });
     }
@@ -149,6 +192,8 @@ function processCall(
           sourceHandle: 'out',
           target: nodeId,
           targetHandle: port.id,
+          type: 'typed' as const,
+          animated: true,
           data: { dataType: port.dataType },
         });
       }

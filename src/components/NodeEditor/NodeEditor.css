@@ -2,10 +2,10 @@
   width: 100%;
   height: 100%;
   position: relative;
-  background: var(--bg-app);
+  background: var(--bg-panel);
 }
 
-/* Override React Flow default styles for dark theme */
+/* Override React Flow default node styles */
 .node-editor .react-flow__node {
   border: none;
   box-shadow: none;
@@ -18,7 +18,7 @@
 }
 
 .node-editor .react-flow__controls-button {
-  background: var(--bg-surface);
+  background: var(--bg-panel);
   border-color: var(--border-subtle);
   fill: var(--text-secondary);
 }
@@ -31,4 +31,8 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
   box-shadow: var(--shadow-md);
+}
+
+.node-editor .react-flow__edge-path {
+  stroke-width: 2;
 }

@@ -6,10 +6,43 @@
   background: var(--bg-app);
 }
 
+.app-layout__left {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+}
+
+.app-layout__panel-label {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-4);
+  z-index: var(--z-controls);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  color: var(--text-primary);
+  pointer-events: none;
+}
+
+.app-layout__panel-label--right {
+  position: static;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-size-xl);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.app-layout__node-editor {
+  flex: 1;
+  overflow: hidden;
+}
+
 .app-layout__right {
   display: flex;
   flex-direction: column;
   height: 100%;
+  border-left: 1px solid var(--border-subtle);
 }
 
 .app-layout__code {
