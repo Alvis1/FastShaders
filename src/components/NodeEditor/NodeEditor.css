@@ -1,0 +1,34 @@
+.node-editor {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: var(--bg-app);
+}
+
+/* Override React Flow default styles for dark theme */
+.node-editor .react-flow__node {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+}
+
+.node-editor .react-flow__controls {
+  box-shadow: var(--shadow-md);
+}
+
+.node-editor .react-flow__controls-button {
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+  fill: var(--text-secondary);
+}
+
+.node-editor .react-flow__controls-button:hover {
+  background: var(--bg-surface-hover);
+}
+
+.node-editor .react-flow__minimap {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--shadow-md);
+}

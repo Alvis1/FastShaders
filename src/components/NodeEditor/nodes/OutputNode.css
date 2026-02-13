@@ -1,0 +1,36 @@
+.output-node {
+  background: linear-gradient(135deg, #e74c3c, #c0392b);
+  border: 2px solid #e74c3c;
+  border-radius: var(--border-radius-lg);
+  padding: var(--node-padding) var(--node-padding) var(--node-padding) calc(var(--node-padding) + 8px);
+  box-shadow: var(--shadow-node);
+  min-width: 180px;
+  position: relative;
+  transition: box-shadow var(--transition-normal), border-color var(--transition-normal);
+}
+
+.output-node--selected {
+  box-shadow: var(--shadow-node-selected);
+  border-color: var(--border-focus);
+}
+
+.output-node__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0 var(--space-4);
+}
+
+.output-node__label {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  color: white;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.output-node__cost {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: rgba(255, 255, 255, 0.8);
+}

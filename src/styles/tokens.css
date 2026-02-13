@@ -1,0 +1,82 @@
+:root {
+  /* ===== DATA TYPE COLORS ===== */
+  --type-float: #00CED1;
+  --type-int: #20B2AA;
+  --type-vec2: #4A90E2;
+  --type-vec3: #E040FB;
+  --type-vec4: #AB47BC;
+  --type-color: #FFD54F;
+  --type-any: #90A4AE;
+
+  /* ===== COST GRADIENT ===== */
+  --cost-low: #4CAF50;
+  --cost-medium: #FFC107;
+  --cost-high: #FF5722;
+
+  /* ===== BACKGROUNDS ===== */
+  --bg-app: #1a1a2e;
+  --bg-panel: #1e1e32;
+  --bg-surface: #252542;
+  --bg-surface-hover: #2d2d50;
+  --bg-input: #16162a;
+  --bg-overlay: rgba(0, 0, 0, 0.6);
+
+  /* ===== BORDERS ===== */
+  --border-subtle: #333355;
+  --border-default: #444466;
+  --border-strong: #5555aa;
+  --border-focus: #6C63FF;
+  --border-radius-sm: 4px;
+  --border-radius-md: 8px;
+  --border-radius-lg: 12px;
+
+  /* ===== TEXT ===== */
+  --text-primary: #E8E8F0;
+  --text-secondary: #9999BB;
+  --text-muted: #666688;
+  --text-accent: #6C63FF;
+
+  /* ===== SHADOWS ===== */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.6);
+  --shadow-node: 0 2px 12px rgba(0, 0, 0, 0.5);
+  --shadow-node-selected: 0 0 0 2px var(--border-focus), 0 4px 16px rgba(108, 99, 255, 0.3);
+
+  /* ===== TYPOGRAPHY ===== */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+
+  /* ===== SPACING ===== */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ===== NODE DIMENSIONS ===== */
+  --node-min-width: 160px;
+  --node-padding: 12px;
+  --handle-size: 14px;
+  --handle-border: 2px;
+
+  /* ===== TRANSITIONS ===== */
+  --transition-fast: 100ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+
+  /* ===== Z-INDEX ===== */
+  --z-nodes: 1;
+  --z-edges: 0;
+  --z-controls: 10;
+  --z-menu: 100;
+  --z-overlay: 1000;
+}
