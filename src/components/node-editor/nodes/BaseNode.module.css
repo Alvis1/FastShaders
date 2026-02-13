@@ -1,0 +1,104 @@
+/**
+ * BaseNode Styles
+ * Flat design with shadows for depth
+ */
+
+.baseNode {
+  min-width: var(--node-min-width);
+  min-height: var(--node-min-height);
+  padding: var(--node-padding);
+  background: var(--bg-node);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--node-border-radius);
+  box-shadow: var(--shadow-node);
+  font-family: var(--font-family);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
+  cursor: grab;
+}
+
+.baseNode:hover {
+  box-shadow: var(--shadow-node-hover);
+}
+
+.baseNode:active {
+  cursor: grabbing;
+}
+
+.baseNode.selected {
+  border-color: var(--color-info);
+  box-shadow: 0 0 0 2px var(--color-info), var(--shadow-node-hover);
+}
+
+/* Header */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-xs);
+}
+
+.labelContainer {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex: 1;
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* VR Impact Indicator */
+.vrIndicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Complexity Display */
+.complexity {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  padding: 2px 6px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+}
+
+/* Handles */
+.baseNode :global(.react-flow__handle) {
+  width: var(--port-size);
+  height: var(--port-size);
+  border: var(--port-border-width) solid var(--bg-node);
+  transition: all var(--transition-fast);
+}
+
+.baseNode :global(.react-flow__handle:hover) {
+  transform: scale(1.2);
+}
+
+.baseNode :global(.react-flow__handle-left) {
+  left: -6px;
+}
+
+.baseNode :global(.react-flow__handle-right) {
+  right: -6px;
+}
+
+/* Connection validation */
+.baseNode :global(.react-flow__handle-valid) {
+  background: var(--color-success);
+}
+
+.baseNode :global(.react-flow__handle-connecting) {
+  background: var(--color-info);
+}
