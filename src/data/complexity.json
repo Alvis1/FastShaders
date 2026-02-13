@@ -1,0 +1,272 @@
+{
+  "vrPerformance": {
+    "targetFPS": 90,
+    "budgets": {
+      "comfortable": 100,
+      "acceptable": 200,
+      "heavy": 300,
+      "critical": 400
+    },
+    "notes": "Performance budgets are based on maintaining 90 FPS in VR headsets (Oculus Quest, HTC Vive, etc.)"
+  },
+  "operations": {
+    "noiseNode": {
+      "cost": 50,
+      "category": "procedural",
+      "vrImpact": "high",
+      "notes": "Procedural noise is expensive in VR - runs per pixel on both eyes"
+    },
+    "color": {
+      "cost": 2,
+      "category": "constant",
+      "vrImpact": "minimal",
+      "notes": "Constant values have negligible VR overhead"
+    },
+    "vec2": {
+      "cost": 1,
+      "category": "constant",
+      "vrImpact": "minimal",
+      "notes": "Vector constants are very cheap"
+    },
+    "vec3": {
+      "cost": 1,
+      "category": "constant",
+      "vrImpact": "minimal",
+      "notes": "Vector constants are very cheap"
+    },
+    "vec4": {
+      "cost": 1,
+      "category": "constant",
+      "vrImpact": "minimal",
+      "notes": "Vector constants are very cheap"
+    },
+    "float": {
+      "cost": 1,
+      "category": "constant",
+      "vrImpact": "minimal",
+      "notes": "Float constants are very cheap"
+    },
+    "mul": {
+      "cost": 1,
+      "category": "arithmetic",
+      "vrImpact": "minimal",
+      "notes": "Basic arithmetic operations are cheap"
+    },
+    "add": {
+      "cost": 1,
+      "category": "arithmetic",
+      "vrImpact": "minimal",
+      "notes": "Basic arithmetic operations are cheap"
+    },
+    "sub": {
+      "cost": 1,
+      "category": "arithmetic",
+      "vrImpact": "minimal",
+      "notes": "Basic arithmetic operations are cheap"
+    },
+    "div": {
+      "cost": 2,
+      "category": "arithmetic",
+      "vrImpact": "low",
+      "notes": "Division is slightly more expensive than multiplication"
+    },
+    "sin": {
+      "cost": 8,
+      "category": "trigonometric",
+      "vrImpact": "medium",
+      "notes": "Trigonometric functions add up quickly in VR"
+    },
+    "cos": {
+      "cost": 8,
+      "category": "trigonometric",
+      "vrImpact": "medium",
+      "notes": "Trigonometric functions add up quickly in VR"
+    },
+    "tan": {
+      "cost": 10,
+      "category": "trigonometric",
+      "vrImpact": "medium",
+      "notes": "Tangent is more expensive than sin/cos"
+    },
+    "atan": {
+      "cost": 12,
+      "category": "trigonometric",
+      "vrImpact": "medium",
+      "notes": "Inverse trigonometric functions are expensive"
+    },
+    "asin": {
+      "cost": 12,
+      "category": "trigonometric",
+      "vrImpact": "medium",
+      "notes": "Inverse trigonometric functions are expensive"
+    },
+    "acos": {
+      "cost": 12,
+      "category": "trigonometric",
+      "vrImpact": "medium",
+      "notes": "Inverse trigonometric functions are expensive"
+    },
+    "pow": {
+      "cost": 5,
+      "category": "mathematical",
+      "vrImpact": "low",
+      "notes": "Power operations are moderately expensive"
+    },
+    "exp": {
+      "cost": 6,
+      "category": "mathematical",
+      "vrImpact": "low",
+      "notes": "Exponential operations are moderately expensive"
+    },
+    "log": {
+      "cost": 6,
+      "category": "mathematical",
+      "vrImpact": "low",
+      "notes": "Logarithmic operations are moderately expensive"
+    },
+    "sqrt": {
+      "cost": 3,
+      "category": "mathematical",
+      "vrImpact": "low",
+      "notes": "Square root is relatively cheap"
+    },
+    "texture": {
+      "cost": 10,
+      "category": "sampling",
+      "vrImpact": "medium",
+      "notes": "Texture lookups are moderate cost - watch for excessive sampling"
+    },
+    "textureCube": {
+      "cost": 12,
+      "category": "sampling",
+      "vrImpact": "medium",
+      "notes": "Cube map lookups are slightly more expensive"
+    },
+    "textureArray": {
+      "cost": 11,
+      "category": "sampling",
+      "vrImpact": "medium",
+      "notes": "Texture array lookups have moderate cost"
+    },
+    "mix": {
+      "cost": 3,
+      "category": "blending",
+      "vrImpact": "low",
+      "notes": "Linear interpolation is relatively cheap"
+    },
+    "smoothstep": {
+      "cost": 4,
+      "category": "blending",
+      "vrImpact": "low",
+      "notes": "Smooth interpolation is slightly more expensive than linear"
+    },
+    "clamp": {
+      "cost": 2,
+      "category": "utility",
+      "vrImpact": "minimal",
+      "notes": "Clamping operations are very cheap"
+    },
+    "saturate": {
+      "cost": 2,
+      "category": "utility",
+      "vrImpact": "minimal",
+      "notes": "Saturate (clamp to 0-1) is very cheap"
+    },
+    "abs": {
+      "cost": 1,
+      "category": "utility",
+      "vrImpact": "minimal",
+      "notes": "Absolute value is very cheap"
+    },
+    "dot": {
+      "cost": 2,
+      "category": "vector",
+      "vrImpact": "minimal",
+      "notes": "Dot product is cheap and common"
+    },
+    "cross": {
+      "cost": 3,
+      "category": "vector",
+      "vrImpact": "low",
+      "notes": "Cross product is slightly more expensive"
+    },
+    "normalize": {
+      "cost": 4,
+      "category": "vector",
+      "vrImpact": "low",
+      "notes": "Normalization requires a square root"
+    },
+    "length": {
+      "cost": 3,
+      "category": "vector",
+      "vrImpact": "low",
+      "notes": "Length calculation requires a square root"
+    },
+    "distance": {
+      "cost": 4,
+      "category": "vector",
+      "vrImpact": "low",
+      "notes": "Distance calculation is length of difference"
+    },
+    "reflect": {
+      "cost": 4,
+      "category": "vector",
+      "vrImpact": "low",
+      "notes": "Reflection is relatively cheap"
+    },
+    "refract": {
+      "cost": 6,
+      "category": "vector",
+      "vrImpact": "medium",
+      "notes": "Refraction involves more complex math"
+    },
+    "fresnel": {
+      "cost": 8,
+      "category": "lighting",
+      "vrImpact": "medium",
+      "notes": "Fresnel calculations involve dot products and power"
+    },
+    "fract": {
+      "cost": 1,
+      "category": "utility",
+      "vrImpact": "minimal",
+      "notes": "Fractional part extraction is very cheap"
+    },
+    "floor": {
+      "cost": 1,
+      "category": "utility",
+      "vrImpact": "minimal",
+      "notes": "Floor operation is very cheap"
+    },
+    "ceil": {
+      "cost": 1,
+      "category": "utility",
+      "vrImpact": "minimal",
+      "notes": "Ceiling operation is very cheap"
+    },
+    "min": {
+      "cost": 1,
+      "category": "utility",
+      "vrImpact": "minimal",
+      "notes": "Minimum operation is very cheap"
+    },
+    "max": {
+      "cost": 1,
+      "category": "utility",
+      "vrImpact": "minimal",
+      "notes": "Maximum operation is very cheap"
+    },
+    "step": {
+      "cost": 1,
+      "category": "utility",
+      "vrImpact": "minimal",
+      "notes": "Step function is very cheap"
+    }
+  },
+  "optimizationSuggestions": {
+    "high_noise_usage": "Consider using texture-based noise instead of procedural noise for better VR performance",
+    "excessive_trigonometry": "Try to minimize trigonometric function calls - consider lookup tables for repeated calculations",
+    "texture_sampling": "Reduce texture lookups by caching values or using lower resolution textures",
+    "complex_math": "Consider approximations or pre-computed lookup tables for complex mathematical operations"
+  }
+}
