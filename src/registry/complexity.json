@@ -1,0 +1,61 @@
+{
+  "meta": {
+    "description": "Performance cost map for TSL functions. Higher = more GPU cycles.",
+    "maxBudget": 200
+  },
+  "costs": {
+    "positionGeometry": 0,
+    "normalLocal": 0,
+    "tangentLocal": 0,
+    "time": 0,
+    "screenUV": 0,
+    "uniform_float": 0,
+
+    "float": 1,
+    "int": 1,
+    "vec2": 1,
+    "vec3": 1,
+    "vec4": 1,
+    "color": 2,
+
+    "add": 1,
+    "sub": 1,
+    "mul": 1,
+    "div": 2,
+
+    "sin": 8,
+    "cos": 8,
+    "abs": 1,
+    "pow": 5,
+    "sqrt": 3,
+    "exp": 6,
+    "log2": 6,
+    "floor": 1,
+    "round": 1,
+    "fract": 1,
+    "mod": 2,
+    "clamp": 2,
+    "min": 1,
+    "max": 1,
+
+    "mix": 3,
+    "smoothstep": 4,
+    "remap": 5,
+    "select": 2,
+
+    "normalize": 4,
+    "length": 3,
+    "distance": 4,
+    "dot": 2,
+    "cross": 3,
+
+    "noise": 50,
+    "fractal": 80,
+    "voronoi": 60,
+
+    "hsl": 5,
+    "toHsl": 5,
+
+    "output": 0
+  }
+}

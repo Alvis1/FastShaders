@@ -1,0 +1,23 @@
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: var(--bg-app);
+}
+
+.app-layout__right {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-layout__code {
+  flex: 1;
+  overflow: hidden;
+}
+
+.app-layout__preview {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+}
