@@ -3,7 +3,6 @@ import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, ParseError } from '@/types';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF } from '@/registry/nodeRegistry';
-import { autoLayout } from './layoutEngine';
 import { generateId } from '@/utils/idGenerator';
 import complexityData from '@/registry/complexity.json';
 
@@ -50,61 +49,66 @@ export function codeToGraph(
 
   let hasOutput = false;
 
-  traverse(ast, {
-    VariableDeclarator(path) {
-      if (!t.isIdentifier(path.node.id)) return;
-      const varName = path.node.id.name;
-      const init = path.node.init;
-      if (!init) return;
+  try {
+    traverse(ast, {
+      VariableDeclarator(path) {
+        if (!t.isIdentifier(path.node.id)) return;
+        const varName = path.node.id.name;
+        const init = path.node.init;
+        if (!init) return;
 
-      // const x = identifier (e.g. positionGeometry)
-      if (t.isIdentifier(init)) {
-        const def = TSL_FUNCTION_TO_DEF.get(init.name);
-        if (def) {
-          const nodeId = generateId();
-          rawNodes.push(createNode(nodeId, def, varName));
-          varToNodeId.set(varName, nodeId);
+        // const x = identifier (e.g. positionGeometry)
+        if (t.isIdentifier(init)) {
+          const def = TSL_FUNCTION_TO_DEF.get(init.name);
+          if (def) {
+            const nodeId = generateId();
+            rawNodes.push(createNode(nodeId, def, varName));
+            varToNodeId.set(varName, nodeId);
+          }
+          return;
         }
-        return;
-      }
 
-      // const x = func(args...) or const x = obj.method(args...)
-      if (t.isCallExpression(init)) {
-        processCall(init, varName, rawNodes, rawEdges, varToNodeId);
-      }
-    },
-
-    // Handle "return x;" to create the Output node and wire the color input
-    ReturnStatement(path) {
-      if (hasOutput) return;
-      const arg = path.node.argument;
-      if (!arg) return;
-
-      const outputDef = NODE_REGISTRY.get('output');
-      if (!outputDef) return;
-
-      const outputId = generateId();
-      rawNodes.push(createNode(outputId, outputDef, 'Output'));
-      hasOutput = true;
-
-      // Wire the returned value → output.color
-      if (t.isIdentifier(arg)) {
-        const sourceId = varToNodeId.get(arg.name);
-        if (sourceId) {
-          rawEdges.push({
-            id: `e-${sourceId}-${outputId}-color`,
-            source: sourceId,
-            sourceHandle: 'out',
-            target: outputId,
-            targetHandle: 'color',
-            type: 'typed' as const,
-            animated: true,
-            data: { dataType: 'any' as const },
-          });
+        // const x = func(args...) or const x = obj.method(args...)
+        if (t.isCallExpression(init)) {
+          processCall(init, varName, rawNodes, rawEdges, varToNodeId);
         }
-      }
-    },
-  });
+      },
+
+      // Handle "return x;" to create the Output node and wire the color input
+      ReturnStatement(path) {
+        if (hasOutput) return;
+        const arg = path.node.argument;
+        if (!arg) return;
+
+        const outputDef = NODE_REGISTRY.get('output');
+        if (!outputDef) return;
+
+        const outputId = generateId();
+        rawNodes.push(createNode(outputId, outputDef, 'Output'));
+        hasOutput = true;
+
+        // Wire the returned value → output.color
+        if (t.isIdentifier(arg)) {
+          const sourceId = varToNodeId.get(arg.name);
+          if (sourceId) {
+            rawEdges.push({
+              id: `e-${sourceId}-${outputId}-color`,
+              source: sourceId,
+              sourceHandle: 'out',
+              target: outputId,
+              targetHandle: 'color',
+              type: 'typed' as const,
+              animated: true,
+              data: { dataType: 'any' as const },
+            });
+          }
+        }
+      },
+    });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { nodes: [], edges: [], errors: [{ message: msg }] };
+  }
 
   // If no return statement produced an output node, add an unconnected one
   if (!hasOutput) {
@@ -114,10 +118,7 @@ export function codeToGraph(
     }
   }
 
-  // Auto-layout
-  const layoutedNodes = autoLayout(rawNodes, rawEdges, 'LR');
-
-  return { nodes: layoutedNodes, edges: rawEdges, errors: [] };
+  return { nodes: rawNodes, edges: rawEdges, errors: [] };
 }
 
 function processCall(
@@ -177,13 +178,17 @@ function processCall(
     inputIdx = 1;
   }
 
-  // Process remaining arguments
+  // Process remaining arguments — extract literals and wire identifier edges
+  const extractedValues: Record<string, string | number> = {};
+
   for (let i = 0; i < callExpr.arguments.length; i++) {
     const arg = callExpr.arguments[i];
     const port = def.inputs[inputIdx + i];
-    if (!port) break;
+
+    const literalValue = extractLiteral(arg);
 
     if (t.isIdentifier(arg)) {
+      if (!port) break;
       const sourceId = varToNodeId.get(arg.name);
       if (sourceId) {
         edges.push({
@@ -197,9 +202,40 @@ function processCall(
           data: { dataType: port.dataType },
         });
       }
+    } else if (literalValue !== undefined) {
+      // Type constructors (no inputs, has defaultValues) — use default key order
+      if (def.inputs.length === 0 && def.defaultValues) {
+        const key = Object.keys(def.defaultValues)[i] ?? 'value';
+        // Handle hex color literals: color(0xff0000) → '#ff0000'
+        if (key === 'hex' && typeof literalValue === 'number') {
+          extractedValues[key] = '#' + Math.round(literalValue).toString(16).padStart(6, '0');
+        } else {
+          extractedValues[key] = literalValue;
+        }
+      } else if (port) {
+        extractedValues[port.id] = literalValue;
+      }
     }
-    // Numeric/string literals are stored as default values (already on node)
   }
+
+  // Merge extracted values into the node
+  if (Object.keys(extractedValues).length > 0) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (node) {
+      const data = node.data as { values: Record<string, string | number> };
+      data.values = { ...data.values, ...extractedValues };
+    }
+  }
+}
+
+function extractLiteral(node: t.Node): string | number | undefined {
+  if (t.isNumericLiteral(node)) return node.value;
+  if (t.isStringLiteral(node)) return node.value;
+  // Negative numbers: -2.5
+  if (t.isUnaryExpression(node) && node.operator === '-' && t.isNumericLiteral(node.argument)) {
+    return -node.argument.value;
+  }
+  return undefined;
 }
 
 function createNode(id: string, def: NodeDefinition, label: string): AppNode {
@@ -208,7 +244,7 @@ function createNode(id: string, def: NodeDefinition, label: string): AppNode {
 
   return {
     id,
-    type: def.type === 'output' ? 'output' : 'shader',
+    type: def.type === 'output' ? 'output' : def.type === 'color' ? 'color' : def.category === 'noise' ? 'preview' : 'shader',
     position: { x: 0, y: 0 },
     data: {
       registryType: def.type,

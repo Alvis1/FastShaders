@@ -1,0 +1,111 @@
+.drag-num {
+  display: inline-flex;
+  align-items: center;
+  width: 90px;
+  height: 24px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  background: var(--bg-input);
+  overflow: hidden;
+  user-select: none;
+}
+
+.drag-num:hover {
+  border-color: var(--border-default);
+}
+
+/* Arrow buttons */
+.drag-num__arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 100%;
+  font-size: 9px;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  padding: 0;
+  line-height: 1;
+}
+
+.drag-num__arrow:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text-primary);
+}
+
+.drag-num__arrow:active {
+  background: rgba(0, 0, 0, 0.14);
+}
+
+/* Value area: draggable + clickable */
+.drag-num__value {
+  flex: 1;
+  min-width: 24px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  cursor: ew-resize;
+  padding: 0 2px;
+  white-space: nowrap;
+}
+
+.drag-num__value--dragging {
+  cursor: ew-resize;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* Edit mode: real text input */
+.drag-num__edit {
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: rgba(255, 255, 255, 0.9);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  text-align: center;
+  padding: 0 2px;
+  -moz-appearance: textfield;
+}
+
+.drag-num__edit::-webkit-inner-spin-button,
+.drag-num__edit::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Compact variant for inline node use */
+.drag-num--compact {
+  width: auto;
+  height: 13px;
+  border-color: rgba(0, 0, 0, 0.15);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.drag-num--compact:hover {
+  border-color: rgba(0, 0, 0, 0.3);
+}
+
+.drag-num--compact .drag-num__arrow {
+  width: 8px;
+  font-size: 6px;
+  color: rgba(0, 0, 0, 0.4);
+}
+
+.drag-num--compact .drag-num__arrow:hover {
+  color: rgba(0, 0, 0, 0.7);
+}
+
+.drag-num--compact .drag-num__value,
+.drag-num--compact .drag-num__edit {
+  font-size: 8px;
+  color: rgba(0, 0, 0, 0.7);
+}

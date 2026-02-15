@@ -33,6 +33,16 @@
   box-shadow: var(--shadow-md);
 }
 
-.node-editor .react-flow__edge-path {
-  stroke-width: 2;
+.node-editor .react-flow__nodesselection-rect,
+.node-editor .react-flow__selection {
+  background: transparent !important;
+  border: none !important;
+}
+
+.node-editor .react-flow__edge-interaction {
+  stroke-width: 20;
+  stroke: transparent;
+  fill: none;
+  pointer-events: stroke;
+  cursor: pointer;
 }

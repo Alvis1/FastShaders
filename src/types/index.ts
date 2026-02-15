@@ -6,6 +6,8 @@ export type {
   ShaderNodeData,
   OutputNodeData,
   ShaderFlowNode,
+  ColorFlowNode,
+  PreviewFlowNode,
   OutputFlowNode,
   AppNode,
   TypedEdgeData,

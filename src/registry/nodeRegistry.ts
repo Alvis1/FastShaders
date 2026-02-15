@@ -382,6 +382,7 @@ const definitions: NodeDefinition[] = [
     tslImportModule: 'three/tsl',
     inputs: [{ id: 'pos', label: 'Position', dataType: 'vec3' }],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
+    defaultValues: { scale: 1.0 },
   },
   {
     type: 'fractal',
@@ -396,7 +397,7 @@ const definitions: NodeDefinition[] = [
       { id: 'diminish', label: 'Diminish', dataType: 'float' },
     ],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
-    defaultValues: { octaves: 4, lacunarity: 2.0, diminish: 0.5 },
+    defaultValues: { scale: 1.0, octaves: 4, lacunarity: 2.0, diminish: 0.5 },
   },
   {
     type: 'voronoi',
@@ -406,6 +407,7 @@ const definitions: NodeDefinition[] = [
     tslImportModule: 'three/tsl',
     inputs: [{ id: 'pos', label: 'Position', dataType: 'vec3' }],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
+    defaultValues: { scale: 1.0 },
   },
 
   // ===== COLOR =====
@@ -457,10 +459,6 @@ export const NODE_REGISTRY = new Map<string, NodeDefinition>(
 export const TSL_FUNCTION_TO_DEF = new Map<string, NodeDefinition>(
   definitions.filter(d => d.tslFunction).map(d => [d.tslFunction, d])
 );
-
-export function getByCategory(category: NodeCategory): NodeDefinition[] {
-  return definitions.filter(d => d.category === category);
-}
 
 export function searchNodes(query: string): NodeDefinition[] {
   const q = query.toLowerCase();

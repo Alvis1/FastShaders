@@ -64,7 +64,7 @@ export function AddNodeMenu() {
     } else {
       const newNode: AppNode = {
         id: generateId(),
-        type: 'shader',
+        type: def.type === 'color' ? 'color' : def.category === 'noise' ? 'preview' : 'shader',
         position,
         data: {
           registryType: def.type,

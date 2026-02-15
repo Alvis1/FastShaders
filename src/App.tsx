@@ -1,95 +1,14 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { useAppStore } from './store/useAppStore';
+import { useAppStore, loadGraph } from './store/useAppStore';
 import { AppLayout } from './components/Layout/AppLayout';
-import { graphToCode } from './engine/graphToCode';
-import { codeToGraph } from './engine/codeToGraph';
-import { NODE_REGISTRY } from './registry/nodeRegistry';
+import { useSyncEngine } from './hooks/useSyncEngine';
 import complexityData from './registry/complexity.json';
 import type { AppNode, AppEdge, OutputNodeData, ShaderNodeData } from './types';
 import { generateId, generateEdgeId } from './utils/idGenerator';
 
 function SyncController() {
-  const nodes = useAppStore((s) => s.nodes);
-  const edges = useAppStore((s) => s.edges);
-  const code = useAppStore((s) => s.code);
-  const syncSource = useAppStore((s) => s.syncSource);
-  const syncInProgress = useAppStore((s) => s.syncInProgress);
-  const setCode = useAppStore((s) => s.setCode);
-  const setNodes = useAppStore((s) => s.setNodes);
-  const setEdges = useAppStore((s) => s.setEdges);
-  const setCodeErrors = useAppStore((s) => s.setCodeErrors);
-  const setTotalCost = useAppStore((s) => s.setTotalCost);
-  const setSyncInProgress = useAppStore((s) => s.setSyncInProgress);
-
-  const prevNodesRef = useRef(nodes);
-  const prevEdgesRef = useRef(edges);
-  const codeTimerRef = useRef<ReturnType<typeof setTimeout>>();
-
-  // Graph → Code (immediate)
-  useEffect(() => {
-    if (syncSource !== 'graph' || syncInProgress) return;
-    if (nodes === prevNodesRef.current && edges === prevEdgesRef.current) return;
-    prevNodesRef.current = nodes;
-    prevEdgesRef.current = edges;
-
-    setSyncInProgress(true);
-    try {
-      const result = graphToCode(nodes, edges, NODE_REGISTRY);
-      setCode(result.code, 'graph');
-    } finally {
-      setSyncInProgress(false);
-    }
-  }, [nodes, edges, syncSource, syncInProgress, setCode, setSyncInProgress]);
-
-  // Code → Graph (debounced 400ms)
-  const doCodeSync = useCallback(
-    (codeStr: string) => {
-      setSyncInProgress(true);
-      try {
-        const result = codeToGraph(codeStr, NODE_REGISTRY);
-        if (result.errors.length === 0 && result.nodes.length > 0) {
-          setNodes(result.nodes, 'code');
-          setEdges(result.edges, 'code');
-        }
-        setCodeErrors(result.errors);
-      } finally {
-        setSyncInProgress(false);
-      }
-    },
-    [setNodes, setEdges, setCodeErrors, setSyncInProgress]
-  );
-
-  useEffect(() => {
-    if (syncSource !== 'code' || syncInProgress) return;
-    clearTimeout(codeTimerRef.current);
-    codeTimerRef.current = setTimeout(() => doCodeSync(code), 400);
-    return () => clearTimeout(codeTimerRef.current);
-  }, [code, syncSource, syncInProgress, doCodeSync]);
-
-  // Recalculate complexity
-  useEffect(() => {
-    const costs = complexityData.costs as Record<string, number>;
-    let total = 0;
-    for (const node of nodes) {
-      total += costs[node.data.registryType] ?? 0;
-    }
-    setTotalCost(total);
-
-    // Update cost on output node
-    const outputNode = nodes.find((n) => n.data.registryType === 'output');
-    if (outputNode && outputNode.data.cost !== total) {
-      // Update inline without triggering full sync cycle
-      useAppStore.setState((state) => ({
-        nodes: state.nodes.map((n) =>
-          n.id === outputNode.id
-            ? { ...n, data: { ...n.data, cost: total } }
-            : n
-        ) as AppNode[],
-      }));
-    }
-  }, [nodes, setTotalCost]);
-
+  useSyncEngine();
   return null;
 }
 
@@ -106,7 +25,7 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
     {
       id: posId,
       type: 'shader',
-      position: { x: 0, y: 150 },
+      position: { x: 0, y: 100 },
       data: {
         registryType: 'positionGeometry',
         label: 'Position',
@@ -116,8 +35,8 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
     },
     {
       id: noiseId,
-      type: 'shader',
-      position: { x: 250, y: 100 },
+      type: 'preview',
+      position: { x: 160, y: 60 },
       data: {
         registryType: 'noise',
         label: 'Noise',
@@ -127,8 +46,8 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
     },
     {
       id: colorId,
-      type: 'shader',
-      position: { x: 250, y: 300 },
+      type: 'color',
+      position: { x: 160, y: 200 },
       data: {
         registryType: 'color',
         label: 'Color',
@@ -139,7 +58,7 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
     {
       id: mixId,
       type: 'shader',
-      position: { x: 500, y: 180 },
+      position: { x: 320, y: 120 },
       data: {
         registryType: 'mix',
         label: 'Mix',
@@ -150,7 +69,7 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
     {
       id: outputId,
       type: 'output',
-      position: { x: 750, y: 180 },
+      position: { x: 480, y: 120 },
       data: {
         registryType: 'output',
         label: 'Output',
@@ -212,7 +131,8 @@ export default function App() {
     if (initialized.current) return;
     initialized.current = true;
 
-    const { nodes, edges } = createInitialNodes();
+    const saved = loadGraph();
+    const { nodes, edges } = saved ?? createInitialNodes();
     useAppStore.getState().setNodes(nodes, 'graph');
     useAppStore.getState().setEdges(edges, 'graph');
   }, []);

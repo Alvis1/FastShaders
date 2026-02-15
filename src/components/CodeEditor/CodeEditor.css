@@ -29,6 +29,43 @@
   border-radius: var(--border-radius-sm);
 }
 
+.code-editor__save {
+  margin-left: auto;
+  padding: 3px 14px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: white;
+  background: var(--text-secondary);
+  border: none;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.code-editor__save:hover {
+  background: var(--text-primary);
+}
+
+.code-editor__error-details {
+  padding: var(--space-2) var(--space-3);
+  background: rgba(231, 76, 60, 0.08);
+  border-bottom: 1px solid rgba(231, 76, 60, 0.2);
+  flex-shrink: 0;
+}
+
+.code-editor__error-line {
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  color: #c0392b;
+  line-height: 1.5;
+}
+
+.code-editor__error-hint {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  margin-top: var(--space-1);
+}
+
 .code-editor__body {
   flex: 1;
   overflow: hidden;

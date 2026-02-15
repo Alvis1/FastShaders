@@ -1,0 +1,173 @@
+import { memo, useEffect, useRef } from 'react';
+import { Position, type NodeProps } from '@xyflow/react';
+import type { PreviewFlowNode, NodeCategory, AppNode } from '@/types';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { useAppStore } from '@/store/useAppStore';
+import { getCostColor, getCostScale } from '@/utils/colorUtils';
+import { TypedHandle } from '../handles/TypedHandle';
+import { CATEGORY_COLORS } from './ShaderNode';
+import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
+import './PreviewNode.css';
+
+const PREVIEW_SIZE = 96;
+const NOISE_TYPES = new Set(['noise', 'fractal', 'voronoi']);
+
+/** Distribute handles evenly along the side, centered. */
+function handleTop(index: number, total: number): string {
+  if (total === 1) return '50%';
+  const start = 25;
+  const end = 75;
+  const step = (end - start) / (total - 1);
+  return `${start + index * step}%`;
+}
+
+/** Walk upstream from a given node to check if a Time node is an ancestor. */
+function hasTimeUpstream(nodeId: string, nodes: AppNode[], edges: { source: string; target: string }[]): boolean {
+  const visited = new Set<string>();
+  const queue = [nodeId];
+  while (queue.length > 0) {
+    const current = queue.pop()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+
+    const node = nodes.find((n) => n.id === current);
+    if (node && node.data.registryType === 'time') return true;
+
+    for (const edge of edges) {
+      if (edge.target === current && !visited.has(edge.source)) {
+        queue.push(edge.source);
+      }
+    }
+  }
+  return false;
+}
+
+/** For each input port of a node, check whether time feeds into it. */
+function getTimeInputs(
+  nodeId: string,
+  nodes: AppNode[],
+  edges: { source: string; target: string; targetHandle?: string | null }[],
+): TimeInputs {
+  const result: TimeInputs = {};
+  // Find edges that connect into this node, grouped by target handle
+  for (const edge of edges) {
+    if (edge.target !== nodeId) continue;
+    const handle = edge.targetHandle;
+    if (!handle) continue;
+    if (hasTimeUpstream(edge.source, nodes, edges)) {
+      (result as Record<string, boolean>)[handle] = true;
+    }
+  }
+  return result;
+}
+
+export const PreviewNode = memo(function PreviewNode({
+  id,
+  data,
+  selected,
+}: NodeProps<PreviewFlowNode>) {
+  const def = NODE_REGISTRY.get(data.registryType);
+  if (!def) return null;
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const nodes = useAppStore((s) => s.nodes);
+  const edges = useAppStore((s) => s.edges);
+
+  const timeInputs = getTimeInputs(id, nodes, edges);
+  const hasAnyTime = Object.values(timeInputs).some(Boolean);
+
+  const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
+  const costColor = getCostColor(data.cost);
+  const costScale = getCostScale(data.cost);
+
+  // Render noise preview — animate only the inputs driven by Time
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !NOISE_TYPES.has(data.registryType)) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    if (!hasAnyTime) {
+      // Static render
+      const imageData = renderNoisePreview(
+        data.registryType as NoiseType,
+        PREVIEW_SIZE,
+        data.values,
+        0,
+        {},
+      );
+      ctx.putImageData(imageData, 0, 0);
+      return;
+    }
+
+    // Animated render — only time-connected inputs change
+    let rafId: number;
+    let startTime: number | null = null;
+
+    const draw = (timestamp: number) => {
+      if (startTime === null) startTime = timestamp;
+      const t = (timestamp - startTime) / 1000;
+
+      const imageData = renderNoisePreview(
+        data.registryType as NoiseType,
+        PREVIEW_SIZE,
+        data.values,
+        t,
+        timeInputs,
+      );
+      ctx.putImageData(imageData, 0, 0);
+      rafId = requestAnimationFrame(draw);
+    };
+
+    rafId = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(rafId);
+  }, [data.registryType, data.values, hasAnyTime, timeInputs.pos, timeInputs.octaves, timeInputs.lacunarity, timeInputs.diminish]);
+
+  return (
+    <div
+      className={`node-base preview-node ${selected ? 'node-base--selected' : ''}`}
+      style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+    >
+      {/* Header */}
+      <div className="node-base__header">
+        <span className="node-base__dot" style={{ background: catColor }} />
+        <span className="node-base__title">{data.label}</span>
+        <span className="node-base__cost">{data.cost}</span>
+      </div>
+
+      {/* Preview canvas */}
+      <div className="preview-node__canvas-wrap">
+        <canvas
+          ref={canvasRef}
+          width={PREVIEW_SIZE}
+          height={PREVIEW_SIZE}
+          className="preview-node__canvas"
+        />
+      </div>
+
+      {/* Input handles — centered on left side */}
+      {def.inputs.map((input, i) => (
+        <TypedHandle
+          key={input.id}
+          type="target"
+          position={Position.Left}
+          id={input.id}
+          dataType={input.dataType}
+          style={{ top: handleTop(i, def.inputs.length) }}
+        />
+      ))}
+
+      {/* Output handles — centered on right side */}
+      {def.outputs.map((output, i) => (
+        <TypedHandle
+          key={output.id}
+          type="source"
+          position={Position.Right}
+          id={output.id}
+          dataType={output.dataType}
+          style={{ top: handleTop(i, def.outputs.length) }}
+        />
+      ))}
+    </div>
+  );
+});

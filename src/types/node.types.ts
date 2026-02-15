@@ -48,8 +48,10 @@ export interface OutputNodeData {
 }
 
 export type ShaderFlowNode = Node<ShaderNodeData, 'shader'>;
+export type ColorFlowNode = Node<ShaderNodeData, 'color'>;
+export type PreviewFlowNode = Node<ShaderNodeData, 'preview'>;
 export type OutputFlowNode = Node<OutputNodeData, 'output'>;
-export type AppNode = ShaderFlowNode | OutputFlowNode;
+export type AppNode = ShaderFlowNode | ColorFlowNode | PreviewFlowNode | OutputFlowNode;
 
 export interface TypedEdgeData {
   dataType: TSLDataType;

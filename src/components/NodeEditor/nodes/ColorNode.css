@@ -1,0 +1,50 @@
+.color-node {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 0, 0, 0.12);
+  cursor: grab;
+  position: relative;
+  transition: box-shadow var(--transition-normal);
+  box-shadow: var(--shadow-node);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.color-node:active {
+  cursor: grabbing;
+}
+
+.color-node--selected {
+  box-shadow: var(--shadow-node-selected);
+  border-color: var(--border-focus);
+}
+
+.color-node__label {
+  font-size: 8px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  user-select: none;
+}
+
+.color-node__picker {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.color-node .react-flow__handle {
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+}
+
+.color-node .react-flow__handle-right {
+  right: calc(var(--handle-size) / -2) !important;
+}
