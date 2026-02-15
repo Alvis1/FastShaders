@@ -1,5 +1,7 @@
 import { useAppStore } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { DragNumberInput } from '../inputs/DragNumberInput';
+import { generateId } from '@/utils/idGenerator';
 
 interface NodeSettingsMenuProps {
   nodeId: string;
@@ -7,6 +9,7 @@ interface NodeSettingsMenuProps {
 
 export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   const nodes = useAppStore((s) => s.nodes);
+  const addNode = useAppStore((s) => s.addNode);
   const removeNode = useAppStore((s) => s.removeNode);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
@@ -16,13 +19,24 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
 
   const def = NODE_REGISTRY.get(node.data.registryType);
 
+  const handleDuplicate = () => {
+    const clone: typeof node = {
+      ...structuredClone(node),
+      id: generateId(),
+      position: { x: node.position.x + 30, y: node.position.y + 30 },
+      selected: false,
+    };
+    addNode(clone);
+    closeContextMenu();
+  };
+
   const handleDelete = () => {
     removeNode(nodeId);
     closeContextMenu();
   };
 
-  const handleValueChange = (key: string, value: string) => {
-    const numVal = parseFloat(value);
+  const handleValueChange = (key: string, value: string | number) => {
+    const numVal = typeof value === 'number' ? value : parseFloat(value);
     updateNodeData(nodeId, {
       values: {
         ...(node.data as { values?: Record<string, string | number> }).values,
@@ -41,43 +55,55 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
       </div>
 
       {def?.defaultValues &&
-        Object.entries(def.defaultValues).map(([key, defaultVal]) => (
-          <div
-            key={key}
-            style={{
-              padding: 'var(--space-1) var(--space-3)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 'var(--space-2)',
-            }}
-          >
-            <label
-              style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}
-            >
-              {key}
-            </label>
-            <input
-              type={typeof defaultVal === 'string' && defaultVal.startsWith('#') ? 'color' : 'number'}
-              defaultValue={
-                ((node.data as { values?: Record<string, string | number> }).values?.[key] ??
-                  defaultVal) as string | number
-              }
-              onChange={(e) => handleValueChange(key, e.target.value)}
+        Object.entries(def.defaultValues).map(([key, defaultVal]) => {
+          const isColor = typeof defaultVal === 'string' && defaultVal.startsWith('#');
+          const currentValue = (node.data as { values?: Record<string, string | number> }).values?.[key] ?? defaultVal;
+
+          return (
+            <div
+              key={key}
               style={{
-                width: '80px',
-                padding: '2px 4px',
-                background: 'var(--bg-input)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--border-radius-sm)',
-                fontSize: 'var(--font-size-xs)',
-                color: 'var(--text-primary)',
+                padding: 'var(--space-1) var(--space-3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 'var(--space-2)',
               }}
-            />
-          </div>
-        ))}
+            >
+              <label
+                style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}
+              >
+                {key}
+              </label>
+              {isColor ? (
+                <input
+                  type="color"
+                  defaultValue={String(currentValue)}
+                  onChange={(e) => handleValueChange(key, e.target.value)}
+                  style={{
+                    width: '80px',
+                    padding: '2px 4px',
+                    background: 'var(--bg-input)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--border-radius-sm)',
+                    fontSize: 'var(--font-size-xs)',
+                    color: 'var(--text-primary)',
+                  }}
+                />
+              ) : (
+                <DragNumberInput
+                  value={Number(currentValue)}
+                  onChange={(v) => handleValueChange(key, v)}
+                />
+              )}
+            </div>
+          );
+        })}
 
       <div className="context-menu__divider" />
+      <button className="context-menu__item" onClick={handleDuplicate}>
+        Duplicate Node
+      </button>
       <button className="context-menu__item" onClick={handleDelete} style={{ color: '#e74c3c' }}>
         Delete Node
       </button>

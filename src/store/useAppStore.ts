@@ -16,6 +16,56 @@ interface ContextMenuState {
   edgeId?: string;
 }
 
+interface HistoryEntry {
+  nodes: AppNode[];
+  edges: AppEdge[];
+}
+
+const MAX_HISTORY = 50;
+
+function loadRatio(key: string, fallback: number): number {
+  try {
+    const v = parseFloat(localStorage.getItem(key) ?? '');
+    return isNaN(v) ? fallback : Math.max(0.25, Math.min(0.75, v));
+  } catch {
+    return fallback;
+  }
+}
+
+function snapshot(nodes: AppNode[], edges: AppEdge[]): HistoryEntry {
+  return {
+    nodes: structuredClone(nodes),
+    edges: structuredClone(edges),
+  };
+}
+
+const STORAGE_KEY = 'fs:graph';
+
+function saveGraph(nodes: AppNode[], edges: AppEdge[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes, edges }));
+  } catch { /* quota exceeded or private mode */ }
+}
+
+export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
+      // Migrate: noise-category nodes should use 'preview' type
+      const noiseTypes = new Set(['noise', 'fractal', 'voronoi']);
+      for (const node of data.nodes) {
+        if (node.type === 'shader' && noiseTypes.has(node.data?.registryType)) {
+          node.type = 'preview';
+        }
+      }
+      return data;
+    }
+  } catch { /* corrupt data */ }
+  return null;
+}
+
 interface AppState {
   // Graph
   nodes: AppNode[];
@@ -32,9 +82,18 @@ interface AppState {
   syncSource: SyncSource;
   syncInProgress: boolean;
 
+  // Script mode (tsl-textures code evaluated directly)
+  activeScript: string | null;
+
+  // History (undo / redo)
+  history: HistoryEntry[];
+  historyIndex: number;
+  isUndoRedo: boolean;
+
   // UI
   contextMenu: ContextMenuState;
   splitRatio: number;
+  rightSplitRatio: number;
 
   // Graph actions
   setNodes: (nodes: AppNode[], source?: SyncSource) => void;
@@ -49,20 +108,29 @@ interface AppState {
   // Code actions
   setCode: (code: string, source?: SyncSource) => void;
   setCodeErrors: (errors: ParseError[]) => void;
+  codeSyncRequested: boolean;
+  requestCodeSync: () => void;
 
   // Complexity actions
   setTotalCost: (cost: number) => void;
 
   // Sync actions
   setSyncInProgress: (v: boolean) => void;
+  setActiveScript: (script: string | null) => void;
+
+  // History actions
+  pushHistory: () => void;
+  undo: () => void;
+  redo: () => void;
 
   // UI actions
   openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader' | 'edge', nodeId?: string, edgeId?: string) => void;
   closeContextMenu: () => void;
   setSplitRatio: (ratio: number) => void;
+  setRightSplitRatio: (ratio: number) => void;
 }
 
-export const useAppStore = create<AppState>()((set) => ({
+export const useAppStore = create<AppState>()((set, get) => ({
   nodes: [],
   edges: [],
   code: '',
@@ -70,14 +138,20 @@ export const useAppStore = create<AppState>()((set) => ({
   totalCost: 0,
   syncSource: 'initial',
   syncInProgress: false,
+  activeScript: null,
+  codeSyncRequested: false,
+  history: [],
+  historyIndex: -1,
+  isUndoRedo: false,
   contextMenu: { open: false, x: 0, y: 0, type: 'canvas' },
-  splitRatio: 0.6,
+  splitRatio: loadRatio('fs:splitRatio', 0.6),
+  rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6),
 
   setNodes: (nodes, source = 'graph') =>
-    set({ nodes, syncSource: source }),
+    set({ nodes, syncSource: source, isUndoRedo: false }),
 
   setEdges: (edges, source = 'graph') =>
-    set({ edges, syncSource: source }),
+    set({ edges, syncSource: source, isUndoRedo: false }),
 
   onNodesChange: (changes) =>
     set((state) => ({
@@ -91,38 +165,96 @@ export const useAppStore = create<AppState>()((set) => ({
       syncSource: 'graph',
     })),
 
-  addNode: (node) =>
-    set((state) => ({ nodes: [...state.nodes, node], syncSource: 'graph' })),
+  addNode: (node) => {
+    get().pushHistory();
+    set((state) => ({ nodes: [...state.nodes, node], syncSource: 'graph', isUndoRedo: false }));
+  },
 
-  removeNode: (nodeId) =>
+  removeNode: (nodeId) => {
+    get().pushHistory();
     set((state) => ({
       nodes: state.nodes.filter((n) => n.id !== nodeId),
       edges: state.edges.filter((e) => e.source !== nodeId && e.target !== nodeId),
       syncSource: 'graph',
-    })),
+      isUndoRedo: false,
+    }));
+  },
 
-  removeEdge: (edgeId) =>
+  removeEdge: (edgeId) => {
+    get().pushHistory();
     set((state) => ({
       edges: state.edges.filter((e) => e.id !== edgeId),
       syncSource: 'graph',
-    })),
+      isUndoRedo: false,
+    }));
+  },
 
-  updateNodeData: (nodeId, data) =>
+  updateNodeData: (nodeId, data) => {
+    get().pushHistory();
     set((state) => ({
       nodes: state.nodes.map((n) =>
         n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n
       ) as AppNode[],
       syncSource: 'graph',
-    })),
+      isUndoRedo: false,
+    }));
+  },
 
-  setCode: (code, source = 'code') =>
-    set({ code, syncSource: source }),
+  setCode: (code, source = 'code') => {
+    // Skip no-op: prevents Monaco onChange from flipping syncSource after programmatic updates
+    if (code === get().code && source === 'code') return;
+    if (source === 'code') {
+      // User typing — just store the code, don't trigger sync
+      set({ code });
+    } else {
+      set({ code, syncSource: source });
+    }
+  },
 
   setCodeErrors: (errors) => set({ codeErrors: errors }),
+
+  requestCodeSync: () => set({ codeSyncRequested: true }),
 
   setTotalCost: (cost) => set({ totalCost: cost }),
 
   setSyncInProgress: (v) => set({ syncInProgress: v }),
+
+  setActiveScript: (script) => set({ activeScript: script }),
+
+  pushHistory: () =>
+    set((state) => {
+      if (state.isUndoRedo) return {};
+      const entry = snapshot(state.nodes, state.edges);
+      const past = state.history.slice(0, state.historyIndex + 1);
+      const newHistory = [...past, entry].slice(-MAX_HISTORY);
+      return { history: newHistory, historyIndex: newHistory.length - 1 };
+    }),
+
+  undo: () =>
+    set((state) => {
+      if (state.historyIndex < 0) return {};
+      const entry = state.history[state.historyIndex];
+      return {
+        nodes: structuredClone(entry.nodes),
+        edges: structuredClone(entry.edges),
+        historyIndex: state.historyIndex - 1,
+        syncSource: 'graph',
+        isUndoRedo: true,
+      };
+    }),
+
+  redo: () =>
+    set((state) => {
+      if (state.historyIndex >= state.history.length - 1) return {};
+      const entry = state.history[state.historyIndex + 1];
+      return {
+        nodes: structuredClone(entry.nodes),
+        edges: structuredClone(entry.edges),
+        historyIndex: state.historyIndex + 1,
+        syncSource: 'graph',
+        isUndoRedo: true,
+      };
+    }),
 
   openContextMenu: (x, y, type, nodeId, edgeId) =>
     set({ contextMenu: { open: true, x, y, type, nodeId, edgeId } }),
@@ -130,6 +262,26 @@ export const useAppStore = create<AppState>()((set) => ({
   closeContextMenu: () =>
     set({ contextMenu: { open: false, x: 0, y: 0, type: 'canvas' } }),
 
-  setSplitRatio: (ratio) =>
-    set({ splitRatio: Math.max(0.25, Math.min(0.75, ratio)) }),
+  setSplitRatio: (ratio) => {
+    const clamped = Math.max(0.25, Math.min(0.75, ratio));
+    try { localStorage.setItem('fs:splitRatio', String(clamped)); } catch { /* */ }
+    set({ splitRatio: clamped });
+  },
+
+  setRightSplitRatio: (ratio) => {
+    const clamped = Math.max(0.25, Math.min(0.75, ratio));
+    try { localStorage.setItem('fs:rightSplitRatio', String(clamped)); } catch { /* */ }
+    set({ rightSplitRatio: clamped });
+  },
 }));
+
+// Auto-save graph to localStorage on changes
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+useAppStore.subscribe(
+  (state, prev) => {
+    if (state.nodes !== prev.nodes || state.edges !== prev.edges) {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => saveGraph(state.nodes, state.edges), 300);
+    }
+  },
+);

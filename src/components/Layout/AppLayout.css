@@ -45,12 +45,18 @@
   border-left: 1px solid var(--border-subtle);
 }
 
+.app-layout__code-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
 .app-layout__code {
   flex: 1;
   overflow: hidden;
 }
 
 .app-layout__preview {
-  flex-shrink: 0;
+  height: 100%;
   border-top: 1px solid var(--border-subtle);
 }

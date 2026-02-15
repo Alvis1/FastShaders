@@ -79,7 +79,8 @@ export function graphToCode(
     } else if (def.inputs.length === 0 && def.defaultValues) {
       // Type constructors with default values
       const nodeValues = (node.data as { values?: Record<string, string | number> }).values;
-      const val = nodeValues?.value ?? Object.values(def.defaultValues)[0];
+      const defaultKey = Object.keys(def.defaultValues)[0];
+      const val = nodeValues?.[defaultKey] ?? Object.values(def.defaultValues)[0];
       const formatted = typeof val === 'string' && val.startsWith('#')
         ? `0x${val.slice(1)}`
         : val;

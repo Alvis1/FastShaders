@@ -1,27 +1,36 @@
 import { useCallback, useRef, type ReactNode } from 'react';
-import { useAppStore } from '@/store/useAppStore';
 
 interface SplitPaneProps {
   left: ReactNode;
   right: ReactNode;
+  direction?: 'horizontal' | 'vertical';
+  ratio: number;
+  onRatioChange: (ratio: number) => void;
 }
 
-export function SplitPane({ left, right }: SplitPaneProps) {
-  const splitRatio = useAppStore((s) => s.splitRatio);
-  const setSplitRatio = useAppStore((s) => s.setSplitRatio);
+export function SplitPane({
+  left,
+  right,
+  direction = 'horizontal',
+  ratio,
+  onRatioChange,
+}: SplitPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  const isH = direction === 'horizontal';
 
   const handleMouseDown = useCallback(() => {
     dragging.current = true;
-    document.body.style.cursor = 'col-resize';
+    document.body.style.cursor = isH ? 'col-resize' : 'row-resize';
     document.body.style.userSelect = 'none';
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!dragging.current || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      const ratio = (e.clientX - rect.left) / rect.width;
-      setSplitRatio(ratio);
+      const newRatio = isH
+        ? (e.clientX - rect.left) / rect.width
+        : (e.clientY - rect.top) / rect.height;
+      onRatioChange(newRatio);
     };
 
     const handleMouseUp = () => {
@@ -34,25 +43,30 @@ export function SplitPane({ left, right }: SplitPaneProps) {
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [setSplitRatio]);
+  }, [isH, onRatioChange]);
+
+  const firstSize = isH
+    ? { width: `${ratio * 100}%` }
+    : { height: `${ratio * 100}%` };
 
   return (
     <div
       ref={containerRef}
       style={{
         display: 'flex',
+        flexDirection: isH ? 'row' : 'column',
         flex: 1,
         overflow: 'hidden',
       }}
     >
-      <div style={{ width: `${splitRatio * 100}%`, overflow: 'hidden' }}>
+      <div style={{ ...firstSize, overflow: 'hidden' }}>
         {left}
       </div>
       <div
         onMouseDown={handleMouseDown}
         style={{
-          width: '4px',
-          cursor: 'col-resize',
+          [isH ? 'width' : 'height']: '4px',
+          cursor: isH ? 'col-resize' : 'row-resize',
           background: 'var(--border-subtle)',
           flexShrink: 0,
           transition: 'background var(--transition-fast)',

@@ -54,4 +54,43 @@ declare module 'three/tsl' {
 `,
     'ts:three-tsl.d.ts'
   );
+
+  // Color provider: inline picker for 0xRRGGBB literals
+  type ITextModel = Parameters<Parameters<typeof monaco.languages.registerColorProvider>[1]['provideDocumentColors']>[0];
+  type IColorInfo = Parameters<Parameters<typeof monaco.languages.registerColorProvider>[1]['provideColorPresentations']>[1];
+
+  monaco.languages.registerColorProvider('javascript', {
+    provideDocumentColors(model: ITextModel) {
+      const matches: {
+        range: InstanceType<typeof monaco.Range>;
+        color: { red: number; green: number; blue: number; alpha: number };
+      }[] = [];
+      const regex = /0x([0-9a-fA-F]{6})\b/g;
+      for (let i = 1; i <= model.getLineCount(); i++) {
+        const line = model.getLineContent(i);
+        let m: RegExpExecArray | null;
+        regex.lastIndex = 0;
+        while ((m = regex.exec(line)) !== null) {
+          const hex = m[1];
+          matches.push({
+            range: new monaco.Range(i, m.index + 1, i, m.index + 1 + m[0].length),
+            color: {
+              red: parseInt(hex.slice(0, 2), 16) / 255,
+              green: parseInt(hex.slice(2, 4), 16) / 255,
+              blue: parseInt(hex.slice(4, 6), 16) / 255,
+              alpha: 1,
+            },
+          });
+        }
+      }
+      return matches;
+    },
+    provideColorPresentations(_model: ITextModel, colorInfo: IColorInfo) {
+      const { red, green, blue } = colorInfo.color;
+      const r = Math.round(red * 255).toString(16).padStart(2, '0');
+      const g = Math.round(green * 255).toString(16).padStart(2, '0');
+      const b = Math.round(blue * 255).toString(16).padStart(2, '0');
+      return [{ label: `0x${r}${g}${b}`.toUpperCase() }];
+    },
+  });
 }

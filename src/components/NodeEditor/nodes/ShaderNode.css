@@ -1,117 +1,38 @@
-/* ===== Node shell ===== */
-.shader-node {
-  min-width: var(--node-min-width);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-md);
-  box-shadow: var(--shadow-node);
-  font-family: var(--font-sans);
-  overflow: visible;
-  transition: box-shadow var(--transition-normal), border-color var(--transition-normal);
-}
+@import './NodeBase.css';
 
-.shader-node--selected {
-  box-shadow: var(--shadow-node-selected);
-  border-color: var(--border-focus);
-}
-
-/* ===== Header ===== */
-.shader-node__header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-surface);
-  border-radius: var(--border-radius-md) var(--border-radius-md) 0 0;
-}
-
-.shader-node__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.shader-node__title {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  flex: 1;
-}
-
-.shader-node__cost {
-  font-size: var(--font-size-xs);
-  color: var(--text-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-/* ===== Body (port rows) ===== */
-.shader-node__body {
-  padding: 4px 0;
-}
-
-/* Each port row is positioned so handles can be placed relative to it */
+/* ShaderNode row uses space-between + extra gap for left/right sides */
 .shader-node__row {
-  position: relative;
-  display: flex;
-  align-items: center;
   justify-content: space-between;
-  min-height: var(--node-row-height);
-  padding: 0 10px;
-  gap: 8px;
-}
-
-/* Override React Flow handle positioning to be relative to the row */
-.shader-node__row .react-flow__handle {
-  top: 50% !important;
-  transform: translateY(-50%) !important;
-}
-
-.shader-node__row .react-flow__handle-left {
-  left: calc(var(--handle-size) / -2) !important;
-}
-
-.shader-node__row .react-flow__handle-right {
-  right: calc(var(--handle-size) / -2) !important;
+  gap: 3px;
 }
 
 /* ===== Left / Right sides ===== */
 .shader-node__left {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 
 .shader-node__right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   margin-left: auto;
   min-width: 0;
 }
 
-/* ===== Port label ===== */
-.shader-node__port-label {
-  font-size: var(--font-size-xs);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
 /* ===== Inline number input ===== */
 .shader-node__input-num {
-  width: 52px;
-  height: 20px;
-  padding: 0 4px;
-  border: 1px solid var(--border-subtle);
+  width: 34px;
+  height: 13px;
+  padding: 0 2px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
   border-radius: var(--border-radius-sm);
-  background: var(--bg-input);
-  font-size: var(--font-size-xs);
+  background: rgba(255, 255, 255, 0.6);
+  font-size: 8px;
   font-family: var(--font-mono);
-  color: var(--text-primary);
+  color: rgba(0, 0, 0, 0.7);
   outline: none;
   -moz-appearance: textfield;
 }
@@ -123,21 +44,22 @@
 }
 
 .shader-node__input-num:focus {
-  border-color: var(--border-focus);
+  border-color: rgba(0, 0, 0, 0.35);
+  background: rgba(255, 255, 255, 0.85);
 }
 
 /* ===== Inline color picker ===== */
 .shader-node__color-wrap {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
 .shader-node__input-color {
-  width: 22px;
-  height: 20px;
+  width: 14px;
+  height: 13px;
   padding: 0;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid rgba(0, 0, 0, 0.15);
   border-radius: var(--border-radius-sm);
   cursor: pointer;
   background: none;
@@ -153,7 +75,7 @@
 }
 
 .shader-node__color-hex {
-  font-size: var(--font-size-xs);
+  font-size: 8px;
   font-family: var(--font-mono);
-  color: var(--text-muted);
+  color: rgba(0, 0, 0, 0.45);
 }

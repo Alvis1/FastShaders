@@ -2,8 +2,8 @@ import dagre from '@dagrejs/dagre';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
 
-const BASE_WIDTH = 180;
-const BASE_HEIGHT = 80;
+const NODE_WIDTH = 90;
+const NODE_HEIGHT = 40;
 
 export function autoLayout(
   nodes: AppNode[],
@@ -13,11 +13,11 @@ export function autoLayout(
   if (nodes.length === 0) return nodes;
 
   const g = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction, nodesep: 60, ranksep: 120 });
+  g.setGraph({ rankdir: direction, nodesep: 25, ranksep: 60 });
 
   for (const node of nodes) {
-    const scale = getCostScale(node.data.cost ?? 0);
-    g.setNode(node.id, { width: BASE_WIDTH * scale, height: BASE_HEIGHT * scale });
+    const scale = getCostScale((node.data as { cost?: number }).cost ?? 0);
+    g.setNode(node.id, { width: NODE_WIDTH * scale, height: NODE_HEIGHT * scale });
   }
 
   for (const edge of edges) {

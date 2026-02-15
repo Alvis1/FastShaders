@@ -42,6 +42,7 @@ import {
   mx_worley_noise_float,
 } from 'three/tsl';
 import type { AppNode, AppEdge } from '@/types';
+import { hexToRgb01 } from '@/utils/colorUtils';
 import { topologicalSort } from './topologicalSort';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -81,10 +82,7 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
     return vec3(x, y, z); // Simplified for colorNode
   },
   color: (_inputs, values) => {
-    const hex = String(values.hex ?? '#ff0000');
-    const r = parseInt(hex.slice(1, 3), 16) / 255;
-    const g = parseInt(hex.slice(3, 5), 16) / 255;
-    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    const [r, g, b] = hexToRgb01(String(values.hex ?? '#ff0000'));
     return tslColor(r, g, b);
   },
 
@@ -124,15 +122,26 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   cross: (inputs) => cross(inputs.a ?? vec3(1, 0, 0), inputs.b ?? vec3(0, 1, 0)),
 
   // Noise
-  noise: (inputs) => mx_noise_float(inputs.pos ?? positionGeometry),
-  fractal: (inputs, values) =>
-    mx_fractal_noise_float(
-      inputs.pos ?? positionGeometry,
+  noise: (inputs, values) => {
+    const pos = inputs.pos ?? positionGeometry;
+    const s = float(Number(values.scale ?? 1));
+    return mx_noise_float(pos.mul(s));
+  },
+  fractal: (inputs, values) => {
+    const pos = inputs.pos ?? positionGeometry;
+    const s = float(Number(values.scale ?? 1));
+    return mx_fractal_noise_float(
+      pos.mul(s),
       inputs.octaves ?? float(Number(values.octaves ?? 4)),
       inputs.lacunarity ?? float(Number(values.lacunarity ?? 2)),
       inputs.diminish ?? float(Number(values.diminish ?? 0.5))
-    ),
-  voronoi: (inputs) => mx_worley_noise_float(inputs.pos ?? positionGeometry),
+    );
+  },
+  voronoi: (inputs, values) => {
+    const pos = inputs.pos ?? positionGeometry;
+    const s = float(Number(values.scale ?? 1));
+    return mx_worley_noise_float(pos.mul(s));
+  },
 
   // Color
   hsl: (inputs) => {
