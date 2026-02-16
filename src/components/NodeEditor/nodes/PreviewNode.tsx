@@ -4,6 +4,7 @@ import type { PreviewFlowNode, NodeCategory, AppNode } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale } from '@/utils/colorUtils';
+import { evaluateNodeScalar } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
 import { CATEGORY_COLORS } from './ShaderNode';
 import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
@@ -80,7 +81,30 @@ export const PreviewNode = memo(function PreviewNode({
   const costColor = getCostColor(data.cost);
   const costScale = getCostScale(data.cost);
 
-  // Render noise preview — animate only the inputs driven by Time
+  // Snapshot nodes/edges for use inside rAF (avoid stale closures)
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  nodesRef.current = nodes;
+  edgesRef.current = edges;
+
+  /** Resolve each scalar input: connected edge → evaluate upstream, else → data.values fallback. */
+  const resolveValues = (
+    currentNodes: AppNode[],
+    currentEdges: typeof edges,
+    time: number,
+  ): Record<string, string | number> => {
+    const resolved: Record<string, string | number> = { ...data.values };
+    for (const edge of currentEdges) {
+      if (edge.target !== id) continue;
+      const handle = edge.targetHandle;
+      if (!handle) continue;
+      const val = evaluateNodeScalar(edge.source, currentNodes, currentEdges, time);
+      if (val !== null) resolved[handle] = val;
+    }
+    return resolved;
+  };
+
+  // Render noise preview — resolve upstream inputs via CPU evaluator
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !NOISE_TYPES.has(data.registryType)) return;
@@ -88,11 +112,12 @@ export const PreviewNode = memo(function PreviewNode({
     if (!ctx) return;
 
     if (!hasAnyTime) {
-      // Static render
+      // Static render — resolve upstream values once
+      const resolved = resolveValues(nodes, edges, 0);
       const imageData = renderNoisePreview(
         data.registryType as NoiseType,
         PREVIEW_SIZE,
-        data.values,
+        resolved,
         0,
         {},
       );
@@ -100,7 +125,7 @@ export const PreviewNode = memo(function PreviewNode({
       return;
     }
 
-    // Animated render — only time-connected inputs change
+    // Animated render — evaluate upstream each frame
     let rafId: number;
     let startTime: number | null = null;
 
@@ -108,10 +133,11 @@ export const PreviewNode = memo(function PreviewNode({
       if (startTime === null) startTime = timestamp;
       const t = (timestamp - startTime) / 1000;
 
+      const resolved = resolveValues(nodesRef.current, edgesRef.current, t);
       const imageData = renderNoisePreview(
         data.registryType as NoiseType,
         PREVIEW_SIZE,
-        data.values,
+        resolved,
         t,
         timeInputs,
       );
@@ -121,7 +147,7 @@ export const PreviewNode = memo(function PreviewNode({
 
     rafId = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafId);
-  }, [data.registryType, data.values, hasAnyTime, timeInputs.pos, timeInputs.octaves, timeInputs.lacunarity, timeInputs.diminish]);
+  }, [data.registryType, data.values, nodes, edges, hasAnyTime, timeInputs.pos, timeInputs.octaves, timeInputs.lacunarity, timeInputs.diminish]);
 
   return (
     <div

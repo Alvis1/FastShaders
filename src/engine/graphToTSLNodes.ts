@@ -5,7 +5,9 @@
  */
 import {
   float,
+  vec2 as tslVec2,
   vec3,
+  vec4 as tslVec4,
   color as tslColor,
   add,
   sub,
@@ -27,6 +29,8 @@ import {
   max,
   mix,
   smoothstep,
+  remap,
+  select,
   normalize,
   length,
   distance,
@@ -67,7 +71,7 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   vec2: (inputs) => {
     const x = inputs.x ?? float(0);
     const y = inputs.y ?? float(0);
-    return vec3(x, y, float(0)); // Simplified: return vec3
+    return tslVec2(x, y);
   },
   vec3: (inputs) => {
     const x = inputs.x ?? float(0);
@@ -79,40 +83,43 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
     const x = inputs.x ?? float(0);
     const y = inputs.y ?? float(0);
     const z = inputs.z ?? float(0);
-    return vec3(x, y, z); // Simplified for colorNode
+    const w = inputs.w ?? float(0);
+    return tslVec4(x, y, z, w);
   },
   color: (_inputs, values) => {
     const [r, g, b] = hexToRgb01(String(values.hex ?? '#ff0000'));
     return tslColor(r, g, b);
   },
 
-  // Arithmetic
-  add: (inputs) => add(inputs.a ?? float(0), inputs.b ?? float(0)),
-  sub: (inputs) => sub(inputs.a ?? float(0), inputs.b ?? float(0)),
-  mul: (inputs) => mul(inputs.a ?? float(1), inputs.b ?? float(1)),
-  div: (inputs) => div(inputs.a ?? float(1), inputs.b ?? float(1)),
+  // Arithmetic — fall back to manual values for unconnected inputs
+  add: (inputs, v) => add(inputs.a ?? float(Number(v.a ?? 0)), inputs.b ?? float(Number(v.b ?? 0))),
+  sub: (inputs, v) => sub(inputs.a ?? float(Number(v.a ?? 0)), inputs.b ?? float(Number(v.b ?? 0))),
+  mul: (inputs, v) => mul(inputs.a ?? float(Number(v.a ?? 1)), inputs.b ?? float(Number(v.b ?? 1))),
+  div: (inputs, v) => div(inputs.a ?? float(Number(v.a ?? 1)), inputs.b ?? float(Number(v.b ?? 1))),
 
   // Math (unary)
-  sin: (inputs) => sin(inputs.x ?? float(0)),
-  cos: (inputs) => cos(inputs.x ?? float(0)),
-  abs: (inputs) => abs(inputs.x ?? float(0)),
-  sqrt: (inputs) => sqrt(inputs.x ?? float(0)),
-  exp: (inputs) => exp(inputs.x ?? float(0)),
-  log2: (inputs) => log2(inputs.x ?? float(1)),
-  floor: (inputs) => floor(inputs.x ?? float(0)),
-  round: (inputs) => round(inputs.x ?? float(0)),
-  fract: (inputs) => fract(inputs.x ?? float(0)),
+  sin: (inputs, v) => sin(inputs.x ?? float(Number(v.x ?? 0))),
+  cos: (inputs, v) => cos(inputs.x ?? float(Number(v.x ?? 0))),
+  abs: (inputs, v) => abs(inputs.x ?? float(Number(v.x ?? 0))),
+  sqrt: (inputs, v) => sqrt(inputs.x ?? float(Number(v.x ?? 0))),
+  exp: (inputs, v) => exp(inputs.x ?? float(Number(v.x ?? 0))),
+  log2: (inputs, v) => log2(inputs.x ?? float(Number(v.x ?? 1))),
+  floor: (inputs, v) => floor(inputs.x ?? float(Number(v.x ?? 0))),
+  round: (inputs, v) => round(inputs.x ?? float(Number(v.x ?? 0))),
+  fract: (inputs, v) => fract(inputs.x ?? float(Number(v.x ?? 0))),
 
   // Math (binary)
-  pow: (inputs) => pow(inputs.base ?? float(1), inputs.exp ?? float(1)),
-  mod: (inputs) => mod(inputs.x ?? float(0), inputs.y ?? float(1)),
-  clamp: (inputs) => clamp(inputs.x ?? float(0), inputs.min ?? float(0), inputs.max ?? float(1)),
-  min: (inputs) => min(inputs.a ?? float(0), inputs.b ?? float(0)),
-  max: (inputs) => max(inputs.a ?? float(0), inputs.b ?? float(0)),
+  pow: (inputs, v) => pow(inputs.base ?? float(Number(v.base ?? 1)), inputs.exp ?? float(Number(v.exp ?? 1))),
+  mod: (inputs, v) => mod(inputs.x ?? float(Number(v.x ?? 0)), inputs.y ?? float(Number(v.y ?? 1))),
+  clamp: (inputs, v) => clamp(inputs.x ?? float(Number(v.x ?? 0)), inputs.min ?? float(Number(v.min ?? 0)), inputs.max ?? float(Number(v.max ?? 1))),
+  min: (inputs, v) => min(inputs.a ?? float(Number(v.a ?? 0)), inputs.b ?? float(Number(v.b ?? 0))),
+  max: (inputs, v) => max(inputs.a ?? float(Number(v.a ?? 0)), inputs.b ?? float(Number(v.b ?? 0))),
 
   // Interpolation
   mix: (inputs) => mix(inputs.a ?? vec3(0, 0, 0), inputs.b ?? vec3(1, 1, 1), inputs.t ?? float(0.5)),
   smoothstep: (inputs) => smoothstep(inputs.edge0 ?? float(0), inputs.edge1 ?? float(1), inputs.x ?? float(0.5)),
+  remap: (inputs) => remap(inputs.x ?? float(0), inputs.inLow ?? float(0), inputs.inHigh ?? float(1), inputs.outLow ?? float(0), inputs.outHigh ?? float(1)),
+  select: (inputs) => select(inputs.condition ?? float(0), inputs.a ?? float(0), inputs.b ?? float(0)),
 
   // Vector
   normalize: (inputs) => normalize(inputs.v ?? vec3(0, 1, 0)),
@@ -155,6 +162,8 @@ export interface CompileResult {
   colorNode: TSLNode | null;
   normalNode: TSLNode | null;
   positionNode: TSLNode | null;
+  opacityNode: TSLNode | null;
+  roughnessNode: TSLNode | null;
   success: boolean;
   error?: string;
 }
@@ -162,7 +171,7 @@ export interface CompileResult {
 export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileResult {
   try {
     if (nodes.length === 0) {
-      return { colorNode: vec3(1, 0, 0), normalNode: null, positionNode: null, success: true };
+      return { colorNode: vec3(1, 0, 0), normalNode: null, positionNode: null, opacityNode: null, roughnessNode: null, success: true };
     }
 
     const sorted = topologicalSort(nodes, edges);
@@ -200,6 +209,8 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
     let colorNode: TSLNode | null = null;
     let normalNode: TSLNode | null = null;
     let positionNode: TSLNode | null = null;
+    let opacityNode: TSLNode | null = null;
+    let roughnessNode: TSLNode | null = null;
 
     if (outputNode) {
       for (const edge of edges) {
@@ -217,6 +228,12 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
           case 'position':
             positionNode = sourceOutput;
             break;
+          case 'opacity':
+            opacityNode = sourceOutput;
+            break;
+          case 'roughness':
+            roughnessNode = sourceOutput;
+            break;
         }
       }
     }
@@ -226,9 +243,9 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
       colorNode = vec3(1, 0, 0);
     }
 
-    return { colorNode, normalNode, positionNode, success: true };
+    return { colorNode, normalNode, positionNode, opacityNode, roughnessNode, success: true };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { colorNode: vec3(1, 0, 0), normalNode: null, positionNode: null, success: false, error: msg };
+    return { colorNode: vec3(1, 0, 0), normalNode: null, positionNode: null, opacityNode: null, roughnessNode: null, success: false, error: msg };
   }
 }

@@ -10,12 +10,42 @@
   font-family: var(--font-sans);
   font-size: var(--font-size-xs);
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   color: #ffffff;
   white-space: nowrap;
 
+  display: flex;
+  align-items: center;
+  gap: 6px;
   animation: edge-info-enter 150ms ease-out;
+}
+
+.edge-info-card__type {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.edge-info-card__values {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 10px;
+}
+
+.edge-info-card__channel {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.edge-info-card__label {
+  font-weight: 700;
+  font-size: 9px;
+}
+
+.edge-info-card__num {
+  opacity: 0.9;
 }
 
 @keyframes edge-info-enter {

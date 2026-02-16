@@ -3,15 +3,13 @@ import { useAppStore } from '@/store/useAppStore';
 import { graphToCode } from '@/engine/graphToCode';
 import { codeToGraph } from '@/engine/codeToGraph';
 import { autoLayout } from '@/engine/layoutEngine';
-import { topologicalSort } from '@/engine/topologicalSort';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import complexityData from '@/registry/complexity.json';
 import { isTSLTexturesCode } from '@/engine/evaluateTSLScript';
-import type { AppNode, AppEdge } from '@/types';
+import type { AppNode } from '@/types';
 
 const NODE_W = 100;
 const NODE_H = 40;
-const RANK_GAP = NODE_W + 40;
 
 function findFreePosition(occupied: { x: number; y: number }[]): { x: number; y: number } {
   const cx = occupied.length > 0
@@ -37,34 +35,6 @@ function findFreePosition(occupied: { x: number; y: number }[]): { x: number; y:
   return { x: cx + occupied.length * (NODE_W + 40), y: cy };
 }
 
-function enforceFlowOrder(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
-  const posMap = new Map<string, { x: number; y: number }>();
-  for (const n of nodes) posMap.set(n.id, { ...n.position });
-
-  const adj = new Map<string, string[]>();
-  for (const e of edges) {
-    if (!adj.has(e.source)) adj.set(e.source, []);
-    adj.get(e.source)!.push(e.target);
-  }
-
-  const sorted = topologicalSort(nodes, edges);
-
-  for (const node of sorted) {
-    const srcPos = posMap.get(node.id);
-    if (!srcPos) continue;
-    for (const tgt of adj.get(node.id) ?? []) {
-      const tgtPos = posMap.get(tgt);
-      if (!tgtPos) continue;
-      const minX = srcPos.x + RANK_GAP;
-      if (tgtPos.x < minX) {
-        tgtPos.x = minX;
-      }
-    }
-  }
-
-  return nodes.map((n) => ({ ...n, position: posMap.get(n.id) ?? n.position }));
-}
-
 export function useSyncEngine() {
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
@@ -79,6 +49,10 @@ export function useSyncEngine() {
   const setSyncInProgress = useAppStore((s) => s.setSyncInProgress);
   const setActiveScript = useAppStore((s) => s.setActiveScript);
   const codeSyncRequested = useAppStore((s) => s.codeSyncRequested);
+
+  // Track last synced code to prevent auto-sync loops
+  const lastSyncedCodeRef = useRef('');
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Undo / Redo keyboard shortcuts
   useEffect(() => {
@@ -114,6 +88,7 @@ export function useSyncEngine() {
     try {
       const result = graphToCode(nodes, edges, NODE_REGISTRY);
       setCode(result.code, 'graph');
+      lastSyncedCodeRef.current = result.code;
     } finally {
       setSyncInProgress(false);
       if (useAppStore.getState().isUndoRedo) {
@@ -122,9 +97,9 @@ export function useSyncEngine() {
     }
   }, [nodes, edges, syncSource, syncInProgress, setCode, setSyncInProgress]);
 
-  // Code → Graph
+  // Code → Graph (with stable node matching)
   const doCodeSync = useCallback(
-    (codeStr: string) => {
+    (codeStr: string, skipHistory = false) => {
       if (isTSLTexturesCode(codeStr)) {
         setActiveScript(codeStr);
         setCodeErrors([]);
@@ -136,13 +111,17 @@ export function useSyncEngine() {
       try {
         const result = codeToGraph(codeStr, NODE_REGISTRY);
         if (result.errors.length === 0 && result.nodes.length > 0) {
-          useAppStore.getState().pushHistory();
+          if (!skipHistory) {
+            useAppStore.getState().pushHistory();
+          }
           const oldNodes = useAppStore.getState().nodes;
 
+          // Build ID mapping: newId → oldId (preserves React Flow identity)
+          const idMap = new Map<string, string>();
           const usedOldIds = new Set<string>();
           const positioned: AppNode[] = [];
-          const unpositioned: AppNode[] = [];
 
+          // Pass 1: exact match by registryType + label
           for (const newNode of result.nodes) {
             const match = oldNodes.find(
               (old) =>
@@ -152,17 +131,56 @@ export function useSyncEngine() {
             );
             if (match) {
               usedOldIds.add(match.id);
-              positioned.push({ ...newNode, position: { ...match.position } });
+              idMap.set(newNode.id, match.id);
+              positioned.push({
+                ...newNode,
+                id: match.id,
+                position: { ...match.position },
+              });
+            }
+          }
+
+          // Pass 2: match remaining by registryType only
+          const unpositioned: AppNode[] = [];
+          for (const newNode of result.nodes) {
+            if (idMap.has(newNode.id)) continue;
+            const match = oldNodes.find(
+              (old) =>
+                !usedOldIds.has(old.id) &&
+                old.data.registryType === newNode.data.registryType,
+            );
+            if (match) {
+              usedOldIds.add(match.id);
+              idMap.set(newNode.id, match.id);
+              positioned.push({
+                ...newNode,
+                id: match.id,
+                position: { ...match.position },
+              });
             } else {
               unpositioned.push(newNode);
             }
           }
 
+          // Remap edges to use preserved node IDs
+          const remappedEdges = result.edges.map((e) => {
+            const src = idMap.get(e.source) ?? e.source;
+            const tgt = idMap.get(e.target) ?? e.target;
+            return {
+              ...e,
+              source: src,
+              target: tgt,
+              id: `e-${src}-${tgt}-${e.targetHandle}`,
+            };
+          });
+
           let finalNodes: AppNode[];
           if (unpositioned.length > 0 && positioned.length === 0) {
-            finalNodes = autoLayout([...unpositioned], result.edges, 'LR');
+            // Entirely new graph — full auto-layout
+            finalNodes = autoLayout([...unpositioned], remappedEdges, 'LR');
           } else {
             if (unpositioned.length > 0) {
+              // Some new nodes — find free positions for them
               const occupied = positioned.map((n) => n.position);
               for (const node of unpositioned) {
                 node.position = findFreePosition(occupied);
@@ -173,11 +191,12 @@ export function useSyncEngine() {
             finalNodes = positioned;
           }
 
-          finalNodes = enforceFlowOrder(finalNodes, result.edges);
           setNodes(finalNodes, 'code');
-          setEdges(result.edges, 'code');
+          setEdges(remappedEdges, 'code');
         }
-        setCodeErrors(result.errors);
+        if (!skipHistory) {
+          setCodeErrors(result.errors);
+        }
       } finally {
         setSyncInProgress(false);
       }
@@ -185,12 +204,30 @@ export function useSyncEngine() {
     [setNodes, setEdges, setCodeErrors, setSyncInProgress, setActiveScript]
   );
 
-  // Code → Graph (triggered by Save button)
+  // Code → Graph (manual Save trigger)
   useEffect(() => {
     if (!codeSyncRequested || syncInProgress) return;
     useAppStore.setState({ codeSyncRequested: false });
+    lastSyncedCodeRef.current = code;
     doCodeSync(code);
   }, [codeSyncRequested, syncInProgress, doCodeSync, code]);
+
+  // Auto-sync: debounced code → graph when user edits code
+  useEffect(() => {
+    if (syncInProgress) return;
+    if (code === lastSyncedCodeRef.current) return;
+    if (!code.trim()) return;
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      lastSyncedCodeRef.current = code;
+      doCodeSync(code, true);
+    }, 600);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [code, syncInProgress, doCodeSync]);
 
   // Recalculate complexity
   useEffect(() => {

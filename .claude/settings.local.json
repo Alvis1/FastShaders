@@ -6,7 +6,8 @@
       "Bash(npx tsc:*)",
       "Bash(npx vite build:*)",
       "WebFetch(domain:app.nodetoy.co)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(wc:*)"
     ]
   }
 }
