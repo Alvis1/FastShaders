@@ -244,7 +244,7 @@ function createNode(id: string, def: NodeDefinition, label: string): AppNode {
 
   return {
     id,
-    type: def.type === 'output' ? 'output' : def.type === 'color' ? 'color' : def.category === 'noise' ? 'preview' : 'shader',
+    type: def.type === 'output' ? 'output' : def.type === 'color' ? 'color' : def.category === 'noise' ? 'preview' : def.type === 'sin' || def.type === 'cos' ? 'mathPreview' : 'shader',
     position: { x: 0, y: 0 },
     data: {
       registryType: def.type,

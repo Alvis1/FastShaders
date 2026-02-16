@@ -138,7 +138,11 @@ export function ShaderPreview() {
       const compiled = compileGraphToTSL(state.nodes, state.edges);
       if (compiled.success && compiled.colorNode) {
         material.colorNode = compiled.colorNode;
-        if (compiled.normalNode) material.normalNode = compiled.normalNode;
+        material.normalNode = compiled.normalNode ?? null;
+        material.positionNode = compiled.positionNode ?? null;
+        material.opacityNode = compiled.opacityNode ?? null;
+        material.roughnessNode = compiled.roughnessNode ?? null;
+        material.transparent = compiled.opacityNode != null;
         material.needsUpdate = true;
       }
 
@@ -187,6 +191,10 @@ export function ShaderPreview() {
     if (result.success) {
       material.colorNode = result.colorNode;
       material.normalNode = result.normalNode ?? null;
+      material.positionNode = result.positionNode ?? null;
+      material.opacityNode = result.opacityNode ?? null;
+      material.roughnessNode = result.roughnessNode ?? null;
+      material.transparent = result.opacityNode != null;
       material.needsUpdate = true;
     }
   }, [nodes, edges, activeScript]);

@@ -8,6 +8,7 @@ export type {
   ShaderFlowNode,
   ColorFlowNode,
   PreviewFlowNode,
+  MathPreviewFlowNode,
   OutputFlowNode,
   AppNode,
   TypedEdgeData,
@@ -15,15 +16,10 @@ export type {
 } from './node.types';
 
 export type {
-  ParsedTSLNode,
-  ParsedTSLArgument,
-  ParseResult,
-  OutputAssignment,
   ParseError,
   GeneratedCode,
 } from './tsl.types';
 
 export type {
   SyncSource,
-  SyncState,
 } from './sync.types';

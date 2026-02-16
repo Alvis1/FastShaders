@@ -35,8 +35,9 @@
 
 .node-editor .react-flow__nodesselection-rect,
 .node-editor .react-flow__selection {
-  background: transparent !important;
-  border: none !important;
+  background: rgba(99, 130, 255, 0.08) !important;
+  border: 1px solid rgba(99, 130, 255, 0.4) !important;
+  border-radius: 2px;
 }
 
 .node-editor .react-flow__edge-interaction {

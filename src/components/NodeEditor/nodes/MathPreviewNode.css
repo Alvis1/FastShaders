@@ -1,0 +1,61 @@
+@import './NodeBase.css';
+
+.math-preview-node {
+  position: relative;
+}
+
+.math-preview-node__canvas-wrap {
+  padding: 3px 5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.math-preview-node__canvas {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.math-preview-node__port-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 5px;
+  min-height: 16px;
+  position: relative;
+}
+
+.math-preview-node__left {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.math-preview-node__right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+/* Input handle in port row — positioned relative to row */
+.math-preview-node__port-row .react-flow__handle {
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+}
+
+.math-preview-node__port-row .react-flow__handle-left {
+  left: calc(var(--handle-size) / -2) !important;
+}
+
+/* Output handle — direct child, vertically centered on node */
+.math-preview-node > .react-flow__handle {
+  transform: translateY(-50%) !important;
+}
+
+.math-preview-node > .react-flow__handle-right {
+  right: calc(var(--handle-size) / -2) !important;
+}
