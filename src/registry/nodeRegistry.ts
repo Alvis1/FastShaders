@@ -1,4 +1,5 @@
 import type { NodeDefinition, NodeCategory } from '@/types';
+import { buildTSLTextureDefinitions } from './tslTexturesRegistry';
 
 const definitions: NodeDefinition[] = [
   // ===== INPUT NODES =====
@@ -373,6 +374,23 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'Result', dataType: 'vec3' }],
   },
 
+  // ===== SPLIT =====
+  {
+    type: 'split',
+    label: 'Split',
+    category: 'vector',
+    tslFunction: 'split',
+    tslImportModule: '',
+    inputs: [{ id: 'v', label: 'Vector', dataType: 'any' }],
+    outputs: [
+      { id: 'x', label: 'X', dataType: 'float' },
+      { id: 'y', label: 'Y', dataType: 'float' },
+      { id: 'z', label: 'Z', dataType: 'float' },
+      { id: 'w', label: 'W', dataType: 'float' },
+    ],
+    description: 'Split vector into components. Also: Separate',
+  },
+
   // ===== NOISE =====
   {
     type: 'noise',
@@ -443,6 +461,7 @@ const definitions: NodeDefinition[] = [
     tslImportModule: '',
     inputs: [
       { id: 'color', label: 'Color', dataType: 'color' },
+      { id: 'emissive', label: 'Emissive', dataType: 'color' },
       { id: 'normal', label: 'Normal', dataType: 'vec3' },
       { id: 'position', label: 'Position', dataType: 'vec3' },
       { id: 'opacity', label: 'Opacity', dataType: 'float' },
@@ -452,17 +471,19 @@ const definitions: NodeDefinition[] = [
   },
 ];
 
+const allDefinitions: NodeDefinition[] = [...definitions, ...buildTSLTextureDefinitions()];
+
 export const NODE_REGISTRY = new Map<string, NodeDefinition>(
-  definitions.map(d => [d.type, d])
+  allDefinitions.map(d => [d.type, d])
 );
 
 export const TSL_FUNCTION_TO_DEF = new Map<string, NodeDefinition>(
-  definitions.filter(d => d.tslFunction).map(d => [d.tslFunction, d])
+  allDefinitions.filter(d => d.tslFunction).map(d => [d.tslFunction, d])
 );
 
 export function searchNodes(query: string): NodeDefinition[] {
   const q = query.toLowerCase();
-  return definitions.filter(d =>
+  return allDefinitions.filter(d =>
     d.label.toLowerCase().includes(q) ||
     d.type.toLowerCase().includes(q) ||
     d.tslFunction.toLowerCase().includes(q) ||
@@ -471,5 +492,5 @@ export function searchNodes(query: string): NodeDefinition[] {
 }
 
 export function getAllDefinitions(): NodeDefinition[] {
-  return definitions;
+  return allDefinitions;
 }

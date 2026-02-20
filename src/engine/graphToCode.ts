@@ -1,5 +1,6 @@
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { getParamClassifications } from '@/registry/tslTexturesRegistry';
 import { topologicalSort } from './topologicalSort';
 
 export function graphToCode(
@@ -19,7 +20,7 @@ export function graphToCode(
 
   for (const node of sorted) {
     const def = registry.get(node.data.registryType);
-    if (!def || node.data.registryType === 'output') continue;
+    if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
 
     let baseName = def.tslFunction;
     // Clean up names for MaterialX functions
@@ -50,14 +51,19 @@ export function graphToCode(
   // Always need Fn
   addImport('three/tsl', 'Fn');
 
+  let needsTHREEImport = false;
   for (const node of sorted) {
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || !def.tslImportModule) continue;
     addImport(def.tslImportModule, def.tslFunction);
+    if (def.tslImportModule === 'tsl-textures') needsTHREEImport = true;
   }
 
   // Build import lines
   const importLines: string[] = [];
+  if (needsTHREEImport) {
+    importLines.push(`import * as THREE from 'three';`);
+  }
   for (const [module, names] of importsByModule) {
     const sortedNames = Array.from(names).sort();
     importLines.push(`import { ${sortedNames.join(', ')} } from '${module}';`);
@@ -68,12 +74,16 @@ export function graphToCode(
 
   for (const node of sorted) {
     const def = registry.get(node.data.registryType);
-    if (!def || node.data.registryType === 'output') continue;
+    if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
 
     const varName = varNames.get(node.id)!;
-    const args = resolveArguments(node, edges, varNames, def);
+    const args = resolveArguments(node, edges, varNames, def, sorted);
 
-    if (def.inputs.length === 0 && def.category === 'input') {
+    if (def.tslImportModule === 'tsl-textures') {
+      // tsl-textures: object parameter call
+      const objProps = buildTSLTextureCallProps(node, edges, varNames, def, sorted);
+      bodyLines.push(`  const ${varName} = ${def.tslFunction}({ ${objProps} });`);
+    } else if (def.inputs.length === 0 && def.category === 'input') {
       // Input nodes: bare reference (positionGeometry, time, etc.)
       bodyLines.push(`  const ${varName} = ${def.tslFunction};`);
     } else if (def.inputs.length === 0 && def.defaultValues) {
@@ -91,17 +101,34 @@ export function graphToCode(
     }
   }
 
-  // Handle output node return
+  // Handle output node — resolve all connected channels
   const outputNode = sorted.find((n) => n.data.registryType === 'output');
-  let returnLine = '  return vec3(1, 0, 0); // default red';
+  const OUTPUT_CHANNELS = ['color', 'emissive', 'normal', 'position', 'opacity', 'roughness'] as const;
+  const channels: Record<string, string> = {};
 
   if (outputNode) {
-    const colorEdge = edges.find(
-      (e) => e.target === outputNode.id && e.targetHandle === 'color'
-    );
-    if (colorEdge && varNames.has(colorEdge.source)) {
-      returnLine = `  return ${varNames.get(colorEdge.source)};`;
+    for (const ch of OUTPUT_CHANNELS) {
+      const edge = edges.find(
+        (e) => e.target === outputNode.id && e.targetHandle === ch
+      );
+      if (edge) {
+        const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+        if (ref) channels[ch] = ref;
+      }
     }
+  }
+
+  // Build return line — single value for color-only, object for multiple channels
+  let returnLine: string;
+  const channelEntries = Object.entries(channels);
+
+  if (channelEntries.length === 0) {
+    returnLine = '  return vec3(1, 0, 0); // default red';
+  } else if (channelEntries.length === 1 && channels.color) {
+    returnLine = `  return ${channels.color};`;
+  } else {
+    const props = channelEntries.map(([k, v]) => `${k}: ${v}`).join(', ');
+    returnLine = `  return { ${props} };`;
   }
 
   // Check if vec3 is needed for fallback
@@ -109,6 +136,9 @@ export function graphToCode(
     addImport('three/tsl', 'vec3');
     // Rebuild import lines
     importLines.length = 0;
+    if (needsTHREEImport) {
+      importLines.push(`import * as THREE from 'three';`);
+    }
     for (const [module, names] of importsByModule) {
       const sortedNames = Array.from(names).sort();
       importLines.push(`import { ${sortedNames.join(', ')} } from '${module}';`);
@@ -131,18 +161,41 @@ export function graphToCode(
   return { code, importStatements: importLines };
 }
 
+/** Resolve a source edge reference, looking through split nodes to inline swizzle. */
+function resolveEdgeRef(
+  edge: AppEdge,
+  edges: AppEdge[],
+  varNames: Map<string, string>,
+  sorted: AppNode[]
+): string | null {
+  const sourceNode = sorted.find(n => n.id === edge.source);
+  if (!sourceNode) return varNames.get(edge.source) ?? null;
+
+  // If source is a split node, inline as inputVar.component
+  if (sourceNode.data.registryType === 'split' && edge.sourceHandle && edge.sourceHandle !== 'out') {
+    const splitInputEdge = edges.find(e => e.target === sourceNode.id && e.targetHandle === 'v');
+    if (splitInputEdge && varNames.has(splitInputEdge.source)) {
+      return `${varNames.get(splitInputEdge.source)}.${edge.sourceHandle}`;
+    }
+  }
+
+  return varNames.get(edge.source) ?? null;
+}
+
 function resolveArguments(
   node: AppNode,
   edges: AppEdge[],
   varNames: Map<string, string>,
-  def: NodeDefinition
+  def: NodeDefinition,
+  sorted: AppNode[]
 ): string[] {
   return def.inputs.map((input) => {
     const edge = edges.find(
       (e) => e.target === node.id && e.targetHandle === input.id
     );
-    if (edge && varNames.has(edge.source)) {
-      return varNames.get(edge.source)!;
+    if (edge) {
+      const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+      if (ref) return ref;
     }
     // No connection: use node's stored value or placeholder
     const nodeValues = (node.data as { values?: Record<string, string | number> }).values;
@@ -150,4 +203,55 @@ function resolveArguments(
     if (val !== undefined) return String(val);
     return '0';
   });
+}
+
+function buildTSLTextureCallProps(
+  node: AppNode,
+  edges: AppEdge[],
+  varNames: Map<string, string>,
+  def: NodeDefinition,
+  sorted: AppNode[]
+): string {
+  const classifications = getParamClassifications(def.tslFunction);
+  const nodeValues = (node.data as { values?: Record<string, string | number> }).values ?? {};
+  const parts: string[] = [];
+
+  for (const param of classifications) {
+    if (param.kind === 'meta') continue;
+
+    // Check if this param has an edge connection
+    const edge = edges.find(
+      (e) => e.target === node.id && e.targetHandle === param.key
+    );
+
+    if (param.kind === 'tslRef') {
+      // Only include if connected to a different node
+      if (edge) {
+        const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+        if (ref) parts.push(`${param.key}: ${ref}`);
+      }
+    } else if (param.kind === 'number') {
+      if (edge) {
+        const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+        if (ref) { parts.push(`${param.key}: ${ref}`); }
+      } else {
+        const val = nodeValues[param.key] ?? param.defaultValue;
+        parts.push(`${param.key}: ${val}`);
+      }
+    } else if (param.kind === 'color') {
+      const hex = String(nodeValues[param.key] ?? '#000000');
+      parts.push(`${param.key}: new THREE.Color(0x${hex.slice(1).toUpperCase()})`);
+    } else if (param.kind === 'vec3') {
+      const x = Number(nodeValues[`${param.key}_x`] ?? 0);
+      const y = Number(nodeValues[`${param.key}_y`] ?? 0);
+      const z = Number(nodeValues[`${param.key}_z`] ?? 0);
+      parts.push(`${param.key}: new THREE.Vector3(${x}, ${y}, ${z})`);
+    } else if (param.kind === 'vec2') {
+      const x = Number(nodeValues[`${param.key}_x`] ?? 0);
+      const y = Number(nodeValues[`${param.key}_y`] ?? 0);
+      parts.push(`${param.key}: new THREE.Vector2(${x}, ${y})`);
+    }
+  }
+
+  return parts.join(', ');
 }

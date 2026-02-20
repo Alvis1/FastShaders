@@ -1,18 +1,22 @@
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
 import './CostBar.css';
-
-const MAX_BUDGET = 200;
 
 export function CostBar() {
   const totalCost = useAppStore((s) => s.totalCost);
-  const percentage = Math.min(totalCost / MAX_BUDGET, 1);
+  const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
+  const headset = VR_HEADSETS.find((h) => h.id === selectedHeadsetId) ?? VR_HEADSETS[0];
+  const maxBudget = headset.maxPoints;
+  const percentage = Math.min(totalCost / maxBudget, 1);
+  const over = totalCost > maxBudget;
 
   return (
     <div className="cost-bar">
       <div className="cost-bar__labels">
-        <span className="cost-bar__label-end">Low</span>
-        <span className="cost-bar__value">{totalCost}</span>
-        <span className="cost-bar__label-end">High</span>
+        <span className="cost-bar__label-end">0</span>
+        <span className={`cost-bar__value ${over ? 'cost-bar__value--over' : ''}`}>
+          {totalCost} / {maxBudget}
+        </span>
+        <span className="cost-bar__label-end">{maxBudget}</span>
       </div>
       <div className="cost-bar__track">
         <div

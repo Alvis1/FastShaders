@@ -15,10 +15,7 @@ interface ScriptResult {
  * (as opposed to the graph-generated Fn() wrapper style).
  */
 export function isTSLTexturesCode(code: string): boolean {
-  return (
-    /from\s+['"]tsl-textures['"]/.test(code) ||
-    /model\.material\.\w+Node\s*=/.test(code)
-  );
+  return /model\.material\.\w+Node\s*=/.test(code);
 }
 
 /**

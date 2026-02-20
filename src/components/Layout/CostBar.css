@@ -1,7 +1,5 @@
 .cost-bar {
-  padding: var(--space-2) var(--space-4);
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-3);
   flex-shrink: 0;
 }
 
@@ -9,26 +7,29 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--space-1);
+  margin-bottom: var(--space-2);
 }
 
 .cost-bar__label-end {
   font-size: var(--font-size-xs);
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-family: var(--font-mono);
 }
 
 .cost-bar__value {
   font-family: var(--font-mono);
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-md);
   font-weight: 700;
   color: var(--text-primary);
 }
 
+.cost-bar__value--over {
+  color: var(--cost-high);
+}
+
 .cost-bar__track {
-  height: 8px;
-  border-radius: 4px;
+  height: 10px;
+  border-radius: 5px;
   background: linear-gradient(
     to right,
     var(--cost-low) 0%,
@@ -41,8 +42,8 @@
 .cost-bar__indicator {
   position: absolute;
   top: -3px;
-  width: 4px;
-  height: 14px;
+  width: 5px;
+  height: 16px;
   background: var(--text-primary);
   border-radius: 2px;
   transform: translateX(-50%);

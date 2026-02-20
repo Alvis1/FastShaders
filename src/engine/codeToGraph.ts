@@ -157,6 +157,16 @@ function processCall(
   nodes.push(createNode(nodeId, def, varName));
   varToNodeId.set(varName, nodeId);
 
+  // tsl-textures: single object argument
+  if (
+    def.tslImportModule === 'tsl-textures' &&
+    callExpr.arguments.length === 1 &&
+    t.isObjectExpression(callExpr.arguments[0])
+  ) {
+    processObjectCall(callExpr.arguments[0], nodeId, def, nodes, edges, varToNodeId);
+    return;
+  }
+
   // Wire edges from arguments
   let inputIdx = 0;
 
@@ -228,6 +238,135 @@ function processCall(
   }
 }
 
+function processObjectCall(
+  objExpr: t.ObjectExpression,
+  nodeId: string,
+  def: NodeDefinition,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  varToNodeId: Map<string, string>
+): void {
+  const extractedValues: Record<string, string | number> = {};
+
+  for (const prop of objExpr.properties) {
+    if (!t.isObjectProperty(prop) || !t.isIdentifier(prop.key)) continue;
+    const key = prop.key.name;
+    const val = prop.value;
+
+    // Variable reference → wire as edge
+    if (t.isIdentifier(val)) {
+      const sourceId = varToNodeId.get(val.name);
+      const port = def.inputs.find((p) => p.id === key);
+      if (sourceId && port) {
+        edges.push({
+          id: `e-${sourceId}-${nodeId}-${port.id}`,
+          source: sourceId,
+          sourceHandle: 'out',
+          target: nodeId,
+          targetHandle: port.id,
+          type: 'typed' as const,
+          animated: true,
+          data: { dataType: port.dataType },
+        });
+      }
+      continue;
+    }
+
+    // new THREE.Color(0x...) or new Color(0x...)
+    const ctor = extractConstructor(val);
+    if (ctor) {
+      if (ctor.type === 'color') {
+        extractedValues[key] = ctor.hex;
+      } else if (ctor.type === 'vec3') {
+        extractedValues[`${key}_x`] = ctor.x;
+        extractedValues[`${key}_y`] = ctor.y;
+        extractedValues[`${key}_z`] = ctor.z;
+      } else if (ctor.type === 'vec2') {
+        extractedValues[`${key}_x`] = ctor.x;
+        extractedValues[`${key}_y`] = ctor.y;
+      }
+      continue;
+    }
+
+    // Numeric literal
+    const lit = extractLiteral(val);
+    if (lit !== undefined) {
+      extractedValues[key] = lit;
+    }
+  }
+
+  // Merge extracted values into the node
+  if (Object.keys(extractedValues).length > 0) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (node) {
+      const data = node.data as { values: Record<string, string | number> };
+      data.values = { ...data.values, ...extractedValues };
+    }
+  }
+}
+
+type ConstructorResult =
+  | { type: 'color'; hex: string }
+  | { type: 'vec3'; x: number; y: number; z: number }
+  | { type: 'vec2'; x: number; y: number };
+
+function extractConstructor(node: t.Node): ConstructorResult | null {
+  if (!t.isNewExpression(node)) return null;
+
+  let className: string | undefined;
+
+  // new Color(...) or new THREE.Color(...)
+  if (t.isIdentifier(node.callee)) {
+    className = node.callee.name;
+  } else if (
+    t.isMemberExpression(node.callee) &&
+    t.isIdentifier(node.callee.property)
+  ) {
+    className = node.callee.property.name;
+  }
+
+  if (!className) return null;
+
+  const args = node.arguments;
+
+  if (className === 'Color') {
+    // new THREE.Color(0xff0000) or new THREE.Color(r, g, b)
+    if (args.length === 1) {
+      const lit = extractLiteral(args[0] as t.Node);
+      if (typeof lit === 'number') {
+        return { type: 'color', hex: '#' + Math.round(lit).toString(16).padStart(6, '0') };
+      }
+      if (typeof lit === 'string') {
+        return { type: 'color', hex: lit.startsWith('#') ? lit : `#${lit}` };
+      }
+    } else if (args.length === 3) {
+      const r = extractLiteral(args[0] as t.Node) ?? 0;
+      const g = extractLiteral(args[1] as t.Node) ?? 0;
+      const b = extractLiteral(args[2] as t.Node) ?? 0;
+      const rHex = Math.round(Number(r) * 255).toString(16).padStart(2, '0');
+      const gHex = Math.round(Number(g) * 255).toString(16).padStart(2, '0');
+      const bHex = Math.round(Number(b) * 255).toString(16).padStart(2, '0');
+      return { type: 'color', hex: `#${rHex}${gHex}${bHex}` };
+    }
+    return { type: 'color', hex: '#ff0000' };
+  }
+
+  if (className === 'Vector3') {
+    const x = Number(extractLiteral(args[0] as t.Node) ?? 0);
+    const y = Number(extractLiteral(args[1] as t.Node) ?? 0);
+    const z = Number(extractLiteral(args[2] as t.Node) ?? 0);
+    return { type: 'vec3', x, y, z };
+  }
+
+  if (className === 'Vector2') {
+    const x = Number(extractLiteral(args[0] as t.Node) ?? 0);
+    const y = Number(extractLiteral(args[1] as t.Node) ?? 0);
+    return { type: 'vec2', x, y };
+  }
+
+  return null;
+}
+
 function extractLiteral(node: t.Node): string | number | undefined {
   if (t.isNumericLiteral(node)) return node.value;
   if (t.isStringLiteral(node)) return node.value;
@@ -240,7 +379,7 @@ function extractLiteral(node: t.Node): string | number | undefined {
 
 function createNode(id: string, def: NodeDefinition, label: string): AppNode {
   const costs = complexityData.costs as Record<string, number>;
-  const cost = costs[def.type] ?? 0;
+  const cost = costs[def.type] ?? (def.category === 'texture' ? 50 : 0);
 
   return {
     id,

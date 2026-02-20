@@ -79,3 +79,17 @@
   font-family: var(--font-mono);
   color: rgba(0, 0, 0, 0.45);
 }
+
+/* ===== Vector group (vec2/vec3) ===== */
+.shader-node__vec-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.shader-node__vec-label {
+  font-size: 8px;
+  color: rgba(0, 0, 0, 0.5);
+  margin-right: 1px;
+  min-width: 18px;
+}

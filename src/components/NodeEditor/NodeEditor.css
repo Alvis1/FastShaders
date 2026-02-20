@@ -5,6 +5,23 @@
   background: var(--bg-panel);
 }
 
+.node-editor__cost-overlay {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-4);
+  z-index: var(--z-controls);
+  width: 280px;
+}
+
+.node-editor__cost-overlay .cost-bar {
+  padding: var(--space-2);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
 /* Override React Flow default node styles */
 .node-editor .react-flow__node {
   border: none;
