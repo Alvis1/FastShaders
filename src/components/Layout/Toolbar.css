@@ -1,0 +1,92 @@
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  height: 40px;
+}
+
+.toolbar__left {
+  flex-shrink: 0;
+}
+
+.toolbar__brand {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.toolbar__center {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.toolbar__name-input {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--border-radius-sm);
+  padding: var(--space-1) var(--space-3);
+  text-align: center;
+  min-width: 200px;
+  max-width: 400px;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.toolbar__name-input:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.toolbar__name-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  background: var(--bg-input);
+}
+
+.toolbar__right {
+  flex-shrink: 0;
+}
+
+.toolbar__headset-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.toolbar__headset-select {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.toolbar__headset-select:hover {
+  border-color: var(--border-default);
+}
+
+.toolbar__headset-select:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}

@@ -17,13 +17,16 @@ export const CATEGORY_COLORS: Record<string, string> = {
   vector: 'var(--cat-vector)',
   noise: 'var(--cat-noise)',
   color: 'var(--cat-color)',
+  texture: 'var(--cat-texture)',
 };
 
 export interface PortRow {
   input: PortDefinition | null;
   output: PortDefinition | null;
   settingKey: string | null;
-  settingType: 'number' | 'color' | null;
+  settingType: 'number' | 'color' | 'vec3' | 'vec2' | null;
+  /** For vec3/vec2 rows, the base key (without _x/_y/_z suffix) */
+  vecBaseKey?: string;
 }
 
 export function buildRows(def: { inputs: PortDefinition[]; outputs: PortDefinition[]; defaultValues?: Record<string, string | number> }): PortRow[] {
@@ -31,29 +34,101 @@ export function buildRows(def: { inputs: PortDefinition[]; outputs: PortDefiniti
   const defaults = def.defaultValues ?? {};
 
   if (def.inputs.length === 0 && Object.keys(defaults).length > 0) {
-    // No input ports but has settings (float, color, uniform_float)
+    // No input ports but has settings (float, color, uniform_float, vec3, vec2)
     const keys = Object.keys(defaults);
-    const maxLen = Math.max(keys.length, def.outputs.length);
+    // Group _x/_y/_z keys into vec rows
+    const consumed = new Set<string>();
+    const orderedKeys: { key: string; type: 'number' | 'color' | 'vec3' | 'vec2'; baseKey?: string }[] = [];
+
+    for (const key of keys) {
+      if (consumed.has(key)) continue;
+      if (key.endsWith('_x')) {
+        const base = key.slice(0, -2);
+        if (keys.includes(`${base}_z`)) {
+          consumed.add(key);
+          consumed.add(`${base}_y`);
+          consumed.add(`${base}_z`);
+          orderedKeys.push({ key, type: 'vec3', baseKey: base });
+        } else if (keys.includes(`${base}_y`)) {
+          consumed.add(key);
+          consumed.add(`${base}_y`);
+          orderedKeys.push({ key, type: 'vec2', baseKey: base });
+        } else {
+          orderedKeys.push({ key, type: 'number' });
+        }
+      } else if (key.endsWith('_y') || key.endsWith('_z')) {
+        // Skip — already consumed by a vec group
+        if (!consumed.has(key)) orderedKeys.push({ key, type: 'number' });
+      } else {
+        orderedKeys.push({
+          key,
+          type: String(defaults[key]).startsWith('#') ? 'color' : 'number',
+        });
+      }
+    }
+
+    const maxLen = Math.max(orderedKeys.length, def.outputs.length);
     for (let i = 0; i < maxLen; i++) {
-      const key = keys[i] ?? null;
+      const entry = orderedKeys[i];
       rows.push({
         input: null,
         output: def.outputs[i] ?? null,
-        settingKey: key,
-        settingType: key ? (String(defaults[key]).startsWith('#') ? 'color' : 'number') : null,
+        settingKey: entry?.key ?? null,
+        settingType: entry?.type ?? null,
+        vecBaseKey: entry?.baseKey,
       });
     }
   } else {
-    const maxLen = Math.max(def.inputs.length, def.outputs.length);
+    // Collect non-port settings (vec3/vec2/color keys not in inputs)
+    const portIds = new Set(def.inputs.map(inp => inp.id));
+    const extraSettings: { key: string; type: 'number' | 'color' | 'vec3' | 'vec2'; baseKey?: string }[] = [];
+    const consumed = new Set<string>();
+    const allKeys = Object.keys(defaults);
+
+    for (const key of allKeys) {
+      if (consumed.has(key) || portIds.has(key)) continue;
+      if (key.endsWith('_x')) {
+        const base = key.slice(0, -2);
+        if (!portIds.has(base)) {
+          if (allKeys.includes(`${base}_z`)) {
+            consumed.add(key); consumed.add(`${base}_y`); consumed.add(`${base}_z`);
+            extraSettings.push({ key, type: 'vec3', baseKey: base });
+          } else if (allKeys.includes(`${base}_y`)) {
+            consumed.add(key); consumed.add(`${base}_y`);
+            extraSettings.push({ key, type: 'vec2', baseKey: base });
+          }
+        }
+      } else if (key.endsWith('_y') || key.endsWith('_z')) {
+        // skip consumed
+      } else if (!portIds.has(key)) {
+        extraSettings.push({
+          key,
+          type: String(defaults[key]).startsWith('#') ? 'color' : 'number',
+        });
+      }
+    }
+
+    const maxLen = Math.max(def.inputs.length + extraSettings.length, def.outputs.length);
     for (let i = 0; i < maxLen; i++) {
-      const inp = def.inputs[i] ?? null;
-      const key = inp && inp.id in defaults ? inp.id : null;
-      rows.push({
-        input: inp,
-        output: def.outputs[i] ?? null,
-        settingKey: key,
-        settingType: key ? (String(defaults[key]).startsWith('#') ? 'color' : 'number') : null,
-      });
+      if (i < def.inputs.length) {
+        const inp = def.inputs[i];
+        const key = inp.id in defaults ? inp.id : null;
+        rows.push({
+          input: inp,
+          output: def.outputs[i] ?? null,
+          settingKey: key,
+          settingType: key ? (String(defaults[key]).startsWith('#') ? 'color' : 'number') : null,
+        });
+      } else {
+        const extra = extraSettings[i - def.inputs.length];
+        rows.push({
+          input: null,
+          output: def.outputs[i] ?? null,
+          settingKey: extra?.key ?? null,
+          settingType: extra?.type ?? null,
+          vecBaseKey: extra?.baseKey,
+        });
+      }
     }
   }
 
@@ -151,6 +226,38 @@ export const ShaderNode = memo(function ShaderNode({
                     <span className="shader-node__color-hex">
                       {String(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? '#ff0000')}
                     </span>
+                  </span>
+                )}
+                {row.settingType === 'vec3' && row.vecBaseKey && (
+                  <span className="shader-node__vec-group">
+                    <span className="shader-node__vec-label">{row.vecBaseKey}</span>
+                    {['x', 'y', 'z'].map((axis) => {
+                      const k = `${row.vecBaseKey}_${axis}`;
+                      return (
+                        <DragNumberInput
+                          key={axis}
+                          compact
+                          value={Number(data.values[k] ?? def.defaultValues?.[k] ?? 0)}
+                          onChange={(v) => handleChange(k, String(v))}
+                        />
+                      );
+                    })}
+                  </span>
+                )}
+                {row.settingType === 'vec2' && row.vecBaseKey && (
+                  <span className="shader-node__vec-group">
+                    <span className="shader-node__vec-label">{row.vecBaseKey}</span>
+                    {['x', 'y'].map((axis) => {
+                      const k = `${row.vecBaseKey}_${axis}`;
+                      return (
+                        <DragNumberInput
+                          key={axis}
+                          compact
+                          value={Number(data.values[k] ?? def.defaultValues?.[k] ?? 0)}
+                          onChange={(v) => handleChange(k, String(v))}
+                        />
+                      );
+                    })}
                   </span>
                 )}
                 {/* Inline value for unconnected ports without defaultValues */}

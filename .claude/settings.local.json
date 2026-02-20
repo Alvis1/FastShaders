@@ -7,7 +7,16 @@
       "Bash(npx vite build:*)",
       "WebFetch(domain:app.nodetoy.co)",
       "Bash(find:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(node:*)",
+      "WebFetch(domain:aframe.io)",
+      "Bash(curl:*)",
+      "Bash(npm run dev:*)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(npm view:*)",
+      "WebFetch(domain:cdn.jsdelivr.net)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm install:*)"
     ]
   }
 }

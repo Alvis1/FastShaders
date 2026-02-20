@@ -1,5 +1,5 @@
-import { CostBar } from './CostBar';
 import { SplitPane } from './SplitPane';
+import { Toolbar } from './Toolbar';
 import { NodeEditor } from '@/components/NodeEditor/NodeEditor';
 import { CodeEditor } from '@/components/CodeEditor/CodeEditor';
 import { ShaderPreview } from '@/components/Preview/ShaderPreview';
@@ -14,7 +14,7 @@ export function AppLayout() {
 
   return (
     <div className="app-layout">
-      <CostBar />
+      <Toolbar />
       <SplitPane
         ratio={splitRatio}
         onRatioChange={setSplitRatio}

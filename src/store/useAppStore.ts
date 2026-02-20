@@ -66,6 +66,20 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
   return null;
 }
 
+export interface VRHeadset {
+  id: string;
+  label: string;
+  maxPoints: number;
+}
+
+export const VR_HEADSETS: VRHeadset[] = [
+  { id: 'quest3', label: 'Meta Quest 3', maxPoints: 150 },
+  { id: 'quest3s', label: 'Meta Quest 3s', maxPoints: 120 },
+  { id: 'steamframe', label: 'Steam Frame', maxPoints: 300 },
+  { id: 'pico4', label: 'Pico 4', maxPoints: 100 },
+  { id: 'visionpro', label: 'Apple Vision Pro', maxPoints: 400 },
+];
+
 interface AppState {
   // Graph
   nodes: AppNode[];
@@ -94,6 +108,10 @@ interface AppState {
   contextMenu: ContextMenuState;
   splitRatio: number;
   rightSplitRatio: number;
+
+  // Shader name + headset
+  shaderName: string;
+  selectedHeadsetId: string;
 
   // Graph actions
   setNodes: (nodes: AppNode[], source?: SyncSource) => void;
@@ -128,6 +146,10 @@ interface AppState {
   closeContextMenu: () => void;
   setSplitRatio: (ratio: number) => void;
   setRightSplitRatio: (ratio: number) => void;
+
+  // Shader name + headset actions
+  setShaderName: (name: string) => void;
+  setSelectedHeadsetId: (id: string) => void;
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
@@ -146,6 +168,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   contextMenu: { open: false, x: 0, y: 0, type: 'canvas' },
   splitRatio: loadRatio('fs:splitRatio', 0.6),
   rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6),
+  shaderName: (() => { try { return localStorage.getItem('fs:shaderName') || 'My Shader'; } catch { return 'My Shader'; } })(),
+  selectedHeadsetId: (() => { try { return localStorage.getItem('fs:headsetId') || 'quest3'; } catch { return 'quest3'; } })(),
 
   setNodes: (nodes, source = 'graph') =>
     set({ nodes, syncSource: source, isUndoRedo: false }),
@@ -272,6 +296,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const clamped = Math.max(0.25, Math.min(0.75, ratio));
     try { localStorage.setItem('fs:rightSplitRatio', String(clamped)); } catch { /* */ }
     set({ rightSplitRatio: clamped });
+  },
+
+  setShaderName: (name) => {
+    try { localStorage.setItem('fs:shaderName', name); } catch { /* */ }
+    set({ shaderName: name });
+  },
+
+  setSelectedHeadsetId: (id) => {
+    try { localStorage.setItem('fs:headsetId', id); } catch { /* */ }
+    set({ selectedHeadsetId: id });
   },
 }));
 

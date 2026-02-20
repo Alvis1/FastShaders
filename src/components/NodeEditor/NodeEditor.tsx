@@ -20,6 +20,7 @@ import { MathPreviewNode } from './nodes/MathPreviewNode';
 import { OutputNode } from './nodes/OutputNode';
 import { TypedEdge } from './edges/TypedEdge';
 import { ContextMenu } from './menus/ContextMenu';
+import { CostBar } from '@/components/Layout/CostBar';
 import { getCostColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
@@ -392,6 +393,9 @@ export function NodeEditor() {
 
   return (
     <div className="node-editor">
+      <div className="node-editor__cost-overlay">
+        <CostBar />
+      </div>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -415,7 +419,7 @@ export function NodeEditor() {
         deleteKeyCode={null}
         panActivationKeyCode={null}
         edgesReconnectable
-        connectionRadius={80}
+        connectionRadius={40}
         selectionOnDrag
         selectionMode={SelectionMode.Partial}
         panOnDrag={[1, 2]}

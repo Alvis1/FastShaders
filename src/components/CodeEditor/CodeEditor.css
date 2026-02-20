@@ -9,16 +9,46 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-3);
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+  gap: var(--space-2);
 }
 
-.code-editor__title {
-  font-size: var(--font-size-sm);
+.code-editor__tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.code-editor__tab {
+  padding: 3px 12px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.code-editor__tab:hover {
   color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.code-editor__tab--active {
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.06);
+  border-color: var(--border-subtle);
+}
+
+.code-editor__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
 }
 
 .code-editor__errors {
@@ -30,7 +60,6 @@
 }
 
 .code-editor__save {
-  margin-left: auto;
   padding: 3px 14px;
   font-size: var(--font-size-xs);
   font-weight: 600;
@@ -43,6 +72,22 @@
 }
 
 .code-editor__save:hover {
+  background: var(--text-primary);
+}
+
+.code-editor__download {
+  padding: 3px 14px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: white;
+  background: var(--text-accent);
+  border: none;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.code-editor__download:hover {
   background: var(--text-primary);
 }
 
@@ -69,4 +114,8 @@
 .code-editor__body {
   flex: 1;
   overflow: hidden;
+}
+
+.code-editor__pane {
+  height: 100%;
 }

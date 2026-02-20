@@ -45,7 +45,11 @@ import {
   mx_fractal_noise_float,
   mx_worley_noise_float,
 } from 'three/tsl';
+import { Color, Vector2, Vector3 } from 'three';
+import * as tslTextures from 'tsl-textures';
 import type { AppNode, AppEdge } from '@/types';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { getParamClassifications } from '@/registry/tslTexturesRegistry';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { topologicalSort } from './topologicalSort';
 
@@ -122,6 +126,7 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   select: (inputs) => select(inputs.condition ?? float(0), inputs.a ?? float(0), inputs.b ?? float(0)),
 
   // Vector
+  split: (inputs) => inputs.v ?? vec3(0, 0, 0),
   normalize: (inputs) => normalize(inputs.v ?? vec3(0, 1, 0)),
   length: (inputs) => length(inputs.v ?? vec3(0, 0, 0)),
   distance: (inputs) => distance(inputs.a ?? vec3(0, 0, 0), inputs.b ?? vec3(0, 0, 0)),
@@ -158,8 +163,72 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   toHsl: (inputs) => inputs.rgb ?? vec3(0, 0, 0),
 };
 
+// Dynamic factory for tsl-textures nodes (auto-registered)
+const tslTexFactoryCache = new Map<string, ((inputs: Record<string, TSLNode>, values: Record<string, string | number>) => TSLNode) | null>();
+
+function getTSLTextureFactory(registryType: string): ((inputs: Record<string, TSLNode>, values: Record<string, string | number>) => TSLNode) | null {
+  if (tslTexFactoryCache.has(registryType)) return tslTexFactoryCache.get(registryType)!;
+
+  const def = NODE_REGISTRY.get(registryType);
+  if (!def || def.tslImportModule !== 'tsl-textures') {
+    tslTexFactoryCache.set(registryType, null);
+    return null;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const texFn = (tslTextures as Record<string, any>)[def.tslFunction];
+  if (typeof texFn !== 'function') {
+    tslTexFactoryCache.set(registryType, null);
+    return null;
+  }
+
+  const classifications = getParamClassifications(def.tslFunction);
+
+  const factory = (resolvedInputs: Record<string, TSLNode>, values: Record<string, string | number>): TSLNode => {
+    const params: Record<string, unknown> = {};
+
+    for (const param of classifications) {
+      if (param.kind === 'meta') continue;
+
+      if (param.kind === 'tslRef') {
+        if (resolvedInputs[param.key] !== undefined) {
+          params[param.key] = resolvedInputs[param.key];
+        }
+        // Omit → library uses its own default (positionGeometry, time, etc.)
+      } else if (param.kind === 'number') {
+        if (resolvedInputs[param.key] !== undefined) {
+          params[param.key] = resolvedInputs[param.key];
+        } else {
+          params[param.key] = Number(values[param.key] ?? param.defaultValue ?? 0);
+        }
+      } else if (param.kind === 'color') {
+        const hex = String(values[param.key] ?? '#000000');
+        const [r, g, b] = hexToRgb01(hex);
+        params[param.key] = new Color(r, g, b);
+      } else if (param.kind === 'vec3') {
+        params[param.key] = new Vector3(
+          Number(values[`${param.key}_x`] ?? 0),
+          Number(values[`${param.key}_y`] ?? 0),
+          Number(values[`${param.key}_z`] ?? 0),
+        );
+      } else if (param.kind === 'vec2') {
+        params[param.key] = new Vector2(
+          Number(values[`${param.key}_x`] ?? 0),
+          Number(values[`${param.key}_y`] ?? 0),
+        );
+      }
+    }
+
+    return texFn(params);
+  };
+
+  tslTexFactoryCache.set(registryType, factory);
+  return factory;
+}
+
 export interface CompileResult {
   colorNode: TSLNode | null;
+  emissiveNode: TSLNode | null;
   normalNode: TSLNode | null;
   positionNode: TSLNode | null;
   opacityNode: TSLNode | null;
@@ -171,7 +240,7 @@ export interface CompileResult {
 export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileResult {
   try {
     if (nodes.length === 0) {
-      return { colorNode: vec3(1, 0, 0), normalNode: null, positionNode: null, opacityNode: null, roughnessNode: null, success: true };
+      return { colorNode: vec3(1, 0, 0), emissiveNode: null, normalNode: null, positionNode: null, opacityNode: null, roughnessNode: null, success: true };
     }
 
     const sorted = topologicalSort(nodes, edges);
@@ -182,7 +251,7 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
     for (const node of sorted) {
       if (node.data.registryType === 'output') continue;
 
-      const factory = TSL_FACTORIES[node.data.registryType];
+      const factory = TSL_FACTORIES[node.data.registryType] ?? getTSLTextureFactory(node.data.registryType);
       if (!factory) continue;
 
       // Resolve inputs from incoming edges
@@ -191,7 +260,12 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
         if (edge.target === node.id && edge.targetHandle) {
           const sourceOutput = nodeOutputs.get(edge.source);
           if (sourceOutput !== undefined) {
-            resolvedInputs[edge.targetHandle] = sourceOutput;
+            const sh = edge.sourceHandle;
+            if (sh && sh !== 'out' && (sh === 'x' || sh === 'y' || sh === 'z' || sh === 'w')) {
+              resolvedInputs[edge.targetHandle] = sourceOutput[sh];
+            } else {
+              resolvedInputs[edge.targetHandle] = sourceOutput;
+            }
           }
         }
       }
@@ -207,6 +281,7 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
     // Find the output node and resolve its connections
     const outputNode = sorted.find((n) => n.data.registryType === 'output');
     let colorNode: TSLNode | null = null;
+    let emissiveNode: TSLNode | null = null;
     let normalNode: TSLNode | null = null;
     let positionNode: TSLNode | null = null;
     let opacityNode: TSLNode | null = null;
@@ -215,12 +290,21 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
     if (outputNode) {
       for (const edge of edges) {
         if (edge.target !== outputNode.id) continue;
-        const sourceOutput = nodeOutputs.get(edge.source);
+        let sourceOutput = nodeOutputs.get(edge.source);
         if (!sourceOutput) continue;
+
+        // Handle swizzle from split-like nodes
+        const sh = edge.sourceHandle;
+        if (sh && sh !== 'out' && (sh === 'x' || sh === 'y' || sh === 'z' || sh === 'w')) {
+          sourceOutput = sourceOutput[sh];
+        }
 
         switch (edge.targetHandle) {
           case 'color':
             colorNode = sourceOutput;
+            break;
+          case 'emissive':
+            emissiveNode = sourceOutput;
             break;
           case 'normal':
             normalNode = sourceOutput;
@@ -243,9 +327,9 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
       colorNode = vec3(1, 0, 0);
     }
 
-    return { colorNode, normalNode, positionNode, opacityNode, roughnessNode, success: true };
+    return { colorNode, emissiveNode, normalNode, positionNode, opacityNode, roughnessNode, success: true };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { colorNode: vec3(1, 0, 0), normalNode: null, positionNode: null, opacityNode: null, roughnessNode: null, success: false, error: msg };
+    return { colorNode: vec3(1, 0, 0), emissiveNode: null, normalNode: null, positionNode: null, opacityNode: null, roughnessNode: null, success: false, error: msg };
   }
 }

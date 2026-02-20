@@ -184,6 +184,25 @@ function evaluate(
       }) : null;
       break;
     }
+    case 'remap': {
+      const x = channelInput('x', 0);
+      const inLow = scalarInput('inLow', 0);
+      const inHigh = scalarInput('inHigh', 1);
+      const outLow = scalarInput('outLow', 0);
+      const outHigh = scalarInput('outHigh', 1);
+      result = x ? x.map((v) => {
+        const t = (inHigh - inLow) !== 0 ? (v - inLow) / (inHigh - inLow) : 0;
+        return outLow + t * (outHigh - outLow);
+      }) : null;
+      break;
+    }
+    case 'select': {
+      const cond = scalarInput('condition', 0);
+      const a = channelInput('a', 0);
+      const b = channelInput('b', 0);
+      result = cond >= 0.5 ? a : b;
+      break;
+    }
 
     // Vector ops that return scalar
     case 'length': {

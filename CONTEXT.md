@@ -15,7 +15,7 @@ src/
 ├── vite-env.d.ts                      # Type declarations (tsl-textures module)
 ├── components/
 │   ├── CodeEditor/
-│   │   ├── CodeEditor.tsx             # Monaco editor with TSL syntax + Save button
+│   │   ├── CodeEditor.tsx             # Monaco editor with TSL/A-Frame tabs, Save button
 │   │   ├── CodeEditor.css
 │   │   └── tslLanguage.ts             # TSL language definition, completions, color picker
 │   ├── Layout/
@@ -27,7 +27,7 @@ src/
 │   │   ├── NodeEditor.tsx             # React Flow canvas + keyboard shortcuts + interaction handlers
 │   │   ├── NodeEditor.css
 │   │   ├── nodes/
-│   │   │   ├── ShaderNode.tsx         # Generic node for all ~40 TSL types (dynamic from registry)
+│   │   │   ├── ShaderNode.tsx         # Generic node for all TSL types (dynamic from registry, vec3/vec2 grouped display)
 │   │   │   ├── ShaderNode.css
 │   │   │   ├── ColorNode.tsx          # Color picker node
 │   │   │   ├── PreviewNode.tsx        # Noise preview with animated canvas (noise, fractal, voronoi)
@@ -56,8 +56,9 @@ src/
 │       └── ShaderPreview.css
 ├── engine/
 │   ├── graphToCode.ts                 # Graph → TSL code string (import statements + Fn() wrapper)
-│   ├── codeToGraph.ts                 # TSL code → nodes + edges (Babel AST parsing)
+│   ├── codeToGraph.ts                 # TSL code → nodes + edges (Babel AST parsing, incl. object literals)
 │   ├── graphToTSLNodes.ts             # Graph → live Three.js TSL node objects (all 5 output channels)
+│   ├── tslToAFrame.ts                 # TSL code → A-Frame component string (read-only conversion)
 │   ├── layoutEngine.ts                # Dagre auto-layout (LR, nodesep=25, ranksep=60)
 │   ├── cpuEvaluator.ts                # CPU-side graph evaluator for real-time values (multi-channel)
 │   ├── topologicalSort.ts             # Kahn's algorithm for execution order
@@ -65,7 +66,8 @@ src/
 ├── hooks/
 │   └── useSyncEngine.ts               # Bidirectional sync hook (watches graph/code changes)
 ├── registry/
-│   ├── nodeRegistry.ts                # ~44 TSL node definitions (type, ports, defaults, tslFunction)
+│   ├── nodeRegistry.ts                # ~90+ TSL node definitions (core + auto-registered tsl-textures)
+│   ├── tslTexturesRegistry.ts         # Auto-registers ~49 tsl-textures functions as nodes from .defaults
 │   ├── nodeCategories.ts              # Category metadata (id + label)
 │   └── complexity.json                # GPU cost per operation
 ├── store/
@@ -103,18 +105,29 @@ const shader = Fn(() => {
 export default shader;
 ```
 
-**Script Mode** — User pastes tsl-textures code. Detected by `isTSLTexturesCode()`. Evaluated via `evaluateTSLScript()` using `new Function()` with THREE + tsl-textures in scope. Bypasses graph sync.
+**Script Mode** — User pastes tsl-textures code with `model.material` assignments. Detected by `isTSLTexturesCode()` (matches `model.material.XNode =` pattern only). Evaluated via `evaluateTSLScript()` using `new Function()` with THREE + tsl-textures in scope. Bypasses graph sync.
 ```typescript
 // Script mode input format:
 import { polkaDots } from "tsl-textures";
 model.material.colorNode = polkaDots({ count: 4, size: 0.34 });
 ```
 
+### Code Editor Tabs
+The code editor has two tabs:
+- **TSL** — Editable TSL code with Save button and error display (default)
+- **A-Frame** — Read-only conversion of the TSL code to a self-contained A-Frame HTML snippet (`tslToAFrame.ts`):
+  - Includes `<script src="...aframe.min.js">` CDN tag
+  - Wraps the shader in `AFRAME.registerComponent`, destructures TSL from `THREE.TSL`
+  - **tsl-textures support**: When tsl-textures functions are used, adds a `<script type="importmap">` (maps `three`, `three/tsl`, `three/webgpu` to jsdelivr CDN) and uses `<script type="module">` with direct CDN import URL. Imports are aliased (`camouflage as _tex_camouflage`) and references renamed in the body to avoid TDZ shadowing (graphToCode uses function name as variable name).
+  - Includes example `<a-entity>` usage
+  - The TSL editor stays mounted (hidden) when switching to A-Frame to avoid Monaco re-initialization freezes.
+
 ### Sync Engine (prevents infinite loops)
 - **`syncSource`** field: `'graph' | 'code' | 'initial'` — tracks who initiated the change
 - **`syncInProgress`** flag — blocks nested syncs
 - **Graph → Code**: Real-time on every node/edge change (`graphToCode()`)
-- **Code → Graph**: Manual via Save button / Ctrl+S (`codeToGraph()` with Babel parser, `errorRecovery: true`)
+- **Code → Graph**: Debounced auto-sync (600ms) + manual via Save button / Ctrl+S (`codeToGraph()` with Babel parser, `errorRecovery: true`)
+- **Stable node matching**: Two-pass matching (registryType+label, then registryType only) preserves node positions and IDs across syncs
 - **Complexity**: Traverses backward from Output node, sums costs from `complexity.json`
 
 ### Zustand Store Shape
@@ -149,20 +162,43 @@ model.material.colorNode = polkaDots({ count: 4, size: 0.34 });
 
 ## Node System
 
-### Node Registry (~44 nodes in 9 categories)
+### Node Registry (~90+ nodes in 10 categories)
 
-| Category       | Nodes |
-|---------------|-------|
-| **Input**      | positionGeometry, normalLocal, tangentLocal, time, screenUV, uniform_float |
-| **Type**       | float, int, vec2, vec3, vec4, color |
-| **Arithmetic** | add, sub, mul, div |
-| **Math (unary)** | sin, cos, abs, sqrt, exp, log2, floor, round, fract |
+| Category        | Nodes |
+|----------------|-------|
+| **Input**       | positionGeometry, normalLocal, tangentLocal, time, screenUV, uniform_float |
+| **Type**        | float, int, vec2, vec3, vec4, color |
+| **Arithmetic**  | add, sub, mul, div |
+| **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract |
 | **Math (binary)** | pow, mod, clamp, min, max |
 | **Interpolation** | mix, smoothstep, remap, select |
-| **Vector**     | normalize, length, distance, dot, cross |
-| **Noise**      | noise (mx_noise_float), fractal (mx_fractal_noise_float), voronoi (mx_worley_noise_float) |
-| **Color**      | hsl, toHsl |
-| **Output**     | output (color, normal, position, opacity, roughness inputs) |
+| **Vector**      | normalize, length, distance, dot, cross, split |
+| **Noise**       | noise (mx_noise_float), fractal (mx_fractal_noise_float), voronoi (mx_worley_noise_float) |
+| **Color**       | hsl, toHsl |
+| **Texture**     | ~49 auto-registered tsl-textures functions (bricks, camouflage, polkaDots, marble, etc.) |
+| **Output**      | output (color, normal, position, opacity, roughness inputs) |
+
+### tsl-textures Auto-Registration (tslTexturesRegistry.ts)
+All ~49 tsl-textures functions are auto-registered as nodes by introspecting `.defaults` at runtime:
+- **Parameter classification** (`classifyParam`): Each default param is classified as `number`, `color` (THREE.Color), `vec3` (THREE.Vector3), `vec2` (THREE.Vector2), `tslRef` (.isNode), or `meta` ($-prefixed)
+- **NodeDefinition generation** (`buildTSLTextureDefinitions`):
+  - Numbers → connectable input ports + editable default values
+  - Colors → hex string in defaultValues (e.g., `#ff0000`)
+  - Vector3 → flattened keys: `key_x`, `key_y`, `key_z` in defaultValues
+  - Vector2 → flattened keys: `key_x`, `key_y`
+  - TSL refs (position, time) → input ports only (library uses own defaults if unconnected)
+- **Node type prefix**: `tslTex_` to avoid collisions (e.g., `tslTex_bricks`)
+- **Code generation**: Object parameter syntax — `bricks({ scale: 2, color: new THREE.Color(0xFF4000) })`
+- **Live compilation**: Dynamic factory builds params object, calls `tslTextures[funcName](params)`
+- **Code parsing**: `processObjectCall()` parses ObjectExpression properties; `extractConstructor()` handles `new THREE.Color/Vector3/Vector2` AST patterns
+
+### Split Node
+The split node decomposes vectors into individual float components:
+- **Input**: one `Vector` port (any type)
+- **Outputs**: four float ports — X, Y, Z, W
+- **TSL compilation**: Factory passes through the input vector; edge resolution applies `.x`/`.y`/`.z`/`.w` swizzle when sourceHandle isn't `'out'`
+- **Code generation**: Split nodes are not emitted as variables; references through them are inlined as `sourceVar.x`, `sourceVar.y`, etc.
+- **Searchable**: by "split" or "separate"
 
 ### React Flow Node Types
 - **`shader`** — Generic node for most TSL operations (ShaderNode.tsx)
@@ -170,6 +206,12 @@ model.material.colorNode = polkaDots({ count: 4, size: 0.34 });
 - **`preview`** — Noise/procedural nodes with animated canvas thumbnail (PreviewNode.tsx)
 - **`mathPreview`** — Math function nodes with scrolling waveform visualization (MathPreviewNode.tsx)
 - **`output`** — Output sink with multiple material property inputs (OutputNode.tsx)
+
+### ShaderNode Vector Display
+ShaderNode handles Vector3/Vector2 parameters with grouped inputs:
+- Detects `_x`/`_y`/`_z` suffixed keys in defaultValues and groups them into `vec3` or `vec2` rows
+- Each vector row shows: base key label + 2-3 compact `DragNumberInput` controls
+- Non-port settings (colors, vec3, vec2) are collected and appended as extra rows after input ports
 
 ### Preview Nodes (Noise/Procedural)
 Noise category nodes render a 96x96 canvas showing their generated pattern:
@@ -277,7 +319,7 @@ After dropping a node, `onNodeDragStop` checks for AABB overlap with all other n
 - **Single-input enforcement**: Connecting to an already-occupied input replaces the existing edge
 - **Reconnect by drag**: Dragging an edge endpoint to a new handle reconnects it
 - **Failed reconnect**: Dropping a reconnected edge on empty space deletes it
-- **Connection radius**: 80px snap distance
+- **Connection radius**: 40px snap distance
 
 ### Selection
 - **Partial overlap**: Nodes are selected when the selection box partially overlaps them
@@ -323,6 +365,7 @@ Routes to specific menu based on `contextMenu.type`:
 - **Shadows**: 4 levels (sm, md, lg, node) + selected state with blue ring
 - **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red)
 - **Category colors**: Each node category has a distinct accent color for the header strip
+  - input (#4CAF50), type (#2196F3), arithmetic (#FF9800), math (#9C27B0), interpolation (#00BCD4), vector (#E91E63), noise (#795548), color (#FF5722), texture (#8D6E63), output (#f44336)
 
 ---
 
@@ -336,15 +379,15 @@ Routes to specific menu based on `contextMenu.type`:
 - React Flow `onNodeDragStop` expects `React.MouseEvent` (not native `MouseEvent`) for the event parameter
 
 ### Three.js TSL Imports Used
-**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float, hsl, toHsl, remap, select
+**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float, hsl, toHsl, remap, select + all tsl-textures functions (via dynamic import)
 
-**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, remap, select, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float
+**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, remap, select, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float + dynamic tsl-textures factories (auto-resolved from registry)
 
 ### Persistence (localStorage)
 - `fs:graph` — nodes + edges (auto-save every 300ms)
 - `fs:splitRatio` — left/right panel ratio
 - `fs:rightSplitRatio` — code/preview ratio
-- `fs:geometry` — selected preview geometry type
+- `fs:previewGeometry` — selected preview geometry type
 
 ### History System
 - 50-entry undo/redo stack
