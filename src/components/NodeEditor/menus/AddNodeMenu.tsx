@@ -5,6 +5,7 @@ import {
   searchNodes,
   getAllDefinitions,
   NODE_REGISTRY,
+  getFlowNodeType,
 } from '@/registry/nodeRegistry';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import type { NodeDefinition, AppNode, ShaderNodeData, OutputNodeData } from '@/types';
@@ -62,9 +63,9 @@ export function AddNodeMenu() {
       };
       addNode(newNode);
     } else {
-      const newNode: AppNode = {
+      const newNode = {
         id: generateId(),
-        type: def.type === 'color' ? 'color' : def.category === 'noise' ? 'preview' : def.type === 'sin' || def.type === 'cos' ? 'mathPreview' : 'shader',
+        type: getFlowNodeType(def),
         position,
         data: {
           registryType: def.type,
@@ -72,7 +73,7 @@ export function AddNodeMenu() {
           cost,
           values: { ...def.defaultValues },
         } as ShaderNodeData,
-      };
+      } as AppNode;
       addNode(newNode);
     }
     closeContextMenu();

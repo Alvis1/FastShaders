@@ -1,5 +1,6 @@
 /* ===== Shared node shell ===== */
 .node-base {
+  position: relative;
   min-width: 80px;
   border: none;
   border-radius: var(--border-radius-md);
@@ -7,6 +8,20 @@
   font-family: var(--font-sans);
   overflow: visible;
   transition: box-shadow var(--transition-normal);
+}
+
+/* Cost badge positioned above the node, centered */
+.node-base__cost-badge {
+  position: absolute;
+  top: -13px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 7px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1;
 }
 
 .node-base--selected {

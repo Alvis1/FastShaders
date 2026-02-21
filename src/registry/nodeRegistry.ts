@@ -494,3 +494,14 @@ export function searchNodes(query: string): NodeDefinition[] {
 export function getAllDefinitions(): NodeDefinition[] {
   return allDefinitions;
 }
+
+/** Map a registry definition to its React Flow node type string. */
+export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'output';
+
+export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
+  if (def.type === 'output') return 'output';
+  if (def.type === 'color') return 'color';
+  if (def.category === 'noise') return 'preview';
+  if (def.type === 'sin' || def.type === 'cos') return 'mathPreview';
+  return 'shader';
+}

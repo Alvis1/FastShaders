@@ -4,6 +4,7 @@ export type {
   NodeCategory,
   NodeDefinition,
   ShaderNodeData,
+  MaterialSettings,
   OutputNodeData,
   ShaderFlowNode,
   ColorFlowNode,

@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx gh-pages:*)"
+      "Bash(npx gh-pages:*)",
+      "Bash(npx vite-bundle-visualizer:*)",
+      "Bash(npm uninstall:*)"
     ]
   }
 }

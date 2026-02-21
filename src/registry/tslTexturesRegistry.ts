@@ -68,7 +68,9 @@ export function buildTSLTextureDefinitions(): NodeDefinition[] {
     if (!('defaults' in exportValue) || !(exportValue as { defaults?: unknown }).defaults) continue;
 
     const defaults = (exportValue as { defaults: Record<string, unknown> }).defaults;
-    const displayName = (defaults.$name as string) ?? camelToLabel(exportName);
+    let displayName = (defaults.$name as string) ?? camelToLabel(exportName);
+    // Strip leading dots (some tsl-textures $name values start with '.')
+    displayName = displayName.replace(/^\.+\s*/, '');
     const isPositionNode = !!defaults.$positionNode;
 
     const inputs: PortDefinition[] = [];

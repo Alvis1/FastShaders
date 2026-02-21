@@ -177,11 +177,12 @@ export const ShaderNode = memo(function ShaderNode({
       className={`node-base ${selected ? 'node-base--selected' : ''}`}
       style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
+      {/* Cost badge above node */}
+      {data.cost > 0 && <span className="node-base__cost-badge">{costLabel}</span>}
+
       {/* Header */}
-      <div className="node-base__header">
-        <span className="node-base__dot" style={{ background: catColor }} />
+      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
         <span className="node-base__title">{data.label}</span>
-        <span className="node-base__cost">{costLabel}</span>
       </div>
 
       {/* Port rows */}

@@ -4,10 +4,11 @@ import {
   getBezierPath,
   type EdgeProps,
 } from '@xyflow/react';
-import type { AppEdge, TSLDataType } from '@/types';
+import type { AppEdge, AppNode, TSLDataType } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getTypeColor } from '@/utils/colorUtils';
+import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { EdgeInfoCard } from './EdgeInfoCard';
 
 const LINE_COUNT: Record<TSLDataType, number> = {
@@ -31,6 +32,11 @@ const CHANNEL_COLORS: Record<TSLDataType, string[]> = {
   vec4: ['#ff4444', '#44dd44', '#4488ff', '#dddddd'],
 };
 
+/** Type priority for broadcasting: higher = wider type */
+const TYPE_PRIORITY: Record<TSLDataType, number> = {
+  any: -1, int: 0, float: 1, vec2: 2, vec3: 3, color: 3, vec4: 4,
+};
+
 const GAP = 3.5;
 
 function getOffsets(count: number): number[] {
@@ -51,7 +57,47 @@ function perp(sx: number, sy: number, tx: number, ty: number): [number, number] 
   return [-dy / len, dx / len];
 }
 
-/** Resolve 'any' to a concrete type by checking source output then target input ports. */
+/** Walk upstream from a node to find the concrete data type flowing through it. */
+function resolveUpstreamType(
+  nodeId: string,
+  handleId: string | null | undefined,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  visited: Set<string>,
+): TSLDataType {
+  if (visited.has(nodeId)) return 'any';
+  visited.add(nodeId);
+
+  const node = nodes.find((n) => n.id === nodeId);
+  if (!node) return 'any';
+
+  const def = NODE_REGISTRY.get(node.data.registryType);
+  if (!def) return 'any';
+
+  // Check this node's output port first
+  const port = def.outputs.find((o) => o.id === (handleId ?? 'out'));
+  if (port && port.dataType !== 'any') return port.dataType;
+
+  // Walk further upstream: check all inputs, pick the widest concrete type
+  let bestType: TSLDataType = 'any';
+  let bestPriority = -1;
+
+  for (const input of def.inputs) {
+    const upEdge = edges.find((e) => e.target === nodeId && e.targetHandle === input.id);
+    if (upEdge) {
+      const upType = resolveUpstreamType(upEdge.source, upEdge.sourceHandle, nodes, edges, visited);
+      const priority = TYPE_PRIORITY[upType] ?? -1;
+      if (priority > bestPriority) {
+        bestPriority = priority;
+        bestType = upType;
+      }
+    }
+  }
+
+  return bestType;
+}
+
+/** Resolve 'any' to a concrete type by walking upstream, then checking target port. */
 function resolveDataType(
   edgeType: TSLDataType,
   sourceId: string,
@@ -60,15 +106,11 @@ function resolveDataType(
   targetHandleId: string | null | undefined,
 ): TSLDataType {
   if (edgeType !== 'any') return edgeType;
-  const nodes = useAppStore.getState().nodes;
+  const { nodes, edges } = useAppStore.getState();
 
-  // Check source output port
-  const srcNode = nodes.find((n) => n.id === sourceId);
-  if (srcNode) {
-    const srcDef = NODE_REGISTRY.get(srcNode.data.registryType);
-    const srcPort = srcDef?.outputs.find((o) => o.id === (sourceHandleId ?? 'out'));
-    if (srcPort && srcPort.dataType !== 'any') return srcPort.dataType;
-  }
+  // Walk upstream from source to find the concrete type flowing through
+  const upstreamType = resolveUpstreamType(sourceId, sourceHandleId, nodes, edges, new Set());
+  if (upstreamType !== 'any') return upstreamType;
 
   // Fall back to target input port
   const tgtNode = nodes.find((n) => n.id === targetId);
@@ -97,8 +139,10 @@ export function TypedEdge({
   selected,
 }: EdgeProps<AppEdge>) {
   const nodes = useAppStore((s) => s.nodes);
-  // Subscribe to nodes so we re-resolve when the graph changes
+  const edges = useAppStore((s) => s.edges);
+  // Subscribe to both nodes and edges so we re-resolve when the graph changes
   void nodes;
+  void edges;
 
   const rawType = data?.dataType ?? 'any';
   const dataType = resolveDataType(rawType, source, sourceHandleId, target, targetHandleId);
@@ -160,6 +204,9 @@ export function TypedEdge({
       store.setEdges(
         store.edges.filter((edge) => edge.id !== id) as typeof store.edges,
       );
+
+      // Set flag so NodeEditor won't open AddNodeMenu when this drops on empty space
+      setEdgeDisconnecting(true);
 
       // Start a new connection from the source handle so user can reconnect
       requestAnimationFrame(() => {

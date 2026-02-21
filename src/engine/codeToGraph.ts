@@ -2,7 +2,7 @@ import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, ParseError } from '@/types';
-import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF } from '@/registry/nodeRegistry';
+import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType } from '@/registry/nodeRegistry';
 import { generateId } from '@/utils/idGenerator';
 import complexityData from '@/registry/complexity.json';
 
@@ -383,7 +383,7 @@ function createNode(id: string, def: NodeDefinition, label: string): AppNode {
 
   return {
     id,
-    type: def.type === 'output' ? 'output' : def.type === 'color' ? 'color' : def.category === 'noise' ? 'preview' : def.type === 'sin' || def.type === 'cos' ? 'mathPreview' : 'shader',
+    type: getFlowNodeType(def),
     position: { x: 0, y: 0 },
     data: {
       registryType: def.type,

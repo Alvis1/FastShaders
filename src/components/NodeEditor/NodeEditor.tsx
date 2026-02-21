@@ -24,6 +24,7 @@ import { CostBar } from '@/components/Layout/CostBar';
 import { getCostColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import type { AppNode, AppEdge } from '@/types';
 import './NodeEditor.css';
 
@@ -181,13 +182,12 @@ export function NodeEditor() {
           if (!srcNode || !tgtNode) continue;
 
           const { w: sw, h: sh } = getSize(srcNode);
-          const { w: tw, h: th } = getSize(tgtNode);
+          const { h: th } = getSize(tgtNode);
 
           const sx = srcNode.position.x + sw;
           const sy = srcNode.position.y + sh / 2;
           const tx = tgtNode.position.x;
           const ty = tgtNode.position.y + th / 2;
-          void tw; void th; // used only for destructuring completeness
 
           const cp = Math.max(Math.abs(tx - sx) * 0.5, 50);
 
@@ -295,6 +295,11 @@ export function NodeEditor() {
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent) => {
       if (connectSucceeded.current) return;
+      // If this connection was initiated from an edge disconnect, don't open the menu
+      if (isEdgeDisconnecting) {
+        setEdgeDisconnecting(false);
+        return;
+      }
       // Connection dropped on empty space — open add-node menu
       const clientX = 'clientX' in event ? event.clientX : event.changedTouches[0].clientX;
       const clientY = 'clientY' in event ? event.clientY : event.changedTouches[0].clientY;

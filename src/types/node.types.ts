@@ -41,10 +41,17 @@ export interface ShaderNodeData {
   [key: string]: unknown;
 }
 
+export interface MaterialSettings {
+  transparent?: boolean;
+  side?: 'front' | 'back' | 'double';
+  depthWrite?: boolean;
+}
+
 export interface OutputNodeData {
   registryType: 'output';
   label: string;
   cost: number;
+  materialSettings?: MaterialSettings;
   [key: string]: unknown;
 }
 
