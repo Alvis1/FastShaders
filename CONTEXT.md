@@ -3,7 +3,11 @@
 ## Overview
 Bi-directional TSL (Three.js Shading Language) visual shader editor. Users build shaders either by connecting nodes in a graph or by writing TSL code — changes in one view sync to the other.
 
-**Stack**: React 18 + TypeScript + Vite | `@xyflow/react` v12 (node graph) | `@monaco-editor/react` (code editor) | `zustand` v5 (state) | `three` 0.181 (WebGPU + TSL) | `tsl-textures` 3.0 | `@dagrejs/dagre` (auto-layout) | `@babel/parser` + `traverse` (code parsing)
+**Live**: https://Alvis1.github.io/FastShaders/
+
+**Stack**: React 18 + TypeScript + Vite | `@xyflow/react` v12 (node graph) | `@monaco-editor/react` (code editor) | `zustand` v5 (state) | `three` 0.183 (WebGPU + TSL) | `tsl-textures` 3.0 | `@dagrejs/dagre` (auto-layout) | `@babel/parser` + `traverse` + `types` (code parsing)
+
+**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles A-Frame 1.7 + Three.js WebGPU + tsl-textures with matching compatible versions.
 
 ---
 
@@ -15,14 +19,17 @@ src/
 ├── vite-env.d.ts                      # Type declarations (tsl-textures module)
 ├── components/
 │   ├── CodeEditor/
-│   │   ├── CodeEditor.tsx             # Monaco editor with TSL/A-Frame tabs, Save button
+│   │   ├── CodeEditor.tsx             # Monaco editor with TSL/A-Frame/Module tabs, Save + Download
 │   │   ├── CodeEditor.css
 │   │   └── tslLanguage.ts             # TSL language definition, completions, color picker
 │   ├── Layout/
 │   │   ├── AppLayout.tsx              # Two nested SplitPanes (left: graph | right: code/preview)
 │   │   ├── AppLayout.css
 │   │   ├── SplitPane.tsx              # Draggable divider (horizontal or vertical)
-│   │   └── CostBar.tsx                # GPU complexity bar (totalCost / 200 pts budget)
+│   │   ├── Toolbar.tsx                # Top bar: brand, shader name input, VR headset selector
+│   │   ├── Toolbar.css
+│   │   ├── CostBar.tsx                # GPU complexity bar (totalCost vs headset budget)
+│   │   └── CostBar.css
 │   ├── NodeEditor/
 │   │   ├── NodeEditor.tsx             # React Flow canvas + keyboard shortcuts + interaction handlers
 │   │   ├── NodeEditor.css
@@ -32,7 +39,7 @@ src/
 │   │   │   ├── ColorNode.tsx          # Color picker node
 │   │   │   ├── PreviewNode.tsx        # Noise preview with animated canvas (noise, fractal, voronoi)
 │   │   │   ├── PreviewNode.css
-│   │   │   ├── MathPreviewNode.tsx   # Math function preview with scrolling waveform (sin, cos)
+│   │   │   ├── MathPreviewNode.tsx    # Math function preview with scrolling waveform (sin, cos)
 │   │   │   ├── MathPreviewNode.css
 │   │   │   ├── OutputNode.tsx         # Output sink (color, normal, position, opacity, roughness)
 │   │   │   └── OutputNode.css
@@ -52,13 +59,16 @@ src/
 │   │       ├── ShaderSettingsMenu.tsx # Output node cost display
 │   │       └── EdgeContextMenu.tsx    # Edge delete menu
 │   └── Preview/
-│       ├── ShaderPreview.tsx          # WebGPU canvas: OrthographicCamera, OrbitControls, geometry selector
+│       ├── ShaderPreview.tsx          # WebGPU iframe preview with geometry selector and rotation toggle
 │       └── ShaderPreview.css
 ├── engine/
 │   ├── graphToCode.ts                 # Graph → TSL code string (import statements + Fn() wrapper)
 │   ├── codeToGraph.ts                 # TSL code → nodes + edges (Babel AST parsing, incl. object literals)
 │   ├── graphToTSLNodes.ts             # Graph → live Three.js TSL node objects (all 5 output channels)
-│   ├── tslToAFrame.ts                 # TSL code → A-Frame component string (read-only conversion)
+│   ├── tslCodeProcessor.ts            # Shared TSL processing: import extraction, TDZ fix, body parsing
+│   ├── tslToAFrame.ts                 # TSL code → A-Frame HTML (uses tslCodeProcessor + IIFE bundle)
+│   ├── tslToShaderModule.ts           # TSL code → shaderloader-compatible ES module (.js)
+│   ├── tslToPreviewHTML.ts            # TSL code → Three.js WebGPU HTML (uses tslCodeProcessor)
 │   ├── layoutEngine.ts                # Dagre auto-layout (LR, nodesep=25, ranksep=60)
 │   ├── cpuEvaluator.ts                # CPU-side graph evaluator for real-time values (multi-channel)
 │   ├── topologicalSort.ts             # Kahn's algorithm for execution order
@@ -113,14 +123,32 @@ model.material.colorNode = polkaDots({ count: 4, size: 0.34 });
 ```
 
 ### Code Editor Tabs
-The code editor has two tabs:
+The code editor has three tabs:
 - **TSL** — Editable TSL code with Save button and error display (default)
-- **A-Frame** — Read-only conversion of the TSL code to a self-contained A-Frame HTML snippet (`tslToAFrame.ts`):
-  - Includes `<script src="...aframe.min.js">` CDN tag
-  - Wraps the shader in `AFRAME.registerComponent`, destructures TSL from `THREE.TSL`
-  - **tsl-textures support**: When tsl-textures functions are used, adds a `<script type="importmap">` (maps `three`, `three/tsl`, `three/webgpu` to jsdelivr CDN) and uses `<script type="module">` with direct CDN import URL. Imports are aliased (`camouflage as _tex_camouflage`) and references renamed in the body to avoid TDZ shadowing (graphToCode uses function name as variable name).
-  - Includes example `<a-entity>` usage
-  - The TSL editor stays mounted (hidden) when switching to A-Frame to avoid Monaco re-initialization freezes.
+- **A-Frame** — Read-only self-contained HTML using the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle (`tslToAFrame.ts`):
+  - Loads `aframe-171-a-0.1.min.js` from jsDelivr CDN (bundles A-Frame 1.7 + Three.js WebGPU + tsl-textures)
+  - Uses a regular `<script>` that destructures TSL functions from `THREE.TSL` and tsl-textures from `window.tslTextures`
+  - tsl-textures fully supported (the IIFE bundle ships matching compatible versions)
+  - TDZ fixes applied: self-ref removal, variable rename for shadowing imports, tsl-textures aliases
+  - Download as `.html`
+- **Module** — Read-only shaderloader-compatible ES module (`tslToShaderModule.ts`):
+  - Converts `Fn(() => { ... })` wrapper to `export default function() { ... }`
+  - Standard bare imports (`'three/tsl'`, `'tsl-textures'`)
+  - Multi-channel returns converted to shaderloader Object API (`color` → `colorNode`, etc.)
+  - The shaderloader handles TDZ fixes and missing import injection at runtime
+  - Download as `.js` for use with `<a-entity shader="src: myshader.js">`
+
+The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-initialization freezes.
+
+### Preview (ShaderPreview.tsx)
+- **Rendered in iframe** via blob URL from `tslToPreviewHTML.ts`
+- **Renderer**: Three.js `WebGPURenderer` (uses three@0.183.0 from CDN for tsl-textures 3.0 compatibility)
+- **Camera**: `PerspectiveCamera` at z=3.5
+- **Geometry**: Selector dropdown (sphere/cube/torus/plane), persisted to localStorage
+- **Material**: `MeshPhysicalNodeMaterial` — all output channels (colorNode, normalNode, positionNode, opacityNode, roughnessNode)
+- **Lighting**: DirectionalLight + AmbientLight
+- **Animation**: Play/pause toggle for mesh rotation
+- **Debounced**: 500ms debounce on code changes to avoid iframe thrashing
 
 ### Sync Engine (prevents infinite loops)
 - **`syncSource`** field: `'graph' | 'code' | 'initial'` — tracks who initiated the change
@@ -141,6 +169,7 @@ The code editor has two tabs:
   activeScript: string | null                  // Script mode (tsl-textures)
   history: HistoryEntry[], historyIndex: number, isUndoRedo: boolean  // 50-entry undo/redo
   splitRatio: number, rightSplitRatio: number  // Panel sizes (localStorage)
+  shaderName: string, selectedHeadsetId: string // Toolbar state
   contextMenu: {
     open: boolean, x: number, y: number,
     type: 'canvas' | 'node' | 'shader' | 'edge',
@@ -149,14 +178,45 @@ The code editor has two tabs:
 }
 ```
 
-### Preview (ShaderPreview.tsx)
-- **Renderer**: `WebGPURenderer` (from `three/webgpu`)
-- **Camera**: `OrthographicCamera` (FRUSTUM_SIZE=3), responsive via ResizeObserver
-- **Controls**: `OrbitControls` with damping (drag rotate, scroll zoom)
-- **Geometry**: Selector (sphere/cube/torus/plane), default cube at 45/45 degrees
-- **Material**: `MeshPhysicalNodeMaterial` — `colorNode`, `normalNode`, `positionNode`, `opacityNode`, `roughnessNode` set from compiled TSL (transparent mode auto-enabled when opacity connected)
-- **Lighting**: DirectionalLight (follows camera) + AmbientLight
-- **Animation**: Play/pause toggle, default paused
+---
+
+## Export Pipeline
+
+### Shared TSL Code Processor (`tslCodeProcessor.ts`)
+Common processing logic used by both `tslToAFrame.ts` and `tslToPreviewHTML.ts`:
+- **`collectImports(code, excludeFn?)`** — extracts `three/tsl` and `tsl-textures` import names
+- **`extractFnBody(code, tslNames)`** — extracts the body inside `Fn(() => { ... })`
+- **`fixTDZ(body, tslNames, texNames)`** — fixes Temporal Dead Zone issues:
+  1. Removes self-referencing bare declarations (`const X = X;`)
+  2. Renames locals that shadow imported function names (`const color = color(...)` → `const _color = color(...)`)
+  3. Fixes bare numeric first-arg in MaterialX noise calls (`mx_noise_float(0)` → `mx_noise_float()`)
+  4. Aliases tsl-textures imports (`camouflage(` → `_tex_camouflage(`)
+- **`parseBody(body, tslNames)`** — splits into definition lines and output channels (simple or multi-channel return)
+- **`GEOMETRY_MAP`** / **`CHANNEL_TO_PROP`** — shared constants
+
+### A-Frame HTML Export (`tslToAFrame.ts`)
+Generates a self-contained `.html` using the a-frame-shaderloader IIFE bundle:
+1. Uses `tslCodeProcessor` to extract imports, body, fix TDZ, and parse channels
+2. Generates HTML with:
+   - `<script src="...aframe-171-a-0.1.min.js">` from jsDelivr CDN
+   - Inline `<script>` registering an A-Frame component
+   - TSL functions destructured from `THREE.TSL`, tsl-textures from `window.tslTextures`
+   - Material creation + channel assignment + mesh
+
+### Shader Module Export (`tslToShaderModule.ts`)
+Generates a `.js` ES module compatible with the a-frame-shaderloader component:
+1. Strips `Fn` from three/tsl imports
+2. Converts `const shader = Fn(() => {` to `export default function() {`
+3. Converts multi-channel return keys to shaderloader Object API names
+4. Removes `export default shader;`
+5. The shaderloader handles TDZ fixes, missing import injection, and specifier resolution at runtime
+
+### Preview HTML (`tslToPreviewHTML.ts`)
+Generates HTML for the in-app preview iframe:
+1. Uses `tslCodeProcessor` to extract imports, body, fix TDZ, and parse channels
+2. Uses three@0.183.0 from CDN (matches installed version, tsl-textures compatible)
+3. Raw Three.js WebGPU setup (no A-Frame) with import map for bare specifiers
+4. Error display div for runtime errors
 
 ---
 
@@ -388,8 +448,14 @@ Routes to specific menu based on `contextMenu.type`:
 - `fs:splitRatio` — left/right panel ratio
 - `fs:rightSplitRatio` — code/preview ratio
 - `fs:previewGeometry` — selected preview geometry type
+- `fs:shaderName` — shader name
+- `fs:headsetId` — selected VR headset
 
 ### History System
 - 50-entry undo/redo stack
 - `pushHistory()` called before: node drag, connection, paste, duplicate, delete, edge drag-to-disconnect
 - `isUndoRedo` flag prevents sync during undo/redo operations
+
+### Deployment
+- **GitHub Pages**: `npm run build && npx gh-pages -d dist`
+- **Vite base path**: `/FastShaders/` (configured in `vite.config.ts`)

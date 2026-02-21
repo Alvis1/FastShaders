@@ -16,6 +16,11 @@ function loadGeometry(): GeometryType {
 
 export function ShaderPreview() {
   const code = useAppStore((s) => s.code);
+  const nodes = useAppStore((s) => s.nodes);
+
+  // Read material settings from the output node
+  const outputNode = nodes.find((n) => n.data.registryType === 'output');
+  const materialSettings = (outputNode?.data as { materialSettings?: PreviewOptions['materialSettings'] })?.materialSettings;
 
   const [geometry, setGeometry] = useState<GeometryType>(loadGeometry);
   const [playing, setPlaying] = useState(false);
@@ -45,13 +50,14 @@ export function ShaderPreview() {
     const options: PreviewOptions = {
       geometry,
       animate: playing,
+      materialSettings,
     };
     const html = tslToPreviewHTML(debouncedCode, options);
     const blob = new Blob([html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     blobUrlRef.current = url;
     return url;
-  }, [debouncedCode, geometry, playing]);
+  }, [debouncedCode, geometry, playing, materialSettings]);
 
   // Cleanup blob URL on unmount
   useEffect(() => {
@@ -92,7 +98,6 @@ export function ShaderPreview() {
           className="shader-preview__iframe"
           src={blobUrl}
           title="Shader Preview"
-          allow="webgpu"
         />
       </div>
     </div>

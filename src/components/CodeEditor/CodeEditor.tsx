@@ -8,6 +8,22 @@ import './CodeEditor.css';
 
 type CodeTab = 'tsl' | 'aframe' | 'module';
 
+const BASE_EDITOR_OPTIONS = {
+  minimap: { enabled: false },
+  fontSize: 14,
+  fontFamily: 'var(--font-mono)',
+  lineNumbers: 'on' as const,
+  scrollBeyondLastLine: false,
+  automaticLayout: true,
+  tabSize: 2,
+  wordWrap: 'on' as const,
+  padding: { top: 12 },
+  renderLineHighlight: 'gutter' as const,
+  overviewRulerBorder: false,
+};
+
+const READONLY_EDITOR_OPTIONS = { ...BASE_EDITOR_OPTIONS, readOnly: true };
+
 export function CodeEditor() {
   const code = useAppStore((s) => s.code);
   const codeErrors = useAppStore((s) => s.codeErrors);
@@ -147,19 +163,7 @@ export function CodeEditor() {
             onChange={handleChange}
             onMount={handleMount}
             theme="vs"
-            options={{
-              minimap: { enabled: false },
-              fontSize: 14,
-              fontFamily: 'var(--font-mono)',
-              lineNumbers: 'on',
-              scrollBeyondLastLine: false,
-              automaticLayout: true,
-              tabSize: 2,
-              wordWrap: 'on',
-              padding: { top: 12 },
-              renderLineHighlight: 'gutter',
-              overviewRulerBorder: false,
-            }}
+            options={BASE_EDITOR_OPTIONS}
           />
         </div>
         {/* A-Frame HTML preview (read-only) */}
@@ -170,20 +174,7 @@ export function CodeEditor() {
               defaultLanguage="html"
               value={aframeCode}
               theme="vs"
-              options={{
-                minimap: { enabled: false },
-                fontSize: 14,
-                fontFamily: 'var(--font-mono)',
-                lineNumbers: 'on',
-                scrollBeyondLastLine: false,
-                automaticLayout: true,
-                tabSize: 2,
-                wordWrap: 'on',
-                padding: { top: 12 },
-                renderLineHighlight: 'gutter',
-                overviewRulerBorder: false,
-                readOnly: true,
-              }}
+              options={READONLY_EDITOR_OPTIONS}
             />
           </div>
         )}
@@ -195,20 +186,7 @@ export function CodeEditor() {
               defaultLanguage="javascript"
               value={moduleCode}
               theme="vs"
-              options={{
-                minimap: { enabled: false },
-                fontSize: 14,
-                fontFamily: 'var(--font-mono)',
-                lineNumbers: 'on',
-                scrollBeyondLastLine: false,
-                automaticLayout: true,
-                tabSize: 2,
-                wordWrap: 'on',
-                padding: { top: 12 },
-                renderLineHighlight: 'gutter',
-                overviewRulerBorder: false,
-                readOnly: true,
-              }}
+              options={READONLY_EDITOR_OPTIONS}
             />
           </div>
         )}

@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getTypeColor } from '@/utils/colorUtils';
+import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { evaluateNodeOutput, type EvalResult } from '@/engine/cpuEvaluator';
-import type { TSLDataType, AppNode } from '@/types';
+import type { TSLDataType } from '@/types';
 import './EdgeInfoCard.css';
 
 interface EdgeInfoCardProps {
@@ -37,29 +38,6 @@ const CHANNEL_COLORS: Record<string, string[]> = {
   color: ['#ff6666', '#66dd66', '#6699ff'],
   vec4: ['#ff6666', '#66dd66', '#6699ff', '#dddddd'],
 };
-
-/** Check if a Time node exists upstream of a given node. */
-function hasTimeUpstream(
-  nodeId: string,
-  nodes: AppNode[],
-  edges: { source: string; target: string }[],
-): boolean {
-  const visited = new Set<string>();
-  const queue = [nodeId];
-  while (queue.length > 0) {
-    const current = queue.pop()!;
-    if (visited.has(current)) continue;
-    visited.add(current);
-    const node = nodes.find((n) => n.id === current);
-    if (node && node.data.registryType === 'time') return true;
-    for (const edge of edges) {
-      if (edge.target === current && !visited.has(edge.source)) {
-        queue.push(edge.source);
-      }
-    }
-  }
-  return false;
-}
 
 export function EdgeInfoCard({
   sourceId,

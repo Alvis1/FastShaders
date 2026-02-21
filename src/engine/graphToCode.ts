@@ -95,6 +95,15 @@ export function graphToCode(
         ? `0x${val.slice(1)}`
         : val;
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${formatted});`);
+    } else if (def.category === 'noise') {
+      // Noise nodes: apply scale to position argument if scale != 1
+      const nv = (node.data as { values?: Record<string, string | number> }).values;
+      const scaleVal = Number(nv?.scale ?? 1);
+      if (scaleVal !== 1 && args.length > 0) {
+        args[0] = `mul(${args[0]}, ${scaleVal})`;
+        addImport('three/tsl', 'mul');
+      }
+      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${args.join(', ')});`);
     } else {
       // Regular function call
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${args.join(', ')});`);

@@ -4,6 +4,7 @@ import type { PreviewFlowNode, NodeCategory, AppNode } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale } from '@/utils/colorUtils';
+import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { evaluateNodeScalar } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
 import { CATEGORY_COLORS } from './ShaderNode';
@@ -20,27 +21,6 @@ function handleTop(index: number, total: number): string {
   const end = 75;
   const step = (end - start) / (total - 1);
   return `${start + index * step}%`;
-}
-
-/** Walk upstream from a given node to check if a Time node is an ancestor. */
-function hasTimeUpstream(nodeId: string, nodes: AppNode[], edges: { source: string; target: string }[]): boolean {
-  const visited = new Set<string>();
-  const queue = [nodeId];
-  while (queue.length > 0) {
-    const current = queue.pop()!;
-    if (visited.has(current)) continue;
-    visited.add(current);
-
-    const node = nodes.find((n) => n.id === current);
-    if (node && node.data.registryType === 'time') return true;
-
-    for (const edge of edges) {
-      if (edge.target === current && !visited.has(edge.source)) {
-        queue.push(edge.source);
-      }
-    }
-  }
-  return false;
 }
 
 /** For each input port of a node, check whether time feeds into it. */
@@ -154,11 +134,12 @@ export const PreviewNode = memo(function PreviewNode({
       className={`node-base preview-node ${selected ? 'node-base--selected' : ''}`}
       style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
+      {/* Cost badge above node */}
+      {data.cost > 0 && <span className="node-base__cost-badge">{data.cost}</span>}
+
       {/* Header */}
-      <div className="node-base__header">
-        <span className="node-base__dot" style={{ background: catColor }} />
+      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
         <span className="node-base__title">{data.label}</span>
-        <span className="node-base__cost">{data.cost}</span>
       </div>
 
       {/* Preview canvas */}
