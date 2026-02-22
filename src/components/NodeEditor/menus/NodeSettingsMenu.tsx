@@ -46,6 +46,13 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   const showPortToggles = def ? !ALWAYS_EXPOSED_CATEGORIES.has(def.category as NodeCategory) : false;
 
   const handleValueChange = (key: string, value: string | number) => {
+    // For the property name field, keep as string (don't parse as number)
+    if (key === 'name' && node.data.registryType === 'property_float') {
+      updateNodeData(nodeId, {
+        values: { ...getNodeValues(node), [key]: String(value) },
+      });
+      return;
+    }
     const numVal = typeof value === 'number' ? value : parseFloat(value);
     updateNodeData(nodeId, {
       values: {
@@ -109,7 +116,8 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
       {def?.defaultValues &&
         Object.entries(def.defaultValues).map(([key, defaultVal]) => {
           const isColor = typeof defaultVal === 'string' && defaultVal.startsWith('#');
-          const isPort = typeof defaultVal === 'string' && !defaultVal.startsWith('#');
+          const isPropertyName = key === 'name' && node.data.registryType === 'property_float';
+          const isPort = typeof defaultVal === 'string' && !defaultVal.startsWith('#') && !isPropertyName;
           const currentValue = getNodeValues(node)[key] ?? defaultVal;
           const isExposed = exposedPorts.includes(key);
 
@@ -138,7 +146,22 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
                 )}
                 {key}
               </label>
-              {isColor ? (
+              {isPropertyName ? (
+                <input
+                  type="text"
+                  value={String(currentValue)}
+                  onChange={(e) => handleValueChange(key, e.target.value)}
+                  style={{
+                    width: '100px',
+                    padding: '2px 6px',
+                    background: 'var(--bg-input)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--border-radius-sm)',
+                    fontSize: 'var(--font-size-xs)',
+                    color: 'var(--text-primary)',
+                  }}
+                />
+              ) : isColor ? (
                 <input
                   type="color"
                   defaultValue={String(currentValue)}

@@ -9,7 +9,7 @@
     "tangentLocal": 0,
     "time": 0,
     "screenUV": 0,
-    "uniform_float": 0,
+    "property_float": 0,
 
     "float": 1,
     "int": 1,

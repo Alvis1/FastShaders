@@ -237,6 +237,15 @@ function processCall(
       (node.data as Record<string, unknown>).values = { ...prev, ...extractedValues };
     }
   }
+
+  // For property_float nodes, set the property name from the variable name in code
+  if (def.type === 'property_float') {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (node) {
+      const prev = getNodeValues(node);
+      (node.data as Record<string, unknown>).values = { ...prev, name: varName };
+    }
+  }
 }
 
 function processObjectCall(

@@ -19,6 +19,7 @@ import {
   parseBody,
 } from './tslCodeProcessor';
 import type { MaterialSettings } from '@/types';
+import type { PropertyInfo } from './tslToShaderModule';
 
 export interface AFrameOptions {
   /** A-Frame geometry primitive (default: 'sphere') */
@@ -29,6 +30,8 @@ export interface AFrameOptions {
   animate?: boolean;
   /** Material settings from the output node (displacement mode, etc.) */
   materialSettings?: MaterialSettings;
+  /** Property definitions for configurable uniforms */
+  properties?: PropertyInfo[];
 }
 
 // IIFE bundle from the a-frame-shaderloader project — includes A-Frame 1.7,
@@ -46,6 +49,7 @@ export function tslToAFrame(
     embedded = false,
     animate = false,
   } = options;
+  const properties = options.properties ?? [];
 
   // Sanitize name for use as component name (kebab-case, no special chars)
   const componentName = shaderName
@@ -74,6 +78,22 @@ export function tslToAFrame(
     }
   }
 
+  // Ensure 'uniform' is available if properties exist
+  if (properties.length > 0 && !tslNames.includes('uniform')) {
+    tslNames.push('uniform');
+  }
+
+  // Replace property uniform declarations in defLines with uniform refs
+  const propertyNames = new Set(properties.map(p => p.name));
+  const processedDefLines = defLines.map(line => {
+    const match = line.match(/^\s*var\s+(\w+)\s*=\s*uniform\([^)]*\)\s*;?\s*$/);
+    if (match && propertyNames.has(match[1])) {
+      const indent = line.match(/^(\s*)/)?.[0] ?? '';
+      return `${indent}var ${match[1]} = this._uniforms.${match[1]};`;
+    }
+    return line;
+  });
+
   // Build the full HTML document
   const lines: string[] = [];
 
@@ -98,6 +118,16 @@ export function tslToAFrame(
   // --- Inline component script (uses globals from IIFE bundle) ---
   lines.push('<script>');
   lines.push(`AFRAME.registerComponent('${componentName}', {`);
+
+  // Emit schema if properties exist
+  if (properties.length > 0) {
+    lines.push('  schema: {');
+    for (const prop of properties) {
+      lines.push(`    ${prop.name}: { type: 'number', default: ${prop.defaultValue} },`);
+    }
+    lines.push('  },');
+  }
+
   lines.push('  init: function() {');
   lines.push('    try {');
 
@@ -120,8 +150,17 @@ export function tslToAFrame(
   }
   lines.push('');
 
-  // Emit node definitions
-  for (const line of defLines) {
+  // Create property uniforms
+  if (properties.length > 0) {
+    lines.push('      this._uniforms = {};');
+    for (const prop of properties) {
+      lines.push(`      this._uniforms.${prop.name} = uniform(this.data.${prop.name});`);
+    }
+    lines.push('');
+  }
+
+  // Emit node definitions (with property uniform refs replaced)
+  for (const line of processedDefLines) {
     lines.push('      ' + line.trimStart());
   }
   lines.push('');
@@ -148,6 +187,19 @@ export function tslToAFrame(
   lines.push('      console.error("[FastShaders]", e);');
   lines.push('    }');
   lines.push('  },');
+
+  // Update method for property changes
+  if (properties.length > 0) {
+    lines.push('  update: function(oldData) {');
+    lines.push('    if (!this._uniforms) return;');
+    for (const prop of properties) {
+      lines.push(`    if (oldData.${prop.name} !== this.data.${prop.name}) {`);
+      lines.push(`      this._uniforms.${prop.name}.value = this.data.${prop.name};`);
+      lines.push(`    }`);
+    }
+    lines.push('  },');
+  }
+
   lines.push('  remove: function() {');
   lines.push("    var mesh = this.el.getObject3D('mesh');");
   lines.push('    if (mesh) {');
