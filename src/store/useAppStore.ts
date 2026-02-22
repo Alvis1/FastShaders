@@ -67,6 +67,23 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
           node.type = 'texturePreview';
         }
       }
+
+      // Migrate: output nodes without exposedPorts — auto-expose any ports with edges
+      const defaultExposed = new Set(['color', 'roughness', 'position']);
+      for (const node of data.nodes) {
+        if (node.data?.registryType === 'output' && !node.data.exposedPorts) {
+          const connectedPorts = new Set<string>();
+          for (const edge of data.edges) {
+            if (edge.target === node.id && edge.targetHandle) {
+              connectedPorts.add(edge.targetHandle);
+            }
+          }
+          // Merge defaults with any connected ports
+          const merged = new Set([...defaultExposed, ...connectedPorts]);
+          node.data.exposedPorts = Array.from(merged);
+        }
+      }
+
       return data;
     }
   } catch { /* corrupt data */ }

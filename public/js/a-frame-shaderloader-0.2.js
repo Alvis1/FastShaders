@@ -63,12 +63,15 @@ AFRAME.registerComponent('shader', {
 
       const material = new THREE.MeshPhysicalNodeMaterial();
 
-      if (shaderResult && shaderResult.colorNode !== undefined) {
+      const nodeProps = [
+        'colorNode', 'positionNode', 'normalNode', 'opacityNode',
+        'roughnessNode', 'metalnessNode', 'emissiveNode'
+      ];
+      const isObjectAPI = shaderResult && typeof shaderResult === 'object'
+        && nodeProps.some(function(p) { return shaderResult[p] !== undefined; });
+
+      if (isObjectAPI) {
         // Object API: { colorNode, positionNode, opacityNode, normalNode, ... }
-        const nodeProps = [
-          'colorNode', 'positionNode', 'normalNode', 'opacityNode',
-          'roughnessNode', 'metalnessNode', 'emissiveNode'
-        ];
         for (const prop of nodeProps) {
           if (shaderResult[prop] !== undefined) {
             material[prop] = shaderResult[prop];

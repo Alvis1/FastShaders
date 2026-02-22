@@ -30,15 +30,39 @@
   color: rgba(0, 0, 0, 0.4);
 }
 
-/* Handles positioned directly on node sides, not in rows */
-.texture-preview-node > .react-flow__handle {
+/* Input port rows */
+.texture-preview-node__ports {
+  padding: 0;
+}
+
+.texture-preview-node__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 8px;
+  gap: 2px;
+}
+
+.texture-preview-node__row .react-flow__handle {
+  top: 50% !important;
   transform: translateY(-50%) !important;
 }
 
-.texture-preview-node > .react-flow__handle-left {
+.texture-preview-node__row .react-flow__handle-left {
   left: calc(var(--handle-size) / -2) !important;
 }
 
+.texture-preview-node__port-label {
+  font-size: 9px;
+  color: rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  padding-left: 4px;
+}
+
+/* Output handle centered on right side */
 .texture-preview-node > .react-flow__handle-right {
+  top: 50% !important;
+  transform: translateY(-50%) !important;
   right: calc(var(--handle-size) / -2) !important;
 }

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { Position, type NodeProps } from '@xyflow/react';
+import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { TexturePreviewFlowNode, NodeCategory, TSLDataType } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
@@ -20,15 +20,6 @@ import './TexturePreviewNode.css';
 const PREVIEW_SIZE = 96;
 const DEBOUNCE_MS = 500;
 
-const HANDLE_SPACING = 18; // px between handles in a group
-
-/** Position handles as a tight centered group. */
-function handleTop(index: number, total: number): string {
-  const groupHeight = (total - 1) * HANDLE_SPACING;
-  const offset = index * HANDLE_SPACING - groupHeight / 2;
-  return `calc(50% + ${offset}px)`;
-}
-
 export const TexturePreviewNode = memo(function TexturePreviewNode({
   id,
   data,
@@ -40,6 +31,13 @@ export const TexturePreviewNode = memo(function TexturePreviewNode({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [gpuReady, setGpuReady] = useState(false);
+  const updateNodeInternals = useUpdateNodeInternals();
+
+  // Force React Flow to recalculate handle positions when exposed ports change
+  const exposedPorts = data.exposedPorts;
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, exposedPorts, updateNodeInternals]);
 
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
@@ -124,7 +122,7 @@ export const TexturePreviewNode = memo(function TexturePreviewNode({
         )}
       </div>
 
-      {/* Input handles — only exposed ports, ordered like settings menu, grouped in center */}
+      {/* Input handles — only exposed ports, in rows like OutputNode */}
       {(() => {
         const exposed = new Set(data.exposedPorts ?? []);
         if (exposed.size === 0) return null;
@@ -147,31 +145,32 @@ export const TexturePreviewNode = memo(function TexturePreviewNode({
             };
           });
 
-        return allInputs.map((input, i) => (
-          <TypedHandle
-            key={input.id}
-            type="target"
-            position={Position.Left}
-            id={input.id}
-            dataType={input.dataType}
-            label={input.label}
-            style={{ top: handleTop(i, allInputs.length) }}
-          />
-        ));
+        return (
+          <div className="texture-preview-node__ports">
+            {allInputs.map((input) => (
+              <div key={input.id} className="texture-preview-node__row">
+                <TypedHandle
+                  type="target"
+                  position={Position.Left}
+                  id={input.id}
+                  dataType={input.dataType}
+                  label={input.label}
+                />
+                <span className="texture-preview-node__port-label">{input.label}</span>
+              </div>
+            ))}
+          </div>
+        );
       })()}
 
-      {/* Output handles — vertically centered on right side */}
-      {def.outputs.map((output, i) => (
-        <TypedHandle
-          key={output.id}
-          type="source"
-          position={Position.Right}
-          id={output.id}
-          dataType={output.dataType}
-          label={output.label}
-          style={{ top: handleTop(i, def.outputs.length) }}
-        />
-      ))}
+      {/* Output handle */}
+      <TypedHandle
+        type="source"
+        position={Position.Right}
+        id={def.outputs[0].id}
+        dataType={def.outputs[0].dataType}
+        label={def.outputs[0].label}
+      />
     </div>
   );
 });

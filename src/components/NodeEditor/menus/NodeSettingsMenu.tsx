@@ -1,8 +1,14 @@
 import { useAppStore } from '@/store/useAppStore';
 import { getNodeValues } from '@/types';
+import type { NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { generateId } from '@/utils/idGenerator';
+
+/** Categories whose nodes always show all ports — no expose/hide checkboxes needed. */
+const ALWAYS_EXPOSED_CATEGORIES: Set<NodeCategory> = new Set([
+  'input', 'math', 'type', 'arithmetic', 'interpolation', 'vector', 'color',
+]);
 
 interface NodeSettingsMenuProps {
   nodeId: string;
@@ -37,6 +43,7 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   };
 
   const exposedPorts: string[] = (node.data as { exposedPorts?: string[] }).exposedPorts ?? [];
+  const showPortToggles = def ? !ALWAYS_EXPOSED_CATEGORIES.has(def.category as NodeCategory) : false;
 
   const handleValueChange = (key: string, value: string | number) => {
     const numVal = typeof value === 'number' ? value : parseFloat(value);
@@ -67,8 +74,8 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
         </div>
       </div>
 
-      {/* Input ports not in defaultValues (tslRef params like position, time) */}
-      {def?.inputs
+      {/* Input ports not in defaultValues (tslRef params like position, time) — only show toggles for non-basic categories */}
+      {showPortToggles && def?.inputs
         .filter((inp) => !def.defaultValues || !(inp.id in def.defaultValues))
         .map((inp) => {
           const isExposed = exposedPorts.includes(inp.id);
@@ -120,13 +127,15 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
               <label
                 style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}
               >
-                <input
-                  type="checkbox"
-                  checked={isExposed}
-                  onChange={() => handleTogglePort(key)}
-                  title="Expose as input socket"
-                  style={{ width: '12px', height: '12px', margin: 0 }}
-                />
+                {showPortToggles && (
+                  <input
+                    type="checkbox"
+                    checked={isExposed}
+                    onChange={() => handleTogglePort(key)}
+                    title="Expose as input socket"
+                    style={{ width: '12px', height: '12px', margin: 0 }}
+                  />
+                )}
                 {key}
               </label>
               {isColor ? (
