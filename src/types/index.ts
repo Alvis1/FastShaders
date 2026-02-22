@@ -17,7 +17,7 @@ export type {
   TypedEdgeData,
   AppEdge,
 } from './node.types';
-export { getNodeValues } from './node.types';
+export { getNodeValues, getNodeExposedPorts } from './node.types';
 
 export type {
   ParseError,

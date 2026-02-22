@@ -6,9 +6,10 @@ import { tslToAFrame } from '@/engine/tslToAFrame';
 import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
 import { getNodeValues } from '@/types';
 import type { MaterialSettings, OutputNodeData } from '@/types';
+import { toKebabCase } from '@/utils/nameUtils';
 import './CodeEditor.css';
 
-type CodeTab = 'tsl' | 'aframe' | 'module';
+type CodeTab = 'tsl' | 'aframe' | 'script';
 
 const BASE_EDITOR_OPTIONS = {
   minimap: { enabled: false },
@@ -80,23 +81,28 @@ export function CodeEditor() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [requestCodeSync]);
 
-  // Only compute export code when that tab is active
-  const aframeCode = useMemo(
-    () => (activeTab === 'aframe' ? tslToAFrame(code, shaderName, { materialSettings, properties }) : ''),
-    [code, activeTab, shaderName, materialSettings, properties]
-  );
+  // Only compute export code when that tab is active; catch errors to avoid blank tabs
+  const aframeCode = useMemo(() => {
+    if (activeTab !== 'aframe') return '';
+    try {
+      return tslToAFrame(code, shaderName, { materialSettings, properties });
+    } catch (e) {
+      return `<!-- Export error: ${e instanceof Error ? e.message : String(e)} -->`;
+    }
+  }, [code, activeTab, shaderName, materialSettings, properties]);
 
-  const moduleCode = useMemo(
-    () => (activeTab === 'module' ? tslToShaderModule(code, materialSettings, properties) : ''),
-    [code, activeTab, materialSettings, properties]
-  );
+  const scriptCode = useMemo(() => {
+    if (activeTab !== 'script') return '';
+    try {
+      return tslToShaderModule(code, materialSettings, properties);
+    } catch (e) {
+      return `// Export error: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }, [code, activeTab, materialSettings, properties]);
 
   const isTSL = activeTab === 'tsl';
 
-  const fileBaseName = (shaderName || 'shader')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'shader';
+  const fileBaseName = toKebabCase(shaderName || 'shader');
 
   const handleDownloadHTML = useCallback(() => {
     const blob = new Blob([aframeCode], { type: 'text/html' });
@@ -108,15 +114,15 @@ export function CodeEditor() {
     URL.revokeObjectURL(url);
   }, [aframeCode, fileBaseName]);
 
-  const handleDownloadModule = useCallback(() => {
-    const blob = new Blob([moduleCode], { type: 'application/javascript' });
+  const handleDownloadScript = useCallback(() => {
+    const blob = new Blob([scriptCode], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${fileBaseName}.js`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [moduleCode, fileBaseName]);
+  }, [scriptCode, fileBaseName]);
 
   return (
     <div className="code-editor">
@@ -135,10 +141,10 @@ export function CodeEditor() {
             A-Frame
           </button>
           <button
-            className={`code-editor__tab ${activeTab === 'module' ? 'code-editor__tab--active' : ''}`}
-            onClick={() => setActiveTab('module')}
+            className={`code-editor__tab ${activeTab === 'script' ? 'code-editor__tab--active' : ''}`}
+            onClick={() => setActiveTab('script')}
           >
-            Module
+            Script
           </button>
         </div>
         <div className="code-editor__actions">
@@ -157,8 +163,8 @@ export function CodeEditor() {
               Download .html
             </button>
           )}
-          {activeTab === 'module' && (
-            <button className="code-editor__download" onClick={handleDownloadModule}>
+          {activeTab === 'script' && (
+            <button className="code-editor__download" onClick={handleDownloadScript}>
               Download .js
             </button>
           )}
@@ -199,13 +205,13 @@ export function CodeEditor() {
             />
           </div>
         )}
-        {/* Shader module preview (read-only) — for a-frame-shaderloader */}
-        {activeTab === 'module' && (
+        {/* Shader script preview (read-only) — for a-frame-shaderloader */}
+        {activeTab === 'script' && (
           <div className="code-editor__pane">
             <Editor
               height="100%"
               defaultLanguage="javascript"
-              value={moduleCode}
+              value={scriptCode}
               theme="vs"
               options={READONLY_EDITOR_OPTIONS}
             />

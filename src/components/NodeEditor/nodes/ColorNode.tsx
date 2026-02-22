@@ -12,6 +12,7 @@ export const ColorNode = memo(function ColorNode({
   selected,
 }: NodeProps<ColorFlowNode>) {
   const updateNodeData = useAppStore((s) => s.updateNodeData);
+  const varName = useAppStore((s) => s.nodeVarNames[id]);
   const pickerRef = useRef<HTMLInputElement>(null);
   const hex = String(data.values?.hex ?? '#ff0000');
 
@@ -40,7 +41,7 @@ export const ColorNode = memo(function ColorNode({
           return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.45
             ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.85)';
         })() }}
-      >Color</span>
+      >{varName ?? 'Color'}</span>
       <input
         ref={pickerRef}
         type="color"

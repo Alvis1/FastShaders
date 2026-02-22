@@ -7,11 +7,10 @@
  *   - A default export that is either a function returning a TSL node
  *     (simple API) or returning an object with { colorNode, positionNode, ... }
  *     (object API).
- *   - An optional `export const schema = { ... }` describing property uniforms
- *     that the shaderloader creates and passes to the function as `params`.
  *
- * The shaderloader handles TDZ fixes and missing import injection at runtime,
- * so this module outputs clean, readable code without workarounds.
+ * The shaderloader handles TDZ fixes, missing import injection, and
+ * auto-detects `const NAME = uniform(VALUE)` patterns to create property
+ * uniforms at runtime — no explicit schema or params needed in the module.
  */
 
 import { CHANNEL_TO_PROP as CHANNEL_TO_NODE_PROP } from './tslCodeProcessor';
@@ -22,6 +21,9 @@ export interface PropertyInfo {
   type: 'float';
   defaultValue: number;
 }
+
+// CDN base for the a-frame-shaderloader project
+const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js';
 
 export function tslToShaderModule(
   tslCode: string,
@@ -35,20 +37,30 @@ export function tslToShaderModule(
   let skippedExportDefault = false;
   let needsPositionImports = false;
 
+  const props = properties ?? [];
+  const propNames = new Set(props.map(p => p.name));
+  const hasProps = props.length > 0;
+  let uniformCallsTotal = 0;
+  let uniformCallsReplaced = 0;
+
   const displacementMode = materialSettings?.displacementMode ?? 'normal';
 
-  // Build a set of property names for uniform replacement
-  const propertyNames = new Set((properties ?? []).map(p => p.name));
-  const hasProperties = propertyNames.size > 0;
+  // Usage header
+  outLines.push('// Load with a-frame-shaderloader:');
+  outLines.push(`// <script src="${CDN_BASE}/aframe-171-a-0.1.min.js"><${''}/script>`);
+  outLines.push(`// <script src="${CDN_BASE}/a-frame-shaderloader-0.2.js"><${''}/script>`);
+  outLines.push('// <a-entity shader="src: shader.js"></a-entity>');
+  outLines.push('');
 
   for (const line of lines) {
     const trimmed = line.trim();
 
     // --- Transform import lines ---
-    // Remove 'Fn' from three/tsl imports
+    // Remove 'Fn' from three/tsl imports (uniform removal deferred to post-processing)
     if (/^\s*import\s*\{[^}]+\}\s*from\s*['"]three\/tsl['"]/.test(trimmed)) {
-      const names = trimmed
-        .match(/\{([^}]+)\}/)![1]
+      const importMatch = trimmed.match(/\{([^}]+)\}/);
+      if (!importMatch) continue;
+      const names = importMatch[1]
         .split(',')
         .map(n => n.trim())
         .filter(n => n && n !== 'Fn');
@@ -68,21 +80,7 @@ export function tslToShaderModule(
     if (!insideFn && /^\s*const\s+\w+\s*=\s*Fn\(\(\)\s*=>\s*\{/.test(trimmed)) {
       insideFn = true;
       fnBraceDepth = 1;
-
-      // Emit schema export before the function if properties exist
-      if (hasProperties) {
-        const schemaEntries = (properties ?? []).map(p =>
-          `  ${p.name}: { type: '${p.type}', default: ${p.defaultValue} }`
-        );
-        outLines.push('');
-        outLines.push('export const schema = {');
-        outLines.push(schemaEntries.join(',\n'));
-        outLines.push('};');
-        outLines.push('');
-        outLines.push('export default function(params) {');
-      } else {
-        outLines.push('export default function() {');
-      }
+      outLines.push(hasProps ? 'export default function(params) {' : 'export default function() {');
       continue;
     }
 
@@ -101,12 +99,15 @@ export function tslToShaderModule(
         continue;
       }
 
-      // Replace property uniform declarations with params references
-      if (hasProperties) {
-        const uniformMatch = trimmed.match(/^const\s+(\w+)\s*=\s*uniform\([^)]*\)\s*;?\s*$/);
-        if (uniformMatch && propertyNames.has(uniformMatch[1])) {
+      // Replace `const NAME = uniform(VALUE)` with `const NAME = params.NAME` for properties
+      const uniformMatch = trimmed.match(/^const\s+(\w+)\s*=\s*uniform\(([^)]*)\)\s*;?$/);
+      if (uniformMatch) {
+        uniformCallsTotal++;
+        const varName = uniformMatch[1];
+        if (propNames.has(varName)) {
+          uniformCallsReplaced++;
           const indent = line.match(/^(\s*)/)?.[1] ?? '';
-          outLines.push(`${indent}const ${uniformMatch[1]} = params.${uniformMatch[1]};`);
+          outLines.push(`${indent}const ${varName} = params.${varName};`);
           continue;
         }
       }
@@ -129,7 +130,6 @@ export function tslToShaderModule(
           }
           return nodeProp ? `${nodeProp}: ${val}` : `${key}: ${val}`;
         });
-        // Determine indentation from original line
         const indent = line.match(/^(\s*)/)?.[1] ?? '';
         outLines.push(`${indent}return { ${entries.join(', ')} };`);
         continue;
@@ -153,44 +153,30 @@ export function tslToShaderModule(
     outLines.push(line);
   }
 
-  // Remove 'uniform' from three/tsl import if all uniform calls were replaced by params
-  if (hasProperties) {
-    const hasRemainingUniform = outLines.some(l =>
-      !/^\s*import/.test(l) && /\buniform\s*\(/.test(l)
-    );
-    if (!hasRemainingUniform) {
-      for (let i = 0; i < outLines.length; i++) {
-        if (/^\s*import\s*\{[^}]+\}\s*from\s*['"]three\/tsl['"]/.test(outLines[i])) {
-          const match = outLines[i].match(/\{([^}]+)\}/);
-          if (match) {
-            const names = match[1].split(',').map(n => n.trim()).filter(n => n && n !== 'uniform');
-            if (names.length > 0) {
-              outLines[i] = `import { ${names.join(', ')} } from 'three/tsl';`;
-            } else {
-              outLines[i] = '';
-            }
-          }
-          break;
-        }
-      }
-    }
-  }
+  // Post-process the three/tsl import line
+  for (let i = 0; i < outLines.length; i++) {
+    if (/^\s*import\s*\{[^}]+\}\s*from\s*['"]three\/tsl['"]/.test(outLines[i])) {
+      const match = outLines[i].match(/\{([^}]+)\}/);
+      if (match) {
+        const names = match[1].split(',').map(n => n.trim()).filter(Boolean);
 
-  // Inject positionLocal/normalLocal into three/tsl import if position wrapping was applied
-  if (needsPositionImports) {
-    for (let i = 0; i < outLines.length; i++) {
-      if (/^\s*import\s*\{[^}]+\}\s*from\s*['"]three\/tsl['"]/.test(outLines[i])) {
-        const match = outLines[i].match(/\{([^}]+)\}/);
-        if (match) {
-          const names = match[1].split(',').map(n => n.trim()).filter(Boolean);
+        // Remove 'uniform' if all uniform() calls were replaced with params
+        if (uniformCallsTotal > 0 && uniformCallsReplaced === uniformCallsTotal) {
+          const idx = names.indexOf('uniform');
+          if (idx !== -1) names.splice(idx, 1);
+        }
+
+        // Inject positionLocal/normalLocal if position wrapping was applied
+        if (needsPositionImports) {
           if (!names.includes('positionLocal')) names.push('positionLocal');
           if (displacementMode === 'normal' && !names.includes('normalLocal')) {
             names.push('normalLocal');
           }
-          outLines[i] = `import { ${names.join(', ')} } from 'three/tsl';`;
         }
-        break;
+
+        outLines[i] = `import { ${names.join(', ')} } from 'three/tsl';`;
       }
+      break;
     }
   }
 

@@ -53,6 +53,7 @@ export const PreviewNode = memo(function PreviewNode({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
+  const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
 
@@ -144,7 +145,7 @@ export const PreviewNode = memo(function PreviewNode({
 
       {/* Header */}
       <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{data.label}</span>
+        <span className="node-base__title">{varName ?? data.label}</span>
       </div>
 
       {/* Preview canvas */}

@@ -149,6 +149,9 @@ interface AppState {
   shaderName: string;
   selectedHeadsetId: string;
 
+  // Node variable names (from code generation)
+  nodeVarNames: Record<string, string>;
+
   // Cost color poles
   costColorLow: string;
   costColorHigh: string;
@@ -192,6 +195,9 @@ interface AppState {
   setShaderName: (name: string) => void;
   setSelectedHeadsetId: (id: string) => void;
 
+  // Node variable name actions
+  setNodeVarNames: (names: Record<string, string>) => void;
+
   // Cost color actions
   setCostColorLow: (hex: string) => void;
   setCostColorHigh: (hex: string) => void;
@@ -216,6 +222,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6),
   shaderName: (() => { try { return localStorage.getItem('fs:shaderName') || 'My Shader'; } catch { return 'My Shader'; } })(),
   selectedHeadsetId: (() => { try { return localStorage.getItem('fs:headsetId') || 'quest3'; } catch { return 'quest3'; } })(),
+  nodeVarNames: {},
   costColorLow: (() => { try { return localStorage.getItem('fs:costColorLow') || '#8BC34A'; } catch { return '#8BC34A'; } })(),
   costColorHigh: (() => { try { return localStorage.getItem('fs:costColorHigh') || '#FF5722'; } catch { return '#FF5722'; } })(),
 
@@ -358,6 +365,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try { localStorage.setItem('fs:headsetId', id); } catch { /* */ }
     set({ selectedHeadsetId: id });
   },
+
+  setNodeVarNames: (names) => set({ nodeVarNames: names }),
 
   setCostColorLow: (hex) => {
     try { localStorage.setItem('fs:costColorLow', hex); } catch { /* */ }

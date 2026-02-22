@@ -57,6 +57,9 @@ import { topologicalSort } from './topologicalSort';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TSLNode = any;
 
+/** Valid swizzle component handles (consistent with graphToCode.ts). */
+const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
+
 /**
  * Map of registry type -> function that creates a TSL node given resolved inputs.
  * Each factory receives an object mapping input port ids to their resolved TSL values.
@@ -156,11 +159,25 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
     return mx_worley_noise_float(pos.mul(s));
   },
 
-  // Color
+  // Color — GPU-friendly branchless HSL→RGB using the standard shader formula:
+  // k(channel) = clamp(|mod(6h + offset, 6) - 3| - 1, 0, 1)
+  // rgb = L + S*(1 - |2L-1|) * (k - 0.5)
   hsl: (inputs) => {
-    // Simplified HSL - just pass through as vec3 for now
-    return vec3(inputs.h ?? float(0), inputs.s ?? float(1), inputs.l ?? float(0.5));
+    const h = inputs.h ?? float(0);
+    const s = inputs.s ?? float(1);
+    const l = inputs.l ?? float(0.5);
+    const h6 = mul(h, float(6));
+    const rk = clamp(sub(abs(sub(mod(add(h6, float(0)), float(6)), float(3))), float(1)), float(0), float(1));
+    const gk = clamp(sub(abs(sub(mod(add(h6, float(4)), float(6)), float(3))), float(1)), float(0), float(1));
+    const bk = clamp(sub(abs(sub(mod(add(h6, float(2)), float(6)), float(3))), float(1)), float(0), float(1));
+    const satFactor = mul(s, sub(float(1), abs(sub(mul(float(2), l), float(1)))));
+    return vec3(
+      add(l, mul(satFactor, sub(rk, float(0.5)))),
+      add(l, mul(satFactor, sub(gk, float(0.5)))),
+      add(l, mul(satFactor, sub(bk, float(0.5)))),
+    );
   },
+  // RGB → HSL: passthrough (inverse conversion requires min/max/conditionals not easily expressed in TSL)
   toHsl: (inputs) => inputs.rgb ?? vec3(0, 0, 0),
 };
 
@@ -262,7 +279,7 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
           const sourceOutput = nodeOutputs.get(edge.source);
           if (sourceOutput !== undefined) {
             const sh = edge.sourceHandle;
-            if (sh && sh !== 'out' && (sh === 'x' || sh === 'y' || sh === 'z' || sh === 'w')) {
+            if (sh && sh !== 'out' && VALID_SWIZZLE.has(sh)) {
               resolvedInputs[edge.targetHandle] = sourceOutput[sh];
             } else {
               resolvedInputs[edge.targetHandle] = sourceOutput;
@@ -296,7 +313,7 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
 
         // Handle swizzle from split-like nodes
         const sh = edge.sourceHandle;
-        if (sh && sh !== 'out' && (sh === 'x' || sh === 'y' || sh === 'z' || sh === 'w')) {
+        if (sh && sh !== 'out' && VALID_SWIZZLE.has(sh)) {
           sourceOutput = sourceOutput[sh];
         }
 

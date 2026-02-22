@@ -10,7 +10,7 @@ export function graphToCode(
   registry: Map<string, NodeDefinition> = NODE_REGISTRY
 ): GeneratedCode {
   if (nodes.length === 0) {
-    return { code: '// Empty shader — add nodes to begin\n', importStatements: [] };
+    return { code: '// Empty shader — add nodes to begin\n', importStatements: [], varNames: new Map() };
   }
 
   const sorted = topologicalSort(nodes, edges);
@@ -46,11 +46,12 @@ export function graphToCode(
       baseName = baseName.replace('mx_', '').replace(/_float$|_vec[234]$/, '');
     }
 
-    let name = baseName;
-    let i = 1;
-    while (usedNames.has(name)) {
-      name = `${baseName}${++i}`;
+    // Always number from 1 to avoid shadowing TSL imports (color1, add1, etc.)
+    let idx = 1;
+    while (usedNames.has(`${baseName}${idx}`)) {
+      idx++;
     }
+    const name = `${baseName}${idx}`;
     usedNames.add(name);
     varNames.set(node.id, name);
   }
@@ -104,11 +105,11 @@ export function graphToCode(
         : val;
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${formatted});`);
     } else if (def.type === 'hsl') {
-      // HSL → RGB: emit as vec3 (simplified placeholder)
-      addImport('three/tsl', 'vec3');
-      bodyLines.push(`  const ${varName} = vec3(${args.join(', ')});`);
+      // HSL → RGB: use the TSL hsl() function (available since Three.js r160+)
+      addImport('three/tsl', 'hsl');
+      bodyLines.push(`  const ${varName} = hsl(${args.join(', ')});`);
     } else if (def.type === 'toHsl') {
-      // RGB → HSL: passthrough (simplified placeholder)
+      // RGB → HSL: passthrough (no TSL toHsl() available)
       bodyLines.push(`  const ${varName} = ${args[0] ?? 'vec3(0, 0, 0)'};`);
     } else if (def.category === 'noise') {
       // Noise nodes: all params come from exposed ports / stored values
@@ -203,7 +204,7 @@ export function graphToCode(
     '',
   ].join('\n');
 
-  return { code, importStatements: importLines };
+  return { code, importStatements: importLines, varNames };
 }
 
 /** Resolve a source edge reference, looking through split nodes to inline swizzle. */

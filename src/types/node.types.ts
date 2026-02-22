@@ -79,3 +79,8 @@ export type AppEdge = Edge<TypedEdgeData>;
 export function getNodeValues(node: AppNode): Record<string, string | number> {
   return (node.data as ShaderNodeData).values ?? {};
 }
+
+/** Safely extract exposedPorts from any AppNode's data. */
+export function getNodeExposedPorts(node: AppNode): string[] {
+  return (node.data as ShaderNodeData).exposedPorts ?? [];
+}

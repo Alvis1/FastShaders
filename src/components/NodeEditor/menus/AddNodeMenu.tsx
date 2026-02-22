@@ -73,13 +73,17 @@ export function AddNodeMenu() {
     } else {
       newNodeId = generateId();
 
-      // Auto-name property nodes: property1, property2, etc.
+      // Auto-name property nodes: use max existing number + 1 to avoid collisions
       let values = { ...def.defaultValues };
       if (def.type === 'property_float') {
-        const existingCount = nodes.filter(
-          (n) => n.data.registryType === 'property_float'
-        ).length;
-        values = { ...values, name: `property${existingCount + 1}` };
+        let maxNum = 0;
+        for (const n of nodes) {
+          if (n.data.registryType !== 'property_float') continue;
+          const name = String((n.data as { values?: Record<string, string | number> }).values?.name ?? '');
+          const m = name.match(/^property(\d+)$/);
+          if (m) maxNum = Math.max(maxNum, Number(m[1]));
+        }
+        values = { ...values, name: `property${maxNum + 1}` };
       }
 
       const newNode = {

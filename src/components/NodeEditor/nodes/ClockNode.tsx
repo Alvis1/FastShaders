@@ -15,11 +15,11 @@ export const ClockNode = memo(function ClockNode({
   data,
   selected,
 }: NodeProps<ShaderFlowNode>) {
-  void id;
   const def = NODE_REGISTRY.get(data.registryType);
   if (!def) return null;
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
@@ -95,7 +95,7 @@ export const ClockNode = memo(function ClockNode({
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 
       <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{data.label}</span>
+        <span className="node-base__title">{varName ?? data.label}</span>
       </div>
 
       <div className="clock-node__canvas-wrap">
