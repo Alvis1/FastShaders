@@ -3,7 +3,9 @@
     "allow": [
       "Bash(npx gh-pages:*)",
       "Bash(npx vite-bundle-visualizer:*)",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm run build:*)"
     ]
   }
 }

@@ -1,0 +1,44 @@
+@import './NodeBase.css';
+
+.texture-preview-node {
+  position: relative;
+}
+
+.texture-preview-node__canvas-wrap {
+  padding: 3px 5px;
+  display: flex;
+  justify-content: center;
+}
+
+.texture-preview-node__canvas {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.texture-preview-node__placeholder {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: rgba(0, 0, 0, 0.4);
+}
+
+/* Handles positioned directly on node sides, not in rows */
+.texture-preview-node > .react-flow__handle {
+  transform: translateY(-50%) !important;
+}
+
+.texture-preview-node > .react-flow__handle-left {
+  left: calc(var(--handle-size) / -2) !important;
+}
+
+.texture-preview-node > .react-flow__handle-right {
+  right: calc(var(--handle-size) / -2) !important;
+}

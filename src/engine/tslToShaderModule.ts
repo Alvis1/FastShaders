@@ -12,14 +12,7 @@
  * so this module outputs clean, readable code without workarounds.
  */
 
-const CHANNEL_TO_NODE_PROP: Record<string, string> = {
-  color: 'colorNode',
-  emissive: 'emissiveNode',
-  normal: 'normalNode',
-  position: 'positionNode',
-  opacity: 'opacityNode',
-  roughness: 'roughnessNode',
-};
+import { CHANNEL_TO_PROP as CHANNEL_TO_NODE_PROP } from './tslCodeProcessor';
 
 export function tslToShaderModule(tslCode: string): string {
   const lines = tslCode.split('\n');

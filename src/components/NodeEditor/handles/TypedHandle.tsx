@@ -9,10 +9,11 @@ interface TypedHandleProps {
   position: Position;
   id: string;
   dataType: TSLDataType;
+  label?: string;
   style?: CSSProperties;
 }
 
-export function TypedHandle({ type, position, id, dataType, style }: TypedHandleProps) {
+export function TypedHandle({ type, position, id, dataType, label, style }: TypedHandleProps) {
   return (
     <Handle
       type={type}
@@ -21,6 +22,7 @@ export function TypedHandle({ type, position, id, dataType, style }: TypedHandle
       className="typed-handle"
       style={{ background: getTypeColor(dataType), ...style }}
       isConnectableStart
+      {...{ 'data-tooltip': label ?? id }}
     />
   );
 }

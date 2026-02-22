@@ -10,11 +10,14 @@ export type {
   ColorFlowNode,
   PreviewFlowNode,
   MathPreviewFlowNode,
+  ClockFlowNode,
+  TexturePreviewFlowNode,
   OutputFlowNode,
   AppNode,
   TypedEdgeData,
   AppEdge,
 } from './node.types';
+export { getNodeValues } from './node.types';
 
 export type {
   ParseError,

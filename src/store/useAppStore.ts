@@ -14,6 +14,9 @@ interface ContextMenuState {
   type: 'canvas' | 'node' | 'shader' | 'edge';
   nodeId?: string;
   edgeId?: string;
+  /** Source pin info when menu was opened by dragging from an output handle. */
+  sourceNodeId?: string;
+  sourceHandleId?: string;
 }
 
 interface HistoryEntry {
@@ -59,6 +62,10 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
         if (node.type === 'shader' && noiseTypes.has(node.data?.registryType)) {
           node.type = 'preview';
         }
+        // Migrate: texture-category nodes should use 'texturePreview' type
+        if (node.type === 'shader' && node.data?.registryType?.startsWith('tslTex_')) {
+          node.type = 'texturePreview';
+        }
       }
       return data;
     }
@@ -87,6 +94,7 @@ interface AppState {
 
   // Code
   code: string;
+  previewCode: string;
   codeErrors: ParseError[];
 
   // Complexity
@@ -113,6 +121,10 @@ interface AppState {
   shaderName: string;
   selectedHeadsetId: string;
 
+  // Cost color poles
+  costColorLow: string;
+  costColorHigh: string;
+
   // Graph actions
   setNodes: (nodes: AppNode[], source?: SyncSource) => void;
   setEdges: (edges: AppEdge[], source?: SyncSource) => void;
@@ -128,6 +140,7 @@ interface AppState {
   setCodeErrors: (errors: ParseError[]) => void;
   codeSyncRequested: boolean;
   requestCodeSync: () => void;
+  commitPreview: () => void;
 
   // Complexity actions
   setTotalCost: (cost: number) => void;
@@ -142,7 +155,7 @@ interface AppState {
   redo: () => void;
 
   // UI actions
-  openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader' | 'edge', nodeId?: string, edgeId?: string) => void;
+  openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader' | 'edge', nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string) => void;
   closeContextMenu: () => void;
   setSplitRatio: (ratio: number) => void;
   setRightSplitRatio: (ratio: number) => void;
@@ -150,12 +163,17 @@ interface AppState {
   // Shader name + headset actions
   setShaderName: (name: string) => void;
   setSelectedHeadsetId: (id: string) => void;
+
+  // Cost color actions
+  setCostColorLow: (hex: string) => void;
+  setCostColorHigh: (hex: string) => void;
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
   nodes: [],
   edges: [],
   code: '',
+  previewCode: '',
   codeErrors: [],
   totalCost: 0,
   syncSource: 'initial',
@@ -170,6 +188,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6),
   shaderName: (() => { try { return localStorage.getItem('fs:shaderName') || 'My Shader'; } catch { return 'My Shader'; } })(),
   selectedHeadsetId: (() => { try { return localStorage.getItem('fs:headsetId') || 'quest3'; } catch { return 'quest3'; } })(),
+  costColorLow: (() => { try { return localStorage.getItem('fs:costColorLow') || '#8BC34A'; } catch { return '#8BC34A'; } })(),
+  costColorHigh: (() => { try { return localStorage.getItem('fs:costColorHigh') || '#FF5722'; } catch { return '#FF5722'; } })(),
 
   setNodes: (nodes, source = 'graph') =>
     set({ nodes, syncSource: source, isUndoRedo: false }),
@@ -228,16 +248,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // Skip no-op: prevents Monaco onChange from flipping syncSource after programmatic updates
     if (code === get().code && source === 'code') return;
     if (source === 'code') {
-      // User typing — just store the code, don't trigger sync
+      // User typing — just store the code, don't update preview yet
       set({ code });
     } else {
-      set({ code, syncSource: source });
+      // Graph or initial sync — update preview immediately
+      set({ code, previewCode: code, syncSource: source });
     }
   },
 
   setCodeErrors: (errors) => set({ codeErrors: errors }),
 
-  requestCodeSync: () => set({ codeSyncRequested: true }),
+  requestCodeSync: () => set({ codeSyncRequested: true, previewCode: get().code }),
+
+  commitPreview: () => set({ previewCode: get().code }),
 
   setTotalCost: (cost) => set({ totalCost: cost }),
 
@@ -280,8 +303,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       };
     }),
 
-  openContextMenu: (x, y, type, nodeId, edgeId) =>
-    set({ contextMenu: { open: true, x, y, type, nodeId, edgeId } }),
+  openContextMenu: (x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId) =>
+    set({ contextMenu: { open: true, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId } }),
 
   closeContextMenu: () =>
     set({ contextMenu: { open: false, x: 0, y: 0, type: 'canvas' } }),
@@ -306,6 +329,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setSelectedHeadsetId: (id) => {
     try { localStorage.setItem('fs:headsetId', id); } catch { /* */ }
     set({ selectedHeadsetId: id });
+  },
+
+  setCostColorLow: (hex) => {
+    try { localStorage.setItem('fs:costColorLow', hex); } catch { /* */ }
+    set({ costColorLow: hex });
+  },
+
+  setCostColorHigh: (hex) => {
+    try { localStorage.setItem('fs:costColorHigh', hex); } catch { /* */ }
+    set({ costColorHigh: hex });
   },
 }));
 

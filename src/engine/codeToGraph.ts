@@ -2,8 +2,9 @@ import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, ParseError } from '@/types';
+import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType } from '@/registry/nodeRegistry';
-import { generateId } from '@/utils/idGenerator';
+import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import complexityData from '@/registry/complexity.json';
 
 // Handle babel traverse CJS/ESM interop
@@ -92,7 +93,7 @@ export function codeToGraph(
           const sourceId = varToNodeId.get(arg.name);
           if (sourceId) {
             rawEdges.push({
-              id: `e-${sourceId}-${outputId}-color`,
+              id: generateEdgeId(sourceId, 'out', outputId, 'color'),
               source: sourceId,
               sourceHandle: 'out',
               target: outputId,
@@ -175,7 +176,7 @@ function processCall(
     const sourceId = varToNodeId.get(objectVarName);
     if (sourceId) {
       edges.push({
-        id: `e-${sourceId}-${nodeId}-${def.inputs[0].id}`,
+        id: generateEdgeId(sourceId, 'out', nodeId, def.inputs[0].id),
         source: sourceId,
         sourceHandle: 'out',
         target: nodeId,
@@ -202,7 +203,7 @@ function processCall(
       const sourceId = varToNodeId.get(arg.name);
       if (sourceId) {
         edges.push({
-          id: `e-${sourceId}-${nodeId}-${port.id}`,
+          id: generateEdgeId(sourceId, 'out', nodeId, port.id),
           source: sourceId,
           sourceHandle: 'out',
           target: nodeId,
@@ -232,8 +233,8 @@ function processCall(
   if (Object.keys(extractedValues).length > 0) {
     const node = nodes.find((n) => n.id === nodeId);
     if (node) {
-      const data = node.data as { values: Record<string, string | number> };
-      data.values = { ...data.values, ...extractedValues };
+      const prev = getNodeValues(node);
+      (node.data as Record<string, unknown>).values = { ...prev, ...extractedValues };
     }
   }
 }
@@ -259,7 +260,7 @@ function processObjectCall(
       const port = def.inputs.find((p) => p.id === key);
       if (sourceId && port) {
         edges.push({
-          id: `e-${sourceId}-${nodeId}-${port.id}`,
+          id: generateEdgeId(sourceId, 'out', nodeId, port.id),
           source: sourceId,
           sourceHandle: 'out',
           target: nodeId,
@@ -299,8 +300,8 @@ function processObjectCall(
   if (Object.keys(extractedValues).length > 0) {
     const node = nodes.find((n) => n.id === nodeId);
     if (node) {
-      const data = node.data as { values: Record<string, string | number> };
-      data.values = { ...data.values, ...extractedValues };
+      const prev = getNodeValues(node);
+      (node.data as Record<string, unknown>).values = { ...prev, ...extractedValues };
     }
   }
 }

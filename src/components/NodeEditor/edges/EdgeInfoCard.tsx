@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { getTypeColor } from '@/utils/colorUtils';
+import { getTypeColor, CARD_CHANNEL_COLORS, CHANNEL_LABELS } from '@/utils/colorUtils';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { evaluateNodeOutput, type EvalResult } from '@/engine/cpuEvaluator';
 import type { TSLDataType } from '@/types';
@@ -16,28 +16,6 @@ interface EdgeInfoCardProps {
   labelX: number;
   labelY: number;
 }
-
-/** Channel labels per data type. */
-const CHANNEL_LABELS: Record<string, string[]> = {
-  float: [''],
-  int: [''],
-  any: [''],
-  vec2: ['X', 'Y'],
-  vec3: ['X', 'Y', 'Z'],
-  color: ['R', 'G', 'B'],
-  vec4: ['X', 'Y', 'Z', 'W'],
-};
-
-/** Channel colors per data type. */
-const CHANNEL_COLORS: Record<string, string[]> = {
-  float: [],
-  int: [],
-  any: [],
-  vec2: ['#ff6666', '#66dd66'],
-  vec3: ['#ff6666', '#66dd66', '#6699ff'],
-  color: ['#ff6666', '#66dd66', '#6699ff'],
-  vec4: ['#ff6666', '#66dd66', '#6699ff', '#dddddd'],
-};
 
 export function EdgeInfoCard({
   sourceId,
@@ -101,7 +79,7 @@ export function EdgeInfoCard({
 
   const typeColor = getTypeColor(resolvedType);
   const labels = CHANNEL_LABELS[resolvedType] ?? [''];
-  const colors = CHANNEL_COLORS[resolvedType] ?? [];
+  const colors = CARD_CHANNEL_COLORS[resolvedType] ?? [];
   const isMultiChannel = labels.length > 1;
 
   return (

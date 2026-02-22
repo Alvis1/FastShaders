@@ -1,4 +1,5 @@
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode } from '@/types';
+import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getParamClassifications } from '@/registry/tslTexturesRegistry';
 import { topologicalSort } from './topologicalSort';
@@ -59,16 +60,6 @@ export function graphToCode(
     if (def.tslImportModule === 'tsl-textures') needsTHREEImport = true;
   }
 
-  // Build import lines
-  const importLines: string[] = [];
-  if (needsTHREEImport) {
-    importLines.push(`import * as THREE from 'three';`);
-  }
-  for (const [module, names] of importsByModule) {
-    const sortedNames = Array.from(names).sort();
-    importLines.push(`import { ${sortedNames.join(', ')} } from '${module}';`);
-  }
-
   // Build body lines
   const bodyLines: string[] = [];
 
@@ -83,27 +74,54 @@ export function graphToCode(
       // tsl-textures: object parameter call
       const objProps = buildTSLTextureCallProps(node, edges, varNames, def, sorted);
       bodyLines.push(`  const ${varName} = ${def.tslFunction}({ ${objProps} });`);
-    } else if (def.inputs.length === 0 && def.category === 'input') {
+    } else if (def.inputs.length === 0 && def.category === 'input' && !def.defaultValues) {
       // Input nodes: bare reference (positionGeometry, time, etc.)
       bodyLines.push(`  const ${varName} = ${def.tslFunction};`);
     } else if (def.inputs.length === 0 && def.defaultValues) {
       // Type constructors with default values
-      const nodeValues = (node.data as { values?: Record<string, string | number> }).values;
+      const nodeValues = getNodeValues(node);
       const defaultKey = Object.keys(def.defaultValues)[0];
       const val = nodeValues?.[defaultKey] ?? Object.values(def.defaultValues)[0];
       const formatted = typeof val === 'string' && val.startsWith('#')
         ? `0x${val.slice(1)}`
         : val;
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${formatted});`);
+    } else if (def.type === 'hsl') {
+      // HSL → RGB: emit as vec3 (simplified placeholder)
+      addImport('three/tsl', 'vec3');
+      bodyLines.push(`  const ${varName} = vec3(${args.join(', ')});`);
+    } else if (def.type === 'toHsl') {
+      // RGB → HSL: passthrough (simplified placeholder)
+      bodyLines.push(`  const ${varName} = ${args[0] ?? 'vec3(0, 0, 0)'};`);
     } else if (def.category === 'noise') {
-      // Noise nodes: apply scale to position argument if scale != 1
-      const nv = (node.data as { values?: Record<string, string | number> }).values;
-      const scaleVal = Number(nv?.scale ?? 1);
-      if (scaleVal !== 1 && args.length > 0) {
-        args[0] = `mul(${args[0]}, ${scaleVal})`;
+      // Noise nodes: all params come from exposed ports / stored values
+      const nv = getNodeValues(node);
+
+      // Resolve position: from exposed port edge, or default positionGeometry
+      let posExpr = resolveExposedParam(node, 'pos', edges, varNames, nv, sorted);
+      if (/^\d+(\.\d+)?$/.test(posExpr) || posExpr === 'positionGeometry') {
+        posExpr = 'positionGeometry';
+      }
+      addImport('three/tsl', 'positionGeometry');
+
+      // Apply scale
+      const scaleExpr = resolveExposedParam(node, 'scale', edges, varNames, nv, sorted);
+      if (scaleExpr !== '1') {
+        posExpr = `mul(${posExpr}, ${scaleExpr})`;
         addImport('three/tsl', 'mul');
       }
-      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${args.join(', ')});`);
+
+      const noiseArgs: string[] = [posExpr];
+
+      // Fractal noise: resolve extra params (octaves, lacunarity, diminish)
+      if (node.data.registryType === 'fractal') {
+        noiseArgs.push(
+          resolveExposedParam(node, 'octaves', edges, varNames, nv, sorted),
+          resolveExposedParam(node, 'lacunarity', edges, varNames, nv, sorted),
+          resolveExposedParam(node, 'diminish', edges, varNames, nv, sorted),
+        );
+      }
+      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${noiseArgs.join(', ')});`);
     } else {
       // Regular function call
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${args.join(', ')});`);
@@ -140,18 +158,19 @@ export function graphToCode(
     returnLine = `  return { ${props} };`;
   }
 
-  // Check if vec3 is needed for fallback
-  if (returnLine.includes('vec3(') && !importsByModule.get('three/tsl')?.has('vec3')) {
+  // Ensure vec3 is imported if used in fallback return
+  if (returnLine.includes('vec3(')) {
     addImport('three/tsl', 'vec3');
-    // Rebuild import lines
-    importLines.length = 0;
-    if (needsTHREEImport) {
-      importLines.push(`import * as THREE from 'three';`);
-    }
-    for (const [module, names] of importsByModule) {
-      const sortedNames = Array.from(names).sort();
-      importLines.push(`import { ${sortedNames.join(', ')} } from '${module}';`);
-    }
+  }
+
+  // Build import lines (after all imports are collected)
+  const importLines: string[] = [];
+  if (needsTHREEImport) {
+    importLines.push(`import * as THREE from 'three';`);
+  }
+  for (const [module, names] of importsByModule) {
+    const sortedNames = Array.from(names).sort();
+    importLines.push(`import { ${sortedNames.join(', ')} } from '${module}';`);
   }
 
   const code = [
@@ -181,7 +200,8 @@ function resolveEdgeRef(
   if (!sourceNode) return varNames.get(edge.source) ?? null;
 
   // If source is a split node, inline as inputVar.component
-  if (sourceNode.data.registryType === 'split' && edge.sourceHandle && edge.sourceHandle !== 'out') {
+  const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
+  if (sourceNode.data.registryType === 'split' && edge.sourceHandle && edge.sourceHandle !== 'out' && VALID_SWIZZLE.has(edge.sourceHandle)) {
     const splitInputEdge = edges.find(e => e.target === sourceNode.id && e.targetHandle === 'v');
     if (splitInputEdge && varNames.has(splitInputEdge.source)) {
       return `${varNames.get(splitInputEdge.source)}.${edge.sourceHandle}`;
@@ -207,11 +227,31 @@ function resolveArguments(
       if (ref) return ref;
     }
     // No connection: use node's stored value or placeholder
-    const nodeValues = (node.data as { values?: Record<string, string | number> }).values;
-    const val = nodeValues?.[input.id];
+    const nodeValues = getNodeValues(node);
+    const val = nodeValues[input.id];
     if (val !== undefined) return String(val);
     return '0';
   });
+}
+
+/** Resolve an exposed parameter: if an edge connects to it, use the variable ref; else use stored value. */
+function resolveExposedParam(
+  node: AppNode,
+  key: string,
+  edges: AppEdge[],
+  varNames: Map<string, string>,
+  nodeValues: Record<string, string | number>,
+  sorted: AppNode[],
+): string {
+  // Check if there's an edge connected to this exposed port
+  const edge = edges.find(
+    (e) => e.target === node.id && e.targetHandle === key
+  );
+  if (edge) {
+    const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+    if (ref) return ref;
+  }
+  return String(nodeValues?.[key] ?? 1);
 }
 
 function buildTSLTextureCallProps(
@@ -222,7 +262,7 @@ function buildTSLTextureCallProps(
   sorted: AppNode[]
 ): string {
   const classifications = getParamClassifications(def.tslFunction);
-  const nodeValues = (node.data as { values?: Record<string, string | number> }).values ?? {};
+  const nodeValues = getNodeValues(node);
   const parts: string[] = [];
 
   for (const param of classifications) {

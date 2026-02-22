@@ -21,6 +21,7 @@ export interface PreviewOptions {
   geometry?: 'sphere' | 'cube' | 'torus' | 'plane';
   animate?: boolean;
   materialSettings?: MaterialSettings;
+  bgColor?: string;
 }
 
 // Resolve full absolute URLs for the IIFE bundle and shaderloader at runtime.
@@ -119,6 +120,7 @@ export function tslToPreviewHTML(
     geometry = 'sphere',
     animate = false,
     materialSettings,
+    bgColor = '#1a1a2e',
   } = options;
 
   const shaderModule = convertToShaderModule(tslCode, materialSettings);
@@ -157,13 +159,14 @@ export function tslToPreviewHTML(
   lines.push('');
 
   // A-Frame scene with camera (FOV 20) and orbit controls
-  lines.push(`<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: #1a1a2e">`);
-  lines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
+  lines.push(`<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ${bgColor}">`);
+  lines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5">');
+  lines.push('    <a-entity light="type: point" position="-2.54828 0.68055 -0.48012"></a-entity>');
+  lines.push('    <a-entity light="type: point" position="0.93609 0.28506 2.65279"></a-entity>');
+  lines.push('  </a-entity>');
   lines.push(`  <a-entity id="preview-entity" geometry="${geoAttr}" material="color: #808080" position="0 0 0" rotation="45 45 0"${animAttr}></a-entity>`);
   lines.push('  <a-light type="directional" position="1 2 1" intensity="1"></a-light>');
   lines.push('  <a-light type="ambient" intensity="0.4"></a-light>');
-  lines.push('  <a-entity light="type: point" position="-2.54828 0.68055 -0.48012"></a-entity>');
-  lines.push('  <a-entity light="type: point" position="0.93609 0.28506 2.65279"></a-entity>');
   lines.push('</a-scene>');
   lines.push('');
 

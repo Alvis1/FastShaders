@@ -101,7 +101,8 @@ export function renderNoisePreview(
   const imageData = new ImageData(size, size);
   const data = imageData.data;
   const userScale = Number(values.scale ?? 1);
-  const scale = 4.0 * userScale;
+  const baseMultiplier = type === 'fractal' ? 8.0 : 4.0;
+  const scale = baseMultiplier * userScale;
 
   // Time-driven position offset (when time feeds into pos)
   const posOffset = timeInputs.pos ? time * 0.4 : 0;

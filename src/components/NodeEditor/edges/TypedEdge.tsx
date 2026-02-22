@@ -7,30 +7,9 @@ import {
 import type { AppEdge, AppNode, TSLDataType } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { getTypeColor } from '@/utils/colorUtils';
+import { getTypeColor, EDGE_CHANNEL_COLORS, LINE_COUNT } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { EdgeInfoCard } from './EdgeInfoCard';
-
-const LINE_COUNT: Record<TSLDataType, number> = {
-  float: 1,
-  int: 1,
-  any: 1,
-  vec2: 2,
-  vec3: 3,
-  color: 3,
-  vec4: 4,
-};
-
-/** Per-channel colors: R, G, B, A */
-const CHANNEL_COLORS: Record<TSLDataType, string[]> = {
-  float: [],
-  int: [],
-  any: [],
-  vec2: ['#ff4444', '#44dd44'],
-  vec3: ['#ff4444', '#44dd44', '#4488ff'],
-  color: ['#ff4444', '#44dd44', '#4488ff'],
-  vec4: ['#ff4444', '#44dd44', '#4488ff', '#dddddd'],
-};
 
 /** Type priority for broadcasting: higher = wider type */
 const TYPE_PRIORITY: Record<TSLDataType, number> = {
@@ -147,7 +126,7 @@ export function TypedEdge({
   const rawType = data?.dataType ?? 'any';
   const dataType = resolveDataType(rawType, source, sourceHandleId, target, targetHandleId);
   const baseColor = getTypeColor(dataType);
-  const channelColors = CHANNEL_COLORS[dataType];
+  const channelColors = EDGE_CHANNEL_COLORS[dataType];
   const count = LINE_COUNT[dataType] ?? 1;
   const offsets = getOffsets(count);
   // Thinner lines when more channels
@@ -184,6 +163,7 @@ export function TypedEdge({
   const dragStart = useRef<{ x: number; y: number; pointerId: number } | null>(null);
 
   const onInteractionDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return; // Only left click
     dragStart.current = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
     (e.target as SVGElement).setPointerCapture(e.pointerId);
   };

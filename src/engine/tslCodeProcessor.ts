@@ -110,10 +110,10 @@ export function fixTDZ(
     );
   }
 
-  // 3. Fix bare numeric first-arg in MaterialX noise calls
+  // 3. Fix bare numeric first-arg in MaterialX noise calls — default to uv()
   processedBody = processedBody.replace(
     /\b(mx_\w+)\(\s*0\s*\)/g,
-    '$1()',
+    '$1(uv())',
   );
   processedBody = processedBody.replace(
     /\b(mx_\w+)\(\s*0\s*,/g,

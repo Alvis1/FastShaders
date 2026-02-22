@@ -29,6 +29,12 @@ export function topologicalSort(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
     }
   }
 
+  if (sorted.length < nodes.length) {
+    console.warn(
+      `[topologicalSort] Cycle detected: ${nodes.length - sorted.length} node(s) excluded from sort.`
+    );
+  }
+
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
   return sorted.map((id) => nodeMap.get(id)!).filter(Boolean);
 }

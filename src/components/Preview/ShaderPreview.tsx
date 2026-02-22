@@ -15,7 +15,7 @@ function loadGeometry(): GeometryType {
 }
 
 export function ShaderPreview() {
-  const code = useAppStore((s) => s.code);
+  const previewCode = useAppStore((s) => s.previewCode);
   const nodes = useAppStore((s) => s.nodes);
 
   // Read material settings from the output node
@@ -24,22 +24,19 @@ export function ShaderPreview() {
 
   const [geometry, setGeometry] = useState<GeometryType>(loadGeometry);
   const [playing, setPlaying] = useState(false);
+  const [bgColor, setBgColor] = useState(() => {
+    try { return localStorage.getItem('fs:previewBgColor') || '#1a1a2e'; } catch { return '#1a1a2e'; }
+  });
 
-  // Debounce iframe updates to avoid thrashing on rapid graph changes
-  const [debouncedCode, setDebouncedCode] = useState(code);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blobUrlRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setDebouncedCode(code), 500);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [code]);
-
-  // Persist geometry selection
+  // Persist geometry and bg color selections
   useEffect(() => {
     try { localStorage.setItem('fs:previewGeometry', geometry); } catch { /* */ }
   }, [geometry]);
+  useEffect(() => {
+    try { localStorage.setItem('fs:previewBgColor', bgColor); } catch { /* */ }
+  }, [bgColor]);
 
   // Generate blob URL for the iframe (more reliable than srcdoc for ES modules + importmaps)
   const blobUrl = useMemo(() => {
@@ -51,13 +48,14 @@ export function ShaderPreview() {
       geometry,
       animate: playing,
       materialSettings,
+      bgColor,
     };
-    const html = tslToPreviewHTML(debouncedCode, options);
+    const html = tslToPreviewHTML(previewCode, options);
     const blob = new Blob([html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     blobUrlRef.current = url;
     return url;
-  }, [debouncedCode, geometry, playing, materialSettings]);
+  }, [previewCode, geometry, playing, materialSettings, bgColor]);
 
   // Cleanup blob URL on unmount
   useEffect(() => {
@@ -81,6 +79,13 @@ export function ShaderPreview() {
           >
             {playing ? '\u23F8' : '\u25B6'}
           </button>
+          <input
+            type="color"
+            className="shader-preview__bg-color"
+            value={bgColor}
+            onChange={(e) => setBgColor(e.target.value)}
+            title="Background color"
+          />
           <select
             className="shader-preview__geo-select"
             value={geometry}

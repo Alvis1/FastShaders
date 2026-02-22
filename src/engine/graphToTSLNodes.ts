@@ -48,6 +48,7 @@ import {
 import { Color, Vector2, Vector3 } from 'three';
 import * as tslTextures from 'tsl-textures';
 import type { AppNode, AppEdge } from '@/types';
+import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getParamClassifications } from '@/registry/tslTexturesRegistry';
 import { hexToRgb01 } from '@/utils/colorUtils';
@@ -271,7 +272,7 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
       }
 
       // Get node values (defaults, user-set parameters)
-      const values = (node.data as { values?: Record<string, string | number> }).values ?? {};
+      const values = getNodeValues(node);
 
       // Create the TSL node
       const tslNode = factory(resolvedInputs, values);
