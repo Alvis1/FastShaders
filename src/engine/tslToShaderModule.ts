@@ -13,13 +13,20 @@
  */
 
 import { CHANNEL_TO_PROP as CHANNEL_TO_NODE_PROP } from './tslCodeProcessor';
+import type { MaterialSettings } from '@/types';
 
-export function tslToShaderModule(tslCode: string): string {
+export function tslToShaderModule(
+  tslCode: string,
+  materialSettings?: MaterialSettings,
+): string {
   const lines = tslCode.split('\n');
   const outLines: string[] = [];
   let insideFn = false;
   let fnBraceDepth = 0;
   let skippedExportDefault = false;
+  let needsPositionImports = false;
+
+  const displacementMode = materialSettings?.displacementMode ?? 'normal';
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -76,6 +83,13 @@ export function tslToShaderModule(tslCode: string): string {
           const key = prop.slice(0, colonIdx).trim();
           const val = prop.slice(colonIdx + 1).trim();
           const nodeProp = CHANNEL_TO_NODE_PROP[key];
+          if (key === 'position' && nodeProp) {
+            needsPositionImports = true;
+            const displacement = displacementMode === 'normal'
+              ? `normalLocal.mul(${val})`
+              : val;
+            return `${nodeProp}: positionLocal.add(${displacement})`;
+          }
           return nodeProp ? `${nodeProp}: ${val}` : `${key}: ${val}`;
         });
         // Determine indentation from original line
@@ -100,6 +114,24 @@ export function tslToShaderModule(tslCode: string): string {
     if (skippedExportDefault && trimmed === '') continue;
 
     outLines.push(line);
+  }
+
+  // Inject positionLocal/normalLocal into three/tsl import if position wrapping was applied
+  if (needsPositionImports) {
+    for (let i = 0; i < outLines.length; i++) {
+      if (/^\s*import\s*\{[^}]+\}\s*from\s*['"]three\/tsl['"]/.test(outLines[i])) {
+        const match = outLines[i].match(/\{([^}]+)\}/);
+        if (match) {
+          const names = match[1].split(',').map(n => n.trim()).filter(Boolean);
+          if (!names.includes('positionLocal')) names.push('positionLocal');
+          if (displacementMode === 'normal' && !names.includes('normalLocal')) {
+            names.push('normalLocal');
+          }
+          outLines[i] = `import { ${names.join(', ')} } from 'three/tsl';`;
+        }
+        break;
+      }
+    }
   }
 
   // Clean up trailing blank lines

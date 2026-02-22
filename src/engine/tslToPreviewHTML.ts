@@ -64,9 +64,13 @@ function convertToShaderModule(
   const { processedBody, texAliases } = fixTDZ(body, tslNames, texNames);
   const { defLines, channels } = parseBody(processedBody, tslNames);
 
-  // Ensure positionLocal is available if position channel is used
-  if (channels.position && !tslNames.includes('positionLocal')) {
-    tslNames.push('positionLocal');
+  // Ensure positionLocal (and normalLocal for normal-based displacement) are available
+  const displacementMode = materialSettings?.displacementMode ?? 'normal';
+  if (channels.position) {
+    if (!tslNames.includes('positionLocal')) tslNames.push('positionLocal');
+    if (displacementMode === 'normal' && !tslNames.includes('normalLocal')) {
+      tslNames.push('normalLocal');
+    }
   }
 
   // Build import statements
@@ -85,7 +89,10 @@ function convertToShaderModule(
     const prop = CHANNEL_TO_PROP[ch];
     if (prop) {
       if (ch === 'position') {
-        returnProps.push(`${prop}: positionLocal.add(${ref})`);
+        const displacement = displacementMode === 'normal'
+          ? `normalLocal.mul(${ref})`
+          : ref;
+        returnProps.push(`${prop}: positionLocal.add(${displacement})`);
       } else {
         returnProps.push(`${prop}: ${ref}`);
       }

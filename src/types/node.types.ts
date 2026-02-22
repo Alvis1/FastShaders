@@ -46,6 +46,8 @@ export interface MaterialSettings {
   transparent?: boolean;
   side?: 'front' | 'back' | 'double';
   depthWrite?: boolean;
+  /** How displacement is applied: 'normal' = along surface normal, 'offset' = raw vec3 offset. */
+  displacementMode?: 'normal' | 'offset';
 }
 
 export interface OutputNodeData {
