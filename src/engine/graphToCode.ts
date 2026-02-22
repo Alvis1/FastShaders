@@ -23,6 +23,23 @@ export function graphToCode(
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
 
+    // Property nodes use their user-defined name as the variable name
+    if (node.data.registryType === 'property_float') {
+      const nodeValues = getNodeValues(node);
+      const rawName = String(nodeValues.name ?? 'property1');
+      let baseName = rawName.replace(/[^a-zA-Z0-9_$]/g, '_').replace(/^(\d)/, '_$1');
+      if (!baseName) baseName = 'property1';
+
+      let name = baseName;
+      let i = 1;
+      while (usedNames.has(name)) {
+        name = `${baseName}${++i}`;
+      }
+      usedNames.add(name);
+      varNames.set(node.id, name);
+      continue;
+    }
+
     let baseName = def.tslFunction;
     // Clean up names for MaterialX functions
     if (baseName.startsWith('mx_')) {

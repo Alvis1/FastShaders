@@ -104,7 +104,7 @@ function evaluate(
       break;
     case 'float':
     case 'int':
-    case 'uniform_float':
+    case 'property_float':
       result = [Number(values.value ?? 0)];
       break;
     case 'screenUV':

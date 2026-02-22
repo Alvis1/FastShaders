@@ -3,7 +3,8 @@ import Editor, { type OnMount } from '@monaco-editor/react';
 import { useAppStore } from '@/store/useAppStore';
 import { registerTSLLanguage } from './tslLanguage';
 import { tslToAFrame } from '@/engine/tslToAFrame';
-import { tslToShaderModule } from '@/engine/tslToShaderModule';
+import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
+import { getNodeValues } from '@/types';
 import type { MaterialSettings, OutputNodeData } from '@/types';
 import './CodeEditor.css';
 
@@ -38,6 +39,21 @@ export function CodeEditor() {
   const materialSettings = (outputNode?.data as OutputNodeData | undefined)?.materialSettings;
   const [activeTab, setActiveTab] = useState<CodeTab>('tsl');
 
+  // Extract property definitions from property_float nodes
+  const properties: PropertyInfo[] = useMemo(() =>
+    nodes
+      .filter((n) => n.data.registryType === 'property_float')
+      .map((n) => {
+        const values = getNodeValues(n);
+        return {
+          name: String(values.name ?? 'property1'),
+          type: 'float' as const,
+          defaultValue: Number(values.value ?? 1.0),
+        };
+      }),
+    [nodes]
+  );
+
   const handleMount: OnMount = useCallback((editor, monaco) => {
     editorRef.current = editor;
     registerTSLLanguage(monaco);
@@ -66,13 +82,13 @@ export function CodeEditor() {
 
   // Only compute export code when that tab is active
   const aframeCode = useMemo(
-    () => (activeTab === 'aframe' ? tslToAFrame(code, shaderName, { materialSettings }) : ''),
-    [code, activeTab, shaderName, materialSettings]
+    () => (activeTab === 'aframe' ? tslToAFrame(code, shaderName, { materialSettings, properties }) : ''),
+    [code, activeTab, shaderName, materialSettings, properties]
   );
 
   const moduleCode = useMemo(
-    () => (activeTab === 'module' ? tslToShaderModule(code, materialSettings) : ''),
-    [code, activeTab, materialSettings]
+    () => (activeTab === 'module' ? tslToShaderModule(code, materialSettings, properties) : ''),
+    [code, activeTab, materialSettings, properties]
   );
 
   const isTSL = activeTab === 'tsl';

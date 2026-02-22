@@ -72,6 +72,16 @@ export function AddNodeMenu() {
       addNode(newNode);
     } else {
       newNodeId = generateId();
+
+      // Auto-name property nodes: property1, property2, etc.
+      let values = { ...def.defaultValues };
+      if (def.type === 'property_float') {
+        const existingCount = nodes.filter(
+          (n) => n.data.registryType === 'property_float'
+        ).length;
+        values = { ...values, name: `property${existingCount + 1}` };
+      }
+
       const newNode = {
         id: newNodeId,
         type: getFlowNodeType(def),
@@ -80,7 +90,7 @@ export function AddNodeMenu() {
           registryType: def.type,
           label: def.label,
           cost,
-          values: { ...def.defaultValues },
+          values,
         } as ShaderNodeData,
       } as AppNode;
       addNode(newNode);

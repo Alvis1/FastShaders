@@ -29,12 +29,16 @@ export interface PortRow {
   vecBaseKey?: string;
 }
 
-export function buildRows(def: { inputs: PortDefinition[]; outputs: PortDefinition[]; defaultValues?: Record<string, string | number> }): PortRow[] {
+export function buildRows(def: { type?: string; inputs: PortDefinition[]; outputs: PortDefinition[]; defaultValues?: Record<string, string | number> }): PortRow[] {
   const rows: PortRow[] = [];
-  const defaults = def.defaultValues ?? {};
+  const allDefaults = def.defaultValues ?? {};
+  // For property nodes, hide 'name' from inline settings (shown in header instead)
+  const defaults = def.type === 'property_float'
+    ? Object.fromEntries(Object.entries(allDefaults).filter(([k]) => k !== 'name'))
+    : allDefaults;
 
   if (def.inputs.length === 0 && Object.keys(defaults).length > 0) {
-    // No input ports but has settings (float, color, uniform_float, vec3, vec2)
+    // No input ports but has settings (float, color, property_float, vec3, vec2)
     const keys = Object.keys(defaults);
     // Group _x/_y/_z keys into vec rows
     const consumed = new Set<string>();
@@ -184,7 +188,11 @@ export const ShaderNode = memo(function ShaderNode({
 
       {/* Header */}
       <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{data.label}</span>
+        <span className="node-base__title">
+          {data.registryType === 'property_float' && data.values?.name
+            ? String(data.values.name)
+            : data.label}
+        </span>
       </div>
 
       {/* Port rows */}

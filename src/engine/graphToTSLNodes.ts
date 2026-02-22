@@ -68,7 +68,7 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   tangentLocal: () => tangentLocal,
   time: () => time,
   screenUV: () => screenUV,
-  uniform_float: (_inputs, values) => float(Number(values.value ?? 1)),
+  property_float: (_inputs, values) => float(Number(values.value ?? 1)),
 
   // Type constructors
   float: (_inputs, values) => float(Number(values.value ?? 0)),

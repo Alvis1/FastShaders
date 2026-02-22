@@ -50,14 +50,14 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'UV', dataType: 'vec2' }],
   },
   {
-    type: 'uniform_float',
-    label: 'Uniform (float)',
+    type: 'property_float',
+    label: 'Property (float)',
     category: 'input',
     tslFunction: 'uniform',
     tslImportModule: 'three/tsl',
     inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
-    defaultValues: { value: 1.0 },
+    defaultValues: { value: 1.0, name: 'property1' },
   },
 
   // ===== TYPE CONSTRUCTORS =====

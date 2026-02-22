@@ -59,7 +59,25 @@ AFRAME.registerComponent('shader', {
       if (this._currentSrc !== tslPath) { return; }
 
       const shaderExport = module.default;
-      const shaderResult = typeof shaderExport === 'function' ? shaderExport() : shaderExport;
+
+      // Read schema for property uniforms and create TSL uniform nodes.
+      // If no explicit schema is exported, auto-detect params.XXX usage
+      // in the source code so hand-written modules work without boilerplate.
+      let schema = module.schema;
+      if (!schema || Object.keys(schema).length === 0) {
+        schema = autoDetectSchema(source);
+      }
+      const uniforms = {};
+      for (const [name, def] of Object.entries(schema)) {
+        const val = (def && def.default !== undefined) ? def.default : 0;
+        uniforms[name] = THREE.TSL.uniform(val);
+      }
+      this._propertyUniforms = uniforms;
+
+      // Always pass uniforms to functions that accept parameters
+      const shaderResult = typeof shaderExport === 'function'
+        ? (shaderExport.length > 0 ? shaderExport(uniforms) : shaderExport())
+        : shaderExport;
 
       const material = new THREE.MeshPhysicalNodeMaterial();
 
@@ -116,8 +134,15 @@ AFRAME.registerComponent('shader', {
       this._shaderMaterial = null;
     }
   },
+  /** Update a property uniform value at runtime. */
+  updateProperty: function(name, value) {
+    if (this._propertyUniforms && this._propertyUniforms[name]) {
+      this._propertyUniforms[name].value = value;
+    }
+  },
   remove: function() {
     this._currentSrc = null;
+    this._propertyUniforms = null;
     const mesh = this.el.getObject3D('mesh');
     if (mesh) {
       this.restoreOriginalMaterials(mesh);
@@ -134,6 +159,40 @@ AFRAME.registerComponent('shader', {
   }
 });
 
+
+// Auto-detect property schema from source code by scanning for `params.XXX`
+// patterns. This lets hand-written modules work without an explicit
+// `export const schema = {...}` — the shaderloader creates TSL uniforms
+// for each detected property with a default value of 0.
+// Also detects `const NAME = uniform(VALUE)` patterns to extract defaults.
+function autoDetectSchema(source) {
+  const schema = {};
+
+  // Detect params.XXX usage
+  const paramRegex = /\bparams\.(\w+)\b/g;
+  let m;
+  while ((m = paramRegex.exec(source)) !== null) {
+    const name = m[1];
+    if (!(name in schema)) {
+      schema[name] = { type: 'number', default: 0 };
+    }
+  }
+
+  // Detect `const NAME = uniform(VALUE)` and use VALUE as default
+  const uniformRegex = /\bconst\s+(\w+)\s*=\s*uniform\(\s*([^)]+)\s*\)/g;
+  while ((m = uniformRegex.exec(source)) !== null) {
+    const name = m[1];
+    const val = parseFloat(m[2]);
+    if (!(name in schema)) {
+      schema[name] = { type: 'number', default: isNaN(val) ? 0 : val };
+    }
+  }
+
+  if (Object.keys(schema).length > 0) {
+    console.log('shaderloader: auto-detected properties:', Object.keys(schema).join(', '));
+  }
+  return schema;
+}
 
 // Auto-detect and inject missing TSL imports. Generated TSL code may use
 // functions like uv() without importing them. This scans the source for

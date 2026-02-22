@@ -66,6 +66,17 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
         if (node.type === 'shader' && node.data?.registryType?.startsWith('tslTex_')) {
           node.type = 'texturePreview';
         }
+        // Migrate: uniform_float → property_float
+        if (node.data?.registryType === 'uniform_float') {
+          node.data.registryType = 'property_float';
+          if (!node.data.values) node.data.values = {};
+          if (!node.data.values.name) {
+            const label = node.data.label;
+            node.data.values.name = (label === 'Uniform (float)' || label === 'uniform')
+              ? 'property1'
+              : label;
+          }
+        }
       }
 
       // Migrate: output nodes without exposedPorts — auto-expose any ports with edges
