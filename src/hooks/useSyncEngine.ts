@@ -63,6 +63,10 @@ export function useSyncEngine() {
       const result = graphToCode(nodes, edges, NODE_REGISTRY);
       setCode(result.code, 'graph');
       lastSyncedCodeRef.current = result.code;
+      // Update node variable names for display
+      const names: Record<string, string> = {};
+      result.varNames.forEach((v, k) => { names[k] = v; });
+      useAppStore.getState().setNodeVarNames(names);
     } finally {
       setSyncInProgress(false);
       if (useAppStore.getState().isUndoRedo) {

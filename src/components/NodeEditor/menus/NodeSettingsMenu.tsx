@@ -1,5 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
-import { getNodeValues } from '@/types';
+import { getNodeValues, getNodeExposedPorts } from '@/types';
 import type { NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
@@ -42,7 +42,7 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
     closeContextMenu();
   };
 
-  const exposedPorts: string[] = (node.data as { exposedPorts?: string[] }).exposedPorts ?? [];
+  const exposedPorts: string[] = getNodeExposedPorts(node);
   const showPortToggles = def ? !ALWAYS_EXPOSED_CATEGORIES.has(def.category as NodeCategory) : false;
 
   const handleValueChange = (key: string, value: string | number) => {

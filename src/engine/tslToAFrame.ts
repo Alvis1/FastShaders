@@ -20,6 +20,7 @@ import {
 } from './tslCodeProcessor';
 import type { MaterialSettings } from '@/types';
 import type { PropertyInfo } from './tslToShaderModule';
+import { sanitizeIdentifier, toKebabCase } from '@/utils/nameUtils';
 
 export interface AFrameOptions {
   /** A-Frame geometry primitive (default: 'sphere') */
@@ -36,8 +37,9 @@ export interface AFrameOptions {
 
 // IIFE bundle from the a-frame-shaderloader project — includes A-Frame 1.7,
 // Three.js WebGPU build, and tsl-textures with matching compatible versions.
-const IIFE_BUNDLE_URL =
-  'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/aframe-171-a-0.1.min.js';
+const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js';
+const IIFE_BUNDLE_URL = `${CDN_BASE}/aframe-171-a-0.1.min.js`;
+const SHADERLOADER_URL = `${CDN_BASE}/a-frame-shaderloader-0.2.js`;
 
 export function tslToAFrame(
   tslCode: string,
@@ -51,11 +53,7 @@ export function tslToAFrame(
   } = options;
   const properties = options.properties ?? [];
 
-  // Sanitize name for use as component name (kebab-case, no special chars)
-  const componentName = shaderName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'tsl-shader';
+  const componentName = toKebabCase(shaderName, 'tsl-shader');
 
   const pageTitle = shaderName || 'TSL Shader';
 
@@ -104,6 +102,7 @@ export function tslToAFrame(
   lines.push('  <meta name="viewport" content="width=device-width, initial-scale=1.0">');
   lines.push(`  <title>${pageTitle}</title>`);
   lines.push(`  <script src="${IIFE_BUNDLE_URL}"><${''}/script>`);
+  lines.push(`  <script src="${SHADERLOADER_URL}"><${''}/script>`);
 
   if (embedded) {
     lines.push('  <style>');
@@ -123,7 +122,8 @@ export function tslToAFrame(
   if (properties.length > 0) {
     lines.push('  schema: {');
     for (const prop of properties) {
-      lines.push(`    ${prop.name}: { type: 'number', default: ${prop.defaultValue} },`);
+      const safeName = sanitizeIdentifier(prop.name, 'property');
+      lines.push(`    ${safeName}: { type: 'number', default: ${prop.defaultValue} },`);
     }
     lines.push('  },');
   }

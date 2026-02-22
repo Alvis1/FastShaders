@@ -21,7 +21,7 @@ src/
 ├── vite-env.d.ts                      # Type declarations (tsl-textures module)
 ├── components/
 │   ├── CodeEditor/
-│   │   ├── CodeEditor.tsx             # Monaco editor with TSL/A-Frame/Module tabs, Save + Download
+│   │   ├── CodeEditor.tsx             # Monaco editor with TSL/A-Frame/Script tabs, Save + Download
 │   │   ├── CodeEditor.css
 │   │   └── tslLanguage.ts             # TSL language definition, completions, color picker
 │   ├── Layout/
@@ -71,7 +71,7 @@ src/
 │   ├── graphToTSLNodes.ts             # Graph → live Three.js TSL node objects (all 5 output channels)
 │   ├── tslCodeProcessor.ts            # Shared TSL processing: import extraction, TDZ fix, body parsing
 │   ├── tslToAFrame.ts                 # TSL code → A-Frame HTML (uses tslCodeProcessor, materialSettings, properties)
-│   ├── tslToShaderModule.ts           # TSL code → shaderloader-compatible ES module (materialSettings, properties)
+│   ├── tslToShaderModule.ts           # TSL code → shaderloader-compatible ES script (materialSettings, properties)
 │   ├── tslToPreviewHTML.ts            # TSL code → Three.js WebGPU HTML (uses tslCodeProcessor)
 │   ├── layoutEngine.ts                # Dagre auto-layout (LR, nodesep=25, ranksep=60)
 │   ├── cpuEvaluator.ts                # CPU-side graph evaluator for real-time values (multi-channel)
@@ -135,22 +135,22 @@ The code editor has three tabs:
 
 - **TSL** — Editable TSL code with Save button and error display (default)
 - **A-Frame** — Read-only self-contained HTML using the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle (`tslToAFrame.ts`):
-  - Loads `aframe-171-a-0.1.min.js` from jsDelivr CDN (bundles A-Frame 1.7 + Three.js WebGPU + tsl-textures)
+  - Loads `aframe-171-a-0.1.min.js` and `a-frame-shaderloader-0.2.js` from jsDelivr CDN
+  - IIFE bundle includes A-Frame 1.7 + Three.js WebGPU + tsl-textures with matching compatible versions
   - Uses a regular `<script>` that destructures TSL functions from `THREE.TSL` and tsl-textures from `window.tslTextures`
-  - tsl-textures fully supported (the IIFE bundle ships matching compatible versions)
   - TDZ fixes applied: self-ref removal, variable rename for shadowing imports, tsl-textures aliases
   - Receives `materialSettings` from output node (displacement mode, transparent, side)
   - Download as `.html`
-- **Module** — Read-only shaderloader-compatible ES module (`tslToShaderModule.ts`):
-  - Converts `Fn(() => { ... })` wrapper to `export default function() { ... }` (or `function(params)` when properties exist)
+- **Script** — Read-only shaderloader-compatible ES module (`tslToShaderModule.ts`):
+  - Converts `Fn(() => { ... })` wrapper to `export default function(params) { ... }` (when properties exist) or `export default function() { ... }` (no properties)
   - Standard bare imports (`'three/tsl'`, `'tsl-textures'`)
   - Multi-channel returns converted to shaderloader Object API (`color` → `colorNode`, etc.)
-  - Position channel wrapped with displacement logic (normal/offset mode from `materialSettings`)
-  - **Property support**: Emits `export const schema = { name: { type, default } }` before the function; replaces `uniform(VALUE)` calls with `params.NAME` references; removes `uniform` from imports when all calls are replaced
+  - Position channel wrapped with displacement logic: `positionLocal.add(normalLocal.mul(val))` (normal mode) or `positionLocal.add(val)` (offset mode from `materialSettings`)
+  - **Property support**: Replaces `const NAME = uniform(VALUE)` with `const NAME = params.NAME`; removes `uniform` from imports when all uniform calls are replaced by params references
   - The shaderloader handles TDZ fixes and missing import injection at runtime
   - Download as `.js` for use with `<a-entity shader="src: myshader.js">`
 
-Both A-Frame and Module tabs read `materialSettings` and `properties` (from `property_float` nodes) in `CodeEditor.tsx` and thread them to their respective generators.
+Both A-Frame and Script tabs read `materialSettings` and `properties` (from `property_float` nodes) in `CodeEditor.tsx` and thread them to their respective generators.
 
 The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-initialization freezes.
 
@@ -223,20 +223,21 @@ Generates a self-contained `.html` using the a-frame-shaderloader IIFE bundle:
 3. **Displacement**: When position channel is used, wraps as `positionLocal.add(normalLocal.mul(ref))` (normal mode) or `positionLocal.add(ref)` (offset mode), injects `positionLocal`/`normalLocal` imports
 4. **Property support**: When properties exist, emits component `schema` with property definitions, creates `this._uniforms.NAME = uniform(this.data.NAME)` in init, replaces property uniform declarations with `this._uniforms.NAME` refs, adds `update()` method for reactive A-Frame attribute changes
 5. Generates HTML with:
-   - `<script src="...aframe-171-a-0.1.min.js">` from jsDelivr CDN
+   - `<script src="...aframe-171-a-0.1.min.js">` from jsDelivr CDN (IIFE bundle)
+   - `<script src="...a-frame-shaderloader-0.2.js">` from jsDelivr CDN (shaderloader component)
    - Inline `<script>` registering an A-Frame component
    - TSL functions destructured from `THREE.TSL`, tsl-textures from `window.tslTextures`
    - Material creation + channel assignment + mesh
 
-### Shader Module Export (`tslToShaderModule.ts`)
+### Shader Script Export (`tslToShaderModule.ts`)
 
 Generates a `.js` ES module compatible with the a-frame-shaderloader component:
 
 1. Strips `Fn` from three/tsl imports
-2. Converts `const shader = Fn(() => {` to `export default function() {` (or `function(params)` when properties exist)
-3. Converts multi-channel return keys to shaderloader Object API names
+2. Converts `const shader = Fn(() => {` to `export default function(params) {` (when properties exist) or `export default function() {` (no properties)
+3. Converts multi-channel return keys to shaderloader Object API names (`color` → `colorNode`, `position` → `positionNode`, etc.)
 4. Accepts optional `materialSettings` and `properties` (PropertyInfo[]) — wraps position channel with displacement logic (same normal/offset modes as tslToAFrame), injects `positionLocal`/`normalLocal` into the `three/tsl` import line when needed
-5. **Property support**: Emits `export const schema = { name: { type, default } }` before the function; replaces `const NAME = uniform(VALUE)` with `const NAME = params.NAME`; removes `uniform` from imports when all calls are replaced
+5. **Property support**: Replaces `const NAME = uniform(VALUE)` with `const NAME = params.NAME`; removes `uniform` from imports when all uniform calls are replaced by params references
 6. Removes `export default shader;`
 7. The shaderloader handles TDZ fixes, missing import injection, and specifier resolution at runtime
 
@@ -306,7 +307,7 @@ Configurable uniform properties that become component attributes in A-Frame expo
 - **Code generation** (`graphToCode.ts`): Uses the sanitized property name as the variable name (e.g., `const brightness = uniform(1.5)`)
 - **Code parsing** (`codeToGraph.ts`): Sets `values.name = varName` from the code's variable name
 - **TSL function map**: `uniform` → `property_float` via `TSL_FUNCTION_TO_DEF` (so code→graph correctly identifies `uniform()` calls as property nodes)
-- **Module export**: Emits `export const schema` + `function(params)` with `params.NAME` references
+- **Script export**: Replaces `uniform(VALUE)` with `params.NAME` references; `function(params)` signature
 - **A-Frame export**: Emits component schema + `this._uniforms.NAME` + `update()` method
 - **Migration**: `loadGraph()` in useAppStore migrates old `uniform_float` → `property_float`
 
@@ -513,7 +514,7 @@ Right-click menu for the output node with sections:
   - Offset mode: `positionLocal.add(displacement)` — raw vec3 offset
 - **Material**: Transparent checkbox, Side selector (front/back/double), Depth Write (when transparent)
 
-All settings stored in `OutputNodeData.materialSettings` and threaded through to all 3 export pipelines (preview, A-Frame, module).
+All settings stored in `OutputNodeData.materialSettings` and threaded through to all 3 export pipelines (preview, A-Frame, script).
 
 ### DragNumberInput
 

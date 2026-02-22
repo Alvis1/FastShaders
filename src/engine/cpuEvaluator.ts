@@ -5,9 +5,11 @@
  * Returns null for nodes that can't be evaluated (e.g. positionGeometry — depends on geometry).
  */
 import type { AppNode, AppEdge } from '@/types';
+import { getNodeValues } from '@/types';
 import { perlin2D, fbm2D, voronoi2D } from '@/utils/noisePreview';
 
-type NodeValues = Record<string, string | number>;
+/** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
+const NOISE_UV_SCALE = 4;
 
 /** Result: array of channel values, or null if unevaluable. */
 export type EvalResult = number[] | null;
@@ -47,7 +49,7 @@ function evaluate(
   if (!node) { cache.set(nodeId, null); return null; }
 
   const type = node.data.registryType;
-  const values = (node.data as { values?: NodeValues }).values ?? {};
+  const values = getNodeValues(node);
 
   // Resolve a single scalar input from edges or inline values
   const scalarInput = (portId: string, fallback: number): number => {
@@ -260,8 +262,8 @@ function evaluate(
     case 'noise': {
       const posInput = channelInput('pos', 0);
       const scale = scalarInput('scale', 1);
-      const px = (posInput ? posInput[0] : 0.5) * 4 * scale;
-      const py = (posInput ? (posInput[1] ?? 0.5) : 0.5) * 4 * scale;
+      const px = (posInput ? posInput[0] : 0.5) * NOISE_UV_SCALE * scale;
+      const py = (posInput ? (posInput[1] ?? 0.5) : 0.5) * NOISE_UV_SCALE * scale;
       result = [(perlin2D(px, py) + 1) * 0.5];
       break;
     }
@@ -271,17 +273,34 @@ function evaluate(
       const oct = scalarInput('octaves', 4);
       const lac = scalarInput('lacunarity', 2);
       const dim = scalarInput('diminish', 0.5);
-      const px = (posInput ? posInput[0] : 0.5) * 4 * scale;
-      const py = (posInput ? (posInput[1] ?? 0.5) : 0.5) * 4 * scale;
+      const px = (posInput ? posInput[0] : 0.5) * NOISE_UV_SCALE * scale;
+      const py = (posInput ? (posInput[1] ?? 0.5) : 0.5) * NOISE_UV_SCALE * scale;
       result = [(fbm2D(px, py, Math.round(oct), lac, dim) + 1) * 0.5];
       break;
     }
     case 'voronoi': {
       const posInput = channelInput('pos', 0);
       const scale = scalarInput('scale', 1);
-      const px = (posInput ? posInput[0] : 0.5) * 4 * scale;
-      const py = (posInput ? (posInput[1] ?? 0.5) : 0.5) * 4 * scale;
+      const px = (posInput ? posInput[0] : 0.5) * NOISE_UV_SCALE * scale;
+      const py = (posInput ? (posInput[1] ?? 0.5) : 0.5) * NOISE_UV_SCALE * scale;
       result = [voronoi2D(px, py)];
+      break;
+    }
+
+    // HSL → RGB conversion (standard algorithm)
+    case 'hsl': {
+      const h = scalarInput('h', 0);
+      const s = scalarInput('s', 1);
+      const l = scalarInput('l', 0.5);
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      result = [hue2rgb(p, q, h + 1 / 3), hue2rgb(p, q, h), hue2rgb(p, q, h - 1 / 3)];
+      break;
+    }
+    // RGB → HSL (passthrough — full implementation requires min/max/conditionals)
+    case 'toHsl': {
+      const rgb = channelInput('rgb', 0);
+      result = rgb;
       break;
     }
 
@@ -291,4 +310,14 @@ function evaluate(
 
   cache.set(nodeId, result);
   return result;
+}
+
+/** Standard HSL hue-to-RGB channel helper. */
+function hue2rgb(p: number, q: number, t: number): number {
+  if (t < 0) t += 1;
+  if (t > 1) t -= 1;
+  if (t < 1 / 6) return p + (q - p) * 6 * t;
+  if (t < 1 / 2) return q;
+  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+  return p;
 }

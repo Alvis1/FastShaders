@@ -29,10 +29,22 @@ export interface PortRow {
   vecBaseKey?: string;
 }
 
+/**
+ * Build the visual row layout for a ShaderNode.
+ *
+ * Rows pair up input ports (left side) with output ports (right side).
+ * Inline settings (numbers, colors) are attached to their port row.
+ *
+ * Special handling:
+ * - Keys ending in `_x/_y/_z` are grouped into compact vec3 rows
+ * - Keys ending in `_x/_y` (no `_z`) are grouped into vec2 rows
+ * - Non-port settings (vec3/vec2/color not backed by an input port) are
+ *   appended as extra rows after the input port rows
+ * - Property nodes hide the `name` key (shown in the header instead)
+ */
 export function buildRows(def: { type?: string; inputs: PortDefinition[]; outputs: PortDefinition[]; defaultValues?: Record<string, string | number> }): PortRow[] {
   const rows: PortRow[] = [];
   const allDefaults = def.defaultValues ?? {};
-  // For property nodes, hide 'name' from inline settings (shown in header instead)
   const defaults = def.type === 'property_float'
     ? Object.fromEntries(Object.entries(allDefaults).filter(([k]) => k !== 'name'))
     : allDefaults;
@@ -156,6 +168,7 @@ export const ShaderNode = memo(function ShaderNode({
 
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const edges = useAppStore((s) => s.edges);
+  const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
@@ -191,7 +204,7 @@ export const ShaderNode = memo(function ShaderNode({
         <span className="node-base__title">
           {data.registryType === 'property_float' && data.values?.name
             ? String(data.values.name)
-            : data.label}
+            : varName ?? data.label}
         </span>
       </div>
 
