@@ -1,6 +1,89 @@
-@import './NodeBase.css';
+/* ===== Output Node ===== */
+.output-node {
+  position: relative;
+  width: fit-content;
+  min-width: 140px;
+  border: none;
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--shadow-node);
+  font-family: var(--font-sans);
+  overflow: visible;
+  transition: box-shadow var(--transition-normal);
+}
 
-/* Output node dot has a fixed category color */
-.output-node__dot {
-  background: var(--cat-output);
+.output-node--selected {
+  box-shadow: var(--shadow-node-selected);
+  outline: 2px solid var(--border-focus);
+  outline-offset: -1px;
+}
+
+/* Main header */
+.output-node__header {
+  display: flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: var(--border-radius-md) var(--border-radius-md) 0 0;
+  background: rgba(0, 0, 0, 0.06);
+  border-left: 3px solid var(--cat-output);
+}
+
+.output-node__title {
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(0, 0, 0, 0.75);
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Section */
+.output-node__section {
+  padding: 2px 0;
+}
+
+.output-node__section-label {
+  font-size: 8px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 3px 8px 1px;
+}
+
+/* Port rows */
+.output-node__ports {
+  padding: 0;
+}
+
+.output-node__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 8px;
+  gap: 2px;
+}
+
+.output-node__row .react-flow__handle {
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+}
+
+.output-node__row .react-flow__handle-left {
+  left: calc(var(--handle-size) / -2) !important;
+}
+
+.output-node__port-label {
+  font-size: 9px;
+  color: rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  padding-left: 4px;
+}
+
+/* Divider between sections */
+.output-node__divider {
+  height: 1px;
+  margin: 2px 6px;
+  background: rgba(0, 0, 0, 0.12);
 }
