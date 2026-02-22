@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { registerTSLLanguage } from './tslLanguage';
 import { tslToAFrame } from '@/engine/tslToAFrame';
 import { tslToShaderModule } from '@/engine/tslToShaderModule';
+import type { MaterialSettings, OutputNodeData } from '@/types';
 import './CodeEditor.css';
 
 type CodeTab = 'tsl' | 'aframe' | 'module';
@@ -30,7 +31,11 @@ export function CodeEditor() {
   const setCode = useAppStore((s) => s.setCode);
   const requestCodeSync = useAppStore((s) => s.requestCodeSync);
   const shaderName = useAppStore((s) => s.shaderName);
+  const nodes = useAppStore((s) => s.nodes);
   const editorRef = useRef<unknown>(null);
+
+  const outputNode = nodes.find((n) => n.data.registryType === 'output');
+  const materialSettings = (outputNode?.data as OutputNodeData | undefined)?.materialSettings;
   const [activeTab, setActiveTab] = useState<CodeTab>('tsl');
 
   const handleMount: OnMount = useCallback((editor, monaco) => {
@@ -61,13 +66,13 @@ export function CodeEditor() {
 
   // Only compute export code when that tab is active
   const aframeCode = useMemo(
-    () => (activeTab === 'aframe' ? tslToAFrame(code, shaderName) : ''),
-    [code, activeTab, shaderName]
+    () => (activeTab === 'aframe' ? tslToAFrame(code, shaderName, { materialSettings }) : ''),
+    [code, activeTab, shaderName, materialSettings]
   );
 
   const moduleCode = useMemo(
-    () => (activeTab === 'module' ? tslToShaderModule(code) : ''),
-    [code, activeTab]
+    () => (activeTab === 'module' ? tslToShaderModule(code, materialSettings) : ''),
+    [code, activeTab, materialSettings]
   );
 
   const isTSL = activeTab === 'tsl';

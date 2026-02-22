@@ -18,6 +18,7 @@ import {
   fixTDZ,
   parseBody,
 } from './tslCodeProcessor';
+import type { MaterialSettings } from '@/types';
 
 export interface AFrameOptions {
   /** A-Frame geometry primitive (default: 'sphere') */
@@ -26,6 +27,8 @@ export interface AFrameOptions {
   embedded?: boolean;
   /** Add slow rotation animation to the entity */
   animate?: boolean;
+  /** Material settings from the output node (displacement mode, etc.) */
+  materialSettings?: MaterialSettings;
 }
 
 // IIFE bundle from the a-frame-shaderloader project — includes A-Frame 1.7,
@@ -62,9 +65,13 @@ export function tslToAFrame(
   const { processedBody, texAliases } = fixTDZ(body, tslNames, texNames);
   const { defLines, channels } = parseBody(processedBody, tslNames);
 
-  // Ensure positionLocal is available if position channel is used
-  if (channels.position && !tslNames.includes('positionLocal')) {
-    tslNames.push('positionLocal');
+  // Ensure positionLocal (and normalLocal for normal-based displacement) are available
+  const displacementMode = options.materialSettings?.displacementMode ?? 'normal';
+  if (channels.position) {
+    if (!tslNames.includes('positionLocal')) tslNames.push('positionLocal');
+    if (displacementMode === 'normal' && !tslNames.includes('normalLocal')) {
+      tslNames.push('normalLocal');
+    }
   }
 
   // Build the full HTML document
@@ -125,8 +132,10 @@ export function tslToAFrame(
     const prop = CHANNEL_TO_PROP[ch];
     if (prop) {
       if (ch === 'position') {
-        // Position as displacement: add to existing local position
-        lines.push(`      material.${prop} = positionLocal.add(${ref});`);
+        const displacement = displacementMode === 'normal'
+          ? `normalLocal.mul(${ref})`
+          : ref;
+        lines.push(`      material.${prop} = positionLocal.add(${displacement});`);
       } else {
         lines.push(`      material.${prop} = ${ref};`);
       }

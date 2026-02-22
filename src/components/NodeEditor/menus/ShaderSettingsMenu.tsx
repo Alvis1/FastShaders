@@ -106,6 +106,25 @@ export function ShaderSettingsMenu() {
         </>
       )}
 
+      {/* Displacement mode — only relevant when position port is exposed */}
+      {exposedSet.has('position') && (
+        <>
+          <div className="context-menu__divider" />
+          <div className="context-menu__category">Displacement</div>
+          <label style={labelStyle}>
+            <input
+              type="checkbox"
+              checked={(settings.displacementMode ?? 'normal') === 'normal'}
+              onChange={(e) =>
+                updateSettings({ displacementMode: e.target.checked ? 'normal' : 'offset' })
+              }
+              style={checkboxStyle}
+            />
+            Along Normal
+          </label>
+        </>
+      )}
+
       <div className="context-menu__divider" />
       <div className="context-menu__category">Material</div>
 
