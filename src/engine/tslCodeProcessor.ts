@@ -105,7 +105,7 @@ export function fixTDZ(
   }
   for (const name of conflicting) {
     processedBody = processedBody.replace(
-      new RegExp(`\\b${name}\\b(?!\\s*\\()`, 'g'),
+      new RegExp(`\\b${name}\\b(?!\\s*[:(])`, 'g'),
       `_${name}`,
     );
   }
