@@ -1,4 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
+import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { generateId } from '@/utils/idGenerator';
@@ -35,14 +36,26 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
     closeContextMenu();
   };
 
+  const exposedPorts: string[] = (node.data as { exposedPorts?: string[] }).exposedPorts ?? [];
+
   const handleValueChange = (key: string, value: string | number) => {
     const numVal = typeof value === 'number' ? value : parseFloat(value);
     updateNodeData(nodeId, {
       values: {
-        ...(node.data as { values?: Record<string, string | number> }).values,
+        ...getNodeValues(node),
         [key]: isNaN(numVal) ? value : numVal,
       },
     });
+  };
+
+  const handleTogglePort = (key: string) => {
+    const current = new Set(exposedPorts);
+    if (current.has(key)) {
+      current.delete(key);
+    } else {
+      current.add(key);
+    }
+    updateNodeData(nodeId, { exposedPorts: Array.from(current) });
   };
 
   return (
@@ -54,10 +67,44 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
         </div>
       </div>
 
+      {/* Input ports not in defaultValues (tslRef params like position, time) */}
+      {def?.inputs
+        .filter((inp) => !def.defaultValues || !(inp.id in def.defaultValues))
+        .map((inp) => {
+          const isExposed = exposedPorts.includes(inp.id);
+          return (
+            <div
+              key={inp.id}
+              style={{
+                padding: 'var(--space-1) var(--space-3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 'var(--space-2)',
+              }}
+            >
+              <label
+                style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={isExposed}
+                  onChange={() => handleTogglePort(inp.id)}
+                  title="Expose as input socket"
+                  style={{ width: '12px', height: '12px', margin: 0 }}
+                />
+                {inp.label}
+              </label>
+            </div>
+          );
+        })}
+
       {def?.defaultValues &&
         Object.entries(def.defaultValues).map(([key, defaultVal]) => {
           const isColor = typeof defaultVal === 'string' && defaultVal.startsWith('#');
-          const currentValue = (node.data as { values?: Record<string, string | number> }).values?.[key] ?? defaultVal;
+          const isPort = typeof defaultVal === 'string' && !defaultVal.startsWith('#');
+          const currentValue = getNodeValues(node)[key] ?? defaultVal;
+          const isExposed = exposedPorts.includes(key);
 
           return (
             <div
@@ -71,8 +118,15 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
               }}
             >
               <label
-                style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}
+                style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}
               >
+                <input
+                  type="checkbox"
+                  checked={isExposed}
+                  onChange={() => handleTogglePort(key)}
+                  title="Expose as input socket"
+                  style={{ width: '12px', height: '12px', margin: 0 }}
+                />
                 {key}
               </label>
               {isColor ? (
@@ -90,7 +144,7 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
                     color: 'var(--text-primary)',
                   }}
                 />
-              ) : (
+              ) : isPort ? null : (
                 <DragNumberInput
                   value={Number(currentValue)}
                   onChange={(v) => handleValueChange(key, v)}

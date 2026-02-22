@@ -38,6 +38,7 @@ export interface ShaderNodeData {
   label: string;
   cost: number;
   values: Record<string, string | number>;
+  exposedPorts?: string[];
   [key: string]: unknown;
 }
 
@@ -52,6 +53,7 @@ export interface OutputNodeData {
   label: string;
   cost: number;
   materialSettings?: MaterialSettings;
+  exposedPorts?: string[];
   [key: string]: unknown;
 }
 
@@ -59,8 +61,10 @@ export type ShaderFlowNode = Node<ShaderNodeData, 'shader'>;
 export type ColorFlowNode = Node<ShaderNodeData, 'color'>;
 export type PreviewFlowNode = Node<ShaderNodeData, 'preview'>;
 export type MathPreviewFlowNode = Node<ShaderNodeData, 'mathPreview'>;
+export type ClockFlowNode = Node<ShaderNodeData, 'clock'>;
+export type TexturePreviewFlowNode = Node<ShaderNodeData, 'texturePreview'>;
 export type OutputFlowNode = Node<OutputNodeData, 'output'>;
-export type AppNode = ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | OutputFlowNode;
+export type AppNode = ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | ClockFlowNode | TexturePreviewFlowNode | OutputFlowNode;
 
 export interface TypedEdgeData {
   dataType: TSLDataType;
@@ -68,3 +72,8 @@ export interface TypedEdgeData {
 }
 
 export type AppEdge = Edge<TypedEdgeData>;
+
+/** Safely extract values from any AppNode's data. */
+export function getNodeValues(node: AppNode): Record<string, string | number> {
+  return (node.data as ShaderNodeData).values ?? {};
+}

@@ -18,6 +18,8 @@ import { ColorNode } from './nodes/ColorNode';
 import { PreviewNode } from './nodes/PreviewNode';
 import { MathPreviewNode } from './nodes/MathPreviewNode';
 import { OutputNode } from './nodes/OutputNode';
+import { ClockNode } from './nodes/ClockNode';
+import { TexturePreviewNode } from './nodes/TexturePreviewNode';
 import { TypedEdge } from './edges/TypedEdge';
 import { ContextMenu } from './menus/ContextMenu';
 import { CostBar } from '@/components/Layout/CostBar';
@@ -33,7 +35,9 @@ const nodeTypes = {
   color: ColorNode,
   preview: PreviewNode,
   mathPreview: MathPreviewNode,
+  clock: ClockNode,
   output: OutputNode,
+  texturePreview: TexturePreviewNode,
 };
 
 const edgeTypes = {
@@ -50,6 +54,8 @@ export function NodeEditor() {
   const openContextMenu = useAppStore((s) => s.openContextMenu);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const contextMenu = useAppStore((s) => s.contextMenu);
+  const costColorLow = useAppStore((s) => s.costColorLow);
+  const costColorHigh = useAppStore((s) => s.costColorHigh);
 
   // Copy/paste clipboard
   const clipboardRef = useRef<AppNode[]>([]);
@@ -287,23 +293,39 @@ export function NodeEditor() {
 
   // Track whether a connection attempt succeeded; if not, open add-node menu
   const connectSucceeded = useRef(false);
+  const pendingSourceRef = useRef<{ nodeId: string; handleId: string } | null>(null);
 
-  const onConnectStart = useCallback(() => {
-    connectSucceeded.current = false;
-  }, []);
+  const onConnectStart = useCallback(
+    (_event: MouseEvent | TouchEvent, params: { nodeId: string | null; handleId: string | null; handleType: string | null }) => {
+      connectSucceeded.current = false;
+      // Only track source when dragging from an output (source) handle
+      if (params.handleType === 'source' && params.nodeId && params.handleId) {
+        pendingSourceRef.current = { nodeId: params.nodeId, handleId: params.handleId };
+      } else {
+        pendingSourceRef.current = null;
+      }
+    },
+    [],
+  );
 
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent) => {
-      if (connectSucceeded.current) return;
+      if (connectSucceeded.current) {
+        pendingSourceRef.current = null;
+        return;
+      }
       // If this connection was initiated from an edge disconnect, don't open the menu
       if (isEdgeDisconnecting) {
         setEdgeDisconnecting(false);
+        pendingSourceRef.current = null;
         return;
       }
-      // Connection dropped on empty space — open add-node menu
+      // Connection dropped on empty space — open add-node menu with source pin info
       const clientX = 'clientX' in event ? event.clientX : event.changedTouches[0].clientX;
       const clientY = 'clientY' in event ? event.clientY : event.changedTouches[0].clientY;
-      openContextMenu(clientX, clientY, 'canvas');
+      const pending = pendingSourceRef.current;
+      openContextMenu(clientX, clientY, 'canvas', undefined, undefined, pending?.nodeId, pending?.handleId);
+      pendingSourceRef.current = null;
     },
     [openContextMenu],
   );
@@ -445,7 +467,7 @@ export function NodeEditor() {
           style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
         />
         <MiniMap
-          nodeColor={(node) => getCostColor((node.data as { cost?: number }).cost ?? 0)}
+          nodeColor={(node) => getCostColor((node.data as { cost?: number }).cost ?? 0, costColorLow, costColorHigh)}
           style={{ backgroundColor: 'var(--bg-panel)' }}
           maskColor="rgba(255, 255, 255, 0.7)"
         />

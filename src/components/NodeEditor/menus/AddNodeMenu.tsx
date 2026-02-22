@@ -8,8 +8,8 @@ import {
   getFlowNodeType,
 } from '@/registry/nodeRegistry';
 import { CATEGORIES } from '@/registry/nodeCategories';
-import type { NodeDefinition, AppNode, ShaderNodeData, OutputNodeData } from '@/types';
-import { generateId } from '@/utils/idGenerator';
+import type { NodeDefinition, AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
+import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import complexityData from '@/registry/complexity.json';
 
 export function AddNodeMenu() {
@@ -17,8 +17,13 @@ export function AddNodeMenu() {
   const contextMenu = useAppStore((s) => s.contextMenu);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const addNode = useAppStore((s) => s.addNode);
+  const setEdges = useAppStore((s) => s.setEdges);
   const nodes = useAppStore((s) => s.nodes);
   const { screenToFlowPosition } = useReactFlow();
+
+  // Source pin info for auto-connect when dragged from an output handle
+  const sourceNodeId = contextMenu.sourceNodeId;
+  const sourceHandleId = contextMenu.sourceHandleId;
 
   const results = useMemo(() => {
     if (query.trim()) return searchNodes(query);
@@ -45,14 +50,17 @@ export function AddNodeMenu() {
     const costs = complexityData.costs as Record<string, number>;
     const cost = costs[def.type] ?? 0;
 
+    let newNodeId: string;
+
     if (def.type === 'output') {
       // Only allow one output node
       if (nodes.some((n) => n.data.registryType === 'output')) {
         closeContextMenu();
         return;
       }
+      newNodeId = generateId();
       const newNode: AppNode = {
-        id: generateId(),
+        id: newNodeId,
         type: 'output',
         position,
         data: {
@@ -63,8 +71,9 @@ export function AddNodeMenu() {
       };
       addNode(newNode);
     } else {
+      newNodeId = generateId();
       const newNode = {
-        id: generateId(),
+        id: newNodeId,
         type: getFlowNodeType(def),
         position,
         data: {
@@ -76,6 +85,27 @@ export function AddNodeMenu() {
       } as AppNode;
       addNode(newNode);
     }
+
+    // Auto-connect from source pin if this menu was opened by dragging from an output
+    if (sourceNodeId && sourceHandleId) {
+      const targetDef = NODE_REGISTRY.get(def.type);
+      const firstInput = targetDef?.inputs[0];
+      if (firstInput) {
+        const store = useAppStore.getState();
+        const newEdge: AppEdge = {
+          id: generateEdgeId(sourceNodeId, sourceHandleId, newNodeId, firstInput.id),
+          source: sourceNodeId,
+          target: newNodeId,
+          sourceHandle: sourceHandleId,
+          targetHandle: firstInput.id,
+          type: 'typed',
+          animated: true,
+          data: { dataType: 'any' },
+        };
+        setEdges([...store.edges, newEdge] as AppEdge[]);
+      }
+    }
+
     closeContextMenu();
   };
 

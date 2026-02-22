@@ -3,7 +3,7 @@ import { Position, type NodeProps } from '@xyflow/react';
 import type { MathPreviewFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale } from '@/utils/colorUtils';
+import { getCostColor, getCostScale, getCostTextColor } from '@/utils/colorUtils';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
@@ -32,16 +32,19 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
+  const costColorLow = useAppStore((s) => s.costColorLow);
+  const costColorHigh = useAppStore((s) => s.costColorHigh);
 
   const func = MATH_FUNCTIONS[data.registryType] ?? Math.sin;
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
-  const costColor = getCostColor(data.cost);
+  const costColor = getCostColor(data.cost, costColorLow, costColorHigh);
+  const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);
 
   // Check if the X input has an edge connected
   const xEdge = edges.find((e) => e.target === id && e.targetHandle === 'x');
   const hasConnection = !!xEdge;
-  const hasTime = hasConnection && hasTimeUpstream(xEdge.source, nodes, edges);
+  const hasTime = !!xEdge && hasTimeUpstream(xEdge.source, nodes, edges);
 
   const accentColor = '#6C63FF';
   const inputX = Number(data.values?.x ?? 0);
@@ -117,7 +120,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
       style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {/* Cost badge above node */}
-      {data.cost > 0 && <span className="node-base__cost-badge">{data.cost}</span>}
+      {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 
       {/* Header */}
       <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
@@ -143,10 +146,8 @@ export const MathPreviewNode = memo(function MathPreviewNode({
               position={Position.Left}
               id={def.inputs[0].id}
               dataType={def.inputs[0].dataType}
+              label={def.inputs[0].label}
             />
-          )}
-          {def.inputs[0] && (
-            <span className="node-base__port-label">{def.inputs[0].label}</span>
           )}
           {!hasConnection && (
             <DragNumberInput
@@ -165,6 +166,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
           position={Position.Right}
           id={def.outputs[0].id}
           dataType={def.outputs[0].dataType}
+          label={def.outputs[0].label}
           style={{ top: '50%' }}
         />
       )}

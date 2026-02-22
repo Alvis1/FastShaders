@@ -1,9 +1,9 @@
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { Position, type NodeProps } from '@xyflow/react';
-import type { PreviewFlowNode, NodeCategory, AppNode } from '@/types';
+import type { PreviewFlowNode, NodeCategory, AppNode, TSLDataType } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale } from '@/utils/colorUtils';
+import { getCostColor, getCostScale, getCostTextColor } from '@/utils/colorUtils';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { evaluateNodeScalar } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
@@ -53,12 +53,17 @@ export const PreviewNode = memo(function PreviewNode({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
+  const costColorLow = useAppStore((s) => s.costColorLow);
+  const costColorHigh = useAppStore((s) => s.costColorHigh);
 
-  const timeInputs = getTimeInputs(id, nodes, edges);
+  const timeInputsRaw = getTimeInputs(id, nodes, edges);
+  const timeInputsKey = JSON.stringify(timeInputsRaw);
+  const timeInputs = useMemo(() => timeInputsRaw, [timeInputsKey]);
   const hasAnyTime = Object.values(timeInputs).some(Boolean);
 
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
-  const costColor = getCostColor(data.cost);
+  const costColor = getCostColor(data.cost, costColorLow, costColorHigh);
+  const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);
 
   // Snapshot nodes/edges for use inside rAF (avoid stale closures)
@@ -127,7 +132,7 @@ export const PreviewNode = memo(function PreviewNode({
 
     rafId = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafId);
-  }, [data.registryType, data.values, nodes, edges, hasAnyTime, timeInputs.pos, timeInputs.octaves, timeInputs.lacunarity, timeInputs.diminish]);
+  }, [data.registryType, data.values, nodes, edges, hasAnyTime, timeInputs]);
 
   return (
     <div
@@ -135,7 +140,7 @@ export const PreviewNode = memo(function PreviewNode({
       style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {/* Cost badge above node */}
-      {data.cost > 0 && <span className="node-base__cost-badge">{data.cost}</span>}
+      {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 
       {/* Header */}
       <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
@@ -152,17 +157,25 @@ export const PreviewNode = memo(function PreviewNode({
         />
       </div>
 
-      {/* Input handles — centered on left side */}
-      {def.inputs.map((input, i) => (
-        <TypedHandle
-          key={input.id}
-          type="target"
-          position={Position.Left}
-          id={input.id}
-          dataType={input.dataType}
-          style={{ top: handleTop(i, def.inputs.length) }}
-        />
-      ))}
+      {/* Input handles — static + exposed dynamic ports on left side */}
+      {(() => {
+        const exposed = data.exposedPorts ?? [];
+        const allInputs = [
+          ...def.inputs.map((p) => ({ id: p.id, dataType: p.dataType, label: p.label })),
+          ...exposed.map((key) => ({ id: key, dataType: (key === 'pos' ? 'vec3' : 'float') as TSLDataType, label: key })),
+        ];
+        return allInputs.map((input, i) => (
+          <TypedHandle
+            key={input.id}
+            type="target"
+            position={Position.Left}
+            id={input.id}
+            dataType={input.dataType}
+            label={input.label}
+            style={{ top: handleTop(i, allInputs.length) }}
+          />
+        ));
+      })()}
 
       {/* Output handles — centered on right side */}
       {def.outputs.map((output, i) => (
@@ -172,6 +185,7 @@ export const PreviewNode = memo(function PreviewNode({
           position={Position.Right}
           id={output.id}
           dataType={output.dataType}
+          label={output.label}
           style={{ top: handleTop(i, def.outputs.length) }}
         />
       ))}

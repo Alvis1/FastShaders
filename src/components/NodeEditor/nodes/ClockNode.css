@@ -1,0 +1,25 @@
+@import './NodeBase.css';
+
+.clock-node {
+  position: relative;
+}
+
+.clock-node__canvas-wrap {
+  padding: 3px 5px;
+  display: flex;
+  justify-content: center;
+}
+
+.clock-node__canvas {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+}
+
+.clock-node > .react-flow__handle {
+  transform: translateY(-50%) !important;
+}
+
+.clock-node > .react-flow__handle-right {
+  right: calc(var(--handle-size) / -2) !important;
+}

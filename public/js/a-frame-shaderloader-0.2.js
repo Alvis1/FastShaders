@@ -157,10 +157,16 @@ function autoInjectTSLImports(source) {
   // Strip comments so patterns like "// glow (effect)" don't trigger false matches
   const body = bodyLines.map(l => l.replace(/\/\/.*$/, '').replace(/\/\*.*?\*\//g, '')).join('\n');
 
+  // Detect function calls: name(
   const callRegex = /(?<![.\w])([a-zA-Z_$]\w*)\s*\(/g;
   const usedCalls = new Set();
   let cm;
   while ((cm = callRegex.exec(body)) !== null) { usedCalls.add(cm[1]); }
+
+  // Also detect bare identifiers (e.g. positionGeometry, normalLocal, time)
+  // that are used as values, not function calls
+  const identRegex = /(?<![.\w])([a-zA-Z_$]\w*)(?!\s*\()/g;
+  while ((cm = identRegex.exec(body)) !== null) { usedCalls.add(cm[1]); }
 
   const exclude = new Set([
     ...importedNames,

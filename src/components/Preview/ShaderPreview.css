@@ -44,6 +44,31 @@
   border-color: var(--border-focus);
 }
 
+.shader-preview__bg-color {
+  width: 22px;
+  height: 22px;
+  padding: 1px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  background: var(--bg-panel);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.shader-preview__bg-color::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.shader-preview__bg-color::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.shader-preview__bg-color:hover {
+  border-color: var(--border-focus);
+}
+
 .shader-preview__geo-select {
   font-size: var(--font-size-xs);
   font-family: var(--font-sans);

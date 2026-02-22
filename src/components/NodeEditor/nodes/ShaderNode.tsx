@@ -3,7 +3,7 @@ import { Position, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale } from '@/utils/colorUtils';
+import { getCostColor, getCostScale, getCostTextColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import './ShaderNode.css';
@@ -152,10 +152,12 @@ export const ShaderNode = memo(function ShaderNode({
 
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const edges = useAppStore((s) => s.edges);
+  const costColorLow = useAppStore((s) => s.costColorLow);
+  const costColorHigh = useAppStore((s) => s.costColorHigh);
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
-  const costColor = getCostColor(data.cost);
+  const costColor = getCostColor(data.cost, costColorLow, costColorHigh);
+  const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);
-  const costLabel = `${data.cost}`;
   const rows = buildRows(def);
 
   // Track which input ports have edges connected
@@ -178,7 +180,7 @@ export const ShaderNode = memo(function ShaderNode({
       style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {/* Cost badge above node */}
-      {data.cost > 0 && <span className="node-base__cost-badge">{costLabel}</span>}
+      {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 
       {/* Header */}
       <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
@@ -201,10 +203,8 @@ export const ShaderNode = memo(function ShaderNode({
                     position={Position.Left}
                     id={row.input.id}
                     dataType={row.input.dataType}
+                    label={row.input.label}
                   />
-                )}
-                {row.input && (
-                  <span className="node-base__port-label">{row.input.label}</span>
                 )}
                 {/* Inline setting from defaultValues */}
                 {row.settingKey && row.settingType === 'number' && !inputConnected && (
@@ -215,23 +215,17 @@ export const ShaderNode = memo(function ShaderNode({
                   />
                 )}
                 {row.settingKey && row.settingType === 'color' && (
-                  <span className="shader-node__color-wrap">
-                    <input
-                      type="color"
-                      className="shader-node__input-color nodrag"
-                      value={String(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? '#ff0000')}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        handleChange(row.settingKey!, e.target.value)
-                      }
-                    />
-                    <span className="shader-node__color-hex">
-                      {String(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? '#ff0000')}
-                    </span>
-                  </span>
+                  <input
+                    type="color"
+                    className="shader-node__input-color nodrag"
+                    value={String(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? '#ff0000')}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      handleChange(row.settingKey!, e.target.value)
+                    }
+                  />
                 )}
                 {row.settingType === 'vec3' && row.vecBaseKey && (
                   <span className="shader-node__vec-group">
-                    <span className="shader-node__vec-label">{row.vecBaseKey}</span>
                     {['x', 'y', 'z'].map((axis) => {
                       const k = `${row.vecBaseKey}_${axis}`;
                       return (
@@ -247,7 +241,6 @@ export const ShaderNode = memo(function ShaderNode({
                 )}
                 {row.settingType === 'vec2' && row.vecBaseKey && (
                   <span className="shader-node__vec-group">
-                    <span className="shader-node__vec-label">{row.vecBaseKey}</span>
                     {['x', 'y'].map((axis) => {
                       const k = `${row.vecBaseKey}_${axis}`;
                       return (
@@ -271,17 +264,15 @@ export const ShaderNode = memo(function ShaderNode({
                 )}
               </div>
 
-              {/* Right side: output label + handle */}
+              {/* Right side: output handle */}
               <div className="shader-node__right">
-                {row.output && (
-                  <span className="node-base__port-label">{row.output.label}</span>
-                )}
                 {row.output && (
                   <TypedHandle
                     type="source"
                     position={Position.Right}
                     id={row.output.id}
                     dataType={row.output.dataType}
+                    label={row.output.label}
                   />
                 )}
               </div>

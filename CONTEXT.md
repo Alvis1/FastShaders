@@ -1,17 +1,19 @@
 # FastShaders — Project Context
 
 ## Overview
+
 Bi-directional TSL (Three.js Shading Language) visual shader editor. Users build shaders either by connecting nodes in a graph or by writing TSL code — changes in one view sync to the other.
 
 **Live**: https://Alvis1.github.io/FastShaders/
 
 **Stack**: React 18 + TypeScript + Vite | `@xyflow/react` v12 (node graph) | `@monaco-editor/react` (code editor) | `zustand` v5 (state) | `three` 0.183 (WebGPU + TSL) | `tsl-textures` 3.0 | `@dagrejs/dagre` (auto-layout) | `@babel/parser` + `traverse` + `types` (code parsing)
 
-**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles A-Frame 1.7 + Three.js WebGPU + tsl-textures with matching compatible versions.
+**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles with a custom A-Frame 1.7 + Three.js WebGPU + tsl-textures with matching compatible versions bundled in aframe-171-a-0.1.min.js.
 
 ---
 
 ## Project Structure
+
 ```
 src/
 ├── App.tsx                            # Root + SyncController (graph↔code sync orchestration)
@@ -41,6 +43,8 @@ src/
 │   │   │   ├── PreviewNode.css
 │   │   │   ├── MathPreviewNode.tsx    # Math function preview with scrolling waveform (sin, cos)
 │   │   │   ├── MathPreviewNode.css
+│   │   │   ├── TexturePreviewNode.tsx  # Texture preview with GPU-rendered canvas (tsl-textures)
+│   │   │   ├── TexturePreviewNode.css
 │   │   │   ├── OutputNode.tsx         # Output sink (color, normal, position, opacity, roughness)
 │   │   │   └── OutputNode.css
 │   │   ├── handles/
@@ -91,7 +95,8 @@ src/
 │   ├── colorUtils.ts                  # Cost color gradient, type→color mapping, category colors
 │   ├── idGenerator.ts                 # generateId(), generateEdgeId()
 │   ├── mathPreview.ts                 # Sin/math waveform canvas renderer (scrolling curve + dot)
-│   └── noisePreview.ts               # CPU noise (Perlin, fBm, Voronoi) + animated render
+│   ├── noisePreview.ts               # CPU noise (Perlin, fBm, Voronoi) + animated render
+│   └── texturePreviewRenderer.ts     # Shared off-screen WebGPU renderer for texture node previews
 └── styles/
     ├── tokens.css                     # CSS custom properties (colors, spacing, shadows, fonts)
     └── reset.css
@@ -104,9 +109,10 @@ src/
 ### Two Code Modes
 
 **Graph Mode (default)** — User builds nodes visually. Graph compiles to TSL code in real-time.
+
 ```typescript
 // Generated output format:
-import { Fn, positionGeometry, mx_noise_float } from 'three/tsl';
+import { Fn, positionGeometry, mx_noise_float } from "three/tsl";
 const shader = Fn(() => {
   const pos = positionGeometry;
   const noise = mx_noise_float(pos);
@@ -116,6 +122,7 @@ export default shader;
 ```
 
 **Script Mode** — User pastes tsl-textures code with `model.material` assignments. Detected by `isTSLTexturesCode()` (matches `model.material.XNode =` pattern only). Evaluated via `evaluateTSLScript()` using `new Function()` with THREE + tsl-textures in scope. Bypasses graph sync.
+
 ```typescript
 // Script mode input format:
 import { polkaDots } from "tsl-textures";
@@ -123,7 +130,9 @@ model.material.colorNode = polkaDots({ count: 4, size: 0.34 });
 ```
 
 ### Code Editor Tabs
+
 The code editor has three tabs:
+
 - **TSL** — Editable TSL code with Save button and error display (default)
 - **A-Frame** — Read-only self-contained HTML using the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle (`tslToAFrame.ts`):
   - Loads `aframe-171-a-0.1.min.js` from jsDelivr CDN (bundles A-Frame 1.7 + Three.js WebGPU + tsl-textures)
@@ -141,6 +150,7 @@ The code editor has three tabs:
 The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-initialization freezes.
 
 ### Preview (ShaderPreview.tsx)
+
 - **Rendered in iframe** via blob URL from `tslToPreviewHTML.ts`
 - **Renderer**: Three.js `WebGPURenderer` (uses three@0.183.0 from CDN for tsl-textures 3.0 compatibility)
 - **Camera**: `PerspectiveCamera` at z=3.5
@@ -151,6 +161,7 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 - **Debounced**: 500ms debounce on code changes to avoid iframe thrashing
 
 ### Sync Engine (prevents infinite loops)
+
 - **`syncSource`** field: `'graph' | 'code' | 'initial'` — tracks who initiated the change
 - **`syncInProgress`** flag — blocks nested syncs
 - **Graph → Code**: Real-time on every node/edge change (`graphToCode()`)
@@ -159,6 +170,7 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 - **Complexity**: Traverses backward from Output node, sums costs from `complexity.json`
 
 ### Zustand Store Shape
+
 ```typescript
 {
   nodes: AppNode[], edges: AppEdge[]           // Graph data
@@ -183,7 +195,9 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 ## Export Pipeline
 
 ### Shared TSL Code Processor (`tslCodeProcessor.ts`)
+
 Common processing logic used by both `tslToAFrame.ts` and `tslToPreviewHTML.ts`:
+
 - **`collectImports(code, excludeFn?)`** — extracts `three/tsl` and `tsl-textures` import names
 - **`extractFnBody(code, tslNames)`** — extracts the body inside `Fn(() => { ... })`
 - **`fixTDZ(body, tslNames, texNames)`** — fixes Temporal Dead Zone issues:
@@ -195,7 +209,9 @@ Common processing logic used by both `tslToAFrame.ts` and `tslToPreviewHTML.ts`:
 - **`GEOMETRY_MAP`** / **`CHANNEL_TO_PROP`** — shared constants
 
 ### A-Frame HTML Export (`tslToAFrame.ts`)
+
 Generates a self-contained `.html` using the a-frame-shaderloader IIFE bundle:
+
 1. Uses `tslCodeProcessor` to extract imports, body, fix TDZ, and parse channels
 2. Generates HTML with:
    - `<script src="...aframe-171-a-0.1.min.js">` from jsDelivr CDN
@@ -204,7 +220,9 @@ Generates a self-contained `.html` using the a-frame-shaderloader IIFE bundle:
    - Material creation + channel assignment + mesh
 
 ### Shader Module Export (`tslToShaderModule.ts`)
+
 Generates a `.js` ES module compatible with the a-frame-shaderloader component:
+
 1. Strips `Fn` from three/tsl imports
 2. Converts `const shader = Fn(() => {` to `export default function() {`
 3. Converts multi-channel return keys to shaderloader Object API names
@@ -212,7 +230,9 @@ Generates a `.js` ES module compatible with the a-frame-shaderloader component:
 5. The shaderloader handles TDZ fixes, missing import injection, and specifier resolution at runtime
 
 ### Preview HTML (`tslToPreviewHTML.ts`)
+
 Generates HTML for the in-app preview iframe:
+
 1. Uses `tslCodeProcessor` to extract imports, body, fix TDZ, and parse channels
 2. Uses three@0.183.0 from CDN (matches installed version, tsl-textures compatible)
 3. Raw Three.js WebGPU setup (no A-Frame) with import map for bare specifiers
@@ -224,22 +244,24 @@ Generates HTML for the in-app preview iframe:
 
 ### Node Registry (~90+ nodes in 10 categories)
 
-| Category        | Nodes |
-|----------------|-------|
-| **Input**       | positionGeometry, normalLocal, tangentLocal, time, screenUV, uniform_float |
-| **Type**        | float, int, vec2, vec3, vec4, color |
-| **Arithmetic**  | add, sub, mul, div |
-| **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract |
-| **Math (binary)** | pow, mod, clamp, min, max |
-| **Interpolation** | mix, smoothstep, remap, select |
-| **Vector**      | normalize, length, distance, dot, cross, split |
-| **Noise**       | noise (mx_noise_float), fractal (mx_fractal_noise_float), voronoi (mx_worley_noise_float) |
-| **Color**       | hsl, toHsl |
-| **Texture**     | ~49 auto-registered tsl-textures functions (bricks, camouflage, polkaDots, marble, etc.) |
-| **Output**      | output (color, normal, position, opacity, roughness inputs) |
+| Category          | Nodes                                                                                     |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| **Input**         | positionGeometry, normalLocal, tangentLocal, time, screenUV, uniform_float                |
+| **Type**          | float, int, vec2, vec3, vec4, color                                                       |
+| **Arithmetic**    | add, sub, mul, div                                                                        |
+| **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract                                       |
+| **Math (binary)** | pow, mod, clamp, min, max                                                                 |
+| **Interpolation** | mix, smoothstep, remap, select                                                            |
+| **Vector**        | normalize, length, distance, dot, cross, split                                            |
+| **Noise**         | noise (mx_noise_float), fractal (mx_fractal_noise_float), voronoi (mx_worley_noise_float) |
+| **Color**         | hsl, toHsl                                                                                |
+| **Texture**       | ~49 auto-registered tsl-textures functions (bricks, camouflage, polkaDots, marble, etc.)  |
+| **Output**        | output (color, normal, position, opacity, roughness inputs)                               |
 
 ### tsl-textures Auto-Registration (tslTexturesRegistry.ts)
+
 All ~49 tsl-textures functions are auto-registered as nodes by introspecting `.defaults` at runtime:
+
 - **Parameter classification** (`classifyParam`): Each default param is classified as `number`, `color` (THREE.Color), `vec3` (THREE.Vector3), `vec2` (THREE.Vector2), `tslRef` (.isNode), or `meta` ($-prefixed)
 - **NodeDefinition generation** (`buildTSLTextureDefinitions`):
   - Numbers → connectable input ports + editable default values
@@ -253,7 +275,9 @@ All ~49 tsl-textures functions are auto-registered as nodes by introspecting `.d
 - **Code parsing**: `processObjectCall()` parses ObjectExpression properties; `extractConstructor()` handles `new THREE.Color/Vector3/Vector2` AST patterns
 
 ### Split Node
+
 The split node decomposes vectors into individual float components:
+
 - **Input**: one `Vector` port (any type)
 - **Outputs**: four float ports — X, Y, Z, W
 - **TSL compilation**: Factory passes through the input vector; edge resolution applies `.x`/`.y`/`.z`/`.w` swizzle when sourceHandle isn't `'out'`
@@ -261,20 +285,26 @@ The split node decomposes vectors into individual float components:
 - **Searchable**: by "split" or "separate"
 
 ### React Flow Node Types
+
 - **`shader`** — Generic node for most TSL operations (ShaderNode.tsx)
 - **`color`** — Color picker with hex input (ColorNode.tsx)
 - **`preview`** — Noise/procedural nodes with animated canvas thumbnail (PreviewNode.tsx)
 - **`mathPreview`** — Math function nodes with scrolling waveform visualization (MathPreviewNode.tsx)
+- **`texturePreview`** — Texture nodes with GPU-rendered 96x96 canvas preview (TexturePreviewNode.tsx)
 - **`output`** — Output sink with multiple material property inputs (OutputNode.tsx)
 
 ### ShaderNode Vector Display
+
 ShaderNode handles Vector3/Vector2 parameters with grouped inputs:
+
 - Detects `_x`/`_y`/`_z` suffixed keys in defaultValues and groups them into `vec3` or `vec2` rows
 - Each vector row shows: base key label + 2-3 compact `DragNumberInput` controls
 - Non-port settings (colors, vec3, vec2) are collected and appended as extra rows after input ports
 
 ### Preview Nodes (Noise/Procedural)
+
 Noise category nodes render a 96x96 canvas showing their generated pattern:
+
 - **CPU noise**: Perlin 2D, fBm (fractal), Voronoi — evaluated in `noisePreview.ts`
 - **Upstream-aware inputs**: Uses `evaluateNodeScalar()` from `cpuEvaluator.ts` to resolve connected input values (e.g., a `float(3)` node connected to `scale` updates the preview)
 - **Time-conditional animation**: Only animates when a Time node is connected upstream
@@ -284,7 +314,9 @@ Noise category nodes render a 96x96 canvas showing their generated pattern:
 - Static render when no Time node is upstream
 
 ### Math Preview Nodes (MathPreviewNode.tsx)
+
 Math function nodes (`sin`, `cos`) render a 72x72 canvas showing a scrolling waveform:
+
 - **Waveform renderer** (`mathPreview.ts`): Draws function curve over one cycle (x ∈ [-π, π]), with grid, axes, dot marker, and value label pill
 - **Curve shifts on X, dot moves on Y**: When input changes, the curve scrolls horizontally (phase = inputValue) while the dot stays at horizontal center and moves only vertically to show f(inputValue)
 - **Output handle**: Vertically centered on the node (direct child, not inside port row)
@@ -294,8 +326,23 @@ Math function nodes (`sin`, `cos`) render a 72x72 canvas showing a scrolling wav
   - **Connected, no Time** → static curve render
   - **Unconnected** → static curve with inline `DragNumberInput` for X value
 
+### Texture Preview Nodes (TexturePreviewNode.tsx)
+
+Texture category nodes (~49 tsl-textures) render a 96x96 canvas showing their GPU-rendered output:
+
+- **GPU rendering**: Uses a shared off-screen `WebGPURenderer` singleton (`texturePreviewRenderer.ts`)
+- **Shared renderer**: One hidden canvas + renderer + `OrthographicCamera` + `PlaneGeometry(2,2)` with per-node `MeshBasicNodeMaterial` cache (avoids shader recompilation during animation)
+- **Parameter building**: Calls tsl-textures functions directly with current node values using `getParamClassifications()` — numbers, Colors, Vector3/Vector2 are reconstructed from stored values
+- **Debounced updates**: 500ms debounce on parameter changes (shader recompile on each change)
+- **Time animation**: When a Time node is connected upstream, the TSL `time` node is passed as parameter; a shared rAF loop re-renders all animated texture nodes each frame (no recompile — GPU auto-updates)
+- **Exposed ports**: Input handles are hidden by default; users toggle them via right-click NodeSettingsMenu checkboxes (`data.exposedPorts`). Handles are rendered as a tight vertically-centered group (18px spacing), ordered to match the settings menu (tslRef inputs first, then defaultValues keys)
+- **Graceful fallback**: Shows "Loading..." during async WebGPU init, "No WebGPU" if unavailable
+- **localStorage migration**: `loadGraph()` migrates `type: 'shader'` nodes with `tslTex_` prefix to `type: 'texturePreview'`
+
 ### CPU Graph Evaluator (cpuEvaluator.ts)
+
 CPU-side evaluator that walks the node graph and computes values using JS math equivalents. Used by both `MathPreviewNode` and `EdgeInfoCard` for real-time value display.
+
 - **`evaluateNodeOutput(nodeId, nodes, edges, time)`** → `EvalResult` (multi-channel `number[]` or `null`)
 - **`evaluateNodeScalar(nodeId, nodes, edges, time)`** → first channel as `number | null`
 - **Multi-channel**: Returns `[x]` for scalar, `[x,y]` for vec2, `[r,g,b]` for vec3/color, `[x,y,z,w]` for vec4
@@ -310,15 +357,17 @@ CPU-side evaluator that walks the node graph and computes values using JS math e
 **Data types**: `float | int | vec2 | vec3 | vec4 | color | any`
 
 Each type has a distinct color for handles and edges:
+
 - float: `#3366CC` (blue), int: `#20B2AA` (teal), vec2: `#4A90E2` (sky), vec3: `#E040FB` (magenta), vec4: `#AB47BC` (purple), color: `#E8A317` (gold), any: `#607D8B` (slate)
 
-**AppNode union**: `ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | OutputFlowNode`
+**AppNode union**: `ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | ClockFlowNode | TexturePreviewFlowNode | OutputFlowNode`
 
 ---
 
 ## Edge System (TypedEdge.tsx)
 
 ### Visual Style
+
 - **Multi-channel rendering**: vec2=2 lines (R,G), vec3/color=3 lines (R,G,B), vec4=4 lines (R,G,B,A)
 - **Channel colors**: R=#ff4444, G=#44dd44, B=#4488ff, A=#dddddd
 - **Scalar types** (float/int/any): Single line in the type's color
@@ -327,7 +376,9 @@ Each type has a distinct color for handles and edges:
 - **Type resolution**: Resolves `'any'` to concrete type by checking source output → target input ports
 
 ### EdgeInfoCard (Live Value Display)
+
 When an edge is selected, an info card appears at the midpoint showing:
+
 - **Data type label** (e.g., `FLOAT`, `VEC3`, `COLOR`) with type-colored background
 - **Per-channel live values**: Each channel displayed with colored label (X/Y/Z/W or R/G/B) and numeric value
 - **Animated values**: When a Time node is upstream, values update via `requestAnimationFrame` loop using `evaluateNodeOutput()` from `cpuEvaluator.ts`
@@ -335,6 +386,7 @@ When an edge is selected, an info card appears at the midpoint showing:
 - **Type resolution**: Resolves `'any'` ports by checking source output → target input concrete types
 
 ### Interaction
+
 - **Click** → Selects edge, shows EdgeInfoCard (live value badge at edge midpoint)
 - **Drag** (>5px threshold) → Disconnects edge from target, starts new connection from source handle
   - Uses pointer capture + synthetic mousedown dispatch on source handle via `requestAnimationFrame`
@@ -346,6 +398,7 @@ When an edge is selected, an info card appears at the midpoint showing:
 ## Canvas Interactions (NodeEditor.tsx)
 
 ### Keyboard Shortcuts
+
 - **Ctrl+S**: Save / sync code→graph
 - **Ctrl+Z**: Undo
 - **Ctrl+Shift+Z**: Redo
@@ -355,6 +408,7 @@ When an edge is selected, an info card appears at the midpoint showing:
 - **Delete/Backspace**: Remove selected nodes and their connected edges
 
 ### Mouse Interactions
+
 - **Left-drag on canvas**: Box selection (partial overlap mode — `SelectionMode.Partial`)
 - **Middle/right-drag on canvas**: Pan
 - **Scroll**: Zoom (0.1x – 3x range)
@@ -366,22 +420,27 @@ When an edge is selected, an info card appears at the midpoint showing:
 - **Drop node on edge**: Inserts node between source and target (bezier curve proximity detection, 40px threshold)
 
 ### Drop-on-Edge Insertion
+
 When a node is dragged and dropped near an existing edge:
+
 1. Samples 20 points along the cubic bezier curve between source/target
 2. Finds minimum distance from dragged node center to curve
 3. If within 40px threshold: removes original edge, creates two new edges through the dropped node
 4. Uses first input and first output ports of the dropped node's registry definition
 
 ### Anti-Overlap
+
 After dropping a node, `onNodeDragStop` checks for AABB overlap with all other nodes. If overlapping, computes the minimum push-out direction (right/left/down/up) and nudges the node with a 10px gap.
 
 ### Connection Rules
+
 - **Single-input enforcement**: Connecting to an already-occupied input replaces the existing edge
 - **Reconnect by drag**: Dragging an edge endpoint to a new handle reconnects it
 - **Failed reconnect**: Dropping a reconnected edge on empty space deletes it
 - **Connection radius**: 40px snap distance
 
 ### Selection
+
 - **Partial overlap**: Nodes are selected when the selection box partially overlaps them
 - **Selection rectangle**: Subtle blue tint (`rgba(99, 130, 255, 0.08)`) with light blue border
 
@@ -390,26 +449,33 @@ After dropping a node, `onNodeDragStop` checks for AABB overlap with all other n
 ## Context Menus
 
 ### Menu Dispatch (ContextMenu.tsx)
+
 Routes to specific menu based on `contextMenu.type`:
+
 - `'canvas'` → AddNodeMenu
 - `'node'` → NodeSettingsMenu
 - `'shader'` → ShaderSettingsMenu
 - `'edge'` → EdgeContextMenu
 
 ### AddNodeMenu
+
 - Auto-focused search input
 - Grouped by category when not searching, flat list when searching
-- Maps node to React Flow type: output→`'output'`, noise category→`'preview'`, color→`'color'`, sin/cos→`'mathPreview'`, else→`'shader'`
+- Maps node to React Flow type: output→`'output'`, noise category→`'preview'`, texture category→`'texturePreview'`, color→`'color'`, sin/cos→`'mathPreview'`, time→`'clock'`, else→`'shader'`
 - Places node at context menu screen position via `screenToFlowPosition()`
 - Prevents adding multiple output nodes
 
 ### NodeSettingsMenu
+
 - Displays node label and registry type
+- Checkbox per parameter to expose/hide as input handle on the node (`exposedPorts`)
+- Checkboxes also shown for input-only ports not in defaultValues (tslRef params like Position, Time)
 - Editable parameters (color inputs for hex, DragNumberInput for numbers)
 - Duplicate Node button (structuredClone + offset)
 - Delete Node button
 
 ### DragNumberInput
+
 - **Drag mode**: Hold + drag left/right to change value (BASE_SPEED=0.005, acceleration factor 0.002)
 - **Edit mode**: Click to enter text editing, Enter/Escape/blur to commit
 - **Arrow buttons**: ◂/▸ with configurable step (default 0.1)
@@ -432,6 +498,7 @@ Routes to specific menu based on `contextMenu.type`:
 ## Key Technical Details
 
 ### TypeScript Gotchas
+
 - `@babel/traverse` CJS/ESM interop: `const traverse = (typeof _traverse.default === 'function' ? _traverse.default : _traverse)`
 - `AppNode` union needs casting for `values`: `(node.data as { values?: Record<string, string | number> }).values`
 - React Flow `applyNodeChanges`/`applyEdgeChanges` return base types → need `as AppNode[]` cast
@@ -439,11 +506,13 @@ Routes to specific menu based on `contextMenu.type`:
 - React Flow `onNodeDragStop` expects `React.MouseEvent` (not native `MouseEvent`) for the event parameter
 
 ### Three.js TSL Imports Used
+
 **Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float, hsl, toHsl, remap, select + all tsl-textures functions (via dynamic import)
 
 **Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, remap, select, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float + dynamic tsl-textures factories (auto-resolved from registry)
 
 ### Persistence (localStorage)
+
 - `fs:graph` — nodes + edges (auto-save every 300ms)
 - `fs:splitRatio` — left/right panel ratio
 - `fs:rightSplitRatio` — code/preview ratio
@@ -452,10 +521,12 @@ Routes to specific menu based on `contextMenu.type`:
 - `fs:headsetId` — selected VR headset
 
 ### History System
+
 - 50-entry undo/redo stack
 - `pushHistory()` called before: node drag, connection, paste, duplicate, delete, edge drag-to-disconnect
 - `isUndoRedo` flag prevents sync during undo/redo operations
 
 ### Deployment
+
 - **GitHub Pages**: `npm run build && npx gh-pages -d dist`
 - **Vite base path**: `/FastShaders/` (configured in `vite.config.ts`)

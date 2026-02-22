@@ -7,33 +7,8 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import complexityData from '@/registry/complexity.json';
 import { isTSLTexturesCode } from '@/engine/evaluateTSLScript';
 import type { AppNode } from '@/types';
+import { generateEdgeId } from '@/utils/idGenerator';
 
-const NODE_W = 100;
-const NODE_H = 40;
-
-function findFreePosition(occupied: { x: number; y: number }[]): { x: number; y: number } {
-  const cx = occupied.length > 0
-    ? occupied.reduce((s, p) => s + p.x, 0) / occupied.length
-    : 0;
-  const cy = occupied.length > 0
-    ? occupied.reduce((s, p) => s + p.y, 0) / occupied.length
-    : 0;
-
-  for (let r = 1; r < 20; r++) {
-    for (let dx = -r; dx <= r; dx++) {
-      for (let dy = -r; dy <= r; dy++) {
-        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
-        const x = cx + dx * (NODE_W + 40);
-        const y = cy + dy * (NODE_H + 30);
-        const overlaps = occupied.some(
-          (p) => Math.abs(p.x - x) < NODE_W + 20 && Math.abs(p.y - y) < NODE_H + 20,
-        );
-        if (!overlaps) return { x, y };
-      }
-    }
-  }
-  return { x: cx + occupied.length * (NODE_W + 40), y: cy };
-}
 
 export function useSyncEngine() {
   const nodes = useAppStore((s) => s.nodes);
@@ -50,9 +25,8 @@ export function useSyncEngine() {
   const setActiveScript = useAppStore((s) => s.setActiveScript);
   const codeSyncRequested = useAppStore((s) => s.codeSyncRequested);
 
-  // Track last synced code to prevent auto-sync loops
+  // Track last synced code to prevent sync loops
   const lastSyncedCodeRef = useRef('');
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Undo / Redo keyboard shortcuts
   useEffect(() => {
@@ -121,14 +95,22 @@ export function useSyncEngine() {
           const usedOldIds = new Set<string>();
           const positioned: AppNode[] = [];
 
+          // Index old nodes by registryType+label and registryType for O(n) lookup
+          const oldByExactKey = new Map<string, AppNode[]>();
+          const oldByType = new Map<string, AppNode[]>();
+          for (const old of oldNodes) {
+            const exactKey = `${old.data.registryType}\0${old.data.label}`;
+            if (!oldByExactKey.has(exactKey)) oldByExactKey.set(exactKey, []);
+            oldByExactKey.get(exactKey)!.push(old);
+            if (!oldByType.has(old.data.registryType)) oldByType.set(old.data.registryType, []);
+            oldByType.get(old.data.registryType)!.push(old);
+          }
+
           // Pass 1: exact match by registryType + label
           for (const newNode of result.nodes) {
-            const match = oldNodes.find(
-              (old) =>
-                !usedOldIds.has(old.id) &&
-                old.data.label === newNode.data.label &&
-                old.data.registryType === newNode.data.registryType,
-            );
+            const exactKey = `${newNode.data.registryType}\0${newNode.data.label}`;
+            const candidates = oldByExactKey.get(exactKey);
+            const match = candidates?.find((old) => !usedOldIds.has(old.id));
             if (match) {
               usedOldIds.add(match.id);
               idMap.set(newNode.id, match.id);
@@ -144,11 +126,8 @@ export function useSyncEngine() {
           const unpositioned: AppNode[] = [];
           for (const newNode of result.nodes) {
             if (idMap.has(newNode.id)) continue;
-            const match = oldNodes.find(
-              (old) =>
-                !usedOldIds.has(old.id) &&
-                old.data.registryType === newNode.data.registryType,
-            );
+            const candidates = oldByType.get(newNode.data.registryType);
+            const match = candidates?.find((old) => !usedOldIds.has(old.id));
             if (match) {
               usedOldIds.add(match.id);
               idMap.set(newNode.id, match.id);
@@ -170,24 +149,15 @@ export function useSyncEngine() {
               ...e,
               source: src,
               target: tgt,
-              id: `e-${src}-${tgt}-${e.targetHandle}`,
+              id: generateEdgeId(src, e.sourceHandle ?? 'out', tgt, e.targetHandle ?? 'out'),
             };
           });
 
           let finalNodes: AppNode[];
-          if (unpositioned.length > 0 && positioned.length === 0) {
-            // Entirely new graph — full auto-layout
-            finalNodes = autoLayout([...unpositioned], remappedEdges, 'LR');
+          if (unpositioned.length > 0) {
+            // New or changed nodes — auto-layout ALL to maintain left-to-right flow
+            finalNodes = autoLayout([...positioned, ...unpositioned], remappedEdges, 'LR');
           } else {
-            if (unpositioned.length > 0) {
-              // Some new nodes — find free positions for them
-              const occupied = positioned.map((n) => n.position);
-              for (const node of unpositioned) {
-                node.position = findFreePosition(occupied);
-                occupied.push(node.position);
-                positioned.push(node);
-              }
-            }
             finalNodes = positioned;
           }
 
@@ -208,26 +178,14 @@ export function useSyncEngine() {
   useEffect(() => {
     if (!codeSyncRequested || syncInProgress) return;
     useAppStore.setState({ codeSyncRequested: false });
+
+    // Skip code→graph sync if the code hasn't been manually edited
+    // (i.e. it was generated from the graph — nothing to parse back)
+    if (code === lastSyncedCodeRef.current) return;
+
     lastSyncedCodeRef.current = code;
     doCodeSync(code);
   }, [codeSyncRequested, syncInProgress, doCodeSync, code]);
-
-  // Auto-sync: debounced code → graph when user edits code
-  useEffect(() => {
-    if (syncInProgress) return;
-    if (code === lastSyncedCodeRef.current) return;
-    if (!code.trim()) return;
-
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      lastSyncedCodeRef.current = code;
-      doCodeSync(code, true);
-    }, 600);
-
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [code, syncInProgress, doCodeSync]);
 
   // Recalculate complexity
   useEffect(() => {

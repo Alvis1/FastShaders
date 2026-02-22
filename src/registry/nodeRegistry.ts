@@ -398,9 +398,9 @@ const definitions: NodeDefinition[] = [
     category: 'noise',
     tslFunction: 'mx_noise_float',
     tslImportModule: 'three/tsl',
-    inputs: [{ id: 'pos', label: 'Position', dataType: 'vec3' }],
+    inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
-    defaultValues: { scale: 1.0 },
+    defaultValues: { pos: 'positionGeometry', scale: 1.0 },
   },
   {
     type: 'fractal',
@@ -408,14 +408,9 @@ const definitions: NodeDefinition[] = [
     category: 'noise',
     tslFunction: 'mx_fractal_noise_float',
     tslImportModule: 'three/tsl',
-    inputs: [
-      { id: 'pos', label: 'Position', dataType: 'vec3' },
-      { id: 'octaves', label: 'Octaves', dataType: 'int' },
-      { id: 'lacunarity', label: 'Lacunarity', dataType: 'float' },
-      { id: 'diminish', label: 'Diminish', dataType: 'float' },
-    ],
+    inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
-    defaultValues: { scale: 1.0, octaves: 4, lacunarity: 2.0, diminish: 0.5 },
+    defaultValues: { pos: 'positionGeometry', scale: 1.0, octaves: 4, lacunarity: 2.0, diminish: 0.5 },
   },
   {
     type: 'voronoi',
@@ -423,9 +418,9 @@ const definitions: NodeDefinition[] = [
     category: 'noise',
     tslFunction: 'mx_worley_noise_float',
     tslImportModule: 'three/tsl',
-    inputs: [{ id: 'pos', label: 'Position', dataType: 'vec3' }],
+    inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
-    defaultValues: { scale: 1.0 },
+    defaultValues: { pos: 'positionGeometry', scale: 1.0 },
   },
 
   // ===== COLOR =====
@@ -434,7 +429,7 @@ const definitions: NodeDefinition[] = [
     label: 'HSL to RGB',
     category: 'color',
     tslFunction: 'hsl',
-    tslImportModule: 'three/tsl',
+    tslImportModule: '',
     inputs: [
       { id: 'h', label: 'Hue', dataType: 'float' },
       { id: 's', label: 'Saturation', dataType: 'float' },
@@ -447,7 +442,7 @@ const definitions: NodeDefinition[] = [
     label: 'RGB to HSL',
     category: 'color',
     tslFunction: 'toHsl',
-    tslImportModule: 'three/tsl',
+    tslImportModule: '',
     inputs: [{ id: 'rgb', label: 'RGB', dataType: 'vec3' }],
     outputs: [{ id: 'out', label: 'HSL', dataType: 'vec3' }],
   },
@@ -463,7 +458,7 @@ const definitions: NodeDefinition[] = [
       { id: 'color', label: 'Color', dataType: 'color' },
       { id: 'emissive', label: 'Emissive', dataType: 'color' },
       { id: 'normal', label: 'Normal', dataType: 'vec3' },
-      { id: 'position', label: 'Position', dataType: 'vec3' },
+      { id: 'position', label: 'Displacement', dataType: 'vec3' },
       { id: 'opacity', label: 'Opacity', dataType: 'float' },
       { id: 'roughness', label: 'Roughness', dataType: 'float' },
     ],
@@ -496,12 +491,14 @@ export function getAllDefinitions(): NodeDefinition[] {
 }
 
 /** Map a registry definition to its React Flow node type string. */
-export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'output';
+export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'output' | 'texturePreview';
 
 export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   if (def.type === 'output') return 'output';
+  if (def.type === 'time') return 'clock';
   if (def.type === 'color') return 'color';
   if (def.category === 'noise') return 'preview';
+  if (def.category === 'texture') return 'texturePreview';
   if (def.type === 'sin' || def.type === 'cos') return 'mathPreview';
   return 'shader';
 }
