@@ -266,13 +266,13 @@ Generates HTML for the in-app preview iframe:
 
 | Category          | Nodes                                                                                     |
 | ----------------- | ----------------------------------------------------------------------------------------- |
-| **Input**         | positionGeometry, normalLocal, tangentLocal, time, screenUV, property_float               |
+| **Input**         | positionGeometry, normalLocal, tangentLocal, time, screenUV, uv, property_float            |
 | **Type**          | float, int, vec2, vec3, vec4, color                                                       |
 | **Arithmetic**    | add, sub, mul, div                                                                        |
 | **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract                                       |
 | **Math (binary)** | pow, mod, clamp, min, max                                                                 |
 | **Interpolation** | mix, smoothstep, remap, select                                                            |
-| **Vector**        | normalize, length, distance, dot, cross, split                                            |
+| **Vector**        | normalize, length, distance, dot, cross, split, append                                     |
 | **Noise**         | noise (mx_noise_float), fractal (mx_fractal_noise_float), voronoi (mx_worley_noise_float) |
 | **Color**         | hsl, toHsl                                                                                |
 | **Texture**       | ~49 auto-registered tsl-textures functions (bricks, camouflage, polkaDots, marble, etc.)  |
@@ -304,6 +304,34 @@ The split node decomposes vectors into individual float components:
 - **TSL compilation**: Factory passes through the input vector; edge resolution applies `.x`/`.y`/`.z`/`.w` swizzle when sourceHandle isn't `'out'`
 - **Code generation**: Split nodes are not emitted as variables; references through them are inlined as `sourceVar.x`, `sourceVar.y`, etc.
 - **Searchable**: by "split" or "separate"
+
+### UV Node
+
+Texture coordinate node with tiling and rotation controls:
+
+- **Inputs**: 4 ports — `channel` (int, UV map index), `tilingU` (float), `tilingV` (float), `rotation` (float)
+- **Output**: one `vec2` port
+- **Default values**: `channel: 0, tilingU: 1.0, tilingV: 1.0, rotation: 0.0`
+- **Code generation**: 3 cases depending on parameters:
+  - No tiling/rotation → `uv()` (or `uv(channel)` for non-zero channel)
+  - Tiling only → `mul(uv(), vec2(tilingU, tilingV))`
+  - Rotation → 2D rotation around center (0.5, 0.5) using cos/sin matrix with intermediate variable `_varName`
+- **TSL compilation**: Builds UV base from channel, applies `mul` for tiling, then centered rotation via `sub`/`add`/`cos`/`sin`
+- **CPU evaluation**: Starts at [0.5, 0.5], applies tiling multiplication, applies 2D rotation if non-zero
+- **Channel input** uses `int` dataType: `DragNumberInput` with `step={1}` and `Math.round()` in onChange
+- **Searchable**: by "uv", "texcoord", or "texture coordinate"
+
+### Append Node
+
+Combines two values into a higher-dimensional vector:
+
+- **Inputs**: two `any` ports — A and B
+- **Output**: one `any` port
+- **Code generation**: Emits `vec2(a, b)` with `vec2` import from `three/tsl`
+- **TSL compilation**: `vec2(inputs.a ?? float(0), inputs.b ?? float(0))`
+- **CPU evaluation**: Concatenates channel arrays (`[...a, ...b]`) — e.g., float+float→vec2, vec2+float→vec3
+- **Use case**: Convert UV (vec2) to vec3 for tsl-textures position input by appending a Z component
+- **Searchable**: by "append", "combine", or "join"
 
 ### Property Nodes (`property_float`)
 
@@ -403,7 +431,7 @@ CPU-side evaluator that walks the node graph and computes values using JS math e
 - **`evaluateNodeScalar(nodeId, nodes, edges, time)`** → first channel as `number | null`
 - **Multi-channel**: Returns `[x]` for scalar, `[x,y]` for vec2, `[r,g,b]` for vec3/color, `[x,y,z,w]` for vec4
 - **Component-wise broadcasting**: Operations like scalar × vec3 broadcast shorter to longer
-- **Supported nodes**: time, float/int/property_float, screenUV, vec2/vec3/vec4/color constructors, all arithmetic (add/sub/mul/div), all unary math (sin/cos/abs/sqrt/exp/log2/floor/round/fract), binary math (pow/mod/min/max/clamp), interpolation (mix/smoothstep), vector ops (length/distance/dot/normalize/cross), noise (perlin/fractal/voronoi — sampled at UV center)
+- **Supported nodes**: time, float/int/property_float, screenUV, uv (with tiling/rotation), vec2/vec3/vec4/color constructors, all arithmetic (add/sub/mul/div), all unary math (sin/cos/abs/sqrt/exp/log2/floor/round/fract), binary math (pow/mod/min/max/clamp), interpolation (mix/smoothstep), vector ops (length/distance/dot/normalize/cross/append), noise (perlin/fractal/voronoi — sampled at UV center)
 - Returns `null` for unevaluable nodes (e.g., positionGeometry — depends on GPU geometry)
 
 ---
@@ -589,9 +617,9 @@ Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`
 
 ### Three.js TSL Imports Used
 
-**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float, hsl, toHsl, remap, select + all tsl-textures functions (via dynamic import)
+**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float, hsl, toHsl, remap, select + all tsl-textures functions (via dynamic import)
 
-**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, remap, select, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float + dynamic tsl-textures factories (auto-resolved from registry)
+**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, remap, select, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float + dynamic tsl-textures factories (auto-resolved from registry)
 
 ### Persistence (localStorage)
 

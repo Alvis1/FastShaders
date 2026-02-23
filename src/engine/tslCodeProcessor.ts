@@ -3,11 +3,12 @@
  * Handles import extraction, TDZ fix, body parsing, and channel resolution.
  */
 
-export const GEOMETRY_MAP: Record<string, string> = {
-  sphere: 'new THREE.SphereGeometry(1, 64, 64)',
-  box: 'new THREE.BoxGeometry(1.4, 1.4, 1.4)',
-  torus: 'new THREE.TorusGeometry(0.7, 0.3, 64, 64)',
-  plane: 'new THREE.PlaneGeometry(2, 2)',
+/** A-Frame geometry component strings with high segment counts for TSL effects */
+export const AFRAME_GEO: Record<string, string> = {
+  sphere: 'primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64',
+  box: 'primitive: box; width: 1.4; height: 1.4; depth: 1.4',
+  torus: 'primitive: torus; radius: 0.7; radiusTubular: 0.3; segmentsRadial: 64; segmentsTubular: 64',
+  plane: 'primitive: plane; width: 2; height: 2',
 };
 
 export const CHANNEL_TO_PROP: Record<string, string> = {

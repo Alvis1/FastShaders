@@ -36,5 +36,5 @@ export function topologicalSort(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
   }
 
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
-  return sorted.map((id) => nodeMap.get(id)!).filter(Boolean);
+  return sorted.map((id) => nodeMap.get(id)).filter((n): n is AppNode => !!n);
 }

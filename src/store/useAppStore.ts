@@ -136,9 +136,6 @@ interface AppState {
   syncSource: SyncSource;
   syncInProgress: boolean;
 
-  // Script mode (tsl-textures code evaluated directly)
-  activeScript: string | null;
-
   // History (undo / redo)
   history: HistoryEntry[];
   historyIndex: number;
@@ -175,14 +172,12 @@ interface AppState {
   setCodeErrors: (errors: ParseError[]) => void;
   codeSyncRequested: boolean;
   requestCodeSync: () => void;
-  commitPreview: () => void;
 
   // Complexity actions
   setTotalCost: (cost: number) => void;
 
   // Sync actions
   setSyncInProgress: (v: boolean) => void;
-  setActiveScript: (script: string | null) => void;
 
   // History actions
   pushHistory: () => void;
@@ -216,7 +211,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
   totalCost: 0,
   syncSource: 'initial',
   syncInProgress: false,
-  activeScript: null,
   codeSyncRequested: false,
   history: [],
   historyIndex: -1,
@@ -299,13 +293,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   requestCodeSync: () => set({ codeSyncRequested: true, previewCode: get().code }),
 
-  commitPreview: () => set({ previewCode: get().code }),
-
   setTotalCost: (cost) => set({ totalCost: cost }),
 
   setSyncInProgress: (v) => set({ syncInProgress: v }),
-
-  setActiveScript: (script) => set({ activeScript: script }),
 
   pushHistory: () =>
     set((state) => {

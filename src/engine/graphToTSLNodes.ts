@@ -41,6 +41,7 @@ import {
   tangentLocal,
   time,
   screenUV,
+  uv,
   mx_noise_float,
   mx_fractal_noise_float,
   mx_worley_noise_float,
@@ -69,7 +70,32 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   tangentLocal: () => tangentLocal,
   time: () => time,
   screenUV: () => screenUV,
+  uv: (inputs, values) => {
+    // Channel: UV map index (static — GPU attribute selection is compile-time)
+    const ch = Math.round(Number(values.channel ?? 0));
+    let base: TSLNode = ch > 0 ? uv(ch) : uv();
+    // Tiling
+    const tU = Number(values.tilingU ?? 1);
+    const tV = Number(values.tilingV ?? 1);
+    if (inputs.tilingU || inputs.tilingV || tU !== 1 || tV !== 1) {
+      base = mul(base, tslVec2(inputs.tilingU ?? float(tU), inputs.tilingV ?? float(tV)));
+    }
+    // Rotation around (0.5, 0.5)
+    const r = Number(values.rotation ?? 0);
+    if (inputs.rotation || r !== 0) {
+      const rot = inputs.rotation ?? float(r);
+      const centered = sub(base, tslVec2(0.5, 0.5));
+      const c = cos(rot);
+      const s = sin(rot);
+      base = add(
+        tslVec2(sub(mul(centered.x, c), mul(centered.y, s)), add(mul(centered.x, s), mul(centered.y, c))),
+        tslVec2(0.5, 0.5),
+      );
+    }
+    return base;
+  },
   property_float: (_inputs, values) => float(Number(values.value ?? 1)),
+  slider: (_inputs, values) => float(Number(values.value ?? 0.5)),
 
   // Type constructors
   float: (_inputs, values) => float(Number(values.value ?? 0)),
@@ -129,6 +155,7 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
 
   // Vector
   split: (inputs) => inputs.v ?? vec3(0, 0, 0),
+  append: (inputs) => tslVec2(inputs.a ?? float(0), inputs.b ?? float(0)),
   normalize: (inputs) => normalize(inputs.v ?? vec3(0, 1, 0)),
   length: (inputs) => length(inputs.v ?? vec3(0, 0, 0)),
   distance: (inputs) => distance(inputs.a ?? vec3(0, 0, 0), inputs.b ?? vec3(0, 0, 0)),

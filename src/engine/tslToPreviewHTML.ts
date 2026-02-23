@@ -9,6 +9,7 @@
  */
 
 import {
+  AFRAME_GEO,
   CHANNEL_TO_PROP,
   collectImports,
   extractFnBody,
@@ -41,14 +42,6 @@ const SIDE_VALUES: Record<string, number> = {
   front: 0,
   back: 1,
   double: 2,
-};
-
-/** A-Frame geometry component strings with high segment counts for TSL effects */
-const AFRAME_GEO: Record<string, string> = {
-  sphere: 'primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64',
-  box: 'primitive: box; width: 1.4; height: 1.4; depth: 1.4',
-  torus: 'primitive: torus; radius: 0.7; radiusTubular: 0.3; segmentsRadial: 64; segmentsTubular: 64',
-  plane: 'primitive: plane; width: 2; height: 2',
 };
 
 /**

@@ -50,6 +50,22 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'UV', dataType: 'vec2' }],
   },
   {
+    type: 'uv',
+    label: 'UV',
+    category: 'input',
+    tslFunction: 'uv',
+    tslImportModule: 'three/tsl',
+    inputs: [
+      { id: 'channel', label: 'Channel', dataType: 'int' },
+      { id: 'tilingU', label: 'U', dataType: 'float' },
+      { id: 'tilingV', label: 'V', dataType: 'float' },
+      { id: 'rotation', label: 'Rotation', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'UV', dataType: 'vec2' }],
+    defaultValues: { channel: 0, tilingU: 1.0, tilingV: 1.0, rotation: 0.0 },
+    description: 'Texture coordinates with tiling and rotation. Defaults to geometry UV. Also: texcoord, texture coordinate',
+  },
+  {
     type: 'property_float',
     label: 'Property (float)',
     category: 'input',
@@ -58,6 +74,17 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
     defaultValues: { value: 1.0, name: 'property1' },
+  },
+  {
+    type: 'slider',
+    label: 'Slider',
+    category: 'input',
+    tslFunction: 'float',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
+    defaultValues: { value: 0.5, min: 0.0, max: 1.0 },
+    description: 'Adjustable float slider with configurable range. Also: range',
   },
 
   // ===== TYPE CONSTRUCTORS =====
@@ -391,6 +418,21 @@ const definitions: NodeDefinition[] = [
     description: 'Split vector into components. Also: Separate',
   },
 
+  // ===== APPEND =====
+  {
+    type: 'append',
+    label: 'Append',
+    category: 'vector',
+    tslFunction: 'append',
+    tslImportModule: '',
+    inputs: [
+      { id: 'a', label: 'A', dataType: 'any' },
+      { id: 'b', label: 'B', dataType: 'any' },
+    ],
+    outputs: [{ id: 'out', label: 'Output', dataType: 'any' }],
+    description: 'Combine values into a vector. Also: Combine, Join',
+  },
+
   // ===== NOISE =====
   {
     type: 'noise',
@@ -473,7 +515,7 @@ export const NODE_REGISTRY = new Map<string, NodeDefinition>(
 );
 
 export const TSL_FUNCTION_TO_DEF = new Map<string, NodeDefinition>(
-  allDefinitions.filter(d => d.tslFunction).map(d => [d.tslFunction, d])
+  allDefinitions.filter(d => d.tslFunction && d.type !== 'slider').map(d => [d.tslFunction, d])
 );
 
 export function searchNodes(query: string): NodeDefinition[] {

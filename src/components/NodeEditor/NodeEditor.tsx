@@ -30,6 +30,7 @@ import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
+import { getNodeValues } from '@/types';
 import complexityData from '@/registry/complexity.json';
 import './NodeEditor.css';
 
@@ -457,7 +458,7 @@ export function NodeEditor() {
           let maxNum = 0;
           for (const n of nodes) {
             if (n.data.registryType !== 'property_float') continue;
-            const name = String((n.data as { values?: Record<string, string | number> }).values?.name ?? '');
+            const name = String(getNodeValues(n)?.name ?? '');
             const m = name.match(/^property(\d+)$/);
             if (m) maxNum = Math.max(maxNum, Number(m[1]));
           }

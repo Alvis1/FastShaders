@@ -35,7 +35,9 @@ export function buildRows(def: { type?: string; inputs: PortDefinition[]; output
   const allDefaults = def.defaultValues ?? {};
   const defaults = def.type === 'property_float'
     ? Object.fromEntries(Object.entries(allDefaults).filter(([k]) => k !== 'name'))
-    : allDefaults;
+    : def.type === 'slider'
+      ? Object.fromEntries(Object.entries(allDefaults).filter(([k]) => k !== 'min' && k !== 'max'))
+      : allDefaults;
 
   if (def.inputs.length === 0 && Object.keys(defaults).length > 0) {
     // No input ports but has settings (float, color, property_float, vec3, vec2)
@@ -215,12 +217,26 @@ export const ShaderNode = memo(function ShaderNode({
                     label={row.input.label}
                   />
                 )}
+                {/* Slider range input */}
+                {data.registryType === 'slider' && row.settingKey === 'value' && (
+                  <input
+                    type="range"
+                    className="shader-node__slider nodrag"
+                    min={Number(data.values.min ?? def.defaultValues?.min ?? 0)}
+                    max={Number(data.values.max ?? def.defaultValues?.max ?? 1)}
+                    step={0.01}
+                    value={Number(data.values.value ?? def.defaultValues?.value ?? 0.5)}
+                    onChange={(e) => handleChange('value', e.target.value)}
+                    title={String(Number(data.values.value ?? 0.5).toFixed(2))}
+                  />
+                )}
                 {/* Inline setting from defaultValues */}
-                {row.settingKey && row.settingType === 'number' && !inputConnected && (
+                {row.settingKey && row.settingType === 'number' && !inputConnected && !(data.registryType === 'slider' && row.settingKey === 'value') && (
                   <DragNumberInput
                     compact
+                    step={row.input?.dataType === 'int' ? 1 : undefined}
                     value={Number(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? 0)}
-                    onChange={(v) => handleChange(row.settingKey!, String(v))}
+                    onChange={(v) => handleChange(row.settingKey!, String(row.input?.dataType === 'int' ? Math.round(v) : v))}
                   />
                 )}
                 {row.settingKey && row.settingType === 'color' && (
@@ -267,8 +283,9 @@ export const ShaderNode = memo(function ShaderNode({
                 {showInlineValue && (
                   <DragNumberInput
                     compact
+                    step={row.input?.dataType === 'int' ? 1 : undefined}
                     value={Number(data.values[row.input!.id] ?? 0)}
-                    onChange={(v) => handleChange(row.input!.id, String(v))}
+                    onChange={(v) => handleChange(row.input!.id, String(row.input?.dataType === 'int' ? Math.round(v) : v))}
                   />
                 )}
               </div>

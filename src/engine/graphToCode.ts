@@ -1,6 +1,6 @@
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode } from '@/types';
 import { getNodeValues } from '@/types';
-import { Color, Vector2, Vector3 } from 'three';
+import type { Color, Vector2, Vector3 } from 'three';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getParamClassifications } from '@/registry/tslTexturesRegistry';
 import { topologicalSort } from './topologicalSort';
@@ -77,6 +77,8 @@ export function graphToCode(
   for (const node of sorted) {
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || !def.tslImportModule) continue;
+    // UV import is handled in body generation (with channel parameter)
+    if (def.type === 'uv') continue;
     addImport(def.tslImportModule, def.tslFunction);
     // For tsl-textures nodes, scan which TSL constructors are needed for their params
     if (def.tslImportModule === 'tsl-textures') {
@@ -99,7 +101,47 @@ export function graphToCode(
     const varName = varNames.get(node.id)!;
     const args = resolveArguments(node, edges, varNames, def, sorted);
 
-    if (def.tslImportModule === 'tsl-textures') {
+    if (def.type === 'uv') {
+      // UV node: channel selector + tiling + rotation
+      const nv = getNodeValues(node);
+      addImport('three/tsl', 'uv');
+
+      // Resolve channel (UV map index)
+      const channelExpr = resolveExposedParam(node, 'channel', edges, varNames, nv, sorted);
+      const baseExpr = channelExpr === '0' ? 'uv()' : `uv(${channelExpr})`;
+
+      // Resolve tiling and rotation (may be connected via input ports)
+      const tilingU = resolveExposedParam(node, 'tilingU', edges, varNames, nv, sorted);
+      const tilingV = resolveExposedParam(node, 'tilingV', edges, varNames, nv, sorted);
+      const rotationExpr = resolveExposedParam(node, 'rotation', edges, varNames, nv, sorted);
+      const hasTiling = tilingU !== '1' || tilingV !== '1';
+      const hasRotation = rotationExpr !== '0';
+
+      if (!hasTiling && !hasRotation) {
+        bodyLines.push(`  const ${varName} = ${baseExpr};`);
+      } else if (hasTiling && !hasRotation) {
+        addImport('three/tsl', 'mul');
+        addImport('three/tsl', 'vec2');
+        bodyLines.push(`  const ${varName} = mul(${baseExpr}, vec2(${tilingU}, ${tilingV}));`);
+      } else {
+        // Rotation (with optional tiling)
+        addImport('three/tsl', 'vec2');
+        addImport('three/tsl', 'sub');
+        addImport('three/tsl', 'add');
+        addImport('three/tsl', 'mul');
+        addImport('three/tsl', 'cos');
+        addImport('three/tsl', 'sin');
+        const scaledExpr = hasTiling ? `mul(${baseExpr}, vec2(${tilingU}, ${tilingV}))` : baseExpr;
+        const cVar = `_${varName}`;
+        bodyLines.push(`  const ${cVar} = sub(${scaledExpr}, vec2(0.5, 0.5));`);
+        bodyLines.push(`  const ${varName} = add(vec2(sub(mul(${cVar}.x, cos(${rotationExpr})), mul(${cVar}.y, sin(${rotationExpr}))), add(mul(${cVar}.x, sin(${rotationExpr})), mul(${cVar}.y, cos(${rotationExpr})))), vec2(0.5, 0.5));`);
+      }
+    } else if (def.type === 'append') {
+      // Append node: combine two values into a vec2
+      const args = resolveArguments(node, edges, varNames, def, sorted);
+      addImport('three/tsl', 'vec2');
+      bodyLines.push(`  const ${varName} = vec2(${args.join(', ')});`);
+    } else if (def.tslImportModule === 'tsl-textures') {
       // tsl-textures: object parameter call
       const objProps = buildTSLTextureCallProps(node, edges, varNames, def, sorted);
       bodyLines.push(`  const ${varName} = ${def.tslFunction}({ ${objProps} });`);

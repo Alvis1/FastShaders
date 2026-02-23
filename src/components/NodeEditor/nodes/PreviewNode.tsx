@@ -3,11 +3,10 @@ import { Position, type NodeProps } from '@xyflow/react';
 import type { PreviewFlowNode, NodeCategory, AppNode, TSLDataType } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale, getCostTextColor } from '@/utils/colorUtils';
+import { getCostColor, getCostScale, getCostTextColor, CATEGORY_COLORS } from '@/utils/colorUtils';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { evaluateNodeScalar } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
-import { CATEGORY_COLORS } from '@/utils/colorUtils';
 import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
 import './PreviewNode.css';
 

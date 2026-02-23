@@ -4,6 +4,7 @@ import type { NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { generateId } from '@/utils/idGenerator';
+import { removeEdgesForPort } from '@/utils/edgeUtils';
 
 /** Categories whose nodes always show all ports — no expose/hide checkboxes needed. */
 const ALWAYS_EXPOSED_CATEGORIES: Set<NodeCategory> = new Set([
@@ -66,6 +67,8 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
     const current = new Set(exposedPorts);
     if (current.has(key)) {
       current.delete(key);
+      // Remove edges connected to the port being hidden
+      removeEdgesForPort(nodeId, key);
     } else {
       current.add(key);
     }

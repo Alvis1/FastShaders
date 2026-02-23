@@ -2,6 +2,7 @@ import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { OUTPUT_DEFAULT_EXPOSED } from '../nodes/OutputNode';
 import type { MaterialSettings, OutputNodeData } from '@/types';
+import { removeEdgesForPort } from '@/utils/edgeUtils';
 
 /** Ports that can be toggled on/off in the output node settings. */
 const OPTIONAL_OUTPUT_PORTS = ['emissive', 'normal', 'opacity'];
@@ -34,6 +35,8 @@ export function ShaderSettingsMenu() {
     const current = new Set(exposedPorts);
     if (current.has(portId)) {
       current.delete(portId);
+      // Remove edges connected to the port being hidden
+      removeEdgesForPort(outputNode.id, portId);
     } else {
       current.add(portId);
     }
