@@ -1,8 +1,15 @@
 .node-editor {
   width: 100%;
   height: 100%;
-  position: relative;
+  display: flex;
+  flex-direction: column;
   background: var(--bg-panel);
+}
+
+.node-editor__canvas {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
 }
 
 .node-editor__cost-overlay {
