@@ -48,6 +48,8 @@ export interface MaterialSettings {
   depthWrite?: boolean;
   /** How displacement is applied: 'normal' = along surface normal, 'offset' = raw vec3 offset. */
   displacementMode?: 'normal' | 'offset';
+  /** Alpha clip threshold. 0 = disabled, >0 = discard fragments below this alpha value. */
+  alphaTest?: number;
 }
 
 export interface OutputNodeData {

@@ -81,7 +81,7 @@ export function voronoi2D(x: number, y: number): number {
   return Math.min(minDist, 1);
 }
 
-export type NoiseType = 'noise' | 'fractal' | 'voronoi';
+export type NoiseType = 'fractal' | 'voronoi';
 
 /** Which input ports of the noise node are driven by time. */
 export interface TimeInputs {
@@ -130,9 +130,6 @@ export function renderNoisePreview(
 
       let v: number;
       switch (type) {
-        case 'noise':
-          v = (perlin2D(nx, ny) + 1) * 0.5;
-          break;
         case 'fractal':
           v = (fbm2D(nx, ny, octaves, lacunarity, diminish) + 1) * 0.5;
           break;

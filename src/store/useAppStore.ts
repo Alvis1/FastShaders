@@ -61,7 +61,7 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
     const data = JSON.parse(raw);
     if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
       // Migrate: noise-category nodes should use 'preview' type
-      const noiseTypes = new Set(['noise', 'fractal', 'voronoi']);
+      const noiseTypes = new Set(['fractal', 'voronoi']);
       for (const node of data.nodes) {
         if (node.type === 'shader' && noiseTypes.has(node.data?.registryType)) {
           node.type = 'preview';

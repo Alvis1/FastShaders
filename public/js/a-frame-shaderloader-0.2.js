@@ -191,6 +191,9 @@ AFRAME.registerComponent("shader", {
         if (shaderResult.side !== undefined) {
           material.side = shaderResult.side;
         }
+        if (shaderResult.alphaTest !== undefined) {
+          material.alphaTest = shaderResult.alphaTest;
+        }
       } else {
         // Simple API: return a single node (backward compatible)
         material.colorNode = shaderResult;

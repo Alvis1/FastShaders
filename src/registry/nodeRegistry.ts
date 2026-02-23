@@ -435,16 +435,6 @@ const definitions: NodeDefinition[] = [
 
   // ===== NOISE =====
   {
-    type: 'noise',
-    label: 'Noise',
-    category: 'noise',
-    tslFunction: 'mx_noise_float',
-    tslImportModule: 'three/tsl',
-    inputs: [],
-    outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
-    defaultValues: { pos: 'positionGeometry', scale: 1.0 },
-  },
-  {
     type: 'fractal',
     label: 'Fractal (fBm)',
     category: 'noise',

@@ -153,6 +153,17 @@ export function tslToShaderModule(
           }
           return nodeProp ? `${nodeProp}: ${val}` : `${key}: ${val}`;
         });
+        // Inject material settings into the return object
+        if (materialSettings?.transparent) {
+          entries.push('transparent: true');
+        }
+        if (materialSettings?.side) {
+          const sideValues: Record<string, number> = { front: 0, back: 1, double: 2 };
+          entries.push(`side: ${sideValues[materialSettings.side] ?? 0}`);
+        }
+        if (materialSettings?.alphaTest) {
+          entries.push(`alphaTest: ${materialSettings.alphaTest}`);
+        }
         const indent = line.match(/^(\s*)/)?.[1] ?? '';
         outLines.push(`${indent}return { ${entries.join(', ')} };`);
         continue;

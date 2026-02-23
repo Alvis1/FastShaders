@@ -42,7 +42,6 @@ import {
   time,
   screenUV,
   uv,
-  mx_noise_float,
   mx_fractal_noise_float,
   mx_worley_noise_float,
 } from 'three/tsl';
@@ -163,11 +162,6 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   cross: (inputs) => cross(inputs.a ?? vec3(1, 0, 0), inputs.b ?? vec3(0, 1, 0)),
 
   // Noise
-  noise: (inputs, values) => {
-    const pos = inputs.pos ?? positionGeometry;
-    const s = float(Number(values.scale ?? 1));
-    return mx_noise_float(pos.mul(s));
-  },
   fractal: (inputs, values) => {
     const pos = inputs.pos ?? positionGeometry;
     const s = float(Number(values.scale ?? 1));

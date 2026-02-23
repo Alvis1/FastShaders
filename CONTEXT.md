@@ -124,10 +124,10 @@ public/
 
 ```typescript
 // Generated output format:
-import { Fn, positionGeometry, mx_noise_float } from "three/tsl";
+import { Fn, positionGeometry, mx_fractal_noise_float } from "three/tsl";
 const shader = Fn(() => {
   const pos = positionGeometry;
-  const noise = mx_noise_float(pos);
+  const noise = mx_fractal_noise_float(pos);
   return noise;
 });
 export default shader;
@@ -157,6 +157,7 @@ The code editor has three tabs:
   - Converts `Fn(() => { ... })` wrapper to `export default function(params) { ... }` (when properties exist) or `export default function() { ... }` (no properties)
   - Standard bare imports (`'three/tsl'`, `'tsl-textures'`) — also usable directly with Three.js
   - Multi-channel returns converted to shaderloader Object API (`color` → `colorNode`, etc.)
+  - Material settings injected into return object: `transparent`, `side`, `alphaTest`
   - Position channel wrapped with displacement logic: `positionLocal.add(normalLocal.mul(val))` (normal mode) or `positionLocal.add(val)` (offset mode from `materialSettings`)
   - **Property support**: Emits `export const schema` with property defaults; replaces `const NAME = uniform(VALUE)` with `const NAME = params.NAME`; removes `uniform` from imports when all uniform calls are replaced by params references
   - The shaderloader handles TDZ fixes and missing import injection at runtime
@@ -275,7 +276,7 @@ Generates HTML for the in-app preview iframe:
 | **Math (binary)** | pow, mod, clamp, min, max                                                                 |
 | **Interpolation** | mix, smoothstep, remap, select                                                            |
 | **Vector**        | normalize, length, distance, dot, cross, split, append                                     |
-| **Noise**         | noise (mx_noise_float), fractal (mx_fractal_noise_float), voronoi (mx_worley_noise_float) |
+| **Noise**         | fractal (mx_fractal_noise_float), voronoi (mx_worley_noise_float)                         |
 | **Color**         | hsl, toHsl                                                                                |
 | **Texture**       | ~49 auto-registered tsl-textures functions (bricks, camouflage, polkaDots, marble, etc.)  |
 | **Output**        | output (color, normal, displacement, opacity, roughness, emissive inputs + materialSettings) |
@@ -373,7 +374,7 @@ Adjustable float value with a visual range slider and configurable min/max bound
 
 ### Asset Browser (ContentBrowser + NodePreviewCard)
 
-The asset browser is a horizontal scrollable drawer at the bottom of the node editor, showing all available nodes grouped by category tabs.
+The asset browser is a horizontal scrollable drawer at the bottom of the node editor, showing all available nodes grouped by category tabs. The Noise category tab is hidden; fractal and voronoi nodes are pinned at the start of the Texture tab (with a spacer), followed by tsl-textures nodes sorted by GPU cost ascending.
 
 **NodePreviewCard** dispatches to 7 visual variants based on `getFlowNodeType(def)` and `def.type`, matching the editor node appearance:
 
@@ -405,7 +406,7 @@ ShaderNode handles Vector3/Vector2 parameters with grouped inputs:
 
 Noise category nodes render a 96x96 canvas showing their generated pattern:
 
-- **CPU noise**: Perlin 2D, fBm (fractal), Voronoi — evaluated in `noisePreview.ts`
+- **CPU noise**: fBm (fractal), Voronoi — evaluated in `noisePreview.ts`
 - **Upstream-aware inputs**: Uses `evaluateNodeScalar()` from `cpuEvaluator.ts` to resolve connected input values (e.g., a `float(3)` node connected to `scale` updates the preview)
 - **Time-conditional animation**: Only animates when a Time node is connected upstream
 - **Per-port animation**: BFS traversal detects which input ports receive time signal
@@ -582,12 +583,15 @@ Routes to specific menu based on `contextMenu.type`:
 Right-click menu for the output node with sections:
 
 - **Shader Settings**: Total cost display with headset budget reference
-- **Output Ports**: Checkboxes to toggle optional ports (emissive, normal, opacity); hiding a port removes connected edges via `removeEdgesForPort()`
+- **Output Ports**: Checkboxes to toggle optional ports (emissive, normal); hiding a port removes connected edges via `removeEdgesForPort()`. Opacity port is auto-managed by Transparent/Alpha Clip toggles.
 - **Displacement** (shown when position port is exposed):
   - "Along Normal" checkbox — controls `materialSettings.displacementMode` (`'normal'` | `'offset'`)
   - Normal mode (default): `positionLocal.add(normalLocal.mul(displacement))` — pushes vertices outward along surface normals
   - Offset mode: `positionLocal.add(displacement)` — raw vec3 offset
-- **Material**: Transparent checkbox, Side selector (front/back/double), Depth Write (when transparent)
+- **Material**: Transparent checkbox, Alpha Clip checkbox + threshold slider (0.01–1.0), Side selector (front/back/double), Depth Write (when transparent)
+  - Transparent: enables smooth alpha blending, shows opacity port
+  - Alpha Clip: enables `material.alphaTest` (hard cutout — fragments below threshold are discarded), shows opacity port
+  - When both Transparent and Alpha Clip are off, the opacity port is hidden and edges removed
 
 All settings stored in `OutputNodeData.materialSettings` and threaded through to all 3 export pipelines (preview, A-Frame, script).
 
@@ -635,9 +639,9 @@ Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`
 
 ### Three.js TSL Imports Used
 
-**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float, hsl, toHsl, remap, select + all tsl-textures functions (via dynamic import)
+**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_fractal_noise_float, mx_worley_noise_float, hsl, toHsl, remap, select + all tsl-textures functions (via dynamic import)
 
-**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, remap, select, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float + dynamic tsl-textures factories (auto-resolved from registry)
+**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, remap, select, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_fractal_noise_float, mx_worley_noise_float + dynamic tsl-textures factories (auto-resolved from registry)
 
 ### Persistence (localStorage)
 

@@ -4,8 +4,9 @@ import { OUTPUT_DEFAULT_EXPOSED } from '../nodes/OutputNode';
 import type { MaterialSettings, OutputNodeData } from '@/types';
 import { removeEdgesForPort } from '@/utils/edgeUtils';
 
-/** Ports that can be toggled on/off in the output node settings. */
-const OPTIONAL_OUTPUT_PORTS = ['emissive', 'normal', 'opacity'];
+/** Ports that can be toggled on/off in the output node settings.
+ *  Opacity is excluded — it's auto-managed by transparent/alphaTest. */
+const OPTIONAL_OUTPUT_PORTS = ['emissive', 'normal'];
 
 export function ShaderSettingsMenu() {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
@@ -28,6 +29,39 @@ export function ShaderSettingsMenu() {
     if (!outputNode) return;
     const merged = { ...settings, ...patch };
     updateNodeData(outputNode.id, { materialSettings: merged } as Partial<OutputNodeData>);
+  };
+
+  /** Show or hide the opacity port based on transparent/alphaTest state. */
+  const setOpacityPort = (show: boolean) => {
+    if (!outputNode) return;
+    const current = new Set(exposedPorts);
+    if (show) {
+      current.add('opacity');
+    } else {
+      current.delete('opacity');
+      removeEdgesForPort(outputNode.id, 'opacity');
+    }
+    updateNodeData(outputNode.id, { exposedPorts: Array.from(current) } as Partial<OutputNodeData>);
+  };
+
+  const handleTransparentChange = (checked: boolean) => {
+    if (checked) {
+      updateSettings({ transparent: true });
+      setOpacityPort(true);
+    } else {
+      updateSettings({ transparent: false });
+      if (!settings.alphaTest) setOpacityPort(false);
+    }
+  };
+
+  const handleAlphaClipChange = (checked: boolean) => {
+    if (checked) {
+      updateSettings({ alphaTest: 0.5 });
+      setOpacityPort(true);
+    } else {
+      updateSettings({ alphaTest: 0 });
+      if (!settings.transparent) setOpacityPort(false);
+    }
   };
 
   const handleTogglePort = (portId: string) => {
@@ -135,11 +169,38 @@ export function ShaderSettingsMenu() {
         <input
           type="checkbox"
           checked={!!settings.transparent}
-          onChange={(e) => updateSettings({ transparent: e.target.checked })}
+          onChange={(e) => handleTransparentChange(e.target.checked)}
           style={checkboxStyle}
         />
         Transparent
       </label>
+
+      <label style={labelStyle}>
+        <input
+          type="checkbox"
+          checked={!!settings.alphaTest}
+          onChange={(e) => handleAlphaClipChange(e.target.checked)}
+          style={checkboxStyle}
+        />
+        Alpha Clip
+      </label>
+
+      {!!settings.alphaTest && (
+        <div style={{ padding: '2px var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <input
+            type="range"
+            min={0.01}
+            max={1}
+            step={0.01}
+            value={settings.alphaTest}
+            onChange={(e) => updateSettings({ alphaTest: parseFloat(e.target.value) })}
+            style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--border-focus)' }}
+          />
+          <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', minWidth: 28, textAlign: 'right' }}>
+            {settings.alphaTest.toFixed(2)}
+          </span>
+        </div>
+      )}
 
       <div style={{ ...labelStyle, cursor: 'default' }}>
         <span>Side</span>
