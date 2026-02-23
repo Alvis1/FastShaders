@@ -94,6 +94,10 @@ function buildColorNode(
   const texFn = (tslTextures as any)[def.tslFunction];
   if (typeof texFn !== 'function') return null;
 
+  // Skip position and normal textures (require geometry/render context not available in off-screen preview)
+  const defaults = texFn.defaults as Record<string, unknown> | undefined;
+  if (defaults?.$positionNode || defaults?.$normalNode) return null;
+
   const classifications = getParamClassifications(def.tslFunction);
   const params: Record<string, unknown> = {};
 
@@ -110,19 +114,25 @@ function buildColorNode(
     } else if (param.kind === 'number') {
       params[param.key] = Number(values[param.key] ?? param.defaultValue ?? 0);
     } else if (param.kind === 'color') {
-      const hex = String(values[param.key] ?? '#000000');
+      const defaultCol = param.defaultValue as Color | undefined;
+      const defaultHex = (defaultCol as { isColor?: boolean })?.isColor ? '#' + (defaultCol as Color).getHexString() : '#000000';
+      const hex = String(values[param.key] ?? defaultHex);
       const [r, g, b] = hexToRgb01(hex);
       params[param.key] = new Color(r, g, b);
     } else if (param.kind === 'vec3') {
+      const dv = param.defaultValue as Vector3 | undefined;
+      const hasDefault = (dv as { isVector3?: boolean })?.isVector3;
       params[param.key] = new Vector3(
-        Number(values[`${param.key}_x`] ?? 0),
-        Number(values[`${param.key}_y`] ?? 0),
-        Number(values[`${param.key}_z`] ?? 0),
+        Number(values[`${param.key}_x`] ?? (hasDefault ? dv!.x : 0)),
+        Number(values[`${param.key}_y`] ?? (hasDefault ? dv!.y : 0)),
+        Number(values[`${param.key}_z`] ?? (hasDefault ? dv!.z : 0)),
       );
     } else if (param.kind === 'vec2') {
+      const dv = param.defaultValue as Vector2 | undefined;
+      const hasDefault = (dv as { isVector2?: boolean })?.isVector2;
       params[param.key] = new Vector2(
-        Number(values[`${param.key}_x`] ?? 0),
-        Number(values[`${param.key}_y`] ?? 0),
+        Number(values[`${param.key}_x`] ?? (hasDefault ? dv!.x : 0)),
+        Number(values[`${param.key}_y`] ?? (hasDefault ? dv!.y : 0)),
       );
     }
   }
@@ -179,12 +189,7 @@ async function doRender(
 
   // Render
   plane.material = current.material;
-  try {
-    await renderer.renderAsync(scene, camera);
-  } catch {
-    // Fallback to sync render
-    renderer.render(scene, camera);
-  }
+  renderer.render(scene, camera);
 
   // Copy to target canvas
   const ctx = targetCanvas.getContext('2d');
@@ -224,17 +229,13 @@ export function unregisterAnimated(nodeId: string): void {
 }
 
 function startAnimLoop(): void {
-  const tick = async () => {
+  const tick = () => {
     if (!available || !renderer || !scene || !camera || !plane) return;
     for (const nodeId of animatedNodes) {
       const entry = nodeEntries.get(nodeId);
       if (!entry) continue;
       plane.material = entry.material;
-      try {
-        await renderer.renderAsync(scene, camera);
-      } catch {
-        renderer.render(scene, camera);
-      }
+      renderer.render(scene, camera);
       const ctx = entry.targetCanvas.getContext('2d');
       if (ctx && renderer.domElement) {
         ctx.drawImage(renderer.domElement, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE);

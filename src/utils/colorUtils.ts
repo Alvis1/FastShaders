@@ -1,4 +1,4 @@
-import type { TSLDataType } from '@/types';
+import type { TSLDataType, NodeCategory } from '@/types';
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -65,6 +65,19 @@ export function getCostScale(cost: number): number {
   if (cost <= 0) return 1;
   return 1 + Math.min(cost / 80, 1) * 0.35;
 }
+
+export const CATEGORY_COLORS: Record<NodeCategory, string> = {
+  input: 'var(--cat-input)',
+  type: 'var(--cat-type)',
+  arithmetic: 'var(--cat-arithmetic)',
+  math: 'var(--cat-math)',
+  interpolation: 'var(--cat-interpolation)',
+  vector: 'var(--cat-vector)',
+  noise: 'var(--cat-noise)',
+  color: 'var(--cat-color)',
+  texture: 'var(--cat-texture)',
+  output: 'var(--cat-output)',
+};
 
 const TYPE_COLORS: Record<TSLDataType, string> = {
   float: 'var(--type-float)',

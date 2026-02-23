@@ -55,6 +55,7 @@
   flex-wrap: nowrap;
   gap: 2px;
   align-items: flex-start;
+  min-height: 160px;
 }
 
 .content-browser__items::-webkit-scrollbar {

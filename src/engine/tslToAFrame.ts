@@ -1,26 +1,16 @@
 /**
  * Converts graph-generated TSL code into a self-contained A-Frame HTML file.
  *
- * Uses the a-frame-shaderloader IIFE bundle (aframe-171-a-0.1.min.js) which
- * bundles A-Frame 1.7, Three.js (WebGPU), and tsl-textures together with
- * matching versions, so all features (including tsl-textures) work correctly.
+ * Uses the a-frame-shaderloader to apply the shader — loads the IIFE bundle
+ * (aframe-171-a-0.1.min.js) which bundles A-Frame 1.7 + Three.js WebGPU +
+ * tsl-textures, and the shaderloader component (a-frame-shaderloader-0.2.js).
  *
- * The shader code runs inside a custom A-Frame component that destructures
- * TSL functions from the global THREE.TSL namespace and tsl-textures from
- * window.tslTextures — both provided by the IIFE bundle.
+ * The shader module code is embedded inline as a blob URL and applied via
+ * the shaderloader's `shader` component attribute.
  */
 
-import {
-  GEOMETRY_MAP,
-  CHANNEL_TO_PROP,
-  collectImports,
-  extractFnBody,
-  fixTDZ,
-  parseBody,
-} from './tslCodeProcessor';
+import { tslToShaderModule, type PropertyInfo } from './tslToShaderModule';
 import type { MaterialSettings } from '@/types';
-import type { PropertyInfo } from './tslToShaderModule';
-import { sanitizeIdentifier, toKebabCase } from '@/utils/nameUtils';
 
 export interface AFrameOptions {
   /** A-Frame geometry primitive (default: 'sphere') */
@@ -41,6 +31,28 @@ const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/j
 const IIFE_BUNDLE_URL = `${CDN_BASE}/aframe-171-a-0.1.min.js`;
 const SHADERLOADER_URL = `${CDN_BASE}/a-frame-shaderloader-0.2.js`;
 
+/** A-Frame geometry component strings with high segment counts for TSL effects */
+const AFRAME_GEO: Record<string, string> = {
+  sphere: 'primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64',
+  box: 'primitive: box; width: 1.4; height: 1.4; depth: 1.4',
+  torus: 'primitive: torus; radius: 0.7; radiusTubular: 0.3; segmentsRadial: 64; segmentsTubular: 64',
+  plane: 'primitive: plane; width: 2; height: 2',
+};
+
+/**
+ * Strip usage comment lines from the top of tslToShaderModule output,
+ * returning just the bare module code for embedding.
+ */
+function stripHeaderComments(code: string): string {
+  const lines = code.split('\n');
+  let start = 0;
+  // Skip leading comment and blank lines
+  while (start < lines.length && (lines[start].startsWith('//') || lines[start].trim() === '')) {
+    start++;
+  }
+  return lines.slice(start).join('\n').trim();
+}
+
 export function tslToAFrame(
   tslCode: string,
   shaderName = 'tsl-shader',
@@ -50,49 +62,24 @@ export function tslToAFrame(
     geometry = 'sphere',
     embedded = false,
     animate = false,
+    materialSettings,
+    properties,
   } = options;
-  const properties = options.properties ?? [];
-
-  const componentName = toKebabCase(shaderName, 'tsl-shader');
 
   const pageTitle = shaderName || 'TSL Shader';
+  const geoKey = geometry === 'cube' ? 'box' : geometry;
+  const geoAttr = AFRAME_GEO[geoKey] ?? AFRAME_GEO.sphere;
 
-  // Map geometry types to Three.js constructors
-  const aframePrimitive = geometry === 'cube' ? 'box' : geometry;
-  const threeGeometry = GEOMETRY_MAP[aframePrimitive] ?? GEOMETRY_MAP.sphere;
+  // Generate shader module code (same as Script tab) and strip header comments
+  const fullModule = tslToShaderModule(tslCode, materialSettings, properties);
+  const shaderModule = stripHeaderComments(fullModule);
 
-  // Extract imports (exclude 'Fn' — not needed in IIFE context), body, fix TDZ, parse channels
-  const { tslNames, texNames } = collectImports(tslCode, true);
-  const body = extractFnBody(tslCode, tslNames);
-  const { processedBody, texAliases } = fixTDZ(body, tslNames, texNames);
-  const { defLines, channels } = parseBody(processedBody, tslNames);
+  const animAttr = animate
+    ? ' animation="property: rotation; to: 0 360 0; loop: true; dur: 12000; easing: linear"'
+    : '';
 
-  // Ensure positionLocal (and normalLocal for normal-based displacement) are available
-  const displacementMode = options.materialSettings?.displacementMode ?? 'normal';
-  if (channels.position) {
-    if (!tslNames.includes('positionLocal')) tslNames.push('positionLocal');
-    if (displacementMode === 'normal' && !tslNames.includes('normalLocal')) {
-      tslNames.push('normalLocal');
-    }
-  }
+  const sceneAttrs = embedded ? ' embedded' : '';
 
-  // Ensure 'uniform' is available if properties exist
-  if (properties.length > 0 && !tslNames.includes('uniform')) {
-    tslNames.push('uniform');
-  }
-
-  // Replace property uniform declarations in defLines with uniform refs
-  const propertyNames = new Set(properties.map(p => p.name));
-  const processedDefLines = defLines.map(line => {
-    const match = line.match(/^\s*var\s+(\w+)\s*=\s*uniform\([^)]*\)\s*;?\s*$/);
-    if (match && propertyNames.has(match[1])) {
-      const indent = line.match(/^(\s*)/)?.[0] ?? '';
-      return `${indent}var ${match[1]} = this._uniforms.${match[1]};`;
-    }
-    return line;
-  });
-
-  // Build the full HTML document
   const lines: string[] = [];
 
   lines.push('<!DOCTYPE html>');
@@ -114,128 +101,31 @@ export function tslToAFrame(
   lines.push('<body>');
   lines.push('');
 
-  // --- Inline component script (uses globals from IIFE bundle) ---
+  // Create shader blob URL from inline module code
   lines.push('<script>');
-  lines.push(`AFRAME.registerComponent('${componentName}', {`);
-
-  // Emit schema if properties exist
-  if (properties.length > 0) {
-    lines.push('  schema: {');
-    for (const prop of properties) {
-      const safeName = sanitizeIdentifier(prop.name, 'property');
-      lines.push(`    ${safeName}: { type: 'number', default: ${prop.defaultValue} },`);
-    }
-    lines.push('  },');
-  }
-
-  lines.push('  init: function() {');
-  lines.push('    try {');
-
-  // Destructure TSL functions from the bundled globals
-  if (tslNames.length > 0) {
-    lines.push(`      var _TSL = THREE.TSL || THREE;`);
-    // Destructure in groups of ~5 to keep lines readable
-    const chunks = chunkArray(tslNames, 5);
-    for (const chunk of chunks) {
-      const assignments = chunk.map(n => `${n} = _TSL.${n}`).join(', ');
-      lines.push(`      var ${assignments};`);
-    }
-  }
-
-  // Destructure tsl-textures from the bundled globals
-  if (texAliases.length > 0) {
-    for (const { original, alias } of texAliases) {
-      lines.push(`      var ${alias} = window.tslTextures.${original};`);
-    }
-  }
-  lines.push('');
-
-  // Create property uniforms
-  if (properties.length > 0) {
-    lines.push('      this._uniforms = {};');
-    for (const prop of properties) {
-      lines.push(`      this._uniforms.${prop.name} = uniform(this.data.${prop.name});`);
-    }
-    lines.push('');
-  }
-
-  // Emit node definitions (with property uniform refs replaced)
-  for (const line of processedDefLines) {
-    lines.push('      ' + line.trimStart());
-  }
-  lines.push('');
-
-  // Create mesh with node material — assign each channel
-  lines.push('      var material = new THREE.MeshPhysicalNodeMaterial();');
-  for (const [ch, ref] of Object.entries(channels)) {
-    const prop = CHANNEL_TO_PROP[ch];
-    if (prop) {
-      if (ch === 'position') {
-        const displacement = displacementMode === 'normal'
-          ? `normalLocal.mul(${ref})`
-          : ref;
-        lines.push(`      material.${prop} = positionLocal.add(${displacement});`);
-      } else {
-        lines.push(`      material.${prop} = ${ref};`);
-      }
-    }
-  }
-  lines.push(`      var geometry = ${threeGeometry};`);
-  lines.push('      var mesh = new THREE.Mesh(geometry, material);');
-  lines.push("      this.el.setObject3D('mesh', mesh);");
-  lines.push('    } catch (e) {');
-  lines.push('      console.error("[FastShaders]", e);');
-  lines.push('    }');
-  lines.push('  },');
-
-  // Update method for property changes
-  if (properties.length > 0) {
-    lines.push('  update: function(oldData) {');
-    lines.push('    if (!this._uniforms) return;');
-    for (const prop of properties) {
-      lines.push(`    if (oldData.${prop.name} !== this.data.${prop.name}) {`);
-      lines.push(`      this._uniforms.${prop.name}.value = this.data.${prop.name};`);
-      lines.push(`    }`);
-    }
-    lines.push('  },');
-  }
-
-  lines.push('  remove: function() {');
-  lines.push("    var mesh = this.el.getObject3D('mesh');");
-  lines.push('    if (mesh) {');
-  lines.push('      mesh.material.dispose();');
-  lines.push('      mesh.geometry.dispose();');
-  lines.push("      this.el.removeObject3D('mesh');");
-  lines.push('    }');
-  lines.push('  }');
-  lines.push('});');
+  lines.push(`var __shaderCode = ${JSON.stringify(shaderModule)};`);
+  lines.push('var __blob = new Blob([__shaderCode], { type: "text/javascript" });');
+  lines.push('window.__shaderUrl = URL.createObjectURL(__blob);');
   lines.push(`<${''}/script>`);
   lines.push('');
 
-  // --- Scene ---
-  const sceneAttrs = embedded ? ' embedded' : '';
-
-  const animAttr = animate
-    ? ' animation="property: rotation; to: 0 360 0; loop: true; dur: 12000; easing: linear"'
-    : '';
-
+  // A-Frame scene
   lines.push(`<a-scene${sceneAttrs} background="color: #1a1a2e">`);
-  lines.push(`  <a-entity ${componentName} position="0 1.5 -3" rotation="45 45 0"${animAttr}></a-entity>`);
+  lines.push(`  <a-entity id="shader-entity" geometry="${geoAttr}" position="0 1.5 -3" rotation="45 45 0"${animAttr}></a-entity>`);
   lines.push('  <a-light type="directional" position="1 2 1" intensity="1"></a-light>');
   lines.push('  <a-light type="ambient" intensity="0.4"></a-light>');
   lines.push('</a-scene>');
   lines.push('');
+
+  // Apply shader after the entity exists in the DOM
+  lines.push('<script>');
+  lines.push('document.getElementById("shader-entity").setAttribute("shader", "src: " + window.__shaderUrl);');
+  lines.push(`<${''}/script>`);
+  lines.push('');
+
   lines.push('</body>');
   lines.push('</html>');
   lines.push('');
 
   return lines.join('\n');
-}
-
-function chunkArray<T>(arr: T[], size: number): T[][] {
-  const result: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    result.push(arr.slice(i, i + size));
-  }
-  return result;
 }

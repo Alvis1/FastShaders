@@ -7,6 +7,7 @@ import type { NodeDefinition, PortDefinition, TSLDataType } from '@/types';
 const TSL_REF_PORTS: Record<string, TSLDataType> = {
   position: 'vec3',
   time: 'float',
+  matcap: 'vec2',
 };
 
 export type ParamKind = 'number' | 'color' | 'vec3' | 'vec2' | 'tslRef' | 'meta';
@@ -28,10 +29,14 @@ function classifyParam(key: string, value: unknown): ParamClassification {
     return { kind: 'tslRef', key, defaultValue: value, tslRefDataType: 'any' };
   }
 
-  if (value instanceof Color) return { kind: 'color', key, defaultValue: value };
-  if (value instanceof Vector3) return { kind: 'vec3', key, defaultValue: value };
-  if (value instanceof Vector2) return { kind: 'vec2', key, defaultValue: value };
+  // Duck-type checks (handles cross-realm instances from tsl-textures)
+  if (value && typeof value === 'object') {
+    if ((value as { isColor?: boolean }).isColor) return { kind: 'color', key, defaultValue: value };
+    if ((value as { isVector3?: boolean }).isVector3) return { kind: 'vec3', key, defaultValue: value };
+    if ((value as { isVector2?: boolean }).isVector2) return { kind: 'vec2', key, defaultValue: value };
+  }
   if (typeof value === 'number') return { kind: 'number', key, defaultValue: value };
+  if (typeof value === 'boolean') return { kind: 'number', key, defaultValue: value ? 1 : 0 };
 
   // Unknown type — skip
   return { kind: 'meta', key, defaultValue: value };
@@ -72,6 +77,7 @@ export function buildTSLTextureDefinitions(): NodeDefinition[] {
     // Strip leading dots (some tsl-textures $name values start with '.')
     displayName = displayName.replace(/^\.+\s*/, '');
     const isPositionNode = !!defaults.$positionNode;
+    const isNormalNode = !!defaults.$normalNode;
 
     const inputs: PortDefinition[] = [];
     const defaultValues: Record<string, string | number> = {};
@@ -117,8 +123,8 @@ export function buildTSLTextureDefinitions(): NodeDefinition[] {
       inputs,
       outputs: [{
         id: 'out',
-        label: isPositionNode ? 'Position' : 'Color',
-        dataType: isPositionNode ? 'vec3' : 'color',
+        label: isPositionNode ? 'Position' : isNormalNode ? 'Normal' : 'Color',
+        dataType: isPositionNode ? 'vec3' : isNormalNode ? 'vec3' : 'color',
       }],
       defaultValues: Object.keys(defaultValues).length > 0 ? defaultValues : undefined,
     });

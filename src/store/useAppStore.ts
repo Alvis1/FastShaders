@@ -35,6 +35,10 @@ function loadRatio(key: string, fallback: number): number {
   }
 }
 
+function loadString(key: string, fallback: string): string {
+  try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+}
+
 function snapshot(nodes: AppNode[], edges: AppEdge[]): HistoryEntry {
   return {
     nodes: structuredClone(nodes),
@@ -220,11 +224,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
   contextMenu: { open: false, x: 0, y: 0, type: 'canvas' },
   splitRatio: loadRatio('fs:splitRatio', 0.6),
   rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6),
-  shaderName: (() => { try { return localStorage.getItem('fs:shaderName') || 'My Shader'; } catch { return 'My Shader'; } })(),
-  selectedHeadsetId: (() => { try { return localStorage.getItem('fs:headsetId') || 'quest3'; } catch { return 'quest3'; } })(),
+  shaderName: loadString('fs:shaderName', 'My Shader'),
+  selectedHeadsetId: loadString('fs:headsetId', 'quest3'),
   nodeVarNames: {},
-  costColorLow: (() => { try { return localStorage.getItem('fs:costColorLow') || '#8BC34A'; } catch { return '#8BC34A'; } })(),
-  costColorHigh: (() => { try { return localStorage.getItem('fs:costColorHigh') || '#FF5722'; } catch { return '#FF5722'; } })(),
+  costColorLow: loadString('fs:costColorLow', '#8BC34A'),
+  costColorHigh: loadString('fs:costColorHigh', '#FF5722'),
 
   setNodes: (nodes, source = 'graph') =>
     set({ nodes, syncSource: source, isUndoRedo: false }),

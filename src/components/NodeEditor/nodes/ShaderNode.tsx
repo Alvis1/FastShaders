@@ -1,24 +1,12 @@
-import { memo, useCallback, type ChangeEvent } from 'react';
+import { memo, useCallback, useMemo, type ChangeEvent } from 'react';
 import { Position, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale, getCostTextColor } from '@/utils/colorUtils';
+import { getCostColor, getCostScale, getCostTextColor, CATEGORY_COLORS } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import './ShaderNode.css';
-
-export const CATEGORY_COLORS: Record<string, string> = {
-  input: 'var(--cat-input)',
-  type: 'var(--cat-type)',
-  arithmetic: 'var(--cat-arithmetic)',
-  math: 'var(--cat-math)',
-  interpolation: 'var(--cat-interpolation)',
-  vector: 'var(--cat-vector)',
-  noise: 'var(--cat-noise)',
-  color: 'var(--cat-color)',
-  texture: 'var(--cat-texture)',
-};
 
 export interface PortRow {
   input: PortDefinition | null;
@@ -175,7 +163,7 @@ export const ShaderNode = memo(function ShaderNode({
   const costColor = getCostColor(data.cost, costColorLow, costColorHigh);
   const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);
-  const rows = buildRows(def);
+  const rows = useMemo(() => buildRows(def), [def]);
 
   // Track which input ports have edges connected
   const connectedInputs = new Set(

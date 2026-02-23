@@ -528,7 +528,7 @@ export function NodeEditor() {
           />
           <MiniMap
             position="top-left"
-            nodeColor={(node) => getCostColor((node.data as { cost?: number }).cost ?? 0, costColorLow, costColorHigh)}
+            nodeColor={(node) => getCostColor((node as AppNode).data.cost ?? 0, costColorLow, costColorHigh)}
             style={{ backgroundColor: 'var(--bg-panel)' }}
             maskColor="rgba(255, 255, 255, 0.7)"
           />
