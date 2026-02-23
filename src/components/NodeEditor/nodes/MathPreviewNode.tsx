@@ -7,7 +7,7 @@ import { getCostColor, getCostScale, getCostTextColor } from '@/utils/colorUtils
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
-import { CATEGORY_COLORS } from './ShaderNode';
+import { CATEGORY_COLORS } from '@/utils/colorUtils';
 import { renderMathPreview } from '@/utils/mathPreview';
 import { evaluateNodeScalar } from '@/engine/cpuEvaluator';
 import './MathPreviewNode.css';

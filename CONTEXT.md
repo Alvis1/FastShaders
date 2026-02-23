@@ -6,9 +6,9 @@ Bi-directional TSL (Three.js Shading Language) visual shader editor. Users build
 
 **Live**: https://Alvis1.github.io/FastShaders/
 
-**Stack**: React 18 + TypeScript + Vite | `@xyflow/react` v12 (node graph) | `@monaco-editor/react` (code editor) | `zustand` v5 (state) | `three` 0.183 (WebGPU + TSL) | `tsl-textures` 3.0 | `@dagrejs/dagre` (auto-layout) | `@babel/parser` + `traverse` + `types` (code parsing)
+**Stack**: React 18 + TypeScript + Vite | `@xyflow/react` v12 (node graph) | `@monaco-editor/react` (code editor) | `zustand` v5 (state) | `three` 0.183 (WebGPU + TSL) | `tsl-textures` 3.0.1 (with `patch-package` fixes) | `@dagrejs/dagre` (auto-layout) | `@babel/parser` + `traverse` + `types` (code parsing)
 
-**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles with a custom A-Frame 1.7 + Three.js WebGPU + tsl-textures with matching compatible versions bundled in aframe-171-a-0.1.min.js. The shaderloader detects Object API (multi-channel) vs Simple API (single node) by checking for any `*Node` property (`colorNode`, `positionNode`, `normalNode`, `opacityNode`, `roughnessNode`, `metalnessNode`, `emissiveNode`). It also manages **property uniforms**: reads `export const schema` from modules (or auto-detects `params.XXX`/`const NAME = uniform(VALUE)` patterns), creates TSL uniforms, passes them to the shader function, and exposes `updateProperty(name, value)` for runtime updates.
+**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles a custom A-Frame 1.7 + Three.js r173 WebGPU + tsl-textures with matching compatible versions in `aframe-171-a-0.1.min.js`. The shaderloader (`a-frame-shaderloader-0.2.js`) resolves bare import specifiers (`'three/tsl'` → `three-tsl-shim.js`, `'tsl-textures'` → `tsl-textures-shim.js`) so blob-loaded modules work. It detects Object API (multi-channel) vs Simple API (single node) by checking for any `*Node` property (`colorNode`, `positionNode`, `normalNode`, `opacityNode`, `roughnessNode`, `metalnessNode`, `emissiveNode`). It also manages **property uniforms**: reads `export const schema` from modules (or auto-detects `params.XXX`/`const NAME = uniform(VALUE)` patterns), creates TSL uniforms, passes them to the shader function, and exposes `updateProperty(name, value)` for runtime updates. The `three-tsl-shim.js` spreads `THREE.TSL` into a mutable copy and falls back to `tsl-textures` for `hsl`/`toHsl` (which may not exist in the r173 bundle's frozen `THREE.TSL`).
 
 ---
 
@@ -55,6 +55,10 @@ src/
 │   │   │   └── EdgeInfoCard.css
 │   │   ├── inputs/
 │   │   │   └── DragNumberInput.tsx    # Drag-to-adjust number input with acceleration
+│   │   ├── ContentBrowser.tsx         # Category-tabbed asset drawer with horizontal scroll
+│   │   ├── ContentBrowser.css
+│   │   ├── NodePreviewCard.tsx        # Type-dispatching preview card (6 visual variants matching editor nodes)
+│   │   ├── NodePreviewCard.css
 │   │   └── menus/
 │   │       ├── ContextMenu.tsx        # Menu dispatcher (canvas/node/shader/edge)
 │   │       ├── ContextMenu.css
@@ -70,18 +74,18 @@ src/
 │   ├── codeToGraph.ts                 # TSL code → nodes + edges (Babel AST parsing, incl. object literals)
 │   ├── graphToTSLNodes.ts             # Graph → live Three.js TSL node objects (all 5 output channels)
 │   ├── tslCodeProcessor.ts            # Shared TSL processing: import extraction, TDZ fix, body parsing
-│   ├── tslToAFrame.ts                 # TSL code → A-Frame HTML (uses tslCodeProcessor, materialSettings, properties)
+│   ├── tslToAFrame.ts                 # TSL code → A-Frame HTML (uses tslToShaderModule + shaderloader blob URL)
 │   ├── tslToShaderModule.ts           # TSL code → shaderloader-compatible ES script (materialSettings, properties)
 │   ├── tslToPreviewHTML.ts            # TSL code → Three.js WebGPU HTML (uses tslCodeProcessor)
 │   ├── layoutEngine.ts                # Dagre auto-layout (LR, nodesep=25, ranksep=60)
 │   ├── cpuEvaluator.ts                # CPU-side graph evaluator for real-time values (multi-channel)
 │   ├── topologicalSort.ts             # Kahn's algorithm for execution order
-│   └── evaluateTSLScript.ts           # tsl-textures script evaluator (new Function)
+│   └── evaluateTSLScript.ts           # isTSLTexturesCode() detection helper
 ├── hooks/
 │   └── useSyncEngine.ts               # Bidirectional sync hook (watches graph/code changes)
 ├── registry/
 │   ├── nodeRegistry.ts                # ~90+ TSL node definitions (core + auto-registered tsl-textures)
-│   ├── tslTexturesRegistry.ts         # Auto-registers ~49 tsl-textures functions as nodes from .defaults
+│   ├── tslTexturesRegistry.ts         # Auto-registers ~49 tsl-textures functions as nodes from .defaults (duck-typed param detection)
 │   ├── nodeCategories.ts              # Category metadata (id + label)
 │   └── complexity.json                # GPU cost per operation
 ├── store/
@@ -92,14 +96,20 @@ src/
 │   ├── sync.types.ts                  # SyncSource type
 │   └── tsl.types.ts                   # ParseError, GeneratedCode
 ├── utils/
-│   ├── colorUtils.ts                  # Cost color gradient, type→color mapping, category colors
+│   ├── colorUtils.ts                  # Cost color gradient, type→color mapping, CATEGORY_COLORS (centralized)
 │   ├── idGenerator.ts                 # generateId(), generateEdgeId()
 │   ├── mathPreview.ts                 # Sin/math waveform canvas renderer (scrolling curve + dot)
 │   ├── noisePreview.ts               # CPU noise (Perlin, fBm, Voronoi) + animated render
-│   └── texturePreviewRenderer.ts     # Shared off-screen WebGPU renderer for texture node previews
+│   └── texturePreviewRenderer.ts     # Shared off-screen WebGPU renderer for texture node previews (skips position/normal textures)
 └── styles/
     ├── tokens.css                     # CSS custom properties (colors, spacing, shadows, fonts)
     └── reset.css
+patches/
+└── tsl-textures+3.0.1.patch          # patch-package: int→float Fn.setLayout + protozoa scale immutability
+public/
+└── js/
+    ├── three-tsl-shim.js             # Re-exports THREE.TSL as ESM; falls back to tsl-textures for hsl/toHsl
+    └── a-frame-shaderloader-0.2.js   # A-Frame shader component (TDZ fix + auto-import)
 ```
 
 ---
@@ -121,7 +131,7 @@ const shader = Fn(() => {
 export default shader;
 ```
 
-**Script Mode** — User pastes tsl-textures code with `model.material` assignments. Detected by `isTSLTexturesCode()` (matches `model.material.XNode =` pattern only). Evaluated via `evaluateTSLScript()` using `new Function()` with THREE + tsl-textures in scope. Bypasses graph sync.
+**Script Mode** — User pastes tsl-textures code with `model.material` assignments. Detected by `isTSLTexturesCode()` (matches `model.material.XNode =` pattern only). Bypasses graph sync.
 
 ```typescript
 // Script mode input format:
@@ -134,21 +144,21 @@ model.material.colorNode = polkaDots({ count: 4, size: 0.34 });
 The code editor has three tabs:
 
 - **TSL** — Editable TSL code with Save button and error display (default)
-- **A-Frame** — Read-only self-contained HTML using the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle (`tslToAFrame.ts`):
+- **A-Frame** — Read-only self-contained HTML using the shaderloader (`tslToAFrame.ts`):
   - Loads `aframe-171-a-0.1.min.js` and `a-frame-shaderloader-0.2.js` from jsDelivr CDN
-  - IIFE bundle includes A-Frame 1.7 + Three.js WebGPU + tsl-textures with matching compatible versions
-  - Uses a regular `<script>` that destructures TSL functions from `THREE.TSL` and tsl-textures from `window.tslTextures`
-  - TDZ fixes applied: self-ref removal, variable rename for shadowing imports, tsl-textures aliases
-  - Receives `materialSettings` from output node (displacement mode, transparent, side)
+  - Generates the shader module via `tslToShaderModule()` (same code as Script tab) and embeds it as a blob URL
+  - Applies the shader via `<a-entity shader="src: blobUrl">` — the shaderloader handles TDZ fixes, import resolution, and property uniforms at runtime
+  - Copy-paste ready: just save as `.html` and open
   - Download as `.html`
 - **Script** — Read-only shaderloader-compatible ES module (`tslToShaderModule.ts`):
+  - Header comments with HTML setup, property attribute examples, and runtime update instructions
   - Converts `Fn(() => { ... })` wrapper to `export default function(params) { ... }` (when properties exist) or `export default function() { ... }` (no properties)
-  - Standard bare imports (`'three/tsl'`, `'tsl-textures'`)
+  - Standard bare imports (`'three/tsl'`, `'tsl-textures'`) — also usable directly with Three.js
   - Multi-channel returns converted to shaderloader Object API (`color` → `colorNode`, etc.)
   - Position channel wrapped with displacement logic: `positionLocal.add(normalLocal.mul(val))` (normal mode) or `positionLocal.add(val)` (offset mode from `materialSettings`)
-  - **Property support**: Replaces `const NAME = uniform(VALUE)` with `const NAME = params.NAME`; removes `uniform` from imports when all uniform calls are replaced by params references
+  - **Property support**: Emits `export const schema` with property defaults; replaces `const NAME = uniform(VALUE)` with `const NAME = params.NAME`; removes `uniform` from imports when all uniform calls are replaced by params references
   - The shaderloader handles TDZ fixes and missing import injection at runtime
-  - Download as `.js` for use with `<a-entity shader="src: myshader.js">`
+  - Download as `.js` for use with `<a-entity shader="src: myshader.js; propName: value">`
 
 Both A-Frame and Script tabs read `materialSettings` and `properties` (from `property_float` nodes) in `CodeEditor.tsx` and thread them to their respective generators.
 
@@ -202,7 +212,7 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 
 ### Shared TSL Code Processor (`tslCodeProcessor.ts`)
 
-Common processing logic used by both `tslToAFrame.ts` and `tslToPreviewHTML.ts`:
+Common processing logic used by `tslToPreviewHTML.ts` (and indirectly by the other pipelines):
 
 - **`collectImports(code, excludeFn?)`** — extracts `three/tsl` and `tsl-textures` import names
 - **`extractFnBody(code, tslNames)`** — extracts the body inside `Fn(() => { ... })`
@@ -216,30 +226,27 @@ Common processing logic used by both `tslToAFrame.ts` and `tslToPreviewHTML.ts`:
 
 ### A-Frame HTML Export (`tslToAFrame.ts`)
 
-Generates a self-contained `.html` using the a-frame-shaderloader IIFE bundle:
+Generates a self-contained copy-paste `.html` using the shaderloader:
 
-1. Uses `tslCodeProcessor` to extract imports, body, fix TDZ, and parse channels
-2. Accepts `materialSettings` and `properties` (PropertyInfo[]) via `AFrameOptions` — applies displacement wrapping, transparent, side
-3. **Displacement**: When position channel is used, wraps as `positionLocal.add(normalLocal.mul(ref))` (normal mode) or `positionLocal.add(ref)` (offset mode), injects `positionLocal`/`normalLocal` imports
-4. **Property support**: When properties exist, emits component `schema` with property definitions, creates `this._uniforms.NAME = uniform(this.data.NAME)` in init, replaces property uniform declarations with `this._uniforms.NAME` refs, adds `update()` method for reactive A-Frame attribute changes
-5. Generates HTML with:
-   - `<script src="...aframe-171-a-0.1.min.js">` from jsDelivr CDN (IIFE bundle)
-   - `<script src="...a-frame-shaderloader-0.2.js">` from jsDelivr CDN (shaderloader component)
-   - Inline `<script>` registering an A-Frame component
-   - TSL functions destructured from `THREE.TSL`, tsl-textures from `window.tslTextures`
-   - Material creation + channel assignment + mesh
+1. Calls `tslToShaderModule()` to generate the shader module code (same as Script tab)
+2. Strips header comments and embeds the module as an inline blob URL
+3. Loads both CDN scripts: `aframe-171-a-0.1.min.js` (IIFE bundle) + `a-frame-shaderloader-0.2.js`
+4. Applies shader via `<a-entity shader="src: blobUrl">` — the shaderloader handles all processing (TDZ fixes, import resolution, property uniforms) at runtime
+5. A-Frame scene with geometry, lights, and optional rotation animation
+6. Properties and material settings are handled by the shaderloader from the embedded module's `export const schema` and Object API return
 
 ### Shader Script Export (`tslToShaderModule.ts`)
 
-Generates a `.js` ES module compatible with the a-frame-shaderloader component:
+Generates a `.js` ES module compatible with the a-frame-shaderloader component. Also reused by `tslToAFrame.ts` for the A-Frame HTML export.
 
-1. Strips `Fn` from three/tsl imports
-2. Converts `const shader = Fn(() => {` to `export default function(params) {` (when properties exist) or `export default function() {` (no properties)
-3. Converts multi-channel return keys to shaderloader Object API names (`color` → `colorNode`, `position` → `positionNode`, etc.)
-4. Accepts optional `materialSettings` and `properties` (PropertyInfo[]) — wraps position channel with displacement logic (same normal/offset modes as tslToAFrame), injects `positionLocal`/`normalLocal` into the `three/tsl` import line when needed
-5. **Property support**: Replaces `const NAME = uniform(VALUE)` with `const NAME = params.NAME`; removes `uniform` from imports when all uniform calls are replaced by params references
-6. Removes `export default shader;`
-7. The shaderloader handles TDZ fixes, missing import injection, and specifier resolution at runtime
+1. Header comments with HTML setup instructions, property attribute examples, and runtime update docs
+2. Strips `Fn` from three/tsl imports; bare imports (`'three/tsl'`, `'tsl-textures'`) — also usable directly with Three.js
+3. Converts `const shader = Fn(() => {` to `export default function(params) {` (when properties exist) or `export default function() {` (no properties)
+4. Converts multi-channel return keys to shaderloader Object API names (`color` → `colorNode`, `position` → `positionNode`, etc.)
+5. Accepts optional `materialSettings` and `properties` (PropertyInfo[]) — wraps position channel with displacement logic (same normal/offset modes), injects `positionLocal`/`normalLocal` into the `three/tsl` import line when needed
+6. **Property support**: Emits `export const schema = { name: { type: 'number', default: value } }` so the shaderloader reads proper defaults; replaces `const NAME = uniform(VALUE)` with `const NAME = params.NAME`; removes `uniform` from imports when all uniform calls are replaced by params references
+7. Removes `export default shader;`
+8. The shaderloader handles TDZ fixes, missing import injection, and specifier resolution at runtime
 
 ### Preview HTML (`tslToPreviewHTML.ts`)
 
@@ -275,7 +282,7 @@ Generates HTML for the in-app preview iframe:
 
 All ~49 tsl-textures functions are auto-registered as nodes by introspecting `.defaults` at runtime:
 
-- **Parameter classification** (`classifyParam`): Each default param is classified as `number`, `color` (THREE.Color), `vec3` (THREE.Vector3), `vec2` (THREE.Vector2), `tslRef` (.isNode), or `meta` ($-prefixed)
+- **Parameter classification** (`classifyParam`): Each default param is classified as `number`, `color` (duck-typed `.isColor`), `vec3` (`.isVector3`), `vec2` (`.isVector2`), `tslRef` (`.isNode` or known ref like position/time/matcap), `boolean` (→ number 0/1), or `meta` ($-prefixed)
 - **NodeDefinition generation** (`buildTSLTextureDefinitions`):
   - Numbers → connectable input ports + editable default values
   - Colors → hex string in defaultValues (e.g., `#ff0000`)
@@ -283,9 +290,10 @@ All ~49 tsl-textures functions are auto-registered as nodes by introspecting `.d
   - Vector2 → flattened keys: `key_x`, `key_y`
   - TSL refs (position, time) → input ports only (library uses own defaults if unconnected)
 - **Node type prefix**: `tslTex_` to avoid collisions (e.g., `tslTex_bricks`)
-- **Code generation**: Object parameter syntax — `bricks({ scale: 2, color: new THREE.Color(0xFF4000) })`
+- **`$normalNode` detection**: Textures with `$normalNode` in defaults get output type `vec3` (label "Normal") instead of `color`
+- **Code generation**: Object parameter syntax using TSL-native constructors — `bricks({ scale: 2, color: color(0xFF4000) })`; imports `color`/`vec3`/`vec2` from `three/tsl` as needed (no `import * as THREE`)
 - **Live compilation**: Dynamic factory builds params object, calls `tslTextures[funcName](params)`
-- **Code parsing**: `processObjectCall()` parses ObjectExpression properties; `extractConstructor()` handles `new THREE.Color/Vector3/Vector2` AST patterns
+- **Code parsing**: `processObjectCall()` parses ObjectExpression properties; `extractConstructor()` handles `new THREE.Color/Vector3/Vector2` and TSL `color()/vec3()/vec2()` AST patterns
 
 ### Split Node
 
@@ -307,8 +315,8 @@ Configurable uniform properties that become component attributes in A-Frame expo
 - **Code generation** (`graphToCode.ts`): Uses the sanitized property name as the variable name (e.g., `const brightness = uniform(1.5)`)
 - **Code parsing** (`codeToGraph.ts`): Sets `values.name = varName` from the code's variable name
 - **TSL function map**: `uniform` → `property_float` via `TSL_FUNCTION_TO_DEF` (so code→graph correctly identifies `uniform()` calls as property nodes)
-- **Script export**: Replaces `uniform(VALUE)` with `params.NAME` references; `function(params)` signature
-- **A-Frame export**: Emits component schema + `this._uniforms.NAME` + `update()` method
+- **Script export**: Emits `export const schema` with defaults; replaces `uniform(VALUE)` with `params.NAME` references; `function(params)` signature
+- **A-Frame export**: Embeds the script module as blob URL; shaderloader reads schema and manages property uniforms automatically
 - **Migration**: `loadGraph()` in useAppStore migrates old `uniform_float` → `property_float`
 
 ### React Flow Node Types
@@ -319,6 +327,26 @@ Configurable uniform properties that become component attributes in A-Frame expo
 - **`mathPreview`** — Math function nodes with scrolling waveform visualization (MathPreviewNode.tsx)
 - **`texturePreview`** — Texture nodes with GPU-rendered 96x96 canvas preview (TexturePreviewNode.tsx)
 - **`output`** — Output sink with two sections: Pixel Shader (color, roughness, emissive, normal, opacity) and Vertex Shader (displacement), plus `materialSettings` for export config (OutputNode.tsx)
+
+### Asset Browser (ContentBrowser + NodePreviewCard)
+
+The asset browser is a horizontal scrollable drawer at the bottom of the node editor, showing all available nodes grouped by category tabs.
+
+**NodePreviewCard** dispatches to 6 visual variants based on `getFlowNodeType(def)`, matching the editor node appearance:
+
+| Flow Type | Renderer | Visual |
+|-----------|----------|--------|
+| `'shader'` | ShaderCardContent | Header + port rows + fake handle dots (generic) |
+| `'texturePreview'` | TextureCardContent | Header + 96x96 GPU canvas + output dot |
+| `'mathPreview'` | MathCardContent | Header + 72x72 waveform canvas + input/output dots |
+| `'preview'` (noise) | NoiseCardContent | Header + 96x96 pixelated CPU noise canvas + output dot |
+| `'clock'` | ClockCardContent | Header + 56x56 circular clock face + output dot |
+| `'color'` | ColorCardContent | 28x28 color circle + contrast-aware label + output dot |
+
+- **Texture GPU previews**: Lazy-rendered via `IntersectionObserver` (rootMargin `0px 300px`) using the shared `texturePreviewRenderer.ts`. Cache key `card_${def.type}` avoids collision with editor node IDs. Static only (no animation). Disposed on unmount.
+- **Math/noise/clock previews**: CPU-rendered once on mount using existing `renderMathPreview()`, `renderNoisePreview()`, and ClockNode drawing code (frozen at mount time).
+- **All sub-renderers** are proper React components (not called as functions) so hooks work correctly.
+- **Drag-to-create**: All cards are draggable; dropping on the canvas creates the corresponding node.
 
 ### ShaderNode Vector Display
 
@@ -357,8 +385,9 @@ Math function nodes (`sin`, `cos`) render a 72x72 canvas showing a scrolling wav
 
 Texture category nodes (~49 tsl-textures) render a 96x96 canvas showing their GPU-rendered output:
 
-- **GPU rendering**: Uses a shared off-screen `WebGPURenderer` singleton (`texturePreviewRenderer.ts`)
+- **GPU rendering**: Uses a shared off-screen `WebGPURenderer` singleton (`texturePreviewRenderer.ts`), sync `render()` (not deprecated `renderAsync`)
 - **Shared renderer**: One hidden canvas + renderer + `OrthographicCamera` + `PlaneGeometry(2,2)` with per-node `MeshBasicNodeMaterial` cache (avoids shader recompilation during animation)
+- **Skipped textures**: `$positionNode` and `$normalNode` textures return null from `buildColorNode()` (require geometry/render context unavailable in off-screen preview)
 - **Parameter building**: Calls tsl-textures functions directly with current node values using `getParamClassifications()` — numbers, Colors, Vector3/Vector2 are reconstructed from stored values
 - **Debounced updates**: 500ms debounce on parameter changes (shader recompile on each change)
 - **Time animation**: When a Time node is connected upstream, the TSL `time` node is passed as parameter; a shared rAF loop re-renders all animated texture nodes each frame (no recompile — GPU auto-updates)
@@ -547,6 +576,17 @@ All settings stored in `OutputNodeData.materialSettings` and threaded through to
 - React Flow `onPaneContextMenu` expects `(event: MouseEvent | React.MouseEvent)`, not just `React.MouseEvent`
 - React Flow `onNodeDragStop` expects `React.MouseEvent` (not native `MouseEvent`) for the event parameter
 
+### tsl-textures Patches (patch-package)
+
+Applied via `postinstall` script using `patch-package`:
+
+- **int→float in `Fn.setLayout`**: WGSL doesn't auto-coerce between `i32` and `f32`; 11 params across 9 functions had `type: 'int'` which caused compilation errors. Patched in all 4 dist bundles (ESM, ESM min, CJS, CJS min)
+- **Protozoa `scale` immutability**: WGSL function parameters are immutable; `scale.mulAssign(0.9)` fails. Patched to create `scaleVar = scale.toVar()` mutable copy
+
+### VALID_SWIZZLE
+
+Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`. Contains `{'x', 'y', 'z', 'w'}` for split node swizzle validation.
+
 ### Three.js TSL Imports Used
 
 **Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_fractal_noise_float, mx_worley_noise_float, hsl, toHsl, remap, select + all tsl-textures functions (via dynamic import)
@@ -559,8 +599,10 @@ All settings stored in `OutputNodeData.materialSettings` and threaded through to
 - `fs:splitRatio` — left/right panel ratio
 - `fs:rightSplitRatio` — code/preview ratio
 - `fs:previewGeometry` — selected preview geometry type
-- `fs:shaderName` — shader name
-- `fs:headsetId` — selected VR headset
+- `fs:shaderName` — shader name (via `loadString()` helper)
+- `fs:headsetId` — selected VR headset (via `loadString()` helper)
+- `fs:costColorLow` — cost gradient low color
+- `fs:costColorHigh` — cost gradient high color
 
 ### History System
 

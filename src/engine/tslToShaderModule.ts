@@ -46,10 +46,24 @@ export function tslToShaderModule(
   const displacementMode = materialSettings?.displacementMode ?? 'normal';
 
   // Usage header
-  outLines.push('// Load with a-frame-shaderloader:');
-  outLines.push(`// <script src="${CDN_BASE}/aframe-171-a-0.1.min.js"><${''}/script>`);
-  outLines.push(`// <script src="${CDN_BASE}/a-frame-shaderloader-0.2.js"><${''}/script>`);
-  outLines.push('// <a-entity shader="src: shader.js"></a-entity>');
+  outLines.push('// TSL Shader Module — for use with a-frame-shaderloader');
+  outLines.push('//');
+  outLines.push('// HTML setup:');
+  outLines.push(`//   <script src="${CDN_BASE}/aframe-171-a-0.1.min.js"><${''}/script>`);
+  outLines.push(`//   <script src="${CDN_BASE}/a-frame-shaderloader-0.2.js"><${''}/script>`);
+  if (hasProps) {
+    const propExample = props.map(p => `${p.name}: ${p.defaultValue}`).join('; ');
+    outLines.push(`//   <a-entity shader="src: shader.js; ${propExample}"></a-entity>`);
+    outLines.push('//');
+    outLines.push('// Properties can be updated at runtime:');
+    for (const p of props) {
+      outLines.push(`//   el.setAttribute('shader', { ${p.name}: value });`);
+    }
+  } else {
+    outLines.push('//   <a-entity shader="src: shader.js"></a-entity>');
+  }
+  outLines.push('//');
+  outLines.push('// Also usable directly with Three.js — import from \'three/tsl\'');
   outLines.push('');
 
   for (const line of lines) {
@@ -80,6 +94,15 @@ export function tslToShaderModule(
     if (!insideFn && /^\s*const\s+\w+\s*=\s*Fn\(\(\)\s*=>\s*\{/.test(trimmed)) {
       insideFn = true;
       fnBraceDepth = 1;
+      // Emit property schema so the shaderloader knows defaults
+      if (hasProps) {
+        outLines.push('export const schema = {');
+        for (const prop of props) {
+          outLines.push(`  ${prop.name}: { type: 'number', default: ${prop.defaultValue} },`);
+        }
+        outLines.push('};');
+        outLines.push('');
+      }
       outLines.push(hasProps ? 'export default function(params) {' : 'export default function() {');
       continue;
     }

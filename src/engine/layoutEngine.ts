@@ -16,7 +16,7 @@ export function autoLayout(
   g.setGraph({ rankdir: direction, nodesep: 25, ranksep: 60 });
 
   for (const node of nodes) {
-    const scale = getCostScale((node.data as { cost?: number }).cost ?? 0);
+    const scale = getCostScale(node.data.cost ?? 0);
     g.setNode(node.id, { width: NODE_WIDTH * scale, height: NODE_HEIGHT * scale });
   }
 

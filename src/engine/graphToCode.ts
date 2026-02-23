@@ -1,8 +1,12 @@
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode } from '@/types';
 import { getNodeValues } from '@/types';
+import { Color, Vector2, Vector3 } from 'three';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getParamClassifications } from '@/registry/tslTexturesRegistry';
 import { topologicalSort } from './topologicalSort';
+
+/** Valid swizzle component handles for split node output. */
+export const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
 
 export function graphToCode(
   nodes: AppNode[],
@@ -70,12 +74,19 @@ export function graphToCode(
   // Always need Fn
   addImport('three/tsl', 'Fn');
 
-  let needsTHREEImport = false;
   for (const node of sorted) {
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || !def.tslImportModule) continue;
     addImport(def.tslImportModule, def.tslFunction);
-    if (def.tslImportModule === 'tsl-textures') needsTHREEImport = true;
+    // For tsl-textures nodes, scan which TSL constructors are needed for their params
+    if (def.tslImportModule === 'tsl-textures') {
+      const classifications = getParamClassifications(def.tslFunction);
+      for (const param of classifications) {
+        if (param.kind === 'color') addImport('three/tsl', 'color');
+        else if (param.kind === 'vec3') addImport('three/tsl', 'vec3');
+        else if (param.kind === 'vec2') addImport('three/tsl', 'vec2');
+      }
+    }
   }
 
   // Build body lines
@@ -183,9 +194,6 @@ export function graphToCode(
 
   // Build import lines (after all imports are collected)
   const importLines: string[] = [];
-  if (needsTHREEImport) {
-    importLines.push(`import * as THREE from 'three';`);
-  }
   for (const [module, names] of importsByModule) {
     const sortedNames = Array.from(names).sort();
     importLines.push(`import { ${sortedNames.join(', ')} } from '${module}';`);
@@ -218,7 +226,6 @@ function resolveEdgeRef(
   if (!sourceNode) return varNames.get(edge.source) ?? null;
 
   // If source is a split node, inline as inputVar.component
-  const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
   if (sourceNode.data.registryType === 'split' && edge.sourceHandle && edge.sourceHandle !== 'out' && VALID_SWIZZLE.has(edge.sourceHandle)) {
     const splitInputEdge = edges.find(e => e.target === sourceNode.id && e.targetHandle === 'v');
     if (splitInputEdge && varNames.has(splitInputEdge.source)) {
@@ -306,17 +313,21 @@ function buildTSLTextureCallProps(
         parts.push(`${param.key}: ${val}`);
       }
     } else if (param.kind === 'color') {
-      const hex = String(nodeValues[param.key] ?? '#000000');
-      parts.push(`${param.key}: new THREE.Color(0x${hex.slice(1).toUpperCase()})`);
+      const col = param.defaultValue as Color;
+      const defaultHex = '#' + col.getHexString();
+      const hex = String(nodeValues[param.key] ?? defaultHex);
+      parts.push(`${param.key}: color(0x${hex.slice(1).toUpperCase()})`);
     } else if (param.kind === 'vec3') {
-      const x = Number(nodeValues[`${param.key}_x`] ?? 0);
-      const y = Number(nodeValues[`${param.key}_y`] ?? 0);
-      const z = Number(nodeValues[`${param.key}_z`] ?? 0);
-      parts.push(`${param.key}: new THREE.Vector3(${x}, ${y}, ${z})`);
+      const dv = param.defaultValue as Vector3;
+      const x = Number(nodeValues[`${param.key}_x`] ?? dv.x ?? 0);
+      const y = Number(nodeValues[`${param.key}_y`] ?? dv.y ?? 0);
+      const z = Number(nodeValues[`${param.key}_z`] ?? dv.z ?? 0);
+      parts.push(`${param.key}: vec3(${x}, ${y}, ${z})`);
     } else if (param.kind === 'vec2') {
-      const x = Number(nodeValues[`${param.key}_x`] ?? 0);
-      const y = Number(nodeValues[`${param.key}_y`] ?? 0);
-      parts.push(`${param.key}: new THREE.Vector2(${x}, ${y})`);
+      const dv = param.defaultValue as Vector2;
+      const x = Number(nodeValues[`${param.key}_x`] ?? dv.x ?? 0);
+      const y = Number(nodeValues[`${param.key}_y`] ?? dv.y ?? 0);
+      parts.push(`${param.key}: vec2(${x}, ${y})`);
     }
   }
 

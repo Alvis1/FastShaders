@@ -5,7 +5,7 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale, getCostTextColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
-import { CATEGORY_COLORS } from './ShaderNode';
+import { CATEGORY_COLORS } from '@/utils/colorUtils';
 import './ClockNode.css';
 
 const CLOCK_SIZE = 56;

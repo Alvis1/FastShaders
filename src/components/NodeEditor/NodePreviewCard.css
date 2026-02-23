@@ -61,6 +61,7 @@
   min-width: 0;
 }
 
+/* Fake handle dots (inline in rows) */
 .node-preview-card__handle {
   width: 10px;
   height: 10px;
@@ -78,6 +79,19 @@
   margin-right: -10px;
 }
 
+/* Absolutely positioned fake handles (for canvas-based variants) */
+.node-preview-card__handle--right-abs {
+  position: absolute;
+  right: -5px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.node-preview-card__handle--left-abs {
+  position: absolute;
+  left: -5px;
+}
+
 .node-preview-card__value {
   font-size: 10px;
   font-family: var(--font-mono);
@@ -91,4 +105,83 @@
   border-radius: 3px;
   border: 1px solid rgba(0, 0, 0, 0.15);
   flex-shrink: 0;
+}
+
+/* --- Canvas-based preview variants --- */
+
+.node-preview-card__canvas-wrap {
+  padding: 3px 5px;
+  display: flex;
+  justify-content: center;
+}
+
+/* Texture canvas (96x96) */
+.node-preview-card__canvas--texture {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* Math waveform canvas (72x72) */
+.node-preview-card__canvas--math {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Noise pattern canvas (96x96, pixelated) */
+.node-preview-card__canvas--noise {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  image-rendering: pixelated;
+}
+
+/* Clock face canvas (56x56, circular) */
+.node-preview-card__canvas--clock {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+}
+
+/* GPU placeholder (before WebGPU ready) */
+.node-preview-card__placeholder {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: rgba(0, 0, 0, 0.4);
+}
+
+/* --- Color circle variant --- */
+
+.node-preview-card__color-node {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-node);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.node-preview-card__color-label {
+  font-size: 5px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  user-select: none;
 }

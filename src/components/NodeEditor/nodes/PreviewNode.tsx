@@ -7,7 +7,7 @@ import { getCostColor, getCostScale, getCostTextColor } from '@/utils/colorUtils
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { evaluateNodeScalar } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
-import { CATEGORY_COLORS } from './ShaderNode';
+import { CATEGORY_COLORS } from '@/utils/colorUtils';
 import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
 import './PreviewNode.css';
 

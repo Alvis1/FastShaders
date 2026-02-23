@@ -6,7 +6,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale, getCostTextColor } from '@/utils/colorUtils';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { TypedHandle } from '../handles/TypedHandle';
-import { CATEGORY_COLORS } from './ShaderNode';
+import { CATEGORY_COLORS } from '@/utils/colorUtils';
 import {
   ensureInit,
   renderPreview,

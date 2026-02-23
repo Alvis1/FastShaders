@@ -52,13 +52,11 @@ import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getParamClassifications } from '@/registry/tslTexturesRegistry';
 import { hexToRgb01 } from '@/utils/colorUtils';
+import { VALID_SWIZZLE } from './graphToCode';
 import { topologicalSort } from './topologicalSort';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TSLNode = any;
-
-/** Valid swizzle component handles (consistent with graphToCode.ts). */
-const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
 
 /**
  * Map of registry type -> function that creates a TSL node given resolved inputs.

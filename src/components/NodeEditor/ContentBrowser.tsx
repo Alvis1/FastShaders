@@ -1,22 +1,10 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { getAllDefinitions } from '@/registry/nodeRegistry';
 import { NodePreviewCard } from './NodePreviewCard';
 import type { NodeCategory, NodeDefinition } from '@/types';
+import { CATEGORY_COLORS } from '@/utils/colorUtils';
 import './ContentBrowser.css';
-
-const CATEGORY_COLORS: Record<NodeCategory, string> = {
-  input: 'var(--cat-input)',
-  type: 'var(--cat-type)',
-  arithmetic: 'var(--cat-arithmetic)',
-  math: 'var(--cat-math)',
-  interpolation: 'var(--cat-interpolation)',
-  vector: 'var(--cat-vector)',
-  noise: 'var(--cat-noise)',
-  color: 'var(--cat-color)',
-  texture: 'var(--cat-texture)',
-  output: 'var(--cat-output)',
-};
 
 const displayCategories = CATEGORIES.filter((c) => c.id !== 'output');
 
@@ -36,12 +24,18 @@ export function ContentBrowser() {
     event.dataTransfer.effectAllowed = 'move';
   }, []);
 
-  // Convert vertical scroll to horizontal scroll
-  const onWheel = useCallback((event: React.WheelEvent) => {
-    if (scrollRef.current && event.deltaY !== 0) {
-      event.preventDefault();
-      scrollRef.current.scrollLeft += event.deltaY;
-    }
+  // Convert vertical scroll to horizontal scroll (native listener for non-passive)
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY !== 0) {
+        event.preventDefault();
+        el.scrollLeft += event.deltaY;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
   return (
@@ -73,7 +67,7 @@ export function ContentBrowser() {
           </button>
         ))}
       </div>
-      <div className="content-browser__items" ref={scrollRef} onWheel={onWheel}>
+      <div className="content-browser__items" ref={scrollRef}>
         {filteredDefs.map((def) => (
           <NodePreviewCard key={def.type} def={def} onDragStart={onDragStart} />
         ))}
