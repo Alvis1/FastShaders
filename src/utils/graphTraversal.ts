@@ -6,13 +6,16 @@ export function hasTimeUpstream(
   nodes: AppNode[],
   edges: { source: string; target: string }[],
 ): boolean {
+  const nodeMap = new Map<string, AppNode>();
+  for (const n of nodes) nodeMap.set(n.id, n);
+
   const visited = new Set<string>();
   const queue = [nodeId];
   while (queue.length > 0) {
     const current = queue.pop()!;
     if (visited.has(current)) continue;
     visited.add(current);
-    const node = nodes.find((n) => n.id === current);
+    const node = nodeMap.get(current);
     if (node && node.data.registryType === 'time') return true;
     for (const edge of edges) {
       if (edge.target === current && !visited.has(edge.source)) {

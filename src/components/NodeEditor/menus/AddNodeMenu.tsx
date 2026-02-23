@@ -49,7 +49,7 @@ export function AddNodeMenu() {
       y: contextMenu.y,
     });
     const costs = complexityData.costs as Record<string, number>;
-    const cost = costs[def.type] ?? 0;
+    const cost = costs[def.type] ?? (def.category === 'texture' ? 50 : 0);
 
     let newNodeId: string;
 
