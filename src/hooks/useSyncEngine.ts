@@ -107,6 +107,26 @@ export function useSyncEngine() {
             oldByType.get(old.data.registryType)!.push(old);
           }
 
+          // Merge a matched old node with a new node: preserve position + UI-only data
+          const mergeMatch = (newNode: AppNode, match: AppNode): AppNode => {
+            const merged = {
+              ...newNode,
+              id: match.id,
+              position: { ...match.position },
+            };
+            // Preserve exposedPorts from old node (not reconstructed by codeToGraph)
+            const oldExposed = (match.data as Record<string, unknown>).exposedPorts;
+            if (oldExposed) {
+              (merged.data as Record<string, unknown>).exposedPorts = oldExposed;
+            }
+            // Preserve materialSettings on output nodes
+            const oldMatSettings = (match.data as Record<string, unknown>).materialSettings;
+            if (oldMatSettings) {
+              (merged.data as Record<string, unknown>).materialSettings = oldMatSettings;
+            }
+            return merged;
+          };
+
           // Pass 1: exact match by registryType + label
           for (const newNode of result.nodes) {
             const exactKey = `${newNode.data.registryType}\0${newNode.data.label}`;
@@ -115,11 +135,7 @@ export function useSyncEngine() {
             if (match) {
               usedOldIds.add(match.id);
               idMap.set(newNode.id, match.id);
-              positioned.push({
-                ...newNode,
-                id: match.id,
-                position: { ...match.position },
-              });
+              positioned.push(mergeMatch(newNode, match));
             }
           }
 
@@ -132,11 +148,7 @@ export function useSyncEngine() {
             if (match) {
               usedOldIds.add(match.id);
               idMap.set(newNode.id, match.id);
-              positioned.push({
-                ...newNode,
-                id: match.id,
-                position: { ...match.position },
-              });
+              positioned.push(mergeMatch(newNode, match));
             } else {
               unpositioned.push(newNode);
             }
@@ -160,6 +172,35 @@ export function useSyncEngine() {
             finalNodes = autoLayout([...positioned, ...unpositioned], remappedEdges, 'LR');
           } else {
             finalNodes = positioned;
+          }
+
+          // Auto-expose ports that have incoming edges (so handles render)
+          for (const node of finalNodes) {
+            const def = NODE_REGISTRY.get(node.data.registryType);
+            if (!def) continue;
+            // Only applies to nodes that use exposedPorts (texture, noise, output)
+            const usesExposedPorts = def.category === 'texture' || def.category === 'noise' || def.type === 'output';
+            if (!usesExposedPorts) continue;
+
+            const connectedPorts = new Set<string>();
+            for (const e of remappedEdges) {
+              if (e.target === node.id && e.targetHandle) {
+                connectedPorts.add(e.targetHandle);
+              }
+            }
+            if (connectedPorts.size === 0) continue;
+
+            const current = new Set<string>((node.data as Record<string, unknown>).exposedPorts as string[] ?? []);
+            let changed = false;
+            for (const port of connectedPorts) {
+              if (!current.has(port)) {
+                current.add(port);
+                changed = true;
+              }
+            }
+            if (changed) {
+              (node.data as Record<string, unknown>).exposedPorts = Array.from(current);
+            }
           }
 
           setNodes(finalNodes, 'code');

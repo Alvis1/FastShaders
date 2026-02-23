@@ -75,7 +75,7 @@ export function codeToGraph(
         }
       },
 
-      // Handle "return x;" to create the Output node and wire the color input
+      // Handle "return x;" or "return { color: x, position: y };" to create the Output node
       ReturnStatement(path) {
         if (hasOutput) return;
         const arg = path.node.argument;
@@ -88,21 +88,43 @@ export function codeToGraph(
         rawNodes.push(createNode(outputId, outputDef, 'Output'));
         hasOutput = true;
 
-        // Wire the returned value → output.color
-        if (t.isIdentifier(arg)) {
-          const sourceId = varToNodeId.get(arg.name);
-          if (sourceId) {
-            rawEdges.push({
-              id: generateEdgeId(sourceId, 'out', outputId, 'color'),
-              source: sourceId,
-              sourceHandle: 'out',
-              target: outputId,
-              targetHandle: 'color',
-              type: 'typed' as const,
-              animated: true,
-              data: { dataType: 'any' as const },
-            });
+        // Multi-channel return: return { color: x, position: y, ... }
+        if (t.isObjectExpression(arg)) {
+          for (const prop of arg.properties) {
+            if (!t.isObjectProperty(prop) || !t.isIdentifier(prop.key)) continue;
+            const channel = prop.key.name;
+            const sourceId = t.isIdentifier(prop.value)
+              ? varToNodeId.get(prop.value.name)
+              : undefined;
+            if (sourceId) {
+              rawEdges.push({
+                id: generateEdgeId(sourceId, 'out', outputId, channel),
+                source: sourceId,
+                sourceHandle: 'out',
+                target: outputId,
+                targetHandle: channel,
+                type: 'typed' as const,
+                animated: true,
+                data: { dataType: 'any' as const },
+              });
+            }
           }
+          return;
+        }
+
+        // Single-value return: wire to output.color
+        const sourceId = resolveReturnSource(arg, rawNodes, rawEdges, varToNodeId);
+        if (sourceId) {
+          rawEdges.push({
+            id: generateEdgeId(sourceId, 'out', outputId, 'color'),
+            source: sourceId,
+            sourceHandle: 'out',
+            target: outputId,
+            targetHandle: 'color',
+            type: 'typed' as const,
+            animated: true,
+            data: { dataType: 'any' as const },
+          });
         }
       },
     });
@@ -120,6 +142,26 @@ export function codeToGraph(
   }
 
   return { nodes: rawNodes, edges: rawEdges, errors: [] };
+}
+
+/** Resolve a return statement argument to a source node ID. Handles identifiers, call expressions, and member expressions. */
+function resolveReturnSource(
+  arg: t.Node,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  varToNodeId: Map<string, string>
+): string | undefined {
+  // return someVar;
+  if (t.isIdentifier(arg)) {
+    return varToNodeId.get(arg.name);
+  }
+  // return someFunc(a, b); — process as an inline call and return its node ID
+  if (t.isCallExpression(arg)) {
+    const tempVar = '_return';
+    processCall(arg, tempVar, nodes, edges, varToNodeId);
+    return varToNodeId.get(tempVar);
+  }
+  return undefined;
 }
 
 function processCall(
@@ -148,6 +190,12 @@ function processCall(
 
   if (!funcName) return;
 
+  // Detect UV-tiling pattern: mul(uv(), vec2(x, y)) → create UV node with tiling values
+  if (funcName === 'mul' && callExpr.arguments.length === 2) {
+    const uvNode = tryParseUVTiling(callExpr, varName, nodes, edges, varToNodeId);
+    if (uvNode) return;
+  }
+
   // Look up definition
   let def = TSL_FUNCTION_TO_DEF.get(funcName);
   // Also try the registry type directly (e.g. for 'noise' mapping to 'mx_noise_float')
@@ -165,6 +213,14 @@ function processCall(
     t.isObjectExpression(callExpr.arguments[0])
   ) {
     processObjectCall(callExpr.arguments[0], nodeId, def, nodes, edges, varToNodeId);
+    return;
+  }
+
+  // Noise nodes: special positional arg mapping
+  // graphToCode emits: mx_fractal_noise_float(posOrMul, octaves, lacunarity, diminish)
+  // where posOrMul is either `positionGeometry`, a var ref, or `mul(pos, scale)`
+  if (def.category === 'noise') {
+    processNoiseCall(callExpr, nodeId, def, nodes, edges, varToNodeId);
     return;
   }
 
@@ -191,6 +247,7 @@ function processCall(
 
   // Process remaining arguments — extract literals and wire identifier edges
   const extractedValues: Record<string, string | number> = {};
+  const defaultKeys = def.defaultValues ? Object.keys(def.defaultValues) : [];
 
   for (let i = 0; i < callExpr.arguments.length; i++) {
     const arg = callExpr.arguments[i];
@@ -199,9 +256,9 @@ function processCall(
     const literalValue = extractLiteral(arg);
 
     if (t.isIdentifier(arg)) {
-      if (!port) break;
       const sourceId = varToNodeId.get(arg.name);
-      if (sourceId) {
+      if (sourceId && port) {
+        // Wire to a defined input port
         edges.push({
           id: generateEdgeId(sourceId, 'out', nodeId, port.id),
           source: sourceId,
@@ -212,11 +269,28 @@ function processCall(
           animated: true,
           data: { dataType: port.dataType },
         });
+      } else if (sourceId && def.inputs.length === 0 && defaultKeys[i]) {
+        // No defined input ports (noise/UV) — wire edge to the defaultValues key
+        edges.push({
+          id: generateEdgeId(sourceId, 'out', nodeId, defaultKeys[i]),
+          source: sourceId,
+          sourceHandle: 'out',
+          target: nodeId,
+          targetHandle: defaultKeys[i],
+          type: 'typed' as const,
+          animated: true,
+          data: { dataType: 'any' as const },
+        });
+      } else if (!sourceId && def.inputs.length === 0 && defaultKeys[i]) {
+        // Bare identifier (e.g. positionGeometry) — store as string value
+        extractedValues[defaultKeys[i]] = arg.name;
+      } else if (!port) {
+        break;
       }
     } else if (literalValue !== undefined) {
-      // Type constructors (no inputs, has defaultValues) — use default key order
+      // Type constructors or noise nodes (no inputs, has defaultValues) — use default key order
       if (def.inputs.length === 0 && def.defaultValues) {
-        const key = Object.keys(def.defaultValues)[i] ?? 'value';
+        const key = defaultKeys[i] ?? 'value';
         // Handle hex color literals: color(0xff0000) → '#ff0000'
         if (key === 'hex' && typeof literalValue === 'number') {
           extractedValues[key] = '#' + Math.round(literalValue).toString(16).padStart(6, '0');
@@ -244,6 +318,153 @@ function processCall(
     if (node) {
       const prev = getNodeValues(node);
       (node.data as Record<string, unknown>).values = { ...prev, name: varName };
+    }
+  }
+}
+
+/**
+ * Detect `mul(uv(), vec2(tilingU, tilingV))` pattern and create a UV node with tiling values.
+ * Returns true if the pattern was matched and handled.
+ */
+function tryParseUVTiling(
+  callExpr: t.CallExpression,
+  varName: string,
+  nodes: AppNode[],
+  _edges: AppEdge[],
+  varToNodeId: Map<string, string>
+): boolean {
+  const [arg0, arg1] = callExpr.arguments;
+
+  // arg0 must be uv() or uv(channel)
+  if (!t.isCallExpression(arg0) || !t.isIdentifier(arg0.callee) || arg0.callee.name !== 'uv') {
+    return false;
+  }
+  // arg1 must be vec2(x, y)
+  if (!t.isCallExpression(arg1) || !t.isIdentifier(arg1.callee) || arg1.callee.name !== 'vec2') {
+    return false;
+  }
+
+  const uvDef = NODE_REGISTRY.get('uv');
+  if (!uvDef) return false;
+
+  const channel = arg0.arguments.length > 0 ? (extractLiteral(arg0.arguments[0]) ?? 0) : 0;
+  const tilingU = arg1.arguments.length > 0 ? (extractLiteral(arg1.arguments[0]) ?? 1) : 1;
+  const tilingV = arg1.arguments.length > 1 ? (extractLiteral(arg1.arguments[1]) ?? 1) : 1;
+
+  const nodeId = generateId();
+  const node = createNode(nodeId, uvDef, varName);
+  (node.data as Record<string, unknown>).values = {
+    ...uvDef.defaultValues,
+    channel: Number(channel),
+    tilingU: Number(tilingU),
+    tilingV: Number(tilingV),
+  };
+  nodes.push(node);
+  varToNodeId.set(varName, nodeId);
+  return true;
+}
+
+/**
+ * Parse noise function calls: mx_fractal_noise_float(posOrMul, octaves, lacunarity, diminish)
+ * The first arg may be `positionGeometry`, a variable ref, or `mul(pos, scale)`.
+ * Remaining args map to fractal-specific defaultValues keys.
+ */
+function processNoiseCall(
+  callExpr: t.CallExpression,
+  nodeId: string,
+  def: NodeDefinition,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  varToNodeId: Map<string, string>
+): void {
+  const extractedValues: Record<string, string | number> = {};
+  const args = callExpr.arguments;
+
+  // --- arg[0]: position (possibly wrapped in mul(pos, scale)) ---
+  if (args.length > 0) {
+    const posArg = args[0];
+    if (
+      t.isCallExpression(posArg) &&
+      t.isIdentifier(posArg.callee) &&
+      posArg.callee.name === 'mul' &&
+      posArg.arguments.length === 2
+    ) {
+      // mul(pos, scale) pattern — extract both
+      const posInner = posArg.arguments[0];
+      const scaleInner = posArg.arguments[1];
+      if (t.isIdentifier(posInner)) {
+        const sourceId = varToNodeId.get(posInner.name);
+        if (sourceId) {
+          edges.push({
+            id: generateEdgeId(sourceId, 'out', nodeId, 'pos'),
+            source: sourceId, sourceHandle: 'out',
+            target: nodeId, targetHandle: 'pos',
+            type: 'typed' as const, animated: true,
+            data: { dataType: 'any' as const },
+          });
+        } else {
+          extractedValues.pos = posInner.name;
+        }
+      }
+      const scaleLit = extractLiteral(scaleInner);
+      if (scaleLit !== undefined) {
+        extractedValues.scale = scaleLit;
+      } else if (t.isIdentifier(scaleInner)) {
+        const sourceId = varToNodeId.get(scaleInner.name);
+        if (sourceId) {
+          edges.push({
+            id: generateEdgeId(sourceId, 'out', nodeId, 'scale'),
+            source: sourceId, sourceHandle: 'out',
+            target: nodeId, targetHandle: 'scale',
+            type: 'typed' as const, animated: true,
+            data: { dataType: 'any' as const },
+          });
+        }
+      }
+    } else if (t.isIdentifier(posArg)) {
+      const sourceId = varToNodeId.get(posArg.name);
+      if (sourceId) {
+        edges.push({
+          id: generateEdgeId(sourceId, 'out', nodeId, 'pos'),
+          source: sourceId, sourceHandle: 'out',
+          target: nodeId, targetHandle: 'pos',
+          type: 'typed' as const, animated: true,
+          data: { dataType: 'any' as const },
+        });
+      } else {
+        extractedValues.pos = posArg.name;
+      }
+    }
+  }
+
+  // --- fractal-specific args: octaves (arg[1]), lacunarity (arg[2]), diminish (arg[3]) ---
+  const fractalKeys = ['octaves', 'lacunarity', 'diminish'];
+  for (let i = 0; i < fractalKeys.length; i++) {
+    const arg = args[1 + i];
+    if (!arg) break;
+    const lit = extractLiteral(arg);
+    if (lit !== undefined) {
+      extractedValues[fractalKeys[i]] = lit;
+    } else if (t.isIdentifier(arg)) {
+      const sourceId = varToNodeId.get(arg.name);
+      if (sourceId) {
+        edges.push({
+          id: generateEdgeId(sourceId, 'out', nodeId, fractalKeys[i]),
+          source: sourceId, sourceHandle: 'out',
+          target: nodeId, targetHandle: fractalKeys[i],
+          type: 'typed' as const, animated: true,
+          data: { dataType: 'any' as const },
+        });
+      }
+    }
+  }
+
+  // Merge extracted values
+  if (Object.keys(extractedValues).length > 0) {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (node) {
+      const prev = getNodeValues(node);
+      (node.data as Record<string, unknown>).values = { ...prev, ...extractedValues };
     }
   }
 }

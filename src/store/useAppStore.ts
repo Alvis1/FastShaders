@@ -112,11 +112,12 @@ export interface VRHeadset {
 }
 
 export const VR_HEADSETS: VRHeadset[] = [
-  { id: 'quest3', label: 'Meta Quest 3', maxPoints: 150 },
-  { id: 'quest3s', label: 'Meta Quest 3s', maxPoints: 120 },
-  { id: 'steamframe', label: 'Steam Frame', maxPoints: 300 },
-  { id: 'pico4', label: 'Pico 4', maxPoints: 100 },
-  { id: 'visionpro', label: 'Apple Vision Pro', maxPoints: 400 },
+  { id: 'quest3', label: 'Meta Quest 3', maxPoints: 200 },
+  { id: 'quest3s', label: 'Meta Quest 3s', maxPoints: 110 },
+  { id: 'quest2', label: 'Meta Quest 2', maxPoints: 90 },
+  { id: 'steamframe', label: 'Steam Frame', maxPoints: 220 },
+  { id: 'pico4', label: 'Pico 4', maxPoints: 80 },
+  { id: 'visionpro', label: 'Apple Vision Pro (M5)', maxPoints: 350 },
 ];
 
 interface AppState {
