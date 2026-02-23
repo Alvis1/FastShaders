@@ -6,6 +6,7 @@ import {
   MiniMap,
   addEdge,
   reconnectEdge,
+  useReactFlow,
   type OnConnect,
   type Connection,
   type Edge,
@@ -22,12 +23,14 @@ import { ClockNode } from './nodes/ClockNode';
 import { TexturePreviewNode } from './nodes/TexturePreviewNode';
 import { TypedEdge } from './edges/TypedEdge';
 import { ContextMenu } from './menus/ContextMenu';
+import { ContentBrowser } from './ContentBrowser';
 import { CostBar } from '@/components/Layout/CostBar';
 import { getCostColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
-import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
-import type { AppNode, AppEdge } from '@/types';
+import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
+import complexityData from '@/registry/complexity.json';
 import './NodeEditor.css';
 
 const nodeTypes = {
@@ -50,12 +53,14 @@ export function NodeEditor() {
   const onNodesChange = useAppStore((s) => s.onNodesChange);
   const onEdgesChange = useAppStore((s) => s.onEdgesChange);
   const setEdges = useAppStore((s) => s.setEdges);
+  const addNode = useAppStore((s) => s.addNode);
   const removeEdge = useAppStore((s) => s.removeEdge);
   const openContextMenu = useAppStore((s) => s.openContextMenu);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const contextMenu = useAppStore((s) => s.contextMenu);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  const { screenToFlowPosition } = useReactFlow();
 
   // Copy/paste clipboard
   const clipboardRef = useRef<AppNode[]>([]);
@@ -418,62 +423,120 @@ export function NodeEditor() {
     [removeEdge]
   );
 
+  // Content browser drag-and-drop: allow drop on canvas
+  const onDragOver = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const onDrop = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault();
+      const nodeType = event.dataTransfer.getData('application/reactflow-type');
+      if (!nodeType) return;
+
+      const def = NODE_REGISTRY.get(nodeType);
+      if (!def) return;
+
+      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const costs = complexityData.costs as Record<string, number>;
+      const cost = costs[def.type] ?? 0;
+
+      if (def.type === 'output') {
+        if (nodes.some((n) => n.data.registryType === 'output')) return;
+        const newNode: AppNode = {
+          id: generateId(),
+          type: 'output',
+          position,
+          data: { registryType: 'output', label: 'Output', cost: 0 } as OutputNodeData,
+        };
+        addNode(newNode);
+      } else {
+        let values = { ...def.defaultValues };
+        if (def.type === 'property_float') {
+          let maxNum = 0;
+          for (const n of nodes) {
+            if (n.data.registryType !== 'property_float') continue;
+            const name = String((n.data as { values?: Record<string, string | number> }).values?.name ?? '');
+            const m = name.match(/^property(\d+)$/);
+            if (m) maxNum = Math.max(maxNum, Number(m[1]));
+          }
+          values = { ...values, name: `property${maxNum + 1}` };
+        }
+        const newNode = {
+          id: generateId(),
+          type: getFlowNodeType(def),
+          position,
+          data: { registryType: def.type, label: def.label, cost, values } as ShaderNodeData,
+        } as AppNode;
+        addNode(newNode);
+      }
+    },
+    [screenToFlowPosition, nodes, addNode],
+  );
+
   return (
     <div className="node-editor">
-      <div className="node-editor__cost-overlay">
-        <CostBar />
-      </div>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        onConnectStart={onConnectStart}
-        onConnectEnd={onConnectEnd}
-        onNodeDragStart={onNodeDragStart}
-        onNodeDragStop={onNodeDragStop}
-        onPaneContextMenu={onPaneContextMenu}
-        onNodeContextMenu={onNodeContextMenu}
-        onEdgeContextMenu={onEdgeContextMenu}
-        onPaneClick={closeContextMenu}
-        onReconnectStart={onReconnectStart}
-        onReconnect={onReconnect}
-        onReconnectEnd={onReconnectEnd}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        defaultEdgeOptions={{ type: 'typed', animated: true }}
-        deleteKeyCode={null}
-        panActivationKeyCode={null}
-        edgesReconnectable
-        connectionRadius={40}
-        selectionOnDrag
-        selectionMode={SelectionMode.Partial}
-        panOnDrag={[1, 2]}
-        zoomOnScroll
-        fitView
-        minZoom={0.1}
-        maxZoom={3}
-        proOptions={{ hideAttribution: true }}
-      >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={20}
-          size={1}
-          color="#DDDDDD"
-        />
-        <Controls
-          showInteractive={false}
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
-        />
-        <MiniMap
-          nodeColor={(node) => getCostColor((node.data as { cost?: number }).cost ?? 0, costColorLow, costColorHigh)}
-          style={{ backgroundColor: 'var(--bg-panel)' }}
-          maskColor="rgba(255, 255, 255, 0.7)"
-        />
-      </ReactFlow>
+      <div className="node-editor__canvas">
+        <div className="node-editor__cost-overlay">
+          <CostBar />
+        </div>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          onConnectStart={onConnectStart}
+          onConnectEnd={onConnectEnd}
+          onNodeDragStart={onNodeDragStart}
+          onNodeDragStop={onNodeDragStop}
+          onPaneContextMenu={onPaneContextMenu}
+          onNodeContextMenu={onNodeContextMenu}
+          onEdgeContextMenu={onEdgeContextMenu}
+          onPaneClick={closeContextMenu}
+          onReconnectStart={onReconnectStart}
+          onReconnect={onReconnect}
+          onReconnectEnd={onReconnectEnd}
+          onDragOver={onDragOver}
+          onDrop={onDrop}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          defaultEdgeOptions={{ type: 'typed', animated: true }}
+          deleteKeyCode={null}
+          panActivationKeyCode={null}
+          edgesReconnectable
+          connectionRadius={40}
+          selectionOnDrag
+          selectionMode={SelectionMode.Partial}
+          panOnDrag={[1, 2]}
+          zoomOnScroll
+          fitView
+          minZoom={0.1}
+          maxZoom={3}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={20}
+            size={1}
+            color="#DDDDDD"
+          />
+          <Controls
+            showInteractive={false}
+            style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
+          />
+          <MiniMap
+            position="top-left"
+            nodeColor={(node) => getCostColor((node.data as { cost?: number }).cost ?? 0, costColorLow, costColorHigh)}
+            style={{ backgroundColor: 'var(--bg-panel)' }}
+            maskColor="rgba(255, 255, 255, 0.7)"
+          />
+        </ReactFlow>
 
-      {contextMenu.open && <ContextMenu />}
+        {contextMenu.open && <ContextMenu />}
+      </div>
+      <ContentBrowser />
     </div>
   );
 }
