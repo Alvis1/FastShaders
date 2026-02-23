@@ -78,7 +78,7 @@ src/
 │   ├── tslToShaderModule.ts           # TSL code → shaderloader-compatible ES script (materialSettings, properties)
 │   ├── tslToPreviewHTML.ts            # TSL code → Three.js WebGPU HTML (uses tslCodeProcessor)
 │   ├── layoutEngine.ts                # Dagre auto-layout (LR, nodesep=25, ranksep=60)
-│   ├── cpuEvaluator.ts                # CPU-side graph evaluator for real-time values (multi-channel)
+│   ├── cpuEvaluator.ts                # CPU-side graph evaluator for real-time values (multi-channel, uses hexToRgb01 from colorUtils)
 │   ├── topologicalSort.ts             # Kahn's algorithm for execution order
 │   └── evaluateTSLScript.ts           # isTSLTexturesCode() detection helper
 ├── hooks/
@@ -87,7 +87,7 @@ src/
 │   ├── nodeRegistry.ts                # ~90+ TSL node definitions (core + auto-registered tsl-textures)
 │   ├── tslTexturesRegistry.ts         # Auto-registers ~49 tsl-textures functions as nodes from .defaults (duck-typed param detection)
 │   ├── nodeCategories.ts              # Category metadata (id + label)
-│   └── complexity.json                # GPU cost per operation
+│   └── complexity.json                # GPU cost per operation (~110 entries incl. all 50 tsl-textures functions)
 ├── store/
 │   └── useAppStore.ts                 # Zustand store (nodes, edges, code, sync, history, UI)
 ├── types/
@@ -96,8 +96,9 @@ src/
 │   ├── sync.types.ts                  # SyncSource type
 │   └── tsl.types.ts                   # ParseError, GeneratedCode
 ├── utils/
-│   ├── colorUtils.ts                  # Cost color gradient, type→color mapping, CATEGORY_COLORS (centralized)
+│   ├── colorUtils.ts                  # Cost color gradient, type→color mapping, CATEGORY_COLORS, hexToRgb01 (centralized)
 │   ├── edgeUtils.ts                   # removeEdgesForPort() — cleans up edges when hiding input ports
+│   ├── graphTraversal.ts             # hasTimeUpstream() — BFS time-node detection with O(1) Map lookup
 │   ├── idGenerator.ts                 # generateId(), generateEdgeId()
 │   ├── mathPreview.ts                 # Sin/math waveform canvas renderer (scrolling curve + dot)
 │   ├── noisePreview.ts               # CPU noise (Perlin, fBm, Voronoi) + animated render
@@ -184,7 +185,7 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 - **Graph → Code**: Real-time on every node/edge change (`graphToCode()`)
 - **Code → Graph**: Debounced auto-sync (600ms) + manual via Save button / Ctrl+S (`codeToGraph()` with Babel parser, `errorRecovery: true`)
 - **Stable node matching**: Two-pass matching (registryType+label, then registryType only) preserves node positions and IDs across syncs
-- **Complexity**: Traverses backward from Output node, sums costs from `complexity.json`
+- **Complexity**: Traverses backward from Output node, sums costs from `complexity.json`. Uses `lastCostRef` guard to prevent double BFS runs (updating output node cost triggers nodes change → would re-run the effect)
 
 ### Zustand Store Shape
 
@@ -386,6 +387,7 @@ The asset browser is a horizontal scrollable drawer at the bottom of the node ed
 | `def.type === 'slider'` | SliderCardContent | Header + track/fill/thumb slider + min/value/max labels + output dot |
 | `'color'` | ColorCardContent | 28x28 color circle + contrast-aware label + output dot |
 
+- **Cost coloring**: NodePreviewCard reads `costColorLow`/`costColorHigh` from the zustand store and passes them to `getCostColor()`/`getCostTextColor()`, ensuring consistent cost-based coloring across editor nodes, MiniMap, and content browser. Texture nodes without explicit costs in `complexity.json` fall back to cost 50.
 - **Texture GPU previews**: Lazy-rendered via `IntersectionObserver` (rootMargin `0px 300px`) using the shared `texturePreviewRenderer.ts`. Cache key `card_${def.type}` avoids collision with editor node IDs. Static only (no animation). Disposed on unmount.
 - **Math/noise/clock previews**: CPU-rendered once on mount using existing `renderMathPreview()`, `renderNoisePreview()`, and ClockNode drawing code (frozen at mount time).
 - **All sub-renderers** are proper React components (not called as functions) so hooks work correctly.
@@ -604,7 +606,7 @@ All settings stored in `OutputNodeData.materialSettings` and threaded through to
 - **Font**: Inter (sans), JetBrains Mono (mono)
 - **Spacing**: 4px base scale (--space-1 through --space-8)
 - **Shadows**: 4 levels (sm, md, lg, node) + selected state with blue ring
-- **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red)
+- **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red). All ~50 tsl-textures functions have individual GPU costs in `complexity.json` across 5 tiers: utility (18–25), simple patterns (28–38), medium (42–58), heavy (62–90), very heavy (95–115). Costs factor in noise calls, loop iterations, trigonometric operations, voronoi lookups, and fractal evaluations.
 - **Category colors**: Each node category has a distinct accent color for the header strip
   - input (#4CAF50), type (#2196F3), arithmetic (#FF9800), math (#9C27B0), interpolation (#00BCD4), vector (#E91E63), noise (#795548), color (#FF5722), texture (#8D6E63), output (#f44336)
 

@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import type { NodeDefinition, NodeCategory } from '@/types';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType } from '@/registry/nodeRegistry';
+import { useAppStore } from '@/store/useAppStore';
 import { buildRows } from './nodes/ShaderNode';
 import { renderMathPreview } from '@/utils/mathPreview';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
@@ -457,10 +458,12 @@ function ColorCardContent({ def, cost, costTextColor }: { def: NodeDefinition; c
 
 export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart }: NodePreviewCardProps) {
   const costs = complexityData.costs as Record<string, number>;
-  const cost = costs[def.type] ?? 0;
+  const cost = costs[def.type] ?? (def.category === 'texture' ? 50 : 0);
+  const costColorLow = useAppStore((s) => s.costColorLow);
+  const costColorHigh = useAppStore((s) => s.costColorHigh);
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
-  const costColor = getCostColor(cost);
-  const costTextColor = getCostTextColor(cost);
+  const costColor = getCostColor(cost, costColorLow, costColorHigh);
+  const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
   const costScale = getCostScale(cost);
   const flowType = getFlowNodeType(def);
 

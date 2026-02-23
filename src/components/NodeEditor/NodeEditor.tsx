@@ -441,7 +441,7 @@ export function NodeEditor() {
 
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
       const costs = complexityData.costs as Record<string, number>;
-      const cost = costs[def.type] ?? 0;
+      const cost = costs[def.type] ?? (def.category === 'texture' ? 50 : 0);
 
       if (def.type === 'output') {
         if (nodes.some((n) => n.data.registryType === 'output')) return;

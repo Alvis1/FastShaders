@@ -7,6 +7,7 @@
 import type { AppNode, AppEdge } from '@/types';
 import { getNodeValues } from '@/types';
 import { perlin2D, fbm2D, voronoi2D } from '@/utils/noisePreview';
+import { hexToRgb01 } from '@/utils/colorUtils';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
 const NOISE_UV_SCALE = 4;
@@ -143,10 +144,7 @@ function evaluate(
       break;
     case 'color': {
       const hex = String(values.hex ?? '#ff0000');
-      const r = parseInt(hex.slice(1, 3), 16) / 255;
-      const g = parseInt(hex.slice(3, 5), 16) / 255;
-      const b = parseInt(hex.slice(5, 7), 16) / 255;
-      result = [r, g, b];
+      result = [...hexToRgb01(hex)];
       break;
     }
 

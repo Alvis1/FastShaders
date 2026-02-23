@@ -188,7 +188,8 @@ export function useSyncEngine() {
     doCodeSync(code);
   }, [codeSyncRequested, syncInProgress, doCodeSync, code]);
 
-  // Recalculate complexity
+  // Recalculate complexity (use ref to avoid double-run when updating output node cost)
+  const lastCostRef = useRef(-1);
   useEffect(() => {
     const costs = complexityData.costs as Record<string, number>;
     const outputNode = nodes.find((n) => n.data.registryType === 'output');
@@ -211,6 +212,9 @@ export function useSyncEngine() {
         }
       }
     }
+
+    if (total === lastCostRef.current) return;
+    lastCostRef.current = total;
 
     setTotalCost(total);
 
