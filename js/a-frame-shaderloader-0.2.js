@@ -1,0 +1,570 @@
+/* global AFRAME, THREE */
+
+AFRAME.registerComponent("shader", {
+  schema: {
+    src: { type: "string" },
+  },
+  init: function () {
+    this.applyShader = this.applyShader.bind(this);
+    this.originalMaterials = {};
+    this._shaderMaterial = null;
+    this._currentSrc = null;
+    this._extending = false;
+
+    this.el.addEventListener("model-loaded", this.applyShader);
+  },
+  update: function (oldData) {
+    if (oldData.src !== this.data.src) {
+      if (!this._extending) {
+        const mesh = this.el.getObject3D("mesh");
+        if (mesh) {
+          this.applyShader();
+        }
+      }
+      return;
+    }
+    // Handle property uniform changes (after schema has been extended)
+    if (this._propertyUniforms) {
+      for (const name in this._propertyUniforms) {
+        if (
+          this.data[name] !== undefined &&
+          this.data[name] !== oldData[name]
+        ) {
+          this._propertyUniforms[name].value = this.data[name];
+        }
+      }
+    }
+  },
+  applyShader: function () {
+    const mesh = this.el.getObject3D("mesh");
+    if (!mesh) {
+      return;
+    }
+
+    this.storeOriginalMaterials(mesh);
+
+    if (this.data.src) {
+      this.applyTSLShader(mesh);
+    }
+  },
+  applyTSLShader: async function (mesh) {
+    const tslPath = this.data.src;
+    this._currentSrc = tslPath;
+
+    try {
+      const modulePath =
+        tslPath.startsWith("./") ||
+        tslPath.startsWith("/") ||
+        tslPath.includes("://")
+          ? tslPath
+          : "./" + tslPath;
+
+      // Fetch source, fix variable shadowing, resolve imports, import via blob
+      const response = await fetch(modulePath);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} loading ${modulePath}`);
+      }
+      let source = await response.text();
+
+      source = autoInjectTSLImports(source);
+      source = fixTSLShadowing(source);
+      source = resolveTSLImports(
+        source,
+        new URL(modulePath, location.href).href,
+      );
+
+      const blob = new Blob([source], { type: "application/javascript" });
+      const blobUrl = URL.createObjectURL(blob);
+      let module;
+      try {
+        module = await import(blobUrl);
+      } finally {
+        URL.revokeObjectURL(blobUrl);
+      }
+
+      if (this._currentSrc !== tslPath) {
+        return;
+      }
+
+      const shaderExport = module.default;
+
+      // Read schema for property uniforms and create TSL uniform nodes.
+      // If no explicit schema is exported, auto-detect params.XXX usage
+      // in the source code so hand-written modules work without boilerplate.
+      let schema = module.schema;
+      if (!schema || Object.keys(schema).length === 0) {
+        schema = autoDetectSchema(source);
+      }
+      const uniforms = {};
+      for (const [name, def] of Object.entries(schema)) {
+        const val = def && def.default !== undefined ? def.default : 0;
+        uniforms[name] = THREE.TSL.uniform(val);
+      }
+      this._propertyUniforms = uniforms;
+
+      // Dynamically extend A-Frame schema with detected properties so
+      // future setAttribute() calls can update them and trigger update().
+      if (Object.keys(schema).length > 0) {
+        const propSchema = {};
+        for (const name in schema) {
+          propSchema[name] = {
+            type: "number",
+            default:
+              schema[name] && schema[name].default !== undefined
+                ? schema[name].default
+                : 0,
+          };
+        }
+        this._extending = true;
+        this.extendSchema(propSchema);
+        this._extending = false;
+
+        // Read initial uniform values from the DOM attribute.
+        // getDOMAttribute may return a string (raw HTML) or an object
+        // (after extendSchema converts to multi-property component).
+        const rawAttr = this.el.getDOMAttribute("shader");
+        if (typeof rawAttr === "string") {
+          for (const pair of rawAttr.split(";")) {
+            const colonIdx = pair.indexOf(":");
+            if (colonIdx === -1) continue;
+            const key = pair.slice(0, colonIdx).trim();
+            const val = pair.slice(colonIdx + 1).trim();
+            if (key === "src") continue;
+            if (uniforms[key]) {
+              const num = parseFloat(val);
+              if (!isNaN(num)) {
+                uniforms[key].value = num;
+                console.log(`shaderloader: ${key} = ${num} (from attribute)`);
+              }
+            }
+          }
+        } else if (rawAttr && typeof rawAttr === "object") {
+          for (const key in rawAttr) {
+            if (key === "src") continue;
+            if (uniforms[key]) {
+              const num = parseFloat(rawAttr[key]);
+              if (!isNaN(num)) {
+                uniforms[key].value = num;
+                console.log(`shaderloader: ${key} = ${num} (from attribute)`);
+              }
+            }
+          }
+        }
+      }
+
+      // Always pass uniforms to functions that accept parameters
+      const shaderResult =
+        typeof shaderExport === "function"
+          ? shaderExport.length > 0
+            ? shaderExport(uniforms)
+            : shaderExport()
+          : shaderExport;
+
+      const material = new THREE.MeshPhysicalNodeMaterial();
+
+      const nodeProps = [
+        "colorNode",
+        "positionNode",
+        "normalNode",
+        "opacityNode",
+        "roughnessNode",
+        "metalnessNode",
+        "emissiveNode",
+      ];
+      const isObjectAPI =
+        shaderResult &&
+        typeof shaderResult === "object" &&
+        nodeProps.some(function (p) {
+          return shaderResult[p] !== undefined;
+        });
+
+      if (isObjectAPI) {
+        // Object API: { colorNode, positionNode, opacityNode, normalNode, ... }
+        for (const prop of nodeProps) {
+          if (shaderResult[prop] !== undefined) {
+            material[prop] = shaderResult[prop];
+          }
+        }
+        if (shaderResult.transparent !== undefined) {
+          material.transparent = shaderResult.transparent;
+        }
+        if (shaderResult.side !== undefined) {
+          material.side = shaderResult.side;
+        }
+      } else {
+        // Simple API: return a single node (backward compatible)
+        material.colorNode = shaderResult;
+      }
+
+      this.disposeShaderMaterial();
+      this._shaderMaterial = material;
+      this.applyMaterialToMesh(mesh, material);
+    } catch (err) {
+      console.error(`Failed to load TSL shader from ${tslPath}`, err);
+      this.restoreOriginalMaterials(mesh);
+    }
+  },
+  storeOriginalMaterials: function (mesh) {
+    mesh.traverse((node) => {
+      if (node.isMesh && !(node.uuid in this.originalMaterials)) {
+        this.originalMaterials[node.uuid] = node.material;
+      }
+    });
+  },
+  applyMaterialToMesh: function (mesh, material) {
+    mesh.traverse((node) => {
+      if (node.isMesh) {
+        node.material = material;
+      }
+    });
+  },
+  disposeShaderMaterial: function () {
+    if (this._shaderMaterial) {
+      this._shaderMaterial.dispose();
+      this._shaderMaterial = null;
+    }
+  },
+  remove: function () {
+    this._currentSrc = null;
+    this._propertyUniforms = null;
+    const mesh = this.el.getObject3D("mesh");
+    if (mesh) {
+      this.restoreOriginalMaterials(mesh);
+    }
+    this.disposeShaderMaterial();
+    this.el.removeEventListener("model-loaded", this.applyShader);
+  },
+  restoreOriginalMaterials: function (mesh) {
+    mesh.traverse((node) => {
+      if (node.isMesh && this.originalMaterials[node.uuid]) {
+        node.material = this.originalMaterials[node.uuid];
+      }
+    });
+  },
+});
+
+// Auto-detect property schema from source code by scanning for `params.XXX`
+// patterns. This lets hand-written modules work without an explicit
+// `export const schema = {...}` — the shaderloader creates TSL uniforms
+// for each detected property with a default value of 0.
+// Also detects `const NAME = uniform(VALUE)` patterns to extract defaults.
+function autoDetectSchema(source) {
+  const schema = {};
+
+  // Detect params.XXX usage
+  const paramRegex = /\bparams\.(\w+)\b/g;
+  let m;
+  while ((m = paramRegex.exec(source)) !== null) {
+    const name = m[1];
+    if (!(name in schema)) {
+      schema[name] = { type: "number", default: 0 };
+    }
+  }
+
+  // Detect `const NAME = uniform(VALUE)` and use VALUE as default
+  const uniformRegex = /\bconst\s+(\w+)\s*=\s*uniform\(\s*([^)]+)\s*\)/g;
+  while ((m = uniformRegex.exec(source)) !== null) {
+    const name = m[1];
+    const val = parseFloat(m[2]);
+    if (!(name in schema)) {
+      schema[name] = { type: "number", default: isNaN(val) ? 0 : val };
+    }
+  }
+
+  if (Object.keys(schema).length > 0) {
+    console.log(
+      "shaderloader: auto-detected properties:",
+      Object.keys(schema).join(", "),
+    );
+  }
+  return schema;
+}
+
+// Auto-detect and inject missing TSL imports. Generated TSL code may use
+// functions like uv() without importing them. This scans the source for
+// function calls that aren't imported or locally declared, and adds them
+// to the existing three/tsl import statement. Only injects names that
+// actually exist in THREE.TSL to avoid injecting non-existent symbols.
+function autoInjectTSLImports(source) {
+  const tslImportRegex = /(import\s*\{)([^}]+)(\}\s*from\s*['"]three\/tsl['"])/;
+  const match = source.match(tslImportRegex);
+  if (!match) {
+    return source;
+  }
+
+  const importedNames = new Set(
+    match[2]
+      .split(",")
+      .map((n) =>
+        n
+          .trim()
+          .split(/\s+as\s+/)
+          .pop()
+          .trim(),
+      )
+      .filter(Boolean),
+  );
+
+  const localDecls = new Set();
+  const declRegex = /\b(?:const|let|var)\s+(\w+)\s*=/g;
+  let dm;
+  while ((dm = declRegex.exec(source)) !== null) {
+    localDecls.add(dm[1]);
+  }
+  const fnDeclRegex = /\bfunction\s+(\w+)\s*\(/g;
+  while ((dm = fnDeclRegex.exec(source)) !== null) {
+    localDecls.add(dm[1]);
+  }
+
+  const bodyLines = source
+    .split("\n")
+    .filter((l) => !/^\s*(import|export)\s/.test(l));
+  // Strip comments so patterns like "// glow (effect)" don't trigger false matches
+  const body = bodyLines
+    .map((l) => l.replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, ""))
+    .join("\n");
+
+  // Detect function calls: name(
+  const callRegex = /(?<![.\w])([a-zA-Z_$]\w*)\s*\(/g;
+  const usedCalls = new Set();
+  let cm;
+  while ((cm = callRegex.exec(body)) !== null) {
+    usedCalls.add(cm[1]);
+  }
+
+  // Also detect bare identifiers (e.g. positionGeometry, normalLocal, time)
+  // that are used as values, not function calls
+  const identRegex = /(?<![.\w])([a-zA-Z_$]\w*)(?!\s*\()/g;
+  while ((cm = identRegex.exec(body)) !== null) {
+    usedCalls.add(cm[1]);
+  }
+
+  const exclude = new Set([
+    ...importedNames,
+    "const",
+    "let",
+    "var",
+    "function",
+    "return",
+    "if",
+    "else",
+    "for",
+    "while",
+    "do",
+    "switch",
+    "case",
+    "break",
+    "continue",
+    "new",
+    "typeof",
+    "instanceof",
+    "void",
+    "delete",
+    "throw",
+    "try",
+    "catch",
+    "finally",
+    "class",
+    "extends",
+    "super",
+    "import",
+    "export",
+    "default",
+    "from",
+    "async",
+    "await",
+    "yield",
+    "of",
+    "in",
+    "true",
+    "false",
+    "null",
+    "undefined",
+    "this",
+    "arguments",
+    "console",
+    "window",
+    "document",
+    "Math",
+    "JSON",
+    "Array",
+    "Object",
+    "String",
+    "Number",
+    "Boolean",
+    "Date",
+    "RegExp",
+    "Error",
+    "TypeError",
+    "RangeError",
+    "Promise",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "Symbol",
+    "Proxy",
+    "Reflect",
+    "parseInt",
+    "parseFloat",
+    "isNaN",
+    "isFinite",
+    "setTimeout",
+    "setInterval",
+    "clearTimeout",
+    "clearInterval",
+    "fetch",
+    "URL",
+    "requestAnimationFrame",
+    "THREE",
+    "AFRAME",
+    "params",
+  ]);
+
+  // Validate against actual TSL exports to avoid injecting non-existent symbols
+  const tslExports = window.THREE && window.THREE.TSL ? window.THREE.TSL : null;
+
+  const missing = [];
+  for (const name of usedCalls) {
+    if (!exclude.has(name) && !localDecls.has(name)) {
+      if (!tslExports || name in tslExports) {
+        missing.push(name);
+      }
+    }
+  }
+
+  if (missing.length === 0) {
+    return source;
+  }
+
+  console.log(
+    "shaderloader: auto-injecting missing TSL imports:",
+    missing.join(", "),
+  );
+  const currentImports = match[2].trimEnd();
+  const newImportList = currentImports + ", " + missing.join(", ");
+  return source.replace(tslImportRegex, "$1" + newImportList + "$3");
+}
+
+// TSL shader preprocessing: fixes variable shadowing in generated code.
+// Generated TSL code often has patterns like `const color = color(0x14f55b)`
+// where the local `const` declaration shadows the imported function, causing
+// a ReferenceError due to the temporal dead zone. This function renames
+// shadowed locals (e.g. `const __color = color(0x14f55b)`) so the import
+// remains accessible on the RHS while subsequent value references use the local.
+function fixTSLShadowing(source) {
+  const importedNames = new Set();
+  const importRegex = /import\s*\{([^}]+)\}\s*from/g;
+  let m;
+  while ((m = importRegex.exec(source)) !== null) {
+    m[1].split(",").forEach((n) => {
+      const name = n
+        .trim()
+        .split(/\s+as\s+/)[0]
+        .trim();
+      if (name) {
+        importedNames.add(name);
+      }
+    });
+  }
+
+  if (importedNames.size === 0) {
+    return source;
+  }
+
+  const lines = source.split("\n");
+  const renames = new Map();
+
+  const fixedLines = lines.map((line) => {
+    // Don't touch import/export declaration lines
+    if (/^\s*import\s/.test(line) || /^\s*export\s/.test(line)) {
+      return line;
+    }
+
+    let out = line;
+
+    // Apply accumulated renames: replace value references (not function calls)
+    for (const [orig, renamed] of renames) {
+      out = out.replace(
+        new RegExp("(?<!\\.)\\b" + orig + "\\b(?!\\s*[\\(:])", "g"),
+        renamed,
+      );
+    }
+
+    // Detect new shadowing declaration: const NAME = ... where NAME is an import
+    const declMatch = out.match(/^\s*const\s+(\w+)\s*=/);
+    if (declMatch && importedNames.has(declMatch[1])) {
+      const name = declMatch[1];
+      const safe = "__" + name;
+      out = out.replace(
+        new RegExp("^(\\s*const\\s+)" + name + "(\\s*=)"),
+        "$1" + safe + "$2",
+      );
+      renames.set(name, safe);
+    }
+
+    return out;
+  });
+
+  return fixedLines.join("\n");
+}
+
+// Built-in specifier map so TSL shaders resolve without a page-level import map.
+// Local shims re-export from window.THREE (set by the IIFE bundle), so all code
+// shares a single Three.js instance. Absolute URLs are computed at load time so
+// blob-loaded modules can resolve them.
+const _scriptDir = (document.currentScript && document.currentScript.src) || "";
+const _baseDir = _scriptDir
+  ? _scriptDir.substring(0, _scriptDir.lastIndexOf("/") + 1)
+  : "";
+const specifierMap = {
+  three: _baseDir + "three-shim.js",
+  "three/webgpu": _baseDir + "three-shim.js",
+  "three/tsl": _baseDir + "three-tsl-shim.js",
+  "tsl-textures": _baseDir + "tsl-textures-shim.js",
+};
+
+// Resolve a bare specifier using the built-in map.
+// Handles exact matches and prefix matches (keys ending with '/').
+function resolveSpecifier(specifier) {
+  if (specifier in specifierMap) {
+    return specifierMap[specifier];
+  }
+  for (const key in specifierMap) {
+    if (key.endsWith("/") && specifier.startsWith(key)) {
+      return specifierMap[key] + specifier.slice(key.length);
+    }
+  }
+  return null;
+}
+
+// Resolve bare import specifiers (e.g. 'three/tsl', 'tsl-textures') to full
+// URLs so the module can be loaded from a Blob URL where import maps don't apply.
+function resolveTSLImports(source, baseUrl) {
+  return source.replace(
+    /from\s+(['"])([^'"]+)\1/g,
+    function (match, quote, specifier) {
+      // Bare specifiers (no ./ or / or :// prefix) — resolve via built-in map
+      if (
+        !specifier.startsWith(".") &&
+        !specifier.startsWith("/") &&
+        !specifier.includes("://")
+      ) {
+        const resolved = resolveSpecifier(specifier);
+        if (resolved) {
+          return "from " + quote + resolved + quote;
+        }
+        return match;
+      }
+      // Relative specifiers — resolve against the original file's URL
+      if (
+        baseUrl &&
+        (specifier.startsWith("./") || specifier.startsWith("../"))
+      ) {
+        const abs = new URL(specifier, baseUrl).href;
+        return "from " + quote + abs + quote;
+      }
+      return match;
+    },
+  );
+}
