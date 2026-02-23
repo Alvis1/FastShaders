@@ -43,14 +43,6 @@
   background: rgba(0, 0, 0, 0.06);
 }
 
-.node-base__dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  border: 1px solid rgba(0, 0, 0, 0.2);
-}
-
 .node-base__title {
   font-size: 9px;
   font-weight: 600;

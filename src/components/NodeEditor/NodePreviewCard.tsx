@@ -381,6 +381,51 @@ function ClockCardContent({ def, catColor, costColor, costTextColor, costScale, 
 }
 
 /* ============================================================
+ * SliderCardContent — slider with range track preview
+ * ============================================================ */
+
+function SliderCardContent({ def, catColor, costColor, costTextColor, costScale, cost }: ContentProps) {
+  const val = Number(def.defaultValues?.value ?? 0.5);
+  const min = Number(def.defaultValues?.min ?? 0);
+  const max = Number(def.defaultValues?.max ?? 1);
+  const pct = max > min ? ((val - min) / (max - min)) * 100 : 50;
+
+  return (
+    <div
+      className="node-base node-preview-card__node"
+      style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+    >
+      {cost > 0 && (
+        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
+      )}
+
+      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
+        <span className="node-base__title">{def.label}</span>
+      </div>
+
+      <div className="node-preview-card__slider-wrap">
+        <div className="node-preview-card__slider-track">
+          <div className="node-preview-card__slider-fill" style={{ width: `${pct}%` }} />
+          <div className="node-preview-card__slider-thumb" style={{ left: `${pct}%` }} />
+        </div>
+        <div className="node-preview-card__slider-labels">
+          <span>{min}</span>
+          <span className="node-preview-card__slider-val">{val}</span>
+          <span>{max}</span>
+        </div>
+      </div>
+
+      {def.outputs[0] && (
+        <span
+          className="node-preview-card__handle node-preview-card__handle--right-abs"
+          style={{ background: getTypeColor(def.outputs[0].dataType) }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
  * ColorCardContent — color circle with contrast-aware label
  * ============================================================ */
 
@@ -433,6 +478,8 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
         <NoiseCardContent {...shared} />
       ) : flowType === 'clock' ? (
         <ClockCardContent {...shared} />
+      ) : def.type === 'slider' ? (
+        <SliderCardContent {...shared} />
       ) : (
         <ShaderCardContent {...shared} />
       )}

@@ -10,6 +10,7 @@
  */
 
 import { tslToShaderModule, type PropertyInfo } from './tslToShaderModule';
+import { AFRAME_GEO } from './tslCodeProcessor';
 import type { MaterialSettings } from '@/types';
 
 export interface AFrameOptions {
@@ -30,14 +31,6 @@ export interface AFrameOptions {
 const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js';
 const IIFE_BUNDLE_URL = `${CDN_BASE}/aframe-171-a-0.1.min.js`;
 const SHADERLOADER_URL = `${CDN_BASE}/a-frame-shaderloader-0.2.js`;
-
-/** A-Frame geometry component strings with high segment counts for TSL effects */
-const AFRAME_GEO: Record<string, string> = {
-  sphere: 'primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64',
-  box: 'primitive: box; width: 1.4; height: 1.4; depth: 1.4',
-  torus: 'primitive: torus; radius: 0.7; radiusTubular: 0.3; segmentsRadial: 64; segmentsTubular: 64',
-  plane: 'primitive: plane; width: 2; height: 2',
-};
 
 /**
  * Strip usage comment lines from the top of tslToShaderModule output,

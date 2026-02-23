@@ -9,6 +9,7 @@ import {
 } from '@/registry/nodeRegistry';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import type { NodeDefinition, AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
+import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import complexityData from '@/registry/complexity.json';
 
@@ -79,7 +80,7 @@ export function AddNodeMenu() {
         let maxNum = 0;
         for (const n of nodes) {
           if (n.data.registryType !== 'property_float') continue;
-          const name = String((n.data as { values?: Record<string, string | number> }).values?.name ?? '');
+          const name = String(getNodeValues(n)?.name ?? '');
           const m = name.match(/^property(\d+)$/);
           if (m) maxNum = Math.max(maxNum, Number(m[1]));
         }

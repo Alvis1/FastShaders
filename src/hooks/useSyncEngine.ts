@@ -22,7 +22,6 @@ export function useSyncEngine() {
   const setCodeErrors = useAppStore((s) => s.setCodeErrors);
   const setTotalCost = useAppStore((s) => s.setTotalCost);
   const setSyncInProgress = useAppStore((s) => s.setSyncInProgress);
-  const setActiveScript = useAppStore((s) => s.setActiveScript);
   const codeSyncRequested = useAppStore((s) => s.codeSyncRequested);
 
   // Track last synced code to prevent sync loops
@@ -79,12 +78,10 @@ export function useSyncEngine() {
   const doCodeSync = useCallback(
     (codeStr: string, skipHistory = false) => {
       if (isTSLTexturesCode(codeStr)) {
-        setActiveScript(codeStr);
         setCodeErrors([]);
         return;
       }
 
-      setActiveScript(null);
       setSyncInProgress(true);
       try {
         const result = codeToGraph(codeStr, NODE_REGISTRY);
@@ -175,7 +172,7 @@ export function useSyncEngine() {
         setSyncInProgress(false);
       }
     },
-    [setNodes, setEdges, setCodeErrors, setSyncInProgress, setActiveScript]
+    [setNodes, setEdges, setCodeErrors, setSyncInProgress]
   );
 
   // Code → Graph (manual Save trigger)

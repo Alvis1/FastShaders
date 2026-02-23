@@ -107,11 +107,29 @@ function evaluate(
     case 'float':
     case 'int':
     case 'property_float':
+    case 'slider':
       result = [Number(values.value ?? 0)];
       break;
     case 'screenUV':
       result = [0.5, 0.5]; // center of screen as default
       break;
+    case 'uv': {
+      // Channel doesn't affect CPU evaluation (always UV center)
+      let u = 0.5, v = 0.5;
+      // Apply tiling
+      u *= scalarInput('tilingU', 1);
+      v *= scalarInput('tilingV', 1);
+      // Apply rotation around (0.5, 0.5)
+      const rot = scalarInput('rotation', 0);
+      if (rot !== 0) {
+        const cu = u - 0.5, cv = v - 0.5;
+        const cosR = Math.cos(rot), sinR = Math.sin(rot);
+        u = cu * cosR - cv * sinR + 0.5;
+        v = cu * sinR + cv * cosR + 0.5;
+      }
+      result = [u, v];
+      break;
+    }
 
     // Type constructors
     case 'vec2':
@@ -254,6 +272,14 @@ function evaluate(
           a[2] * b[0] - a[0] * b[2],
           a[0] * b[1] - a[1] * b[0],
         ];
+      }
+      break;
+    }
+    case 'append': {
+      const a = channelInput('a', 0);
+      const b = channelInput('b', 0);
+      if (a && b) {
+        result = [...a, ...b];
       }
       break;
     }
