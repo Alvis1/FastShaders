@@ -57,7 +57,7 @@ src/
 │   │   │   └── DragNumberInput.tsx    # Drag-to-adjust number input with acceleration
 │   │   ├── ContentBrowser.tsx         # Category-tabbed asset drawer with horizontal scroll
 │   │   ├── ContentBrowser.css
-│   │   ├── NodePreviewCard.tsx        # Type-dispatching preview card (6 visual variants matching editor nodes)
+│   │   ├── NodePreviewCard.tsx        # Type-dispatching preview card (7 visual variants matching editor nodes)
 │   │   ├── NodePreviewCard.css
 │   │   └── menus/
 │   │       ├── ContextMenu.tsx        # Menu dispatcher (canvas/node/shader/edge)
@@ -97,6 +97,7 @@ src/
 │   └── tsl.types.ts                   # ParseError, GeneratedCode
 ├── utils/
 │   ├── colorUtils.ts                  # Cost color gradient, type→color mapping, CATEGORY_COLORS (centralized)
+│   ├── edgeUtils.ts                   # removeEdgesForPort() — cleans up edges when hiding input ports
 │   ├── idGenerator.ts                 # generateId(), generateEdgeId()
 │   ├── mathPreview.ts                 # Sin/math waveform canvas renderer (scrolling curve + dot)
 │   ├── noisePreview.ts               # CPU noise (Perlin, fBm, Voronoi) + animated render
@@ -266,7 +267,7 @@ Generates HTML for the in-app preview iframe:
 
 | Category          | Nodes                                                                                     |
 | ----------------- | ----------------------------------------------------------------------------------------- |
-| **Input**         | positionGeometry, normalLocal, tangentLocal, time, screenUV, uv, property_float            |
+| **Input**         | positionGeometry, normalLocal, tangentLocal, time, screenUV, uv, property_float, slider    |
 | **Type**          | float, int, vec2, vec3, vec4, color                                                       |
 | **Arithmetic**    | add, sub, mul, div                                                                        |
 | **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract                                       |
@@ -347,6 +348,19 @@ Configurable uniform properties that become component attributes in A-Frame expo
 - **A-Frame export**: Embeds the script module as blob URL; shaderloader reads schema and manages property uniforms automatically
 - **Migration**: `loadGraph()` in useAppStore migrates old `uniform_float` → `property_float`
 
+### Slider Node
+
+Adjustable float value with a visual range slider and configurable min/max bounds:
+
+- **Registry**: `tslFunction: 'float'`, `defaultValues: { value: 0.5, min: 0.0, max: 1.0 }` — value is first key for positional lookup in graphToCode
+- **Node body**: Shows an `<input type="range">` slider constrained between min and max; min/max are hidden from the node body (only editable via right-click settings menu)
+- **Code generation**: Emits `float(value)` — identical to the Float node in generated code
+- **TSL compilation**: `float(value)` — same as Float
+- **CPU evaluation**: Returns `[value]` — same as float/int/property_float
+- **Code→Graph**: `float()` calls in code always map to the `float` node definition (slider is excluded from `TSL_FUNCTION_TO_DEF` since it shares `tslFunction: 'float'`)
+- **Asset browser**: Dedicated `SliderCardContent` with a visual track, fill bar, thumb dot, and min/value/max labels
+- **Searchable**: by "slider" or "range"
+
 ### React Flow Node Types
 
 - **`shader`** — Generic node for most TSL operations (ShaderNode.tsx)
@@ -360,7 +374,7 @@ Configurable uniform properties that become component attributes in A-Frame expo
 
 The asset browser is a horizontal scrollable drawer at the bottom of the node editor, showing all available nodes grouped by category tabs.
 
-**NodePreviewCard** dispatches to 6 visual variants based on `getFlowNodeType(def)`, matching the editor node appearance:
+**NodePreviewCard** dispatches to 7 visual variants based on `getFlowNodeType(def)` and `def.type`, matching the editor node appearance:
 
 | Flow Type | Renderer | Visual |
 |-----------|----------|--------|
@@ -369,6 +383,7 @@ The asset browser is a horizontal scrollable drawer at the bottom of the node ed
 | `'mathPreview'` | MathCardContent | Header + 72x72 waveform canvas + input/output dots |
 | `'preview'` (noise) | NoiseCardContent | Header + 96x96 pixelated CPU noise canvas + output dot |
 | `'clock'` | ClockCardContent | Header + 56x56 circular clock face + output dot |
+| `def.type === 'slider'` | SliderCardContent | Header + track/fill/thumb slider + min/value/max labels + output dot |
 | `'color'` | ColorCardContent | 28x28 color circle + contrast-aware label + output dot |
 
 - **Texture GPU previews**: Lazy-rendered via `IntersectionObserver` (rootMargin `0px 300px`) using the shared `texturePreviewRenderer.ts`. Cache key `card_${def.type}` avoids collision with editor node IDs. Static only (no animation). Disposed on unmount.
@@ -431,7 +446,7 @@ CPU-side evaluator that walks the node graph and computes values using JS math e
 - **`evaluateNodeScalar(nodeId, nodes, edges, time)`** → first channel as `number | null`
 - **Multi-channel**: Returns `[x]` for scalar, `[x,y]` for vec2, `[r,g,b]` for vec3/color, `[x,y,z,w]` for vec4
 - **Component-wise broadcasting**: Operations like scalar × vec3 broadcast shorter to longer
-- **Supported nodes**: time, float/int/property_float, screenUV, uv (with tiling/rotation), vec2/vec3/vec4/color constructors, all arithmetic (add/sub/mul/div), all unary math (sin/cos/abs/sqrt/exp/log2/floor/round/fract), binary math (pow/mod/min/max/clamp), interpolation (mix/smoothstep), vector ops (length/distance/dot/normalize/cross/append), noise (perlin/fractal/voronoi — sampled at UV center)
+- **Supported nodes**: time, float/int/property_float/slider, screenUV, uv (with tiling/rotation), vec2/vec3/vec4/color constructors, all arithmetic (add/sub/mul/div), all unary math (sin/cos/abs/sqrt/exp/log2/floor/round/fract), binary math (pow/mod/min/max/clamp), interpolation (mix/smoothstep), vector ops (length/distance/dot/normalize/cross/append), noise (perlin/fractal/voronoi — sampled at UV center)
 - Returns `null` for unevaluable nodes (e.g., positionGeometry — depends on GPU geometry)
 
 ---
@@ -554,6 +569,7 @@ Routes to specific menu based on `contextMenu.type`:
 - Displays node label and registry type
 - Checkbox per parameter to expose/hide as input handle on the node (`exposedPorts`)
 - Checkboxes also shown for input-only ports not in defaultValues (tslRef params like Position, Time)
+- **Edge cleanup**: Hiding a port removes all edges connected to it via `removeEdgesForPort()` from `edgeUtils.ts`
 - Editable parameters (color inputs for hex, DragNumberInput for numbers)
 - **Property name editing**: For `property_float` nodes, the `name` field is a text input (kept as string, not parsed as number)
 - Duplicate Node button (structuredClone + offset)
@@ -564,7 +580,7 @@ Routes to specific menu based on `contextMenu.type`:
 Right-click menu for the output node with sections:
 
 - **Shader Settings**: Total cost display with headset budget reference
-- **Output Ports**: Checkboxes to toggle optional ports (emissive, normal, opacity)
+- **Output Ports**: Checkboxes to toggle optional ports (emissive, normal, opacity); hiding a port removes connected edges via `removeEdgesForPort()`
 - **Displacement** (shown when position port is exposed):
   - "Along Normal" checkbox — controls `materialSettings.displacementMode` (`'normal'` | `'offset'`)
   - Normal mode (default): `positionLocal.add(normalLocal.mul(displacement))` — pushes vertices outward along surface normals
