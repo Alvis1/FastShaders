@@ -99,6 +99,9 @@ function convertToShaderModule(
   if (materialSettings?.side) {
     returnProps.push(`side: ${SIDE_VALUES[materialSettings.side] ?? 0}`);
   }
+  if (materialSettings?.alphaTest) {
+    returnProps.push(`alphaTest: ${materialSettings.alphaTest}`);
+  }
 
   const lines = [
     ...imports,

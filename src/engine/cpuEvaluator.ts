@@ -6,7 +6,7 @@
  */
 import type { AppNode, AppEdge } from '@/types';
 import { getNodeValues } from '@/types';
-import { perlin2D, fbm2D, voronoi2D } from '@/utils/noisePreview';
+import { fbm2D, voronoi2D } from '@/utils/noisePreview';
 import { hexToRgb01 } from '@/utils/colorUtils';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
@@ -283,14 +283,6 @@ function evaluate(
     }
 
     // Noise (evaluate at a representative point — center of UV)
-    case 'noise': {
-      const posInput = channelInput('pos', 0);
-      const scale = scalarInput('scale', 1);
-      const px = (posInput ? posInput[0] : 0.5) * NOISE_UV_SCALE * scale;
-      const py = (posInput ? (posInput[1] ?? 0.5) : 0.5) * NOISE_UV_SCALE * scale;
-      result = [(perlin2D(px, py) + 1) * 0.5];
-      break;
-    }
     case 'fractal': {
       const posInput = channelInput('pos', 0);
       const scale = scalarInput('scale', 1);

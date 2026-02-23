@@ -50,7 +50,6 @@
     "dot": 2,
     "cross": 3,
 
-    "noise": 50,
     "fractal": 80,
     "voronoi": 60,
 

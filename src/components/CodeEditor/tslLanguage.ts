@@ -46,7 +46,6 @@ declare module 'three/tsl' {
   export function distance(a: any, b: any): any;
   export function dot(a: any, b: any): any;
   export function cross(a: any, b: any): any;
-  export function mx_noise_float(pos: any): any;
   export function mx_fractal_noise_float(pos: any, octaves: any, lacunarity: any, diminish: any): any;
   export function mx_worley_noise_float(pos: any): any;
   export function hsl(h: any, s: any, l: any): any;

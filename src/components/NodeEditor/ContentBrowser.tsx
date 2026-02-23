@@ -4,18 +4,46 @@ import { getAllDefinitions } from '@/registry/nodeRegistry';
 import { NodePreviewCard } from './NodePreviewCard';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CATEGORY_COLORS } from '@/utils/colorUtils';
+import complexityData from '@/registry/complexity.json';
 import './ContentBrowser.css';
 
-const displayCategories = CATEGORIES.filter((c) => c.id !== 'output');
+const displayCategories = CATEGORIES.filter((c) => c.id !== 'output' && c.id !== 'noise');
+const costs = complexityData.costs as Record<string, number>;
+
+/** Nodes pinned at the start of the texture section (order matters). */
+const PINNED_TEXTURE_ORDER = ['tslTex_perlinNoise', 'voronoi'] as const;
+const PINNED_TEXTURE_TYPES = new Set<string>(PINNED_TEXTURE_ORDER);
 
 export function ContentBrowser() {
   const [activeCategory, setActiveCategory] = useState<NodeCategory | 'all'>('all');
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const allDefs = useMemo(() => getAllDefinitions().filter((d) => d.type !== 'output'), []);
+  const allDefs = useMemo(() => {
+    const defs = getAllDefinitions().filter((d) => d.type !== 'output');
+    // Sort texture nodes by cost (ascending)
+    defs.sort((a, b) => {
+      if (a.category === 'texture' && b.category === 'texture') {
+        const costA = costs[a.type] ?? 50;
+        const costB = costs[b.type] ?? 50;
+        return costA - costB;
+      }
+      return 0;
+    });
+    return defs;
+  }, []);
 
   const filteredDefs = useMemo(() => {
     if (activeCategory === 'all') return allDefs;
+    if (activeCategory === 'texture') {
+      // Pin perlinNoise & voronoi at start (in order), then all noise + texture nodes sorted by cost
+      const pinned = PINNED_TEXTURE_ORDER
+        .map((type) => allDefs.find((d) => d.type === type))
+        .filter((d): d is NodeDefinition => d != null);
+      const rest = allDefs
+        .filter((d) => (d.category === 'texture' || d.category === 'noise') && !PINNED_TEXTURE_TYPES.has(d.type))
+        .sort((a, b) => (costs[a.type] ?? 50) - (costs[b.type] ?? 50));
+      return [...pinned, { type: '__spacer__' } as NodeDefinition, ...rest];
+    }
     return allDefs.filter((d) => d.category === activeCategory);
   }, [allDefs, activeCategory]);
 
@@ -68,9 +96,13 @@ export function ContentBrowser() {
         ))}
       </div>
       <div className="content-browser__items" ref={scrollRef}>
-        {filteredDefs.map((def) => (
-          <NodePreviewCard key={def.type} def={def} onDragStart={onDragStart} />
-        ))}
+        {filteredDefs.map((def) =>
+          def.type === '__spacer__' ? (
+            <div key="__spacer__" style={{ width: 12, flexShrink: 0 }} />
+          ) : (
+            <NodePreviewCard key={def.type} def={def} onDragStart={onDragStart} />
+          )
+        )}
       </div>
     </div>
   );
