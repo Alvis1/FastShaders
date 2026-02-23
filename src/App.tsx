@@ -38,9 +38,9 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
       type: 'preview',
       position: { x: 160, y: 60 },
       data: {
-        registryType: 'noise',
-        label: 'Noise',
-        cost: costs.noise ?? 0,
+        registryType: 'fractal',
+        label: 'Fractal (fBm)',
+        cost: costs.fractal ?? 0,
         values: {},
       } as ShaderNodeData,
     },

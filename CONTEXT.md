@@ -71,7 +71,7 @@ src/
 │       └── ShaderPreview.css
 ├── engine/
 │   ├── graphToCode.ts                 # Graph → TSL code string (import statements + Fn() wrapper)
-│   ├── codeToGraph.ts                 # TSL code → nodes + edges (Babel AST parsing, incl. object literals)
+│   ├── codeToGraph.ts                 # TSL code → nodes + edges (Babel AST, multi-channel returns, noise/UV/texture patterns)
 │   ├── graphToTSLNodes.ts             # Graph → live Three.js TSL node objects (all 5 output channels)
 │   ├── tslCodeProcessor.ts            # Shared TSL processing: import extraction, TDZ fix, body parsing
 │   ├── tslToAFrame.ts                 # TSL code → A-Frame HTML (uses tslToShaderModule + shaderloader blob URL)
@@ -184,9 +184,21 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 - **`syncSource`** field: `'graph' | 'code' | 'initial'` — tracks who initiated the change
 - **`syncInProgress`** flag — blocks nested syncs
 - **Graph → Code**: Real-time on every node/edge change (`graphToCode()`)
-- **Code → Graph**: Debounced auto-sync (600ms) + manual via Save button / Ctrl+S (`codeToGraph()` with Babel parser, `errorRecovery: true`)
-- **Stable node matching**: Two-pass matching (registryType+label, then registryType only) preserves node positions and IDs across syncs
+- **Code → Graph**: Manual via Save button / Ctrl+S (`codeToGraph()` with Babel parser, `errorRecovery: true`)
+- **Stable node matching**: Two-pass matching (registryType+label, then registryType only) preserves node positions, IDs, `exposedPorts`, and `materialSettings` across syncs
+- **Auto-expose ports**: After code→graph sync, any port with an incoming edge is automatically added to `exposedPorts` (texture, noise, output nodes)
 - **Complexity**: Traverses backward from Output node, sums costs from `complexity.json`. Uses `lastCostRef` guard to prevent double BFS runs (updating output node cost triggers nodes change → would re-run the effect)
+
+### Code → Graph Parsing (codeToGraph.ts)
+
+The Babel-based parser handles these patterns:
+
+- **Multi-channel returns**: `return { color: x, position: y }` → wires each property to the corresponding output port
+- **Single-value returns**: `return x` or `return someFunc(a, b)` → wires to output.color (inline calls create intermediate nodes)
+- **Noise functions**: `mx_fractal_noise_float(posOrMul, octaves, lacunarity, diminish)` — detects `mul(pos, scale)` pattern for the first arg, maps remaining args to fractal-specific keys
+- **UV tiling**: `mul(uv(), vec2(x, y))` pattern detected and converted to a single UV node with tiling values
+- **tsl-textures**: Single object argument `bricks({ scale: 2, color: color(0xFF0000) })` — wires variable refs as edges, extracts literals/constructors as values
+- **Property nodes**: `uniform(value)` calls → `property_float` nodes with variable name as property name
 
 ### Zustand Store Shape
 
@@ -610,7 +622,7 @@ All settings stored in `OutputNodeData.materialSettings` and threaded through to
 - **Font**: Inter (sans), JetBrains Mono (mono)
 - **Spacing**: 4px base scale (--space-1 through --space-8)
 - **Shadows**: 4 levels (sm, md, lg, node) + selected state with blue ring
-- **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red). All ~50 tsl-textures functions have individual GPU costs in `complexity.json` across 5 tiers: utility (18–25), simple patterns (28–38), medium (42–58), heavy (62–90), very heavy (95–115). Costs factor in noise calls, loop iterations, trigonometric operations, voronoi lookups, and fractal evaluations.
+- **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red). All ~50 tsl-textures functions have individual GPU costs in `complexity.json` across 5 tiers: utility (10–20), simple patterns (25–38), medium (45–62), heavy (78–100), very heavy (115–165). Costs calibrated against mobile GPU SFU quarter-rate (add=1, sin/cos=4, pow=12). Budgets assume 3–5 concurrent shaders in scene.
 - **Category colors**: Each node category has a distinct accent color for the header strip
   - input (#4CAF50), type (#2196F3), arithmetic (#FF9800), math (#9C27B0), interpolation (#00BCD4), vector (#E91E63), noise (#795548), color (#FF5722), texture (#8D6E63), output (#f44336)
 
