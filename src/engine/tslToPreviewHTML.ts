@@ -32,7 +32,7 @@ function getScriptUrls() {
   const base = import.meta.env.BASE_URL; // e.g. '/FastShaders/'
   return {
     iife: `${origin}${base}js/aframe-171-a-0.1.min.js`,
-    shaderloader: `${origin}${base}js/a-frame-shaderloader-0.2.js`,
+    shaderloader: `${origin}${base}js/a-frame-shaderloader-0.3.js`,
     orbitControls: `${origin}${base}js/aframe-orbit-controls.min.js`,
   };
 }
@@ -123,7 +123,7 @@ export function tslToPreviewHTML(
     geometry = 'sphere',
     animate = false,
     materialSettings,
-    bgColor = '#1a1a2e',
+    bgColor = '#808080',
   } = options;
 
   const shaderModule = convertToShaderModule(tslCode, materialSettings);

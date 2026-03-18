@@ -50,7 +50,7 @@ export function tslToShaderModule(
   outLines.push('//');
   outLines.push('// HTML setup:');
   outLines.push(`//   <script src="${CDN_BASE}/aframe-171-a-0.1.min.js"><${''}/script>`);
-  outLines.push(`//   <script src="${CDN_BASE}/a-frame-shaderloader-0.2.js"><${''}/script>`);
+  outLines.push(`//   <script src="${CDN_BASE}/a-frame-shaderloader-0.3.js"><${''}/script>`);
   if (hasProps) {
     const propExample = props.map(p => `${p.name}: ${p.defaultValue}`).join('; ');
     outLines.push(`//   <a-entity shader="src: shader.js; ${propExample}"></a-entity>`);

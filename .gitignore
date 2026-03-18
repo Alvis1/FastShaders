@@ -2,3 +2,9 @@ node_modules
 dist
 .DS_Store
 *.local
+Raksts
+FastShaders_IEEE_Article_Fixed.docx
+FastShaders_IEEE_Formatted.docx
+FastShaders_IEEE_Formatted.pdf
+FastShaders_Third_Draft.docx
+ICVARS_Review_FastShaders.md
