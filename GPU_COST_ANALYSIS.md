@@ -60,35 +60,45 @@ Register reads and assignments — not ALU operations.
 | `log2`                    | 6   | **4** | SFU             | Native SFU instruction[^1][^3]                                                        |
 | `exp`                     | 6   | **5** | SFU + FMA       | `exp2(x * 1.4427)` = 1 SFU + 1 multiply[^1]                                           |
 
-### Math — Binary (1–12 pts)
+### Math — Binary (1–12 pts, corrected)
 
 | Node         | Old | New    | Pipeline | Rationale                                                   |
 | ------------ | --- | ------ | -------- | ----------------------------------------------------------- |
 | `min`, `max` | 1   | **1**  | ALU      | Single instruction[^1]                                      |
-| `mod`        | 2   | **2**  | ALU      | `x - y * floor(x/y)` = floor + mul + sub                    |
+| `mod`        | 2   | **6**  | SFU + ALU | `x - y * floor(x * rcp(y))` = rcp SFU(4) + mul(1) + floor(1) + mul(1) + sub(1). Optimized drivers may use a dedicated fmod path (~4–6 ALU)[^1][^3] |
 | `clamp`      | 2   | **2**  | ALU      | `min(max(x, a), b)` = 2 instructions                        |
 | `pow`        | 5   | **12** | SFU x3   | `exp2(y * log2(x))` = 3 chained SFU operations[^1][^3][^12] |
 
 > [!warning] `pow()` is the biggest correction
 > Was 2.4x undervalued. It compiles to 3 chained SFU ops, making it one of the most expensive common operations. AMD GCN measured: 16-cycle latency vs 4 for mul.
 
-### Interpolation (2–7 pts)
+### Interpolation (2–10 pts)
 
 | Node         | Old | New   | Pipeline  | Rationale                                                                                              |
 | ------------ | --- | ----- | --------- | ------------------------------------------------------------------------------------------------------ |
 | `mix`        | 3   | **2** | FMA       | `a + t*(b-a)` = 1–2 FMA instructions[^1]                                                               |
 | `select`     | 2   | **2** | ALU       | Predicated select                                                                                      |
-| `remap`      | 5   | **5** | ALU       | Linear remap: sub + div + mul + add                                                                    |
-| `smoothstep` | 4   | **7** | ALU + SFU | `t = clamp((x-e0)/(e1-e0)); t*t*(3-2*t)` — involves division (SFU rcp) + clamp + cubic polynomial[^13] |
+| `remap`      | 5   | **7** | ALU + SFU | Linear remap: `(x-a) / (b-a) * (d-c) + c` = sub(1) + sub(1) + rcp SFU(4) + mul(1) + mul(1) + add(1). Some terms parallelize; effective ~7[^1] |
+| `smoothstep` | 4   | **10** | ALU + SFU | `t = clamp((x-e0)/(e1-e0)); t*t*(3-2*t)` = sub(1) + rcp SFU(4) + mul(1) + clamp(2) + cubic(3). ~10–11 total[^13] |
 
 ### Vector Operations (3–8 pts, for vec3)
 
-Costs scale with vector dimension. Values below are for vec3 (most common in shaders).
+Costs scale with vector dimension. Values below are for **vec3** (most common in shaders).
+
+**Scaling rule:** For `dot`, `length`, `normalize`, `distance` — the ALU component scales linearly with dimension while the SFU component is fixed. For `cross`, which is defined only for vec3, no scaling applies.
+
+| Dim  | `dot` | `length`      | `normalize`   | `distance`    |
+| ---- | ----- | ------------- | ------------- | ------------- |
+| vec2 | 2     | 6 (dot2 + 4) | 6 (dot2 + 4) | 7 (sub + 6)  |
+| vec3 | 3     | 7 (dot3 + 4) | 7 (dot3 + 4) | 8 (sub + 7)  |
+| vec4 | 4     | 8 (dot4 + 4) | 8 (dot4 + 4) | 9 (sub + 8)  |
+
+Component-wise operations (`add`, `mul`, `mix`, etc.) applied to vectors execute as N independent scalar operations on SIMD hardware. On Adreno/Mali, vec4 ops typically execute in a single cycle (SIMD-width ≥ 4), so **component-wise vector ops cost the same as their scalar equivalents** — the hardware parallelism absorbs the extra components.[^1][^2]
 
 | Node        | Old | New   | Pipeline  | Rationale                                             |
 | ----------- | --- | ----- | --------- | ----------------------------------------------------- |
 | `dot`       | 2   | **3** | FMA       | 3 multiply-adds (one per component)[^1]               |
-| `cross`     | 3   | **6** | FMA       | 6 multiplies + 3 subtracts[^1]                        |
+| `cross`     | 3   | **6** | FMA       | 6 multiplies + 3 subtracts (vec3 only)[^1]            |
 | `normalize` | 4   | **7** | FMA + SFU | `v * rsqrt(dot(v,v))` = dot(3) + rsqrt SFU(4)[^1][^3] |
 | `length`    | 3   | **7** | FMA + SFU | `sqrt(dot(v,v))` = dot(3) + sqrt SFU(4)[^1][^3]       |
 | `distance`  | 4   | **8** | FMA + SFU | `length(a-b)` = sub(1) + length(7)                    |
@@ -206,24 +216,34 @@ Costs based on internal composition: noise calls, loop iterations, trigonometric
 
 ### Per-pixel fragment budget calculation
 
-The effective per-pixel budget depends on TFLOPS, resolution, framerate, overdraw, and system overhead:
+The effective per-pixel budget depends on TFLOPS, resolution, framerate, overdraw, system overhead, and API overhead:
 
 ```
-FLOPs/pixel = (TFLOPS x utilization x (1 - system_overhead)) / (total_pixels x FPS x overdraw)
+FLOPs/pixel = (TFLOPS x utilization x (1 - system_overhead) x (1 - api_overhead)) / (total_pixels x FPS x overdraw)
 ```
 
-| Device              | Pixels/frame | FPS | Overdraw | Util. | System OH | Eff. FLOPs/px |
-| ------------------- | ------------ | --- | -------- | ----- | --------- | ------------- |
-| **Quest 2**         | 7.03M        | 90  | 3x       | 50%   | 15%       | ~69           |
-| **Pico 4**          | 9.33M        | 90  | 3x       | 50%   | 15%       | ~62           |
-| **Quest 3S**        | 7.03M        | 90  | 3x       | 50%   | 15%       | ~82           |
-| **Quest 3**         | 9.11M        | 90  | 3x       | 50%   | 15%       | ~155          |
-| **Steam Frame**     | 9.33M        | 90  | 3x       | 50%   | 10%       | ~150          |
-| **Vision Pro (M5)** | ~25.8M       | 96  | 1.5x[^a] | 60%   | 30%[^b]   | ~170          |
+| Device              | Pixels/frame | FPS | Overdraw | Util. | System OH | API OH[^c] | Eff. FLOPs/px |
+| ------------------- | ------------ | --- | -------- | ----- | --------- | ---------- | ------------- |
+| **Quest 2**         | 7.03M        | 90  | 3x       | 50%   | 15%       | 25%        | ~185          |
+| **Pico 4**          | 9.33M        | 90  | 3x       | 50%   | 15%       | 25%        | ~165          |
+| **Quest 3S**        | 7.03M        | 90  | 3x       | 50%   | 15%       | 25%        | ~218          |
+| **Quest 3**         | 9.11M        | 90  | 3x       | 50%   | 15%       | 25%        | ~389          |
+| **Steam Frame**     | 9.33M        | 90  | 3x       | 50%   | 10%       | 25%        | ~375          |
+| **Vision Pro (M5)** | ~25.8M       | 96  | 1.5x[^a] | 60%   | 30%[^b]   | 20%        | ~516          |
 
 [^a]: Vision Pro uses Tile-Based Deferred Rendering — overdraw for opaque geometry is ~1x (only visible fragments shaded). Averaged to 1.5x including transparency.[^23]
 
 [^b]: visionOS system compositor, passthrough cameras, hand tracking claim significant GPU share.[^24]
+
+[^c]: WebGL/A-Frame overhead vs. native. Includes JS→GPU bridge, shader compilation indirection, and A-Frame abstraction cost. Estimated 20–30% per [^25]; we use 25% for Adreno (Android WebView) and 20% for Vision Pro (Safari WebGPU, more optimized path).
+
+### Assumptions and caveats
+
+**50% ALU utilization** — conservative estimate for procedural (ALU-bound) shaders with minimal texture fetches. Real utilization varies: texture-heavy shaders may drop to 30–40% due to memory stalls; purely mathematical shaders may reach 60–70%. We use 50% as a middle ground because most FastShaders graphs mix procedural noise (ALU-bound) with some varying interpolation.[^26]
+
+**3x overdraw (Adreno)** — typical for a multi-object VR scene with some transparency. Best case for opaque-only scenes is ~1.5x (Adreno 740/750 support FlexRender, a hybrid tiling mode that reduces redundant shading[^8]); worst case with heavy transparency or particles is 5x+. The 3x figure represents a "typical A-Frame scene with 5–10 objects and a skybox." Developers building opaque-only scenes can mentally increase their budget by ~2x.
+
+**Bandwidth is not modeled** — the cost model is ALU-only, which is appropriate for FastShaders' procedural shaders (no texture sampling, minimal buffer reads). Shaders that add texture lookups or heavy varying interpolation may be bandwidth-bound on Adreno 650/660 (44 GB/s), making the ALU cost understate the real bottleneck.
 
 ### Steam Frame vs Quest 3
 
@@ -235,16 +255,38 @@ Despite having 1.9x the TFLOPS (5.7 vs 3.0), Vision Pro renders **~2.83x more pi
 
 ### Per-shader budget (3–5 shaders in scene)
 
-Dividing effective budget by ~4 (average of 3–5 shaders weighted by screen coverage):
+Dividing effective FLOPs/px by ~4 (average of 3–5 shaders weighted by screen coverage). Since TFLOPS specs count FMA as 2 FLOPs but we cost FMA as 1 point, the FLOPs-to-points conversion is approximately 1:1 for add-heavy code and 2:1 for FMA-heavy code. We use a **1.5:1** ratio as a middle ground for mixed shader code, giving `maxPoints ≈ FLOPs/px / 4 / 1.5`:
 
-| Device              | Old maxPoints | **New maxPoints** | Change | Practical meaning                                                                   |
-| ------------------- | ------------- | ----------------- | ------ | ----------------------------------------------------------------------------------- |
-| **Pico 4**          | 100           | **80**            | -20%   | Basic patterns only. `polkaDots(35)` + math                                         |
-| **Quest 2**         | —             | **90**            | new    | Slightly above Pico 4. `circles(30) + smoothstep(7) + mix(2)`                       |
-| **Quest 3S**        | 120           | **110**           | -8%    | One medium texture + light math. `perlinNoise(55) + smoothstep(7)`                  |
-| **Quest 3**         | 150           | **200**           | +33%   | One heavy texture + math pipeline. `marble(85) + hsl(15) + mix(2)`                  |
-| **Steam Frame**     | 300           | **220**           | -27%   | Similar to Quest 3 + slight SteamOS edge. `marble(85) + pow(12) + hsl(15) + mix(2)` |
-| **Vision Pro (M5)** | 400           | **350**           | -12%   | Heavy texture + complex pipeline. `clouds(100) + fractal(140) + mix(2)`             |
+| Device              | Old maxPoints | **New maxPoints** | Change | Practical meaning                                                          |
+| ------------------- | ------------- | ----------------- | ------ | -------------------------------------------------------------------------- |
+| **Pico 4**          | 100           | **70**            | -30%   | Basic patterns only. `polkaDots(35) + mix(2) + math`                       |
+| **Quest 2**         | —             | **75**            | new    | Slightly above Pico 4. `circles(30) + smoothstep(10) + mix(2)`            |
+| **Quest 3S**        | 120           | **95**            | -21%   | One medium texture + light math. `perlinNoise(55) + smoothstep(10)`       |
+| **Quest 3**         | 150           | **165**           | +10%   | One heavy texture + math. `marble(85) + hsl(15) + mix(2)`                 |
+| **Steam Frame**     | 300           | **160**           | -47%   | Similar to Quest 3. `marble(85) + pow(12) + hsl(15) + mix(2)`             |
+| **Vision Pro (M5)** | 400           | **285**           | -29%   | Heavy texture + complex pipeline. `clouds(100) + fractal(140) + mix(2)`   |
+
+> [!note] Sensitivity to scene assumptions
+> These budgets use **conservative defaults** (50% utilization, 3x overdraw, 25% API overhead). For simpler scenes — opaque-only geometry, 2 shaders, minimal overdraw — effective budgets can be **1.5–2x higher**. Conversely, scenes with heavy transparency or 5+ shaders will have tighter budgets. Treat these values as the safe floor, not the ceiling.
+
+> [!warning] Budgets reduced vs. prior revision
+> Adding the WebXR/A-Frame API overhead (20–25%)[^25] and correcting the FLOPs-to-points conversion significantly lowers effective budgets, especially for lower-end devices and Steam Frame (which was previously treated as PCVR). Pico 4 and Quest 2 are now tightly constrained — complex tsl-textures (Tier 4+) are impractical on these devices without reducing scene complexity.
+
+---
+
+## Model Limitations
+
+The additive cost model is a practical simplification. These known limitations affect accuracy:
+
+**Instruction-level parallelism (ILP)** — The model sums operation costs, but real GPUs execute independent instructions in parallel. An `add` and a `sin` with no data dependency can overlap on the ALU and SFU pipelines, costing ~4 points rather than 5. Conversely, chained dependent operations (like `pow`'s `exp2(y * log2(x))`) cannot overlap and may stall the pipeline. The additive model is roughly correct for typical shader graphs where operations form a dependency chain, but **overestimates cost for wide, parallel graphs** and **underestimates cost for deep, serial chains**.
+
+**Control flow divergence** — Operations like `hsl` (15 pts) involve branches (hue sector selection). On SIMD hardware, when threads in a warp take different branches, all paths execute with inactive threads masked out. The 15-point cost assumes a single path; worst-case divergence could push the effective cost to ~20–25 points. This primarily affects color space conversions and `select`/conditional nodes.[^1]
+
+**Half-precision (mediump)** — Mobile GPUs execute FP16 operations at 2x the rate of FP32. If TSL shaders can use `mediump` for color math (which is common), the ALU cost for those operations is halved. The model assumes FP32 throughout, which is conservative for color-only pipelines but accurate for position/normal calculations that require full precision.[^2][^3]
+
+**Shader compilation cost** — The model captures per-frame runtime cost only. Complex shaders can cause multi-second compilation stalls on Adreno GPUs (the driver performs aggressive optimization at compile time). This one-time cost matters for user experience but is not reflected in the point budget.[^27]
+
+**tsl-textures verification** — Tier 3–5 tsl-texture costs are estimated from internal composition (e.g., "FBM + distortion") rather than measured instruction counts. These could be validated using the Adreno Offline Compiler[^27] to get exact ALU instruction counts per texture function.
 
 ---
 
@@ -254,13 +296,17 @@ Dividing effective budget by ~4 (average of 3–5 shaders weighted by screen cov
 | -------------------- | -------------- | ------------------------------------------------------------------------------ |
 | `pow()`              | 5 to **12**    | Was 2.4x undervalued. 3 chained SFU ops                                        |
 | `sin()`/`cos()`      | 8 to **4**     | Was 2x overvalued. Single SFU instruction                                      |
+| `mod()`              | 2 to **6**     | Was 3x undervalued. Contains hidden `rcp` (SFU) for division                   |
 | `hsl`/`toHsl`        | 5 to **15**    | Was 3x undervalued. Complex conditional color conversion                       |
 | `fractal` (FBM)      | 80 to **140**  | Was 1.75x undervalued. 4 octaves x ~35 ALU each                                |
 | Constructors         | 1–2 to **0**   | Were adding phantom cost. Register assignments are free                        |
 | `normalize`/`length` | 3–4 to **7**   | Hidden SFU cost in the dot to sqrt/rsqrt chain                                 |
-| `smoothstep`         | 4 to **7**     | Hidden division cost often overlooked                                          |
-| Steam Frame          | 300 to **220** | Was treated as PCVR — actually standalone Adreno 750                           |
-| Vision Pro           | 400 to **350** | M5 (5.7 TFLOPS) is powerful but ~26M pixels + system compositor cap the budget |
+| `smoothstep`         | 4 to **10**    | Hidden rcp SFU + clamp + cubic polynomial — was 2.5x undervalued              |
+| `remap`              | 5 to **7**     | Contains hidden rcp SFU for division step                                      |
+| WebXR API overhead   | omitted → **25%** | Was not factored in despite being cited. Reduces all budgets significantly   |
+| Steam Frame          | 300 to **160** | Was treated as PCVR — actually standalone Adreno 750 + WebXR overhead          |
+| Vision Pro           | 400 to **285** | M5 (5.7 TFLOPS) is powerful but ~26M pixels + compositor + WebXR cap the budget |
+| Quest 2 / Pico 4     | — to **70–75** | Now modeled. Tightly constrained — Tier 4+ textures are impractical            |
 
 ---
 

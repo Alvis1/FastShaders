@@ -11,7 +11,7 @@ function loadGeometry(): GeometryType {
     const v = localStorage.getItem('fs:previewGeometry');
     if (v === 'cube' || v === 'torus' || v === 'plane' || v === 'sphere') return v;
   } catch { /* */ }
-  return 'cube';
+  return 'sphere';
 }
 
 export function ShaderPreview() {
@@ -25,7 +25,7 @@ export function ShaderPreview() {
   const [geometry, setGeometry] = useState<GeometryType>(loadGeometry);
   const [playing, setPlaying] = useState(false);
   const [bgColor, setBgColor] = useState(() => {
-    try { return localStorage.getItem('fs:previewBgColor') || '#1a1a2e'; } catch { return '#1a1a2e'; }
+    try { return localStorage.getItem('fs:previewBgColor') || '#808080'; } catch { return '#808080'; }
   });
 
   const blobUrlRef = useRef<string | null>(null);

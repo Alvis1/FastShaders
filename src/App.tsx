@@ -15,50 +15,69 @@ function SyncController() {
 function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
   const costs = complexityData.costs as Record<string, number>;
 
-  const posId = generateId();
-  const noiseId = generateId();
-  const colorId = generateId();
+  const perlinId = generateId();
+  const color1Id = generateId();
+  const color2Id = generateId();
+  const subId = generateId();
   const mixId = generateId();
   const outputId = generateId();
 
   const nodes: AppNode[] = [
     {
-      id: posId,
-      type: 'shader',
-      position: { x: 0, y: 100 },
+      id: perlinId,
+      type: 'texturePreview',
+      position: { x: 0, y: 130 },
       data: {
-        registryType: 'positionGeometry',
-        label: 'Position',
-        cost: costs.positionGeometry ?? 0,
-        values: {},
+        registryType: 'tslTex_perlinNoise',
+        label: 'Perlin Noise',
+        cost: costs.tslTex_perlinNoise ?? 55,
+        values: {
+          scale: 1.1,
+          balance: 0,
+          contrast: 0,
+          color: '#ffffff',
+          background: '#000000',
+          seed: 0,
+        },
       } as ShaderNodeData,
     },
     {
-      id: noiseId,
-      type: 'preview',
-      position: { x: 160, y: 60 },
-      data: {
-        registryType: 'fractal',
-        label: 'Fractal (fBm)',
-        cost: costs.fractal ?? 0,
-        values: {},
-      } as ShaderNodeData,
-    },
-    {
-      id: colorId,
+      id: color1Id,
       type: 'color',
-      position: { x: 160, y: 200 },
+      position: { x: 270, y: 0 },
       data: {
         registryType: 'color',
         label: 'Color',
         cost: costs.color ?? 0,
-        values: { hex: '#6C63FF' },
+        values: { hex: '#fec700' },
+      } as ShaderNodeData,
+    },
+    {
+      id: color2Id,
+      type: 'color',
+      position: { x: 270, y: 130 },
+      data: {
+        registryType: 'color',
+        label: 'Color',
+        cost: costs.color ?? 0,
+        values: { hex: '#e32400' },
+      } as ShaderNodeData,
+    },
+    {
+      id: subId,
+      type: 'shader',
+      position: { x: 450, y: 260 },
+      data: {
+        registryType: 'sub',
+        label: 'Subtract',
+        cost: costs.sub ?? 0,
+        values: { b: 0.5 },
       } as ShaderNodeData,
     },
     {
       id: mixId,
       type: 'shader',
-      position: { x: 320, y: 120 },
+      position: { x: 450, y: 40 },
       data: {
         registryType: 'mix',
         label: 'Mix',
@@ -69,42 +88,53 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
     {
       id: outputId,
       type: 'output',
-      position: { x: 480, y: 120 },
+      position: { x: 650, y: 120 },
       data: {
         registryType: 'output',
         label: 'Output',
         cost: 0,
+        exposedPorts: ['color', 'position'],
       } as OutputNodeData,
     },
   ];
 
   const edges = [
     {
-      id: generateEdgeId(posId, 'out', noiseId, 'pos'),
-      source: posId,
-      target: noiseId,
-      sourceHandle: 'out',
-      targetHandle: 'pos',
-      type: 'typed' as const,
-      animated: true,
-      data: { dataType: 'vec3' as const },
-    },
-    {
-      id: generateEdgeId(noiseId, 'out', mixId, 't'),
-      source: noiseId,
+      id: generateEdgeId(perlinId, 'out', mixId, 't'),
+      source: perlinId,
       target: mixId,
       sourceHandle: 'out',
       targetHandle: 't',
       type: 'typed' as const,
       animated: true,
-      data: { dataType: 'float' as const },
+      data: { dataType: 'color' as const },
     },
     {
-      id: generateEdgeId(colorId, 'out', mixId, 'a'),
-      source: colorId,
+      id: generateEdgeId(perlinId, 'out', subId, 'a'),
+      source: perlinId,
+      target: subId,
+      sourceHandle: 'out',
+      targetHandle: 'a',
+      type: 'typed' as const,
+      animated: true,
+      data: { dataType: 'color' as const },
+    },
+    {
+      id: generateEdgeId(color1Id, 'out', mixId, 'a'),
+      source: color1Id,
       target: mixId,
       sourceHandle: 'out',
       targetHandle: 'a',
+      type: 'typed' as const,
+      animated: true,
+      data: { dataType: 'color' as const },
+    },
+    {
+      id: generateEdgeId(color2Id, 'out', mixId, 'b'),
+      source: color2Id,
+      target: mixId,
+      sourceHandle: 'out',
+      targetHandle: 'b',
       type: 'typed' as const,
       animated: true,
       data: { dataType: 'color' as const },
@@ -115,6 +145,16 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
       target: outputId,
       sourceHandle: 'out',
       targetHandle: 'color',
+      type: 'typed' as const,
+      animated: true,
+      data: { dataType: 'any' as const },
+    },
+    {
+      id: generateEdgeId(subId, 'out', outputId, 'position'),
+      source: subId,
+      target: outputId,
+      sourceHandle: 'out',
+      targetHandle: 'position',
       type: 'typed' as const,
       animated: true,
       data: { dataType: 'any' as const },
