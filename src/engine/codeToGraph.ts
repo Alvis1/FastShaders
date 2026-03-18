@@ -47,6 +47,8 @@ export function codeToGraph(
   const varToNodeId = new Map<string, string>();
   const rawNodes: AppNode[] = [];
   const rawEdges: AppEdge[] = [];
+  // Track split nodes created for member expression patterns (sourceVarName → splitNodeId)
+  const splitNodes = new Map<string, string>();
 
   let hasOutput = false;
 
@@ -71,7 +73,7 @@ export function codeToGraph(
 
         // const x = func(args...) or const x = obj.method(args...)
         if (t.isCallExpression(init)) {
-          processCall(init, varName, rawNodes, rawEdges, varToNodeId);
+          processCall(init, varName, rawNodes, rawEdges, varToNodeId, splitNodes);
         }
       },
 
@@ -93,32 +95,55 @@ export function codeToGraph(
           for (const prop of arg.properties) {
             if (!t.isObjectProperty(prop) || !t.isIdentifier(prop.key)) continue;
             const channel = prop.key.name;
-            const sourceId = t.isIdentifier(prop.value)
-              ? varToNodeId.get(prop.value.name)
-              : undefined;
-            if (sourceId) {
-              rawEdges.push({
-                id: generateEdgeId(sourceId, 'out', outputId, channel),
-                source: sourceId,
-                sourceHandle: 'out',
-                target: outputId,
-                targetHandle: channel,
-                type: 'typed' as const,
-                animated: true,
-                data: { dataType: 'any' as const },
-              });
+            if (t.isIdentifier(prop.value)) {
+              const sourceId = varToNodeId.get(prop.value.name);
+              if (sourceId) {
+                rawEdges.push({
+                  id: generateEdgeId(sourceId, 'out', outputId, channel),
+                  source: sourceId, sourceHandle: 'out',
+                  target: outputId, targetHandle: channel,
+                  type: 'typed' as const, animated: true,
+                  data: { dataType: 'any' as const },
+                });
+              }
+            } else if (t.isMemberExpression(prop.value)) {
+              // Member expression: someVar.x → resolve through split node
+              const ref = resolveMemberExpr(prop.value, rawNodes, rawEdges, varToNodeId, splitNodes);
+              if (ref) {
+                rawEdges.push({
+                  id: generateEdgeId(ref.nodeId, ref.handle, outputId, channel),
+                  source: ref.nodeId, sourceHandle: ref.handle,
+                  target: outputId, targetHandle: channel,
+                  type: 'typed' as const, animated: true,
+                  data: { dataType: 'float' as const },
+                });
+              }
+            } else if (t.isCallExpression(prop.value)) {
+              // Inline call expression: return { color: someFunc(a, b) }
+              const tempVar = `_return_${channel}`;
+              processCall(prop.value, tempVar, rawNodes, rawEdges, varToNodeId, splitNodes);
+              const sourceId = varToNodeId.get(tempVar);
+              if (sourceId) {
+                rawEdges.push({
+                  id: generateEdgeId(sourceId, 'out', outputId, channel),
+                  source: sourceId, sourceHandle: 'out',
+                  target: outputId, targetHandle: channel,
+                  type: 'typed' as const, animated: true,
+                  data: { dataType: 'any' as const },
+                });
+              }
             }
           }
           return;
         }
 
         // Single-value return: wire to output.color
-        const sourceId = resolveReturnSource(arg, rawNodes, rawEdges, varToNodeId);
-        if (sourceId) {
+        const returnRef = resolveReturnSource(arg, rawNodes, rawEdges, varToNodeId, splitNodes);
+        if (returnRef) {
           rawEdges.push({
-            id: generateEdgeId(sourceId, 'out', outputId, 'color'),
-            source: sourceId,
-            sourceHandle: 'out',
+            id: generateEdgeId(returnRef.nodeId, returnRef.handle, outputId, 'color'),
+            source: returnRef.nodeId,
+            sourceHandle: returnRef.handle,
             target: outputId,
             targetHandle: 'color',
             type: 'typed' as const,
@@ -144,22 +169,30 @@ export function codeToGraph(
   return { nodes: rawNodes, edges: rawEdges, errors: [] };
 }
 
-/** Resolve a return statement argument to a source node ID. Handles identifiers, call expressions, and member expressions. */
+/** Resolve a return statement argument to a source node ID + optional handle. */
 function resolveReturnSource(
   arg: t.Node,
   nodes: AppNode[],
   edges: AppEdge[],
-  varToNodeId: Map<string, string>
-): string | undefined {
+  varToNodeId: Map<string, string>,
+  splitNodesMap: Map<string, string>,
+): { nodeId: string; handle: string } | undefined {
   // return someVar;
   if (t.isIdentifier(arg)) {
-    return varToNodeId.get(arg.name);
+    const id = varToNodeId.get(arg.name);
+    if (id) return { nodeId: id, handle: 'out' };
+  }
+  // return someVar.x; — member expression through split node
+  if (t.isMemberExpression(arg)) {
+    const ref = resolveMemberExpr(arg, nodes, edges, varToNodeId, splitNodesMap);
+    if (ref) return ref;
   }
   // return someFunc(a, b); — process as an inline call and return its node ID
   if (t.isCallExpression(arg)) {
     const tempVar = '_return';
-    processCall(arg, tempVar, nodes, edges, varToNodeId);
-    return varToNodeId.get(tempVar);
+    processCall(arg, tempVar, nodes, edges, varToNodeId, splitNodesMap);
+    const id = varToNodeId.get(tempVar);
+    if (id) return { nodeId: id, handle: 'out' };
   }
   return undefined;
 }
@@ -169,7 +202,8 @@ function processCall(
   varName: string,
   nodes: AppNode[],
   edges: AppEdge[],
-  varToNodeId: Map<string, string>
+  varToNodeId: Map<string, string>,
+  splitNodesMap: Map<string, string> = new Map(),
 ): void {
   let funcName: string | undefined;
   let objectVarName: string | undefined;
@@ -194,6 +228,52 @@ function processCall(
   if (funcName === 'mul' && callExpr.arguments.length === 2) {
     const uvNode = tryParseUVTiling(callExpr, varName, nodes, edges, varToNodeId);
     if (uvNode) return;
+  }
+
+  // Detect append pattern: vec2(ref, ref) where at least one arg is a variable reference
+  if (funcName === 'vec2' && callExpr.arguments.length === 2) {
+    const hasVarRef = callExpr.arguments.some(
+      (a) => t.isIdentifier(a) && varToNodeId.has(a.name)
+    );
+    const hasMemberRef = callExpr.arguments.some(
+      (a) => t.isMemberExpression(a) && t.isIdentifier(a.object) && varToNodeId.has(a.object.name)
+    );
+    if (hasVarRef || hasMemberRef) {
+      const appendDef = NODE_REGISTRY.get('append');
+      if (appendDef) {
+        const nodeId = generateId();
+        nodes.push(createNode(nodeId, appendDef, varName));
+        varToNodeId.set(varName, nodeId);
+        const ports = ['a', 'b'];
+        for (let i = 0; i < 2; i++) {
+          const arg = callExpr.arguments[i];
+          if (t.isIdentifier(arg)) {
+            const sourceId = varToNodeId.get(arg.name);
+            if (sourceId) {
+              edges.push({
+                id: generateEdgeId(sourceId, 'out', nodeId, ports[i]),
+                source: sourceId, sourceHandle: 'out',
+                target: nodeId, targetHandle: ports[i],
+                type: 'typed' as const, animated: true,
+                data: { dataType: 'any' as const },
+              });
+            }
+          } else if (t.isMemberExpression(arg)) {
+            const ref = resolveMemberExpr(arg, nodes, edges, varToNodeId, splitNodesMap);
+            if (ref) {
+              edges.push({
+                id: generateEdgeId(ref.nodeId, ref.handle, nodeId, ports[i]),
+                source: ref.nodeId, sourceHandle: ref.handle,
+                target: nodeId, targetHandle: ports[i],
+                type: 'typed' as const, animated: true,
+                data: { dataType: 'float' as const },
+              });
+            }
+          }
+        }
+        return;
+      }
+    }
   }
 
   // Look up definition
@@ -286,6 +366,26 @@ function processCall(
         extractedValues[defaultKeys[i]] = arg.name;
       } else if (!port) {
         break;
+      }
+    } else if (t.isMemberExpression(arg)) {
+      // Member expression: someVar.x → resolve through split node
+      const ref = resolveMemberExpr(arg, nodes, edges, varToNodeId, splitNodesMap);
+      if (ref && port) {
+        edges.push({
+          id: generateEdgeId(ref.nodeId, ref.handle, nodeId, port.id),
+          source: ref.nodeId, sourceHandle: ref.handle,
+          target: nodeId, targetHandle: port.id,
+          type: 'typed' as const, animated: true,
+          data: { dataType: 'float' as const },
+        });
+      } else if (ref && def.inputs.length === 0 && defaultKeys[i]) {
+        edges.push({
+          id: generateEdgeId(ref.nodeId, ref.handle, nodeId, defaultKeys[i]),
+          source: ref.nodeId, sourceHandle: ref.handle,
+          target: nodeId, targetHandle: defaultKeys[i],
+          type: 'typed' as const, animated: true,
+          data: { dataType: 'float' as const },
+        });
       }
     } else if (literalValue !== undefined) {
       // Type constructors or noise nodes (no inputs, has defaultValues) — use default key order
@@ -503,8 +603,8 @@ function processObjectCall(
       continue;
     }
 
-    // new THREE.Color(0x...) or new Color(0x...)
-    const ctor = extractConstructor(val);
+    // new THREE.Color(0x...) / color(0x...) / vec3(1,2,3) / vec2(1,2)
+    const ctor = extractConstructor(val) ?? extractTSLConstructorCall(val);
     if (ctor) {
       if (ctor.type === 'color') {
         extractedValues[key] = ctor.hex;
@@ -595,6 +695,89 @@ function extractConstructor(node: t.Node): ConstructorResult | null {
     return { type: 'vec2', x, y };
   }
 
+  return null;
+}
+
+const SWIZZLE_COMPONENTS = new Set(['x', 'y', 'z', 'w']);
+
+/**
+ * Resolve a member expression like `someVar.x` to a split node output.
+ * Creates the split node on first use for each source variable.
+ * Returns { nodeId, handle } for the split node output, or null.
+ */
+function resolveMemberExpr(
+  expr: t.MemberExpression,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  varToNodeId: Map<string, string>,
+  splitNodesMap: Map<string, string>,
+): { nodeId: string; handle: string } | null {
+  if (!t.isIdentifier(expr.object) || !t.isIdentifier(expr.property)) return null;
+  const varName = expr.object.name;
+  const component = expr.property.name;
+  if (!SWIZZLE_COMPONENTS.has(component)) return null;
+
+  const sourceId = varToNodeId.get(varName);
+  if (!sourceId) return null;
+
+  // Reuse existing split node for this source variable
+  let splitId = splitNodesMap.get(varName);
+  if (!splitId) {
+    const splitDef = NODE_REGISTRY.get('split');
+    if (!splitDef) return null;
+    splitId = generateId();
+    nodes.push(createNode(splitId, splitDef, `split_${varName}`));
+    // Wire source → split.v
+    edges.push({
+      id: generateEdgeId(sourceId, 'out', splitId, 'v'),
+      source: sourceId,
+      sourceHandle: 'out',
+      target: splitId,
+      targetHandle: 'v',
+      type: 'typed' as const,
+      animated: true,
+      data: { dataType: 'any' as const },
+    });
+    splitNodesMap.set(varName, splitId);
+  }
+
+  return { nodeId: splitId, handle: component };
+}
+
+/**
+ * Extract a TSL constructor function call: color(0xFF), vec3(1,2,3), vec2(1,2).
+ * Unlike extractConstructor, this handles function calls (not `new` expressions).
+ */
+function extractTSLConstructorCall(node: t.Node): ConstructorResult | null {
+  if (!t.isCallExpression(node) || !t.isIdentifier(node.callee)) return null;
+  const name = node.callee.name;
+  const args = node.arguments;
+
+  if (name === 'color' && args.length >= 1) {
+    const lit = extractLiteral(args[0] as t.Node);
+    if (typeof lit === 'number') {
+      return { type: 'color', hex: '#' + Math.round(lit).toString(16).padStart(6, '0') };
+    }
+    if (typeof lit === 'string') {
+      return { type: 'color', hex: lit.startsWith('#') ? lit : `#${lit}` };
+    }
+    return { type: 'color', hex: '#ff0000' };
+  }
+  if (name === 'vec3' && args.length >= 3) {
+    return {
+      type: 'vec3',
+      x: Number(extractLiteral(args[0] as t.Node) ?? 0),
+      y: Number(extractLiteral(args[1] as t.Node) ?? 0),
+      z: Number(extractLiteral(args[2] as t.Node) ?? 0),
+    };
+  }
+  if (name === 'vec2' && args.length >= 2) {
+    return {
+      type: 'vec2',
+      x: Number(extractLiteral(args[0] as t.Node) ?? 0),
+      y: Number(extractLiteral(args[1] as t.Node) ?? 0),
+    };
+  }
   return null;
 }
 

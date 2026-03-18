@@ -168,8 +168,9 @@ export const ShaderNode = memo(function ShaderNode({
   const rows = useMemo(() => buildRows(def), [def]);
 
   // Track which input ports have edges connected
-  const connectedInputs = new Set(
-    edges.filter((e) => e.target === id).map((e) => e.targetHandle),
+  const connectedInputs = useMemo(
+    () => new Set(edges.filter((e) => e.target === id).map((e) => e.targetHandle)),
+    [edges, id],
   );
 
   const handleChange = useCallback(

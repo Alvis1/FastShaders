@@ -42,6 +42,8 @@ export function useSyncEngine() {
       } else {
         useAppStore.getState().undo();
       }
+      // Clear cached code so graph→code sync regenerates after undo/redo
+      lastSyncedCodeRef.current = '';
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -85,7 +87,7 @@ export function useSyncEngine() {
       setSyncInProgress(true);
       try {
         const result = codeToGraph(codeStr, NODE_REGISTRY);
-        if (result.errors.length === 0 && result.nodes.length > 0) {
+        if (result.errors.length === 0) {
           if (!skipHistory) {
             useAppStore.getState().pushHistory();
           }

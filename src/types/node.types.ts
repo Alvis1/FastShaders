@@ -79,6 +79,7 @@ export type AppEdge = Edge<TypedEdgeData>;
 
 /** Safely extract values from any AppNode's data. */
 export function getNodeValues(node: AppNode): Record<string, string | number> {
+  if (node.type === 'output') return {};
   return (node.data as ShaderNodeData).values ?? {};
 }
 

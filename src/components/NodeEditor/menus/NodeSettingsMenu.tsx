@@ -167,7 +167,7 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
               ) : isColor ? (
                 <input
                   type="color"
-                  defaultValue={String(currentValue)}
+                  value={String(currentValue)}
                   onChange={(e) => handleValueChange(key, e.target.value)}
                   style={{
                     width: '80px',
