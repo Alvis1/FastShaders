@@ -540,11 +540,12 @@ const _scriptDir = (document.currentScript && document.currentScript.src) || "";
 const _baseDir = _scriptDir
   ? _scriptDir.substring(0, _scriptDir.lastIndexOf("/") + 1)
   : "";
+const _shimUrl = _baseDir + "tsl-shim.js";
 const specifierMap = {
-  three: _baseDir + "three-shim.js",
-  "three/webgpu": _baseDir + "three-shim.js",
-  "three/tsl": _baseDir + "three-tsl-shim.js",
-  "tsl-textures": _baseDir + "tsl-textures-shim.js",
+  three: _shimUrl,
+  "three/webgpu": _shimUrl,
+  "three/tsl": _shimUrl,
+  "tsl-textures": _shimUrl,
 };
 
 // Resolve a bare specifier using the built-in map.
