@@ -12,7 +12,7 @@ export function hasTimeUpstream(
   const visited = new Set<string>();
   const queue = [nodeId];
   while (queue.length > 0) {
-    const current = queue.pop()!;
+    const current = queue.shift()!;
     if (visited.has(current)) continue;
     visited.add(current);
     const node = nodeMap.get(current);

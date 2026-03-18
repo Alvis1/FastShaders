@@ -247,12 +247,12 @@ function startAnimLoop(): void {
 }
 
 export function dispose(nodeId: string): void {
+  animatedNodes.delete(nodeId);
   const entry = nodeEntries.get(nodeId);
   if (entry) {
-    entry.material.dispose();
     nodeEntries.delete(nodeId);
+    entry.material.dispose();
   }
-  animatedNodes.delete(nodeId);
   if (animatedNodes.size === 0 && animFrameId) {
     cancelAnimationFrame(animFrameId);
     animFrameId = null;

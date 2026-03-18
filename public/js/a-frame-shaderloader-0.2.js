@@ -327,9 +327,24 @@ function autoInjectTSLImports(source) {
   const bodyLines = source
     .split("\n")
     .filter((l) => !/^\s*(import|export)\s/.test(l));
-  // Strip comments so patterns like "// glow (effect)" don't trigger false matches
+  // Strip comments while respecting string literals.
+  // Replace string contents with spaces (preserving length) before stripping comments,
+  // so patterns inside strings like "// not a comment" are not removed.
   const body = bodyLines
-    .map((l) => l.replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, ""))
+    .map((l) => {
+      // Mask string literals to avoid false comment matches inside them
+      const masked = l.replace(/(["'`])(?:(?!\1|\\).|\\.)*\1/g, (m) => " ".repeat(m.length));
+      // Find comment start positions in the masked line
+      const lineComment = masked.indexOf("//");
+      const blockStart = masked.indexOf("/*");
+      if (lineComment >= 0 && (blockStart < 0 || lineComment < blockStart)) {
+        return l.slice(0, lineComment);
+      }
+      if (blockStart >= 0) {
+        return l.replace(/\/\*.*?\*\//g, "");
+      }
+      return l;
+    })
     .join("\n");
 
   // Detect function calls: name(

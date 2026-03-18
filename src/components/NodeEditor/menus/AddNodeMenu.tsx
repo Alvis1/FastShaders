@@ -107,6 +107,7 @@ export function AddNodeMenu() {
       const firstInput = targetDef?.inputs[0];
       if (firstInput) {
         const store = useAppStore.getState();
+        store.pushHistory();
         const newEdge: AppEdge = {
           id: generateEdgeId(sourceNodeId, sourceHandleId, newNodeId, firstInput.id),
           source: sourceNodeId,

@@ -37,14 +37,28 @@ export function evaluateNodeScalar(
   return result !== null && result.length > 0 ? result[0] : null;
 }
 
+// Index edges by target node ID for O(1) lookup
+function buildEdgeIndex(edges: AppEdge[]): Map<string, AppEdge[]> {
+  const index = new Map<string, AppEdge[]>();
+  for (const e of edges) {
+    let list = index.get(e.target);
+    if (!list) { list = []; index.set(e.target, list); }
+    list.push(e);
+  }
+  return index;
+}
+
 function evaluate(
   nodeId: string,
   nodes: AppNode[],
   edges: AppEdge[],
   time: number,
   cache: Map<string, EvalResult>,
+  edgeIndex?: Map<string, AppEdge[]>,
 ): EvalResult {
   if (cache.has(nodeId)) return cache.get(nodeId)!;
+
+  const idx = edgeIndex ?? buildEdgeIndex(edges);
 
   const node = nodes.find((n) => n.id === nodeId);
   if (!node) { cache.set(nodeId, null); return null; }
@@ -52,11 +66,13 @@ function evaluate(
   const type = node.data.registryType;
   const values = getNodeValues(node);
 
+  const nodeEdges = idx.get(nodeId) ?? [];
+
   // Resolve a single scalar input from edges or inline values
   const scalarInput = (portId: string, fallback: number): number => {
-    const edge = edges.find((e) => e.target === nodeId && e.targetHandle === portId);
+    const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
-      const upstream = evaluate(edge.source, nodes, edges, time, cache);
+      const upstream = evaluate(edge.source, nodes, edges, time, cache, idx);
       if (upstream !== null && upstream.length > 0) return upstream[0];
     }
     const v = values[portId];
@@ -65,9 +81,9 @@ function evaluate(
 
   // Resolve a multi-channel input (returns upstream result or fallback scalar)
   const channelInput = (portId: string, fallback: number): EvalResult => {
-    const edge = edges.find((e) => e.target === nodeId && e.targetHandle === portId);
+    const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
-      const upstream = evaluate(edge.source, nodes, edges, time, cache);
+      const upstream = evaluate(edge.source, nodes, edges, time, cache, idx);
       if (upstream !== null) return upstream;
     }
     const v = values[portId];

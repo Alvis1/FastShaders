@@ -193,11 +193,13 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 
 The Babel-based parser handles these patterns:
 
-- **Multi-channel returns**: `return { color: x, position: y }` → wires each property to the corresponding output port
-- **Single-value returns**: `return x` or `return someFunc(a, b)` → wires to output.color (inline calls create intermediate nodes)
+- **Multi-channel returns**: `return { color: x, position: y }` → wires each property to the corresponding output port. Also handles member expressions (`someVar.x`) and inline call expressions (`someFunc(a, b)`) as return values.
+- **Single-value returns**: `return x` or `return someFunc(a, b)` or `return someVar.x` → wires to output.color (inline calls create intermediate nodes, member expressions create split nodes)
+- **Split node reconstruction**: Member expressions like `someVar.x`, `someVar.y`, etc. in function arguments or return values automatically create split nodes. One split node is reused per source variable (tracked via `splitNodes` map). Wires `source → split.v` and `split.{x,y,z,w} → target`.
+- **Append node detection**: `vec2(ref1, ref2)` where at least one argument is a variable reference or member expression creates an `append` node (not a `vec2` type constructor). This matches the `graphToCode` output for append nodes.
 - **Noise functions**: `mx_fractal_noise_float(posOrMul, octaves, lacunarity, diminish)` — detects `mul(pos, scale)` pattern for the first arg, maps remaining args to fractal-specific keys
 - **UV tiling**: `mul(uv(), vec2(x, y))` pattern detected and converted to a single UV node with tiling values
-- **tsl-textures**: Single object argument `bricks({ scale: 2, color: color(0xFF0000) })` — wires variable refs as edges, extracts literals/constructors as values
+- **tsl-textures**: Single object argument `bricks({ scale: 2, color: color(0xFF0000) })` — wires variable refs as edges, extracts literals/constructors as values. Handles both `new` expression constructors (`new THREE.Color(...)`) and TSL function call constructors (`color(0xFF)`, `vec3(1,2,3)`, `vec2(1,2)`) via `extractConstructor()` + `extractTSLConstructorCall()`.
 - **Property nodes**: `uniform(value)` calls → `property_float` nodes with variable name as property name
 
 ### Zustand Store Shape
@@ -308,7 +310,7 @@ All ~49 tsl-textures functions are auto-registered as nodes by introspecting `.d
 - **`$normalNode` detection**: Textures with `$normalNode` in defaults get output type `vec3` (label "Normal") instead of `color`
 - **Code generation**: Object parameter syntax using TSL-native constructors — `bricks({ scale: 2, color: color(0xFF4000) })`; imports `color`/`vec3`/`vec2` from `three/tsl` as needed (no `import * as THREE`)
 - **Live compilation**: Dynamic factory builds params object, calls `tslTextures[funcName](params)`
-- **Code parsing**: `processObjectCall()` parses ObjectExpression properties; `extractConstructor()` handles `new THREE.Color/Vector3/Vector2` and TSL `color()/vec3()/vec2()` AST patterns
+- **Code parsing**: `processObjectCall()` parses ObjectExpression properties; `extractConstructor()` handles `new THREE.Color/Vector3/Vector2` expressions, `extractTSLConstructorCall()` handles TSL function call syntax `color(0xFF)`/`vec3(1,2,3)`/`vec2(1,2)` — both are tried via fallback chain
 
 ### Split Node
 
@@ -318,6 +320,7 @@ The split node decomposes vectors into individual float components:
 - **Outputs**: four float ports — X, Y, Z, W
 - **TSL compilation**: Factory passes through the input vector; edge resolution applies `.x`/`.y`/`.z`/`.w` swizzle when sourceHandle isn't `'out'`
 - **Code generation**: Split nodes are not emitted as variables; references through them are inlined as `sourceVar.x`, `sourceVar.y`, etc.
+- **Code parsing**: `resolveMemberExpr()` detects `someVar.x/y/z/w` member expressions and creates split nodes on demand. One split node is reused per source variable (tracked via `splitNodes` map). Used in function arguments, single-value returns, and multi-channel return properties.
 - **Searchable**: by "split" or "separate"
 
 ### UV Node
@@ -343,6 +346,7 @@ Combines two values into a higher-dimensional vector:
 - **Inputs**: two `any` ports — A and B
 - **Output**: one `any` port
 - **Code generation**: Emits `vec2(a, b)` with `vec2` import from `three/tsl`
+- **Code parsing**: `vec2(ref1, ref2)` where at least one arg is a variable reference or member expression creates an `append` node (not a `vec2` type constructor). Literal-only `vec2(1, 2)` still creates a `vec2` type node.
 - **TSL compilation**: `vec2(inputs.a ?? float(0), inputs.b ?? float(0))`
 - **CPU evaluation**: Concatenates channel arrays (`[...a, ...b]`) — e.g., float+float→vec2, vec2+float→vec3
 - **Use case**: Convert UV (vec2) to vec3 for tsl-textures position input by appending a Z component
