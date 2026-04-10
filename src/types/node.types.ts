@@ -18,6 +18,7 @@ export type NodeCategory =
   | 'noise'
   | 'color'
   | 'texture'
+  | 'unknown'
   | 'output';
 
 export interface NodeDefinition {

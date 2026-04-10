@@ -102,11 +102,17 @@ export function tslToAFrame(
   lines.push(`<${''}/script>`);
   lines.push('');
 
-  // A-Frame scene
+  // A-Frame scene with three-point lighting for material evaluation
   lines.push(`<a-scene${sceneAttrs} background="color: #1a1a2e">`);
   lines.push(`  <a-entity id="shader-entity" geometry="${geoAttr}" position="0 1.5 -3" rotation="45 45 0"${animAttr}></a-entity>`);
-  lines.push('  <a-light type="directional" position="1 2 1" intensity="1"></a-light>');
-  lines.push('  <a-light type="ambient" intensity="0.4"></a-light>');
+  // Key light — raking angle (~55°), warm, high intensity for normal/bump detail
+  lines.push('  <a-light type="directional" color="#fff5e6" position="-3 4 2" intensity="2.5"></a-light>');
+  // Rim light — behind and above, cool tint, defines specularity and silhouette
+  lines.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
+  // Fill light — opposite key, neutral, low intensity to lift shadows
+  lines.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
+  // Ambient — minimal base fill
+  lines.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
   lines.push('</a-scene>');
   lines.push('');
 

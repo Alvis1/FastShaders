@@ -17,6 +17,7 @@ export function Toolbar() {
     <div className="toolbar">
       <div className="toolbar__left">
         <span className="toolbar__brand">FastShaders</span>
+        <span className="toolbar__version">v{__APP_VERSION__}</span>
       </div>
       <div className="toolbar__center">
         <input

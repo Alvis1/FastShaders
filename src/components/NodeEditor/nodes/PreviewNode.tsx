@@ -11,7 +11,8 @@ import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noi
 import './PreviewNode.css';
 
 const PREVIEW_SIZE = 96;
-const NOISE_TYPES = new Set(['noise', 'fractal', 'voronoi']);
+/** Registry types this preview node can render. Currently only `voronoi` lives in the noise category. */
+const NOISE_TYPES = new Set<string>(['voronoi']);
 
 /** Distribute handles evenly along the side, centered. */
 function handleTop(index: number, total: number): string {

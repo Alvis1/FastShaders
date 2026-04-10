@@ -1,0 +1,7 @@
+[submodule "ShaderCarousel"]
+	path = ShaderCarousel
+	url = https://github.com/Alvis1/ShaderCarousel.git
+
+[submodule "a-frame-shaderloader"]
+	path = a-frame-shaderloader
+	url = https://github.com/Alvis1/a-frame-shaderloader.git

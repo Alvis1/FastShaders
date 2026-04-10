@@ -97,6 +97,7 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
     defaultValues: { value: 0.0 },
+    description: 'Constant float value. Also: number, value',
   },
   {
     type: 'int',
@@ -225,6 +226,16 @@ const definitions: NodeDefinition[] = [
     inputs: [{ id: 'x', label: 'X', dataType: 'any' as const }],
     outputs: [{ id: 'out', label: 'Result', dataType: 'any' as const }],
   })),
+  {
+    type: 'oneMinus',
+    label: 'Invert (oneMinus)',
+    category: 'math',
+    tslFunction: 'oneMinus',
+    tslImportModule: 'three/tsl',
+    inputs: [{ id: 'x', label: 'X', dataType: 'any' }],
+    outputs: [{ id: 'out', label: 'Result', dataType: 'any' }],
+    description: 'Invert a 0–1 value: returns 1 - x. Also: invert, complement, negate',
+  },
 
   // ===== MATH (binary/ternary) =====
   {
@@ -435,16 +446,6 @@ const definitions: NodeDefinition[] = [
 
   // ===== NOISE =====
   {
-    type: 'fractal',
-    label: 'Fractal (fBm)',
-    category: 'noise',
-    tslFunction: 'mx_fractal_noise_float',
-    tslImportModule: 'three/tsl',
-    inputs: [],
-    outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
-    defaultValues: { pos: 'positionGeometry', scale: 1.0, octaves: 4, lacunarity: 2.0, diminish: 0.5 },
-  },
-  {
     type: 'voronoi',
     label: 'Voronoi',
     category: 'noise',
@@ -498,10 +499,23 @@ const definitions: NodeDefinition[] = [
   },
 ];
 
+// Internal-only node for preserving unrecognized TSL functions during round-tripping.
+// Not included in allDefinitions (hidden from content browser / search).
+const unknownNodeDef: NodeDefinition = {
+  type: 'unknown',
+  label: 'Unknown',
+  category: 'unknown',
+  tslFunction: '',
+  tslImportModule: '',
+  inputs: [],
+  outputs: [{ id: 'out', label: 'Output', dataType: 'any' }],
+  description: 'Unknown/unsupported TSL function (preserved for round-tripping)',
+};
+
 const allDefinitions: NodeDefinition[] = [...definitions, ...buildTSLTextureDefinitions()];
 
 export const NODE_REGISTRY = new Map<string, NodeDefinition>(
-  allDefinitions.map(d => [d.type, d])
+  [...allDefinitions, unknownNodeDef].map(d => [d.type, d])
 );
 
 export const TSL_FUNCTION_TO_DEF = new Map<string, NodeDefinition>(

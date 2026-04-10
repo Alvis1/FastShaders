@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Position, type NodeProps } from '@xyflow/react';
-import type { OutputFlowNode, OutputNodeData } from '@/types';
+import type { OutputFlowNode } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostTextColor } from '@/utils/colorUtils';
@@ -25,7 +25,7 @@ export const OutputNode = memo(function OutputNode({
   const costColor = getCostColor(cost, costColorLow, costColorHigh);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
 
-  const exposedPorts = (data as OutputNodeData).exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
+  const exposedPorts = data.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
   const exposedSet = new Set(exposedPorts);
 
   const pixelPorts = def.inputs.filter(

@@ -8,7 +8,7 @@ Bi-directional TSL (Three.js Shading Language) visual shader editor. Users build
 
 **Stack**: React 18 + TypeScript + Vite | `@xyflow/react` v12 (node graph) | `@monaco-editor/react` (code editor) | `zustand` v5 (state) | `three` 0.183 (WebGPU + TSL) | `tsl-textures` 3.0.1 (with `patch-package` fixes) | `@dagrejs/dagre` (auto-layout) | `@babel/parser` + `traverse` + `types` (code parsing)
 
-**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles a custom A-Frame 1.7 + Three.js r173 WebGPU + tsl-textures with matching compatible versions in `aframe-171-a-0.1.min.js`. The shaderloader (`a-frame-shaderloader-0.2.js`) resolves bare import specifiers (`'three/tsl'` → `three-tsl-shim.js`, `'tsl-textures'` → `tsl-textures-shim.js`) so blob-loaded modules work. It detects Object API (multi-channel) vs Simple API (single node) by checking for any `*Node` property (`colorNode`, `positionNode`, `normalNode`, `opacityNode`, `roughnessNode`, `metalnessNode`, `emissiveNode`). It also manages **property uniforms**: reads `export const schema` from modules (or auto-detects `params.XXX`/`const NAME = uniform(VALUE)` patterns), creates TSL uniforms, passes them to the shader function, and exposes `updateProperty(name, value)` for runtime updates. The `three-tsl-shim.js` spreads `THREE.TSL` into a mutable copy and falls back to `tsl-textures` for `hsl`/`toHsl` (which may not exist in the r173 bundle's frozen `THREE.TSL`).
+**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles a custom A-Frame 1.7 + Three.js r173 WebGPU + tsl-textures with matching compatible versions in `aframe-171-a-0.1.min.js`. The shaderloader (`a-frame-shaderloader-0.3.js`) resolves bare import specifiers (`'three/tsl'` → `tsl-shim.js`, `'tsl-textures'` → `tsl-textures-shim.js`) so blob-loaded modules work. It detects Object API (multi-channel) vs Simple API (single node) by checking for any `*Node` property (`colorNode`, `positionNode`, `normalNode`, `opacityNode`, `roughnessNode`, `metalnessNode`, `emissiveNode`). It also manages **property uniforms**: reads `export const schema` from modules (or auto-detects `params.XXX`/`const NAME = uniform(VALUE)` patterns), creates TSL uniforms, passes them to the shader function, and exposes `updateProperty(name, value)` for runtime updates. The `three-tsl-shim.js` spreads `THREE.TSL` into a mutable copy and falls back to `tsl-textures` for `hsl`/`toHsl` (which may not exist in the r173 bundle's frozen `THREE.TSL`).
 
 ---
 
@@ -28,7 +28,7 @@ src/
 │   │   ├── AppLayout.tsx              # Two nested SplitPanes (left: graph | right: code/preview)
 │   │   ├── AppLayout.css
 │   │   ├── SplitPane.tsx              # Draggable divider (horizontal or vertical)
-│   │   ├── Toolbar.tsx                # Top bar: brand, shader name input, VR headset selector
+│   │   ├── Toolbar.tsx                # Top bar: brand + version, shader name input, VR headset selector
 │   │   ├── Toolbar.css
 │   │   ├── CostBar.tsx                # GPU complexity bar (totalCost vs headset budget)
 │   │   └── CostBar.css
@@ -110,8 +110,11 @@ patches/
 └── tsl-textures+3.0.1.patch          # patch-package: int→float Fn.setLayout + protozoa scale immutability
 public/
 └── js/
-    ├── three-tsl-shim.js             # Re-exports THREE.TSL as ESM; falls back to tsl-textures for hsl/toHsl
-    └── a-frame-shaderloader-0.2.js   # A-Frame shader component (TDZ fix + auto-import)
+    ├── tsl-shim.js                   # Combined shim: re-exports THREE + THREE.TSL + tsl-textures as ESM
+    ├── a-frame-shaderloader-0.3.js   # A-Frame shader component (TDZ fix + auto-import + property schema)
+    ├── a-frame-shaderloader-0.2.js   # Legacy shaderloader version
+    ├── aframe-171-a-0.1.min.js       # A-Frame 1.7 IIFE bundle (WebGPU)
+    └── aframe-orbit-controls.min.js  # Orbit controls for preview
 ```
 
 ---
@@ -147,7 +150,7 @@ The code editor has three tabs:
 
 - **TSL** — Editable TSL code with Save button and error display (default)
 - **A-Frame** — Read-only self-contained HTML using the shaderloader (`tslToAFrame.ts`):
-  - Loads `aframe-171-a-0.1.min.js` and `a-frame-shaderloader-0.2.js` from jsDelivr CDN
+  - Loads `aframe-171-a-0.1.min.js` and `a-frame-shaderloader-0.3.js` from jsDelivr CDN
   - Generates the shader module via `tslToShaderModule()` (same code as Script tab) and embeds it as a blob URL
   - Applies the shader via `<a-entity shader="src: blobUrl">` — the shaderloader handles TDZ fixes, import resolution, and property uniforms at runtime
   - Copy-paste ready: just save as `.html` and open
@@ -247,7 +250,7 @@ Generates a self-contained copy-paste `.html` using the shaderloader:
 
 1. Calls `tslToShaderModule()` to generate the shader module code (same as Script tab)
 2. Strips header comments and embeds the module as an inline blob URL
-3. Loads both CDN scripts: `aframe-171-a-0.1.min.js` (IIFE bundle) + `a-frame-shaderloader-0.2.js`
+3. Loads both CDN scripts: `aframe-171-a-0.1.min.js` (IIFE bundle) + `a-frame-shaderloader-0.3.js`
 4. Applies shader via `<a-entity shader="src: blobUrl">` — the shaderloader handles all processing (TDZ fixes, import resolution, property uniforms) at runtime
 5. A-Frame scene with geometry, lights, and optional rotation animation
 6. Properties and material settings are handled by the shaderloader from the embedded module's `export const schema` and Object API return
@@ -286,7 +289,7 @@ Generates HTML for the in-app preview iframe:
 | **Input**         | positionGeometry, normalLocal, tangentLocal, time, screenUV, uv, property_float, slider    |
 | **Type**          | float, int, vec2, vec3, vec4, color                                                       |
 | **Arithmetic**    | add, sub, mul, div                                                                        |
-| **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract                                       |
+| **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract, oneMinus (Invert)                     |
 | **Math (binary)** | pow, mod, clamp, min, max                                                                 |
 | **Interpolation** | mix, smoothstep, remap, select                                                            |
 | **Vector**        | normalize, length, distance, dot, cross, split, append                                     |
@@ -345,12 +348,21 @@ Combines two values into a higher-dimensional vector:
 
 - **Inputs**: two `any` ports — A and B
 - **Output**: one `any` port
-- **Code generation**: Emits `vec2(a, b)` with `vec2` import from `three/tsl`
-- **Code parsing**: `vec2(ref1, ref2)` where at least one arg is a variable reference or member expression creates an `append` node (not a `vec2` type constructor). Literal-only `vec2(1, 2)` still creates a `vec2` type node.
-- **TSL compilation**: `vec2(inputs.a ?? float(0), inputs.b ?? float(0))`
+- **Shape-aware code generation**: The emitted constructor is chosen dynamically from the sum of the input component counts (computed via `getComponentCount` in [cpuEvaluator.ts](src/engine/cpuEvaluator.ts) — which falls back to `evaluateNodeOutput(source, nodes, edges, 0).length`). 2 → `vec2(a,b)`, 3 → `vec3(a,b)`, 4 → `vec4(a,b)`. Unconnected inputs count as 1. Total is clamped to `[2,4]`. This matters for chains like `append(vec2, float)` which must become `vec3` — previously they were truncated to `vec2` and lost the trailing channel, producing the wrong shader output on the GPU.
+- **Code parsing**: `vec2(ref1, ref2)` where at least one arg is a variable reference or member expression creates an `append` node (not a `vec2` type constructor). Literal-only `vec2(1, 2)` still creates a `vec2` type node. (vec3/vec4 parsing of append is handled symmetrically in [codeToGraph.ts](src/engine/codeToGraph.ts))
+- **TSL compilation** ([graphToTSLNodes.ts](src/engine/graphToTSLNodes.ts)): Before invoking the factory, the loop computes `_appendSize` from `getComponentCount` on each input edge and stashes it into the `values` object. The append factory reads `values._appendSize` and picks `tslVec2` / `vec3` / `tslVec4` accordingly.
 - **CPU evaluation**: Concatenates channel arrays (`[...a, ...b]`) — e.g., float+float→vec2, vec2+float→vec3
 - **Use case**: Convert UV (vec2) to vec3 for tsl-textures position input by appending a Z component
 - **Searchable**: by "append", "combine", or "join"
+
+### Invert Node (`oneMinus`)
+
+Inverts a 0–1 value via TSL's `oneMinus` builtin:
+
+- **Registry**: `tslFunction: 'oneMinus'`, category `'math'`, single `x` input, label `'Invert (oneMinus)'`, description mentions `invert`, `complement`, `negate` so search matches those too
+- **TSL compilation**: `oneMinus(x)` (imported from `three/tsl`)
+- **CPU evaluation**: Component-wise `1 - x`
+- **Why not just multiply by -1**: `mul(-1, x)` for a 0–1 value clamps to 0 (negative color values render as black), not the visual inversion users expect. `oneMinus` gives `1 - x`, the correct inverse.
 
 ### Property Nodes (`property_float`)
 
@@ -459,14 +471,37 @@ Texture category nodes (~49 tsl-textures) render a 96x96 canvas showing their GP
 
 ### CPU Graph Evaluator (cpuEvaluator.ts)
 
-CPU-side evaluator that walks the node graph and computes values using JS math equivalents. Used by both `MathPreviewNode` and `EdgeInfoCard` for real-time value display.
+CPU-side evaluator that walks the node graph and computes values using JS math equivalents. Used by `MathPreviewNode` (deterministic eval), `EdgeInfoCard` (range eval), and codegen (shape inference for `append`).
+
+#### Deterministic eval
 
 - **`evaluateNodeOutput(nodeId, nodes, edges, time)`** → `EvalResult` (multi-channel `number[]` or `null`)
 - **`evaluateNodeScalar(nodeId, nodes, edges, time)`** → first channel as `number | null`
 - **Multi-channel**: Returns `[x]` for scalar, `[x,y]` for vec2, `[r,g,b]` for vec3/color, `[x,y,z,w]` for vec4
 - **Component-wise broadcasting**: Operations like scalar × vec3 broadcast shorter to longer
-- **Supported nodes**: time, float/int/property_float/slider, screenUV, uv (with tiling/rotation), vec2/vec3/vec4/color constructors, all arithmetic (add/sub/mul/div), all unary math (sin/cos/abs/sqrt/exp/log2/floor/round/fract), binary math (pow/mod/min/max/clamp), interpolation (mix/smoothstep), vector ops (length/distance/dot/normalize/cross/append), noise (perlin/fractal/voronoi — sampled at UV center)
-- Returns `null` for unevaluable nodes (e.g., positionGeometry — depends on GPU geometry)
+- **Strict null propagation** (important): When an input port is connected to an upstream node, the upstream result is authoritative — including `null`. The `channelInput` helper does NOT silently fall back to the inline value when an edge exists. This was a bug fix: previously `sub(perlinNoise, 0.5)` would compute `sub(0, 0.5) = -0.5` (length 1) because perlinNoise returned null and channelInput substituted the inline default, fooling the visualization layer into thinking a 3-channel chain was a single float.
+- **Supported nodes**: time, float/int/property_float/slider, screenUV, uv (with tiling/rotation), vec2/vec3/vec4/color constructors, all arithmetic (add/sub/mul/div), all unary math (sin/cos/abs/sqrt/exp/log2/floor/round/fract/oneMinus), binary math (pow/mod/min/max/clamp), interpolation (mix/smoothstep), vector ops (length/distance/dot/normalize/cross/append), noise (perlin/fractal/voronoi — sampled at UV center)
+- Returns `null` for unevaluable nodes (positionGeometry, normalLocal, tangentLocal, tsl-textures, anything downstream of one)
+
+#### Static shape inference
+
+- **`getNodeOutputShape(nodeId, nodes, edges)`** → `number` (1–4). Walks the graph using port type info and broadcast rules to compute the *expected* channel count even when eval returns null. tsl-textures nodes have a concrete `color`/`vec3` output port so this resolves to 3 immediately. Concrete output port types (vec2/vec3/vec4/color/float/int) win immediately; for `'any'` outputs it sums input shapes for `append` and takes the max otherwise (broadcast rule: vec3 + scalar = vec3).
+- **`getComponentCount(nodeId, nodes, edges)`** → `number` (1–4). Tries `evaluateNodeOutput` first; falls back to `getNodeOutputShape` when eval returns null. Used by [graphToCode.ts](src/engine/graphToCode.ts) and [graphToTSLNodes.ts](src/engine/graphToTSLNodes.ts) to pick the right vector constructor for shape-dependent nodes like `append`.
+
+#### Range evaluation
+
+The deterministic evaluator can't sample procedural textures, but the EdgeInfoCard still wants to show *something* useful. `evaluateNodeRange` computes per-channel min/max bounds analytically.
+
+- **`evaluateNodeRange(nodeId, nodes, edges, time?)`** → `RangeResult | null` where `RangeResult = { min: number[]; max: number[] }`
+- **Resolution order per node**:
+  1. **tsl-textures special case** — scans `getParamClassifications(tslFunction)` for `kind === 'color'` params, reads each color hex from `node.values`, and computes the per-channel min/max across all palette colors (most procedural textures interpolate between palette colors based on a pattern, so the output range *is* the palette extents). E.g. perlinNoise with `color: red, background: black` → `R: [0..1], G: [0,0], B: [0,0]`.
+  2. **uv/screenUV** → `[0..1, 0..1]` (more useful than the (0.5, 0.5) sample point).
+  3. **voronoi** → `[0..1]`.
+  4. **Deterministic fallback** — calls `evaluateNodeOutput(time)`. When it succeeds the range is degenerate (min === max), which is exactly right for constants and time-driven inputs.
+  5. **Interval propagation** — for nodes whose eval returned null (chain through a texture), propagates ranges using interval arithmetic. Implemented for `add`, `sub`, `mul`, `div`, `oneMinus`, `abs`, `sin`, `cos`, `fract`, `smoothstep`, `sqrt`, `floor`, `round`, `min`, `max`, `clamp`, `mix`, `remap`, `select`, `vec2/3/4`, `append`, `normalize`, `length`, `distance`. `div` falls back to `[0, 1]` if the divisor spans zero (would otherwise be unbounded). `mix`/`select` return the union of the two branches (conservative — doesn't try to weight by `t`).
+  6. Anything else → `null` (the EdgeInfoCard renders the `0..1` placeholder).
+- **Time forwarding**: range eval forwards `time` to the deterministic fallback, so a slider connected to `time` updates live in the card. Texture-derived ranges don't depend on `time`, so they're stable per frame and update only when the user edits a palette color in the node settings.
+- **`portRange(portId, fallback)`** treats unconnected ports as a degenerate `{min:[v], max:[v]}` from inline values, and treats connected-but-unknown upstream as `[0..1]` (conservative normalized assumption).
 
 ---
 
@@ -486,22 +521,33 @@ Each type has a distinct color for handles and edges:
 
 ### Visual Style
 
-- **Multi-channel rendering**: vec2=2 lines (R,G), vec3/color=3 lines (R,G,B), vec4=4 lines (R,G,B,A)
-- **Channel colors**: R=#ff4444, G=#44dd44, B=#4488ff, A=#dddddd
-- **Scalar types** (float/int/any): Single line in the type's color
-- **Dashed lines** for multi-channel (strokeDasharray `4 1`), solid for single
-- **Selected state**: Glow effect via `drop-shadow` filter
-- **Type resolution**: Resolves `'any'` to concrete type by checking source output → target input ports
+- **Channel-count-driven rendering**: The visualization is keyed off the *actual* number of channels flowing through the edge, not the static type. 1 channel = single black line, 2 channels = 2 parallel lines (R, G), 3 channels = 3 lines (R, G, B), 4 channels = 4 lines (R, G, B, A). Color-typed nodes render as RGB because they carry 3 channels, not because they're tagged `'color'`.
+- **Runtime shape resolution**: Every render, TypedEdge takes the **max** of two signals: (1) the live `evaluateNodeOutput(source, nodes, edges, 0)` length, and (2) the static `getNodeOutputShape(source, nodes, edges)` walk. Each fills the gaps of the other:
+  - Live eval handles `any → any` arithmetic broadcasting (e.g. `mul(float, vec2)` where the arithmetic node's port is `'any'` and the static walker would say `float`).
+  - Static shape handles chains downstream of unevaluable nodes (e.g. `perlinNoise → sub`): eval returns null because the texture is unevaluable, but the static walker still resolves sub's output to vec3 because perlinNoise's output port is `color`.
+  - Final `count = clamp(max(evalLen, shapeLen, 1), 1, 4)`. The older `LINE_COUNT[dataType]` lookup is gone.
+- **Count-keyed color maps** in [colorUtils.ts](src/utils/colorUtils.ts):
+  - `COUNT_EDGE_COLORS` — saturated, used on edge paths. `1: ['#000000']`, `2: ['#ff4444','#44dd44']`, `3: [...,'#4488ff']`, `4: [...,'#dddddd']`.
+  - `COUNT_CARD_COLORS` — lighter versions for the EdgeInfoCard.
+  - `COUNT_LABELS` — `1: ['']`, `2: ['R','G']`, `3: ['R','G','B']`, `4: ['R','G','B','A']`. All edge UIs now use RGB labels instead of the older type-specific X/Y/Z/W / R/G/B split.
+  - The older `EDGE_CHANNEL_COLORS` / `CARD_CHANNEL_COLORS` / `CHANNEL_LABELS` type-indexed maps are gone.
+- **Parallel offset** ([TypedEdge.tsx](src/components/NodeEditor/edges/TypedEdge.tsx)): `GAP = 3.5 / 3` — tight spacing so multi-channel edges read as a single ribbon rather than divergent wires.
+- **Dashes**: `strokeDasharray="4 0.5"` when `count > 1`, solid when `count === 1`.
+- **Stroke width** narrows with channel count: 1-ch = 1.5 (or 2 when selected), 2-ch = 1.2, 3-ch = 1, 4-ch = 0.8.
+- **Selected state**: Glow effect via `drop-shadow` filter keyed on the line color.
+- **Static type resolution** (`resolveDataType`) is still used for `baseColor` (the type-token color from CSS vars), which matters for the 1-channel fallback path.
 
 ### EdgeInfoCard (Live Value Display)
 
-When an edge is selected, an info card appears at the midpoint showing:
+When an edge is selected, an info card appears at the midpoint showing live values **as ranges**, not just point samples — so chains downstream of procedural textures (e.g. perlinNoise) still display useful information.
 
-- **Data type label** (e.g., `FLOAT`, `VEC3`, `COLOR`) with type-colored background
-- **Per-channel live values**: Each channel displayed with colored label (X/Y/Z/W or R/G/B) and numeric value
-- **Animated values**: When a Time node is upstream, values update via `requestAnimationFrame` loop using `evaluateNodeOutput()` from `cpuEvaluator.ts`
-- **Channel colors**: R=#ff6666, G=#66dd66, B=#6699ff, A=#dddddd
-- **Type resolution**: Resolves `'any'` ports by checking source output → target input concrete types
+- **Range-based**: State is `range: RangeResult | null` populated by `evaluateNodeRange(sourceId, nodes, edges, t)` from [cpuEvaluator.ts](src/engine/cpuEvaluator.ts). Re-runs in a `requestAnimationFrame` loop when a Time node is upstream; otherwise computed once and cached until the node graph changes (effect dep on `nodes`/`edges`, so editing a perlinNoise color in the node settings updates the displayed range live).
+- **Per-channel display**: Each channel renders as `LABEL VALUE` where:
+  - `LABEL` is colored R/G/B/A from `COUNT_CARD_COLORS` (1-channel has no label).
+  - `VALUE` is `lo.toFixed(2)` when `|hi - lo| < 0.005` (degenerate / point value), `${lo.toFixed(2)}..${hi.toFixed(2)}` when bounded (e.g. `0.00..1.00`), or the placeholder `0..1` when the channel is unknown or unbounded (`Infinity`).
+- **Vertical layout**: `.edge-info-card__values` is a column flex container — channels stack top-to-bottom (R / G / B). Each row is itself a horizontal flex with the label on the left and the value on the right.
+- **Channel count**: `max(range?.min.length ?? 0, getNodeOutputShape(source, nodes, edges), 1)`, clamped to `[1,4]`. Same idea as TypedEdge: prefer the range result, fall back to static shape inference for nodes neither eval nor range propagation can handle (e.g. `length`, `distance` chains).
+- **Visual style**: Dark gray background `#2a2a2a` (set in [EdgeInfoCard.css](src/components/NodeEditor/edges/EdgeInfoCard.css)), white value text (`.edge-info-card__num` color is explicitly `#ffffff`), preserved colored R/G/B/A labels via inline styles. The previous type-colored background and the data-type label (`FLOAT` / `VEC3` / etc.) were both removed — the visualization itself conveys the shape, and the dark gray reads cleanly against any background regardless of the edge type.
 
 ### Interaction
 
@@ -523,7 +569,7 @@ When an edge is selected, an info card appears at the midpoint showing:
 - **Ctrl+C**: Copy selected nodes (deep clone to clipboard ref)
 - **Ctrl+V**: Paste copied nodes (shared `pasteNodes()` helper — offset +30px, clone edges between copied nodes)
 - **Ctrl+D**: Duplicate selected (reuses `pasteNodes()` helper)
-- **Delete/Backspace**: Remove selected nodes and their connected edges
+- **Delete/Backspace**: Remove selected nodes (and their connected edges) and/or selected edges. React Flow's built-in delete is disabled (`deleteKeyCode={null}`); the manual handler in `NodeEditor.tsx` reads both `n.selected` and `edge.selected`
 
 ### Mouse Interactions
 
@@ -535,7 +581,7 @@ When an edge is selected, an info card appears at the midpoint showing:
 - **Right-click output node**: Opens ShaderSettingsMenu (cost, ports, displacement, material)
 - **Right-click edge**: Opens EdgeContextMenu (delete)
 - **Drag from handle → release on empty space**: Opens AddNodeMenu at drop position
-- **Drop node on edge**: Inserts node between source and target (bezier curve proximity detection, 40px threshold)
+- **Drop node on edge**: Inserts node between source and target (bezier curve proximity detection, `CONNECTION_RADIUS` = 40px threshold, shared with `connectionRadius` prop)
 
 ### Drop-on-Edge Insertion
 
@@ -543,8 +589,10 @@ When a node is dragged and dropped near an existing edge:
 
 1. Samples 20 points along the cubic bezier curve between source/target
 2. Finds minimum distance from dragged node center to curve
-3. If within 40px threshold: removes original edge, creates two new edges through the dropped node
+3. If within `CONNECTION_RADIUS` (40px): removes original edge, creates two new edges through the dropped node
 4. Uses first input and first output ports of the dropped node's registry definition
+
+History is pushed once in `onNodeDragStop` (covering both the position change and any edge insertion). Click-only events (no drag) are skipped via `DRAG_HISTORY_THRESHOLD = 2px` so the undo buffer isn't polluted with no-ops.
 
 ### Anti-Overlap
 
@@ -579,9 +627,11 @@ Routes to specific menu based on `contextMenu.type`:
 
 - Auto-focused search input
 - Grouped by category when not searching, flat list when searching
+- **Enter key**: While a non-empty query is typed, pressing Enter adds the highest-ranked search result (`results[0]`). Lets users add a node without reaching for the mouse — type `invert` + Enter, done. Gated on `query.trim() && results.length > 0`.
 - Maps node to React Flow type: output→`'output'`, noise category→`'preview'`, texture category→`'texturePreview'`, color→`'color'`, sin/cos→`'mathPreview'`, time→`'clock'`, else→`'shader'`
 - Places node at context menu screen position via `screenToFlowPosition()`
 - Prevents adding multiple output nodes
+- **Search aliases** — node `description` fields are searched alongside `label`/`type`/`tslFunction`, so common aliases are added as "Also: X, Y, Z" tails. Examples: Float = `number`, `value`; Invert = `invert`, `complement`, `negate`; Append = `combine`, `join`; Slider = `range`; UV = `texcoord`, `texture coordinate`.
 
 ### NodeSettingsMenu
 
@@ -655,9 +705,9 @@ Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`
 
 ### Three.js TSL Imports Used
 
-**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_fractal_noise_float, mx_worley_noise_float, hsl, toHsl, remap, select + all tsl-textures functions (via dynamic import)
+**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_fractal_noise_float, mx_worley_noise_float, hsl, toHsl, remap, select + all tsl-textures functions (via dynamic import)
 
-**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, mod, clamp, min, max, mix, smoothstep, remap, select, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_fractal_noise_float, mx_worley_noise_float + dynamic tsl-textures factories (auto-resolved from registry)
+**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, remap, select, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_fractal_noise_float, mx_worley_noise_float + dynamic tsl-textures factories (auto-resolved from registry)
 
 ### Persistence (localStorage)
 
@@ -680,3 +730,81 @@ Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`
 
 - **GitHub Pages**: `npm run build && npx gh-pages -d dist`
 - **Vite base path**: `/FastShaders/` (configured in `vite.config.ts`)
+
+### Version Display
+
+- App version is read from `package.json` at build time and injected via Vite's `define` as a global `__APP_VERSION__` string (declared in `src/vite-env.d.ts`)
+- `Toolbar.tsx` renders it next to the brand: `FastShaders v{__APP_VERSION__}` (mono font, secondary text color, `.toolbar__version` style)
+- Bumping the version requires only editing `package.json`'s `version` field; the bundle picks it up automatically on the next build
+
+---
+
+## ShaderFace (GPU Micro-Benchmark)
+
+Standalone benchmark tool in `ShaderFace/` for empirically measuring per-shader fragment cost. Two modes: **Standard** measures all shaders at fixed 512×512; **Resolution Sweep** steps through increasing resolutions per shader to find the max resolution that fits within VR frame budgets (120/90/72 fps). Produces JSON data to calibrate `complexity.json` performance point weights.
+
+### Architecture
+
+- **`index.html` + `bench.js`** — Main benchmark (bare Three.js quad, two modes: Standard + Resolution Sweep)
+- **`aframe.html`** — A-Frame pipeline benchmark (measures scene overhead vs bare Three.js; uses A-Frame IIFE bundle + shaderloader from `public/js/`)
+- **`shaderRegistry.js`** — 43 shaders: 1 baseline (flat color), 1 atomic (Voronoi), 41 tsl-textures
+- **`lib/`** — Local copies of `three.webgpu.js`, `three.tsl.js`, `three.core.js`, `tsl-textures-src/`
+
+### Benchmark Modes
+
+**Standard**: Fixed 512×512 quad, all shaders, randomized order, multi-loop. Produces marginal cost ranking.
+
+**Resolution Sweep**: Select shaders via checkbox picker, step through resolutions (default 256→1760, step 128). For each shader at each resolution: warmup + measure + record median. Adds A-Frame scene overhead (configurable constant) to compute total frame time. Reports `maxRes120`, `maxRes90`, `maxRes72` — the largest resolution fitting each FPS budget. Quest 3 per-eye is ~1680×1760, so max res defaults to 1760.
+
+### Measurement Method
+
+1. Multi-pass amplification: render N passes synchronously, divide wall-clock by N
+2. GPU sync via `device.queue.onSubmittedWorkDone()` (WebGPU) or `gl.finish()` (WebGL fallback)
+3. Ramp discard: 5 measurement cycles discarded before recording (GPU DVFS settling)
+4. Randomized shader order per loop (decorrelates thermal drift) — standard mode only
+5. Auto-calibration: passes=0 finds count where baseline ≥10ms (WebGPU) or ≥50ms (WebGL)
+6. Periodic yields every 5 samples (prevents Quest compositor starvation)
+7. Unreliable sync compensation: WebGL fallback enforces min 200 passes (vs 100 for WebGPU)
+
+### GPU Sync Reliability
+
+Only WebGPU `onSubmittedWorkDone()` provides real GPU sync. Quest Browser falls to WebGL where `gl.finish()` doesn't truly wait for GPU completion — measurements show bimodal distributions. Mac Safari WebGPU is the gold standard (CV% 0–5%). Quest WebGL data is approximate but ranking is consistent for top ~35/41 shaders.
+
+### Serving
+
+Must be served via static HTTP server (VS Code Live Server, `python3 -m http.server`, `serve.sh`) — **not** through Vite, which interferes with the import map. A-Frame benchmark uses scripts from `public/js/`.
+
+### Output
+
+**Standard**: JSON with raw per-sample timing arrays + summary statistics (median, IQR, CV%, outlier filtering via Tukey fences, baseline-subtracted marginal cost). Auto-downloads at 20% increments. Filename: `shaderface-standard-{sessionId}-{tag}.json`.
+
+**Resolution Sweep**: JSON with `sweepResults[]` containing per-shader cost at each resolution + `maxRes120/90/72`. Filename: `shaderface-resolution_sweep-{sessionId}-{tag}.json`.
+
+### Key Findings
+
+**Mac (WebGPU, 120 passes, 2 loops)** — reliable, CV% 0–5%:
+
+| Shader | Marginal (ms) | Notes |
+|--------|-------------:|-------|
+| circleDecor | 0.558 | was severely underestimated in complexity.json |
+| caustics | 0.542 | roughly correct rank |
+| cork | 0.354 | underestimated |
+| turbulentSmoke | 0.275 | overestimated |
+| dalmatianSpots | 0.250 | severely underestimated |
+| protozoa | 0.208 | correct |
+| reticularVeins | 0.200 | underestimated |
+| planet | 0.142 | overestimated |
+| ... (34 more) | 0–0.10 | |
+| dysonSphere | 0.000 | was 165 in complexity.json (20x overestimated) |
+
+**Quest 3 (WebGL, 500 passes, 2 loops)** — noisy but ranking matches Mac for 35/41 shaders:
+
+| Shader | Marginal (ms) | Max FPS @512×512 |
+|--------|-------------:|:---:|
+| cork | 5.54 | 120 |
+| circleDecor | 5.15 | 120 |
+| caustics | 5.00 | 120 |
+| turbulentSmoke | 4.76 | 120 |
+| dalmatianSpots | 4.28 | 120 |
+
+All shaders fit 120fps at 512×512 on Quest 3. Resolution sweep mode determines at what resolution each shader breaks the frame budget.

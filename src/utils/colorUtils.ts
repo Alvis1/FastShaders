@@ -76,6 +76,7 @@ export const CATEGORY_COLORS: Record<NodeCategory, string> = {
   noise: 'var(--cat-noise)',
   color: 'var(--cat-color)',
   texture: 'var(--cat-texture)',
+  unknown: 'var(--cat-unknown)',
   output: 'var(--cat-output)',
 };
 
@@ -93,40 +94,7 @@ export function getTypeColor(dataType: TSLDataType): string {
   return TYPE_COLORS[dataType] || TYPE_COLORS.any;
 }
 
-/** Per-channel colors for edge lines (saturated). */
-export const EDGE_CHANNEL_COLORS: Record<TSLDataType, string[]> = {
-  float: [],
-  int: [],
-  any: [],
-  vec2: ['#ff4444', '#44dd44'],
-  vec3: ['#ff4444', '#44dd44', '#4488ff'],
-  color: ['#ff4444', '#44dd44', '#4488ff'],
-  vec4: ['#ff4444', '#44dd44', '#4488ff', '#dddddd'],
-};
-
-/** Per-channel colors for info cards (lighter). */
-export const CARD_CHANNEL_COLORS: Record<TSLDataType, string[]> = {
-  float: [],
-  int: [],
-  any: [],
-  vec2: ['#ff6666', '#66dd66'],
-  vec3: ['#ff6666', '#66dd66', '#6699ff'],
-  color: ['#ff6666', '#66dd66', '#6699ff'],
-  vec4: ['#ff6666', '#66dd66', '#6699ff', '#dddddd'],
-};
-
-/** Channel labels per data type. */
-export const CHANNEL_LABELS: Record<TSLDataType, string[]> = {
-  float: [''],
-  int: [''],
-  any: [''],
-  vec2: ['X', 'Y'],
-  vec3: ['X', 'Y', 'Z'],
-  color: ['R', 'G', 'B'],
-  vec4: ['X', 'Y', 'Z', 'W'],
-};
-
-/** Number of visual lines per data type. */
+/** Number of visual lines per data type ('any' is resolved at runtime via evaluation). */
 export const LINE_COUNT: Record<TSLDataType, number> = {
   float: 1,
   int: 1,
@@ -135,4 +103,28 @@ export const LINE_COUNT: Record<TSLDataType, number> = {
   vec3: 3,
   color: 3,
   vec4: 4,
+};
+
+/** Per-channel edge colors keyed by channel count (saturated). */
+export const COUNT_EDGE_COLORS: Record<number, string[]> = {
+  1: ['#000000'],
+  2: ['#ff4444', '#44dd44'],
+  3: ['#ff4444', '#44dd44', '#4488ff'],
+  4: ['#ff4444', '#44dd44', '#4488ff', '#dddddd'],
+};
+
+/** Per-channel info-card colors keyed by channel count (lighter). */
+export const COUNT_CARD_COLORS: Record<number, string[]> = {
+  1: ['#ffffff'],
+  2: ['#ff6666', '#66dd66'],
+  3: ['#ff6666', '#66dd66', '#6699ff'],
+  4: ['#ff6666', '#66dd66', '#6699ff', '#dddddd'],
+};
+
+/** Channel labels keyed by channel count (single-channel has no label). */
+export const COUNT_LABELS: Record<number, string[]> = {
+  1: [''],
+  2: ['R', 'G'],
+  3: ['R', 'G', 'B'],
+  4: ['R', 'G', 'B', 'A'],
 };

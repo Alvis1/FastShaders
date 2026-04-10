@@ -23,6 +23,7 @@ import {
   floor,
   round,
   fract,
+  oneMinus,
   mod,
   clamp,
   min,
@@ -42,7 +43,6 @@ import {
   time,
   screenUV,
   uv,
-  mx_fractal_noise_float,
   mx_worley_noise_float,
 } from 'three/tsl';
 import { Color, Vector2, Vector3 } from 'three';
@@ -52,6 +52,7 @@ import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getParamClassifications } from '@/registry/tslTexturesRegistry';
 import { hexToRgb01 } from '@/utils/colorUtils';
+import { getComponentCount } from './cpuEvaluator';
 import { VALID_SWIZZLE } from './graphToCode';
 import { topologicalSort } from './topologicalSort';
 
@@ -63,6 +64,9 @@ type TSLNode = any;
  * Each factory receives an object mapping input port ids to their resolved TSL values.
  */
 const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Record<string, string | number>) => TSLNode> = {
+  // Unknown nodes: magenta fallback so downstream connections show something visible
+  unknown: () => vec3(1, 0, 1),
+
   // Inputs (no arguments, return a built-in node)
   positionGeometry: () => positionGeometry,
   normalLocal: () => normalLocal,
@@ -138,6 +142,7 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   floor: (inputs, v) => floor(inputs.x ?? float(Number(v.x ?? 0))),
   round: (inputs, v) => round(inputs.x ?? float(Number(v.x ?? 0))),
   fract: (inputs, v) => fract(inputs.x ?? float(Number(v.x ?? 0))),
+  oneMinus: (inputs, v) => oneMinus(inputs.x ?? float(Number(v.x ?? 0))),
 
   // Math (binary)
   pow: (inputs, v) => pow(inputs.base ?? float(Number(v.base ?? 1)), inputs.exp ?? float(Number(v.exp ?? 1))),
@@ -154,7 +159,16 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
 
   // Vector
   split: (inputs) => inputs.v ?? vec3(0, 0, 0),
-  append: (inputs) => tslVec2(inputs.a ?? float(0), inputs.b ?? float(0)),
+  // Append: shape is determined per-call in the loop below (needs nodes/edges context)
+  // and stashed in values._appendSize so this factory can pick the right constructor.
+  append: (inputs, values) => {
+    const a = inputs.a ?? float(0);
+    const b = inputs.b ?? float(0);
+    const size = Number(values._appendSize ?? 2);
+    if (size >= 4) return tslVec4(a, b);
+    if (size === 3) return vec3(a, b);
+    return tslVec2(a, b);
+  },
   normalize: (inputs) => normalize(inputs.v ?? vec3(0, 1, 0)),
   length: (inputs) => length(inputs.v ?? vec3(0, 0, 0)),
   distance: (inputs) => distance(inputs.a ?? vec3(0, 0, 0), inputs.b ?? vec3(0, 0, 0)),
@@ -162,16 +176,6 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   cross: (inputs) => cross(inputs.a ?? vec3(1, 0, 0), inputs.b ?? vec3(0, 1, 0)),
 
   // Noise
-  fractal: (inputs, values) => {
-    const pos = inputs.pos ?? positionGeometry;
-    const s = float(Number(values.scale ?? 1));
-    return mx_fractal_noise_float(
-      pos.mul(s),
-      inputs.octaves ?? float(Number(values.octaves ?? 4)),
-      inputs.lacunarity ?? float(Number(values.lacunarity ?? 2)),
-      inputs.diminish ?? float(Number(values.diminish ?? 0.5))
-    );
-  },
   voronoi: (inputs, values) => {
     const pos = inputs.pos ?? positionGeometry;
     const s = float(Number(values.scale ?? 1));
@@ -308,7 +312,19 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
       }
 
       // Get node values (defaults, user-set parameters)
-      const values = getNodeValues(node);
+      let values = getNodeValues(node);
+
+      // For append nodes, pre-compute the output size from the actual input shapes so the
+      // factory can pick vec2/vec3/vec4. Done here (not in the factory) because we have
+      // access to nodes/edges and can run the cpuEvaluator-backed shape walk.
+      if (node.data.registryType === 'append') {
+        let total = 0;
+        for (const inputId of ['a', 'b'] as const) {
+          const edge = edges.find((e) => e.target === node.id && e.targetHandle === inputId);
+          total += edge ? getComponentCount(edge.source, nodes, edges) : 1;
+        }
+        values = { ...values, _appendSize: Math.min(Math.max(total, 2), 4) };
+      }
 
       // Create the TSL node
       const tslNode = factory(resolvedInputs, values);

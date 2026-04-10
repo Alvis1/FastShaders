@@ -148,11 +148,19 @@ export function CodeEditor() {
           </button>
         </div>
         <div className="code-editor__actions">
-          {isTSL && codeErrors.length > 0 && (
-            <span className="code-editor__errors">
-              {codeErrors.length} error{codeErrors.length > 1 ? 's' : ''}
-            </span>
-          )}
+          {isTSL && codeErrors.length > 0 && (() => {
+            const errorCount = codeErrors.filter(e => e.severity !== 'warning').length;
+            const warnCount = codeErrors.filter(e => e.severity === 'warning').length;
+            return errorCount > 0 ? (
+              <span className="code-editor__errors">
+                {errorCount} error{errorCount > 1 ? 's' : ''}
+              </span>
+            ) : warnCount > 0 ? (
+              <span className="code-editor__warnings">
+                {warnCount} warning{warnCount > 1 ? 's' : ''}
+              </span>
+            ) : null;
+          })()}
           {isTSL && (
             <button className="code-editor__save" onClick={requestCodeSync}>
               Save
@@ -170,16 +178,29 @@ export function CodeEditor() {
           )}
         </div>
       </div>
-      {isTSL && codeErrors.length > 0 && (
-        <div className="code-editor__error-details">
-          {codeErrors.map((err, i) => (
-            <div key={i} className="code-editor__error-line">
-              {err.line ? `Line ${err.line}: ` : ''}{err.message}
-            </div>
-          ))}
-          <div className="code-editor__error-hint">Fix the errors above, then press Save to update the node view.</div>
-        </div>
-      )}
+      {isTSL && codeErrors.length > 0 && (() => {
+        const errors = codeErrors.filter(e => e.severity !== 'warning');
+        const warnings = codeErrors.filter(e => e.severity === 'warning');
+        return (
+          <div className={errors.length > 0 ? 'code-editor__error-details' : 'code-editor__warning-details'}>
+            {errors.map((err, i) => (
+              <div key={`e${i}`} className="code-editor__error-line">
+                {err.line ? `Line ${err.line}: ` : ''}{err.message}
+              </div>
+            ))}
+            {warnings.map((err, i) => (
+              <div key={`w${i}`} className="code-editor__warning-line">
+                {err.line ? `Line ${err.line}: ` : ''}{err.message}
+              </div>
+            ))}
+            {errors.length > 0 ? (
+              <div className="code-editor__error-hint">Fix the errors above, then press Save to update the node view.</div>
+            ) : (
+              <div className="code-editor__error-hint">Unknown functions are preserved as-is in the graph.</div>
+            )}
+          </div>
+        );
+      })()}
       <div className="code-editor__body">
         {/* TSL editor — always mounted, hidden when not active */}
         <div className="code-editor__pane" style={{ display: isTSL ? 'block' : 'none' }}>

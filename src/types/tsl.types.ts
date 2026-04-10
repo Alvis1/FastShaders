@@ -2,6 +2,7 @@ export interface ParseError {
   message: string;
   line?: number;
   column?: number;
+  severity?: 'error' | 'warning';
 }
 
 export interface GeneratedCode {

@@ -7,8 +7,9 @@ import {
 import type { AppEdge, AppNode, TSLDataType } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { getTypeColor, EDGE_CHANNEL_COLORS, LINE_COUNT } from '@/utils/colorUtils';
+import { getTypeColor, COUNT_EDGE_COLORS } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
+import { evaluateNodeOutput, getNodeOutputShape } from '@/engine/cpuEvaluator';
 import { EdgeInfoCard } from './EdgeInfoCard';
 
 /** Type priority for broadcasting: higher = wider type */
@@ -16,7 +17,7 @@ const TYPE_PRIORITY: Record<TSLDataType, number> = {
   any: -1, int: 0, float: 1, vec2: 2, vec3: 3, color: 3, vec4: 4,
 };
 
-const GAP = 3.5;
+const GAP = 3.5 / 3;
 
 function getOffsets(count: number): number[] {
   if (count <= 1) return [0];
@@ -126,8 +127,21 @@ export function TypedEdge({
   const rawType = data?.dataType ?? 'any';
   const dataType = resolveDataType(rawType, source, sourceHandleId, target, targetHandleId);
   const baseColor = getTypeColor(dataType);
-  const channelColors = EDGE_CHANNEL_COLORS[dataType];
-  const count = LINE_COUNT[dataType] ?? 1;
+
+  // Channel count: take the *larger* of live evaluation length and static shape inference.
+  // Why both?
+  //  - Live eval handles cases where the static walker can't see through 'any' broadcasting,
+  //    e.g. `mul(float, vec2)` where the arithmetic node's output port is 'any' and the
+  //    static walker would resolve to float.
+  //  - Static shape handles cases where eval returns null or a shorter array, e.g. anything
+  //    downstream of a procedural texture (perlinNoise → sub → ...): eval returns null because
+  //    the texture is unevaluable, but the static walker still knows sub's output is vec3 (color).
+  // Taking max means each path catches the gaps of the other.
+  const evaluated = evaluateNodeOutput(source, nodes, edges, 0);
+  const evalLen = evaluated?.length ?? 0;
+  const shapeLen = getNodeOutputShape(source, nodes, edges);
+  const count = Math.min(Math.max(evalLen, shapeLen, 1), 4);
+  const channelColors = COUNT_EDGE_COLORS[count] ?? COUNT_EDGE_COLORS[1];
   const offsets = getOffsets(count);
   // Thinner lines when more channels
   const strokeWidth = count >= 4 ? 0.8 : count >= 3 ? 1 : count >= 2 ? 1.2 : selected ? 2 : 1.5;
@@ -228,7 +242,7 @@ export function TypedEdge({
             fill="none"
             stroke={lineColor}
             strokeWidth={strokeWidth}
-            strokeDasharray={count > 1 ? '4 1' : undefined}
+            strokeDasharray={count > 1 ? '4 0.5' : undefined}
             opacity={selected ? 1 : 0.9}
             filter={selected ? `drop-shadow(0 0 3px ${lineColor})` : undefined}
             style={{ pointerEvents: 'none' }}
