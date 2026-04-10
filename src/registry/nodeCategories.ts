@@ -15,5 +15,6 @@ export const CATEGORIES: CategoryInfo[] = [
   { id: 'noise', label: 'Noise' },
   { id: 'color', label: 'Color' },
   { id: 'texture', label: 'Textures' },
+  { id: 'unknown', label: 'Unknown' },
   { id: 'output', label: 'Output' },
 ];

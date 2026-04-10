@@ -41,10 +41,13 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);
 
-  // Check if the X input has an edge connected
+  // Check if the X input has an edge connected.
+  // Pull `xSource` (a string) instead of the edge object so the effect deps below
+  // are stable across re-renders that don't actually change this node's input.
   const xEdge = edges.find((e) => e.target === id && e.targetHandle === 'x');
-  const hasConnection = !!xEdge;
-  const hasTime = !!xEdge && hasTimeUpstream(xEdge.source, nodes, edges);
+  const xSource = xEdge?.source ?? null;
+  const hasConnection = xSource !== null;
+  const hasTime = xSource !== null && hasTimeUpstream(xSource, nodes, edges);
 
   const accentColor = '#6C63FF';
   const inputX = Number(data.values?.x ?? 0);
@@ -73,8 +76,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
 
         // Evaluate the actual input flowing into this node's X port
         // by walking the upstream graph with the current time
-        const xSource = xEdge!.source;
-        const evaluated = evaluateNodeScalar(xSource, nodesRef.current, edgesRef.current, t);
+        const evaluated = xSource ? evaluateNodeScalar(xSource, nodesRef.current, edgesRef.current, t) : null;
         const inputVal = evaluated ?? t;
 
         renderMathPreview(ctx, {
@@ -103,7 +105,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
         funcLabel: data.registryType,
       });
     }
-  }, [data.registryType, data.values, hasTime, hasConnection, func, accentColor, inputX, xEdge]);
+  }, [data.registryType, data.values, hasTime, hasConnection, func, accentColor, inputX, xSource]);
 
   const handleXChange = useCallback(
     (v: number) => {

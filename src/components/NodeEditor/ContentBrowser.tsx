@@ -14,6 +14,12 @@ const costs = complexityData.costs as Record<string, number>;
 const PINNED_TEXTURE_ORDER = ['tslTex_perlinNoise', 'voronoi'] as const;
 const PINNED_TEXTURE_TYPES = new Set<string>(PINNED_TEXTURE_ORDER);
 
+/** A spacer slot inserted into the browser items list (rendered as an empty gap). */
+type SpacerItem = { kind: 'spacer' };
+type BrowserItem = NodeDefinition | SpacerItem;
+const SPACER: SpacerItem = { kind: 'spacer' };
+const isSpacer = (item: BrowserItem): item is SpacerItem => 'kind' in item && item.kind === 'spacer';
+
 export function ContentBrowser() {
   const [activeCategory, setActiveCategory] = useState<NodeCategory | 'all'>('all');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -32,7 +38,7 @@ export function ContentBrowser() {
     return defs;
   }, []);
 
-  const filteredDefs = useMemo(() => {
+  const filteredDefs = useMemo<BrowserItem[]>(() => {
     if (activeCategory === 'all') return allDefs;
     if (activeCategory === 'texture') {
       // Pin perlinNoise & voronoi at start (in order), then all noise + texture nodes sorted by cost
@@ -42,7 +48,7 @@ export function ContentBrowser() {
       const rest = allDefs
         .filter((d) => (d.category === 'texture' || d.category === 'noise') && !PINNED_TEXTURE_TYPES.has(d.type))
         .sort((a, b) => (costs[a.type] ?? 50) - (costs[b.type] ?? 50));
-      return [...pinned, { type: '__spacer__' } as NodeDefinition, ...rest];
+      return [...pinned, SPACER, ...rest];
     }
     return allDefs.filter((d) => d.category === activeCategory);
   }, [allDefs, activeCategory]);
@@ -96,11 +102,11 @@ export function ContentBrowser() {
         ))}
       </div>
       <div className="content-browser__items" ref={scrollRef}>
-        {filteredDefs.map((def) =>
-          def.type === '__spacer__' ? (
-            <div key="__spacer__" style={{ width: 12, flexShrink: 0 }} />
+        {filteredDefs.map((item, i) =>
+          isSpacer(item) ? (
+            <div key={`spacer-${i}`} style={{ width: 12, flexShrink: 0 }} />
           ) : (
-            <NodePreviewCard key={def.type} def={def} onDragStart={onDragStart} />
+            <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
           )
         )}
       </div>

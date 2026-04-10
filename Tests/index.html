@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="utf-8">
   <title>TSL Shader Gallery</title>
@@ -7,7 +8,10 @@
   <script src="../a-frame-shaderloader/js/tsl-textures.min.js"></script>
   <script src="../a-frame-shaderloader/js/a-frame-shaderloader-0.3.js"></script>
   <style>
-    body { margin: 0; overflow: hidden; }
+    body {
+      margin: 0;
+      overflow: hidden;
+    }
   </style>
   <script>
     // Canvas-based text label — works with WebGPU renderer (unlike a-text SDF shader)
@@ -48,8 +52,9 @@
     });
   </script>
 </head>
+
 <body>
-  <a-scene background="color: #000000" renderer="colorManagement: true">
+  <a-scene stats background="color: #000000" renderer="colorManagement: true;">
 
     <!-- Lighting -->
     <a-entity light="type: ambient; color: #fff; intensity: 0.5"></a-entity>
@@ -58,12 +63,11 @@
     <!-- Camera -->
     <a-entity camera look-controls wasd-controls position="0 -1.5 20"></a-entity>
 
-    <!-- ===== Row 0 (y=4.8) ===== -->
+    <!-- ===== Row 0 (y=4.8): 2KM, AS, BJ ===== -->
 
     <!-- 2KM — udens (sphere) -->
     <a-entity position="-7 4.8 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/2km-shader-iced-udens.js">
       </a-entity>
       <a-entity label="value: 2KM; sub: udens" position="0 1.3 0"></a-entity>
@@ -71,8 +75,7 @@
 
     <!-- 2KM — uguns (plane) -->
     <a-entity position="-4.2 4.8 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/2km-shader-uguns.js">
       </a-entity>
       <a-entity label="value: 2KM; sub: uguns" position="0 1.3 0"></a-entity>
@@ -80,8 +83,7 @@
 
     <!-- AS — udens (sphere) -->
     <a-entity position="-1.4 4.8 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/as_udens.js">
       </a-entity>
       <a-entity label="value: AS; sub: udens" position="0 1.3 0"></a-entity>
@@ -89,8 +91,7 @@
 
     <!-- AS — uguns (plane) -->
     <a-entity position="1.4 4.8 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/as_uguns.js">
       </a-entity>
       <a-entity label="value: AS; sub: uguns" position="0 1.3 0"></a-entity>
@@ -98,8 +99,7 @@
 
     <!-- BJ — udens (sphere) -->
     <a-entity position="4.2 4.8 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/bj_udens.js">
       </a-entity>
       <a-entity label="value: BJ; sub: udens" position="0 1.3 0"></a-entity>
@@ -107,140 +107,125 @@
 
     <!-- BJ — uguns (plane) -->
     <a-entity position="7 4.8 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/bj_uguns.js">
       </a-entity>
       <a-entity label="value: BJ; sub: uguns" position="0 1.3 0"></a-entity>
     </a-entity>
 
-    <!-- ===== Row 1 (y=1.6) ===== -->
+    <!-- ===== Row 1 (y=1.6): BJ(2), DEMO, EM, EMK ===== -->
 
     <!-- BJ — uguns2 (plane) -->
     <a-entity position="-7 1.6 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/bj_uguns2.js">
       </a-entity>
       <a-entity label="value: BJ; sub: uguns 2" position="0 1.3 0"></a-entity>
     </a-entity>
 
-    <!-- EM — udens (sphere) -->
+    <!-- DEMO — udens-shader (sphere) -->
     <a-entity position="-4.2 1.6 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+        shader="src: 1stTest/udens-shader.js">
+      </a-entity>
+      <a-entity label="value: DEMO; sub: udens" position="0 1.3 0"></a-entity>
+    </a-entity>
+
+    <!-- EM — udens (sphere) -->
+    <a-entity position="-1.4 1.6 0">
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/em_udens.js">
       </a-entity>
       <a-entity label="value: EM; sub: udens" position="0 1.3 0"></a-entity>
     </a-entity>
 
     <!-- EM — uguns (plane) -->
-    <a-entity position="-1.4 1.6 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="1.4 1.6 0">
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/em_uguns.js">
       </a-entity>
       <a-entity label="value: EM; sub: uguns" position="0 1.3 0"></a-entity>
     </a-entity>
 
     <!-- EMK — udens (sphere) -->
-    <a-entity position="1.4 1.6 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="4.2 1.6 0">
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/emk-udens.js">
       </a-entity>
       <a-entity label="value: EMK; sub: udens" position="0 1.3 0"></a-entity>
     </a-entity>
 
     <!-- EMK — uguns (plane) -->
-    <a-entity position="4.2 1.6 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="7 1.6 0">
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/emk-uguns.js">
       </a-entity>
       <a-entity label="value: EMK; sub: uguns" position="0 1.3 0"></a-entity>
     </a-entity>
 
+    <!-- ===== Row 2 (y=-1.6): EZ, LI, LO ===== -->
+
     <!-- EZ — udens (sphere) -->
-    <a-entity position="7 1.6 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="-7 -1.6 0">
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/ez_udens.js">
       </a-entity>
       <a-entity label="value: EZ; sub: udens" position="0 1.3 0"></a-entity>
     </a-entity>
 
-    <!-- ===== Row 2 (y=-1.6) ===== -->
-
     <!-- EZ — uguns (plane) -->
-    <a-entity position="-7 -1.6 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="-4.2 -1.6 0">
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/ez_uguns.js">
       </a-entity>
       <a-entity label="value: EZ; sub: uguns" position="0 1.3 0"></a-entity>
     </a-entity>
 
     <!-- LI — udens (sphere) -->
-    <a-entity position="-4.2 -1.6 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="-1.4 -1.6 0">
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/li_udens.js">
       </a-entity>
       <a-entity label="value: LI; sub: udens" position="0 1.3 0"></a-entity>
     </a-entity>
 
     <!-- LI — uguns (plane) -->
-    <a-entity position="-1.4 -1.6 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="1.4 -1.6 0">
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/li_uguns.js">
       </a-entity>
       <a-entity label="value: LI; sub: uguns" position="0 1.3 0"></a-entity>
     </a-entity>
 
     <!-- LO — udens (sphere) -->
-    <a-entity position="1.4 -1.6 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="4.2 -1.6 0">
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/lo_udens.js">
       </a-entity>
       <a-entity label="value: LO; sub: udens" position="0 1.3 0"></a-entity>
     </a-entity>
 
     <!-- LO — uguns (plane) -->
-    <a-entity position="4.2 -1.6 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="7 -1.6 0">
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/lo_uguns.js">
       </a-entity>
       <a-entity label="value: LO; sub: uguns" position="0 1.3 0"></a-entity>
     </a-entity>
 
-    <!-- MY — shader 2 (plane, no udens/uguns) -->
-    <a-entity position="7 -1.6 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+    <!-- ===== Row 3 (y=-4.8): MY, RK, TK ===== -->
+
+    <!-- MY — shader 2 (plane) -->
+    <a-entity position="-7 -4.8 0">
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/my-shader 2.js">
       </a-entity>
       <a-entity label="value: MY; sub: shader 2" position="0 1.3 0"></a-entity>
     </a-entity>
 
-    <!-- ===== Row 3 (y=-4.8) ===== -->
-
-    <!-- MY — shader 3 (plane) -->
-    <a-entity position="-7 -4.8 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
-        shader="src: 1stTest/my-shader 3.js">
-      </a-entity>
-      <a-entity label="value: MY; sub: shader 3" position="0 1.3 0"></a-entity>
-    </a-entity>
-
     <!-- RK — udens (sphere) -->
     <a-entity position="-4.2 -4.8 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/rk-udens.js">
       </a-entity>
       <a-entity label="value: RK; sub: udens" position="0 1.3 0"></a-entity>
@@ -248,8 +233,7 @@
 
     <!-- RK — udens2 (sphere) -->
     <a-entity position="-1.4 -4.8 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/rk-udens2.js">
       </a-entity>
       <a-entity label="value: RK; sub: udens 2" position="0 1.3 0"></a-entity>
@@ -257,8 +241,7 @@
 
     <!-- RK — uguns (plane) -->
     <a-entity position="1.4 -4.8 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/rk-uguns.js">
       </a-entity>
       <a-entity label="value: RK; sub: uguns" position="0 1.3 0"></a-entity>
@@ -266,8 +249,7 @@
 
     <!-- TK — udens (sphere) -->
     <a-entity position="4.2 -4.8 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/tk-udens.js">
       </a-entity>
       <a-entity label="value: TK; sub: udens" position="0 1.3 0"></a-entity>
@@ -275,37 +257,25 @@
 
     <!-- TK — uguns (plane) -->
     <a-entity position="7 -4.8 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/tk-uguns.js">
       </a-entity>
       <a-entity label="value: TK; sub: uguns" position="0 1.3 0"></a-entity>
     </a-entity>
 
-    <!-- ===== Row 4 (y=-8.0) ===== -->
-
-    <!-- DEMO — udens-shader (sphere) -->
-    <a-entity position="-7 -8.0 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
-        shader="src: 1stTest/udens-shader.js">
-      </a-entity>
-      <a-entity label="value: DEMO; sub: udens" position="0 1.3 0"></a-entity>
-    </a-entity>
+    <!-- ===== Row 4 (y=-8.0): ZD ===== -->
 
     <!-- ZD — udens (sphere) -->
-    <a-entity position="-4.2 -8.0 0">
-      <a-entity
-        geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="-7 -8.0 0">
+      <a-entity geometry="primitive: sphere; radius: 0.9; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/zd_udens.js">
       </a-entity>
       <a-entity label="value: ZD; sub: udens" position="0 1.3 0"></a-entity>
     </a-entity>
 
     <!-- ZD — uguns (plane) -->
-    <a-entity position="-1.4 -8.0 0">
-      <a-entity
-        geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
+    <a-entity position="-4.2 -8.0 0">
+      <a-entity geometry="primitive: plane; width: 1.8; height: 1.8; segmentsWidth: 64; segmentsHeight: 64"
         shader="src: 1stTest/zd_uguns.js">
       </a-entity>
       <a-entity label="value: ZD; sub: uguns" position="0 1.3 0"></a-entity>
@@ -313,4 +283,5 @@
 
   </a-scene>
 </body>
+
 </html>

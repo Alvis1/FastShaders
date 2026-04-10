@@ -87,7 +87,8 @@ export function useSyncEngine() {
       setSyncInProgress(true);
       try {
         const result = codeToGraph(codeStr, NODE_REGISTRY);
-        if (result.errors.length === 0) {
+        const hasBlockingErrors = result.errors.some(e => e.severity !== 'warning');
+        if (!hasBlockingErrors) {
           if (!skipHistory) {
             useAppStore.getState().pushHistory();
           }

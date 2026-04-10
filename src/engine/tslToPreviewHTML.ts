@@ -161,15 +161,22 @@ export function tslToPreviewHTML(
   lines.push(`<${''}/script>`);
   lines.push('');
 
-  // A-Frame scene with camera (FOV 20) and orbit controls
+  // A-Frame scene with three-point lighting rig for material evaluation
+  // Key light: strong directional at ~55° raking angle — exposes normal/bump detail
+  // Rim light: backlight behind object — defines specularity and silhouette
+  // Fill light: soft low-intensity opposite key — lifts shadows without flattening
+  // Ambient: minimal base to prevent pure black
   lines.push(`<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ${bgColor}">`);
-  lines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5">');
-  lines.push('    <a-entity light="type: point" position="-2.54828 0.68055 -0.48012"></a-entity>');
-  lines.push('    <a-entity light="type: point" position="0.93609 0.28506 2.65279"></a-entity>');
-  lines.push('  </a-entity>');
+  lines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
   lines.push(`  <a-entity id="preview-entity" geometry="${geoAttr}" material="color: #808080" position="0 0 0" rotation="45 45 0"${animAttr}></a-entity>`);
-  lines.push('  <a-light type="directional" position="1 2 1" intensity="1"></a-light>');
-  lines.push('  <a-light type="ambient" intensity="0.4"></a-light>');
+  // Key light — raking angle (~55° from camera axis), warm, high intensity
+  lines.push('  <a-light type="directional" color="#fff5e6" position="-3 4 2" intensity="2.5"></a-light>');
+  // Rim light — behind and above, cool tint, high intensity for specular edge
+  lines.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
+  // Fill light — opposite key, neutral, low intensity
+  lines.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
+  // Ambient — very low, just enough to prevent pure black in crevices
+  lines.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
   lines.push('</a-scene>');
   lines.push('');
 

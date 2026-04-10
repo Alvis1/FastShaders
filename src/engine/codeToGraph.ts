@@ -1,7 +1,7 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
-import type { AppNode, AppEdge, NodeDefinition, ParseError } from '@/types';
+import type { AppNode, AppEdge, NodeDefinition, ParseError, ShaderNodeData } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType } from '@/registry/nodeRegistry';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
@@ -47,10 +47,86 @@ export function codeToGraph(
   const varToNodeId = new Map<string, string>();
   const rawNodes: AppNode[] = [];
   const rawEdges: AppEdge[] = [];
+  const warnings: ParseError[] = [];
   // Track split nodes created for member expression patterns (sourceVarName → splitNodeId)
   const splitNodes = new Map<string, string>();
 
   let hasOutput = false;
+
+  // Build the OutputNode and wire its channels from a return/output expression.
+  // Shared between `return X` (FastShaders canonical form) and `output = X`
+  // (three.js TSL editor compatible form).
+  const buildOutputFromExpr = (arg: t.Node): void => {
+    if (hasOutput) return;
+
+    const outputDef = NODE_REGISTRY.get('output');
+    if (!outputDef) return;
+
+    const outputId = generateId();
+    rawNodes.push(createNode(outputId, outputDef, 'Output'));
+    hasOutput = true;
+
+    // Multi-channel: { color: x, position: y, ... }
+    if (t.isObjectExpression(arg)) {
+      for (const prop of arg.properties) {
+        if (!t.isObjectProperty(prop) || !t.isIdentifier(prop.key)) continue;
+        const channel = prop.key.name;
+        if (t.isIdentifier(prop.value)) {
+          const sourceId = varToNodeId.get(prop.value.name)
+            ?? ensureBareInputNode(prop.value.name, rawNodes, varToNodeId);
+          if (sourceId) {
+            rawEdges.push({
+              id: generateEdgeId(sourceId, 'out', outputId, channel),
+              source: sourceId, sourceHandle: 'out',
+              target: outputId, targetHandle: channel,
+              type: 'typed' as const, animated: true,
+              data: { dataType: 'any' as const },
+            });
+          }
+        } else if (t.isMemberExpression(prop.value)) {
+          const ref = resolveMemberExpr(prop.value, rawNodes, rawEdges, varToNodeId, splitNodes);
+          if (ref) {
+            rawEdges.push({
+              id: generateEdgeId(ref.nodeId, ref.handle, outputId, channel),
+              source: ref.nodeId, sourceHandle: ref.handle,
+              target: outputId, targetHandle: channel,
+              type: 'typed' as const, animated: true,
+              data: { dataType: 'float' as const },
+            });
+          }
+        } else if (t.isCallExpression(prop.value)) {
+          const tempVar = `_return_${channel}`;
+          processCall(prop.value, tempVar, rawNodes, rawEdges, varToNodeId, splitNodes, code, warnings);
+          const sourceId = varToNodeId.get(tempVar);
+          if (sourceId) {
+            rawEdges.push({
+              id: generateEdgeId(sourceId, 'out', outputId, channel),
+              source: sourceId, sourceHandle: 'out',
+              target: outputId, targetHandle: channel,
+              type: 'typed' as const, animated: true,
+              data: { dataType: 'any' as const },
+            });
+          }
+        }
+      }
+      return;
+    }
+
+    // Single-value: wire to output.color
+    const returnRef = resolveReturnSource(arg, rawNodes, rawEdges, varToNodeId, splitNodes, code, warnings);
+    if (returnRef) {
+      rawEdges.push({
+        id: generateEdgeId(returnRef.nodeId, returnRef.handle, outputId, 'color'),
+        source: returnRef.nodeId,
+        sourceHandle: returnRef.handle,
+        target: outputId,
+        targetHandle: 'color',
+        type: 'typed' as const,
+        animated: true,
+        data: { dataType: 'any' as const },
+      });
+    }
+  };
 
   try {
     traverse(ast, {
@@ -73,84 +149,26 @@ export function codeToGraph(
 
         // const x = func(args...) or const x = obj.method(args...)
         if (t.isCallExpression(init)) {
-          processCall(init, varName, rawNodes, rawEdges, varToNodeId, splitNodes);
+          processCall(init, varName, rawNodes, rawEdges, varToNodeId, splitNodes, code, warnings);
         }
       },
 
       // Handle "return x;" or "return { color: x, position: y };" to create the Output node
       ReturnStatement(path) {
-        if (hasOutput) return;
         const arg = path.node.argument;
         if (!arg) return;
+        buildOutputFromExpr(arg);
+      },
 
-        const outputDef = NODE_REGISTRY.get('output');
-        if (!outputDef) return;
-
-        const outputId = generateId();
-        rawNodes.push(createNode(outputId, outputDef, 'Output'));
-        hasOutput = true;
-
-        // Multi-channel return: return { color: x, position: y, ... }
-        if (t.isObjectExpression(arg)) {
-          for (const prop of arg.properties) {
-            if (!t.isObjectProperty(prop) || !t.isIdentifier(prop.key)) continue;
-            const channel = prop.key.name;
-            if (t.isIdentifier(prop.value)) {
-              const sourceId = varToNodeId.get(prop.value.name);
-              if (sourceId) {
-                rawEdges.push({
-                  id: generateEdgeId(sourceId, 'out', outputId, channel),
-                  source: sourceId, sourceHandle: 'out',
-                  target: outputId, targetHandle: channel,
-                  type: 'typed' as const, animated: true,
-                  data: { dataType: 'any' as const },
-                });
-              }
-            } else if (t.isMemberExpression(prop.value)) {
-              // Member expression: someVar.x → resolve through split node
-              const ref = resolveMemberExpr(prop.value, rawNodes, rawEdges, varToNodeId, splitNodes);
-              if (ref) {
-                rawEdges.push({
-                  id: generateEdgeId(ref.nodeId, ref.handle, outputId, channel),
-                  source: ref.nodeId, sourceHandle: ref.handle,
-                  target: outputId, targetHandle: channel,
-                  type: 'typed' as const, animated: true,
-                  data: { dataType: 'float' as const },
-                });
-              }
-            } else if (t.isCallExpression(prop.value)) {
-              // Inline call expression: return { color: someFunc(a, b) }
-              const tempVar = `_return_${channel}`;
-              processCall(prop.value, tempVar, rawNodes, rawEdges, varToNodeId, splitNodes);
-              const sourceId = varToNodeId.get(tempVar);
-              if (sourceId) {
-                rawEdges.push({
-                  id: generateEdgeId(sourceId, 'out', outputId, channel),
-                  source: sourceId, sourceHandle: 'out',
-                  target: outputId, targetHandle: channel,
-                  type: 'typed' as const, animated: true,
-                  data: { dataType: 'any' as const },
-                });
-              }
-            }
-          }
-          return;
-        }
-
-        // Single-value return: wire to output.color
-        const returnRef = resolveReturnSource(arg, rawNodes, rawEdges, varToNodeId, splitNodes);
-        if (returnRef) {
-          rawEdges.push({
-            id: generateEdgeId(returnRef.nodeId, returnRef.handle, outputId, 'color'),
-            source: returnRef.nodeId,
-            sourceHandle: returnRef.handle,
-            target: outputId,
-            targetHandle: 'color',
-            type: 'typed' as const,
-            animated: true,
-            data: { dataType: 'any' as const },
-          });
-        }
+      // Handle three.js TSL editor compatible form: `output = X` at the top level.
+      // The three.js webgpu_tsl_editor example evaluates a flat snippet that
+      // assigns its result to a magic `output` variable. We treat that exactly
+      // like a return statement so snippets can be pasted in directly.
+      AssignmentExpression(path) {
+        if (path.node.operator !== '=') return;
+        if (!t.isIdentifier(path.node.left)) return;
+        if (path.node.left.name !== 'output') return;
+        buildOutputFromExpr(path.node.right);
       },
     });
   } catch (e: unknown) {
@@ -158,7 +176,7 @@ export function codeToGraph(
     return { nodes: [], edges: [], errors: [{ message: msg }] };
   }
 
-  // If no return statement produced an output node, add an unconnected one
+  // If no return/output assignment produced an output node, add an unconnected one
   if (!hasOutput) {
     const outputDef = NODE_REGISTRY.get('output');
     if (outputDef) {
@@ -166,7 +184,34 @@ export function codeToGraph(
     }
   }
 
-  return { nodes: rawNodes, edges: rawEdges, errors: [] };
+  return { nodes: rawNodes, edges: rawEdges, errors: warnings };
+}
+
+/**
+ * Lazily create an input node for a bare TSL identifier (e.g. `time`,
+ * `positionGeometry`, `normalGeometry`) the first time it appears as a chained
+ * receiver or call argument. This lets snippets pasted from the three.js TSL
+ * editor — which use these globals directly without `const time1 = time;`
+ * scaffolding — still produce a wired graph.
+ */
+function ensureBareInputNode(
+  name: string,
+  nodes: AppNode[],
+  varToNodeId: Map<string, string>,
+): string | undefined {
+  const existing = varToNodeId.get(name);
+  if (existing) return existing;
+  const def = TSL_FUNCTION_TO_DEF.get(name);
+  if (!def) return undefined;
+  // Only auto-create zero-arg input nodes (time, positionGeometry, uv, etc.).
+  // Anything that takes parameters or has default values must be declared
+  // explicitly so we don't guess at the wrong shape.
+  if (def.inputs.length > 0 || def.defaultValues) return undefined;
+  if (def.category !== 'input') return undefined;
+  const nodeId = generateId();
+  nodes.push(createNode(nodeId, def, name));
+  varToNodeId.set(name, nodeId);
+  return nodeId;
 }
 
 /** Resolve a return statement argument to a source node ID + optional handle. */
@@ -176,10 +221,12 @@ function resolveReturnSource(
   edges: AppEdge[],
   varToNodeId: Map<string, string>,
   splitNodesMap: Map<string, string>,
+  code: string,
+  errors: ParseError[],
 ): { nodeId: string; handle: string } | undefined {
-  // return someVar;
+  // return someVar;  (or `output = someVar` for three.js editor compatible form)
   if (t.isIdentifier(arg)) {
-    const id = varToNodeId.get(arg.name);
+    const id = varToNodeId.get(arg.name) ?? ensureBareInputNode(arg.name, nodes, varToNodeId);
     if (id) return { nodeId: id, handle: 'out' };
   }
   // return someVar.x; — member expression through split node
@@ -190,7 +237,7 @@ function resolveReturnSource(
   // return someFunc(a, b); — process as an inline call and return its node ID
   if (t.isCallExpression(arg)) {
     const tempVar = '_return';
-    processCall(arg, tempVar, nodes, edges, varToNodeId, splitNodesMap);
+    processCall(arg, tempVar, nodes, edges, varToNodeId, splitNodesMap, code, errors);
     const id = varToNodeId.get(tempVar);
     if (id) return { nodeId: id, handle: 'out' };
   }
@@ -204,6 +251,8 @@ function processCall(
   edges: AppEdge[],
   varToNodeId: Map<string, string>,
   splitNodesMap: Map<string, string> = new Map(),
+  code: string = '',
+  errors: ParseError[] = [],
 ): void {
   let funcName: string | undefined;
   let objectVarName: string | undefined;
@@ -223,6 +272,29 @@ function processCall(
   }
 
   if (!funcName) return;
+
+  // Pass-through TSL methods that don't change graph semantics. `.toVar()`
+  // and `.toConst()` only mark a node for evaluation in the GPU pipeline; for
+  // graph purposes they alias the receiver. Common in three.js TSL editor
+  // snippets like `const blink = sin(t).toVar();`.
+  if (
+    (funcName === 'toVar' || funcName === 'toConst') &&
+    callExpr.arguments.length === 0 &&
+    t.isMemberExpression(callExpr.callee)
+  ) {
+    const inner = callExpr.callee.object;
+    if (t.isIdentifier(inner)) {
+      const sourceId =
+        varToNodeId.get(inner.name) ?? ensureBareInputNode(inner.name, nodes, varToNodeId);
+      if (sourceId) varToNodeId.set(varName, sourceId);
+      return;
+    }
+    if (t.isCallExpression(inner)) {
+      // Recurse: let the inner call produce a node under our varName.
+      processCall(inner, varName, nodes, edges, varToNodeId, splitNodesMap, code, errors);
+      return;
+    }
+  }
 
   // Detect UV-tiling pattern: mul(uv(), vec2(x, y)) → create UV node with tiling values
   if (funcName === 'mul' && callExpr.arguments.length === 2) {
@@ -248,7 +320,8 @@ function processCall(
         for (let i = 0; i < 2; i++) {
           const arg = callExpr.arguments[i];
           if (t.isIdentifier(arg)) {
-            const sourceId = varToNodeId.get(arg.name);
+            const sourceId =
+              varToNodeId.get(arg.name) ?? ensureBareInputNode(arg.name, nodes, varToNodeId);
             if (sourceId) {
               edges.push({
                 id: generateEdgeId(sourceId, 'out', nodeId, ports[i]),
@@ -280,7 +353,25 @@ function processCall(
   let def = TSL_FUNCTION_TO_DEF.get(funcName);
   // Also try the registry type directly (e.g. for 'noise' mapping to 'mx_noise_float')
   if (!def) def = NODE_REGISTRY.get(funcName);
-  if (!def) return;
+  if (!def) {
+    // Create an unknown node preserving the raw expression for round-tripping
+    const unknownDef = NODE_REGISTRY.get('unknown');
+    if (!unknownDef) return;
+    const nodeId = generateId();
+    const rawExpr = callExpr.start != null && callExpr.end != null
+      ? code.slice(callExpr.start, callExpr.end)
+      : `${funcName}(/* ... */)`;
+    const node = createNode(nodeId, unknownDef, varName);
+    (node.data as ShaderNodeData).values = { functionName: funcName, rawExpression: rawExpr };
+    nodes.push(node);
+    varToNodeId.set(varName, nodeId);
+    errors.push({
+      message: `Unknown function: ${funcName}`,
+      line: callExpr.loc?.start.line,
+      severity: 'warning',
+    });
+    return;
+  }
 
   const nodeId = generateId();
   nodes.push(createNode(nodeId, def, varName));
@@ -297,7 +388,7 @@ function processCall(
   }
 
   // Noise nodes: special positional arg mapping
-  // graphToCode emits: mx_fractal_noise_float(posOrMul, octaves, lacunarity, diminish)
+  // graphToCode emits: mx_worley_noise_float(posOrMul)
   // where posOrMul is either `positionGeometry`, a var ref, or `mul(pos, scale)`
   if (def.category === 'noise') {
     processNoiseCall(callExpr, nodeId, def, nodes, edges, varToNodeId);
@@ -309,7 +400,8 @@ function processCall(
 
   // If chained, the object becomes the first input
   if (objectVarName && def.inputs.length > 0) {
-    const sourceId = varToNodeId.get(objectVarName);
+    const sourceId =
+      varToNodeId.get(objectVarName) ?? ensureBareInputNode(objectVarName, nodes, varToNodeId);
     if (sourceId) {
       edges.push({
         id: generateEdgeId(sourceId, 'out', nodeId, def.inputs[0].id),
@@ -336,7 +428,8 @@ function processCall(
     const literalValue = extractLiteral(arg);
 
     if (t.isIdentifier(arg)) {
-      const sourceId = varToNodeId.get(arg.name);
+      const sourceId =
+        varToNodeId.get(arg.name) ?? ensureBareInputNode(arg.name, nodes, varToNodeId);
       if (sourceId && port) {
         // Wire to a defined input port
         edges.push({
@@ -465,9 +558,8 @@ function tryParseUVTiling(
 }
 
 /**
- * Parse noise function calls: mx_fractal_noise_float(posOrMul, octaves, lacunarity, diminish)
+ * Parse noise function calls: mx_worley_noise_float(posOrMul)
  * The first arg may be `positionGeometry`, a variable ref, or `mul(pos, scale)`.
- * Remaining args map to fractal-specific defaultValues keys.
  */
 function processNoiseCall(
   callExpr: t.CallExpression,
@@ -533,28 +625,6 @@ function processNoiseCall(
         });
       } else {
         extractedValues.pos = posArg.name;
-      }
-    }
-  }
-
-  // --- fractal-specific args: octaves (arg[1]), lacunarity (arg[2]), diminish (arg[3]) ---
-  const fractalKeys = ['octaves', 'lacunarity', 'diminish'];
-  for (let i = 0; i < fractalKeys.length; i++) {
-    const arg = args[1 + i];
-    if (!arg) break;
-    const lit = extractLiteral(arg);
-    if (lit !== undefined) {
-      extractedValues[fractalKeys[i]] = lit;
-    } else if (t.isIdentifier(arg)) {
-      const sourceId = varToNodeId.get(arg.name);
-      if (sourceId) {
-        edges.push({
-          id: generateEdgeId(sourceId, 'out', nodeId, fractalKeys[i]),
-          source: sourceId, sourceHandle: 'out',
-          target: nodeId, targetHandle: fractalKeys[i],
-          type: 'typed' as const, animated: true,
-          data: { dataType: 'any' as const },
-        });
       }
     }
   }

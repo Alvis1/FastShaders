@@ -48,6 +48,11 @@ const edgeTypes = {
   typed: TypedEdge,
 };
 
+/** Snap radius for edge drag-to-connect AND drop-on-edge insertion. */
+const CONNECTION_RADIUS = 40;
+/** Pixels of movement before a node drag is considered "real" (and worth pushing history). */
+const DRAG_HISTORY_THRESHOLD = 2;
+
 export function NodeEditor() {
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
@@ -75,28 +80,28 @@ export function NodeEditor() {
       const clones = sourceNodes.map((node) => {
         const newId = generateId();
         idMap.set(node.id, newId);
-        return {
-          ...structuredClone(node),
-          id: newId,
-          position: { x: node.position.x + 30, y: node.position.y + 30 },
-          selected: true,
-        } as AppNode;
+        const cloned = structuredClone(node);
+        cloned.id = newId;
+        cloned.position = { x: node.position.x + 30, y: node.position.y + 30 };
+        cloned.selected = true;
+        return cloned;
       });
 
       const sourceIds = new Set(sourceNodes.map((n) => n.id));
       const edgeClones: AppEdge[] = store.edges
         .filter((e) => sourceIds.has(e.source) && sourceIds.has(e.target))
-        .map((e) => ({
-          ...structuredClone(e),
-          id: generateEdgeId(
-            idMap.get(e.source) ?? e.source,
-            e.sourceHandle ?? 'out',
-            idMap.get(e.target) ?? e.target,
-            e.targetHandle ?? 'in',
-          ),
-          source: idMap.get(e.source) ?? e.source,
-          target: idMap.get(e.target) ?? e.target,
-        }));
+        .map((e) => {
+          const cloned = structuredClone(e);
+          cloned.source = idMap.get(e.source) ?? e.source;
+          cloned.target = idMap.get(e.target) ?? e.target;
+          cloned.id = generateEdgeId(
+            cloned.source,
+            cloned.sourceHandle ?? 'out',
+            cloned.target,
+            cloned.targetHandle ?? 'in',
+          );
+          return cloned;
+        });
 
       store.pushHistory();
       const deselected = store.nodes.map((n) => ({ ...n, selected: false }));
@@ -139,18 +144,28 @@ export function NodeEditor() {
         pasteNodes(selected);
       }
 
-      // Delete / Backspace — remove selected nodes
+      // Delete / Backspace — remove selected nodes and/or edges
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const store = useAppStore.getState();
-        const selected = store.nodes.filter((n) => n.selected);
-        if (selected.length === 0) return;
+        const selectedNodes = store.nodes.filter((n) => n.selected);
+        const selectedEdges = store.edges.filter((edge) => edge.selected);
+        if (selectedNodes.length === 0 && selectedEdges.length === 0) return;
         e.preventDefault();
 
-        const selectedIds = new Set(selected.map((n) => n.id));
+        const selectedNodeIds = new Set(selectedNodes.map((n) => n.id));
+        const selectedEdgeIds = new Set(selectedEdges.map((edge) => edge.id));
         store.pushHistory();
-        store.setNodes(store.nodes.filter((n) => !selectedIds.has(n.id)) as AppNode[]);
+
+        if (selectedNodeIds.size > 0) {
+          store.setNodes(store.nodes.filter((n) => !selectedNodeIds.has(n.id)) as AppNode[]);
+        }
         store.setEdges(
-          store.edges.filter((edge) => !selectedIds.has(edge.source) && !selectedIds.has(edge.target)) as AppEdge[],
+          store.edges.filter(
+            (edge) =>
+              !selectedEdgeIds.has(edge.id) &&
+              !selectedNodeIds.has(edge.source) &&
+              !selectedNodeIds.has(edge.target),
+          ) as AppEdge[],
         );
       }
     };
@@ -159,9 +174,13 @@ export function NodeEditor() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // Save history when user starts dragging a node (so position change is undoable)
-  const onNodeDragStart = useCallback(() => {
-    useAppStore.getState().pushHistory();
+  // Track the dragged node's start position so we can detect "no real movement" clicks.
+  const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Capture the start position; defer the history push to onNodeDragStop
+  // (so click-only "drags" don't pollute the undo buffer with no-op snapshots).
+  const onNodeDragStart = useCallback((_event: React.MouseEvent, node: AppNode) => {
+    dragStartPosRef.current = { x: node.position.x, y: node.position.y };
   }, []);
 
   // Drop-on-edge: insert dragged node between source and target
@@ -170,6 +189,17 @@ export function NodeEditor() {
     (_event: React.MouseEvent, draggedNode: AppNode) => {
       const store = useAppStore.getState();
       const allNodes = store.nodes;
+
+      // Skip work entirely if the node didn't actually move (click without drag).
+      const startPos = dragStartPosRef.current;
+      dragStartPosRef.current = null;
+      if (startPos) {
+        const moved = Math.hypot(
+          draggedNode.position.x - startPos.x,
+          draggedNode.position.y - startPos.y,
+        );
+        if (moved < DRAG_HISTORY_THRESHOLD) return;
+      }
 
       type Measured = AppNode & { measured?: { width?: number; height?: number } };
       const getSize = (n: AppNode) => ({
@@ -181,11 +211,13 @@ export function NodeEditor() {
       const cx = draggedNode.position.x + nw / 2;
       const cy = draggedNode.position.y + nh / 2;
 
+      // History snapshot covers BOTH the position change and any drop-on-edge insertion.
+      // Pushed once here (not in onNodeDragStart) so click-only events don't add no-op entries.
+      store.pushHistory();
+
       // --- Drop-on-edge insertion ---
       const def = NODE_REGISTRY.get(draggedNode.data.registryType);
       if (def && def.inputs.length > 0 && def.outputs.length > 0) {
-        const THRESHOLD = 40;
-
         for (const edge of store.edges) {
           if (edge.source === draggedNode.id || edge.target === draggedNode.id) continue;
 
@@ -216,7 +248,7 @@ export function NodeEditor() {
             if (dist < minDist) minDist = dist;
           }
 
-          if (minDist < THRESHOLD) {
+          if (minDist < CONNECTION_RADIUS) {
             const inputPort = def.inputs[0];
             const outputPort = def.outputs[0];
 
@@ -443,8 +475,12 @@ export function NodeEditor() {
       const costs = complexityData.costs as Record<string, number>;
       const cost = costs[def.type] ?? (def.category === 'texture' ? 50 : 0);
 
+      // Read from store directly — `nodes` from the closure may be stale if the
+      // user added a node between render and drop (e.g. via context menu).
+      const currentNodes = useAppStore.getState().nodes;
+
       if (def.type === 'output') {
-        if (nodes.some((n) => n.data.registryType === 'output')) return;
+        if (currentNodes.some((n) => n.data.registryType === 'output')) return;
         const newNode: AppNode = {
           id: generateId(),
           type: 'output',
@@ -456,7 +492,7 @@ export function NodeEditor() {
         let values = { ...def.defaultValues };
         if (def.type === 'property_float') {
           let maxNum = 0;
-          for (const n of nodes) {
+          for (const n of currentNodes) {
             if (n.data.registryType !== 'property_float') continue;
             const name = String(getNodeValues(n)?.name ?? '');
             const m = name.match(/^property(\d+)$/);
@@ -473,7 +509,7 @@ export function NodeEditor() {
         addNode(newNode);
       }
     },
-    [screenToFlowPosition, nodes, addNode],
+    [screenToFlowPosition, addNode],
   );
 
   return (
@@ -507,7 +543,7 @@ export function NodeEditor() {
           deleteKeyCode={null}
           panActivationKeyCode={null}
           edgesReconnectable
-          connectionRadius={40}
+          connectionRadius={CONNECTION_RADIUS}
           selectionOnDrag
           selectionMode={SelectionMode.Partial}
           panOnDrag={[1, 2]}

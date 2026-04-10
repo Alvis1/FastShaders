@@ -132,6 +132,13 @@ export function AddNodeMenu() {
         placeholder="Search nodes..."
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter adds the top-ranked search result so users can add a node without reaching for the mouse.
+          if (e.key === 'Enter' && query.trim() && results.length > 0) {
+            e.preventDefault();
+            handleAddNode(results[0]);
+          }
+        }}
         autoFocus
       />
       <div className="context-menu__list">

@@ -3,6 +3,7 @@ import { getNodeValues } from '@/types';
 import type { Color, Vector2, Vector3 } from 'three';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getParamClassifications } from '@/registry/tslTexturesRegistry';
+import { getComponentCount } from './cpuEvaluator';
 import { topologicalSort } from './topologicalSort';
 
 /** Valid swizzle component handles for split node output. */
@@ -39,6 +40,19 @@ export function graphToCode(
       while (usedNames.has(name)) {
         name = `${baseName}${++i}`;
       }
+      usedNames.add(name);
+      varNames.set(node.id, name);
+      continue;
+    }
+
+    // Unknown nodes: use the stored function name as the variable base
+    if (def.type === 'unknown') {
+      const nv = getNodeValues(node);
+      let baseName = String(nv.functionName ?? 'unknown').replace(/[^a-zA-Z0-9_$]/g, '_');
+      if (!baseName) baseName = 'unknown';
+      let idx = 1;
+      while (usedNames.has(`${baseName}${idx}`)) idx++;
+      const name = `${baseName}${idx}`;
       usedNames.add(name);
       varNames.set(node.id, name);
       continue;
@@ -99,6 +113,15 @@ export function graphToCode(
     if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
 
     const varName = varNames.get(node.id)!;
+
+    // Unknown nodes: emit the preserved raw expression verbatim
+    if (def.type === 'unknown') {
+      const nv = getNodeValues(node);
+      const rawExpr = String(nv.rawExpression ?? 'float(0)');
+      bodyLines.push(`  const ${varName} = ${rawExpr};`);
+      continue;
+    }
+
     const args = resolveArguments(node, edges, varNames, def, sorted);
 
     if (def.type === 'uv') {
@@ -137,10 +160,13 @@ export function graphToCode(
         bodyLines.push(`  const ${varName} = add(vec2(sub(mul(${cVar}.x, cos(${rotationExpr})), mul(${cVar}.y, sin(${rotationExpr}))), add(mul(${cVar}.x, sin(${rotationExpr})), mul(${cVar}.y, cos(${rotationExpr})))), vec2(0.5, 0.5));`);
       }
     } else if (def.type === 'append') {
-      // Append node: combine two values into a vec2
+      // Append node: concatenate values into a vector. Pick vec2/vec3/vec4 based on the
+      // total component count of the inputs (a vec2 + float must become vec3, not vec2).
       const args = resolveArguments(node, edges, varNames, def, sorted);
-      addImport('three/tsl', 'vec2');
-      bodyLines.push(`  const ${varName} = vec2(${args.join(', ')});`);
+      const total = computeAppendOutputSize(node, edges, sorted);
+      const ctor = total === 2 ? 'vec2' : total === 3 ? 'vec3' : 'vec4';
+      addImport('three/tsl', ctor);
+      bodyLines.push(`  const ${varName} = ${ctor}(${args.join(', ')});`);
     } else if (def.tslImportModule === 'tsl-textures') {
       // tsl-textures: object parameter call
       const objProps = buildTSLTextureCallProps(node, edges, varNames, def, sorted);
@@ -182,17 +208,7 @@ export function graphToCode(
         addImport('three/tsl', 'mul');
       }
 
-      const noiseArgs: string[] = [posExpr];
-
-      // Fractal noise: resolve extra params (octaves, lacunarity, diminish)
-      if (node.data.registryType === 'fractal') {
-        noiseArgs.push(
-          resolveExposedParam(node, 'octaves', edges, varNames, nv, sorted),
-          resolveExposedParam(node, 'lacunarity', edges, varNames, nv, sorted),
-          resolveExposedParam(node, 'diminish', edges, varNames, nv, sorted),
-        );
-      }
-      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${noiseArgs.join(', ')});`);
+      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${posExpr});`);
     } else {
       // Regular function call
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${args.join(', ')});`);
@@ -255,6 +271,28 @@ export function graphToCode(
   ].join('\n');
 
   return { code, importStatements: importLines, varNames };
+}
+
+/**
+ * Compute the total component count produced by an append node by summing the channel
+ * counts of its two inputs (connected = evaluate upstream; unconnected = scalar = 1).
+ * Result is clamped to [2, 4] since GLSL has no vec5+.
+ */
+function computeAppendOutputSize(
+  node: AppNode,
+  edges: AppEdge[],
+  nodes: AppNode[],
+): number {
+  let total = 0;
+  for (const inputId of ['a', 'b'] as const) {
+    const edge = edges.find((e) => e.target === node.id && e.targetHandle === inputId);
+    if (edge) {
+      total += getComponentCount(edge.source, nodes, edges);
+    } else {
+      total += 1;
+    }
+  }
+  return Math.min(Math.max(total, 2), 4);
 }
 
 /** Resolve a source edge reference, looking through split nodes to inline swizzle. */

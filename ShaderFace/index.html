@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShaderFace — Shader Micro-Benchmark</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #111;
+      color: #eee;
+      overflow: hidden;
+    }
+    #canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+    #hud {
+      position: fixed; top: 0; left: 0; right: 0;
+      z-index: 10; padding: 12px 16px;
+      background: rgba(0,0,0,0.7);
+      font-size: 14px;
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    }
+    #hud .label { color: #888; }
+    #hud .value { color: #0f0; font-family: monospace; }
+    #hud .warn { color: #f80; }
+    #controls {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      z-index: 10; padding: 12px 16px;
+      background: rgba(0,0,0,0.8);
+      display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    }
+    button {
+      padding: 8px 16px; border: 1px solid #444; border-radius: 4px;
+      background: #222; color: #eee; cursor: pointer; font-size: 14px;
+    }
+    button:hover { background: #333; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.primary { background: #0a5; border-color: #0a5; }
+    button.primary:hover { background: #0b6; }
+    button.danger { background: #a22; border-color: #a22; }
+    button.danger:hover { background: #b33; }
+    select, input {
+      padding: 6px 10px; border: 1px solid #444; border-radius: 4px;
+      background: #222; color: #eee; font-size: 14px;
+    }
+    #log {
+      position: fixed; top: 50px; right: 0; width: 320px; bottom: 50px;
+      z-index: 10; padding: 8px; overflow-y: auto;
+      background: rgba(0,0,0,0.6); font-size: 12px; font-family: monospace;
+      display: none;
+    }
+    #log.visible { display: block; }
+    #log div { padding: 2px 0; border-bottom: 1px solid #222; }
+    #log .info { color: #8cf; }
+    #log .ok { color: #8f8; }
+    #log .err { color: #f88; }
+    #progress-bar {
+      height: 3px; background: #0a5; transition: width 0.3s;
+      position: fixed; top: 47px; left: 0; z-index: 11;
+    }
+    /* Shader picker panel */
+    #shader-picker {
+      position: fixed; top: 50px; left: 0; bottom: 50px; width: 240px;
+      z-index: 10; padding: 8px; overflow-y: auto;
+      background: rgba(0,0,0,0.85); font-size: 12px;
+      display: none;
+    }
+    #shader-picker.visible { display: block; }
+    #shader-picker label { display: block; padding: 3px 0; cursor: pointer; }
+    #shader-picker label:hover { color: #0f0; }
+    #shader-picker .pick-actions { margin-bottom: 8px; display: flex; gap: 6px; }
+    #shader-picker .pick-actions button { font-size: 11px; padding: 3px 8px; }
+    /* Sweep controls — shown only in sweep mode */
+    .sweep-only { display: none; }
+    .standard-only { display: inline; }
+    body.mode-sweep .sweep-only { display: inline; }
+    body.mode-sweep .standard-only { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="progress-bar" style="width: 0%"></div>
+
+  <div id="hud">
+    <span><span class="label">Shader: </span><span class="value" id="hud-shader">—</span></span>
+    <span><span class="label">Loop: </span><span class="value" id="hud-loop">—</span></span>
+    <span><span class="label">Phase: </span><span class="value" id="hud-phase">idle</span></span>
+    <span><span class="label">GPU: </span><span class="value" id="hud-gpu">—</span></span>
+    <span><span class="label">Method: </span><span class="value" id="hud-method">—</span></span>
+  </div>
+
+  <div id="controls">
+    <button id="btn-start" class="primary">Start</button>
+    <button id="btn-stop" class="danger" disabled>Stop</button>
+    <button id="btn-export">Export</button>
+    <button id="btn-log">Log</button>
+
+    <label>Mode: <select id="input-mode">
+      <option value="standard">Standard</option>
+      <option value="sweep">Resolution Sweep</option>
+    </select></label>
+
+    <!-- Standard mode controls -->
+    <span class="standard-only">
+      <label>Loops: <input id="input-loops" type="number" value="2" min="1" max="20" style="width:60px"></label>
+      <label>Frames: <input id="input-frames" type="number" value="30" min="10" max="300" style="width:70px"></label>
+      <label>Passes: <input id="input-passes" type="number" value="0" min="0" max="5000" style="width:70px"></label>
+    </span>
+
+    <!-- Sweep mode controls -->
+    <span class="sweep-only">
+      <button id="btn-shaders">Shaders</button>
+      <label>Min: <input id="input-res-min" type="number" value="256" min="64" max="2048" step="64" style="width:70px"></label>
+      <label>Max: <input id="input-res-max" type="number" value="1760" min="64" max="2048" step="64" style="width:70px"></label>
+      <label>Step: <input id="input-res-step" type="number" value="128" min="32" max="512" step="32" style="width:70px"></label>
+      <label>Samples: <input id="input-sweep-samples" type="number" value="20" min="5" max="100" style="width:60px"></label>
+      <label>Passes: <input id="input-sweep-passes" type="number" value="0" min="0" max="5000" style="width:70px"></label>
+    </span>
+  </div>
+
+  <div id="shader-picker">
+    <div class="pick-actions">
+      <button id="pick-all">All</button>
+      <button id="pick-none">None</button>
+      <button id="pick-top10">Top 10</button>
+    </div>
+    <div id="pick-list"></div>
+  </div>
+
+  <div id="log"></div>
+
+  <script>
+    // Visible error overlay for debugging
+    function showError(msg) {
+      document.getElementById('hud-phase').textContent = 'ERROR';
+      document.getElementById('hud-shader').textContent = String(msg).slice(0, 200);
+      var el = document.getElementById('error-overlay');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'error-overlay';
+        el.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999;background:rgba(200,0,0,0.9);color:white;padding:20px;border-radius:8px;max-width:80%;font-family:monospace;font-size:14px;word-break:break-all;';
+        document.body.appendChild(el);
+      }
+      el.textContent = String(msg).slice(0, 500);
+    }
+    window.onerror = (msg, src, line, col, err) => {
+      showError(msg + ' (' + src + ':' + line + ')');
+      console.error('Global error:', msg, src, line, col, err);
+    };
+    window.addEventListener('unhandledrejection', e => {
+      showError(e.reason?.message || String(e.reason));
+      console.error('Unhandled rejection:', e.reason);
+    });
+  </script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./lib/three.webgpu.js",
+      "three/webgpu": "./lib/three.webgpu.js",
+      "three/tsl": "./lib/three.tsl.js",
+      "tsl-textures": "./lib/tsl-textures-src/tsl-textures.js"
+    }
+  }
+  </script>
+  <script type="module" src="bench.js?v=7"></script>
+</body>
+</html>

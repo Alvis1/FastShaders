@@ -34,6 +34,7 @@
     "floor": 1,
     "round": 1,
     "fract": 1,
+    "oneMinus": 1,
     "mod": 2,
     "clamp": 2,
     "min": 1,
@@ -50,20 +51,14 @@
     "dot": 3,
     "cross": 6,
 
-    "fractal": 140,
     "voronoi": 55,
 
     "hsl": 15,
     "toHsl": 15,
 
+    "unknown": 0,
     "output": 0,
 
-    "tslTex_translator": 10,
-    "tslTex_scaler": 12,
-    "tslTex_rotator": 18,
-    "tslTex_supersphere": 20,
-
-    "tslTex_grid": 25,
     "tslTex_satin": 28,
     "tslTex_zebraLines": 28,
     "tslTex_circles": 30,
@@ -71,7 +66,6 @@
     "tslTex_staticNoise": 35,
     "tslTex_polkaDots": 35,
     "tslTex_stars": 38,
-    "tslTex_darthMaul": 45,
     "tslTex_scream": 48,
     "tslTex_watermelon": 48,
     "tslTex_camouflage": 52,
@@ -85,7 +79,6 @@
     "tslTex_neonLights": 62,
 
     "tslTex_processedWood": 78,
-    "tslTex_concrete": 80,
     "tslTex_fordite": 82,
     "tslTex_marble": 85,
     "tslTex_scepterHead": 85,

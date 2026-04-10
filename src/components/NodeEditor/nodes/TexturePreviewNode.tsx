@@ -32,11 +32,13 @@ export const TexturePreviewNode = memo(function TexturePreviewNode({
   const [gpuReady, setGpuReady] = useState(false);
   const updateNodeInternals = useUpdateNodeInternals();
 
-  // Force React Flow to recalculate handle positions when exposed ports change
-  const exposedPorts = data.exposedPorts;
+  // Force React Flow to recalculate handle positions when exposed ports change.
+  // Use a content-based key — `data.exposedPorts` is a fresh array reference on
+  // every store update, which would otherwise fire updateNodeInternals on every render.
+  const exposedPortsKey = (data.exposedPorts ?? []).join(',');
   useEffect(() => {
     updateNodeInternals(id);
-  }, [id, exposedPorts, updateNodeInternals]);
+  }, [id, exposedPortsKey, updateNodeInternals]);
 
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);

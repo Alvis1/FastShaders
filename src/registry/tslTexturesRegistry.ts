@@ -65,10 +65,22 @@ export function getParamClassifications(exportName: string): ParamClassification
   return result;
 }
 
+// Texture exports to exclude from the node palette (geometry modifiers, screen-space, etc.)
+const EXCLUDED_TEXTURES = new Set([
+  'translator',
+  'supersphere',
+  'rotator',
+  'scaler',
+  'grid',
+  'darthMaul',
+  'concrete',
+]);
+
 export function buildTSLTextureDefinitions(): NodeDefinition[] {
   const definitions: NodeDefinition[] = [];
 
   for (const [exportName, exportValue] of Object.entries(tslTextures)) {
+    if (EXCLUDED_TEXTURES.has(exportName)) continue;
     if (typeof exportValue !== 'function') continue;
     if (!('defaults' in exportValue) || !(exportValue as { defaults?: unknown }).defaults) continue;
 

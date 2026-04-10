@@ -6,7 +6,7 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 
 ## Features
 
-- **Node graph editor** — drag, connect, and configure ~40 TSL node types
+- **Node graph editor** — drag, connect, and configure 90+ TSL node types
 - **Code editor** — write TSL directly with Monaco; changes sync back to the graph
 - **Live 3D preview** — WebGPU-rendered preview with geometry selector and rotation
 - **tsl-textures support** — procedural texture nodes (camouflage, rust, marble, etc.)
@@ -18,11 +18,19 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 ## Quick Start
 
 ```bash
+git clone --recurse-submodules https://github.com/Alvis1/FastShaders.git
+cd FastShaders
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173
+Open http://localhost:5173/FastShaders/
+
+If you already cloned without `--recurse-submodules`:
+
+```bash
+git submodule init && git submodule update
+```
 
 ## Build & Deploy
 
@@ -43,7 +51,7 @@ npx gh-pages -d dist   # deploy to GitHub Pages
 
 ```html
 <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/aframe-171-a-0.1.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/a-frame-shaderloader-0.2.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/a-frame-shaderloader-0.3.js"></script>
 
 <a-scene>
   <a-entity shader="src: TSL/myshader.js" position="0 1.5 -3"></a-entity>
@@ -56,7 +64,7 @@ npx gh-pages -d dist   # deploy to GitHub Pages
 - [@xyflow/react](https://reactflow.dev/) v12 — node graph
 - [@monaco-editor/react](https://github.com/suren-atoyan/monaco-react) — code editor
 - [zustand](https://github.com/pmndrs/zustand) v5 — state management
-- [three.js](https://threejs.org/) 0.183 + [tsl-textures](https://github.com/nicolo-ribaudo/tsl-textures) 3.0 — shader engine
+- [three.js](https://threejs.org/) 0.183 + [tsl-textures](https://github.com/boytchev/tsl-textures) 3.0 — shader engine (WebGPU)
 - [@babel/parser](https://babeljs.io/docs/babel-parser) — code-to-graph parsing
 - [dagre](https://github.com/dagrejs/dagre) — automatic graph layout
 
