@@ -24,8 +24,6 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173/FastShaders/
-
 If you already cloned without `--recurse-submodules`:
 
 ```bash
@@ -36,16 +34,15 @@ git submodule init && git submodule update
 
 ```bash
 npm run build          # production build → dist/
-npx gh-pages -d dist   # deploy to GitHub Pages
 ```
 
 ## Export Formats
 
-| Tab | Output | Usage |
-|-----|--------|-------|
-| **TSL** | `Fn(() => { ... })` code | Edit in-app, syncs with node graph |
-| **A-Frame** | Self-contained `.html` | Open in browser / VR headset |
-| **Module** | ES module `.js` file | `<a-entity shader="src: myshader.js">` with [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) |
+| Tab         | Output                   | Usage                                                                                                              |
+| ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| **TSL**     | `Fn(() => { ... })` code | Edit in-app, syncs with node graph                                                                                 |
+| **A-Frame** | Self-contained `.html`   | Open in browser / VR headset                                                                                       |
+| **Module**  | ES module `.js` file     | `<a-entity shader="src: myshader.js">` with [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) |
 
 ### Using the shader module with a-frame-shaderloader
 
@@ -54,7 +51,7 @@ npx gh-pages -d dist   # deploy to GitHub Pages
 <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/a-frame-shaderloader-0.3.js"></script>
 
 <a-scene>
-  <a-entity shader="src: TSL/myshader.js" position="0 1.5 -3"></a-entity>
+  <a-sphere shader="src: myshader.js" position="0 1.5 -3"></a-sphere>
 </a-scene>
 ```
 
@@ -71,3 +68,10 @@ npx gh-pages -d dist   # deploy to GitHub Pages
 ## License
 
 MIT
+
+## Contact
+
+Alvis Misjuns
+
+- Email: [alvis.misjuns@va.lv](mailto:alvis.misjuns@va.lv)
+- Web: [alvismisjuns.lv](https://alvismisjuns.lv)
