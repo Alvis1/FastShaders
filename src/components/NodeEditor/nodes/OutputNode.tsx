@@ -1,5 +1,5 @@
-import { memo } from 'react';
-import { Position, type NodeProps } from '@xyflow/react';
+import { memo, useEffect } from 'react';
+import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { OutputFlowNode } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
@@ -15,6 +15,7 @@ const VERTEX_PORTS = ['position'];
 export const OUTPUT_DEFAULT_EXPOSED = ['color', 'roughness', 'position'];
 
 export const OutputNode = memo(function OutputNode({
+  id,
   data,
   selected,
 }: NodeProps<OutputFlowNode>) {
@@ -27,6 +28,16 @@ export const OutputNode = memo(function OutputNode({
 
   const exposedPorts = data.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
   const exposedSet = new Set(exposedPorts);
+
+  // Tell React Flow to re-measure handles whenever the exposed-port set changes.
+  // Without this, dynamically mounted handles (e.g. `emissive` after the user
+  // toggles it on) aren't in React Flow's bounds map, so any edge connected to
+  // them silently fails to render until the page is reloaded.
+  const updateNodeInternals = useUpdateNodeInternals();
+  const exposedKey = exposedPorts.join('|');
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, exposedKey, updateNodeInternals]);
 
   const pixelPorts = def.inputs.filter(
     (p) => PIXEL_PORTS.includes(p.id) && exposedSet.has(p.id)

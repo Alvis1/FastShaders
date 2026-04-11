@@ -1,10 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { tslToPreviewHTML } from '@/engine/tslToPreviewHTML';
-import type { PreviewOptions } from '@/engine/tslToPreviewHTML';
+import type { CameraPosition, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import './ShaderPreview.css';
 
 type GeometryType = 'sphere' | 'cube' | 'torus' | 'plane';
+
+interface UniformInfo {
+  name: string;
+  defaultValue: number;
+}
+
+interface UniformBounds {
+  min: number;
+  max: number;
+}
 
 function loadGeometry(): GeometryType {
   try {
@@ -12,6 +22,59 @@ function loadGeometry(): GeometryType {
     if (v === 'cube' || v === 'torus' || v === 'plane' || v === 'sphere') return v;
   } catch { /* */ }
   return 'sphere';
+}
+
+function loadLighting(): LightingMode {
+  try {
+    const v = localStorage.getItem('fs:previewLighting');
+    if (v === 'studio' || v === 'moon' || v === 'laboratory') return v;
+  } catch { /* */ }
+  return 'studio';
+}
+
+const SUBDIVISION_MIN = 1;
+const SUBDIVISION_MAX = 256;
+const SUBDIVISION_DEFAULT = 64;
+
+function loadSubdivision(): number {
+  try {
+    const v = parseInt(localStorage.getItem('fs:previewSubdivision') ?? '', 10);
+    if (!isNaN(v) && v >= SUBDIVISION_MIN && v <= SUBDIVISION_MAX) return v;
+  } catch { /* */ }
+  return SUBDIVISION_DEFAULT;
+}
+
+function loadUniformBounds(): Record<string, UniformBounds> {
+  try {
+    const raw = localStorage.getItem('fs:previewUniformBounds');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed as Record<string, UniformBounds>;
+    }
+  } catch { /* */ }
+  return {};
+}
+
+/**
+ * Extract scalar property uniforms from generated TSL code by matching
+ * `const NAME = uniform(VALUE)` — the same pattern the shaderloader auto-detects.
+ * This guarantees the names we render in the overlay match the keys the
+ * shaderloader uses for `_propertyUniforms`, regardless of any mangling
+ * graphToCode does to the original property name.
+ */
+function extractUniforms(code: string): UniformInfo[] {
+  const result: UniformInfo[] = [];
+  const seen = new Set<string>();
+  const regex = /\bconst\s+(\w+)\s*=\s*uniform\(\s*([^)]+)\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(code)) !== null) {
+    const name = m[1];
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const val = parseFloat(m[2]);
+    result.push({ name, defaultValue: isNaN(val) ? 0 : val });
+  }
+  return result;
 }
 
 export function ShaderPreview() {
@@ -24,16 +87,140 @@ export function ShaderPreview() {
 
   const [geometry, setGeometry] = useState<GeometryType>(loadGeometry);
   const [playing, setPlaying] = useState(false);
+  const [lighting, setLighting] = useState<LightingMode>(loadLighting);
+  const [subdivision, setSubdivision] = useState<number>(loadSubdivision);
   const [bgColor, setBgColor] = useState(() => {
     try { return localStorage.getItem('fs:previewBgColor') || '#808080'; } catch { return '#808080'; }
   });
 
   const blobUrlRef = useRef<string | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Persist geometry and bg color selections
+  // Latest camera position reported by the iframe. Stored in a ref (not state)
+  // so live position updates from inside the iframe don't retrigger the
+  // useMemo that rebuilds the iframe — that would create an infinite loop.
+  // The memo reads `current` at rebuild time and embeds it as the restore
+  // target for the next iframe instance.
+  const cameraPosRef = useRef<CameraPosition | null>(null);
+
+  // Property uniforms detected from the generated code (single source of truth
+  // matches what the shaderloader sees)
+  const uniforms = useMemo(() => extractUniforms(previewCode), [previewCode]);
+
+  // Per-uniform min/max — persisted across reloads, keyed by uniform name
+  const [uniformBounds, setUniformBounds] = useState<Record<string, UniformBounds>>(loadUniformBounds);
+  useEffect(() => {
+    try { localStorage.setItem('fs:previewUniformBounds', JSON.stringify(uniformBounds)); } catch { /* */ }
+  }, [uniformBounds]);
+
+  // Live slider values — overlay-local; do not write back to the graph (so
+  // tweaking a slider doesn't trigger a graph re-sync and tear the iframe down)
+  const [uniformValues, setUniformValues] = useState<Record<string, number>>({});
+  // When the set of uniform names changes (added/removed/renamed), seed any
+  // new entries from their code-side default. Existing entries keep whatever
+  // the user has dragged them to.
+  const uniformsKey = uniforms.map((u) => `${u.name}=${u.defaultValue}`).join('|');
+  useEffect(() => {
+    setUniformValues((prev) => {
+      const next: Record<string, number> = {};
+      let changed = false;
+      const currentNames = new Set(uniforms.map((u) => u.name));
+      for (const u of uniforms) {
+        if (u.name in prev) {
+          next[u.name] = prev[u.name];
+        } else {
+          next[u.name] = u.defaultValue;
+          changed = true;
+        }
+      }
+      // Drop stale entries
+      for (const k of Object.keys(prev)) {
+        if (!currentNames.has(k)) { changed = true; }
+      }
+      return changed || Object.keys(next).length !== Object.keys(prev).length ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uniformsKey]);
+
+  // Refs for the message handler so it doesn't need to re-bind on every change
+  const uniformValuesRef = useRef(uniformValues);
+  useEffect(() => { uniformValuesRef.current = uniformValues; }, [uniformValues]);
+
+  // Single message handler for all iframe → parent traffic:
+  // - fs:preview-ready: push all current uniform values to the freshly built iframe
+  // - fs:camera: snapshot the latest camera position so it can be restored on next rebuild
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      const data = e.data as { type?: string; x?: number; y?: number; z?: number } | null;
+      if (!data || typeof data.type !== 'string') return;
+      if (data.type === 'fs:preview-ready') {
+        const win = iframeRef.current?.contentWindow;
+        if (!win) return;
+        for (const [name, value] of Object.entries(uniformValuesRef.current)) {
+          win.postMessage({ type: 'fs:uniform', name, value }, '*');
+        }
+      } else if (data.type === 'fs:camera') {
+        if (typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number') {
+          cameraPosRef.current = { x: data.x, y: data.y, z: data.z };
+        }
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  // Reset the iframe to defaults: camera home, studio lighting, default
+  // subdivision, and every property uniform back to its shader-defined value.
+  // Min/max bounds and bg color are user preferences, not part of the reset.
+  const handleReset = useCallback(() => {
+    // Camera: clear the saved view AND tell the live iframe to snap home now
+    cameraPosRef.current = null;
+    const win = iframeRef.current?.contentWindow;
+    win?.postMessage({ type: 'fs:reset-camera' }, '*');
+
+    // Lighting + subdivision back to defaults. If these are already at the
+    // default the setState is a no-op and no iframe rebuild happens — that's
+    // fine because we still push uniform values via postMessage below.
+    setLighting('studio');
+    setSubdivision(SUBDIVISION_DEFAULT);
+
+    // Property uniforms back to their shader defaults. Update local state so
+    // the overlay reflects the change, AND push to the iframe immediately
+    // (the rebuild path's fs:preview-ready handler is a safety net for the
+    // case where lighting/subdivision did trigger a rebuild).
+    const defaults: Record<string, number> = {};
+    for (const u of uniforms) {
+      defaults[u.name] = u.defaultValue;
+      win?.postMessage({ type: 'fs:uniform', name: u.name, value: u.defaultValue }, '*');
+    }
+    setUniformValues(defaults);
+  }, [uniforms]);
+
+  // Slider drag → live uniform update via postMessage
+  const handleUniformChange = useCallback((name: string, value: number) => {
+    setUniformValues((prev) => ({ ...prev, [name]: value }));
+    iframeRef.current?.contentWindow?.postMessage({ type: 'fs:uniform', name, value }, '*');
+  }, []);
+
+  const handleBoundsChange = useCallback((name: string, key: 'min' | 'max', raw: string) => {
+    const parsed = parseFloat(raw);
+    if (isNaN(parsed)) return;
+    setUniformBounds((prev) => {
+      const current = prev[name] ?? { min: 0, max: 1 };
+      return { ...prev, [name]: { ...current, [key]: parsed } };
+    });
+  }, []);
+
+  // Persist geometry, lighting, subdivision, and bg color selections
   useEffect(() => {
     try { localStorage.setItem('fs:previewGeometry', geometry); } catch { /* */ }
   }, [geometry]);
+  useEffect(() => {
+    try { localStorage.setItem('fs:previewLighting', lighting); } catch { /* */ }
+  }, [lighting]);
+  useEffect(() => {
+    try { localStorage.setItem('fs:previewSubdivision', String(subdivision)); } catch { /* */ }
+  }, [subdivision]);
   useEffect(() => {
     try { localStorage.setItem('fs:previewBgColor', bgColor); } catch { /* */ }
   }, [bgColor]);
@@ -49,13 +236,19 @@ export function ShaderPreview() {
       animate: playing,
       materialSettings,
       bgColor,
+      lighting,
+      subdivision,
+      // Read from the ref at memo time so the user's current camera angle
+      // survives setting changes (subdivision, lighting, etc.) without
+      // joining the dep list (which would cause an infinite rebuild loop).
+      initialCameraPosition: cameraPosRef.current,
     };
     const html = tslToPreviewHTML(previewCode, options);
     const blob = new Blob([html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     blobUrlRef.current = url;
     return url;
-  }, [previewCode, geometry, playing, materialSettings, bgColor]);
+  }, [previewCode, geometry, playing, materialSettings, bgColor, lighting, subdivision]);
 
   // Cleanup blob URL on unmount
   useEffect(() => {
@@ -70,7 +263,17 @@ export function ShaderPreview() {
   return (
     <div className="shader-preview">
       <div className="shader-preview__header">
-        <span>Preview</span>
+        <div className="shader-preview__header-left">
+          <span>Preview</span>
+          <button
+            type="button"
+            className="shader-preview__reset-btn"
+            onClick={handleReset}
+            title="Reset camera, lighting, subdivision, and uniform values to defaults"
+          >
+            Reset
+          </button>
+        </div>
         <div className="shader-preview__controls">
           <button
             className="shader-preview__play-btn"
@@ -88,6 +291,16 @@ export function ShaderPreview() {
           />
           <select
             className="shader-preview__geo-select"
+            value={lighting}
+            onChange={(e) => setLighting(e.target.value as LightingMode)}
+            title="Lighting mode"
+          >
+            <option value="studio">light: Studio</option>
+            <option value="moon">light: Moon</option>
+            <option value="laboratory">light: Laboratory</option>
+          </select>
+          <select
+            className="shader-preview__geo-select"
             value={geometry}
             onChange={(e) => setGeometry(e.target.value as GeometryType)}
           >
@@ -96,14 +309,72 @@ export function ShaderPreview() {
             <option value="torus">Torus</option>
             <option value="plane">Plane</option>
           </select>
+          <label className="shader-preview__subdivision" title="Mesh subdivision">
+            <input
+              type="range"
+              min={SUBDIVISION_MIN}
+              max={SUBDIVISION_MAX}
+              step={1}
+              value={subdivision}
+              onChange={(e) => setSubdivision(parseInt(e.target.value, 10))}
+              className="shader-preview__subdivision-slider"
+            />
+            <span className="shader-preview__subdivision-value">{subdivision}</span>
+          </label>
         </div>
       </div>
       <div className="shader-preview__body">
         <iframe
+          ref={iframeRef}
           className="shader-preview__iframe"
           src={blobUrl}
           title="Shader Preview"
         />
+        {uniforms.length > 0 && (
+          <div className="shader-preview__uniforms">
+            {uniforms.map((u) => {
+              const bounds = uniformBounds[u.name] ?? { min: 0, max: 1 };
+              const value = uniformValues[u.name] ?? u.defaultValue;
+              const span = bounds.max - bounds.min;
+              const step = span > 0 ? span / 200 : 0.01;
+              return (
+                <div key={u.name} className="shader-preview__uniform-row">
+                  <div className="shader-preview__uniform-header">
+                    <span className="shader-preview__uniform-name" title={u.name}>{u.name}</span>
+                    <span className="shader-preview__uniform-value">{value.toFixed(3)}</span>
+                  </div>
+                  <div className="shader-preview__uniform-controls">
+                    <input
+                      type="number"
+                      className="shader-preview__uniform-bound"
+                      value={bounds.min}
+                      step="any"
+                      onChange={(e) => handleBoundsChange(u.name, 'min', e.target.value)}
+                      title="Min"
+                    />
+                    <input
+                      type="range"
+                      className="shader-preview__uniform-slider"
+                      min={bounds.min}
+                      max={bounds.max}
+                      step={step}
+                      value={value}
+                      onChange={(e) => handleUniformChange(u.name, parseFloat(e.target.value))}
+                    />
+                    <input
+                      type="number"
+                      className="shader-preview__uniform-bound"
+                      value={bounds.max}
+                      step="any"
+                      onChange={(e) => handleBoundsChange(u.name, 'max', e.target.value)}
+                      title="Max"
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

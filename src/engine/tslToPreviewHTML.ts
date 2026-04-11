@@ -9,7 +9,6 @@
  */
 
 import {
-  AFRAME_GEO,
   CHANNEL_TO_PROP,
   collectImports,
   extractFnBody,
@@ -18,11 +17,53 @@ import {
 } from './tslCodeProcessor';
 import type { MaterialSettings } from '@/types';
 
+export type LightingMode = 'studio' | 'moon' | 'laboratory';
+
+export interface CameraPosition {
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface PreviewOptions {
   geometry?: 'sphere' | 'cube' | 'torus' | 'plane';
   animate?: boolean;
   materialSettings?: MaterialSettings;
   bgColor?: string;
+  lighting?: LightingMode;
+  /** Mesh subdivision count — applied symmetrically to each axis. */
+  subdivision?: number;
+  /**
+   * Camera position to restore after orbit-controls initialization. Passed
+   * out-of-band rather than baked into orbit-controls' `initialPosition` so
+   * the controls' internal `position0` stays at the original `0 0 8` and
+   * `reset()` snaps back there instead of to the saved view.
+   */
+  initialCameraPosition?: CameraPosition | null;
+}
+
+/**
+ * Build the A-Frame `geometry` attribute string with the requested
+ * subdivision count baked into the per-primitive segment fields. The
+ * subdivision is clamped to a sensible range so the slider can't lock the
+ * tab up with millions of vertices.
+ */
+function buildGeoAttr(
+  geometry: 'sphere' | 'cube' | 'torus' | 'plane',
+  subdivision: number,
+): string {
+  const seg = Math.max(1, Math.min(256, Math.round(subdivision)));
+  switch (geometry) {
+    case 'cube':
+      return `primitive: box; width: 1.4; height: 1.4; depth: 1.4; segmentsWidth: ${seg}; segmentsHeight: ${seg}; segmentsDepth: ${seg}`;
+    case 'torus':
+      return `primitive: torus; radius: 0.7; radiusTubular: 0.3; segmentsRadial: ${seg}; segmentsTubular: ${seg}`;
+    case 'plane':
+      return `primitive: plane; width: 2; height: 2; segmentsWidth: ${seg}; segmentsHeight: ${seg}`;
+    case 'sphere':
+    default:
+      return `primitive: sphere; radius: 1; segmentsWidth: ${seg}; segmentsHeight: ${seg}`;
+  }
 }
 
 // Resolve full absolute URLs for the IIFE bundle and shaderloader at runtime.
@@ -66,6 +107,30 @@ function convertToShaderModule(
     }
   }
 
+  // Rewrite property uniforms so the live overlay can drive them.
+  //
+  // Without this, `const property1 = uniform(1.0)` in the function body would
+  // create an anonymous TSL uniform every render — the shaderloader's
+  // auto-detected `_propertyUniforms.property1` would be a *separate* uniform
+  // instance that's never passed into the function, so mutating its `.value`
+  // (e.g. from a slider drag) would have no visible effect.
+  //
+  // By rewriting each line to `const property1 = params.property1` and
+  // exporting an explicit `schema`, the shaderloader creates the uniforms
+  // up-front, passes them in as `params`, and the function uses *those*
+  // uniforms — so `_propertyUniforms.property1.value = N` reaches the material.
+  const schemaEntries: Record<string, number> = {};
+  const uniformLineRe = /^(\s*)const\s+(\w+)\s*=\s*uniform\(\s*(-?\d+(?:\.\d+)?)\s*\)\s*;?\s*$/;
+  const rewrittenDefLines = defLines.map((line) => {
+    const m = line.match(uniformLineRe);
+    if (!m) return line;
+    const [, indent, name, rawVal] = m;
+    const val = parseFloat(rawVal);
+    schemaEntries[name] = isNaN(val) ? 0 : val;
+    return `${indent}const ${name} = params.${name};`;
+  });
+  const hasParams = Object.keys(schemaEntries).length > 0;
+
   // Build import statements
   const imports: string[] = [];
   if (tslNames.length > 0) {
@@ -99,11 +164,23 @@ function convertToShaderModule(
     returnProps.push(`alphaTest: ${materialSettings.alphaTest}`);
   }
 
+  // Build the explicit schema export so the shaderloader honors original
+  // default values (its fallback `params.X` auto-detection always defaults to 0).
+  const schemaLines: string[] = [];
+  if (hasParams) {
+    const schemaObj = Object.fromEntries(
+      Object.entries(schemaEntries).map(([k, v]) => [k, { type: 'number', default: v }]),
+    );
+    schemaLines.push(`export const schema = ${JSON.stringify(schemaObj)};`);
+    schemaLines.push('');
+  }
+
   const lines = [
     ...imports,
     '',
-    'export default function() {',
-    ...defLines.map(l => '  ' + l.trimStart()),
+    ...schemaLines,
+    `export default function(${hasParams ? 'params' : ''}) {`,
+    ...rewrittenDefLines.map(l => '  ' + l.trimStart()),
     `  return { ${returnProps.join(', ')} };`,
     '}',
   ];
@@ -120,16 +197,26 @@ export function tslToPreviewHTML(
     animate = false,
     materialSettings,
     bgColor = '#808080',
+    lighting = 'studio',
+    subdivision = 64,
+    initialCameraPosition = null,
   } = options;
 
   const shaderModule = convertToShaderModule(tslCode, materialSettings);
-  const geoKey = geometry === 'cube' ? 'box' : geometry;
-  const geoAttr = AFRAME_GEO[geoKey] ?? AFRAME_GEO.sphere;
+  const geoAttr = buildGeoAttr(geometry, subdivision);
   const { iife, shaderloader, orbitControls } = getScriptUrls();
 
+  // Plane spins on its Z axis (in-plane, like a record), since the flat face
+  // is already pointed at the camera. Everything else spins on Y like a turntable.
+  const animTo = geometry === 'plane' ? '0 0 360' : '0 360 0';
   const animAttr = animate
-    ? ' animation="property: rotation; to: 0 360 0; loop: true; dur: 12000; easing: linear"'
+    ? ` animation="property: rotation; to: ${animTo}; loop: true; dur: 12000; easing: linear"`
     : '';
+
+  // Plane is meant to be viewed flat-on, so leave it un-rotated (it already
+  // faces +Z, which is where the camera sits). All other primitives keep the
+  // 45/45 tilt so multiple faces are visible.
+  const rotationAttr = geometry === 'plane' ? '0 0 0' : '45 45 0';
 
   const lines: string[] = [];
 
@@ -157,22 +244,31 @@ export function tslToPreviewHTML(
   lines.push(`<${''}/script>`);
   lines.push('');
 
-  // A-Frame scene with three-point lighting rig for material evaluation
-  // Key light: strong directional at ~55° raking angle — exposes normal/bump detail
-  // Rim light: backlight behind object — defines specularity and silhouette
-  // Fill light: soft low-intensity opposite key — lifts shadows without flattening
-  // Ambient: minimal base to prevent pure black
   lines.push(`<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ${bgColor}">`);
   lines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
-  lines.push(`  <a-entity id="preview-entity" geometry="${geoAttr}" material="color: #808080" position="0 0 0" rotation="45 45 0"${animAttr}></a-entity>`);
-  // Key light — raking angle (~55° from camera axis), warm, high intensity
-  lines.push('  <a-light type="directional" color="#fff5e6" position="-3 4 2" intensity="2.5"></a-light>');
-  // Rim light — behind and above, cool tint, high intensity for specular edge
-  lines.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
-  // Fill light — opposite key, neutral, low intensity
-  lines.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
-  // Ambient — very low, just enough to prevent pure black in crevices
-  lines.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
+  lines.push(`  <a-entity id="preview-entity" geometry="${geoAttr}" material="color: #808080" position="0 0 0" rotation="${rotationAttr}"${animAttr}></a-entity>`);
+
+  if (lighting === 'studio') {
+    // Three-point rig for material evaluation:
+    // Key — raking angle, warm, exposes normal/bump detail
+    // Rim — backlight, cool tint, defines specular silhouette
+    // Fill — opposite key, neutral, lifts shadows
+    // Ambient — minimal base so crevices aren't pure black
+    lines.push('  <a-light type="directional" color="#fff5e6" position="-3 4 2" intensity="2.5"></a-light>');
+    lines.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
+    lines.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
+    lines.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
+  } else if (lighting === 'moon') {
+    // Single cool directional angled in front of the object so roughly 2/3 of
+    // the camera-facing hemisphere is lit (terminator runs ~65° off the camera
+    // axis). A faint ambient floor keeps the unlit side from going pure black.
+    lines.push('  <a-light type="directional" color="#cfd8ff" position="-4 1.5 2" intensity="4.0"></a-light>');
+    lines.push('  <a-light type="ambient" color="#1a1f33" intensity="0.05"></a-light>');
+  } else if (lighting === 'laboratory') {
+    // Pure flat ambient — every surface lit identically, no shadows.
+    lines.push('  <a-light type="ambient" color="#ffffff" intensity="1.0"></a-light>');
+  }
+
   lines.push('</a-scene>');
   lines.push('');
 
@@ -185,6 +281,94 @@ export function tslToPreviewHTML(
   lines.push('    var errEl = document.getElementById("error");');
   lines.push('    if (errEl) errEl.textContent = String(e);');
   lines.push('  }');
+  lines.push(`<${''}/script>`);
+  lines.push('');
+
+  // Bridge to parent: expose property uniforms for live overlay control AND
+  // restore/sync camera position across iframe rebuilds.
+  //
+  // - Shader uniforms: poll for the shaderloader's `_propertyUniforms` (it's
+  //   populated asynchronously after fetch/import/extendSchema), then
+  //   announce readiness and listen for direct value updates. We mutate
+  //   `.value` directly — going through setAttribute would round-trip through
+  //   A-Frame's component data layer for no benefit.
+  //
+  // - Camera persistence: if the parent passed a saved position, apply it
+  //   after orbit-controls initializes — and only after, so the controls'
+  //   internal `position0` snapshot remains the original `0 0 8` and
+  //   `reset()` snaps back to the home view, not the saved view. Then poll
+  //   the camera position and post any changes back to the parent so the
+  //   next iframe rebuild can restore it.
+  const savedCamLiteral = initialCameraPosition
+    ? JSON.stringify({ x: initialCameraPosition.x, y: initialCameraPosition.y, z: initialCameraPosition.z })
+    : 'null';
+  lines.push('<script>');
+  lines.push(`  window.__savedCameraPos = ${savedCamLiteral};`);
+  lines.push('  (function() {');
+  lines.push('    var entity = document.getElementById("preview-entity");');
+  lines.push('    var camEl = document.querySelector("[camera]");');
+  lines.push('');
+  lines.push('    // ----- shader uniform readiness + live updates -----');
+  lines.push('    var shaderRetries = 0;');
+  lines.push('    function checkShaderReady() {');
+  lines.push('      var comp = entity && entity.components && entity.components.shader;');
+  lines.push('      if (comp && comp._propertyUniforms) {');
+  lines.push('        try {');
+  lines.push('          window.parent.postMessage({');
+  lines.push('            type: "fs:preview-ready",');
+  lines.push('            uniforms: Object.keys(comp._propertyUniforms)');
+  lines.push('          }, "*");');
+  lines.push('        } catch (e) {}');
+  lines.push('        return;');
+  lines.push('      }');
+  lines.push('      if (shaderRetries++ < 200) setTimeout(checkShaderReady, 50);');
+  lines.push('    }');
+  lines.push('    checkShaderReady();');
+  lines.push('');
+  lines.push('    // ----- orbit-controls readiness + camera persistence -----');
+  lines.push('    var camRetries = 0;');
+  lines.push('    function whenOrbitReady(cb) {');
+  lines.push('      var oc = camEl && camEl.components && camEl.components["orbit-controls"];');
+  lines.push('      if (oc && oc.controls) { cb(oc); return; }');
+  lines.push('      if (camRetries++ < 200) setTimeout(function() { whenOrbitReady(cb); }, 50);');
+  lines.push('    }');
+  lines.push('    whenOrbitReady(function(oc) {');
+  lines.push('      // Restore saved view (if any) AFTER controls init so position0 stays at home.');
+  lines.push('      var saved = window.__savedCameraPos;');
+  lines.push('      if (saved && camEl && camEl.object3D) {');
+  lines.push('        camEl.object3D.position.set(saved.x, saved.y, saved.z);');
+  lines.push('        try { oc.controls.update(); } catch (e) {}');
+  lines.push('      }');
+  lines.push('      // Post position back to the parent whenever it changes (cheap throttle).');
+  lines.push('      var lx = NaN, ly = NaN, lz = NaN;');
+  lines.push('      setInterval(function() {');
+  lines.push('        var p = camEl && camEl.object3D && camEl.object3D.position;');
+  lines.push('        if (!p) return;');
+  lines.push('        if (p.x === lx && p.y === ly && p.z === lz) return;');
+  lines.push('        lx = p.x; ly = p.y; lz = p.z;');
+  lines.push('        try {');
+  lines.push('          window.parent.postMessage({ type: "fs:camera", x: p.x, y: p.y, z: p.z }, "*");');
+  lines.push('        } catch (e) {}');
+  lines.push('      }, 200);');
+  lines.push('    });');
+  lines.push('');
+  lines.push('    // ----- inbound messages from parent -----');
+  lines.push('    window.addEventListener("message", function(e) {');
+  lines.push('      var msg = e.data;');
+  lines.push('      if (!msg) return;');
+  lines.push('      if (msg.type === "fs:uniform") {');
+  lines.push('        var comp = entity && entity.components && entity.components.shader;');
+  lines.push('        if (!comp || !comp._propertyUniforms) return;');
+  lines.push('        var u = comp._propertyUniforms[msg.name];');
+  lines.push('        if (u) u.value = msg.value;');
+  lines.push('      } else if (msg.type === "fs:reset-camera") {');
+  lines.push('        var oc = camEl && camEl.components && camEl.components["orbit-controls"];');
+  lines.push('        if (oc && oc.controls && typeof oc.controls.reset === "function") {');
+  lines.push('          oc.controls.reset();');
+  lines.push('        }');
+  lines.push('      }');
+  lines.push('    });');
+  lines.push('  })();');
   lines.push(`<${''}/script>`);
   lines.push('');
 
