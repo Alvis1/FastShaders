@@ -1,0 +1,123 @@
+.group-node {
+  position: relative;
+  border: 2px solid;
+  border-radius: 8px;
+  box-sizing: border-box;
+  pointer-events: all;
+  /* Round-trip the parent box: children should still receive their own pointer events */
+  overflow: visible;
+}
+
+.group-node--selected {
+  box-shadow: 0 0 0 2px rgba(99, 130, 255, 0.25);
+}
+
+.group-node__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 4px 0 10px;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  cursor: grab;
+  user-select: none;
+}
+
+.group-node__label {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.group-node__toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.group-node__toggle:hover {
+  background: rgba(0, 0, 0, 0.32);
+}
+
+/* Collapsed pill: header sits at the top, sockets render in the body region
+   below. Members + their internal edges are hidden via React Flow's `hidden`
+   flag, but boundary edges stay live and connect to synthetic handles
+   positioned over the body area. */
+.group-node--collapsed {
+  border-radius: 6px;
+  overflow: visible;
+  box-shadow: var(--shadow-node);
+}
+
+.group-node--collapsed .group-node__header {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+/* Cost badge above the collapsed pill — uses the shared .node-base__cost-badge
+   sizing/positioning from NodeBase.css for visual consistency with normal nodes. */
+.group-node__cost-badge {
+  /* Color is overridden by the .react-flow scope rule in NodeBase.css. */
+}
+
+/* Socket row: a thin absolutely-positioned strip across the pill body that
+   carries the handle dot on one side and the source-node label on the other. */
+.group-node__socket {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.group-node__socket--in {
+  justify-content: flex-start;
+  padding-left: 10px;
+}
+
+.group-node__socket--out {
+  justify-content: flex-end;
+  padding-right: 10px;
+}
+
+.group-node__socket-label {
+  font-size: 9px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 90px;
+  pointer-events: none;
+}
+
+/* Group nodes must render below member nodes so children stay clickable */
+.react-flow__node.react-flow__node-group {
+  z-index: 0 !important;
+}

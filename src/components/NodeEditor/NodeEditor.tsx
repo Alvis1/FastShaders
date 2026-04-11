@@ -20,11 +20,13 @@ import { PreviewNode } from './nodes/PreviewNode';
 import { MathPreviewNode } from './nodes/MathPreviewNode';
 import { OutputNode } from './nodes/OutputNode';
 import { ClockNode } from './nodes/ClockNode';
+import { GroupNode } from './nodes/GroupNode';
 import { TypedEdge } from './edges/TypedEdge';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
+import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
 import { CostBar } from '@/components/Layout/CostBar';
-import { getCostColor } from '@/utils/colorUtils';
+import { getCostColor, getContrastColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
@@ -40,6 +42,7 @@ const nodeTypes = {
   mathPreview: MathPreviewNode,
   clock: ClockNode,
   output: OutputNode,
+  group: GroupNode,
 };
 
 const edgeTypes = {
@@ -64,6 +67,8 @@ export function NodeEditor() {
   const contextMenu = useAppStore((s) => s.contextMenu);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
+  const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
   const { screenToFlowPosition } = useReactFlow();
 
   // Copy/paste clipboard
@@ -133,6 +138,26 @@ export function NodeEditor() {
         clipboardRef.current = clones.map((n) => structuredClone(n));
       }
 
+      // Ctrl+G — group selected nodes (Ctrl+Shift+G ungroups the selected group)
+      if (mod && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        const store = useAppStore.getState();
+        const selected = store.nodes.filter((n) => n.selected);
+        if (e.shiftKey) {
+          // Ungroup any selected group nodes
+          for (const n of selected) {
+            if (n.type === 'group') store.ungroup(n.id);
+          }
+        } else {
+          // Group selected non-group nodes
+          const groupable = selected.filter((n) => n.type !== 'group');
+          if (groupable.length >= 2) {
+            store.groupSelection(groupable.map((n) => n.id));
+          }
+        }
+        return;
+      }
+
       // Ctrl+D — duplicate selected
       if (mod && e.key === 'd') {
         const selected = useAppStore.getState().nodes.filter((n) => n.selected);
@@ -154,8 +179,19 @@ export function NodeEditor() {
         const selectedEdgeIds = new Set(selectedEdges.map((edge) => edge.id));
         store.pushHistory();
 
+        // Deleting a group should dissolve it, not orphan its children with a
+        // dangling parentId. Lift them out first, then proceed with the normal
+        // deletion path so the rest of the selection is removed too.
+        const deletedGroups = selectedNodes.filter((n) => n.type === 'group');
+        if (deletedGroups.length > 0) {
+          for (const g of deletedGroups) store.ungroup(g.id);
+          // ungroup() pushed history; treat the rest as a single follow-up.
+        }
+
+        // Re-read nodes since ungroup may have mutated them.
+        const currentNodes = useAppStore.getState().nodes;
         if (selectedNodeIds.size > 0) {
-          store.setNodes(store.nodes.filter((n) => !selectedNodeIds.has(n.id)) as AppNode[]);
+          store.setNodes(currentNodes.filter((n) => !selectedNodeIds.has(n.id)) as AppNode[]);
         }
         store.setEdges(
           store.edges.filter(
@@ -187,6 +223,14 @@ export function NodeEditor() {
     (_event: React.MouseEvent, draggedNode: AppNode) => {
       const store = useAppStore.getState();
       const allNodes = store.nodes;
+
+      // Group nodes are pure containers — they should never trigger drop-on-edge,
+      // never anti-overlap-nudge, and never push history beyond what React Flow
+      // already does for the position change.
+      if (draggedNode.type === 'group') {
+        dragStartPosRef.current = null;
+        return;
+      }
 
       // Skip work entirely if the node didn't actually move (click without drag).
       const startPos = dragStartPosRef.current;
@@ -290,6 +334,8 @@ export function NodeEditor() {
 
       for (const other of allNodes) {
         if (other.id === draggedNode.id) continue;
+        // Group containers must not push their members aside.
+        if (other.type === 'group') continue;
         const { w: ow, h: oh } = getSize(other);
 
         // Check AABB overlap
@@ -413,7 +459,12 @@ export function NodeEditor() {
   const onNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: AppNode) => {
       event.preventDefault();
-      const menuType = node.data.registryType === 'output' ? 'shader' : 'node';
+      const menuType =
+        node.type === 'group'
+          ? 'group'
+          : node.data.registryType === 'output'
+            ? 'shader'
+            : 'node';
       openContextMenu(event.clientX, event.clientY, menuType, node.id);
     },
     [openContextMenu]
@@ -463,6 +514,17 @@ export function NodeEditor() {
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
+
+      // Saved-group drag payload takes precedence over a regular node-type drag
+      // (the two payloads can't both be set at once but we check this one first
+      // so the regular path doesn't accidentally swallow it).
+      const savedGroupId = event.dataTransfer.getData(SAVED_GROUP_DRAG_TYPE);
+      if (savedGroupId) {
+        const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+        useAppStore.getState().instantiateSavedGroup(savedGroupId, position);
+        return;
+      }
+
       const nodeType = event.dataTransfer.getData('application/reactflow-type');
       if (!nodeType) return;
 
@@ -510,8 +572,20 @@ export function NodeEditor() {
     [screenToFlowPosition, addNode],
   );
 
+  // Pick a contrast color for the canvas-scoped badge text + 1-channel edges
+  // (black on light bg, white on dark bg). Same value drives both, so they
+  // always flip together when the user picks a new background.
+  const contrastColor = getContrastColor(nodeEditorBgColor);
+  const contrastShadow = contrastColor === '#000000'
+    ? 'rgba(255, 255, 255, 0.65)'
+    : 'rgba(0, 0, 0, 0.65)';
+  const canvasCssVars = {
+    '--node-cost-text': contrastColor,
+    '--node-cost-text-shadow': contrastShadow,
+  } as React.CSSProperties;
+
   return (
-    <div className="node-editor">
+    <div className="node-editor" style={canvasCssVars}>
       <div className="node-editor__canvas">
         <div className="node-editor__cost-overlay">
           <CostBar />
@@ -550,6 +624,7 @@ export function NodeEditor() {
           minZoom={0.1}
           maxZoom={3}
           proOptions={{ hideAttribution: true }}
+          style={{ background: nodeEditorBgColor }}
         >
           <Background
             variant={BackgroundVariant.Dots}
@@ -560,10 +635,28 @@ export function NodeEditor() {
           <Controls
             showInteractive={false}
             style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
-          />
+          >
+            <label
+              className="react-flow__controls-button node-editor__bg-color-btn"
+              title="Canvas background color"
+            >
+              <span
+                className="node-editor__bg-color-swatch"
+                style={{ background: nodeEditorBgColor }}
+              />
+              <input
+                type="color"
+                value={nodeEditorBgColor}
+                onChange={(e) => setNodeEditorBgColor(e.target.value)}
+              />
+            </label>
+          </Controls>
           <MiniMap
             position="top-left"
-            nodeColor={(node) => getCostColor((node as AppNode).data.cost ?? 0, costColorLow, costColorHigh)}
+            nodeColor={(node) => {
+              const cost = ((node as AppNode).data as { cost?: number }).cost ?? 0;
+              return getCostColor(cost, costColorLow, costColorHigh);
+            }}
             style={{ backgroundColor: 'var(--bg-panel)' }}
             maskColor="rgba(255, 255, 255, 0.7)"
           />
