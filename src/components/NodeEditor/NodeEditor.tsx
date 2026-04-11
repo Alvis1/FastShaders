@@ -361,14 +361,96 @@ export function NodeEditor() {
         }
       }
 
-      if (nudged) {
-        const updated = allNodes.map((n) =>
-          n.id === draggedNode.id
-            ? { ...n, position: { x: Math.round(posX), y: Math.round(posY) } }
-            : n,
-        ) as AppNode[];
-        store.setNodes(updated);
+      // --- Group attachment: if the dragged node lands inside a group's
+      // bounds, attach it; if it lands outside its current parent, detach it.
+      // React Flow doesn't reparent on its own, so this is the only place that
+      // mutates parentId based on drag.
+      const absolutePos = (node: AppNode): { x: number; y: number } => {
+        let x = node.position.x;
+        let y = node.position.y;
+        const seen = new Set<string>();
+        let cur: AppNode | undefined = node;
+        while (cur?.parentId && !seen.has(cur.parentId)) {
+          seen.add(cur.parentId);
+          const parent = allNodes.find((p) => p.id === cur!.parentId);
+          if (!parent) break;
+          x += parent.position.x;
+          y += parent.position.y;
+          cur = parent;
+        }
+        return { x, y };
+      };
+      const groupSize = (g: AppNode) => {
+        const sz = g as AppNode & { width?: number; height?: number };
+        const dataSz = g.data as { width?: number; height?: number };
+        return { w: sz.width ?? dataSz.width ?? 200, h: sz.height ?? dataSz.height ?? 120 };
+      };
+
+      // Translate the post-nudge LOCAL position into absolute coords by adding
+      // the (post-nudge − pre-drag) delta to the pre-drag absolute.
+      const finalPosX = nudged ? posX : draggedNode.position.x;
+      const finalPosY = nudged ? posY : draggedNode.position.y;
+      const startAbs = absolutePos(draggedNode);
+      const draggedAbsX = startAbs.x + (finalPosX - draggedNode.position.x);
+      const draggedAbsY = startAbs.y + (finalPosY - draggedNode.position.y);
+      const draggedCx = draggedAbsX + nw / 2;
+      const draggedCy = draggedAbsY + nh / 2;
+
+      // Find a non-collapsed group whose absolute bounds contain the dragged
+      // center. Collapsed groups (compact pills) must not slurp up unrelated
+      // nodes that happen to overlap their footprint.
+      let targetGroupId: string | undefined;
+      let targetGroupAbsX = 0;
+      let targetGroupAbsY = 0;
+      for (const other of allNodes) {
+        if (other.type !== 'group' || other.id === draggedNode.id) continue;
+        if ((other.data as { collapsed?: boolean }).collapsed) continue;
+        const oAbs = absolutePos(other);
+        const { w: ow, h: oh } = groupSize(other);
+        if (draggedCx >= oAbs.x && draggedCx <= oAbs.x + ow &&
+            draggedCy >= oAbs.y && draggedCy <= oAbs.y + oh) {
+          targetGroupId = other.id;
+          targetGroupAbsX = oAbs.x;
+          targetGroupAbsY = oAbs.y;
+          break;
+        }
       }
+
+      const parentChanged = targetGroupId !== draggedNode.parentId;
+      if (!nudged && !parentChanged) return;
+
+      // New local coords = absolute − new-parent absolute. With no new parent
+      // (top-level), the fallback `0` collapses to `local = absolute`. In the
+      // same-parent case the loop above resolves the current parent and this
+      // expression simplifies algebraically to `finalPosX/Y` — no special case.
+      const newLocalX = Math.round(draggedAbsX - targetGroupAbsX);
+      const newLocalY = Math.round(draggedAbsY - targetGroupAbsY);
+
+      const updated: AppNode[] = allNodes.map((n) => {
+        if (n.id !== draggedNode.id) return n;
+        // Strip extent + parentId then rebuild from scratch. We never reattach
+        // `extent: 'parent'` — that constraint is what would prevent users
+        // from dragging children back out of the group.
+        const { extent: _extent, parentId: _pid, ...rest } = n as AppNode & { extent?: unknown; parentId?: string };
+        void _extent; void _pid;
+        return {
+          ...rest,
+          ...(targetGroupId ? { parentId: targetGroupId } : {}),
+          position: { x: newLocalX, y: newLocalY },
+        } as AppNode;
+      }) as AppNode[];
+
+      // React Flow requires the parent to come BEFORE its children in the array.
+      if (parentChanged && targetGroupId) {
+        const draggedIdx = updated.findIndex((n) => n.id === draggedNode.id);
+        const groupIdx = updated.findIndex((n) => n.id === targetGroupId);
+        if (draggedIdx >= 0 && groupIdx >= 0 && draggedIdx < groupIdx) {
+          const [draggedItem] = updated.splice(draggedIdx, 1);
+          updated.splice(groupIdx, 0, draggedItem);
+        }
+      }
+
+      store.setNodes(updated);
     },
     [],
   );

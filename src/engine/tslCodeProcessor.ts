@@ -7,7 +7,6 @@
 export const AFRAME_GEO: Record<string, string> = {
   sphere: 'primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64',
   box: 'primitive: box; width: 1.4; height: 1.4; depth: 1.4',
-  torus: 'primitive: torus; radius: 0.7; radiusTubular: 0.3; segmentsRadial: 64; segmentsTubular: 64',
   plane: 'primitive: plane; width: 2; height: 2',
 };
 

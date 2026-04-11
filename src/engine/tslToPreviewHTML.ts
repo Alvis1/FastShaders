@@ -19,6 +19,15 @@ import type { MaterialSettings } from '@/types';
 
 export type LightingMode = 'studio' | 'moon' | 'laboratory';
 
+export type GeometryType = 'sphere' | 'cube' | 'plane' | 'teapot' | 'bunny';
+
+/** Geometry types backed by an OBJ model file rather than an A-Frame primitive. */
+const OBJ_GEOMETRIES: ReadonlySet<GeometryType> = new Set(['teapot', 'bunny']);
+
+export function isObjGeometry(geometry: GeometryType): boolean {
+  return OBJ_GEOMETRIES.has(geometry);
+}
+
 export interface CameraPosition {
   x: number;
   y: number;
@@ -26,12 +35,12 @@ export interface CameraPosition {
 }
 
 export interface PreviewOptions {
-  geometry?: 'sphere' | 'cube' | 'torus' | 'plane';
+  geometry?: GeometryType;
   animate?: boolean;
   materialSettings?: MaterialSettings;
   bgColor?: string;
   lighting?: LightingMode;
-  /** Mesh subdivision count — applied symmetrically to each axis. */
+  /** Mesh subdivision count — applied symmetrically to each axis (primitives only). */
   subdivision?: number;
   /**
    * Camera position to restore after orbit-controls initialization. Passed
@@ -49,21 +58,31 @@ export interface PreviewOptions {
  * tab up with millions of vertices.
  */
 function buildGeoAttr(
-  geometry: 'sphere' | 'cube' | 'torus' | 'plane',
+  geometry: 'sphere' | 'cube' | 'plane',
   subdivision: number,
 ): string {
   const seg = Math.max(1, Math.min(256, Math.round(subdivision)));
   switch (geometry) {
     case 'cube':
       return `primitive: box; width: 1.4; height: 1.4; depth: 1.4; segmentsWidth: ${seg}; segmentsHeight: ${seg}; segmentsDepth: ${seg}`;
-    case 'torus':
-      return `primitive: torus; radius: 0.7; radiusTubular: 0.3; segmentsRadial: ${seg}; segmentsTubular: ${seg}`;
     case 'plane':
       return `primitive: plane; width: 2; height: 2; segmentsWidth: ${seg}; segmentsHeight: ${seg}`;
     case 'sphere':
     default:
       return `primitive: sphere; radius: 1; segmentsWidth: ${seg}; segmentsHeight: ${seg}`;
   }
+}
+
+/**
+ * Resolve the absolute URL of an OBJ model in `public/models/`. The iframe
+ * loads from a blob URL, so relative paths won't resolve — we need the full
+ * origin-qualified URL.
+ */
+function getModelUrl(geometry: 'teapot' | 'bunny'): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const base = import.meta.env.BASE_URL;
+  const file = geometry === 'bunny' ? 'stanford-bunny.obj' : 'teapot.obj';
+  return `${origin}${base}models/${file}`;
 }
 
 // Resolve full absolute URLs for the IIFE bundle and shaderloader at runtime.
@@ -84,6 +103,146 @@ const SIDE_VALUES: Record<string, number> = {
   back: 1,
   double: 2,
 };
+
+/**
+ * A-Frame component registration for OBJ-backed previews. On `model-loaded`,
+ * for every Mesh in the loaded hierarchy:
+ *   1. Compute vertex normals if the source file lacked them (the Stanford
+ *      bunny and the common-3d-test-models teapot are both raw v/f files).
+ *   2. Generate spherical UVs from each vertex's direction relative to the
+ *      geometry's local center, so TSL shaders reading `uv()` get meaningful
+ *      values. Spherical projection seams at the atan2 wrap; acceptable for
+ *      procedural shaders (proper unwrap needs offline tools).
+ *   3. Recenter the world bbox at the origin and rescale so the longest axis
+ *      equals `data.size` — bunny (mm) and teapot (tens of units) otherwise
+ *      would not frame anywhere near the primitives.
+ *
+ * String literal so the iframe sees raw JS — no Vite transformation pass.
+ */
+const FIT_BOUNDS_SCRIPT = `<script>
+  if (window.AFRAME && !AFRAME.components["fit-bounds"]) {
+    AFRAME.registerComponent("fit-bounds", {
+      schema: { size: { type: "number", default: 1.6 } },
+      init: function () { this.el.addEventListener("model-loaded", this.fit.bind(this)); },
+      fit: function () {
+        var mesh = this.el.getObject3D("mesh");
+        if (!mesh) return;
+        mesh.traverse(function (node) {
+          if (!node.isMesh || !node.geometry) return;
+          var g = node.geometry;
+          if (!g.attributes.normal) g.computeVertexNormals();
+          if (g.attributes.uv) return;
+          var pos = g.attributes.position;
+          if (!pos) return;
+          g.computeBoundingBox();
+          var c = new THREE.Vector3();
+          g.boundingBox.getCenter(c);
+          var uvs = new Float32Array(pos.count * 2);
+          var v = new THREE.Vector3();
+          var TWO_PI = Math.PI * 2;
+          for (var i = 0; i < pos.count; i++) {
+            v.fromBufferAttribute(pos, i).sub(c);
+            var len = v.length();
+            if (len > 0) v.multiplyScalar(1 / len);
+            uvs[i * 2] = Math.atan2(v.z, v.x) / TWO_PI + 0.5;
+            uvs[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, v.y))) / Math.PI + 0.5;
+          }
+          g.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+        });
+        mesh.updateMatrixWorld(true);
+        var box = new THREE.Box3().setFromObject(mesh);
+        if (box.isEmpty()) return;
+        var size = new THREE.Vector3();
+        var center = new THREE.Vector3();
+        box.getSize(size);
+        box.getCenter(center);
+        var scale = this.data.size / (Math.max(size.x, size.y, size.z) || 1);
+        mesh.position.sub(center.multiplyScalar(scale));
+        mesh.scale.setScalar(scale);
+      }
+    });
+  }
+<\/script>`;
+
+/**
+ * Iframe ↔ parent bridge: shader uniform readiness + camera persistence.
+ *
+ * - Shader uniforms: poll for the shaderloader's `_propertyUniforms` (it's
+ *   populated asynchronously after fetch/import/extendSchema), announce
+ *   readiness, listen for direct value updates. We mutate `.value` directly
+ *   — going through setAttribute round-trips through A-Frame's component
+ *   data layer for no benefit.
+ *
+ * - Camera persistence: if the parent passed a saved position, apply it
+ *   AFTER orbit-controls initializes — and only after, so the controls'
+ *   internal `position0` snapshot remains the original `0 0 8` and `reset()`
+ *   snaps back to home, not to the saved view.
+ *
+ * `__SAVED_CAM__` is replaced with a JSON literal at emit time.
+ */
+const BRIDGE_SCRIPT_TEMPLATE = `<script>
+  window.__savedCameraPos = __SAVED_CAM__;
+  (function() {
+    var entity = document.getElementById("preview-entity");
+    var camEl = document.querySelector("[camera]");
+
+    var shaderRetries = 0;
+    function checkShaderReady() {
+      var comp = entity && entity.components && entity.components.shader;
+      if (comp && comp._propertyUniforms) {
+        try {
+          window.parent.postMessage({
+            type: "fs:preview-ready",
+            uniforms: Object.keys(comp._propertyUniforms)
+          }, "*");
+        } catch (e) {}
+        return;
+      }
+      if (shaderRetries++ < 200) setTimeout(checkShaderReady, 50);
+    }
+    checkShaderReady();
+
+    var camRetries = 0;
+    function whenOrbitReady(cb) {
+      var oc = camEl && camEl.components && camEl.components["orbit-controls"];
+      if (oc && oc.controls) { cb(oc); return; }
+      if (camRetries++ < 200) setTimeout(function() { whenOrbitReady(cb); }, 50);
+    }
+    whenOrbitReady(function(oc) {
+      var saved = window.__savedCameraPos;
+      if (saved && camEl && camEl.object3D) {
+        camEl.object3D.position.set(saved.x, saved.y, saved.z);
+        try { oc.controls.update(); } catch (e) {}
+      }
+      var lx = NaN, ly = NaN, lz = NaN;
+      setInterval(function() {
+        var p = camEl && camEl.object3D && camEl.object3D.position;
+        if (!p) return;
+        if (p.x === lx && p.y === ly && p.z === lz) return;
+        lx = p.x; ly = p.y; lz = p.z;
+        try {
+          window.parent.postMessage({ type: "fs:camera", x: p.x, y: p.y, z: p.z }, "*");
+        } catch (e) {}
+      }, 200);
+    });
+
+    window.addEventListener("message", function(e) {
+      var msg = e.data;
+      if (!msg) return;
+      if (msg.type === "fs:uniform") {
+        var comp = entity && entity.components && entity.components.shader;
+        if (!comp || !comp._propertyUniforms) return;
+        var u = comp._propertyUniforms[msg.name];
+        if (u) u.value = msg.value;
+      } else if (msg.type === "fs:reset-camera") {
+        var oc = camEl && camEl.components && camEl.components["orbit-controls"];
+        if (oc && oc.controls && typeof oc.controls.reset === "function") {
+          oc.controls.reset();
+        }
+      }
+    });
+  })();
+<\/script>`;
 
 /**
  * Convert editor TSL code (with Fn wrapper) into a shaderloader-compatible
@@ -203,7 +362,7 @@ export function tslToPreviewHTML(
   } = options;
 
   const shaderModule = convertToShaderModule(tslCode, materialSettings);
-  const geoAttr = buildGeoAttr(geometry, subdivision);
+  const isObj = isObjGeometry(geometry);
   const { iife, shaderloader, orbitControls } = getScriptUrls();
 
   // Plane spins on its Z axis (in-plane, like a record), since the flat face
@@ -214,9 +373,34 @@ export function tslToPreviewHTML(
     : '';
 
   // Plane is meant to be viewed flat-on, so leave it un-rotated (it already
-  // faces +Z, which is where the camera sits). All other primitives keep the
-  // 45/45 tilt so multiple faces are visible.
-  const rotationAttr = geometry === 'plane' ? '0 0 0' : '45 45 0';
+  // faces +Z, which is where the camera sits). OBJ models are normalized and
+  // recentered on load, so we tilt them like the other primitives. The bunny
+  // is shown upright (no tilt) since its silhouette reads better head-on.
+  let rotationAttr: string;
+  if (geometry === 'plane') {
+    rotationAttr = '0 0 0';
+  } else if (geometry === 'bunny') {
+    rotationAttr = '0 25 0';
+  } else if (geometry === 'teapot') {
+    rotationAttr = '15 35 0';
+  } else {
+    rotationAttr = '45 45 0';
+  }
+
+  // Build the per-geometry entity attribute(s).
+  // - Primitives: A-Frame `geometry` component with subdivision baked in.
+  // - OBJ models: A-Frame `obj-model` component pointing at public/models/*,
+  //   plus a custom `fit-bounds` component (registered below) that recenters
+  //   and rescales the loaded mesh into a unit-ish bounding box so the camera
+  //   framing matches the primitives.
+  let entityAttrs: string;
+  if (isObj) {
+    const url = getModelUrl(geometry as 'teapot' | 'bunny');
+    entityAttrs = `obj-model="obj: url(${url})" fit-bounds="size: 1.6"`;
+  } else {
+    const geoAttr = buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane', subdivision);
+    entityAttrs = `geometry="${geoAttr}"`;
+  }
 
   const lines: string[] = [];
 
@@ -244,9 +428,14 @@ export function tslToPreviewHTML(
   lines.push(`<${''}/script>`);
   lines.push('');
 
+  // Register the fit-bounds component used by OBJ-backed previews. Inert for
+  // primitive geometries — the component is only attached to OBJ entities.
+  lines.push(FIT_BOUNDS_SCRIPT);
+  lines.push('');
+
   lines.push(`<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ${bgColor}">`);
   lines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
-  lines.push(`  <a-entity id="preview-entity" geometry="${geoAttr}" material="color: #808080" position="0 0 0" rotation="${rotationAttr}"${animAttr}></a-entity>`);
+  lines.push(`  <a-entity id="preview-entity" ${entityAttrs} material="color: #808080" position="0 0 0" rotation="${rotationAttr}"${animAttr}></a-entity>`);
 
   if (lighting === 'studio') {
     // Three-point rig for material evaluation:
@@ -284,92 +473,11 @@ export function tslToPreviewHTML(
   lines.push(`<${''}/script>`);
   lines.push('');
 
-  // Bridge to parent: expose property uniforms for live overlay control AND
-  // restore/sync camera position across iframe rebuilds.
-  //
-  // - Shader uniforms: poll for the shaderloader's `_propertyUniforms` (it's
-  //   populated asynchronously after fetch/import/extendSchema), then
-  //   announce readiness and listen for direct value updates. We mutate
-  //   `.value` directly — going through setAttribute would round-trip through
-  //   A-Frame's component data layer for no benefit.
-  //
-  // - Camera persistence: if the parent passed a saved position, apply it
-  //   after orbit-controls initializes — and only after, so the controls'
-  //   internal `position0` snapshot remains the original `0 0 8` and
-  //   `reset()` snaps back to the home view, not the saved view. Then poll
-  //   the camera position and post any changes back to the parent so the
-  //   next iframe rebuild can restore it.
+  // Bridge: shader uniform overlay + camera persistence across iframe rebuilds.
   const savedCamLiteral = initialCameraPosition
     ? JSON.stringify({ x: initialCameraPosition.x, y: initialCameraPosition.y, z: initialCameraPosition.z })
     : 'null';
-  lines.push('<script>');
-  lines.push(`  window.__savedCameraPos = ${savedCamLiteral};`);
-  lines.push('  (function() {');
-  lines.push('    var entity = document.getElementById("preview-entity");');
-  lines.push('    var camEl = document.querySelector("[camera]");');
-  lines.push('');
-  lines.push('    // ----- shader uniform readiness + live updates -----');
-  lines.push('    var shaderRetries = 0;');
-  lines.push('    function checkShaderReady() {');
-  lines.push('      var comp = entity && entity.components && entity.components.shader;');
-  lines.push('      if (comp && comp._propertyUniforms) {');
-  lines.push('        try {');
-  lines.push('          window.parent.postMessage({');
-  lines.push('            type: "fs:preview-ready",');
-  lines.push('            uniforms: Object.keys(comp._propertyUniforms)');
-  lines.push('          }, "*");');
-  lines.push('        } catch (e) {}');
-  lines.push('        return;');
-  lines.push('      }');
-  lines.push('      if (shaderRetries++ < 200) setTimeout(checkShaderReady, 50);');
-  lines.push('    }');
-  lines.push('    checkShaderReady();');
-  lines.push('');
-  lines.push('    // ----- orbit-controls readiness + camera persistence -----');
-  lines.push('    var camRetries = 0;');
-  lines.push('    function whenOrbitReady(cb) {');
-  lines.push('      var oc = camEl && camEl.components && camEl.components["orbit-controls"];');
-  lines.push('      if (oc && oc.controls) { cb(oc); return; }');
-  lines.push('      if (camRetries++ < 200) setTimeout(function() { whenOrbitReady(cb); }, 50);');
-  lines.push('    }');
-  lines.push('    whenOrbitReady(function(oc) {');
-  lines.push('      // Restore saved view (if any) AFTER controls init so position0 stays at home.');
-  lines.push('      var saved = window.__savedCameraPos;');
-  lines.push('      if (saved && camEl && camEl.object3D) {');
-  lines.push('        camEl.object3D.position.set(saved.x, saved.y, saved.z);');
-  lines.push('        try { oc.controls.update(); } catch (e) {}');
-  lines.push('      }');
-  lines.push('      // Post position back to the parent whenever it changes (cheap throttle).');
-  lines.push('      var lx = NaN, ly = NaN, lz = NaN;');
-  lines.push('      setInterval(function() {');
-  lines.push('        var p = camEl && camEl.object3D && camEl.object3D.position;');
-  lines.push('        if (!p) return;');
-  lines.push('        if (p.x === lx && p.y === ly && p.z === lz) return;');
-  lines.push('        lx = p.x; ly = p.y; lz = p.z;');
-  lines.push('        try {');
-  lines.push('          window.parent.postMessage({ type: "fs:camera", x: p.x, y: p.y, z: p.z }, "*");');
-  lines.push('        } catch (e) {}');
-  lines.push('      }, 200);');
-  lines.push('    });');
-  lines.push('');
-  lines.push('    // ----- inbound messages from parent -----');
-  lines.push('    window.addEventListener("message", function(e) {');
-  lines.push('      var msg = e.data;');
-  lines.push('      if (!msg) return;');
-  lines.push('      if (msg.type === "fs:uniform") {');
-  lines.push('        var comp = entity && entity.components && entity.components.shader;');
-  lines.push('        if (!comp || !comp._propertyUniforms) return;');
-  lines.push('        var u = comp._propertyUniforms[msg.name];');
-  lines.push('        if (u) u.value = msg.value;');
-  lines.push('      } else if (msg.type === "fs:reset-camera") {');
-  lines.push('        var oc = camEl && camEl.components && camEl.components["orbit-controls"];');
-  lines.push('        if (oc && oc.controls && typeof oc.controls.reset === "function") {');
-  lines.push('          oc.controls.reset();');
-  lines.push('        }');
-  lines.push('      }');
-  lines.push('    });');
-  lines.push('  })();');
-  lines.push(`<${''}/script>`);
+  lines.push(BRIDGE_SCRIPT_TEMPLATE.replace('__SAVED_CAM__', savedCamLiteral));
   lines.push('');
 
   lines.push('</body>');
