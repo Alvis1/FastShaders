@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { tslToPreviewHTML } from '@/engine/tslToPreviewHTML';
-import type { CameraPosition, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
+import { isObjGeometry, tslToPreviewHTML } from '@/engine/tslToPreviewHTML';
+import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import './ShaderPreview.css';
-
-type GeometryType = 'sphere' | 'cube' | 'torus' | 'plane';
 
 interface UniformInfo {
   name: string;
@@ -19,7 +17,7 @@ interface UniformBounds {
 function loadGeometry(): GeometryType {
   try {
     const v = localStorage.getItem('fs:previewGeometry');
-    if (v === 'cube' || v === 'torus' || v === 'plane' || v === 'sphere') return v;
+    if (v === 'cube' || v === 'plane' || v === 'sphere' || v === 'teapot' || v === 'bunny') return v;
   } catch { /* */ }
   return 'sphere';
 }
@@ -225,6 +223,12 @@ export function ShaderPreview() {
     try { localStorage.setItem('fs:previewBgColor', bgColor); } catch { /* */ }
   }, [bgColor]);
 
+  // OBJ-backed geometries ignore the subdivision slider entirely. Folding the
+  // value to a constant in the dep list (instead of the live state) means
+  // dragging the slider while a teapot/bunny is selected doesn't rebuild the
+  // iframe to produce identical HTML.
+  const effectiveSubdivision = isObjGeometry(geometry) ? 0 : subdivision;
+
   // Generate blob URL for the iframe (more reliable than srcdoc for ES modules + importmaps)
   const blobUrl = useMemo(() => {
     // Revoke previous blob URL
@@ -237,7 +241,7 @@ export function ShaderPreview() {
       materialSettings,
       bgColor,
       lighting,
-      subdivision,
+      subdivision: effectiveSubdivision,
       // Read from the ref at memo time so the user's current camera angle
       // survives setting changes (subdivision, lighting, etc.) without
       // joining the dep list (which would cause an infinite rebuild loop).
@@ -248,7 +252,7 @@ export function ShaderPreview() {
     const url = URL.createObjectURL(blob);
     blobUrlRef.current = url;
     return url;
-  }, [previewCode, geometry, playing, materialSettings, bgColor, lighting, subdivision]);
+  }, [previewCode, geometry, playing, materialSettings, bgColor, lighting, effectiveSubdivision]);
 
   // Cleanup blob URL on unmount
   useEffect(() => {
@@ -306,21 +310,24 @@ export function ShaderPreview() {
           >
             <option value="sphere">Sphere</option>
             <option value="cube">Cube</option>
-            <option value="torus">Torus</option>
             <option value="plane">Plane</option>
+            <option value="teapot">Utah Teapot</option>
+            <option value="bunny">Stanford Bunny</option>
           </select>
-          <label className="shader-preview__subdivision" title="Mesh subdivision">
-            <input
-              type="range"
-              min={SUBDIVISION_MIN}
-              max={SUBDIVISION_MAX}
-              step={1}
-              value={subdivision}
-              onChange={(e) => setSubdivision(parseInt(e.target.value, 10))}
-              className="shader-preview__subdivision-slider"
-            />
-            <span className="shader-preview__subdivision-value">{subdivision}</span>
-          </label>
+          {!isObjGeometry(geometry) && (
+            <label className="shader-preview__subdivision" title="Mesh subdivision">
+              <input
+                type="range"
+                min={SUBDIVISION_MIN}
+                max={SUBDIVISION_MAX}
+                step={1}
+                value={subdivision}
+                onChange={(e) => setSubdivision(parseInt(e.target.value, 10))}
+                className="shader-preview__subdivision-slider"
+              />
+              <span className="shader-preview__subdivision-value">{subdivision}</span>
+            </label>
+          )}
         </div>
       </div>
       <div className="shader-preview__body">

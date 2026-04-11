@@ -145,6 +145,11 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
         if (node.type === 'shader' && noiseTypes.has(node.data?.registryType)) {
           node.type = 'preview';
         }
+        // Migrate: drop `extent: 'parent'` from any persisted member node so
+        // drag-out-to-detach works on graphs saved before that change.
+        if (node.extent === 'parent') {
+          delete node.extent;
+        }
         // Migrate: uniform_float → property_float
         if (node.data?.registryType === 'uniform_float') {
           node.data.registryType = 'property_float';
@@ -561,13 +566,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
     get().pushHistory();
 
     // Re-parent members: their position becomes relative to the group origin.
+    // Intentionally NOT setting `extent: 'parent'` — we want users to be able
+    // to drag children out of the group, and onNodeDragStop reconciles
+    // parentId based on the final drop position.
     const memberIds = new Set(members.map((m) => m.id));
     const newNodes: AppNode[] = state.nodes.map((n) => {
       if (!memberIds.has(n.id)) return n;
       return {
         ...n,
         parentId: groupId,
-        extent: 'parent',
         position: {
           x: n.position.x - groupX,
           y: n.position.y - groupY,
@@ -610,7 +617,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
         } as AppNode;
         if (grandParentId) {
           (lifted as { parentId?: string }).parentId = grandParentId;
-          (lifted as { extent?: 'parent' }).extent = 'parent';
         }
         return lifted;
       });
@@ -657,6 +663,21 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const ports = side === 'input' ? def.inputs : def.outputs;
       const port = ports.find((p) => p.id === (handleId ?? (side === 'output' ? 'out' : 'in')));
       return port?.dataType ?? 'any';
+    };
+
+    /** Look up a port's display label. Falls back to the handle id when missing. */
+    const portLabel = (
+      nodeId: string,
+      handleId: string | null | undefined,
+      side: 'input' | 'output',
+    ): string | undefined => {
+      const n = nodeById.get(nodeId);
+      if (!n) return handleId ?? undefined;
+      const def = NODE_REGISTRY.get((n.data as { registryType: string }).registryType);
+      if (!def) return handleId ?? undefined;
+      const ports = side === 'input' ? def.inputs : def.outputs;
+      const port = ports.find((p) => p.id === (handleId ?? (side === 'output' ? 'out' : 'in')));
+      return port?.label ?? handleId ?? undefined;
     };
 
     /** Look up a node's display label, used to name boundary sockets. */
@@ -739,7 +760,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
         if (!srcInside && tgtInside) {
           // Input boundary: target pin sits inside, source lives outside.
-          // Socket name = the external feeder (the source of the edge).
+          // Socket name = the input port label of the internal child the edge
+          // terminates at, so users see what value they're feeding (e.g.
+          // "Position", "Scale") rather than the upstream feeder's label.
           const pinKey = `${e.target}\0${e.targetHandle ?? 'in'}`;
           let socket = inputSocketByPin.get(pinKey);
           if (!socket) {
@@ -748,7 +771,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
               originalNodeId: e.target,
               originalHandleId: e.targetHandle ?? 'in',
               dataType: portDataType(e.target, e.targetHandle, 'input'),
-              name: nodeLabel(e.source),
+              name: portLabel(e.target, e.targetHandle, 'input'),
             };
             inputSocketByPin.set(pinKey, socket);
             collapsedInputs.push(socket);
@@ -768,11 +791,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // Pill size scales with the number of sockets so they all fit.
       // Width is intentionally compact — labels live next to the handles, not
       // inside a wide body, so the pill stays small horizontally.
+      // SOCKET_TOP_PAD here mirrors the value in GroupNode.tsx — keep them in
+      // sync so handle dots stay below the colored header strip.
       const COLLAPSED_W = 130;
       const SOCKET_H = 18;
       const HEADER_H = 28;
+      const SOCKET_TOP_PAD = 8;
       const socketCount = Math.max(collapsedInputs.length, collapsedOutputs.length);
-      const collapsedH = HEADER_H + Math.max(1, socketCount) * SOCKET_H + 6;
+      const collapsedH = HEADER_H + SOCKET_TOP_PAD + Math.max(1, socketCount) * SOCKET_H + 6;
 
       set((s) => ({
         nodes: s.nodes.map((n) => {
@@ -880,10 +906,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
           } as AppNode;
         }
         if (memberIds.has(n.id)) {
-          // Strip the hide-class and re-attach the parent extent constraint.
+          // Strip the hide-class. We don't re-attach `extent: 'parent'` —
+          // letting members be dragged outside is what enables drag-out-to-detach.
           const { className: _c, ...rest } = n as AppNode & { className?: string };
           void _c;
-          return { ...rest, extent: 'parent' } as AppNode;
+          return rest as AppNode;
         }
         return n;
       }),
@@ -957,13 +984,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const cloned = structuredClone(m);
       const newId = idMap.get(m.id)!;
       // Re-parent under the new group; positions are already group-relative.
+      // No `extent: 'parent'` — drag-out-to-detach relies on members being free
+      // to leave the group's bounds.
       const out = {
         ...cloned,
         id: newId,
         parentId: newGroupId,
-        extent: 'parent',
         selected: false,
-      } as AppNode;
+      } as AppNode & { extent?: unknown };
+      delete out.extent;
       return out;
     });
 

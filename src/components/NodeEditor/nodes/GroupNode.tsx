@@ -38,6 +38,10 @@ export const GroupNode = memo(function GroupNode({
   const outputs = collapsed ? (data.collapsedOutputs ?? []) : [];
   const SOCKET_H = 18;
   const HEADER_H = 28;
+  // Extra gap below the header so the first socket's handle dot doesn't
+  // visually collide with the colored header strip. Must match the value used
+  // by toggleGroupCollapsed when sizing the pill.
+  const SOCKET_TOP_PAD = 8;
 
   return (
     <div
@@ -87,7 +91,7 @@ export const GroupNode = memo(function GroupNode({
           regardless of how many sockets the group exposes. The label next to
           the dot is the source-of-edge node name. */}
       {collapsed && inputs.map((sock, i) => {
-        const top = HEADER_H + SOCKET_H * (i + 0.5);
+        const top = HEADER_H + SOCKET_TOP_PAD + SOCKET_H * (i + 0.5);
         return (
           <span
             key={sock.socketId}
@@ -109,7 +113,7 @@ export const GroupNode = memo(function GroupNode({
         );
       })}
       {collapsed && outputs.map((sock, i) => {
-        const top = HEADER_H + SOCKET_H * (i + 0.5);
+        const top = HEADER_H + SOCKET_TOP_PAD + SOCKET_H * (i + 0.5);
         return (
           <span
             key={sock.socketId}

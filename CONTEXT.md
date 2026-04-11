@@ -46,7 +46,9 @@ src/
 │   │   │   ├── ClockNode.tsx          # Time node with animated analog clock face
 │   │   │   ├── ClockNode.css
 │   │   │   ├── OutputNode.tsx         # Output sink (color, normal, position, opacity, roughness)
-│   │   │   └── OutputNode.css
+│   │   │   ├── OutputNode.css
+│   │   │   ├── GroupNode.tsx          # Selection group container — collapsible, recolorable, savable
+│   │   │   └── GroupNode.css
 │   │   ├── handles/
 │   │   │   └── TypedHandle.tsx        # Color-coded handles per data type
 │   │   ├── edges/
@@ -55,16 +57,18 @@ src/
 │   │   │   └── EdgeInfoCard.css
 │   │   ├── inputs/
 │   │   │   └── DragNumberInput.tsx    # Drag-to-adjust number input with acceleration
-│   │   ├── ContentBrowser.tsx         # Category-tabbed asset drawer with horizontal scroll
+│   │   ├── ContentBrowser.tsx         # Category-tabbed asset drawer with horizontal scroll + Saved Groups tab
 │   │   ├── ContentBrowser.css
 │   │   ├── NodePreviewCard.tsx        # Type-dispatching preview card (7 visual variants matching editor nodes)
 │   │   ├── NodePreviewCard.css
+│   │   ├── SavedGroupCard.tsx         # Draggable tile for a user-saved group (Saved Groups tab)
 │   │   └── menus/
-│   │       ├── ContextMenu.tsx        # Menu dispatcher (canvas/node/shader/edge)
+│   │       ├── ContextMenu.tsx        # Menu dispatcher (canvas/node/shader/edge/group)
 │   │       ├── ContextMenu.css
-│   │       ├── AddNodeMenu.tsx        # Searchable node palette, grouped by category
+│   │       ├── AddNodeMenu.tsx        # Searchable node palette, grouped by category, "Group Selection" entry
 │   │       ├── NodeSettingsMenu.tsx   # Node properties, duplicate, delete
-│   │       ├── ShaderSettingsMenu.tsx # Output node settings (ports, displacement, material)
+│   │       ├── ShaderSettingsMenu.tsx # Output node settings (ports, displacement, material, uniforms)
+│   │       ├── GroupSettingsMenu.tsx  # Rename + recolor + Save to Library + Ungroup
 │   │       └── EdgeContextMenu.tsx    # Edge delete menu
 │   └── Preview/
 │       ├── ShaderPreview.tsx          # WebGPU iframe preview with geometry selector and rotation toggle
@@ -91,11 +95,11 @@ src/
 │   └── useAppStore.ts                 # Zustand store (nodes, edges, code, sync, history, UI)
 ├── types/
 │   ├── index.ts                       # Re-exports all types
-│   ├── node.types.ts                  # AppNode union, ShaderNodeData, OutputNodeData
+│   ├── node.types.ts                  # AppNode union, ShaderNodeData, OutputNodeData, GroupNodeData, BoundarySocket
 │   ├── sync.types.ts                  # SyncSource type
 │   └── tsl.types.ts                   # ParseError, GeneratedCode
 ├── utils/
-│   ├── colorUtils.ts                  # Cost color gradient, type→color mapping, CATEGORY_COLORS, hexToRgb01 (centralized)
+│   ├── colorUtils.ts                  # Cost color gradient, type→color mapping, CATEGORY_COLORS, hexToRgb01, getContrastColor (auto-flip text against bg)
 │   ├── edgeUtils.ts                   # removeEdgesForPort() — cleans up edges when hiding input ports
 │   ├── graphTraversal.ts             # hasTimeUpstream() — BFS time-node detection with O(1) Map lookup
 │   ├── idGenerator.ts                 # generateId(), generateEdgeId()
@@ -174,14 +178,17 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 - **Rendered in iframe** via blob URL from `tslToPreviewHTML.ts`
 - **Renderer**: A-Frame scene with `a-frame-shaderloader` (loads local IIFE bundle via Vite public dir)
 - **Camera**: FOV 20 with orbit controls (zoom 2–80, rotate 0.5 speed). Initial position `0 0 8`.
-- **Geometry**: Selector dropdown (sphere/cube/torus/plane), persisted to localStorage. Plane is rendered un-rotated (faces the camera) — every other primitive uses a 45/45 tilt so multiple faces are visible.
-- **Subdivision slider**: Symmetrically applied to per-primitive segment fields (`segmentsWidth/Height` for sphere/plane, all three for cube, `segmentsRadial/Tubular` for torus). Range `[1, 256]`, default 64. Built into the geometry attribute by `buildGeoAttr()` in `tslToPreviewHTML.ts`.
+- **Geometry**: Selector dropdown with five options, persisted to localStorage:
+  - **Primitives** — `sphere`, `cube`, `plane`. Plane is rendered un-rotated (faces the camera); sphere and cube use a 45/45 tilt so multiple faces are visible.
+  - **OBJ models** — `teapot` (Utah teapot, 15/35/0 tilt) and `bunny` (Stanford bunny, 0/25/0 tilt — silhouette reads better head-on). Backed by static files in `public/models/` (`teapot.obj`, `stanford-bunny.obj`), loaded via A-Frame's `obj-model` component. The custom `fit-bounds` component (registered inline in the iframe) recomputes vertex normals when the source file lacks them, generates spherical UVs from each vertex's direction so TSL shaders that read `uv()` get meaningful values, and recenters/rescales the mesh so the longest axis equals `1.6` (matching primitive framing).
+  - `isObjGeometry(geometry)` in [tslToPreviewHTML.ts](src/engine/tslToPreviewHTML.ts) is the single source of truth for primitive vs OBJ branching.
+- **Subdivision slider**: Symmetrically applied to per-primitive segment fields (`segmentsWidth/Height` for sphere/plane, all three for cube). Range `[1, 256]`, default 64. Built into the geometry attribute by `buildGeoAttr()` in `tslToPreviewHTML.ts`. **Hidden when an OBJ model is selected** — the slider has no meaning for static meshes.
 - **Lighting modes** (dropdown, persisted):
   - **light: Studio** (default) — three-point rig (warm key + cool rim + neutral fill + low ambient).
   - **light: Moon** — single cool directional from `-4 1.5 2` at intensity 4.0 (terminator ~65° off camera axis, ~2/3 of the visible hemisphere lit) + a faint dark-blue ambient floor.
   - **light: Laboratory** — pure white ambient at intensity 1.0, no shadows.
 - **Material**: `materialSettings` from output node (displacement mode, transparent, side)
-- **Animation**: Play/pause toggle for mesh rotation. Y-axis turntable spin for sphere/cube/torus; planes spin on Z (in-plane, like a record).
+- **Animation**: Play/pause toggle for mesh rotation. Y-axis turntable spin for sphere/cube/teapot/bunny; planes spin on Z (in-plane, like a record).
 - **Background**: User-picked color via `<input type="color">` in the header, persisted to `fs:previewBgColor`. Defaults to `#808080`.
 - **Reset button** (red, left side of header): clears the saved camera, restores **studio** lighting, **subdivision 64**, and every property uniform back to its shader-defined default. Min/max bounds, geometry, and bg color are user preferences and intentionally **not** reset.
 
@@ -297,10 +304,10 @@ Generates HTML for the in-app preview iframe:
 1. Uses `tslCodeProcessor` to extract imports, body, fix TDZ, and parse channels.
 2. **Property uniform rewrite**: `convertToShaderModule()` rewrites every `const N = uniform(V)` line to `const N = params.N`, captures `{N: V}` defaults into a schemaEntries map, exports an explicit `export const schema`, and switches the function signature to `function(params)` (only when there are uniforms — otherwise it stays `function()`). Without this, the shaderloader's auto-detected `_propertyUniforms` would be a *separate* uniform instance from the one wired into the material, and the slider overlay would be talking to the wrong object.
 3. Accepts `materialSettings` via `PreviewOptions` — applies displacement wrapping (same normal/offset logic) + transparent/side/alphaTest settings.
-4. **Geometry**: `buildGeoAttr(geometry, subdivision)` clamps subdivision to `[1, 256]` and applies it to the appropriate per-primitive segment fields. (The export pipeline `tslToAFrame.ts` still uses the static `AFRAME_GEO` constant — only the in-app preview is parameterized.)
+4. **Geometry**: `isObjGeometry(geometry)` branches on primitive vs OBJ. Primitives go through `buildGeoAttr(geometry, subdivision)` which clamps subdivision to `[1, 256]` and applies it to the appropriate per-primitive segment fields. OBJ models (`teapot`, `bunny`) are emitted as `<a-entity obj-model="obj: url(${absUrl})" fit-bounds="size: 1.6">`, with `getModelUrl()` resolving `${origin}${BASE_URL}models/<file>` so the blob iframe can fetch the asset cross-origin-free. The inline `fit-bounds` A-Frame component (registered in a `<script>` block in the same HTML) listens for `model-loaded`, computes missing vertex normals, generates spherical UVs from vertex direction, and recenters/rescales the mesh into a unit-ish bbox so it frames like the primitives. (The standalone export pipeline `tslToAFrame.ts` only supports primitives — OBJ geometries are not threaded through and would fall back to sphere if they were.)
 5. **Lighting**: `studio` (4-light three-point rig), `moon` (single cool directional + faint ambient), or `laboratory` (white ambient only).
-6. **Plane orientation**: Plane geometry is emitted with `rotation="0 0 0"` so it faces the camera; everything else uses the existing `45 45 0` tilt.
-7. **Animation**: Y-axis turntable (`0 360 0`) for sphere/cube/torus, Z-axis spin (`0 0 360`) for plane.
+6. **Per-geometry rotation**: `plane` → `0 0 0` (faces camera); `bunny` → `0 25 0` (upright); `teapot` → `15 35 0` (slight tilt to read the spout/handle); other primitives → `45 45 0`.
+7. **Animation**: Y-axis turntable (`0 360 0`) for sphere/cube/teapot/bunny, Z-axis spin (`0 0 360`) for plane.
 8. **Iframe ↔ parent bridge** (inline `<script>` block): polls for shaderloader readiness → posts `fs:preview-ready` with the uniform name list, listens for `fs:uniform`/`fs:reset-camera`, polls camera position and posts `fs:camera` only on change. Saved camera position is embedded as `window.__savedCameraPos` and applied **after** orbit-controls initializes (not via `initialPosition`, so `controls.reset()` still snaps to the original `0 0 8`).
 9. Uses A-Frame IIFE bundle with `a-frame-shaderloader` for rendering.
 10. Error display div for runtime errors.
@@ -574,16 +581,18 @@ When an edge is selected, an info card appears at the midpoint showing live valu
 - **Ctrl+C**: Copy selected nodes (deep clone to clipboard ref)
 - **Ctrl+V**: Paste copied nodes (shared `pasteNodes()` helper — offset +30px, clone edges between copied nodes)
 - **Ctrl+D**: Duplicate selected (reuses `pasteNodes()` helper)
-- **Delete/Backspace**: Remove selected nodes (and their connected edges) and/or selected edges. React Flow's built-in delete is disabled (`deleteKeyCode={null}`); the manual handler in `NodeEditor.tsx` reads both `n.selected` and `edge.selected`
+- **Ctrl+G**: Group selected (≥2 non-group nodes); **Ctrl+Shift+G** ungroups any selected group
+- **Delete/Backspace**: Remove selected nodes (and their connected edges) and/or selected edges. React Flow's built-in delete is disabled (`deleteKeyCode={null}`); the manual handler in `NodeEditor.tsx` reads both `n.selected` and `edge.selected`. Deleting a group dissolves it first (children lifted) so they aren't orphaned with a dangling `parentId`.
 
 ### Mouse Interactions
 
 - **Left-drag on canvas**: Box selection (partial overlap mode — `SelectionMode.Partial`)
 - **Middle/right-drag on canvas**: Pan
 - **Scroll**: Zoom (0.1x – 3x range)
-- **Right-click canvas**: Opens AddNodeMenu (searchable node palette)
+- **Right-click canvas**: Opens AddNodeMenu (searchable node palette + "Group Selection" entry when ≥2 non-group nodes are selected)
 - **Right-click node**: Opens NodeSettingsMenu (edit values, duplicate, delete)
-- **Right-click output node**: Opens ShaderSettingsMenu (cost, ports, displacement, material)
+- **Right-click output node**: Opens ShaderSettingsMenu (cost, ports, displacement, material, uniforms)
+- **Right-click group**: Opens GroupSettingsMenu (rename, recolor, save to library, ungroup)
 - **Right-click edge**: Opens EdgeContextMenu (delete)
 - **Drag from handle → release on empty space**: Opens AddNodeMenu at drop position
 - **Drop node on edge**: Inserts node between source and target (bezier curve proximity detection, `CONNECTION_RADIUS` = 40px threshold, shared with `connectionRadius` prop)
@@ -601,7 +610,18 @@ History is pushed once in `onNodeDragStop` (covering both the position change an
 
 ### Anti-Overlap
 
-After dropping a node, `onNodeDragStop` checks for AABB overlap with all other nodes. If overlapping, computes the minimum push-out direction (right/left/down/up) and nudges the node with a 10px gap.
+After dropping a node, `onNodeDragStop` checks for AABB overlap with all other nodes. If overlapping, computes the minimum push-out direction (right/left/down/up) and nudges the node with a 10px gap. Group containers are skipped — they don't push their members aside.
+
+### Drag-In / Drag-Out Group Reparenting
+
+After the anti-overlap pass, `onNodeDragStop` also reconciles `parentId`:
+
+1. Walks the dragged node's parent chain to compute its absolute (post-nudge) flow-space center via `absolutePos()`.
+2. Scans every group node and picks the first whose AABB contains that center. **Collapsed groups are skipped** — their compact pill must not slurp up unrelated nodes.
+3. If the resulting target differs from the current `parentId`:
+   - **Attach**: sets `parentId = targetGroupId`, translates absolute coords into the new parent's local frame, and reorders the nodes array so the parent group sits BEFORE the child (React Flow requirement).
+   - **Detach**: drops `parentId` and writes the absolute coords as the new top-level local position.
+4. **Never sets `extent: 'parent'`** — that constraint is what would prevent dragging children out. The reconciliation pass replaces it. `loadGraph()` also strips any persisted `extent: 'parent'` from older saves so existing graphs unblock.
 
 ### Connection Rules
 
@@ -627,6 +647,7 @@ Routes to specific menu based on `contextMenu.type`:
 - `'node'` → NodeSettingsMenu
 - `'shader'` → ShaderSettingsMenu
 - `'edge'` → EdgeContextMenu
+- `'group'` → GroupSettingsMenu
 
 ### AddNodeMenu
 
@@ -636,6 +657,7 @@ Routes to specific menu based on `contextMenu.type`:
 - Maps node to React Flow type: output→`'output'`, time→`'clock'`, color→`'color'`, noise category→`'preview'`, sin/cos→`'mathPreview'`, else→`'shader'`
 - Places node at context menu screen position via `screenToFlowPosition()`
 - Prevents adding multiple output nodes
+- **Group Selection** — when ≥2 non-group nodes are selected and the search is empty, a top-of-menu entry calls `groupSelection()` (same path as Ctrl+G). Shows a `N nodes` count badge.
 - **Search aliases** — node `description` fields are searched alongside `label`/`type`/`tslFunction`, so common aliases are added as "Also: X, Y, Z" tails. Examples: Float = `number`, `value`; Invert = `invert`, `complement`, `negate`; Append = `combine`, `join`; Slider = `range`; UV = `texcoord`, `texture coordinate`.
 
 ### NodeSettingsMenu
@@ -663,8 +685,18 @@ Right-click menu for the output node with sections:
   - Transparent: enables smooth alpha blending, shows opacity port
   - Alpha Clip: enables `material.alphaTest` (hard cutout — fragments below threshold are discarded), shows opacity port
   - When both Transparent and Alpha Clip are off, the opacity port is hidden and edges removed
+- **Uniforms**: Lists every `property_float` node in the graph with a text input for the uniform name and a `DragNumberInput` for its default value. Edits flow through `updateNodeData` so they hit history + code regen like any other change.
 
 All settings stored in `OutputNodeData.materialSettings` and threaded through to all 3 export pipelines (preview, A-Frame, script).
+
+### GroupSettingsMenu
+
+Right-click menu for `'group'` nodes:
+
+- **name** — text input that patches `data.label` via `updateGroupData()`.
+- **color** — `<input type="color">` that patches `data.color`. Header strip + tinted body update live.
+- **Save to Library** — calls `saveGroupToLibrary(groupId)`; the snippet shows up in the asset bar's "Saved Groups" tab.
+- **Ungroup** — dissolves the container, lifts children back to root (or to the grandparent group), and restores their absolute positions.
 
 ### DragNumberInput
 
@@ -675,12 +707,81 @@ All settings stored in `OutputNodeData.materialSettings` and threaded through to
 
 ---
 
+## Groups (GroupNode.tsx + store)
+
+Selection groups are first-class React Flow nodes (`type: 'group'`) that own member nodes via `parentId`. They have no registry entry, no inputs/outputs while expanded, and no shader semantics — `graphToCode`/`graphToTSLNodes`/`cpuEvaluator` ignore them entirely.
+
+### Lifecycle
+
+- **Create** — `groupSelection(nodeIds)` (Ctrl+G or right-click → Group Selection) computes the bbox of the selected nodes, mints a group container with `width`/`height`/header padding, and re-parents members so their position is group-relative. The group goes at the front of the nodes array (React Flow requires parent-before-child ordering).
+- **Resize** — `<NodeResizer>` from `@xyflow/react` (`minWidth=120`, `minHeight=80`) is rendered when expanded + selected.
+- **Recolor / rename** — `updateGroupData()` patches `data.color` and `data.label`. Header strip + tinted body update live.
+- **Save to library** — `saveGroupToLibrary()` snapshots the container + every direct child + every internal edge into `savedGroups` (localStorage `fs:savedGroups`).
+- **Ungroup** — `ungroup()` lifts members back to their grandparent's coordinate space, restores absolute positions, and removes the container. Triggered by Ctrl+Shift+G, the GroupSettingsMenu, or pressing Delete on a selected group.
+
+### Drag-in / drag-out
+
+`onNodeDragStop` reconciles `parentId` after every drag (see "Drag-In / Drag-Out Group Reparenting" above). **No member ever gets `extent: 'parent'`** — that constraint would prevent dragging children outside the group bounds. The reconcile pass replaces it: drop a free node inside a group's footprint and it attaches; drag a member outside and it detaches. Collapsed groups are skipped from the attach scan.
+
+### Collapse / expand
+
+`toggleGroupCollapsed()` flips `data.collapsed` and rewires the graph so the pill stays useful:
+
+- **Members + internal edges** get `className: 'fs-collapsed-member' | 'fs-collapsed-edge'` (hidden via `display: none !important` in [NodeEditor.css](src/components/NodeEditor/NodeEditor.css)). We use a className instead of React Flow's `hidden: true` flag because the latter unmounts the React component, which would tear down preview / clock / math `requestAnimationFrame` loops. With `display: none` the components stay mounted, animations keep running, and restoring is just a class toggle.
+- **Boundary edges** are bucketed into input vs output and rewritten to point at synthetic handles on the group node:
+  - **Output socket** (source inside, target outside) — deduped per `(nodeId, handleId)`. Multiple downstream consumers share one socket. `name = source node label` (the producer).
+  - **Input socket** (source outside, target inside) — `name = port label` of the internal child input the edge feeds (e.g. "Position", "Scale"). The data type comes from `NODE_REGISTRY` lookup.
+  - Both record `originalNodeId`/`originalHandleId` so expand can rewire the edge back. The synthetic ids are `__out_<nodeId>_<handleId>` / `__in_<nodeId>_<handleId>`.
+- **Pill geometry** — `COLLAPSED_W = 130`, `HEADER_H = 28`, `SOCKET_TOP_PAD = 8`, `SOCKET_H = 18`. Height = `HEADER_H + SOCKET_TOP_PAD + max(1, socketCount) * SOCKET_H + 6`. The padding pushes the first handle dot below the colored header strip so they don't visually collide. The constant is duplicated in `GroupNode.tsx` and the store — keep them in sync.
+- **Cost badge** — `data.cost` is set to the sum of GPU costs of every member (looked up from `complexity.json` by `registryType`). Rendered above the pill via the same `node-base__cost-badge` class as regular nodes (so it auto-flips contrast against the canvas background).
+- **Resize handles** are hidden while collapsed — the pill is fixed-size.
+
+### BoundarySocket
+
+```typescript
+interface BoundarySocket {
+  socketId: string;            // synthetic handle id rendered on the group
+  originalNodeId: string;      // original child node + port for restore
+  originalHandleId: string;
+  dataType: TSLDataType;       // colors the handle dot
+  name?: string;               // shown next to the dot
+}
+```
+
+### Saved Group Library
+
+`savedGroups: SavedGroup[]` lives on the store and persists to localStorage (`fs:savedGroups`):
+
+- **`saveGroupToLibrary(groupId)`** — snapshots the group container + every direct child + every edge whose source AND target are both inside the group (cross-boundary edges are dropped — they'd reference nodes that don't exist when the snippet is dropped on a different graph).
+- **`deleteSavedGroup(savedId)`** — removes from the library + persists.
+- **`instantiateSavedGroup(savedId, position)`** — builds an `oldId → newId` map up front, clones the container at `position`, re-parents members under the new container with original group-relative positions, rewrites edge `source/target/id` references via the id map, and pushes everything in a single `setNodes` / `setEdges` call. Group container is inserted before its children (React Flow ordering).
+- **Asset bar tab** — [SavedGroupCard.tsx](src/components/NodeEditor/SavedGroupCard.tsx) is a draggable tile that mirrors the in-canvas GroupNode visual (colored header, tinted body, member count). Drag it onto the canvas; the drop handler in `NodeEditor.onDrop` reads the `application/fastshaders-saved-group` dataTransfer key and calls `instantiateSavedGroup()`. Hover reveals an X button that calls `deleteSavedGroup()`.
+- **Tab label**: "Saved Groups (N)" — count badge appears when non-empty.
+
+---
+
+## Canvas Background + Auto-Contrast
+
+- **`nodeEditorBgColor`** store field (localStorage `fs:nodeEditorBgColor`, default `#FAFAFA`). Wired to React Flow's root via `style={{ background }}` and to a color swatch button slotted inside the React Flow `<Controls>` next to the +/- buttons (custom CSS in [NodeEditor.css](src/components/NodeEditor/NodeEditor.css)).
+- **`getContrastColor(hex)`** in [colorUtils.ts](src/utils/colorUtils.ts) returns `'#000000'` or `'#ffffff'` based on Rec. 601 luminance (threshold 0.55).
+- **Cost badges** — [NodeBase.css](src/components/NodeEditor/nodes/NodeBase.css) defines `.react-flow .node-base__cost-badge` that reads `--node-cost-text` / `--node-cost-text-shadow` CSS vars set on the `.node-editor` wrapper from `getContrastColor(nodeEditorBgColor)`. The `!important` is needed to override the inline cost-gradient color the components still pass — that inline color only applies to NodePreviewCard tiles in the asset bar (outside React Flow's scope), where it should keep cost-gradient text.
+- **1-channel edges** — [TypedEdge.tsx](src/components/NodeEditor/edges/TypedEdge.tsx) reads `nodeEditorBgColor` and substitutes `getContrastColor()` for the single-channel edge color (formerly hardcoded `#000000`). Multi-channel R/G/B(A) edges keep their saturated colors.
+
+---
+
+## Code Editor Theme Toggle
+
+- **`codeEditorTheme: 'vs' | 'vs-dark'`** store field, persisted to `fs:codeEditorTheme`.
+- Sun/moon button on the right side of the [CodeEditor.tsx](src/components/CodeEditor/CodeEditor.tsx) header (after Save / Download). Applies the chosen theme to all three Monaco editors (TSL, A-Frame, Script).
+
+---
+
 ## Design System (tokens.css)
 
-- **Theme**: Light, flat design with subtle shadows
+- **Theme**: Light, flat design — node shadows tuned **dark + sharp** so they read against any canvas background, not feathery
 - **Font**: Inter (sans), JetBrains Mono (mono)
 - **Spacing**: 4px base scale (--space-1 through --space-8)
-- **Shadows**: 4 levels (sm, md, lg, node) + selected state with blue ring
+- **Shadows**: 4 levels (sm, md, lg, node). `--shadow-node` is a two-layer combo — tight contact shadow (`0 1px 2px rgba(0,0,0,0.55)`) + slightly diffused offset (`0 3px 6px rgba(0,0,0,0.4)`) — small blur radii keep edges crisp
 - **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red). Costs calibrated against mobile GPU SFU quarter-rate (add=1, sin/cos=4, pow=12). Noise costs: cellNoise=12, perlin=35, perlinVec3=75, fbm=95, fbmVec3=200, voronoi=55, voronoiVec2=60, voronoiVec3=65. Budgets assume 3–5 concurrent shaders in scene.
 - **Category colors**: Each node category has a distinct accent color for the header strip
   - input (#4CAF50), type (#2196F3), arithmetic (#FF9800), math (#9C27B0), interpolation (#00BCD4), vector (#E91E63), noise (#795548), color (#FF5722), output (#f44336)
@@ -727,6 +828,9 @@ Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`
 - `fs:headsetId` — selected VR headset (via `loadString()` helper)
 - `fs:costColorLow` — cost gradient low color
 - `fs:costColorHigh` — cost gradient high color
+- `fs:nodeEditorBgColor` — canvas background hex color
+- `fs:codeEditorTheme` — Monaco theme (`'vs' | 'vs-dark'`)
+- `fs:savedGroups` — JSON array of `SavedGroup` snapshots (group + members + internal edges)
 
 ### History System
 
@@ -743,7 +847,7 @@ Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`
 
 ### Version Display
 
-- App version is read from `package.json` at build time. Vite's `define` exposes it as a global `__APP_VERSION__` string (declared in `src/vite-env.d.ts`); a custom `fs-version-html` plugin in [vite.config.ts](vite.config.ts) substitutes `%APP_VERSION%` in `index.html` so the deployed HTML self-reports its build via `<meta name="version" content="0.1.6">` — visible in DevTools (or via `view-source:`) without running any JS, useful when debugging stale-tab reports.
+- App version is read from `package.json` at build time. Vite's `define` exposes it as a global `__APP_VERSION__` string (declared in `src/vite-env.d.ts`); a custom `fs-version-html` plugin in [vite.config.ts](vite.config.ts) substitutes `%APP_VERSION%` in `index.html` so the deployed HTML self-reports its build via `<meta name="version" content="0.1.7">` — visible in DevTools (or via `view-source:`) without running any JS, useful when debugging stale-tab reports.
 - `Toolbar.tsx` renders the same version next to the brand: `FastShaders v{__APP_VERSION__}` (mono font, secondary text color, `.toolbar__version` style). The brand text itself is now a button — clicking it opens a contact popover with the author's name, an email link + Copy button, and a website link + Copy button. Outside-click and Escape close it.
 - Bumping the version requires only editing `package.json`'s `version` field; both the JS bundle and the HTML meta tag pick it up automatically on the next build.
 

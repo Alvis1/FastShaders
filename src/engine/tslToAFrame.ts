@@ -14,8 +14,10 @@ import { AFRAME_GEO } from './tslCodeProcessor';
 import type { MaterialSettings } from '@/types';
 
 export interface AFrameOptions {
-  /** A-Frame geometry primitive (default: 'sphere') */
-  geometry?: 'sphere' | 'cube' | 'torus' | 'plane';
+  /** A-Frame geometry primitive (default: 'sphere'). OBJ models from the
+   * in-app preview (`teapot`, `bunny`) are intentionally not exported here —
+   * the standalone HTML would need to bundle the model file too. */
+  geometry?: 'sphere' | 'cube' | 'plane';
   /** Embedded mode — hides VR button, minimal styling (for preview iframe) */
   embedded?: boolean;
   /** Add slow rotation animation to the entity */
