@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
-import { Position, type NodeProps } from '@xyflow/react';
+import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { PreviewFlowNode, NodeCategory, AppNode, TSLDataType } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
@@ -61,6 +61,17 @@ export const PreviewNode = memo(function PreviewNode({
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  const updateNodeInternals = useUpdateNodeInternals();
+
+  // Tell React Flow to re-measure handles whenever the exposed-port set changes.
+  // Without this, dynamically mounted handles (e.g. `pos` after the user toggles
+  // it on, or after an edge is auto-attached) aren't in React Flow's bounds map,
+  // so any edge connected to them silently fails to render until the page is
+  // reloaded and every handle is measured from scratch.
+  const exposedKey = (data.exposedPorts ?? []).join('|');
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, exposedKey, updateNodeInternals]);
 
   const timeInputsRaw = getTimeInputs(id, nodes, edges);
   const timeInputsKey = JSON.stringify(timeInputsRaw);

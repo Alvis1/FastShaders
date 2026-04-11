@@ -18,6 +18,34 @@
   flex-shrink: 0;
 }
 
+.shader-preview__header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shader-preview__reset-btn {
+  padding: 2px 8px;
+  height: 22px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #d32f2f;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.shader-preview__reset-btn:hover {
+  border-color: #d32f2f;
+  background: rgba(211, 47, 47, 0.06);
+}
+
+.shader-preview__reset-btn:active {
+  background: rgba(211, 47, 47, 0.12);
+}
+
 .shader-preview__controls {
   display: flex;
   align-items: center;
@@ -85,6 +113,36 @@
   border-color: var(--border-focus);
 }
 
+.shader-preview__subdivision {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  height: 22px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  background: var(--bg-panel);
+}
+
+.shader-preview__subdivision:hover {
+  border-color: var(--border-focus);
+}
+
+.shader-preview__subdivision-slider {
+  width: 70px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.shader-preview__subdivision-value {
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary);
+  min-width: 24px;
+  text-align: right;
+  user-select: none;
+}
+
 .shader-preview__body {
   flex: 1;
   position: relative;
@@ -99,4 +157,89 @@
   height: 100%;
   border: none;
   display: block;
+}
+
+.shader-preview__uniforms {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  max-width: 240px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.shader-preview__uniform-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.shader-preview__uniform-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.shader-preview__uniform-name {
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shader-preview__uniform-value {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.shader-preview__uniform-controls {
+  display: grid;
+  grid-template-columns: 36px 1fr 36px;
+  align-items: center;
+  gap: 4px;
+}
+
+.shader-preview__uniform-bound {
+  width: 100%;
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  padding: 1px 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  background: var(--bg-input, #fff);
+  color: var(--text-primary);
+  text-align: center;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.shader-preview__uniform-bound::-webkit-outer-spin-button,
+.shader-preview__uniform-bound::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.shader-preview__uniform-bound:hover,
+.shader-preview__uniform-bound:focus {
+  border-color: var(--border-focus);
+}
+
+.shader-preview__uniform-slider {
+  width: 100%;
+  margin: 0;
 }
