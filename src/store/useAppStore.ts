@@ -60,15 +60,43 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
     if (!raw) return null;
     const data = JSON.parse(raw);
     if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
+      // Migrate: legacy tsl-textures nodes are removed — drop them entirely
+      // so the graph still loads. Edges that referenced them are also pruned
+      // below. Nodes saved with the (now-removed) `texturePreview` flow type
+      // or any `tslTex_*` registry type fall into this bucket.
+      const droppedNodeIds = new Set<string>();
+      data.nodes = data.nodes.filter((node: { id: string; type?: string; data?: { registryType?: string } }) => {
+        if (
+          node.type === 'texturePreview' ||
+          node.data?.registryType?.startsWith?.('tslTex_')
+        ) {
+          droppedNodeIds.add(node.id);
+          return false;
+        }
+        return true;
+      });
+      if (droppedNodeIds.size > 0) {
+        data.edges = data.edges.filter(
+          (edge: { source: string; target: string }) =>
+            !droppedNodeIds.has(edge.source) && !droppedNodeIds.has(edge.target),
+        );
+      }
+
       // Migrate: noise-category nodes should use 'preview' type
-      const noiseTypes = new Set(['fractal', 'voronoi']);
+      const noiseTypes = new Set([
+        'fractal',
+        'perlin',
+        'perlinVec3',
+        'fbm',
+        'fbmVec3',
+        'cellNoise',
+        'voronoi',
+        'voronoiVec2',
+        'voronoiVec3',
+      ]);
       for (const node of data.nodes) {
         if (node.type === 'shader' && noiseTypes.has(node.data?.registryType)) {
           node.type = 'preview';
-        }
-        // Migrate: texture-category nodes should use 'texturePreview' type
-        if (node.type === 'shader' && node.data?.registryType?.startsWith('tslTex_')) {
-          node.type = 'texturePreview';
         }
         // Migrate: uniform_float → property_float
         if (node.data?.registryType === 'uniform_float') {

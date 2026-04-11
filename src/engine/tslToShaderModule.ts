@@ -84,7 +84,7 @@ export function tslToShaderModule(
       continue;
     }
 
-    // Pass through other imports (three, tsl-textures) unchanged
+    // Pass through other imports (e.g. raw 'three') unchanged
     if (/^\s*import\s/.test(trimmed)) {
       outLines.push(line);
       continue;

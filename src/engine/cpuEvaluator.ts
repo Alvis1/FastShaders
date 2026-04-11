@@ -13,8 +13,7 @@
 import type { AppNode, AppEdge, TSLDataType } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { getParamClassifications } from '@/registry/tslTexturesRegistry';
-import { voronoi2D } from '@/utils/noisePreview';
+import { perlin2D, fbm2D, cellNoise2D, voronoi2D } from '@/utils/noisePreview';
 import { hexToRgb01 } from '@/utils/colorUtils';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
@@ -147,10 +146,15 @@ function evaluate(
 ): EvalResult {
   if (cache.has(nodeId)) return cache.get(nodeId)!;
 
+  // Cycle guard: write a sentinel BEFORE recursing so any cyclic path back to
+  // this node short-circuits to null instead of recursing forever. The real
+  // result overwrites the sentinel at the end of this function.
+  cache.set(nodeId, null);
+
   const idx = edgeIndex ?? buildEdgeIndex(edges);
 
   const node = nodes.find((n) => n.id === nodeId);
-  if (!node) { cache.set(nodeId, null); return null; }
+  if (!node) return null;
 
   const type = node.data.registryType;
   const values = getNodeValues(node);
@@ -389,13 +393,36 @@ function evaluate(
       break;
     }
 
-    // Noise (evaluate at a representative point — center of UV)
-    case 'voronoi': {
+    // Noise (evaluate at a representative point — center of UV).
+    // Float-output variants return a single channel; vec2/vec3 variants
+    // approximate the multi-channel output by replicating the same scalar
+    // sample (good enough for the dataflow viz, the GPU side is exact).
+    case 'perlin':
+    case 'perlinVec3':
+    case 'fbm':
+    case 'fbmVec3':
+    case 'cellNoise':
+    case 'voronoi':
+    case 'voronoiVec2':
+    case 'voronoiVec3': {
       const posInput = channelInput('pos', 0);
       const scale = scalarInput('scale', 1);
       const px = (posInput ? posInput[0] : 0.5) * NOISE_UV_SCALE * scale;
       const py = (posInput ? (posInput[1] ?? 0.5) : 0.5) * NOISE_UV_SCALE * scale;
-      result = [voronoi2D(px, py)];
+      let v: number;
+      if (type === 'perlin' || type === 'perlinVec3') v = (perlin2D(px, py) + 1) * 0.5;
+      else if (type === 'fbm' || type === 'fbmVec3') v = (fbm2D(px, py) + 1) * 0.5;
+      else if (type === 'cellNoise') v = cellNoise2D(px, py);
+      else v = voronoi2D(px, py);
+      // Match the channel count of the registered output port for downstream
+      // dataflow visualizations (single line vs ribbon).
+      if (type === 'perlinVec3' || type === 'fbmVec3' || type === 'voronoiVec3') {
+        result = [v, v, v];
+      } else if (type === 'voronoiVec2') {
+        result = [v, v];
+      } else {
+        result = [v];
+      }
       break;
     }
 
@@ -441,18 +468,15 @@ function hue2rgb(p: number, q: number, t: number): number {
 // For nodes the deterministic evaluator can't handle (procedural textures and
 // anything downstream of them), we still want to show *something* useful in the
 // EdgeInfoCard. Range evaluation produces per-channel min/max bounds by:
-//   1. Special-casing nodes with known analytical ranges (textures derived from
-//      their `color`/`background` palette params, UV/screenUV, voronoi, etc.)
+//   1. Special-casing nodes with known analytical ranges (UV/screenUV in
+//      [0, 1], MaterialX noise variants in [0, 1] per channel).
 //   2. Falling through to deterministic eval — when it succeeds, the range is
 //      degenerate (`min === max === value`).
 //   3. Propagating ranges through arithmetic operations using interval math.
 //
-// Why this is the right approach: most tsl-textures interpolate between palette
-// colors based on a procedural pattern, so the per-channel output range is
-// exactly the per-channel min/max of the palette colors. Editing the colors in
-// the node settings updates the displayed range live. For chains downstream
-// (e.g., `sub(perlinNoise, 0.5)`), interval arithmetic on the texture's range
-// gives the correct downstream bounds.
+// For chains downstream of a noise node (e.g., `sub(perlinNoise, 0.5)`),
+// interval arithmetic on the noise's [0, 1] range gives the correct downstream
+// bounds without needing to evaluate the GPU function on the CPU.
 
 export interface RangeResult {
   min: number[];
@@ -547,36 +571,6 @@ function computeRange(
   let result: RangeResult | null = null;
 
   // ─── Special-case nodes with analytical ranges ──────────────────────────
-  // tsl-textures: derive per-channel min/max from all `color`-typed parameters.
-  // Most procedural textures interpolate between palette colors based on a
-  // pattern function, so the output is bounded by the palette extents.
-  if (def.tslImportModule === 'tsl-textures') {
-    const classifications = getParamClassifications(def.tslFunction);
-    const colors: number[][] = [];
-    for (const param of classifications) {
-      if (param.kind === 'color') {
-        const hex = String(values[param.key] ?? '#000000');
-        colors.push([...hexToRgb01(hex)]);
-      }
-    }
-    if (colors.length > 0) {
-      const min = [colors[0][0], colors[0][1], colors[0][2]];
-      const max = [colors[0][0], colors[0][1], colors[0][2]];
-      for (let i = 1; i < colors.length; i++) {
-        for (let c = 0; c < 3; c++) {
-          if (colors[i][c] < min[c]) min[c] = colors[i][c];
-          if (colors[i][c] > max[c]) max[c] = colors[i][c];
-        }
-      }
-      result = { min, max };
-    } else {
-      // Texture with no color params — assume [0, 1] per channel
-      result = { min: [0, 0, 0], max: [1, 1, 1] };
-    }
-    cache.set(nodeId, result);
-    return result;
-  }
-
   // UV/screenUV: span [0, 1] across the surface even though point-sampling
   // returns the centre (0.5, 0.5). Range is more useful here than the sample.
   if (type === 'uv' || type === 'screenUV') {
@@ -585,9 +579,23 @@ function computeRange(
     return result;
   }
 
-  // voronoi (mx_worley_noise_float) → [0, 1]
-  if (type === 'voronoi') {
+  // MaterialX noise: scalar variants are bounded in [0, 1] (after the perlin
+  // remap to display range). vec2/vec3 variants share the same per-channel
+  // bound, just with more channels. The visualization layer just needs the
+  // overall extent — exact analytical ranges per noise function aren't worth
+  // the complexity.
+  if (type === 'perlin' || type === 'fbm' || type === 'cellNoise' || type === 'voronoi') {
     result = { min: [0], max: [1] };
+    cache.set(nodeId, result);
+    return result;
+  }
+  if (type === 'voronoiVec2') {
+    result = { min: [0, 0], max: [1, 1] };
+    cache.set(nodeId, result);
+    return result;
+  }
+  if (type === 'perlinVec3' || type === 'fbmVec3' || type === 'voronoiVec3') {
+    result = { min: [0, 0, 0], max: [1, 1, 1] };
     cache.set(nodeId, result);
     return result;
   }

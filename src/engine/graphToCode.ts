@@ -1,8 +1,6 @@
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode } from '@/types';
 import { getNodeValues } from '@/types';
-import type { Color, Vector2, Vector3 } from 'three';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { getParamClassifications } from '@/registry/tslTexturesRegistry';
 import { getComponentCount } from './cpuEvaluator';
 import { topologicalSort } from './topologicalSort';
 
@@ -94,15 +92,6 @@ export function graphToCode(
     // UV import is handled in body generation (with channel parameter)
     if (def.type === 'uv') continue;
     addImport(def.tslImportModule, def.tslFunction);
-    // For tsl-textures nodes, scan which TSL constructors are needed for their params
-    if (def.tslImportModule === 'tsl-textures') {
-      const classifications = getParamClassifications(def.tslFunction);
-      for (const param of classifications) {
-        if (param.kind === 'color') addImport('three/tsl', 'color');
-        else if (param.kind === 'vec3') addImport('three/tsl', 'vec3');
-        else if (param.kind === 'vec2') addImport('three/tsl', 'vec2');
-      }
-    }
   }
 
   // Build body lines
@@ -167,13 +156,30 @@ export function graphToCode(
       const ctor = total === 2 ? 'vec2' : total === 3 ? 'vec3' : 'vec4';
       addImport('three/tsl', ctor);
       bodyLines.push(`  const ${varName} = ${ctor}(${args.join(', ')});`);
-    } else if (def.tslImportModule === 'tsl-textures') {
-      // tsl-textures: object parameter call
-      const objProps = buildTSLTextureCallProps(node, edges, varNames, def, sorted);
-      bodyLines.push(`  const ${varName} = ${def.tslFunction}({ ${objProps} });`);
     } else if (def.inputs.length === 0 && def.category === 'input' && !def.defaultValues) {
       // Input nodes: bare reference (positionGeometry, time, etc.)
       bodyLines.push(`  const ${varName} = ${def.tslFunction};`);
+    } else if (def.category === 'noise') {
+      // Noise nodes: all params come from exposed ports / stored values.
+      // Handled BEFORE the generic `inputs.length === 0 && defaultValues` branch
+      // because noise nodes have multiple default values (pos + scale) that the
+      // generic branch can't express.
+      const nv = getNodeValues(node);
+
+      // Resolve position: from exposed port edge, or default positionGeometry
+      let posExpr = resolveExposedParam(node, 'pos', edges, varNames, nv, sorted);
+      if (/^\d+(\.\d+)?$/.test(posExpr) || posExpr === 'positionGeometry') {
+        posExpr = 'positionGeometry';
+        addImport('three/tsl', 'positionGeometry');
+      }
+
+      // Apply scale via method chain so the result keeps the position's vector type
+      const scaleExpr = resolveExposedParam(node, 'scale', edges, varNames, nv, sorted);
+      if (scaleExpr !== '1') {
+        posExpr = `${posExpr}.mul(${scaleExpr})`;
+      }
+
+      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${posExpr});`);
     } else if (def.inputs.length === 0 && def.defaultValues) {
       // Type constructors with default values
       const nodeValues = getNodeValues(node);
@@ -190,25 +196,6 @@ export function graphToCode(
     } else if (def.type === 'toHsl') {
       // RGB → HSL: passthrough (no TSL toHsl() available)
       bodyLines.push(`  const ${varName} = ${args[0] ?? 'vec3(0, 0, 0)'};`);
-    } else if (def.category === 'noise') {
-      // Noise nodes: all params come from exposed ports / stored values
-      const nv = getNodeValues(node);
-
-      // Resolve position: from exposed port edge, or default positionGeometry
-      let posExpr = resolveExposedParam(node, 'pos', edges, varNames, nv, sorted);
-      if (/^\d+(\.\d+)?$/.test(posExpr) || posExpr === 'positionGeometry') {
-        posExpr = 'positionGeometry';
-      }
-      addImport('three/tsl', 'positionGeometry');
-
-      // Apply scale
-      const scaleExpr = resolveExposedParam(node, 'scale', edges, varNames, nv, sorted);
-      if (scaleExpr !== '1') {
-        posExpr = `mul(${posExpr}, ${scaleExpr})`;
-        addImport('three/tsl', 'mul');
-      }
-
-      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${posExpr});`);
     } else {
       // Regular function call
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${args.join(', ')});`);
@@ -359,57 +346,3 @@ function resolveExposedParam(
   return String(nodeValues?.[key] ?? 1);
 }
 
-function buildTSLTextureCallProps(
-  node: AppNode,
-  edges: AppEdge[],
-  varNames: Map<string, string>,
-  def: NodeDefinition,
-  sorted: AppNode[]
-): string {
-  const classifications = getParamClassifications(def.tslFunction);
-  const nodeValues = getNodeValues(node);
-  const parts: string[] = [];
-
-  for (const param of classifications) {
-    if (param.kind === 'meta') continue;
-
-    // Check if this param has an edge connection
-    const edge = edges.find(
-      (e) => e.target === node.id && e.targetHandle === param.key
-    );
-
-    if (param.kind === 'tslRef') {
-      // Only include if connected to a different node
-      if (edge) {
-        const ref = resolveEdgeRef(edge, edges, varNames, sorted);
-        if (ref) parts.push(`${param.key}: ${ref}`);
-      }
-    } else if (param.kind === 'number') {
-      if (edge) {
-        const ref = resolveEdgeRef(edge, edges, varNames, sorted);
-        if (ref) { parts.push(`${param.key}: ${ref}`); }
-      } else {
-        const val = nodeValues[param.key] ?? param.defaultValue;
-        parts.push(`${param.key}: ${val}`);
-      }
-    } else if (param.kind === 'color') {
-      const col = param.defaultValue as Color;
-      const defaultHex = '#' + col.getHexString();
-      const hex = String(nodeValues[param.key] ?? defaultHex);
-      parts.push(`${param.key}: color(0x${hex.slice(1).toUpperCase()})`);
-    } else if (param.kind === 'vec3') {
-      const dv = param.defaultValue as Vector3;
-      const x = Number(nodeValues[`${param.key}_x`] ?? dv.x ?? 0);
-      const y = Number(nodeValues[`${param.key}_y`] ?? dv.y ?? 0);
-      const z = Number(nodeValues[`${param.key}_z`] ?? dv.z ?? 0);
-      parts.push(`${param.key}: vec3(${x}, ${y}, ${z})`);
-    } else if (param.kind === 'vec2') {
-      const dv = param.defaultValue as Vector2;
-      const x = Number(nodeValues[`${param.key}_x`] ?? dv.x ?? 0);
-      const y = Number(nodeValues[`${param.key}_y`] ?? dv.y ?? 0);
-      parts.push(`${param.key}: vec2(${x}, ${y})`);
-    }
-  }
-
-  return parts.join(', ');
-}

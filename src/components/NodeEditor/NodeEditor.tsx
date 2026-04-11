@@ -20,7 +20,6 @@ import { PreviewNode } from './nodes/PreviewNode';
 import { MathPreviewNode } from './nodes/MathPreviewNode';
 import { OutputNode } from './nodes/OutputNode';
 import { ClockNode } from './nodes/ClockNode';
-import { TexturePreviewNode } from './nodes/TexturePreviewNode';
 import { TypedEdge } from './edges/TypedEdge';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
@@ -41,7 +40,6 @@ const nodeTypes = {
   mathPreview: MathPreviewNode,
   clock: ClockNode,
   output: OutputNode,
-  texturePreview: TexturePreviewNode,
 };
 
 const edgeTypes = {
@@ -473,7 +471,7 @@ export function NodeEditor() {
 
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
       const costs = complexityData.costs as Record<string, number>;
-      const cost = costs[def.type] ?? (def.category === 'texture' ? 50 : 0);
+      const cost = costs[def.type] ?? 0;
 
       // Read from store directly — `nodes` from the closure may be stale if the
       // user added a node between render and drop (e.g. via context menu).

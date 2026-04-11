@@ -25,19 +25,15 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
   const nodes: AppNode[] = [
     {
       id: perlinId,
-      type: 'texturePreview',
+      type: 'preview',
       position: { x: 0, y: 130 },
       data: {
-        registryType: 'tslTex_perlinNoise',
+        registryType: 'perlin',
         label: 'Perlin Noise',
-        cost: costs.tslTex_perlinNoise ?? 55,
+        cost: costs.perlin ?? 35,
         values: {
+          pos: 'positionGeometry',
           scale: 1.1,
-          balance: 0,
-          contrast: 0,
-          color: '#ffffff',
-          background: '#000000',
-          seed: 0,
         },
       } as ShaderNodeData,
     },

@@ -17,7 +17,6 @@ export type NodeCategory =
   | 'vector'
   | 'noise'
   | 'color'
-  | 'texture'
   | 'unknown'
   | 'output';
 
@@ -67,9 +66,8 @@ export type ColorFlowNode = Node<ShaderNodeData, 'color'>;
 export type PreviewFlowNode = Node<ShaderNodeData, 'preview'>;
 export type MathPreviewFlowNode = Node<ShaderNodeData, 'mathPreview'>;
 export type ClockFlowNode = Node<ShaderNodeData, 'clock'>;
-export type TexturePreviewFlowNode = Node<ShaderNodeData, 'texturePreview'>;
 export type OutputFlowNode = Node<OutputNodeData, 'output'>;
-export type AppNode = ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | ClockFlowNode | TexturePreviewFlowNode | OutputFlowNode;
+export type AppNode = ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | ClockFlowNode | OutputFlowNode;
 
 export interface TypedEdgeData {
   dataType: TSLDataType;

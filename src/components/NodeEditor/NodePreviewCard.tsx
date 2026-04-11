@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import type { NodeDefinition, NodeCategory } from '@/types';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType } from '@/registry/nodeRegistry';
@@ -6,7 +6,6 @@ import { useAppStore } from '@/store/useAppStore';
 import { buildRows } from './nodes/ShaderNode';
 import { renderMathPreview } from '@/utils/mathPreview';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
-import { ensureInit, renderPreview, dispose, isAvailable } from '@/utils/texturePreviewRenderer';
 import complexityData from '@/registry/complexity.json';
 import './NodePreviewCard.css';
 
@@ -94,81 +93,6 @@ function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale,
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-/* ============================================================
- * TextureCardContent — GPU-rendered preview (lazy via IntersectionObserver)
- * ============================================================ */
-
-function TextureCardContent({ def, catColor, costColor, costTextColor, costScale, cost }: ContentProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [gpuReady, setGpuReady] = useState(false);
-  const renderedRef = useRef(false);
-  const cacheId = `card_${def.type}`;
-
-  useEffect(() => {
-    ensureInit().then((ok) => setGpuReady(ok));
-  }, []);
-
-  useEffect(() => {
-    if (!gpuReady || !canvasRef.current || !containerRef.current) return;
-    if (renderedRef.current) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting && canvasRef.current) {
-          renderedRef.current = true;
-          renderPreview(cacheId, def.type, def.defaultValues ?? {}, false, canvasRef.current);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: '0px 300px' },
-    );
-
-    observer.observe(containerRef.current);
-    return () => observer.disconnect();
-  }, [gpuReady, def.type, cacheId]);
-
-  useEffect(() => () => dispose(cacheId), [cacheId]);
-
-  return (
-    <div
-      ref={containerRef}
-      className="node-base node-preview-card__node"
-      style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
-    >
-      {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
-      )}
-
-      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{def.label}</span>
-      </div>
-
-      <div className="node-preview-card__canvas-wrap">
-        {gpuReady ? (
-          <canvas
-            ref={canvasRef}
-            width={96}
-            height={96}
-            className="node-preview-card__canvas--texture"
-          />
-        ) : (
-          <div className="node-preview-card__placeholder">
-            {isAvailable() ? 'Loading\u2026' : 'No WebGPU'}
-          </div>
-        )}
-      </div>
-
-      {def.outputs[0] && (
-        <span
-          className="node-preview-card__handle node-preview-card__handle--right-abs"
-          style={{ background: getTypeColor(def.outputs[0].dataType) }}
-        />
-      )}
     </div>
   );
 }
@@ -458,7 +382,7 @@ function ColorCardContent({ def, cost, costTextColor }: { def: NodeDefinition; c
 
 export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart }: NodePreviewCardProps) {
   const costs = complexityData.costs as Record<string, number>;
-  const cost = costs[def.type] ?? (def.category === 'texture' ? 50 : 0);
+  const cost = costs[def.type] ?? 0;
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
@@ -473,8 +397,6 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
     <div className="node-preview-card" draggable onDragStart={(e) => onDragStart(e, def)}>
       {flowType === 'color' ? (
         <ColorCardContent def={def} cost={cost} costTextColor={costTextColor} />
-      ) : flowType === 'texturePreview' ? (
-        <TextureCardContent {...shared} />
       ) : flowType === 'mathPreview' ? (
         <MathCardContent {...shared} />
       ) : flowType === 'preview' ? (

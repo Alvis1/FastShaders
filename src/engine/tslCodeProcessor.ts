@@ -22,12 +22,6 @@ export const CHANNEL_TO_PROP: Record<string, string> = {
 
 export interface TSLImports {
   tslNames: string[];
-  texNames: string[];
-}
-
-export interface TexAlias {
-  original: string;
-  alias: string;
 }
 
 export interface ProcessedBody {
@@ -35,10 +29,9 @@ export interface ProcessedBody {
   channels: Record<string, string>;
 }
 
-/** Collect imported names from 'three/tsl' and 'tsl-textures'. */
+/** Collect imported names from 'three/tsl'. */
 export function collectImports(tslCode: string, excludeFn = false): TSLImports {
   const tslNames: string[] = [];
-  const texNames: string[] = [];
 
   const tslImportRe = /import\s*\{([^}]+)\}\s*from\s*['"]three\/tsl['"]/g;
   let m: RegExpExecArray | null;
@@ -49,12 +42,7 @@ export function collectImports(tslCode: string, excludeFn = false): TSLImports {
     }
   }
 
-  const texImportRe = /import\s*\{([^}]+)\}\s*from\s*['"]tsl-textures['"]/g;
-  while ((m = texImportRe.exec(tslCode)) !== null) {
-    texNames.push(...m[1].split(',').map(s => s.trim()).filter(Boolean));
-  }
-
-  return { tslNames, texNames };
+  return { tslNames };
 }
 
 /** Extract the body of the Fn(() => { ... }); wrapper. */
@@ -77,13 +65,8 @@ export function extractFnBody(tslCode: string, tslNames: string[]): string {
  * 1. Remove self-referencing bare declarations (const X = X;)
  * 2. Rename local variables that shadow imported function names
  * 3. Fix bare numeric first-arg in MaterialX noise calls
- * 4. Alias tsl-textures imports to avoid TDZ shadowing
  */
-export function fixTDZ(
-  body: string,
-  tslNames: string[],
-  texNames: string[],
-): { processedBody: string; texAliases: TexAlias[] } {
+export function fixTDZ(body: string, tslNames: string[]): string {
   let processedBody = body;
   const importedNames = new Set(tslNames);
 
@@ -124,16 +107,7 @@ export function fixTDZ(
     tslNames.push('uv');
   }
 
-  // 4. Alias tsl-textures imports to avoid TDZ shadowing
-  const texAliases = texNames.map(n => ({ original: n, alias: `_tex_${n}` }));
-  for (const { original, alias } of texAliases) {
-    processedBody = processedBody.replace(
-      new RegExp(`\\b${original}\\s*\\(`, 'g'),
-      `${alias}(`,
-    );
-  }
-
-  return { processedBody, texAliases };
+  return processedBody;
 }
 
 /** Parse processed body into definition lines and output channels. */

@@ -1,5 +1,4 @@
 import type { NodeDefinition, NodeCategory } from '@/types';
-import { buildTSLTextureDefinitions } from './tslTexturesRegistry';
 
 const definitions: NodeDefinition[] = [
   // ===== INPUT NODES =====
@@ -445,6 +444,64 @@ const definitions: NodeDefinition[] = [
   },
 
   // ===== NOISE =====
+  // All noise nodes share the same `pos` (defaults to positionGeometry) +
+  // `scale` (uniform multiplier applied to pos) parameter convention; the
+  // graphToCode emitter handles them via `def.category === 'noise'`.
+  {
+    type: 'perlin',
+    label: 'Perlin Noise',
+    category: 'noise',
+    tslFunction: 'mx_noise_float',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
+    defaultValues: { pos: 'positionGeometry', scale: 1.0 },
+    description: 'MaterialX Perlin-style noise (scalar, range ~[-1, 1])',
+  },
+  {
+    type: 'perlinVec3',
+    label: 'Perlin Noise (vec3)',
+    category: 'noise',
+    tslFunction: 'mx_noise_vec3',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Value', dataType: 'vec3' }],
+    defaultValues: { pos: 'positionGeometry', scale: 1.0 },
+    description: 'MaterialX Perlin-style noise (3-channel, range ~[-1, 1] per channel)',
+  },
+  {
+    type: 'fbm',
+    label: 'fBm',
+    category: 'noise',
+    tslFunction: 'mx_fractal_noise_float',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
+    defaultValues: { pos: 'positionGeometry', scale: 1.0 },
+    description: 'Fractal Brownian motion (multi-octave Perlin)',
+  },
+  {
+    type: 'fbmVec3',
+    label: 'fBm (vec3)',
+    category: 'noise',
+    tslFunction: 'mx_fractal_noise_vec3',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Value', dataType: 'vec3' }],
+    defaultValues: { pos: 'positionGeometry', scale: 1.0 },
+    description: 'Fractal Brownian motion (3-channel)',
+  },
+  {
+    type: 'cellNoise',
+    label: 'Cell Noise',
+    category: 'noise',
+    tslFunction: 'mx_cell_noise_float',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
+    defaultValues: { pos: 'positionGeometry', scale: 1.0 },
+    description: 'Flat per-cell random value (scalar, range [0, 1])',
+  },
   {
     type: 'voronoi',
     label: 'Voronoi',
@@ -454,6 +511,29 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
     defaultValues: { pos: 'positionGeometry', scale: 1.0 },
+    description: 'Worley/Voronoi cellular noise (F1 distance, scalar)',
+  },
+  {
+    type: 'voronoiVec2',
+    label: 'Voronoi (F1/F2)',
+    category: 'noise',
+    tslFunction: 'mx_worley_noise_vec2',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'F1/F2', dataType: 'vec2' }],
+    defaultValues: { pos: 'positionGeometry', scale: 1.0 },
+    description: 'Worley/Voronoi cellular noise (first two distances)',
+  },
+  {
+    type: 'voronoiVec3',
+    label: 'Voronoi (F1/F2/F3)',
+    category: 'noise',
+    tslFunction: 'mx_worley_noise_vec3',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'F1/F2/F3', dataType: 'vec3' }],
+    defaultValues: { pos: 'positionGeometry', scale: 1.0 },
+    description: 'Worley/Voronoi cellular noise (first three distances)',
   },
 
   // ===== COLOR =====
@@ -512,7 +592,7 @@ const unknownNodeDef: NodeDefinition = {
   description: 'Unknown/unsupported TSL function (preserved for round-tripping)',
 };
 
-const allDefinitions: NodeDefinition[] = [...definitions, ...buildTSLTextureDefinitions()];
+const allDefinitions: NodeDefinition[] = [...definitions];
 
 export const NODE_REGISTRY = new Map<string, NodeDefinition>(
   [...allDefinitions, unknownNodeDef].map(d => [d.type, d])
@@ -537,14 +617,13 @@ export function getAllDefinitions(): NodeDefinition[] {
 }
 
 /** Map a registry definition to its React Flow node type string. */
-export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'output' | 'texturePreview';
+export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'output';
 
 export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   if (def.type === 'output') return 'output';
   if (def.type === 'time') return 'clock';
   if (def.type === 'color') return 'color';
   if (def.category === 'noise') return 'preview';
-  if (def.category === 'texture') return 'texturePreview';
   if (def.type === 'sin' || def.type === 'cos') return 'mathPreview';
   return 'shader';
 }

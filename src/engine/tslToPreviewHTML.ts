@@ -2,10 +2,10 @@
  * Generates a self-contained A-Frame HTML page that renders a TSL shader
  * using the a-frame-shaderloader component. Used for the in-app preview iframe.
  *
- * Loads the IIFE bundle (A-Frame 1.7 + Three.js WebGPU + tsl-textures) and
- * the shaderloader from local files served via Vite's public directory.
- * The editor's TSL code is converted into a shaderloader-compatible ES module,
- * served as a blob URL, and applied via the shaderloader's `shader` component.
+ * Loads the IIFE bundle (A-Frame 1.7 + Three.js WebGPU) and the shaderloader
+ * from local files served via Vite's public directory. The editor's TSL code
+ * is converted into a shaderloader-compatible ES module, served as a blob URL,
+ * and applied via the shaderloader's `shader` component.
  */
 
 import {
@@ -52,9 +52,9 @@ function convertToShaderModule(
   tslCode: string,
   materialSettings?: MaterialSettings,
 ): string {
-  const { tslNames, texNames } = collectImports(tslCode, true);
+  const { tslNames } = collectImports(tslCode, true);
   const body = extractFnBody(tslCode, tslNames);
-  const { processedBody, texAliases } = fixTDZ(body, tslNames, texNames);
+  const processedBody = fixTDZ(body, tslNames);
   const { defLines, channels } = parseBody(processedBody, tslNames);
 
   // Ensure positionLocal (and normalLocal for normal-based displacement) are available
@@ -70,10 +70,6 @@ function convertToShaderModule(
   const imports: string[] = [];
   if (tslNames.length > 0) {
     imports.push(`import { ${tslNames.join(', ')} } from 'three/tsl';`);
-  }
-  if (texAliases.length > 0) {
-    const specs = texAliases.map(t => `${t.original} as ${t.alias}`).join(', ');
-    imports.push(`import { ${specs} } from 'tsl-textures';`);
   }
 
   // Build return object with node property names (colorNode, normalNode, etc.)

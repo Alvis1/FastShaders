@@ -11,7 +11,6 @@ export type {
   PreviewFlowNode,
   MathPreviewFlowNode,
   ClockFlowNode,
-  TexturePreviewFlowNode,
   OutputFlowNode,
   AppNode,
   TypedEdgeData,
