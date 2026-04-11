@@ -107,20 +107,65 @@ const SIDE_VALUES: Record<string, number> = {
 /**
  * A-Frame component registration for OBJ-backed previews. On `model-loaded`,
  * for every Mesh in the loaded hierarchy:
- *   1. Compute vertex normals if the source file lacked them (the Stanford
- *      bunny and the common-3d-test-models teapot are both raw v/f files).
- *   2. Generate spherical UVs from each vertex's direction relative to the
- *      geometry's local center, so TSL shaders reading `uv()` get meaningful
+ *   1. **Merge vertices by position.** OBJLoader returns non-indexed geometry
+ *      where every triangle owns its own vertices, so a position shared by N
+ *      faces becomes N duplicate vertices with N different face normals. Per-
+ *      vertex displacement (`positionLocal + normalLocal * val`) then pushes
+ *      each duplicate along *its own* face normal and the shape splits open.
+ *      Merging by quantized position rebuilds an index so shared points stay
+ *      a single vertex — and after \`computeVertexNormals\` they share a single
+ *      averaged smooth normal, so displacement keeps faces stitched together.
+ *   2. Compute vertex normals from the merged (indexed) geometry, producing
+ *      smooth shading regardless of whether the source file had normals.
+ *   3. Generate spherical UVs from each vertex's direction relative to the
+ *      geometry's local center, so TSL shaders reading \`uv()\` get meaningful
  *      values. Spherical projection seams at the atan2 wrap; acceptable for
  *      procedural shaders (proper unwrap needs offline tools).
- *   3. Recenter the world bbox at the origin and rescale so the longest axis
- *      equals `data.size` — bunny (mm) and teapot (tens of units) otherwise
+ *   4. Recenter the world bbox at the origin and rescale so the longest axis
+ *      equals \`data.size\` — bunny (mm) and teapot (tens of units) otherwise
  *      would not frame anywhere near the primitives.
  *
  * String literal so the iframe sees raw JS — no Vite transformation pass.
  */
 const FIT_BOUNDS_SCRIPT = `<script>
   if (window.AFRAME && !AFRAME.components["fit-bounds"]) {
+    // Merge vertices that share a quantized position. Discards old normals/UVs
+    // (they index into the old layout and we recompute both anyway) and
+    // returns a freshly indexed BufferGeometry.
+    function mergeByPosition(geom) {
+      var pos = geom.attributes.position;
+      if (!pos) return geom;
+      var oldIndex = geom.index;
+      var precision = 1e4; // 4 decimal places — tighter than typical OBJ precision
+      var lookup = Object.create(null);
+      var newPositions = [];
+      var remap = new Uint32Array(pos.count);
+      var nextIndex = 0;
+      for (var i = 0; i < pos.count; i++) {
+        var x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        var key = Math.round(x * precision) + "_" + Math.round(y * precision) + "_" + Math.round(z * precision);
+        var idx = lookup[key];
+        if (idx === undefined) {
+          idx = nextIndex++;
+          lookup[key] = idx;
+          newPositions.push(x, y, z);
+        }
+        remap[i] = idx;
+      }
+      var indexCount = oldIndex ? oldIndex.count : pos.count;
+      var Arr = nextIndex < 65535 ? Uint16Array : Uint32Array;
+      var newIndex = new Arr(indexCount);
+      if (oldIndex) {
+        for (var j = 0; j < indexCount; j++) newIndex[j] = remap[oldIndex.getX(j)];
+      } else {
+        for (var k = 0; k < indexCount; k++) newIndex[k] = remap[k];
+      }
+      var merged = new THREE.BufferGeometry();
+      merged.setAttribute("position", new THREE.BufferAttribute(new Float32Array(newPositions), 3));
+      merged.setIndex(new THREE.BufferAttribute(newIndex, 1));
+      return merged;
+    }
+
     AFRAME.registerComponent("fit-bounds", {
       schema: { size: { type: "number", default: 1.6 } },
       init: function () { this.el.addEventListener("model-loaded", this.fit.bind(this)); },
@@ -129,14 +174,39 @@ const FIT_BOUNDS_SCRIPT = `<script>
         if (!mesh) return;
         mesh.traverse(function (node) {
           if (!node.isMesh || !node.geometry) return;
-          var g = node.geometry;
-          if (!g.attributes.normal) g.computeVertexNormals();
-          if (g.attributes.uv) return;
+          var g = mergeByPosition(node.geometry);
+          g.computeVertexNormals();
           var pos = g.attributes.position;
-          if (!pos) return;
           g.computeBoundingBox();
           var c = new THREE.Vector3();
           g.boundingBox.getCenter(c);
+          // Detect inverted winding (e.g. the Stanford bunny OBJ uses CW
+          // triangles, so computeVertexNormals produces inward-facing normals
+          // and displacement pushes the surface *into* the mesh). Sample a
+          // sparse set of vertices: if most have a normal pointing toward the
+          // centroid, the winding is reversed — flip every triangle and
+          // recompute.
+          var nrm = g.attributes.normal;
+          var inward = 0, sampled = 0;
+          var step = Math.max(1, Math.floor(pos.count / 200));
+          for (var s = 0; s < pos.count; s += step) {
+            var dx = pos.getX(s) - c.x;
+            var dy = pos.getY(s) - c.y;
+            var dz = pos.getZ(s) - c.z;
+            var dot = dx * nrm.getX(s) + dy * nrm.getY(s) + dz * nrm.getZ(s);
+            if (dot < 0) inward++;
+            sampled++;
+          }
+          if (sampled > 0 && inward * 2 > sampled) {
+            var idx = g.index;
+            for (var t = 0; t + 2 < idx.count; t += 3) {
+              var b = idx.getX(t + 1);
+              idx.setX(t + 1, idx.getX(t + 2));
+              idx.setX(t + 2, b);
+            }
+            idx.needsUpdate = true;
+            g.computeVertexNormals();
+          }
           var uvs = new Float32Array(pos.count * 2);
           var v = new THREE.Vector3();
           var TWO_PI = Math.PI * 2;
@@ -148,6 +218,7 @@ const FIT_BOUNDS_SCRIPT = `<script>
             uvs[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, v.y))) / Math.PI + 0.5;
           }
           g.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+          node.geometry = g;
         });
         mesh.updateMatrixWorld(true);
         var box = new THREE.Box3().setFromObject(mesh);
@@ -367,9 +438,18 @@ export function tslToPreviewHTML(
 
   // Plane spins on its Z axis (in-plane, like a record), since the flat face
   // is already pointed at the camera. Everything else spins on Y like a turntable.
+  //
+  // The spin lives on a *parent* entity wrapping the shaded entity (see scene
+  // markup below). The parent has no tilt of its own, so its local Y/Z is the
+  // world Y/Z, and the animation cleanly tweens 0→360 with no end-of-loop snap.
+  // If we instead applied this animation to the same entity that holds the
+  // static tilt (e.g. `45 45 0`), A-Frame would interpolate componentwise from
+  // the current value (`45 45 0`) to `to: 0 360 0` — flattening the X tilt
+  // over the loop and only spinning Y by 315° before snapping back. That snap
+  // is what produced the visible jump on every full rotation.
   const animTo = geometry === 'plane' ? '0 0 360' : '0 360 0';
-  const animAttr = animate
-    ? ` animation="property: rotation; to: ${animTo}; loop: true; dur: 12000; easing: linear"`
+  const spinAttr = animate
+    ? ` animation="property: rotation; from: 0 0 0; to: ${animTo}; loop: true; dur: 12000; easing: linear"`
     : '';
 
   // Plane is meant to be viewed flat-on, so leave it un-rotated (it already
@@ -435,7 +515,13 @@ export function tslToPreviewHTML(
 
   lines.push(`<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ${bgColor}">`);
   lines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
-  lines.push(`  <a-entity id="preview-entity" ${entityAttrs} material="color: #808080" position="0 0 0" rotation="${rotationAttr}"${animAttr}></a-entity>`);
+  // Parent holds the spin (so it tweens cleanly 0→360 on world Y/Z), child
+  // holds the static tilt and the shader/geometry. The id stays on the child
+  // because that's where the shader component lives (the bridge looks it up
+  // by id), and `fit-bounds` needs the OBJ entity for `model-loaded`.
+  lines.push(`  <a-entity${spinAttr}>`);
+  lines.push(`    <a-entity id="preview-entity" ${entityAttrs} material="color: #808080" position="0 0 0" rotation="${rotationAttr}"></a-entity>`);
+  lines.push('  </a-entity>');
 
   if (lighting === 'studio') {
     // Three-point rig for material evaluation:

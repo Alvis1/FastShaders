@@ -1,6 +1,7 @@
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { getComponentCount } from './cpuEvaluator';
 import { topologicalSort } from './topologicalSort';
 
@@ -15,6 +16,11 @@ export function graphToCode(
   if (nodes.length === 0) {
     return { code: '// Empty shader — add nodes to begin\n', importStatements: [], varNames: new Map() };
   }
+
+  // Collapsed groups have rewritten boundary edges to point at synthetic group
+  // sockets — translate them back to their original child endpoints so this
+  // function compiles against the logical graph rather than the visual one.
+  edges = unwrapCollapsedGroupEdges(nodes, edges);
 
   const sorted = topologicalSort(nodes, edges);
 

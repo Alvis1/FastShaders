@@ -15,6 +15,7 @@ import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { perlin2D, fbm2D, cellNoise2D, voronoi2D } from '@/utils/noisePreview';
 import { hexToRgb01 } from '@/utils/colorUtils';
+import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
 const NOISE_UV_SCALE = 4;
@@ -29,6 +30,10 @@ export function evaluateNodeOutput(
   edges: AppEdge[],
   time: number,
 ): EvalResult {
+  // See unwrapCollapsedGroupEdges for why this is needed: collapsed groups
+  // visually re-route boundary edges to a synthetic socket, but the evaluator
+  // needs to follow the wire to the real producer.
+  edges = unwrapCollapsedGroupEdges(nodes, edges);
   const cache = new Map<string, EvalResult>();
   return evaluate(nodeId, nodes, edges, time, cache);
 }
@@ -76,6 +81,9 @@ export function getNodeOutputShape(
   edges: AppEdge[],
   visited: Set<string> = new Set(),
 ): number {
+  // Only unwrap on the top-level call (visited starts empty); subsequent
+  // recursive calls below pass an already-unwrapped edges array.
+  if (visited.size === 0) edges = unwrapCollapsedGroupEdges(nodes, edges);
   if (visited.has(nodeId)) return 1;
   visited.add(nodeId);
 
@@ -496,6 +504,7 @@ export function evaluateNodeRange(
   edges: AppEdge[],
   time: number = 0,
 ): RangeResult | null {
+  edges = unwrapCollapsedGroupEdges(nodes, edges);
   const cache = new Map<string, RangeResult | null>();
   return computeRange(nodeId, nodes, edges, time, cache);
 }

@@ -14,6 +14,52 @@ interface UniformBounds {
   max: number;
 }
 
+/**
+ * Number input that buffers in-progress text as a string so the user can type
+ * partial values like "-" or "1e" without the controlled-input round-trip
+ * snapping the field back to the previous numeric value. Commits on every
+ * successful parse and re-syncs from the prop on blur or when the prop changes
+ * outside of editing.
+ */
+function BoundInput({
+  value,
+  onCommit,
+  title,
+  className,
+}: {
+  value: number;
+  onCommit: (n: number) => void;
+  title: string;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const editingRef = useRef(false);
+  useEffect(() => {
+    if (!editingRef.current) setDraft(String(value));
+  }, [value]);
+  return (
+    <input
+      type="number"
+      className={className}
+      value={draft}
+      step="any"
+      title={title}
+      onFocus={() => { editingRef.current = true; }}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        const n = parseFloat(e.target.value);
+        if (!isNaN(n)) onCommit(n);
+      }}
+      onBlur={() => {
+        editingRef.current = false;
+        const n = parseFloat(draft);
+        if (isNaN(n)) setDraft(String(value));
+        else setDraft(String(n));
+      }}
+    />
+  );
+}
+
 function loadGeometry(): GeometryType {
   try {
     const v = localStorage.getItem('fs:previewGeometry');
@@ -200,12 +246,10 @@ export function ShaderPreview() {
     iframeRef.current?.contentWindow?.postMessage({ type: 'fs:uniform', name, value }, '*');
   }, []);
 
-  const handleBoundsChange = useCallback((name: string, key: 'min' | 'max', raw: string) => {
-    const parsed = parseFloat(raw);
-    if (isNaN(parsed)) return;
+  const handleBoundsChange = useCallback((name: string, key: 'min' | 'max', value: number) => {
     setUniformBounds((prev) => {
       const current = prev[name] ?? { min: 0, max: 1 };
-      return { ...prev, [name]: { ...current, [key]: parsed } };
+      return { ...prev, [name]: { ...current, [key]: value } };
     });
   }, []);
 
@@ -351,12 +395,10 @@ export function ShaderPreview() {
                     <span className="shader-preview__uniform-value">{value.toFixed(3)}</span>
                   </div>
                   <div className="shader-preview__uniform-controls">
-                    <input
-                      type="number"
+                    <BoundInput
                       className="shader-preview__uniform-bound"
                       value={bounds.min}
-                      step="any"
-                      onChange={(e) => handleBoundsChange(u.name, 'min', e.target.value)}
+                      onCommit={(n) => handleBoundsChange(u.name, 'min', n)}
                       title="Min"
                     />
                     <input
@@ -368,12 +410,10 @@ export function ShaderPreview() {
                       value={value}
                       onChange={(e) => handleUniformChange(u.name, parseFloat(e.target.value))}
                     />
-                    <input
-                      type="number"
+                    <BoundInput
                       className="shader-preview__uniform-bound"
                       value={bounds.max}
-                      step="any"
-                      onChange={(e) => handleBoundsChange(u.name, 'max', e.target.value)}
+                      onCommit={(n) => handleBoundsChange(u.name, 'max', n)}
                       title="Max"
                     />
                   </div>
