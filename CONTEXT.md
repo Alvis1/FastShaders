@@ -88,8 +88,8 @@ src/
 ├── hooks/
 │   └── useSyncEngine.ts               # Bidirectional sync hook (watches graph/code changes)
 ├── registry/
-│   ├── nodeRegistry.ts                # ~60 hardcoded TSL node definitions (incl. 8 MaterialX noise nodes)
-│   ├── nodeCategories.ts              # Category metadata (id + label) — 10 categories
+│   ├── nodeRegistry.ts                # ~55 hardcoded TSL node definitions (incl. 8 MaterialX noise nodes) + hidden `unknown` def
+│   ├── nodeCategories.ts              # Category metadata (id + label) — 10 categories (incl. unknown)
 │   └── complexity.json                # GPU cost per operation
 ├── store/
 │   └── useAppStore.ts                 # Zustand store (nodes, edges, code, sync, history, UI)
@@ -251,9 +251,16 @@ The Babel-based parser handles these patterns:
   shaderName: string, selectedHeadsetId: string // Toolbar state
   contextMenu: {
     open: boolean, x: number, y: number,
-    type: 'canvas' | 'node' | 'shader' | 'edge',
-    nodeId?: string, edgeId?: string
+    type: 'canvas' | 'node' | 'shader' | 'edge' | 'group',
+    nodeId?: string, edgeId?: string,
+    sourceNodeId?: string, sourceHandleId?: string  // for handle-drop AddNodeMenu
   }
+  // Groups
+  savedGroups: SavedGroup[]                       // user-saved group library (localStorage `fs:savedGroups`)
+  // Canvas + editor look-and-feel
+  nodeEditorBgColor: string                       // React Flow canvas background hex
+  codeEditorTheme: 'vs' | 'vs-dark'               // Monaco theme
+  costColorLow: string, costColorHigh: string     // cost gradient endpoints
 }
 ```
 
@@ -325,20 +332,21 @@ Both `FIT_BOUNDS_SCRIPT` and `BRIDGE_SCRIPT_TEMPLATE` are kept as raw template l
 
 ## Node System
 
-### Node Registry (~60 nodes in 10 categories)
+### Node Registry (~55 nodes in 10 categories — `unknown` is the 10th, hidden from search)
 
 | Category          | Nodes                                                                                     |
 | ----------------- | ----------------------------------------------------------------------------------------- |
-| **Input**         | positionGeometry, normalLocal, tangentLocal, time, screenUV, uv, property_float, slider    |
-| **Type**          | float, int, vec2, vec3, vec4, color                                                       |
-| **Arithmetic**    | add, sub, mul, div                                                                        |
-| **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract, oneMinus (Invert)                     |
+| **Input** (8)     | positionGeometry, normalLocal, tangentLocal, time, screenUV, uv, property_float, slider    |
+| **Type** (6)      | float, int, vec2, vec3, vec4, color                                                       |
+| **Arithmetic** (4)| add, sub, mul, div                                                                        |
+| **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract, oneMinus (Invert) — 10 total          |
 | **Math (binary)** | pow, mod, clamp, min, max                                                                 |
-| **Interpolation** | mix, smoothstep, remap, select                                                            |
-| **Vector**        | normalize, length, distance, dot, cross, split, append                                     |
-| **Noise**         | perlin, perlinVec3, fbm, fbmVec3, cellNoise, voronoi, voronoiVec2, voronoiVec3 (all MaterialX-backed) |
-| **Color**         | hsl, toHsl                                                                                |
-| **Output**        | output (color, normal, displacement, opacity, roughness, emissive inputs + materialSettings) |
+| **Interpolation** (4) | mix, smoothstep, remap, select                                                        |
+| **Vector** (7)    | normalize, length, distance, dot, cross, split, append                                     |
+| **Noise** (8)     | perlin, perlinVec3, fbm, fbmVec3, cellNoise, voronoi, voronoiVec2, voronoiVec3 (all MaterialX-backed) |
+| **Color** (2)     | hsl, toHsl                                                                                |
+| **Output** (1)    | output (color, normal, displacement, opacity, roughness, emissive inputs + materialSettings) |
+| **Unknown** (1, hidden) | `unknown` — round-trip preservation for unrecognized TSL functions parsed from code |
 
 ### MaterialX Noise Nodes
 
@@ -439,6 +447,7 @@ Adjustable float value with a visual range slider and configurable min/max bound
 - **`mathPreview`** — Math function nodes with scrolling waveform visualization (MathPreviewNode.tsx)
 - **`clock`** — Time node with animated analog clock face (ClockNode.tsx)
 - **`output`** — Output sink with two sections: Pixel Shader (color, roughness, emissive, normal, opacity) and Vertex Shader (displacement), plus `materialSettings` for export config (OutputNode.tsx)
+- **`group`** — Selection group container (GroupNode.tsx) — owns members via `parentId`, has no registry entry, no shader semantics. Collapsible into a pill with synthetic boundary handles. See the **Groups** section for details.
 
 ### Asset Browser (ContentBrowser + NodePreviewCard)
 
@@ -534,7 +543,7 @@ Each type has a distinct color for handles and edges:
 
 - float: `#3366CC` (blue), int: `#20B2AA` (teal), vec2: `#4A90E2` (sky), vec3: `#E040FB` (magenta), vec4: `#AB47BC` (purple), color: `#E8A317` (gold), any: `#607D8B` (slate)
 
-**AppNode union**: `ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | ClockFlowNode | OutputFlowNode`
+**AppNode union**: `ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | ClockFlowNode | OutputFlowNode | GroupFlowNode`
 
 ---
 
@@ -795,8 +804,9 @@ interface BoundarySocket {
 - **Spacing**: 4px base scale (--space-1 through --space-8)
 - **Shadows**: 4 levels (sm, md, lg, node). `--shadow-node` is a two-layer combo — tight contact shadow (`0 1px 2px rgba(0,0,0,0.55)`) + slightly diffused offset (`0 3px 6px rgba(0,0,0,0.4)`) — small blur radii keep edges crisp
 - **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red). Costs calibrated against mobile GPU SFU quarter-rate (add=1, sin/cos=4, pow=12). Noise costs: cellNoise=12, perlin=35, perlinVec3=75, fbm=95, fbmVec3=200, voronoi=55, voronoiVec2=60, voronoiVec3=65. Budgets assume 3–5 concurrent shaders in scene.
-- **Category colors**: Each node category has a distinct accent color for the header strip
-  - input (#4CAF50), type (#2196F3), arithmetic (#FF9800), math (#9C27B0), interpolation (#00BCD4), vector (#E91E63), noise (#795548), color (#FF5722), output (#f44336)
+- **Category colors**: Each node category has a distinct accent color for the header strip (defined as `--cat-*` CSS vars in [tokens.css](src/styles/tokens.css), consumed by `CATEGORY_COLORS` in [colorUtils.ts](src/utils/colorUtils.ts))
+  - input (#4CAF50), type (#2196F3), arithmetic (#FF9800), math (#9C27B0), interpolation (#00BCD4), vector (#E91E63), noise (#795548), color (#FF5722), unknown (#9E9E9E), output (#f44336)
+  - **Dead variable**: `--cat-texture: #8D6E63` is still declared in tokens.css but no node category references it (texture support was removed). Safe to delete.
 
 ---
 
@@ -859,7 +869,7 @@ Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`
 
 ### Version Display
 
-- App version is read from `package.json` at build time. Vite's `define` exposes it as a global `__APP_VERSION__` string (declared in `src/vite-env.d.ts`); a custom `fs-version-html` plugin in [vite.config.ts](vite.config.ts) substitutes `%APP_VERSION%` in `index.html` so the deployed HTML self-reports its build via `<meta name="version" content="0.1.7">` — visible in DevTools (or via `view-source:`) without running any JS, useful when debugging stale-tab reports.
+- App version is read from `package.json` at build time. Vite's `define` exposes it as a global `__APP_VERSION__` string (declared in `src/vite-env.d.ts`); a custom `fs-version-html` plugin in [vite.config.ts](vite.config.ts) substitutes `%APP_VERSION%` in `index.html` so the deployed HTML self-reports its build via `<meta name="version" content="0.1.8">` (whatever the current `package.json` version is) — visible in DevTools (or via `view-source:`) without running any JS, useful when debugging stale-tab reports.
 - `Toolbar.tsx` renders the same version next to the brand: `FastShaders v{__APP_VERSION__}` (mono font, secondary text color, `.toolbar__version` style). The brand text itself is now a button — clicking it opens a contact popover with the author's name, an email link + Copy button, and a website link + Copy button. Outside-click and Escape close it.
 - Bumping the version requires only editing `package.json`'s `version` field; both the JS bundle and the HTML meta tag pick it up automatically on the next build.
 
