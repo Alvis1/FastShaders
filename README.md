@@ -6,13 +6,15 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 
 ## Features
 
-- **Node graph editor** — drag, connect, and configure 90+ TSL node types
-- **Code editor** — write TSL directly with Monaco; changes sync back to the graph
-- **Live 3D preview** — WebGPU-rendered preview with geometry selector and rotation
-- **tsl-textures support** — procedural texture nodes (camouflage, rust, marble, etc.)
+- **Node graph editor** — drag, connect, and configure ~55 TSL node types across 9 categories (input, type, arithmetic, math, interpolation, vector, noise, color, output)
+- **Code editor** — write TSL directly with Monaco; changes sync back to the graph. Light / dark theme toggle.
+- **Live 3D preview** — WebGPU-rendered preview with five geometries (sphere, cube, plane, Utah teapot, Stanford bunny), three lighting modes (studio / moon / laboratory), subdivision slider, picked background color, and a property-uniform slider overlay
+- **MaterialX noise** — 8 built-in noise variants (Perlin, fBm, cell, Worley/Voronoi) backed by `three/tsl`'s MaterialX functions
+- **Groups** — select nodes and Ctrl+G to wrap them in a recolorable, collapsible container; save groups to a per-browser library and drag them back onto any graph
 - **A-Frame export** — download a self-contained VR-ready `.html` file
 - **Shader module export** — download a `.js` module for use with [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader)
-- **Undo / redo** — full history for node graph changes
+- **Property uniforms** — `property_float` nodes become live-tunable component attributes in the A-Frame export
+- **Undo / redo** — 50-entry history for node graph changes
 - **VR cost budget** — tracks shader complexity against target headset limits
 
 ## Quick Start
@@ -61,8 +63,8 @@ npm run build          # production build → dist/
 - [@xyflow/react](https://reactflow.dev/) v12 — node graph
 - [@monaco-editor/react](https://github.com/suren-atoyan/monaco-react) — code editor
 - [zustand](https://github.com/pmndrs/zustand) v5 — state management
-- [three.js](https://threejs.org/) 0.183 + [tsl-textures](https://github.com/boytchev/tsl-textures) 3.0 — shader engine (WebGPU)
-- [@babel/parser](https://babeljs.io/docs/babel-parser) — code-to-graph parsing
+- [three.js](https://threejs.org/) 0.183 (WebGPU build) — shader runtime, exclusively `three/tsl` built-ins (including the MaterialX noise family)
+- [@babel/parser](https://babeljs.io/docs/babel-parser) + [@babel/traverse](https://babeljs.io/docs/babel-traverse) — code-to-graph parsing
 - [dagre](https://github.com/dagrejs/dagre) — automatic graph layout
 
 ## License
