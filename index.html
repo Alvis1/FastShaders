@@ -3,11 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Cache-busting for the deployed SPA on GitHub Pages.
+      The hashed JS/CSS assets in /assets/ are content-hashed by Vite, so
+      they're safe to cache forever. But the HTML file points at those hashes
+      and changes every deploy — if the browser caches it, users on a stale
+      tab will keep loading old asset URLs that 404 after we redeploy.
+      Telling the browser to always revalidate the HTML solves this without
+      hurting first-paint performance: the HTML is tiny (~1 KB) and only
+      its 304 round-trip is added; the heavy assets keep their cache hits.
+    -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <!-- Substituted at build time by the fs-version-html plugin in vite.config.ts -->
+    <meta name="version" content="0.1.6" />
     <title>FastShaders - TSL Visual Shader Editor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-    <script type="module" crossorigin src="/FastShaders/assets/index-ABuOrB1z.js"></script>
+    <script type="module" crossorigin src="/FastShaders/assets/index-5IX3exUQ.js"></script>
     <link rel="stylesheet" crossorigin href="/FastShaders/assets/index-BLdVQkQC.css">
   </head>
   <body>
