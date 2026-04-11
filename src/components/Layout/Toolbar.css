@@ -10,6 +10,7 @@
 }
 
 .toolbar__left {
+  position: relative;
   flex-shrink: 0;
   display: flex;
   align-items: baseline;
@@ -22,6 +23,91 @@
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: -0.02em;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  line-height: inherit;
+  transition: color var(--transition-fast);
+}
+
+.toolbar__brand:hover {
+  color: var(--border-focus);
+}
+
+.toolbar__brand:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.toolbar__contact-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  min-width: 240px;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+.toolbar__contact-name {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.toolbar__contact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.toolbar__contact-link {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar__contact-link:hover {
+  text-decoration: underline;
+  color: var(--border-focus);
+}
+
+.toolbar__contact-copy {
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  min-width: 48px;
+  text-align: center;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.toolbar__contact-copy:hover {
+  border-color: var(--border-focus);
+  color: var(--text-primary);
 }
 
 .toolbar__version {
