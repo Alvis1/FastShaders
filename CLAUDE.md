@@ -10,8 +10,9 @@ Bi-directional TSL (Three.js Shading Language) visual shader editor.
 - `zustand` v5 — state management
 - `@babel/parser` + `@babel/traverse` — code→graph parsing
 - `@dagrejs/dagre` — auto-layout (LR direction)
-- `three` + `tsl-textures` — shader runtime (WebGPU)
-- `patch-package` — patches `tsl-textures` at postinstall
+- `three` (WebGPU build) — shader runtime; FastShaders uses only `three/tsl`
+  built-in functions including the MaterialX noise family (`mx_noise_*`,
+  `mx_fractal_noise_*`, `mx_worley_noise_*`, `mx_cell_noise_float`)
 - Path alias: `@/*` → `./src/*`
 
 ## Commands
@@ -41,8 +42,8 @@ src/
       handles/        — TypedHandle with color-coded data types
       inputs/         — DragNumberInput (drag/click-to-edit number widget)
       menus/          — AddNodeMenu, NodeSettingsMenu, ShaderSettingsMenu, EdgeContextMenu
-      nodes/          — ShaderNode, OutputNode, ColorNode, PreviewNode, MathPreviewNode, ClockNode, TexturePreviewNode
-      NodePreviewCard.tsx — content browser card renderer (GPU/CPU/canvas previews)
+      nodes/          — ShaderNode, OutputNode, ColorNode, PreviewNode, MathPreviewNode, ClockNode
+      NodePreviewCard.tsx — content browser card renderer (CPU/canvas previews)
     Preview/          — ShaderPreview (iframe-based 3D preview via blob URL)
   engine/
     graphToCode.ts    — graph → TSL code generation (topological sort, import collection)
@@ -55,13 +56,12 @@ src/
     topologicalSort.ts — Kahn's algorithm (warns on cycles)
     layoutEngine.ts   — Dagre auto-layout
     cpuEvaluator.ts   — CPU-side recursive graph evaluation (live previews, cost)
-    evaluateTSLScript.ts — detects tsl-textures direct-assignment code style
+    evaluateTSLScript.ts — detects `model.material.*Node = ...` direct-assignment style
   hooks/
     useSyncEngine.ts  — bidirectional graph↔code sync, undo/redo, complexity calc
   registry/
-    nodeRegistry.ts   — 52+ hardcoded node definitions + dynamic texture defs
-    tslTexturesRegistry.ts — introspects tsl-textures exports, classifies params
-    nodeCategories.ts — 11 category definitions (input, type, arithmetic, …, unknown)
+    nodeRegistry.ts   — ~60 hardcoded node definitions (incl. 8 MaterialX noise nodes)
+    nodeCategories.ts — 10 category definitions (input, type, arithmetic, …, unknown)
     complexity.json   — per-node GPU cost values
   store/
     useAppStore.ts    — zustand store (23 state fields, 23 actions, localStorage persistence)
@@ -73,22 +73,19 @@ src/
   utils/
     idGenerator.ts    — generateId(), generateEdgeId() (4-part deterministic format)
     colorUtils.ts     — hex/RGB conversion, cost color gradient, type/category colors
-    noisePreview.ts   — CPU Perlin/fBm/Voronoi noise rendering
+    noisePreview.ts   — CPU Perlin/fBm/Cell/Voronoi noise rendering for thumbnails
     mathPreview.ts    — math function waveform canvas renderer
-    texturePreviewRenderer.ts — shared WebGPU renderer for texture node previews
     graphTraversal.ts — hasTimeUpstream() BFS graph walker
     edgeUtils.ts      — removeEdgesForPort() helper
     edgeDisconnectFlag.ts — transient flag for edge disconnect suppression
     nameUtils.ts      — toKebabCase() for export filenames
 public/
   js/
-    tsl-shim.js             — combined shim: re-exports THREE + THREE.TSL + tsl-textures as ESM
+    tsl-shim.js             — re-exports window.THREE + THREE.TSL as ESM (consumed by preview iframes)
     a-frame-shaderloader-0.3.js — A-Frame shader component (TDZ fix + auto-import + property schema)
     a-frame-shaderloader-0.2.js — legacy shaderloader version
     aframe-171-a-0.1.min.js — A-Frame 1.7 IIFE bundle (WebGPU)
     aframe-orbit-controls.min.js — orbit controls for preview
-patches/
-  tsl-textures+3.0.1.patch — patch-package patch for tsl-textures
 ```
 
 ### Subprojects (outside src/)
@@ -106,7 +103,7 @@ patches/
 - **Light theme**: flat design with subtle shadows, CSS tokens in `tokens.css`
 - **A-Frame pipeline**: graphToCode → tslToShaderModule → shaderloader 0.3 (runtime TDZ fix + auto-import injection) → dynamic blob import
 - **rAF ref pattern**: PreviewNode/MathPreviewNode/EdgeInfoCard overwrite refs for animation — this is correct (avoids stale closures)
-- **WebGPU texture previews**: singleton renderer in `texturePreviewRenderer.ts`, serialized render queue, per-node material cache, animation loop for time-connected nodes
+- **Noise nodes**: 8 MaterialX-backed nodes (`perlin`, `perlinVec3`, `fbm`, `fbmVec3`, `cellNoise`, `voronoi`, `voronoiVec2`, `voronoiVec3`) all use the same `pos`/`scale` parameter convention. graphToCode emits them via the `def.category === 'noise'` branch; codeToGraph parses them via `processNoiseCall`; CPU thumbnails come from `noisePreview.ts`; live GPU previews from the factories in `graphToTSLNodes.ts`. There is no `texture` category — `tsl-textures` was removed in favour of three.js's built-in MaterialX noise.
 - **History**: circular buffer (50 entries) with undo/redo via `structuredClone`, Cmd+Z/Cmd+Shift+Z shortcuts
 - **localStorage**: auto-saves graph, split ratios, shader name, headset selection, cost colors (debounced 300ms)
 - **VR cost budgeting**: 6 VR headset presets with maxPoints, cost gradient visualization in CostBar

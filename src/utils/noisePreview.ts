@@ -1,4 +1,8 @@
-// CPU-based 2D noise for node preview thumbnails
+// CPU-based 2D noise for node preview thumbnails. These are approximations of
+// the GPU-side TSL functions (mx_perlin_noise_*, mx_worley_noise_*, mx_cell_*,
+// mx_fractal_noise_*) — accurate enough for a recognisable thumbnail, not for
+// use as actual shading. Range conventions match the GPU side: Perlin/fBm in
+// [-1, 1] (mapped to [0, 1] for display), Worley/Cell in [0, 1].
 
 // Permutation table (Ken Perlin's original)
 const PERM = new Uint8Array(512);
@@ -18,6 +22,55 @@ const P = [
 ];
 for (let i = 0; i < 256; i++) { PERM[i] = P[i]; PERM[i + 256] = P[i]; }
 
+function fade(t: number): number { return t * t * t * (t * (t * 6 - 15) + 10); }
+function lerp(a: number, b: number, t: number): number { return a + t * (b - a); }
+function grad(hash: number, x: number, y: number): number {
+  const h = hash & 7;
+  const u = h < 4 ? x : y;
+  const v = h < 4 ? y : x;
+  return ((h & 1) ? -u : u) + ((h & 2) ? -2 * v : 2 * v);
+}
+
+/** Perlin noise in roughly [-1, 1]. */
+export function perlin2D(x: number, y: number): number {
+  const xi = Math.floor(x) & 255;
+  const yi = Math.floor(y) & 255;
+  const xf = x - Math.floor(x);
+  const yf = y - Math.floor(y);
+  const u = fade(xf);
+  const v = fade(yf);
+  const aa = PERM[PERM[xi] + yi];
+  const ab = PERM[PERM[xi] + yi + 1];
+  const ba = PERM[PERM[xi + 1] + yi];
+  const bb = PERM[PERM[xi + 1] + yi + 1];
+  return lerp(
+    lerp(grad(aa, xf, yf), grad(ba, xf - 1, yf), u),
+    lerp(grad(ab, xf, yf - 1), grad(bb, xf - 1, yf - 1), u),
+    v,
+  );
+}
+
+/** Fractal Brownian motion built on Perlin (3 octaves). */
+export function fbm2D(x: number, y: number): number {
+  let amp = 0.5;
+  let freq = 1;
+  let sum = 0;
+  for (let o = 0; o < 3; o++) {
+    sum += amp * perlin2D(x * freq, y * freq);
+    freq *= 2;
+    amp *= 0.5;
+  }
+  return sum;
+}
+
+/** Hash-based per-cell random in [0, 1]. */
+export function cellNoise2D(x: number, y: number): number {
+  const ix = Math.floor(x) & 255;
+  const iy = Math.floor(y) & 255;
+  return PERM[PERM[ix] + iy] / 255;
+}
+
+/** Worley/Voronoi F1 distance (approximate, range ~[0, 1]). */
 export function voronoi2D(x: number, y: number): number {
   const ix = Math.floor(x);
   const iy = Math.floor(y);
@@ -38,11 +91,38 @@ export function voronoi2D(x: number, y: number): number {
   return Math.min(minDist, 1);
 }
 
-export type NoiseType = 'voronoi';
+export type NoiseType =
+  | 'perlin'
+  | 'perlinVec3'
+  | 'fbm'
+  | 'fbmVec3'
+  | 'cellNoise'
+  | 'voronoi'
+  | 'voronoiVec2'
+  | 'voronoiVec3';
 
 /** Which input ports of the noise node are driven by time. */
 export interface TimeInputs {
   pos?: boolean;
+}
+
+/** Sample a single greyscale value in [0, 1] for the given noise type at (nx, ny). */
+function sampleNoise(type: NoiseType, nx: number, ny: number): number {
+  switch (type) {
+    case 'perlin':
+    case 'perlinVec3':
+      // Perlin output is ~[-1, 1] → remap to [0, 1] for display
+      return (perlin2D(nx, ny) + 1) * 0.5;
+    case 'fbm':
+    case 'fbmVec3':
+      return (fbm2D(nx, ny) + 1) * 0.5;
+    case 'cellNoise':
+      return cellNoise2D(nx, ny);
+    case 'voronoi':
+    case 'voronoiVec2':
+    case 'voronoiVec3':
+      return voronoi2D(nx, ny);
+  }
 }
 
 export function renderNoisePreview(
@@ -65,7 +145,7 @@ export function renderNoisePreview(
       const nx = (x / size) * scale + posOffset;
       const ny = (y / size) * scale + posOffset * 0.75;
 
-      const v = voronoi2D(nx, ny);
+      const v = sampleNoise(type, nx, ny);
 
       const byte = Math.round(Math.max(0, Math.min(1, v)) * 255);
       const idx = (y * size + x) * 4;

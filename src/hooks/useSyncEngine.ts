@@ -5,7 +5,7 @@ import { codeToGraph } from '@/engine/codeToGraph';
 import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import complexityData from '@/registry/complexity.json';
-import { isTSLTexturesCode } from '@/engine/evaluateTSLScript';
+import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
 import type { AppNode } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
 
@@ -79,7 +79,7 @@ export function useSyncEngine() {
   // Code → Graph (with stable node matching)
   const doCodeSync = useCallback(
     (codeStr: string, skipHistory = false) => {
-      if (isTSLTexturesCode(codeStr)) {
+      if (isDirectAssignmentCode(codeStr)) {
         setCodeErrors([]);
         return;
       }
@@ -181,8 +181,8 @@ export function useSyncEngine() {
           for (const node of finalNodes) {
             const def = NODE_REGISTRY.get(node.data.registryType);
             if (!def) continue;
-            // Only applies to nodes that use exposedPorts (texture, noise, output)
-            const usesExposedPorts = def.category === 'texture' || def.category === 'noise' || def.type === 'output';
+            // Only applies to nodes that use exposedPorts (noise, output)
+            const usesExposedPorts = def.category === 'noise' || def.type === 'output';
             if (!usesExposedPorts) continue;
 
             const connectedPorts = new Set<string>();

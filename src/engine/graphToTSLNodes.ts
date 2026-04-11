@@ -43,14 +43,17 @@ import {
   time,
   screenUV,
   uv,
+  mx_noise_float,
+  mx_noise_vec3,
+  mx_fractal_noise_float,
+  mx_fractal_noise_vec3,
+  mx_cell_noise_float,
   mx_worley_noise_float,
+  mx_worley_noise_vec2,
+  mx_worley_noise_vec3,
 } from 'three/tsl';
-import { Color, Vector2, Vector3 } from 'three';
-import * as tslTextures from 'tsl-textures';
 import type { AppNode, AppEdge } from '@/types';
 import { getNodeValues } from '@/types';
-import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { getParamClassifications } from '@/registry/tslTexturesRegistry';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { getComponentCount } from './cpuEvaluator';
 import { VALID_SWIZZLE } from './graphToCode';
@@ -175,11 +178,48 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   dot: (inputs) => dot(inputs.a ?? vec3(0, 0, 0), inputs.b ?? vec3(0, 0, 0)),
   cross: (inputs) => cross(inputs.a ?? vec3(1, 0, 0), inputs.b ?? vec3(0, 1, 0)),
 
-  // Noise
+  // Noise — all share the same `pos` (defaults to positionGeometry) + `scale`
+  // (uniform multiplier on pos) parameter convention. graphToCode emits the
+  // matching code via `def.category === 'noise'`.
+  perlin: (inputs, values) => {
+    const pos = inputs.pos ?? positionGeometry;
+    const s = float(Number(values.scale ?? 1));
+    return mx_noise_float(pos.mul(s));
+  },
+  perlinVec3: (inputs, values) => {
+    const pos = inputs.pos ?? positionGeometry;
+    const s = float(Number(values.scale ?? 1));
+    return mx_noise_vec3(pos.mul(s));
+  },
+  fbm: (inputs, values) => {
+    const pos = inputs.pos ?? positionGeometry;
+    const s = float(Number(values.scale ?? 1));
+    return mx_fractal_noise_float(pos.mul(s));
+  },
+  fbmVec3: (inputs, values) => {
+    const pos = inputs.pos ?? positionGeometry;
+    const s = float(Number(values.scale ?? 1));
+    return mx_fractal_noise_vec3(pos.mul(s));
+  },
+  cellNoise: (inputs, values) => {
+    const pos = inputs.pos ?? positionGeometry;
+    const s = float(Number(values.scale ?? 1));
+    return mx_cell_noise_float(pos.mul(s));
+  },
   voronoi: (inputs, values) => {
     const pos = inputs.pos ?? positionGeometry;
     const s = float(Number(values.scale ?? 1));
     return mx_worley_noise_float(pos.mul(s));
+  },
+  voronoiVec2: (inputs, values) => {
+    const pos = inputs.pos ?? positionGeometry;
+    const s = float(Number(values.scale ?? 1));
+    return mx_worley_noise_vec2(pos.mul(s));
+  },
+  voronoiVec3: (inputs, values) => {
+    const pos = inputs.pos ?? positionGeometry;
+    const s = float(Number(values.scale ?? 1));
+    return mx_worley_noise_vec3(pos.mul(s));
   },
 
   // Color — GPU-friendly branchless HSL→RGB using the standard shader formula:
@@ -203,69 +243,6 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   // RGB → HSL: passthrough (inverse conversion requires min/max/conditionals not easily expressed in TSL)
   toHsl: (inputs) => inputs.rgb ?? vec3(0, 0, 0),
 };
-
-// Dynamic factory for tsl-textures nodes (auto-registered)
-const tslTexFactoryCache = new Map<string, ((inputs: Record<string, TSLNode>, values: Record<string, string | number>) => TSLNode) | null>();
-
-function getTSLTextureFactory(registryType: string): ((inputs: Record<string, TSLNode>, values: Record<string, string | number>) => TSLNode) | null {
-  if (tslTexFactoryCache.has(registryType)) return tslTexFactoryCache.get(registryType)!;
-
-  const def = NODE_REGISTRY.get(registryType);
-  if (!def || def.tslImportModule !== 'tsl-textures') {
-    tslTexFactoryCache.set(registryType, null);
-    return null;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const texFn = (tslTextures as Record<string, any>)[def.tslFunction];
-  if (typeof texFn !== 'function') {
-    tslTexFactoryCache.set(registryType, null);
-    return null;
-  }
-
-  const classifications = getParamClassifications(def.tslFunction);
-
-  const factory = (resolvedInputs: Record<string, TSLNode>, values: Record<string, string | number>): TSLNode => {
-    const params: Record<string, unknown> = {};
-
-    for (const param of classifications) {
-      if (param.kind === 'meta') continue;
-
-      if (param.kind === 'tslRef') {
-        if (resolvedInputs[param.key] !== undefined) {
-          params[param.key] = resolvedInputs[param.key];
-        }
-        // Omit → library uses its own default (positionGeometry, time, etc.)
-      } else if (param.kind === 'number') {
-        if (resolvedInputs[param.key] !== undefined) {
-          params[param.key] = resolvedInputs[param.key];
-        } else {
-          params[param.key] = Number(values[param.key] ?? param.defaultValue ?? 0);
-        }
-      } else if (param.kind === 'color') {
-        const hex = String(values[param.key] ?? '#000000');
-        const [r, g, b] = hexToRgb01(hex);
-        params[param.key] = new Color(r, g, b);
-      } else if (param.kind === 'vec3') {
-        params[param.key] = new Vector3(
-          Number(values[`${param.key}_x`] ?? 0),
-          Number(values[`${param.key}_y`] ?? 0),
-          Number(values[`${param.key}_z`] ?? 0),
-        );
-      } else if (param.kind === 'vec2') {
-        params[param.key] = new Vector2(
-          Number(values[`${param.key}_x`] ?? 0),
-          Number(values[`${param.key}_y`] ?? 0),
-        );
-      }
-    }
-
-    return texFn(params);
-  };
-
-  tslTexFactoryCache.set(registryType, factory);
-  return factory;
-}
 
 export interface CompileResult {
   colorNode: TSLNode | null;
@@ -292,7 +269,7 @@ export function compileGraphToTSL(nodes: AppNode[], edges: AppEdge[]): CompileRe
     for (const node of sorted) {
       if (node.data.registryType === 'output') continue;
 
-      const factory = TSL_FACTORIES[node.data.registryType] ?? getTSLTextureFactory(node.data.registryType);
+      const factory = TSL_FACTORIES[node.data.registryType];
       if (!factory) continue;
 
       // Resolve inputs from incoming edges

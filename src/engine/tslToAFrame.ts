@@ -2,8 +2,8 @@
  * Converts graph-generated TSL code into a self-contained A-Frame HTML file.
  *
  * Uses the a-frame-shaderloader to apply the shader — loads the IIFE bundle
- * (aframe-171-a-0.1.min.js) which bundles A-Frame 1.7 + Three.js WebGPU +
- * tsl-textures, and the shaderloader component (a-frame-shaderloader-0.3.js).
+ * (aframe-171-a-0.1.min.js) which bundles A-Frame 1.7 + Three.js WebGPU,
+ * and the shaderloader component (a-frame-shaderloader-0.3.js).
  *
  * The shader module code is embedded inline as a blob URL and applied via
  * the shaderloader's `shader` component attribute.
@@ -26,8 +26,8 @@ export interface AFrameOptions {
   properties?: PropertyInfo[];
 }
 
-// IIFE bundle from the a-frame-shaderloader project — includes A-Frame 1.7,
-// Three.js WebGPU build, and tsl-textures with matching compatible versions.
+// IIFE bundle from the a-frame-shaderloader project — includes A-Frame 1.7
+// and the Three.js WebGPU build with matching compatible versions.
 const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js';
 const IIFE_BUNDLE_URL = `${CDN_BASE}/aframe-171-a-0.1.min.js`;
 const SHADERLOADER_URL = `${CDN_BASE}/a-frame-shaderloader-0.3.js`;
