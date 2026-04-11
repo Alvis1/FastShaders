@@ -177,6 +177,59 @@ export function useSyncEngine() {
             finalNodes = positioned;
           }
 
+          // Preserve group nodes from the old graph — codeToGraph doesn't know about
+          // them, so they'd otherwise be lost on every Save. Carry over both the
+          // group containers themselves AND any parentId/extent on members whose
+          // ID survived the merge. Skip when autoLayout ran: positions are now
+          // absolute and reattaching them as group-relative would put children in
+          // the wrong place.
+          const oldGroups =
+            unpositioned.length > 0 ? [] : oldNodes.filter((n) => n.type === 'group');
+          if (oldGroups.length > 0) {
+            const survivingIds = new Set(finalNodes.map((n) => n.id));
+            const oldById = new Map(oldNodes.map((n) => [n.id, n]));
+
+            // Restore parentId/extent on surviving children whose old node had them.
+            finalNodes = finalNodes.map((n) => {
+              const old = oldById.get(n.id);
+              if (!old || !old.parentId) return n;
+              // Only re-attach if the parent group is also surviving (it always
+              // should be since we re-add groups below, but guard regardless).
+              const restored = { ...n, parentId: old.parentId } as AppNode;
+              if ((old as { extent?: 'parent' }).extent) {
+                (restored as { extent?: 'parent' }).extent = 'parent';
+              }
+              return restored;
+            });
+
+            // Append surviving group nodes — but keep them BEFORE their children
+            // in the array, since React Flow requires parent-before-child ordering.
+            const groupsToKeep = oldGroups.filter((g) =>
+              // A group is worth keeping if it still has at least one child
+              // among the surviving (or freshly created) nodes.
+              finalNodes.some((n) => (n as { parentId?: string }).parentId === g.id),
+            );
+            // Drop dangling parentIds for any child whose group is not kept.
+            const keptGroupIds = new Set(groupsToKeep.map((g) => g.id));
+            finalNodes = finalNodes.map((n) => {
+              const pid = (n as { parentId?: string }).parentId;
+              if (pid && !keptGroupIds.has(pid)) {
+                const { parentId: _p, extent: _e, ...rest } = n as AppNode & { parentId?: string; extent?: unknown };
+                void _p; void _e;
+                return rest as AppNode;
+              }
+              return n;
+            });
+            // Groups must come first; suppress duplicates and prepend.
+            const groupIdSet = new Set(groupsToKeep.map((g) => g.id));
+            const withoutGroups = finalNodes.filter((n) => !groupIdSet.has(n.id));
+            // Note: surviving group nodes from oldNodes carry their original
+            // position/width/height/data — that's exactly what we want.
+            // Survival check above already accounts for `survivingIds`.
+            void survivingIds;
+            finalNodes = [...groupsToKeep, ...withoutGroups];
+          }
+
           // Auto-expose ports that have incoming edges (so handles render)
           for (const node of finalNodes) {
             const def = NODE_REGISTRY.get(node.data.registryType);

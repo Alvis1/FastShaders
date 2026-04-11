@@ -20,7 +20,20 @@ export function AddNodeMenu() {
   const addNode = useAppStore((s) => s.addNode);
   const setEdges = useAppStore((s) => s.setEdges);
   const nodes = useAppStore((s) => s.nodes);
+  const groupSelection = useAppStore((s) => s.groupSelection);
   const { screenToFlowPosition } = useReactFlow();
+
+  // Selected non-group nodes — gates the "Group Selection" entry
+  const selectedGroupable = useMemo(
+    () => nodes.filter((n) => n.selected && n.type !== 'group'),
+    [nodes],
+  );
+  const canGroup = selectedGroupable.length >= 2;
+
+  const handleGroupSelection = () => {
+    groupSelection(selectedGroupable.map((n) => n.id));
+    closeContextMenu();
+  };
 
   // Source pin info for auto-connect when dragged from an output handle
   const sourceNodeId = contextMenu.sourceNodeId;
@@ -142,6 +155,23 @@ export function AddNodeMenu() {
         autoFocus
       />
       <div className="context-menu__list">
+        {/* Group selection — only when 2+ groupable nodes are selected */}
+        {!query.trim() && canGroup && (
+          <>
+            <div className="context-menu__category">Selection</div>
+            <button
+              className="context-menu__item"
+              onClick={handleGroupSelection}
+            >
+              <span>Group Selection</span>
+              <span className="context-menu__item-category">
+                {selectedGroupable.length} nodes
+              </span>
+            </button>
+            <div className="context-menu__divider" />
+          </>
+        )}
+
         {/* Add output node option */}
         {!query.trim() && !nodes.some((n) => n.data.registryType === 'output') && (
           <>

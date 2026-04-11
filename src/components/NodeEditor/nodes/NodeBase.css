@@ -26,6 +26,17 @@
   text-shadow: 0 1px 2px rgba(255, 255, 255, 0.6);
 }
 
+/* When the badge lives inside the React Flow canvas, force it to a contrast
+   color (black on light bg, white on dark bg). The CSS vars are set on the
+   `.node-editor` wrapper from a luminance check on `nodeEditorBgColor`.
+   `!important` is required because the badge components still pass an inline
+   `color` (used by the asset browser cards, which live OUTSIDE the canvas and
+   should keep their cost-gradient text). */
+.react-flow .node-base__cost-badge {
+  color: var(--node-cost-text, #000000) !important;
+  text-shadow: 0 1px 2px var(--node-cost-text-shadow, rgba(255, 255, 255, 0.6)) !important;
+}
+
 .node-base--selected {
   box-shadow: var(--shadow-node-selected);
   outline: 2px solid var(--border-focus);

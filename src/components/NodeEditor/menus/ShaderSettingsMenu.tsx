@@ -1,7 +1,9 @@
 import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { OUTPUT_DEFAULT_EXPOSED } from '../nodes/OutputNode';
-import type { MaterialSettings, OutputNodeData } from '@/types';
+import { DragNumberInput } from '../inputs/DragNumberInput';
+import { getNodeValues } from '@/types';
+import type { MaterialSettings, OutputNodeData, ShaderNodeData } from '@/types';
 import { removeEdgesForPort } from '@/utils/edgeUtils';
 
 /** Ports that can be toggled on/off in the output node settings.
@@ -24,6 +26,20 @@ export function ShaderSettingsMenu() {
   const exposedSet = new Set(exposedPorts);
 
   const outputDef = NODE_REGISTRY.get('output');
+
+  // Collect every property_float (uniform) node so the user can tweak default
+  // values + rename uniforms from one place instead of hunting them down.
+  const uniformNodes = nodes.filter((n) => n.data.registryType === 'property_float');
+
+  const updateUniform = (nodeId: string, key: 'name' | 'value', value: string | number) => {
+    const node = nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const current = getNodeValues(node);
+    const next = key === 'name'
+      ? { ...current, name: String(value) }
+      : { ...current, value: Number(value) };
+    updateNodeData(nodeId, { values: next } as Partial<ShaderNodeData>);
+  };
 
   const updateSettings = (patch: Partial<MaterialSettings>) => {
     if (!outputNode) return;
@@ -225,6 +241,52 @@ export function ShaderSettingsMenu() {
           />
           Depth Write
         </label>
+      )}
+
+      {/* Uniforms — every property_float node, editable by name + value
+          without leaving the shader settings menu. */}
+      {uniformNodes.length > 0 && (
+        <>
+          <div className="context-menu__divider" />
+          <div className="context-menu__category">Uniforms</div>
+          {uniformNodes.map((n) => {
+            const v = getNodeValues(n);
+            const name = String(v.name ?? 'property');
+            const value = Number(v.value ?? 0);
+            return (
+              <div
+                key={n.id}
+                style={{
+                  padding: '4px var(--space-3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-2)',
+                }}
+              >
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => updateUniform(n.id, 'name', e.target.value)}
+                  title="Uniform name"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    padding: '2px 6px',
+                    background: 'var(--bg-input)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--border-radius-sm)',
+                    fontSize: 'var(--font-size-xs)',
+                    color: 'var(--text-primary)',
+                  }}
+                />
+                <DragNumberInput
+                  value={value}
+                  onChange={(nv) => updateUniform(n.id, 'value', nv)}
+                />
+              </div>
+            );
+          })}
+        </>
       )}
 
       <div className="context-menu__divider" />

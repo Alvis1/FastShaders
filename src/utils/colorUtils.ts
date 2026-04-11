@@ -20,6 +20,23 @@ export function hexToRgb01(hex: string): [number, number, number] {
   return [r / 255, g / 255, b / 255];
 }
 
+/**
+ * Pick a foreground color (black or white) that contrasts with `bgHex`.
+ * Uses perceived luminance (Rec. 601). Defaults to black for light backgrounds,
+ * white for dark — same heuristic the cost badge and 1-channel edge color use
+ * to flip themselves when the canvas background changes.
+ */
+export function getContrastColor(bgHex: string): '#000000' | '#ffffff' {
+  // Be lenient on input — anything other than a 7-char #rrggbb falls back to dark assumption.
+  if (typeof bgHex !== 'string' || bgHex.length !== 7 || !bgHex.startsWith('#')) {
+    return '#000000';
+  }
+  const [r, g, b] = hexToRgb(bgHex);
+  // Rec. 601 luminance — cheap, perceptually OK, no gamma correction needed for a binary flip.
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.55 ? '#000000' : '#ffffff';
+}
+
 /** Interpolate between low and high color poles based on cost. */
 function costLerp(
   cost: number,

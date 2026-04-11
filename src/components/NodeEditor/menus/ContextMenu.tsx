@@ -3,6 +3,7 @@ import { AddNodeMenu } from './AddNodeMenu';
 import { NodeSettingsMenu } from './NodeSettingsMenu';
 import { ShaderSettingsMenu } from './ShaderSettingsMenu';
 import { EdgeContextMenu } from './EdgeContextMenu';
+import { GroupSettingsMenu } from './GroupSettingsMenu';
 import './ContextMenu.css';
 
 export function ContextMenu() {
@@ -21,6 +22,7 @@ export function ContextMenu() {
       {type === 'node' && nodeId && <NodeSettingsMenu nodeId={nodeId} />}
       {type === 'shader' && <ShaderSettingsMenu />}
       {type === 'edge' && edgeId && <EdgeContextMenu edgeId={edgeId} />}
+      {type === 'group' && nodeId && <GroupSettingsMenu nodeId={nodeId} />}
     </div>
   );
 }

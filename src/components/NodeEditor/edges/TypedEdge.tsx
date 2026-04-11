@@ -7,7 +7,7 @@ import {
 import type { AppEdge, AppNode, TSLDataType } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { getTypeColor, COUNT_EDGE_COLORS } from '@/utils/colorUtils';
+import { getTypeColor, COUNT_EDGE_COLORS, getContrastColor } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { evaluateNodeOutput, getNodeOutputShape } from '@/engine/cpuEvaluator';
 import { EdgeInfoCard } from './EdgeInfoCard';
@@ -120,6 +120,7 @@ export function TypedEdge({
 }: EdgeProps<AppEdge>) {
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
+  const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   // Subscribe to both nodes and edges so we re-resolve when the graph changes
   void nodes;
   void edges;
@@ -141,7 +142,13 @@ export function TypedEdge({
   const evalLen = evaluated?.length ?? 0;
   const shapeLen = getNodeOutputShape(source, nodes, edges);
   const count = Math.min(Math.max(evalLen, shapeLen, 1), 4);
-  const channelColors = COUNT_EDGE_COLORS[count] ?? COUNT_EDGE_COLORS[1];
+  // 1-channel edges flip black ↔ white so they remain visible against the
+  // user-picked canvas background. Multi-channel edges keep their RGB(A)
+  // colors — those already read against any background.
+  const channelColors =
+    count === 1
+      ? [getContrastColor(nodeEditorBgColor)]
+      : COUNT_EDGE_COLORS[count] ?? COUNT_EDGE_COLORS[1];
   const offsets = getOffsets(count);
   // Thinner lines when more channels
   const strokeWidth = count >= 4 ? 0.8 : count >= 3 ? 1 : count >= 2 ? 1.2 : selected ? 2 : 1.5;

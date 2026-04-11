@@ -28,7 +28,7 @@ src/
 │   │   ├── AppLayout.tsx              # Two nested SplitPanes (left: graph | right: code/preview)
 │   │   ├── AppLayout.css
 │   │   ├── SplitPane.tsx              # Draggable divider (horizontal or vertical)
-│   │   ├── Toolbar.tsx                # Top bar: brand + version, shader name input, VR headset selector
+│   │   ├── Toolbar.tsx                # Top bar: clickable brand → contact popover, version, shader name input
 │   │   ├── Toolbar.css
 │   │   ├── CostBar.tsx                # GPU complexity bar (totalCost vs headset budget)
 │   │   └── CostBar.css
@@ -173,13 +173,37 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 
 - **Rendered in iframe** via blob URL from `tslToPreviewHTML.ts`
 - **Renderer**: A-Frame scene with `a-frame-shaderloader` (loads local IIFE bundle via Vite public dir)
-- **Camera**: FOV 20 with orbit controls (zoom 2–80, rotate 0.5 speed)
-- **Geometry**: Selector dropdown (sphere/cube/torus/plane), persisted to localStorage
+- **Camera**: FOV 20 with orbit controls (zoom 2–80, rotate 0.5 speed). Initial position `0 0 8`.
+- **Geometry**: Selector dropdown (sphere/cube/torus/plane), persisted to localStorage. Plane is rendered un-rotated (faces the camera) — every other primitive uses a 45/45 tilt so multiple faces are visible.
+- **Subdivision slider**: Symmetrically applied to per-primitive segment fields (`segmentsWidth/Height` for sphere/plane, all three for cube, `segmentsRadial/Tubular` for torus). Range `[1, 256]`, default 64. Built into the geometry attribute by `buildGeoAttr()` in `tslToPreviewHTML.ts`.
+- **Lighting modes** (dropdown, persisted):
+  - **light: Studio** (default) — three-point rig (warm key + cool rim + neutral fill + low ambient).
+  - **light: Moon** — single cool directional from `-4 1.5 2` at intensity 4.0 (terminator ~65° off camera axis, ~2/3 of the visible hemisphere lit) + a faint dark-blue ambient floor.
+  - **light: Laboratory** — pure white ambient at intensity 1.0, no shadows.
 - **Material**: `materialSettings` from output node (displacement mode, transparent, side)
-- **Lighting**: 2 point lights on camera + directional + ambient
-- **Animation**: Play/pause toggle for mesh rotation
-- **Debounced**: 500ms debounce on code changes to avoid iframe thrashing
-- **Background**: Dark (#1a1a2e) for contrast with light UI theme
+- **Animation**: Play/pause toggle for mesh rotation. Y-axis turntable spin for sphere/cube/torus; planes spin on Z (in-plane, like a record).
+- **Background**: User-picked color via `<input type="color">` in the header, persisted to `fs:previewBgColor`. Defaults to `#808080`.
+- **Reset button** (red, left side of header): clears the saved camera, restores **studio** lighting, **subdivision 64**, and every property uniform back to its shader-defined default. Min/max bounds, geometry, and bg color are user preferences and intentionally **not** reset.
+
+#### Property uniform overlay
+
+- Floating top-right panel listing every property uniform with `[min] [slider] [max]` per row plus a live numeric readout.
+- Uniforms are extracted on the parent side via the same regex the shaderloader uses (`const NAME = uniform(VALUE)`), so the names always line up regardless of any sanitization `graphToCode` does.
+- Sliders are **overlay-local** state — they never write back to the graph, so dragging doesn't trigger a graph re-sync that would tear the iframe down. Per-uniform `{min, max}` is persisted under `fs:previewUniformBounds`.
+- When `previewCode` changes, slider values are **preserved** for names that still exist and **seeded from the code default** for new names; stale entries are dropped.
+
+#### Iframe ↔ parent bridge
+
+The generated iframe HTML carries an inline bridge script that talks to the parent over `postMessage`:
+
+- **Property uniforms**: To make sliders actually move the GPU uniforms, `convertToShaderModule` rewrites every `const N = uniform(V)` to `const N = params.N`, exports an explicit `schema`, and changes the function signature to `function(params)`. The shaderloader then creates the uniforms up-front, passes them in as `params`, and the function uses *those* uniforms — so writing to `_propertyUniforms[name].value` from the bridge actually reaches the material.
+- **Outbound messages** (iframe → parent):
+  - `fs:preview-ready` — sent once after the shaderloader's `_propertyUniforms` populates. Parent responds by pushing all current slider values via `fs:uniform`, so a freshly rebuilt iframe immediately reflects user tweaks.
+  - `fs:camera` — sent whenever the camera position changes (200ms polling, only posted on actual change).
+- **Inbound messages** (parent → iframe):
+  - `fs:uniform` — `{name, value}`; bridge writes directly into `_propertyUniforms[name].value` (no setAttribute round-trip).
+  - `fs:reset-camera` — bridge calls `oc.controls.reset()`.
+- **Camera persistence**: The parent stores the latest position in a `cameraPosRef` (a ref, not state — putting it in state would create an infinite rebuild loop). When `useMemo` rebuilds the iframe (lighting/subdivision/etc. changed), it reads `cameraPosRef.current` and embeds it as `window.__savedCameraPos = {x,y,z}`. The bridge applies that position **after** orbit-controls finishes initializing — critically, **not** by setting `initialPosition`, because that would also overwrite the controls' internal `position0` snapshot and break `controls.reset()`. So the user's view survives setting changes, and Reset still snaps home.
 
 ### Sync Engine (prevents infinite loops)
 
@@ -270,11 +294,16 @@ Generates a `.js` ES module compatible with the a-frame-shaderloader component. 
 
 Generates HTML for the in-app preview iframe:
 
-1. Uses `tslCodeProcessor` to extract imports, body, fix TDZ, and parse channels
-2. Accepts `materialSettings` via `PreviewOptions` — applies displacement wrapping (same normal/offset logic) + transparent/side settings
-3. Uses A-Frame IIFE bundle with `a-frame-shaderloader` for rendering
-4. Camera with orbit controls, two point lights, directional + ambient light
-5. Error display div for runtime errors
+1. Uses `tslCodeProcessor` to extract imports, body, fix TDZ, and parse channels.
+2. **Property uniform rewrite**: `convertToShaderModule()` rewrites every `const N = uniform(V)` line to `const N = params.N`, captures `{N: V}` defaults into a schemaEntries map, exports an explicit `export const schema`, and switches the function signature to `function(params)` (only when there are uniforms — otherwise it stays `function()`). Without this, the shaderloader's auto-detected `_propertyUniforms` would be a *separate* uniform instance from the one wired into the material, and the slider overlay would be talking to the wrong object.
+3. Accepts `materialSettings` via `PreviewOptions` — applies displacement wrapping (same normal/offset logic) + transparent/side/alphaTest settings.
+4. **Geometry**: `buildGeoAttr(geometry, subdivision)` clamps subdivision to `[1, 256]` and applies it to the appropriate per-primitive segment fields. (The export pipeline `tslToAFrame.ts` still uses the static `AFRAME_GEO` constant — only the in-app preview is parameterized.)
+5. **Lighting**: `studio` (4-light three-point rig), `moon` (single cool directional + faint ambient), or `laboratory` (white ambient only).
+6. **Plane orientation**: Plane geometry is emitted with `rotation="0 0 0"` so it faces the camera; everything else uses the existing `45 45 0` tilt.
+7. **Animation**: Y-axis turntable (`0 360 0`) for sphere/cube/torus, Z-axis spin (`0 0 360`) for plane.
+8. **Iframe ↔ parent bridge** (inline `<script>` block): polls for shaderloader readiness → posts `fs:preview-ready` with the uniform name list, listens for `fs:uniform`/`fs:reset-camera`, polls camera position and posts `fs:camera` only on change. Saved camera position is embedded as `window.__savedCameraPos` and applied **after** orbit-controls initializes (not via `initialPosition`, so `controls.reset()` still snaps to the original `0 0 8`).
+9. Uses A-Frame IIFE bundle with `a-frame-shaderloader` for rendering.
+10. Error display div for runtime errors.
 
 ---
 
@@ -489,7 +518,7 @@ Each type has a distinct color for handles and edges:
 
 - float: `#3366CC` (blue), int: `#20B2AA` (teal), vec2: `#4A90E2` (sky), vec3: `#E040FB` (magenta), vec4: `#AB47BC` (purple), color: `#E8A317` (gold), any: `#607D8B` (slate)
 
-**AppNode union**: `ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | ClockFlowNode | TexturePreviewFlowNode | OutputFlowNode`
+**AppNode union**: `ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | ClockFlowNode | OutputFlowNode`
 
 ---
 
@@ -668,6 +697,12 @@ All settings stored in `OutputNodeData.materialSettings` and threaded through to
 - React Flow `onPaneContextMenu` expects `(event: MouseEvent | React.MouseEvent)`, not just `React.MouseEvent`
 - React Flow `onNodeDragStop` expects `React.MouseEvent` (not native `MouseEvent`) for the event parameter
 
+### React Flow: Dynamic handles need `useUpdateNodeInternals`
+
+`PreviewNode` (noise variants) and `OutputNode` mount/unmount handles based on `data.exposedPorts` — e.g. the noise `pos` port only exists when exposed, output `emissive`/`normal`/`opacity` only exist when toggled on. When a handle first mounts, React Flow's internal handle-bounds map is not automatically refreshed, so any edge connecting to that handle silently fails to render even though the edge is in state and graphToCode reads it correctly. (After a page refresh, every handle is measured fresh on initial mount, so the bounds map is correct and the edge appears — that's the giveaway symptom.)
+
+The fix in both nodes is a `useUpdateNodeInternals(id)` effect keyed on the joined `exposedPorts.join('|')` so React Flow re-measures the handles whenever a port is added or removed. Without this, exposing `pos` on a fresh noise node and dropping a vec3 onto it would update the noise effect but no edge polyline would draw.
+
 ### VALID_SWIZZLE
 
 Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`. Contains `{'x', 'y', 'z', 'w'}` for split node swizzle validation.
@@ -684,6 +719,10 @@ Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`
 - `fs:splitRatio` — left/right panel ratio
 - `fs:rightSplitRatio` — code/preview ratio
 - `fs:previewGeometry` — selected preview geometry type
+- `fs:previewLighting` — preview lighting mode (`'studio' | 'moon' | 'laboratory'`)
+- `fs:previewSubdivision` — preview mesh subdivision count (1–256)
+- `fs:previewBgColor` — preview background hex color
+- `fs:previewUniformBounds` — JSON map of `{ uniformName: { min, max } }` per shader uniform slider
 - `fs:shaderName` — shader name (via `loadString()` helper)
 - `fs:headsetId` — selected VR headset (via `loadString()` helper)
 - `fs:costColorLow` — cost gradient low color
@@ -699,12 +738,14 @@ Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`
 
 - **GitHub Pages**: `npm run build && npx gh-pages -d dist`
 - **Vite base path**: `/FastShaders/` (configured in `vite.config.ts`)
+- **Source vs deployed**: `main` holds source, `gh-pages` is the orphan branch with built `dist/` output. There is **no GitHub Actions workflow** — every deploy is a manual `npx gh-pages -d dist` run, so the two branches can drift if you forget to publish.
+- **Cache busting**: `index.html` ships with `Cache-Control: no-cache, no-store, must-revalidate` + `Pragma: no-cache` + `Expires: 0` meta tags. Hashed JS/CSS assets in `/assets/` keep their content-hash filenames and stay infinitely cacheable, but the HTML always revalidates — so a fresh deploy never leaves a returning visitor pointed at a 404'd previous-build asset URL. Only costs a tiny 304 round-trip on a ~1 KB file.
 
 ### Version Display
 
-- App version is read from `package.json` at build time and injected via Vite's `define` as a global `__APP_VERSION__` string (declared in `src/vite-env.d.ts`)
-- `Toolbar.tsx` renders it next to the brand: `FastShaders v{__APP_VERSION__}` (mono font, secondary text color, `.toolbar__version` style)
-- Bumping the version requires only editing `package.json`'s `version` field; the bundle picks it up automatically on the next build
+- App version is read from `package.json` at build time. Vite's `define` exposes it as a global `__APP_VERSION__` string (declared in `src/vite-env.d.ts`); a custom `fs-version-html` plugin in [vite.config.ts](vite.config.ts) substitutes `%APP_VERSION%` in `index.html` so the deployed HTML self-reports its build via `<meta name="version" content="0.1.6">` — visible in DevTools (or via `view-source:`) without running any JS, useful when debugging stale-tab reports.
+- `Toolbar.tsx` renders the same version next to the brand: `FastShaders v{__APP_VERSION__}` (mono font, secondary text color, `.toolbar__version` style). The brand text itself is now a button — clicking it opens a contact popover with the author's name, an email link + Copy button, and a website link + Copy button. Outside-click and Escape close it.
+- Bumping the version requires only editing `package.json`'s `version` field; both the JS bundle and the HTML meta tag pick it up automatically on the next build.
 
 ---
 

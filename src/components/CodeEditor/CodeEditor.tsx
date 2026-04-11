@@ -34,7 +34,10 @@ export function CodeEditor() {
   const requestCodeSync = useAppStore((s) => s.requestCodeSync);
   const shaderName = useAppStore((s) => s.shaderName);
   const nodes = useAppStore((s) => s.nodes);
+  const codeEditorTheme = useAppStore((s) => s.codeEditorTheme);
+  const setCodeEditorTheme = useAppStore((s) => s.setCodeEditorTheme);
   const editorRef = useRef<unknown>(null);
+  const isDark = codeEditorTheme === 'vs-dark';
 
   const outputNode = nodes.find((n) => n.data.registryType === 'output');
   const materialSettings = (outputNode?.data as OutputNodeData | undefined)?.materialSettings;
@@ -176,6 +179,14 @@ export function CodeEditor() {
               Download .js
             </button>
           )}
+          <button
+            className="code-editor__theme-toggle"
+            onClick={() => setCodeEditorTheme(isDark ? 'vs' : 'vs-dark')}
+            title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+            aria-label="Toggle code editor theme"
+          >
+            {isDark ? '\u263C' : '\u263E'}
+          </button>
         </div>
       </div>
       {isTSL && codeErrors.length > 0 && (() => {
@@ -210,7 +221,7 @@ export function CodeEditor() {
             value={code}
             onChange={handleChange}
             onMount={handleMount}
-            theme="vs"
+            theme={codeEditorTheme}
             options={BASE_EDITOR_OPTIONS}
           />
         </div>
@@ -221,7 +232,7 @@ export function CodeEditor() {
               height="100%"
               defaultLanguage="html"
               value={aframeCode}
-              theme="vs"
+              theme={codeEditorTheme}
               options={READONLY_EDITOR_OPTIONS}
             />
           </div>
@@ -233,7 +244,7 @@ export function CodeEditor() {
               height="100%"
               defaultLanguage="javascript"
               value={scriptCode}
-              theme="vs"
+              theme={codeEditorTheme}
               options={READONLY_EDITOR_OPTIONS}
             />
           </div>

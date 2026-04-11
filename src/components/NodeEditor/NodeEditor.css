@@ -71,3 +71,48 @@
   pointer-events: stroke;
   cursor: pointer;
 }
+
+/* Collapsed-group hiding: members + their internal edges get a className when
+   the parent group is collapsed. We hide them via `display: none` instead of
+   React Flow's `hidden: true` flag because the latter unmounts the React
+   component — which would tear down preview/clock/math rAF loops. With
+   `display: none` the components stay mounted, animations keep running, and
+   restoring is just a class toggle. */
+.node-editor .react-flow__node.fs-collapsed-member {
+  display: none !important;
+}
+
+.node-editor .react-flow__edge.fs-collapsed-edge {
+  display: none !important;
+}
+
+/* Custom canvas background color picker, slotted into the React Flow Controls
+   right next to the +/- buttons. The native color input is hidden behind a
+   visible swatch that follows React Flow's button styling. */
+.node-editor__bg-color-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.node-editor__bg-color-swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.node-editor__bg-color-btn input[type='color'] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  background: transparent;
+}
