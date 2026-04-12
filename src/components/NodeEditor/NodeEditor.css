@@ -64,6 +64,7 @@
   border-radius: 2px;
 }
 
+
 .node-editor .react-flow__edge-interaction {
   stroke-width: 20;
   stroke: transparent;
@@ -84,6 +85,12 @@
 
 .node-editor .react-flow__edge.fs-collapsed-edge {
   display: none !important;
+}
+
+/* Drop-on-edge highlight: thicken when a dragged node is near enough to snap. */
+.node-editor .react-flow__edge.fs-edge-drop-target path:not(.react-flow__edge-interaction) {
+  stroke-width: 4 !important;
+  opacity: 1 !important;
 }
 
 /* Custom canvas background color picker, slotted into the React Flow Controls

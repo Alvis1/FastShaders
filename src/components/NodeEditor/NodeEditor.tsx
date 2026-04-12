@@ -54,6 +54,115 @@ const CONNECTION_RADIUS = 40;
 /** Pixels of movement before a node drag is considered "real" (and worth pushing history). */
 const DRAG_HISTORY_THRESHOLD = 2;
 
+/** Minimum distance from point (cx,cy) to a cubic bezier with given source, target, and control-point offset. */
+function bezierDist(
+  sx: number, sy: number, tx: number, ty: number, cp: number,
+  cx: number, cy: number,
+): number {
+  let min = Infinity;
+  for (let t = 0; t <= 1; t += 0.05) {
+    const mt = 1 - t;
+    const mt2 = mt * mt;
+    const mt3 = mt2 * mt;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const bx = mt3 * sx + 3 * mt2 * t * (sx + cp) + 3 * mt * t2 * (tx - cp) + t3 * tx;
+    const by = mt3 * sy + 3 * mt2 * t * sy + 3 * mt * t2 * ty + t3 * ty;
+    const d = Math.hypot(bx - cx, by - cy);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
+type Measured = AppNode & { measured?: { width?: number; height?: number } };
+function getNodeSize(n: AppNode) {
+  return {
+    w: (n as Measured).measured?.width ?? 120,
+    h: (n as Measured).measured?.height ?? 40,
+  };
+}
+
+/**
+ * Find the closest edge to (cx, cy) in flow-space that is within CONNECTION_RADIUS.
+ * `excludeNodeId` skips edges connected to the node being dragged.
+ */
+function findNearestEdge(
+  cx: number, cy: number,
+  allNodes: AppNode[], allEdges: AppEdge[],
+  excludeNodeId?: string,
+): string | null {
+  let bestId: string | null = null;
+  let bestDist = CONNECTION_RADIUS;
+
+  for (const edge of allEdges) {
+    if (excludeNodeId && (edge.source === excludeNodeId || edge.target === excludeNodeId)) continue;
+    const srcNode = allNodes.find((n) => n.id === edge.source);
+    const tgtNode = allNodes.find((n) => n.id === edge.target);
+    if (!srcNode || !tgtNode) continue;
+
+    const { w: sw, h: sh } = getNodeSize(srcNode);
+    const { h: th } = getNodeSize(tgtNode);
+    const sx = srcNode.position.x + sw;
+    const sy = srcNode.position.y + sh / 2;
+    const tx = tgtNode.position.x;
+    const ty = tgtNode.position.y + th / 2;
+    const cp = Math.max(Math.abs(tx - sx) * 0.5, 50);
+
+    const d = bezierDist(sx, sy, tx, ty, cp, cx, cy);
+    if (d < bestDist) {
+      bestDist = d;
+      bestId = edge.id;
+    }
+  }
+  return bestId;
+}
+
+/**
+ * Try to insert `nodeId` (with registry def `def`) onto the nearest edge at
+ * flow-space center (cx, cy). Returns true if an insertion was made.
+ */
+function tryInsertOnEdge(
+  nodeId: string,
+  def: { inputs: { id: string }[]; outputs: { id: string }[] },
+  cx: number, cy: number,
+): boolean {
+  const store = useAppStore.getState();
+  const edgeId = findNearestEdge(cx, cy, store.nodes, store.edges, nodeId);
+  if (!edgeId) return false;
+  const edge = store.edges.find((e) => e.id === edgeId);
+  if (!edge) return false;
+
+  const inputPort = def.inputs[0];
+  const outputPort = def.outputs[0];
+
+  const newEdge1: AppEdge = {
+    id: generateEdgeId(edge.source, edge.sourceHandle ?? 'out', nodeId, inputPort.id),
+    source: edge.source,
+    target: nodeId,
+    sourceHandle: edge.sourceHandle,
+    targetHandle: inputPort.id,
+    type: 'typed',
+    animated: true,
+    data: { dataType: 'any' },
+  };
+
+  const newEdge2: AppEdge = {
+    id: generateEdgeId(nodeId, outputPort.id, edge.target, edge.targetHandle ?? 'in'),
+    source: nodeId,
+    target: edge.target,
+    sourceHandle: outputPort.id,
+    targetHandle: edge.targetHandle,
+    type: 'typed',
+    animated: true,
+    data: { dataType: 'any' },
+  };
+
+  store.setEdges(
+    store.edges.filter((e) => e.id !== edge.id).concat(newEdge1, newEdge2) as AppEdge[],
+  );
+  return true;
+}
+
 export function NodeEditor() {
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
@@ -210,6 +319,18 @@ export function NodeEditor() {
 
   // Track the dragged node's start position so we can detect "no real movement" clicks.
   const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  // Track the edge currently highlighted for drop-on-edge insertion.
+  const highlightedEdgeRef = useRef<string | null>(null);
+
+  /** Remove the CSS highlight class from the currently highlighted edge (if any). */
+  const clearEdgeHighlight = useCallback(() => {
+    if (highlightedEdgeRef.current) {
+      document
+        .querySelector(`.react-flow__edge[data-id="${CSS.escape(highlightedEdgeRef.current)}"]`)
+        ?.classList.remove('fs-edge-drop-target');
+      highlightedEdgeRef.current = null;
+    }
+  }, []);
 
   // Capture the start position; defer the history push to onNodeDragStop
   // (so click-only "drags" don't pollute the undo buffer with no-op snapshots).
@@ -217,12 +338,50 @@ export function NodeEditor() {
     dragStartPosRef.current = { x: node.position.x, y: node.position.y };
   }, []);
 
+  /** Set or clear the CSS highlight on the nearest candidate edge. */
+  const updateEdgeHighlight = useCallback(
+    (bestId: string | null) => {
+      if (bestId !== highlightedEdgeRef.current) {
+        clearEdgeHighlight();
+        if (bestId) {
+          document
+            .querySelector(`.react-flow__edge[data-id="${CSS.escape(bestId)}"]`)
+            ?.classList.add('fs-edge-drop-target');
+          highlightedEdgeRef.current = bestId;
+        }
+      }
+    },
+    [clearEdgeHighlight],
+  );
+
+  // Highlight the nearest edge when dragging a node close to it (drop-on-edge preview).
+  const onNodeDrag = useCallback(
+    (_event: React.MouseEvent, draggedNode: AppNode) => {
+      if (draggedNode.type === 'group') return;
+      const def = NODE_REGISTRY.get(draggedNode.data.registryType);
+      if (!def || def.inputs.length === 0 || def.outputs.length === 0) {
+        clearEdgeHighlight();
+        return;
+      }
+
+      const store = useAppStore.getState();
+      const { w: nw, h: nh } = getNodeSize(draggedNode);
+      const cx = draggedNode.position.x + nw / 2;
+      const cy = draggedNode.position.y + nh / 2;
+
+      updateEdgeHighlight(findNearestEdge(cx, cy, store.nodes, store.edges, draggedNode.id));
+    },
+    [clearEdgeHighlight, updateEdgeHighlight],
+  );
+
   // Drop-on-edge: insert dragged node between source and target
   // + Anti-overlap: nudge dropped node so it doesn't sit on top of another
   const onNodeDragStop = useCallback(
     (_event: React.MouseEvent, draggedNode: AppNode) => {
       const store = useAppStore.getState();
       const allNodes = store.nodes;
+
+      clearEdgeHighlight();
 
       // Group nodes are pure containers — they should never trigger drop-on-edge,
       // never anti-overlap-nudge, and never push history beyond what React Flow
@@ -243,13 +402,7 @@ export function NodeEditor() {
         if (moved < DRAG_HISTORY_THRESHOLD) return;
       }
 
-      type Measured = AppNode & { measured?: { width?: number; height?: number } };
-      const getSize = (n: AppNode) => ({
-        w: (n as Measured).measured?.width ?? 120,
-        h: (n as Measured).measured?.height ?? 40,
-      });
-
-      const { w: nw, h: nh } = getSize(draggedNode);
+      const { w: nw, h: nh } = getNodeSize(draggedNode);
       const cx = draggedNode.position.x + nw / 2;
       const cy = draggedNode.position.y + nh / 2;
 
@@ -260,70 +413,7 @@ export function NodeEditor() {
       // --- Drop-on-edge insertion ---
       const def = NODE_REGISTRY.get(draggedNode.data.registryType);
       if (def && def.inputs.length > 0 && def.outputs.length > 0) {
-        for (const edge of store.edges) {
-          if (edge.source === draggedNode.id || edge.target === draggedNode.id) continue;
-
-          const srcNode = allNodes.find((n) => n.id === edge.source);
-          const tgtNode = allNodes.find((n) => n.id === edge.target);
-          if (!srcNode || !tgtNode) continue;
-
-          const { w: sw, h: sh } = getSize(srcNode);
-          const { h: th } = getSize(tgtNode);
-
-          const sx = srcNode.position.x + sw;
-          const sy = srcNode.position.y + sh / 2;
-          const tx = tgtNode.position.x;
-          const ty = tgtNode.position.y + th / 2;
-
-          const cp = Math.max(Math.abs(tx - sx) * 0.5, 50);
-
-          let minDist = Infinity;
-          for (let t = 0; t <= 1; t += 0.05) {
-            const mt = 1 - t;
-            const mt2 = mt * mt;
-            const mt3 = mt2 * mt;
-            const t2 = t * t;
-            const t3 = t2 * t;
-            const bx = mt3 * sx + 3 * mt2 * t * (sx + cp) + 3 * mt * t2 * (tx - cp) + t3 * tx;
-            const by = mt3 * sy + 3 * mt2 * t * sy + 3 * mt * t2 * ty + t3 * ty;
-            const dist = Math.hypot(bx - cx, by - cy);
-            if (dist < minDist) minDist = dist;
-          }
-
-          if (minDist < CONNECTION_RADIUS) {
-            const inputPort = def.inputs[0];
-            const outputPort = def.outputs[0];
-
-            const newEdge1: AppEdge = {
-              id: generateEdgeId(edge.source, edge.sourceHandle ?? 'out', draggedNode.id, inputPort.id),
-              source: edge.source,
-              target: draggedNode.id,
-              sourceHandle: edge.sourceHandle,
-              targetHandle: inputPort.id,
-              type: 'typed',
-              animated: true,
-              data: { dataType: 'any' },
-            };
-
-            const newEdge2: AppEdge = {
-              id: generateEdgeId(draggedNode.id, outputPort.id, edge.target, edge.targetHandle ?? 'in'),
-              source: draggedNode.id,
-              target: edge.target,
-              sourceHandle: outputPort.id,
-              targetHandle: edge.targetHandle,
-              type: 'typed',
-              animated: true,
-              data: { dataType: 'any' },
-            };
-
-            const newEdges = store.edges
-              .filter((e) => e.id !== edge.id)
-              .concat(newEdge1, newEdge2);
-
-            store.setEdges(newEdges as AppEdge[]);
-            break;
-          }
-        }
+        tryInsertOnEdge(draggedNode.id, def, cx, cy);
       }
 
       // --- Anti-overlap: nudge node if it sits on top of another ---
@@ -336,7 +426,7 @@ export function NodeEditor() {
         if (other.id === draggedNode.id) continue;
         // Group containers must not push their members aside.
         if (other.type === 'group') continue;
-        const { w: ow, h: oh } = getSize(other);
+        const { w: ow, h: oh } = getNodeSize(other);
 
         // Check AABB overlap
         const overlapX = Math.min(posX + nw, other.position.x + ow) - Math.max(posX, other.position.x);
@@ -452,7 +542,7 @@ export function NodeEditor() {
 
       store.setNodes(updated);
     },
-    [],
+    [clearEdgeHighlight],
   );
 
   // Track whether a connection attempt succeeded; if not, open add-node menu
@@ -560,6 +650,14 @@ export function NodeEditor() {
     [openContextMenu]
   );
 
+  const onSelectionContextMenu = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault();
+      openContextMenu(event.clientX, event.clientY, 'canvas');
+    },
+    [openContextMenu]
+  );
+
   // Drag-to-delete: track reconnect start + save history
   const onReconnectStart = useCallback(() => {
     reconnectSuccessful.current = false;
@@ -591,11 +689,17 @@ export function NodeEditor() {
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
-  }, []);
+
+    // Highlight the nearest edge for drop-on-edge insertion preview (asset browser drags).
+    const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    const store = useAppStore.getState();
+    updateEdgeHighlight(findNearestEdge(pos.x, pos.y, store.nodes, store.edges));
+  }, [screenToFlowPosition, updateEdgeHighlight]);
 
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
+      clearEdgeHighlight();
 
       // Saved-group drag payload takes precedence over a regular node-type drag
       // (the two payloads can't both be set at once but we check this one first
@@ -621,6 +725,8 @@ export function NodeEditor() {
       // user added a node between render and drop (e.g. via context menu).
       const currentNodes = useAppStore.getState().nodes;
 
+      let newNodeId: string | undefined;
+
       if (def.type === 'output') {
         if (currentNodes.some((n) => n.data.registryType === 'output')) return;
         const newNode: AppNode = {
@@ -630,6 +736,7 @@ export function NodeEditor() {
           data: { registryType: 'output', label: 'Output', cost: 0 } as OutputNodeData,
         };
         addNode(newNode);
+        newNodeId = newNode.id;
       } else {
         let values = { ...def.defaultValues };
         if (def.type === 'property_float') {
@@ -649,9 +756,15 @@ export function NodeEditor() {
           data: { registryType: def.type, label: def.label, cost, values } as ShaderNodeData,
         } as AppNode;
         addNode(newNode);
+        newNodeId = newNode.id;
+      }
+
+      // Drop-on-edge: if the new node landed on an edge, insert it inline.
+      if (newNodeId && def.inputs.length > 0 && def.outputs.length > 0) {
+        tryInsertOnEdge(newNodeId, def, position.x, position.y);
       }
     },
-    [screenToFlowPosition, addNode],
+    [screenToFlowPosition, addNode, clearEdgeHighlight],
   );
 
   // Pick a contrast color for the canvas-scoped badge text + 1-channel edges
@@ -664,11 +777,36 @@ export function NodeEditor() {
   const canvasCssVars = {
     '--node-cost-text': contrastColor,
     '--node-cost-text-shadow': contrastShadow,
+    '--canvas-bg': nodeEditorBgColor,
   } as React.CSSProperties;
+
+  // Let middle/right-click pan through the selection overlay.
+  // React Flow's d3-zoom filter blocks panning when the event target is inside
+  // an element with the `nopan` class. The nodesselection wrapper carries this
+  // class to prevent left-drag panning (so the selection can be dragged
+  // instead). But it also blocks middle-click panning, which is unwanted.
+  // Fix: on middle/right mousedown, temporarily strip the `nopan` class from
+  // the nodesselection wrapper so d3-zoom's filter lets the event through,
+  // then restore it on the next frame.
+  const canvasRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const handler = (e: MouseEvent) => {
+      if (e.button === 0) return;
+      const sel = (e.target as HTMLElement).closest('.react-flow__nodesselection');
+      if (sel && sel.classList.contains('nopan')) {
+        sel.classList.remove('nopan');
+        requestAnimationFrame(() => sel.classList.add('nopan'));
+      }
+    };
+    el.addEventListener('mousedown', handler, true);
+    return () => el.removeEventListener('mousedown', handler, true);
+  }, []);
 
   return (
     <div className="node-editor" style={canvasCssVars}>
-      <div className="node-editor__canvas">
+      <div className="node-editor__canvas" ref={canvasRef}>
         <div className="node-editor__cost-overlay">
           <CostBar />
         </div>
@@ -681,10 +819,12 @@ export function NodeEditor() {
           onConnectStart={onConnectStart}
           onConnectEnd={onConnectEnd}
           onNodeDragStart={onNodeDragStart}
+          onNodeDrag={onNodeDrag}
           onNodeDragStop={onNodeDragStop}
           onPaneContextMenu={onPaneContextMenu}
           onNodeContextMenu={onNodeContextMenu}
           onEdgeContextMenu={onEdgeContextMenu}
+          onSelectionContextMenu={onSelectionContextMenu}
           onPaneClick={closeContextMenu}
           onReconnectStart={onReconnectStart}
           onReconnect={onReconnect}
@@ -709,10 +849,10 @@ export function NodeEditor() {
           style={{ background: nodeEditorBgColor }}
         >
           <Background
-            variant={BackgroundVariant.Dots}
+            variant={BackgroundVariant.Cross}
             gap={20}
             size={1}
-            color="#DDDDDD"
+            color="#BBBBBB"
           />
           <Controls
             showInteractive={false}

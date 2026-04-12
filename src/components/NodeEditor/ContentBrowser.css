@@ -1,6 +1,6 @@
 .content-browser {
   border-top: 1px solid var(--border-subtle);
-  background: var(--bg-panel);
+  background: var(--canvas-bg, var(--bg-panel));
   display: flex;
   flex-direction: column;
   overflow: hidden;
