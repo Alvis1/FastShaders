@@ -117,6 +117,7 @@ export function Toolbar() {
         )}
       </div>
       <div className="toolbar__center">
+        <span className="toolbar__name-label">Script name:</span>
         <input
           className="toolbar__name-input"
           type="text"

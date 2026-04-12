@@ -20,7 +20,6 @@ export function AppLayout() {
         onRatioChange={setSplitRatio}
         left={
           <div className="app-layout__left">
-            <div className="app-layout__panel-label">Node View</div>
             <div className="app-layout__node-editor">
               <NodeEditor />
             </div>
@@ -34,7 +33,6 @@ export function AppLayout() {
               onRatioChange={setRightSplitRatio}
               left={
                 <div className="app-layout__code-panel">
-                  <div className="app-layout__panel-label app-layout__panel-label--right">TSL Code View</div>
                   <div className="app-layout__code">
                     <CodeEditor />
                   </div>

@@ -349,6 +349,11 @@ function processCall(
     }
   }
 
+  // Skip Fn() wrapper — Babel's traverse already enters its arrow function body,
+  // so the inner VariableDeclarator/ReturnStatement visitors process the contents.
+  // Creating an unknown node for Fn would pollute the graph and trigger a warning.
+  if (funcName === 'Fn') return;
+
   // Look up definition
   let def = TSL_FUNCTION_TO_DEF.get(funcName);
   // Also try the registry type directly (e.g. for 'noise' mapping to 'mx_noise_float')

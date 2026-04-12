@@ -21,7 +21,7 @@ src/
 ├── vite-env.d.ts                      # Type declarations (Vite env + __APP_VERSION__)
 ├── components/
 │   ├── CodeEditor/
-│   │   ├── CodeEditor.tsx             # Monaco editor with TSL/A-Frame/Script tabs, Save + Download
+│   │   ├── CodeEditor.tsx             # Monaco editor with TSL/Script folder tabs, Save, Load Script, Download Script
 │   │   ├── CodeEditor.css
 │   │   └── tslLanguage.ts             # TSL language definition, completions, color picker
 │   ├── Layout/
@@ -84,7 +84,8 @@ src/
 │   ├── layoutEngine.ts                # Dagre auto-layout (LR, nodesep=25, ranksep=60)
 │   ├── cpuEvaluator.ts                # CPU-side graph evaluator for real-time values (multi-channel, cycle guard, uses hexToRgb01 from colorUtils)
 │   ├── topologicalSort.ts             # Kahn's algorithm for execution order
-│   └── evaluateTSLScript.ts           # isDirectAssignmentCode() — detects `model.material.*Node = …` style scripts
+│   ├── evaluateTSLScript.ts           # isDirectAssignmentCode() — detects `model.material.*Node = …` style scripts
+│   └── scriptToTSL.ts                # Reverse of tslToShaderModule — converts .js script back to Fn-wrapped TSL
 ├── hooks/
 │   └── useSyncEngine.ts               # Bidirectional sync hook (watches graph/code changes)
 ├── registry/
@@ -149,15 +150,9 @@ model.material.colorNode = mx_noise_vec3(positionGeometry.mul(3));
 
 ### Code Editor Tabs
 
-The code editor has three tabs:
+The code editor has two tabs styled as folder tabs (active tab visually connects to the page below):
 
-- **TSL** — Editable TSL code with Save button and error display (default)
-- **A-Frame** — Read-only self-contained HTML using the shaderloader (`tslToAFrame.ts`):
-  - Loads `aframe-171-a-0.1.min.js` and `a-frame-shaderloader-0.3.js` from jsDelivr CDN
-  - Generates the shader module via `tslToShaderModule()` (same code as Script tab) and embeds it as a blob URL
-  - Applies the shader via `<a-entity shader="src: blobUrl">` — the shaderloader handles TDZ fixes, import resolution, and property uniforms at runtime
-  - Copy-paste ready: just save as `.html` and open
-  - Download as `.html`
+- **TSL** — Editable TSL code with Save button, Load Script button, and error display (default)
 - **Script** — Read-only shaderloader-compatible ES module (`tslToShaderModule.ts`):
   - Header comments with HTML setup, property attribute examples, and runtime update instructions
   - Converts `Fn(() => { ... })` wrapper to `export default function(params) { ... }` (when properties exist) or `export default function() { ... }` (no properties)
@@ -167,11 +162,15 @@ The code editor has three tabs:
   - Position channel wrapped with displacement logic: `positionLocal.add(normalLocal.mul(val))` (normal mode) or `positionLocal.add(val)` (offset mode from `materialSettings`)
   - **Property support**: Emits `export const schema` with property defaults; replaces `const NAME = uniform(VALUE)` with `const NAME = params.NAME`; removes `uniform` from imports when all uniform calls are replaced by params references
   - The shaderloader handles TDZ fixes and missing import injection at runtime
-  - Download as `.js` for use with `<a-entity shader="src: myshader.js; propName: value">`
+  - Download Script button for `.js` export (for use with `<a-entity shader="src: myshader.js; propName: value">`)
 
-Both A-Frame and Script tabs read `materialSettings` and `properties` (from `property_float` nodes) in `CodeEditor.tsx` and thread them to their respective generators.
+The Script tab reads `materialSettings` and `properties` (from `property_float` nodes) in `CodeEditor.tsx` and threads them to the generator.
 
 The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-initialization freezes.
+
+**Load Script**: On the TSL tab, a "Load Script" button opens a file picker for `.js` files. The selected file is read and converted back to TSL code via `scriptToTSL()` ([scriptToTSL.ts](src/engine/scriptToTSL.ts)), which reverses the `tslToShaderModule` transforms: `export default function(params)` → `Fn(() => {`, `params.NAME` → `uniform(default)` (defaults read from `export const schema`), `colorNode` → `color`, strips nested `Fn()` artifacts from unknown-node round-tripping, and re-adds `Fn`/`uniform` to the import line. The converted TSL is written into the editor and a code→graph sync is triggered.
+
+**No panel headers**: The "Node View" and "TSL Code View" panel labels have been removed. The code editor uses a tab bar with folder-style tabs at the top. The toolbar shows a "Script name:" label before the shader name input. The preview panel has a compact top bar with controls (play/pause, reset, bg color, lighting, geometry, subdivision).
 
 ### Preview (ShaderPreview.tsx)
 
@@ -235,6 +234,34 @@ The Babel-based parser handles these patterns:
 - **UV tiling**: `mul(uv(), vec2(x, y))` pattern detected and converted to a single UV node with tiling values
 - **Property nodes**: `uniform(value)` calls → `property_float` nodes with variable name as property name
 - **Three.js editor flat form**: `output = expr;` top-level assignments and `.toVar()` / `.toConst()` passthrough chains
+
+### TSL Code Authoring Constraints
+
+When writing TSL code to paste into FastShaders (or when generating code for an AI/LLM to paste), the following constraints must be respected for the code→graph parser (`codeToGraph.ts`) to produce a correct graph and a working GPU preview:
+
+1. **Every intermediate result must be a named `const` variable.** The `VariableDeclarator` visitor only processes `const x = someCall(...)` statements. Inline/nested call expressions as function arguments (e.g. `smoothstep(float(0.01), float(0.35), x)`) are **silently dropped** — the argument processing loop handles `Identifier` (variable references), `MemberExpression` (`.x`/`.y`), and `NumericLiteral`, but not `CallExpression`. This means:
+   - **Bad**: `smoothstep(float(0.01), float(0.35), x)` → first two args lost, compiles as `smoothstep(0, 0, x)` → WGSL error
+   - **Good**: `const lo = float(0.01);` then `const hi = float(0.35);` then `smoothstep(lo, hi, x)`
+   - **Also good**: `smoothstep(0.01, 0.35, x)` — raw numeric literals work directly
+
+2. **Prefer function-form calls over method chains on non-variable objects.** Method chains like `a.mul(b)` work when `a` is a named variable (the parser reads `objectVarName`). But `float(0.45).sub(x)` fails because the callee object is a `CallExpression`, not an `Identifier` — `objectVarName` is undefined, so the first operand is lost. Break chains into named steps:
+   - **Bad**: `float(0.45).sub(softness)` → first operand lost
+   - **Good**: `const base = float(0.45);` then `base.sub(softness)`
+   - **Also good**: `sub(0.45, softness)` — function form with literal
+
+3. **Use raw numeric literals instead of `float()` wrappers where possible.** `mix(8, 512, t)` is cleaner and guaranteed to parse (the literal handler catches `NumericLiteral`). `float()` works too, but only if the result is stored in a named variable first.
+
+4. **The `Fn` wrapper is silently skipped.** `const shader = Fn(() => { ... })` is the canonical output format from `graphToCode`. `codeToGraph` explicitly skips `Fn` calls (no unknown node, no warning) — Babel's `traverse` already enters the arrow function body and processes its contents via the inner `VariableDeclarator` and `ReturnStatement` visitors.
+
+5. **`uniform()` calls must be inside the `Fn` body.** Property uniforms declared outside the arrow function (e.g. at module top level) won't be traversed by the `VariableDeclarator` visitor inside the `Fn` body, and won't create `property_float` nodes. Place them as the first statements inside `Fn(() => { ... })`.
+
+6. **Function arguments that are supported**: `Identifier` (variable name), `MemberExpression` (`var.x`), `NumericLiteral`, `UnaryExpression` (negative numbers like `-0.5`), `StringLiteral`. Anything else (call expressions, binary expressions, template literals) as a direct argument is silently ignored.
+
+7. **Method chains on named variables are fine.** `coords.mul(cellScale)` works because `coords` resolves to a node ID via `objectVarName`. The chain creates a `mul` node with the object wired to the first input. Multiple chaining (`a.mul(b).add(c)`) works only if each step is a named variable:
+   - **Bad**: `coords.mul(cellScale).add(offset)` → `.add()` sees a `CallExpression` object, not a variable
+   - **Good**: `const scaled = coords.mul(cellScale);` then `scaled.add(offset)`
+
+**Summary rule of thumb**: Write TSL code in SSA-like form — one operation per line, every result named, arguments are either variable names or numeric literals. This is the same style that `graphToCode` emits, so round-tripping is lossless.
 
 ### Zustand Store Shape
 
@@ -608,21 +635,28 @@ When an edge is selected, an info card appears at the midpoint showing live valu
 - **Middle/right-drag on canvas**: Pan
 - **Scroll**: Zoom (0.1x – 3x range)
 - **Right-click canvas**: Opens AddNodeMenu (searchable node palette + "Group Selection" entry when ≥2 non-group nodes are selected)
+- **Right-click box selection**: Opens AddNodeMenu (same as canvas — shows "Group Selection" at top when ≥2 groupable nodes are selected). Uses React Flow's `onSelectionContextMenu`.
 - **Right-click node**: Opens NodeSettingsMenu (edit values, duplicate, delete)
 - **Right-click output node**: Opens ShaderSettingsMenu (cost, ports, displacement, material, uniforms)
 - **Right-click group**: Opens GroupSettingsMenu (rename, recolor, save to library, ungroup)
 - **Right-click edge**: Opens EdgeContextMenu (delete)
 - **Drag from handle → release on empty space**: Opens AddNodeMenu at drop position
-- **Drop node on edge**: Inserts node between source and target (bezier curve proximity detection, `CONNECTION_RADIUS` = 40px threshold, shared with `connectionRadius` prop)
+- **Drop node on edge**: Inserts node between source and target (bezier curve proximity detection, `CONNECTION_RADIUS` = 40px threshold, shared with `connectionRadius` prop). Works both for existing nodes dragged on the canvas **and** for new nodes dragged from the asset browser.
 
 ### Drop-on-Edge Insertion
 
 When a node is dragged and dropped near an existing edge:
 
-1. Samples 20 points along the cubic bezier curve between source/target
-2. Finds minimum distance from dragged node center to curve
-3. If within `CONNECTION_RADIUS` (40px): removes original edge, creates two new edges through the dropped node
+1. Samples 20 points along the cubic bezier curve between source/target (via `bezierDist()`)
+2. `findNearestEdge()` returns the closest edge within `CONNECTION_RADIUS` (40px)
+3. `tryInsertOnEdge()` removes the original edge and creates two new edges through the dropped node
 4. Uses first input and first output ports of the dropped node's registry definition
+
+**Works for two paths:**
+- **Existing nodes** — `onNodeDrag` highlights the candidate edge (thick stroke via `fs-edge-drop-target` CSS class, applied directly to the DOM via ref — not store — to avoid rerenders on every drag frame). `onNodeDragStop` calls `tryInsertOnEdge()`.
+- **Asset browser drags** — `onDragOver` converts screen coords to flow-space via `screenToFlowPosition` and highlights the candidate edge. `onDrop` creates the node via `addNode` then calls `tryInsertOnEdge()`.
+
+Both paths share the same module-level helpers (`getNodeSize`, `bezierDist`, `findNearestEdge`, `tryInsertOnEdge`) to avoid duplication.
 
 History is pushed once in `onNodeDragStop` (covering both the position change and any edge insertion). Click-only events (no drag) are skipped via `DRAG_HISTORY_THRESHOLD = 2px` so the undo buffer isn't polluted with no-ops.
 

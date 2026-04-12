@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { useAppStore } from '@/store/useAppStore';
 import { registerTSLLanguage } from './tslLanguage';
-import { tslToAFrame } from '@/engine/tslToAFrame';
 import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
+import { scriptToTSL } from '@/engine/scriptToTSL';
 import { getNodeValues } from '@/types';
 import type { MaterialSettings, OutputNodeData } from '@/types';
 import { toKebabCase } from '@/utils/nameUtils';
 import './CodeEditor.css';
 
-type CodeTab = 'tsl' | 'aframe' | 'script';
+type CodeTab = 'tsl' | 'script';
 
 const BASE_EDITOR_OPTIONS = {
   minimap: { enabled: false },
@@ -85,15 +85,6 @@ export function CodeEditor() {
   }, [requestCodeSync]);
 
   // Only compute export code when that tab is active; catch errors to avoid blank tabs
-  const aframeCode = useMemo(() => {
-    if (activeTab !== 'aframe') return '';
-    try {
-      return tslToAFrame(code, shaderName, { materialSettings, properties });
-    } catch (e) {
-      return `<!-- Export error: ${e instanceof Error ? e.message : String(e)} -->`;
-    }
-  }, [code, activeTab, shaderName, materialSettings, properties]);
-
   const scriptCode = useMemo(() => {
     if (activeTab !== 'script') return '';
     try {
@@ -107,16 +98,6 @@ export function CodeEditor() {
 
   const fileBaseName = toKebabCase(shaderName || 'shader');
 
-  const handleDownloadHTML = useCallback(() => {
-    const blob = new Blob([aframeCode], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${fileBaseName}.html`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [aframeCode, fileBaseName]);
-
   const handleDownloadScript = useCallback(() => {
     const blob = new Blob([scriptCode], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
@@ -127,21 +108,43 @@ export function CodeEditor() {
     URL.revokeObjectURL(url);
   }, [scriptCode, fileBaseName]);
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleLoadScript = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = reader.result as string;
+      const tslCode = scriptToTSL(text);
+      setCode(tslCode, 'code');
+      setActiveTab('tsl');
+      requestCodeSync();
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }, [setCode, requestCodeSync]);
+
   return (
     <div className="code-editor">
-      <div className="code-editor__header">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".js"
+        style={{ display: 'none' }}
+        onChange={handleFileChange}
+      />
+      <div className="code-editor__tabbar">
         <div className="code-editor__tabs">
           <button
             className={`code-editor__tab ${activeTab === 'tsl' ? 'code-editor__tab--active' : ''}`}
             onClick={() => setActiveTab('tsl')}
           >
             TSL
-          </button>
-          <button
-            className={`code-editor__tab ${activeTab === 'aframe' ? 'code-editor__tab--active' : ''}`}
-            onClick={() => setActiveTab('aframe')}
-          >
-            A-Frame
           </button>
           <button
             className={`code-editor__tab ${activeTab === 'script' ? 'code-editor__tab--active' : ''}`}
@@ -169,14 +172,14 @@ export function CodeEditor() {
               Save
             </button>
           )}
-          {activeTab === 'aframe' && (
-            <button className="code-editor__download" onClick={handleDownloadHTML}>
-              Download .html
+          {isTSL && (
+            <button className="code-editor__action-btn" onClick={handleLoadScript} title="Load a shaderloader .js file into the editor">
+              Load Script
             </button>
           )}
           {activeTab === 'script' && (
-            <button className="code-editor__download" onClick={handleDownloadScript}>
-              Download .js
+            <button className="code-editor__action-btn" onClick={handleDownloadScript}>
+              Download Script
             </button>
           )}
           <button
@@ -225,18 +228,6 @@ export function CodeEditor() {
             options={BASE_EDITOR_OPTIONS}
           />
         </div>
-        {/* A-Frame HTML preview (read-only) */}
-        {activeTab === 'aframe' && (
-          <div className="code-editor__pane">
-            <Editor
-              height="100%"
-              defaultLanguage="html"
-              value={aframeCode}
-              theme={codeEditorTheme}
-              options={READONLY_EDITOR_OPTIONS}
-            />
-          </div>
-        )}
         {/* Shader script preview (read-only) — for a-frame-shaderloader */}
         {activeTab === 'script' && (
           <div className="code-editor__pane">
