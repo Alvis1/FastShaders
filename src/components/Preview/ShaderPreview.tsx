@@ -310,69 +310,64 @@ export function ShaderPreview() {
 
   return (
     <div className="shader-preview">
-      <div className="shader-preview__header">
-        <div className="shader-preview__header-left">
-          <span>Preview</span>
-          <button
-            type="button"
-            className="shader-preview__reset-btn"
-            onClick={handleReset}
-            title="Reset camera, lighting, subdivision, and uniform values to defaults"
-          >
-            Reset
-          </button>
-        </div>
-        <div className="shader-preview__controls">
-          <button
-            className="shader-preview__play-btn"
-            onClick={() => setPlaying((p) => !p)}
-            title={playing ? 'Pause rotation' : 'Play rotation'}
-          >
-            {playing ? '\u23F8' : '\u25B6'}
-          </button>
-          <input
-            type="color"
-            className="shader-preview__bg-color"
-            value={bgColor}
-            onChange={(e) => setBgColor(e.target.value)}
-            title="Background color"
-          />
-          <select
-            className="shader-preview__geo-select"
-            value={lighting}
-            onChange={(e) => setLighting(e.target.value as LightingMode)}
-            title="Lighting mode"
-          >
-            <option value="studio">light: Studio</option>
-            <option value="moon">light: Moon</option>
-            <option value="laboratory">light: Laboratory</option>
-          </select>
-          <select
-            className="shader-preview__geo-select"
-            value={geometry}
-            onChange={(e) => setGeometry(e.target.value as GeometryType)}
-          >
-            <option value="sphere">Sphere</option>
-            <option value="cube">Cube</option>
-            <option value="plane">Plane</option>
-            <option value="teapot">Utah Teapot</option>
-            <option value="bunny">Stanford Bunny</option>
-          </select>
-          {!isObjGeometry(geometry) && (
-            <label className="shader-preview__subdivision" title="Mesh subdivision">
-              <input
-                type="range"
-                min={SUBDIVISION_MIN}
-                max={SUBDIVISION_MAX}
-                step={1}
-                value={subdivision}
-                onChange={(e) => setSubdivision(parseInt(e.target.value, 10))}
-                className="shader-preview__subdivision-slider"
-              />
-              <span className="shader-preview__subdivision-value">{subdivision}</span>
-            </label>
-          )}
-        </div>
+      <div className="shader-preview__controls">
+        <button
+          className="shader-preview__play-btn"
+          onClick={() => setPlaying((p) => !p)}
+          title={playing ? 'Pause rotation' : 'Play rotation'}
+        >
+          {playing ? '\u23F8' : '\u25B6'}
+        </button>
+        <button
+          type="button"
+          className="shader-preview__reset-btn"
+          onClick={handleReset}
+          title="Reset camera, lighting, subdivision, and uniform values to defaults"
+        >
+          Reset
+        </button>
+        <input
+          type="color"
+          className="shader-preview__bg-color"
+          value={bgColor}
+          onChange={(e) => setBgColor(e.target.value)}
+          title="Background color"
+        />
+        <select
+          className="shader-preview__geo-select"
+          value={lighting}
+          onChange={(e) => setLighting(e.target.value as LightingMode)}
+          title="Lighting mode"
+        >
+          <option value="studio">light: Studio</option>
+          <option value="moon">light: Moon</option>
+          <option value="laboratory">light: Laboratory</option>
+        </select>
+        <select
+          className="shader-preview__geo-select"
+          value={geometry}
+          onChange={(e) => setGeometry(e.target.value as GeometryType)}
+        >
+          <option value="sphere">Sphere</option>
+          <option value="cube">Cube</option>
+          <option value="plane">Plane</option>
+          <option value="teapot">Utah Teapot</option>
+          <option value="bunny">Stanford Bunny</option>
+        </select>
+        {!isObjGeometry(geometry) && (
+          <label className="shader-preview__subdivision" title="Mesh subdivision">
+            <input
+              type="range"
+              min={SUBDIVISION_MIN}
+              max={SUBDIVISION_MAX}
+              step={1}
+              value={subdivision}
+              onChange={(e) => setSubdivision(parseInt(e.target.value, 10))}
+              className="shader-preview__subdivision-slider"
+            />
+            <span className="shader-preview__subdivision-value">{subdivision}</span>
+          </label>
+        )}
       </div>
       <div className="shader-preview__body">
         <iframe

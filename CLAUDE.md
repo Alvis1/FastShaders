@@ -34,7 +34,7 @@ src/
     tokens.css        — CSS design tokens (colors, spacing, typography, z-index)
     reset.css         — CSS reset
   components/
-    CodeEditor/       — Monaco editor panel (TSL/A-Frame/Script tabs, download)
+    CodeEditor/       — Monaco editor panel (TSL/Script folder tabs, Save, Load Script, Download Script)
       tslLanguage.ts  — Monaco TSL type declarations + hex color picker
     Layout/           — Toolbar (brand→contact popover, version), CostBar, SplitPane, AppLayout
     NodeEditor/       — React Flow graph editor + ContentBrowser (node palette + Saved Groups tab)
@@ -58,6 +58,7 @@ src/
     layoutEngine.ts   — Dagre auto-layout
     cpuEvaluator.ts   — CPU-side recursive graph evaluation (live previews, cost)
     evaluateTSLScript.ts — detects `model.material.*Node = ...` direct-assignment style
+    scriptToTSL.ts    — reverse of tslToShaderModule (converts .js script back to Fn-wrapped TSL)
   hooks/
     useSyncEngine.ts  — bidirectional graph↔code sync, undo/redo, complexity calc
   registry/

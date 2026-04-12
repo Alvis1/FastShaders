@@ -6,7 +6,7 @@
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
-  height: 40px;
+  height: auto;
 }
 
 .toolbar__left {
@@ -19,7 +19,7 @@
 
 .toolbar__brand {
   font-family: var(--font-sans);
-  font-size: var(--font-size-md);
+  font-size: 28px;
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: -0.02em;
@@ -121,7 +121,17 @@
 .toolbar__center {
   flex: 1;
   display: flex;
+  align-items: baseline;
   justify-content: center;
+  gap: var(--space-2);
+}
+
+.toolbar__name-label {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-lg);
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .toolbar__name-input {

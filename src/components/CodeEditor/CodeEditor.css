@@ -5,54 +5,62 @@
   background: var(--bg-panel);
 }
 
-.code-editor__header {
+/* Tab bar — sits above the editor, contains folder tabs + actions */
+.code-editor__tabbar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  padding: var(--space-1) var(--space-3);
+  padding: 0 var(--space-2);
   background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
-  gap: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Folder-style tab row */
 .code-editor__tabs {
   display: flex;
-  gap: 2px;
+  gap: 0;
+  position: relative;
+  bottom: -1px; /* overlap the tabbar border so active tab merges with content */
 }
 
 .code-editor__tab {
-  padding: 3px 12px;
-  font-size: var(--font-size-xs);
+  padding: 5px 16px 4px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--text-secondary);
-  background: transparent;
+  background: var(--bg-surface);
   border: 1px solid transparent;
-  border-radius: var(--border-radius-sm);
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm) var(--border-radius-sm) 0 0;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s;
+  position: relative;
 }
 
 .code-editor__tab:hover {
   color: var(--text-primary);
-  background: rgba(0, 0, 0, 0.04);
+  background: rgba(0, 0, 0, 0.02);
 }
 
+/* Active tab: connected to the page below — border on top/sides, no bottom border */
 .code-editor__tab--active {
   color: var(--text-primary);
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--bg-panel);
   border-color: var(--border-subtle);
+  border-bottom-color: var(--bg-panel); /* erase the bar's bottom border */
 }
 
+/* Actions row (right side of tabbar) */
 .code-editor__actions {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-left: auto;
+  padding-bottom: 4px;
 }
 
 .code-editor__errors {
-  font-size: var(--font-size-xs);
+  font-size: 17px;
   color: #e74c3c;
   background: rgba(231, 76, 60, 0.15);
   padding: 2px 8px;
@@ -60,7 +68,7 @@
 }
 
 .code-editor__warnings {
-  font-size: var(--font-size-xs);
+  font-size: 17px;
   color: #e67e22;
   background: rgba(230, 126, 34, 0.15);
   padding: 2px 8px;
@@ -68,8 +76,8 @@
 }
 
 .code-editor__save {
-  padding: 3px 14px;
-  font-size: var(--font-size-xs);
+  padding: 4px 14px;
+  font-size: 17px;
   font-weight: 600;
   color: white;
   background: var(--text-secondary);
@@ -83,9 +91,9 @@
   background: var(--text-primary);
 }
 
-.code-editor__download {
-  padding: 3px 14px;
-  font-size: var(--font-size-xs);
+.code-editor__action-btn {
+  padding: 4px 14px;
+  font-size: 17px;
   font-weight: 600;
   color: white;
   background: var(--text-accent);
@@ -95,7 +103,7 @@
   transition: background 0.15s;
 }
 
-.code-editor__download:hover {
+.code-editor__action-btn:hover {
   background: var(--text-primary);
 }
 
@@ -103,10 +111,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 22px;
+  width: 30px;
+  height: 28px;
   padding: 0;
-  font-size: 14px;
+  font-size: 17px;
   line-height: 1;
   color: var(--text-secondary);
   background: transparent;
