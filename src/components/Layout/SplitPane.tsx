@@ -19,31 +19,28 @@ export function SplitPane({
   const dragging = useRef(false);
   const isH = direction === 'horizontal';
 
-  const handleMouseDown = useCallback(() => {
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
     dragging.current = true;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
     document.body.style.cursor = isH ? 'col-resize' : 'row-resize';
     document.body.style.userSelect = 'none';
+  }, [isH]);
 
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!dragging.current || !containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const newRatio = isH
-        ? (e.clientX - rect.left) / rect.width
-        : (e.clientY - rect.top) / rect.height;
-      onRatioChange(newRatio);
-    };
-
-    const handleMouseUp = () => {
-      dragging.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragging.current || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const newRatio = isH
+      ? (e.clientX - rect.left) / rect.width
+      : (e.clientY - rect.top) / rect.height;
+    onRatioChange(Math.max(0.05, Math.min(0.95, newRatio)));
   }, [isH, onRatioChange]);
+
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    dragging.current = false;
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }, []);
 
   const firstSize = isH
     ? { width: `${ratio * 100}%` }
@@ -63,13 +60,16 @@ export function SplitPane({
         {left}
       </div>
       <div
-        onMouseDown={handleMouseDown}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
         style={{
           [isH ? 'width' : 'height']: '4px',
           cursor: isH ? 'col-resize' : 'row-resize',
           background: 'var(--border-subtle)',
           flexShrink: 0,
           transition: 'background var(--transition-fast)',
+          touchAction: 'none',
         }}
         onMouseEnter={(e) => {
           (e.target as HTMLElement).style.background = 'var(--border-focus)';
