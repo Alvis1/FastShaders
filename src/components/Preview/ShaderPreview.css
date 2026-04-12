@@ -16,9 +16,9 @@
 }
 
 .shader-preview__reset-btn {
-  padding: 3px 12px;
+  padding: 3px 10px;
   height: auto;
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 600;
   color: #d32f2f;
   background: var(--bg-panel);
@@ -41,10 +41,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 27px;
+  height: 27px;
   padding: 0;
-  font-size: 15px;
+  font-size: 12px;
   line-height: 1;
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
@@ -58,8 +58,8 @@
 }
 
 .shader-preview__bg-color {
-  width: 28px;
-  height: 28px;
+  width: 27px;
+  height: 27px;
   padding: 2px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
@@ -83,9 +83,9 @@
 }
 
 .shader-preview__geo-select {
-  font-size: 17px;
+  font-size: 14px;
   font-family: var(--font-sans);
-  padding: 3px 8px;
+  padding: 3px 6px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   background: var(--bg-panel);
@@ -103,7 +103,7 @@
   align-items: center;
   gap: 4px;
   padding: 0 6px;
-  height: 28px;
+  height: 27px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   background: var(--bg-panel);
@@ -114,16 +114,16 @@
 }
 
 .shader-preview__subdivision-slider {
-  width: 80px;
+  width: 75px;
   margin: 0;
   cursor: pointer;
 }
 
 .shader-preview__subdivision-value {
-  font-size: 15px;
+  font-size: 12px;
   font-family: var(--font-mono, monospace);
   color: var(--text-secondary);
-  min-width: 28px;
+  min-width: 27px;
   text-align: right;
   user-select: none;
 }

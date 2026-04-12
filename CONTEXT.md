@@ -632,7 +632,7 @@ When an edge is selected, an info card appears at the midpoint showing live valu
 ### Mouse Interactions
 
 - **Left-drag on canvas**: Box selection (partial overlap mode — `SelectionMode.Partial`)
-- **Middle/right-drag on canvas**: Pan
+- **Middle/right-drag on canvas**: Pan (works even over selected-node regions — a capture-phase `mousedown` handler temporarily strips the `nopan` class from React Flow's `__nodesselection` wrapper so d3-zoom's filter lets the event through)
 - **Scroll**: Zoom (0.1x – 3x range)
 - **Right-click canvas**: Opens AddNodeMenu (searchable node palette + "Group Selection" entry when ≥2 non-group nodes are selected)
 - **Right-click box selection**: Opens AddNodeMenu (same as canvas — shows "Group Selection" at top when ≥2 groupable nodes are selected). Uses React Flow's `onSelectionContextMenu`.
@@ -817,7 +817,8 @@ interface BoundarySocket {
 
 ## Canvas Background + Auto-Contrast
 
-- **`nodeEditorBgColor`** store field (localStorage `fs:nodeEditorBgColor`, default `#FAFAFA`). Wired to React Flow's root via `style={{ background }}` and to a color swatch button slotted inside the React Flow `<Controls>` next to the +/- buttons (custom CSS in [NodeEditor.css](src/components/NodeEditor/NodeEditor.css)).
+- **`nodeEditorBgColor`** store field (localStorage `fs:nodeEditorBgColor`, default `#FAFAFA`). Wired to React Flow's root via `style={{ background }}` and to a color swatch button slotted inside the React Flow `<Controls>` next to the +/- buttons (custom CSS in [NodeEditor.css](src/components/NodeEditor/NodeEditor.css)). Also passed as `--canvas-bg` CSS variable on the `.node-editor` wrapper, consumed by the content browser (`background: var(--canvas-bg, var(--bg-panel))`) so the asset drawer background matches the canvas.
+- **Background pattern**: `BackgroundVariant.Cross` — cross/plus pattern with `gap: 20`, `size: 1`, `color: #BBBBBB`.
 - **`getContrastColor(hex)`** in [colorUtils.ts](src/utils/colorUtils.ts) returns `'#000000'` or `'#ffffff'` based on Rec. 601 luminance (threshold 0.55).
 - **Cost badges** — [NodeBase.css](src/components/NodeEditor/nodes/NodeBase.css) defines `.react-flow .node-base__cost-badge` that reads `--node-cost-text` / `--node-cost-text-shadow` CSS vars set on the `.node-editor` wrapper from `getContrastColor(nodeEditorBgColor)`. The `!important` is needed to override the inline cost-gradient color the components still pass — that inline color only applies to NodePreviewCard tiles in the asset bar (outside React Flow's scope), where it should keep cost-gradient text.
 - **1-channel edges** — [TypedEdge.tsx](src/components/NodeEditor/edges/TypedEdge.tsx) reads `nodeEditorBgColor` and substitutes `getContrastColor()` for the single-channel edge color (formerly hardcoded `#000000`). Multi-channel R/G/B(A) edges keep their saturated colors.
@@ -827,7 +828,7 @@ interface BoundarySocket {
 ## Code Editor Theme Toggle
 
 - **`codeEditorTheme: 'vs' | 'vs-dark'`** store field, persisted to `fs:codeEditorTheme`.
-- Sun/moon button on the right side of the [CodeEditor.tsx](src/components/CodeEditor/CodeEditor.tsx) header (after Save / Download). Applies the chosen theme to all three Monaco editors (TSL, A-Frame, Script).
+- Sun/moon button in the code editor tab bar (after Save / Load Script / Download Script). Applies the chosen theme to both Monaco editors (TSL, Script).
 
 ---
 
