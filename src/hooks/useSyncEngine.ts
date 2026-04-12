@@ -305,7 +305,13 @@ export function useSyncEngine() {
       }
       for (const node of nodes) {
         if (visited.has(node.id) && node.id !== outputNode.id) {
-          total += costs[node.data.registryType] ?? 0;
+          // Collapsed groups cache the sum of their members' costs — use that
+          // instead of the (zero) registry cost so the total stays stable.
+          if (node.type === 'group' && node.data.collapsed && node.data.cost) {
+            total += node.data.cost;
+          } else {
+            total += costs[node.data.registryType] ?? 0;
+          }
         }
       }
     }

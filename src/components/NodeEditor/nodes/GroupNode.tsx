@@ -1,5 +1,5 @@
-import { memo, type MouseEvent } from 'react';
-import { NodeResizer, Position, type NodeProps } from '@xyflow/react';
+import { memo, useEffect, type MouseEvent } from 'react';
+import { NodeResizer, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { GroupFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { TypedHandle } from '../handles/TypedHandle';
@@ -24,6 +24,20 @@ export const GroupNode = memo(function GroupNode({
   const color = data.color ?? '#6366f1';
   const collapsed = !!data.collapsed;
   const toggleGroupCollapsed = useAppStore((s) => s.toggleGroupCollapsed);
+
+  // Tell React Flow to re-measure handle positions when boundary sockets
+  // change. Without this, dynamically mounted synthetic handles (__in_*,
+  // __out_*) aren't in React Flow's bounds map and edges fail to render.
+  const updateNodeInternals = useUpdateNodeInternals();
+  const socketKey = [
+    ...(data.collapsedInputs ?? []).map((s) => s.socketId),
+    ...(data.collapsedOutputs ?? []).map((s) => s.socketId),
+  ].join('|');
+  useEffect(() => {
+    if (collapsed) {
+      updateNodeInternals(id);
+    }
+  }, [id, collapsed, socketKey, updateNodeInternals]);
 
   const onToggle = (e: MouseEvent) => {
     // Stop the click from also selecting/dragging the group node.
