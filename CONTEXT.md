@@ -220,7 +220,7 @@ The generated iframe HTML carries an inline bridge script that talks to the pare
 - **Code → Graph**: Manual via Save button / Ctrl+S (`codeToGraph()` with Babel parser, `errorRecovery: true`)
 - **Stable node matching**: Two-pass matching (registryType+label, then registryType only) preserves node positions, IDs, `exposedPorts`, and `materialSettings` across syncs
 - **Auto-expose ports**: After code→graph sync, any port with an incoming edge is automatically added to `exposedPorts` (texture, noise, output nodes)
-- **Complexity**: Traverses backward from Output node, sums costs from `complexity.json`. Uses `lastCostRef` guard to prevent double BFS runs (updating output node cost triggers nodes change → would re-run the effect)
+- **Complexity**: Traverses backward from Output node, sums costs from `complexity.json`. Uses `lastCostRef` guard to prevent double BFS runs (updating output node cost triggers nodes change → would re-run the effect). Collapsed groups are opaque to the BFS (no edges lead from the group node into its members), so the summation loop uses the group's cached `data.cost` instead of the (zero) registry cost — this keeps the total stable across collapse/expand.
 
 ### Code → Graph Parsing (codeToGraph.ts)
 
@@ -788,7 +788,8 @@ Selection groups are first-class React Flow nodes (`type: 'group'`) that own mem
   - [cpuEvaluator.ts](src/engine/cpuEvaluator.ts) — entry of `evaluateNodeOutput`, `getNodeOutputShape`, and `evaluateNodeRange`. Fixes live edge value cards (EdgeInfoCard), PreviewNode/MathPreviewNode thumbnails, and the `getComponentCount` shape inference used by `append` codegen. `evaluateNodeScalar` and `getComponentCount` are pass-throughs to those entries so they inherit the fix. `getNodeOutputShape` only unwraps when `visited.size === 0` (top-level call); recursive calls reuse the already-unwrapped array.
   - The visual rewrite in `toggleGroupCollapsed` stays untouched — the unwrap is purely a logical view applied at engine boundaries. Whichever side a consumer cares about, it gets a coherent answer.
 - **Pill geometry** — `COLLAPSED_W = 130`, `HEADER_H = 28`, `SOCKET_TOP_PAD = 8`, `SOCKET_H = 18`. Height = `HEADER_H + SOCKET_TOP_PAD + max(1, socketCount) * SOCKET_H + 6`. The padding pushes the first handle dot below the colored header strip so they don't visually collide. The constant is duplicated in `GroupNode.tsx` and the store — keep them in sync.
-- **Cost badge** — `data.cost` is set to the sum of GPU costs of every member (looked up from `complexity.json` by `registryType`). Rendered above the pill via the same `node-base__cost-badge` class as regular nodes (so it auto-flips contrast against the canvas background).
+- **Cost badge** — `data.cost` is set to the sum of GPU costs of every member (looked up from `complexity.json` by `registryType`). Rendered above the pill via the same `node-base__cost-badge` class as regular nodes (so it auto-flips contrast against the canvas background). The global complexity BFS in `useSyncEngine` also reads this cached value — since boundary edge rewriting makes members unreachable from the group node, the BFS treats collapsed groups as opaque and uses `data.cost` directly.
+- **Handle internals** — `GroupNode` calls `useUpdateNodeInternals()` whenever the group is collapsed and the set of boundary sockets changes, matching the pattern used by `OutputNode` and `PreviewNode`. Without this, React Flow's internal bounds map doesn't know about the dynamically mounted synthetic handles and edges fail to render.
 - **Resize handles** are hidden while collapsed — the pill is fixed-size.
 
 ### BoundarySocket
