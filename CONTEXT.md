@@ -27,7 +27,7 @@ src/
 │   ├── Layout/
 │   │   ├── AppLayout.tsx              # Two nested SplitPanes (left: graph | right: code/preview)
 │   │   ├── AppLayout.css
-│   │   ├── SplitPane.tsx              # Draggable divider (horizontal or vertical)
+│   │   ├── SplitPane.tsx              # Draggable divider (pointer-captured, horizontal or vertical)
 │   │   ├── Toolbar.tsx                # Top bar: clickable brand → contact popover, version, shader name input
 │   │   ├── Toolbar.css
 │   │   ├── CostBar.tsx                # GPU complexity bar (totalCost vs headset budget)
@@ -57,7 +57,7 @@ src/
 │   │   │   └── EdgeInfoCard.css
 │   │   ├── inputs/
 │   │   │   └── DragNumberInput.tsx    # Drag-to-adjust number input with acceleration
-│   │   ├── ContentBrowser.tsx         # Category-tabbed asset drawer with horizontal scroll + Saved Groups tab
+│   │   ├── ContentBrowser.tsx         # Category-tabbed asset drawer with search, folder tabs, horizontal scroll + Saved Groups tab
 │   │   ├── ContentBrowser.css
 │   │   ├── NodePreviewCard.tsx        # Type-dispatching preview card (7 visual variants matching editor nodes)
 │   │   ├── NodePreviewCard.css
@@ -171,6 +171,8 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 **Load Script**: On the TSL tab, a "Load Script" button opens a file picker for `.js` files. The selected file is read and converted back to TSL code via `scriptToTSL()` ([scriptToTSL.ts](src/engine/scriptToTSL.ts)), which reverses the `tslToShaderModule` transforms: `export default function(params)` → `Fn(() => {`, `params.NAME` → `uniform(default)` (defaults read from `export const schema`), `colorNode` → `color`, strips nested `Fn()` artifacts from unknown-node round-tripping, and re-adds `Fn`/`uniform` to the import line. The converted TSL is written into the editor and a code→graph sync is triggered.
 
 **No panel headers**: The "Node View" and "TSL Code View" panel labels have been removed. The code editor uses a tab bar with folder-style tabs at the top. The toolbar shows a "Script name:" label before the shader name input. The preview panel has a compact top bar with controls (play/pause, reset, bg color, lighting, geometry, subdivision).
+
+**SplitPane** ([SplitPane.tsx](src/components/Layout/SplitPane.tsx)): Uses `setPointerCapture()` on the divider so dragging never loses grip — even when the cursor flies over iframes or other elements that would swallow regular mouse events. Ratio clamped to `[0.05, 0.95]`. `touchAction: none` prevents browser scroll hijack on touch devices.
 
 ### Preview (ShaderPreview.tsx)
 
@@ -479,6 +481,10 @@ Adjustable float value with a visual range slider and configurable min/max bound
 ### Asset Browser (ContentBrowser + NodePreviewCard)
 
 The asset browser is a horizontal scrollable drawer at the bottom of the node editor, showing all available nodes grouped by category tabs. The Noise category lists all 8 MaterialX noise variants sorted by GPU cost ascending.
+
+- **Search bar** — text input before the tab row, filters nodes by label, type, or description. Visible on all tabs (except Saved Groups which shows saved group cards).
+- **Folder-style tabs** — styled like the CodeEditor TSL/Script tabs (top/side borders, rounded top corners, `bottom: -1px` overlap so active tab merges with content). Font size 17px, bold (600 weight). Each tab has a tinted category-color background: ~8% opacity when inactive, ~20% when active. The items area below also tints with the active category color at ~10% opacity. A `CAT_HEX` map in ContentBrowser holds raw hex values (the main `CATEGORY_COLORS` uses CSS variables which can't take alpha suffixes).
+- **Scrollbar hidden** on the items row (`scrollbar-width: none` + `::-webkit-scrollbar { display: none }`). Horizontal scrolling works via vertical-to-horizontal wheel conversion (same listener on both the tabs row and the items row).
 
 **NodePreviewCard** dispatches to visual variants based on `getFlowNodeType(def)` and `def.type`, matching the editor node appearance:
 

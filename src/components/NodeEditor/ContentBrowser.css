@@ -8,12 +8,14 @@
 
 .content-browser__categories {
   display: flex;
-  gap: 4px;
-  padding: var(--space-2) var(--space-3);
+  align-items: flex-end;
+  gap: 0;
+  padding: 0 var(--space-2);
   overflow-x: auto;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-surface);
+  position: relative;
 }
 
 .content-browser__categories::-webkit-scrollbar {
@@ -25,26 +27,61 @@
   border-radius: 2px;
 }
 
+/* Search field — sits before all tabs */
+.content-browser__search {
+  flex-shrink: 0;
+  width: 110px;
+  padding: 3px 8px;
+  margin-right: 6px;
+  margin-bottom: 3px;
+  font-size: 14px;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  outline: none;
+  align-self: center;
+}
+
+.content-browser__search:focus {
+  border-color: var(--text-secondary);
+}
+
+.content-browser__search::placeholder {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* Folder-style tabs — mirrors the CodeEditor TSL/Script tabs */
 .content-browser__cat-btn {
   flex-shrink: 0;
-  padding: 3px 10px;
-  border-radius: 12px;
-  font-size: var(--font-size-xs);
+  padding: 5px 14px 4px;
+  font-size: 17px;
   font-family: var(--font-sans);
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
-  transition: all var(--transition-fast);
-  border: 1.5px solid transparent;
-  background: transparent;
+  transition: color 0.15s, background 0.15s;
+  border: 1px solid transparent;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm) var(--border-radius-sm) 0 0;
+  background: var(--bg-surface);
   color: var(--text-secondary);
+  position: relative;
+  bottom: -1px;
 }
 
 .content-browser__cat-btn:hover {
-  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.02);
 }
 
+/* Active tab: connected to the page below — border on top/sides, no bottom border */
 .content-browser__cat-btn--active {
-  color: #fff;
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+  border-bottom-color: transparent;
 }
 
 .content-browser__items {
@@ -56,15 +93,11 @@
   gap: 2px;
   align-items: flex-start;
   min-height: 160px;
+  scrollbar-width: none;            /* Firefox */
 }
 
 .content-browser__items::-webkit-scrollbar {
-  height: 4px;
-}
-
-.content-browser__items::-webkit-scrollbar-thumb {
-  background: var(--border-default);
-  border-radius: 2px;
+  display: none;                     /* Chrome / Safari */
 }
 
 .content-browser__empty {
