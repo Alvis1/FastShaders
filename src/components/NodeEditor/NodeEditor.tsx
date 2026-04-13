@@ -25,6 +25,7 @@ import { TypedEdge } from './edges/TypedEdge';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
+import { BUILTIN_TEXTURE_DRAG_TYPE } from './TextureCard';
 import { CostBar } from '@/components/Layout/CostBar';
 import { getCostColor, getContrastColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
@@ -708,6 +709,14 @@ export function NodeEditor() {
       if (savedGroupId) {
         const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
         useAppStore.getState().instantiateSavedGroup(savedGroupId, position);
+        return;
+      }
+
+      // Built-in texture drag
+      const textureId = event.dataTransfer.getData(BUILTIN_TEXTURE_DRAG_TYPE);
+      if (textureId) {
+        const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+        useAppStore.getState().instantiateBuiltinTexture(textureId, position);
         return;
       }
 

@@ -16,6 +16,7 @@ import type {
 } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { getBuiltinTextures } from '@/registry/builtinTextures';
 import complexityData from '@/registry/complexity.json';
 
 /**
@@ -314,6 +315,8 @@ interface AppState {
   deleteSavedGroup: (savedId: string) => void;
   /** Drop a copy of a saved group onto the canvas at `position` (flow coords). */
   instantiateSavedGroup: (savedId: string, position: { x: number; y: number }) => void;
+  /** Drop a built-in texture group onto the canvas at `position` (flow coords). */
+  instantiateBuiltinTexture: (textureId: string, position: { x: number; y: number }) => void;
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
@@ -954,6 +957,60 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const next = get().savedGroups.filter((g) => g.id !== savedId);
     persistSavedGroups(next);
     set({ savedGroups: next });
+  },
+
+  instantiateBuiltinTexture: (textureId, position) => {
+    const textures = getBuiltinTextures();
+    const texture = textures.find((t) => t.id === textureId);
+    if (!texture || texture.nodes.length === 0) return;
+
+    const idMap = new Map<string, string>();
+    for (const n of texture.nodes) idMap.set(n.id, generateId());
+
+    const [originalGroup, ...originalMembers] = texture.nodes;
+    const newGroupId = idMap.get(originalGroup.id)!;
+
+    const clonedGroup: AppNode = {
+      ...structuredClone(originalGroup),
+      id: newGroupId,
+      position: { x: position.x, y: position.y },
+      parentId: undefined,
+      selected: false,
+    } as AppNode;
+
+    const clonedMembers: AppNode[] = originalMembers.map((m) => {
+      const cloned = structuredClone(m);
+      const newId = idMap.get(m.id)!;
+      const out = {
+        ...cloned,
+        id: newId,
+        parentId: newGroupId,
+        selected: false,
+      } as AppNode & { extent?: unknown };
+      delete out.extent;
+      return out;
+    });
+
+    const clonedEdges: AppEdge[] = texture.edges.map((e: AppEdge) => {
+      const src = idMap.get(e.source) ?? e.source;
+      const tgt = idMap.get(e.target) ?? e.target;
+      return {
+        ...structuredClone(e),
+        id: generateEdgeId(src, e.sourceHandle ?? 'out', tgt, e.targetHandle ?? 'in'),
+        source: src,
+        target: tgt,
+        selected: false,
+      };
+    });
+
+    const state = get();
+    get().pushHistory();
+    set({
+      nodes: [clonedGroup, ...state.nodes, ...clonedMembers] as AppNode[],
+      edges: [...state.edges, ...clonedEdges] as AppEdge[],
+      syncSource: 'graph',
+      isUndoRedo: false,
+    });
   },
 
   instantiateSavedGroup: (savedId, position) => {

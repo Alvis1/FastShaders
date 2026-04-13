@@ -57,11 +57,12 @@ src/
 │   │   │   └── EdgeInfoCard.css
 │   │   ├── inputs/
 │   │   │   └── DragNumberInput.tsx    # Drag-to-adjust number input with acceleration
-│   │   ├── ContentBrowser.tsx         # Category-tabbed asset drawer with search, folder tabs, horizontal scroll + Saved Groups tab
+│   │   ├── ContentBrowser.tsx         # Category-tabbed asset drawer with search, folder tabs, horizontal scroll + Textures + Saved Groups tabs
 │   │   ├── ContentBrowser.css
 │   │   ├── NodePreviewCard.tsx        # Type-dispatching preview card (7 visual variants matching editor nodes)
 │   │   ├── NodePreviewCard.css
 │   │   ├── SavedGroupCard.tsx         # Draggable tile for a user-saved group (Saved Groups tab)
+│   │   ├── TextureCard.tsx            # Draggable tile for a built-in texture (Textures tab, CPU canvas preview)
 │   │   └── menus/
 │   │       ├── ContextMenu.tsx        # Menu dispatcher (canvas/node/shader/edge/group)
 │   │       ├── ContextMenu.css
@@ -90,7 +91,8 @@ src/
 │   └── useSyncEngine.ts               # Bidirectional sync hook (watches graph/code changes)
 ├── registry/
 │   ├── nodeRegistry.ts                # ~55 hardcoded TSL node definitions (incl. 8 MaterialX noise nodes) + hidden `unknown` def
-│   ├── nodeCategories.ts              # Category metadata (id + label) — 10 categories (incl. unknown)
+│   ├── nodeCategories.ts              # Category metadata (id + label) — 11 categories (incl. texture, unknown)
+│   ├── builtinTextures.ts             # Built-in texture groups (wood, etc.) — TSL code parsed to node graphs at startup
 │   └── complexity.json                # GPU cost per operation
 ├── store/
 │   └── useAppStore.ts                 # Zustand store (nodes, edges, code, sync, history, UI)
@@ -263,7 +265,15 @@ When writing TSL code to paste into FastShaders (or when generating code for an 
    - **Bad**: `coords.mul(cellScale).add(offset)` → `.add()` sees a `CallExpression` object, not a variable
    - **Good**: `const scaled = coords.mul(cellScale);` then `scaled.add(offset)`
 
-**Summary rule of thumb**: Write TSL code in SSA-like form — one operation per line, every result named, arguments are either variable names or numeric literals. This is the same style that `graphToCode` emits, so round-tripping is lossless.
+8. **MemberExpression assignments are silently dropped.** `const z = positionGeometry.z;` is a `MemberExpression` initializer, NOT a function call — the `VariableDeclarator` visitor ignores it entirely. The variable `z` never enters `varToNodeId`, and every downstream reference silently disconnects. Workaround: assign the *parent* object to a named variable first, then use swizzle as function arguments:
+   - **Bad**: `const z = positionGeometry.z;` then `mul(z, 2)` → `z` undefined, argument lost
+   - **Good**: `const pos = positionGeometry;` then `mul(pos.z, 2)` → creates split node, wires `.z` output
+
+9. **`resolveMemberExpr` does not call `ensureBareInputNode`.** When `someVar.x` appears as a function argument, `resolveMemberExpr` looks up `someVar` in `varToNodeId`. If `someVar` is a built-in input like `positionGeometry` that was never explicitly declared, the lookup returns `null` and the argument is **silently dropped**. Unlike the `Identifier` handler (which falls back to `ensureBareInputNode` to auto-materialise input nodes), `resolveMemberExpr` has no such fallback. Always declare built-in inputs with an alias first: `const pos = positionGeometry;` before using `pos.x`, `pos.y`, `pos.z`.
+
+10. **`scriptToTSL` only handles shaderloader script format.** The "Load Script" button in the TSL editor runs `scriptToTSL()` which expects `export default function(params) { ... }` + `export const schema = { ... }` format. Files already in `Fn()` form will have their entire body stripped because the `Fn(` keyword triggers the nested-Fn skip logic (line 155). For pasting code directly into the TSL editor, use the canonical `Fn()` format and click Save — do NOT use "Load Script".
+
+**Summary rule of thumb**: Write TSL code in SSA-like form — one operation per line, every result named, arguments are either variable names or numeric literals. For built-in inputs used with swizzle (`.x`, `.y`, `.z`), always declare an alias first (`const pos = positionGeometry;`). This is the same style that `graphToCode` emits, so round-tripping is lossless.
 
 ### Zustand Store Shape
 
