@@ -450,6 +450,8 @@ export function NodeEditor() {
         if (other.id === draggedNode.id) continue;
         // Group containers must not push their members aside.
         if (other.type === 'group') continue;
+        // Only compare nodes in the same coordinate space (same parent).
+        if (other.parentId !== draggedNode.parentId) continue;
         const { w: ow, h: oh } = getNodeSize(other);
 
         // Check AABB overlap

@@ -124,6 +124,7 @@ function extractUniforms(code: string): UniformInfo[] {
 export function ShaderPreview() {
   const previewCode = useAppStore((s) => s.previewCode);
   const nodes = useAppStore((s) => s.nodes);
+  const edges = useAppStore((s) => s.edges);
 
   // Read material settings from the output node
   const outputNode = nodes.find((n) => n.data.registryType === 'output');
@@ -146,10 +147,33 @@ export function ShaderPreview() {
   // The memo reads `current` at rebuild time and embeds it as the restore
   // target for the next iframe instance.
   const cameraPosRef = useRef<CameraPosition | null>(null);
+  const rotationRef = useRef<CameraPosition | null>(null);
 
-  // Property uniforms detected from the generated code (single source of truth
-  // matches what the shaderloader sees)
-  const uniforms = useMemo(() => extractUniforms(previewCode), [previewCode]);
+  // Property uniforms detected from the generated code, filtered to only those
+  // whose property_float node has at least one outgoing edge (i.e. is connected).
+  const uniforms = useMemo(() => {
+    const all = extractUniforms(previewCode);
+    // If no property nodes exist (e.g. direct-assignment mode), show all
+    const propertyNodes = nodes.filter((n) => n.data.registryType === 'property_float');
+    if (propertyNodes.length === 0) return all;
+    // Build set of connected property node IDs (have at least one outgoing edge)
+    const connectedIds = new Set<string>();
+    for (const e of edges) {
+      if (propertyNodes.some((n) => n.id === e.source)) {
+        connectedIds.add(e.source);
+      }
+    }
+    // Map connected IDs to their variable names (values.name)
+    const connectedNames = new Set<string>();
+    for (const n of propertyNodes) {
+      if (connectedIds.has(n.id)) {
+        const vals = (n.data as { values?: Record<string, unknown> }).values;
+        const name = vals?.name as string | undefined;
+        if (name) connectedNames.add(name);
+      }
+    }
+    return all.filter((u) => connectedNames.has(u.name));
+  }, [previewCode, nodes, edges]);
 
   // Per-uniform min/max — persisted across reloads, keyed by uniform name
   const [uniformBounds, setUniformBounds] = useState<Record<string, UniformBounds>>(loadUniformBounds);
@@ -207,6 +231,10 @@ export function ShaderPreview() {
         if (typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number') {
           cameraPosRef.current = { x: data.x, y: data.y, z: data.z };
         }
+      } else if (data.type === 'fs:rotation') {
+        if (typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number') {
+          rotationRef.current = { x: data.x, y: data.y, z: data.z };
+        }
       }
     };
     window.addEventListener('message', handler);
@@ -219,6 +247,7 @@ export function ShaderPreview() {
   const handleReset = useCallback(() => {
     // Camera: clear the saved view AND tell the live iframe to snap home now
     cameraPosRef.current = null;
+    rotationRef.current = null;
     const win = iframeRef.current?.contentWindow;
     win?.postMessage({ type: 'fs:reset-camera' }, '*');
 
@@ -290,6 +319,7 @@ export function ShaderPreview() {
       // survives setting changes (subdivision, lighting, etc.) without
       // joining the dep list (which would cause an infinite rebuild loop).
       initialCameraPosition: cameraPosRef.current,
+      initialRotation: rotationRef.current,
     };
     const html = tslToPreviewHTML(previewCode, options);
     const blob = new Blob([html], { type: 'text/html' });
