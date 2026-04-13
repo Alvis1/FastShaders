@@ -6,25 +6,65 @@
   overflow: hidden;
 }
 
+/* ===== Scroll wrapper with arrow buttons ===== */
+.content-browser__scroll-wrapper {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.content-browser__scroll-wrapper:last-child {
+  flex: 1;
+  min-height: 0;
+}
+
+.content-browser__arrow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 24px;
+  z-index: 2;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: linear-gradient(to right, var(--bg-surface) 60%, transparent);
+  padding: 0;
+}
+
+.content-browser__arrow--left {
+  left: 0;
+  background: linear-gradient(to right, var(--bg-surface) 60%, transparent);
+}
+
+.content-browser__arrow--right {
+  right: 0;
+  background: linear-gradient(to left, var(--bg-surface) 60%, transparent);
+}
+
+.content-browser__arrow:hover {
+  color: var(--text-primary);
+}
+
 .content-browser__categories {
   display: flex;
   align-items: flex-end;
   gap: 0;
   padding: 0 var(--space-2);
   overflow-x: auto;
-  flex-shrink: 0;
+  flex: 1;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-surface);
   position: relative;
+  scrollbar-width: none;
 }
 
 .content-browser__categories::-webkit-scrollbar {
-  height: 3px;
-}
-
-.content-browser__categories::-webkit-scrollbar-thumb {
-  background: var(--border-default);
-  border-radius: 2px;
+  display: none;
 }
 
 /* Search field — sits before all tabs */
@@ -89,15 +129,16 @@
   overflow-y: hidden;
   padding: var(--space-1) var(--space-3) var(--space-2);
   display: flex;
+  flex: 1;
   flex-wrap: nowrap;
   gap: 2px;
   align-items: flex-start;
   min-height: 160px;
-  scrollbar-width: none;            /* Firefox */
+  scrollbar-width: none;
 }
 
 .content-browser__items::-webkit-scrollbar {
-  display: none;                     /* Chrome / Safari */
+  display: none;
 }
 
 .content-browser__empty {
