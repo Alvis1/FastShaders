@@ -144,42 +144,68 @@
   display: block;
 }
 
+/* Properties toggle button in the controls bar */
+.shader-preview__props-btn {
+  padding: 3px 10px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.shader-preview__props-btn:hover {
+  border-color: var(--border-focus);
+}
+
+.shader-preview__props-btn--active {
+  color: var(--text-primary);
+  border-color: var(--border-focus);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* Floating uniform overlay — compact */
 .shader-preview__uniforms {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 6px;
+  right: 6px;
   z-index: 5;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 10px;
-  max-width: 240px;
+  gap: 4px;
+  padding: 6px 8px;
+  max-width: 220px;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-primary);
 }
 
 .shader-preview__uniform-row {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 1px;
 }
 
 .shader-preview__uniform-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 6px;
+  gap: 4px;
 }
 
 .shader-preview__uniform-name {
   font-weight: 600;
   font-family: var(--font-mono, monospace);
+  font-size: 10px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -187,16 +213,16 @@
 
 .shader-preview__uniform-value {
   font-family: var(--font-mono, monospace);
-  font-size: 10px;
+  font-size: 9px;
   color: var(--text-secondary);
   flex-shrink: 0;
 }
 
 .shader-preview__uniform-controls {
   display: grid;
-  grid-template-columns: 36px 1fr 36px;
+  grid-template-columns: 32px 1fr 32px;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
 .shader-preview__uniform-bound {

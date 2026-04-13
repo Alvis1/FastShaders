@@ -62,14 +62,14 @@ src/
 │   │   ├── NodePreviewCard.tsx        # Type-dispatching preview card (7 visual variants matching editor nodes)
 │   │   ├── NodePreviewCard.css
 │   │   ├── SavedGroupCard.tsx         # Draggable tile for a user-saved group (Saved Groups tab)
-│   │   ├── TextureCard.tsx            # Draggable tile for a built-in texture (Textures tab, CPU canvas preview)
+│   │   ├── TextureCard.tsx            # Draggable tile for a built-in texture (Textures tab, CPU canvas preview with per-texture renderer)
 │   │   └── menus/
 │   │       ├── ContextMenu.tsx        # Menu dispatcher (canvas/node/shader/edge/group)
 │   │       ├── ContextMenu.css
 │   │       ├── AddNodeMenu.tsx        # Searchable node palette, grouped by category, "Group Selection" entry
 │   │       ├── NodeSettingsMenu.tsx   # Node properties, duplicate, delete
 │   │       ├── ShaderSettingsMenu.tsx # Output node settings (ports, displacement, material, uniforms)
-│   │       ├── GroupSettingsMenu.tsx  # Rename + recolor + Save to Library + Ungroup
+│   │       ├── GroupSettingsMenu.tsx  # Rename + recolor + title size + Save to Library + Ungroup
 │   │       └── EdgeContextMenu.tsx    # Edge delete menu
 │   └── Preview/
 │       ├── ShaderPreview.tsx          # WebGPU iframe preview with geometry selector and rotation toggle
@@ -92,7 +92,7 @@ src/
 ├── registry/
 │   ├── nodeRegistry.ts                # ~55 hardcoded TSL node definitions (incl. 8 MaterialX noise nodes) + hidden `unknown` def
 │   ├── nodeCategories.ts              # Category metadata (id + label) — 11 categories (incl. texture, unknown)
-│   ├── builtinTextures.ts             # Built-in texture groups (wood, etc.) — TSL code parsed to node graphs at startup
+│   ├── builtinTextures.ts             # Built-in texture groups (8 textures: polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) — TSL code parsed to node graphs at startup
 │   └── complexity.json                # GPU cost per operation
 ├── store/
 │   └── useAppStore.ts                 # Zustand store (nodes, edges, code, sync, history, UI)
@@ -210,11 +210,13 @@ The generated iframe HTML carries an inline bridge script that talks to the pare
 - **Property uniforms**: To make sliders actually move the GPU uniforms, `convertToShaderModule` rewrites every `const N = uniform(V)` to `const N = params.N`, exports an explicit `schema`, and changes the function signature to `function(params)`. The shaderloader then creates the uniforms up-front, passes them in as `params`, and the function uses *those* uniforms — so writing to `_propertyUniforms[name].value` from the bridge actually reaches the material.
 - **Outbound messages** (iframe → parent):
   - `fs:preview-ready` — sent once after the shaderloader's `_propertyUniforms` populates. Parent responds by pushing all current slider values via `fs:uniform`, so a freshly rebuilt iframe immediately reflects user tweaks.
-  - `fs:camera` — sent whenever the camera position changes (200ms polling, only posted on actual change).
+  - `fs:camera` — sent whenever the camera position changes (200ms polling inside `whenOrbitReady`, only posted on actual change).
+  - `fs:rotation` — sent whenever the spin parent's rotation changes (200ms polling, independent of orbit controls, degrees). Runs as a standalone `setInterval` outside `whenOrbitReady` since the spin parent's `object3D` is available before orbit controls.
 - **Inbound messages** (parent → iframe):
   - `fs:uniform` — `{name, value}`; bridge writes directly into `_propertyUniforms[name].value` (no setAttribute round-trip).
   - `fs:reset-camera` — bridge calls `oc.controls.reset()`.
 - **Camera persistence**: The parent stores the latest position in a `cameraPosRef` (a ref, not state — putting it in state would create an infinite rebuild loop). When `useMemo` rebuilds the iframe (lighting/subdivision/etc. changed), it reads `cameraPosRef.current` and embeds it as `window.__savedCameraPos = {x,y,z}`. The bridge applies that position **after** orbit-controls finishes initializing — critically, **not** by setting `initialPosition`, because that would also overwrite the controls' internal `position0` snapshot and break `controls.reset()`. So the user's view survives setting changes, and Reset still snaps home.
+- **Rotation persistence**: Works like camera persistence — `rotationRef` stores the latest spin parent angle (degrees). On iframe rebuild, `initialRotation` is passed through `PreviewOptions` and baked directly into the animation's `from`/`to` attributes (animated mode) or as a static `rotation` attribute (paused mode). Values are normalized to `[0, 360)` via `mod360` to prevent unbounded growth. The spin parent entity has `id="spin-parent"` so the bridge can look it up. Reset clears `rotationRef`.
 
 ### Sync Engine (prevents infinite loops)
 
@@ -360,8 +362,8 @@ Generates HTML for the in-app preview iframe:
    Always emitted (even for primitive previews) — inert if no entity attaches `fit-bounds="..."`. (The standalone export pipeline `tslToAFrame.ts` only supports primitives — OBJ geometries are not threaded through and would fall back to sphere if they were.)
 5. **Lighting**: `studio` (4-light three-point rig), `moon` (single cool directional + faint ambient), or `laboratory` (white ambient only).
 6. **Per-geometry rotation**: `plane` → `0 0 0` (faces camera); `bunny` → `0 25 0` (upright); `teapot` → `15 35 0` (slight tilt to read the spout/handle); other primitives → `45 45 0`.
-7. **Animation**: Y-axis turntable (`0 360 0`) for sphere/cube/teapot/bunny, Z-axis spin (`0 0 360`) for plane. The shaded entity is wrapped in a **spin parent** that owns the `animation` attribute (`from: 0 0 0; to: 0 360 0`); the **child** carries the static tilt (`rotationAttr`) and the shader. Splitting the two is what keeps the loop seamless: if the spin animation lived on the same entity as the tilt, A-Frame would tween componentwise from the current value (e.g. `45 45 0`) to `to` (`0 360 0`), gradually flattening the X tilt and only spinning Y by `+315°` before snapping back to the start on every loop — visible as a slight jump on each full rotation. With the parent/child split, the parent has no tilt of its own so its local Y/Z is the world Y/Z, the animation cleanly tweens `0→360`, and `0 360 0 ≡ 0 0 0` at loop boundary so there's nothing to snap. The `id="preview-entity"` stays on the child since that's where the shader component lives (the bridge looks it up by id) and where `fit-bounds` needs the OBJ entity for `model-loaded`.
-8. **Iframe ↔ parent bridge**: emitted as the **`BRIDGE_SCRIPT_TEMPLATE`** module-level template literal with a `__SAVED_CAM__` placeholder replaced by a JSON literal at emit time. Polls for shaderloader readiness → posts `fs:preview-ready` with the uniform name list, listens for `fs:uniform`/`fs:reset-camera`, polls camera position and posts `fs:camera` only on change. Saved camera position is embedded as `window.__savedCameraPos` and applied **after** orbit-controls initializes (not via `initialPosition`, so `controls.reset()` still snaps to the original `0 0 8`).
+7. **Animation**: Y-axis turntable (`0 360 0`) for sphere/cube/teapot/bunny, Z-axis spin (`0 0 360`) for plane. The shaded entity is wrapped in a **spin parent** (`id="spin-parent"`) that owns the `animation` attribute; the **child** (`id="preview-entity"`) carries the static tilt (`rotationAttr`) and the shader. Splitting the two is what keeps the loop seamless: if the spin animation lived on the same entity as the tilt, A-Frame would tween componentwise from the current value (e.g. `45 45 0`) to `to` (`0 360 0`), gradually flattening the X tilt and only spinning Y by `+315°` before snapping back to the start on every loop. With the parent/child split, the parent has no tilt of its own so its local Y/Z is the world Y/Z. When `initialRotation` is provided, the animation's `from` and `to` are offset by the saved angle (normalized to `[0, 360)`) so the spin continues from where it was; in paused mode, a static `rotation` attribute is set instead. The `id="preview-entity"` stays on the child since that's where the shader component lives (the bridge looks it up by id) and where `fit-bounds` needs the OBJ entity for `model-loaded`.
+8. **Iframe ↔ parent bridge**: emitted as the **`BRIDGE_SCRIPT_TEMPLATE`** module-level template literal with a `__SAVED_CAM__` placeholder replaced by a JSON literal at emit time. Polls for shaderloader readiness → posts `fs:preview-ready` with the uniform name list, listens for `fs:uniform`/`fs:reset-camera`. Camera polling (inside `whenOrbitReady`) posts `fs:camera` on change; rotation polling (standalone `setInterval`, not gated on orbit controls) posts `fs:rotation` with degrees from `spinEl.object3D.rotation`. Both poll at 200ms. Saved camera position is embedded as `window.__savedCameraPos` and applied **after** orbit-controls initializes (not via `initialPosition`, so `controls.reset()` still snaps to the original `0 0 8`).
 9. Uses A-Frame IIFE bundle with `a-frame-shaderloader` for rendering.
 10. Error display div for runtime errors.
 
@@ -505,7 +507,7 @@ The asset browser is a horizontal scrollable drawer at the bottom of the node ed
 | `'preview'` (noise) | NoiseCardContent | Header + 96x96 pixelated CPU noise canvas + output dot |
 | `'clock'` | ClockCardContent | Header + 56x56 circular clock face + output dot |
 | `def.type === 'slider'` | SliderCardContent | Header + track/fill/thumb slider + min/value/max labels + output dot |
-| `'color'` | ColorCardContent | 28x28 color circle + contrast-aware label + output dot |
+| `'color'` | ColorCardContent | 84x84 color circle + contrast-aware label + output dot |
 
 - **Cost coloring**: NodePreviewCard reads `costColorLow`/`costColorHigh` from the zustand store and passes them to `getCostColor()`/`getCostTextColor()`, ensuring consistent cost-based coloring across editor nodes, MiniMap, and content browser.
 - **Math/noise/clock previews**: CPU-rendered once on mount using existing `renderMathPreview()`, `renderNoisePreview()`, and ClockNode drawing code (frozen at mount time).
@@ -762,6 +764,7 @@ Right-click menu for `'group'` nodes:
 
 - **name** — text input that patches `data.label` via `updateGroupData()`.
 - **color** — `<input type="color">` that patches `data.color`. Header strip + tinted body update live.
+- **title size** — number input (range slider) that patches `data.titleSize` via `updateGroupData()`. Values >1 scale the header height and font proportionally (`22 * titleSize` px header, `font-size-xs * titleSize` label).
 - **Save to Library** — calls `saveGroupToLibrary(groupId)`; the snippet shows up in the asset bar's "Saved Groups" tab.
 - **Ungroup** — dissolves the container, lifts children back to root (or to the grandparent group), and restores their absolute positions.
 
@@ -858,7 +861,7 @@ interface BoundarySocket {
 - **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red). Costs calibrated against mobile GPU SFU quarter-rate (add=1, sin/cos=4, pow=12). Noise costs: cellNoise=12, perlin=35, perlinVec3=75, fbm=95, fbmVec3=200, voronoi=55, voronoiVec2=60, voronoiVec3=65. Budgets assume 3–5 concurrent shaders in scene.
 - **Category colors**: Each node category has a distinct accent color for the header strip (defined as `--cat-*` CSS vars in [tokens.css](src/styles/tokens.css), consumed by `CATEGORY_COLORS` in [colorUtils.ts](src/utils/colorUtils.ts))
   - input (#4CAF50), type (#2196F3), arithmetic (#FF9800), math (#9C27B0), interpolation (#00BCD4), vector (#E91E63), noise (#795548), color (#FF5722), unknown (#9E9E9E), output (#f44336)
-  - **Dead variable**: `--cat-texture: #8D6E63` is still declared in tokens.css but no node category references it (texture support was removed). Safe to delete.
+  - `--cat-texture: #8D6E63` is used by ContentBrowser for the Textures tab background tint (via `CATEGORY_COLORS.texture` in colorUtils.ts and the `texture` entry in nodeCategories.ts). No node has `category: 'texture'` in the registry, but the category exists as a special tab that shows built-in texture groups.
 
 ---
 

@@ -176,6 +176,7 @@ export function ShaderPreview() {
   }, [previewCode, nodes, edges]);
 
   // Per-uniform min/max — persisted across reloads, keyed by uniform name
+  const [showUniforms, setShowUniforms] = useState(true);
   const [uniformBounds, setUniformBounds] = useState<Record<string, UniformBounds>>(loadUniformBounds);
   useEffect(() => {
     try { localStorage.setItem('fs:previewUniformBounds', JSON.stringify(uniformBounds)); } catch { /* */ }
@@ -398,6 +399,16 @@ export function ShaderPreview() {
             <span className="shader-preview__subdivision-value">{subdivision}</span>
           </label>
         )}
+        {uniforms.length > 0 && (
+          <button
+            type="button"
+            className={`shader-preview__props-btn${showUniforms ? ' shader-preview__props-btn--active' : ''}`}
+            onClick={() => setShowUniforms((v) => !v)}
+            title={showUniforms ? 'Hide properties' : 'Show properties'}
+          >
+            Properties
+          </button>
+        )}
       </div>
       <div className="shader-preview__body">
         <iframe
@@ -406,7 +417,7 @@ export function ShaderPreview() {
           src={blobUrl}
           title="Shader Preview"
         />
-        {uniforms.length > 0 && (
+        {uniforms.length > 0 && showUniforms && (
           <div className="shader-preview__uniforms">
             {uniforms.map((u) => {
               const bounds = uniformBounds[u.name] ?? { min: 0, max: 1 };

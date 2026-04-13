@@ -212,10 +212,10 @@
 /* --- Color circle variant --- */
 
 .node-preview-card__color-node {
-  width: 28px;
-  height: 28px;
+  width: 84px;
+  height: 84px;
   border-radius: 50%;
-  border: 1.5px solid rgba(0, 0, 0, 0.12);
+  border: 2px solid rgba(0, 0, 0, 0.12);
   box-shadow: var(--shadow-node);
   position: relative;
   display: flex;
@@ -225,7 +225,7 @@
 }
 
 .node-preview-card__color-label {
-  font-size: 5px;
+  font-size: 15px;
   font-weight: 600;
   font-family: var(--font-sans);
   letter-spacing: 0.02em;
