@@ -103,6 +103,8 @@ export interface GroupNodeData {
   collapsedOutputs?: BoundarySocket[];
   /** Sum of GPU costs of all members — populated while collapsed for the cost badge. */
   cost?: number;
+  /** Title font size multiplier (1 = default, 2 = 2x, etc.). */
+  titleSize?: number;
   [key: string]: unknown;
 }
 

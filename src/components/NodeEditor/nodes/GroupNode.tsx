@@ -79,9 +79,9 @@ export const GroupNode = memo(function GroupNode({
       )}
       <div
         className="group-node__header"
-        style={{ background: color }}
+        style={{ background: color, height: data.titleSize && data.titleSize > 1 ? 22 * data.titleSize : undefined }}
       >
-        <span className="group-node__label">{data.label || 'Group'}</span>
+        <span className="group-node__label" style={data.titleSize && data.titleSize > 1 ? { fontSize: `calc(var(--font-size-xs) * ${data.titleSize})` } : undefined}>{data.label || 'Group'}</span>
         <button
           type="button"
           className="group-node__toggle nodrag"
