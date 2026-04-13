@@ -49,6 +49,8 @@ export interface PreviewOptions {
    * `reset()` snaps back there instead of to the saved view.
    */
   initialCameraPosition?: CameraPosition | null;
+  /** Spin parent rotation to restore so the object angle survives iframe rebuilds. */
+  initialRotation?: CameraPosition | null;
 }
 
 /**
@@ -255,6 +257,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
   window.__savedCameraPos = __SAVED_CAM__;
   (function() {
     var entity = document.getElementById("preview-entity");
+    var spinEl = document.getElementById("spin-parent");
     var camEl = document.querySelector("[camera]");
 
     var shaderRetries = 0;
@@ -288,14 +291,31 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       var lx = NaN, ly = NaN, lz = NaN;
       setInterval(function() {
         var p = camEl && camEl.object3D && camEl.object3D.position;
-        if (!p) return;
-        if (p.x === lx && p.y === ly && p.z === lz) return;
-        lx = p.x; ly = p.y; lz = p.z;
-        try {
-          window.parent.postMessage({ type: "fs:camera", x: p.x, y: p.y, z: p.z }, "*");
-        } catch (e) {}
+        if (p && (p.x !== lx || p.y !== ly || p.z !== lz)) {
+          lx = p.x; ly = p.y; lz = p.z;
+          try {
+            window.parent.postMessage({ type: "fs:camera", x: p.x, y: p.y, z: p.z }, "*");
+          } catch (e) {}
+        }
       }, 200);
     });
+
+    // Rotation polling runs independently of orbit controls — the spin
+    // parent's object3D is available as soon as A-Frame initializes the entity.
+    var rx = NaN, ry = NaN, rz = NaN;
+    setInterval(function() {
+      var r = spinEl && spinEl.object3D && spinEl.object3D.rotation;
+      if (!r) return;
+      var dx = r.x * 180 / Math.PI;
+      var dy = r.y * 180 / Math.PI;
+      var dz = r.z * 180 / Math.PI;
+      if (dx !== rx || dy !== ry || dz !== rz) {
+        rx = dx; ry = dy; rz = dz;
+        try {
+          window.parent.postMessage({ type: "fs:rotation", x: dx, y: dy, z: dz }, "*");
+        } catch (e) {}
+      }
+    }, 200);
 
     window.addEventListener("message", function(e) {
       var msg = e.data;
@@ -430,6 +450,7 @@ export function tslToPreviewHTML(
     lighting = 'studio',
     subdivision = 64,
     initialCameraPosition = null,
+    initialRotation = null,
   } = options;
 
   const shaderModule = convertToShaderModule(tslCode, materialSettings);
@@ -447,10 +468,20 @@ export function tslToPreviewHTML(
   // the current value (`45 45 0`) to `to: 0 360 0` — flattening the X tilt
   // over the loop and only spinning Y by 315° before snapping back. That snap
   // is what produced the visible jump on every full rotation.
-  const animTo = geometry === 'plane' ? '0 0 360' : '0 360 0';
+  // Build animation from/to, incorporating saved rotation so the spin
+  // continues from where it left off across iframe rebuilds.
+  const rawRot = initialRotation ?? { x: 0, y: 0, z: 0 };
+  // Normalize to [0, 360) so values don't grow unboundedly across rebuilds
+  const mod360 = (v: number) => ((v % 360) + 360) % 360;
+  const savedRot = { x: mod360(rawRot.x), y: mod360(rawRot.y), z: mod360(rawRot.z) };
+  const isPlane = geometry === 'plane';
+  const animFrom = `${savedRot.x} ${savedRot.y} ${savedRot.z}`;
+  const animTo = isPlane
+    ? `${savedRot.x} ${savedRot.y} ${savedRot.z + 360}`
+    : `${savedRot.x} ${savedRot.y + 360} ${savedRot.z}`;
   const spinAttr = animate
-    ? ` animation="property: rotation; from: 0 0 0; to: ${animTo}; loop: true; dur: 12000; easing: linear"`
-    : '';
+    ? ` animation="property: rotation; from: ${animFrom}; to: ${animTo}; loop: true; dur: 12000; easing: linear"`
+    : (initialRotation ? ` rotation="${animFrom}"` : '');
 
   // Plane is meant to be viewed flat-on, so leave it un-rotated (it already
   // faces +Z, which is where the camera sits). OBJ models are normalized and
@@ -519,7 +550,7 @@ export function tslToPreviewHTML(
   // holds the static tilt and the shader/geometry. The id stays on the child
   // because that's where the shader component lives (the bridge looks it up
   // by id), and `fit-bounds` needs the OBJ entity for `model-loaded`.
-  lines.push(`  <a-entity${spinAttr}>`);
+  lines.push(`  <a-entity id="spin-parent"${spinAttr}>`);
   lines.push(`    <a-entity id="preview-entity" ${entityAttrs} material="color: #808080" position="0 0 0" rotation="${rotationAttr}"></a-entity>`);
   lines.push('  </a-entity>');
 
@@ -559,7 +590,7 @@ export function tslToPreviewHTML(
   lines.push(`<${''}/script>`);
   lines.push('');
 
-  // Bridge: shader uniform overlay + camera persistence across iframe rebuilds.
+  // Bridge: shader uniform overlay + camera/rotation persistence across iframe rebuilds.
   const savedCamLiteral = initialCameraPosition
     ? JSON.stringify({ x: initialCameraPosition.x, y: initialCameraPosition.y, z: initialCameraPosition.z })
     : 'null';

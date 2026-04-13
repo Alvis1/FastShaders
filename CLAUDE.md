@@ -65,7 +65,7 @@ src/
   registry/
     nodeRegistry.ts   — ~55 hardcoded node definitions (8 input, 6 type, 4 arithmetic, 15 math, 4 interpolation, 7 vector, 8 noise, 2 color, 1 output) + hidden `unknown` def
     nodeCategories.ts — 11 category definitions (input, type, arithmetic, math, interpolation, vector, noise, color, texture, unknown, output)
-    builtinTextures.ts — built-in texture groups (wood, etc.) — TSL code parsed to node graphs at startup
+    builtinTextures.ts — 8 built-in texture groups (polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) — TSL code parsed to node graphs at startup
     complexity.json   — per-node GPU cost values
   store/
     useAppStore.ts    — zustand store (graph, sync, history, UI, groups + saved-group library, preview/canvas/code-editor prefs, localStorage persistence)
