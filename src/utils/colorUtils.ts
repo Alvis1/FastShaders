@@ -92,6 +92,7 @@ export const CATEGORY_COLORS: Record<NodeCategory, string> = {
   vector: 'var(--cat-vector)',
   noise: 'var(--cat-noise)',
   color: 'var(--cat-color)',
+  texture: 'var(--cat-texture)',
   unknown: 'var(--cat-unknown)',
   output: 'var(--cat-output)',
 };

@@ -17,6 +17,7 @@ export type NodeCategory =
   | 'vector'
   | 'noise'
   | 'color'
+  | 'texture'
   | 'unknown'
   | 'output';
 

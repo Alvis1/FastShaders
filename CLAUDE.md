@@ -37,7 +37,7 @@ src/
     CodeEditor/       — Monaco editor panel (TSL/Script folder tabs, Save, Load Script, Download Script)
       tslLanguage.ts  — Monaco TSL type declarations + hex color picker
     Layout/           — Toolbar (brand→contact popover, version), CostBar, SplitPane, AppLayout
-    NodeEditor/       — React Flow graph editor + ContentBrowser (node palette + Saved Groups tab)
+    NodeEditor/       — React Flow graph editor + ContentBrowser (node palette + Textures + Saved Groups tabs)
       edges/          — TypedEdge (multi-channel, drag-to-disconnect), EdgeInfoCard
       handles/        — TypedHandle with color-coded data types
       inputs/         — DragNumberInput (drag/click-to-edit number widget)
@@ -45,6 +45,7 @@ src/
       nodes/          — ShaderNode, OutputNode, ColorNode, PreviewNode, MathPreviewNode, ClockNode, GroupNode
       NodePreviewCard.tsx — content browser card renderer (CPU/canvas previews)
       SavedGroupCard.tsx  — draggable tile for a user-saved group (Saved Groups tab)
+      TextureCard.tsx     — draggable tile for a built-in texture (Textures tab, CPU canvas preview)
     Preview/          — ShaderPreview (iframe-based 3D preview via blob URL, property uniform overlay, geometry/lighting/subdivision/bg controls)
   engine/
     graphToCode.ts    — graph → TSL code generation (topological sort, import collection)
@@ -63,7 +64,8 @@ src/
     useSyncEngine.ts  — bidirectional graph↔code sync, undo/redo, complexity calc
   registry/
     nodeRegistry.ts   — ~55 hardcoded node definitions (8 input, 6 type, 4 arithmetic, 15 math, 4 interpolation, 7 vector, 8 noise, 2 color, 1 output) + hidden `unknown` def
-    nodeCategories.ts — 10 category definitions (input, type, arithmetic, math, interpolation, vector, noise, color, unknown, output)
+    nodeCategories.ts — 11 category definitions (input, type, arithmetic, math, interpolation, vector, noise, color, texture, unknown, output)
+    builtinTextures.ts — built-in texture groups (wood, etc.) — TSL code parsed to node graphs at startup
     complexity.json   — per-node GPU cost values
   store/
     useAppStore.ts    — zustand store (graph, sync, history, UI, groups + saved-group library, preview/canvas/code-editor prefs, localStorage persistence)

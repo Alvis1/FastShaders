@@ -1,8 +1,10 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { getAllDefinitions } from '@/registry/nodeRegistry';
+import { getBuiltinTextures } from '@/registry/builtinTextures';
 import { NodePreviewCard } from './NodePreviewCard';
 import { SavedGroupCard } from './SavedGroupCard';
+import { TextureCard } from './TextureCard';
 import { useAppStore } from '@/store/useAppStore';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CATEGORY_COLORS } from '@/utils/colorUtils';
@@ -27,6 +29,7 @@ const CAT_HEX: Record<string, string> = {
   vector: '#E91E63',
   noise: '#795548',
   color: '#FF5722',
+  texture: '#8D6E63',
   unknown: '#9E9E9E',
   saved: SAVED_GROUPS_COLOR,
 };
@@ -153,9 +156,13 @@ export function ContentBrowser() {
               </div>
             )
             : savedGroups.map((g) => <SavedGroupCard key={g.id} group={g} />)
-          : filteredDefs.map((item) => (
-              <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
-            ))}
+          : activeCategory === 'texture'
+            ? getBuiltinTextures().map((t) => (
+                <TextureCard key={t.id} texture={t} />
+              ))
+            : filteredDefs.map((item) => (
+                <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
+              ))}
       </div>
     </div>
   );
