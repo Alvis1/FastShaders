@@ -87,6 +87,23 @@ function getNodeSize(n: AppNode) {
  * Find the closest edge to (cx, cy) in flow-space that is within CONNECTION_RADIUS.
  * `excludeNodeId` skips edges connected to the node being dragged.
  */
+/** Compute absolute (flow-space) position of a node, walking up the parent chain. */
+function nodeAbsolutePos(node: AppNode, allNodes: AppNode[]): { x: number; y: number } {
+  let x = node.position.x;
+  let y = node.position.y;
+  const seen = new Set<string>();
+  let cur: AppNode | undefined = node;
+  while (cur?.parentId && !seen.has(cur.parentId)) {
+    seen.add(cur.parentId);
+    const parent = allNodes.find((p) => p.id === cur!.parentId);
+    if (!parent) break;
+    x += parent.position.x;
+    y += parent.position.y;
+    cur = parent;
+  }
+  return { x, y };
+}
+
 function findNearestEdge(
   cx: number, cy: number,
   allNodes: AppNode[], allEdges: AppEdge[],
@@ -101,12 +118,15 @@ function findNearestEdge(
     const tgtNode = allNodes.find((n) => n.id === edge.target);
     if (!srcNode || !tgtNode) continue;
 
+    // Use absolute positions so grouped and top-level nodes compare correctly
+    const srcAbs = nodeAbsolutePos(srcNode, allNodes);
+    const tgtAbs = nodeAbsolutePos(tgtNode, allNodes);
     const { w: sw, h: sh } = getNodeSize(srcNode);
     const { h: th } = getNodeSize(tgtNode);
-    const sx = srcNode.position.x + sw;
-    const sy = srcNode.position.y + sh / 2;
-    const tx = tgtNode.position.x;
-    const ty = tgtNode.position.y + th / 2;
+    const sx = srcAbs.x + sw;
+    const sy = srcAbs.y + sh / 2;
+    const tx = tgtAbs.x;
+    const ty = tgtAbs.y + th / 2;
     const cp = Math.max(Math.abs(tx - sx) * 0.5, 50);
 
     const d = bezierDist(sx, sy, tx, ty, cp, cx, cy);
@@ -367,8 +387,9 @@ export function NodeEditor() {
 
       const store = useAppStore.getState();
       const { w: nw, h: nh } = getNodeSize(draggedNode);
-      const cx = draggedNode.position.x + nw / 2;
-      const cy = draggedNode.position.y + nh / 2;
+      const absPos = nodeAbsolutePos(draggedNode, store.nodes);
+      const cx = absPos.x + nw / 2;
+      const cy = absPos.y + nh / 2;
 
       updateEdgeHighlight(findNearestEdge(cx, cy, store.nodes, store.edges, draggedNode.id));
     },
@@ -404,8 +425,10 @@ export function NodeEditor() {
       }
 
       const { w: nw, h: nh } = getNodeSize(draggedNode);
-      const cx = draggedNode.position.x + nw / 2;
-      const cy = draggedNode.position.y + nh / 2;
+      // Use absolute position for edge-proximity so grouped nodes compare correctly
+      const absPos = nodeAbsolutePos(draggedNode, allNodes);
+      const cx = absPos.x + nw / 2;
+      const cy = absPos.y + nh / 2;
 
       // History snapshot covers BOTH the position change and any drop-on-edge insertion.
       // Pushed once here (not in onNodeDragStart) so click-only events don't add no-op entries.

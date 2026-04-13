@@ -10,6 +10,7 @@ import type { AppNode, AppEdge, GroupNodeData } from '@/types';
 import { codeToGraph } from '@/engine/codeToGraph';
 import { autoLayout } from '@/engine/layoutEngine';
 import { generateId } from '@/utils/idGenerator';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 
 export interface BuiltinTexture {
   id: string;
@@ -125,10 +126,11 @@ interface TextureEntry {
   name: string;
   color: string;
   code: string;
+  titleSize?: number;
 }
 
 const TEXTURE_ENTRIES: TextureEntry[] = [
-  { id: 'wood', name: 'Wood', color: '#8D6E63', code: WOOD_CODE },
+  { id: 'wood', name: 'Wood', color: '#8D6E63', code: WOOD_CODE, titleSize: 2 },
 ];
 
 /**
@@ -158,6 +160,24 @@ export function getBuiltinTextures(): BuiltinTexture[] {
     // Auto-layout with tight spacing for compact groups
     const laid = autoLayout(nodes, edges, 'LR', { nodesep: 10, ranksep: 30 });
 
+    // Auto-expose input ports that have incoming edges (mirrors useSyncEngine logic)
+    for (const n of laid) {
+      const def = NODE_REGISTRY.get(n.data.registryType);
+      if (!def) continue;
+      const usesExposedPorts = def.category === 'noise' || def.type === 'output' || def.type === 'uv';
+      if (!usesExposedPorts) continue;
+
+      const connectedPorts = new Set<string>();
+      for (const e of edges) {
+        if (e.target === n.id && e.targetHandle) {
+          connectedPorts.add(e.targetHandle);
+        }
+      }
+      if (connectedPorts.size > 0) {
+        (n.data as Record<string, unknown>).exposedPorts = Array.from(connectedPorts);
+      }
+    }
+
     // Compute bounding box for the group container
     const NODE_W = 160;
     const NODE_H = 80;
@@ -181,6 +201,7 @@ export function getBuiltinTextures(): BuiltinTexture[] {
         label: entry.name,
         color: entry.color,
         collapsed: false,
+        titleSize: entry.titleSize,
       } as GroupNodeData,
       style: {
         width: maxX - minX + PAD * 2,
