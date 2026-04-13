@@ -16,6 +16,7 @@ export interface BuiltinTexture {
   name: string;
   color: string;
   code: string;
+  totalCost: number;
   nodes: AppNode[];
   edges: AppEdge[];
 }
@@ -149,13 +150,18 @@ export function getBuiltinTextures(): BuiltinTexture[] {
       (e) => nodeIds.has(e.source) && nodeIds.has(e.target),
     );
 
-    // Auto-layout the nodes
-    const laid = autoLayout(nodes, edges);
+    // Sum node costs
+    const totalCost = nodes.reduce((sum, n) => {
+      return sum + ((n.data as { cost?: number }).cost ?? 0);
+    }, 0);
+
+    // Auto-layout with tight spacing for compact groups
+    const laid = autoLayout(nodes, edges, 'LR', { nodesep: 10, ranksep: 30 });
 
     // Compute bounding box for the group container
     const NODE_W = 160;
     const NODE_H = 80;
-    const PAD = 30;
+    const PAD = 20;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of laid) {
       minX = Math.min(minX, n.position.x);
@@ -194,6 +200,7 @@ export function getBuiltinTextures(): BuiltinTexture[] {
       name: entry.name,
       color: entry.color,
       code: entry.code,
+      totalCost,
       nodes: [groupNode, ...laid],
       edges,
     };
