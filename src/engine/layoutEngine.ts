@@ -8,12 +8,13 @@ const NODE_HEIGHT = 40;
 export function autoLayout(
   nodes: AppNode[],
   edges: AppEdge[],
-  direction: 'LR' | 'TB' = 'LR'
+  direction: 'LR' | 'TB' = 'LR',
+  spacing?: { nodesep?: number; ranksep?: number },
 ): AppNode[] {
   if (nodes.length === 0) return nodes;
 
   const g = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction, nodesep: 25, ranksep: 60 });
+  g.setGraph({ rankdir: direction, nodesep: spacing?.nodesep ?? 25, ranksep: spacing?.ranksep ?? 60 });
 
   for (const node of nodes) {
     const cost = (node.data as { cost?: number }).cost ?? 0;

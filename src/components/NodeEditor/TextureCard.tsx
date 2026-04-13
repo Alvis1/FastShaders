@@ -104,7 +104,7 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
             style={{ width: 56, height: 56, borderRadius: 4, imageRendering: 'auto' }}
           />
           <span className="saved-group-card__count" style={{ marginTop: 2 }}>
-            {memberCount} nodes
+            {memberCount} nodes &middot; {texture.totalCost} pts
           </span>
         </div>
       </div>
