@@ -1,5 +1,77 @@
 import { useAppStore } from '@/store/useAppStore';
 import type { AppEdge, AppNode, GroupNodeData } from '@/types';
+import { generateEdgeId } from '@/utils/idGenerator';
+
+/**
+ * When one or more nodes are deleted, splice their outgoing edges onto the
+ * upstream source of their first connected input so the signal keeps flowing
+ * through the remaining graph — the "keep the edge" deletion semantic.
+ *
+ * Chains: if X → A → B → C and both A and B are deleted, the B → C edge is
+ * resolved by walking A's incoming (X → A) back to X, producing X → C.
+ *
+ * Rules:
+ *  - If the target is deleted, drop the edge (nothing downstream to preserve).
+ *  - If the source is deleted and no live upstream exists, drop the edge.
+ *  - Single-input-per-port is preserved: the first bridge to a (target,
+ *    targetHandle) wins; duplicates are dropped.
+ *
+ * Used by both the keyboard Delete handler and `store.removeNode` so every
+ * user-facing node deletion behaves the same way.
+ */
+export function bridgeEdgesAcrossDeletedNodes(
+  edges: AppEdge[],
+  deletedIds: Set<string>,
+): AppEdge[] {
+  if (deletedIds.size === 0) return edges;
+
+  const incomingByTarget = new Map<string, AppEdge[]>();
+  for (const e of edges) {
+    const list = incomingByTarget.get(e.target);
+    if (list) list.push(e);
+    else incomingByTarget.set(e.target, [e]);
+  }
+
+  // Walk upstream from a deleted source through chains of deleted nodes until
+  // we hit a live source, or give up. Returns null when the chain dead-ends.
+  const resolveLiveSource = (
+    edge: AppEdge,
+  ): { source: string; sourceHandle: string | null | undefined } | null => {
+    let cur = edge;
+    const visited = new Set<string>([cur.id]);
+    while (deletedIds.has(cur.source)) {
+      const upstream = incomingByTarget.get(cur.source);
+      const next = upstream?.find((u) => !visited.has(u.id));
+      if (!next) return null;
+      visited.add(next.id);
+      cur = next;
+    }
+    return { source: cur.source, sourceHandle: cur.sourceHandle };
+  };
+
+  const out: AppEdge[] = [];
+  const occupiedPorts = new Set<string>();
+  for (const e of edges) {
+    if (deletedIds.has(e.target)) continue;
+    if (!deletedIds.has(e.source)) {
+      out.push(e);
+      occupiedPorts.add(`${e.target}\0${e.targetHandle ?? 'in'}`);
+      continue;
+    }
+    const live = resolveLiveSource(e);
+    if (!live) continue;
+    const portKey = `${e.target}\0${e.targetHandle ?? 'in'}`;
+    if (occupiedPorts.has(portKey)) continue;
+    occupiedPorts.add(portKey);
+    out.push({
+      ...e,
+      source: live.source,
+      sourceHandle: live.sourceHandle,
+      id: generateEdgeId(live.source, live.sourceHandle ?? 'out', e.target, e.targetHandle ?? 'in'),
+    });
+  }
+  return out;
+}
 
 /**
  * Remove all edges connected to a specific input port on a node.
