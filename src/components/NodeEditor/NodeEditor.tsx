@@ -31,6 +31,7 @@ import { getCostColor, getContrastColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
+import { bridgeEdgesAcrossDeletedNodes } from '@/utils/edgeUtils';
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
 import { getNodeValues } from '@/types';
 import complexityData from '@/registry/complexity.json';
@@ -318,19 +319,20 @@ export function NodeEditor() {
           // ungroup() pushed history; treat the rest as a single follow-up.
         }
 
-        // Re-read nodes since ungroup may have mutated them.
-        const currentNodes = useAppStore.getState().nodes;
+        // Re-read nodes/edges since ungroup may have mutated them.
+        const { nodes: currentNodes, edges: currentEdges } = useAppStore.getState();
         if (selectedNodeIds.size > 0) {
           store.setNodes(currentNodes.filter((n) => !selectedNodeIds.has(n.id)) as AppNode[]);
         }
-        store.setEdges(
-          store.edges.filter(
-            (edge) =>
-              !selectedEdgeIds.has(edge.id) &&
-              !selectedNodeIds.has(edge.source) &&
-              !selectedNodeIds.has(edge.target),
-          ) as AppEdge[],
+        // Splice-delete: bridge outgoing edges of deleted nodes onto their
+        // first connected input's upstream, then drop the user's explicitly
+        // selected edges. Chain deletes (X→A→B→C with A and B selected)
+        // resolve across the whole deleted run to produce X→C.
+        const afterBridge = bridgeEdgesAcrossDeletedNodes(
+          currentEdges as AppEdge[],
+          selectedNodeIds,
         );
+        store.setEdges(afterBridge.filter((e) => !selectedEdgeIds.has(e.id)));
       }
     };
 

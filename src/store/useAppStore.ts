@@ -18,6 +18,7 @@ import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
 import complexityData from '@/registry/complexity.json';
+import { bridgeEdgesAcrossDeletedNodes } from '@/utils/edgeUtils';
 
 /**
  * A user-saved group: the group node + every member node + every edge that lives
@@ -371,7 +372,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     get().pushHistory();
     set((state) => ({
       nodes: state.nodes.filter((n) => n.id !== nodeId),
-      edges: state.edges.filter((e) => e.source !== nodeId && e.target !== nodeId),
+      // Splice-delete: outgoing edges of the removed node re-parent to its
+      // first connected input's upstream so the signal stays wired up.
+      edges: bridgeEdgesAcrossDeletedNodes(state.edges, new Set([nodeId])),
       syncSource: 'graph',
       isUndoRedo: false,
     }));
