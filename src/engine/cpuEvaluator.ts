@@ -35,7 +35,9 @@ export function evaluateNodeOutput(
   // needs to follow the wire to the real producer.
   edges = unwrapCollapsedGroupEdges(nodes, edges);
   const cache = new Map<string, EvalResult>();
-  return evaluate(nodeId, nodes, edges, time, cache);
+  const nodeIndex = buildNodeIndex(nodes);
+  const edgeIndex = buildEdgeIndex(edges);
+  return evaluate(nodeId, nodes, edges, time, cache, edgeIndex, nodeIndex);
 }
 
 /**
@@ -80,6 +82,7 @@ export function getNodeOutputShape(
   nodes: AppNode[],
   edges: AppEdge[],
   visited: Set<string> = new Set(),
+  nodeIndex?: Map<string, AppNode>,
 ): number {
   // Only unwrap on the top-level call (visited starts empty); subsequent
   // recursive calls below pass an already-unwrapped edges array.
@@ -87,7 +90,8 @@ export function getNodeOutputShape(
   if (visited.has(nodeId)) return 1;
   visited.add(nodeId);
 
-  const node = nodes.find((n) => n.id === nodeId);
+  const nidx = nodeIndex ?? buildNodeIndex(nodes);
+  const node = nidx.get(nodeId);
   if (!node) return 1;
   const def = NODE_REGISTRY.get(node.data.registryType);
   if (!def) return 1;
@@ -105,7 +109,7 @@ export function getNodeOutputShape(
     let total = 0;
     for (const inputId of ['a', 'b'] as const) {
       const e = edges.find((edge) => edge.target === nodeId && edge.targetHandle === inputId);
-      total += e ? getNodeOutputShape(e.source, nodes, edges, visited) : 1;
+      total += e ? getNodeOutputShape(e.source, nodes, edges, visited, nidx) : 1;
     }
     return Math.min(Math.max(total, 1), 4);
   }
@@ -115,7 +119,7 @@ export function getNodeOutputShape(
   for (const input of def.inputs) {
     const e = edges.find((edge) => edge.target === nodeId && edge.targetHandle === input.id);
     if (e) {
-      const s = getNodeOutputShape(e.source, nodes, edges, visited);
+      const s = getNodeOutputShape(e.source, nodes, edges, visited, nidx);
       if (s > maxShape) maxShape = s;
     }
   }
@@ -144,6 +148,13 @@ function buildEdgeIndex(edges: AppEdge[]): Map<string, AppEdge[]> {
   return index;
 }
 
+// Index nodes by ID — lets the recursive evaluator avoid O(N) scans per step.
+function buildNodeIndex(nodes: AppNode[]): Map<string, AppNode> {
+  const index = new Map<string, AppNode>();
+  for (const n of nodes) index.set(n.id, n);
+  return index;
+}
+
 function evaluate(
   nodeId: string,
   nodes: AppNode[],
@@ -151,6 +162,7 @@ function evaluate(
   time: number,
   cache: Map<string, EvalResult>,
   edgeIndex?: Map<string, AppEdge[]>,
+  nodeIndex?: Map<string, AppNode>,
 ): EvalResult {
   if (cache.has(nodeId)) return cache.get(nodeId)!;
 
@@ -160,8 +172,9 @@ function evaluate(
   cache.set(nodeId, null);
 
   const idx = edgeIndex ?? buildEdgeIndex(edges);
+  const nidx = nodeIndex ?? buildNodeIndex(nodes);
 
-  const node = nodes.find((n) => n.id === nodeId);
+  const node = nidx.get(nodeId);
   if (!node) return null;
 
   const type = node.data.registryType;
@@ -173,7 +186,7 @@ function evaluate(
   const scalarInput = (portId: string, fallback: number): number => {
     const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
-      const upstream = evaluate(edge.source, nodes, edges, time, cache, idx);
+      const upstream = evaluate(edge.source, nodes, edges, time, cache, idx, nidx);
       if (upstream !== null && upstream.length > 0) return upstream[0];
     }
     const v = values[portId];
@@ -186,7 +199,7 @@ function evaluate(
   const channelInput = (portId: string, fallback: number): EvalResult => {
     const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
-      return evaluate(edge.source, nodes, edges, time, cache, idx);
+      return evaluate(edge.source, nodes, edges, time, cache, idx, nidx);
     }
     const v = values[portId];
     return [v !== undefined ? Number(v) : fallback];
@@ -444,10 +457,27 @@ function evaluate(
       result = [hue2rgb(p, q, h + 1 / 3), hue2rgb(p, q, h), hue2rgb(p, q, h - 1 / 3)];
       break;
     }
-    // RGB → HSL (passthrough — full implementation requires min/max/conditionals)
+    // RGB → HSL — matches the branchless GPU/codegen implementations.
     case 'toHsl': {
       const rgb = channelInput('rgb', 0);
-      result = rgb;
+      if (!rgb) { result = null; break; }
+      const r = rgb[0] ?? 0;
+      const g = rgb[1] ?? r;
+      const b = rgb[2] ?? r;
+      const maxC = Math.max(r, g, b);
+      const minC = Math.min(r, g, b);
+      const d = maxC - minC;
+      const L = (maxC + minC) * 0.5;
+      const satDenom = Math.max(1 - Math.abs(2 * L - 1), 1e-10);
+      const S = d > 0 ? d / satDenom : 0;
+      let H = 0;
+      if (d > 0) {
+        const dSafe = Math.max(d, 1e-10);
+        if (maxC === r) H = ((g - b) / dSafe + (g < b ? 6 : 0)) / 6;
+        else if (maxC === g) H = ((b - r) / dSafe + 2) / 6;
+        else H = ((r - g) / dSafe + 4) / 6;
+      }
+      result = [H, S, L];
       break;
     }
 

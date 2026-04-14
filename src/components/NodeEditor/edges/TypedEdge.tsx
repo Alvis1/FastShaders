@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import {
   EdgeLabelRenderer,
   getBezierPath,
@@ -16,6 +16,12 @@ import { EdgeInfoCard } from './EdgeInfoCard';
 const TYPE_PRIORITY: Record<TSLDataType, number> = {
   any: -1, int: 0, float: 1, vec2: 2, vec3: 3, color: 3, vec4: 4,
 };
+
+function buildNodeMap(nodes: AppNode[]): Map<string, AppNode> {
+  const m = new Map<string, AppNode>();
+  for (const n of nodes) m.set(n.id, n);
+  return m;
+}
 
 const GAP = 3.5 / 3;
 
@@ -41,14 +47,14 @@ function perp(sx: number, sy: number, tx: number, ty: number): [number, number] 
 function resolveUpstreamType(
   nodeId: string,
   handleId: string | null | undefined,
-  nodes: AppNode[],
-  edges: AppEdge[],
+  nodeMap: Map<string, AppNode>,
+  incomingByTarget: Map<string, AppEdge[]>,
   visited: Set<string>,
 ): TSLDataType {
   if (visited.has(nodeId)) return 'any';
   visited.add(nodeId);
 
-  const node = nodes.find((n) => n.id === nodeId);
+  const node = nodeMap.get(nodeId);
   if (!node) return 'any';
 
   const def = NODE_REGISTRY.get(node.data.registryType);
@@ -62,14 +68,17 @@ function resolveUpstreamType(
   let bestType: TSLDataType = 'any';
   let bestPriority = -1;
 
-  for (const input of def.inputs) {
-    const upEdge = edges.find((e) => e.target === nodeId && e.targetHandle === input.id);
-    if (upEdge) {
-      const upType = resolveUpstreamType(upEdge.source, upEdge.sourceHandle, nodes, edges, visited);
-      const priority = TYPE_PRIORITY[upType] ?? -1;
-      if (priority > bestPriority) {
-        bestPriority = priority;
-        bestType = upType;
+  const incoming = incomingByTarget.get(nodeId);
+  if (incoming) {
+    for (const input of def.inputs) {
+      const upEdge = incoming.find((e) => e.targetHandle === input.id);
+      if (upEdge) {
+        const upType = resolveUpstreamType(upEdge.source, upEdge.sourceHandle, nodeMap, incomingByTarget, visited);
+        const priority = TYPE_PRIORITY[upType] ?? -1;
+        if (priority > bestPriority) {
+          bestPriority = priority;
+          bestType = upType;
+        }
       }
     }
   }
@@ -84,16 +93,17 @@ function resolveDataType(
   sourceHandleId: string | null | undefined,
   targetId: string,
   targetHandleId: string | null | undefined,
+  nodeMap: Map<string, AppNode>,
+  incomingByTarget: Map<string, AppEdge[]>,
 ): TSLDataType {
   if (edgeType !== 'any') return edgeType;
-  const { nodes, edges } = useAppStore.getState();
 
   // Walk upstream from source to find the concrete type flowing through
-  const upstreamType = resolveUpstreamType(sourceId, sourceHandleId, nodes, edges, new Set());
+  const upstreamType = resolveUpstreamType(sourceId, sourceHandleId, nodeMap, incomingByTarget, new Set());
   if (upstreamType !== 'any') return upstreamType;
 
   // Fall back to target input port
-  const tgtNode = nodes.find((n) => n.id === targetId);
+  const tgtNode = nodeMap.get(targetId);
   if (tgtNode) {
     const tgtDef = NODE_REGISTRY.get(tgtNode.data.registryType);
     const tgtPort = tgtDef?.inputs.find((i) => i.id === targetHandleId);
@@ -121,12 +131,23 @@ export function TypedEdge({
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
-  // Subscribe to both nodes and edges so we re-resolve when the graph changes
-  void nodes;
-  void edges;
+
+  // Build per-graph lookup structures once per nodes/edges identity (not once per
+  // rendered edge) — React Flow renders one TypedEdge component per edge, so
+  // without memoization these lookups were O(E·N) across the whole canvas.
+  const nodeMap = useMemo(() => buildNodeMap(nodes), [nodes]);
+  const incomingByTarget = useMemo(() => {
+    const m = new Map<string, AppEdge[]>();
+    for (const e of edges) {
+      const list = m.get(e.target);
+      if (list) list.push(e);
+      else m.set(e.target, [e]);
+    }
+    return m;
+  }, [edges]);
 
   const rawType = data?.dataType ?? 'any';
-  const dataType = resolveDataType(rawType, source, sourceHandleId, target, targetHandleId);
+  const dataType = resolveDataType(rawType, source, sourceHandleId, target, targetHandleId, nodeMap, incomingByTarget);
   const baseColor = getTypeColor(dataType);
 
   // Channel count: take the *larger* of live evaluation length and static shape inference.

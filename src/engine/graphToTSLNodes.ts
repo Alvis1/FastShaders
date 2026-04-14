@@ -32,6 +32,9 @@ import {
   smoothstep,
   remap,
   select,
+  greaterThan,
+  lessThan,
+  equal,
   normalize,
   length,
   distance,
@@ -240,8 +243,27 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
       add(l, mul(satFactor, sub(bk, float(0.5)))),
     );
   },
-  // RGB → HSL: passthrough (inverse conversion requires min/max/conditionals not easily expressed in TSL)
-  toHsl: (inputs) => inputs.rgb ?? vec3(0, 0, 0),
+  // RGB → HSL: branchless inverse, kept in lockstep with the TO_HSL_HELPER_LINES
+  // emitted by graphToCode so live preview and generated code agree pixel-for-pixel.
+  toHsl: (inputs) => {
+    const rgb = inputs.rgb ?? vec3(0, 0, 0);
+    const r = rgb.x;
+    const g = rgb.y;
+    const b = rgb.z;
+    const maxC = max(max(r, g), b);
+    const minC = min(min(r, g), b);
+    const d = sub(maxC, minC);
+    const L = mul(add(maxC, minC), float(0.5));
+    const satDenom = max(sub(float(1), abs(sub(mul(L, float(2)), float(1)))), float(1e-10));
+    const S = select(greaterThan(d, float(0)), div(d, satDenom), float(0));
+    const dSafe = max(d, float(1e-10));
+    const hR = add(div(sub(g, b), dSafe), select(lessThan(g, b), float(6), float(0)));
+    const hG = add(div(sub(b, r), dSafe), float(2));
+    const hB = add(div(sub(r, g), dSafe), float(4));
+    const hueSeg = select(equal(maxC, r), hR, select(equal(maxC, g), hG, hB));
+    const H = select(greaterThan(d, float(0)), mul(hueSeg, float(1 / 6)), float(0));
+    return vec3(H, S, L);
+  },
 };
 
 export interface CompileResult {
