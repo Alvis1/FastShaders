@@ -97,7 +97,23 @@ export function graphToCode(
     if (!def || node.data.registryType === 'output' || !def.tslImportModule) continue;
     // UV import is handled in body generation (with channel parameter)
     if (def.type === 'uv') continue;
+    // hsl/toHsl are local helpers, not TSL exports — never try to import them.
+    if (def.type === 'hsl' || def.type === 'toHsl') continue;
     addImport(def.tslImportModule, def.tslFunction);
+  }
+
+  // Collect helper imports for hsl/toHsl if used
+  const usedHsl = sorted.some((n) => n.data.registryType === 'hsl');
+  const usedToHsl = sorted.some((n) => n.data.registryType === 'toHsl');
+  if (usedHsl) {
+    for (const name of ['mul', 'add', 'sub', 'abs', 'mod', 'clamp', 'float', 'vec3']) {
+      addImport('three/tsl', name);
+    }
+  }
+  if (usedToHsl) {
+    for (const name of ['max', 'min', 'sub', 'add', 'mul', 'abs', 'select', 'greaterThan', 'lessThan', 'equal', 'div', 'float', 'vec3']) {
+      addImport('three/tsl', name);
+    }
   }
 
   // Build body lines
@@ -195,13 +211,18 @@ export function graphToCode(
         ? `0x${val.slice(1)}`
         : val;
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${formatted});`);
-    } else if (def.type === 'hsl') {
-      // HSL → RGB: use the TSL hsl() function (available since Three.js r160+)
-      addImport('three/tsl', 'hsl');
-      bodyLines.push(`  const ${varName} = hsl(${args.join(', ')});`);
-    } else if (def.type === 'toHsl') {
-      // RGB → HSL: passthrough (no TSL toHsl() available)
-      bodyLines.push(`  const ${varName} = ${args[0] ?? 'vec3(0, 0, 0)'};`);
+    } else if (def.type === 'hsl' || def.type === 'toHsl') {
+      // HSL↔RGB: neither `hsl` nor `toHsl` exist in three/tsl, so we emit
+      // module-local helper Fn declarations (see buildColorHelpers below) and
+      // call them here. The helpers are auto-included whenever either node is
+      // used; the matching `path.skip()` in codeToGraph prevents round-trip
+      // pollution of the graph.
+      const call = def.type === 'hsl' ? 'hsl' : 'toHsl';
+      const fallback = def.type === 'hsl' ? '0, 0, 0' : 'vec3(0, 0, 0)';
+      const argExpr = def.type === 'hsl'
+        ? args.join(', ')
+        : (args[0] ?? fallback);
+      bodyLines.push(`  const ${varName} = ${call}(${argExpr});`);
     } else {
       // Regular function call
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${args.join(', ')});`);
@@ -250,9 +271,14 @@ export function graphToCode(
     importLines.push(`import { ${sortedNames.join(', ')} } from '${module}';`);
   }
 
+  const helperLines: string[] = [];
+  if (usedHsl) helperLines.push(...HSL_HELPER_LINES, '');
+  if (usedToHsl) helperLines.push(...TO_HSL_HELPER_LINES, '');
+
   const code = [
     ...importLines,
     '',
+    ...helperLines,
     'const shader = Fn(() => {',
     ...bodyLines,
     '',
@@ -265,6 +291,50 @@ export function graphToCode(
 
   return { code, importStatements: importLines, varNames };
 }
+
+/**
+ * HSL → RGB helper emitted at module scope when the graph contains an hsl node.
+ * `hsl` is not an export of `three/tsl`, so we ship our own branchless implementation
+ * (GLSL-style — no conditionals, suitable for the GPU). Identical to the factory
+ * in graphToTSLNodes so generated-code and live-preview paths stay in sync.
+ */
+const HSL_HELPER_LINES = [
+  'const hsl = Fn(([h, s, l]) => {',
+  '  const h6 = mul(h, float(6));',
+  '  const rk = clamp(sub(abs(sub(mod(add(h6, float(0)), float(6)), float(3))), float(1)), float(0), float(1));',
+  '  const gk = clamp(sub(abs(sub(mod(add(h6, float(4)), float(6)), float(3))), float(1)), float(0), float(1));',
+  '  const bk = clamp(sub(abs(sub(mod(add(h6, float(2)), float(6)), float(3))), float(1)), float(0), float(1));',
+  '  const sat = mul(s, sub(float(1), abs(sub(mul(float(2), l), float(1)))));',
+  '  return vec3(',
+  '    add(l, mul(sat, sub(rk, float(0.5)))),',
+  '    add(l, mul(sat, sub(gk, float(0.5)))),',
+  '    add(l, mul(sat, sub(bk, float(0.5)))),',
+  '  );',
+  '});',
+];
+
+/**
+ * RGB → HSL helper. Branchless via select/greaterThan/equal so GPU warp divergence
+ * stays low. Uses `max(d, 1e-10)` to dodge division-by-zero on neutral/grayscale
+ * inputs; the outer `select(d > 0, …, 0)` then zeros hue/saturation cleanly.
+ */
+const TO_HSL_HELPER_LINES = [
+  'const toHsl = Fn(([rgb]) => {',
+  '  const maxC = max(max(rgb.x, rgb.y), rgb.z);',
+  '  const minC = min(min(rgb.x, rgb.y), rgb.z);',
+  '  const d = sub(maxC, minC);',
+  '  const L = mul(add(maxC, minC), float(0.5));',
+  '  const satDenom = max(sub(float(1), abs(sub(mul(L, float(2)), float(1)))), float(1e-10));',
+  '  const S = select(greaterThan(d, float(0)), div(d, satDenom), float(0));',
+  '  const dSafe = max(d, float(1e-10));',
+  '  const hR = add(div(sub(rgb.y, rgb.z), dSafe), select(lessThan(rgb.y, rgb.z), float(6), float(0)));',
+  '  const hG = add(div(sub(rgb.z, rgb.x), dSafe), float(2));',
+  '  const hB = add(div(sub(rgb.x, rgb.y), dSafe), float(4));',
+  '  const hueSeg = select(equal(maxC, rgb.x), hR, select(equal(maxC, rgb.y), hG, hB));',
+  '  const H = select(greaterThan(d, float(0)), mul(hueSeg, float(1 / 6)), float(0));',
+  '  return vec3(H, S, L);',
+  '});',
+];
 
 /**
  * Compute the total component count produced by an append node by summing the channel

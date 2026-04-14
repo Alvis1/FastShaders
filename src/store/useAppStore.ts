@@ -326,7 +326,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   previewCode: '',
   codeErrors: [],
   totalCost: 0,
-  syncSource: 'initial',
+  syncSource: 'graph',
   syncInProgress: false,
   codeSyncRequested: false,
   history: [],

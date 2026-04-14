@@ -51,6 +51,10 @@
     "dot": 3,
     "cross": 6,
 
+    "uv": 2,
+    "split": 0,
+    "append": 1,
+
     "perlin": 35,
     "perlinVec3": 75,
     "fbm": 95,

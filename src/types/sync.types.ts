@@ -1,1 +1,1 @@
-export type SyncSource = 'graph' | 'code' | 'initial';
+export type SyncSource = 'graph' | 'code';

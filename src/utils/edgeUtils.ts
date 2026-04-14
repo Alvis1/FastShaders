@@ -52,7 +52,20 @@ export function unwrapCollapsedGroupEdges(nodes: AppNode[], edges: AppEdge[]): A
   }
   if (!anyCollapsed) return edges;
 
-  return edges.map((e) => {
+  // Track which group IDs are currently collapsed so we can drop edges that
+  // still land on a synthetic socket we couldn't translate — happens with
+  // legacy persisted groups where `collapsedInputs/Outputs` were never
+  // populated. Without this filter graphToCode / cpuEvaluator would look up
+  // a var name on the group container (not in `sorted`) and silently emit 0.
+  const liveNodeIds = new Set(nodes.map((n) => n.id));
+  const collapsedGroupIds = new Set<string>();
+  for (const n of nodes) {
+    if (n.type === 'group' && (n.data as GroupNodeData).collapsed) {
+      collapsedGroupIds.add(n.id);
+    }
+  }
+
+  const rewritten = edges.map((e) => {
     let { source, sourceHandle, target, targetHandle } = e;
     const outKey = `${source}\0${sourceHandle ?? ''}`;
     const outOrig = outMap.get(outKey);
@@ -70,5 +83,14 @@ export function unwrapCollapsedGroupEdges(nodes: AppNode[], edges: AppEdge[]): A
       return e;
     }
     return { ...e, source, sourceHandle, target, targetHandle };
+  });
+
+  return rewritten.filter((e) => {
+    if (!liveNodeIds.has(e.source) || !liveNodeIds.has(e.target)) return false;
+    // Drop edges that still point at a collapsed group's synthetic socket —
+    // we couldn't translate them, so they'd otherwise be compiled as 0.
+    if (collapsedGroupIds.has(e.source)) return false;
+    if (collapsedGroupIds.has(e.target)) return false;
+    return true;
   });
 }

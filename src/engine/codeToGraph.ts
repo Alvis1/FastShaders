@@ -6,6 +6,7 @@ import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType } from '@/registry/nodeRegistry';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import complexityData from '@/registry/complexity.json';
+import { VALID_SWIZZLE } from './graphToCode';
 
 // Handle babel traverse CJS/ESM interop
 const traverse = (
@@ -135,6 +136,21 @@ export function codeToGraph(
         const varName = path.node.id.name;
         const init = path.node.init;
         if (!init) return;
+
+        // Skip module-local color helpers (`const hsl = Fn(...)`, `const toHsl = Fn(...)`)
+        // that graphToCode emits when the graph contains an hsl/toHsl node.
+        // Their bodies contain raw TSL primitives (mul/sub/clamp/…) which would
+        // otherwise be parsed as standalone nodes, polluting the graph on every
+        // code→graph round-trip.
+        if (
+          (varName === 'hsl' || varName === 'toHsl') &&
+          t.isCallExpression(init) &&
+          t.isIdentifier(init.callee) &&
+          init.callee.name === 'Fn'
+        ) {
+          path.skip();
+          return;
+        }
 
         // const x = identifier (e.g. positionGeometry)
         if (t.isIdentifier(init)) {
@@ -634,8 +650,6 @@ function processNoiseCall(
   }
 }
 
-const SWIZZLE_COMPONENTS = new Set(['x', 'y', 'z', 'w']);
-
 /**
  * Resolve a member expression like `someVar.x` to a split node output.
  * Creates the split node on first use for each source variable.
@@ -651,7 +665,7 @@ function resolveMemberExpr(
   if (!t.isIdentifier(expr.object) || !t.isIdentifier(expr.property)) return null;
   const varName = expr.object.name;
   const component = expr.property.name;
-  if (!SWIZZLE_COMPONENTS.has(component)) return null;
+  if (!VALID_SWIZZLE.has(component)) return null;
 
   const sourceId = varToNodeId.get(varName);
   if (!sourceId) return null;

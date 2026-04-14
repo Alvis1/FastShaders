@@ -20,7 +20,6 @@ export function useSyncEngine() {
   const setNodes = useAppStore((s) => s.setNodes);
   const setEdges = useAppStore((s) => s.setEdges);
   const setCodeErrors = useAppStore((s) => s.setCodeErrors);
-  const setTotalCost = useAppStore((s) => s.setTotalCost);
   const setSyncInProgress = useAppStore((s) => s.setSyncInProgress);
   const codeSyncRequested = useAppStore((s) => s.codeSyncRequested);
 
@@ -157,17 +156,23 @@ export function useSyncEngine() {
             }
           }
 
-          // Remap edges to use preserved node IDs
-          const remappedEdges = result.edges.map((e) => {
-            const src = idMap.get(e.source) ?? e.source;
-            const tgt = idMap.get(e.target) ?? e.target;
-            return {
-              ...e,
-              source: src,
-              target: tgt,
-              id: generateEdgeId(src, e.sourceHandle ?? 'out', tgt, e.targetHandle ?? 'out'),
-            };
-          });
+          // Remap edges to use preserved node IDs, then drop any edge whose
+          // endpoint doesn't resolve to an actual parsed node — defensive
+          // against parser changes; today the parser only emits self-consistent
+          // edges, but the cost of one Set membership check is worth it.
+          const parsedNodeIds = new Set(result.nodes.map((n) => n.id));
+          const remappedEdges = result.edges
+            .filter((e) => parsedNodeIds.has(e.source) && parsedNodeIds.has(e.target))
+            .map((e) => {
+              const src = idMap.get(e.source) ?? e.source;
+              const tgt = idMap.get(e.target) ?? e.target;
+              return {
+                ...e,
+                source: src,
+                target: tgt,
+                id: generateEdgeId(src, e.sourceHandle ?? 'out', tgt, e.targetHandle ?? 'out'),
+              };
+            });
 
           let finalNodes: AppNode[];
           if (unpositioned.length > 0) {
@@ -319,16 +324,20 @@ export function useSyncEngine() {
     if (total === lastCostRef.current) return;
     lastCostRef.current = total;
 
-    setTotalCost(total);
-
-    if (outputNode && outputNode.data.cost !== total) {
-      useAppStore.setState((state) => ({
-        nodes: state.nodes.map((n) =>
-          n.id === outputNode.id
-            ? { ...n, data: { ...n.data, cost: total } }
-            : n
-        ) as AppNode[],
-      }));
-    }
-  }, [nodes, edges, setTotalCost]);
+    // Collapse the `setTotalCost` write and the output-node cost write into a
+    // single setState so we don't re-enter this effect twice for one change.
+    const needsOutputUpdate = !!(outputNode && outputNode.data.cost !== total);
+    useAppStore.setState((state) => ({
+      totalCost: total,
+      ...(needsOutputUpdate
+        ? {
+            nodes: state.nodes.map((n) =>
+              n.id === outputNode!.id
+                ? { ...n, data: { ...n.data, cost: total } }
+                : n
+            ) as AppNode[],
+          }
+        : {}),
+    }));
+  }, [nodes, edges]);
 }

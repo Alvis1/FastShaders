@@ -537,27 +537,6 @@ export function NodeEditor() {
       }
 
       const parentChanged = targetGroupId !== draggedNode.parentId;
-      // DEBUG: temporary logging to diagnose group detachment
-      if (draggedNode.parentId) {
-        const parentGroup = allNodes.find((n) => n.id === draggedNode.parentId);
-        if (parentGroup) {
-          const pAbs = absolutePos(parentGroup);
-          const { w: pw, h: ph } = groupSize(parentGroup);
-          console.log('[GROUP DEBUG]', {
-            draggedId: draggedNode.id,
-            parentId: draggedNode.parentId,
-            targetGroupId,
-            parentChanged,
-            nudged,
-            draggedCenter: { x: draggedCx, y: draggedCy },
-            parentAbsBounds: { x: pAbs.x, y: pAbs.y, x2: pAbs.x + pw, y2: pAbs.y + ph },
-            parentSize: { w: pw, h: ph },
-            parentMeasured: (parentGroup as Measured).measured,
-            parentWidth: (parentGroup as AppNode & { width?: number }).width,
-            parentDataWidth: (parentGroup.data as { width?: number }).width,
-          });
-        }
-      }
       if (!nudged && !parentChanged) return;
 
       // New local coords = absolute − new-parent absolute. With no new parent
