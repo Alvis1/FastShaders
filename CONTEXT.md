@@ -8,7 +8,7 @@ Bi-directional TSL (Three.js Shading Language) visual shader editor. Users build
 
 **Stack**: React 18 + TypeScript + Vite | `@xyflow/react` v12 (node graph) | `@monaco-editor/react` (code editor) | `zustand` v5 (state) | `three` 0.183 (WebGPU + TSL — exclusively `three/tsl` built-ins, including the MaterialX noise family) | `@dagrejs/dagre` (auto-layout) | `@babel/parser` + `traverse` + `types` (code parsing)
 
-**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles a custom A-Frame 1.7 + Three.js r173 WebGPU in `aframe-171-a-0.1.min.js`. The shaderloader (`a-frame-shaderloader-0.3.js`) resolves the bare `'three/tsl'` import specifier via `tsl-shim.js` so blob-loaded modules work. It detects Object API (multi-channel) vs Simple API (single node) by checking for any `*Node` property (`colorNode`, `positionNode`, `normalNode`, `opacityNode`, `roughnessNode`, `metalnessNode`, `emissiveNode`). It also manages **property uniforms**: reads `export const schema` from modules (or auto-detects `params.XXX`/`const NAME = uniform(VALUE)` patterns), creates TSL uniforms, passes them to the shader function, and exposes `updateProperty(name, value)` for runtime updates. `tsl-shim.js` re-exports `window.THREE` + `THREE.TSL` as ESM — no fallback library is needed since the r173 bundle exposes `hsl`/`toHsl` natively.
+**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles a custom A-Frame 1.7 + Three.js r173 WebGPU in `aframe-171-a-0.1.min.js`. The shaderloader (`a-frame-shaderloader-0.3.js`) resolves the bare `'three/tsl'` import specifier via `tsl-shim.js` so blob-loaded modules work. It detects Object API (multi-channel) vs Simple API (single node) by checking for any `*Node` property (`colorNode`, `positionNode`, `normalNode`, `opacityNode`, `roughnessNode`, `metalnessNode`, `emissiveNode`). It also manages **property uniforms**: reads `export const schema` from modules (or auto-detects `params.XXX`/`const NAME = uniform(VALUE)` patterns), creates TSL uniforms, passes them to the shader function, and exposes `updateProperty(name, value)` for runtime updates. `tsl-shim.js` re-exports `window.THREE` + `THREE.TSL` as ESM. **Colour helpers**: `hsl` and `toHsl` are *not* exports of `three/tsl` in r173 (only `mx_hsvtorgb`/`mx_rgbtohsv` exist). Whenever the graph contains an `hsl` or `toHsl` node, `graphToCode` emits a module-local branchless `Fn` helper at top-of-file; `codeToGraph` detects and `path.skip()`s those helpers so their bodies don't round-trip back into the graph as standalone arithmetic nodes.
 
 ---
 
@@ -99,11 +99,11 @@ src/
 ├── types/
 │   ├── index.ts                       # Re-exports all types
 │   ├── node.types.ts                  # AppNode union, ShaderNodeData, OutputNodeData, GroupNodeData, BoundarySocket
-│   ├── sync.types.ts                  # SyncSource type
+│   ├── sync.types.ts                  # SyncSource type ('graph' | 'code')
 │   └── tsl.types.ts                   # ParseError, GeneratedCode
 ├── utils/
 │   ├── colorUtils.ts                  # Cost color gradient, type→color mapping, CATEGORY_COLORS, hexToRgb01, getContrastColor (auto-flip text against bg)
-│   ├── edgeUtils.ts                   # removeEdgesForPort() — cleans up edges when hiding input ports
+│   ├── edgeUtils.ts                   # removeEdgesForPort(), unwrapCollapsedGroupEdges() (group boundary rewrite), bridgeEdgesAcrossDeletedNodes() (splice-delete)
 │   ├── graphTraversal.ts             # hasTimeUpstream() — BFS time-node detection with O(1) Map lookup
 │   ├── idGenerator.ts                 # generateId(), generateEdgeId()
 │   ├── mathPreview.ts                 # Sin/math waveform canvas renderer (scrolling curve + dot)
@@ -645,7 +645,7 @@ When an edge is selected, an info card appears at the midpoint showing live valu
 - **Ctrl+V**: Paste copied nodes (shared `pasteNodes()` helper — offset +30px, clone edges between copied nodes)
 - **Ctrl+D**: Duplicate selected (reuses `pasteNodes()` helper)
 - **Ctrl+G**: Group selected (≥2 non-group nodes); **Ctrl+Shift+G** ungroups any selected group
-- **Delete/Backspace**: Remove selected nodes (and their connected edges) and/or selected edges. React Flow's built-in delete is disabled (`deleteKeyCode={null}`); the manual handler in `NodeEditor.tsx` reads both `n.selected` and `edge.selected`. Deleting a group dissolves it first (children lifted) so they aren't orphaned with a dangling `parentId`.
+- **Delete/Backspace**: Remove selected nodes and/or selected edges. React Flow's built-in delete is disabled (`deleteKeyCode={null}`); the manual handler in `NodeEditor.tsx` reads both `n.selected` and `edge.selected`. Deleting a group dissolves it first (children lifted) so they aren't orphaned with a dangling `parentId`. **Splice-delete**: the outgoing edges of a deleted node are re-parented to the upstream source of its first connected input via `bridgeEdgesAcrossDeletedNodes()`, so chains like `X → A → B → C` with A+B selected collapse to `X → C`. Multi-output deleted nodes fan out from the same live upstream; single-input-per-port is preserved by dropping duplicate bridges. Same helper is wired into `store.removeNode`, so every deletion path (Delete key, context menu, programmatic) behaves identically.
 
 ### Mouse Interactions
 
@@ -883,13 +883,13 @@ The fix in both nodes is a `useUpdateNodeInternals(id)` effect keyed on the join
 
 ### VALID_SWIZZLE
 
-Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`. Contains `{'x', 'y', 'z', 'w'}` for split node swizzle validation.
+Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts` and `codeToGraph.ts` (for the member-expression → split-node pattern). Contains `{'x', 'y', 'z', 'w'}` for split node swizzle validation.
 
 ### Three.js TSL Imports Used
 
-**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, hsl, toHsl, remap, select, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3
+**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, remap, select, greaterThan, lessThan, equal, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. *(`hsl` and `toHsl` are emitted as module-local `Fn` helpers, not imported — r173's `three/tsl` does not export them.)*
 
-**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, remap, select, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3
+**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, remap, select, greaterThan, lessThan, equal, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. The `hsl` and `toHsl` factories build the same branchless formula in TSL node form so live preview matches generated-code output pixel-for-pixel.
 
 ### Persistence (localStorage)
 
