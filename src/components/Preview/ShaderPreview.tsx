@@ -88,6 +88,43 @@ function loadSubdivision(): number {
   return SUBDIVISION_DEFAULT;
 }
 
+function loadCameraPos(): CameraPosition | null {
+  try {
+    const raw = localStorage.getItem('fs:previewCameraPos');
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
+        // Reject origin-ish values — a prior bug saved (0,0,0) every frame by
+        // reading the camera-entity wrapper instead of the camera itself.
+        // Restoring that would place the camera inside the mesh.
+        if (Math.hypot(p.x, p.y, p.z) < 1) {
+          try { localStorage.removeItem('fs:previewCameraPos'); } catch { /* */ }
+          return null;
+        }
+        return { x: p.x, y: p.y, z: p.z };
+      }
+    }
+  } catch { /* */ }
+  return null;
+}
+
+function loadRotation(): CameraPosition | null {
+  try {
+    const raw = localStorage.getItem('fs:previewRotation');
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
+        return { x: p.x, y: p.y, z: p.z };
+      }
+    }
+  } catch { /* */ }
+  return null;
+}
+
+function loadPlaying(): boolean {
+  try { return localStorage.getItem('fs:previewPlaying') === 'true'; } catch { return false; }
+}
+
 function loadUniformBounds(): Record<string, UniformBounds> {
   try {
     const raw = localStorage.getItem('fs:previewUniformBounds');
@@ -131,7 +168,7 @@ export function ShaderPreview() {
   const materialSettings = (outputNode?.data as { materialSettings?: PreviewOptions['materialSettings'] })?.materialSettings;
 
   const [geometry, setGeometry] = useState<GeometryType>(loadGeometry);
-  const [playing, setPlaying] = useState(false);
+  const [playing, setPlaying] = useState<boolean>(loadPlaying);
   const [lighting, setLighting] = useState<LightingMode>(loadLighting);
   const [subdivision, setSubdivision] = useState<number>(loadSubdivision);
   const [bgColor, setBgColor] = useState(() => {
@@ -146,8 +183,8 @@ export function ShaderPreview() {
   // useMemo that rebuilds the iframe — that would create an infinite loop.
   // The memo reads `current` at rebuild time and embeds it as the restore
   // target for the next iframe instance.
-  const cameraPosRef = useRef<CameraPosition | null>(null);
-  const rotationRef = useRef<CameraPosition | null>(null);
+  const cameraPosRef = useRef<CameraPosition | null>(loadCameraPos());
+  const rotationRef = useRef<CameraPosition | null>(loadRotation());
 
   // Property uniforms detected from the generated code, filtered to only those
   // whose property_float node has at least one outgoing edge (i.e. is connected).
@@ -230,11 +267,15 @@ export function ShaderPreview() {
         }
       } else if (data.type === 'fs:camera') {
         if (typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number') {
-          cameraPosRef.current = { x: data.x, y: data.y, z: data.z };
+          const pos = { x: data.x, y: data.y, z: data.z };
+          cameraPosRef.current = pos;
+          try { localStorage.setItem('fs:previewCameraPos', JSON.stringify(pos)); } catch { /* */ }
         }
       } else if (data.type === 'fs:rotation') {
         if (typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number') {
-          rotationRef.current = { x: data.x, y: data.y, z: data.z };
+          const rot = { x: data.x, y: data.y, z: data.z };
+          rotationRef.current = rot;
+          try { localStorage.setItem('fs:previewRotation', JSON.stringify(rot)); } catch { /* */ }
         }
       }
     };
@@ -249,14 +290,18 @@ export function ShaderPreview() {
     // Camera: clear the saved view AND tell the live iframe to snap home now
     cameraPosRef.current = null;
     rotationRef.current = null;
+    try { localStorage.removeItem('fs:previewCameraPos'); } catch { /* */ }
+    try { localStorage.removeItem('fs:previewRotation'); } catch { /* */ }
     const win = iframeRef.current?.contentWindow;
     win?.postMessage({ type: 'fs:reset-camera' }, '*');
 
-    // Lighting + subdivision back to defaults. If these are already at the
-    // default the setState is a no-op and no iframe rebuild happens — that's
-    // fine because we still push uniform values via postMessage below.
+    // Lighting + subdivision back to defaults, playback paused. If these are
+    // already at the default the setState is a no-op and no iframe rebuild
+    // happens — that's fine because we still push uniform values via
+    // postMessage below.
     setLighting('studio');
     setSubdivision(SUBDIVISION_DEFAULT);
+    setPlaying(false);
 
     // Property uniforms back to their shader defaults. Update local state so
     // the overlay reflects the change, AND push to the iframe immediately
@@ -296,6 +341,9 @@ export function ShaderPreview() {
   useEffect(() => {
     try { localStorage.setItem('fs:previewBgColor', bgColor); } catch { /* */ }
   }, [bgColor]);
+  useEffect(() => {
+    try { localStorage.setItem('fs:previewPlaying', String(playing)); } catch { /* */ }
+  }, [playing]);
 
   // OBJ-backed geometries ignore the subdivision slider entirely. Folding the
   // value to a constant in the dep list (instead of the live state) means

@@ -283,14 +283,22 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       if (camRetries++ < 200) setTimeout(function() { whenOrbitReady(cb); }, 50);
     }
     whenOrbitReady(function(oc) {
+      // The orbit-controls component attaches THREE.OrbitControls to
+      // \`el.getObject3D("camera")\` (the PerspectiveCamera child), not to the
+      // entity's own object3D group. Reading/writing \`camEl.object3D.position\`
+      // manipulates the wrapper group (which never moves) — so both restore
+      // and polling must go through the camera child.
+      var getCam = function() { return camEl && camEl.getObject3D && camEl.getObject3D("camera"); };
       var saved = window.__savedCameraPos;
-      if (saved && camEl && camEl.object3D) {
-        camEl.object3D.position.set(saved.x, saved.y, saved.z);
+      var cam = getCam();
+      if (saved && cam) {
+        cam.position.set(saved.x, saved.y, saved.z);
         try { oc.controls.update(); } catch (e) {}
       }
       var lx = NaN, ly = NaN, lz = NaN;
       setInterval(function() {
-        var p = camEl && camEl.object3D && camEl.object3D.position;
+        var c = getCam();
+        var p = c && c.position;
         if (p && (p.x !== lx || p.y !== ly || p.z !== lz)) {
           lx = p.x; ly = p.y; lz = p.z;
           try {
@@ -560,7 +568,7 @@ export function tslToPreviewHTML(
     // Rim — backlight, cool tint, defines specular silhouette
     // Fill — opposite key, neutral, lifts shadows
     // Ambient — minimal base so crevices aren't pure black
-    lines.push('  <a-light type="directional" color="#fff5e6" position="-3 4 2" intensity="2.5"></a-light>');
+    lines.push('  <a-light type="directional" color="#ffffff" position="-3 4 2" intensity="2.5"></a-light>');
     lines.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
     lines.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
     lines.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
@@ -572,7 +580,7 @@ export function tslToPreviewHTML(
     lines.push('  <a-light type="ambient" color="#1a1f33" intensity="0.05"></a-light>');
   } else if (lighting === 'laboratory') {
     // Pure flat ambient — every surface lit identically, no shadows.
-    lines.push('  <a-light type="ambient" color="#ffffff" intensity="1.0"></a-light>');
+    lines.push('  <a-light type="ambient" color="#ffffff" intensity="2.5"></a-light>');
   }
 
   lines.push('</a-scene>');
