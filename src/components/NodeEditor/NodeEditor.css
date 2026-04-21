@@ -37,6 +37,24 @@
   padding: 0;
 }
 
+/* React Flow ships default styles for its built-in node types (`input`,
+   `default`, `output`, `group`) including a fixed 150px width and
+   selected/hover box-shadows. Our custom `output` type reuses that key,
+   so without this override the built-in type-specific rules win on
+   specificity and produce a phantom 150px-wide frame to the right of
+   the selected/hovered Output node. */
+.node-editor .react-flow__node-output,
+.node-editor .react-flow__node-output.selectable:hover,
+.node-editor .react-flow__node-output.selectable.selected,
+.node-editor .react-flow__node-output.selectable:focus,
+.node-editor .react-flow__node-output.selectable:focus-visible {
+  width: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
 .node-editor .react-flow__controls {
   box-shadow: var(--shadow-md);
 }

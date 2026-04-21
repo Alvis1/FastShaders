@@ -94,27 +94,47 @@ export function ContentBrowser() {
     return getAllDefinitions().filter((d) => d.type !== 'output');
   }, []);
 
+  const q = search.trim().toLowerCase();
+
+  const matchesDef = useCallback(
+    (d: NodeDefinition) =>
+      d.label.toLowerCase().includes(q) ||
+      d.type.toLowerCase().includes(q) ||
+      (d.description ?? '').toLowerCase().includes(q),
+    [q],
+  );
+
   const filteredDefs = useMemo<NodeDefinition[]>(() => {
     let defs: NodeDefinition[];
-    if (activeCategory === 'all') defs = allDefs;
-    else if (activeCategory === 'noise') {
+    if (activeCategory === 'all' || activeCategory === 'saved' || activeCategory === 'texture') {
+      defs = allDefs;
+    } else if (activeCategory === 'noise') {
       defs = allDefs
         .filter((d) => d.category === 'noise')
         .sort((a, b) => (costs[a.type] ?? 50) - (costs[b.type] ?? 50));
     } else {
       defs = allDefs.filter((d) => d.category === activeCategory);
     }
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      defs = defs.filter(
-        (d) =>
-          d.label.toLowerCase().includes(q) ||
-          d.type.toLowerCase().includes(q) ||
-          (d.description ?? '').toLowerCase().includes(q),
-      );
-    }
-    return defs;
-  }, [allDefs, activeCategory, search]);
+    if (!q) return defs;
+    const scoped = defs.filter(matchesDef);
+    // Fallback: if the active category has no matches, broaden to all node defs
+    // so the user isn't left staring at an empty panel while typing.
+    if (scoped.length === 0 && activeCategory !== 'all') return allDefs.filter(matchesDef);
+    return scoped;
+  }, [allDefs, activeCategory, q, matchesDef]);
+
+  const filteredSavedGroups = useMemo(() => {
+    if (!q) return savedGroups;
+    return savedGroups.filter((g) => g.name.toLowerCase().includes(q));
+  }, [savedGroups, q]);
+
+  const filteredTextures = useMemo(() => {
+    const all = getBuiltinTextures();
+    if (!q) return all;
+    return all.filter(
+      (t) => t.name.toLowerCase().includes(q) || t.id.toLowerCase().includes(q),
+    );
+  }, [q]);
 
   const onDragStart = useCallback((event: React.DragEvent, def: NodeDefinition) => {
     event.dataTransfer.setData('application/reactflow-type', def.type);
@@ -210,11 +230,23 @@ export function ContentBrowser() {
                   Right-click a group on the canvas → Save to Library to store it here.
                 </div>
               )
-              : savedGroups.map((g) => <SavedGroupCard key={g.id} group={g} />)
+              : filteredSavedGroups.length === 0
+                ? (
+                  <div className="content-browser__empty">
+                    No saved groups match “{search.trim()}”.
+                  </div>
+                )
+                : filteredSavedGroups.map((g) => <SavedGroupCard key={g.id} group={g} />)
             : activeCategory === 'texture'
-              ? getBuiltinTextures().map((t) => (
-                  <TextureCard key={t.id} texture={t} />
-                ))
+              ? filteredTextures.length === 0
+                ? (
+                  <div className="content-browser__empty">
+                    No textures match “{search.trim()}”.
+                  </div>
+                )
+                : filteredTextures.map((t) => (
+                    <TextureCard key={t.id} texture={t} />
+                  ))
               : filteredDefs.map((item) => (
                   <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
                 ))}

@@ -177,60 +177,81 @@ const shader = Fn(() => {
 export default shader;`;
 
 // ── Crumpled Fabric ─────────────────────────────────────────────────────────
-// Domain-warped noise → finite-difference normals in object space via TBN frame.
-// Uses normalLocal/tangentLocal so the perturbation follows surface orientation.
-// Output should be connected to the Normal channel on the output node.
-const CRUMPLED_FABRIC_CODE = `import { add, cross, exp, Fn, mul, mx_noise_float, normalize, normalLocal, positionGeometry, sub, tangentLocal, uniform, vec3 } from "three/tsl";
+// Port of boytchev/tsl-textures crumpled-fabric: 4-iteration domain-warped
+// noise where each iteration samples three noise channels on swizzled
+// (xyz, yzx, zxy) positions and displaces the sample point by the resulting
+// vector. The final noise value is blended between main/sub/background colors.
+// Output is a vec3 color (connect to the Color channel of the Output node).
+const CRUMPLED_FABRIC_CODE = `import { abs, add, clamp, color, div, exp, Fn, mul, mx_noise_float, oneMinus, positionGeometry, pow, sub, uniform, vec3 } from "three/tsl";
 
 const shader = Fn(() => {
   const scale = uniform(2);
   const pinch = uniform(0.5);
-  const bump = uniform(20);
+  const mainColor = color(0xB0F0FF);
+  const subColor = color(0x4040F0);
+  const bgColor = color(0x003000);
   const pos = positionGeometry;
-  const nml = normalLocal;
-  const tan = tangentLocal;
 
   const scaleSub = sub(scale, 0.5);
   const eScale = exp(scaleSub);
-  const sPos = mul(pos, eScale);
+  const pos0 = mul(pos, eScale);
 
-  const nx1 = mx_noise_float(sPos);
-  const offY1 = add(sPos, 100);
-  const ny1 = mx_noise_float(offY1);
-  const offZ1 = add(sPos, 200);
-  const nz1 = mx_noise_float(offZ1);
-  const warp1 = vec3(nx1, ny1, nz1);
+  const x1 = mx_noise_float(pos0);
+  const s1a = vec3(pos0.y, pos0.z, pos0.x);
+  const y1 = mx_noise_float(s1a);
+  const s1b = vec3(pos0.z, pos0.x, pos0.y);
+  const z1 = mx_noise_float(s1b);
+  const warp1 = vec3(x1, y1, z1);
   const warpS1 = mul(warp1, pinch);
-  const wPos1 = add(sPos, warpS1);
+  const pos1 = add(pos0, warpS1);
 
-  const nx2 = mx_noise_float(wPos1);
-  const offY2 = add(wPos1, 300);
-  const ny2 = mx_noise_float(offY2);
-  const offZ2 = add(wPos1, 400);
-  const nz2 = mx_noise_float(offZ2);
-  const warp2 = vec3(nx2, ny2, nz2);
+  const x2 = mx_noise_float(pos1);
+  const s2a = vec3(pos1.y, pos1.z, pos1.x);
+  const y2 = mx_noise_float(s2a);
+  const s2b = vec3(pos1.z, pos1.x, pos1.y);
+  const z2 = mx_noise_float(s2b);
+  const warp2 = vec3(x2, y2, z2);
   const warpS2 = mul(warp2, pinch);
-  const wPos = add(wPos1, warpS2);
+  const pos2 = add(pos1, warpS2);
 
-  const h0 = mx_noise_float(wPos);
-  const epsX = vec3(0.01, 0, 0);
-  const wPosX = add(wPos, epsX);
-  const h1 = mx_noise_float(wPosX);
-  const epsY = vec3(0, 0.01, 0);
-  const wPosY = add(wPos, epsY);
-  const h2 = mx_noise_float(wPosY);
+  const x3 = mx_noise_float(pos2);
+  const s3a = vec3(pos2.y, pos2.z, pos2.x);
+  const y3 = mx_noise_float(s3a);
+  const s3b = vec3(pos2.z, pos2.x, pos2.y);
+  const z3 = mx_noise_float(s3b);
+  const warp3 = vec3(x3, y3, z3);
+  const warpS3 = mul(warp3, pinch);
+  const pos3 = add(pos2, warpS3);
 
-  const slopeX = sub(h0, h1);
-  const slopeY = sub(h0, h2);
-  const bumpX = mul(slopeX, bump);
-  const bumpY = mul(slopeY, bump);
+  const x4 = mx_noise_float(pos3);
+  const s4a = vec3(pos3.y, pos3.z, pos3.x);
+  const y4 = mx_noise_float(s4a);
+  const s4b = vec3(pos3.z, pos3.x, pos3.y);
+  const z4 = mx_noise_float(s4b);
+  const warp4 = vec3(x4, y4, z4);
+  const warpS4 = mul(warp4, pinch);
+  const pos4 = add(pos3, warpS4);
 
-  const bitan = cross(nml, tan);
-  const pertX = mul(tan, bumpX);
-  const pertY = mul(bitan, bumpY);
-  const sum1 = add(nml, pertX);
-  const sum2 = add(sum1, pertY);
-  const result = normalize(sum2);
+  const nFinal = mx_noise_float(pos4);
+  const nShift = add(nFinal, 1);
+  const nHalf = div(nShift, 2);
+  const k = clamp(nHalf, 0, 1);
+
+  const k2 = mul(k, 2);
+  const k2m1 = sub(k2, 1);
+  const ak = abs(k2m1);
+  const w1 = oneMinus(ak);
+  const color1 = mul(mainColor, w1);
+
+  const kSq = pow(k, 2);
+  const color2 = mul(subColor, kSq);
+
+  const kInv = oneMinus(k);
+  const kInvSq = pow(kInv, 2);
+  const color3 = mul(bgColor, kInvSq);
+
+  const sum12 = add(color1, color2);
+  const result = add(sum12, color3);
   return result;
 });
 export default shader;`;

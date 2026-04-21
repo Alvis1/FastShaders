@@ -606,6 +606,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const groupX = groupNode.position.x;
     const groupY = groupNode.position.y;
     const grandParentId = groupNode.parentId;
+    const groupData = groupNode.data as GroupNodeData;
+    const wasCollapsed = !!groupData.collapsed;
+    const memberIds = new Set(
+      state.nodes.filter((n) => n.parentId === groupId).map((n) => n.id),
+    );
 
     const newNodes: AppNode[] = state.nodes
       .filter((n) => n.id !== groupId)
@@ -624,10 +629,68 @@ export const useAppStore = create<AppState>()((set, get) => ({
         if (grandParentId) {
           (lifted as { parentId?: string }).parentId = grandParentId;
         }
+        // If the group was collapsed, members carry `fs-collapsed-member`;
+        // drop it so they render normally after being lifted.
+        if (wasCollapsed) {
+          const { className: _c, ...liftedRest } = lifted as AppNode & { className?: string };
+          void _c;
+          return liftedRest as AppNode;
+        }
         return lifted;
       });
 
-    set({ nodes: newNodes, syncSource: 'graph', isUndoRedo: false });
+    // Collapsed groups rewrite boundary edges to point at the group's
+    // synthetic handles (__in_*, __out_*) and mark internal edges with
+    // `fs-collapsed-edge` to hide them. Without restoring here, deleting
+    // a collapsed group leaves behind stale boundary edges pointing at the
+    // now-missing group (ghost edges) and internal edges that stay
+    // `display: none` even though both endpoints still exist.
+    let newEdges = state.edges;
+    if (wasCollapsed) {
+      const inputSocketLookup = new Map<string, BoundarySocket>();
+      const outputSocketLookup = new Map<string, BoundarySocket>();
+      for (const s of groupData.collapsedInputs ?? []) inputSocketLookup.set(s.socketId, s);
+      for (const s of groupData.collapsedOutputs ?? []) outputSocketLookup.set(s.socketId, s);
+
+      newEdges = state.edges.map((e) => {
+        if (e.source === groupId && e.sourceHandle && outputSocketLookup.has(e.sourceHandle)) {
+          const socket = outputSocketLookup.get(e.sourceHandle)!;
+          return {
+            ...e,
+            id: generateEdgeId(
+              socket.originalNodeId,
+              socket.originalHandleId,
+              e.target,
+              e.targetHandle ?? 'in',
+            ),
+            source: socket.originalNodeId,
+            sourceHandle: socket.originalHandleId,
+          };
+        }
+        if (e.target === groupId && e.targetHandle && inputSocketLookup.has(e.targetHandle)) {
+          const socket = inputSocketLookup.get(e.targetHandle)!;
+          return {
+            ...e,
+            id: generateEdgeId(
+              e.source,
+              e.sourceHandle ?? 'out',
+              socket.originalNodeId,
+              socket.originalHandleId,
+            ),
+            target: socket.originalNodeId,
+            targetHandle: socket.originalHandleId,
+          };
+        }
+        if (memberIds.has(e.source) && memberIds.has(e.target)) {
+          const { className: _c, ...rest } = e as AppEdge & { className?: string };
+          void _c;
+          return rest as AppEdge;
+        }
+        return e;
+      });
+    }
+
+    set({ nodes: newNodes, edges: newEdges, syncSource: 'graph', isUndoRedo: false });
   },
 
   updateGroupData: (groupId, data) => {
@@ -824,6 +887,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
               ...n,
               width: COLLAPSED_W,
               height: collapsedH,
+              // Keep `measured` in sync with the new size. React Flow's
+              // ResizeObserver will eventually re-measure and overwrite this,
+              // but our unparent-on-drag logic reads `measured.width` first and
+              // would otherwise see the pre-toggle dimensions until that tick.
+              measured: { width: COLLAPSED_W, height: collapsedH },
               data,
             } as AppNode;
           }
@@ -908,6 +976,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
             ...n,
             width: data.width,
             height: data.height,
+            // See collapse branch: force `measured` to match so the unparent-
+            // on-drag hit-test uses the expanded frame immediately, without
+            // waiting for the ResizeObserver tick that would otherwise leave
+            // it reporting the pill footprint.
+            measured: { width: data.width, height: data.height },
             data,
           } as AppNode;
         }
