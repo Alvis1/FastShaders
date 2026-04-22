@@ -16,7 +16,8 @@
       "Bash(npm view:*)",
       "WebFetch(domain:cdn.jsdelivr.net)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

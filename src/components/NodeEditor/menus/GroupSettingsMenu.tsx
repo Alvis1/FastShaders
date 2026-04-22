@@ -9,6 +9,7 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
   const nodes = useAppStore((s) => s.nodes);
   const updateGroupData = useAppStore((s) => s.updateGroupData);
   const ungroup = useAppStore((s) => s.ungroup);
+  const deleteGroup = useAppStore((s) => s.deleteGroup);
   const saveGroupToLibrary = useAppStore((s) => s.saveGroupToLibrary);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
 
@@ -134,6 +135,15 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
         }}
       >
         Ungroup
+      </button>
+      <button
+        className="context-menu__item context-menu__item--danger"
+        onClick={() => {
+          deleteGroup(nodeId);
+          closeContextMenu();
+        }}
+      >
+        Delete Group
       </button>
     </div>
   );

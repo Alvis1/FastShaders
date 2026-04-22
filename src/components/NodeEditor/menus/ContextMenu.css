@@ -59,6 +59,15 @@
   background: var(--bg-surface-hover);
 }
 
+.context-menu__item--danger {
+  color: #c0392b;
+}
+
+.context-menu__item--danger:hover {
+  background: rgba(231, 76, 60, 0.1);
+  color: #c0392b;
+}
+
 .context-menu__item-category {
   font-size: var(--font-size-xs);
   color: var(--text-muted);

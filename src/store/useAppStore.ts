@@ -56,6 +56,55 @@ function persistSavedGroups(groups: SavedGroup[]) {
   } catch { /* quota exceeded or private mode */ }
 }
 
+/**
+ * Clone a group snapshot (container + members + internal edges) with fresh ids,
+ * anchored at `position`. First node in `snapshot.nodes` must be the group
+ * container; the rest are its members.
+ */
+function cloneGroupSnapshot(
+  snapshot: { nodes: AppNode[]; edges: AppEdge[] },
+  position: { x: number; y: number },
+): { group: AppNode; members: AppNode[]; edges: AppEdge[] } {
+  const idMap = new Map<string, string>();
+  for (const n of snapshot.nodes) idMap.set(n.id, generateId());
+
+  const [originalGroup, ...originalMembers] = snapshot.nodes;
+  const newGroupId = idMap.get(originalGroup.id)!;
+
+  const group: AppNode = {
+    ...structuredClone(originalGroup),
+    id: newGroupId,
+    position: { x: position.x, y: position.y },
+    parentId: undefined,
+    selected: false,
+  } as AppNode;
+
+  const members: AppNode[] = originalMembers.map((m) => {
+    const out = {
+      ...structuredClone(m),
+      id: idMap.get(m.id)!,
+      parentId: newGroupId,
+      selected: false,
+    } as AppNode & { extent?: unknown };
+    delete out.extent;
+    return out;
+  });
+
+  const edges: AppEdge[] = snapshot.edges.map((e) => {
+    const src = idMap.get(e.source) ?? e.source;
+    const tgt = idMap.get(e.target) ?? e.target;
+    return {
+      ...structuredClone(e),
+      id: generateEdgeId(src, e.sourceHandle ?? 'out', tgt, e.targetHandle ?? 'in'),
+      source: src,
+      target: tgt,
+      selected: false,
+    };
+  });
+
+  return { group, members, edges };
+}
+
 interface ContextMenuState {
   open: boolean;
   x: number;
@@ -219,9 +268,12 @@ interface AppState {
   syncSource: SyncSource;
   syncInProgress: boolean;
 
-  // History (undo / redo)
-  history: HistoryEntry[];
-  historyIndex: number;
+  // History (undo / redo). past/future are stacks of past states. `pushHistory`
+  // snapshots the current state onto `past` before a mutation; `undo` moves the
+  // tail of `past` to `future`; `redo` does the reverse. Any fresh mutation
+  // clears `future` (standard undo-history semantics).
+  past: HistoryEntry[];
+  future: HistoryEntry[];
   isUndoRedo: boolean;
 
   // UI
@@ -304,6 +356,8 @@ interface AppState {
   groupSelection: (nodeIds: string[]) => string | null;
   /** Dissolves a group: detaches member parentIds and restores absolute positions, then deletes the group node. */
   ungroup: (groupId: string) => void;
+  /** Delete a group AND every member node inside it. Edges are spliced across the removal set. */
+  deleteGroup: (groupId: string) => void;
   /** Patch a group node's data (label / color). */
   updateGroupData: (groupId: string, data: Partial<GroupNodeData>) => void;
   /** Collapse/expand a group: hide its children + their edges and shrink to a pill, or restore. */
@@ -330,8 +384,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   syncSource: 'graph',
   syncInProgress: false,
   codeSyncRequested: false,
-  history: [],
-  historyIndex: -1,
+  past: [],
+  future: [],
   isUndoRedo: false,
   contextMenu: { open: false, x: 0, y: 0, type: 'canvas' },
   splitRatio: loadRatio('fs:splitRatio', 0.6),
@@ -424,19 +478,22 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set((state) => {
       if (state.isUndoRedo) return {};
       const entry = snapshot(state.nodes, state.edges);
-      const past = state.history.slice(0, state.historyIndex + 1);
-      const newHistory = [...past, entry].slice(-MAX_HISTORY);
-      return { history: newHistory, historyIndex: newHistory.length - 1 };
+      return {
+        past: [...state.past, entry].slice(-MAX_HISTORY),
+        future: [],
+      };
     }),
 
   undo: () =>
     set((state) => {
-      if (state.historyIndex < 0) return {};
-      const entry = state.history[state.historyIndex];
+      const prev = state.past[state.past.length - 1];
+      if (!prev) return {};
+      const current = snapshot(state.nodes, state.edges);
       return {
-        nodes: structuredClone(entry.nodes),
-        edges: structuredClone(entry.edges),
-        historyIndex: state.historyIndex - 1,
+        nodes: structuredClone(prev.nodes),
+        edges: structuredClone(prev.edges),
+        past: state.past.slice(0, -1),
+        future: [...state.future, current].slice(-MAX_HISTORY),
         syncSource: 'graph',
         isUndoRedo: true,
       };
@@ -444,12 +501,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   redo: () =>
     set((state) => {
-      if (state.historyIndex >= state.history.length - 1) return {};
-      const entry = state.history[state.historyIndex + 1];
+      const next = state.future[state.future.length - 1];
+      if (!next) return {};
+      const current = snapshot(state.nodes, state.edges);
       return {
-        nodes: structuredClone(entry.nodes),
-        edges: structuredClone(entry.edges),
-        historyIndex: state.historyIndex + 1,
+        nodes: structuredClone(next.nodes),
+        edges: structuredClone(next.edges),
+        future: state.future.slice(0, -1),
+        past: [...state.past, current].slice(-MAX_HISTORY),
         syncSource: 'graph',
         isUndoRedo: true,
       };
@@ -691,6 +750,38 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
 
     set({ nodes: newNodes, edges: newEdges, syncSource: 'graph', isUndoRedo: false });
+  },
+
+  deleteGroup: (groupId) => {
+    const state = get();
+    const groupNode = state.nodes.find((n) => n.id === groupId);
+    if (!groupNode || groupNode.type !== 'group') return;
+
+    // Everything to remove: the group node + every descendant (handles nested
+    // groups correctly by walking parentId transitively).
+    const toRemove = new Set<string>([groupId]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const n of state.nodes) {
+        if (!toRemove.has(n.id) && n.parentId && toRemove.has(n.parentId)) {
+          toRemove.add(n.id);
+          grew = true;
+        }
+      }
+    }
+
+    get().pushHistory();
+    // Splice-delete edges across the removed run so signal stays wired when
+    // the group sat mid-graph; then drop any edge still touching the removal set.
+    const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, toRemove);
+    const edges = bridged.filter((e) => !toRemove.has(e.source) && !toRemove.has(e.target));
+    set({
+      nodes: state.nodes.filter((n) => !toRemove.has(n.id)),
+      edges,
+      syncSource: 'graph',
+      isUndoRedo: false,
+    });
   },
 
   updateGroupData: (groupId, data) => {
@@ -1036,54 +1127,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   instantiateBuiltinTexture: (textureId, position) => {
-    const textures = getBuiltinTextures();
-    const texture = textures.find((t) => t.id === textureId);
+    const texture = getBuiltinTextures().find((t) => t.id === textureId);
     if (!texture || texture.nodes.length === 0) return;
-
-    const idMap = new Map<string, string>();
-    for (const n of texture.nodes) idMap.set(n.id, generateId());
-
-    const [originalGroup, ...originalMembers] = texture.nodes;
-    const newGroupId = idMap.get(originalGroup.id)!;
-
-    const clonedGroup: AppNode = {
-      ...structuredClone(originalGroup),
-      id: newGroupId,
-      position: { x: position.x, y: position.y },
-      parentId: undefined,
-      selected: false,
-    } as AppNode;
-
-    const clonedMembers: AppNode[] = originalMembers.map((m) => {
-      const cloned = structuredClone(m);
-      const newId = idMap.get(m.id)!;
-      const out = {
-        ...cloned,
-        id: newId,
-        parentId: newGroupId,
-        selected: false,
-      } as AppNode & { extent?: unknown };
-      delete out.extent;
-      return out;
-    });
-
-    const clonedEdges: AppEdge[] = texture.edges.map((e: AppEdge) => {
-      const src = idMap.get(e.source) ?? e.source;
-      const tgt = idMap.get(e.target) ?? e.target;
-      return {
-        ...structuredClone(e),
-        id: generateEdgeId(src, e.sourceHandle ?? 'out', tgt, e.targetHandle ?? 'in'),
-        source: src,
-        target: tgt,
-        selected: false,
-      };
-    });
-
+    const { group, members, edges } = cloneGroupSnapshot(texture, position);
     const state = get();
     get().pushHistory();
     set({
-      nodes: [clonedGroup, ...state.nodes, ...clonedMembers] as AppNode[],
-      edges: [...state.edges, ...clonedEdges] as AppEdge[],
+      nodes: [group, ...state.nodes, ...members] as AppNode[],
+      edges: [...state.edges, ...edges] as AppEdge[],
       syncSource: 'graph',
       isUndoRedo: false,
     });
@@ -1093,60 +1144,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const state = get();
     const saved = state.savedGroups.find((g) => g.id === savedId);
     if (!saved || saved.nodes.length === 0) return;
-
-    // Build an oldId → newId map up front so we can rewrite parentId + edges.
-    const idMap = new Map<string, string>();
-    for (const n of saved.nodes) idMap.set(n.id, generateId());
-
-    // The first node in `saved.nodes` is always the group container itself
-    // (saveGroupToLibrary writes it that way). Anchor it at the drop point and
-    // let React Flow translate the children automatically via parentId.
-    const [originalGroup, ...originalMembers] = saved.nodes;
-    const newGroupId = idMap.get(originalGroup.id)!;
-
-    const clonedGroup: AppNode = {
-      ...structuredClone(originalGroup),
-      id: newGroupId,
-      position: { x: position.x, y: position.y },
-      // Wipe parentId — saved snippets are always dropped at root level.
-      parentId: undefined,
-      selected: false,
-    } as AppNode;
-
-    const clonedMembers: AppNode[] = originalMembers.map((m) => {
-      const cloned = structuredClone(m);
-      const newId = idMap.get(m.id)!;
-      // Re-parent under the new group; positions are already group-relative.
-      // No `extent: 'parent'` — drag-out-to-detach relies on members being free
-      // to leave the group's bounds.
-      const out = {
-        ...cloned,
-        id: newId,
-        parentId: newGroupId,
-        selected: false,
-      } as AppNode & { extent?: unknown };
-      delete out.extent;
-      return out;
-    });
-
-    const clonedEdges: AppEdge[] = saved.edges.map((e) => {
-      const src = idMap.get(e.source) ?? e.source;
-      const tgt = idMap.get(e.target) ?? e.target;
-      return {
-        ...structuredClone(e),
-        id: generateEdgeId(src, e.sourceHandle ?? 'out', tgt, e.targetHandle ?? 'in'),
-        source: src,
-        target: tgt,
-        selected: false,
-      };
-    });
-
+    const { group, members, edges } = cloneGroupSnapshot(saved, position);
+    // React Flow requires the parent container before its children in the array.
     get().pushHistory();
     set({
-      // Group container must come BEFORE its children in the array (React Flow
-      // requirement). Append everything else after the existing graph.
-      nodes: [clonedGroup, ...state.nodes, ...clonedMembers] as AppNode[],
-      edges: [...state.edges, ...clonedEdges] as AppEdge[],
+      nodes: [group, ...state.nodes, ...members] as AppNode[],
+      edges: [...state.edges, ...edges] as AppEdge[],
       syncSource: 'graph',
       isUndoRedo: false,
     });

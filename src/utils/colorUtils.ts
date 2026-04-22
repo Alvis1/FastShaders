@@ -83,6 +83,28 @@ export function getCostScale(cost: number): number {
   return 1 + Math.min(cost / 80, 1) * 0.35;
 }
 
+/**
+ * Raw hex colors per category — the single source of truth. Also powers the
+ * `--cat-*` CSS variables that OutputNode.css and friends reference; see the
+ * `publishCategoryVars` call at the bottom of this module.
+ *
+ * `saved` is a pseudo-category for the Saved Groups library (no registry entry).
+ */
+export const CAT_HEX: Record<NodeCategory | 'saved', string> = {
+  input: '#4CAF50',
+  type: '#2196F3',
+  arithmetic: '#FF9800',
+  math: '#9C27B0',
+  interpolation: '#00BCD4',
+  vector: '#E91E63',
+  noise: '#795548',
+  color: '#FF5722',
+  texture: '#8D6E63',
+  unknown: '#9E9E9E',
+  output: '#f44336',
+  saved: '#6366f1',
+};
+
 export const CATEGORY_COLORS: Record<NodeCategory, string> = {
   input: 'var(--cat-input)',
   type: 'var(--cat-type)',
@@ -96,6 +118,16 @@ export const CATEGORY_COLORS: Record<NodeCategory, string> = {
   unknown: 'var(--cat-unknown)',
   output: 'var(--cat-output)',
 };
+
+// Publish CAT_HEX as CSS variables on :root so CSS files and CATEGORY_COLORS
+// (var() lookups) resolve to the same hex values. Runs once at module load,
+// which happens before any React component mounts.
+if (typeof document !== 'undefined') {
+  const style = document.documentElement.style;
+  for (const [cat, hex] of Object.entries(CAT_HEX)) {
+    style.setProperty(`--cat-${cat}`, hex);
+  }
+}
 
 const TYPE_COLORS: Record<TSLDataType, string> = {
   float: 'var(--type-float)',

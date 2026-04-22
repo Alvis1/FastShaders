@@ -84,10 +84,6 @@ function getNodeSize(n: AppNode) {
   };
 }
 
-/**
- * Find the closest edge to (cx, cy) in flow-space that is within CONNECTION_RADIUS.
- * `excludeNodeId` skips edges connected to the node being dragged.
- */
 /** Compute absolute (flow-space) position of a node, walking up the parent chain. */
 function nodeAbsolutePos(node: AppNode, allNodes: AppNode[]): { x: number; y: number } {
   let x = node.position.x;
@@ -105,6 +101,10 @@ function nodeAbsolutePos(node: AppNode, allNodes: AppNode[]): { x: number; y: nu
   return { x, y };
 }
 
+/**
+ * Find the closest edge to (cx, cy) in flow-space within CONNECTION_RADIUS.
+ * `excludeNodeId` skips edges connected to the node being dragged.
+ */
 function findNearestEdge(
   cx: number, cy: number,
   allNodes: AppNode[], allEdges: AppEdge[],
@@ -137,6 +137,76 @@ function findNearestEdge(
     }
   }
   return bestId;
+}
+
+function groupSize(g: AppNode) {
+  const m = (g as Measured).measured;
+  const sz = g as AppNode & { width?: number; height?: number };
+  const dataSz = g.data as { width?: number; height?: number };
+  return {
+    w: m?.width ?? sz.width ?? dataSz.width ?? 200,
+    h: m?.height ?? sz.height ?? dataSz.height ?? 120,
+  };
+}
+
+/**
+ * Given a node's absolute drop position, find the first non-collapsed group
+ * whose bounds contain its center, skipping the node itself. Returns the
+ * target group (if any) along with its absolute position for coordinate
+ * translation.
+ */
+function findContainingGroup(
+  draggedId: string,
+  absX: number, absY: number,
+  nw: number, nh: number,
+  allNodes: AppNode[],
+): { id: string; absX: number; absY: number } | null {
+  const cx = absX + nw / 2;
+  const cy = absY + nh / 2;
+  for (const other of allNodes) {
+    if (other.type !== 'group' || other.id === draggedId) continue;
+    if ((other.data as { collapsed?: boolean }).collapsed) continue;
+    const oAbs = nodeAbsolutePos(other, allNodes);
+    const { w: ow, h: oh } = groupSize(other);
+    if (cx >= oAbs.x && cx <= oAbs.x + ow && cy >= oAbs.y && cy <= oAbs.y + oh) {
+      return { id: other.id, absX: oAbs.x, absY: oAbs.y };
+    }
+  }
+  return null;
+}
+
+/**
+ * Reparent one dragged node: compute its target group (or root) based on the
+ * absolute position of the drop, then rewrite its parentId + local position.
+ * Group containers themselves are left alone. Returns the updated node and
+ * whether the parent actually changed (so the caller can decide whether to
+ * reorder for React Flow's parent-before-children invariant).
+ */
+function reparentedNode(
+  draggedNode: AppNode,
+  allNodes: AppNode[],
+  finalLocalX: number,
+  finalLocalY: number,
+): { node: AppNode; targetGroupId: string | undefined; parentChanged: boolean } {
+  const { w: nw, h: nh } = getNodeSize(draggedNode);
+  const startAbs = nodeAbsolutePos(draggedNode, allNodes);
+  const absX = startAbs.x + (finalLocalX - draggedNode.position.x);
+  const absY = startAbs.y + (finalLocalY - draggedNode.position.y);
+  const target = findContainingGroup(draggedNode.id, absX, absY, nw, nh, allNodes);
+
+  const newLocalX = Math.round(absX - (target?.absX ?? 0));
+  const newLocalY = Math.round(absY - (target?.absY ?? 0));
+  const parentChanged = target?.id !== draggedNode.parentId;
+
+  const { extent: _extent, parentId: _pid, ...rest } =
+    draggedNode as AppNode & { extent?: unknown; parentId?: string };
+  void _extent; void _pid;
+  const node = {
+    ...rest,
+    ...(target ? { parentId: target.id } : {}),
+    position: { x: newLocalX, y: newLocalY },
+  } as AppNode;
+  return { node, targetGroupId: target?.id, parentChanged };
 }
 
 /**
@@ -200,7 +270,7 @@ export function NodeEditor() {
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, getViewport, setViewport } = useReactFlow();
 
   // Copy/paste clipboard
   const clipboardRef = useRef<AppNode[]>([]);
@@ -483,84 +553,15 @@ export function NodeEditor() {
       // bounds, attach it; if it lands outside its current parent, detach it.
       // React Flow doesn't reparent on its own, so this is the only place that
       // mutates parentId based on drag.
-      const absolutePos = (node: AppNode): { x: number; y: number } => {
-        let x = node.position.x;
-        let y = node.position.y;
-        const seen = new Set<string>();
-        let cur: AppNode | undefined = node;
-        while (cur?.parentId && !seen.has(cur.parentId)) {
-          seen.add(cur.parentId);
-          const parent = allNodes.find((p) => p.id === cur!.parentId);
-          if (!parent) break;
-          x += parent.position.x;
-          y += parent.position.y;
-          cur = parent;
-        }
-        return { x, y };
-      };
-      const groupSize = (g: AppNode) => {
-        const m = (g as Measured).measured;
-        const sz = g as AppNode & { width?: number; height?: number };
-        const dataSz = g.data as { width?: number; height?: number };
-        return {
-          w: m?.width ?? sz.width ?? dataSz.width ?? 200,
-          h: m?.height ?? sz.height ?? dataSz.height ?? 120,
-        };
-      };
-
-      // Translate the post-nudge LOCAL position into absolute coords by adding
-      // the (post-nudge − pre-drag) delta to the pre-drag absolute.
       const finalPosX = nudged ? posX : draggedNode.position.x;
       const finalPosY = nudged ? posY : draggedNode.position.y;
-      const startAbs = absolutePos(draggedNode);
-      const draggedAbsX = startAbs.x + (finalPosX - draggedNode.position.x);
-      const draggedAbsY = startAbs.y + (finalPosY - draggedNode.position.y);
-      const draggedCx = draggedAbsX + nw / 2;
-      const draggedCy = draggedAbsY + nh / 2;
-
-      // Find a non-collapsed group whose absolute bounds contain the dragged
-      // center. Collapsed groups (compact pills) must not slurp up unrelated
-      // nodes that happen to overlap their footprint.
-      let targetGroupId: string | undefined;
-      let targetGroupAbsX = 0;
-      let targetGroupAbsY = 0;
-      for (const other of allNodes) {
-        if (other.type !== 'group' || other.id === draggedNode.id) continue;
-        if ((other.data as { collapsed?: boolean }).collapsed) continue;
-        const oAbs = absolutePos(other);
-        const { w: ow, h: oh } = groupSize(other);
-        if (draggedCx >= oAbs.x && draggedCx <= oAbs.x + ow &&
-            draggedCy >= oAbs.y && draggedCy <= oAbs.y + oh) {
-          targetGroupId = other.id;
-          targetGroupAbsX = oAbs.x;
-          targetGroupAbsY = oAbs.y;
-          break;
-        }
-      }
-
-      const parentChanged = targetGroupId !== draggedNode.parentId;
+      const { node: updatedNode, targetGroupId, parentChanged } =
+        reparentedNode(draggedNode, allNodes, finalPosX, finalPosY);
       if (!nudged && !parentChanged) return;
 
-      // New local coords = absolute − new-parent absolute. With no new parent
-      // (top-level), the fallback `0` collapses to `local = absolute`. In the
-      // same-parent case the loop above resolves the current parent and this
-      // expression simplifies algebraically to `finalPosX/Y` — no special case.
-      const newLocalX = Math.round(draggedAbsX - targetGroupAbsX);
-      const newLocalY = Math.round(draggedAbsY - targetGroupAbsY);
-
-      const updated: AppNode[] = allNodes.map((n) => {
-        if (n.id !== draggedNode.id) return n;
-        // Strip extent + parentId then rebuild from scratch. We never reattach
-        // `extent: 'parent'` — that constraint is what would prevent users
-        // from dragging children back out of the group.
-        const { extent: _extent, parentId: _pid, ...rest } = n as AppNode & { extent?: unknown; parentId?: string };
-        void _extent; void _pid;
-        return {
-          ...rest,
-          ...(targetGroupId ? { parentId: targetGroupId } : {}),
-          position: { x: newLocalX, y: newLocalY },
-        } as AppNode;
-      }) as AppNode[];
+      const updated: AppNode[] = allNodes.map((n) =>
+        n.id === draggedNode.id ? updatedNode : n,
+      );
 
       // React Flow requires the parent to come BEFORE its children in the array.
       if (parentChanged && targetGroupId) {
@@ -575,6 +576,64 @@ export function NodeEditor() {
       store.setNodes(updated);
     },
     [clearEdgeHighlight],
+  );
+
+  // Multi-node drag: React Flow fires this for selection drags (instead of
+  // onNodeDragStop per-node). Apply group attachment to every dragged node in
+  // one commit so a box-selected clump dropped onto a group all reparents
+  // together rather than only one landing inside.
+  const onSelectionDragStop = useCallback(
+    (_event: React.MouseEvent, draggedNodes: AppNode[]) => {
+      const store = useAppStore.getState();
+      const allNodes = store.nodes;
+      const draggedById = new Map<string, AppNode>(draggedNodes.map((n) => [n.id, n]));
+
+      // Each node's local position in the drag event is already the post-drag
+      // position; the reparent helper expects that same coordinate as the
+      // final local. Skip group containers — they're moved, not attached.
+      const replacements = new Map<string, AppNode>();
+      const newParents = new Set<string>();
+      let anyParentChanged = false;
+      for (const dragged of draggedNodes) {
+        if (dragged.type === 'group') continue;
+        const { node: updatedNode, targetGroupId, parentChanged } =
+          reparentedNode(dragged, allNodes, dragged.position.x, dragged.position.y);
+        // A selection-drag doesn't pick up a new parent if the dropped group
+        // is itself part of the selection — that would nest the group inside
+        // one of its own peers being moved, causing a parent-loop.
+        if (targetGroupId && draggedById.has(targetGroupId)) continue;
+        replacements.set(dragged.id, updatedNode);
+        if (parentChanged) {
+          anyParentChanged = true;
+          if (targetGroupId) newParents.add(targetGroupId);
+        }
+      }
+
+      store.pushHistory();
+      if (!anyParentChanged) return;
+
+      const updated: AppNode[] = allNodes.map((n) => replacements.get(n.id) ?? n);
+
+      // React Flow requires each parent to come BEFORE its children in the
+      // array. For each newly adopted group, lift any child sitting before it
+      // to the slot immediately after.
+      for (const parentId of newParents) {
+        for (;;) {
+          const parentIdx = updated.findIndex((p) => p.id === parentId);
+          if (parentIdx < 0) break;
+          const childIdx = updated.findIndex(
+            (n, i) => i < parentIdx
+              && (n as AppNode & { parentId?: string }).parentId === parentId,
+          );
+          if (childIdx < 0) break;
+          const [item] = updated.splice(childIdx, 1);
+          updated.splice(parentIdx, 0, item);
+        }
+      }
+
+      store.setNodes(updated);
+    },
+    [],
   );
 
   // Track whether a connection attempt succeeded; if not, open add-node menu
@@ -844,6 +903,103 @@ export function NodeEditor() {
     return () => el.removeEventListener('mousedown', handler, true);
   }, []);
 
+  // Trackpad two-finger drag to pan. Mouse wheels fire the same `wheel`
+  // event, so we distinguish by signature: trackpads emit pixel-mode events
+  // with small/fractional deltas (or a non-zero deltaX for diagonals), while
+  // mouse wheels emit large discrete deltas (|deltaY| typically >= 50).
+  //
+  // - ctrlKey on a wheel event = pinch-to-zoom (synthesized by macOS). Let
+  //   React Flow handle it so zoom keeps working.
+  // - Mouse-wheel-sized events: let React Flow zoom.
+  // - Trackpad-sized events: intercept and pan manually. Capture phase +
+  //   stopImmediatePropagation prevents React Flow from also zooming.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) return; // pinch-to-zoom
+      const looksTrackpad =
+        e.deltaMode === 0 &&
+        (e.deltaX !== 0 || Math.abs(e.deltaY) < 50 || !Number.isInteger(e.deltaY));
+      if (!looksTrackpad) return;
+
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const vp = getViewport();
+      setViewport({ x: vp.x - e.deltaX, y: vp.y - e.deltaY, zoom: vp.zoom });
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    return () => el.removeEventListener('wheel', onWheel, { capture: true } as EventListenerOptions);
+  }, [getViewport, setViewport]);
+
+  // Double-click-and-drag to pan. On a touchpad, the natural "grab" gesture is
+  // tap-tap-hold-drag. `panOnDrag={[1, 2]}` only pans with middle/right buttons,
+  // so without this the second click lands on a node (often a group) and
+  // starts a node drag instead of a canvas pan. We intercept the second
+  // mousedown in the capture phase, block React Flow from seeing it, and take
+  // over the gesture by rewriting the viewport ourselves.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+
+    let lastDownAt = 0;
+    let panning = false;
+    let panStart = { x: 0, y: 0 };
+    let vpStart = { x: 0, y: 0, zoom: 1 };
+    const DOUBLE_MS = 300;
+
+    const isInteractive = (target: EventTarget | null) => {
+      const t = target as HTMLElement | null;
+      return !!t?.closest('input, textarea, select, button, .nodrag, [contenteditable="true"]');
+    };
+
+    const onDown = (e: MouseEvent) => {
+      if (e.button !== 0 || isInteractive(e.target)) {
+        lastDownAt = 0;
+        return;
+      }
+      const now = Date.now();
+      const second = now - lastDownAt < DOUBLE_MS;
+      lastDownAt = second ? 0 : now;
+      if (!second) return;
+
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      panning = true;
+      panStart = { x: e.clientX, y: e.clientY };
+      vpStart = getViewport();
+      document.body.style.cursor = 'grabbing';
+      document.body.style.userSelect = 'none';
+    };
+
+    const onMove = (e: MouseEvent) => {
+      if (!panning) return;
+      setViewport({
+        x: vpStart.x + (e.clientX - panStart.x),
+        y: vpStart.y + (e.clientY - panStart.y),
+        zoom: vpStart.zoom,
+      });
+    };
+
+    const onUp = () => {
+      if (!panning) return;
+      panning = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    el.addEventListener('mousedown', onDown, true);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      el.removeEventListener('mousedown', onDown, true);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [getViewport, setViewport]);
+
   return (
     <div className="node-editor" style={canvasCssVars}>
       <div className="node-editor__canvas" ref={canvasRef}>
@@ -861,6 +1017,7 @@ export function NodeEditor() {
           onNodeDragStart={onNodeDragStart}
           onNodeDrag={onNodeDrag}
           onNodeDragStop={onNodeDragStop}
+          onSelectionDragStop={onSelectionDragStop}
           onPaneContextMenu={onPaneContextMenu}
           onNodeContextMenu={onNodeContextMenu}
           onEdgeContextMenu={onEdgeContextMenu}

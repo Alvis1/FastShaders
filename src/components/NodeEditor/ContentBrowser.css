@@ -74,7 +74,7 @@
   padding: 3px 8px;
   margin-right: 6px;
   margin-bottom: 3px;
-  font-size: 14px;
+  font-size: 7px;
   font-family: var(--font-sans);
   font-weight: 600;
   color: var(--text-primary);
@@ -98,7 +98,7 @@
 .content-browser__cat-btn {
   flex-shrink: 0;
   padding: 5px 14px 4px;
-  font-size: 17px;
+  font-size: 9px;
   font-family: var(--font-sans);
   font-weight: 600;
   cursor: pointer;
