@@ -73,18 +73,9 @@
   --handle-size: 10px;
   --handle-border: 2px;
 
-  /* ===== CATEGORY COLORS ===== */
-  --cat-input: #4CAF50;
-  --cat-type: #2196F3;
-  --cat-arithmetic: #FF9800;
-  --cat-math: #9C27B0;
-  --cat-interpolation: #00BCD4;
-  --cat-vector: #E91E63;
-  --cat-noise: #795548;
-  --cat-color: #FF5722;
-  --cat-texture: #8D6E63;
-  --cat-unknown: #9E9E9E;
-  --cat-output: #f44336;
+  /* ===== CATEGORY COLORS =====
+     --cat-* vars are published at runtime from CAT_HEX in src/utils/colorUtils.ts
+     (single source of truth). Nothing to declare here. */
 
   /* ===== TRANSITIONS ===== */
   --transition-fast: 100ms ease;

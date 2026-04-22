@@ -7,11 +7,13 @@ import { SavedGroupCard } from './SavedGroupCard';
 import { TextureCard } from './TextureCard';
 import { useAppStore } from '@/store/useAppStore';
 import type { NodeCategory, NodeDefinition } from '@/types';
-import { CATEGORY_COLORS } from '@/utils/colorUtils';
+import { CAT_HEX } from '@/utils/colorUtils';
 import complexityData from '@/registry/complexity.json';
 import './ContentBrowser.css';
 
-const displayCategories = CATEGORIES.filter((c) => c.id !== 'output');
+// Exclude 'output' (the graph has at most one, not draggable from the palette)
+// and 'unknown' (the registry hides unknown defs, so the tab would always be empty).
+const displayCategories = CATEGORIES.filter((c) => c.id !== 'output' && c.id !== 'unknown');
 const costs = complexityData.costs as Record<string, number>;
 
 /** Track overflow state of a horizontally scrollable element and provide scroll actions. */
@@ -64,22 +66,12 @@ function ScrollArrow({ direction, onClick }: { direction: 'left' | 'right'; onCl
 /** Pseudo-category id for the user's saved-group library. */
 type BrowserCategory = NodeCategory | 'all' | 'saved';
 
-const SAVED_GROUPS_COLOR = '#6366f1';
-
-/** Raw hex colors for alpha-suffixed backgrounds (CATEGORY_COLORS uses CSS vars). */
-const CAT_HEX: Record<string, string> = {
-  input: '#4CAF50',
-  type: '#2196F3',
-  arithmetic: '#FF9800',
-  math: '#9C27B0',
-  interpolation: '#00BCD4',
-  vector: '#E91E63',
-  noise: '#795548',
-  color: '#FF5722',
-  texture: '#8D6E63',
-  unknown: '#9E9E9E',
-  saved: SAVED_GROUPS_COLOR,
-};
+/** Tab style for a colored category button (active = stronger tint). */
+function tabStyle(hex: string, active: boolean) {
+  return active
+    ? { background: `${hex}33`, borderColor: `${hex}66` }
+    : { background: `${hex}15`, borderColor: `${hex}33` };
+}
 
 export function ContentBrowser() {
   const [activeCategory, setActiveCategory] = useState<BrowserCategory>('all');
@@ -105,13 +97,14 @@ export function ContentBrowser() {
   );
 
   const filteredDefs = useMemo<NodeDefinition[]>(() => {
+    // saved/texture render their own tiles; defs unused there.
     let defs: NodeDefinition[];
-    if (activeCategory === 'all' || activeCategory === 'saved' || activeCategory === 'texture') {
-      defs = allDefs;
-    } else if (activeCategory === 'noise') {
+    if (activeCategory === 'noise') {
       defs = allDefs
         .filter((d) => d.category === 'noise')
         .sort((a, b) => (costs[a.type] ?? 50) - (costs[b.type] ?? 50));
+    } else if (activeCategory === 'all' || activeCategory === 'saved' || activeCategory === 'texture') {
+      defs = allDefs;
     } else {
       defs = allDefs.filter((d) => d.category === activeCategory);
     }
@@ -159,6 +152,25 @@ export function ContentBrowser() {
     return () => handlers.forEach((h) => h());
   }, []);
 
+  const empty = (msg: string) => <div className="content-browser__empty">{msg}</div>;
+
+  let items: React.ReactNode;
+  if (activeCategory === 'saved') {
+    items = savedGroups.length === 0
+      ? empty('Right-click a group on the canvas → Save to Library to store it here.')
+      : filteredSavedGroups.length === 0
+        ? empty(`No saved groups match “${search.trim()}”.`)
+        : filteredSavedGroups.map((g) => <SavedGroupCard key={g.id} group={g} />);
+  } else if (activeCategory === 'texture') {
+    items = filteredTextures.length === 0
+      ? empty(`No textures match “${search.trim()}”.`)
+      : filteredTextures.map((t) => <TextureCard key={t.id} texture={t} />);
+  } else {
+    items = filteredDefs.map((item) => (
+      <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
+    ));
+  }
+
   return (
     <div className="content-browser">
       <div className="content-browser__scroll-wrapper">
@@ -182,30 +194,19 @@ export function ContentBrowser() {
           >
             All
           </button>
-          {displayCategories.map((cat) => {
-            const hex = CAT_HEX[cat.id];
-            return (
-              <button
-                key={cat.id}
-                className={`content-browser__cat-btn ${activeCategory === cat.id ? 'content-browser__cat-btn--active' : ''}`}
-                style={
-                  activeCategory === cat.id
-                    ? { background: `${hex}33`, borderColor: `${hex}66` }
-                    : { background: `${hex}15`, borderColor: `${hex}33` }
-                }
-                onClick={() => setActiveCategory(cat.id)}
-              >
-                {cat.label}
-              </button>
-            );
-          })}
+          {displayCategories.map((cat) => (
+            <button
+              key={cat.id}
+              className={`content-browser__cat-btn ${activeCategory === cat.id ? 'content-browser__cat-btn--active' : ''}`}
+              style={tabStyle(CAT_HEX[cat.id], activeCategory === cat.id)}
+              onClick={() => setActiveCategory(cat.id)}
+            >
+              {cat.label}
+            </button>
+          ))}
           <button
             className={`content-browser__cat-btn ${activeCategory === 'saved' ? 'content-browser__cat-btn--active' : ''}`}
-            style={
-              activeCategory === 'saved'
-                ? { background: `${CAT_HEX.saved}33`, borderColor: `${CAT_HEX.saved}66` }
-                : { background: `${CAT_HEX.saved}15`, borderColor: `${CAT_HEX.saved}33` }
-            }
+            style={tabStyle(CAT_HEX.saved, activeCategory === 'saved')}
             onClick={() => setActiveCategory('saved')}
           >
             Saved Groups {savedGroups.length > 0 ? `(${savedGroups.length})` : ''}
@@ -223,33 +224,7 @@ export function ContentBrowser() {
             : undefined
           }}
         >
-          {activeCategory === 'saved'
-            ? savedGroups.length === 0
-              ? (
-                <div className="content-browser__empty">
-                  Right-click a group on the canvas → Save to Library to store it here.
-                </div>
-              )
-              : filteredSavedGroups.length === 0
-                ? (
-                  <div className="content-browser__empty">
-                    No saved groups match “{search.trim()}”.
-                  </div>
-                )
-                : filteredSavedGroups.map((g) => <SavedGroupCard key={g.id} group={g} />)
-            : activeCategory === 'texture'
-              ? filteredTextures.length === 0
-                ? (
-                  <div className="content-browser__empty">
-                    No textures match “{search.trim()}”.
-                  </div>
-                )
-                : filteredTextures.map((t) => (
-                    <TextureCard key={t.id} texture={t} />
-                  ))
-              : filteredDefs.map((item) => (
-                  <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
-                ))}
+          {items}
         </div>
         {itemsArrows.canRight && <ScrollArrow direction="right" onClick={() => itemsArrows.scrollBy(1)} />}
       </div>
