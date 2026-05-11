@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShaderSphere — A-Frame</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: #111; color: #eee; overflow: hidden; }
+    a-scene { position: fixed !important; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
+    #hud { position: fixed; top: 0; left: 0; right: 0; z-index: 100; padding: 8px 14px; background: rgba(0,0,0,.7); font-size: 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    #hud .label { color: #888; } #hud .value { color: #0f0; font-family: monospace; min-width: 40px; display: inline-block; }
+    .badge { padding: 2px 7px; border-radius: 3px; font-size: 10px; font-weight: bold; color: #fff; }
+    .badge-tsl { background: #08c; } .badge-af { background: #c60; }
+    #progress-bar { height: 3px; background: #0a5; transition: width .3s; position: fixed; top: 36px; left: 0; z-index: 101; }
+    #controls { position: fixed; bottom: 0; left: 0; right: 0; z-index: 100; padding: 8px 14px; background: rgba(0,0,0,.8); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+    button { padding: 5px 10px; border: 1px solid #444; border-radius: 3px; background: #222; color: #eee; cursor: pointer; font-size: 11px; }
+    button:hover { background: #333; } button:disabled { opacity: .4; cursor: not-allowed; }
+    button.primary { background: #0a5; border-color: #0a5; } button.primary:hover { background: #0b6; }
+    button.danger { background: #a22; border-color: #a22; }
+    input { padding: 4px 6px; border: 1px solid #444; border-radius: 3px; background: #222; color: #eee; font-size: 11px; }
+    .sep { width: 1px; height: 18px; background: #444; }
+    .lbl { color: #888; font-size: 10px; }
+    #log { position: fixed; top: 39px; right: 0; width: 320px; bottom: 42px; z-index: 100; padding: 6px; overflow-y: auto; background: rgba(0,0,0,.7); font-size: 10px; font-family: monospace; display: none; }
+    #log.visible { display: block; }
+    #log div { padding: 1px 0; border-bottom: 1px solid #222; }
+    #log .info { color: #8cf; } #log .ok { color: #8f8; } #log .warn { color: #f80; } #log .err { color: #f88; }
+    #shader-picker { position: fixed; top: 39px; left: 0; bottom: 42px; width: 200px; z-index: 100; padding: 6px; overflow-y: auto; background: rgba(0,0,0,.85); font-size: 10px; display: none; }
+    #shader-picker.visible { display: block; }
+    #shader-picker label { display: block; padding: 1px 0; cursor: pointer; } #shader-picker label:hover { color: #0f0; }
+    .pick-actions { margin-bottom: 4px; display: flex; gap: 4px; }
+    .pick-actions button { font-size: 9px; padding: 1px 6px; }
+    #error-overlay { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 9999; background: rgba(200,0,0,.9); color: #fff; padding: 16px; border-radius: 6px; max-width: 80%; font-family: monospace; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="progress-bar" style="width:0%"></div>
+  <div id="error-overlay"></div>
+
+  <div id="hud">
+    <span class="badge badge-af">A-Frame</span>
+    <span><span class="label">Shader: </span><span class="value" id="hud-shader">—</span></span>
+    <span><span class="label">Pts: </span><span class="value" id="hud-pts">—</span></span>
+    <span><span class="label">FT: </span><span class="value" id="hud-ft">—</span></span>
+    <span><span class="label">Progress: </span><span class="value" id="hud-progress">—</span></span>
+    <span><span class="label">Phase: </span><span class="value" id="hud-phase" style="color:#0af">loading</span></span>
+  </div>
+
+  <div id="controls">
+    <button id="btn-start" class="primary" disabled>Start</button>
+    <button id="btn-stop" class="danger" disabled>Stop</button>
+    <button id="btn-export">Export</button>
+    <button id="btn-shaders">Shaders</button>
+    <button id="btn-log">Log</button>
+    <div class="sep"></div>
+    <span class="lbl">Quest 3 (2064 × 2208)</span>
+    <div class="sep"></div>
+    <span class="lbl">Duration:</span>
+    <input id="input-duration" type="number" value="3" min="2" max="60" style="width:42px" title="Seconds per shader">
+    <span class="lbl">Warmup:</span>
+    <input id="input-warmup" type="number" value="10" min="2" max="100" style="width:42px">
+    <div class="sep"></div>
+    <a href="index.html"><button type="button" style="background:#444;border-color:#666">TSL Mode</button></a>
+  </div>
+
+  <div id="shader-picker">
+    <div class="pick-actions"><button id="pick-all">All</button><button id="pick-none">None</button></div>
+    <div id="pick-list"></div>
+  </div>
+  <div id="log" class="visible"></div>
+
+  <script>
+    window.onerror = (m,s,l) => { const e = document.getElementById('error-overlay'); e.style.display='block'; e.textContent=`${m} (${s}:${l})`; };
+    window.addEventListener('unhandledrejection', e => { const el = document.getElementById('error-overlay'); el.style.display='block'; el.textContent=e.reason?.message||String(e.reason); });
+  </script>
+
+  <script src="../public/js/aframe-171-a-0.1.min.js"></script>
+  <script src="../public/js/a-frame-shaderloader-0.3.js"></script>
+
+  <a-scene id="scene" renderer="antialias: true; highRefreshRate: true; colorManagement: true; foveationLevel: 0; alpha: false" vr-mode-ui="enabled: false" loading-screen="enabled: false">
+    <a-sphere id="bench-sphere" radius="1" segments-width="64" segments-height="64" position="0 0 -5"></a-sphere>
+    <a-entity light="type: ambient; intensity: 0.4"></a-entity>
+    <a-entity light="type: directional; intensity: 0.8" position="2 3 1"></a-entity>
+    <a-entity id="camera" camera="fov: 30" position="0 0 0"></a-entity>
+  </a-scene>
+
+  <script type="module" src="bench-aframe.js"></script>
+</body>
+</html>

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShaderCarousel — TSL shader viewer &amp; benchmarks</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #eee; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+  #frame { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: #000; }
+
+  /* Mode selector overlay — top-left, intentionally large/legible */
+  #mode-overlay {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    background: rgba(0, 0, 0, 0.72);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    pointer-events: auto;
+  }
+  #mode-overlay label {
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9aa;
+  }
+  #mode-select {
+    font-size: 20px;
+    font-weight: 600;
+    padding: 12px 36px 12px 16px;
+    min-width: 320px;
+    background: #1b1b1b;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 8px;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image:
+      linear-gradient(45deg, transparent 50%, #888 50%),
+      linear-gradient(135deg, #888 50%, transparent 50%);
+    background-position:
+      calc(100% - 18px) 50%,
+      calc(100% - 12px) 50%;
+    background-size: 6px 6px, 6px 6px;
+    background-repeat: no-repeat;
+  }
+  #mode-select:hover { border-color: #888; }
+  #mode-select:focus { outline: 2px solid #4af; outline-offset: 1px; }
+
+  /* Collapse handle — click the label to fade the overlay out of the way */
+  #toggle-overlay {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 1001;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.72);
+    color: #ccc;
+    font-size: 18px;
+    line-height: 32px;
+    text-align: center;
+    cursor: pointer;
+    display: none;
+  }
+  body.overlay-hidden #mode-overlay { display: none; }
+  body.overlay-hidden #toggle-overlay { display: block; }
+
+  /* Reveal handle inside the overlay */
+  #hide-overlay {
+    background: transparent;
+    border: 0;
+    color: #888;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+  #hide-overlay:hover { color: #fff; }
+</style>
+</head>
+<body>
+  <!--
+    Unified entry point for the ShaderCarousel suite.
+
+    The mode selector picks between:
+      - Carousel       : VR-ready A-Frame viewer (carousel.html)
+      - Sphere TSL     : full-coverage WebGPU benchmark (sphere/index.html)
+      - Sphere A-Frame : full-coverage A-Frame benchmark (sphere/aframe.html)
+      - Face TSL       : fixed-quad WebGPU micro-benchmark (face/index.html)
+      - Face A-Frame   : fixed-quad A-Frame benchmark (face/aframe.html)
+
+    Each sub-tool is loaded into a full-screen iframe so its existing
+    HTML/JS keeps working unmodified. The iframe `allow` attribute
+    forwards permissions WebXR (xr-spatial-tracking) and fullscreen
+    need on Quest Browser. The selected mode persists to localStorage
+    and is also reflected in `?mode=...` so URLs are shareable.
+  -->
+  <div id="mode-overlay" role="region" aria-label="Mode selector">
+    <label for="mode-select">Mode</label>
+    <select id="mode-select" aria-label="Benchmark / viewer mode">
+      <option value="carousel">Carousel — VR viewer</option>
+      <option value="sphere-tsl">ShaderSphere — TSL (WebGPU)</option>
+      <option value="sphere-aframe">ShaderSphere — A-Frame</option>
+      <option value="face-tsl">ShaderFace — TSL (WebGPU)</option>
+      <option value="face-aframe">ShaderFace — A-Frame</option>
+    </select>
+    <button id="hide-overlay" type="button" aria-label="Hide mode selector" title="Hide (press M to show)">×</button>
+  </div>
+  <button id="toggle-overlay" type="button" aria-label="Show mode selector" title="Show mode selector (M)">≡</button>
+
+  <iframe
+    id="frame"
+    title="ShaderCarousel mode frame"
+    allow="xr-spatial-tracking; fullscreen; accelerometer; gyroscope; magnetometer"
+    allowfullscreen></iframe>
+
+  <script>
+    const MODES = {
+      'carousel':       './carousel.html',
+      'sphere-tsl':     './sphere/index.html',
+      'sphere-aframe':  './sphere/aframe.html',
+      'face-tsl':       './face/index.html',
+      'face-aframe':    './face/aframe.html',
+    };
+    const DEFAULT_MODE = 'carousel';
+    const STORAGE_KEY = 'shaderCarousel:mode';
+
+    const select = document.getElementById('mode-select');
+    const frame = document.getElementById('frame');
+    const overlay = document.getElementById('mode-overlay');
+    const hideBtn = document.getElementById('hide-overlay');
+    const showBtn = document.getElementById('toggle-overlay');
+
+    function resolveInitialMode() {
+      const url = new URL(window.location.href);
+      const queryMode = url.searchParams.get('mode');
+      if (queryMode && MODES[queryMode]) return queryMode;
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored && MODES[stored]) return stored;
+      return DEFAULT_MODE;
+    }
+
+    function applyMode(mode, { pushHistory = true } = {}) {
+      if (!MODES[mode]) mode = DEFAULT_MODE;
+      select.value = mode;
+      frame.src = MODES[mode];
+      localStorage.setItem(STORAGE_KEY, mode);
+      if (pushHistory) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('mode', mode);
+        window.history.replaceState({ mode }, '', url);
+      }
+    }
+
+    select.addEventListener('change', () => applyMode(select.value));
+
+    hideBtn.addEventListener('click', () => document.body.classList.add('overlay-hidden'));
+    showBtn.addEventListener('click', () => document.body.classList.remove('overlay-hidden'));
+
+    // Press M to toggle the overlay (handy in benchmark modes that draw to the full viewport).
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'm' || e.key === 'M') {
+        document.body.classList.toggle('overlay-hidden');
+      }
+    });
+
+    applyMode(resolveInitialMode(), { pushHistory: false });
+  </script>
+</body>
+</html>

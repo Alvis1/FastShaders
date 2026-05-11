@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShaderFace — A-Frame Benchmark</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #111; color: #eee; overflow: hidden; }
+    #hud {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      padding: 12px 16px; background: rgba(0,0,0,0.85);
+      font-size: 14px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    }
+    #hud .label { color: #888; }
+    #hud .value { color: #0f0; font-family: monospace; }
+    #controls {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+      padding: 12px 16px; background: rgba(0,0,0,0.9);
+      display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    }
+    button { padding: 8px 16px; border: 1px solid #444; border-radius: 4px; background: #222; color: #eee; cursor: pointer; font-size: 14px; }
+    button:hover { background: #333; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.primary { background: #0a5; border-color: #0a5; }
+    button.danger { background: #a22; border-color: #a22; }
+    select, input { padding: 6px 10px; border: 1px solid #444; border-radius: 4px; background: #222; color: #eee; font-size: 14px; }
+    #log {
+      position: fixed; top: 50px; right: 0; width: 320px; bottom: 50px;
+      z-index: 100; padding: 8px; overflow-y: auto;
+      background: rgba(0,0,0,0.8); font-size: 12px; font-family: monospace;
+    }
+    #log div { padding: 2px 0; border-bottom: 1px solid #222; }
+    #log .info { color: #8cf; }
+    #log .ok { color: #8f8; }
+    #log .err { color: #f88; }
+    #progress-bar { height: 3px; background: #0a5; transition: width 0.3s; position: fixed; top: 47px; left: 0; z-index: 101; }
+    a-scene { position: fixed !important; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
+  </style>
+</head>
+<body>
+  <div id="progress-bar" style="width: 0%"></div>
+
+  <div id="hud">
+    <span><span class="label">Mode: </span><span class="value">A-Frame</span></span>
+    <span><span class="label">Shader: </span><span class="value" id="hud-shader">—</span></span>
+    <span><span class="label">Loop: </span><span class="value" id="hud-loop">—</span></span>
+    <span><span class="label">Phase: </span><span class="value" id="hud-phase">loading</span></span>
+    <span><span class="label">GPU: </span><span class="value" id="hud-gpu">—</span></span>
+  </div>
+
+  <div id="controls">
+    <button id="btn-start" class="primary" disabled>Start Benchmark</button>
+    <button id="btn-stop" class="danger" disabled>Stop</button>
+    <button id="btn-export">Export JSON</button>
+    <button id="btn-log">Toggle Log</button>
+    <label>Loops: <input id="input-loops" type="number" value="2" min="1" max="20" style="width:60px"></label>
+    <label>Frames: <input id="input-frames" type="number" value="30" min="10" max="300" style="width:70px"></label>
+    <label>Passes: <input id="input-passes" type="number" value="0" min="0" max="2000" style="width:70px"></label>
+  </div>
+
+  <div id="log"></div>
+
+  <!-- A-Frame IIFE bundle (includes Three.js WebGPU + tsl-textures) -->
+  <script src="../public/js/aframe-171-a-0.1.min.js"></script>
+  <script src="../public/js/a-frame-shaderloader-0.3.js"></script>
+
+  <!-- A-Frame scene with a single sphere -->
+  <a-scene id="scene" renderer="colorManagement: true" vr-mode-ui="enabled: false" loading-screen="enabled: false">
+    <a-entity id="bench-entity" geometry="primitive: plane; width: 4; height: 4" position="0 0 -1" rotation="0 0 0"></a-entity>
+    <a-entity light="type: ambient; intensity: 0.5"></a-entity>
+    <a-entity light="type: directional; intensity: 1" position="1 2 1"></a-entity>
+    <a-entity id="camera" camera position="0 0 0"></a-entity>
+  </a-scene>
+
+  <script>
+    // ── Logging ──
+    const logPanel = document.getElementById('log');
+    function log(msg, cls = 'info') {
+      const d = document.createElement('div');
+      d.className = cls;
+      d.textContent = `[${new Date().toISOString().slice(11, 23)}] ${msg}`;
+      logPanel.appendChild(d);
+      logPanel.scrollTop = logPanel.scrollHeight;
+      console.log(`[ShaderFace-AF] ${msg}`);
+    }
+    document.getElementById('btn-log').addEventListener('click', () => logPanel.style.display = logPanel.style.display === 'none' ? 'block' : 'none');
+
+    // ── DOM refs ──
+    const hudShader = document.getElementById('hud-shader');
+    const hudLoop = document.getElementById('hud-loop');
+    const hudPhase = document.getElementById('hud-phase');
+    const hudGpu = document.getElementById('hud-gpu');
+    const progressBar = document.getElementById('progress-bar');
+    const btnStart = document.getElementById('btn-start');
+    const btnStop = document.getElementById('btn-stop');
+    const btnExport = document.getElementById('btn-export');
+
+    // ── Shader definitions using THREE.TSL (from A-Frame's bundled Three.js) ──
+    function buildShaderRegistry() {
+      const TSL = THREE.TSL;
+      const TEX = window.tslTextures;
+      if (!TSL) { log('THREE.TSL not available', 'err'); return []; }
+      if (!TEX) { log('tslTextures not available', 'err'); return []; }
+
+      const shaders = [
+        { id: 'ref_flat_color', label: 'Flat Color (baseline)', category: 'reference',
+          build: () => TSL.color(0x888888) },
+        { id: 'atom_voronoi', label: 'Voronoi (mx)', category: 'atomic',
+          build: () => TSL.vec3(TSL.mx_worley_noise_float(TSL.positionGeometry.mul(4))) },
+      ];
+
+      const textures = [
+        'caustics','circleDecor','cork','turbulentSmoke','dalmatianSpots',
+        'protozoa','reticularVeins','planet','crumpledFabric','rust',
+        'romanPaving','wood','entangled','runnyEggs','gasGiant','bricks',
+        'watermelon','neonLights','voronoiCells','marble','clouds','satin',
+        'photosphere','polkaDots','karstRock','dysonSphere','caveArt',
+        'camouflage','scream','darthMaul','fordite','processedWood','brain',
+        'tigerFur','scepterHead','stars','isolayers','perlinNoise','isolines',
+        'circles','staticNoise',
+      ];
+
+      for (const name of textures) {
+        if (!TEX[name]) { log(`Missing texture: ${name}`, 'err'); continue; }
+        const fn = TEX[name];
+        shaders.push({
+          id: `tex_${name}`, label: name, category: 'texture',
+          build: () => { try { return fn(); } catch(e) { log(`Build fail: ${name}: ${e.message}`, 'err'); return TSL.color(0xff00ff); } },
+        });
+      }
+
+      return shaders;
+    }
+
+    // ── Globals ──
+    let sceneEl, renderer, threeScene, threeCamera;
+    let gpuDevice = null;
+    let running = false, aborted = false;
+    let sessionData = null;
+    let SHADERS = [];
+    let lastExportPct = 0;
+
+    // ── GPU sync ──
+    async function gpuSyncAsync() {
+      if (gpuDevice && gpuDevice.queue && gpuDevice.queue.onSubmittedWorkDone) {
+        await gpuDevice.queue.onSubmittedWorkDone();
+        return;
+      }
+      // WebGL fallback
+      const gl = renderer.getContext && renderer.getContext();
+      if (gl && gl.finish) { gl.finish(); return; }
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    }
+
+    // ── Measurement ──
+    function shuffleArray(arr) {
+      const a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
+    function median(arr) {
+      if (arr.length === 0) return 0;
+      const sorted = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+
+    function renderFrame() {
+      return new Promise(r => requestAnimationFrame(() => { renderer.render(threeScene, threeCamera); r(); }));
+    }
+
+    async function measureMultiPass(passes) {
+      renderer.render(threeScene, threeCamera);
+      await gpuSyncAsync();
+      const t0 = performance.now();
+      for (let i = 0; i < passes; i++) {
+        renderer.render(threeScene, threeCamera);
+      }
+      await gpuSyncAsync();
+      return (performance.now() - t0) / passes;
+    }
+
+    // Without onSubmittedWorkDone, gl.finish()/rAF doesn't truly sync — need
+    // higher target + pass floor to get signal above noise.
+    const MIN_PASSES_RELIABLE = 100;
+    const MIN_PASSES_UNRELIABLE = 200;
+
+    async function calibratePasses() {
+      const hasRealSync = !!(gpuDevice && gpuDevice.queue && gpuDevice.queue.onSubmittedWorkDone);
+      const targetMs = hasRealSync ? 10 : 50;
+      const minPasses = hasRealSync ? MIN_PASSES_RELIABLE : MIN_PASSES_UNRELIABLE;
+
+      log(`Calibrating (target: ${targetMs}ms, min: ${minPasses}, sync: ${hasRealSync ? 'GPU' : 'UNRELIABLE'})...`);
+      let passes = 10;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const t0 = performance.now();
+        for (let i = 0; i < passes; i++) renderer.render(threeScene, threeCamera);
+        await gpuSyncAsync();
+        const elapsed = performance.now() - t0;
+        log(`  ${passes} passes = ${elapsed.toFixed(1)}ms`);
+        if (elapsed >= targetMs && passes >= minPasses) { log(`Calibrated: ${passes} passes`, 'ok'); return passes; }
+        passes = Math.min(passes * Math.max(2, Math.ceil(targetMs / Math.max(elapsed, 0.1))), 500);
+      }
+      passes = Math.max(passes, minPasses);
+      log(`Capped at ${passes} passes`, 'warn');
+      return passes;
+    }
+
+    // ── Apply shader to entity (reuse single material to avoid leaks) ──
+    let benchMat = null;
+
+    function getBenchMaterial() {
+      if (!benchMat) {
+        benchMat = new THREE.MeshBasicNodeMaterial();
+        const entity = document.getElementById('bench-entity');
+        const mesh = entity.getObject3D('mesh');
+        if (mesh) mesh.traverse(child => { if (child.isMesh) child.material = benchMat; });
+      }
+      return benchMat;
+    }
+
+    function applyShaderToEntity(shaderDef) {
+      try {
+        const node = shaderDef.build();
+        const mat = getBenchMaterial();
+        mat.colorNode = node;
+        mat.needsUpdate = true;
+        return true;
+      } catch (e) {
+        log(`Apply fail "${shaderDef.id}": ${e.message}`, 'err');
+        return false;
+      }
+    }
+
+    function applyBaseline() {
+      const mat = getBenchMaterial();
+      mat.colorNode = THREE.TSL.color(0x888888);
+      mat.needsUpdate = true;
+    }
+
+    // ── Export ──
+    function exportData(tag = 'final') {
+      if (!sessionData || sessionData.measurements.length === 0) { log('No data', 'err'); return; }
+      const summary = computeSummary(sessionData);
+      const json = JSON.stringify({ ...sessionData, summary }, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `shaderface-aframe-${sessionData.sessionId}-${tag}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      log(`Exported [${tag}] ${sessionData.measurements.length} measurements`, 'ok');
+    }
+
+    function computeSummary(data) {
+      const byShader = {};
+      for (const m of data.measurements) {
+        if (m.error) continue;
+        if (!byShader[m.shaderId]) byShader[m.shaderId] = { shaderId: m.shaderId, label: m.shaderLabel, category: m.category, allGpuTimes: [] };
+        byShader[m.shaderId].allGpuTimes.push(...m.gpuTimesMs);
+      }
+      const results = [];
+      for (const s of Object.values(byShader)) {
+        const gpuSorted = [...s.allGpuTimes].sort((a, b) => a - b);
+        if (gpuSorted.length === 0) continue;
+        const q1 = gpuSorted[Math.floor(gpuSorted.length * 0.25)];
+        const q3 = gpuSorted[Math.floor(gpuSorted.length * 0.75)];
+        const iqr = q3 - q1;
+        const filtered = gpuSorted.filter(v => v >= q1 - 1.5 * iqr && v <= q3 + 1.5 * iqr);
+        if (filtered.length === 0) continue;
+        const med = median(filtered);
+        const mean = filtered.reduce((a, b) => a + b, 0) / filtered.length;
+        const sd = Math.sqrt(filtered.reduce((a, b) => a + (b - mean) ** 2, 0) / filtered.length);
+        const cv = mean > 0 ? (sd / mean) * 100 : 0;
+        results.push({
+          shaderId: s.shaderId, label: s.label, category: s.category,
+          sampleCount: s.allGpuTimes.length, outlierCount: s.allGpuTimes.length - filtered.length,
+          medianGpuMs: +med.toFixed(4), meanGpuMs: +mean.toFixed(4),
+          sdGpuMs: +sd.toFixed(4), cvPercent: +cv.toFixed(2),
+          q1GpuMs: +q1.toFixed(4), q3GpuMs: +q3.toFixed(4),
+          minGpuMs: +filtered[0].toFixed(4), maxGpuMs: +filtered[filtered.length - 1].toFixed(4),
+        });
+      }
+      results.sort((a, b) => b.medianGpuMs - a.medianGpuMs);
+      const baseline = results.find(r => r.shaderId === 'ref_flat_color');
+      const baselineCost = baseline ? baseline.medianGpuMs : 0;
+      for (const r of results) r.marginalCostMs = +(r.medianGpuMs - baselineCost).toFixed(4);
+      return { baselineCostMs: baselineCost, shaders: results };
+    }
+
+    // ── Benchmark ──
+    async function runBenchmark() {
+      const loopCount = parseInt(document.getElementById('input-loops').value) || 2;
+      const framesPerShader = parseInt(document.getElementById('input-frames').value) || 30;
+      let multiPassCount = parseInt(document.getElementById('input-passes').value) || 0;
+      const totalSteps = loopCount * SHADERS.length;
+      let currentStep = 0;
+      lastExportPct = 0;
+
+      // Thermal warmup (5s)
+      hudPhase.textContent = 'thermal warm-up';
+      log('Thermal warm-up (5s)...');
+      applyBaseline();
+      const warmupEnd = performance.now() + 5000;
+      while (performance.now() < warmupEnd && !aborted) await renderFrame();
+      if (aborted) return;
+
+      // Auto-calibrate
+      if (multiPassCount === 0) {
+        multiPassCount = await calibratePasses();
+      }
+
+      sessionData = {
+        device: navigator.userAgent,
+        platform: navigator.platform || 'unknown',
+        renderResolution: [512, 512],
+        renderMode: 'aframe',
+        geometry: 'plane',
+        syncMethod: gpuDevice ? 'onSubmittedWorkDone' : 'gl_finish_or_rAF',
+        measurementMethod: 'multi_pass_synced_steady_state',
+        rampDiscardSamples: 5,
+        multiPassCount,
+        framesPerShader,
+        loopCount,
+        sessionId: new Date().toISOString().replace(/[:.]/g, '-'),
+        startTime: new Date().toISOString(),
+        measurements: [],
+      };
+
+      log(`Starting: ${SHADERS.length} shaders x ${loopCount} loops, ${multiPassCount} passes`);
+
+      for (let loop = 0; loop < loopCount; loop++) {
+        if (aborted) break;
+        const order = shuffleArray(SHADERS);
+        hudLoop.textContent = `${loop + 1}/${loopCount}`;
+        log(`--- Loop ${loop + 1}/${loopCount} ---`);
+
+        for (let si = 0; si < order.length; si++) {
+          if (aborted) break;
+          const shader = order[si];
+          currentStep++;
+          progressBar.style.width = `${(currentStep / totalSteps) * 100}%`;
+          hudShader.textContent = shader.label;
+
+          hudPhase.textContent = 'compiling';
+          if (!applyShaderToEntity(shader)) {
+            sessionData.measurements.push({ shaderId: shader.id, shaderLabel: shader.label, category: shader.category, loopIndex: loop, orderInLoop: si, error: 'failed', timestamp: new Date().toISOString() });
+            continue;
+          }
+
+          // Ramp discard
+          hudPhase.textContent = 'warmup';
+          try {
+            renderer.render(threeScene, threeCamera);
+            await gpuSyncAsync();
+            for (let w = 0; w < 5; w++) await measureMultiPass(multiPassCount);
+          } catch (e) {
+            log(`Warmup fail "${shader.id}": ${e.message}`, 'err');
+            sessionData.measurements.push({ shaderId: shader.id, shaderLabel: shader.label, category: shader.category, loopIndex: loop, orderInLoop: si, error: `warmup: ${e.message}`, timestamp: new Date().toISOString() });
+            applyBaseline();
+            continue;
+          }
+          if (aborted) break;
+
+          // Measure
+          hudPhase.textContent = 'measuring';
+          const gpuTimesMs = [];
+          for (let f = 0; f < framesPerShader; f++) {
+            if (aborted) break;
+            // Yield every 5 samples so the browser can process input + compositor
+            if (f > 0 && f % 5 === 0) await new Promise(r => setTimeout(r, 0));
+            try {
+              const t = await measureMultiPass(multiPassCount);
+              gpuTimesMs.push(t);
+              hudGpu.textContent = `${t.toFixed(3)} ms`;
+            } catch (e) { log(`Measure err: ${e.message}`, 'err'); break; }
+          }
+          if (aborted) break;
+
+          if (gpuTimesMs.length > 0) {
+            const med = median(gpuTimesMs);
+            const sorted = [...gpuTimesMs].sort((a, b) => a - b);
+            sessionData.measurements.push({
+              shaderId: shader.id, shaderLabel: shader.label, category: shader.category,
+              loopIndex: loop, orderInLoop: si,
+              gpuTimesMs, medianGpuMs: med,
+              timestamp: new Date().toISOString(),
+            });
+            log(`  ${shader.label}: ${med.toFixed(3)}ms [${sorted[0].toFixed(3)}-${sorted[sorted.length-1].toFixed(3)}]`, 'ok');
+          }
+
+          // Auto-export at 20% increments
+          const pct = Math.floor((currentStep / totalSteps) * 100);
+          if (pct >= lastExportPct + 20) {
+            lastExportPct = Math.floor(pct / 20) * 20;
+            exportData(`${lastExportPct}pct`);
+          }
+
+          // Cooldown
+          hudPhase.textContent = 'cooldown';
+          applyBaseline();
+          for (let i = 0; i < 20; i++) await renderFrame();
+        }
+        log(`Loop ${loop + 1} done`);
+      }
+
+      sessionData.endTime = new Date().toISOString();
+      hudPhase.textContent = 'done';
+      progressBar.style.width = '100%';
+      log(`Complete! ${sessionData.measurements.length} measurements.`, 'ok');
+      exportData();
+    }
+
+    // ── Controls ──
+    btnStart.addEventListener('click', async () => {
+      if (running) return;
+      running = true; aborted = false;
+      btnStart.disabled = true; btnStop.disabled = false;
+      try { await runBenchmark(); } catch (e) { log(`Error: ${e.message}`, 'err'); console.error(e); }
+      running = false; btnStart.disabled = false; btnStop.disabled = true;
+    });
+    btnStop.addEventListener('click', () => { aborted = true; log('Aborted', 'err'); });
+    btnExport.addEventListener('click', () => exportData());
+
+    // ── Init: wait for A-Frame scene to be ready ──
+    log('Waiting for A-Frame scene...');
+    const sceneReady = new Promise(resolve => {
+      sceneEl = document.getElementById('scene');
+      if (sceneEl.hasLoaded) resolve();
+      else sceneEl.addEventListener('loaded', resolve);
+    });
+
+    sceneReady.then(() => {
+      log('A-Frame scene loaded', 'ok');
+
+      renderer = sceneEl.renderer;
+      threeScene = sceneEl.object3D;
+      threeCamera = document.getElementById('camera').getObject3D('camera');
+
+      // Pause A-Frame render loop — we drive rendering manually
+      sceneEl.pause();
+      // Some A-Frame versions keep rendering; also stop the RAF loop
+      if (sceneEl.renderTarget) sceneEl.renderTarget = null;
+
+      // Reduce render resolution — full-screen is unnecessary for relative cost
+      // measurement and starves the Quest compositor
+      renderer.setSize(512, 512);
+      renderer.setPixelRatio(1);
+
+      // Try to get GPU device for sync — check multiple paths
+      try {
+        const backend = renderer.backend;
+        // Direct backend.device (standard Three.js WebGPU path)
+        if (backend && backend.device) {
+          gpuDevice = backend.device;
+          log('GPU sync: onSubmittedWorkDone (backend.device)', 'ok');
+        }
+        // Some Three.js versions store device differently
+        else if (renderer._device) {
+          gpuDevice = renderer._device;
+          log('GPU sync: onSubmittedWorkDone (renderer._device)', 'ok');
+        }
+        else if (backend && backend.gl) {
+          log('GPU sync: gl.finish() — WARNING: unreliable, shader cost differentiation may be poor', 'warn');
+        } else {
+          log('GPU sync: double rAF — WARNING: unreliable', 'warn');
+        }
+      } catch (e) { log('GPU sync detection failed', 'warn'); }
+
+      SHADERS = buildShaderRegistry();
+      log(`Registry: ${SHADERS.length} shaders (${SHADERS.filter(s => s.category === 'texture').length} textures)`, 'ok');
+
+      // Test render
+      try { renderer.render(threeScene, threeCamera); log('Test render OK', 'ok'); }
+      catch (e) { log(`Test render failed: ${e.message}`, 'err'); }
+
+      hudPhase.textContent = 'ready';
+      btnStart.disabled = false;
+      log('Ready — press Start', 'ok');
+    }).catch(e => {
+      log(`Init failed: ${e.message}`, 'err');
+      hudPhase.textContent = 'ERROR';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "shaders": [
+    "brain.js", "camouflage.js", "caustics.js", "cave-art.js",
+    "circle-decor.js", "circles.js", "clouds.js", "concrete.js",
+    "cork.js", "crumpled-fabric.js", "dalmatian-spots.js", "darth-maul.js",
+    "dyson-sphere.js", "entangled.js", "fordite.js", "gas-giant.js",
+    "grid.js", "isolayers.js", "isolines.js", "karst-rock.js",
+    "marble.js", "melter.js", "neon-lights.js", "photosphere.js",
+    "planet.js", "polka-dots.js", "processed-wood.js", "protozoa.js",
+    "reticular-veins.js", "roman-paving.js", "rotator.js", "rough-clay.js",
+    "runny-eggs.js", "rust.js", "satin.js", "scaler.js",
+    "scepter-head.js", "scream.js", "simplex-noise.js", "stars.js",
+    "static-noise.js", "supersphere.js", "tiger-fur.js", "translator.js",
+    "turbulent-smoke.js", "voronoi-cells.js", "water-drops.js", "watermelon.js",
+    "wood.js", "zebra-lines.js"
+  ]
+}
