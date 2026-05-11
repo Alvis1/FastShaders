@@ -1,0 +1,1778 @@
+{
+  "summary": {
+    "totalSamples": 171,
+    "completedCycles": 4,
+    "scalesUsed": [
+      1,
+      3,
+      6,
+      10
+    ],
+    "startTimeSeconds": 1.1,
+    "endTimeSeconds": 153,
+    "overallAverageFPS": 73,
+    "overallAverageFrameTime": 16.81,
+    "minFPS": 2.8,
+    "maxFPS": 133.3
+  },
+  "scaleStatistics": {
+    "scale_1": {
+      "scale": 1,
+      "sampleCount": 42,
+      "averageFPS": 73.5,
+      "averageFrameTime": 22.62,
+      "minFPS": 2.8,
+      "maxFPS": 120.5
+    },
+    "scale_3": {
+      "scale": 3,
+      "sampleCount": 43,
+      "averageFPS": 69.7,
+      "averageFrameTime": 15.45,
+      "minFPS": 41.2,
+      "maxFPS": 99
+    },
+    "scale_6": {
+      "scale": 6,
+      "sampleCount": 43,
+      "averageFPS": 73.1,
+      "averageFrameTime": 14.85,
+      "minFPS": 40.5,
+      "maxFPS": 102
+    },
+    "scale_10": {
+      "scale": 10,
+      "sampleCount": 43,
+      "averageFPS": 75.6,
+      "averageFrameTime": 14.44,
+      "minFPS": 41.3,
+      "maxFPS": 133.3
+    }
+  },
+  "data": [
+    {
+      "timeSeconds": 1.1,
+      "timestampMs": 1064.4,
+      "frameTime": 357.7,
+      "fps": 2.8,
+      "meshCount": 0,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0,
+      "shaderName": "Turbulent Smoke",
+      "shaderParams": {}
+    },
+    {
+      "timeSeconds": 1.7,
+      "timestampMs": 1712.7,
+      "frameTime": 10.8,
+      "fps": 92.6,
+      "meshCount": 1,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 2.8,
+      "timestampMs": 2762.3,
+      "frameTime": 12.4,
+      "fps": 80.6,
+      "meshCount": 2,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 3.5,
+      "timestampMs": 3512.6,
+      "frameTime": 9.5,
+      "fps": 105.3,
+      "meshCount": 2,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 4.4,
+      "timestampMs": 4412.3,
+      "frameTime": 12,
+      "fps": 83.3,
+      "meshCount": 2,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 5.3,
+      "timestampMs": 5312.3,
+      "frameTime": 10,
+      "fps": 100,
+      "meshCount": 3,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 6.2,
+      "timestampMs": 6212.4,
+      "frameTime": 10.2,
+      "fps": 98,
+      "meshCount": 3,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 7.1,
+      "timestampMs": 7112.5,
+      "frameTime": 10.5,
+      "fps": 95.2,
+      "meshCount": 4,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 8,
+      "timestampMs": 8012.4,
+      "frameTime": 10.6,
+      "fps": 94.3,
+      "meshCount": 5,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 8.9,
+      "timestampMs": 8912.4,
+      "frameTime": 11.2,
+      "fps": 89.3,
+      "meshCount": 5,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 9.8,
+      "timestampMs": 9812.3,
+      "frameTime": 11.6,
+      "fps": 86.2,
+      "meshCount": 6,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 10.7,
+      "timestampMs": 10712.4,
+      "frameTime": 10.5,
+      "fps": 95.2,
+      "meshCount": 6,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 11.6,
+      "timestampMs": 11613.7,
+      "frameTime": 13.1,
+      "fps": 76.3,
+      "meshCount": 6,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 12.5,
+      "timestampMs": 12512.4,
+      "frameTime": 9.9,
+      "fps": 101,
+      "meshCount": 7,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 13.4,
+      "timestampMs": 13412.2,
+      "frameTime": 11.1,
+      "fps": 90.1,
+      "meshCount": 7,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 14.3,
+      "timestampMs": 14312.4,
+      "frameTime": 11.4,
+      "fps": 87.7,
+      "meshCount": 8,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 15.2,
+      "timestampMs": 15212.3,
+      "frameTime": 8.3,
+      "fps": 120.5,
+      "meshCount": 8,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 16.1,
+      "timestampMs": 16112.4,
+      "frameTime": 11.8,
+      "fps": 84.7,
+      "meshCount": 9,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 17,
+      "timestampMs": 17012.2,
+      "frameTime": 12.3,
+      "fps": 81.3,
+      "meshCount": 10,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 17.9,
+      "timestampMs": 17912.3,
+      "frameTime": 12.4,
+      "fps": 80.6,
+      "meshCount": 10,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 18.8,
+      "timestampMs": 18812.3,
+      "frameTime": 12.2,
+      "fps": 82,
+      "meshCount": 10,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 19.7,
+      "timestampMs": 19713.6,
+      "frameTime": 13,
+      "fps": 76.9,
+      "meshCount": 11,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 20.6,
+      "timestampMs": 20612.4,
+      "frameTime": 14.5,
+      "fps": 69,
+      "meshCount": 11,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 21.5,
+      "timestampMs": 21512.3,
+      "frameTime": 14.3,
+      "fps": 69.9,
+      "meshCount": 12,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 22.4,
+      "timestampMs": 22412.3,
+      "frameTime": 16.7,
+      "fps": 59.9,
+      "meshCount": 12,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 23.3,
+      "timestampMs": 23313.1,
+      "frameTime": 13.3,
+      "fps": 75.2,
+      "meshCount": 13,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 24.2,
+      "timestampMs": 24212.3,
+      "frameTime": 21.5,
+      "fps": 46.5,
+      "meshCount": 13,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 25.1,
+      "timestampMs": 25112.3,
+      "frameTime": 12.5,
+      "fps": 80,
+      "meshCount": 14,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 26,
+      "timestampMs": 26012.3,
+      "frameTime": 22.4,
+      "fps": 44.6,
+      "meshCount": 15,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 26.9,
+      "timestampMs": 26914.5,
+      "frameTime": 14.3,
+      "fps": 69.9,
+      "meshCount": 15,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 27.8,
+      "timestampMs": 27812.3,
+      "frameTime": 21.6,
+      "fps": 46.3,
+      "meshCount": 15,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 28.7,
+      "timestampMs": 28713.8,
+      "frameTime": 14.5,
+      "fps": 69,
+      "meshCount": 16,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 29.7,
+      "timestampMs": 29662.4,
+      "frameTime": 11.1,
+      "fps": 90.1,
+      "meshCount": 16,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 30.5,
+      "timestampMs": 30512.4,
+      "frameTime": 14.8,
+      "fps": 67.6,
+      "meshCount": 17,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 31.4,
+      "timestampMs": 31412.4,
+      "frameTime": 22,
+      "fps": 45.5,
+      "meshCount": 17,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 32.3,
+      "timestampMs": 32312.3,
+      "frameTime": 13.5,
+      "fps": 74.1,
+      "meshCount": 18,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 33.2,
+      "timestampMs": 33212.4,
+      "frameTime": 23,
+      "fps": 43.5,
+      "meshCount": 19,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 34.1,
+      "timestampMs": 34112.3,
+      "frameTime": 20.7,
+      "fps": 48.3,
+      "meshCount": 19,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 35.1,
+      "timestampMs": 35062.3,
+      "frameTime": 22.1,
+      "fps": 45.2,
+      "meshCount": 20,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 35.9,
+      "timestampMs": 35912.3,
+      "frameTime": 22.6,
+      "fps": 44.2,
+      "meshCount": 20,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 36.9,
+      "timestampMs": 36862.3,
+      "frameTime": 19.5,
+      "fps": 51.3,
+      "meshCount": 20,
+      "rotationAngle": 90,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 37.7,
+      "timestampMs": 37714.7,
+      "frameTime": 22.6,
+      "fps": 44.2,
+      "meshCount": 20,
+      "rotationAngle": 270,
+      "scale": 1,
+      "cycleNumber": 0
+    },
+    {
+      "timeSeconds": 38.7,
+      "timestampMs": 38664.1,
+      "frameTime": 11.4,
+      "fps": 87.7,
+      "meshCount": 20,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1,
+      "shaderName": "Turbulent Smoke",
+      "shaderParams": {
+        "scale": "3"
+      }
+    },
+    {
+      "timeSeconds": 39.5,
+      "timestampMs": 39464.2,
+      "frameTime": 11.3,
+      "fps": 88.5,
+      "meshCount": 1,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 40.4,
+      "timestampMs": 40362.8,
+      "frameTime": 10.8,
+      "fps": 92.6,
+      "meshCount": 2,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 41.3,
+      "timestampMs": 41262.2,
+      "frameTime": 10.9,
+      "fps": 91.7,
+      "meshCount": 2,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 42.2,
+      "timestampMs": 42162.3,
+      "frameTime": 10.1,
+      "fps": 99,
+      "meshCount": 3,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 43.1,
+      "timestampMs": 43063.3,
+      "frameTime": 10.9,
+      "fps": 91.7,
+      "meshCount": 3,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 44,
+      "timestampMs": 43964.5,
+      "frameTime": 11.3,
+      "fps": 88.5,
+      "meshCount": 3,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 44.9,
+      "timestampMs": 44865.2,
+      "frameTime": 10.8,
+      "fps": 92.6,
+      "meshCount": 4,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 45.8,
+      "timestampMs": 45765.3,
+      "frameTime": 10.9,
+      "fps": 91.7,
+      "meshCount": 4,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 46.7,
+      "timestampMs": 46662.2,
+      "frameTime": 12.4,
+      "fps": 80.6,
+      "meshCount": 5,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 47.6,
+      "timestampMs": 47562.3,
+      "frameTime": 11.4,
+      "fps": 87.7,
+      "meshCount": 5,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 48.5,
+      "timestampMs": 48462.4,
+      "frameTime": 11.6,
+      "fps": 86.2,
+      "meshCount": 6,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 49.4,
+      "timestampMs": 49369.7,
+      "frameTime": 14.4,
+      "fps": 69.4,
+      "meshCount": 7,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 50.3,
+      "timestampMs": 50262.3,
+      "frameTime": 10.5,
+      "fps": 95.2,
+      "meshCount": 7,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 51.2,
+      "timestampMs": 51162.2,
+      "frameTime": 15,
+      "fps": 66.7,
+      "meshCount": 8,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 52.1,
+      "timestampMs": 52062.4,
+      "frameTime": 13,
+      "fps": 76.9,
+      "meshCount": 8,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 53,
+      "timestampMs": 52962.3,
+      "frameTime": 11,
+      "fps": 90.9,
+      "meshCount": 8,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 53.9,
+      "timestampMs": 53862.3,
+      "frameTime": 13.2,
+      "fps": 75.8,
+      "meshCount": 9,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 54.8,
+      "timestampMs": 54762.2,
+      "frameTime": 12.1,
+      "fps": 82.6,
+      "meshCount": 9,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 55.7,
+      "timestampMs": 55662.3,
+      "frameTime": 15.5,
+      "fps": 64.5,
+      "meshCount": 10,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 56.6,
+      "timestampMs": 56562.3,
+      "frameTime": 16.1,
+      "fps": 62.1,
+      "meshCount": 10,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 57.5,
+      "timestampMs": 57462.4,
+      "frameTime": 15.2,
+      "fps": 65.8,
+      "meshCount": 11,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 58.4,
+      "timestampMs": 58362.3,
+      "frameTime": 16.5,
+      "fps": 60.6,
+      "meshCount": 12,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 59.3,
+      "timestampMs": 59262.3,
+      "frameTime": 15.1,
+      "fps": 66.2,
+      "meshCount": 12,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 60.2,
+      "timestampMs": 60162.3,
+      "frameTime": 12.8,
+      "fps": 78.1,
+      "meshCount": 12,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 61.1,
+      "timestampMs": 61062.3,
+      "frameTime": 14.3,
+      "fps": 69.9,
+      "meshCount": 13,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 62,
+      "timestampMs": 61962.3,
+      "frameTime": 24.3,
+      "fps": 41.2,
+      "meshCount": 13,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 62.9,
+      "timestampMs": 62862.3,
+      "frameTime": 16.8,
+      "fps": 59.5,
+      "meshCount": 14,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 63.8,
+      "timestampMs": 63762.4,
+      "frameTime": 20.4,
+      "fps": 49,
+      "meshCount": 14,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 64.7,
+      "timestampMs": 64664.3,
+      "frameTime": 13,
+      "fps": 76.9,
+      "meshCount": 15,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 65.6,
+      "timestampMs": 65562.4,
+      "frameTime": 22,
+      "fps": 45.5,
+      "meshCount": 16,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 66.5,
+      "timestampMs": 66462.3,
+      "frameTime": 14,
+      "fps": 71.4,
+      "meshCount": 16,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 67.4,
+      "timestampMs": 67362.3,
+      "frameTime": 22.1,
+      "fps": 45.2,
+      "meshCount": 17,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 68.3,
+      "timestampMs": 68262.3,
+      "frameTime": 14.3,
+      "fps": 69.9,
+      "meshCount": 17,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 69.2,
+      "timestampMs": 69164.6,
+      "frameTime": 20.5,
+      "fps": 48.8,
+      "meshCount": 17,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 70.1,
+      "timestampMs": 70062.3,
+      "frameTime": 14.4,
+      "fps": 69.4,
+      "meshCount": 18,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 71,
+      "timestampMs": 70962.3,
+      "frameTime": 22.3,
+      "fps": 44.8,
+      "meshCount": 18,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 71.9,
+      "timestampMs": 71862.3,
+      "frameTime": 19.6,
+      "fps": 51,
+      "meshCount": 19,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 72.8,
+      "timestampMs": 72762.6,
+      "frameTime": 22.1,
+      "fps": 45.2,
+      "meshCount": 19,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 73.7,
+      "timestampMs": 73662.3,
+      "frameTime": 22.7,
+      "fps": 44.1,
+      "meshCount": 20,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 74.6,
+      "timestampMs": 74562.4,
+      "frameTime": 22.6,
+      "fps": 44.2,
+      "meshCount": 20,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 75.5,
+      "timestampMs": 75462.3,
+      "frameTime": 23,
+      "fps": 43.5,
+      "meshCount": 20,
+      "rotationAngle": 270,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 76.4,
+      "timestampMs": 76362.3,
+      "frameTime": 21.7,
+      "fps": 46.1,
+      "meshCount": 20,
+      "rotationAngle": 90,
+      "scale": 3,
+      "cycleNumber": 1
+    },
+    {
+      "timeSeconds": 77,
+      "timestampMs": 77012.2,
+      "frameTime": 10.8,
+      "fps": 92.6,
+      "meshCount": 20,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2,
+      "shaderName": "Turbulent Smoke",
+      "shaderParams": {
+        "scale": "6"
+      }
+    },
+    {
+      "timeSeconds": 77.7,
+      "timestampMs": 77712.6,
+      "frameTime": 12.1,
+      "fps": 82.6,
+      "meshCount": 1,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 78.7,
+      "timestampMs": 78665.1,
+      "frameTime": 11,
+      "fps": 90.9,
+      "meshCount": 2,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 79.6,
+      "timestampMs": 79562.3,
+      "frameTime": 11.1,
+      "fps": 90.1,
+      "meshCount": 2,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 80.4,
+      "timestampMs": 80412.3,
+      "frameTime": 11.4,
+      "fps": 87.7,
+      "meshCount": 2,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 81.3,
+      "timestampMs": 81312.3,
+      "frameTime": 12,
+      "fps": 83.3,
+      "meshCount": 3,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 82.2,
+      "timestampMs": 82212.7,
+      "frameTime": 12.2,
+      "fps": 82,
+      "meshCount": 3,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 83.1,
+      "timestampMs": 83112.2,
+      "frameTime": 10.8,
+      "fps": 92.6,
+      "meshCount": 4,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 84,
+      "timestampMs": 84012.3,
+      "frameTime": 11.8,
+      "fps": 84.7,
+      "meshCount": 4,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 84.9,
+      "timestampMs": 84912.3,
+      "frameTime": 10,
+      "fps": 100,
+      "meshCount": 5,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 85.8,
+      "timestampMs": 85812.6,
+      "frameTime": 11.1,
+      "fps": 90.1,
+      "meshCount": 5,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 86.7,
+      "timestampMs": 86713.3,
+      "frameTime": 11.3,
+      "fps": 88.5,
+      "meshCount": 6,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 87.6,
+      "timestampMs": 87614.5,
+      "frameTime": 11,
+      "fps": 90.9,
+      "meshCount": 7,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 88.6,
+      "timestampMs": 88562.3,
+      "frameTime": 11.1,
+      "fps": 90.1,
+      "meshCount": 7,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 89.5,
+      "timestampMs": 89462.4,
+      "frameTime": 11.4,
+      "fps": 87.7,
+      "meshCount": 7,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 90.4,
+      "timestampMs": 90362.3,
+      "frameTime": 10.8,
+      "fps": 92.6,
+      "meshCount": 8,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 91.3,
+      "timestampMs": 91262.3,
+      "frameTime": 11,
+      "fps": 90.9,
+      "meshCount": 8,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 92.2,
+      "timestampMs": 92162.3,
+      "frameTime": 11.1,
+      "fps": 90.1,
+      "meshCount": 9,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 93.1,
+      "timestampMs": 93062.3,
+      "frameTime": 11.7,
+      "fps": 85.5,
+      "meshCount": 9,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 94,
+      "timestampMs": 93962.6,
+      "frameTime": 13.2,
+      "fps": 75.8,
+      "meshCount": 10,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 94.9,
+      "timestampMs": 94862.3,
+      "frameTime": 13.5,
+      "fps": 74.1,
+      "meshCount": 10,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 95.8,
+      "timestampMs": 95762.3,
+      "frameTime": 11.4,
+      "fps": 87.7,
+      "meshCount": 11,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 96.7,
+      "timestampMs": 96662.3,
+      "frameTime": 14.5,
+      "fps": 69,
+      "meshCount": 12,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 97.5,
+      "timestampMs": 97514.5,
+      "frameTime": 15.4,
+      "fps": 64.9,
+      "meshCount": 12,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 98.5,
+      "timestampMs": 98462.3,
+      "frameTime": 15.7,
+      "fps": 63.7,
+      "meshCount": 12,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 99.4,
+      "timestampMs": 99362.2,
+      "frameTime": 13.1,
+      "fps": 76.3,
+      "meshCount": 13,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 100.3,
+      "timestampMs": 100262.5,
+      "frameTime": 21.1,
+      "fps": 47.4,
+      "meshCount": 13,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 101.1,
+      "timestampMs": 101113,
+      "frameTime": 17.2,
+      "fps": 58.1,
+      "meshCount": 14,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 102.1,
+      "timestampMs": 102062.3,
+      "frameTime": 20.7,
+      "fps": 48.3,
+      "meshCount": 14,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 103,
+      "timestampMs": 102962.4,
+      "frameTime": 13.2,
+      "fps": 75.8,
+      "meshCount": 15,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 103.8,
+      "timestampMs": 103813.8,
+      "frameTime": 21.9,
+      "fps": 45.7,
+      "meshCount": 16,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 104.8,
+      "timestampMs": 104762.4,
+      "frameTime": 13.3,
+      "fps": 75.2,
+      "meshCount": 16,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 105.7,
+      "timestampMs": 105662.3,
+      "frameTime": 21.9,
+      "fps": 45.7,
+      "meshCount": 17,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 106.5,
+      "timestampMs": 106515,
+      "frameTime": 17.1,
+      "fps": 58.5,
+      "meshCount": 17,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 107.5,
+      "timestampMs": 107464.8,
+      "frameTime": 23.8,
+      "fps": 42,
+      "meshCount": 17,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 108.4,
+      "timestampMs": 108362.3,
+      "frameTime": 14.3,
+      "fps": 69.9,
+      "meshCount": 18,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 109.3,
+      "timestampMs": 109262.3,
+      "frameTime": 20.5,
+      "fps": 48.8,
+      "meshCount": 18,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 110.1,
+      "timestampMs": 110116.1,
+      "frameTime": 22.4,
+      "fps": 44.6,
+      "meshCount": 19,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 111,
+      "timestampMs": 111013.7,
+      "frameTime": 9.8,
+      "fps": 102,
+      "meshCount": 19,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 112,
+      "timestampMs": 111962.3,
+      "frameTime": 22.6,
+      "fps": 44.2,
+      "meshCount": 20,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 112.9,
+      "timestampMs": 112862.3,
+      "frameTime": 22.1,
+      "fps": 45.2,
+      "meshCount": 20,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 113.8,
+      "timestampMs": 113762.3,
+      "frameTime": 24.7,
+      "fps": 40.5,
+      "meshCount": 20,
+      "rotationAngle": 270,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 114.7,
+      "timestampMs": 114662.3,
+      "frameTime": 21.5,
+      "fps": 46.5,
+      "meshCount": 20,
+      "rotationAngle": 90,
+      "scale": 6,
+      "cycleNumber": 2
+    },
+    {
+      "timeSeconds": 115.3,
+      "timestampMs": 115314,
+      "frameTime": 12.6,
+      "fps": 79.4,
+      "meshCount": 0,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3,
+      "shaderName": "Turbulent Smoke",
+      "shaderParams": {
+        "scale": "10"
+      }
+    },
+    {
+      "timeSeconds": 116,
+      "timestampMs": 116012.5,
+      "frameTime": 10.9,
+      "fps": 91.7,
+      "meshCount": 1,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 117,
+      "timestampMs": 116962.3,
+      "frameTime": 11.1,
+      "fps": 90.1,
+      "meshCount": 2,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 117.9,
+      "timestampMs": 117862.3,
+      "frameTime": 11.2,
+      "fps": 89.3,
+      "meshCount": 2,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 118.7,
+      "timestampMs": 118713.6,
+      "frameTime": 11.9,
+      "fps": 84,
+      "meshCount": 2,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 119.6,
+      "timestampMs": 119613.2,
+      "frameTime": 10.5,
+      "fps": 95.2,
+      "meshCount": 3,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 120.5,
+      "timestampMs": 120513.1,
+      "frameTime": 10.7,
+      "fps": 93.5,
+      "meshCount": 3,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 121.4,
+      "timestampMs": 121414.2,
+      "frameTime": 11.5,
+      "fps": 87,
+      "meshCount": 4,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 122.3,
+      "timestampMs": 122314.7,
+      "frameTime": 12.1,
+      "fps": 82.6,
+      "meshCount": 4,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 123.2,
+      "timestampMs": 123213.8,
+      "frameTime": 9.8,
+      "fps": 102,
+      "meshCount": 5,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 124.2,
+      "timestampMs": 124164,
+      "frameTime": 11.2,
+      "fps": 89.3,
+      "meshCount": 5,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 125,
+      "timestampMs": 125014.1,
+      "frameTime": 10.5,
+      "fps": 95.2,
+      "meshCount": 6,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 126,
+      "timestampMs": 125962.3,
+      "frameTime": 10.8,
+      "fps": 92.6,
+      "meshCount": 7,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 126.8,
+      "timestampMs": 126813.7,
+      "frameTime": 10.3,
+      "fps": 97.1,
+      "meshCount": 7,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 127.8,
+      "timestampMs": 127762.7,
+      "frameTime": 11.7,
+      "fps": 85.5,
+      "meshCount": 7,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 128.6,
+      "timestampMs": 128613.8,
+      "frameTime": 10.9,
+      "fps": 91.7,
+      "meshCount": 8,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 129.6,
+      "timestampMs": 129562.3,
+      "frameTime": 11.9,
+      "fps": 84,
+      "meshCount": 8,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 130.5,
+      "timestampMs": 130462.4,
+      "frameTime": 11.9,
+      "fps": 84,
+      "meshCount": 9,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 131.3,
+      "timestampMs": 131313.5,
+      "frameTime": 11.3,
+      "fps": 88.5,
+      "meshCount": 9,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 132.3,
+      "timestampMs": 132262.3,
+      "frameTime": 10.9,
+      "fps": 91.7,
+      "meshCount": 10,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 133.2,
+      "timestampMs": 133162.2,
+      "frameTime": 15.1,
+      "fps": 66.2,
+      "meshCount": 10,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 134.1,
+      "timestampMs": 134062.2,
+      "frameTime": 11.2,
+      "fps": 89.3,
+      "meshCount": 11,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 135,
+      "timestampMs": 134962.3,
+      "frameTime": 12.4,
+      "fps": 80.6,
+      "meshCount": 12,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 135.9,
+      "timestampMs": 135862.3,
+      "frameTime": 13,
+      "fps": 76.9,
+      "meshCount": 12,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 136.8,
+      "timestampMs": 136762.3,
+      "frameTime": 16.5,
+      "fps": 60.6,
+      "meshCount": 12,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 137.7,
+      "timestampMs": 137662.2,
+      "frameTime": 12,
+      "fps": 83.3,
+      "meshCount": 13,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 138.6,
+      "timestampMs": 138562.3,
+      "frameTime": 21.8,
+      "fps": 45.9,
+      "meshCount": 13,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 139.5,
+      "timestampMs": 139462.3,
+      "frameTime": 14.6,
+      "fps": 68.5,
+      "meshCount": 14,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 140.4,
+      "timestampMs": 140363,
+      "frameTime": 19.8,
+      "fps": 50.5,
+      "meshCount": 14,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 141.3,
+      "timestampMs": 141262.3,
+      "frameTime": 12,
+      "fps": 83.3,
+      "meshCount": 15,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 142.1,
+      "timestampMs": 142114.8,
+      "frameTime": 7.5,
+      "fps": 133.3,
+      "meshCount": 16,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 143.1,
+      "timestampMs": 143063.1,
+      "frameTime": 15.6,
+      "fps": 64.1,
+      "meshCount": 16,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 144,
+      "timestampMs": 143964.9,
+      "frameTime": 20.1,
+      "fps": 49.8,
+      "meshCount": 16,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 144.9,
+      "timestampMs": 144862.3,
+      "frameTime": 14.2,
+      "fps": 70.4,
+      "meshCount": 17,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 145.7,
+      "timestampMs": 145714.6,
+      "frameTime": 21.9,
+      "fps": 45.7,
+      "meshCount": 17,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 146.7,
+      "timestampMs": 146662.6,
+      "frameTime": 13.8,
+      "fps": 72.5,
+      "meshCount": 18,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 147.6,
+      "timestampMs": 147563.1,
+      "frameTime": 22.1,
+      "fps": 45.2,
+      "meshCount": 18,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 148.5,
+      "timestampMs": 148463,
+      "frameTime": 19.1,
+      "fps": 52.4,
+      "meshCount": 19,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 149.4,
+      "timestampMs": 149362.3,
+      "frameTime": 23,
+      "fps": 43.5,
+      "meshCount": 19,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 150.3,
+      "timestampMs": 150263.8,
+      "frameTime": 21.8,
+      "fps": 45.9,
+      "meshCount": 20,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 151.2,
+      "timestampMs": 151162.4,
+      "frameTime": 22.8,
+      "fps": 43.9,
+      "meshCount": 20,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 152.1,
+      "timestampMs": 152064.8,
+      "frameTime": 22.7,
+      "fps": 44.1,
+      "meshCount": 20,
+      "rotationAngle": 270,
+      "scale": 10,
+      "cycleNumber": 3
+    },
+    {
+      "timeSeconds": 153,
+      "timestampMs": 152962.3,
+      "frameTime": 24.2,
+      "fps": 41.3,
+      "meshCount": 20,
+      "rotationAngle": 90,
+      "scale": 10,
+      "cycleNumber": 3
+    }
+  ]
+}
