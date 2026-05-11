@@ -7,17 +7,7 @@ import {
   buildShaderPicker, getSelectedIds, pickerAll, pickerNone,
   saveSettings, loadSettings,
 } from './stats.js';
-
-const TEXTURE_NAMES = [
-  'caustics','circleDecor','cork','turbulentSmoke','dalmatianSpots',
-  'protozoa','reticularVeins','planet','crumpledFabric','rust',
-  'romanPaving','wood','entangled','runnyEggs','gasGiant','bricks',
-  'watermelon','neonLights','voronoiCells','marble','clouds','satin',
-  'photosphere','polkaDots','karstRock','dysonSphere','caveArt',
-  'camouflage','scream','darthMaul','fordite','processedWood','brain',
-  'tigerFur','scepterHead','stars','isolayers','perlinNoise','isolines',
-  'circles','staticNoise',
-];
+import { buildShaderRegistry } from './shaderRegistry.js';
 
 // Quest 3 per-eye resolution
 const Q3_WIDTH = 2064;
@@ -40,24 +30,6 @@ function log(msg, cls = 'info') {
 }
 
 function nextFrame() { return new Promise(r => requestAnimationFrame(r)); }
-
-// ── Shader registry from IIFE globals ───────────────────────────────────────
-
-function buildShaderRegistry() {
-  const TSL = THREE.TSL, TEX = window.tslTextures;
-  if (!TSL || !TEX) { log('THREE.TSL or tslTextures missing', 'err'); return []; }
-  const shaders = [
-    { id: 'ref_flat_color', label: 'Flat Color (baseline)', category: 'reference', build: () => TSL.color(0x888888) },
-    { id: 'atom_voronoi', label: 'Voronoi (mx)', category: 'atomic', build: () => TSL.vec3(TSL.mx_worley_noise_float(TSL.positionGeometry.mul(4))) },
-  ];
-  for (const name of TEXTURE_NAMES) {
-    if (!TEX[name]) continue;
-    const fn = TEX[name];
-    shaders.push({ id: `tex_${name}`, label: name, category: 'texture',
-      build: () => { try { return fn(); } catch (e) { return TSL.color(0xff00ff); } } });
-  }
-  return shaders;
-}
 
 // ── A-Frame setup ───────────────────────────────────────────────────────────
 
@@ -194,6 +166,7 @@ function exportResults() {
   downloadJSON({
     metadata: {
       tool: 'ShaderSphere v3', mode: 'aframe-pipeline', material: 'MeshPhysicalNodeMaterial',
+      shaderSet: 'fastshaders-noise+textures-v2',
       resolution: { width: Q3_WIDTH, height: Q3_HEIGHT, label: 'Quest 3 per-eye' },
       date: new Date().toISOString(), userAgent: navigator.userAgent, gpu: gpuInfo,
       config: { duration: CONFIG.duration, warmupFrames: CONFIG.warmupFrames },
@@ -201,7 +174,7 @@ function exportResults() {
       notes: 'Full-coverage A-Frame pipeline benchmark at Quest 3 per-eye resolution. 100 points = 120 fps (8.33 ms). frameTime = rAF delta. Display-bound at low GPU load.',
     },
     shaders: results,
-  }, 'shadersphere-aframe');
+  }, 'shadersphere-aframe-v2');
   log('Exported', 'ok');
 }
 
@@ -223,7 +196,8 @@ $('pick-none').addEventListener('click', () => pickerNone($('pick-list')));
   try {
     log('Waiting for A-Frame...');
     await initFromAFrame();
-    SHADERS = buildShaderRegistry();
+    if (!THREE?.TSL) { log('THREE.TSL missing', 'err'); return; }
+    SHADERS = buildShaderRegistry(THREE.TSL);
     log(`${SHADERS.length} shaders`, 'ok');
     buildShaderPicker(SHADERS, $('pick-list'));
     loadSettings();

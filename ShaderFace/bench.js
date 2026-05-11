@@ -6,7 +6,7 @@ import {
   PlaneGeometry, Mesh, MeshBasicNodeMaterial,
 } from 'three';
 import { color as tslColor } from 'three/tsl';
-import { SHADER_REGISTRY } from './shaderRegistry.js';
+import { SHADER_REGISTRY, PAIR_SHADER_IDS } from './shaderRegistry.js';
 
 // ── DOM refs ──
 const canvas = document.getElementById('canvas');
@@ -55,42 +55,80 @@ inputMode.addEventListener('change', () => {
 });
 
 // ── Shader picker ──
+// The picker drives both Standard and Resolution Sweep modes — only the
+// checked shaders are measured. Presets:
+//   • All    — every shader in the registry
+//   • None   — clear
+//   • Pairs  — FastShaders ↔ tsl-textures comparison set + baseline
 btnShaders.addEventListener('click', () => shaderPicker.classList.toggle('visible'));
+
+function setChecked(predicate) {
+  pickList.querySelectorAll('input').forEach(cb => {
+    cb.checked = predicate(cb);
+  });
+}
+
 document.getElementById('pick-all').addEventListener('click', () => {
-  pickList.querySelectorAll('input').forEach(cb => cb.checked = true);
+  setChecked(() => true);
 });
 document.getElementById('pick-none').addEventListener('click', () => {
-  pickList.querySelectorAll('input').forEach(cb => cb.checked = false);
+  setChecked(() => false);
 });
-document.getElementById('pick-top10').addEventListener('click', () => {
-  // Select top 10 most expensive (by registry order — roughly sorted by cost)
-  const cbs = [...pickList.querySelectorAll('input')];
-  cbs.forEach(cb => cb.checked = false);
-  // Always include baseline
-  cbs.find(cb => cb.value === 'ref_flat_color')?.click();
-  // Pick first 10 textures (registry is roughly cost-ordered)
-  let count = 0;
-  for (const cb of cbs) {
-    if (count >= 10) break;
-    if (cb.value.startsWith('tex_')) { cb.checked = true; count++; }
-  }
+document.getElementById('pick-pairs').addEventListener('click', () => {
+  // FastShaders builtin texture group reconstructions vs their tsl-textures
+  // counterparts. 8 pairs × 2 sides = 16 shaders, plus baseline.
+  const pairSet = new Set(PAIR_SHADER_IDS);
+  setChecked(cb => cb.value === 'ref_flat_color' || pairSet.has(cb.value));
 });
 
 function getSelectedShaderIds() {
   return [...pickList.querySelectorAll('input:checked')].map(cb => cb.value);
 }
 
+const CATEGORY_LABELS = {
+  reference:   'References',
+  atomic:      'Atomics',
+  texture:     'tsl-textures',
+  fastshaders: 'FastShaders (builtin texture groups)',
+  noise:       'Noise (MaterialX primitives)',
+};
+
 function buildShaderPicker() {
   pickList.innerHTML = '';
+  // Render in the order categories first appear in the registry, so editing
+  // the registry order naturally reorders the picker.
+  const seenCategories = [];
+  const groups = new Map();
   for (const s of SHADER_REGISTRY) {
-    const label = document.createElement('label');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.value = s.id;
-    cb.checked = true;
-    label.appendChild(cb);
-    label.appendChild(document.createTextNode(` ${s.label}`));
-    pickList.appendChild(label);
+    if (!groups.has(s.category)) {
+      groups.set(s.category, []);
+      seenCategories.push(s.category);
+    }
+    groups.get(s.category).push(s);
+  }
+
+  for (const cat of seenCategories) {
+    const header = document.createElement('div');
+    header.className = 'pick-section';
+    header.textContent = CATEGORY_LABELS[cat] || cat;
+    pickList.appendChild(header);
+
+    for (const s of groups.get(cat)) {
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = s.id;
+      cb.checked = true;
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(` ${s.label}`));
+      if (s.pairId) {
+        const tag = document.createElement('span');
+        tag.className = 'pair-tag';
+        tag.textContent = `↔ ${s.pairId}`;
+        label.appendChild(tag);
+      }
+      pickList.appendChild(label);
+    }
   }
 }
 
@@ -336,7 +374,10 @@ async function runBenchmark() {
 
   renderer.setSize(BENCH_SIZE, BENCH_SIZE);
 
-  const shaders = SHADER_REGISTRY;
+  const selectedIds = new Set(getSelectedShaderIds());
+  if (selectedIds.size === 0) { log('No shaders selected!', 'err'); return; }
+  const shaders = SHADER_REGISTRY.filter(s => selectedIds.has(s.id));
+  log(`Selected: ${shaders.length}/${SHADER_REGISTRY.length} shaders`);
   const totalSteps = loopCount * shaders.length;
   let currentStep = 0;
   let lastExportPct = 0;
@@ -400,7 +441,7 @@ async function runBenchmark() {
       const applied = applyShader(shader);
       if (!applied) {
         sessionData.measurements.push({
-          shaderId: shader.id, shaderLabel: shader.label, category: shader.category,
+          shaderId: shader.id, shaderLabel: shader.label, category: shader.category, pairId: shader.pairId,
           loopIndex: loop, orderInLoop: si, error: 'failed to compile',
           timestamp: new Date().toISOString(),
         });
@@ -417,7 +458,7 @@ async function runBenchmark() {
       } catch (e) {
         log(`Warmup failed for "${shader.id}": ${e.message}`, 'err');
         sessionData.measurements.push({
-          shaderId: shader.id, shaderLabel: shader.label, category: shader.category,
+          shaderId: shader.id, shaderLabel: shader.label, category: shader.category, pairId: shader.pairId,
           loopIndex: loop, orderInLoop: si, error: `warmup failed: ${e.message}`,
           timestamp: new Date().toISOString(),
         });
@@ -448,7 +489,7 @@ async function runBenchmark() {
         const q1 = gpuTimesMs.sort((a, b) => a - b)[Math.floor(gpuTimesMs.length * 0.25)];
         const q3 = gpuTimesMs[Math.floor(gpuTimesMs.length * 0.75)];
         sessionData.measurements.push({
-          shaderId: shader.id, shaderLabel: shader.label, category: shader.category,
+          shaderId: shader.id, shaderLabel: shader.label, category: shader.category, pairId: shader.pairId,
           loopIndex: loop, orderInLoop: si,
           gpuTimesMs, medianGpuMs: med,
           timestamp: new Date().toISOString(),
@@ -570,6 +611,7 @@ async function runResolutionSweep() {
       shaderId: shader.id,
       shaderLabel: shader.label,
       category: shader.category,
+      pairId: shader.pairId,
       resolutions: [],
       // Will be filled: maxRes120, maxRes90, maxRes72
     };
@@ -727,7 +769,13 @@ initRenderer().then(() => {
   }
   buildShaderPicker();
   log(`Registry: ${SHADER_REGISTRY.length} shaders`);
-  log(`  ${SHADER_REGISTRY.filter(s => s.category === 'reference').length} reference, ${SHADER_REGISTRY.filter(s => s.category === 'atomic').length} atomic, ${SHADER_REGISTRY.filter(s => s.category === 'texture').length} texture`);
+  const nRef = SHADER_REGISTRY.filter(s => s.category === 'reference').length;
+  const nAtom = SHADER_REGISTRY.filter(s => s.category === 'atomic').length;
+  const nTex = SHADER_REGISTRY.filter(s => s.category === 'texture').length;
+  const nFs = SHADER_REGISTRY.filter(s => s.category === 'fastshaders').length;
+  const nNoise = SHADER_REGISTRY.filter(s => s.category === 'noise').length;
+  const nPairs = PAIR_SHADER_IDS.length / 2;
+  log(`  ${nRef} reference, ${nAtom} atomic, ${nTex} tsl-textures, ${nFs} FastShaders (${nPairs} pairs), ${nNoise} noise primitives`);
   log('Ready — select mode and press Start', 'ok');
 }).catch(e => {
   log(`Init failed: ${e.message}`, 'err');

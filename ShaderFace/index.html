@@ -68,8 +68,11 @@
     #shader-picker.visible { display: block; }
     #shader-picker label { display: block; padding: 3px 0; cursor: pointer; }
     #shader-picker label:hover { color: #0f0; }
-    #shader-picker .pick-actions { margin-bottom: 8px; display: flex; gap: 6px; }
+    #shader-picker .pick-actions { margin-bottom: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
     #shader-picker .pick-actions button { font-size: 11px; padding: 3px 8px; }
+    #shader-picker .pick-section { margin-top: 10px; padding-top: 6px; border-top: 1px solid #333; color: #888; text-transform: uppercase; font-size: 10px; letter-spacing: 1px; }
+    #shader-picker .pick-section:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+    #shader-picker label .pair-tag { color: #fc3; font-size: 10px; margin-left: 6px; }
     /* Sweep controls — shown only in sweep mode */
     .sweep-only { display: none; }
     .standard-only { display: inline; }
@@ -94,6 +97,7 @@
     <button id="btn-stop" class="danger" disabled>Stop</button>
     <button id="btn-export">Export</button>
     <button id="btn-log">Log</button>
+    <button id="btn-shaders">Shaders</button>
 
     <label>Mode: <select id="input-mode">
       <option value="standard">Standard</option>
@@ -109,7 +113,6 @@
 
     <!-- Sweep mode controls -->
     <span class="sweep-only">
-      <button id="btn-shaders">Shaders</button>
       <label>Min: <input id="input-res-min" type="number" value="256" min="64" max="2048" step="64" style="width:70px"></label>
       <label>Max: <input id="input-res-max" type="number" value="1760" min="64" max="2048" step="64" style="width:70px"></label>
       <label>Step: <input id="input-res-step" type="number" value="128" min="32" max="512" step="32" style="width:70px"></label>
@@ -122,7 +125,7 @@
     <div class="pick-actions">
       <button id="pick-all">All</button>
       <button id="pick-none">None</button>
-      <button id="pick-top10">Top 10</button>
+      <button id="pick-pairs" title="Select FastShaders ↔ tsl-textures comparison pairs + baseline">Pairs</button>
     </div>
     <div id="pick-list"></div>
   </div>
