@@ -1,0 +1,10 @@
+{
+    "liveServer.settings.port": 5502,
+    "liveServer.settings.root": "/",
+    "liveServer.settings.https": {
+    "enable": true,
+    "cert": "/Users/alvis/Documents/_PROJEKTI/FastShaders/ShaderCarousel/https/localhost.pem",
+    "key": "/Users/alvis/Documents/_PROJEKTI/FastShaders/ShaderCarousel/https/localhost2.key",
+    "passphrase": "viensdivi"
+  }
+}
