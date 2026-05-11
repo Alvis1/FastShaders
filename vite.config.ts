@@ -29,6 +29,7 @@ const versionHtmlPlugin = (): Plugin => ({
  */
 const SHADER_CAROUSEL_EXCLUDE = new Set([
   'benchData',
+  'https', // local dev TLS material — never ship the private key
   '.DS_Store',
   '.vscode',
   '.git',
