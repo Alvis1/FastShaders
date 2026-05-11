@@ -7,13 +7,16 @@ import {
   SphereGeometry, Mesh, MeshPhysicalNodeMaterial, Color,
   AmbientLight, DirectionalLight,
 } from 'three';
-import { color as tslColor } from 'three/tsl';
-import { SHADER_REGISTRY } from './shaderRegistry.js';
+import * as TSL from 'three/tsl';
+import { buildShaderRegistry } from './shaderRegistry.js';
 import {
   computeStats, downloadJSON,
   buildShaderPicker, getSelectedIds, pickerAll, pickerNone,
   saveSettings, loadSettings,
 } from './stats.js';
+
+const tslColor = TSL.color;
+const SHADER_REGISTRY = buildShaderRegistry(TSL);
 
 // Quest 3 per-eye resolution
 const Q3_WIDTH = 2064;
@@ -163,13 +166,14 @@ function exportResults() {
   downloadJSON({
     metadata: {
       tool: 'ShaderSphere v3', mode: 'tsl', material: 'MeshPhysicalNodeMaterial',
+      shaderSet: 'fastshaders-noise+textures-v2',
       resolution: { width: Q3_WIDTH, height: Q3_HEIGHT, label: 'Quest 3 per-eye' },
       date: new Date().toISOString(), userAgent: navigator.userAgent, gpu: gpuInfo,
       config: { duration: CONFIG.duration, warmupFrames: CONFIG.warmupFrames },
       notes: 'Full-coverage benchmark at Quest 3 per-eye resolution. 100 points = 120 fps (8.33 ms). GPU-synced timing.',
     },
     shaders: results,
-  }, 'shadersphere-tsl');
+  }, 'shadersphere-tsl-v2');
   log('Exported', 'ok');
 }
 
