@@ -6,16 +6,20 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 
 ## Features
 
-- **Node graph editor** — drag, connect, and configure ~55 TSL node types across 9 categories (input, type, arithmetic, math, interpolation, vector, noise, color, output)
-- **Code editor** — write TSL directly with Monaco; changes sync back to the graph. Light / dark theme toggle.
-- **Live 3D preview** — WebGPU-rendered preview with five geometries (sphere, cube, plane, Utah teapot, Stanford bunny), three lighting modes (studio / moon / laboratory), subdivision slider, picked background color, and a property-uniform slider overlay
+- **Bi-directional sync** — edit either the graph or the TSL code; changes round-trip in both directions
+- **Node graph editor** — ~55 TSL node types across 9 visible categories (input, type, arithmetic, math, interpolation, vector, noise, color, output), drag from the palette or right-click → search to add
+- **Code editor** — Monaco with TSL syntax highlighting, light/dark toggle, inline error/warning squiggles, and a separate read-only Script tab showing the exported `.js` module
+- **Live 3D preview** — WebGPU-rendered preview with five geometries (sphere, cube, plane, Utah teapot, Stanford bunny), three lighting modes (studio / moon / laboratory), subdivision slider, picked background color, orbit camera, and play/pause
 - **MaterialX noise** — 8 built-in noise variants (Perlin, fBm, cell, Worley/Voronoi) backed by `three/tsl`'s MaterialX functions
-- **Groups** — select nodes and Ctrl+G to wrap them in a recolorable, collapsible container; save groups to a per-browser library and drag them back onto any graph
+- **Built-in textures** — 8 procedural texture presets (polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) draggable from the palette
+- **Groups** — Ctrl/Cmd+G to wrap selected nodes in a recolorable, collapsible container; save groups to a per-browser library and drag them onto any graph
+- **Property uniforms** — `property_float` nodes become live-tunable sliders in the preview overlay and component attributes in the A-Frame export
 - **A-Frame export** — download a self-contained VR-ready `.html` file
 - **Shader module export** — download a `.js` module for use with [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader)
-- **Property uniforms** — `property_float` nodes become live-tunable component attributes in the A-Frame export
-- **Undo / redo** — 50-entry history for node graph changes
-- **VR cost budget** — tracks shader complexity against target headset limits
+- **Undo / redo** — 50-entry history with Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z
+- **Copy / paste / duplicate** — Cmd/Ctrl+C, Cmd/Ctrl+V, Cmd/Ctrl+D across nodes (internal edges preserved)
+- **VR cost budget** — per-headset cost meter (Quest 2/3/3s, Steam Frame, Pico 4, Apple Vision Pro) with a color-gradient bar
+- **Persistent state** — graph, code, shader name, split ratios, headset, cost colors, canvas background, editor theme, preview prefs, and saved groups all auto-save to localStorage
 
 ## Quick Start
 
@@ -35,8 +39,135 @@ git submodule init && git submodule update
 ## Build & Deploy
 
 ```bash
-npm run build          # production build → dist/
+npm run build          # typecheck + production build → dist/
 ```
+
+## UI Guide
+
+The app is laid out in three resizable panes: a **Node Editor** on the left, a **Code Editor** in the top-right, and a **3D Preview** in the bottom-right. A **Toolbar** sits on top and a **Cost Bar** runs along the bottom. Both split dividers persist their position to localStorage.
+
+### Toolbar
+
+- **Brand button** — clicking *FastShaders* toggles a contact popover (name, email, website with copy buttons)
+- **Version label** — current app version
+- **Shader name input** — sets the export filename and persists across reloads
+
+### Cost Bar (VR budget)
+
+- **Headset selector** — picks a target device (Meta Quest 3 / 3s / 2, Steam Frame, Pico 4, Apple Vision Pro), each with its own GPU point budget (90–350)
+- **Cost readout** — `current / max` points; turns red when over budget
+- **Gradient bar** — slider position reflects budget usage; both pole colors (low-impact and high-impact) are user-customizable
+
+### Node Editor (canvas)
+
+**Selection & navigation**
+
+- Click a node to select; box-select by dragging on empty canvas (partial-selection mode)
+- Pan: middle-click drag, right-click drag, two-finger trackpad gesture, or double-click-and-drag
+- Zoom: mouse wheel or trackpad pinch (range 0.1×–3.0×)
+- MiniMap (top-left of canvas) shows the full graph with cost-coloured nodes; click to jump
+- Background colour is user-pickable from the bottom-right Controls panel; cost badges and 1-channel edges auto-flip contrast for readability
+
+**Keyboard shortcuts**
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl/Cmd+Z` / `Ctrl/Cmd+Shift+Z` | Undo / redo |
+| `Ctrl/Cmd+C` / `Ctrl/Cmd+V` | Copy / paste selected nodes (internal edges preserved, paste offsets cascade) |
+| `Ctrl/Cmd+D` | Duplicate selection |
+| `Ctrl/Cmd+G` / `Ctrl/Cmd+Shift+G` | Group / ungroup selection |
+| `Delete` / `Backspace` | Delete nodes and edges (chains bridge across removed nodes when ends are kept) |
+
+**Drag interactions**
+
+- Drag from the **Content Browser** (palette) to drop a new node, group instance, or texture onto the canvas
+- Drop a node *onto an edge* to splice-insert it between source and target
+- New nodes auto-nudge if they would overlap an existing one
+- Dragging a node near an existing edge highlights the edge in yellow as a drop target
+- Dragging a node into a group reparents it; dragging outside un-parents (members never use `extent: 'parent'`)
+
+### Content Browser
+
+A horizontally-scrolling palette pinned to the canvas with three modes:
+
+- **Nodes** — All / per-category tabs (Input, Math, Noise, Type, Arithmetic, Interpolation, Vector, Color, Sampling) with a search box that matches label, type, and description
+- **Textures** — 8 procedural texture presets, each rendered as a CPU canvas thumbnail
+- **Saved Groups** — your local group library with thumbnails; drag any tile to instantiate
+
+Every node card shows its complexity cost so you can budget while building.
+
+### Context Menus
+
+Right-click anywhere to open a context menu — the dispatcher picks the right one based on what you clicked.
+
+- **Canvas → AddNodeMenu** — searchable node list grouped by category; "Group Selection" entry (active when ≥2 nodes selected). If the menu opened from a failed connection drag, the new node auto-connects from the source pin.
+- **Node → NodeSettingsMenu** — Duplicate, Delete, toggle individual input port visibility, and edit inline values (drag-number inputs, color pickers, vec2/vec3 rows).
+- **Output node → ShaderSettingsMenu** — total cost vs. headset budget, output port toggles (roughness / emissive / normal / opacity), displacement mode (Along Normal / Offset), Transparent toggle, Alpha Clip + threshold, side rendering (Front / Back / Double), Depth Write, and a per-uniform editor that lists every `property_float` in the graph.
+- **Group → GroupSettingsMenu** — rename, recolor, title-size slider, Save to Library, Ungroup, Delete Group (with members).
+- **Edge → EdgeContextMenu** — Delete Connection.
+
+### Nodes
+
+| Node | UI |
+| --- | --- |
+| **ShaderNode** | Generic dynamic node — header with title and color-coded cost badge, input ports on the left, output ports on the right, inline drag-number / color / vec2 / vec3 controls in the middle |
+| **OutputNode** | Two sections (Pixel / Vertex shader); only exposed ports show as handles; cost badge sums the upstream graph |
+| **ColorNode** | Square colour swatch with native colour picker; outputs a color value |
+| **PreviewNode** | 96×96 canvas thumbnail of the noise function (CPU evaluator), animates if `time` is upstream |
+| **MathPreviewNode** | 72×72 waveform thumbnail of sin/cos curves, animates with `time` upstream |
+| **ClockNode** | 56×56 analog clock face with a moving second hand; outputs the time value |
+| **GroupNode** | Coloured header bar with name and a +/− collapse toggle, semi-transparent body, resizable corners; collapse hides member nodes via CSS (rAF loops keep running) and presents synthetic boundary sockets for crossing edges |
+
+### Edges
+
+- **TypedEdge** — animated dashed line, color-coded by data type (float, int, vec2/3/4, color, any)
+- **Multi-channel display** — vec3/vec4 edges render as 1–4 parallel offset paths
+- **Drag-to-reconnect** — grab either endpoint to rewire; drop on empty canvas to delete
+- **EdgeInfoCard** — hover label showing channel count and live min/max range per channel (animates if time is upstream)
+
+### Number Input (DragNumberInput)
+
+Reusable across every numeric field:
+
+- Click to enter text mode (select-all)
+- Drag horizontally to scrub; speed accelerates with distance
+- ◂ / ▸ arrow buttons for ±step nudges
+- Enter to commit, Escape to cancel
+
+### Code Editor
+
+- **TSL tab** — editable Monaco editor with custom TSL grammar, hex color picker on color literals, word wrap, inline red squigglies for errors and orange for warnings
+- **Script tab** — read-only export of the generated `.js` shaderloader module
+- **Theme toggle** — light (`vs`) / dark (`vs-dark`), persists separately from the rest of the app
+- **Buttons** — *Save Code* (commit code → graph), *Load Script* (file picker, parses a `.js` script back into TSL + graph), *Download Script* (downloads the Script tab as `<shader-name>.js`)
+- `Ctrl/Cmd+S` saves code → graph
+
+### 3D Preview
+
+- **Geometry** — Sphere, Cube, Plane, Teapot, Bunny (OBJ models with auto-generated spherical UVs and recomputed normals)
+- **Lighting** — Studio, Moon, Laboratory presets
+- **Subdivision** slider (1–256) for primitive geometry detail
+- **Background** colour picker
+- **Camera** — orbit drag, scroll-zoom; position + rotation persist
+- **Play / Pause** — freezes animation that depends on time
+- **Property uniform overlay** — collapsible panel listing every `property_float` in the graph as a live slider; min/max bounds are user-editable per uniform and persist to localStorage
+- **Reset** — restores camera home position, lighting, subdivision, and uniforms to defaults (geometry, background colour, and uniform bounds are kept as preferences)
+
+## ShaderCarousel — viewer & benchmark suite
+
+`ShaderCarousel/` is a standalone static-HTML suite used for shader research and Quest 3 benchmarking. It is not part of the main Vite build — serve it with any static HTTP server (e.g. `python3 -m http.server` from the repo root). Do **not** use the Vite dev server; it interferes with the WebGPU import maps the benchmarks rely on.
+
+A single launcher (`ShaderCarousel/index.html`) hosts the whole suite in a full-screen iframe. A large mode selector sits at the top-left of the page and switches between five tools. The chosen mode persists to localStorage and is mirrored to `?mode=…` in the URL so links are shareable. Press `M` to hide / show the overlay (useful when a benchmark needs the full viewport).
+
+| Mode | Iframe target | Purpose |
+| --- | --- | --- |
+| **Carousel — VR viewer** | `carousel.html` | A-Frame 1.7 scene with a ping-pong sphere cycling TSL shaders. WebXR-ready on Quest 3 over HTTPS in the Meta Browser; the WebGL renderer path is selected from the IIFE bundle for stable XR sessions. |
+| **ShaderSphere — TSL (WebGPU)** | `sphere/index.html` | Pure Three.js WebGPU with GPU-fence timing (`onSubmittedWorkDone`). A sphere fills the Quest 3 per-eye viewport (2064×2208) so every pixel runs the shader. Produces fine-grained per-shader cost rankings (best on Mac/Safari WebGPU). |
+| **ShaderSphere — A-Frame** | `sphere/aframe.html` | Same sphere, run through the full A-Frame pipeline with rAF frame deltas. Validates Quest 3 performance including framework overhead. |
+| **ShaderFace — TSL (WebGPU)** | `face/index.html` | Fixed-size quad with an orthographic camera, multi-pass amplification, randomized order, ramp-discard warmup. Two sub-modes inside: **Standard** (all 43 shaders at 512×512) and **Resolution Sweep** (steps through resolutions to find the FPS cliff for 120 / 90 / 72 fps budgets, with configurable A-Frame overhead added in). |
+| **ShaderFace — A-Frame** | `face/aframe.html` | Same fixed-quad measurement through A-Frame's scene graph; the delta vs. TSL mode quantifies pipeline overhead. |
+
+All benchmarks output JSON + CSV with median / p95 / p99 frame times, jitter, thermal drift, and a `points` score (`100 pts = 120 fps`). The ShaderSphere TSL ranking is what feeds `src/registry/complexity.json` in the main app.
 
 ## Export Formats
 
