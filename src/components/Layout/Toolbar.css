@@ -162,4 +162,33 @@
 
 .toolbar__right {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.toolbar__sc-link {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  padding: 6px 12px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+}
+
+.toolbar__sc-link:hover {
+  border-color: var(--border-focus);
+  color: var(--border-focus);
+  background: var(--bg-panel);
+}
+
+.toolbar__sc-link:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
 }
