@@ -127,7 +127,18 @@ export function Toolbar() {
           spellCheck={false}
         />
       </div>
-      <div className="toolbar__right" />
+      <div className="toolbar__right">
+        <a
+          className="toolbar__sc-link"
+          href={`${import.meta.env.BASE_URL}ShaderCarousel/`}
+          target="_blank"
+          rel="noreferrer noopener"
+          title="Open ShaderCarousel — viewer & benchmark suite"
+          aria-label="Open ShaderCarousel"
+        >
+          SC
+        </a>
+      </div>
     </div>
   );
 }
