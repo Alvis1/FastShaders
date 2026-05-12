@@ -66,11 +66,17 @@ function ScrollArrow({ direction, onClick }: { direction: 'left' | 'right'; onCl
 /** Pseudo-category id for the user's saved-group library. */
 type BrowserCategory = NodeCategory | 'all' | 'saved';
 
-/** Tab style for a colored category button (active = stronger tint). */
-function tabStyle(hex: string, active: boolean) {
-  return active
-    ? { background: `${hex}33`, borderColor: `${hex}66` }
-    : { background: `${hex}15`, borderColor: `${hex}33` };
+/**
+ * Tab style for a colored category button. The active tab's bg + bottom
+ * border match the items-area tint so it visually merges with the content
+ * below (same trick the TSL/Script tabs use in the code editor).
+ */
+function tabStyle(hex: string, active: boolean): React.CSSProperties {
+  if (active) {
+    const body = `${hex}1A`;
+    return { background: body, borderColor: `${hex}66`, borderBottomColor: body };
+  }
+  return { background: `${hex}15`, borderColor: `${hex}33` };
 }
 
 export function ContentBrowser() {
@@ -187,7 +193,11 @@ export function ContentBrowser() {
             className={`content-browser__cat-btn ${activeCategory === 'all' ? 'content-browser__cat-btn--active' : ''}`}
             style={
               activeCategory === 'all'
-                ? { background: 'rgba(0,0,0,0.08)', borderColor: 'var(--border-subtle)' }
+                ? {
+                    background: 'var(--canvas-bg, var(--bg-panel))',
+                    borderColor: 'var(--border-subtle)',
+                    borderBottomColor: 'var(--canvas-bg, var(--bg-panel))',
+                  }
                 : {}
             }
             onClick={() => setActiveCategory('all')}

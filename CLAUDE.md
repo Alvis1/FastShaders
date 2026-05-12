@@ -97,7 +97,15 @@ public/
 
 ### Subprojects (outside src/)
 
-- `ShaderCarousel/` — standalone shader showcase gallery (A-Frame, separate from editor)
+- `ShaderCarousel/` — three purpose-built benchmark pages (no auto-play; centred Start gate each):
+  - `bench-inout/` — A-Frame WebGL + WebXR, sphere-mover ping-pong, gate triggers `enterVR()`; logs rAF deltas via the bench-tick A-Frame component so frames are captured during XR too. UA-sniff headset detect + text override
+  - `bench-static/` — Three.js WebGPU, static full-coverage sphere @ Quest 3 per-eye (2064×2208), `onSubmittedWorkDone` fence + multi-pass (default 30) defeats vsync clamping
+  - `bench-microplane/` — Three.js WebGPU, 512×512 ortho quad, multi-pass; defaults to noise atomics only (per-node calibration via baseline subtraction)
+  - Shared infra in `lib/`: `bench-style.css`, `bench-stats.js` (computeStats + exportResults emitting raw JSON + summary CSV + **complexity-suggestion JSON** mapping marginal ms → suggested points), `bench-registry.js` (baseline + 8 presets + 8 noise atomics + saved-groups loader stub — reads `fs:savedGroups` but greys entries lacking a `tslCode` field), `bench-ui.js` (grouped picker with master checkboxes, settings persistence, Reset-to-defaults, start gate, done popup, headset detect)
+  - Three.js WebGPU bundle at `lib/three/`, A-Frame 1.7 IIFE at `components/three/aframe-171-a-0.1.min.js`, `sphere-mover.js` (used by InOut)
+  - Launcher at `ShaderCarousel/index.html` adopts each iframe's `<style>` AND `<link rel=stylesheet>` so adopted controls keep styling; `#bench-start-gate` + `#bench-done-popup` stay in the iframe (XR-entry needs the gesture origin to be inside the iframe document)
+- `a-frame-shaderloader/` — shaderloader component dev project (source of public/js builds)
+- `Tests/` — test shader JS files + test HTML page
 - `a-frame-shaderloader/` — shaderloader component dev project (source of public/js builds)
 - `Tests/` — test shader JS files + test HTML page
 

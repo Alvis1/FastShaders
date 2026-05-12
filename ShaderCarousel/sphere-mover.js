@@ -2,6 +2,9 @@
  *
  * Linear ping-pong over `duration` ms. The sphere's center reaches the camera
  * (z=0) at the midpoint, briefly enveloping the viewer in the inverted sphere.
+ * Scale is coupled to distance: 0 at startZ, the entity's captured base scale
+ * at centerZ — so the sphere appears to emerge from nothing in the distance,
+ * grow as it approaches, and shrink back to nothing on the way out.
  *
  * Drive externally via the `start-cycle` event; emits `cycle-complete` when
  * the position returns to `startZ`. The benchmark component listens for this
@@ -21,12 +24,15 @@ AFRAME.registerComponent("sphere-mover", {
   init: function () {
     this.cycleStartTime = null;
     this.running = false;
+    // Capture the entity's authored scale once — we lerp 0..baseScale every tick.
+    this.baseScale = this.el.object3D.scale.x || 1;
 
     this.startCycle = this.startCycle.bind(this);
     this.el.addEventListener("start-cycle", this.startCycle);
 
-    // Park at startZ so the first frame is at the far position
+    // Park at startZ scale=0 so the first frame is fully off-screen
     this.el.object3D.position.z = this.data.startZ;
+    this.el.object3D.scale.setScalar(0);
 
     if (this.data.autostart) {
       // defer one tick so other components finish init first
@@ -56,6 +62,7 @@ AFRAME.registerComponent("sphere-mover", {
 
     if (t >= 1) {
       this.el.object3D.position.z = this.data.startZ;
+      this.el.object3D.scale.setScalar(0);
       this.running = false;
       this.cycleStartTime = null;
       this.el.emit("cycle-complete", null, false);
@@ -70,5 +77,11 @@ AFRAME.registerComponent("sphere-mover", {
       : centerZ + (startZ - centerZ) * ((t - 0.5) * 2);
 
     this.el.object3D.position.z = z;
+
+    // Scale couples linearly to distance from centerZ: full size at the camera
+    // pass-through, zero at the far end. Equivalent to a triangle wave on `t`.
+    const span = Math.abs(startZ - centerZ) || 1;
+    const proximity = 1 - Math.abs(z - centerZ) / span; // 0 at startZ, 1 at centerZ
+    this.el.object3D.scale.setScalar(this.baseScale * proximity);
   },
 });

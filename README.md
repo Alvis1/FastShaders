@@ -157,17 +157,17 @@ Reusable across every numeric field:
 
 `ShaderCarousel/` is a standalone static-HTML suite used for shader research and Quest 3 benchmarking. It is not part of the main Vite build — serve it with any static HTTP server (e.g. `python3 -m http.server` from the repo root). Do **not** use the Vite dev server; it interferes with the WebGPU import maps the benchmarks rely on.
 
-A single launcher (`ShaderCarousel/index.html`) hosts the whole suite in a full-screen iframe. A large mode selector sits at the top-left of the page and switches between five tools. The chosen mode persists to localStorage and is mirrored to `?mode=…` in the URL so links are shareable. Press `M` to hide / show the overlay (useful when a benchmark needs the full viewport).
+A single launcher (`ShaderCarousel/index.html`) hosts three purpose-built benchmark pages in a full-screen iframe. The mode selector at the top-left switches between them; the chosen mode persists to localStorage and is mirrored to `?mode=…` in the URL so links are shareable. Press `M` to hide / show the overlay. **No bench auto-plays** — each one shows a centred Start button and waits for the user.
 
 | Mode | Iframe target | Purpose |
 | --- | --- | --- |
-| **Carousel — VR viewer** | `carousel.html` | A-Frame 1.7 scene with a ping-pong sphere cycling TSL shaders. WebXR-ready on Quest 3 over HTTPS in the Meta Browser; the WebGL renderer path is selected from the IIFE bundle for stable XR sessions. |
-| **ShaderSphere — TSL (WebGPU)** | `sphere/index.html` | Pure Three.js WebGPU with GPU-fence timing (`onSubmittedWorkDone`). A sphere fills the Quest 3 per-eye viewport (2064×2208) so every pixel runs the shader. Produces fine-grained per-shader cost rankings (best on Mac/Safari WebGPU). |
-| **ShaderSphere — A-Frame** | `sphere/aframe.html` | Same sphere, run through the full A-Frame pipeline with rAF frame deltas. Validates Quest 3 performance including framework overhead. |
-| **ShaderFace — TSL (WebGPU)** | `face/index.html` | Fixed-size quad with an orthographic camera, multi-pass amplification, randomized order, ramp-discard warmup. Two sub-modes inside: **Standard** (all 43 shaders at 512×512) and **Resolution Sweep** (steps through resolutions to find the FPS cliff for 120 / 90 / 72 fps budgets, with configurable A-Frame overhead added in). |
-| **ShaderFace — A-Frame** | `face/aframe.html` | Same fixed-quad measurement through A-Frame's scene graph; the delta vs. TSL mode quantifies pipeline overhead. |
+| **Sphere InOut — immersive WebXR** | `bench-inout/index.html` | A-Frame WebGL pipeline with WebXR session entry. Inverted sphere ping-pongs through the camera (10 s cycles) while the bench logs rAF frame deltas via an A-Frame `tick` component (XR-safe). The Start button gates `enterVR()` — the only way to capture true stereoscopic per-eye cost on a standalone HMD. Headset name is auto-detected (Quest 3 / Quest Pro / Pico / Vision Pro) with a text-input override. |
+| **Sphere Static — WebGPU multi-pass** | `bench-static/index.html` | Static full-coverage sphere at Quest 3 per-eye resolution (2064×2208), Three.js WebGPU with `device.queue.onSubmittedWorkDone` fence sync. Renders the shader 30× per measurement (default) and divides by N, so per-pass cost rises above the display vsync floor — the macOS calibration technique from the paper. Best for ranking compositions on desktop. |
+| **MicroPlane — per-node microbench** | `bench-microplane/index.html` | Small ortho quad (default 512×512), WebGPU fence sync, multi-pass timing. Defaults to noise atomics + baseline — designed for deriving per-node points by subtraction. Does not enter immersive mode. Closes the gap the paper § 3.3 identifies: "Recovering individual node costs requires microbenchmarks". |
 
-All benchmarks output JSON + CSV with median / p95 / p99 frame times, jitter, thermal drift, and a `points` score (`100 pts = 120 fps`). The ShaderSphere TSL ranking is what feeds `src/registry/complexity.json` in the main app.
+All three share a unified style (`lib/bench-style.css`), corpus (`lib/bench-registry.js`: baseline + 8 presets + 8 noise atomics + saved-groups stub), settings persistence with **Reset to defaults**, frame-log stride parameter, and the export pipeline (`lib/bench-stats.js`). Each run emits **three files**: the raw frame JSON, a per-shader summary CSV, and a `complexity-suggestion.json` mapping each measured shader to its implied points (`marginalMs / 8.33 × 100`) — diffable against `src/registry/complexity.json` to close the paper's calibration loop.
+
+The first shader of every run is always the flat-color baseline (`ref_baseline`); subsequent shaders' marginal cost (median minus baseline median) is what the suggestion file is built from. Multi-pass benches default to **30 passes per measurement** on the user's request, after benchmark-corpus testing on Quest 3 (~3 s per shader, 16-shader default = ~1 min total).
 
 ## Export Formats
 
