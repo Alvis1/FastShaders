@@ -1,0 +1,257 @@
+/* Unified styling for the three benchmark pages (bench-inout, bench-static,
+ * bench-microplane). Each bench page links this file directly; the
+ * ShaderCarousel launcher adopts each iframe's <style> nodes via
+ * document.adoptNode, so these rules continue to apply once the controls
+ * are lifted into the sidebar. */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #0b0b10;
+  color: #eee;
+  overflow: hidden;
+}
+
+#canvas, #scene {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0;
+}
+
+/* ── HUD (top bar) ──────────────────────────────────────────────────────── */
+#hud {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.72);
+  font-size: 12px;
+  display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+#hud .badge {
+  padding: 2px 7px; border-radius: 3px; font-size: 10px; font-weight: 600;
+  color: #fff; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.badge-inout { background: #8856e0; }
+.badge-static { background: #0a85d6; }
+.badge-micro { background: #d68a0a; }
+#hud .label { color: #9aa; }
+#hud .value {
+  color: #6dffa0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  min-width: 40px;
+  display: inline-block;
+}
+
+/* ── Progress bar (just under HUD) ──────────────────────────────────────── */
+#progress-bar {
+  height: 3px; background: linear-gradient(90deg, #0a5 0%, #6dffa0 100%);
+  transition: width 0.3s;
+  position: fixed; top: 40px; left: 0; z-index: 11; width: 0%;
+}
+
+/* ── Bottom controls bar ────────────────────────────────────────────────── */
+#controls {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  font-size: 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+#controls .sep { width: 1px; height: 20px; background: rgba(255,255,255,0.16); }
+#controls .lbl { color: #9aa; font-size: 11px; letter-spacing: 0.03em; }
+
+button {
+  padding: 6px 12px; border: 1px solid #3a3a48; border-radius: 4px;
+  background: #1c1c24; color: #eee; cursor: pointer; font-size: 12px;
+  transition: background 0.12s, border-color 0.12s;
+}
+button:hover { background: #25252f; border-color: #585870; }
+button:active { background: #15151b; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.primary { background: #0a8e52; border-color: #0a8e52; color: #fff; font-weight: 600; }
+button.primary:hover { background: #0bb168; border-color: #0bb168; }
+button.danger { background: #b3324a; border-color: #b3324a; color: #fff; }
+button.danger:hover { background: #cc3a55; border-color: #cc3a55; }
+button.ghost { background: transparent; }
+
+input[type="number"], input[type="text"], select {
+  padding: 5px 8px; border: 1px solid #3a3a48; border-radius: 4px;
+  background: #1c1c24; color: #eee; font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+input[type="number"]:focus, input[type="text"]:focus, select:focus {
+  outline: none; border-color: #6dffa0;
+}
+
+label.field {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: #c8c8d0;
+}
+label.field input[type="number"] { width: 56px; text-align: right; }
+
+/* ── Shader picker (groups with collapsible sections + master checks) ───── */
+#shader-picker {
+  position: fixed; top: 43px; left: 0; bottom: 44px; width: 240px;
+  z-index: 10; padding: 8px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.86);
+  font-size: 12px;
+  display: none;
+  border-right: 1px solid rgba(255,255,255,0.06);
+}
+#shader-picker.visible { display: block; }
+#shader-picker .pick-section-header {
+  margin-top: 10px;
+  padding: 4px 0 4px 2px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  color: #c8c8d0;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+}
+#shader-picker .pick-section-header:first-child { margin-top: 0; padding-top: 2px; border-top: none; }
+#shader-picker .pick-section-header input[type="checkbox"] { margin: 0; }
+#shader-picker .pick-section-header .count {
+  margin-left: auto; color: #888; font-size: 10px; letter-spacing: 0;
+}
+#shader-picker label {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 0 3px 18px;
+  cursor: pointer;
+  color: #d0d0d8;
+}
+#shader-picker label:hover { color: #6dffa0; }
+#shader-picker .pick-disabled {
+  padding: 3px 0 3px 18px; color: #666; font-size: 11px; font-style: italic;
+}
+#shader-picker .pick-actions {
+  display: flex; gap: 6px; margin-bottom: 8px; padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+#shader-picker .pick-actions button {
+  font-size: 10px; padding: 3px 8px;
+}
+
+/* ── Log panel ──────────────────────────────────────────────────────────── */
+#log {
+  position: fixed; top: 43px; right: 0; bottom: 44px; width: 320px;
+  z-index: 10; padding: 8px;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.78);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  display: none;
+  border-left: 1px solid rgba(255,255,255,0.06);
+}
+#log.visible { display: block; }
+#log div { padding: 1px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+#log .info { color: #8cf; }
+#log .ok { color: #8f8; }
+#log .warn { color: #fb6; }
+#log .err { color: #f88; }
+
+/* ── Big start gate (center of canvas) ──────────────────────────────────── */
+#bench-start-gate {
+  position: fixed; inset: 0; z-index: 20;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px;
+  pointer-events: none;
+}
+#bench-start-gate.hidden { display: none; }
+#bench-start-gate .gate-card {
+  pointer-events: auto;
+  background: rgba(10, 10, 16, 0.88);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 14px;
+  padding: 28px 36px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.5);
+  max-width: 560px; width: calc(100% - 64px);
+  text-align: center;
+}
+#bench-start-gate h1 {
+  font-size: 22px;
+  letter-spacing: 0.02em;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+#bench-start-gate .gate-sub {
+  color: #9aa; font-size: 13px; line-height: 1.5; margin-bottom: 16px;
+}
+#bench-start-gate .gate-detect {
+  margin: 12px 0; padding: 10px 14px; background: rgba(0,0,0,0.4); border-radius: 6px;
+  font-size: 12px; color: #c8c8d0; text-align: left;
+}
+#bench-start-gate .gate-detect label {
+  display: flex; align-items: center; gap: 8px; margin-top: 6px;
+}
+#bench-start-gate .gate-detect input[type="text"] { flex: 1; font-size: 12px; }
+#bench-start-gate .gate-go {
+  font-size: 16px; padding: 14px 32px;
+  background: #0a8e52; border-color: #0a8e52; color: #fff; font-weight: 700;
+  letter-spacing: 0.04em;
+}
+#bench-start-gate .gate-go:hover { background: #0bb168; border-color: #0bb168; }
+#bench-start-gate .gate-go:disabled { opacity: 0.5; }
+
+/* ── Done popup ─────────────────────────────────────────────────────────── */
+#bench-done-popup {
+  position: fixed; inset: 0; z-index: 30;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+}
+#bench-done-popup.hidden { display: none; }
+#bench-done-popup .popup-card {
+  background: rgba(20, 20, 28, 0.98);
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 14px;
+  padding: 28px 32px;
+  max-width: 620px; width: calc(100% - 64px);
+  max-height: 80vh; overflow-y: auto;
+}
+#bench-done-popup h2 { font-size: 20px; margin-bottom: 6px; }
+#bench-done-popup .popup-sub {
+  color: #9aa; font-size: 13px; margin-bottom: 18px;
+}
+#bench-done-popup .popup-warning {
+  background: rgba(255, 140, 0, 0.12);
+  border: 1px solid rgba(255, 140, 0, 0.45);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 4px 0 16px;
+  color: #ffcc7e;
+  font-size: 12px;
+  line-height: 1.55;
+}
+#bench-done-popup .popup-warning strong { color: #ffe1a8; }
+#bench-done-popup .popup-warning code {
+  background: rgba(0,0,0,0.4); padding: 1px 5px; border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+#bench-done-popup table {
+  width: 100%; border-collapse: collapse; margin-bottom: 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+}
+#bench-done-popup th, #bench-done-popup td {
+  text-align: left; padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+#bench-done-popup th { color: #9aa; font-weight: 600; font-size: 10px; text-transform: uppercase; }
+#bench-done-popup .popup-actions {
+  display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;
+}
+#bench-done-popup .num {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: right;
+}
+
+/* ── Error overlay (last-resort surface for unhandled errors) ───────────── */
+#error-overlay {
+  display: none;
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  z-index: 9999;
+  background: rgba(180, 32, 48, 0.95); color: #fff;
+  padding: 16px 20px; border-radius: 8px;
+  max-width: 80%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
