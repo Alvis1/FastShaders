@@ -3,6 +3,7 @@
   cursor: grab;
   user-select: none;
   padding: 20px 8px 6px;
+  zoom: 0.67;
 }
 
 .node-preview-card:active {

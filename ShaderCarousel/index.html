@@ -44,16 +44,18 @@
     flex-shrink: 0;
   }
   #mode-overlay label {
-    font-size: 13px;
+    font-size: 12px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: #9aa;
+    flex-shrink: 0;
   }
   #mode-select {
     flex: 1;
-    font-size: 18px;
+    min-width: 0;                    /* allow shrinking inside flex parent */
+    font-size: 13px;
     font-weight: 600;
-    padding: 10px 32px 10px 14px;
+    padding: 8px 28px 8px 12px;
     background: #1b1b1b;
     color: #fff;
     border: 1px solid #444;
@@ -61,12 +63,17 @@
     cursor: pointer;
     appearance: none;
     -webkit-appearance: none;
+    /* Truncate the selected option's text when it can't fit, so it stays
+       inside the rounded box instead of bleeding past the right border. */
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
     background-image:
       linear-gradient(45deg, transparent 50%, #888 50%),
       linear-gradient(135deg, #888 50%, transparent 50%);
     background-position:
-      calc(100% - 18px) 50%,
-      calc(100% - 12px) 50%;
+      calc(100% - 16px) 50%,
+      calc(100% - 11px) 50%;
     background-size: 6px 6px, 6px 6px;
     background-repeat: no-repeat;
   }
@@ -101,7 +108,19 @@
     flex-direction: column;
     gap: 12px;
   }
-  #tool-ui:empty { display: none; }
+  /* Static brand header at the top of the sub-tool box. The `tool-static`
+     class is also the marker that `teardownAdopted` uses to skip removal
+     on mode switch — only adopted children get cleared. */
+  #tool-ui .tool-header {
+    margin: -4px 0 0 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: #fff;
+    flex-shrink: 0;
+  }
 
   /*
     Override the sub-tools' position: fixed; rules — these target #hud,
@@ -150,7 +169,7 @@
     background: rgba(0,0,0,0.5);
   }
 
-  /* When no tool UI is present (carousel mode), show a small status note. */
+  /* When no tool UI is present, show a small status note. */
   #tool-empty {
     padding: 14px 16px;
     background: rgba(0, 0, 0, 0.78);
@@ -189,17 +208,17 @@
   <div id="sidebar">
     <div id="mode-overlay" role="region" aria-label="Mode selector">
       <label for="mode-select">Mode</label>
-      <select id="mode-select" aria-label="Benchmark / viewer mode">
-        <option value="carousel">Carousel — VR viewer</option>
-        <option value="sphere-tsl">ShaderSphere — TSL (WebGPU)</option>
-        <option value="sphere-aframe">ShaderSphere — A-Frame</option>
-        <option value="face-tsl">ShaderFace — TSL (WebGPU)</option>
-        <option value="face-aframe">ShaderFace — A-Frame</option>
+      <select id="mode-select" aria-label="Benchmark mode">
+        <option value="bench-inout">Sphere InOut — immersive WebXR</option>
+        <option value="bench-static">Sphere Static — WebGPU multi-pass</option>
+        <option value="bench-microplane">MicroPlane — per-node microbench</option>
       </select>
       <button id="hide-overlay" type="button" aria-label="Hide sidebar" title="Hide (press M to show)">×</button>
     </div>
 
-    <div id="tool-ui" aria-live="polite"></div>
+    <div id="tool-ui" aria-live="polite">
+      <div class="tool-header tool-static">ShaderCarousel</div>
+    </div>
     <div id="tool-empty" class="hidden"></div>
   </div>
 
@@ -213,16 +232,12 @@
 
   <script>
     const MODES = {
-      'carousel':       './carousel.html',
-      'sphere-tsl':     './sphere/index.html',
-      'sphere-aframe':  './sphere/aframe.html',
-      'face-tsl':       './face/index.html',
-      'face-aframe':    './face/aframe.html',
+      'bench-inout':      './bench-inout/index.html',
+      'bench-static':     './bench-static/index.html',
+      'bench-microplane': './bench-microplane/index.html',
     };
-    const EMPTY_MESSAGES = {
-      'carousel': '<strong>Carousel</strong><br>Auto-running VR viewer. Use the in-scene VR button (bottom-right of the iframe) to enter immersive mode on Quest. JSON downloads automatically after one full pass.',
-    };
-    const DEFAULT_MODE = 'carousel';
+    const EMPTY_MESSAGES = {};
+    const DEFAULT_MODE = 'bench-static';
     const STORAGE_KEY = 'shaderCarousel:mode';
 
     // IDs that we lift out of each sub-tool and into #tool-ui. Order
@@ -239,7 +254,7 @@
 
     /** Style elements adopted from the current iframe — removed on mode change. */
     let adoptedStyles = [];
-    /** MutationObservers that watch for late-arriving overlays (e.g. carousel.js dynamic overlay). */
+    /** MutationObservers that watch for late-arriving overlays (e.g. bench-start-gate inserted after onload). */
     let observers = [];
 
     function resolveInitialMode() {
@@ -252,8 +267,13 @@
     }
 
     function teardownAdopted() {
-      // Drop everything we adopted from the previous iframe.
-      while (toolUi.firstChild) toolUi.removeChild(toolUi.firstChild);
+      // Drop everything we adopted from the previous iframe. Static
+      // children (`.tool-static`, e.g. the ShaderCarousel brand header
+      // at the top of #tool-ui) are kept across mode switches so they
+      // don't flash in and out as the user picks a different bench.
+      [...toolUi.children].forEach((c) => {
+        if (!c.classList.contains('tool-static')) toolUi.removeChild(c);
+      });
       toolUi.className = '';
       adoptedStyles.forEach((s) => s.remove());
       adoptedStyles = [];
@@ -296,11 +316,23 @@
     }
 
     function adoptStyles(doc) {
-      // Copy every <style> the iframe declared so the moved elements
-      // keep their look. We DON'T copy external <link rel="stylesheet">
-      // because the sub-tools all use inline <style> only.
-      doc.querySelectorAll('style').forEach((style) => {
-        const clone = style.cloneNode(true);
+      // Copy every <style> AND every <link rel="stylesheet"> from the
+      // iframe so the moved elements keep their look. The new bench pages
+      // (bench-inout, bench-static, bench-microplane) load shared CSS
+      // via <link rel="stylesheet" href="../lib/bench-style.css"> — we
+      // need to forward those too, otherwise the adopted #hud/#controls
+      // render unstyled in the sidebar.
+      doc.querySelectorAll('style, link[rel="stylesheet"]').forEach((node) => {
+        let clone;
+        if (node.tagName === 'LINK') {
+          // Resolve the href against the iframe's base so it points at the
+          // shared lib/ rather than a path relative to the parent doc.
+          clone = document.createElement('link');
+          clone.rel = 'stylesheet';
+          clone.href = new URL(node.getAttribute('href'), doc.baseURI).href;
+        } else {
+          clone = node.cloneNode(true);
+        }
         document.head.appendChild(clone);
         adoptedStyles.push(clone);
       });
@@ -320,9 +352,8 @@
         if (moveById(doc, id)) movedAny = true;
       }
 
-      // Some sub-tools create UI elements lazily (carousel's benchmark.js
-      // injects #benchmark-overlay on first cycle). Watch the iframe body
-      // and adopt any of the known IDs that show up later.
+      // Bench pages may inject DOM lazily. Watch the iframe body and
+      // adopt any of the known IDs that show up later.
       const lateObserver = new MutationObserver(() => {
         for (const id of ADOPT_IDS) moveById(doc, id);
       });
