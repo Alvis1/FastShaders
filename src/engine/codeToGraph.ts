@@ -583,7 +583,42 @@ function processNoiseCall(
   const extractedValues: Record<string, string | number> = {};
   const args = callExpr.arguments;
 
-  // --- arg[0]: position (possibly wrapped in mul(pos, scale)) ---
+  // Process a (pos, scale) pair extracted from either `mul(pos, scale)` or
+  // `pos.mul(scale)`. graphToCode emits the chained form; the three.js TSL
+  // editor produces the direct-call form. Both need to round-trip.
+  const wirePosAndScale = (posInner: t.Node, scaleInner: t.Node): void => {
+    if (t.isIdentifier(posInner)) {
+      const sourceId = varToNodeId.get(posInner.name);
+      if (sourceId) {
+        edges.push({
+          id: generateEdgeId(sourceId, 'out', nodeId, 'pos'),
+          source: sourceId, sourceHandle: 'out',
+          target: nodeId, targetHandle: 'pos',
+          type: 'typed' as const, animated: true,
+          data: { dataType: 'any' as const },
+        });
+      } else {
+        extractedValues.pos = posInner.name;
+      }
+    }
+    const scaleLit = extractLiteral(scaleInner);
+    if (scaleLit !== undefined) {
+      extractedValues.scale = scaleLit;
+    } else if (t.isIdentifier(scaleInner)) {
+      const sourceId = varToNodeId.get(scaleInner.name);
+      if (sourceId) {
+        edges.push({
+          id: generateEdgeId(sourceId, 'out', nodeId, 'scale'),
+          source: sourceId, sourceHandle: 'out',
+          target: nodeId, targetHandle: 'scale',
+          type: 'typed' as const, animated: true,
+          data: { dataType: 'any' as const },
+        });
+      }
+    }
+  };
+
+  // --- arg[0]: position (possibly wrapped in mul(pos, scale) or pos.mul(scale)) ---
   if (args.length > 0) {
     const posArg = args[0];
     if (
@@ -592,38 +627,17 @@ function processNoiseCall(
       posArg.callee.name === 'mul' &&
       posArg.arguments.length === 2
     ) {
-      // mul(pos, scale) pattern — extract both
-      const posInner = posArg.arguments[0];
-      const scaleInner = posArg.arguments[1];
-      if (t.isIdentifier(posInner)) {
-        const sourceId = varToNodeId.get(posInner.name);
-        if (sourceId) {
-          edges.push({
-            id: generateEdgeId(sourceId, 'out', nodeId, 'pos'),
-            source: sourceId, sourceHandle: 'out',
-            target: nodeId, targetHandle: 'pos',
-            type: 'typed' as const, animated: true,
-            data: { dataType: 'any' as const },
-          });
-        } else {
-          extractedValues.pos = posInner.name;
-        }
-      }
-      const scaleLit = extractLiteral(scaleInner);
-      if (scaleLit !== undefined) {
-        extractedValues.scale = scaleLit;
-      } else if (t.isIdentifier(scaleInner)) {
-        const sourceId = varToNodeId.get(scaleInner.name);
-        if (sourceId) {
-          edges.push({
-            id: generateEdgeId(sourceId, 'out', nodeId, 'scale'),
-            source: sourceId, sourceHandle: 'out',
-            target: nodeId, targetHandle: 'scale',
-            type: 'typed' as const, animated: true,
-            data: { dataType: 'any' as const },
-          });
-        }
-      }
+      // mul(pos, scale) — direct-call form
+      wirePosAndScale(posArg.arguments[0], posArg.arguments[1]);
+    } else if (
+      t.isCallExpression(posArg) &&
+      t.isMemberExpression(posArg.callee) &&
+      t.isIdentifier(posArg.callee.property) &&
+      posArg.callee.property.name === 'mul' &&
+      posArg.arguments.length === 1
+    ) {
+      // pos.mul(scale) — chained form (what graphToCode emits)
+      wirePosAndScale(posArg.callee.object, posArg.arguments[0]);
     } else if (t.isIdentifier(posArg)) {
       const sourceId = varToNodeId.get(posArg.name);
       if (sourceId) {
