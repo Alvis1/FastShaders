@@ -194,6 +194,37 @@ export function ShaderPreview() {
   });
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Defer the iframe's srcDoc until the container element has non-zero
+  // dimensions. Without this gate, on first page load the iframe boots
+  // before the flex layout has resolved — A-Frame's WebGPU renderer then
+  // initializes with a 0×0 canvas, dawn rejects the framebuffer texture
+  // ("texture size … is empty"), and the renderer is left in a broken
+  // state that paints the mesh solid red. Removing-and-adding an edge
+  // appeared to "fix it" only because that triggered a previewCode change
+  // → srcDoc rewrite → iframe rebuild, which happened to land after
+  // layout had settled.
+  const [containerReady, setContainerReady] = useState(false);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    if (el.clientWidth > 0 && el.clientHeight > 0) {
+      setContainerReady(true);
+      return;
+    }
+    const obs = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        if (e.contentRect.width > 0 && e.contentRect.height > 0) {
+          setContainerReady(true);
+          obs.disconnect();
+          return;
+        }
+      }
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
 
   // Latest camera position reported by the iframe. Stored in a ref (not state)
   // so live position updates from inside the iframe don't retrigger the
@@ -284,19 +315,14 @@ export function ShaderPreview() {
       if (data.type === 'fs:preview-ready') {
         const win = iframeRef.current?.contentWindow;
         if (!win) return;
-        // Re-sync hot-update state after every iframe rebuild — initial
-        // postMessages from mount may have been lost if they raced with
-        // iframe boot, and after a previewCode/materialSettings change
-        // the new iframe document hasn't seen any of our updates yet.
-        // The receivers are all idempotent so re-sending current values
-        // on top of an already-baked-in initial state is a no-op.
-        win.postMessage({ type: 'fs:bg-color', color: bgColorRef.current }, '*');
-        win.postMessage(
-          { type: 'fs:lighting', lights: LIGHT_PRESETS[lightingRef.current] ?? LIGHT_PRESETS.studio },
-          '*',
-        );
-        win.postMessage(playingPayloadRef.current, '*');
-        win.postMessage(geometryPayloadRef.current, '*');
+        // Uniforms aren't baked into the iframe HTML — shaderloader
+        // initialises them from the module schema, so the user's
+        // current slider values need to be pushed every time a fresh
+        // shader binds. The other hot-update channels (bg-color,
+        // lighting, playing, geometry) ARE baked in via useMemo, so
+        // re-pushing them here would just redo work the iframe already
+        // did at boot — that's what was causing the post-refresh red
+        // material (the re-push was racing with shader application).
         for (const [name, value] of Object.entries(uniformValuesRef.current)) {
           win.postMessage({ type: 'fs:uniform', name, value }, '*');
         }
@@ -423,49 +449,13 @@ export function ShaderPreview() {
   }, [previewCode, materialSettings]);
 
   // Hot-update channels: push appearance changes to the running iframe
-  // instead of triggering an iframe rebuild. Initial sends on mount may
-  // be queued or dropped depending on browser behaviour around postMessage
-  // to a still-loading iframe; the re-push on `fs:preview-ready` (in the
-  // message handler above) is the safety net that guarantees the iframe
-  // converges to the current parent state even if early sends are lost.
-  // See BRIDGE_SCRIPT_TEMPLATE in tslToPreviewHTML.ts for the receivers.
-
-  // Build the payload for an `fs:geometry` postMessage. Extracted because
-  // the fs:preview-ready handler re-uses it on iframe rebuild to re-sync.
-  const buildGeometryPayload = useCallback((): Record<string, unknown> => {
-    const isObj = isObjGeometry(geometry);
-    const payload: Record<string, unknown> = {
-      type: 'fs:geometry',
-      isObj,
-      rotation: GEOMETRY_ROTATIONS[geometry] ?? '45 45 0',
-    };
-    if (isObj) {
-      payload.objModel = `obj: url(${getModelUrl(geometry as 'teapot' | 'bunny')})`;
-      payload.fitBounds = 'size: 1.6';
-    } else {
-      payload.geometry = buildGeoAttr(
-        geometry as 'sphere' | 'cube' | 'plane',
-        effectiveSubdivision,
-      );
-    }
-    return payload;
-  }, [geometry, effectiveSubdivision]);
-
-  // Build the fs:playing payload. The from/to rotation values are
-  // computed in the parent so the iframe doesn't need to know the
-  // plane-vs-other axis convention.
-  const buildPlayingPayload = useCallback((): Record<string, unknown> => {
-    const rawRot = rotationRef.current ?? { x: 0, y: 0, z: 0 };
-    const mod360 = (v: number) => ((v % 360) + 360) % 360;
-    const r = { x: mod360(rawRot.x), y: mod360(rawRot.y), z: mod360(rawRot.z) };
-    const isPlane = geometry === 'plane';
-    const from = `${r.x} ${r.y} ${r.z}`;
-    const to = isPlane
-      ? `${r.x} ${r.y} ${r.z + 360}`
-      : `${r.x} ${r.y + 360} ${r.z}`;
-    return { type: 'fs:playing', playing, from, to };
-  }, [playing, geometry]);
-
+  // instead of triggering an iframe rebuild. Idempotency is enforced on
+  // the *iframe* side (each handler compares the payload to a last-
+  // applied key seeded from the baked-in HTML state) rather than here,
+  // because React StrictMode double-fires mount effects in dev — any
+  // parent-side "skip first run" guard gets bypassed on the second fire,
+  // so the iframe must be the safe one. See BRIDGE_SCRIPT_TEMPLATE in
+  // tslToPreviewHTML.ts for the receivers.
   useEffect(() => {
     iframeRef.current?.contentWindow?.postMessage(
       { type: 'fs:bg-color', color: bgColor },
@@ -481,24 +471,40 @@ export function ShaderPreview() {
   }, [lighting]);
 
   useEffect(() => {
-    iframeRef.current?.contentWindow?.postMessage(buildPlayingPayload(), '*');
-  }, [buildPlayingPayload]);
+    // from/to are computed in the parent so the iframe doesn't need to
+    // know the plane-vs-other axis convention.
+    const rawRot = rotationRef.current ?? { x: 0, y: 0, z: 0 };
+    const mod360 = (v: number) => ((v % 360) + 360) % 360;
+    const r = { x: mod360(rawRot.x), y: mod360(rawRot.y), z: mod360(rawRot.z) };
+    const isPlane = geometry === 'plane';
+    const from = `${r.x} ${r.y} ${r.z}`;
+    const to = isPlane
+      ? `${r.x} ${r.y} ${r.z + 360}`
+      : `${r.x} ${r.y + 360} ${r.z}`;
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: 'fs:playing', playing, from, to },
+      '*',
+    );
+  }, [playing, geometry]);
 
   useEffect(() => {
-    iframeRef.current?.contentWindow?.postMessage(buildGeometryPayload(), '*');
-  }, [buildGeometryPayload]);
-
-  // Keep refs of the latest hot-update payloads so the fs:preview-ready
-  // handler can re-sync the iframe after any rebuild without depending on
-  // the current closure.
-  const bgColorRef = useRef(bgColor);
-  const lightingRef = useRef(lighting);
-  const playingPayloadRef = useRef(buildPlayingPayload());
-  const geometryPayloadRef = useRef(buildGeometryPayload());
-  useEffect(() => { bgColorRef.current = bgColor; }, [bgColor]);
-  useEffect(() => { lightingRef.current = lighting; }, [lighting]);
-  useEffect(() => { playingPayloadRef.current = buildPlayingPayload(); }, [buildPlayingPayload]);
-  useEffect(() => { geometryPayloadRef.current = buildGeometryPayload(); }, [buildGeometryPayload]);
+    const isObj = isObjGeometry(geometry);
+    const payload: Record<string, unknown> = {
+      type: 'fs:geometry',
+      isObj,
+      rotation: GEOMETRY_ROTATIONS[geometry] ?? '45 45 0',
+    };
+    if (isObj) {
+      payload.objModel = `obj: url(${getModelUrl(geometry as 'teapot' | 'bunny')})`;
+      payload.fitBounds = 'size: 1.6';
+    } else {
+      payload.geometry = buildGeoAttr(
+        geometry as 'sphere' | 'cube' | 'plane',
+        effectiveSubdivision,
+      );
+    }
+    iframeRef.current?.contentWindow?.postMessage(payload, '*');
+  }, [geometry, effectiveSubdivision]);
 
   return (
     <div className="shader-preview">
@@ -571,11 +577,11 @@ export function ShaderPreview() {
           </button>
         )}
       </div>
-      <div className="shader-preview__body">
+      <div className="shader-preview__body" ref={bodyRef}>
         <iframe
           ref={iframeRef}
           className="shader-preview__iframe"
-          srcDoc={previewHtml}
+          srcDoc={containerReady ? previewHtml : undefined}
           title="Shader Preview"
           // User-pasted TSL becomes an ES module that runs inside this iframe.
           // Without sandboxing the iframe inherits the FastShaders origin and
