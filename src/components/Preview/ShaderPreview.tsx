@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { isObjGeometry, tslToPreviewHTML } from '@/engine/tslToPreviewHTML';
+import {
+  GEOMETRY_ROTATIONS,
+  LIGHT_PRESETS,
+  buildGeoAttr,
+  getModelUrl,
+  isObjGeometry,
+  tslToPreviewHTML,
+} from '@/engine/tslToPreviewHTML';
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import './ShaderPreview.css';
 
@@ -277,6 +284,19 @@ export function ShaderPreview() {
       if (data.type === 'fs:preview-ready') {
         const win = iframeRef.current?.contentWindow;
         if (!win) return;
+        // Re-sync hot-update state after every iframe rebuild — initial
+        // postMessages from mount may have been lost if they raced with
+        // iframe boot, and after a previewCode/materialSettings change
+        // the new iframe document hasn't seen any of our updates yet.
+        // The receivers are all idempotent so re-sending current values
+        // on top of an already-baked-in initial state is a no-op.
+        win.postMessage({ type: 'fs:bg-color', color: bgColorRef.current }, '*');
+        win.postMessage(
+          { type: 'fs:lighting', lights: LIGHT_PRESETS[lightingRef.current] ?? LIGHT_PRESETS.studio },
+          '*',
+        );
+        win.postMessage(playingPayloadRef.current, '*');
+        win.postMessage(geometryPayloadRef.current, '*');
         for (const [name, value] of Object.entries(uniformValuesRef.current)) {
           win.postMessage({ type: 'fs:uniform', name, value }, '*');
         }
@@ -374,6 +394,16 @@ export function ShaderPreview() {
   // origin, so the iframe's content runs in its sandbox-issued opaque
   // origin, and the shader blob URL it creates internally is same-origin
   // to itself — which is what the shaderloader's fetch+import needs.
+  //
+  // Rebuilds are expensive under sandbox: each reload gets a new opaque
+  // origin, Chrome's network cache partitioning treats that as a fresh
+  // site, and the ~1MB A-Frame bundle re-fetches + re-parses every time.
+  // So only the *structural* props that genuinely require a new shader
+  // module (previewCode, materialSettings) drive a rebuild. The closure
+  // still captures the current bgColor / lighting / playing / geometry /
+  // subdivision so a rebuild driven by previewCode/materialSettings emits
+  // HTML with the up-to-date values; the useEffects below push live
+  // changes for those props via postMessage without rebuilding.
   const previewHtml = useMemo(() => {
     const options: PreviewOptions = {
       geometry,
@@ -389,7 +419,86 @@ export function ShaderPreview() {
       initialRotation: rotationRef.current,
     };
     return tslToPreviewHTML(previewCode, options);
-  }, [previewCode, geometry, playing, materialSettings, bgColor, lighting, effectiveSubdivision]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewCode, materialSettings]);
+
+  // Hot-update channels: push appearance changes to the running iframe
+  // instead of triggering an iframe rebuild. Initial sends on mount may
+  // be queued or dropped depending on browser behaviour around postMessage
+  // to a still-loading iframe; the re-push on `fs:preview-ready` (in the
+  // message handler above) is the safety net that guarantees the iframe
+  // converges to the current parent state even if early sends are lost.
+  // See BRIDGE_SCRIPT_TEMPLATE in tslToPreviewHTML.ts for the receivers.
+
+  // Build the payload for an `fs:geometry` postMessage. Extracted because
+  // the fs:preview-ready handler re-uses it on iframe rebuild to re-sync.
+  const buildGeometryPayload = useCallback((): Record<string, unknown> => {
+    const isObj = isObjGeometry(geometry);
+    const payload: Record<string, unknown> = {
+      type: 'fs:geometry',
+      isObj,
+      rotation: GEOMETRY_ROTATIONS[geometry] ?? '45 45 0',
+    };
+    if (isObj) {
+      payload.objModel = `obj: url(${getModelUrl(geometry as 'teapot' | 'bunny')})`;
+      payload.fitBounds = 'size: 1.6';
+    } else {
+      payload.geometry = buildGeoAttr(
+        geometry as 'sphere' | 'cube' | 'plane',
+        effectiveSubdivision,
+      );
+    }
+    return payload;
+  }, [geometry, effectiveSubdivision]);
+
+  // Build the fs:playing payload. The from/to rotation values are
+  // computed in the parent so the iframe doesn't need to know the
+  // plane-vs-other axis convention.
+  const buildPlayingPayload = useCallback((): Record<string, unknown> => {
+    const rawRot = rotationRef.current ?? { x: 0, y: 0, z: 0 };
+    const mod360 = (v: number) => ((v % 360) + 360) % 360;
+    const r = { x: mod360(rawRot.x), y: mod360(rawRot.y), z: mod360(rawRot.z) };
+    const isPlane = geometry === 'plane';
+    const from = `${r.x} ${r.y} ${r.z}`;
+    const to = isPlane
+      ? `${r.x} ${r.y} ${r.z + 360}`
+      : `${r.x} ${r.y + 360} ${r.z}`;
+    return { type: 'fs:playing', playing, from, to };
+  }, [playing, geometry]);
+
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: 'fs:bg-color', color: bgColor },
+      '*',
+    );
+  }, [bgColor]);
+
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: 'fs:lighting', lights: LIGHT_PRESETS[lighting] ?? LIGHT_PRESETS.studio },
+      '*',
+    );
+  }, [lighting]);
+
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage(buildPlayingPayload(), '*');
+  }, [buildPlayingPayload]);
+
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage(buildGeometryPayload(), '*');
+  }, [buildGeometryPayload]);
+
+  // Keep refs of the latest hot-update payloads so the fs:preview-ready
+  // handler can re-sync the iframe after any rebuild without depending on
+  // the current closure.
+  const bgColorRef = useRef(bgColor);
+  const lightingRef = useRef(lighting);
+  const playingPayloadRef = useRef(buildPlayingPayload());
+  const geometryPayloadRef = useRef(buildGeometryPayload());
+  useEffect(() => { bgColorRef.current = bgColor; }, [bgColor]);
+  useEffect(() => { lightingRef.current = lighting; }, [lighting]);
+  useEffect(() => { playingPayloadRef.current = buildPlayingPayload(); }, [buildPlayingPayload]);
+  useEffect(() => { geometryPayloadRef.current = buildGeometryPayload(); }, [buildGeometryPayload]);
 
   return (
     <div className="shader-preview">
