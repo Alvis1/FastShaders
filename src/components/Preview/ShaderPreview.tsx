@@ -592,6 +592,14 @@ export function ShaderPreview() {
           // server.headers in vite.config.ts for the dev side; GitHub Pages
           // sets Access-Control-Allow-Origin: * on all served files.
           sandbox="allow-scripts"
+          // Permissions Policy — both default to "denied" on sandboxed
+          // frames; without these the browser's fullscreen overlay and any
+          // A-Frame enter-VR button fail silently. fullscreen needs a user
+          // gesture to take effect (the button click counts), so granting
+          // it doesn't open new attack surface beyond what sandbox already
+          // permits. xr-spatial-tracking is the WebXR feature flag; A-Frame
+          // probes for it on init regardless of vr-mode-ui state.
+          allow="fullscreen; xr-spatial-tracking"
         />
         {uniforms.length > 0 && showUniforms && (
           <div className="shader-preview__uniforms">
