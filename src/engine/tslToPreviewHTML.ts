@@ -390,23 +390,42 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
     // allow-same-origin) each iframe reload gets a new opaque origin, and
     // Chrome's cache partitioning means the ~1MB A-Frame bundle + workers
     // re-fetch + re-parse on every reload. Pushing appearance changes
-    // (bg color, lights, geometry, subdivision, animate toggle) through
-    // postMessage keeps the existing document live so the user sees
-    // sub-frame updates instead of a full re-init.
+    // (bg color, lights, geometry, animate toggle) through postMessage
+    // keeps the existing document live so the user sees sub-frame updates
+    // instead of a full re-init.
+    //
+    // Each handler is *idempotent*: it tracks the last-applied payload key
+    // (seeded from the baked-in initial HTML state) and skips if the new
+    // payload matches. This is required for correctness, not just perf —
+    // React StrictMode double-fires the parent's mount useEffects in
+    // development, and even without StrictMode a useEffect runs once on
+    // mount with the value that's already baked into the HTML. Without
+    // skip-if-same the duplicate post on mount re-applies the geometry
+    // attribute (recreating the THREE.Mesh) and re-creates all the
+    // <a-light> nodes (forcing a WebGPU pipeline recompile) right while
+    // shaderloader's first applyTSLShader is still mid-fetch, leaving
+    // the mesh on a fallback red material until something else triggers
+    // an iframe rebuild.
     //
     // The parent still rebuilds the iframe for structural changes
     // (previewCode, materialSettings) where a new shader module is needed.
 
+    var __lastBgKey = __INITIAL_BG_KEY__;
     function __applyBgColor(color) {
+      var key = String(color);
+      if (key === __lastBgKey) return;
+      __lastBgKey = key;
       var scene = document.querySelector("a-scene");
       if (scene) scene.setAttribute("background", "color: " + color);
     }
 
+    var __lastLightingKey = __INITIAL_LIGHTING_KEY__;
     function __applyLighting(lights) {
+      var key = JSON.stringify(lights || []);
+      if (key === __lastLightingKey) return;
+      __lastLightingKey = key;
       var scene = document.querySelector("a-scene");
       if (!scene) return;
-      // Remove existing lights, then add the new preset. setAttribute
-      // would only update one of them — and we don't know how many.
       var existing = scene.querySelectorAll("a-light");
       for (var i = 0; i < existing.length; i++) existing[i].parentNode.removeChild(existing[i]);
       for (var j = 0; j < lights.length; j++) {
@@ -420,7 +439,11 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       }
     }
 
+    var __lastPlayingKey = __INITIAL_PLAYING_KEY__;
     function __applyPlaying(payload) {
+      var key = JSON.stringify({ p: !!payload.playing, f: payload.from, t: payload.to });
+      if (key === __lastPlayingKey) return;
+      __lastPlayingKey = key;
       if (!spinEl) return;
       if (payload.playing) {
         spinEl.setAttribute(
@@ -430,9 +453,6 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
           "; loop: true; dur: 12000; easing: linear"
         );
       } else {
-        // Snapshot the current animated rotation so removing the
-        // animation component doesn't snap the entity back to its
-        // initial value.
         var r = spinEl.object3D && spinEl.object3D.rotation;
         if (r) {
           var rx = r.x * 180 / Math.PI;
@@ -446,13 +466,17 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       }
     }
 
+    var __lastGeometryKey = __INITIAL_GEOMETRY_KEY__;
     function __applyGeometry(payload) {
+      var key = JSON.stringify({
+        o: !!payload.isObj,
+        m: payload.objModel || null,
+        g: payload.geometry || null,
+        r: payload.rotation || null,
+      });
+      if (key === __lastGeometryKey) return;
+      __lastGeometryKey = key;
       if (!entity) return;
-      // Parent computes attribute strings; we only swap them onto the
-      // entity. For OBJ models, shaderloader's existing model-loaded
-      // listener re-applies the shader; for primitives, we trigger
-      // applyShader() manually since the shader component's update()
-      // only re-runs on src change, not on geometry change.
       if (payload.isObj) {
         entity.removeAttribute("geometry");
         entity.setAttribute("fit-bounds", payload.fitBounds || "size: 1.6");
@@ -461,7 +485,6 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         entity.removeAttribute("obj-model");
         entity.removeAttribute("fit-bounds");
         entity.setAttribute("geometry", payload.geometry);
-        // Re-apply the shader so it binds to the new THREE.Mesh.
         setTimeout(function() {
           var comp = entity.components && entity.components.shader;
           if (comp && typeof comp.applyShader === "function") {
@@ -570,8 +593,19 @@ function convertToShaderModule(
   }
 
   // Build return object with node property names (colorNode, normalNode, etc.)
-  // When Discard is present, the `color` channel is routed through __pixel()
-  // (defined below) so the Discard runs inside an Fn body.
+  // When Discard is present, the `color` channel is routed through __pixel(...)
+  // (defined below) so the Discard runs inside an Fn body. Conditions and the
+  // color node are passed as explicit Fn parameters — see __pixel block below.
+  const discardConds = hasDiscard
+    ? discardLines
+        .map((l) => {
+          const m = l.match(/^\s*Discard\(\s*([\s\S]+?)\s*\)\s*;?\s*$/);
+          return m ? m[1].trim() : '';
+        })
+        .filter(Boolean)
+    : [];
+  const pixelCallArgs = hasDiscard ? [...discardConds, channels.color ?? 'vec3(1, 0, 0)'] : [];
+
   const returnProps: string[] = [];
   for (const [ch, ref] of Object.entries(channels)) {
     const prop = CHANNEL_TO_PROP[ch];
@@ -582,24 +616,33 @@ function convertToShaderModule(
         : ref;
       returnProps.push(`${prop}: positionLocal.add(${displacement})`);
     } else if (ch === 'color' && hasDiscard) {
-      returnProps.push(`${prop}: __pixel()`);
+      returnProps.push(`${prop}: __pixel(${pixelCallArgs.join(', ')})`);
     } else {
       returnProps.push(`${prop}: ${ref}`);
     }
   }
 
-  // The Fn body just calls Discard and returns the (already-computed) color
-  // node. All upstream defs stay in the outer plain function so they're built
-  // once at material-setup time; the Fn body only ships per-fragment side
-  // effects to the GPU.
+  // The Fn body calls Discard and returns the color. Each discard condition
+  // and the color node are passed as explicit Fn parameters rather than
+  // captured via JS closure — the iframe ships Three.js r173 (via the bundled
+  // A-Frame IIFE), whose Fn-call setup doesn't propagate closure-captured
+  // derived nodes from the outer plain function into the function-body
+  // compilation. The Fn's body would then resolve `return mix1` to a default
+  // (visible as a solid red material on the preview mesh). Passing them as
+  // params routes them through the standard function-call API and forces the
+  // dependency chain to compile correctly. Upstream defs still live in the
+  // outer function so they're built once at material-setup time.
   const pixelFnLines: string[] = [];
   if (hasDiscard) {
-    const colorRef = channels.color ?? 'vec3(1, 0, 0)';
-    pixelFnLines.push('  const __pixel = Fn(() => {');
-    for (const line of discardLines) {
-      pixelFnLines.push('    ' + line.trimStart());
-    }
-    pixelFnLines.push(`    return ${colorRef};`);
+    const fnParams = [
+      ...discardConds.map((_, i) => `__c${i}`),
+      '__color',
+    ];
+    pixelFnLines.push(`  const __pixel = Fn(([${fnParams.join(', ')}]) => {`);
+    discardConds.forEach((_, i) => {
+      pixelFnLines.push(`    Discard(__c${i});`);
+    });
+    pixelFnLines.push('    return __color;');
     pixelFnLines.push('  });');
   }
 
@@ -779,7 +822,41 @@ export function tslToPreviewHTML(
   const savedCamLiteral = initialCameraPosition
     ? JSON.stringify({ x: initialCameraPosition.x, y: initialCameraPosition.y, z: initialCameraPosition.z })
     : 'null';
-  lines.push(BRIDGE_SCRIPT_TEMPLATE.replace('__SAVED_CAM__', savedCamLiteral));
+
+  // Seed each hot-update handler's last-applied key with the value baked
+  // into the initial HTML. The parent posts these same values from its
+  // mount useEffects (plus a duplicate under React StrictMode), and the
+  // iframe must recognise them as no-ops so the geometry attribute, the
+  // <a-light> list, etc. don't get rebuilt right while the shader's
+  // first applyTSLShader is still mid-fetch.
+  const lights = LIGHT_PRESETS[lighting] ?? LIGHT_PRESETS.studio;
+  const initialBgKey = JSON.stringify(String(bgColor));
+  const initialLightingKey = JSON.stringify(JSON.stringify(lights));
+  const initialPlayingKey = JSON.stringify(JSON.stringify({ p: !!animate, f: animFrom, t: animTo }));
+  const initialGeometryKey = JSON.stringify(JSON.stringify(
+    isObj
+      ? {
+          o: true,
+          m: `obj: url(${getModelUrl(geometry as 'teapot' | 'bunny')})`,
+          g: null,
+          r: rotationAttr,
+        }
+      : {
+          o: false,
+          m: null,
+          g: buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane', subdivision),
+          r: rotationAttr,
+        },
+  ));
+
+  lines.push(
+    BRIDGE_SCRIPT_TEMPLATE
+      .replace('__SAVED_CAM__', savedCamLiteral)
+      .replace('__INITIAL_BG_KEY__', initialBgKey)
+      .replace('__INITIAL_LIGHTING_KEY__', initialLightingKey)
+      .replace('__INITIAL_PLAYING_KEY__', initialPlayingKey)
+      .replace('__INITIAL_GEOMETRY_KEY__', initialGeometryKey),
+  );
   lines.push('');
 
   lines.push('</body>');
