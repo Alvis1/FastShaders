@@ -24,6 +24,13 @@ const NODE_PROP_TO_CHANNEL: Record<string, string> = {
 const MATERIAL_KEYS = new Set(['transparent', 'side', 'alphaTest']);
 
 export function scriptToTSL(scriptCode: string): string {
+  // Pre-pass: inline the `const __pixel = Fn(() => { Discard(...); return X; });`
+  // wrapper that tslToShaderModule / convertToShaderModule emit to give
+  // `Discard()` an active TSL stack. Without this, the generic nested-Fn-skip
+  // logic below swallows the wrapper whole — the Discard line is lost and the
+  // `__pixel()` call in the return ends up dangling.
+  scriptCode = inlinePixelWrapper(scriptCode);
+
   const lines = scriptCode.split('\n');
   const outLines: string[] = [];
 
@@ -229,4 +236,63 @@ export function scriptToTSL(scriptCode: string): string {
   }
 
   return outLines.join('\n') + '\n';
+}
+
+/**
+ * Inline the discard-Fn wrapper. The emitters produce:
+ *
+ *   const __pixel = Fn(() => {
+ *     Discard(cond);
+ *     return colorVar;
+ *   });
+ *   return { colorNode: __pixel(), ... };
+ *
+ * which reverses to:
+ *
+ *   Discard(cond);
+ *   return { colorNode: colorVar, ... };
+ *
+ * before the rest of scriptToTSL runs. Multiple Discard lines and arbitrary
+ * indentation are tolerated. The `return X;` line inside the wrapper supplies
+ * the value that replaces every `__pixel()` reference downstream. If we can't
+ * find a well-formed wrapper we leave the script untouched — the generic
+ * passthrough still produces a parseable (if non-functional) result.
+ */
+function inlinePixelWrapper(scriptCode: string): string {
+  const wrapperRe =
+    /^([ \t]*)const\s+__pixel\s*=\s*Fn\(\(\)\s*=>\s*\{([\s\S]*?)\}\s*\)\s*;?[ \t]*$/m;
+  const match = wrapperRe.exec(scriptCode);
+  if (!match) return scriptCode;
+
+  const indent = match[1];
+  const body = match[2];
+
+  const discardLines: string[] = [];
+  let returnRef: string | null = null;
+  for (const rawLine of body.split('\n')) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+    if (/^Discard\(/.test(trimmed)) {
+      discardLines.push(`${indent}${trimmed}`);
+      continue;
+    }
+    const ret = trimmed.match(/^return\s+(.+?);?$/);
+    if (ret) {
+      returnRef = ret[1].trim();
+      continue;
+    }
+    // Unrecognized line — bail out, fall through to the original behaviour.
+    return scriptCode;
+  }
+
+  // Replace the wrapper with the bare Discard lines (still inside the outer
+  // function body) so the line-by-line passthrough re-emits them verbatim.
+  let out = scriptCode.replace(match[0], discardLines.join('\n'));
+
+  // Then swap every `__pixel()` reference for the captured return value.
+  if (returnRef) {
+    out = out.replace(/\b__pixel\(\)/g, returnRef);
+  }
+
+  return out;
 }

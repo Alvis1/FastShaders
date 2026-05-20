@@ -35,6 +35,21 @@ const IIFE_BUNDLE_URL = `${CDN_BASE}/aframe-171-a-0.1.min.js`;
 const SHADERLOADER_URL = `${CDN_BASE}/a-frame-shaderloader-0.3.js`;
 
 /**
+ * HTML-escape user-controlled text before interpolating it into the
+ * exported HTML. `shaderName` is the only such value here; without escaping
+ * a name like `</title><script>alert(1)</script>` would land in the
+ * downloaded HTML as stored XSS for anyone who opens the shared file.
+ */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
  * Strip usage comment lines from the top of tslToShaderModule output,
  * returning just the bare module code for embedding.
  */
@@ -82,7 +97,7 @@ export function tslToAFrame(
   lines.push('<head>');
   lines.push('  <meta charset="UTF-8">');
   lines.push('  <meta name="viewport" content="width=device-width, initial-scale=1.0">');
-  lines.push(`  <title>${pageTitle}</title>`);
+  lines.push(`  <title>${escapeHtml(pageTitle)}</title>`);
   lines.push(`  <script src="${IIFE_BUNDLE_URL}"><${''}/script>`);
   lines.push(`  <script src="${SHADERLOADER_URL}"><${''}/script>`);
 

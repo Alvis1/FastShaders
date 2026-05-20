@@ -41,6 +41,14 @@ import {
   dot,
   cross,
   positionGeometry,
+  positionLocal,
+  positionWorld,
+  positionView,
+  positionWorldDirection,
+  positionViewDirection,
+  cameraPosition,
+  cameraNear,
+  cameraFar,
   normalLocal,
   tangentLocal,
   time,
@@ -75,6 +83,14 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
 
   // Inputs (no arguments, return a built-in node)
   positionGeometry: () => positionGeometry,
+  positionLocal: () => positionLocal,
+  positionWorld: () => positionWorld,
+  positionView: () => positionView,
+  positionWorldDirection: () => positionWorldDirection,
+  positionViewDirection: () => positionViewDirection,
+  cameraPosition: () => cameraPosition,
+  cameraNear: () => cameraNear,
+  cameraFar: () => cameraFar,
   normalLocal: () => normalLocal,
   tangentLocal: () => tangentLocal,
   time: () => time,
@@ -162,6 +178,13 @@ const TSL_FACTORIES: Record<string, (inputs: Record<string, TSLNode>, values: Re
   smoothstep: (inputs) => smoothstep(inputs.edge0 ?? float(0), inputs.edge1 ?? float(1), inputs.x ?? float(0.5)),
   remap: (inputs) => remap(inputs.x ?? float(0), inputs.inLow ?? float(0), inputs.inHigh ?? float(1), inputs.outLow ?? float(0), inputs.outHigh ?? float(1)),
   select: (inputs) => select(inputs.condition ?? float(0), inputs.a ?? float(0), inputs.b ?? float(0)),
+
+  // Logic — per-channel comparisons. Output type is conceptually bool per channel
+  // but TSL coerces to numeric (0/1) where needed; downstream Select / Discard
+  // accept either form.
+  greaterThan: (inputs, v) => greaterThan(inputs.a ?? float(Number(v.a ?? 0)), inputs.b ?? float(Number(v.b ?? 0))),
+  lessThan: (inputs, v) => lessThan(inputs.a ?? float(Number(v.a ?? 0)), inputs.b ?? float(Number(v.b ?? 0))),
+  equal: (inputs, v) => equal(inputs.a ?? float(Number(v.a ?? 0)), inputs.b ?? float(Number(v.b ?? 0))),
 
   // Vector
   split: (inputs) => inputs.v ?? vec3(0, 0, 0),

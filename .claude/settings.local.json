@@ -17,7 +17,8 @@
       "WebFetch(domain:cdn.jsdelivr.net)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(npm install:*)",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Bash(git worktree *)"
     ]
   }
 }

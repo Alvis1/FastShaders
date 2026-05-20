@@ -6,42 +6,7 @@ import {
   getNodeOutputShape,
   evaluateNodeRange,
 } from './cpuEvaluator';
-import type { AppNode, AppEdge } from '@/types';
-
-/**
- * Construct a minimal ShaderNode-like object that satisfies the parts of AppNode
- * the evaluator actually touches: `id`, `type`, `data.registryType`, `data.values`.
- * We cast through `unknown` to skip React Flow's full Node generic constraints.
- */
-function makeNode(
-  id: string,
-  registryType: string,
-  values: Record<string, string | number> = {},
-): AppNode {
-  return {
-    id,
-    type: 'shader',
-    position: { x: 0, y: 0 },
-    data: { registryType, label: id, cost: 0, values },
-  } as unknown as AppNode;
-}
-
-function makeEdge(
-  source: string,
-  sourceHandle: string,
-  target: string,
-  targetHandle: string,
-): AppEdge {
-  return {
-    id: `e-${source}-${sourceHandle}-${target}-${targetHandle}`,
-    source,
-    sourceHandle,
-    target,
-    targetHandle,
-    type: 'typed',
-    data: { dataType: 'any' },
-  } as unknown as AppEdge;
-}
+import { makeNode, makeEdge } from '@/test-utils';
 
 describe('evaluateNodeOutput — constants', () => {
   it('emits a scalar for float / int / slider / property_float', () => {

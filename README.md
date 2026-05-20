@@ -7,10 +7,12 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 ## Features
 
 - **Bi-directional sync** — edit either the graph or the TSL code; changes round-trip in both directions
-- **Node graph editor** — ~55 TSL node types across 9 visible categories (input, type, arithmetic, math, interpolation, vector, noise, color, output), drag from the palette or right-click → search to add
+- **Node graph editor** — ~70 TSL node types across 10 visible categories (input, type, arithmetic, math, interpolation, logic, vector, noise, color, output), drag from the palette or right-click → search to add. The right-click menu supports full keyboard navigation: type to filter, arrow keys to move the highlight, Enter to add.
 - **Code editor** — Monaco with TSL syntax highlighting, light/dark toggle, inline error/warning squiggles, and a separate read-only Script tab showing the exported `.js` module
 - **Live 3D preview** — WebGPU-rendered preview with five geometries (sphere, cube, plane, Utah teapot, Stanford bunny), three lighting modes (studio / moon / laboratory), subdivision slider, picked background color, orbit camera, and play/pause
 - **MaterialX noise** — 8 built-in noise variants (Perlin, fBm, cell, Worley/Voronoi) backed by `three/tsl`'s MaterialX functions
+- **Position & camera inputs** — `positionLocal`, `positionWorld`, `positionView` (+ direction variants), `cameraPosition`, `cameraNear`, `cameraFar` for camera-relative effects
+- **Logic category** — `greaterThan`, `lessThan`, `equal` per-channel comparisons that feed `select()` or the Output node's new **discard** input (wire any condition into Output → discard to kill those fragments — emits `Discard(cond)` in TSL)
 - **Built-in textures** — 8 procedural texture presets (polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) draggable from the palette
 - **Groups** — Ctrl/Cmd+G to wrap selected nodes in a recolorable, collapsible container; save groups to a per-browser library and drag them onto any graph
 - **Property uniforms** — `property_float` nodes become live-tunable sliders in the preview overlay and component attributes in the A-Frame export
@@ -77,6 +79,9 @@ The app is laid out in three resizable panes: a **Node Editor** on the left, a *
 | `Ctrl/Cmd+D` | Duplicate selection |
 | `Ctrl/Cmd+G` / `Ctrl/Cmd+Shift+G` | Group / ungroup selection |
 | `Delete` / `Backspace` | Delete nodes and edges (chains bridge across removed nodes when ends are kept) |
+| `↑` / `↓` (in the right-click Add Node menu) | Move the highlighted entry up / down |
+| `Home` / `End` (in the right-click Add Node menu) | Jump to the first / last entry |
+| `Enter` (in the right-click Add Node menu) | Add the highlighted entry |
 
 **Drag interactions**
 
@@ -100,9 +105,9 @@ Every node card shows its complexity cost so you can budget while building.
 
 Right-click anywhere to open a context menu — the dispatcher picks the right one based on what you clicked.
 
-- **Canvas → AddNodeMenu** — searchable node list grouped by category; "Group Selection" entry (active when ≥2 nodes selected). If the menu opened from a failed connection drag, the new node auto-connects from the source pin.
+- **Canvas → AddNodeMenu** — searchable node list grouped by category; "Group Selection" entry (active when ≥2 nodes selected). Fully keyboard-driven: type to filter, `↑`/`↓` (or `Home`/`End`) to move the highlight, Enter to add the highlighted entry, hover to sync the highlight to the mouse. If the menu opened from a failed connection drag, the new node auto-connects from the source pin.
 - **Node → NodeSettingsMenu** — Duplicate, Delete, toggle individual input port visibility, and edit inline values (drag-number inputs, color pickers, vec2/vec3 rows).
-- **Output node → ShaderSettingsMenu** — total cost vs. headset budget, output port toggles (roughness / emissive / normal / opacity), displacement mode (Along Normal / Offset), Transparent toggle, Alpha Clip + threshold, side rendering (Front / Back / Double), Depth Write, and a per-uniform editor that lists every `property_float` in the graph.
+- **Output node → ShaderSettingsMenu** — total cost vs. headset budget, output port toggles (roughness / emissive / normal / opacity / discard), displacement mode (Along Normal / Offset), Transparent toggle, Alpha Clip + threshold, side rendering (Front / Back / Double), Depth Write, and a per-uniform editor that lists every `property_float` in the graph. Wiring anything into the **discard** port emits a `Discard(cond)` statement in the shader so fragments where the condition is true are killed.
 - **Group → GroupSettingsMenu** — rename, recolor, title-size slider, Save to Library, Ungroup, Delete Group (with members).
 - **Edge → EdgeContextMenu** — Delete Connection.
 

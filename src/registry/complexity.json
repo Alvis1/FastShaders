@@ -5,6 +5,14 @@
   },
   "costs": {
     "positionGeometry": 0,
+    "positionLocal": 0,
+    "positionWorld": 0,
+    "positionView": 0,
+    "positionWorldDirection": 7,
+    "positionViewDirection": 7,
+    "cameraPosition": 0,
+    "cameraNear": 0,
+    "cameraFar": 0,
     "normalLocal": 0,
     "tangentLocal": 0,
     "time": 0,
@@ -44,6 +52,10 @@
     "smoothstep": 7,
     "remap": 5,
     "select": 2,
+
+    "greaterThan": 1,
+    "lessThan": 1,
+    "equal": 1,
 
     "normalize": 7,
     "length": 7,

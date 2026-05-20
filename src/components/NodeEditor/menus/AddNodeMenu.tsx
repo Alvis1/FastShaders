@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 import {
@@ -13,8 +13,21 @@ import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import complexityData from '@/registry/complexity.json';
 
+/**
+ * Flat, render-order action item used for keyboard navigation. Mirrors what's
+ * actually drawn (group entry, output entry, then defs in their grouped or
+ * flat-search order) so ArrowUp/Down + Enter behaviour matches what the user
+ * sees.
+ */
+type ActionItem =
+  | { kind: 'group'; key: string; run: () => void }
+  | { kind: 'output'; key: string; run: () => void }
+  | { kind: 'def'; key: string; def: NodeDefinition; run: () => void };
+
 export function AddNodeMenu() {
   const [query, setQuery] = useState('');
+  const [focusedIndex, setFocusedIndex] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
   const contextMenu = useAppStore((s) => s.contextMenu);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const addNode = useAppStore((s) => s.addNode);
@@ -29,11 +42,6 @@ export function AddNodeMenu() {
     [nodes],
   );
   const canGroup = selectedGroupable.length >= 2;
-
-  const handleGroupSelection = () => {
-    groupSelection(selectedGroupable.map((n) => n.id));
-    closeContextMenu();
-  };
 
   // Source pin info for auto-connect when dragged from an output handle
   const sourceNodeId = contextMenu.sourceNodeId;
@@ -56,7 +64,7 @@ export function AddNodeMenu() {
     return groups;
   }, [results, query]);
 
-  const handleAddNode = (def: NodeDefinition) => {
+  const handleAddNode = useCallback((def: NodeDefinition) => {
     const position = screenToFlowPosition({
       x: contextMenu.x,
       y: contextMenu.y,
@@ -136,7 +144,97 @@ export function AddNodeMenu() {
     }
 
     closeContextMenu();
+  }, [contextMenu.x, contextMenu.y, screenToFlowPosition, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, setEdges]);
+
+  const handleGroupSelection = useCallback(() => {
+    groupSelection(selectedGroupable.map((n) => n.id));
+    closeContextMenu();
+  }, [groupSelection, selectedGroupable, closeContextMenu]);
+
+  // Build the flat keyboard-traversable list in the same order things render.
+  // ArrowUp/Down step through this list; Enter runs the focused item's action.
+  const actionItems: ActionItem[] = useMemo(() => {
+    const items: ActionItem[] = [];
+    if (!query.trim() && canGroup) {
+      items.push({ kind: 'group', key: '__group__', run: handleGroupSelection });
+    }
+    if (!query.trim() && !nodes.some((n) => n.data.registryType === 'output')) {
+      items.push({
+        kind: 'output',
+        key: '__output__',
+        run: () => handleAddNode(NODE_REGISTRY.get('output')!),
+      });
+    }
+    if (grouped) {
+      for (const cat of CATEGORIES) {
+        if (cat.id === 'output' || !grouped.has(cat.id)) continue;
+        for (const def of grouped.get(cat.id)!) {
+          items.push({ kind: 'def', key: def.type, def, run: () => handleAddNode(def) });
+        }
+      }
+    } else {
+      for (const def of results) {
+        items.push({ kind: 'def', key: def.type, def, run: () => handleAddNode(def) });
+      }
+    }
+    return items;
+  }, [query, canGroup, nodes, grouped, results, handleGroupSelection, handleAddNode]);
+
+  // Reset focus to the first item whenever the visible list changes (typing in
+  // the search box, selection toggling, output-node presence flipping, etc.).
+  useEffect(() => {
+    setFocusedIndex(0);
+  }, [actionItems.length, query]);
+
+  // Scroll the focused item into view as the user arrows past the visible
+  // bounds. `block: 'nearest'` keeps the menu from jumping when the item is
+  // already visible.
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>(
+      '[data-add-node-focused="true"]',
+    );
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [focusedIndex, actionItems.length]);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (actionItems.length === 0) return;
+      setFocusedIndex((i) => (i + 1) % actionItems.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (actionItems.length === 0) return;
+      setFocusedIndex((i) => (i - 1 + actionItems.length) % actionItems.length);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      setFocusedIndex(0);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      if (actionItems.length === 0) return;
+      setFocusedIndex(actionItems.length - 1);
+    } else if (e.key === 'Enter') {
+      if (actionItems.length === 0) return;
+      e.preventDefault();
+      const item = actionItems[focusedIndex] ?? actionItems[0];
+      item.run();
+    }
   };
+
+  const itemIndexByKey = useMemo(() => {
+    const m = new Map<string, number>();
+    actionItems.forEach((it, i) => m.set(it.key, i));
+    return m;
+  }, [actionItems]);
+
+  const itemClass = (key: string) => {
+    const i = itemIndexByKey.get(key);
+    return i === focusedIndex
+      ? 'context-menu__item context-menu__item--focused'
+      : 'context-menu__item';
+  };
+
+  const focusedAttr = (key: string) =>
+    itemIndexByKey.get(key) === focusedIndex ? 'true' : undefined;
 
   return (
     <>
@@ -145,23 +243,19 @@ export function AddNodeMenu() {
         placeholder="Search nodes..."
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          // Enter adds the top-ranked search result so users can add a node without reaching for the mouse.
-          if (e.key === 'Enter' && query.trim() && results.length > 0) {
-            e.preventDefault();
-            handleAddNode(results[0]);
-          }
-        }}
+        onKeyDown={onKeyDown}
         autoFocus
       />
-      <div className="context-menu__list">
+      <div className="context-menu__list" ref={listRef}>
         {/* Group selection — only when 2+ groupable nodes are selected */}
         {!query.trim() && canGroup && (
           <>
             <div className="context-menu__category">Selection</div>
             <button
-              className="context-menu__item"
+              className={itemClass('__group__')}
+              data-add-node-focused={focusedAttr('__group__')}
               onClick={handleGroupSelection}
+              onMouseEnter={() => setFocusedIndex(itemIndexByKey.get('__group__') ?? 0)}
             >
               <span>Group Selection</span>
               <span className="context-menu__item-category">
@@ -177,8 +271,10 @@ export function AddNodeMenu() {
           <>
             <div className="context-menu__category">Output</div>
             <button
-              className="context-menu__item"
+              className={itemClass('__output__')}
+              data-add-node-focused={focusedAttr('__output__')}
               onClick={() => handleAddNode(NODE_REGISTRY.get('output')!)}
+              onMouseEnter={() => setFocusedIndex(itemIndexByKey.get('__output__') ?? 0)}
             >
               <span>Output Node</span>
               <span className="context-menu__item-category">output</span>
@@ -194,8 +290,10 @@ export function AddNodeMenu() {
                 {grouped.get(cat.id)!.map((def) => (
                   <button
                     key={def.type}
-                    className="context-menu__item"
+                    className={itemClass(def.type)}
+                    data-add-node-focused={focusedAttr(def.type)}
                     onClick={() => handleAddNode(def)}
+                    onMouseEnter={() => setFocusedIndex(itemIndexByKey.get(def.type) ?? 0)}
                   >
                     <span>{def.label}</span>
                     <span className="context-menu__item-category">{def.category}</span>
@@ -207,8 +305,10 @@ export function AddNodeMenu() {
             results.map((def) => (
               <button
                 key={def.type}
-                className="context-menu__item"
+                className={itemClass(def.type)}
+                data-add-node-focused={focusedAttr(def.type)}
                 onClick={() => handleAddNode(def)}
+                onMouseEnter={() => setFocusedIndex(itemIndexByKey.get(def.type) ?? 0)}
               >
                 <span>{def.label}</span>
                 <span className="context-menu__item-category">{def.category}</span>

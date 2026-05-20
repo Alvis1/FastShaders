@@ -59,6 +59,15 @@
   background: var(--bg-surface-hover);
 }
 
+/* Keyboard-focused item (driven by ArrowUp / ArrowDown in AddNodeMenu).
+   Sits above :hover so keyboard navigation wins when the cursor is parked
+   somewhere else, but mouseenter syncs focusedIndex back so they agree. */
+.context-menu__item--focused,
+.context-menu__item--focused:hover {
+  background: var(--bg-surface-hover);
+  box-shadow: inset 2px 0 0 var(--border-focus);
+}
+
 .context-menu__item--danger {
   color: #c0392b;
 }

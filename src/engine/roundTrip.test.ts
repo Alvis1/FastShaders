@@ -15,37 +15,8 @@
 import { describe, it, expect } from 'vitest';
 import { graphToCode } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
+import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode, AppEdge } from '@/types';
-
-function makeNode(
-  id: string,
-  registryType: string,
-  values: Record<string, string | number> = {},
-): AppNode {
-  return {
-    id,
-    type: registryType === 'output' ? 'output' : 'shader',
-    position: { x: 0, y: 0 },
-    data: { registryType, label: id, cost: 0, values },
-  } as unknown as AppNode;
-}
-
-function makeEdge(
-  source: string,
-  sourceHandle: string,
-  target: string,
-  targetHandle: string,
-): AppEdge {
-  return {
-    id: `e-${source}-${sourceHandle}-${target}-${targetHandle}`,
-    source,
-    sourceHandle,
-    target,
-    targetHandle,
-    type: 'typed',
-    data: { dataType: 'any' },
-  } as unknown as AppEdge;
-}
 
 function roundTrip(nodes: AppNode[], edges: AppEdge[]): { code1: string; code2: string } {
   const code1 = graphToCode(nodes, edges).code;

@@ -1,8 +1,45 @@
 .code-editor {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   background: var(--bg-panel);
+}
+
+/* Drop overlay shown while a file is being dragged over the editor.
+   Sits above Monaco so its built-in drop handler doesn't swallow the event. */
+.code-editor__drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(33, 150, 243, 0.12);
+  border: 2px dashed var(--text-accent, #2196F3);
+  border-radius: var(--border-radius-sm);
+  pointer-events: auto;
+}
+
+.code-editor__drop-msg {
+  text-align: center;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.code-editor__drop-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.code-editor__drop-sub {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
 /* Tab bar — sits above the editor, contains folder tabs + actions */
@@ -169,5 +206,22 @@
 }
 
 .code-editor__pane {
+  position: relative;
   height: 100%;
+}
+
+/* Hint shown over the empty TSL editor, styled as a JS line comment so it
+   blends with Monaco. pointer-events: none so Monaco still receives clicks
+   and typing — the hint hides the moment a character is entered. */
+.code-editor__empty-hint {
+  position: absolute;
+  top: 12px;
+  left: 60px; /* clear the gutter */
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 19px;
+  color: #6a737d; /* matches Monaco's default JS comment color */
+  pointer-events: none;
+  user-select: none;
+  white-space: pre;
 }

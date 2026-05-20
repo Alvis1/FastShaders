@@ -1,6 +1,6 @@
 # FastShaders
 
-Bi-directional TSL (Three.js Shading Language) visual shader editor.
+Bi-directional TSL (Three.js Shading Language) visual shader editor. Users author and execute their own shader code inside the app, and `.fastshader` files can be shared between users — treat any loaded `.fastshader` or pasted shader source as adversarial input.
 
 ## Stack
 
@@ -20,8 +20,14 @@ Bi-directional TSL (Three.js Shading Language) visual shader editor.
 - `npm run dev` — start dev server (port 5173)
 - `npm run build` — typecheck + build (`tsc -b && vite build`)
 - `npx tsc --noEmit` — typecheck only
+- `npm test` — run the vitest suite once (CI-friendly)
+- `npm run test:watch` — run vitest in watch mode
 
-No test framework is configured.
+## Testing
+
+- Framework: **vitest** (configured in `vite.config.ts` so `@/*` alias + TS setup are inherited from the build config). Test files match `src/**/*.test.ts`; environment is `node` (no jsdom — tests target pure logic only).
+- Shared test factories live in `src/test-utils.ts` (`makeNode`, `makeEdge`). Always import these instead of redefining stub builders in each test file — the helpers cast through `unknown as AppNode/AppEdge` to skip React Flow's full Node generic constraints.
+- Current coverage: utilities (`colorUtils`, `idGenerator`, `nameUtils`, `graphTraversal`) + engine core (`topologicalSort`, `cpuEvaluator`, `graphToCode`, `codeToGraph`, plus a `graphToCode ↔ codeToGraph` round-trip invariant suite).
 
 ## Project Structure
 

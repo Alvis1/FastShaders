@@ -389,6 +389,20 @@ function convertToShaderModule(
   });
   const hasParams = Object.keys(schemaEntries).length > 0;
 
+  // Pull `Discard(cond);` calls out of the body so we can re-emit them inside
+  // a small Fn wrapper. `Discard()` calls `.toStack()` which needs an active
+  // TSL execution stack — outside an Fn the call is a silent no-op, so live
+  // uniform changes can't move the discard threshold. Wrapping the color
+  // computation in an Fn restores the stack context.
+  const discardLines: string[] = [];
+  const nonDiscardLines: string[] = [];
+  for (const line of rewrittenDefLines) {
+    if (/^\s*Discard\(/.test(line)) discardLines.push(line);
+    else nonDiscardLines.push(line);
+  }
+  const hasDiscard = discardLines.length > 0;
+  if (hasDiscard && !tslNames.includes('Fn')) tslNames.push('Fn');
+
   // Build import statements
   const imports: string[] = [];
   if (tslNames.length > 0) {
@@ -396,19 +410,37 @@ function convertToShaderModule(
   }
 
   // Build return object with node property names (colorNode, normalNode, etc.)
+  // When Discard is present, the `color` channel is routed through __pixel()
+  // (defined below) so the Discard runs inside an Fn body.
   const returnProps: string[] = [];
   for (const [ch, ref] of Object.entries(channels)) {
     const prop = CHANNEL_TO_PROP[ch];
-    if (prop) {
-      if (ch === 'position') {
-        const displacement = displacementMode === 'normal'
-          ? `normalLocal.mul(${ref})`
-          : ref;
-        returnProps.push(`${prop}: positionLocal.add(${displacement})`);
-      } else {
-        returnProps.push(`${prop}: ${ref}`);
-      }
+    if (!prop) continue;
+    if (ch === 'position') {
+      const displacement = displacementMode === 'normal'
+        ? `normalLocal.mul(${ref})`
+        : ref;
+      returnProps.push(`${prop}: positionLocal.add(${displacement})`);
+    } else if (ch === 'color' && hasDiscard) {
+      returnProps.push(`${prop}: __pixel()`);
+    } else {
+      returnProps.push(`${prop}: ${ref}`);
     }
+  }
+
+  // The Fn body just calls Discard and returns the (already-computed) color
+  // node. All upstream defs stay in the outer plain function so they're built
+  // once at material-setup time; the Fn body only ships per-fragment side
+  // effects to the GPU.
+  const pixelFnLines: string[] = [];
+  if (hasDiscard) {
+    const colorRef = channels.color ?? 'vec3(1, 0, 0)';
+    pixelFnLines.push('  const __pixel = Fn(() => {');
+    for (const line of discardLines) {
+      pixelFnLines.push('    ' + line.trimStart());
+    }
+    pixelFnLines.push(`    return ${colorRef};`);
+    pixelFnLines.push('  });');
   }
 
   // Material settings supported by the shaderloader
@@ -438,7 +470,8 @@ function convertToShaderModule(
     '',
     ...schemaLines,
     `export default function(${hasParams ? 'params' : ''}) {`,
-    ...rewrittenDefLines.map(l => '  ' + l.trimStart()),
+    ...nonDiscardLines.map(l => '  ' + l.trimStart()),
+    ...pixelFnLines,
     `  return { ${returnProps.join(', ')} };`,
     '}',
   ];
