@@ -58,8 +58,12 @@ export interface PreviewOptions {
  * subdivision count baked into the per-primitive segment fields. The
  * subdivision is clamped to a sensible range so the slider can't lock the
  * tab up with millions of vertices.
+ *
+ * Exported because ShaderPreview also needs this for the postMessage
+ * geometry/subdivision hot-updates (keeps the formula in one place so the
+ * initial-HTML and live-update paths can't drift).
  */
-function buildGeoAttr(
+export function buildGeoAttr(
   geometry: 'sphere' | 'cube' | 'plane',
   subdivision: number,
 ): string {
@@ -79,13 +83,67 @@ function buildGeoAttr(
  * Resolve the absolute URL of an OBJ model in `public/models/`. The iframe
  * loads from a blob URL, so relative paths won't resolve — we need the full
  * origin-qualified URL.
+ *
+ * Exported so ShaderPreview can build the same URL when hot-swapping
+ * geometry via postMessage.
  */
-function getModelUrl(geometry: 'teapot' | 'bunny'): string {
+export function getModelUrl(geometry: 'teapot' | 'bunny'): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const base = import.meta.env.BASE_URL;
   const file = geometry === 'bunny' ? 'stanford-bunny.obj' : 'teapot.obj';
   return `${origin}${base}models/${file}`;
 }
+
+/**
+ * Per-geometry static rotation applied to the inner `preview-entity`. The
+ * spin parent handles the live rotation animation; this is the resting tilt.
+ * Exported so the hot-update path can set the same value as the initial HTML.
+ */
+export const GEOMETRY_ROTATIONS: Record<GeometryType, string> = {
+  sphere: '45 45 0',
+  cube: '45 45 0',
+  plane: '0 0 0',
+  teapot: '15 35 0',
+  bunny: '0 25 0',
+};
+
+/**
+ * Light-rig definitions for each lighting mode. The bridge script reads
+ * these via postMessage when the parent dispatches a lighting change, and
+ * recreates `<a-light>` elements without a full iframe rebuild.
+ *
+ * Format: array of attribute bags. `type` becomes `a-light type=...`, all
+ * other keys become element attributes verbatim.
+ */
+export interface LightSpec {
+  type: 'directional' | 'ambient';
+  color: string;
+  intensity: number;
+  position?: string;
+}
+
+export const LIGHT_PRESETS: Record<LightingMode, LightSpec[]> = {
+  studio: [
+    // Key — raking angle, warm, exposes normal/bump detail
+    { type: 'directional', color: '#ffffff', position: '-3 4 2', intensity: 2.5 },
+    // Rim — backlight, cool tint, defines specular silhouette
+    { type: 'directional', color: '#d4e5ff', position: '2 3 -4', intensity: 2.0 },
+    // Fill — opposite key, neutral, lifts shadows
+    { type: 'directional', color: '#e8e8e8', position: '4 1 3', intensity: 0.6 },
+    // Ambient — minimal base so crevices aren't pure black
+    { type: 'ambient', color: '#ffffff', intensity: 0.15 },
+  ],
+  moon: [
+    // Single cool directional angled in front of the object so roughly 2/3 of
+    // the camera-facing hemisphere is lit. Faint ambient floor.
+    { type: 'directional', color: '#cfd8ff', position: '-4 1.5 2', intensity: 4.0 },
+    { type: 'ambient', color: '#1a1f33', intensity: 0.05 },
+  ],
+  laboratory: [
+    // Pure flat ambient — every surface lit identically, no shadows.
+    { type: 'ambient', color: '#ffffff', intensity: 2.5 },
+  ],
+};
 
 // Resolve full absolute URLs for the IIFE bundle and shaderloader at runtime.
 // Blob URL iframes can't resolve path-only URLs, so we need the full origin.
@@ -325,7 +383,101 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       }
     }, 200);
 
+    // ── Hot-update helpers ────────────────────────────────────────────────
+    //
+    // Each handler below mutates one piece of scene state without an iframe
+    // rebuild. We do this because under sandbox=allow-scripts (no
+    // allow-same-origin) each iframe reload gets a new opaque origin, and
+    // Chrome's cache partitioning means the ~1MB A-Frame bundle + workers
+    // re-fetch + re-parse on every reload. Pushing appearance changes
+    // (bg color, lights, geometry, subdivision, animate toggle) through
+    // postMessage keeps the existing document live so the user sees
+    // sub-frame updates instead of a full re-init.
+    //
+    // The parent still rebuilds the iframe for structural changes
+    // (previewCode, materialSettings) where a new shader module is needed.
+
+    function __applyBgColor(color) {
+      var scene = document.querySelector("a-scene");
+      if (scene) scene.setAttribute("background", "color: " + color);
+    }
+
+    function __applyLighting(lights) {
+      var scene = document.querySelector("a-scene");
+      if (!scene) return;
+      // Remove existing lights, then add the new preset. setAttribute
+      // would only update one of them — and we don't know how many.
+      var existing = scene.querySelectorAll("a-light");
+      for (var i = 0; i < existing.length; i++) existing[i].parentNode.removeChild(existing[i]);
+      for (var j = 0; j < lights.length; j++) {
+        var spec = lights[j];
+        var el = document.createElement("a-light");
+        el.setAttribute("type", spec.type);
+        el.setAttribute("color", spec.color);
+        if (spec.position) el.setAttribute("position", spec.position);
+        el.setAttribute("intensity", String(spec.intensity));
+        scene.appendChild(el);
+      }
+    }
+
+    function __applyPlaying(payload) {
+      if (!spinEl) return;
+      if (payload.playing) {
+        spinEl.setAttribute(
+          "animation",
+          "property: rotation; from: " + payload.from +
+          "; to: " + payload.to +
+          "; loop: true; dur: 12000; easing: linear"
+        );
+      } else {
+        // Snapshot the current animated rotation so removing the
+        // animation component doesn't snap the entity back to its
+        // initial value.
+        var r = spinEl.object3D && spinEl.object3D.rotation;
+        if (r) {
+          var rx = r.x * 180 / Math.PI;
+          var ry = r.y * 180 / Math.PI;
+          var rz = r.z * 180 / Math.PI;
+          spinEl.removeAttribute("animation");
+          spinEl.setAttribute("rotation", rx + " " + ry + " " + rz);
+        } else {
+          spinEl.removeAttribute("animation");
+        }
+      }
+    }
+
+    function __applyGeometry(payload) {
+      if (!entity) return;
+      // Parent computes attribute strings; we only swap them onto the
+      // entity. For OBJ models, shaderloader's existing model-loaded
+      // listener re-applies the shader; for primitives, we trigger
+      // applyShader() manually since the shader component's update()
+      // only re-runs on src change, not on geometry change.
+      if (payload.isObj) {
+        entity.removeAttribute("geometry");
+        entity.setAttribute("fit-bounds", payload.fitBounds || "size: 1.6");
+        entity.setAttribute("obj-model", payload.objModel);
+      } else {
+        entity.removeAttribute("obj-model");
+        entity.removeAttribute("fit-bounds");
+        entity.setAttribute("geometry", payload.geometry);
+        // Re-apply the shader so it binds to the new THREE.Mesh.
+        setTimeout(function() {
+          var comp = entity.components && entity.components.shader;
+          if (comp && typeof comp.applyShader === "function") {
+            comp.applyShader();
+          }
+        }, 0);
+      }
+      if (payload.rotation) {
+        entity.setAttribute("rotation", payload.rotation);
+      }
+    }
+
     window.addEventListener("message", function(e) {
+      // Accept messages only from our parent document — both extra safety
+      // and a guard against accidental fan-out from other embedded frames.
+      if (e.source !== window.parent) return;
       var msg = e.data;
       if (!msg) return;
       if (msg.type === "fs:uniform") {
@@ -338,6 +490,14 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         if (oc && oc.controls && typeof oc.controls.reset === "function") {
           oc.controls.reset();
         }
+      } else if (msg.type === "fs:bg-color") {
+        __applyBgColor(msg.color);
+      } else if (msg.type === "fs:lighting") {
+        __applyLighting(msg.lights || []);
+      } else if (msg.type === "fs:playing") {
+        __applyPlaying(msg);
+      } else if (msg.type === "fs:geometry") {
+        __applyGeometry(msg);
       }
     });
   })();
@@ -528,16 +688,9 @@ export function tslToPreviewHTML(
   // faces +Z, which is where the camera sits). OBJ models are normalized and
   // recentered on load, so we tilt them like the other primitives. The bunny
   // is shown upright (no tilt) since its silhouette reads better head-on.
-  let rotationAttr: string;
-  if (geometry === 'plane') {
-    rotationAttr = '0 0 0';
-  } else if (geometry === 'bunny') {
-    rotationAttr = '0 25 0';
-  } else if (geometry === 'teapot') {
-    rotationAttr = '15 35 0';
-  } else {
-    rotationAttr = '45 45 0';
-  }
+  // Source-of-truth values live in GEOMETRY_ROTATIONS so the hot-update path
+  // (postMessage fs:geometry) sets the same tilt without drifting.
+  const rotationAttr = GEOMETRY_ROTATIONS[geometry] ?? '45 45 0';
 
   // Build the per-geometry entity attribute(s).
   // - Primitives: A-Frame `geometry` component with subdivision baked in.
@@ -595,25 +748,16 @@ export function tslToPreviewHTML(
   lines.push(`    <a-entity id="preview-entity" ${entityAttrs} material="color: #808080" position="0 0 0" rotation="${rotationAttr}"></a-entity>`);
   lines.push('  </a-entity>');
 
-  if (lighting === 'studio') {
-    // Three-point rig for material evaluation:
-    // Key — raking angle, warm, exposes normal/bump detail
-    // Rim — backlight, cool tint, defines specular silhouette
-    // Fill — opposite key, neutral, lifts shadows
-    // Ambient — minimal base so crevices aren't pure black
-    lines.push('  <a-light type="directional" color="#ffffff" position="-3 4 2" intensity="2.5"></a-light>');
-    lines.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
-    lines.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
-    lines.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
-  } else if (lighting === 'moon') {
-    // Single cool directional angled in front of the object so roughly 2/3 of
-    // the camera-facing hemisphere is lit (terminator runs ~65° off the camera
-    // axis). A faint ambient floor keeps the unlit side from going pure black.
-    lines.push('  <a-light type="directional" color="#cfd8ff" position="-4 1.5 2" intensity="4.0"></a-light>');
-    lines.push('  <a-light type="ambient" color="#1a1f33" intensity="0.05"></a-light>');
-  } else if (lighting === 'laboratory') {
-    // Pure flat ambient — every surface lit identically, no shadows.
-    lines.push('  <a-light type="ambient" color="#ffffff" intensity="2.5"></a-light>');
+  // Emit the light rig from LIGHT_PRESETS so the initial HTML and the
+  // postMessage hot-update path read the same source of truth.
+  for (const light of LIGHT_PRESETS[lighting] ?? LIGHT_PRESETS.studio) {
+    const attrs = [
+      `type="${light.type}"`,
+      `color="${light.color}"`,
+      light.position ? `position="${light.position}"` : null,
+      `intensity="${light.intensity}"`,
+    ].filter(Boolean).join(' ');
+    lines.push(`  <a-light ${attrs}></a-light>`);
   }
 
   lines.push('</a-scene>');
