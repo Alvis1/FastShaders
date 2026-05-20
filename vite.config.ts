@@ -31,25 +31,40 @@ const versionHtmlPlugin = (): Plugin => ({
  *   - `'unsafe-eval'` — Three.js TSL and Monaco compile dynamic code via
  *     `new Function`; without it the editor and live preview don't render.
  *   - `'wasm-unsafe-eval'` — A-Frame's WebGPU build instantiates Wasm.
+ *   - `'unsafe-inline'` for script-src — the preview iframe is loaded via
+ *     `srcdoc`, which inherits the parent CSP, and the generated preview
+ *     HTML uses several inline <script> blocks (shader-blob setup,
+ *     fit-bounds component, postMessage glue). Hashing them all is
+ *     brittle because they change with every render. The iframe sandbox
+ *     (allow-scripts only, no allow-same-origin) is what actually
+ *     contains user code; 'unsafe-inline' here just lets the
+ *     bench-authored inline scripts run.
  *   - `'unsafe-inline'` for style-src — Monaco and React inject inline
  *     style attributes for theming and layout.
  *   - `blob:` — preview HTML, shader modules, and Monaco workers are loaded
  *     from blob URLs created at runtime.
- *   - `https://cdn.jsdelivr.net` — exported A-Frame HTML pulls the bundle
- *     from there; restricting to this single host avoids open-CDN abuse.
+ *   - `https://cdn.jsdelivr.net` — @monaco-editor/react loads the Monaco
+ *     loader.js + workers from there at runtime, and exported A-Frame
+ *     HTML pulls the shaderloader bundle from there too.
+ *   - `https://alvis1.github.io` — the sandboxed preview iframe has an
+ *     opaque origin, so `'self'` resolves to `null` for fetches it makes
+ *     under the inherited CSP. The deployed prod origin therefore has to
+ *     be listed explicitly so the iframe can fetch /FastShaders/models/*
+ *     OBJs across the sandbox boundary. Update this list (or move CSP
+ *     emission behind a build-time env var) if the deploy URL changes.
  *
- * `frame-src blob:` is the directive that authorizes the user-shader iframe;
- * `worker-src blob: 'self'` covers Monaco's web workers.
+ * `frame-src 'self' blob:` authorizes the user-shader iframe;
+ * `worker-src 'self' blob:` covers Monaco's web workers.
  */
 const CSP_DIRECTIVES = [
   "default-src 'self'",
-  "script-src 'self' blob: 'unsafe-eval' 'wasm-unsafe-eval'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
   "font-src 'self' https://fonts.gstatic.com data:",
   "img-src 'self' data: blob:",
-  "connect-src 'self' blob: https://cdn.jsdelivr.net",
-  "frame-src blob:",
-  "worker-src blob: 'self'",
+  "connect-src 'self' blob: https://cdn.jsdelivr.net https://alvis1.github.io",
+  "frame-src 'self' blob:",
+  "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
