@@ -88,11 +88,22 @@ function loadSubdivision(): number {
   return SUBDIVISION_DEFAULT;
 }
 
+/**
+ * Drop dangerous structural keys when parsing localStorage. Same rationale
+ * as the reviver in useAppStore — defense in depth against a tampered
+ * `fs:previewCameraPos` / `fs:previewRotation` / `fs:previewUniformBounds`
+ * smuggling `__proto__` etc. into the parsed object.
+ */
+function safeJsonReviver(key: string, value: unknown): unknown {
+  if (key === '__proto__' || key === 'constructor' || key === 'prototype') return undefined;
+  return value;
+}
+
 function loadCameraPos(): CameraPosition | null {
   try {
     const raw = localStorage.getItem('fs:previewCameraPos');
     if (raw) {
-      const p = JSON.parse(raw);
+      const p = JSON.parse(raw, safeJsonReviver);
       if (p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
         // Reject origin-ish values — a prior bug saved (0,0,0) every frame by
         // reading the camera-entity wrapper instead of the camera itself.
@@ -112,7 +123,7 @@ function loadRotation(): CameraPosition | null {
   try {
     const raw = localStorage.getItem('fs:previewRotation');
     if (raw) {
-      const p = JSON.parse(raw);
+      const p = JSON.parse(raw, safeJsonReviver);
       if (p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
         return { x: p.x, y: p.y, z: p.z };
       }
@@ -129,7 +140,7 @@ function loadUniformBounds(): Record<string, UniformBounds> {
   try {
     const raw = localStorage.getItem('fs:previewUniformBounds');
     if (raw) {
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw, safeJsonReviver);
       if (parsed && typeof parsed === 'object') return parsed as Record<string, UniformBounds>;
     }
   } catch { /* */ }
@@ -175,7 +186,6 @@ export function ShaderPreview() {
     try { return localStorage.getItem('fs:previewBgColor') || '#808080'; } catch { return '#808080'; }
   });
 
-  const blobUrlRef = useRef<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Latest camera position reported by the iframe. Stored in a ref (not state)
@@ -257,6 +267,11 @@ export function ShaderPreview() {
   // - fs:camera: snapshot the latest camera position so it can be restored on next rebuild
   useEffect(() => {
     const handler = (e: MessageEvent) => {
+      // Only accept messages from our own preview iframe — any other window
+      // posting fs:* messages must not be allowed to mutate persisted state.
+      // The iframe is sandboxed (allow-scripts only, no allow-same-origin),
+      // so e.origin will be "null"; identity is verified via e.source instead.
+      if (e.source !== iframeRef.current?.contentWindow) return;
       const data = e.data as { type?: string; x?: number; y?: number; z?: number } | null;
       if (!data || typeof data.type !== 'string') return;
       if (data.type === 'fs:preview-ready') {
@@ -351,12 +366,15 @@ export function ShaderPreview() {
   // iframe to produce identical HTML.
   const effectiveSubdivision = isObjGeometry(geometry) ? 0 : subdivision;
 
-  // Generate blob URL for the iframe (more reliable than srcdoc for ES modules + importmaps)
-  const blobUrl = useMemo(() => {
-    // Revoke previous blob URL
-    if (blobUrlRef.current) {
-      URL.revokeObjectURL(blobUrlRef.current);
-    }
+  // Generate the iframe's HTML payload. We pass it via `srcDoc` rather than
+  // building a blob URL because the iframe is sandboxed without
+  // `allow-same-origin` — a parent-created blob URL belongs to the parent
+  // origin and the browser refuses to load it into a foreign-origin frame
+  // ("Not allowed to load local resource: blob:..."). srcdoc carries no
+  // origin, so the iframe's content runs in its sandbox-issued opaque
+  // origin, and the shader blob URL it creates internally is same-origin
+  // to itself — which is what the shaderloader's fetch+import needs.
+  const previewHtml = useMemo(() => {
     const options: PreviewOptions = {
       geometry,
       animate: playing,
@@ -370,22 +388,8 @@ export function ShaderPreview() {
       initialCameraPosition: cameraPosRef.current,
       initialRotation: rotationRef.current,
     };
-    const html = tslToPreviewHTML(previewCode, options);
-    const blob = new Blob([html], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    blobUrlRef.current = url;
-    return url;
+    return tslToPreviewHTML(previewCode, options);
   }, [previewCode, geometry, playing, materialSettings, bgColor, lighting, effectiveSubdivision]);
-
-  // Cleanup blob URL on unmount
-  useEffect(() => {
-    return () => {
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = null;
-      }
-    };
-  }, []);
 
   return (
     <div className="shader-preview">
@@ -462,8 +466,23 @@ export function ShaderPreview() {
         <iframe
           ref={iframeRef}
           className="shader-preview__iframe"
-          src={blobUrl}
+          srcDoc={previewHtml}
           title="Shader Preview"
+          // User-pasted TSL becomes an ES module that runs inside this iframe.
+          // Without sandboxing the iframe inherits the FastShaders origin and
+          // would expose parent localStorage / cookies / same-origin fetch to
+          // adversarial shader code. allow-scripts is the only flag granted;
+          // omitting allow-same-origin puts the iframe in a unique opaque
+          // origin so user code can't reach parent storage. We use srcDoc
+          // (not src=blobUrl) because a parent-origin blob URL can't be
+          // navigated into a foreign-origin sandboxed frame — srcdoc has no
+          // origin of its own, so the content runs in the iframe's
+          // sandbox-issued opaque origin from the start. Static parent
+          // assets (OBJ models, A-Frame bundle) load via cross-origin
+          // requests that depend on the server returning CORS headers — see
+          // server.headers in vite.config.ts for the dev side; GitHub Pages
+          // sets Access-Control-Allow-Origin: * on all served files.
+          sandbox="allow-scripts"
         />
         {uniforms.length > 0 && showUniforms && (
           <div className="shader-preview__uniforms">

@@ -52,10 +52,17 @@ AFRAME.registerComponent("shader", {
     this._currentSrc = tslPath;
 
     try {
+      // Treat `blob:` and `data:` URLs as absolute. When the preview iframe
+      // is sandboxed without `allow-same-origin` its origin is opaque, so
+      // blob URLs minted inside it look like `blob:null/<uuid>` — the
+      // `://` heuristic below misses that form and the loader would
+      // wrongly prefix `./`, producing an unparseable URL.
       const modulePath =
         tslPath.startsWith("./") ||
         tslPath.startsWith("/") ||
-        tslPath.includes("://")
+        tslPath.includes("://") ||
+        tslPath.startsWith("blob:") ||
+        tslPath.startsWith("data:")
           ? tslPath
           : "./" + tslPath;
 

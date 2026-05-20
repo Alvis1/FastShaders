@@ -8,7 +8,7 @@ import { removeEdgesForPort } from '@/utils/edgeUtils';
 
 /** Ports that can be toggled on/off in the output node settings.
  *  Opacity is excluded — it's auto-managed by transparent/alphaTest. */
-const OPTIONAL_OUTPUT_PORTS = ['roughness', 'emissive', 'normal'];
+const OPTIONAL_OUTPUT_PORTS = ['roughness', 'emissive', 'normal', 'discard'];
 
 export function ShaderSettingsMenu() {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);

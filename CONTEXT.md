@@ -373,21 +373,32 @@ Both `FIT_BOUNDS_SCRIPT` and `BRIDGE_SCRIPT_TEMPLATE` are kept as raw template l
 
 ## Node System
 
-### Node Registry (~55 nodes in 10 categories — `unknown` is the 10th, hidden from search)
+### Node Registry (~70 nodes in 11 categories — `unknown` is the 11th, hidden from search)
 
 | Category          | Nodes                                                                                     |
 | ----------------- | ----------------------------------------------------------------------------------------- |
-| **Input** (8)     | positionGeometry, normalLocal, tangentLocal, time, screenUV, uv, property_float, slider    |
+| **Input** (16)    | positionGeometry, positionLocal, positionWorld, positionView, positionWorldDirection, positionViewDirection, cameraPosition, cameraNear, cameraFar, normalLocal, tangentLocal, time, screenUV, uv, property_float, slider |
 | **Type** (6)      | float, int, vec2, vec3, vec4, color                                                       |
 | **Arithmetic** (4)| add, sub, mul, div                                                                        |
 | **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract, oneMinus (Invert) — 10 total          |
 | **Math (binary)** | pow, mod, clamp, min, max                                                                 |
 | **Interpolation** (4) | mix, smoothstep, remap, select                                                        |
+| **Logic** (3)     | greaterThan, lessThan, equal — per-channel comparisons; feed `select.condition` or the Output node's `discard` port |
 | **Vector** (7)    | normalize, length, distance, dot, cross, split, append                                     |
 | **Noise** (8)     | perlin, perlinVec3, fbm, fbmVec3, cellNoise, voronoi, voronoiVec2, voronoiVec3 (all MaterialX-backed) |
 | **Color** (2)     | hsl, toHsl                                                                                |
-| **Output** (1)    | output (color, normal, displacement, opacity, roughness, emissive inputs + materialSettings) |
+| **Output** (1)    | output (color, emissive, normal, displacement, opacity, roughness, discard inputs + materialSettings) |
 | **Unknown** (1, hidden) | `unknown` — round-trip preservation for unrecognized TSL functions parsed from code |
+
+### Position & Camera Inputs
+
+The 8 non-`positionGeometry` position/camera nodes are zero-input, zero-default `category: 'input'` defs that resolve to bare references (`const positionWorld1 = positionWorld;`). They behave exactly like `positionGeometry` from the editor's POV — `getFlowNodeType()` routes them to the generic ShaderNode, the cpuEvaluator returns `null` (geometry/camera attributes can't be sampled CPU-side, so downstream visualization falls back to `getNodeOutputShape()` for shape inference), and `ensureBareInputNode()` in codeToGraph auto-materialises them when bare references like `positionView.z` appear. Direction variants (`positionWorldDirection`, `positionViewDirection`) carry a cost of 7 (matches `normalize`); everything else is cost 0.
+
+Use case: `Position (world) → distance(_, Camera Position) → Greater Than (_, slider) → Output.discard` discards fragments past a chosen world-space distance from the camera.
+
+### Logic Nodes
+
+`greaterThan`, `lessThan`, `equal` are regular two-input shader nodes (`category: 'logic'`, color `#7E57C2`, GPU cost 1). Both inputs declared as `'any'` — they broadcast like the arithmetic nodes. Output is `'any'` too; the cpuEvaluator emits 0/1 per channel for visualization, and `evaluateNodeRange` reports `[0, 1]` per channel so the EdgeInfoCard can show meaningful bounds. graphToCode emits them via the generic-call branch (no special handling needed); graphToTSLNodes has factories that just call the imported `greaterThan`/`lessThan`/`equal`. Designed to feed the Output node's `discard` port and the `select()` `condition` input.
 
 ### MaterialX Noise Nodes
 
@@ -480,6 +491,18 @@ Adjustable float value with a visual range slider and configurable min/max bound
 - **Asset browser**: Dedicated `SliderCardContent` with a visual track, fill bar, thumb dot, and min/value/max labels
 - **Searchable**: by "slider" or "range"
 
+### Discard Pipeline
+
+`Discard(cond)` is a side-effect statement (not a value), so it doesn't fit the "every node has an output" model the rest of the registry follows. Instead, it lives as an extra **input port on the Output node** (`{ id: 'discard', label: 'Discard', dataType: 'float' }`, last in `def.inputs`).
+
+- **OutputNode rendering** ([OutputNode.tsx](src/components/NodeEditor/nodes/OutputNode.tsx)): `discard` is in `PIXEL_PORTS` so it renders inside the Pixel Shader section when exposed. Hidden by default — not in `OUTPUT_DEFAULT_EXPOSED`.
+- **ShaderSettingsMenu** ([ShaderSettingsMenu.tsx](src/components/NodeEditor/menus/ShaderSettingsMenu.tsx)): `discard` is in `OPTIONAL_OUTPUT_PORTS` alongside roughness/emissive/normal so a checkbox appears under "Output Ports". Toggling it off removes the wired edge via `removeEdgesForPort()`.
+- **graphToCode emit** ([graphToCode.ts](src/engine/graphToCode.ts)): when an edge targets `output.discard`, resolves the source ref via `resolveEdgeRef()`, conditionally adds `Discard` to `three/tsl` imports, and emits `Discard(${ref});` as a `discardLine` inserted between `bodyLines` and `returnLine`. Order matters: discard must be after its dependency variables are defined; placing it last in the body satisfies that for any topologically-sorted graph. Discard is **not** a member of `OUTPUT_CHANNELS` (the array used to build the multi-channel return object) — it's strictly a side-effect statement.
+- **codeToGraph parse** ([codeToGraph.ts](src/engine/codeToGraph.ts)): an `ExpressionStatement` visitor catches bare `Discard(arg);` calls and buffers the AST argument in `pendingDiscardArg`. The output node may not exist yet (it's created lazily by `ReturnStatement` / `output =` or by the no-output fallback), so wiring is deferred. After traversal completes, the buffered arg is resolved via `resolveReturnSource()` (handles Identifier / MemberExpression / CallExpression — same paths as a return value) and a typed edge is pushed into `output.discard`. The auto-expose pass in `useSyncEngine` then adds `'discard'` to `exposedPorts` because it has an incoming edge, so the toggle reflects the wired state without a manual checkbox poke.
+- **Module-emit Fn re-wrap** (important): `Discard()` in TSL is `select(cond, expression('discard')).toStack()` — `.toStack()` only attaches to a live TSL execution stack, which exists inside an `Fn(() => …)` body. Both `convertToShaderModule()` in [tslToPreviewHTML.ts](src/engine/tslToPreviewHTML.ts) and [tslToShaderModule.ts](src/engine/tslToShaderModule.ts) unwrap the canonical `Fn(() => { … })` into a plain `function(params) { … }` so they can rewrite `uniform()` calls into `params.X` references. That unwrap destroys the stack — a bare `Discard(cond);` inside the resulting plain function becomes a silent no-op and live uniform changes can't move the discard threshold. To fix this, both emitters split bare `Discard(cond);` lines out of the body, build a small wrapper `const __pixel = Fn(() => { Discard(cond); return colorVar; });` immediately before the return, and route the color channel through `__pixel()` (object API) so the discard runs inside an active Fn stack and inlines into the compiled fragment shader. `Fn` is re-added to the `three/tsl` imports when this rewrite fires. Upstream defs (positionWorld, distance, the uniform itself) stay in the outer plain function — TSL nodes can be referenced from inside the Fn via closure, so the wrapper only needs to contain the side-effect call. Single-value `return colorVar;` shapes are promoted to object API (`return { colorNode: __pixel(), … };`) when Discard is present.
+- **Live preview**: works because the iframe path runs the generated TSL code through `convertToShaderModule()`, which now applies the Fn re-wrap. The standalone `compileGraphToTSL` factory map intentionally has no discard handler — it returns channel nodes for direct property assignment, not an `Fn` body, so there's no statement context to inject `Discard` into.
+- **Round-trip**: graph → code → graph preserves the discard wiring through the pending-arg + auto-expose dance. Toggle the port off and back on in settings without losing the edge by using "Save Code" (Ctrl+S) round-trips.
+
 ### React Flow Node Types
 
 - **`shader`** — Generic node for most TSL operations (ShaderNode.tsx)
@@ -487,7 +510,7 @@ Adjustable float value with a visual range slider and configurable min/max bound
 - **`preview`** — Noise nodes with animated CPU canvas thumbnail (PreviewNode.tsx) — used by all 8 MaterialX noise variants
 - **`mathPreview`** — Math function nodes with scrolling waveform visualization (MathPreviewNode.tsx)
 - **`clock`** — Time node with animated analog clock face (ClockNode.tsx)
-- **`output`** — Output sink with two sections: Pixel Shader (color, roughness, emissive, normal, opacity) and Vertex Shader (displacement), plus `materialSettings` for export config (OutputNode.tsx)
+- **`output`** — Output sink with two sections: Pixel Shader (color, roughness, emissive, normal, opacity, **discard**) and Vertex Shader (displacement), plus `materialSettings` for export config (OutputNode.tsx). The `discard` port is hidden by default and exposed via ShaderSettingsMenu → Output Ports → Discard; wiring it emits a `Discard(cond)` statement in the generated TSL (see "Discard Pipeline" below).
 - **`group`** — Selection group container (GroupNode.tsx) — owns members via `parentId`, has no registry entry, no shader semantics. Collapsible into a pill with synthetic boundary handles. See the **Groups** section for details.
 
 ### Asset Browser (ContentBrowser + NodePreviewCard)
@@ -722,11 +745,12 @@ Routes to specific menu based on `contextMenu.type`:
 
 - Auto-focused search input
 - Grouped by category when not searching, flat list when searching
-- **Enter key**: While a non-empty query is typed, pressing Enter adds the highest-ranked search result (`results[0]`). Lets users add a node without reaching for the mouse — type `invert` + Enter, done. Gated on `query.trim() && results.length > 0`.
+- **Keyboard navigation** — full ArrowUp / ArrowDown / Home / End / Enter handling on the search input. A `focusedIndex` state walks a flat `actionItems[]` list built in **render order** (Group Selection entry → Output entry → grouped/flat defs) so the highlight follows what's actually drawn. Reset to 0 whenever the visible list changes (`useEffect` keyed on `actionItems.length` and `query`). The focused row gets `.context-menu__item--focused` (stronger background + 2px inset accent) and is scrolled into view via `el.scrollIntoView({ block: 'nearest' })` after every move. Mouse `onMouseEnter` syncs `focusedIndex` to the hovered row so keyboard and mouse stay in agreement. Enter runs `actionItems[focusedIndex].run()` — adds the highlighted node, runs Group Selection, or adds the Output entry as appropriate.
+- **Enter without arrows** — still works: when the user types and presses Enter without arrowing, `focusedIndex` is 0 (auto-reset on query change) so Enter adds the top-ranked search result, preserving the original "type `invert` + Enter" workflow.
 - Maps node to React Flow type: output→`'output'`, time→`'clock'`, color→`'color'`, noise category→`'preview'`, sin/cos→`'mathPreview'`, else→`'shader'`
 - Places node at context menu screen position via `screenToFlowPosition()`
 - Prevents adding multiple output nodes
-- **Group Selection** — when ≥2 non-group nodes are selected and the search is empty, a top-of-menu entry calls `groupSelection()` (same path as Ctrl+G). Shows a `N nodes` count badge.
+- **Group Selection** — when ≥2 non-group nodes are selected and the search is empty, a top-of-menu entry calls `groupSelection()` (same path as Ctrl+G). Shows a `N nodes` count badge. Participates in keyboard navigation as the first `actionItems[]` entry.
 - **Search aliases** — node `description` fields are searched alongside `label`/`type`/`tslFunction`, so common aliases are added as "Also: X, Y, Z" tails. Examples: Float = `number`, `value`; Invert = `invert`, `complement`, `negate`; Append = `combine`, `join`; Slider = `range`; UV = `texcoord`, `texture coordinate`.
 
 ### NodeSettingsMenu
@@ -745,7 +769,7 @@ Routes to specific menu based on `contextMenu.type`:
 Right-click menu for the output node with sections:
 
 - **Shader Settings**: Total cost display with headset budget reference
-- **Output Ports**: Checkboxes to toggle optional ports (emissive, normal); hiding a port removes connected edges via `removeEdgesForPort()`. Opacity port is auto-managed by Transparent/Alpha Clip toggles.
+- **Output Ports**: Checkboxes to toggle optional ports (roughness, emissive, normal, **discard**); hiding a port removes connected edges via `removeEdgesForPort()`. Opacity port is auto-managed by Transparent/Alpha Clip toggles. `discard` is also auto-exposed when the code→graph parser wires it from a `Discard(cond)` statement (see useSyncEngine auto-expose pass).
 - **Displacement** (shown when position port is exposed):
   - "Along Normal" checkbox — controls `materialSettings.displacementMode` (`'normal'` | `'offset'`)
   - Normal mode (default): `positionLocal.add(normalLocal.mul(displacement))` — pushes vertices outward along surface normals
@@ -887,9 +911,9 @@ Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts`
 
 ### Three.js TSL Imports Used
 
-**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, remap, select, greaterThan, lessThan, equal, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. *(`hsl` and `toHsl` are emitted as module-local `Fn` helpers, not imported — r173's `three/tsl` does not export them.)*
+**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, positionLocal, positionWorld, positionView, positionWorldDirection, positionViewDirection, cameraPosition, cameraNear, cameraFar, normalLocal, tangentLocal, time, screenUV, remap, select, greaterThan, lessThan, equal, Discard, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. *(`hsl` and `toHsl` are emitted as module-local `Fn` helpers, not imported — r173's `three/tsl` does not export them. `Discard` is added to imports only when the Output node has a wired `discard` port.)*
 
-**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, remap, select, greaterThan, lessThan, equal, normalize, length, distance, dot, cross, positionGeometry, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. The `hsl` and `toHsl` factories build the same branchless formula in TSL node form so live preview matches generated-code output pixel-for-pixel.
+**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, remap, select, greaterThan, lessThan, equal, normalize, length, distance, dot, cross, positionGeometry, positionLocal, positionWorld, positionView, positionWorldDirection, positionViewDirection, cameraPosition, cameraNear, cameraFar, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. The `hsl` and `toHsl` factories build the same branchless formula in TSL node form so live preview matches generated-code output pixel-for-pixel. **`Discard` is intentionally absent**: `compileGraphToTSL` returns channel nodes for direct material-property assignment (`material.colorNode = …`), not an `Fn` body — there's no statement context to inject `Discard()` into. The discard path is generated-code-only; the live iframe preview already goes through generated TSL so it covers discard correctly.
 
 ### Persistence (localStorage)
 

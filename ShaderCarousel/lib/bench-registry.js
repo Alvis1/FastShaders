@@ -255,16 +255,23 @@ function loadSavedGroups(TSL) {
   });
 }
 
-function compileSavedGroup(g, TSL) {
+function compileSavedGroup(g, _TSL) {
+  // SECURITY: the original implementation here executed g.tslCode via
+  // `new Function('TSL', \`with (TSL) { ${g.tslCode}; ... }\`)` so any
+  // process able to write `fs:savedGroups` (XSS in the editor, hand-edited
+  // localStorage, a tampered shared file that the editor accepts) could
+  // achieve arbitrary JS execution inside the bench origin the moment that
+  // payload included a `tslCode` field. That code path was dormant — the
+  // editor's saveGroupToLibrary does not persist `tslCode` — so removing
+  // it loses no shipped functionality. If/when saved groups grow real TSL
+  // round-tripping, recompile inside a sandboxed worker or evaluate via the
+  // same shaderloader pipeline the editor uses (parsed, not executed via
+  // Function-with-`with`).
   if (typeof g.tslCode === 'string' && g.tslCode.trim().length) {
-    try {
-      const fn = new Function('TSL', `with (TSL) { ${g.tslCode}\nreturn (typeof __build === 'function') ? __build() : null; }`);
-      const result = fn(TSL);
-      if (result) return { runnable: true, build: () => fn(TSL) };
-    } catch (e) {
-      console.warn(`[bench-registry] saved group '${g.name}' compile failed:`, e);
-      return { runnable: false, reason: 'compile failed — open in editor and re-save' };
-    }
+    return {
+      runnable: false,
+      reason: 'inline tslCode execution disabled — bench needs a sandboxed compile step',
+    };
   }
   return {
     runnable: false,

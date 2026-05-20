@@ -114,9 +114,7 @@ export function CodeEditor() {
     fileInputRef.current?.click();
   }, []);
 
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const importScriptFile = useCallback((file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       const text = reader.result as string;
@@ -126,11 +124,61 @@ export function CodeEditor() {
       requestCodeSync();
     };
     reader.readAsText(file);
-    e.target.value = '';
   }, [setCode, requestCodeSync]);
 
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) importScriptFile(file);
+    e.target.value = '';
+  }, [importScriptFile]);
+
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const dragDepthRef = useRef(0);
+
+  const isFileDrag = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer.types).includes('Files');
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDraggingFile(true);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!isFileDrag(e)) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDraggingFile(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDraggingFile(false);
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    if (!/\.js$/i.test(file.name)) {
+      window.alert(`"${file.name}" is not a .js shader script.`);
+      return;
+    }
+    importScriptFile(file);
+  }, [importScriptFile]);
+
   return (
-    <div className="code-editor">
+    <div
+      className="code-editor"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <input
         ref={fileInputRef}
         type="file"
@@ -138,6 +186,14 @@ export function CodeEditor() {
         style={{ display: 'none' }}
         onChange={handleFileChange}
       />
+      {isDraggingFile && (
+        <div className="code-editor__drop-overlay">
+          <div className="code-editor__drop-msg">
+            <div className="code-editor__drop-title">Drop shader script</div>
+            <div className="code-editor__drop-sub">.js file — will replace current TSL code</div>
+          </div>
+        </div>
+      )}
       <div className="code-editor__tabbar">
         <div className="code-editor__tabs">
           <button
@@ -227,6 +283,11 @@ export function CodeEditor() {
             theme={codeEditorTheme}
             options={BASE_EDITOR_OPTIONS}
           />
+          {isTSL && code.trim() === '' && !isDraggingFile && (
+            <div className="code-editor__empty-hint">
+              {'// Drop a .js shader script here to import, or click Load Script above.'}
+            </div>
+          )}
         </div>
         {/* Shader script preview (read-only) — for a-frame-shaderloader */}
         {activeTab === 'script' && (

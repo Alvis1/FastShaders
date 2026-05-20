@@ -1,19 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { hasTimeUpstream } from './graphTraversal';
-import type { AppNode } from '@/types';
+import { makeNode } from '@/test-utils';
 
-/**
- * The function only reads `id` and `data.registryType`, so we cast minimal
- * stubs as AppNode to avoid building full React Flow node shapes.
- */
-function node(id: string, registryType: string): AppNode {
-  return {
-    id,
-    type: 'shader',
-    position: { x: 0, y: 0 },
-    data: { registryType, label: id, cost: 0, values: {} },
-  } as unknown as AppNode;
-}
+const node = makeNode;
 
 describe('hasTimeUpstream', () => {
   it('returns false on an isolated non-time node', () => {

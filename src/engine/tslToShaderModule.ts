@@ -36,6 +36,14 @@ export function tslToShaderModule(
   let fnBraceDepth = 0;
   let skippedExportDefault = false;
   let needsPositionImports = false;
+  // Track Discard(...) lines so we can wrap them in an Fn after the function
+  // body is laid out — see the post-processing pass below. `Discard()` uses
+  // `.toStack()` which only attaches to an active TSL execution stack, and
+  // unwrapping the original `Fn(...)` into a plain `function(params)` leaves
+  // no stack — so without this fix, live uniform changes can't move the
+  // discard threshold and the call is a silent no-op.
+  const discardLines: string[] = [];
+  let discardColorRef: string | null = null;
 
   const props = properties ?? [];
   const propNames = new Set(props.map(p => p.name));
@@ -135,6 +143,43 @@ export function tslToShaderModule(
         }
       }
 
+      // Capture bare `Discard(cond);` calls and drop them from the body —
+      // they'll be re-emitted inside an Fn wrapper below.
+      if (/^Discard\(/.test(trimmed)) {
+        discardLines.push(line);
+        continue;
+      }
+
+      // Single-value return: `return foo;` — when Discard is present, wrap the
+      // color in __pixel() and convert to object API. Without this, single-
+      // channel shaders (only color wired) would still drop the Discard.
+      const simpleReturnMatch = trimmed.match(/^return\s+(.+);$/);
+      if (simpleReturnMatch && discardLines.length > 0) {
+        const val = simpleReturnMatch[1].trim();
+        discardColorRef = val;
+        const indent = line.match(/^(\s*)/)?.[1] ?? '';
+        outLines.push(`${indent}const __pixel = Fn(() => {`);
+        for (const dl of discardLines) {
+          outLines.push(indent + '  ' + dl.trimStart());
+        }
+        outLines.push(`${indent}  return ${val};`);
+        outLines.push(`${indent}});`);
+        // Promote to object API so material settings can still be threaded
+        // through the same return path the object-return branch uses.
+        const extras: string[] = [];
+        if (materialSettings?.transparent) extras.push('transparent: true');
+        if (materialSettings?.side) {
+          const sideValues: Record<string, number> = { front: 0, back: 1, double: 2 };
+          extras.push(`side: ${sideValues[materialSettings.side] ?? 0}`);
+        }
+        if (materialSettings?.alphaTest) {
+          extras.push(`alphaTest: ${materialSettings.alphaTest}`);
+        }
+        const props = ['colorNode: __pixel()', ...extras].join(', ');
+        outLines.push(`${indent}return { ${props} };`);
+        continue;
+      }
+
       // Convert multi-channel return: { color: x } → { colorNode: x }
       const objReturnMatch = trimmed.match(/^return\s*\{(.+)\}\s*;?$/);
       if (objReturnMatch) {
@@ -151,6 +196,12 @@ export function tslToShaderModule(
               : val;
             return `${nodeProp}: positionLocal.add(${displacement})`;
           }
+          // When Discard is present, swap the color value for __pixel() — the
+          // original color expression is computed inside the Fn body below.
+          if (key === 'color' && discardLines.length > 0) {
+            discardColorRef = val;
+            return nodeProp ? `${nodeProp}: __pixel()` : `${key}: __pixel()`;
+          }
           return nodeProp ? `${nodeProp}: ${val}` : `${key}: ${val}`;
         });
         // Inject material settings into the return object
@@ -165,6 +216,16 @@ export function tslToShaderModule(
           entries.push(`alphaTest: ${materialSettings.alphaTest}`);
         }
         const indent = line.match(/^(\s*)/)?.[1] ?? '';
+        // Emit the __pixel Fn just before the return so the discard runs
+        // inside an active TSL stack.
+        if (discardLines.length > 0 && discardColorRef) {
+          outLines.push(`${indent}const __pixel = Fn(() => {`);
+          for (const dl of discardLines) {
+            outLines.push(indent + '  ' + dl.trimStart());
+          }
+          outLines.push(`${indent}  return ${discardColorRef};`);
+          outLines.push(`${indent}});`);
+        }
         outLines.push(`${indent}return { ${entries.join(', ')} };`);
         continue;
       }
@@ -206,6 +267,14 @@ export function tslToShaderModule(
           if (displacementMode === 'normal' && !names.includes('normalLocal')) {
             names.push('normalLocal');
           }
+        }
+
+        // Re-inject Fn when Discard wrapping requires it (the import-line
+        // pass earlier stripped Fn unconditionally because the canonical
+        // shader format wraps everything in Fn — we strip that wrapper and
+        // emit a plain function, but the discard fix needs Fn back).
+        if (discardLines.length > 0 && !names.includes('Fn')) {
+          names.push('Fn');
         }
 
         outLines[i] = `import { ${names.join(', ')} } from 'three/tsl';`;

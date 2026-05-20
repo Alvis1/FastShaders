@@ -354,6 +354,12 @@ function evaluate(
       break;
     }
 
+    // Logic — per-channel comparisons emit 0/1 as a float so downstream
+    // visualization sees the right shape without piping booleans around.
+    case 'greaterThan': result = binaryOp('a', 0, 'b', 0, (a, b) => a > b ? 1 : 0); break;
+    case 'lessThan': result = binaryOp('a', 0, 'b', 0, (a, b) => a < b ? 1 : 0); break;
+    case 'equal': result = binaryOp('a', 0, 'b', 0, (a, b) => a === b ? 1 : 0); break;
+
     // Vector ops that return scalar
     case 'length': {
       const v = channelInput('v', 0);
@@ -784,6 +790,16 @@ function computeRange(
         Math.min(amin, bmin),
         Math.max(amax, bmax),
       ]);
+      break;
+    }
+    case 'greaterThan':
+    case 'lessThan':
+    case 'equal': {
+      // Result is 0/1 per input channel.
+      const a = portRange('a', 0);
+      const b = portRange('b', 0);
+      const len = Math.max(a.min.length, b.min.length);
+      result = { min: Array(len).fill(0), max: Array(len).fill(1) };
       break;
     }
     case 'vec2': {

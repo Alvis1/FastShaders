@@ -1,25 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { topologicalSort } from './topologicalSort';
-import type { AppNode, AppEdge } from '@/types';
+import { makeNode, makeEdge } from '@/test-utils';
 
-function node(id: string): AppNode {
-  return {
-    id,
-    type: 'shader',
-    position: { x: 0, y: 0 },
-    data: { registryType: 'add', label: id, cost: 0, values: {} },
-  } as unknown as AppNode;
-}
-
-function edge(source: string, target: string): AppEdge {
-  return {
-    id: `e-${source}-${target}`,
-    source,
-    target,
-    sourceHandle: 'out',
-    targetHandle: 'a',
-  } as unknown as AppEdge;
-}
+const node = (id: string) => makeNode(id, 'add');
+const edge = (source: string, target: string) => makeEdge(source, 'out', target, 'a');
 
 describe('topologicalSort', () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;

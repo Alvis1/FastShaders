@@ -14,6 +14,7 @@ export type NodeCategory =
   | 'arithmetic'
   | 'math'
   | 'interpolation'
+  | 'logic'
   | 'vector'
   | 'noise'
   | 'color'

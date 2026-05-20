@@ -8,7 +8,7 @@ import { TypedHandle } from '../handles/TypedHandle';
 import './OutputNode.css';
 
 /** Ports that belong to the pixel (fragment) shader section */
-const PIXEL_PORTS = ['color', 'emissive', 'normal', 'opacity', 'roughness'];
+const PIXEL_PORTS = ['color', 'emissive', 'normal', 'opacity', 'roughness', 'discard'];
 /** Ports that belong to the vertex shader section */
 const VERTEX_PORTS = ['position'];
 /** Ports always visible by default (no need to expose via settings) */

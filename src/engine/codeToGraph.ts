@@ -53,6 +53,12 @@ export function codeToGraph(
   const splitNodes = new Map<string, string>();
 
   let hasOutput = false;
+  // Discard is a side-effect statement (`Discard(cond);`) that appears in the
+  // function body, but its value flows into the Output node's `discard` port —
+  // which doesn't exist until the return statement creates the output. Buffer
+  // the argument here, then wire it after the output node is built (either by
+  // ReturnStatement / `output =` or by the no-output fallback below).
+  let pendingDiscardArg: t.Node | undefined;
 
   // Build the OutputNode and wire its channels from a return/output expression.
   // Shared between `return X` (FastShaders canonical form) and `output = X`
@@ -186,6 +192,17 @@ export function codeToGraph(
         if (path.node.left.name !== 'output') return;
         buildOutputFromExpr(path.node.right);
       },
+
+      // Capture bare `Discard(cond);` statements. The arg is buffered and wired
+      // to the Output node's `discard` port after traversal, since the output
+      // node may not exist yet at the moment the Discard call is visited.
+      ExpressionStatement(path) {
+        const expr = path.node.expression;
+        if (!t.isCallExpression(expr)) return;
+        if (!t.isIdentifier(expr.callee) || expr.callee.name !== 'Discard') return;
+        if (expr.arguments.length === 0) return;
+        pendingDiscardArg = expr.arguments[0];
+      },
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -197,6 +214,28 @@ export function codeToGraph(
     const outputDef = NODE_REGISTRY.get('output');
     if (outputDef) {
       rawNodes.push(createNode(generateId(), outputDef, 'Output'));
+    }
+  }
+
+  // Wire any deferred Discard(cond) into the output node's discard port.
+  if (pendingDiscardArg) {
+    const outputNode = rawNodes.find((n) => n.data.registryType === 'output');
+    if (outputNode) {
+      const ref = resolveReturnSource(
+        pendingDiscardArg, rawNodes, rawEdges, varToNodeId, splitNodes, code, warnings,
+      );
+      if (ref) {
+        rawEdges.push({
+          id: generateEdgeId(ref.nodeId, ref.handle, outputNode.id, 'discard'),
+          source: ref.nodeId,
+          sourceHandle: ref.handle,
+          target: outputNode.id,
+          targetHandle: 'discard',
+          type: 'typed' as const,
+          animated: true,
+          data: { dataType: 'float' as const },
+        });
+      }
     }
   }
 

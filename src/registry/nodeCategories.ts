@@ -11,6 +11,7 @@ export const CATEGORIES: CategoryInfo[] = [
   { id: 'arithmetic', label: 'Arithmetic' },
   { id: 'math', label: 'Math' },
   { id: 'interpolation', label: 'Interpolation' },
+  { id: 'logic', label: 'Logic' },
   { id: 'vector', label: 'Vector' },
   { id: 'noise', label: 'Noise' },
   { id: 'color', label: 'Color' },
