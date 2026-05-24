@@ -278,6 +278,13 @@ export function graphToCode(
   // the fragment before any further work.
   let discardLine: string | null = null;
 
+  // Channels that the WebGL/WebGPU backend will validate as vec3-typed. A
+  // bool-producing source (logic category) wired straight into one of these
+  // links a broken shader program — WebGL then spams INVALID_OPERATION on
+  // every frame. Coerce to `vec3(float(...))` so the shader is well-typed and
+  // the boolean visualises as black/white instead of melting the renderer.
+  const VEC3_CHANNELS = new Set(['color', 'emissive', 'normal', 'position']);
+
   if (outputNode) {
     for (const ch of OUTPUT_CHANNELS) {
       const edge = edges.find(
@@ -285,7 +292,17 @@ export function graphToCode(
       );
       if (edge) {
         const ref = resolveEdgeRef(edge, edges, varNames, sorted);
-        if (ref) channels[ch] = ref;
+        if (ref) {
+          const sourceNode = sorted.find((n) => n.id === edge.source);
+          const sourceDef = sourceNode ? registry.get(sourceNode.data.registryType) : undefined;
+          if (sourceDef?.category === 'logic' && VEC3_CHANNELS.has(ch)) {
+            addImport('three/tsl', 'vec3');
+            addImport('three/tsl', 'float');
+            channels[ch] = `vec3(float(${ref}))`;
+          } else {
+            channels[ch] = ref;
+          }
+        }
       }
     }
 
