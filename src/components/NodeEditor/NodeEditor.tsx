@@ -51,8 +51,10 @@ const edgeTypes = {
   typed: TypedEdge,
 };
 
-/** Snap radius for edge drag-to-connect AND drop-on-edge insertion. */
+/** Snap radius for edge drag-to-connect (handle-to-handle wiring). */
 const CONNECTION_RADIUS = 40;
+/** Snap radius for drop-on-edge insertion — small so the node center must be basically over the edge. */
+const DROP_ON_EDGE_RADIUS = 8;
 /** Pixels of movement before a node drag is considered "real" (and worth pushing history). */
 const DRAG_HISTORY_THRESHOLD = 2;
 
@@ -102,7 +104,7 @@ function nodeAbsolutePos(node: AppNode, allNodes: AppNode[]): { x: number; y: nu
 }
 
 /**
- * Find the closest edge to (cx, cy) in flow-space within CONNECTION_RADIUS.
+ * Find the closest edge to (cx, cy) in flow-space within DROP_ON_EDGE_RADIUS.
  * `excludeNodeId` skips edges connected to the node being dragged.
  */
 function findNearestEdge(
@@ -111,7 +113,7 @@ function findNearestEdge(
   excludeNodeId?: string,
 ): string | null {
   let bestId: string | null = null;
-  let bestDist = CONNECTION_RADIUS;
+  let bestDist = DROP_ON_EDGE_RADIUS;
 
   for (const edge of allEdges) {
     if (excludeNodeId && (edge.source === excludeNodeId || edge.target === excludeNodeId)) continue;

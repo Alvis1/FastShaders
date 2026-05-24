@@ -154,6 +154,23 @@ function loadUniformBounds(): Record<string, UniformBounds> {
   return {};
 }
 
+function loadUniformValues(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem('fs:previewUniformValues');
+    if (raw) {
+      const parsed = JSON.parse(raw, safeJsonReviver);
+      if (parsed && typeof parsed === 'object') {
+        const result: Record<string, number> = {};
+        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+          if (typeof v === 'number' && Number.isFinite(v)) result[k] = v;
+        }
+        return result;
+      }
+    }
+  } catch { /* */ }
+  return {};
+}
+
 /**
  * Extract scalar property uniforms from generated TSL code by matching
  * `const NAME = uniform(VALUE)` — the same pattern the shaderloader auto-detects.
@@ -267,31 +284,34 @@ export function ShaderPreview() {
     try { localStorage.setItem('fs:previewUniformBounds', JSON.stringify(uniformBounds)); } catch { /* */ }
   }, [uniformBounds]);
 
-  // Live slider values — overlay-local; do not write back to the graph (so
-  // tweaking a slider doesn't trigger a graph re-sync and tear the iframe down)
-  const [uniformValues, setUniformValues] = useState<Record<string, number>>({});
-  // When the set of uniform names changes (added/removed/renamed), seed any
-  // new entries from their code-side default. Existing entries keep whatever
-  // the user has dragged them to.
+  // Live slider values — overlay-local (don't write back to the graph, so
+  // tweaking a slider doesn't trigger a graph re-sync and tear the iframe
+  // down) but persisted to localStorage so refresh + node-graph mutations
+  // (rename/delete/re-add of a property node) preserve user tuning, the
+  // same way uniformBounds and camera/rotation already do.
+  const [uniformValues, setUniformValues] = useState<Record<string, number>>(loadUniformValues);
+  useEffect(() => {
+    try { localStorage.setItem('fs:previewUniformValues', JSON.stringify(uniformValues)); } catch { /* */ }
+  }, [uniformValues]);
+  // When the set of uniform names changes, seed any newly-appearing entries
+  // from their code-side default. Existing entries (including ones that
+  // disappeared earlier and have just come back via undo/rename/re-add) keep
+  // their stored value — we deliberately do NOT prune names that aren't in
+  // the current shader, mirroring uniformBounds' "remember everything"
+  // behaviour. The iframe's fs:uniform handler ignores unknown names, so
+  // carrying extras is harmless.
   const uniformsKey = uniforms.map((u) => `${u.name}=${u.defaultValue}`).join('|');
   useEffect(() => {
     setUniformValues((prev) => {
-      const next: Record<string, number> = {};
       let changed = false;
-      const currentNames = new Set(uniforms.map((u) => u.name));
+      const next: Record<string, number> = { ...prev };
       for (const u of uniforms) {
-        if (u.name in prev) {
-          next[u.name] = prev[u.name];
-        } else {
+        if (!(u.name in prev)) {
           next[u.name] = u.defaultValue;
           changed = true;
         }
       }
-      // Drop stale entries
-      for (const k of Object.keys(prev)) {
-        if (!currentNames.has(k)) { changed = true; }
-      }
-      return changed || Object.keys(next).length !== Object.keys(prev).length ? next : prev;
+      return changed ? next : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uniformsKey]);

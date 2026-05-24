@@ -158,13 +158,17 @@ export function codeToGraph(
           return;
         }
 
-        // const x = identifier (e.g. positionGeometry)
+        // const x = identifier (e.g. positionGeometry, or aliasing another var)
         if (t.isIdentifier(init)) {
           const def = TSL_FUNCTION_TO_DEF.get(init.name);
           if (def) {
             const nodeId = generateId();
             rawNodes.push(createNode(nodeId, def, varName));
             varToNodeId.set(varName, nodeId);
+          } else if (varToNodeId.has(init.name)) {
+            // `const colorNode = baseColor;` — alias to an existing node so
+            // later references (return, Discard, …) resolve through this name.
+            varToNodeId.set(varName, varToNodeId.get(init.name)!);
           }
           return;
         }
@@ -323,6 +327,16 @@ function processCall(
     funcName = callExpr.callee.property.name;
     if (t.isIdentifier(callExpr.callee.object)) {
       objectVarName = callExpr.callee.object.name;
+    } else if (t.isCallExpression(callExpr.callee.object)) {
+      // Nested chain like `positionWorld.sub(cameraPosition).length()`. Recurse
+      // on the inner call under a synthetic variable, then use that as the
+      // chain receiver so the outer call can wire to it normally.
+      const innerVar = `__chain${nodes.length}`;
+      processCall(
+        callExpr.callee.object, innerVar,
+        nodes, edges, varToNodeId, splitNodesMap, code, errors,
+      );
+      if (varToNodeId.has(innerVar)) objectVarName = innerVar;
     }
   }
 
@@ -528,6 +542,29 @@ function processCall(
           target: nodeId, targetHandle: defaultKeys[i],
           type: 'typed' as const, animated: true,
           data: { dataType: 'float' as const },
+        });
+      }
+    } else if (t.isCallExpression(arg)) {
+      // Inline call argument like `add(x, foo.bar(y))`. Process under a
+      // synthetic variable, then wire that node's output into our input port.
+      const innerVar = `__arg${nodes.length}_${i}`;
+      processCall(arg, innerVar, nodes, edges, varToNodeId, splitNodesMap, code, errors);
+      const sourceId = varToNodeId.get(innerVar);
+      if (sourceId && port) {
+        edges.push({
+          id: generateEdgeId(sourceId, 'out', nodeId, port.id),
+          source: sourceId, sourceHandle: 'out',
+          target: nodeId, targetHandle: port.id,
+          type: 'typed' as const, animated: true,
+          data: { dataType: port.dataType },
+        });
+      } else if (sourceId && def.inputs.length === 0 && defaultKeys[i]) {
+        edges.push({
+          id: generateEdgeId(sourceId, 'out', nodeId, defaultKeys[i]),
+          source: sourceId, sourceHandle: 'out',
+          target: nodeId, targetHandle: defaultKeys[i],
+          type: 'typed' as const, animated: true,
+          data: { dataType: 'any' as const },
         });
       }
     } else if (literalValue !== undefined) {
