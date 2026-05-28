@@ -110,3 +110,28 @@
   min-width: 16px;
   color: rgba(0, 0, 0, 0.7);
 }
+
+/* Touch devices: shrink-to-6px arrows are unhittable and the 24px value pad is
+   below the 44px Apple HIG minimum. Widen the touch target without changing
+   layout flow more than necessary. */
+@media (pointer: coarse) {
+  .drag-num {
+    height: 32px;
+  }
+  .drag-num__arrow {
+    width: 28px;
+    font-size: 12px;
+  }
+  .drag-num--compact {
+    height: 20px;
+  }
+  .drag-num--compact .drag-num__arrow {
+    width: 14px;
+    font-size: 9px;
+  }
+  .drag-num--compact .drag-num__value,
+  .drag-num--compact .drag-num__edit {
+    font-size: 10px;
+    min-width: 24px;
+  }
+}

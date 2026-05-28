@@ -60,6 +60,14 @@
   background: rgba(0, 0, 0, 0.32);
 }
 
+@media (pointer: coarse) {
+  .group-node__toggle {
+    width: 28px;
+    height: 28px;
+    font-size: 18px;
+  }
+}
+
 /* Collapsed pill: header sits at the top, sockets render in the body region
    below. Members + their internal edges are hidden via React Flow's `hidden`
    flag, but boundary edges stay live and connect to synthetic handles

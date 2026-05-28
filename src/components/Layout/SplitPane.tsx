@@ -1,4 +1,5 @@
 import { useCallback, useRef, type ReactNode } from 'react';
+import './SplitPane.css';
 
 interface SplitPaneProps {
   left: ReactNode;
@@ -60,23 +61,16 @@ export function SplitPane({
         {left}
       </div>
       <div
+        className={`split-pane__divider split-pane__divider--${isH ? 'h' : 'v'}`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        style={{
-          [isH ? 'width' : 'height']: '4px',
-          cursor: isH ? 'col-resize' : 'row-resize',
-          background: 'var(--border-subtle)',
-          flexShrink: 0,
-          transition: 'background var(--transition-fast)',
-          touchAction: 'none',
-        }}
         onMouseEnter={(e) => {
           (e.target as HTMLElement).style.background = 'var(--border-focus)';
         }}
         onMouseLeave={(e) => {
           if (!dragging.current) {
-            (e.target as HTMLElement).style.background = 'var(--border-subtle)';
+            (e.target as HTMLElement).style.background = '';
           }
         }}
       />

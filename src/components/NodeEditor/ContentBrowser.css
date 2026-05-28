@@ -235,3 +235,30 @@
   background: #e74c3c;
   color: #ffffff;
 }
+
+/* Touch devices: scroll arrows aren't really needed (swipe-scroll is native)
+   but when they appear they should be tappable. Saved-group delete buttons are
+   hover-only, so pin them on. Category tabs need taller hit area. */
+@media (pointer: coarse) {
+  .content-browser__arrow {
+    width: 40px;
+    font-size: 26px;
+  }
+  .content-browser__cat-btn {
+    padding: 10px 18px 9px;
+    font-size: 11px;
+  }
+  .content-browser__search {
+    padding: 8px 10px;
+    font-size: 11px;
+    width: 140px;
+  }
+  .saved-group-card__delete {
+    display: flex;
+    top: -10px;
+    right: -10px;
+    width: 28px;
+    height: 28px;
+    font-size: 18px;
+  }
+}

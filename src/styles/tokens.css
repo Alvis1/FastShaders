@@ -89,3 +89,15 @@
   --z-menu: 100;
   --z-overlay: 1000;
 }
+
+/* ===== TOUCH / COARSE-POINTER OVERRIDES =====
+   Activates on iPad, phone, and any device whose primary pointer can't hover
+   precisely (10px hit targets and hover-revealed UI are unusable there).
+   These rules are additive; desktop layouts are untouched. */
+@media (pointer: coarse) {
+  :root {
+    /* Bigger port disc — 18px visual, still centered on the same anchor.
+       React Flow's internal hit area scales with this. */
+    --handle-size: 18px;
+  }
+}

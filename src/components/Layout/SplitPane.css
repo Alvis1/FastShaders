@@ -1,0 +1,30 @@
+.split-pane__divider {
+  background: var(--border-subtle);
+  flex-shrink: 0;
+  transition: background var(--transition-fast);
+  touch-action: none;
+}
+
+.split-pane__divider--h {
+  width: 4px;
+  cursor: col-resize;
+}
+
+.split-pane__divider--v {
+  height: 4px;
+  cursor: row-resize;
+}
+
+/* Touch devices: thicken to a comfortable tap target and pin the contrast
+   color (no hover state) so users can see the divider before grabbing it. */
+@media (pointer: coarse) {
+  .split-pane__divider {
+    background: var(--border-default);
+  }
+  .split-pane__divider--h {
+    width: 12px;
+  }
+  .split-pane__divider--v {
+    height: 12px;
+  }
+}
