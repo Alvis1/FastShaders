@@ -1,5 +1,6 @@
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useRef, useCallback } from 'react';
 import type { NodeDefinition, NodeCategory } from '@/types';
+import { startTileDrag } from './tileDrag';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
@@ -393,8 +394,25 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
 
   const shared: ContentProps = { def, catColor, costColor, costTextColor, costScale, cost };
 
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+      startTileDrag(
+        e.nativeEvent,
+        { kind: 'node', nodeType: def.type },
+        `<div class="node-preview-card">${(e.currentTarget as HTMLElement).innerHTML}</div>`,
+      );
+    },
+    [def.type],
+  );
+
   return (
-    <div className="node-preview-card" draggable onDragStart={(e) => onDragStart(e, def)}>
+    <div
+      className="node-preview-card"
+      draggable
+      onDragStart={(e) => onDragStart(e, def)}
+      onPointerDown={onPointerDown}
+    >
       {flowType === 'color' ? (
         <ColorCardContent def={def} cost={cost} costTextColor={costTextColor} />
       ) : flowType === 'mathPreview' ? (

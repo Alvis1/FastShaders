@@ -976,6 +976,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const socketCount = Math.max(collapsedInputs.length, collapsedOutputs.length);
       const collapsedH = HEADER_H + SOCKET_TOP_PAD + Math.max(1, socketCount) * SOCKET_H + 6;
 
+      // Two-phase commit: React Flow only measures a handle's bounding rect
+      // after the Handle component mounts + ResizeObserver fires, so the
+      // synthetic sockets minted above aren't yet in `nodeLookup.handleBounds`
+      // when EdgeWrapper renders this turn. If we rewired the boundary edges
+      // in the same `set()`, React Flow's `getEdgePosition` would log
+      // "Couldn't create edge for target handle id: __in_..." for every
+      // boundary edge before `updateNodeInternals` corrects things on the next
+      // render. We avoid the warning by deferring the rewire one frame:
+      //   1. commit the node updates (handles render → ResizeObserver fires)
+      //      and mark each boundary edge `hidden: true` so React Flow doesn't
+      //      try to draw it against unmeasured handles
+      //   2. on the next rAF, swap in `updatedEdges` (now safe to look up)
       set((s) => ({
         nodes: s.nodes.map((n) => {
           if (n.id === groupId) {
@@ -1013,10 +1025,39 @@ export const useAppStore = create<AppState>()((set, get) => ({
           }
           return n;
         }),
-        edges: updatedEdges,
+        edges: s.edges.map((e) => {
+          const srcInside = memberIds.has(e.source);
+          const tgtInside = memberIds.has(e.target);
+          if (srcInside && tgtInside) {
+            // Internal edge — same final state as `updatedEdges` so phase 2 is a no-op for it.
+            return { ...e, className: 'fs-collapsed-edge' };
+          }
+          if (srcInside !== tgtInside) {
+            // Boundary edge: hide it for this one frame so React Flow doesn't
+            // try to position it against the not-yet-measured synthetic handle.
+            return { ...e, hidden: true };
+          }
+          return e;
+        }),
         syncSource: 'graph',
         isUndoRedo: false,
       }));
+
+      // Phase 2 — rewire the boundary edges to the synthetic sockets. Handles
+      // have mounted and been measured by the time this rAF callback runs, so
+      // the lookups in `getEdgePosition` succeed and no devWarn fires.
+      requestAnimationFrame(() => {
+        set((s) => {
+          // If the user already expanded the group (or undid the collapse)
+          // during the one-frame gap, abort — phase 2 would otherwise
+          // overwrite the now-restored edges with stale rewired ones.
+          const group = s.nodes.find((n) => n.id === groupId);
+          if (!group || group.type !== 'group' || !(group.data as GroupNodeData).collapsed) {
+            return {};
+          }
+          return { edges: updatedEdges, syncSource: 'graph', isUndoRedo: false };
+        });
+      });
       return;
     }
 

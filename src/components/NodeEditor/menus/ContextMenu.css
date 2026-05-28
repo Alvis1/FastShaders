@@ -87,3 +87,17 @@
   background: var(--border-subtle);
   margin: var(--space-1) 0;
 }
+
+@media (pointer: coarse) {
+  .context-menu {
+    min-width: 240px;
+  }
+  .context-menu__item {
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--font-size-md);
+  }
+  .context-menu__search {
+    padding: var(--space-3) var(--space-3);
+    font-size: var(--font-size-md);
+  }
+}

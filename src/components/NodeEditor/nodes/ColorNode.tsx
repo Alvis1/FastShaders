@@ -4,6 +4,7 @@ import type { ColorFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
+import { useLongPress } from '@/hooks/useLongPress';
 import './ColorNode.css';
 
 export const ColorNode = memo(function ColorNode({
@@ -14,6 +15,7 @@ export const ColorNode = memo(function ColorNode({
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const pickerRef = useRef<HTMLInputElement>(null);
+  const nodeRef = useRef<HTMLDivElement>(null);
   const hex = String(data.values?.hex ?? '#ff0000');
 
   const handleChange = useCallback(
@@ -27,8 +29,12 @@ export const ColorNode = memo(function ColorNode({
     pickerRef.current?.click();
   }, []);
 
+  // Touch/pen long-press opens the color picker (double-click is unreliable on touch).
+  useLongPress(nodeRef, openPicker);
+
   return (
     <div
+      ref={nodeRef}
       className={`color-node ${selected ? 'color-node--selected' : ''}`}
       style={{ background: hex }}
       onDoubleClick={openPicker}

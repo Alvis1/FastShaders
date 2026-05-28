@@ -14,6 +14,7 @@ import {
   SelectionMode,
 } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
+import { useLongPress } from '@/hooks/useLongPress';
 import { ShaderNode } from './nodes/ShaderNode';
 import { ColorNode } from './nodes/ColorNode';
 import { PreviewNode } from './nodes/PreviewNode';
@@ -26,6 +27,7 @@ import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
 import { BUILTIN_TEXTURE_DRAG_TYPE } from './TextureCard';
+import { TILE_DROP_EVENT, type TileDropEventDetail, type TilePayload } from './tileDrag';
 import { CostBar } from '@/components/Layout/CostBar';
 import { getCostColor, getContrastColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
@@ -789,45 +791,28 @@ export function NodeEditor() {
     updateEdgeHighlight(findNearestEdge(pos.x, pos.y, store.nodes, store.edges));
   }, [screenToFlowPosition, updateEdgeHighlight]);
 
-  const onDrop = useCallback(
-    (event: React.DragEvent) => {
-      event.preventDefault();
-      clearEdgeHighlight();
+  // Place a node/group/texture at the given screen point. Shared by both the
+  // HTML5 onDrop path (desktop) and the touch tileDrag path (iPad/phone).
+  const placeTilePayload = useCallback(
+    (payload: TilePayload, clientX: number, clientY: number) => {
+      const position = screenToFlowPosition({ x: clientX, y: clientY });
 
-      // Saved-group drag payload takes precedence over a regular node-type drag
-      // (the two payloads can't both be set at once but we check this one first
-      // so the regular path doesn't accidentally swallow it).
-      const savedGroupId = event.dataTransfer.getData(SAVED_GROUP_DRAG_TYPE);
-      if (savedGroupId) {
-        const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-        useAppStore.getState().instantiateSavedGroup(savedGroupId, position);
+      if (payload.kind === 'savedGroup') {
+        useAppStore.getState().instantiateSavedGroup(payload.id, position);
+        return;
+      }
+      if (payload.kind === 'texture') {
+        useAppStore.getState().instantiateBuiltinTexture(payload.id, position);
         return;
       }
 
-      // Built-in texture drag
-      const textureId = event.dataTransfer.getData(BUILTIN_TEXTURE_DRAG_TYPE);
-      if (textureId) {
-        const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-        useAppStore.getState().instantiateBuiltinTexture(textureId, position);
-        return;
-      }
-
-      const nodeType = event.dataTransfer.getData('application/reactflow-type');
-      if (!nodeType) return;
-
-      const def = NODE_REGISTRY.get(nodeType);
+      const def = NODE_REGISTRY.get(payload.nodeType);
       if (!def) return;
-
-      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
       const costs = complexityData.costs as Record<string, number>;
       const cost = costs[def.type] ?? 0;
-
-      // Read from store directly — `nodes` from the closure may be stale if the
-      // user added a node between render and drop (e.g. via context menu).
       const currentNodes = useAppStore.getState().nodes;
 
       let newNodeId: string | undefined;
-
       if (def.type === 'output') {
         if (currentNodes.some((n) => n.data.registryType === 'output')) return;
         const newNode: AppNode = {
@@ -860,13 +845,38 @@ export function NodeEditor() {
         newNodeId = newNode.id;
       }
 
-      // Drop-on-edge: if the new node landed on an edge, insert it inline.
       if (newNodeId && def.inputs.length > 0 && def.outputs.length > 0) {
         tryInsertOnEdge(newNodeId, def, position.x, position.y);
       }
     },
-    [screenToFlowPosition, addNode, clearEdgeHighlight],
+    [screenToFlowPosition, addNode],
   );
+
+  const onDrop = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault();
+      clearEdgeHighlight();
+
+      // Saved-group drag payload takes precedence over a regular node-type drag
+      // (the two payloads can't both be set at once but we check this one first
+      // so the regular path doesn't accidentally swallow it).
+      const savedGroupId = event.dataTransfer.getData(SAVED_GROUP_DRAG_TYPE);
+      if (savedGroupId) {
+        placeTilePayload({ kind: 'savedGroup', id: savedGroupId }, event.clientX, event.clientY);
+        return;
+      }
+      const textureId = event.dataTransfer.getData(BUILTIN_TEXTURE_DRAG_TYPE);
+      if (textureId) {
+        placeTilePayload({ kind: 'texture', id: textureId }, event.clientX, event.clientY);
+        return;
+      }
+      const nodeType = event.dataTransfer.getData('application/reactflow-type');
+      if (!nodeType) return;
+      placeTilePayload({ kind: 'node', nodeType }, event.clientX, event.clientY);
+    },
+    [clearEdgeHighlight, placeTilePayload],
+  );
+
 
   // Pick a contrast color for the canvas-scoped badge text + 1-channel edges
   // (black on light bg, white on dark bg). Same value drives both, so they
@@ -890,6 +900,38 @@ export function NodeEditor() {
   // the nodesselection wrapper so d3-zoom's filter lets the event through,
   // then restore it on the next frame.
   const canvasRef = useRef<HTMLDivElement>(null);
+
+  // Touch/pen long-press → context menu. We dispatch a synthetic `contextmenu`
+  // MouseEvent on the original DOM target so React Flow's existing per-element
+  // handlers (onPaneContextMenu / onNodeContextMenu / onEdgeContextMenu /
+  // onSelectionContextMenu) route the gesture exactly as a right-click would —
+  // no duplicate hit-testing here. Handles get skipped so a long-press on a
+  // port doesn't pop a menu mid-connection-drag.
+  useLongPress(canvasRef, (target, clientX, clientY) => {
+    if (target.closest('.react-flow__handle')) return;
+    const evt = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      button: 2,
+    });
+    target.dispatchEvent(evt);
+  });
+
+  // Touch-drag landing pad: tiles (NodePreviewCard / SavedGroupCard /
+  // TextureCard) dispatch this event on the canvas when their finger drag
+  // releases over it. Routes through the same placement logic as HTML5 DnD.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<TileDropEventDetail>).detail;
+      placeTilePayload(detail.payload, detail.clientX, detail.clientY);
+    };
+    el.addEventListener(TILE_DROP_EVENT, handler);
+    return () => el.removeEventListener(TILE_DROP_EVENT, handler);
+  }, [placeTilePayload]);
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
@@ -905,49 +947,41 @@ export function NodeEditor() {
     return () => el.removeEventListener('mousedown', handler, true);
   }, []);
 
-  // Trackpad two-finger drag to pan. Mouse wheels fire the same `wheel`
-  // event, so we distinguish by signature: trackpads emit pixel-mode events
-  // with small/fractional deltas (or a non-zero deltaX for diagonals), while
-  // mouse wheels emit large discrete deltas (|deltaY| typically >= 50).
-  //
-  // - ctrlKey on a wheel event = pinch-to-zoom (synthesized by macOS). Let
-  //   React Flow handle it so zoom keeps working.
-  // - Mouse-wheel-sized events: let React Flow zoom.
-  // - Trackpad-sized events: intercept and pan manually. Capture phase +
-  //   stopImmediatePropagation prevents React Flow from also zooming.
+  // Horizontal-wheel pan. Vertical wheel (deltaY) keeps zooming via React
+  // Flow's zoomOnScroll. A mouse tilt-wheel or trackpad horizontal swipe emits
+  // deltaX on its own, so this is unambiguous and doesn't conflict with the
+  // smooth-scroll inertia that previously made mouse wheels misfire as pans.
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
 
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey) return; // pinch-to-zoom
-      const looksTrackpad =
-        e.deltaMode === 0 &&
-        (e.deltaX !== 0 || Math.abs(e.deltaY) < 50 || !Number.isInteger(e.deltaY));
-      if (!looksTrackpad) return;
-
+      if (e.deltaX === 0) return; // pure vertical wheel → let React Flow zoom
       e.preventDefault();
       e.stopImmediatePropagation();
       const vp = getViewport();
-      setViewport({ x: vp.x - e.deltaX, y: vp.y - e.deltaY, zoom: vp.zoom });
+      setViewport({ x: vp.x - e.deltaX, y: vp.y, zoom: vp.zoom });
     };
 
     el.addEventListener('wheel', onWheel, { passive: false, capture: true });
     return () => el.removeEventListener('wheel', onWheel, { capture: true } as EventListenerOptions);
   }, [getViewport, setViewport]);
 
-  // Double-click-and-drag to pan. On a touchpad, the natural "grab" gesture is
-  // tap-tap-hold-drag. `panOnDrag={[1, 2]}` only pans with middle/right buttons,
-  // so without this the second click lands on a node (often a group) and
-  // starts a node drag instead of a canvas pan. We intercept the second
-  // mousedown in the capture phase, block React Flow from seeing it, and take
-  // over the gesture by rewriting the viewport ourselves.
+  // Double-tap-and-drag to pan. On a trackpad the natural "grab" gesture is
+  // tap-tap-hold-drag; on touch it's the same with fingers. `panOnDrag={[1, 2]}`
+  // only pans with middle/right buttons, so without this the second press
+  // lands on a node (often a group) and starts a node drag instead of a canvas
+  // pan. We intercept the second pointerdown in the capture phase, block React
+  // Flow from seeing it, and take over the gesture by rewriting the viewport
+  // ourselves. Pointer events cover mouse, trackpad, touch and pen uniformly.
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
 
     let lastDownAt = 0;
     let panning = false;
+    let activePointerId = -1;
     let panStart = { x: 0, y: 0 };
     let vpStart = { x: 0, y: 0, zoom: 1 };
     const DOUBLE_MS = 300;
@@ -957,7 +991,8 @@ export function NodeEditor() {
       return !!t?.closest('input, textarea, select, button, .nodrag, [contenteditable="true"]');
     };
 
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: PointerEvent) => {
+      // Primary button only (e.button === 0 for left-click / first-touch / pen-tip).
       if (e.button !== 0 || isInteractive(e.target)) {
         lastDownAt = 0;
         return;
@@ -970,14 +1005,15 @@ export function NodeEditor() {
       e.preventDefault();
       e.stopImmediatePropagation();
       panning = true;
+      activePointerId = e.pointerId;
       panStart = { x: e.clientX, y: e.clientY };
       vpStart = getViewport();
       document.body.style.cursor = 'grabbing';
       document.body.style.userSelect = 'none';
     };
 
-    const onMove = (e: MouseEvent) => {
-      if (!panning) return;
+    const onMove = (e: PointerEvent) => {
+      if (!panning || e.pointerId !== activePointerId) return;
       setViewport({
         x: vpStart.x + (e.clientX - panStart.x),
         y: vpStart.y + (e.clientY - panStart.y),
@@ -985,20 +1021,23 @@ export function NodeEditor() {
       });
     };
 
-    const onUp = () => {
-      if (!panning) return;
+    const onUp = (e: PointerEvent) => {
+      if (!panning || e.pointerId !== activePointerId) return;
       panning = false;
+      activePointerId = -1;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
 
-    el.addEventListener('mousedown', onDown, true);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    el.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     return () => {
-      el.removeEventListener('mousedown', onDown, true);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      el.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
   }, [getViewport, setViewport]);
 

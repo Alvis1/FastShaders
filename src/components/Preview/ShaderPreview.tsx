@@ -426,6 +426,31 @@ export function ShaderPreview() {
     try { localStorage.setItem('fs:previewPlaying', String(playing)); } catch { /* */ }
   }, [playing]);
 
+  // Project-file import (CodeEditor → dispatch `fs:project-imported`):
+  // localStorage has already been overwritten with the imported preview prefs
+  // by the time this fires, but our useState values were seeded once at mount
+  // and would still hold the old ones. Re-read the loaders so the overlay,
+  // iframe srcDoc inputs, and uniform sliders pick up the new values without
+  // a full page reload.
+  useEffect(() => {
+    const handler = () => {
+      setGeometry(loadGeometry());
+      setLighting(loadLighting());
+      setSubdivision(loadSubdivision());
+      try {
+        const bg = localStorage.getItem('fs:previewBgColor');
+        if (bg) setBgColor(bg);
+      } catch { /* */ }
+      setPlaying(loadPlaying());
+      setUniformBounds(loadUniformBounds());
+      setUniformValues(loadUniformValues());
+      cameraPosRef.current = loadCameraPos();
+      rotationRef.current = loadRotation();
+    };
+    window.addEventListener('fs:project-imported', handler);
+    return () => window.removeEventListener('fs:project-imported', handler);
+  }, []);
+
   // OBJ-backed geometries ignore the subdivision slider entirely. Folding the
   // value to a constant in the dep list (instead of the live state) means
   // dragging the slider while a teapot/bunny is selected doesn't rebuild the

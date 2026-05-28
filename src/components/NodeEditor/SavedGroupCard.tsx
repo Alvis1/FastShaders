@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import type { SavedGroup } from '@/store/useAppStore';
+import { startTileDrag } from './tileDrag';
 
 export const SAVED_GROUP_DRAG_TYPE = 'application/fastshaders-saved-group';
 
@@ -34,6 +35,20 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
     [deleteSavedGroup, group.id],
   );
 
+  const onPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+      // Tap on the X button is a delete, not a drag.
+      if ((event.target as HTMLElement).closest('.saved-group-card__delete')) return;
+      startTileDrag(
+        event.nativeEvent,
+        { kind: 'savedGroup', id: group.id },
+        `<div class="saved-group-card">${(event.currentTarget as HTMLElement).innerHTML}</div>`,
+      );
+    },
+    [group.id],
+  );
+
   // Member count = total saved nodes minus the group container itself.
   const memberCount = Math.max(0, group.nodes.length - 1);
 
@@ -42,6 +57,7 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
       className="saved-group-card"
       draggable
       onDragStart={onDragStart}
+      onPointerDown={onPointerDown}
       title={`${group.name} — drag to canvas`}
     >
       <div

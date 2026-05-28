@@ -33,3 +33,11 @@
 .typed-handle[data-tooltip]:hover::after {
   opacity: 1;
 }
+
+/* On touch devices there's no reliable hover, so port labels never appear and
+   users can't tell what each socket does. Pin them on by default. */
+@media (pointer: coarse) {
+  .typed-handle[data-tooltip]::after {
+    opacity: 1;
+  }
+}
