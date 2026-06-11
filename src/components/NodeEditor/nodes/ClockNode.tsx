@@ -3,7 +3,7 @@ import { Position, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale, getCostTextColor, CATEGORY_COLORS } from '@/utils/colorUtils';
+import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import './ClockNode.css';
 
@@ -21,8 +21,9 @@ export const ClockNode = memo(function ClockNode({
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
-  const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
+  const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
   const costColor = getCostColor(data.cost, costColorLow, costColorHigh);
+  const headerTextColor = getContrastColor(costColor);
   const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);
 
@@ -89,12 +90,12 @@ export const ClockNode = memo(function ClockNode({
   return (
     <div
       className={`node-base clock-node ${selected ? 'node-base--selected' : ''}`}
-      style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 
-      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{varName ?? data.label}</span>
+      <div className="node-base__header" style={{ background: costColor }}>
+        <span className="node-base__title" style={{ color: headerTextColor }}>{varName ?? data.label}</span>
       </div>
 
       <div className="clock-node__canvas-wrap">

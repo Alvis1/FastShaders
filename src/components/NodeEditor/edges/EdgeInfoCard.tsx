@@ -81,14 +81,14 @@ export function EdgeInfoCard({
 
   // Build display strings per channel:
   //  - degenerate range (min === max) → single number "0.42"
-  //  - bounded range → "min..max" (e.g. "0.00..1.00")
-  //  - unbounded (Infinity) or no range data → generic "0..1" placeholder
-  const PLACEHOLDER = '0..1';
+  //  - bounded range → "min…max" (e.g. "0.00…1.00")
+  //  - unbounded (Infinity) or no range data → "…" (honest unknown, no guess)
+  const PLACEHOLDER = '…';
   const RANGE_EPSILON = 0.005; // values closer than this collapse to a single display
   const formatChannel = (lo: number, hi: number): string => {
     if (!Number.isFinite(lo) || !Number.isFinite(hi)) return PLACEHOLDER;
     if (Math.abs(hi - lo) < RANGE_EPSILON) return lo.toFixed(2);
-    return `${lo.toFixed(2)}..${hi.toFixed(2)}`;
+    return `${lo.toFixed(2)}…${hi.toFixed(2)}`;
   };
   const displayValues: string[] = [];
   for (let i = 0; i < count; i++) {

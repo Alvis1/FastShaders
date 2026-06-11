@@ -3,7 +3,7 @@ import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react'
 import type { PreviewFlowNode, NodeCategory, AppNode, TSLDataType } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostScale, getCostTextColor, CATEGORY_COLORS } from '@/utils/colorUtils';
+import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { evaluateNodeScalar } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
@@ -78,8 +78,9 @@ export const PreviewNode = memo(function PreviewNode({
   const timeInputs = useMemo(() => timeInputsRaw, [timeInputsKey]);
   const hasAnyTime = Object.values(timeInputs).some(Boolean);
 
-  const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
+  const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
   const costColor = getCostColor(data.cost, costColorLow, costColorHigh);
+  const headerTextColor = getContrastColor(costColor);
   const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);
 
@@ -154,14 +155,14 @@ export const PreviewNode = memo(function PreviewNode({
   return (
     <div
       className={`node-base preview-node ${selected ? 'node-base--selected' : ''}`}
-      style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {/* Cost badge above node */}
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 
       {/* Header */}
-      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{varName ?? data.label}</span>
+      <div className="node-base__header" style={{ background: costColor }}>
+        <span className="node-base__title" style={{ color: headerTextColor }}>{varName ?? data.label}</span>
       </div>
 
       {/* Preview canvas */}

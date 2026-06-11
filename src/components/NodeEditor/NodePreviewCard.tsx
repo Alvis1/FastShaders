@@ -1,10 +1,11 @@
 import { memo, useEffect, useRef, useCallback } from 'react';
 import type { NodeDefinition, NodeCategory } from '@/types';
 import { startTileDrag } from './tileDrag';
-import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, hexToRgb01 } from '@/utils/colorUtils';
+import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, getContrastColor, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { buildRows } from './nodes/ShaderNode';
+import { hasNodeGlyph, NodeGlyph } from './nodes/glyphs/NodeGlyph';
 import { renderMathPreview } from '@/utils/mathPreview';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
 import complexityData from '@/registry/complexity.json';
@@ -22,27 +23,34 @@ interface ContentProps {
   costTextColor: string;
   costScale: number;
   cost: number;
+  headerTextColor: string;
 }
 
 /* ============================================================
  * ShaderCardContent — generic node (header + port rows + fake handles)
  * ============================================================ */
 
-function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale, cost }: ContentProps) {
+function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
   const rows = buildRows(def);
 
   return (
     <div
       className="node-base node-preview-card__node"
-      style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
 
-      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{def.label}</span>
+      <div className="node-base__header" style={{ background: costColor }}>
+        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
       </div>
+
+      {hasNodeGlyph(def.type) && (
+        <div className="shader-node__glyph">
+          <NodeGlyph type={def.type} value={Number(def.defaultValues?.value ?? 0)} size={30} />
+        </div>
+      )}
 
       <div className="node-base__body">
         {rows.map((row, i) => (
@@ -102,7 +110,7 @@ function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale,
  * MathCardContent — waveform canvas (static)
  * ============================================================ */
 
-function MathCardContent({ def, catColor, costColor, costTextColor, costScale, cost }: ContentProps) {
+function MathCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -126,14 +134,14 @@ function MathCardContent({ def, catColor, costColor, costTextColor, costScale, c
   return (
     <div
       className="node-base node-preview-card__node"
-      style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
 
-      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{def.label}</span>
+      <div className="node-base__header" style={{ background: costColor }}>
+        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
       </div>
 
       <div className="node-preview-card__canvas-wrap">
@@ -165,7 +173,7 @@ function MathCardContent({ def, catColor, costColor, costTextColor, costScale, c
  * NoiseCardContent — CPU noise pattern (static)
  * ============================================================ */
 
-function NoiseCardContent({ def, catColor, costColor, costTextColor, costScale, cost }: ContentProps) {
+function NoiseCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -187,14 +195,14 @@ function NoiseCardContent({ def, catColor, costColor, costTextColor, costScale, 
   return (
     <div
       className="node-base node-preview-card__node"
-      style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
 
-      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{def.label}</span>
+      <div className="node-base__header" style={{ background: costColor }}>
+        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
       </div>
 
       <div className="node-preview-card__canvas-wrap">
@@ -220,7 +228,7 @@ function NoiseCardContent({ def, catColor, costColor, costTextColor, costScale, 
  * ClockCardContent — static clock face
  * ============================================================ */
 
-function ClockCardContent({ def, catColor, costColor, costTextColor, costScale, cost }: ContentProps) {
+function ClockCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -277,14 +285,14 @@ function ClockCardContent({ def, catColor, costColor, costTextColor, costScale, 
   return (
     <div
       className="node-base node-preview-card__node"
-      style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
 
-      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{def.label}</span>
+      <div className="node-base__header" style={{ background: costColor }}>
+        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
       </div>
 
       <div className="node-preview-card__canvas-wrap">
@@ -310,7 +318,7 @@ function ClockCardContent({ def, catColor, costColor, costTextColor, costScale, 
  * SliderCardContent — slider with range track preview
  * ============================================================ */
 
-function SliderCardContent({ def, catColor, costColor, costTextColor, costScale, cost }: ContentProps) {
+function SliderCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
   const val = Number(def.defaultValues?.value ?? 0.5);
   const min = Number(def.defaultValues?.min ?? 0);
   const max = Number(def.defaultValues?.max ?? 1);
@@ -319,14 +327,14 @@ function SliderCardContent({ def, catColor, costColor, costTextColor, costScale,
   return (
     <div
       className="node-base node-preview-card__node"
-      style={{ background: costColor, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
 
-      <div className="node-base__header" style={{ borderLeft: `3px solid ${catColor}` }}>
-        <span className="node-base__title">{def.label}</span>
+      <div className="node-base__header" style={{ background: costColor }}>
+        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
       </div>
 
       <div className="node-preview-card__slider-wrap">
@@ -389,10 +397,11 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
   const costColor = getCostColor(cost, costColorLow, costColorHigh);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
+  const headerTextColor = getContrastColor(costColor);
   const costScale = getCostScale(cost);
   const flowType = getFlowNodeType(def);
 
-  const shared: ContentProps = { def, catColor, costColor, costTextColor, costScale, cost };
+  const shared: ContentProps = { def, catColor, costColor, costTextColor, costScale, cost, headerTextColor };
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {

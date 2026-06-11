@@ -515,6 +515,30 @@ Adjustable float value with a visual range slider and configurable min/max bound
 - **`output`** — Output sink with two sections: Pixel Shader (color, roughness, emissive, normal, opacity, **discard**) and Vertex Shader (displacement), plus `materialSettings` for export config (OutputNode.tsx). The `discard` port is hidden by default and exposed via ShaderSettingsMenu → Output Ports → Discard; wiring it emits a `Discard(cond)` statement in the generated TSL (see "Discard Pipeline" below).
 - **`group`** — Selection group container (GroupNode.tsx) — owns members via `parentId`, has no registry entry, no shader semantics. Collapsible into a pill with synthetic boundary handles. See the **Groups** section for details.
 
+### Node Visual Anatomy (header = cost, glyph tiles, consistent sockets)
+
+Every editor node — and its NodePreviewCard preview — shares one anatomy. When modifying or adding nodes, keep these consistent:
+
+- **Header** — filled with the node's **performance-impact (cost) color** (`getCostColor`), with auto-contrast title text (`getContrastColor`). The cost "points" badge stays centered *above* the node (`.node-base__cost-badge`), unchanged.
+- **Body** — flat white surface (`var(--bg-panel)`).
+- **Border** — `1.5px` solid in the node's **category color** (`CAT_HEX[def.category]`); category is read from the outline, not the header. **Frame style is fixed app-wide** — corner radius (8px) and border thickness are the same for every node and are NOT per-node customizable (only `width` is, via `customGlyphs.ts`).
+- **Sockets** — type-colored (`getTypeColor`); see *Socket consistency* below.
+- **Multi-channel stack** — when 2–4-channel data **arrives on a connected input** (widest edge wins; counts mirror `TypedEdge`), the node renders as **N stacked cards**: N−1 offset layers (3px steps, staggered `z-index` −1/−2/−3 so deeper layers paint first and every strip stays visible) as **siblings** of the card inside its cost-scale wrapper — never children, which would erase the card's bottom border. While stacked the card drops its own shadow; **only the deepest layer casts the single group shadow**. Source/constructor nodes never stack. (`node-base__stack` in `NodeBase.css`, structure in `ShaderNode.tsx`.)
+
+#### Glyph visualizations (`nodes/glyphs/NodeGlyph.tsx`)
+
+Light-theme SVG glyphs (ported from the v14 design mockup) illustrate what a node does — operator symbol, function plot, vector construction, input frame. `NODE_GLYPH_TYPES` / `hasNodeGlyph(type)` gate which registry types have one; per-node designer overrides in `glyphs/customGlyphs.ts` (`{ svg?, justify?, scale?, dx?, dy?, width?, sockets? }`, authored with `node-designer.html`) win over built-in art. Live-preview nodes (`time`, `sin`/`cos`, all noise) are intentionally excluded — they keep their canvases and only got the new header/border.
+
+- **Operator layout (2-input glyph nodes)** — the glyph sits **between** the two inputs (`a` above, `b` below; values centered or per-node `justify`). The body keeps a 52px base height; **`scale` grows the glyph ONLY** (body grows just enough to fit — `max(52, glyphPx+10)`; socket/value spacing never changes). `dx`/`dy` nudge the art visually without affecting layout. **Socket positions are px offsets from the body center** (defaults a −12.5, b +12.5, out 0 — the classic 26%/74% spots), per-node movable via the designer with **4px snap** (`customGlyphs.ts → sockets`); each value label follows its socket.
+- **Glyph icon + rows (other glyph nodes)** — `ShaderNode` renders a small glyph icon (`size=30`, `.shader-node__glyph`) between the header and the port rows. The glyph is **purely an icon — values are never drawn on top of it.** A designer `sockets[id]` / `sockets.out` override **detaches that socket from its row** and anchors it to the below-header region's center (same center-relative px convention as the operator layout); a detached input's **value widget follows its socket** (op-val styling), and the vacated row keeps its spacing. No override = classic row anchoring. Row-anchored inputs keep their value in the row, **horizontally aligned with that input's socket** (right after the `TypedHandle`):
+  - **Unconnected** → editable `DragNumberInput` literal (the existing row control).
+  - **Connected** → the value(s) on the **connecting edge** via `evaluateNodeOutput(source)`: one channel → the number (up to 2 decimals), multiple channels → **`min…max` range rounded to whole numbers** (integer part only: `-0.8…0.8` displays `-1…1`; endpoints compared *after* formatting so `3.687…3.694` collapses to a single `3.69`, and a range whose rounded ends meet collapses to that integer) — both blue `#2D6CDF`, `.shader-node__edge-val`. When the upstream isn't directly evaluable (texture chains), `evaluateNodeRange(source)` supplies an inferred range (gray, same integer rounding); geometry attributes carry analytical ranges (normals/tangents/view directions `-1…1`, `positionGeometry`/`positionLocal` `-0.8…0.8` → shown `-1…1`). **Nothing derivable → `…`** — a connected socket never shows a blank. Logic lives in the module-level `edgeValueLabel()` helper, shared by every input row; the `EdgeInfoCard` keeps precise 2-decimal figures with the same `…` separator.
+- **No glyph** — interpolation, `hsl`/`toHsl`, `split`/`append`, `vec2`/`vec3`/`vec4`, position variants, `property`/`slider`, etc. render standard rows. **`float`/`int` are not glyph nodes** — they render as ordinary number rows like `vec2`/`vec3` (no knob).
+
+#### Socket consistency
+
+Sockets (`TypedHandle`) are **always visually constant and static** — no hover zoom, scale, movement, animation, or transition. A port looks identical whether idle, hovered, or mid-connection; only the instant text tooltip reacts to hover. Enforced in `TypedHandle.css` via `transition: none !important` and by **not touching `transform` on `:hover` at all — not even `transform: none`**: React Flow positions handles *via* transform (`translate(±50%, -50%)` for the side classes), so any hover transform override — the old `:hover { transform: none }` guard included — moves the socket and makes it jump under the cursor. **Do not re-introduce a `scale()` hover or any hover transform** on handles. Socket size is driven solely by `--handle-size` (10px desktop, 18px coarse-pointer) so every port matches across all node types. Sockets also never render stacked/ghost copies — multi-channel signal comes from the edges and the node-body stack.
+
 ### Asset Browser (ContentBrowser + NodePreviewCard)
 
 The asset browser is a horizontal scrollable drawer at the bottom of the node editor, showing all available nodes grouped by category tabs. The Noise category lists all 8 MaterialX noise variants sorted by GPU cost ascending.
@@ -527,7 +551,7 @@ The asset browser is a horizontal scrollable drawer at the bottom of the node ed
 
 | Flow Type | Renderer | Visual |
 |-----------|----------|--------|
-| `'shader'` | ShaderCardContent | Header + port rows + fake handle dots (generic) |
+| `'shader'` | ShaderCardContent | Cost header + small glyph icon (glyph nodes) + port rows + fake handle dots |
 | `'mathPreview'` | MathCardContent | Header + 72x72 waveform canvas + input/output dots |
 | `'preview'` (noise) | NoiseCardContent | Header + 96x96 pixelated CPU noise canvas + output dot |
 | `'clock'` | ClockCardContent | Header + 56x56 circular clock face + output dot |
@@ -535,6 +559,7 @@ The asset browser is a horizontal scrollable drawer at the bottom of the node ed
 | `'color'` | ColorCardContent | 84x84 color circle + contrast-aware label + output dot |
 
 - **Cost coloring**: NodePreviewCard reads `costColorLow`/`costColorHigh` from the zustand store and passes them to `getCostColor()`/`getCostTextColor()`, ensuring consistent cost-based coloring across editor nodes, MiniMap, and content browser.
+- **Matches editor anatomy** (see *Node Visual Anatomy*): cards use the same cost-colored header (auto-contrast title), white body, and category-colored border as live nodes; `ShaderCardContent` renders the same small glyph icon above the port rows for glyph nodes (default values shown statically; cards have no live edges so no connected-value labels).
 - **Math/noise/clock previews**: CPU-rendered once on mount using existing `renderMathPreview()`, `renderNoisePreview()`, and ClockNode drawing code (frozen at mount time).
 - **All sub-renderers** are proper React components (not called as functions) so hooks work correctly.
 - **Drag-to-create**: All cards are draggable; dropping on the canvas creates the corresponding node.
@@ -546,6 +571,7 @@ ShaderNode handles Vector3/Vector2 parameters with grouped inputs:
 - Detects `_x`/`_y`/`_z` suffixed keys in defaultValues and groups them into `vec3` or `vec2` rows
 - Each vector row shows: base key label + 2-3 compact `DragNumberInput` controls
 - Non-port settings (colors, vec3, vec2) are collected and appended as extra rows after input ports
+- `float`/`int`/`vec2`/`vec3`/`vec4` type constructors all render as plain number rows (no knob/glyph) so they read identically — see *Node Visual Anatomy*.
 
 ### Preview Nodes (Noise)
 
@@ -612,6 +638,8 @@ The deterministic evaluator can't sample procedural textures, but the EdgeInfoCa
 Each type has a distinct color for handles and edges:
 
 - float: `#3366CC` (blue), int: `#20B2AA` (teal), vec2: `#4A90E2` (sky), vec3: `#E040FB` (magenta), vec4: `#AB47BC` (purple), color: `#E8A317` (gold), any: `#607D8B` (slate)
+
+Socket handles render this color as a constant disc — no hover zoom/scale/animation (see *Node Visual Anatomy → Socket consistency*).
 
 **AppNode union**: `ShaderFlowNode | ColorFlowNode | PreviewFlowNode | MathPreviewFlowNode | ClockFlowNode | OutputFlowNode | GroupFlowNode`
 

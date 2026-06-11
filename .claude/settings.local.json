@@ -18,7 +18,13 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(npm install:*)",
       "mcp__Claude_Preview__preview_start",
-      "Bash(git worktree *)"
+      "Bash(git worktree *)",
+      "Bash(echo \"TSC_EXIT=$?\")",
+      "Bash(git -C /Users/alvis/Documents/_PROJEKTI/FastShaders/FastShaders ls-files)",
+      "Bash(md5 -q node-designer.html)",
+      "Bash(md5 -q public/node-designer.html)",
+      "Bash(git -C /Users/alvis/Documents/_PROJEKTI/FastShaders/FastShaders check-ignore ShaderCarousel/https)",
+      "Bash(git check-ignore *)"
     ]
   }
 }

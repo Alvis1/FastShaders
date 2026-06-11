@@ -82,10 +82,13 @@
   margin: 0;
 }
 
-/* Compact variant for inline node use */
+/* Compact variant for inline node use. Sizes multiply by the per-node
+   designer text scale (--node-text-scale, default 1) so node value boxes
+   follow the node's "Text size" setting; outside nodes the var is unset
+   and everything keeps its classic size. */
 .drag-num--compact {
   width: auto;
-  height: 12px;
+  height: calc(12px * var(--node-text-scale, 1));
   border-color: rgba(0, 0, 0, 0.15);
   background: rgba(255, 255, 255, 0.6);
 }
@@ -96,7 +99,7 @@
 
 .drag-num--compact .drag-num__arrow {
   width: 6px;
-  font-size: 5px;
+  font-size: calc(5px * var(--node-text-scale, 1));
   color: rgba(0, 0, 0, 0.4);
 }
 
@@ -106,8 +109,8 @@
 
 .drag-num--compact .drag-num__value,
 .drag-num--compact .drag-num__edit {
-  font-size: 7px;
-  min-width: 16px;
+  font-size: calc(7px * var(--node-text-scale, 1));
+  min-width: calc(16px * var(--node-text-scale, 1));
   color: rgba(0, 0, 0, 0.7);
 }
 

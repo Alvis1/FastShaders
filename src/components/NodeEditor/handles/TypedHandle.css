@@ -1,14 +1,20 @@
+/* Sockets are intentionally STATIC: no hover zoom, scale, movement, or
+   transition — a port looks identical idle, hovered, or mid-connection. Only
+   the instant tooltip below reacts to hover.
+
+   IMPORTANT: never set `transform` on :hover here (not even `none`). React
+   Flow POSITIONS handles via transform (`translate(±50%, -50%)`), so any
+   hover transform override — including `transform: none` — MOVES the socket
+   and makes it jump under the cursor. Hover must simply inherit the idle
+   positioning, whatever context it comes from (React Flow defaults or the
+   NodeBase row overrides). `transition: none` kills any animated change. */
 .typed-handle {
   width: var(--handle-size) !important;
   height: var(--handle-size) !important;
   border: var(--handle-border) solid white !important;
   border-radius: 50% !important;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
-  transition: transform var(--transition-fast);
-}
-
-.typed-handle:hover {
-  transform: scale(1.4);
+  transition: none !important;
 }
 
 /* Instant CSS tooltip */
