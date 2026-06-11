@@ -245,7 +245,7 @@ export const ShaderNode = memo(function ShaderNode({
     border: `1.5px solid ${catHex}`,
   };
   // Exact width override: also lowers min-width so the node can go NARROWER
-  // than its natural fit-content size (header ellipsizes; op body unfloors).
+  // than its natural fit-content size (header wraps + grows; op body unfloors).
   if (box.width) {
     nodeStyle.width = box.width;
     nodeStyle.minWidth = box.width;
@@ -317,7 +317,8 @@ export const ShaderNode = memo(function ShaderNode({
     const ins = def.inputs;
     const justify = nodeJustify(data.registryType);
     const scale = nodeScale(data.registryType);
-    const HEADER_H = 14;
+    // No header-height constant: handles live INSIDE the body container, so
+    // the header may wrap to any number of lines without shifting sockets.
     // Scale grows the glyph ONLY. Socket/value spacing is fixed: in auto mode
     // the body keeps its 52px base height and grows just enough to contain a
     // larger glyph. An explicit designer `height` overrides the body height
@@ -374,29 +375,30 @@ export const ShaderNode = memo(function ShaderNode({
               </div>
             ) : null;
           })}
+          {/* Handles anchor to the body (not the node top) so a wrapped,
+              taller header never shifts socket positions. */}
+          {ins.map((inp, i) => (
+            <TypedHandle
+              key={`h-${inp.id}`}
+              type="target"
+              position={Position.Left}
+              id={inp.id}
+              dataType={inp.dataType}
+              label={inp.label}
+              style={{ top: `${BODY_H / 2 + offOf(inp.id, i)}px` }}
+            />
+          ))}
+          {def.outputs[0] && (
+            <TypedHandle
+              type="source"
+              position={Position.Right}
+              id={def.outputs[0].id}
+              dataType={def.outputs[0].dataType}
+              label={def.outputs[0].label}
+              style={{ top: `${BODY_H / 2 + outOff}px` }}
+            />
+          )}
         </div>
-
-        {ins.map((inp, i) => (
-          <TypedHandle
-            key={`h-${inp.id}`}
-            type="target"
-            position={Position.Left}
-            id={inp.id}
-            dataType={inp.dataType}
-            label={inp.label}
-            style={{ top: `${HEADER_H + BODY_H / 2 + offOf(inp.id, i)}px` }}
-          />
-        ))}
-        {def.outputs[0] && (
-          <TypedHandle
-            type="source"
-            position={Position.Right}
-            id={def.outputs[0].id}
-            dataType={def.outputs[0].dataType}
-            label={def.outputs[0].label}
-            style={{ top: `${HEADER_H + BODY_H / 2 + outOff}px` }}
-          />
-        )}
         </div>
       </div>
     );

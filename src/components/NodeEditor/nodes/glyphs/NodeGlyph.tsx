@@ -78,7 +78,7 @@ export function nodeScale(type: string): number {
 
 /** Per-node box override: EXACT node width in px (≥24; default auto/fit).
  *  Exact — not a minimum — so nodes can be made narrower than their natural
- *  content width (header truncates with an ellipsis; the operator body's
+ *  content width (the header wraps and auto-grows; the operator body's
  *  54px floor applies only in auto mode). The node frame style (corner
  *  radius, border thickness) is fixed app-wide; border color stays the
  *  category color. */
