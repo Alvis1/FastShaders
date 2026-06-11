@@ -44,12 +44,12 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "cameraNear": {
-    "svg": "<line x1=\"19\" y1=\"28\" x2=\"47\" y2=\"10\" stroke=\"#8A8F9C\" stroke-width=\".8\"></line><line x1=\"19\" y1=\"28\" x2=\"47\" y2=\"46\" stroke=\"#8A8F9C\" stroke-width=\".8\"></line><line x1=\"39.78\" y1=\"10\" x2=\"39.78\" y2=\"46\" stroke=\"#2B2B2B\" stroke-width=\"0.7\" stroke-linecap=\"round\"></line><line x1=\"24\" y1=\"10\" x2=\"24\" y2=\"46\" stroke=\"#F57C00\" stroke-width=\"2.6\" stroke-linecap=\"round\"></line><ellipse cx=\"13\" cy=\"28\" rx=\"6\" ry=\"3.5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.6\"></ellipse><circle cx=\"13\" cy=\"28\" r=\"2\" fill=\"#F57C00\"></circle>",
+    "svg": "<line x1=\"19\" y1=\"28\" x2=\"47\" y2=\"19.44\" stroke=\"#8A8F9C\" stroke-width=\".8\"></line><line x1=\"19\" y1=\"28\" x2=\"47\" y2=\"37.2\" stroke=\"#8A8F9C\" stroke-width=\".8\"></line><line x1=\"39.78\" y1=\"19.44\" x2=\"39.78\" y2=\"37.2\" stroke=\"#2B2B2B\" stroke-width=\"0.7\" stroke-linecap=\"round\"></line><line x1=\"24\" y1=\"19.44\" x2=\"24\" y2=\"37.2\" stroke=\"#F57C00\" stroke-width=\"2.6\" stroke-linecap=\"round\"></line><ellipse cx=\"13\" cy=\"28\" rx=\"6\" ry=\"3.5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.6\"></ellipse><circle cx=\"13\" cy=\"28\" r=\"2\" fill=\"#F57C00\"></circle>",
     "scale": 2,
-    "dx": -1,
-    "dy": -7,
-    "width": 71,
-    "height": 49,
+    "dx": -2.5,
+    "dy": -13.5,
+    "width": 73,
+    "height": 35,
     "sockets": {
       "out": 0
     }
@@ -67,12 +67,12 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "height": 28
   },
   "cameraFar": {
-    "svg": "<line x1=\"19\" y1=\"28\" x2=\"47\" y2=\"10\" stroke=\"#8A8F9C\" stroke-width=\".8\"></line><line x1=\"19\" y1=\"28\" x2=\"47\" y2=\"46\" stroke=\"#8A8F9C\" stroke-width=\".8\"></line><line x1=\"24\" y1=\"10\" x2=\"24\" y2=\"46\" stroke=\"#2B2B2B\" stroke-width=\"0.7\" stroke-linecap=\"round\"></line><line x1=\"39.78\" y1=\"10\" x2=\"39.78\" y2=\"46\" stroke=\"#F57C00\" stroke-width=\"2.6\" stroke-linecap=\"round\"></line><ellipse cx=\"13\" cy=\"28\" rx=\"6\" ry=\"3.5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.6\"></ellipse><circle cx=\"13\" cy=\"28\" r=\"2\" fill=\"#F57C00\"></circle>",
+    "svg": "<line x1=\"19\" y1=\"28\" x2=\"47\" y2=\"19.44\" stroke=\"#8A8F9C\" stroke-width=\".8\"></line><line x1=\"19\" y1=\"28\" x2=\"47\" y2=\"37.2\" stroke=\"#8A8F9C\" stroke-width=\".8\"></line><line x1=\"24\" y1=\"19.44\" x2=\"24\" y2=\"37.2\" stroke=\"#2B2B2B\" stroke-width=\"0.7\" stroke-linecap=\"round\"></line><line x1=\"39.78\" y1=\"19.44\" x2=\"39.78\" y2=\"37.2\" stroke=\"#F57C00\" stroke-width=\"2.6\" stroke-linecap=\"round\"></line><ellipse cx=\"13\" cy=\"28\" rx=\"6\" ry=\"3.5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.6\"></ellipse><circle cx=\"13\" cy=\"28\" r=\"2\" fill=\"#F57C00\"></circle>",
     "scale": 2,
-    "dx": -1,
-    "dy": -7,
-    "width": 71,
-    "height": 49,
+    "dx": -2.5,
+    "dy": -13.5,
+    "width": 73,
+    "height": 35,
     "sockets": {
       "out": 0
     }
