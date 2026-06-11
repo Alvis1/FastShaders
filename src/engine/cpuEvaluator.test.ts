@@ -376,15 +376,37 @@ describe('evaluateNodeRange', () => {
     expect(evaluateNodeRange('n', [n], [], 0)).toEqual({ min: [0], max: [1] });
   });
 
+  it('reports unit-vector ranges for normals, tangents, and view directions', () => {
+    for (const type of ['normalLocal', 'tangentLocal', 'positionWorldDirection', 'positionViewDirection']) {
+      const n = makeNode('n', type);
+      expect(evaluateNodeRange('n', [n], [], 0)).toEqual({
+        min: [-1, -1, -1], max: [1, 1, 1],
+      });
+    }
+  });
+
+  it('reports the fit-bounds range for model-space positions', () => {
+    for (const type of ['positionGeometry', 'positionLocal']) {
+      const n = makeNode('n', type);
+      expect(evaluateNodeRange('n', [n], [], 0)).toEqual({
+        min: [-0.8, -0.8, -0.8], max: [0.8, 0.8, 0.8],
+      });
+    }
+  });
+
   it('propagates an additive offset through interval arithmetic', () => {
-    // positionGeometry is unevaluable on CPU, so range falls back to its [0, 1]
-    // assumption and the add propagates that interval: [0..1] + 1 → [1..2].
+    // positionGeometry carries the analytical fit-bounds range [-0.8, 0.8] per
+    // channel; the add shifts the interval: [-0.8..0.8] + 1 → [0.2..1.8].
     const pos = makeNode('p', 'positionGeometry');
     const one = makeNode('one', 'float', { value: 1 });
     const op = makeNode('op', 'add');
     const edges = [makeEdge('p', 'out', 'op', 'a'), makeEdge('one', 'out', 'op', 'b')];
-    expect(evaluateNodeRange('op', [pos, one, op], edges, 0)).toEqual({
-      min: [1], max: [2],
-    });
+    const r = evaluateNodeRange('op', [pos, one, op], edges, 0)!;
+    expect(r).not.toBeNull();
+    expect(r.min).toHaveLength(3);
+    for (let i = 0; i < 3; i++) {
+      expect(r.min[i]).toBeCloseTo(0.2, 10);
+      expect(r.max[i]).toBeCloseTo(1.8, 10);
+    }
   });
 });

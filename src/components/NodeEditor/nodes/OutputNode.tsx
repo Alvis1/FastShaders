@@ -3,7 +3,7 @@ import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react'
 import type { OutputFlowNode } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { getCostColor, getCostTextColor } from '@/utils/colorUtils';
+import { getCostColor, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import './OutputNode.css';
 
@@ -25,6 +25,7 @@ export const OutputNode = memo(function OutputNode({
   const cost = data.cost ?? 0;
   const costColor = getCostColor(cost, costColorLow, costColorHigh);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
+  const headerTextColor = getContrastColor(costColor);
 
   const exposedPorts = data.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
   const exposedSet = new Set(exposedPorts);
@@ -49,7 +50,7 @@ export const OutputNode = memo(function OutputNode({
   return (
     <div
       className={`output-node ${selected ? 'output-node--selected' : ''}`}
-      style={{ background: costColor }}
+      style={{ background: 'var(--bg-panel)', border: '1.5px solid var(--cat-output)' }}
     >
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>
@@ -58,8 +59,8 @@ export const OutputNode = memo(function OutputNode({
       )}
 
       {/* Main header */}
-      <div className="output-node__header">
-        <span className="output-node__title">Output</span>
+      <div className="output-node__header" style={{ background: costColor }}>
+        <span className="output-node__title" style={{ color: headerTextColor }}>Output</span>
       </div>
 
       {/* Pixel Shader section */}

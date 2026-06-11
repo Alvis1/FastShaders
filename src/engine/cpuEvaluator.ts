@@ -624,6 +624,26 @@ function computeRange(
     return result;
   }
 
+  // Geometry attributes with well-defined bounds. Normals, tangents, and view
+  // directions are unit vectors → every channel lies in [-1, 1].
+  if (
+    type === 'normalLocal' || type === 'tangentLocal' ||
+    type === 'positionWorldDirection' || type === 'positionViewDirection'
+  ) {
+    result = { min: [-1, -1, -1], max: [1, 1, 1] };
+    cache.set(nodeId, result);
+    return result;
+  }
+
+  // Model-space positions follow the preview convention: fit-bounds rescales
+  // geometry so the longest axis spans 1.6 (matching primitive framing), so
+  // each channel sits within roughly [-0.8, 0.8].
+  if (type === 'positionGeometry' || type === 'positionLocal') {
+    result = { min: [-0.8, -0.8, -0.8], max: [0.8, 0.8, 0.8] };
+    cache.set(nodeId, result);
+    return result;
+  }
+
   // MaterialX noise: scalar variants are bounded in [0, 1] (after the perlin
   // remap to display range). vec2/vec3 variants share the same per-channel
   // bound, just with more channels. The visualization layer just needs the

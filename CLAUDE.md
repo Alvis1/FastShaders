@@ -2,6 +2,8 @@
 
 Bi-directional TSL (Three.js Shading Language) visual shader editor. Users author and execute their own shader code inside the app, and `.fastshader` files can be shared between users — treat any loaded `.fastshader` or pasted shader source as adversarial input.
 
+> **Before changing node visuals, the glyph system, `ShaderNode`, `NodePreviewCard`, or the Node Designer (`node-designer.html`), read [`NODE_DESIGN_REQUIREMENTS.md`](NODE_DESIGN_REQUIREMENTS.md) — it is the authoritative spec for node appearance/layout.**
+
 ## Stack
 
 - React 18 + TypeScript + Vite (ES modules, base path `/FastShaders/`)
@@ -121,6 +123,7 @@ public/
 - **Node values**: always use `getNodeValues(node)` from `@/types` — never cast `node.data as ...`
 - **Edge IDs**: always use `generateEdgeId(source, sourceHandle, target, targetHandle)` from `@/utils/idGenerator`
 - **Single ShaderNode**: one component handles all TSL node types dynamically via registry
+- **Node visuals**: per-node designer overrides live in `glyphs/customGlyphs.ts` — `{ svg, justify, scale (glyph-only; spacing fixed), dx/dy (glyph nudge), width (exact, ≥24), height (exact in both layouts, ≥28; shorter than content overflows; independent of glyph scale), text (0.4–2.5× header/value/label fonts via --node-text-scale), sockets (center-relative offsets, 4px snap; op layout natively, rows layout detaches the socket from its row — values follow) }`; frame radius/border are **fixed app-wide**. Connected inputs show edge values (`min…max` ranges, bare `…` when underivable; geometry attributes have analytical ranges). Multi-channel data **arriving on a connected input** stacks the node into N cards (sibling layers behind the card, staggered negative z, single group shadow from the deepest layer). Sockets are **static** — never set `transform` on handle `:hover` (React Flow positions handles via transform) — and never stack. The Node Designer (`node-designer.html`) saves via the dev-server endpoint `/__nd` (any browser), the File System Access API (Chromium), or download; see `NODE_DESIGN_REQUIREMENTS.md`
 - **Light theme by default**: flat design with sharp dark shadows, CSS tokens in `tokens.css`. The Monaco code editor has its own light/dark toggle (`codeEditorTheme`, persisted to `fs:codeEditorTheme`). The React Flow canvas background is user-pickable (`nodeEditorBgColor`, persisted to `fs:nodeEditorBgColor`); cost badges and 1-channel edges auto-flip via `getContrastColor()` so they remain readable on any background.
 - **A-Frame pipeline**: graphToCode → tslToShaderModule → shaderloader 0.3 (runtime TDZ fix + auto-import injection + `export const schema` parsing) → dynamic blob import. The standalone `.html` export embeds the same module as a blob URL.
 - **rAF ref pattern**: PreviewNode/MathPreviewNode/EdgeInfoCard overwrite refs for animation — this is correct (avoids stale closures)

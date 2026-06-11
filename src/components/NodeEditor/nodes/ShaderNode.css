@@ -57,3 +57,58 @@
   gap: 2px;
 }
 
+/* ===== Glyph icon (small, between header and port rows) ===== */
+.shader-node__glyph {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 1px 0 0;
+}
+
+.shader-node__glyph svg {
+  display: block;
+}
+
+/* Value(s) arriving on a connected input edge, shown beside the socket */
+.shader-node__edge-val {
+  font: 600 calc(9px * var(--node-text-scale, 1)) var(--font-mono);
+  color: rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+}
+
+/* ===== Operator layout (2-input glyph node: glyph BETWEEN the two inputs) ===== */
+.shader-node__op {
+  position: relative;
+  width: 100%;
+  min-width: 54px;
+}
+
+.shader-node__op-glyph {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* Input value, vertically aligned to its socket; horizontally justified */
+.shader-node__op-val {
+  position: absolute;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+}
+
+.shader-node__op-val--center { left: 50%; transform: translate(-50%, -50%); }
+.shader-node__op-val--left { left: 6px; }
+.shader-node__op-val--right { right: 6px; }
+
+/* keep the value legible if it ever meets the glyph */
+.shader-node__op-val > * {
+  background: rgba(255, 255, 255, 0.82);
+  border-radius: 3px;
+}
+

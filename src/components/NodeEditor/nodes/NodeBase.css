@@ -43,6 +43,23 @@
   outline-offset: -1px;
 }
 
+/* ===== Multi-channel stack layers =====
+   When multi-channel data (2–4 ch) ARRIVES on a node's connected inputs,
+   offset "card" layers render so N channels read as N stacked cards. Layers
+   are SIBLINGS of the node card inside its cost-scale wrapper, painted below
+   it (negative z within the wrapper's stacking context). Being siblings — not
+   children — keeps the card's own background/border fully intact; only the
+   offset strips peek out at the bottom. */
+.node-base__stack {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--border-radius-md);
+  border: 1.5px solid; /* color set inline (category) */
+  background: var(--bg-panel);
+  z-index: -1;
+  pointer-events: none;
+}
+
 /* ===== Header ===== */
 .node-base__header {
   display: flex;
@@ -55,11 +72,17 @@
 }
 
 .node-base__title {
-  font-size: 9px;
+  /* --node-text-scale: per-node designer text-size multiplier (default 1) */
+  font-size: calc(9px * var(--node-text-scale, 1));
   font-weight: 600;
   color: rgba(0, 0, 0, 0.75);
   white-space: nowrap;
   flex: 1;
+  /* With an explicit (designer) node width the title must yield, not prop
+     the node open — truncate with an ellipsis instead. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .node-base__cost {

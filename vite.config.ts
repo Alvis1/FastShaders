@@ -2,7 +2,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { cpSync, readFileSync } from 'fs';
+import { cpSync, readFileSync, writeFileSync, existsSync } from 'fs';
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, './package.json'), 'utf-8'));
 
@@ -111,9 +111,72 @@ const shaderCarouselCopyPlugin = (): Plugin => ({
   },
 });
 
+/**
+ * Dev-only save/load endpoint for the Node Designer (`node-designer.html`).
+ *
+ * The designer's File System Access path (`showDirectoryPicker`) is
+ * Chromium-only; this endpoint lets it persist `customGlyphs.ts` through the
+ * dev server instead, so saving works in ANY browser at
+ * http://localhost:5173/FastShaders/node-designer.html.
+ *
+ *   GET  /__nd/glyphs → { content } — current customGlyphs.ts text ('' if absent)
+ *   GET  /__nd/costs  → { content } — complexity.json text (cost parity refresh)
+ *   POST /__nd/glyphs { content }   — rewrite customGlyphs.ts
+ *
+ * Serve-only (`apply: 'serve'`) — never part of a production build. Writes
+ * exactly one hard-coded path; client-supplied paths are never honored.
+ * Mounted at server root (outside the Vite base) so the tool can call
+ * absolute `/__nd/*` URLs.
+ */
+const ND_GLYPHS = path.resolve(__dirname, 'src/components/NodeEditor/nodes/glyphs/customGlyphs.ts');
+const ND_COSTS = path.resolve(__dirname, 'src/registry/complexity.json');
+const nodeDesignerEndpointPlugin = (): Plugin => ({
+  name: 'fs-node-designer-endpoint',
+  apply: 'serve',
+  configureServer(server) {
+    server.middlewares.use('/__nd', (req, res) => {
+      const send = (code: number, obj: unknown) => {
+        res.statusCode = code;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(obj));
+      };
+      try {
+        if (req.method === 'GET' && req.url === '/glyphs') {
+          send(200, { content: existsSync(ND_GLYPHS) ? readFileSync(ND_GLYPHS, 'utf-8') : '' });
+        } else if (req.method === 'GET' && req.url === '/costs') {
+          send(200, { content: readFileSync(ND_COSTS, 'utf-8') });
+        } else if (req.method === 'POST' && req.url === '/glyphs') {
+          let body = '';
+          req.on('data', (c) => {
+            body += c;
+            if (body.length > 5_000_000) req.destroy(); // sanity cap
+          });
+          req.on('end', () => {
+            try {
+              const { content } = JSON.parse(body) as { content?: unknown };
+              if (typeof content !== 'string' || !content.includes('export const CUSTOM_GLYPHS')) {
+                send(400, { error: 'unexpected content' });
+                return;
+              }
+              writeFileSync(ND_GLYPHS, content, 'utf-8');
+              send(200, { ok: true });
+            } catch (e) {
+              send(500, { error: String((e as Error).message) });
+            }
+          });
+        } else {
+          send(404, { error: 'not found' });
+        }
+      } catch (e) {
+        send(500, { error: String((e as Error).message) });
+      }
+    });
+  },
+});
+
 export default defineConfig({
   base: '/FastShaders/',
-  plugins: [react(), versionHtmlPlugin(), cspHtmlPlugin(), shaderCarouselCopyPlugin()],
+  plugins: [react(), versionHtmlPlugin(), cspHtmlPlugin(), shaderCarouselCopyPlugin(), nodeDesignerEndpointPlugin()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
