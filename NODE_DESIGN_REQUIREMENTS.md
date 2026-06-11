@@ -89,8 +89,9 @@ Implemented in: `src/components/NodeEditor/nodes/ShaderNode.tsx`,
   customizable. Only the border *color* varies (category color, app-owned).
 - **Width (horizontal)** — `customGlyphs.ts → width` (px): the node's **exact**
   width (≥24px; default auto / fit-content). Exact — not a minimum — so a node can
-  be made **narrower than its natural content**: the header title truncates with an
-  ellipsis, and the operator body's `min-width: 54px` floor applies only in auto
+  be made **narrower than its natural content**: the header title **wraps** (the
+  header bar grows in height automatically — sockets never shift, since handles
+  anchor to the body), and the operator body's `min-width: 54px` floor applies only in auto
   mode (an explicit width overrides it). Rows-layout content may overflow if forced
   very narrow — the designer shows the result live.
 - **Height (vertical)** — `height` (px, ≥28; default auto): the body height,
@@ -107,7 +108,8 @@ Implemented in: `src/components/NodeEditor/nodes/ShaderNode.tsx`,
 - **Text size** — `text` (multiplier 0.4–2.5, default 1): scales the node's text —
   header title, value boxes (`DragNumberInput` compact), and edge value labels —
   together via the `--node-text-scale` CSS variable. Purely typographic: layout
-  metrics stay fixed (the 14px header bar doesn't grow; oversized header text clips).
+  metrics for sockets stay fixed; the header bar itself wraps and auto-grows with
+  its text (both from this text scale and from narrow widths).
 - **Socket positions** — `sockets`: per-socket vertical offsets in px from the
   below-header body center, keys = input port ids plus `out`. Authored by dragging
   sockets along the border in the designer; **4px snap increments**; **every
@@ -152,7 +154,20 @@ socket existence/type, or live-canvas behavior).
     textarea and **replaceable by drag-and-dropping an `.svg` file** (auto-fitted to
     the `0 0 56 56` canvas) or via an Upload button. Modal live-previews the art with
     a toggleable 56-grid/center-guide overlay, validates the SVG (parse errors block
-    Apply), and offers Copy SVG / restore Built-in / Clear.
+    Apply), and offers Copy SVG / restore Built-in / Clear. **Points are editable
+    directly on the preview** (toggleable): draggable handles for line endpoints,
+    circle/ellipse centers + radius handles, rect corners, polyline/polygon
+    vertices, text anchors, and path command points (M/L/H/V/C/S/Q/T/A, absolute
+    or relative — relative deltas rebase so the point lands where dropped; H/V stay
+    axis-locked). Blue ● = anchors, orange ○ = control/size handles; ancestor
+    transforms are honored; 0.5-unit snap; edits write back to the SVG + textarea
+    live. **Shift = angle lock**: the drag vector (from the point's start position)
+    snaps to the nearest of the 30°/45° angle families (0, 30, 45, 60, 90, 120…°)
+    with 0.5-unit steps along the locked axis. **Smart alignment** (no modifier):
+    the dragged point snaps to other points' x and/or y within ~1.5 units — same
+    column, same row, or the cross of one point's column with another's row —
+    drawing dashed magenta guide lines; the canvas center (28,28) is always a
+    reference. Aligned axes write exact coordinates; alignment beats the grid.
 20. **Glyph scale** number (glyph-only; spacing fixed), **glyph nudge dx/dy** (also
     editable by **dragging the glyph on the canvas**; a plain click still opens the
     editor), **Width / Height** controls, **movable sockets** (drag a socket ↕ along
