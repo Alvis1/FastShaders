@@ -1,0 +1,1340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>FastShaders · Node Designer</title>
+<style>
+  :root{--bg:#f3f4f6;--panel:#fff;--line:#e2e4ea;--line2:#cfd2da;--ink:#1f2430;--dim:#5b6170;--mut:#8a909e;--accent:#3366CC;--mono:'JetBrains Mono','SF Mono',ui-monospace,monospace;--sans:'Inter',-apple-system,system-ui,sans-serif}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px}
+  .app{display:flex;flex-direction:column;height:100vh}
+  .topbar{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .topbar h1{font-size:15px;font-weight:600;margin:0}
+  .topbar .sub{font-size:11px;color:var(--mut)}
+  .topbar .spacer{flex:1}
+  select,input[type=text],input[type=number],input[type=search],textarea{font-family:var(--sans);font-size:12px;color:var(--ink);background:#fff;border:1px solid var(--line2);border-radius:6px;padding:5px 7px;outline:none}
+  select:focus,input:focus,textarea:focus{border-color:var(--accent)}
+  textarea{font-family:var(--mono);font-size:11.5px;line-height:1.5;resize:vertical;width:100%}
+  button{font-family:var(--sans);font-size:12px;font-weight:500;cursor:pointer;background:#fff;border:1px solid var(--line2);border-radius:6px;padding:6px 11px;color:var(--ink)}
+  button:hover{background:#f6f7f9}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover{filter:brightness(1.05)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.mini{padding:3px 8px;font-size:11px}
+  kbd{font:10px var(--mono);background:#f1f2f5;border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--dim)}
+  .dirty-pill{font-size:11px;color:#B45309;background:#FEF3C7;border:1px solid #FDE68A;border-radius:10px;padding:2px 8px;display:none}
+  .dirty-pill.show{display:inline-block}
+  /* local-only notice — hidden automatically once the dev-server endpoint responds */
+  .devnote{background:#FEF3C7;border-bottom:1px solid #FDE68A;color:#92400E;font-size:11.5px;padding:6px 14px;line-height:1.5}
+  .devnote code{font-family:var(--mono);font-size:10.5px;background:rgba(255,255,255,.6);border-radius:3px;padding:0 3px}
+
+  .main{flex:1;display:flex;min-height:0}
+  /* ============================= stage ============================= */
+  .stage{flex:1;position:relative;overflow:hidden}
+  .stage-hint{position:absolute;top:10px;left:12px;font-size:10.5px;color:var(--mut);z-index:4;line-height:1.6;pointer-events:none}
+  .stage-tools{position:absolute;top:10px;right:12px;z-index:4;display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:8px;padding:4px 8px;font-size:11px;color:var(--dim)}
+  .stage-tools input[type=color]{width:24px;height:18px;padding:0;border:1px solid var(--line2);border-radius:4px;background:none;cursor:pointer}
+  .zoombar{position:absolute;bottom:12px;right:12px;z-index:4;display:flex;align-items:center;gap:2px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:8px;padding:3px}
+  .zoombar button{border:none;background:transparent;padding:3px 8px;font-size:13px}
+  .zoombar .zval{font:11px var(--mono);min-width:46px;text-align:center}
+  .viewport{position:absolute;inset:0;cursor:grab;touch-action:none}
+  .viewport.panning{cursor:grabbing}
+  .panzoom{position:absolute;left:50%;top:50%;width:0;height:0}
+  .nodeWrap{position:relative;width:max-content;transform:translate(-50%,-50%)}
+  .stubs{position:absolute;left:-90px;top:-90px;pointer-events:none;overflow:visible}
+
+  /* ====== faithful node shell (mirrors NodeBase.css / ShaderNode.css) ====== */
+  .node{position:relative;background:#fff;width:fit-content;min-width:40px;border-radius:8px;
+        box-shadow:0 1px 2px rgba(0,0,0,.55),0 3px 6px rgba(0,0,0,.4);font-family:var(--sans)}
+  /* header WRAPS and grows with its text (min-height keeps the classic 14px);
+     sockets are unaffected — they anchor to the body, not the node top */
+  .node-hd{min-height:14px;font-size:calc(9px*var(--ts,1));font-weight:600;padding:0 4px;
+           border-bottom:1px solid rgba(0,0,0,.1);border-radius:7px 7px 0 0;white-space:normal;overflow-wrap:break-word;display:block;line-height:calc(13px*var(--ts,1))}
+  .cost-badge{position:absolute;top:-14px;left:50%;transform:translateX(-50%);font-size:12px;font-weight:800;line-height:1;white-space:nowrap;pointer-events:none;z-index:1}
+  .sock{position:absolute;width:10px;height:10px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.15);cursor:pointer;z-index:3}
+  .sock.in{left:-5px}.sock.out{right:-5px}
+  .node-glyph{display:flex;justify-content:center;align-items:center;padding:1px 0 0;cursor:pointer;position:relative}
+  .node-glyph:hover::after,.op-glyph:hover::after{content:'edit · drag';position:absolute;top:1px;right:3px;font-size:7px;color:var(--accent);background:rgba(255,255,255,.85);border-radius:3px;padding:0 3px;pointer-events:none}
+  .node-glyph svg,.op-glyph svg{display:block;overflow:visible}
+  .rows{padding:0}
+  .row{position:relative;display:flex;align-items:center;justify-content:space-between;min-height:14px;padding:0 4px;gap:2px}
+  .row .lt,.row .rt{display:flex;align-items:center;gap:2px;min-width:0}
+  .row .rt{margin-left:auto}
+  /* DragNumberInput (compact) mimic */
+  .dnum{display:inline-flex;align-items:center;height:calc(12px*var(--ts,1));border:1px solid rgba(0,0,0,.15);border-radius:4px;background:rgba(255,255,255,.6);overflow:hidden;user-select:none}
+  .dnum:hover{border-color:rgba(0,0,0,.3)}
+  .dnum .ar{display:flex;align-items:center;justify-content:center;width:6px;height:100%;font-size:calc(5px*var(--ts,1));color:rgba(0,0,0,.4);cursor:pointer;background:transparent;border:none;padding:0;line-height:1}
+  .dnum .ar:hover{color:rgba(0,0,0,.7);background:rgba(0,0,0,.08)}
+  .dnum .val{font-size:calc(7px*var(--ts,1));font-family:var(--mono);color:rgba(0,0,0,.7);min-width:calc(16px*var(--ts,1));text-align:center;padding:0 2px;cursor:ew-resize;outline:none;white-space:nowrap}
+  .edge-val{font:600 calc(9px*var(--ts,1)) var(--mono);color:rgba(0,0,0,.6);white-space:nowrap}
+  .edge-val.live{color:#2D6CDF}
+  .nslider{width:80px;height:14px;cursor:pointer;accent-color:var(--accent)}
+  /* operator layout */
+  .op-body{position:relative;min-width:54px}
+  .op-glyph{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);display:flex;justify-content:center;cursor:pointer}
+  .op-val{position:absolute;transform:translateY(-50%);display:flex;align-items:center}
+  .op-val>*{background:rgba(255,255,255,.82);border-radius:3px}
+  .op-val.center{left:50%;transform:translate(-50%,-50%)}
+  .op-val.left{left:6px}
+  .op-val.right{right:6px}
+  .nres{position:absolute;right:-7px;bottom:-7px;width:13px;height:13px;border-radius:3px;background:#fff;border:1.5px solid var(--accent);cursor:nwse-resize;z-index:5}
+  /* snap ruler shown along the border while dragging a socket */
+  .snapcol{position:absolute;top:0;bottom:0;width:3px;background:repeating-linear-gradient(to bottom,rgba(51,102,204,.6) 0 1px,transparent 1px 4px);pointer-events:none;z-index:2}
+  .snapcol.l{left:-1.5px}.snapcol.r{right:-1.5px}
+  /* multi-channel stack: card layers SIBLING to (and painted below) the node
+     card, inside the cost-scale wrapper — the card's bg/border stay intact */
+  .nstack{position:absolute;inset:0;border-radius:8px;border:1.5px solid;background:#fff;z-index:-1;pointer-events:none}
+
+  /* ============================= inspector ============================= */
+  .insp{width:340px;flex-shrink:0;background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:4px 0 60px}
+  .sec{border-bottom:1px solid var(--line);padding:12px 16px}
+  .sec h2{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 10px;display:flex;align-items:center;gap:8px}
+  .kv{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .kv .k{width:78px;color:var(--dim);font-size:11.5px;flex-shrink:0}
+  .kv .v{font-size:12px}
+  .kv input[type=number]{width:72px}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;background:#f6f7f9;border:1px solid var(--line);border-radius:6px;padding:3px 9px}
+  .chip .dot{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.12)}
+  .lock{font-size:10px;color:var(--mut);border:1px solid var(--line2);border-radius:5px;padding:1px 5px}
+  .unit{font-size:10px;color:var(--mut)}
+  .glyph-card{position:relative;border:1px dashed var(--line2);border-radius:8px;padding:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:#fafbfc;min-height:74px}
+  .glyph-card:hover{border-color:var(--accent);background:#f3f7ff}
+  .glyph-card .nudge-tag{position:absolute;bottom:3px;right:5px;font:9px var(--mono);color:var(--mut)}
+  .hintline{font-size:10.5px;color:var(--mut);margin:8px 0 0;line-height:1.45}
+  .btnrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+  /* preview-state rows */
+  .pstate{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .pstate .dot{width:10px;height:10px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.15);flex-shrink:0}
+  .pstate label{width:52px;color:var(--dim);font-size:11.5px;overflow:hidden;text-overflow:ellipsis}
+  .pstate select.mode{width:104px;padding:3px 4px;font-size:11px}
+  .pstate select.ch{width:44px;padding:3px 2px;font-size:11px}
+  .pstate input.pv{width:56px;padding:3px 5px;font-size:11px;font-family:var(--mono)}
+
+  /* ============================= modal ============================= */
+  .overlay{position:fixed;inset:0;background:rgba(15,18,26,.45);display:none;align-items:center;justify-content:center;z-index:50}
+  .overlay.show{display:flex}
+  .modal{background:#fff;border-radius:12px;width:800px;max-width:96vw;max-height:92vh;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+  .modal .mhd{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .modal .mhd h3{margin:0;font-size:14px;font-weight:600}
+  .modal .mbody{padding:16px 18px}
+  .modal .grid{display:grid;grid-template-columns:312px 1fr;gap:14px}
+  .glyph-preview{position:relative;border:1px solid var(--line);border-radius:8px;background:repeating-conic-gradient(#f2f3f5 0% 25%,#fff 0% 50%) 0 0/14px 14px;display:flex;align-items:center;justify-content:center;height:312px}
+  .glyph-preview svg{width:280px;height:280px;display:block;overflow:visible}
+  .glyph-preview .gridlay{position:absolute;inset:0;margin:auto;width:280px;height:280px;pointer-events:none}
+  /* handle/guide sizes are in 56-space units — tuned for the 280px (5px/unit) canvas */
+  #mPtsLay circle{pointer-events:all;cursor:move}
+  #mPtsLay .pt-anchor{fill:#3366CC;stroke:#fff;stroke-width:.45}
+  #mPtsLay .pt-ctrl{fill:#fff;stroke:#F57C00;stroke-width:.55}
+  #mPtsLay .pt-guide{stroke:#E91E63;stroke-width:.3;stroke-dasharray:1.4 1}
+  .gridopt{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--dim);margin-top:6px}
+  .drop{margin-top:8px;border:1.5px dashed var(--line2);border-radius:8px;padding:10px;text-align:center;color:var(--mut);font-size:11.5px}
+  .drop.over{border-color:var(--accent);background:#f3f7ff;color:var(--accent)}
+  .merr{display:none;font-size:11px;color:#B91C1C;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:5px 8px;margin-top:8px}
+  .merr.show{display:block}
+  .mactions{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
+  .mactions .spacer{flex:1}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1f2430;color:#fff;padding:9px 16px;border-radius:8px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:60;max-width:80vw;text-align:center}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <h1>Node Designer</h1>
+    <span class="sub">FastShaders</span>
+    <input type="search" id="search" placeholder="search nodes…  ( / )" style="width:150px" />
+    <select id="nodeSel" style="min-width:200px" title="● unsaved changes · ◆ has saved design"></select>
+    <button class="mini" id="prevBtn" title="Previous node (Alt+↑)">↑</button>
+    <button class="mini" id="nextBtn" title="Next node (Alt+↓)">↓</button>
+    <div class="spacer"></div>
+    <span class="dirty-pill" id="dirtyPill"></span>
+    <span class="sub" id="fsStatus" style="cursor:pointer" title="Click to link the FastShaders folder (Chromium browsers)">folder not linked</span>
+    <button id="saveBtn" title="Save this node (writes customGlyphs.ts)">Save</button>
+    <button id="saveAllBtn" class="primary" title="Save all changed nodes (⌘/Ctrl+S)">Save all</button>
+  </div>
+  <div class="devnote" id="devNote">⚠ <b>Local tool</b> — run <code>npm run dev</code> and open <code>http://localhost:5173/FastShaders/node-designer.html</code>. Saving writes <code>customGlyphs.ts</code> through the dev server and <b>works locally only</b> (the <code>/__nd</code> endpoint exists in dev only; elsewhere Save falls back to a download).</div>
+
+  <div class="main">
+    <div class="stage" id="stage">
+      <div class="stage-hint">click glyph = edit svg · drag glyph = nudge (dx/dy) · click sockets = cycle connection · <b>drag sockets ↕ = move (4px snap)</b> · drag corner ↘ = width / height (glyph never scales with the node)<br>drag canvas = pan · <b>⌘/Ctrl + wheel</b> = zoom · <kbd>/</kbd> search · <kbd>Alt ↑↓</kbd> switch node · <kbd>⌘S</kbd> save all</div>
+      <div class="stage-tools">bg <input type="color" id="bgInput" title="Canvas background (cost badge & 1-channel edges auto-contrast, like the app)"><button class="mini" id="bgReset" title="App default #FAFAFA">⟲</button></div>
+      <div class="viewport" id="viewport">
+        <div class="panzoom" id="panzoom">
+          <div class="nodeWrap" id="nodeWrap"></div>
+        </div>
+      </div>
+      <div class="zoombar">
+        <button id="zOut" title="Zoom out">−</button>
+        <button class="zval" id="zVal" title="Reset zoom & position">100%</button>
+        <button id="zIn" title="Zoom in">+</button>
+      </div>
+    </div>
+
+    <div class="insp">
+      <div class="sec">
+        <h2>Node <span class="lock" id="dirtyFlag" style="display:none;color:#B45309;border-color:#FDE68A;background:#FEF3C7">unsaved</span></h2>
+        <div class="kv"><span class="k">Type</span><span class="v" id="iType">—</span></div>
+        <div class="kv"><span class="k">Category</span><span class="v"><span class="chip" id="iCat"><span class="dot"></span><span></span></span> <span class="lock">locked</span></span></div>
+        <div class="kv"><span class="k">Cost</span><span class="v"><span class="chip" id="iCost"><span class="dot"></span><span></span></span> <span class="lock">locked</span></span></div>
+        <div class="btnrow">
+          <button class="mini" id="copyBtn" title="Copy this node's design — everything except the glyph art">Copy design</button>
+          <button class="mini" id="pasteBtn" title="Paste the copied design onto this node (its glyph stays)" disabled>Paste</button>
+          <button class="mini" id="resetBtn" title="Reset this node to built-in defaults">Reset node</button>
+        </div>
+      </div>
+
+      <div class="sec">
+        <h2>Preview states</h2>
+        <div id="stateList"></div>
+      </div>
+
+      <div class="sec">
+        <h2>Visualization (glyph)</h2>
+        <div class="glyph-card" id="glyphCard" title="Click to edit the SVG · drag the glyph on the canvas to nudge"></div>
+        <div class="kv" style="margin-top:10px"><span class="k">Glyph scale</span><input type="number" id="gScale" min="0.2" max="3" step="0.05" title="Scales the glyph only — never the socket/value spacing"></div>
+        <div class="kv"><span class="k">Nudge X / Y</span><input type="number" id="gDx" min="-28" max="28" step="0.5" title="dx — glyph-space units"> <input type="number" id="gDy" min="-28" max="28" step="0.5" title="dy — glyph-space units"> <button class="mini" id="nudge0" title="Reset nudge">0,0</button></div>
+      </div>
+
+      <div class="sec">
+        <h2>Text</h2>
+        <div class="kv"><span class="k">Justify</span><select id="just"><option value="center">center</option><option value="left">left</option><option value="right">right</option></select></div>
+        <div class="kv"><span class="k">Text size</span><input type="number" id="nT" min="0.4" max="2.5" step="0.05" title="Scales header/value/edge-label text; header wraps and auto-grows"> <span class="unit">× · 1 = default</span></div>
+      </div>
+
+      <div class="sec">
+        <h2>Node box &amp; sockets</h2>
+        <div class="kv"><span class="k">Width</span><input type="number" id="nW" min="0" max="400" step="2"> <span class="unit">px · 0 = auto · min 24</span></div>
+        <div class="kv"><span class="k">Height</span><input type="number" id="nH" min="0" max="1200" step="2"> <span class="unit">px · 0 = auto · min 28</span></div>
+        <div class="kv"><span class="k">Sockets</span><button class="mini" id="sockReset" title="Restore default socket positions (row anchoring / classic operator spots)">Reset positions</button> <span class="unit" id="sockInfo"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Glyph editor modal -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="mhd"><h3>Edit glyph</h3><span class="sub" id="mType"></span></div>
+    <div class="mbody">
+      <div class="grid">
+        <div>
+          <div class="glyph-preview" id="mPrevBox"><div id="mPreview"></div><svg class="gridlay" id="mGridLay" viewBox="0 0 56 56" style="display:none"><rect x="0.25" y="0.25" width="55.5" height="55.5" fill="none" stroke="#3366CC" stroke-width=".5" opacity=".55"/><line x1="28" y1="0" x2="28" y2="56" stroke="#3366CC" stroke-width=".4" opacity=".55"/><line x1="0" y1="28" x2="56" y2="28" stroke="#3366CC" stroke-width=".4" opacity=".55"/><line x1="14" y1="0" x2="14" y2="56" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="42" y1="0" x2="42" y2="56" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="0" y1="14" x2="56" y2="14" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="0" y1="42" x2="56" y2="42" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/></svg><svg class="gridlay" id="mPtsLay" viewBox="0 0 56 56"></svg></div>
+          <label class="gridopt"><input type="checkbox" id="mGrid"> 56-grid &amp; center guides</label>
+          <label class="gridopt"><input type="checkbox" id="mMove"> drag points (●&nbsp;anchor · ○&nbsp;control/size · 0.5 snap · aligns to other points' rows/columns · <b>⇧&nbsp;= angle lock</b> 0/30/45/60/90°…)</label>
+          <div class="drop" id="drop">Drop an <b>.svg</b> file here to replace</div>
+        </div>
+        <div>
+          <label class="sub" style="color:var(--dim)">Inner SVG (0 0 56 56)</label>
+          <textarea id="mSvg" rows="21" spellcheck="false"></textarea>
+          <div class="merr" id="mErr"></div>
+        </div>
+      </div>
+    </div>
+    <div class="mactions">
+      <select id="mLoad" title="Load another node's glyph art into the editor (Apply to keep it)" style="max-width:185px;font-size:11px;padding:4px 5px">
+        <option value="">load art from…</option>
+      </select>
+      <button class="mini" id="mUpload">Upload .svg…</button>
+      <input type="file" id="mFile" accept=".svg,image/svg+xml" style="display:none">
+      <button class="mini" id="mCopy">Copy SVG</button>
+      <button class="mini" id="mBuiltin" title="Restore the built-in FastShaders art">Built-in</button>
+      <button class="mini" id="mClear">Clear</button>
+      <span class="spacer"></span>
+      <button id="mClose">Cancel</button>
+      <button class="primary" id="mApply">Apply</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ================= registry data (faithful snapshot; costs refresh from
+   src/registry/complexity.json whenever the folder is linked) ================= */
+const CAT = {input:'#4CAF50',type:'#2196F3',arithmetic:'#FF9800',math:'#9C27B0',interpolation:'#00BCD4',logic:'#7E57C2',vector:'#E91E63',color:'#FF5722'};
+const TYPE_COLORS={float:'#3366CC',int:'#20B2AA',vec2:'#4A90E2',vec3:'#E040FB',vec4:'#AB47BC',color:'#E8A317',any:'#607D8B'};
+const COSTS={positionGeometry:0,positionLocal:0,positionWorld:0,positionView:0,positionWorldDirection:7,positionViewDirection:7,cameraPosition:0,cameraNear:0,cameraFar:0,normalLocal:0,tangentLocal:0,screenUV:0,uv:2,property_float:0,slider:0,float:0,int:0,vec2:0,vec3:0,vec4:0,add:1,sub:1,mul:1,div:4,abs:0,sqrt:4,exp:5,log2:4,floor:1,round:1,fract:1,oneMinus:1,pow:12,mod:2,clamp:2,min:1,max:1,mix:2,smoothstep:7,remap:5,select:2,greaterThan:1,lessThan:1,equal:1,normalize:7,length:7,distance:8,dot:3,cross:6,split:0,append:1,hsl:15,toHsl:15};
+/* ShaderNode-rendered nodes only (glyphs apply; live-canvas nodes are excluded).
+   [type, label, category, inputs[[id,type]], outputs[[id,type]], defaults?] */
+const NODES=[
+ ['positionGeometry','Position','input',[],[['out','vec3']]],['positionLocal','Position (local)','input',[],[['out','vec3']]],['positionWorld','Position (world)','input',[],[['out','vec3']]],['positionView','Position (view)','input',[],[['out','vec3']]],['positionWorldDirection','View Dir (world)','input',[],[['out','vec3']]],['positionViewDirection','View Dir (view)','input',[],[['out','vec3']]],['cameraPosition','Camera Position','input',[],[['out','vec3']]],['cameraNear','Camera Near','input',[],[['out','float']]],['cameraFar','Camera Far','input',[],[['out','float']]],['normalLocal','Normal','input',[],[['out','vec3']]],['tangentLocal','Tangent','input',[],[['out','vec3']]],['screenUV','Screen UV','input',[],[['out','vec2']]],['uv','UV','input',[['channel','int'],['tilingU','float'],['tilingV','float'],['rotation','float']],[['out','vec2']],{channel:0,tilingU:1,tilingV:1,rotation:0}],['property_float','Property (float)','input',[],[['out','float']],{value:1}],['slider','Slider','input',[],[['out','float']],{value:0.5}],
+ ['float','Float','type',[],[['out','float']],{value:0}],['int','Int','type',[],[['out','int']],{value:0}],['vec2','Vec2','type',[['x','float'],['y','float']],[['out','vec2']]],['vec3','Vec3','type',[['x','float'],['y','float'],['z','float']],[['out','vec3']]],['vec4','Vec4','type',[['x','float'],['y','float'],['z','float'],['w','float']],[['out','vec4']]],
+ ['add','Add','arithmetic',[['a','any'],['b','any']],[['out','any']]],['sub','Subtract','arithmetic',[['a','any'],['b','any']],[['out','any']]],['mul','Multiply','arithmetic',[['a','any'],['b','any']],[['out','any']]],['div','Divide','arithmetic',[['a','any'],['b','any']],[['out','any']]],
+ ['abs','Abs','math',[['x','any']],[['out','any']]],['sqrt','Sqrt','math',[['x','any']],[['out','any']]],['exp','Exp','math',[['x','any']],[['out','any']]],['log2','Log2','math',[['x','any']],[['out','any']]],['floor','Floor','math',[['x','any']],[['out','any']]],['round','Round','math',[['x','any']],[['out','any']]],['fract','Fract','math',[['x','any']],[['out','any']]],['oneMinus','Invert (oneMinus)','math',[['x','any']],[['out','any']]],['pow','Power','math',[['base','any'],['exp','float']],[['out','any']]],['mod','Mod','math',[['x','any'],['y','any']],[['out','any']]],['clamp','Clamp','math',[['x','any'],['min','any'],['max','any']],[['out','any']]],['min','Min','math',[['a','any'],['b','any']],[['out','any']]],['max','Max','math',[['a','any'],['b','any']],[['out','any']]],
+ ['mix','Mix','interpolation',[['a','any'],['b','any'],['t','float']],[['out','any']]],['smoothstep','Smoothstep','interpolation',[['edge0','float'],['edge1','float'],['x','float']],[['out','float']]],['remap','Remap','interpolation',[['x','float'],['inLow','float'],['inHigh','float'],['outLow','float'],['outHigh','float']],[['out','float']]],['select','Select','interpolation',[['condition','float'],['a','any'],['b','any']],[['out','any']]],
+ ['greaterThan','Greater Than','logic',[['a','any'],['b','any']],[['out','any']]],['lessThan','Less Than','logic',[['a','any'],['b','any']],[['out','any']]],['equal','Equal','logic',[['a','any'],['b','any']],[['out','any']]],
+ ['normalize','Normalize','vector',[['v','vec3']],[['out','vec3']]],['length','Length','vector',[['v','vec3']],[['out','float']]],['distance','Distance','vector',[['a','vec3'],['b','vec3']],[['out','float']]],['dot','Dot Product','vector',[['a','vec3'],['b','vec3']],[['out','float']]],['cross','Cross Product','vector',[['a','vec3'],['b','vec3']],[['out','vec3']]],['split','Split','vector',[['v','any']],[['x','float'],['y','float'],['z','float'],['w','float']]],['append','Append','vector',[['a','any'],['b','any']],[['out','any']]],
+ ['hsl','HSL to RGB','color',[['h','float'],['s','float'],['l','float']],[['out','vec3']]],['toHsl','RGB to HSL','color',[['rgb','vec3']],[['out','vec3']]]
+];
+const NODE_BY_TYPE={}; NODES.forEach(n=>NODE_BY_TYPE[n[0]]={type:n[0],label:n[1],cat:n[2],in:n[3],out:n[4],def:n[5]||null});
+/* channel count per data type (mirrors LINE_COUNT in colorUtils) */
+const LINE_COUNT={float:1,int:1,any:1,vec2:2,vec3:3,color:3,vec4:4};
+/* per-channel edge colors (mirrors COUNT_EDGE_COLORS; 1-ch flips to contrast vs canvas) */
+const COUNT_EDGE_COLORS={2:['#ff4444','#44dd44'],3:['#ff4444','#44dd44','#4488ff'],4:['#ff4444','#44dd44','#4488ff','#dddddd']};
+const EDGE_GAP=3.5/3, STUB_LEN=64;
+
+/* ---------------- built-in glyph art (faithful to NodeGlyph.tsx) ---------------- */
+const AX='#B4B7C0',PLOT='#F57C00',FILL='#FF9800',INK='#2B2B2B',CON='#8A8F9C',BLUE='#2D6CDF',GREEN='#2E9E5B';
+const PG='<g stroke="'+CON+'" stroke-width=".6" fill="none"><line x1="-22" y1="-18" x2="22" y2="-18" stroke-width=".8"/><circle cx="0" cy="-18" r="1.2" fill="'+CON+'" stroke="none"/><line x1="-22" y1="20" x2="0" y2="-18"/><line x1="-11" y1="20" x2="0" y2="-18"/><line x1="0" y1="20" x2="0" y2="-18"/><line x1="11" y1="20" x2="0" y2="-18"/><line x1="22" y1="20" x2="0" y2="-18"/><line x1="-22" y1="20" x2="22" y2="20"/><line x1="-17" y1="10" x2="17" y2="10"/><line x1="-13" y1="2" x2="13" y2="2"/><line x1="-10" y1="-4" x2="10" y2="-4"/></g>';
+const MP={abs:{f:'M-20 -12 L0 0 L20 -12 L20 0 L-20 0 Z',l:'-20,-12 0,0 20,-12',p:1},sqrt:{f:'M-20 0 Q-10 -10 0 -11 Q10 -12 20 -12 L20 0 Z',l:'M-20 0 Q-10 -10 0 -11 Q10 -12 20 -12'},exp:{f:'M-20 12 Q0 10 12 0 Q18 -8 20 -13 L20 0 L-20 0 Z',l:'M-20 12 Q0 10 12 0 Q18 -8 20 -13'},log2:{f:'M-20 13 Q-15 0 -5 -8 Q5 -12 20 -13 L20 0 L-20 0 Z',l:'M-20 13 Q-15 0 -5 -8 Q5 -12 20 -13'},oneMinus:{f:'M-20 -12 L20 12 L20 0 L-20 0 Z',l:'M-20 -12 L20 12'},clamp:{f:'M-20 10 L-10 10 L10 -10 L20 -10 L20 0 L-20 0 Z',l:'-20,10 -10,10 10,-10 20,-10',p:1},min:{f:'M-20 10 L-10 10 L16 -16 L16 0 L-20 0 Z',l:'-20,10 -10,10 16,-16',p:1},max:{f:'M-16 16 L10 -10 L20 -10 L20 0 L-16 0 Z',l:'-16,16 10,-10 20,-10',p:1}};
+const OPS={add:'+',sub:'−',mul:'×',div:'÷',greaterThan:'>',lessThan:'<',equal:'=',mod:'%'};
+function plot(s){let o='<g transform="translate(28 28)"><line x1="-20" y1="0" x2="20" y2="0" stroke="'+AX+'" stroke-width=".6"/>';if(s.f)o+='<path d="'+s.f+'" fill="'+FILL+'" fill-opacity=".16"/>';o+=s.p?'<polyline points="'+s.l+'"':'<path d="'+s.l+'"';return o+' fill="none" stroke="'+PLOT+'" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></g>';}
+function builtinGlyph(t){
+ if(MP[t])return plot(MP[t]);
+ if(OPS[t])return '<text x="28" y="35" text-anchor="middle" fill="'+INK+'" style="font:700 17px Inter,sans-serif">'+OPS[t]+'</text>';
+ if(t==='pow')return '<text x="28" y="34" text-anchor="middle" fill="'+INK+'" style="font:italic 700 13px Georgia,serif">xʸ</text>';
+ if(t==='floor')return '<g transform="translate(28 28)" stroke="'+PLOT+'" stroke-width="1.4" stroke-linecap="round"><line x1="-20" y1="0" x2="20" y2="0" stroke="'+AX+'" stroke-width=".6"/><line x1="-20" y1="10" x2="-10" y2="10"/><line x1="-10" y1="3" x2="0" y2="3"/><line x1="0" y1="-4" x2="10" y2="-4"/><line x1="10" y1="-11" x2="20" y2="-11"/></g>';
+ if(t==='round')return '<g transform="translate(28 28)" stroke="'+PLOT+'" stroke-width="1.4" stroke-linecap="round"><line x1="-20" y1="0" x2="20" y2="0" stroke="'+AX+'" stroke-width=".6"/><line x1="-20" y1="10" x2="-15" y2="10"/><line x1="-15" y1="3" x2="-5" y2="3"/><line x1="-5" y1="-4" x2="5" y2="-4"/><line x1="5" y1="-11" x2="15" y2="-11"/><line x1="15" y1="-15" x2="20" y2="-15"/></g>';
+ if(t==='fract')return '<g transform="translate(28 28)"><line x1="-20" y1="0" x2="20" y2="0" stroke="'+AX+'" stroke-width=".6"/><g fill="'+FILL+'" fill-opacity=".16"><path d="M-20 0 L-20 10 L-10 -10 L-10 0 Z"/><path d="M-10 0 L-10 10 L0 -10 L0 0 Z"/><path d="M0 0 L0 10 L10 -10 L10 0 Z"/><path d="M10 0 L10 10 L20 -10 L20 0 Z"/></g><g stroke="'+PLOT+'" stroke-width="1.4" stroke-linecap="round"><line x1="-20" y1="10" x2="-10" y2="-10"/><line x1="-10" y1="10" x2="0" y2="-10"/><line x1="0" y1="10" x2="10" y2="-10"/><line x1="10" y1="10" x2="20" y2="-10"/></g></g>';
+ if(t==='dot')return '<g transform="translate(15 36)"><line x1="0" y1="0" x2="26" y2="0" stroke="'+CON+'" stroke-width="1.4"/><polygon points="26,0 22,-2 22,2" fill="'+CON+'"/><line x1="0" y1="0" x2="13" y2="-16" stroke="'+BLUE+'" stroke-width="1.8"/><polygon points="13,-16 9,-15 12,-12" fill="'+BLUE+'"/><line x1="13" y1="-16" x2="13" y2="0" stroke="'+CON+'" stroke-width=".9" stroke-dasharray="1.4 1.4"/><line x1="0" y1="0" x2="13" y2="0" stroke="'+PLOT+'" stroke-width="3" stroke-linecap="round"/></g>';
+ if(t==='cross')return '<path d="M 16 44 L 28.1 37 L 40.2 44 L 28.1 51 Z" fill="'+BLUE+'" fill-opacity=".16"/><line x1="28.1" y1="37" x2="40.2" y2="44" stroke="'+CON+'" stroke-width=".9" stroke-dasharray="1.4 1.4"/><line x1="28.1" y1="51" x2="40.2" y2="44" stroke="'+CON+'" stroke-width=".9" stroke-dasharray="1.4 1.4"/><line x1="16" y1="44" x2="28.1" y2="37" stroke="'+BLUE+'" stroke-width="2.2"/><polygon points="28.1,37 25,37.4 25.9,40.4" fill="'+BLUE+'"/><line x1="16" y1="44" x2="28.1" y2="51" stroke="'+PLOT+'" stroke-width="2.2"/><polygon points="28.1,51 25,50.6 25.9,47.6" fill="'+PLOT+'"/><line x1="16" y1="44" x2="16" y2="14" stroke="'+GREEN+'" stroke-width="2.2"/><polygon points="16,14 13,19 19,19" fill="'+GREEN+'"/>';
+ if(t==='length')return '<g transform="translate(28 28)"><line x1="-15" y1="-9" x2="-15" y2="9" stroke="'+INK+'" stroke-width="1.2"/><line x1="15" y1="-9" x2="15" y2="9" stroke="'+INK+'" stroke-width="1.2"/><line x1="-15" y1="0" x2="15" y2="0" stroke="'+PLOT+'" stroke-width="1.6"/><polygon points="-15,0 -10,-3 -10,3" fill="'+PLOT+'"/><polygon points="15,0 10,-3 10,3" fill="'+PLOT+'"/></g>';
+ if(t==='distance')return '<g transform="translate(28 28)">'+PG+'<line x1="-12" y1="17" x2="14" y2="11" stroke="'+INK+'" stroke-dasharray="1.4 1.4" stroke-width="1.1"/><circle cx="-12" cy="17" r="3.5" fill="'+BLUE+'"/><circle cx="14" cy="11" r="3.5" fill="'+PLOT+'"/></g>';
+ if(t==='normalize')return '<g transform="translate(28 32)"><line x1="-14" y1="8" x2="14" y2="-10" stroke="'+AX+'" stroke-dasharray="2 2" stroke-width="1"/><line x1="-14" y1="8" x2="-2" y2="0" stroke="'+PLOT+'" stroke-width="2"/><polygon points="-2,0 -5,-1 -3,2" fill="'+PLOT+'"/></g>';
+ if(t==='positionWorld'||t==='positionGeometry'||t==='positionLocal'){let s='<g transform="translate(28 28)">'+PG;if(t==='positionLocal')s+='<rect x="-12" y="4" width="24" height="12" fill="rgba(0,0,0,0.04)" stroke="'+INK+'" stroke-width="1.4"/><circle cx="0" cy="10" r="3" fill="'+PLOT+'"/>';else s+='<circle cx="-4" cy="14" r="3.5" fill="'+PLOT+'"/>';return s+'</g>';}
+ if(t==='uv')return '<g transform="translate(28 28)"><g stroke="'+PLOT+'" stroke-width=".6" opacity=".6"><line x1="-14" y1="-14" x2="-14" y2="14"/><line x1="-6" y1="-14" x2="-6" y2="14"/><line x1="2" y1="-14" x2="2" y2="14"/><line x1="10" y1="-14" x2="10" y2="14"/><line x1="-14" y1="-14" x2="14" y2="-14"/><line x1="-14" y1="-6" x2="14" y2="-6"/><line x1="-14" y1="2" x2="14" y2="2"/><line x1="-14" y1="10" x2="14" y2="10"/></g><g stroke="'+INK+'" stroke-width="1.6" fill="none"><rect x="-2" y="-10" width="8" height="8"/><rect x="-10" y="-2" width="8" height="8"/><rect x="-2" y="-2" width="8" height="8"/><rect x="6" y="-2" width="8" height="8"/><rect x="-2" y="6" width="8" height="8"/></g></g>';
+ if(t==='cameraNear'||t==='cameraFar'){const n=t==='cameraNear';return '<line x1="19" y1="28" x2="47" y2="10" stroke="'+CON+'" stroke-width=".8"/><line x1="19" y1="28" x2="47" y2="46" stroke="'+CON+'" stroke-width=".8"/><line x1="36" y1="20" x2="36" y2="36" stroke="'+(n?PLOT:INK)+'" stroke-width="'+(n?1.2:2.6)+'" stroke-linecap="round"/><line x1="24" y1="25.6" x2="24" y2="30.4" stroke="'+(n?INK:PLOT)+'" stroke-width="'+(n?2.6:1.2)+'" stroke-linecap="round"/><ellipse cx="13" cy="28" rx="6" ry="3.5" fill="none" stroke="'+INK+'" stroke-width="1.6"/><circle cx="13" cy="28" r="2" fill="'+INK+'"/>';}
+ return '';
+}
+
+/* ---------------- helpers ---------------- */
+function contrast(hex){const h=String(hex||'').replace('#','');if(h.length<6)return '#000000';const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);return (0.299*r+0.587*g+0.114*b)/255>0.55?'#000000':'#ffffff';}
+function costColor(c){if(c<=0)return '#EBEBEB';const t=Math.min(c/80,1);const lo=[139,195,74],hi=[255,87,34];const m=i=>Math.round((lo[i]+(hi[i]-lo[i])*t)*0.45+255*0.55).toString(16).padStart(2,'0');return '#'+m(0)+m(1)+m(2);}
+function costScaleOf(c){return c<=0?1:1+Math.min(c/80,1)*0.35;}
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2400);}
+function el(id){return document.getElementById(id);}
+function lsGet(k,d){try{const v=localStorage.getItem(k);return v==null?d:v;}catch(e){return d;}}
+function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
+
+/* normalize pasted/dropped svg to inner content in 0..56 space */
+function normalizeSvg(text){
+ text=(text||'').trim(); if(!text)return '';
+ if(!/<svg[\s>]/i.test(text))return text; // already inner content
+ try{const doc=new DOMParser().parseFromString(text,'image/svg+xml');const svg=doc.querySelector('svg');if(!svg)return text;
+  let vb=svg.getAttribute('viewBox'); let mx=0,my=0,w=56,h=56;
+  if(vb){const p=vb.split(/[ ,]+/).map(Number);mx=p[0];my=p[1];w=p[2];h=p[3];}
+  else{w=parseFloat(svg.getAttribute('width'))||56;h=parseFloat(svg.getAttribute('height'))||56;}
+  const inner=svg.innerHTML;
+  if(Math.abs(mx)<.01&&Math.abs(my)<.01&&Math.abs(w-56)<.01&&Math.abs(h-56)<.01)return inner;
+  const sx=(56/w).toFixed(4),sy=(56/h).toFixed(4);
+  return '<g transform="scale('+sx+' '+sy+') translate('+(-mx)+' '+(-my)+')">'+inner+'</g>';
+ }catch(e){return text;}
+}
+/* returns null if `inner` parses cleanly as SVG content, else an error string */
+function svgError(inner){
+ if(!(inner||'').trim())return null;
+ try{const doc=new DOMParser().parseFromString('<svg xmlns="http://www.w3.org/2000/svg">'+inner+'</svg>','image/svg+xml');
+  const err=doc.querySelector('parsererror');
+  if(err)return (err.textContent||'SVG parse error').split('\n')[0].slice(0,160);
+  return null;
+ }catch(e){return 'SVG parse error';}
+}
+
+/* ---------------- glyph point editor (drag points on the preview) ----------------
+   Parses the live preview SVG and exposes draggable handles for every editable
+   coordinate: line endpoints, circle/ellipse centers (+ radius handles), rect
+   corners, polyline/polygon vertices, text anchors, and path command points
+   (M/L/H/V/C/S/Q/T/A — absolute or relative; relative deltas are rebased so the
+   dragged point lands exactly where dropped). Ancestor transforms
+   (translate/scale/rotate/matrix) are honored. Edits write back to the SVG and
+   the textarea live; 0.5-unit snap. */
+function mulMat(p,q){return[p[0]*q[0]+p[2]*q[1],p[1]*q[0]+p[3]*q[1],p[0]*q[2]+p[2]*q[3],p[1]*q[2]+p[3]*q[3],p[0]*q[4]+p[2]*q[5]+p[4],p[1]*q[4]+p[3]*q[5]+p[5]];}
+function invMat(m){const det=m[0]*m[3]-m[1]*m[2]||1e-9;const a=m[3]/det,b=-m[1]/det,c=-m[2]/det,d=m[0]/det;return[a,b,c,d,-(a*m[4]+c*m[5]),-(b*m[4]+d*m[5])];}
+function applyMat(m,x,y){return{x:m[0]*x+m[2]*y+m[4],y:m[1]*x+m[3]*y+m[5]};}
+function parseTransform(str){
+ let m=[1,0,0,1,0,0];const re=/(translate|scale|rotate|matrix)\(([^)]*)\)/g;let t;
+ while((t=re.exec(str||''))){const a=t[2].split(/[\s,]+/).filter(Boolean).map(Number);let n=null;
+  if(t[1]==='translate')n=[1,0,0,1,a[0]||0,a[1]||0];
+  else if(t[1]==='scale')n=[a[0]!=null?a[0]:1,0,0,a[1]!=null?a[1]:(a[0]!=null?a[0]:1),0,0];
+  else if(t[1]==='matrix'&&a.length===6)n=a;
+  else if(t[1]==='rotate'){const r=(a[0]||0)*Math.PI/180,co=Math.cos(r),si=Math.sin(r);n=[co,si,-si,co,0,0];
+   if(a.length===3)n=mulMat([1,0,0,1,a[1],a[2]],mulMat(n,[1,0,0,1,-a[1],-a[2]]));}
+  if(n)m=mulMat(m,n);}
+ return m;}
+function ctmOf(elm,root){const chain=[];let e=elm;while(e&&e!==root){chain.unshift(e);e=e.parentNode;}
+ let m=[1,0,0,1,0,0];chain.forEach(x=>{if(x.getAttribute)m=mulMat(m,parseTransform(x.getAttribute('transform')));});return m;}
+
+const PATH_ARGC={m:2,l:2,h:1,v:1,c:6,s:4,q:4,t:2,a:7,z:0};
+function tokenizePath(d){
+ const toks=[];const re=/([MLHVCSQTAZmlhvcsqtaz])|(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g;let m;
+ while((m=re.exec(d||'')))toks.push(m[1]!=null?m[1]:parseFloat(m[2]));
+ const segs=[];let i=0,cmd=null;
+ while(i<toks.length){
+  if(typeof toks[i]==='string')cmd=toks[i++];
+  if(cmd==null)break;
+  const lc=cmd.toLowerCase();
+  if(lc==='z'){segs.push({cmd,args:[]});cmd=null;continue;}
+  const n=PATH_ARGC[lc];if(n==null)break;
+  const args=[];let ok=true;
+  for(let k=0;k<n;k++){if(typeof toks[i]==='number')args.push(toks[i++]);else{ok=false;break;}}
+  if(!ok)break;
+  segs.push({cmd,args});
+  if(cmd==='M')cmd='L';else if(cmd==='m')cmd='l';
+ }
+ return segs;
+}
+function fmtN(v){return String(Math.round(v*100)/100);}
+function serializePath(segs){return segs.map(s=>s.cmd+(s.args.length?' '+s.args.map(fmtN).join(' '):'')).join(' ');}
+function segEnd(s,cur,sub){
+ const lc=s.cmd.toLowerCase(),rel=s.cmd===lc,a=s.args;let x=cur.x,y=cur.y,sx=sub.x,sy=sub.y;
+ switch(lc){
+  case 'm':x=rel?cur.x+a[0]:a[0];y=rel?cur.y+a[1]:a[1];sx=x;sy=y;break;
+  case 'l':case 't':x=rel?cur.x+a[0]:a[0];y=rel?cur.y+a[1]:a[1];break;
+  case 'h':x=rel?cur.x+a[0]:a[0];break;
+  case 'v':y=rel?cur.y+a[0]:a[0];break;
+  case 'c':x=rel?cur.x+a[4]:a[4];y=rel?cur.y+a[5]:a[5];break;
+  case 's':case 'q':x=rel?cur.x+a[2]:a[2];y=rel?cur.y+a[3]:a[3];break;
+  case 'a':x=rel?cur.x+a[5]:a[5];y=rel?cur.y+a[6]:a[6];break;
+  case 'z':x=sx;y=sy;break;
+ }
+ return {cur:{x:x,y:y},sub:{x:sx,y:sy}};
+}
+function segStart(segs,idx){let cur={x:0,y:0},sub={x:0,y:0};
+ for(let i=0;i<idx;i++){const r=segEnd(segs[i],cur,sub);cur=r.cur;sub=r.sub;}
+ return cur;}
+function pathPointDefs(elm){
+ const segs=tokenizePath(elm.getAttribute('d')||'');
+ const defs=[];
+ segs.forEach((s,si)=>{
+  const lc=s.cmd.toLowerCase(),rel=s.cmd===lc;
+  const pairs=[];
+  switch(lc){
+   case 'm':case 'l':case 't':pairs.push([0,1,'anchor']);break;
+   case 'c':pairs.push([0,1,'ctrl'],[2,3,'ctrl'],[4,5,'anchor']);break;
+   case 's':pairs.push([0,1,'ctrl'],[2,3,'anchor']);break;
+   case 'q':pairs.push([0,1,'ctrl'],[2,3,'anchor']);break;
+   case 'a':pairs.push([5,6,'anchor']);break;
+   case 'h':pairs.push([0,-1,'anchor']);break;
+   case 'v':pairs.push([-1,0,'anchor']);break;
+  }
+  pairs.forEach(pr=>{
+   const ax=pr[0],ay=pr[1],kind=pr[2];
+   defs.push({el:elm,kind:kind,
+    get:function(){const g=tokenizePath(elm.getAttribute('d')||'');const sg=g[si];if(!sg)return{x:0,y:0};const base=segStart(g,si);
+     return {x:ax<0?base.x:((rel?base.x:0)+sg.args[ax]), y:ay<0?base.y:((rel?base.y:0)+sg.args[ay])};},
+    set:function(x,y){const g=tokenizePath(elm.getAttribute('d')||'');const sg=g[si];if(!sg)return;const base=segStart(g,si);
+     if(ax>=0)sg.args[ax]=x-(rel?base.x:0);
+     if(ay>=0)sg.args[ay]=y-(rel?base.y:0);
+     elm.setAttribute('d',serializePath(g));}});
+  });
+ });
+ return defs;
+}
+function collectGlyphPoints(root){
+ const pts=[];
+ root.querySelectorAll('line,circle,ellipse,rect,polyline,polygon,text,path').forEach(elm=>{
+  const tag=elm.tagName.toLowerCase();
+  const g=n=>parseFloat(elm.getAttribute(n))||0;
+  const S=(n,v)=>elm.setAttribute(n,fmtN(v));
+  const add=(get,set,kind)=>pts.push({el:elm,get:get,set:set,kind:kind||'anchor'});
+  if(tag==='line'){
+   add(()=>({x:g('x1'),y:g('y1')}),(x,y)=>{S('x1',x);S('y1',y);});
+   add(()=>({x:g('x2'),y:g('y2')}),(x,y)=>{S('x2',x);S('y2',y);});
+  }else if(tag==='circle'){
+   add(()=>({x:g('cx'),y:g('cy')}),(x,y)=>{S('cx',x);S('cy',y);});
+   add(()=>({x:g('cx')+g('r'),y:g('cy')}),(x,_y)=>{S('r',Math.max(.5,Math.abs(x-g('cx'))));},'ctrl');
+  }else if(tag==='ellipse'){
+   add(()=>({x:g('cx'),y:g('cy')}),(x,y)=>{S('cx',x);S('cy',y);});
+   add(()=>({x:g('cx')+g('rx'),y:g('cy')}),(x,_y)=>{S('rx',Math.max(.5,Math.abs(x-g('cx'))));},'ctrl');
+   add(()=>({x:g('cx'),y:g('cy')+g('ry')}),(_x,y)=>{S('ry',Math.max(.5,Math.abs(y-g('cy'))));},'ctrl');
+  }else if(tag==='rect'){
+   add(()=>({x:g('x'),y:g('y')}),(x,y)=>{const brx=g('x')+g('width'),bry=g('y')+g('height');
+    const nx=Math.min(x,brx-.5),ny=Math.min(y,bry-.5);
+    S('x',nx);S('y',ny);S('width',brx-nx);S('height',bry-ny);});
+   add(()=>({x:g('x')+g('width'),y:g('y')+g('height')}),(x,y)=>{S('width',Math.max(.5,x-g('x')));S('height',Math.max(.5,y-g('y')));},'ctrl');
+  }else if(tag==='polyline'||tag==='polygon'){
+   const nums=()=>(elm.getAttribute('points')||'').split(/[\s,]+/).filter(Boolean).map(Number);
+   const count=nums().length;
+   for(let i=0;i+1<count;i+=2){
+    (idx=>{add(()=>{const a=nums();return{x:a[idx]||0,y:a[idx+1]||0};},(x,y)=>{const a=nums();a[idx]=x;a[idx+1]=y;elm.setAttribute('points',a.map(fmtN).join(' '));});})(i);
+   }
+  }else if(tag==='text'){
+   add(()=>({x:g('x'),y:g('y')}),(x,y)=>{S('x',x);S('y',y);});
+  }else if(tag==='path'){
+   pathPointDefs(elm).forEach(p=>pts.push(p));
+  }
+ });
+ return pts;
+}
+let ptDrag=null;
+/* Shift while dragging locks the drag vector (from the point's start position,
+   in view space) to the nearest of the 30°/45° angle families:
+   0, 30, 45, 60, 90, 120, 135, 150, 180, … Length moves in 0.5 steps along
+   the locked axis, so axis-aligned drags stay on clean coordinates. */
+const ANGLE_LOCK=(()=>{const s=new Set();for(let a=0;a<360;a+=30)s.add(a);for(let a=45;a<360;a+=90)s.add(a);return Array.from(s).map(a=>a*Math.PI/180);})();
+function angleLockVec(dx,dy){
+ const len=Math.hypot(dx,dy);
+ if(len<1e-6)return {x:0,y:0};
+ const ang=Math.atan2(dy,dx);
+ let best=0,err=1e9;
+ ANGLE_LOCK.forEach(c=>{const d=Math.abs(Math.atan2(Math.sin(ang-c),Math.cos(ang-c)));if(d<err){err=d;best=c;}});
+ const ux=Math.cos(best),uy=Math.sin(best);
+ let pl=dx*ux+dy*uy;pl=Math.round(pl*2)/2;
+ return {x:ux*pl,y:uy*pl};
+}
+/* Smart alignment: snap the dragged point to OTHER points' x (vertical guide)
+   and/or y (horizontal guide) within a threshold — both at once = the cross
+   of one point's column with another's row. Refs are captured at drag start
+   (other points + the 28,28 canvas center); matched guides draw as dashed
+   magenta lines. Aligned axes write exact coordinates (fine rounding). */
+const ALIGN_T=1.5; // view-units threshold (≈4px on the 140px preview)
+function alignSnap(vx,vy,refs,t){
+ let gx=null,gy=null,bx=t,by=t;
+ (refs||[]).forEach(r=>{
+  const dx=Math.abs(vx-r.x);if(dx<bx){bx=dx;gx=r.x;}
+  const dy=Math.abs(vy-r.y);if(dy<by){by=dy;gy=r.y;}
+ });
+ return {x:gx!=null?gx:vx,y:gy!=null?gy:vy,gx:gx,gy:gy};
+}
+function renderGlyphPts(){
+ const lay=el('mPtsLay');if(!lay)return;
+ lay.innerHTML='';
+ if(!el('mMove').checked){lay.style.display='none';return;}
+ lay.style.display='';
+ const root=el('mPreview').querySelector('svg');if(!root)return;
+ /* alignment guide lines (drawn under the handles) */
+ if(ptDrag&&ptDrag.guides){
+  const mk=(x1,y1,x2,y2)=>{const l=document.createElementNS('http://www.w3.org/2000/svg','line');
+   l.setAttribute('x1',x1);l.setAttribute('y1',y1);l.setAttribute('x2',x2);l.setAttribute('y2',y2);
+   l.setAttribute('class','pt-guide');lay.appendChild(l);};
+  if(ptDrag.guides.x!=null)mk(ptDrag.guides.x,0,ptDrag.guides.x,56);
+  if(ptDrag.guides.y!=null)mk(0,ptDrag.guides.y,56,ptDrag.guides.y);
+ }
+ let pts;try{pts=collectGlyphPoints(root);}catch(e){return;}
+ if(pts.length>240)pts=pts.slice(0,240); // sanity cap for pathological art
+ pts.forEach(p=>{
+  let pos;try{const lp=p.get();pos=applyMat(ctmOf(p.el,root),lp.x,lp.y);}catch(e){return;}
+  const c=document.createElementNS('http://www.w3.org/2000/svg','circle');
+  c.setAttribute('cx',pos.x);c.setAttribute('cy',pos.y);c.setAttribute('r',p.kind==='ctrl'?1:1.15);
+  c.setAttribute('class',p.kind==='ctrl'?'pt-ctrl':'pt-anchor');
+  c.addEventListener('pointerdown',e=>{
+   e.preventDefault();e.stopPropagation();
+   const m=ctmOf(p.el,root),lp=p.get();
+   const o=applyMat(m,lp.x,lp.y);
+   /* alignment refs: every OTHER point's view position + the canvas center
+      (coincident-with-origin points are excluded so the point isn't pinned) */
+   const refs=[{x:28,y:28}];
+   try{collectGlyphPoints(root).forEach(q=>{
+    try{const ql=q.get();const qv=applyMat(ctmOf(q.el,root),ql.x,ql.y);
+     if(Math.hypot(qv.x-o.x,qv.y-o.y)>1e-6)refs.push(qv);}catch(_){}});}catch(_){}
+   ptDrag={p:p,root:root,inv:invMat(m),o:o,refs:refs,guides:null};
+   window.addEventListener('pointermove',onPtMove);
+   window.addEventListener('pointerup',endPtMove);
+  });
+  lay.appendChild(c);
+ });
+}
+function onPtMove(e){
+ if(!ptDrag)return;
+ const box=el('mPtsLay').getBoundingClientRect();if(!box.width)return;
+ let vx=(e.clientX-box.left)/box.width*56,vy=(e.clientY-box.top)/box.height*56;
+ if(e.shiftKey){
+  /* ⇧ angle lock: snap to nearest 30°/45°-family axis from the drag origin */
+  ptDrag.guides=null;
+  const v=angleLockVec(vx-ptDrag.o.x,vy-ptDrag.o.y);
+  vx=ptDrag.o.x+v.x;vy=ptDrag.o.y+v.y;
+  const loc=applyMat(ptDrag.inv,vx,vy);
+  ptDrag.p.set(Math.round(loc.x*100)/100,Math.round(loc.y*100)/100); // fine rounding — don't break the angle
+ }else{
+  /* alignment to other points' rows/columns beats the grid; aligned axes
+     write exact coords (fine rounding), free drags keep the 0.5 grid */
+  const a=alignSnap(vx,vy,ptDrag.refs,ALIGN_T);
+  ptDrag.guides=(a.gx!=null||a.gy!=null)?{x:a.gx,y:a.gy}:null;
+  const loc=applyMat(ptDrag.inv,a.x,a.y);
+  if(ptDrag.guides)ptDrag.p.set(Math.round(loc.x*100)/100,Math.round(loc.y*100)/100);
+  else ptDrag.p.set(Math.round(loc.x*2)/2,Math.round(loc.y*2)/2); // 0.5 grid snap
+ }
+ el('mSvg').value=ptDrag.root.innerHTML;
+ renderGlyphPts();
+}
+function endPtMove(){
+ if(!ptDrag)return;
+ ptDrag=null;
+ window.removeEventListener('pointermove',onPtMove);
+ window.removeEventListener('pointerup',endPtMove);
+ refreshMPreview();
+}
+
+/* ---------------- state ---------------- */
+/* Node frame style is FIXED app-wide: radius 8px, border 1.5px (category color). */
+const FRAME={radius:8,border:1.5};
+const SOCK_SNAP=4;                    // px snap increment for socket positions
+const DEF_OFF=[-12.5,12.5];           // default input offsets from body center (a, b)
+const DEFAULTS={justify:'center',scale:1,dx:0,dy:0,width:0,height:0,text:1};
+const state={type:null,glyph:'',justify:'center',scale:1,dx:0,dy:0,width:0,height:0,text:1,sockets:{}};
+function defOffFor(key){if(key==='out')return 0;const n=NODE_BY_TYPE[state.type];const i=n?n.in.findIndex(x=>x[0]===key):-1;return DEF_OFF[i]??0;}
+/* op body height: explicit designer height wins (glyph NOT scaled with it);
+   auto = 52px base grown just enough to fit the glyph */
+function opBodyH(){return state.height>0?Math.max(28,state.height):Math.max(52,Math.round(34*state.scale)+10);}
+const ui={zoom:parseFloat(lsGet('nd:zoom','1'))||1,panX:0,panY:0,bg:lsGet('nd:stageBg','#FAFAFA')};
+let savedGlyphs={};                                     // contents of customGlyphs.ts
+let sessionEdits={};                                    // per-type WIP designs (stash)
+try{sessionEdits=JSON.parse(lsGet('nd:edits','{}'))||{};}catch(e){sessionEdits={};}
+Object.values(sessionEdits).forEach(d=>sanitizeDesign(d)); // strip pre-rework fields
+const previews={};                                      // per-type socket preview states (session only)
+let copyBuf=null;
+let dirHandle=null;
+let devApi=false;                                       // dev-server save endpoint reachable
+const DEV_API='/__nd';
+
+/* preview model: ins[id] = {mode:'un'|'live'|'inf', ch, val} ; out = {on, ch} */
+function previewFor(type){
+ if(previews[type])return previews[type];
+ const n=NODE_BY_TYPE[type];
+ const p={ins:{},out:{on:true,ch:n.out[0]?(LINE_COUNT[n.out[0][1]]||1):1}};
+ n.in.forEach(([id,ty])=>{const dv=n.def&&n.def[id]!=null?String(n.def[id]):'0.1';p.ins[id]={mode:'un',ch:LINE_COUNT[ty]||1,val:dv};});
+ previews[type]=p; return p;
+}
+/* designer rows for the non-operator layout (mirrors buildRows for our node set) */
+function designerRows(n){
+ const rows=[];
+ if(n.in.length){
+  const m=Math.max(n.in.length,n.out.length);
+  for(let i=0;i<m;i++)rows.push({in:n.in[i]||null,out:n.out[i]||null,key:n.in[i]?n.in[i][0]:null});
+ }else if(n.def){
+  const hidden=n.type==='property_float'?['name']:n.type==='slider'?['min','max']:[];
+  const keys=Object.keys(n.def).filter(k=>hidden.indexOf(k)<0);
+  const m=Math.max(keys.length,n.out.length,1);
+  for(let i=0;i<m;i++)rows.push({in:null,out:n.out[i]||null,key:keys[i]||null});
+ }else{
+  n.out.forEach(o=>rows.push({in:null,out:o,key:null}));
+ }
+ return rows;
+}
+
+function gsvg(px){
+ const nudge=(state.dx||state.dy)?'<g transform="translate('+state.dx+' '+state.dy+')">'+(state.glyph||'')+'</g>':(state.glyph||'');
+ return '<svg viewBox="0 0 56 56" width="'+px+'" height="'+px+'" style="overflow:visible">'+nudge+'</svg>';
+}
+function syncLayoutInputs(){
+ const set=(id,v)=>{const e=el(id);if(e)e.value=v;};
+ set('gScale',state.scale);set('just',state.justify);set('nW',state.width);set('nH',state.height);set('nT',state.text);set('gDx',state.dx);set('gDy',state.dy);
+ const k=Object.keys(state.sockets);
+ el('sockInfo').textContent=k.length?k.map(x=>x+' '+(state.sockets[x]>0?'+':'')+state.sockets[x]).join(' · '):'default';
+}
+
+/* the diff that would be written for the current node ({} = registry default) */
+function currentDesign(){
+ const d={},b=builtinGlyph(state.type);
+ if(state.glyph&&state.glyph!==b)d.svg=state.glyph; // empty can't override built-in art in the app
+ if(state.justify!==DEFAULTS.justify)d.justify=state.justify;
+ if(state.scale!==DEFAULTS.scale)d.scale=state.scale;
+ if(state.dx!==DEFAULTS.dx)d.dx=state.dx;
+ if(state.dy!==DEFAULTS.dy)d.dy=state.dy;
+ if(state.width>0)d.width=state.width;
+ if(state.height>0)d.height=state.height;
+ if(state.text!==DEFAULTS.text)d.text=state.text;
+ if(Object.keys(state.sockets).length)d.sockets={...state.sockets};
+ return d;
+}
+function applyDesignTo(st,type,d){
+ const b=builtinGlyph(type);
+ st.glyph=(d&&d.svg!=null)?d.svg:b;
+ st.justify=(d&&d.justify)||DEFAULTS.justify;
+ st.scale=(d&&d.scale!=null)?d.scale:DEFAULTS.scale;
+ st.dx=(d&&typeof d.dx==='number')?d.dx:0;
+ st.dy=(d&&typeof d.dy==='number')?d.dy:0;
+ st.width=(d&&d.width!=null)?d.width:DEFAULTS.width;
+ st.height=(d&&d.height!=null)?d.height:DEFAULTS.height;
+ st.text=(d&&typeof d.text==='number'&&d.text>0)?d.text:DEFAULTS.text;
+ st.sockets=(d&&d.sockets&&typeof d.sockets==='object')?{...d.sockets}:{};
+}
+/* drop fields from older designer versions (frame style is fixed app-wide now) */
+function sanitizeDesign(d){if(d&&typeof d==='object'){delete d.radius;delete d.border;}return d;}
+function isDirty(type){
+ if(!(type in sessionEdits))return false;
+ return JSON.stringify(sessionEdits[type])!==JSON.stringify(savedGlyphs[type]||{});
+}
+function dirtyTypes(){return Object.keys(sessionEdits).filter(isDirty);}
+function stash(){
+ sessionEdits[state.type]=currentDesign();
+ if(!isDirty(state.type))delete sessionEdits[state.type]; // identical to saved → drop
+ lsSet('nd:edits',JSON.stringify(sessionEdits));
+ refreshDirtyUI();
+}
+function refreshDirtyUI(){
+ const n=dirtyTypes().length;
+ const pill=el('dirtyPill');pill.textContent=n+' unsaved';pill.classList.toggle('show',n>0);
+ el('saveAllBtn').disabled=n===0;
+ el('dirtyFlag').style.display=isDirty(state.type)?'':'none';
+ rebuildDropdown();
+}
+
+/* ---------------- selection / dropdown / search ---------------- */
+let filterText='';
+function visibleNodes(){
+ const q=filterText.trim().toLowerCase();
+ return q?NODES.filter(n=>n[0].toLowerCase().includes(q)||n[1].toLowerCase().includes(q)):NODES;
+}
+function rebuildDropdown(){
+ const sel=el('nodeSel');const cur=state.type;sel.innerHTML='';
+ const groups={};visibleNodes().forEach(n=>{(groups[n[2]]=groups[n[2]]||[]).push(n);});
+ Object.keys(groups).forEach(cat=>{const og=document.createElement('optgroup');og.label=cat;
+  groups[cat].forEach(n=>{const o=document.createElement('option');o.value=n[0];
+   const mark=isDirty(n[0])?'● ':(savedGlyphs[n[0]]?'◆ ':'');
+   o.textContent=mark+n[1]+' ('+n[0]+')';og.appendChild(o);});
+  sel.appendChild(og);});
+ if(cur&&sel.querySelector('option[value="'+cur+'"]'))sel.value=cur;
+}
+function stepNode(dir){
+ const list=visibleNodes().map(n=>n[0]);if(!list.length)return;
+ let i=list.indexOf(state.type);i=(i<0?0:(i+dir+list.length)%list.length);
+ selectNode(list[i]);
+}
+function selectNode(type){
+ const n=NODE_BY_TYPE[type];if(!n)return;state.type=type;lsSet('nd:lastNode',type);
+ const d=(type in sessionEdits)?sessionEdits[type]:(savedGlyphs[type]||null);
+ applyDesignTo(state,type,d);
+ previewFor(type);
+ const sel=el('nodeSel');if(sel.value!==type&&sel.querySelector('option[value="'+type+'"]'))sel.value=type;
+ syncLayoutInputs();renderInfo();renderStates();renderNode();renderGlyphCard();refreshDirtyUI();
+}
+
+/* ---------------- inspector rendering ---------------- */
+function renderInfo(){
+ const n=NODE_BY_TYPE[state.type];const cat=CAT[n.cat]||'#888';const cost=COSTS[state.type]??0;
+ el('iType').textContent=n.type+'  ·  '+n.label;
+ const ic=el('iCat');ic.querySelector('.dot').style.background=cat;ic.querySelector('span:last-child').textContent=n.cat;
+ const io=el('iCost');io.querySelector('.dot').style.background=costColor(cost);io.querySelector('span:last-child').textContent=cost+' pts';
+ el('pasteBtn').disabled=!copyBuf;
+}
+function renderStates(){
+ const n=NODE_BY_TYPE[state.type];const p=previewFor(state.type);const box=el('stateList');box.innerHTML='';
+ if(!n.in.length){const d=document.createElement('div');d.className='hintline';d.style.margin='0';d.textContent='No input sockets.';box.appendChild(d);}
+ n.in.forEach(([id,ty])=>{
+  const s=p.ins[id];const r=document.createElement('div');r.className='pstate';
+  const dot=document.createElement('span');dot.className='dot';dot.style.background=TYPE_COLORS[ty];r.appendChild(dot);
+  const l=document.createElement('label');l.textContent=id;l.title=id+' : '+ty;r.appendChild(l);
+  const mode=document.createElement('select');mode.className='mode';
+  [['un','unconnected'],['live','connected · live'],['inf','connected · range']].forEach(([v,t])=>{const o=document.createElement('option');o.value=v;o.textContent=t;mode.appendChild(o);});
+  mode.value=s.mode;mode.onchange=()=>{s.mode=mode.value;ch.disabled=s.mode==='un';renderNode();};r.appendChild(mode);
+  const ch=document.createElement('select');ch.className='ch';ch.title='channels';
+  [1,2,3,4].forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c+'ch';ch.appendChild(o);});
+  ch.value=s.ch;ch.disabled=s.mode==='un';ch.onchange=()=>{s.ch=+ch.value;renderNode();};r.appendChild(ch);
+  const v=document.createElement('input');v.className='pv';v.type='text';v.value=s.val;v.title='preview value / range text';
+  v.oninput=()=>{s.val=v.value;renderNode();};r.appendChild(v);
+  box.appendChild(r);
+ });
+ if(n.out.length){
+  const o0=n.out[0];const p2=p.out;const r=document.createElement('div');r.className='pstate';r.style.marginTop='8px';
+  const dot=document.createElement('span');dot.className='dot';dot.style.background=TYPE_COLORS[o0[1]];r.appendChild(dot);
+  const l=document.createElement('label');l.textContent='out';l.title='output · no label, ever';r.appendChild(l);
+  const cb=document.createElement('select');cb.className='mode';
+  [['1','connected'],['0','unconnected']].forEach(([v,t])=>{const o=document.createElement('option');o.value=v;o.textContent=t;cb.appendChild(o);});
+  cb.value=p2.on?'1':'0';cb.onchange=()=>{p2.on=cb.value==='1';ch2.disabled=!p2.on;renderNode();};r.appendChild(cb);
+  const ch2=document.createElement('select');ch2.className='ch';
+  [1,2,3,4].forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c+'ch';ch2.appendChild(o);});
+  ch2.value=p2.ch;ch2.disabled=!p2.on;ch2.onchange=()=>{p2.ch=+ch2.value;renderNode();};r.appendChild(ch2);
+  box.appendChild(r);
+ }
+}
+function renderGlyphCard(){
+ const card=el('glyphCard');
+ card.innerHTML=state.glyph
+   ?'<svg viewBox="0 0 56 56" width="56" height="56" style="overflow:visible">'+state.glyph+'</svg>'
+   :'<svg viewBox="0 0 56 56" width="56" height="56"><text x="28" y="32" text-anchor="middle" fill="#aaa" style="font:11px Inter">empty</text></svg>';
+ if(state.dx||state.dy){const t=document.createElement('span');t.className='nudge-tag';t.textContent='nudge '+state.dx+','+state.dy;card.appendChild(t);}
+}
+
+/* ---------------- stage: node rendering (mirrors ShaderNode) ---------------- */
+function mkSock(ty,io,topPct,clickFn,title){
+ const s=document.createElement('span');s.className='sock '+io;s.style.background=TYPE_COLORS[ty]||TYPE_COLORS.any;
+ if(topPct!=null){s.style.top=topPct;s.style.transform='translateY(-50%)';}
+ if(title)s.title=title;
+ if(clickFn){
+  s.addEventListener('pointerdown',e=>{e.stopPropagation();});
+  s.addEventListener('click',e=>{e.stopPropagation();clickFn();});
+ }else{s.style.cursor='default';}
+ return s;
+}
+function cycleIn(id){const s=previewFor(state.type).ins[id];s.mode=s.mode==='un'?'live':s.mode==='live'?'inf':'un';renderStates();renderNode();}
+function toggleOut(){const p=previewFor(state.type).out;p.on=!p.on;renderStates();renderNode();}
+
+/* DragNumberInput (compact) mimic: ◂ value ▸ — drag value to scrub, click to type */
+function mkDnum(getV,setV,step){
+ const box=document.createElement('span');box.className='dnum nodrag';
+ const val=document.createElement('span');val.className='val';val.contentEditable='true';val.spellcheck=false;val.textContent=getV();
+ const mk=(txt,d)=>{const b=document.createElement('button');b.className='ar';b.textContent=txt;
+  b.onclick=e=>{e.stopPropagation();const v=(parseFloat(val.textContent)||0)+d*step;
+   val.textContent=String(+v.toFixed(2));setV(val.textContent);};return b;};
+ box.appendChild(mk('◂',-1));
+ val.addEventListener('input',()=>{setV(val.textContent);});
+ val.addEventListener('blur',()=>{renderNode();});
+ val.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();val.blur();}});
+ /* scrub: 0.005 / px (accelerating), like DragNumberInput */
+ let drag=null;
+ val.addEventListener('pointerdown',e=>{drag={x:e.clientX,v:parseFloat(val.textContent)||0,moved:false};});
+ val.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x;
+  if(!drag.moved&&Math.abs(dx)<3)return;
+  if(!drag.moved){drag.moved=true;try{val.setPointerCapture(e.pointerId);}catch(_){}}
+  const v=drag.v+dx*0.005*(1+Math.abs(dx)*0.002);
+  val.textContent=String(+v.toFixed(2));setV(val.textContent);e.preventDefault();});
+ val.addEventListener('pointerup',e=>{if(drag&&drag.moved){try{val.releasePointerCapture(e.pointerId);}catch(_){}}drag=null;});
+ box.appendChild(val);
+ box.appendChild(mk('▸',1));
+ return box;
+}
+function mkEdgeVal(s){
+ const sp=document.createElement('span');sp.className='edge-val'+(s.mode==='live'?' live':'');sp.textContent=s.val||'0';
+ sp.title=s.mode==='live'?'live edge value':'inferred range';
+ return sp;
+}
+
+function renderNode(){
+ const n=NODE_BY_TYPE[state.type];if(!n)return;
+ const cost=COSTS[state.type]??0,cat=CAT[n.cat],p=previewFor(state.type);
+ const wrap=el('nodeWrap');wrap.innerHTML='';
+ /* outer wrapper carries the cost scale so the stack layers (siblings painted
+    BELOW the card) scale together with it — matches ShaderNode's structure */
+ const sw=document.createElement('div');
+ sw.style.cssText='position:relative;width:fit-content;transform:scale('+costScaleOf(cost)+');transform-origin:top left';
+ const node=document.createElement('div');node.className='node';
+ node.style.position='relative';
+ node.style.border=FRAME.border+'px solid '+cat;
+ node.style.borderRadius=FRAME.radius+'px';
+ /* exact width — also lowers min-width so nodes can go NARROWER than their
+    natural content size (header text wraps, header grows; op body unfloors below) */
+ if(state.width>0){node.style.width=state.width+'px';node.style.minWidth=state.width+'px';}
+ /* per-node text scale (header, value boxes, edge labels) */
+ if(state.text!==1)node.style.setProperty('--ts',state.text);
+ if(cost>0){const b=document.createElement('span');b.className='cost-badge';
+  b.style.color=contrast(ui.bg);b.style.textShadow='0 1px 2px '+(contrast(ui.bg)==='#000000'?'rgba(255,255,255,.6)':'rgba(0,0,0,.6)');
+  b.textContent=cost;node.appendChild(b);}
+ const hd=document.createElement('div');hd.className='node-hd';
+ hd.style.background=costColor(cost);hd.style.color=contrast(costColor(cost));
+ hd.style.borderRadius=FRAME.radius+'px '+FRAME.radius+'px 0 0';
+ hd.textContent=state.type==='property_float'?'property1':n.label;node.appendChild(hd);
+
+ /* multi-channel stack: appears only when multi-channel data ARRIVES on a
+    connected input — widest count wins; N channels read as N total cards */
+ let inCh=1;
+ n.in.forEach(([iid])=>{const s=p.ins[iid];if(s&&s.mode!=='un')inCh=Math.max(inCh,s.ch||1);});
+ const stackCh=Math.min(inCh,4);
+ for(let k=1;k<stackCh;k++){
+  const st=document.createElement('div');st.className='nstack';
+  st.style.borderColor=cat;st.style.transform='translateY('+(k*3)+'px)';
+  st.style.zIndex=String(-k); // deeper layers paint first → every strip visible
+  if(k===stackCh-1)st.style.boxShadow='0 1px 2px rgba(0,0,0,.55),0 3px 6px rgba(0,0,0,.4)';
+  sw.appendChild(st);
+ }
+ /* while stacked the card drops its own shadow — only the deepest layer casts
+    the single group shadow (no shadow between cards) */
+ if(stackCh>1)node.style.boxShadow='none';
+ const hasGlyph=!!state.glyph;
+ if(hasGlyph&&n.in.length===2){
+  /* operator layout: glyph BETWEEN the two inputs. Scale grows the glyph ONLY —
+     socket/value spacing is fixed; the body grows just enough to fit the glyph.
+     Socket positions are px offsets from the body center (drag ↕, 4px snap). */
+  const BODY_H=opBodyH();
+  const body=document.createElement('div');body.className='op-body';body.style.height=BODY_H+'px';
+  if(state.width>0)body.style.minWidth='0'; // explicit width beats the 54px auto floor
+  const g=document.createElement('div');g.className='op-glyph';g.innerHTML=gsvg(Math.round(34*state.scale));
+  bindGlyph(g);body.appendChild(g);
+  const offOf=key=>state.sockets[key]!=null?state.sockets[key]:defOffFor(key);
+  n.in.forEach((inp,i)=>{
+   const s=p.ins[inp[0]];
+   const off=offOf(inp[0]);
+   const top=(BODY_H/2+off)+'px';
+   const v=document.createElement('div');v.className='op-val '+state.justify;v.style.top=top;
+   v.appendChild(s.mode==='un'
+     ?mkDnum(()=>s.val,t=>{s.val=t;rAFEdges();},inp[1]==='int'?1:0.1)
+     :mkEdgeVal(s));
+   body.appendChild(v);
+   const sock=mkSock(inp[1],'in',top,null,inp[0]+' — drag ↕ move (4px snap) · click: cycle state');
+   bindSockMove(sock,inp[0]);body.appendChild(sock);
+  });
+  if(n.out[0]){
+   const outTop=BODY_H/2+offOf('out');
+   const sock=mkSock(n.out[0][1],'out',outTop+'px',null,'out — drag ↕ move (4px snap) · click: toggle edge');
+   bindSockMove(sock,'out');body.appendChild(sock);
+  }
+  if(sockDrag){const col=document.createElement('div');col.className='snapcol '+(sockDrag.key==='out'?'r':'l');
+   col.style.backgroundPosition='0 '+((BODY_H/2)%SOCK_SNAP)+'px';body.appendChild(col);}
+  node.appendChild(body);
+ }else{
+  /* glyph-icon-on-top + rows layout. A region wraps glyph+rows so a moved
+     output socket can anchor to the region center (like the operator layout). */
+  const region=document.createElement('div');region.style.position='relative';
+  if(state.height>0)region.style.height=Math.max(28,state.height)+'px'; // rows: EXACT height — content may overflow
+  if(hasGlyph){const g=document.createElement('div');g.className='node-glyph';g.innerHTML=gsvg(Math.round(30*state.scale));bindGlyph(g);region.appendChild(g);}
+  const outMoved=!!(n.out[0]&&state.sockets['out']!=null);
+  const rows=document.createElement('div');rows.className='rows';
+  designerRows(n).forEach(row=>{
+   const r=document.createElement('div');r.className='row';
+   const lt=document.createElement('span');lt.className='lt';
+   if(row.in&&state.sockets[row.in[0]]!=null){
+    /* designer-moved input: socket + value render detached below */
+    lt.innerHTML='&nbsp;';
+   }else if(row.in){
+    const s=p.ins[row.in[0]];
+    const sock=mkSock(row.in[1],'in','50%',null,row.in[0]+' — drag ↕ move (4px snap) · click: cycle state');
+    bindSockMove(sock,row.in[0],region);r.appendChild(sock);
+    lt.appendChild(s.mode==='un'
+      ?mkDnum(()=>s.val,t=>{s.val=t;rAFEdges();},row.in[1]==='int'?1:0.1)
+      :mkEdgeVal(s));
+   }else if(row.key){
+    if(state.type==='slider'&&row.key==='value'){
+     const sl=document.createElement('input');sl.type='range';sl.className='nslider';sl.min=0;sl.max=1;sl.step=0.01;sl.value=0.5;lt.appendChild(sl);
+    }else{
+     const n2=NODE_BY_TYPE[state.type];const def=n2.def||{};
+     lt.appendChild(mkDnum(()=>String(def['__'+row.key]??def[row.key]??0),t=>{def['__'+row.key]=t;rAFEdges();},0.1));
+    }
+   }else{lt.innerHTML='&nbsp;';}
+   r.appendChild(lt);
+   const rt=document.createElement('span');rt.className='rt';
+   if(row.out&&!(outMoved&&row.out===n.out[0])){
+    if(row.out===n.out[0]){
+     /* first output: draggable (detaches into the region) + click toggles */
+     const sock=mkSock(row.out[1],'out','50%',null,'out — drag ↕ move (4px snap) · click: toggle edge');
+     bindSockMove(sock,'out',region);r.appendChild(sock);
+    }else{
+     r.appendChild(mkSock(row.out[1],'out','50%',null,row.out[0]));
+    }
+   }
+   r.appendChild(rt);
+   rows.appendChild(r);
+  });
+  region.appendChild(rows);
+  /* detached inputs: socket + value (value follows its socket, op-val style) */
+  n.in.forEach(inp=>{
+   const off=state.sockets[inp[0]];if(off==null)return;
+   const top='calc(50% '+(off<0?'- ':'+ ')+Math.abs(off)+'px)';
+   const s=p.ins[inp[0]];
+   const v=document.createElement('div');v.className='op-val '+state.justify;v.style.top=top;
+   v.appendChild(s.mode==='un'
+     ?mkDnum(()=>s.val,t=>{s.val=t;rAFEdges();},inp[1]==='int'?1:0.1)
+     :mkEdgeVal(s));
+   region.appendChild(v);
+   const sock=mkSock(inp[1],'in',top,null,inp[0]+' — drag ↕ move (4px snap) · click: cycle state');
+   bindSockMove(sock,inp[0],region);region.appendChild(sock);
+  });
+  if(outMoved){
+   const ov=state.sockets['out'];
+   const sock=mkSock(n.out[0][1],'out','calc(50% '+(ov<0?'- ':'+ ')+Math.abs(ov)+'px)',null,'out — drag ↕ move (4px snap) · click: toggle edge');
+   bindSockMove(sock,'out',region);region.appendChild(sock);
+  }
+  if(sockDrag&&sockDrag.rows){
+   const col=document.createElement('div');col.className='snapcol '+(sockDrag.key==='out'?'r':'l');region.appendChild(col);
+   requestAnimationFrame(()=>{col.style.backgroundPosition='0 '+((region.offsetHeight/2)%SOCK_SNAP)+'px';});
+  }
+  node.appendChild(region);
+ }
+ const rz=document.createElement('div');rz.className='nres';rz.title='Drag: → width · ↕ height (glyph stays its own scale)';rz.addEventListener('pointerdown',startScale);node.appendChild(rz);
+ sw.appendChild(node);
+ wrap.appendChild(sw);
+ rAFEdges();
+}
+
+/* ---------------- edge stubs (mirrors TypedEdge multi-channel rendering) ---------------- */
+function rAFEdges(){requestAnimationFrame(renderEdges);}
+function renderEdges(){
+ const wrap=el('nodeWrap');const node=wrap.querySelector('.node');if(!node)return;
+ let svg=wrap.querySelector('.stubs');
+ if(!svg){svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('class','stubs');wrap.insertBefore(svg,wrap.firstChild);}
+ const wB=wrap.getBoundingClientRect();if(wB.width===0)return;
+ const z=ui.zoom||1;
+ const W=wB.width/z+180,H=wB.height/z+180;
+ svg.setAttribute('width',W);svg.setAttribute('height',H);svg.setAttribute('viewBox','0 0 '+W+' '+H);
+ let out='';
+ const p=previewFor(state.type);
+ const line=(x0,y0,x1,y1,ch)=>{
+  const colors=ch===1?[contrast(ui.bg)]:(COUNT_EDGE_COLORS[ch]||['#000']);
+  const w=ch>=4?0.8:ch>=3?1:ch>=2?1.2:1.5;
+  const half=(ch-1)/2;let s='';
+  for(let i=0;i<ch;i++){const off=(i-half)*EDGE_GAP;
+   s+='<line x1="'+x0+'" y1="'+(y0+off)+'" x2="'+x1+'" y2="'+(y1+off)+'" stroke="'+colors[i]+'" stroke-width="'+w+'"'+(ch>1?' stroke-dasharray="4 0.5"':'')+' opacity="0.9"/>';}
+  return s;
+ };
+ wrap.querySelectorAll('.sock').forEach(sock=>{
+  const sB=sock.getBoundingClientRect();
+  const cx=(sB.left+sB.width/2-wB.left)/z+90, cy=(sB.top+sB.height/2-wB.top)/z+90;
+  if(sock.classList.contains('in')){
+   const id=(sock.title||'').split(' ')[0];const s=p.ins[id];
+   if(s&&s.mode!=='un')out+=line(cx-STUB_LEN,cy,cx-3,cy,s.ch);
+  }else{
+   if(p.out.on)out+=line(cx+3,cy,cx+STUB_LEN,cy,p.out.ch);
+  }
+ });
+ svg.innerHTML=out;
+}
+
+/* ---------------- glyph drag-to-nudge / click-to-edit ---------------- */
+function bindGlyph(g){
+ let drag=null;
+ g.addEventListener('pointerdown',e=>{
+  e.preventDefault();e.stopPropagation();
+  const svg=g.querySelector('svg');if(!svg)return;
+  const r=svg.getBoundingClientRect();
+  drag={x:e.clientX,y:e.clientY,dx0:state.dx,dy0:state.dy,upp:r.width/56,moved:false,pid:e.pointerId,el:g};
+  g.setPointerCapture(e.pointerId);
+ });
+ g.addEventListener('pointermove',e=>{
+  if(!drag)return;
+  const mx=e.clientX-drag.x,my=e.clientY-drag.y;
+  if(!drag.moved&&Math.hypot(mx,my)<3)return;
+  drag.moved=true;
+  state.dx=Math.max(-28,Math.min(28,Math.round((drag.dx0+mx/drag.upp)*2)/2));
+  state.dy=Math.max(-28,Math.min(28,Math.round((drag.dy0+my/drag.upp)*2)/2));
+  syncLayoutInputs();
+  const svg2=g.querySelector('svg');if(svg2){const px=svg2.getAttribute('width');g.innerHTML=gsvg(px);}
+ });
+ const up=e=>{
+  if(!drag)return;
+  const wasMoved=drag.moved;try{g.releasePointerCapture(drag.pid);}catch(_){}
+  drag=null;
+  if(wasMoved){stash();renderNode();renderGlyphCard();}
+  else openGlyph();
+ };
+ g.addEventListener('pointerup',up);g.addEventListener('pointercancel',()=>{drag=null;});
+}
+
+/* ------- sockets: drag ↕ along the border (4px snap); plain click = cycle -------
+   Operator layout: inputs + output, offsets from the body center.
+   Rows layout: the FIRST OUTPUT is movable too — dragging detaches it from its
+   row and anchors it to the below-header region's center (pass `regionEl`).
+   Rows overrides persist even at 0 (0 = region center ≠ the row default);
+   "Reset positions" restores row anchoring. */
+let sockDrag=null;
+function bindSockMove(sock,key,regionEl){
+ sock.style.cursor='ns-resize';
+ sock.addEventListener('pointerdown',e=>{
+  if(e.button!==0)return;
+  e.preventDefault();e.stopPropagation();
+  const cs=costScaleOf(COSTS[state.type]??0),z=ui.zoom||1;
+  let off0;
+  if(state.sockets[key]!=null)off0=state.sockets[key];
+  else if(regionEl){const sb=sock.getBoundingClientRect(),rb=regionEl.getBoundingClientRect();
+   off0=((sb.top+sb.height/2)-(rb.top+rb.height/2))/(z*cs);} // current visual spot → no jump on grab
+  else off0=defOffFor(key);
+  sockDrag={key,y0:e.clientY,off0,limH:regionEl?regionEl.offsetHeight:opBodyH(),rows:!!regionEl,moved:false};
+  window.addEventListener('pointermove',onSockMove);
+  window.addEventListener('pointerup',endSockMove);
+ });
+}
+function onSockMove(e){
+ if(!sockDrag)return;
+ const cs=costScaleOf(COSTS[state.type]??0),z=ui.zoom||1;
+ const dy=(e.clientY-sockDrag.y0)/(z*cs);
+ if(!sockDrag.moved&&Math.abs(dy)<3)return;
+ sockDrag.moved=true;
+ const lim=Math.floor((sockDrag.limH/2-5)/SOCK_SNAP)*SOCK_SNAP; // clamp stays on the snap grid
+ let off=Math.round((sockDrag.off0+dy)/SOCK_SNAP)*SOCK_SNAP;
+ off=Math.max(-lim,Math.min(lim,off));
+ if(!sockDrag.rows&&off===defOffFor(sockDrag.key))delete state.sockets[sockDrag.key];
+ else state.sockets[sockDrag.key]=off;
+ syncLayoutInputs();renderNode();
+}
+function endSockMove(){
+ const d=sockDrag;sockDrag=null;
+ window.removeEventListener('pointermove',onSockMove);
+ window.removeEventListener('pointerup',endSockMove);
+ if(!d)return;
+ if(d.moved){stash();renderNode();}
+ else if(d.key==='out')toggleOut();
+ else cycleIn(d.key);
+}
+
+/* ------- corner handle: drag → width, ↕ → HEIGHT (the glyph never scales
+   with the node — glyph size is its own `scale` control) ------- */
+let scaleDrag=null;
+function startScale(e){e.preventDefault();e.stopPropagation();const node=e.currentTarget.parentElement;
+ scaleDrag={x0:e.clientX,y0:e.clientY,
+  h0:state.height>0?state.height
+     :(node?Math.max(28,node.offsetHeight-((node.querySelector('.node-hd')||{}).offsetHeight||14)-3):52), // minus actual (wrappable) header + borders
+  w0:state.width||(node?node.offsetWidth:96)};
+ e.currentTarget.setPointerCapture(e.pointerId);window.addEventListener('pointermove',onScale);window.addEventListener('pointerup',endScale);}
+function onScale(e){if(!scaleDrag)return;const z=ui.zoom||1;
+ let h=Math.round(scaleDrag.h0+(e.clientY-scaleDrag.y0)/z);h=Math.max(28,Math.min(1200,h));state.height=h;
+ let w=Math.round(scaleDrag.w0+(e.clientX-scaleDrag.x0)/z);w=Math.max(24,Math.min(400,w));state.width=w;
+ syncLayoutInputs();renderNode();}
+function endScale(){if(scaleDrag){scaleDrag=null;stash();}window.removeEventListener('pointermove',onScale);window.removeEventListener('pointerup',endScale);}
+
+/* ---------------- stage pan / zoom / bg ---------------- */
+function applyView(){
+ el('panzoom').style.transform='translate('+ui.panX+'px,'+ui.panY+'px) scale('+ui.zoom+')';
+ el('zVal').textContent=Math.round(ui.zoom*100)+'%';
+ lsSet('nd:zoom',String(ui.zoom));
+}
+function applyBg(){
+ const stage=el('stage');const dot=contrast(ui.bg)==='#000000'?'rgba(0,0,0,.16)':'rgba(255,255,255,.2)';
+ stage.style.background='radial-gradient(circle,'+dot+' 1px,transparent 1px) 0 0/18px 18px,'+ui.bg;
+ el('bgInput').value=ui.bg;lsSet('nd:stageBg',ui.bg);
+ renderNode(); // badge + 1ch edge contrast flip
+}
+function setZoom(z){ui.zoom=Math.max(0.5,Math.min(6,z));applyView();rAFEdges();}
+(function initStage(){
+ const vp=el('viewport');let pan=null;
+ vp.addEventListener('pointerdown',e=>{
+  if(e.target!==vp&&e.target!==el('panzoom'))return;
+  pan={x:e.clientX,y:e.clientY,px:ui.panX,py:ui.panY};vp.classList.add('panning');vp.setPointerCapture(e.pointerId);});
+ vp.addEventListener('pointermove',e=>{if(!pan)return;ui.panX=pan.px+(e.clientX-pan.x);ui.panY=pan.py+(e.clientY-pan.y);applyView();});
+ const end=()=>{pan=null;vp.classList.remove('panning');};
+ vp.addEventListener('pointerup',end);vp.addEventListener('pointercancel',end);
+ el('stage').addEventListener('wheel',e=>{
+  e.preventDefault();
+  if(e.ctrlKey||e.metaKey)setZoom(ui.zoom*Math.exp(-e.deltaY*0.0018));
+  else{ui.panX-=e.deltaX;ui.panY-=e.deltaY;applyView();}
+ },{passive:false});
+ el('zIn').onclick=()=>setZoom(ui.zoom*1.2);
+ el('zOut').onclick=()=>setZoom(ui.zoom/1.2);
+ el('zVal').onclick=()=>{ui.panX=0;ui.panY=0;setZoom(1);};
+ el('bgInput').oninput=e=>{ui.bg=e.target.value;applyBg();};
+ el('bgReset').onclick=()=>{ui.bg='#FAFAFA';applyBg();};
+})();
+
+/* ---------------- glyph modal ---------------- */
+const overlay=el('overlay');
+/* "load art from…" dropdown: pull any existing glyph into the editor —
+   saved/session custom designs first, then every built-in. Rebuilt on each
+   open so it always reflects the latest saves. Loading only fills the
+   textarea/preview; nothing sticks until Apply. */
+function populateLoadList(){
+ const sel=el('mLoad');if(!sel)return;
+ sel.innerHTML='<option value="">load art from…</option>';
+ const addGroup=(label,items)=>{
+  if(!items.length)return;
+  const og=document.createElement('optgroup');og.label=label;
+  items.forEach(it=>{const o=document.createElement('option');o.value=it[0];o.textContent=it[1];og.appendChild(o);});
+  sel.appendChild(og);
+ };
+ const custom=[],builtins=[];
+ NODES.forEach(n=>{
+  const t=n[0];
+  const d=(t in sessionEdits)?sessionEdits[t]:savedGlyphs[t];
+  if(d&&d.svg)custom.push(['c:'+t,n[1]+' ('+t+')'+(t===state.type?' — current':'')]);
+  if(builtinGlyph(t))builtins.push(['b:'+t,n[1]+' ('+t+')']);
+ });
+ addGroup('Saved / session designs',custom);
+ addGroup('Built-in glyphs',builtins);
+}
+el('mLoad').onchange=e=>{
+ const v=e.target.value;e.target.value='';
+ if(!v)return;
+ const t=v.slice(2);
+ let art='';
+ if(v[0]==='c'){const d=(t in sessionEdits)?sessionEdits[t]:savedGlyphs[t];art=(d&&d.svg)||'';}
+ else art=builtinGlyph(t);
+ if(!art){toast('No art found for "'+t+'".');return;}
+ el('mSvg').value=art;refreshMPreview();
+ toast('Loaded "'+t+'" art — Apply to keep it.');
+};
+function openGlyph(){el('mType').textContent=state.type;el('mSvg').value=state.glyph;populateLoadList();refreshMPreview();overlay.classList.add('show');el('mSvg').focus();}
+function refreshMPreview(){
+ const txt=el('mSvg').value||'';
+ el('mPreview').innerHTML='<svg viewBox="0 0 56 56" width="280" height="280" style="overflow:visible">'+txt+'</svg>';
+ const err=svgError(txt);const e=el('mErr');
+ e.classList.toggle('show',!!err);e.textContent=err||'';
+ el('mApply').disabled=!!err;
+ renderGlyphPts();
+}
+el('mSvg').addEventListener('input',refreshMPreview);
+el('mGrid').checked=lsGet('nd:grid','0')==='1';
+el('mGridLay').style.display=el('mGrid').checked?'':'none';
+el('mGrid').onchange=e=>{el('mGridLay').style.display=e.target.checked?'':'none';lsSet('nd:grid',e.target.checked?'1':'0');};
+el('mMove').checked=lsGet('nd:pts','1')==='1';
+el('mMove').onchange=e=>{lsSet('nd:pts',e.target.checked?'1':'0');renderGlyphPts();};
+el('mClose').onclick=()=>overlay.classList.remove('show');
+el('mClear').onclick=()=>{el('mSvg').value='';refreshMPreview();};
+el('mBuiltin').onclick=()=>{el('mSvg').value=builtinGlyph(state.type);refreshMPreview();};
+el('mCopy').onclick=async()=>{try{await navigator.clipboard.writeText(el('mSvg').value);toast('SVG copied to clipboard.');}catch(e){toast('Clipboard unavailable.');}};
+el('mUpload').onclick=()=>el('mFile').click();
+el('mFile').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{el('mSvg').value=normalizeSvg(String(r.result));refreshMPreview();};r.readAsText(f);e.target.value='';};
+el('mApply').onclick=()=>{state.glyph=normalizeSvg(el('mSvg').value);stash();renderNode();renderGlyphCard();overlay.classList.remove('show');};
+el('glyphCard').onclick=openGlyph;
+const drop=el('drop');
+['dragenter','dragover'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('over');}));
+['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('over');}));
+drop.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{el('mSvg').value=normalizeSvg(String(r.result));refreshMPreview();};r.readAsText(f);});
+
+/* ---------------- File System Access: save to FastShaders ---------------- */
+const GLYPH_REL=['src','components','NodeEditor','nodes','glyphs','customGlyphs.ts'];
+const FILE_HEADER='/**\n * Per-node design overrides authored with node-designer.html (repo root).\n * { svg?: inner SVG (0 0 56 56), justify?: left|center|right, scale?: glyph-only scale,\n *   dx?/dy?: glyph nudge, width?: exact node width (>=24; header text wraps + header auto-grows),\n *   height?: EXACT body height (>=28, both layouts; shorter than content shrinks\n *   the node, content overflows; independent of glyph scale), text?: text-size\n *   multiplier (0.4-2.5, default 1; header/value/edge-label fonts), sockets?:\n *   per-socket offsets from body center (4px snap; keys = input ids + "out") }\n * Node frame style (corner radius, border) is fixed app-wide.\n * Rewritten wholesale by the designer on save.\n */\n';
+
+/* tiny IndexedDB k/v so the folder link survives reloads */
+function idb(){return new Promise((res,rej)=>{const r=indexedDB.open('fastshaders-node-designer',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});}
+async function idbSet(k,v){try{const d=await idb();return new Promise((res,rej)=>{const t=d.transaction('kv','readwrite');t.objectStore('kv').put(v,k);t.oncomplete=()=>res();t.onerror=()=>rej(t.error);});}catch(e){}}
+async function idbGet(k){try{const d=await idb();return new Promise((res,rej)=>{const t=d.transaction('kv','readonly');const q=t.objectStore('kv').get(k);q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error);});}catch(e){return undefined;}}
+
+async function adoptFolder(h){
+ dirHandle=h;await loadSaved();await loadCosts();
+ el('fsStatus').textContent='linked: '+h.name;
+ selectNode(state.type||'mul');
+}
+async function linkFolder(){
+ if(!window.showDirectoryPicker){toast('This browser has no folder access — Save downloads customGlyphs.ts instead.');return false;}
+ try{const h=await window.showDirectoryPicker({mode:'readwrite'});await idbSet('dir',h);await adoptFolder(h);return true;
+ }catch(e){if(e&&e.name!=='AbortError')toast('Could not link folder: '+e.message);return false;}
+}
+async function tryRestoreFolder(){
+ try{
+  if(devApi)return; // dev-server endpoint already handles persistence
+  const h=await idbGet('dir');if(!h)return;
+  const p=await h.queryPermission({mode:'readwrite'});
+  if(p==='granted'){await adoptFolder(h);return;}
+  if(p==='prompt'){
+   const st=el('fsStatus');st.textContent='relink: '+h.name+' (1 click)';
+   st.onclick=async()=>{try{
+     const q=await h.requestPermission({mode:'readwrite'});
+     if(q==='granted'){await adoptFolder(h);st.onclick=linkFolder;}
+     else linkFolder();
+    }catch(e){linkFolder();}};
+  }
+ }catch(e){}
+}
+async function getRelFile(parts,create){
+ let d=dirHandle;for(let i=0;i<parts.length-1;i++)d=await d.getDirectoryHandle(parts[i],{create});
+ return d.getFileHandle(parts[parts.length-1],{create});
+}
+function parseGlyphs(text){try{const m=text.match(/=\s*(\{[\s\S]*\})\s*;/);return m?JSON.parse(m[1]):{};}catch(e){return {};}}
+async function loadSaved(){try{const fh=await getRelFile(GLYPH_REL,false);const f=await fh.getFile();savedGlyphs=parseGlyphs(await f.text());Object.values(savedGlyphs).forEach(sanitizeDesign);}catch(e){savedGlyphs={};}}
+/* refresh costs from the live registry so the designer can't drift from the app */
+function applyCostsJson(text){
+ try{const j=JSON.parse(text);
+  if(j&&j.costs){let drift=0;Object.keys(COSTS).forEach(k=>{if(j.costs[k]!=null&&j.costs[k]!==COSTS[k]){COSTS[k]=j.costs[k];drift++;}});
+   if(drift)toast('Costs refreshed from complexity.json ('+drift+' updated).');}
+ }catch(e){}
+}
+async function loadCosts(){
+ try{const fh=await getRelFile(['src','registry','complexity.json'],false);applyCostsJson(await (await fh.getFile()).text());}catch(e){}
+}
+
+/* ---- dev-server endpoint (vite plugin /__nd) — saves work in ANY browser ---- */
+async function probeDevApi(){
+ try{
+  const r=await fetch(DEV_API+'/glyphs');
+  if(!r.ok)return false;
+  const j=await r.json();
+  devApi=true;
+  const dn=el('devNote');if(dn)dn.style.display='none'; // running correctly — drop the notice
+  savedGlyphs=parseGlyphs(j.content||'');Object.values(savedGlyphs).forEach(sanitizeDesign);
+  try{const rc=await fetch(DEV_API+'/costs');if(rc.ok)applyCostsJson((await rc.json()).content||'');}catch(e){}
+  const st=el('fsStatus');
+  st.textContent='saving via dev server';st.style.color='#2E7D32';
+  st.title='customGlyphs.ts is read & written through the vite dev server (/__nd) — no folder link or Chromium needed.';
+  st.onclick=()=>toast('Already saving through the dev server — no folder link needed.');
+  selectNode(state.type||'mul');
+  return true;
+ }catch(e){return false;}
+}
+function fileContent(obj){return FILE_HEADER+'export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; scale?: number; dx?: number; dy?: number; width?: number; height?: number; text?: number; sockets?: Record<string, number> }> = '+JSON.stringify(obj,null,2)+';\n';}
+
+async function writeGlyphFile(){
+ const fh=await getRelFile(GLYPH_REL,true);const w=await fh.createWritable();await w.write(fileContent(savedGlyphs));await w.close();
+}
+function mergeInto(types){
+ types.forEach(t=>{const d=(t===state.type)?currentDesign():sessionEdits[t];
+  if(d&&Object.keys(d).length)savedGlyphs[t]=d;else delete savedGlyphs[t];});
+}
+async function doSave(types,label){
+ if(!types.length){toast('Nothing to save.');return;}
+ if(devApi){
+  try{
+   try{const r0=await fetch(DEV_API+'/glyphs');if(r0.ok){savedGlyphs=parseGlyphs((await r0.json()).content||'');Object.values(savedGlyphs).forEach(sanitizeDesign);}}catch(e){}
+   mergeInto(types);
+   const r=await fetch(DEV_API+'/glyphs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:fileContent(savedGlyphs)})});
+   if(!r.ok)throw new Error('HTTP '+r.status);
+   types.forEach(t=>delete sessionEdits[t]);
+   lsSet('nd:edits',JSON.stringify(sessionEdits));
+   refreshDirtyUI();
+   toast('Saved '+label+' → customGlyphs.ts (dev server)');
+  }catch(e){toast('Save failed: '+e.message);}
+  return;
+ }
+ if(dirHandle){
+  try{
+   try{const fh0=await getRelFile(GLYPH_REL,false);savedGlyphs=parseGlyphs(await (await fh0.getFile()).text());}catch(e){}
+   mergeInto(types);
+   await writeGlyphFile();
+   types.forEach(t=>delete sessionEdits[t]);
+   lsSet('nd:edits',JSON.stringify(sessionEdits));
+   refreshDirtyUI();
+   toast('Saved '+label+' → customGlyphs.ts');
+  }catch(e){await loadSaved();refreshDirtyUI();toast('Save failed: '+e.message);}
+ }else{
+  mergeInto(types);
+  types.forEach(t=>delete sessionEdits[t]);
+  lsSet('nd:edits',JSON.stringify(sessionEdits));
+  refreshDirtyUI();
+  downloadFile('customGlyphs.ts',fileContent(savedGlyphs));
+  toast('Downloaded customGlyphs.ts — drop it into src/.../glyphs/ (link the folder to save in place).');
+ }
+}
+async function save(){if(!state.type){toast('Pick a node first.');return;}stash();await doSave([state.type],'"'+state.type+'"');}
+async function saveAll(){
+ stash();const t=dirtyTypes();
+ if(!t.length){toast('No unsaved changes.');return;}
+ await doSave(t,t.length+' node'+(t.length>1?'s':''));
+}
+function downloadFile(name,text){const b=new Blob([text],{type:'text/plain'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
+
+/* ---------------- design ops: copy / paste / reset ----------------
+   Copy/paste transfers the LAYOUT design (justify, scale, dx/dy, width,
+   height, text, sockets) — everything EXCEPT the glyph art: each node keeps
+   its own svg. Socket offsets keyed to input ids the target doesn't have are
+   simply ignored by the renderer. */
+el('copyBtn').onclick=()=>{copyBuf=currentDesign();delete copyBuf.svg;el('pasteBtn').disabled=false;
+ try{navigator.clipboard.writeText(JSON.stringify(copyBuf,null,2));}catch(e){}
+ toast('Design copied (without glyph art)'+(Object.keys(copyBuf).length?'':' — registry defaults')+'.');};
+el('pasteBtn').onclick=()=>{if(!copyBuf)return;
+ const keepGlyph=state.glyph; // never overwrite the target's art
+ applyDesignTo(state,state.type,{...copyBuf,svg:undefined});
+ state.glyph=keepGlyph;
+ stash();syncLayoutInputs();renderNode();renderGlyphCard();toast('Design pasted onto "'+state.type+'" (glyph kept).');};
+el('resetBtn').onclick=()=>{applyDesignTo(state,state.type,null);
+ stash();syncLayoutInputs();renderNode();renderGlyphCard();toast('Reset "'+state.type+'" to built-in defaults (save to persist).');};
+
+/* ---------------- wiring ---------------- */
+el('nodeSel').onchange=e=>selectNode(e.target.value);
+el('prevBtn').onclick=()=>stepNode(-1);
+el('nextBtn').onclick=()=>stepNode(1);
+el('search').addEventListener('input',e=>{filterText=e.target.value;rebuildDropdown();});
+el('search').addEventListener('keydown',e=>{
+ if(e.key==='Enter'){const v=visibleNodes();if(v.length)selectNode(v[0][0]);}
+ if(e.key==='Escape'){e.target.value='';filterText='';rebuildDropdown();e.target.blur();}
+});
+el('gScale').oninput=e=>{state.scale=Math.max(0.2,Math.min(3,parseFloat(e.target.value)||1));stash();renderNode();renderGlyphCard();};
+el('gDx').oninput=e=>{state.dx=Math.max(-28,Math.min(28,parseFloat(e.target.value)||0));stash();renderNode();renderGlyphCard();};
+el('gDy').oninput=e=>{state.dy=Math.max(-28,Math.min(28,parseFloat(e.target.value)||0));stash();renderNode();renderGlyphCard();};
+el('nudge0').onclick=()=>{state.dx=0;state.dy=0;syncLayoutInputs();stash();renderNode();renderGlyphCard();};
+el('just').onchange=e=>{state.justify=e.target.value;stash();renderNode();};
+el('nW').oninput=e=>{const v=parseInt(e.target.value)||0;state.width=v<=0?0:Math.max(24,Math.min(400,v));stash();renderNode();};
+el('nH').oninput=e=>{const v=parseInt(e.target.value)||0;state.height=v<=0?0:Math.max(28,Math.min(1200,v));stash();renderNode();};
+el('nT').oninput=e=>{state.text=Math.max(0.4,Math.min(2.5,parseFloat(e.target.value)||1));stash();renderNode();};
+el('sockReset').onclick=()=>{state.sockets={};syncLayoutInputs();stash();renderNode();toast('Socket positions reset to defaults.');};
+el('fsStatus').onclick=linkFolder;
+el('saveBtn').onclick=async()=>{if(!devApi&&!dirHandle&&window.showDirectoryPicker)await linkFolder();await save();};
+el('saveAllBtn').onclick=async()=>{if(!devApi&&!dirHandle&&window.showDirectoryPicker)await linkFolder();await saveAll();};
+
+document.addEventListener('keydown',e=>{
+ const typing=/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement&&document.activeElement.tagName||'')||(document.activeElement&&document.activeElement.isContentEditable);
+ if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'){e.preventDefault();(dirtyTypes().length?saveAll:save)();return;}
+ if(overlay.classList.contains('show')){if(e.key==='Escape')overlay.classList.remove('show');return;}
+ if(e.key==='/'&&!typing){e.preventDefault();el('search').focus();return;}
+ if(e.altKey&&e.key==='ArrowUp'){e.preventDefault();stepNode(-1);}
+ if(e.altKey&&e.key==='ArrowDown'){e.preventDefault();stepNode(1);}
+});
+
+/* init */
+applyBg();applyView();
+rebuildDropdown();
+const last=lsGet('nd:lastNode','mul');
+selectNode(NODE_BY_TYPE[last]?last:'mul');
+/* Persistence, in order of preference:
+   1. dev-server endpoint (/__nd, any browser) → 2. File System Access API
+   (Chromium) → 3. download fallback. Explain WHY when only download remains. */
+(async()=>{
+ if(await probeDevApi())return;
+ if(window.showDirectoryPicker){tryRestoreFolder();return;}
+ const st=el('fsStatus');st.style.color='#B45309';
+ if(location.protocol==='file:'){
+  st.textContent='run `npm run dev` → open http://localhost:5173/FastShaders/node-designer.html';
+  st.title='Opened from file:// — no save access. Through the dev server, saving works in ANY browser (vite /__nd endpoint). Until then, Save downloads customGlyphs.ts.';
+ }else{
+  st.textContent='Save downloads here — run `npm run dev` to save in place (any browser)';
+  st.title='This browser has no File System Access API and the vite dev endpoint isn’t reachable from this URL. Open the designer via the dev server to save in place in any browser, or use Chrome/Edge to link the folder. Save still downloads customGlyphs.ts for you to drop into src/components/NodeEditor/nodes/glyphs/.';
+ }
+})();
+window.addEventListener('load',rAFEdges);
+</script>
+</body>
+</html>
