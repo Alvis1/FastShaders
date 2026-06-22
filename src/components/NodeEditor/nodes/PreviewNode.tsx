@@ -73,7 +73,12 @@ export const PreviewNode = memo(function PreviewNode({
     updateNodeInternals(id);
   }, [id, exposedKey, updateNodeInternals]);
 
-  const timeInputsRaw = getTimeInputs(id, nodes, edges);
+  // getTimeInputs walks the graph per incoming edge (BFS), so memoize it on the
+  // graph identity instead of recomputing on every render. The JSON.stringify
+  // key then stabilizes the *reference* when the resolved set is unchanged, so
+  // effects keyed on `timeInputs` don't re-fire just because nodes/edges got a
+  // new array identity (intentional idiom — see CLAUDE.md).
+  const timeInputsRaw = useMemo(() => getTimeInputs(id, nodes, edges), [id, nodes, edges]);
   const timeInputsKey = JSON.stringify(timeInputsRaw);
   const timeInputs = useMemo(() => timeInputsRaw, [timeInputsKey]);
   const hasAnyTime = Object.values(timeInputs).some(Boolean);
@@ -107,28 +112,31 @@ export const PreviewNode = memo(function PreviewNode({
     return resolved;
   };
 
-  // Render noise preview — resolve upstream inputs via CPU evaluator
+  // Static (non-time-driven) noise preview: one-shot render. It legitimately
+  // depends on nodes/edges so the thumbnail refreshes when an upstream value
+  // changes, but it's a plain putImageData — no rAF loop to tear down.
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !NOISE_TYPES.has(data.registryType)) return;
+    if (!canvas || !NOISE_TYPES.has(data.registryType) || hasAnyTime) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const resolved = resolveValues(nodes, edges, 0);
+    const imageData = renderNoisePreview(data.registryType as NoiseType, PREVIEW_SIZE, resolved, 0, {});
+    ctx.putImageData(imageData, 0, 0);
+  }, [data.registryType, data.values, nodes, edges, hasAnyTime]);
+
+  // Animated (time-driven) noise preview: the rAF loop reads fresh graph state
+  // via nodesRef/edgesRef, so its deps deliberately EXCLUDE nodes/edges —
+  // otherwise the loop would tear down and re-subscribe on every unrelated drag
+  // frame (each of which gives nodes/edges a new array identity). The remaining
+  // deps (registryType, the stabilized timeInputs, this node's own values) are
+  // all stable across unrelated drags.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !NOISE_TYPES.has(data.registryType) || !hasAnyTime) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    if (!hasAnyTime) {
-      // Static render — resolve upstream values once
-      const resolved = resolveValues(nodes, edges, 0);
-      const imageData = renderNoisePreview(
-        data.registryType as NoiseType,
-        PREVIEW_SIZE,
-        resolved,
-        0,
-        {},
-      );
-      ctx.putImageData(imageData, 0, 0);
-      return;
-    }
-
-    // Animated render — evaluate upstream each frame
     let rafId: number;
     let startTime: number | null = null;
 
@@ -150,7 +158,7 @@ export const PreviewNode = memo(function PreviewNode({
 
     rafId = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafId);
-  }, [data.registryType, data.values, nodes, edges, hasAnyTime, timeInputs]);
+  }, [data.registryType, data.values, hasAnyTime, timeInputs]);
 
   return (
     <div

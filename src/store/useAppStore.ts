@@ -834,7 +834,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     ): TSLDataType => {
       const n = nodeById.get(nodeId);
       if (!n) return 'any';
-      const def = NODE_REGISTRY.get((n.data as { registryType: string }).registryType);
+      const def = NODE_REGISTRY.get(n.data.registryType);
       if (!def) return 'any';
       const ports = side === 'input' ? def.inputs : def.outputs;
       const port = ports.find((p) => p.id === (handleId ?? (side === 'output' ? 'out' : 'in')));
@@ -849,7 +849,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     ): string | undefined => {
       const n = nodeById.get(nodeId);
       if (!n) return handleId ?? undefined;
-      const def = NODE_REGISTRY.get((n.data as { registryType: string }).registryType);
+      const def = NODE_REGISTRY.get(n.data.registryType);
       if (!def) return handleId ?? undefined;
       const ports = side === 'input' ? def.inputs : def.outputs;
       const port = ports.find((p) => p.id === (handleId ?? (side === 'output' ? 'out' : 'in')));
@@ -873,7 +873,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     let groupCostSum = 0;
     for (const m of state.nodes) {
       if (!memberIds.has(m.id)) continue;
-      const rt = (m.data as { registryType?: string }).registryType;
+      const rt = m.data.registryType;
       if (rt) groupCostSum += costMap[rt] ?? 0;
     }
 

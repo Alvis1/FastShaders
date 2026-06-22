@@ -145,17 +145,6 @@ export function getTypeColor(dataType: TSLDataType): string {
   return TYPE_COLORS[dataType] || TYPE_COLORS.any;
 }
 
-/** Number of visual lines per data type ('any' is resolved at runtime via evaluation). */
-export const LINE_COUNT: Record<TSLDataType, number> = {
-  float: 1,
-  int: 1,
-  any: 1,
-  vec2: 2,
-  vec3: 3,
-  color: 3,
-  vec4: 4,
-};
-
 /** Per-channel edge colors keyed by channel count (saturated). */
 export const COUNT_EDGE_COLORS: Record<number, string[]> = {
   1: ['#000000'],

@@ -25,6 +25,9 @@
   kbd{font:10px var(--mono);background:#f1f2f5;border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--dim)}
   .dirty-pill{font-size:11px;color:#B45309;background:#FEF3C7;border:1px solid #FDE68A;border-radius:10px;padding:2px 8px;display:none}
   .dirty-pill.show{display:inline-block}
+  /* local-only notice — hidden automatically once the dev-server endpoint responds */
+  .devnote{background:#FEF3C7;border-bottom:1px solid #FDE68A;color:#92400E;font-size:11.5px;padding:6px 14px;line-height:1.5}
+  .devnote code{font-family:var(--mono);font-size:10.5px;background:rgba(255,255,255,.6);border-radius:3px;padding:0 3px}
 
   .main{flex:1;display:flex;min-height:0}
   /* ============================= stage ============================= */
@@ -150,6 +153,7 @@
     <button id="saveBtn" title="Save this node (writes customGlyphs.ts)">Save</button>
     <button id="saveAllBtn" class="primary" title="Save all changed nodes (⌘/Ctrl+S)">Save all</button>
   </div>
+  <div class="devnote" id="devNote">⚠ <b>Local tool</b> — run <code>npm run dev</code> and open <code>http://localhost:5173/FastShaders/node-designer.html</code>. Saving writes <code>customGlyphs.ts</code> through the dev server and <b>works locally only</b> (the <code>/__nd</code> endpoint exists in dev only; elsewhere Save falls back to a download).</div>
 
   <div class="main">
     <div class="stage" id="stage">
@@ -178,36 +182,31 @@
           <button class="mini" id="pasteBtn" title="Paste the copied design onto this node (its glyph stays)" disabled>Paste</button>
           <button class="mini" id="resetBtn" title="Reset this node to built-in defaults">Reset node</button>
         </div>
-        <div class="hintline">Border = category color, header = cost color — registry-owned, not editable. <b>●</b> unsaved · <b>◆</b> saved design.</div>
       </div>
 
       <div class="sec">
         <h2>Preview states</h2>
         <div id="stateList"></div>
-        <div class="hintline">Per-socket connection preview — <b>unconnected</b> shows the editable number box, <b>connected</b> shows the edge value (blue = live, gray = inferred). Ranges display as <code>min…max</code> (e.g. <code>-1…1</code> for normals) and unknown values as <code>…</code> — type those in the value field to preview. Channels drive the multi-line edge (R/G/B/W) <b>and the node-body stacked effect</b> — stacking appears only when a <b>connected input</b> carries 2+ channels (widest wins; N channels read as N stacked cards), like the app. Sockets always stay single circles. Click sockets on the canvas to cycle. Output sockets never show text.</div>
       </div>
 
       <div class="sec">
         <h2>Visualization (glyph)</h2>
-        <div class="glyph-card" id="glyphCard" title="Click to edit the SVG"></div>
-        <div class="kv" style="margin-top:10px"><span class="k">Glyph scale</span><input type="number" id="gScale" min="0.2" max="3" step="0.05"></div>
+        <div class="glyph-card" id="glyphCard" title="Click to edit the SVG · drag the glyph on the canvas to nudge"></div>
+        <div class="kv" style="margin-top:10px"><span class="k">Glyph scale</span><input type="number" id="gScale" min="0.2" max="3" step="0.05" title="Scales the glyph only — never the socket/value spacing"></div>
         <div class="kv"><span class="k">Nudge X / Y</span><input type="number" id="gDx" min="-28" max="28" step="0.5" title="dx — glyph-space units"> <input type="number" id="gDy" min="-28" max="28" step="0.5" title="dy — glyph-space units"> <button class="mini" id="nudge0" title="Reset nudge">0,0</button></div>
-        <div class="hintline">Click the box to edit the SVG (drag &amp; drop an <code>.svg</code> to replace; auto-fitted to <code>0 0 56 56</code>). Scale grows the glyph <b>only</b> — socket/value spacing never changes; the node grows just enough to fit. Nudge slides the art — drag the glyph on the canvas.</div>
       </div>
 
       <div class="sec">
         <h2>Text</h2>
         <div class="kv"><span class="k">Justify</span><select id="just"><option value="center">center</option><option value="left">left</option><option value="right">right</option></select></div>
-        <div class="kv"><span class="k">Text size</span><input type="number" id="nT" min="0.4" max="2.5" step="0.05"> <span class="unit">× · 1 = default</span></div>
-        <div class="hintline">2-input nodes place the glyph <b>between</b> the inputs; numbers are centered by default. Text size scales the header title, value boxes, and edge labels together. Header text <b>wraps</b> and the header grows automatically — sockets never shift (they anchor to the body).</div>
+        <div class="kv"><span class="k">Text size</span><input type="number" id="nT" min="0.4" max="2.5" step="0.05" title="Scales header/value/edge-label text; header wraps and auto-grows"> <span class="unit">× · 1 = default</span></div>
       </div>
 
       <div class="sec">
         <h2>Node box &amp; sockets</h2>
         <div class="kv"><span class="k">Width</span><input type="number" id="nW" min="0" max="400" step="2"> <span class="unit">px · 0 = auto · min 24</span></div>
         <div class="kv"><span class="k">Height</span><input type="number" id="nH" min="0" max="1200" step="2"> <span class="unit">px · 0 = auto · min 28</span></div>
-        <div class="kv"><span class="k">Sockets</span><button class="mini" id="sockReset">Reset positions</button> <span class="unit" id="sockInfo"></span></div>
-        <div class="hintline">Width &amp; height are <b>exact</b> and <b>independent of the glyph</b> — resizing the node never scales the glyph (use Glyph scale for that). Width can go narrower than content (the header wraps and grows in height automatically; the 54px operator floor applies only in auto); height is exact in both layouts (content may overflow). Drag <b>any socket ↕ along the border</b> — 4px snap; on rows nodes dragging detaches it from its row and its value follows. Drag the corner handle: <b>→</b> width, <b>↕</b> height. Corner radius &amp; border are <b>fixed app-wide</b>; color &amp; cost stay app-controlled.</div>
+        <div class="kv"><span class="k">Sockets</span><button class="mini" id="sockReset" title="Restore default socket positions (row anchoring / classic operator spots)">Reset positions</button> <span class="unit" id="sockInfo"></span></div>
       </div>
     </div>
   </div>
@@ -233,6 +232,9 @@
       </div>
     </div>
     <div class="mactions">
+      <select id="mLoad" title="Load another node's glyph art into the editor (Apply to keep it)" style="max-width:185px;font-size:11px;padding:4px 5px">
+        <option value="">load art from…</option>
+      </select>
       <button class="mini" id="mUpload">Upload .svg…</button>
       <input type="file" id="mFile" accept=".svg,image/svg+xml" style="display:none">
       <button class="mini" id="mCopy">Copy SVG</button>
@@ -1082,7 +1084,41 @@ function setZoom(z){ui.zoom=Math.max(0.5,Math.min(6,z));applyView();rAFEdges();}
 
 /* ---------------- glyph modal ---------------- */
 const overlay=el('overlay');
-function openGlyph(){el('mType').textContent=state.type;el('mSvg').value=state.glyph;refreshMPreview();overlay.classList.add('show');el('mSvg').focus();}
+/* "load art from…" dropdown: pull any existing glyph into the editor —
+   saved/session custom designs first, then every built-in. Rebuilt on each
+   open so it always reflects the latest saves. Loading only fills the
+   textarea/preview; nothing sticks until Apply. */
+function populateLoadList(){
+ const sel=el('mLoad');if(!sel)return;
+ sel.innerHTML='<option value="">load art from…</option>';
+ const addGroup=(label,items)=>{
+  if(!items.length)return;
+  const og=document.createElement('optgroup');og.label=label;
+  items.forEach(it=>{const o=document.createElement('option');o.value=it[0];o.textContent=it[1];og.appendChild(o);});
+  sel.appendChild(og);
+ };
+ const custom=[],builtins=[];
+ NODES.forEach(n=>{
+  const t=n[0];
+  const d=(t in sessionEdits)?sessionEdits[t]:savedGlyphs[t];
+  if(d&&d.svg)custom.push(['c:'+t,n[1]+' ('+t+')'+(t===state.type?' — current':'')]);
+  if(builtinGlyph(t))builtins.push(['b:'+t,n[1]+' ('+t+')']);
+ });
+ addGroup('Saved / session designs',custom);
+ addGroup('Built-in glyphs',builtins);
+}
+el('mLoad').onchange=e=>{
+ const v=e.target.value;e.target.value='';
+ if(!v)return;
+ const t=v.slice(2);
+ let art='';
+ if(v[0]==='c'){const d=(t in sessionEdits)?sessionEdits[t]:savedGlyphs[t];art=(d&&d.svg)||'';}
+ else art=builtinGlyph(t);
+ if(!art){toast('No art found for "'+t+'".');return;}
+ el('mSvg').value=art;refreshMPreview();
+ toast('Loaded "'+t+'" art — Apply to keep it.');
+};
+function openGlyph(){el('mType').textContent=state.type;el('mSvg').value=state.glyph;populateLoadList();refreshMPreview();overlay.classList.add('show');el('mSvg').focus();}
 function refreshMPreview(){
  const txt=el('mSvg').value||'';
  el('mPreview').innerHTML='<svg viewBox="0 0 56 56" width="280" height="280" style="overflow:visible">'+txt+'</svg>';
@@ -1169,6 +1205,7 @@ async function probeDevApi(){
   if(!r.ok)return false;
   const j=await r.json();
   devApi=true;
+  const dn=el('devNote');if(dn)dn.style.display='none'; // running correctly — drop the notice
   savedGlyphs=parseGlyphs(j.content||'');Object.values(savedGlyphs).forEach(sanitizeDesign);
   try{const rc=await fetch(DEV_API+'/costs');if(rc.ok)applyCostsJson((await rc.json()).content||'');}catch(e){}
   const st=el('fsStatus');

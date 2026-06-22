@@ -130,6 +130,36 @@ const shaderCarouselCopyPlugin = (): Plugin => ({
  */
 const ND_GLYPHS = path.resolve(__dirname, 'src/components/NodeEditor/nodes/glyphs/customGlyphs.ts');
 const ND_COSTS = path.resolve(__dirname, 'src/registry/complexity.json');
+
+/**
+ * Keep `public/node-designer.html` in sync with the repo-root source.
+ *
+ * The Node Designer is authored at the repo root (`node-designer.html`), but
+ * Vite only serves / ships files under `public/`, so the running tool is
+ * `public/node-designer.html` (dev URL /FastShaders/node-designer.html and the
+ * copy emitted to dist/). Without a sync step the two were byte-identical
+ * untracked copies that would silently diverge on the next edit. Treat the
+ * root file as the single source of truth and regenerate the public copy at
+ * the start of every dev server and every build (runs in both via buildStart).
+ */
+const ND_ROOT = path.resolve(__dirname, 'node-designer.html');
+const ND_PUBLIC = path.resolve(__dirname, 'public/node-designer.html');
+const nodeDesignerSyncPlugin = (): Plugin => ({
+  name: 'fs-node-designer-sync',
+  buildStart() {
+    try {
+      if (!existsSync(ND_ROOT)) return;
+      // Compare before writing: skips no-op copies (no mtime churn) and writes
+      // in place via writeFileSync (no unlink — cpSync's unlink can EPERM on
+      // restricted mounts). Never let a sync hiccup kill dev/test startup.
+      const src = readFileSync(ND_ROOT, 'utf-8');
+      const dst = existsSync(ND_PUBLIC) ? readFileSync(ND_PUBLIC, 'utf-8') : null;
+      if (src !== dst) writeFileSync(ND_PUBLIC, src, 'utf-8');
+    } catch (e) {
+      console.warn('[fs-node-designer-sync] sync skipped:', (e as Error).message);
+    }
+  },
+});
 const nodeDesignerEndpointPlugin = (): Plugin => ({
   name: 'fs-node-designer-endpoint',
   apply: 'serve',
@@ -146,6 +176,32 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
         } else if (req.method === 'GET' && req.url === '/costs') {
           send(200, { content: readFileSync(ND_COSTS, 'utf-8') });
         } else if (req.method === 'POST' && req.url === '/glyphs') {
+          // CSRF / cross-origin write guard. While `npm run dev` runs, any
+          // other tab in the developer's browser could fire a CORS "simple"
+          // POST at localhost and overwrite customGlyphs.ts — whose SVG is
+          // rendered via dangerouslySetInnerHTML — yielding dev-origin stored
+          // XSS / source injection. Two cheap, independent checks close it:
+          //   1. Reject any request whose Origin isn't a loopback host. A
+          //      cross-site page's Origin (set by the browser, unforgeable)
+          //      is its own domain; same-origin requests omit Origin or send
+          //      a localhost one.
+          const origin = req.headers.origin;
+          if (origin) {
+            let loopback = false;
+            try {
+              const h = new URL(origin).hostname;
+              loopback = h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+            } catch { loopback = false; }
+            if (!loopback) { send(403, { error: 'forbidden origin' }); return; }
+          }
+          //   2. Require application/json. A true cross-origin POST with this
+          //      content-type is a "non-simple" request, so the browser must
+          //      preflight it — and this endpoint answers no preflight, so the
+          //      write never fires. The same-origin tool already sends JSON.
+          if (!String(req.headers['content-type'] ?? '').includes('application/json')) {
+            send(415, { error: 'content-type must be application/json' });
+            return;
+          }
           let body = '';
           req.on('data', (c) => {
             body += c;
@@ -176,7 +232,7 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
 
 export default defineConfig({
   base: '/FastShaders/',
-  plugins: [react(), versionHtmlPlugin(), cspHtmlPlugin(), shaderCarouselCopyPlugin(), nodeDesignerEndpointPlugin()],
+  plugins: [react(), versionHtmlPlugin(), cspHtmlPlugin(), shaderCarouselCopyPlugin(), nodeDesignerSyncPlugin(), nodeDesignerEndpointPlugin()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

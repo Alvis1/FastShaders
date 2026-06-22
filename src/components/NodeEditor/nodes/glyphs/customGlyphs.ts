@@ -28,7 +28,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "positionLocal": {
     "scale": 1.6,
     "dy": -4,
-    "width": 50,
+    "width": 48,
     "height": 48,
     "sockets": {
       "out": -4
@@ -37,7 +37,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "positionWorld": {
     "scale": 1.6,
     "dy": -4,
-    "width": 50,
+    "width": 48,
     "height": 48,
     "sockets": {
       "out": -4
@@ -95,7 +95,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "add": {
     "svg": "<text x=\"28\" y=\"33\" text-anchor=\"middle\" fill=\"#2B2B2B\" style=\"font:200 20px Inter,sans-serif\">+</text>",
     "scale": 1.3,
-    "width": 37,
+    "width": 44,
     "height": 42,
     "sockets": {
       "b": 12,
@@ -166,7 +166,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "floor": {
-    "svg": "<g transform=\"translate(28 28)\" stroke=\"#F57C00\" stroke-width=\"1.4\" stroke-linecap=\"round\"><line x1=\"-14.06\" y1=\"7.5\" x2=\"14.5\" y2=\"7.5\"></line><line x1=\"0\" y1=\"3.97\" x2=\"0\" y2=\"-14.15\"></line><line x1=\"-7\" y1=\"-7\" x2=\"0\" y2=\"-14.15\"></line><line x1=\"0\" y1=\"-14.15\" x2=\"7.2\" y2=\"-7\"></line></g>",
+    "svg": "<g transform=\"translate(28 28)\" stroke=\"#F57C00\" stroke-width=\"1.4\" stroke-linecap=\"round\"><line stroke=\"#000000\" x1=\"-13.88\" y1=\"6\" x2=\"13.54\" y2=\"6\"></line><line x1=\"0\" y1=\"3.97\" x2=\"0\" y2=\"-14.15\"></line><line x1=\"-6.18\" y1=\"-3.5\" x2=\"0\" y2=\"3.97\"></line><line x1=\"0\" y1=\"3.97\" x2=\"7.13\" y2=\"-3.5\"></line></g>",
     "scale": 1.2,
     "dy": -10.5,
     "width": 48,
@@ -199,7 +199,9 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "oneMinus": {
-    "width": 49,
+    "dx": -0.5,
+    "dy": -3,
+    "width": 63,
     "height": 28,
     "sockets": {
       "x": 0,
@@ -219,8 +221,10 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "pow": {
-    "width": 68,
-    "height": 56,
+    "scale": 2,
+    "dy": -3.5,
+    "width": 40,
+    "height": 55,
     "sockets": {
       "exp": 16,
       "base": -16
@@ -338,19 +342,23 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "mix": {
-    "width": 45,
+    "width": 50,
     "height": 50,
     "sockets": {
       "out": -8,
-      "t": 16
+      "t": 16,
+      "b": -4,
+      "a": -16
     }
   },
   "smoothstep": {
-    "width": 66,
-    "height": 57,
+    "width": 43,
+    "height": 50,
     "sockets": {
       "x": 16,
-      "out": -12
+      "out": -12,
+      "edge1": -4,
+      "edge0": -16
     }
   },
   "remap": {
@@ -367,13 +375,13 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   },
   "clamp": {
     "scale": 1.5,
-    "dx": -0.5,
-    "dy": 23,
+    "dx": -1,
+    "dy": 25,
     "width": 45,
-    "height": 68,
+    "height": 72,
     "sockets": {
       "out": 8,
-      "x": -24,
+      "x": -28,
       "min": -8,
       "max": 24
     }
@@ -394,5 +402,9 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "a": -20,
       "b": 16
     }
+  },
+  "mod": {
+    "width": 47,
+    "height": 47
   }
 };

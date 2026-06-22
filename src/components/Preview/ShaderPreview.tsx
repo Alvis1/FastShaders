@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { getNodeValues } from '@/types';
 import {
   GEOMETRY_ROTATIONS,
   LIGHT_PRESETS,
@@ -81,6 +82,26 @@ function loadLighting(): LightingMode {
     if (v === 'studio' || v === 'moon' || v === 'laboratory') return v;
   } catch { /* */ }
   return 'studio';
+}
+
+// bgColor is concatenated into the preview iframe HTML (`background="color:
+// ${bgColor}"`). An imported project file controls it via fs:previewBgColor,
+// so — like geometry/lighting above — it must be validated before use or a
+// payload like `red"></a-scene><img src=x onerror=…>` would inject markup.
+// Accept only hex, rgb()/rgba() with numeric content, or a bare CSS color
+// keyword (letters only — no spaces/quotes/brackets to break out with).
+const DEFAULT_BG_COLOR = '#808080';
+function isValidCssColor(v: string): boolean {
+  return /^#[0-9a-fA-F]{3,8}$/.test(v) ||
+    /^rgba?\(\s*[\d.,\s%]+\)$/.test(v) ||
+    /^[a-zA-Z]{3,20}$/.test(v);
+}
+function loadBgColor(): string {
+  try {
+    const v = localStorage.getItem('fs:previewBgColor');
+    if (v && isValidCssColor(v)) return v;
+  } catch { /* */ }
+  return DEFAULT_BG_COLOR;
 }
 
 const SUBDIVISION_MIN = 1;
@@ -206,9 +227,7 @@ export function ShaderPreview() {
   const [playing, setPlaying] = useState<boolean>(loadPlaying);
   const [lighting, setLighting] = useState<LightingMode>(loadLighting);
   const [subdivision, setSubdivision] = useState<number>(loadSubdivision);
-  const [bgColor, setBgColor] = useState(() => {
-    try { return localStorage.getItem('fs:previewBgColor') || '#808080'; } catch { return '#808080'; }
-  });
+  const [bgColor, setBgColor] = useState(loadBgColor);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -269,9 +288,8 @@ export function ShaderPreview() {
     const connectedNames = new Set<string>();
     for (const n of propertyNodes) {
       if (connectedIds.has(n.id)) {
-        const vals = (n.data as { values?: Record<string, unknown> }).values;
-        const name = vals?.name as string | undefined;
-        if (name) connectedNames.add(name);
+        const name = getNodeValues(n).name;
+        if (name != null && name !== '') connectedNames.add(String(name));
       }
     }
     return all.filter((u) => connectedNames.has(u.name));
@@ -437,10 +455,7 @@ export function ShaderPreview() {
       setGeometry(loadGeometry());
       setLighting(loadLighting());
       setSubdivision(loadSubdivision());
-      try {
-        const bg = localStorage.getItem('fs:previewBgColor');
-        if (bg) setBgColor(bg);
-      } catch { /* */ }
+      setBgColor(loadBgColor());
       setPlaying(loadPlaying());
       setUniformBounds(loadUniformBounds());
       setUniformValues(loadUniformValues());
