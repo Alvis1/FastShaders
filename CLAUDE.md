@@ -58,11 +58,9 @@ src/
   engine/
     graphToCode.ts    — graph → TSL code generation (topological sort, import collection)
     codeToGraph.ts    — TSL code → graph parsing (Babel, node matching, pattern detection)
-    graphToTSLNodes.ts — graph → live GPU TSL node tree (runtime compilation)
     tslCodeProcessor.ts — shared TSL processing (import extraction, TDZ fix, body parsing)
     tslToPreviewHTML.ts — TSL → standalone HTML preview (A-Frame + shaderloader 0.3)
     tslToShaderModule.ts — TSL → shaderloader-compatible ES module (property schema)
-    tslToAFrame.ts    — TSL → downloadable A-Frame HTML (CDN-loaded)
     topologicalSort.ts — Kahn's algorithm (warns on cycles)
     layoutEngine.ts   — Dagre auto-layout
     cpuEvaluator.ts   — CPU-side recursive graph evaluation (live previews, cost)
@@ -80,7 +78,7 @@ src/
   types/
     node.types.ts     — AppNode union, ShaderNodeData, OutputNodeData, GroupNodeData, BoundarySocket, MaterialSettings, helpers
     tsl.types.ts      — ParseError (with severity), GeneratedCode
-    sync.types.ts     — SyncSource ('graph' | 'code' | 'initial')
+    sync.types.ts     — SyncSource ('graph' | 'code')
     index.ts          — barrel re-exports
   utils/
     idGenerator.ts    — generateId(), generateEdgeId() (4-part deterministic format)
@@ -119,7 +117,7 @@ public/
 
 ## Key Conventions
 
-- **Sync engine**: `syncSource` field in zustand (`'graph'` | `'code'` | `'initial'`) prevents infinite sync loops. `useSyncEngine` hook manages bidirectional sync with `lastSyncedCodeRef` to skip no-op updates
+- **Sync engine**: `syncSource` field in zustand (`'graph'` | `'code'`) prevents infinite sync loops. `useSyncEngine` hook manages bidirectional sync with `lastSyncedCodeRef` to skip no-op updates
 - **Node values**: always use `getNodeValues(node)` from `@/types` — never cast `node.data as ...`
 - **Edge IDs**: always use `generateEdgeId(source, sourceHandle, target, targetHandle)` from `@/utils/idGenerator`
 - **Single ShaderNode**: one component handles all TSL node types dynamically via registry
@@ -127,8 +125,8 @@ public/
 - **Light theme by default**: flat design with sharp dark shadows, CSS tokens in `tokens.css`. The Monaco code editor has its own light/dark toggle (`codeEditorTheme`, persisted to `fs:codeEditorTheme`). The React Flow canvas background is user-pickable (`nodeEditorBgColor`, persisted to `fs:nodeEditorBgColor`); cost badges and 1-channel edges auto-flip via `getContrastColor()` so they remain readable on any background.
 - **A-Frame pipeline**: graphToCode → tslToShaderModule → shaderloader 0.3 (runtime TDZ fix + auto-import injection + `export const schema` parsing) → dynamic blob import. The standalone `.html` export embeds the same module as a blob URL.
 - **rAF ref pattern**: PreviewNode/MathPreviewNode/EdgeInfoCard overwrite refs for animation — this is correct (avoids stale closures)
-- **Noise nodes**: 8 MaterialX-backed nodes (`perlin`, `perlinVec3`, `fbm`, `fbmVec3`, `cellNoise`, `voronoi`, `voronoiVec2`, `voronoiVec3`) all use the same `pos`/`scale` parameter convention. graphToCode emits them via the `def.category === 'noise'` branch; codeToGraph parses them via `processNoiseCall`; CPU thumbnails come from `noisePreview.ts`; live GPU previews from the factories in `graphToTSLNodes.ts`. There is no `texture` category — `tsl-textures` was removed in favour of three.js's built-in MaterialX noise.
-- **Groups**: selection groups are first-class React Flow nodes (`type: 'group'`) created via Ctrl+G or right-click → Group Selection. They have no registry entry and no shader semantics — `graphToCode`/`graphToTSLNodes`/`cpuEvaluator` ignore the *node*, but call `unwrapCollapsedGroupEdges()` from `edgeUtils.ts` at their entry to translate visually-rewritten boundary edges back to their real child endpoints, so collapse state never affects compiled output. Groups can be recolored, renamed, collapsed (members hidden via `display: none` className — *not* React Flow's `hidden: true`, which would unmount rAF loops), saved to a per-browser library (`fs:savedGroups`), and dragged out of containers. Members never get `extent: 'parent'` — `onNodeDragStop` reconciles `parentId` after every drag instead.
+- **Noise nodes**: 8 MaterialX-backed nodes (`perlin`, `perlinVec3`, `fbm`, `fbmVec3`, `cellNoise`, `voronoi`, `voronoiVec2`, `voronoiVec3`) all use the same `pos`/`scale` parameter convention. graphToCode emits them via the `def.category === 'noise'` branch; codeToGraph parses them via `processNoiseCall`; CPU thumbnails come from `noisePreview.ts`; live GPU previews run the generated TSL through the preview iframe (`graphToCode` → `tslToPreviewHTML` → `convertToShaderModule`). There is no `texture` category — `tsl-textures` was removed in favour of three.js's built-in MaterialX noise.
+- **Groups**: selection groups are first-class React Flow nodes (`type: 'group'`) created via Ctrl+G or right-click → Group Selection. They have no registry entry and no shader semantics — `graphToCode`/`cpuEvaluator` ignore the *node*, but call `unwrapCollapsedGroupEdges()` from `edgeUtils.ts` at their entry to translate visually-rewritten boundary edges back to their real child endpoints, so collapse state never affects compiled output. Groups can be recolored, renamed, collapsed (members hidden via `display: none` className — *not* React Flow's `hidden: true`, which would unmount rAF loops), saved to a per-browser library (`fs:savedGroups`), and dragged out of containers. Members never get `extent: 'parent'` — `onNodeDragStop` reconciles `parentId` after every drag instead.
 - **History**: circular buffer (50 entries) with undo/redo via `structuredClone`, Cmd+Z/Cmd+Shift+Z shortcuts
 - **localStorage**: auto-saves graph, split ratios, shader name, headset selection, cost colors, canvas bg color, code editor theme, preview prefs (geometry, lighting, subdivision, bg, uniform bounds, uniform values, camera pos, rotation, playing state), saved groups (debounced 300ms). Reset clears camera/rotation/playing and restores lighting/subdivision/uniforms — bg color, uniform bounds, and geometry are treated as user preferences. Uniform values persist by name: removing a property node from the graph keeps the stored value (the iframe ignores `fs:uniform` messages for unknown names), so re-adding a property with the same name restores the user's last tuning.
 - **VR cost budgeting**: 6 VR headset presets with maxPoints, cost gradient visualization in CostBar

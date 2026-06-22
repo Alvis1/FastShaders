@@ -77,9 +77,7 @@ src/
 ├── engine/
 │   ├── graphToCode.ts                 # Graph → TSL code string (import statements + Fn() wrapper)
 │   ├── codeToGraph.ts                 # TSL code → nodes + edges (Babel AST, multi-channel returns, noise/UV patterns, three.js editor compat)
-│   ├── graphToTSLNodes.ts             # Graph → live Three.js TSL node objects (all 5 output channels)
 │   ├── tslCodeProcessor.ts            # Shared TSL processing: import extraction, TDZ fix, body parsing
-│   ├── tslToAFrame.ts                 # TSL code → A-Frame HTML (uses tslToShaderModule + shaderloader blob URL)
 │   ├── tslToShaderModule.ts           # TSL code → shaderloader-compatible ES script (materialSettings, properties)
 │   ├── tslToPreviewHTML.ts            # TSL code → Three.js WebGPU HTML (uses tslCodeProcessor)
 │   ├── layoutEngine.ts                # Dagre auto-layout (LR, nodesep=25, ranksep=60)
@@ -323,20 +321,9 @@ Common processing logic used by `tslToPreviewHTML.ts` (and indirectly by the oth
 - **`parseBody(body, tslNames)`** — splits into definition lines and output channels (simple or multi-channel return)
 - **`AFRAME_GEO`** / **`CHANNEL_TO_PROP`** — shared constants
 
-### A-Frame HTML Export (`tslToAFrame.ts`)
-
-Generates a self-contained copy-paste `.html` using the shaderloader:
-
-1. Calls `tslToShaderModule()` to generate the shader module code (same as Script tab)
-2. Strips header comments and embeds the module as an inline blob URL
-3. Loads both CDN scripts: `aframe-171-a-0.1.min.js` (IIFE bundle) + `a-frame-shaderloader-0.3.js`
-4. Applies shader via `<a-entity shader="src: blobUrl">` — the shaderloader handles all processing (TDZ fixes, import resolution, property uniforms) at runtime
-5. A-Frame scene with geometry, lights, and optional rotation animation
-6. Properties and material settings are handled by the shaderloader from the embedded module's `export const schema` and Object API return
-
 ### Shader Script Export (`tslToShaderModule.ts`)
 
-Generates a `.js` ES module compatible with the a-frame-shaderloader component. Also reused by `tslToAFrame.ts` for the A-Frame HTML export.
+Generates a `.js` ES module compatible with the a-frame-shaderloader component (emitted by the "Download Shader" button).
 
 1. Header comments with HTML setup instructions, property attribute examples, and runtime update docs
 2. Strips `Fn` from three/tsl imports; bare import (`'three/tsl'`) — also usable directly with Three.js
@@ -360,7 +347,7 @@ Generates HTML for the in-app preview iframe:
    3. **Auto-detect inverted winding** — the Stanford bunny OBJ uses CW triangles, so `computeVertexNormals` produces inward-facing normals and displacement pushes the surface *into* the mesh. We sample ~200 vertices and compare each `(vertex − centroid) · normal`; if a majority are negative, the winding is reversed. Fix: swap the 2nd and 3rd index of every triangle, then recompute normals. Auto-handles any future model with bad winding without hardcoding per-model flips.
    4. **Spherical UVs** generated from each vertex's direction relative to the geometry center, then a final recenter + uniform rescale so the longest axis equals `data.size` — bunny (mm) and teapot (tens of units) frame near the primitives.
 
-   Always emitted (even for primitive previews) — inert if no entity attaches `fit-bounds="..."`. (The standalone export pipeline `tslToAFrame.ts` only supports primitives — OBJ geometries are not threaded through and would fall back to sphere if they were.)
+   Always emitted (even for primitive previews) — inert if no entity attaches `fit-bounds="..."`.
 5. **Lighting**: `studio` (4-light three-point rig), `moon` (single cool directional + faint ambient), or `laboratory` (white ambient only).
 6. **Per-geometry rotation**: `plane` → `0 0 0` (faces camera); `bunny` → `0 25 0` (upright); `teapot` → `15 35 0` (slight tilt to read the spout/handle); other primitives → `45 45 0`.
 7. **Animation**: Y-axis turntable (`0 360 0`) for sphere/cube/teapot/bunny, Z-axis spin (`0 0 360`) for plane. The shaded entity is wrapped in a **spin parent** (`id="spin-parent"`) that owns the `animation` attribute; the **child** (`id="preview-entity"`) carries the static tilt (`rotationAttr`) and the shader. Splitting the two is what keeps the loop seamless: if the spin animation lived on the same entity as the tilt, A-Frame would tween componentwise from the current value (e.g. `45 45 0`) to `to` (`0 360 0`), gradually flattening the X tilt and only spinning Y by `+315°` before snapping back to the start on every loop. With the parent/child split, the parent has no tilt of its own so its local Y/Z is the world Y/Z. When `initialRotation` is provided, the animation's `from` and `to` are offset by the saved angle (normalized to `[0, 360)`) so the spin continues from where it was; in paused mode, a static `rotation` attribute is set instead. The `id="preview-entity"` stays on the child since that's where the shader component lives (the bridge looks it up by id) and where `fit-bounds` needs the OBJ entity for `model-loaded`.
@@ -399,7 +386,7 @@ Use case: `Position (world) → distance(_, Camera Position) → Greater Than (_
 
 ### Logic Nodes
 
-`greaterThan`, `lessThan`, `equal` are regular two-input shader nodes (`category: 'logic'`, color `#7E57C2`, GPU cost 1). Both inputs declared as `'any'` — they broadcast like the arithmetic nodes. Output is `'any'` too; the cpuEvaluator emits 0/1 per channel for visualization, and `evaluateNodeRange` reports `[0, 1]` per channel so the EdgeInfoCard can show meaningful bounds. graphToCode emits them via the generic-call branch (no special handling needed); graphToTSLNodes has factories that just call the imported `greaterThan`/`lessThan`/`equal`. Designed to feed the Output node's `discard` port and the `select()` `condition` input.
+`greaterThan`, `lessThan`, `equal` are regular two-input shader nodes (`category: 'logic'`, color `#7E57C2`, GPU cost 1). Both inputs declared as `'any'` — they broadcast like the arithmetic nodes. Output is `'any'` too; the cpuEvaluator emits 0/1 per channel for visualization, and `evaluateNodeRange` reports `[0, 1]` per channel so the EdgeInfoCard can show meaningful bounds. graphToCode emits them via the generic-call branch (no special handling needed). Designed to feed the Output node's `discard` port and the `select()` `condition` input.
 
 ### MaterialX Noise Nodes
 
@@ -412,7 +399,7 @@ Use case: `Position (world) → distance(_, Camera Position) → Greater Than (_
   - `cellNoise` → `mx_cell_noise_float`
   - `voronoi` → `mx_worley_noise_float`, `voronoiVec2` → `mx_worley_noise_vec2`, `voronoiVec3` → `mx_worley_noise_vec3`
 - **Code generation** ([graphToCode.ts](src/engine/graphToCode.ts)): Dedicated `def.category === 'noise'` branch placed **before** the generic `inputs.length === 0 && defaultValues` branch (otherwise the generic branch would silently emit `mx_noise_float(positionGeometry)` and drop `scale`). Resolves `pos` from the exposed-port edge or stored value (default `positionGeometry`), then chains scale via `pos.mul(scale)` only when `scale !== 1`. Emits `const noise1 = mx_noise_float(positionGeometry.mul(2.5));` and imports `positionGeometry` automatically.
-- **Live compilation** ([graphToTSLNodes.ts](src/engine/graphToTSLNodes.ts)): Per-variant factories — `(inputs, values) => mx_noise_float(pos.mul(s))` etc. — read `inputs.pos` (or default `positionGeometry`) and `values.scale`.
+- **Live preview**: runs the generated TSL through the iframe pipeline (`graphToCode` → `tslToPreviewHTML` → `convertToShaderModule`), so the emitted `mx_noise_float(positionGeometry.mul(scale))` is what executes in the sandboxed preview.
 - **CPU thumbnails** ([noisePreview.ts](src/utils/noisePreview.ts)): `perlin2D`, `fbm2D`, `cellNoise2D`, `voronoi2D` — perlin/fBm output `~[-1,1]` is remapped to `[0,1]` for display. PreviewNode's `NOISE_TYPES` set must include all 8 variants for the canvas to render.
 - **Range eval**: All variants have a stable `[0..1]` range entry in `evaluateNodeRange` (perlin/fBm display-remapped, cell/voronoi naturally 0..1).
 
@@ -451,7 +438,6 @@ Combines two values into a higher-dimensional vector:
 - **Output**: one `any` port
 - **Shape-aware code generation**: The emitted constructor is chosen dynamically from the sum of the input component counts (computed via `getComponentCount` in [cpuEvaluator.ts](src/engine/cpuEvaluator.ts) — which falls back to `evaluateNodeOutput(source, nodes, edges, 0).length`). 2 → `vec2(a,b)`, 3 → `vec3(a,b)`, 4 → `vec4(a,b)`. Unconnected inputs count as 1. Total is clamped to `[2,4]`. This matters for chains like `append(vec2, float)` which must become `vec3` — previously they were truncated to `vec2` and lost the trailing channel, producing the wrong shader output on the GPU.
 - **Code parsing**: `vec2(ref1, ref2)` where at least one arg is a variable reference or member expression creates an `append` node (not a `vec2` type constructor). Literal-only `vec2(1, 2)` still creates a `vec2` type node. (vec3/vec4 parsing of append is handled symmetrically in [codeToGraph.ts](src/engine/codeToGraph.ts))
-- **TSL compilation** ([graphToTSLNodes.ts](src/engine/graphToTSLNodes.ts)): Before invoking the factory, the loop computes `_appendSize` from `getComponentCount` on each input edge and stashes it into the `values` object. The append factory reads `values._appendSize` and picks `tslVec2` / `vec3` / `tslVec4` accordingly.
 - **CPU evaluation**: Concatenates channel arrays (`[...a, ...b]`) — e.g., float+float→vec2, vec2+float→vec3
 - **Use case**: Convert UV (vec2) to vec3 for noise `pos` input by appending a Z component, or pack arbitrary scalars into a vector
 - **Searchable**: by "append", "combine", or "join"
@@ -502,7 +488,7 @@ Adjustable float value with a visual range slider and configurable min/max bound
 - **codeToGraph parse** ([codeToGraph.ts](src/engine/codeToGraph.ts)): an `ExpressionStatement` visitor catches bare `Discard(arg);` calls and buffers the AST argument in `pendingDiscardArg`. The output node may not exist yet (it's created lazily by `ReturnStatement` / `output =` or by the no-output fallback), so wiring is deferred. After traversal completes, the buffered arg is resolved via `resolveReturnSource()` (handles Identifier / MemberExpression / CallExpression — same paths as a return value) and a typed edge is pushed into `output.discard`. The auto-expose pass in `useSyncEngine` then adds `'discard'` to `exposedPorts` because it has an incoming edge, so the toggle reflects the wired state without a manual checkbox poke.
 - **Module-emit Fn re-wrap** (important): `Discard()` in TSL is `select(cond, expression('discard')).toStack()` — `.toStack()` only attaches to a live TSL execution stack, which exists inside an `Fn(() => …)` body. Both `convertToShaderModule()` in [tslToPreviewHTML.ts](src/engine/tslToPreviewHTML.ts) and [tslToShaderModule.ts](src/engine/tslToShaderModule.ts) unwrap the canonical `Fn(() => { … })` into a plain `function(params) { … }` so they can rewrite `uniform()` calls into `params.X` references. That unwrap destroys the stack — a bare `Discard(cond);` inside the resulting plain function becomes a silent no-op and live uniform changes can't move the discard threshold. To fix this, both emitters split bare `Discard(cond);` lines out of the body, build a small wrapper `Fn` immediately before the return, and route the color channel through it (object API) so the discard runs inside an active Fn stack and inlines into the compiled fragment shader. `Fn` is re-added to the `three/tsl` imports when this rewrite fires. Single-value `return colorVar;` shapes are promoted to object API (`return { colorNode: __pixel(...), … };`) when Discard is present.
   - **Why parameters, not closures**: the preview iframe runs Three.js r173 (bundled inside `aframe-171-a-0.1.min.js`), and in r173 an `Fn` invoked at module scope doesn't reliably wire closure-captured derived nodes (the upstream color chain and the condition node) into the compiled function body — `return mix1` resolves to a default and the mesh paints solid red. The emitter therefore passes every node the wrapper needs as explicit `Fn` parameters: `const __pixel = Fn(([__c0, __color]) => { Discard(__c0); return __color; })` invoked as `__pixel(condNode, colorNode)`. Upstream defs still live in the outer plain function so they're built once at material-setup time; only their `node` references are threaded through the call. This compiles correctly in both r173 (iframe) and r182 (node_modules).
-- **Live preview**: works because the iframe path runs the generated TSL code through `convertToShaderModule()`, which now applies the Fn re-wrap. The standalone `compileGraphToTSL` factory map intentionally has no discard handler — it returns channel nodes for direct property assignment, not an `Fn` body, so there's no statement context to inject `Discard` into.
+- **Live preview**: works because the iframe path runs the generated TSL code through `convertToShaderModule()`, which now applies the Fn re-wrap.
 - **Round-trip**: graph → code → graph preserves the discard wiring through the pending-arg + auto-expose dance. Toggle the port off and back on in settings without losing the edge by using "Save Code" (Ctrl+S) round-trips.
 
 ### React Flow Node Types
@@ -551,7 +537,7 @@ The asset browser is a horizontal scrollable drawer at the bottom of the node ed
 
 | Flow Type | Renderer | Visual |
 |-----------|----------|--------|
-| `'shader'` | ShaderCardContent | Cost header + small glyph icon (glyph nodes) + port rows + fake handle dots |
+| `'shader'` | ShaderCardContent | Exact inert replica of the live node — same classes/widgets (real DragNumberInput, live handle geometry) **incl. all designer overrides** (operator layout, width/height, justify, text scale, moved sockets); 1:1 proportions (`--exact` opts out of card size overrides) |
 | `'mathPreview'` | MathCardContent | Header + 72x72 waveform canvas + input/output dots |
 | `'preview'` (noise) | NoiseCardContent | Header + 96x96 pixelated CPU noise canvas + output dot |
 | `'clock'` | ClockCardContent | Header + 56x56 circular clock face + output dot |
@@ -613,7 +599,7 @@ CPU-side evaluator that walks the node graph and computes values using JS math e
 #### Static shape inference
 
 - **`getNodeOutputShape(nodeId, nodes, edges)`** → `number` (1–4). Walks the graph using port type info and broadcast rules to compute the *expected* channel count even when eval returns null. Has its own `visited` set for cycle protection. Concrete output port types (vec2/vec3/vec4/color/float/int) win immediately; for `'any'` outputs it sums input shapes for `append` and takes the max otherwise (broadcast rule: vec3 + scalar = vec3).
-- **`getComponentCount(nodeId, nodes, edges)`** → `number` (1–4). Tries `evaluateNodeOutput` first; falls back to `getNodeOutputShape` when eval returns null. Used by [graphToCode.ts](src/engine/graphToCode.ts) and [graphToTSLNodes.ts](src/engine/graphToTSLNodes.ts) to pick the right vector constructor for shape-dependent nodes like `append`.
+- **`getComponentCount(nodeId, nodes, edges)`** → `number` (1–4). Tries `evaluateNodeOutput` first; falls back to `getNodeOutputShape` when eval returns null. Used by [graphToCode.ts](src/engine/graphToCode.ts) to pick the right vector constructor for shape-dependent nodes like `append`.
 
 #### Range evaluation
 
@@ -833,7 +819,7 @@ Right-click menu for `'group'` nodes:
 
 ## Groups (GroupNode.tsx + store)
 
-Selection groups are first-class React Flow nodes (`type: 'group'`) that own member nodes via `parentId`. They have no registry entry, no inputs/outputs while expanded, and no shader semantics — `graphToCode`/`graphToTSLNodes`/`cpuEvaluator` ignore the *node* entirely, but they call `unwrapCollapsedGroupEdges()` (see below) at their entry to translate any visually-rewritten boundary edges back to their real child endpoints, so the group's collapse state never affects compiled output.
+Selection groups are first-class React Flow nodes (`type: 'group'`) that own member nodes via `parentId`. They have no registry entry, no inputs/outputs while expanded, and no shader semantics — `graphToCode`/`cpuEvaluator` ignore the *node* entirely, but they call `unwrapCollapsedGroupEdges()` (see below) at their entry to translate any visually-rewritten boundary edges back to their real child endpoints, so the group's collapse state never affects compiled output.
 
 ### Lifecycle
 
@@ -937,13 +923,11 @@ The fix in both nodes is a `useUpdateNodeInternals(id)` effect keyed on the join
 
 ### VALID_SWIZZLE
 
-Shared constant exported from `graphToCode.ts`, imported by `graphToTSLNodes.ts` and `codeToGraph.ts` (for the member-expression → split-node pattern). Contains `{'x', 'y', 'z', 'w'}` for split node swizzle validation.
+Shared constant exported from `graphToCode.ts`, imported by `codeToGraph.ts` (for the member-expression → split-node pattern). Contains `{'x', 'y', 'z', 'w'}` for split node swizzle validation.
 
 ### Three.js TSL Imports Used
 
-**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, positionLocal, positionWorld, positionView, positionWorldDirection, positionViewDirection, cameraPosition, cameraNear, cameraFar, normalLocal, tangentLocal, time, screenUV, remap, select, greaterThan, lessThan, equal, Discard, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. *(`hsl` and `toHsl` are emitted as module-local `Fn` helpers, not imported — r173's `three/tsl` does not export them. `Discard` is added to imports only when the Output node has a wired `discard` port.)*
-
-**Live compilation** (`graphToTSLNodes.ts`): float, vec2, vec3, vec4, color, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, remap, select, greaterThan, lessThan, equal, normalize, length, distance, dot, cross, positionGeometry, positionLocal, positionWorld, positionView, positionWorldDirection, positionViewDirection, cameraPosition, cameraNear, cameraFar, normalLocal, tangentLocal, time, screenUV, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. The `hsl` and `toHsl` factories build the same branchless formula in TSL node form so live preview matches generated-code output pixel-for-pixel. **`Discard` is intentionally absent**: `compileGraphToTSL` returns channel nodes for direct material-property assignment (`material.colorNode = …`), not an `Fn` body — there's no statement context to inject `Discard()` into. The discard path is generated-code-only; the live iframe preview already goes through generated TSL so it covers discard correctly.
+**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, positionLocal, positionWorld, positionView, positionWorldDirection, positionViewDirection, cameraPosition, cameraNear, cameraFar, normalLocal, tangentLocal, time, screenUV, remap, select, greaterThan, lessThan, equal, Discard, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. *(`hsl` and `toHsl` are emitted as module-local `Fn` helpers, not imported — r173's `three/tsl` does not export them. `Discard` is added to imports only when the Output node has a wired `discard` port.)* This generated TSL is what runs in the live preview (via the iframe pipeline), so live preview and generated code stay pixel-for-pixel identical, including the discard path.
 
 ### Persistence (localStorage)
 

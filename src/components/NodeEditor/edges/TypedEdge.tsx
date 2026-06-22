@@ -159,10 +159,15 @@ export function TypedEdge({
   //    downstream of a procedural texture (perlinNoise → sub → ...): eval returns null because
   //    the texture is unevaluable, but the static walker still knows sub's output is vec3 (color).
   // Taking max means each path catches the gaps of the other.
-  const evaluated = evaluateNodeOutput(source, nodes, edges, 0);
-  const evalLen = evaluated?.length ?? 0;
-  const shapeLen = getNodeOutputShape(source, nodes, edges);
-  const count = Math.min(Math.max(evalLen, shapeLen, 1), 4);
+  // Memoized on [source, nodes, edges] so the two full CPU graph evaluations
+  // (each O(N+E) with an upstream walk) don't re-run on re-renders that aren't
+  // graph changes — e.g. selecting this edge or changing the canvas bg color.
+  const count = useMemo(() => {
+    const evaluated = evaluateNodeOutput(source, nodes, edges, 0);
+    const evalLen = evaluated?.length ?? 0;
+    const shapeLen = getNodeOutputShape(source, nodes, edges);
+    return Math.min(Math.max(evalLen, shapeLen, 1), 4);
+  }, [source, nodes, edges]);
   // 1-channel edges flip black ↔ white so they remain visible against the
   // user-picked canvas background. Multi-channel edges keep their RGB(A)
   // colors — those already read against any background.

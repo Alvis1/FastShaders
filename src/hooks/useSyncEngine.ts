@@ -6,6 +6,7 @@ import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import complexityData from '@/registry/complexity.json';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
+import { getNodeExposedPorts } from '@/types';
 import type { AppNode } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
 
@@ -251,7 +252,7 @@ export function useSyncEngine() {
             }
             if (connectedPorts.size === 0) continue;
 
-            const current = new Set<string>((node.data as Record<string, unknown>).exposedPorts as string[] ?? []);
+            const current = new Set<string>(getNodeExposedPorts(node));
             let changed = false;
             for (const port of connectedPorts) {
               if (!current.has(port)) {
@@ -298,14 +299,27 @@ export function useSyncEngine() {
 
     let total = 0;
     if (outputNode) {
+      // Reverse-BFS from the output over an incoming-edge adjacency map built
+      // once (O(E)); an index pointer instead of Array.shift() keeps the walk
+      // O(V+E) rather than O(V² + V·E). This effect re-runs on every drag
+      // frame (nodes identity changes), so the cheaper traversal matters.
+      const incoming = new Map<string, string[]>();
+      for (const e of edges) {
+        const list = incoming.get(e.target);
+        if (list) list.push(e.source);
+        else incoming.set(e.target, [e.source]);
+      }
       const visited = new Set<string>();
       const queue = [outputNode.id];
-      while (queue.length > 0) {
-        const id = queue.shift()!;
+      for (let head = 0; head < queue.length; head++) {
+        const id = queue[head];
         if (visited.has(id)) continue;
         visited.add(id);
-        for (const e of edges) {
-          if (e.target === id && !visited.has(e.source)) queue.push(e.source);
+        const sources = incoming.get(id);
+        if (sources) {
+          for (const src of sources) {
+            if (!visited.has(src)) queue.push(src);
+          }
         }
       }
       for (const node of nodes) {

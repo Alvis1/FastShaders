@@ -15,30 +15,31 @@
   pointer-events: none;
 }
 
-/* Override node-base sizes for larger preview cards */
-.node-preview-card .node-base {
+/* Override node-base sizes for larger preview cards — EXCEPT the ShaderNode
+   replica (`--exact`), which must keep 1:1 live proportions (designer parity). */
+.node-preview-card .node-base:not(.node-preview-card__node--exact) {
   min-width: 100px;
 }
 
-.node-preview-card .node-base__header {
+.node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__header {
   padding: 2px 8px;
 }
 
-.node-preview-card .node-base__title {
+.node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__title {
   font-size: 12px;
 }
 
-.node-preview-card .node-base__cost-badge {
+.node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__cost-badge {
   font-size: 14px;
   top: -16px;
 }
 
-.node-preview-card .node-base__row {
+.node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__row {
   min-height: 22px;
   padding: 1px 8px;
 }
 
-.node-preview-card .node-base__port-label {
+.node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__port-label {
   font-size: 11px;
 }
 
@@ -94,7 +95,8 @@
 }
 
 .node-preview-card__value {
-  font-size: 10px;
+  /* follows the per-node designer text scale, like live node values */
+  font-size: calc(10px * var(--node-text-scale, 1));
   font-family: var(--font-mono);
   color: rgba(0, 0, 0, 0.5);
   white-space: nowrap;

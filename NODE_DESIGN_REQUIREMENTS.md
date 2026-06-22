@@ -17,7 +17,19 @@ Implemented in: `src/components/NodeEditor/nodes/ShaderNode.tsx`,
 3. **Border** is `1.5px` in the node's **category color** (`CAT_HEX[category]`).
 4. **Cost "points" badge** stays centered *above* the node (`node-base__cost-badge`).
 5. **Sockets** are colored by **data type** (`getTypeColor`).
-6. Asset-browser cards (`NodePreviewCard`) mirror this same anatomy.
+6. Asset-browser cards (`NodePreviewCard`) mirror this same anatomy **including
+   all per-node designer overrides**: operator layout, exact width/height,
+   justify, text scale, glyph scale/nudge, and moved (detached) sockets — as
+   **exact, fully inert static replicas**: same classes and widgets as the live
+   node (real `DragNumberInput`, live handle geometry), default values, no port
+   labels (the live no-label rule), and none of the enlarged card sizing (the
+   `--exact` modifier opts the replica out of `.node-preview-card` size
+   overrides). Cards are scaled so every node's **heading reads at the same
+   visual size** (`FitNodeHeading`: factor = 19.5px / (9px × text scale × cost
+   scale)): widths/heights vary with each node's true proportions while the
+   titles match; uniform scaling keeps the replica an undistorted miniature.
+   Width (300px) / height (270px) caps keep extreme designs inside the drawer
+   (those render with a smaller heading, still proportional).
 
 ## Sockets
 
@@ -154,7 +166,9 @@ socket existence/type, or live-canvas behavior).
     textarea and **replaceable by drag-and-dropping an `.svg` file** (auto-fitted to
     the `0 0 56 56` canvas) or via an Upload button. Modal live-previews the art with
     a toggleable 56-grid/center-guide overlay, validates the SVG (parse errors block
-    Apply), and offers Copy SVG / restore Built-in / Clear. **Points are editable
+    Apply), and offers Copy SVG / restore Built-in / Clear, plus a **"load art
+    from…" dropdown** that pulls any existing glyph into the editor — saved/session
+    custom designs and every built-in — without committing until Apply. **Points are editable
     directly on the preview** (toggleable): draggable handles for line endpoints,
     circle/ellipse centers + radius handles, rect corners, polyline/polygon
     vertices, text anchors, and path command points (M/L/H/V/C/S/Q/T/A, absolute

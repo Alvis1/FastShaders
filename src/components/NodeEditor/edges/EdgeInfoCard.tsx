@@ -44,13 +44,18 @@ export function EdgeInfoCard({
 
   const isTimeDriven = hasTimeUpstream(sourceId, nodes, edges);
 
+  // Static (non-time-driven) range: recompute once whenever the graph changes.
   useEffect(() => {
-    const r = evaluateNodeRange(sourceId, nodes, edges, 0);
-    if (!isTimeDriven) {
-      setRange(r);
-      return;
-    }
+    if (isTimeDriven) return;
+    setRange(evaluateNodeRange(sourceId, nodes, edges, 0));
+  }, [sourceId, nodes, edges, isTimeDriven]);
 
+  // Animated (time-driven) range: the rAF loop reads fresh graph state via
+  // nodesRef/edgesRef, so its deps EXCLUDE nodes/edges — listing them would
+  // tear down and re-create the loop on every unrelated drag frame (new array
+  // identity). Only sourceId / isTimeDriven actually change what to animate.
+  useEffect(() => {
+    if (!isTimeDriven) return;
     let rafId: number;
     let startTime: number | null = null;
 
@@ -64,7 +69,7 @@ export function EdgeInfoCard({
 
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, [sourceId, nodes, edges, isTimeDriven]);
+  }, [sourceId, isTimeDriven]);
 
   if (!sourceNode || !targetNode) return null;
 

@@ -270,8 +270,13 @@ export const ShaderNode = memo(function ShaderNode({
   // multi-channel input) never stack. Sockets stay single — consistency rule.
   const inChannels = useMemo(() => {
     let widest = 1;
+    // channelCount() runs a full upstream CPU eval, so evaluate each distinct
+    // source at most once (a node can have several edges from one source).
+    const seen = new Set<string>();
     for (const e of edges) {
-      if (e.target === id) widest = Math.max(widest, channelCount(e.source, nodes, edges));
+      if (e.target !== id || seen.has(e.source)) continue;
+      seen.add(e.source);
+      widest = Math.max(widest, channelCount(e.source, nodes, edges));
     }
     return Math.min(widest, 4);
   }, [id, nodes, edges]);

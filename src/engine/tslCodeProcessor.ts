@@ -1,5 +1,5 @@
 /**
- * Shared TSL code processing utilities used by both tslToPreviewHTML and tslToAFrame.
+ * Shared TSL code processing utilities used by tslToPreviewHTML and tslToShaderModule.
  * Handles import extraction, TDZ fix, body parsing, and channel resolution.
  */
 

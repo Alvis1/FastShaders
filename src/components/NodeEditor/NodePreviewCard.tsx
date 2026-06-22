@@ -1,11 +1,12 @@
-import { memo, useEffect, useRef, useCallback } from 'react';
+import { memo, useEffect, useRef, useCallback, useState, type CSSProperties } from 'react';
 import type { NodeDefinition, NodeCategory } from '@/types';
 import { startTileDrag } from './tileDrag';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, getContrastColor, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { buildRows } from './nodes/ShaderNode';
-import { hasNodeGlyph, NodeGlyph } from './nodes/glyphs/NodeGlyph';
+import { DragNumberInput } from './inputs/DragNumberInput';
+import { hasNodeGlyph, NodeGlyph, nodeBox, nodeSockets, nodeTextScale, nodeJustify, nodeScale } from './nodes/glyphs/NodeGlyph';
 import { renderMathPreview } from '@/utils/mathPreview';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
 import complexityData from '@/registry/complexity.json';
@@ -27,80 +28,246 @@ interface ContentProps {
 }
 
 /* ============================================================
- * ShaderCardContent — generic node (header + port rows + fake handles)
+ * FitNodeHeading — uniform heading size, true proportions
+ * ============================================================ */
+
+/** Scales the exact ShaderNode replica uniformly so every asset card shows
+ *  the HEADING at the same visual font size: the factor normalizes the
+ *  title's effective size (9px x node text-scale x cost-scale) to a common
+ *  target, so node widths/heights vary with their true proportions while the
+ *  headers all read identically. Width/height caps keep extreme designs
+ *  inside the drawer (those render with a smaller heading, still
+ *  proportional). The scale is uniform — an undistorted miniature. */
+const CARD_HEADING_PX = 19.5; // target visual title size (pre tile zoom)
+const CARD_NODE_MAX_W = 300;
+const CARD_NODE_MAX_H = 270;
+function FitNodeHeading({ visualScale, textScale, children }: { visualScale: number; textScale: number; children: React.ReactNode }) {
+  const innerRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = innerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.offsetWidth, h = el.offsetHeight;
+      setSize((s) => (s && s.w === w && s.h === h ? s : { w, h }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  // visual size includes the replica's own cost-scale transform
+  const vw = size ? Math.max(1, size.w * visualScale) : 0;
+  const vh = size ? Math.max(1, size.h * visualScale) : 0;
+  // heading-normalizing factor, clamped by the drawer-safety caps
+  let f = CARD_HEADING_PX / (9 * Math.max(0.1, textScale) * Math.max(0.1, visualScale));
+  if (vw) f = Math.min(f, CARD_NODE_MAX_W / vw);
+  if (vh) f = Math.min(f, CARD_NODE_MAX_H / vh);
+  return (
+    <div style={{ width: vw ? vw * f : undefined, height: vh ? vh * f : undefined, overflow: 'visible' }}>
+      <div ref={innerRef} style={{ width: 'fit-content', transform: `scale(${f})`, transformOrigin: 'top left' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+ * ShaderCardContent — EXACT static replica of the live ShaderNode
  * ============================================================ */
 
 function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
-  const rows = buildRows(def);
+  // EXACT static replica of the live ShaderNode: same classes, same widgets
+  // (real DragNumberInput, real handle styling via the react-flow/typed-handle
+  // classes), same structure, and all per-node designer overrides (operator
+  // layout, width/height, justify, text scale, glyph scale/nudge, moved
+  // sockets). Rendered inert — the card wrapper has pointer-events: none.
+  const box = nodeBox(def.type);
+  const textScale = nodeTextScale(def.type);
+  const sockets = nodeSockets(def.type);
+  const justify = nodeJustify(def.type);
+  const gScale = nodeScale(def.type);
+  const dv = def.defaultValues ?? {};
 
-  return (
-    <div
-      className="node-base node-preview-card__node"
-      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
-    >
+  // Mirrors ShaderNode's wrapper (cost scale) + card (border/width/text) split.
+  const wrapStyle: CSSProperties = {
+    position: 'relative',
+    width: 'fit-content',
+    transform: `scale(${costScale})`,
+    transformOrigin: 'top left',
+  };
+  const nodeStyle: CSSProperties = {
+    background: 'var(--bg-panel)',
+    border: `1.5px solid ${catColor}`,
+  };
+  if (box.width) {
+    nodeStyle.width = box.width;
+    nodeStyle.minWidth = box.width;
+  }
+  if (textScale !== 1) (nodeStyle as Record<string, string | number>)['--node-text-scale'] = textScale;
+
+  const calcTop = (off: number) => `calc(50% ${off < 0 ? '-' : '+'} ${Math.abs(off)}px)`;
+  const num = (k: string) => Number(dv[k] ?? 0);
+  const noop = () => {};
+
+  /** Static socket dot with the live handle's exact classes/geometry. */
+  const StaticHandle = ({ side, dataType, label, style }: {
+    side: 'left' | 'right';
+    dataType: Parameters<typeof getTypeColor>[0];
+    label?: string;
+    style?: CSSProperties;
+  }) => (
+    <span
+      className={`react-flow__handle react-flow__handle-${side} typed-handle`}
+      title={label}
+      style={{ background: getTypeColor(dataType), ...style }}
+    />
+  );
+
+  const header = (
+    <>
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
-
       <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
+        <span className="node-base__title" style={{ color: headerTextColor }}>
+          {def.type === 'property_float' ? String(dv.name ?? def.label) : def.label}
+        </span>
       </div>
+    </>
+  );
 
-      {hasNodeGlyph(def.type) && (
-        <div className="shader-node__glyph">
-          <NodeGlyph type={def.type} value={Number(def.defaultValues?.value ?? 0)} size={30} />
-        </div>
-      )}
-
-      <div className="node-base__body">
-        {rows.map((row, i) => (
-          <div key={i} className="node-base__row node-preview-card__row">
-            <div className="node-preview-card__left">
-              {row.input && (
-                <>
-                  <span
-                    className="node-preview-card__handle node-preview-card__handle--left"
-                    style={{ background: getTypeColor(row.input.dataType) }}
-                  />
-                  <span className="node-base__port-label">{row.input.label}</span>
-                </>
-              )}
-              {row.settingKey && row.settingType === 'number' && (
-                <span className="node-preview-card__value">
-                  {def.defaultValues?.[row.settingKey] ?? 0}
-                </span>
-              )}
-              {row.settingKey && row.settingType === 'color' && (
-                <span
-                  className="node-preview-card__color-swatch"
-                  style={{ background: String(def.defaultValues?.[row.settingKey] ?? '#ff0000') }}
-                />
-              )}
-              {row.settingType === 'vec3' && row.vecBaseKey && (
-                <span className="node-preview-card__value">
-                  {['x', 'y', 'z'].map((a) => def.defaultValues?.[`${row.vecBaseKey}_${a}`] ?? 0).join(', ')}
-                </span>
-              )}
-              {row.settingType === 'vec2' && row.vecBaseKey && (
-                <span className="node-preview-card__value">
-                  {['x', 'y'].map((a) => def.defaultValues?.[`${row.vecBaseKey}_${a}`] ?? 0).join(', ')}
-                </span>
-              )}
+  // ── Operator layout (2-input glyph nodes) ──
+  if (hasNodeGlyph(def.type) && def.inputs.length === 2) {
+    const BODY_H = box.height ?? Math.max(52, Math.round(34 * gScale) + 10);
+    const DEF_OFF = [-12.5, 12.5];
+    const offOf = (id: string, i: number) => sockets[id] ?? DEF_OFF[i] ?? 0;
+    const outOff = sockets['out'] ?? 0;
+    return (
+      <div className="node-preview-card__node" style={wrapStyle}>
+        <div className="node-base node-preview-card__node--exact" style={nodeStyle}>
+          {header}
+          <div className="shader-node__op" style={{ height: BODY_H, ...(box.width ? { minWidth: 0 } : null) }}>
+            <div className="shader-node__op-glyph">
+              <NodeGlyph type={def.type} value={num('value')} size={34} />
             </div>
-
-            <div className="node-preview-card__right">
-              {row.output && (
-                <>
-                  <span className="node-base__port-label">{row.output.label}</span>
-                  <span
-                    className="node-preview-card__handle node-preview-card__handle--right"
-                    style={{ background: getTypeColor(row.output.dataType) }}
-                  />
-                </>
-              )}
-            </div>
+            {def.inputs.map((inp, i) => (
+              <div
+                key={`v-${inp.id}`}
+                className={`shader-node__op-val shader-node__op-val--${justify}`}
+                style={{ top: BODY_H / 2 + offOf(inp.id, i) }}
+              >
+                <DragNumberInput compact value={num(inp.id)} onChange={noop} />
+              </div>
+            ))}
+            {def.inputs.map((inp, i) => (
+              <StaticHandle key={`h-${inp.id}`} side="left" dataType={inp.dataType} label={inp.label}
+                style={{ top: `${BODY_H / 2 + offOf(inp.id, i)}px` }} />
+            ))}
+            {def.outputs[0] && (
+              <StaticHandle side="right" dataType={def.outputs[0].dataType} label={def.outputs[0].label}
+                style={{ top: `${BODY_H / 2 + outOff}px` }} />
+            )}
           </div>
-        ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Rows layout (ShaderNode's rows branch with every input unconnected) ──
+  const rows = buildRows(def);
+  const outMoved = sockets['out'] != null && !!def.outputs[0];
+  return (
+    <div className="node-preview-card__node" style={wrapStyle}>
+      <div className="node-base node-preview-card__node--exact" style={nodeStyle}>
+        {header}
+        <div style={{ position: 'relative', ...(box.height ? { height: box.height } : null) }}>
+          {hasNodeGlyph(def.type) && (
+            <div className="shader-node__glyph">
+              <NodeGlyph type={def.type} value={num('value')} size={30} />
+            </div>
+          )}
+
+          <div className="node-base__body">
+            {rows.map((row, i) => {
+              const inputMoved = row.input ? sockets[row.input.id] != null : false;
+              const showInlineValue = row.input && !row.settingKey;
+              if (inputMoved) {
+                return (
+                  <div key={i} className="node-base__row shader-node__row">
+                    <div className="shader-node__left" />
+                    <div className="shader-node__right">
+                      {row.output && !(outMoved && row.output === def.outputs[0]) && (
+                        <StaticHandle side="right" dataType={row.output.dataType} label={row.output.label} />
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div key={i} className="node-base__row shader-node__row">
+                  <div className="shader-node__left">
+                    {row.input && (
+                      <StaticHandle side="left" dataType={row.input.dataType} label={row.input.label} />
+                    )}
+                    {def.type === 'slider' && row.settingKey === 'value' && (
+                      <input type="range" className="shader-node__slider nodrag"
+                        min={num('min')} max={Number(dv.max ?? 1)} step={0.01}
+                        defaultValue={Number(dv.value ?? 0.5)} readOnly />
+                    )}
+                    {row.settingKey && row.settingType === 'number' && !(def.type === 'slider' && row.settingKey === 'value') && (
+                      <DragNumberInput compact value={num(row.settingKey)} onChange={noop} />
+                    )}
+                    {row.settingKey && row.settingType === 'color' && (
+                      <input type="color" className="shader-node__input-color nodrag"
+                        defaultValue={String(dv[row.settingKey] ?? '#ff0000')} />
+                    )}
+                    {row.settingType === 'vec3' && row.vecBaseKey && (
+                      <span className="shader-node__vec-group">
+                        {['x', 'y', 'z'].map((a) => (
+                          <DragNumberInput key={a} compact value={num(`${row.vecBaseKey}_${a}`)} onChange={noop} />
+                        ))}
+                      </span>
+                    )}
+                    {row.settingType === 'vec2' && row.vecBaseKey && (
+                      <span className="shader-node__vec-group">
+                        {['x', 'y'].map((a) => (
+                          <DragNumberInput key={a} compact value={num(`${row.vecBaseKey}_${a}`)} onChange={noop} />
+                        ))}
+                      </span>
+                    )}
+                    {showInlineValue && (
+                      <DragNumberInput compact value={num(row.input!.id)} onChange={noop} />
+                    )}
+                  </div>
+                  <div className="shader-node__right">
+                    {row.output && !(outMoved && row.output === def.outputs[0]) && (
+                      <StaticHandle side="right" dataType={row.output.dataType} label={row.output.label} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Detached (designer-moved) inputs: value follows its socket */}
+          {def.inputs.map((inp) => {
+            const off = sockets[inp.id];
+            if (off == null) return null;
+            return (
+              <div key={`mv-${inp.id}`} style={{ display: 'contents' }}>
+                <div className={`shader-node__op-val shader-node__op-val--${justify}`} style={{ top: calcTop(off) }}>
+                  <DragNumberInput compact value={num(inp.id)} onChange={noop} />
+                </div>
+                <StaticHandle side="left" dataType={inp.dataType} label={inp.label} style={{ top: calcTop(off) }} />
+              </div>
+            );
+          })}
+          {outMoved && (
+            <StaticHandle side="right" dataType={def.outputs[0].dataType} label={def.outputs[0].label}
+              style={{ top: calcTop(sockets['out']) }} />
+          )}
+        </div>
       </div>
     </div>
   );
@@ -433,7 +600,7 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
       ) : def.type === 'slider' ? (
         <SliderCardContent {...shared} />
       ) : (
-        <ShaderCardContent {...shared} />
+        <FitNodeHeading visualScale={shared.costScale} textScale={nodeTextScale(def.type)}><ShaderCardContent {...shared} /></FitNodeHeading>
       )}
     </div>
   );
