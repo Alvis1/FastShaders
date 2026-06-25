@@ -4,6 +4,7 @@ import type { AppNode, AppEdge, NodeDefinition, GeneratedCode } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { getComponentCount } from './cpuEvaluator';
 import { topologicalSort } from './topologicalSort';
 
@@ -148,8 +149,7 @@ export function graphToCode(
     if (node.data.registryType === 'property_float') {
       const nodeValues = getNodeValues(node);
       const rawName = String(nodeValues.name ?? 'property1');
-      let baseName = rawName.replace(/[^a-zA-Z0-9_$]/g, '_').replace(/^(\d)/, '_$1');
-      if (!baseName) baseName = 'property1';
+      const baseName = sanitizeIdentifier(rawName);
 
       let name = baseName;
       let i = 1;

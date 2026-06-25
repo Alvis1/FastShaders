@@ -101,6 +101,8 @@ export function scriptToTSL(scriptCode: string): string {
   let skipSchema = false;
   let schemaBraces = 0;
   let skipNestedFn = 0;
+  let keepHelper = false;
+  let helperBraces = 0;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -152,6 +154,33 @@ export function scriptToTSL(scriptCode: string): string {
     // Pass through other imports
     if (/^\s*import\s/.test(trimmed)) {
       outLines.push(line);
+      continue;
+    }
+
+    // Preserve module-scope helper Fns (hsl/toHsl) emitted before the main
+    // shader. codeToGraph skips their *definition* (path.skip), but the editor
+    // code + live preview still need them present so the `hsl(...)` call
+    // resolves — dropping them would re-introduce the helper-drop bug on the
+    // .js → editor direction.
+    if (!insideFn && !keepHelper &&
+        /^\s*const\s+(hsl|toHsl)\s*=\s*Fn\(/.test(trimmed)) {
+      keepHelper = true;
+      helperBraces = 0;
+      for (const ch of line) {
+        if (ch === '{') helperBraces++;
+        if (ch === '}') helperBraces--;
+      }
+      outLines.push(line);
+      if (helperBraces <= 0) keepHelper = false;
+      continue;
+    }
+    if (keepHelper) {
+      for (const ch of line) {
+        if (ch === '{') helperBraces++;
+        if (ch === '}') helperBraces--;
+      }
+      outLines.push(line);
+      if (helperBraces <= 0) keepHelper = false;
       continue;
     }
 
@@ -330,6 +359,25 @@ function splitTopLevelArgs(s: string): string[] {
 }
 
 /**
+ * Given an index just past an opening `{`, return the index of its matching
+ * `}` (brace-balanced), or -1 if unbalanced. Shared by the Fn-unwrapping passes
+ * (`inlinePixelFn`, `inlineIIFEAssignments`) so they can't drift on how a block
+ * end is located.
+ */
+function findMatchingBrace(src: string, afterOpenBrace: number): number {
+  let depth = 1;
+  for (let i = afterOpenBrace; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
  * Reverse the emitter's param-passing discard wrapper:
  *
  *   const __pixel = Fn(([__c0, __c1, ..., __color]) => {
@@ -361,16 +409,8 @@ function inlinePixelFn(scriptCode: string): string {
 
   // Find the matching `}` of the arrow body.
   const bodyStart = head.index + head[0].length;
-  let depth = 1;
-  let i = bodyStart;
-  while (i < scriptCode.length && depth > 0) {
-    const ch = scriptCode[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') depth--;
-    i++;
-  }
-  if (depth !== 0) return scriptCode;
-  const braceEnd = i - 1;
+  const braceEnd = findMatchingBrace(scriptCode, bodyStart);
+  if (braceEnd === -1) return scriptCode;
 
   // After `}` expect `)` (closes the Fn call) then optional `;`.
   let p = braceEnd + 1;
@@ -456,16 +496,8 @@ function inlineIIFEAssignments(scriptCode: string): string {
     const bodyStart = m.index + m[0].length;
 
     // Find matching closing brace of the arrow body.
-    let depth = 1;
-    let i = bodyStart;
-    while (i < scriptCode.length && depth > 0) {
-      const ch = scriptCode[i];
-      if (ch === '{') depth++;
-      else if (ch === '}') depth--;
-      i++;
-    }
-    if (depth !== 0) continue;
-    const bodyEnd = i - 1;
+    const bodyEnd = findMatchingBrace(scriptCode, bodyStart);
+    if (bodyEnd === -1) continue;
     const body = scriptCode.slice(bodyStart, bodyEnd);
 
     // After the `}`, expect `)` closing the Fn call, optional `()` for IIFE,
