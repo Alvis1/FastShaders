@@ -3,6 +3,8 @@
  * Handles import extraction, TDZ fix, body parsing, and channel resolution.
  */
 
+import type { MaterialSettings } from '@/types';
+
 /** A-Frame geometry component strings with high segment counts for TSL effects */
 export const AFRAME_GEO: Record<string, string> = {
   sphere: 'primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64',
@@ -146,4 +148,194 @@ export function parseBody(
   }
 
   return { defLines, channels };
+}
+
+/** THREE.FrontSide=0, THREE.BackSide=1, THREE.DoubleSide=2 */
+export const SIDE_VALUES: Record<string, number> = {
+  front: 0,
+  back: 1,
+  double: 2,
+};
+
+export interface ShaderModuleProperty {
+  name: string;
+  defaultValue: number;
+}
+
+export interface BuildShaderModuleOptions {
+  materialSettings?: MaterialSettings;
+  /**
+   * Comment lines emitted above the import statements. The standalone `.js`
+   * export uses this for its usage header; the live preview omits it.
+   */
+  header?: string[];
+  /**
+   * Declared float properties. When provided (export), the schema uses each
+   * property's `defaultValue` and only `const NAME = uniform(V)` declarations
+   * whose name matches a property are rewritten to `const NAME = params.NAME`.
+   * When omitted (preview), every `uniform(V)` declaration is auto-detected and
+   * its literal `V` becomes the schema default.
+   */
+  properties?: ShaderModuleProperty[];
+}
+
+/**
+ * Convert Fn-wrapped editor TSL into a shaderloader-compatible ES module. This
+ * is the SINGLE source of truth shared by the live preview (tslToPreviewHTML)
+ * and the `.js` export (tslToShaderModule) — they must never diverge, because
+ * any divergence means the export ships a shader that differs from what the
+ * user previewed.
+ *
+ * The shaderloader calls the default export as a *plain function* (no active
+ * TSL stack) and assigns `material.colorNode = result.colorNode` directly, so
+ * two rules are non-negotiable and historically easy to break with ad-hoc
+ * per-line string surgery (which is exactly what produced the struct-as-
+ * colorNode export bug):
+ *
+ *   1. Object returns (`{ color, position, ... }`) MUST be parsed per channel.
+ *      `parseBody` matches the object-form return before the bare-value form so
+ *      a `{ ... }` literal is never swallowed whole into a single color slot —
+ *      assigning a struct to `colorNode` makes the renderer read uninitialised
+ *      memory (random color each reload) and drops every other channel.
+ *   2. `Discard()` needs an active stack, so the color channel is routed
+ *      through a tiny `__pixel` Fn. Its discard conditions and color node are
+ *      passed as explicit Fn *parameters*, never closure-captured: Three.js
+ *      r173 (where first diagnosed; the bundled A-Frame build is now r184) did not propagate closure-captured
+ *      derived nodes into an Fn body invoked from an outer plain function,
+ *      which would otherwise resolve the color to a default (solid red).
+ */
+export function buildShaderModule(
+  tslCode: string,
+  options: BuildShaderModuleOptions = {},
+): string {
+  const { materialSettings, header, properties } = options;
+
+  const { tslNames } = collectImports(tslCode, true);
+  const body = extractFnBody(tslCode, tslNames);
+  const processedBody = fixTDZ(body, tslNames);
+  const { defLines, channels } = parseBody(processedBody, tslNames);
+
+  // Ensure positionLocal (and normalLocal for normal-based displacement) are available.
+  const displacementMode = materialSettings?.displacementMode ?? 'normal';
+  if (channels.position) {
+    if (!tslNames.includes('positionLocal')) tslNames.push('positionLocal');
+    if (displacementMode === 'normal' && !tslNames.includes('normalLocal')) {
+      tslNames.push('normalLocal');
+    }
+  }
+
+  // --- Property uniforms → params + schema --------------------------------
+  //
+  // Rewriting `const X = uniform(N)` to `const X = params.X` (plus an explicit
+  // `schema`) makes the shaderloader create the uniforms up-front and pass them
+  // in, so the live overlay's `_propertyUniforms.X.value = …` reaches the
+  // material instead of mutating a throwaway anonymous uniform.
+  const explicit = !!(properties && properties.length > 0);
+  const propDefaults = new Map<string, number>(
+    (properties ?? []).map((p) => [p.name, p.defaultValue]),
+  );
+  const schemaEntries: Record<string, number> = {};
+  // Export mode declares the full schema up-front: a property node may exist
+  // without being wired into the output, so its `uniform()` line can be absent.
+  if (explicit) {
+    for (const p of properties!) schemaEntries[p.name] = p.defaultValue;
+  }
+  const uniformLineRe = /^(\s*)const\s+(\w+)\s*=\s*uniform\(\s*(-?\d+(?:\.\d+)?)\s*\)\s*;?\s*$/;
+  const rewrittenDefLines = defLines.map((line) => {
+    const m = line.match(uniformLineRe);
+    if (!m) return line;
+    const [, indent, name, rawVal] = m;
+    // Export: only convert uniforms that correspond to a declared property.
+    if (explicit && !propDefaults.has(name)) return line;
+    if (!explicit) {
+      const v = parseFloat(rawVal);
+      schemaEntries[name] = isNaN(v) ? 0 : v;
+    }
+    return `${indent}const ${name} = params.${name};`;
+  });
+  const hasParams = Object.keys(schemaEntries).length > 0;
+
+  // --- Pull Discard(...) out for the __pixel wrapper ----------------------
+  const discardLines: string[] = [];
+  const nonDiscardLines: string[] = [];
+  for (const line of rewrittenDefLines) {
+    if (/^\s*Discard\(/.test(line)) discardLines.push(line);
+    else nonDiscardLines.push(line);
+  }
+  const hasDiscard = discardLines.length > 0;
+  if (hasDiscard && !tslNames.includes('Fn')) tslNames.push('Fn');
+
+  const discardConds = discardLines
+    .map((l) => {
+      const m = l.match(/^\s*Discard\(\s*([\s\S]+?)\s*\)\s*;?\s*$/);
+      return m ? m[1].trim() : '';
+    })
+    .filter(Boolean);
+  const pixelCallArgs = hasDiscard
+    ? [...discardConds, channels.color ?? 'vec3(1, 0, 0)']
+    : [];
+
+  // --- Build the return object (node property names per channel) ----------
+  const returnProps: string[] = [];
+  for (const [ch, ref] of Object.entries(channels)) {
+    const prop = CHANNEL_TO_PROP[ch];
+    if (!prop) continue;
+    if (ch === 'position') {
+      const displacement = displacementMode === 'normal'
+        ? `normalLocal.mul(${ref})`
+        : ref;
+      returnProps.push(`${prop}: positionLocal.add(${displacement})`);
+    } else if (ch === 'color' && hasDiscard) {
+      returnProps.push(`${prop}: __pixel(${pixelCallArgs.join(', ')})`);
+    } else {
+      returnProps.push(`${prop}: ${ref}`);
+    }
+  }
+
+  if (materialSettings?.transparent) returnProps.push('transparent: true');
+  if (materialSettings?.side) {
+    returnProps.push(`side: ${SIDE_VALUES[materialSettings.side] ?? 0}`);
+  }
+  if (materialSettings?.alphaTest) {
+    returnProps.push(`alphaTest: ${materialSettings.alphaTest}`);
+  }
+
+  // --- The __pixel Fn: conditions + color as explicit params (see rule 2) -
+  const pixelFnLines: string[] = [];
+  if (hasDiscard) {
+    const fnParams = [...discardConds.map((_, i) => `__c${i}`), '__color'];
+    pixelFnLines.push(`  const __pixel = Fn(([${fnParams.join(', ')}]) => {`);
+    discardConds.forEach((_, i) => pixelFnLines.push(`    Discard(__c${i});`));
+    pixelFnLines.push('    return __color;');
+    pixelFnLines.push('  });');
+  }
+
+  // --- Explicit schema export so original defaults survive ----------------
+  const schemaLines: string[] = [];
+  if (hasParams) {
+    schemaLines.push('export const schema = {');
+    for (const [name, def] of Object.entries(schemaEntries)) {
+      schemaLines.push(`  ${name}: { type: 'number', default: ${def} },`);
+    }
+    schemaLines.push('};');
+    schemaLines.push('');
+  }
+
+  const imports = tslNames.length > 0
+    ? [`import { ${tslNames.join(', ')} } from 'three/tsl';`]
+    : [];
+
+  const lines = [
+    ...(header && header.length ? [...header, ''] : []),
+    ...imports,
+    '',
+    ...schemaLines,
+    `export default function(${hasParams ? 'params' : ''}) {`,
+    ...nonDiscardLines.map((l) => '  ' + l.trimStart()),
+    ...pixelFnLines,
+    `  return { ${returnProps.join(', ')} };`,
+    '}',
+  ];
+
+  return lines.join('\n') + '\n';
 }

@@ -28,9 +28,9 @@ ShaderCarousel/
 │   ├── bench-stats.js          # computeStats (IQR-filtered) + exportResults
 │   ├── bench-registry.js       # canonical corpus (baseline + presets + noises + saved)
 │   ├── bench-ui.js             # picker, settings, start gate, done popup, headset detect
-│   └── three/                  # Three.js WebGPU bundle (three.webgpu.js, three.tsl.js, three.core.js)
+│   └── three/                  # Three.js r184 WebGPU ESM (three.webgpu.js, three.tsl.js, three.core.js — regenerated from node_modules/three@0.184)
 ├── components/three/
-│   └── aframe-171-a-0.1.min.js # A-Frame 1.7 IIFE (only the InOut bench uses this)
+│   └── a-frame-180-a-01.min.js # A-Frame 1.8.0 IIFE, r184 WebGPU (synced from a-frame-shaderloader/js/ by fs-vendor-sync; only the InOut bench uses this)
 ├── sphere-mover.js             # A-Frame component — linear ping-pong z animation (InOut only)
 ├── bench-inout/                # immersive WebXR bench
 │   ├── index.html
@@ -59,7 +59,7 @@ button counts as a user-gesture origin for `sceneEl.enterVR()`.
 
 | Property | Value |
 |---|---|
-| Backend | A-Frame 1.7 → THREE.WebGLRenderer (only stable WebXR path on Quest 3 Browser today; WebGPU XR is not reliable on Quest yet) |
+| Backend | A-Frame 1.8.0 / Three.js r184 bundle, run on the WebGL backend (only stable WebXR path on Quest 3 Browser today; WebGPU XR is not reliable on Quest yet) |
 | Geometry | Inverted sphere (`THREE.BackSide`), radius 2.5, 64×32 segments |
 | Camera path | sphere-mover linear ping-pong on z (default 10 s cycle: z = −10 → 0 → −10) — the sphere envelops the viewer at z = 0 |
 | Timing | rAF delta inside a one-shot `bench-tick` A-Frame component → fires every render whether `requestAnimationFrame` (flat) or `xr.setAnimationLoop` (in-headset) is driving the loop |

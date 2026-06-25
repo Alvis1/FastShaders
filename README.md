@@ -21,13 +21,15 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 ### Using the shader module with a-frame-shaderloader
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/aframe-171-a-0.1.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/a-frame-shaderloader-0.3.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/a-frame-180-a-01.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/a-frame-shaderloader-0.4.js"></script>
 
 <a-scene>
   <a-sphere shader="src: myshader.js" position="0 1.5 -3"></a-sphere>
 </a-scene>
 ```
+
+Those two scripts are all you need: `a-frame-180-a-01.min.js` bundles **A-Frame 1.8.0 + Three.js r184 (WebGPU)**, and `a-frame-shaderloader-0.4.js` rewrites the module's `import … from 'three/tsl'` to read that bundle's single Three.js instance — so **no import map and no shim are required**. The exported `.js` also works directly with Three.js, or any bundler that resolves `three/tsl`.
 
 ## Tech Stack
 
@@ -35,7 +37,7 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 - [@xyflow/react](https://reactflow.dev/) v12 — node graph
 - [@monaco-editor/react](https://github.com/suren-atoyan/monaco-react) — code editor
 - [zustand](https://github.com/pmndrs/zustand) v5 — state management
-- [three.js](https://threejs.org/) 0.183 (WebGPU build) — shader runtime, exclusively `three/tsl` built-ins (including the MaterialX noise family)
+- [three.js](https://threejs.org/) 0.184 (WebGPU build) — shader runtime, exclusively `three/tsl` built-ins (including the MaterialX noise family)
 - [@babel/parser](https://babeljs.io/docs/babel-parser) + [@babel/traverse](https://babeljs.io/docs/babel-traverse) — code-to-graph parsing
 - [dagre](https://github.com/dagrejs/dagre) — automatic graph layout
 

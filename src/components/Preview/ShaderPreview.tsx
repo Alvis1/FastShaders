@@ -5,7 +5,6 @@ import {
   GEOMETRY_ROTATIONS,
   LIGHT_PRESETS,
   buildGeoAttr,
-  getModelUrl,
   isObjGeometry,
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
@@ -484,12 +483,15 @@ export function ShaderPreview() {
   // Rebuilds are expensive under sandbox: each reload gets a new opaque
   // origin, Chrome's network cache partitioning treats that as a fresh
   // site, and the ~1MB A-Frame bundle re-fetches + re-parses every time.
-  // So only the *structural* props that genuinely require a new shader
-  // module (previewCode, materialSettings) drive a rebuild. The closure
-  // still captures the current bgColor / lighting / playing / geometry /
-  // subdivision so a rebuild driven by previewCode/materialSettings emits
-  // HTML with the up-to-date values; the useEffects below push live
-  // changes for those props via postMessage without rebuilding.
+  // So rebuilds are limited to props that need a fresh document: previewCode +
+  // materialSettings (a new shader module) and `geometry` (the TYPE). Geometry
+  // type is REBUILT, not hot-swapped, because swapping across the
+  // OBJ↔primitive boundary via setAttribute on a live scene crashes the r184
+  // WebGPU renderer ("Cannot read properties of undefined (reading 'id')" in
+  // getAttributes during the render loop). The closure still captures the
+  // current bgColor / lighting / playing / subdivision, so any rebuild emits
+  // HTML with up-to-date values; the useEffects below push those — and
+  // primitive-only subdivision — live via postMessage without rebuilding.
   const previewHtml = useMemo(() => {
     const options: PreviewOptions = {
       geometry,
@@ -506,7 +508,7 @@ export function ShaderPreview() {
     };
     return tslToPreviewHTML(previewCode, options);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewCode, materialSettings]);
+  }, [previewCode, materialSettings, geometry]);
 
   // Hot-update channels: push appearance changes to the running iframe
   // instead of triggering an iframe rebuild. Idempotency is enforced on
@@ -547,23 +549,28 @@ export function ShaderPreview() {
     );
   }, [playing, geometry]);
 
+  // Live SUBDIVISION updates only. Geometry TYPE changes rebuild the iframe
+  // (see previewHtml useMemo) — posting an OBJ↔primitive swap to the live (old)
+  // iframe is exactly what crashes the r184 WebGPU renderer, so when the type
+  // changes we skip the postMessage and let the rebuild bake the new geometry.
+  // We therefore only hot-swap when the type is unchanged AND it's a primitive.
+  const prevGeometryRef = useRef(geometry);
   useEffect(() => {
-    const isObj = isObjGeometry(geometry);
-    const payload: Record<string, unknown> = {
-      type: 'fs:geometry',
-      isObj,
-      rotation: GEOMETRY_ROTATIONS[geometry] ?? '45 45 0',
-    };
-    if (isObj) {
-      payload.objModel = `obj: url(${getModelUrl(geometry as 'teapot' | 'bunny')})`;
-      payload.fitBounds = 'size: 1.6';
-    } else {
-      payload.geometry = buildGeoAttr(
-        geometry as 'sphere' | 'cube' | 'plane',
-        effectiveSubdivision,
-      );
-    }
-    iframeRef.current?.contentWindow?.postMessage(payload, '*');
+    const typeChanged = prevGeometryRef.current !== geometry;
+    prevGeometryRef.current = geometry;
+    if (typeChanged || isObjGeometry(geometry)) return;
+    iframeRef.current?.contentWindow?.postMessage(
+      {
+        type: 'fs:geometry',
+        isObj: false,
+        geometry: buildGeoAttr(
+          geometry as 'sphere' | 'cube' | 'plane',
+          effectiveSubdivision,
+        ),
+        rotation: GEOMETRY_ROTATIONS[geometry] ?? '45 45 0',
+      },
+      '*',
+    );
   }, [geometry, effectiveSubdivision]);
 
   return (

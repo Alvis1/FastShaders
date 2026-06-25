@@ -6,11 +6,11 @@
   <title>Sphere InOut — immersive WebXR bench</title>
   <link rel="stylesheet" href="../lib/bench-style.css">
 
-  <!-- A-Frame 1.7 IIFE bundle. Same bundle the prior carousel used.
+  <!-- A-Frame 1.8.0 IIFE bundle, Three.js r184 WebGPU build.
        WebGL backend on Quest 3 is the only stable WebXR path right now —
        the Three.js WebGPU XR manager doesn't reliably submit XR frames on
        Meta Quest Browser (paper § 5.2 + carousel.html notes). -->
-  <script src="../components/three/aframe-171-a-0.1.min.js"></script>
+  <script src="../components/three/a-frame-180-a-01.min.js"></script>
 
   <!-- Sphere mover (linear ping-pong over `duration` ms; emits cycle-complete
        so this bench can advance to the next shader). This bench assigns

@@ -59,7 +59,7 @@ src/
     graphToCode.ts    — graph → TSL code generation (topological sort, import collection)
     codeToGraph.ts    — TSL code → graph parsing (Babel, node matching, pattern detection)
     tslCodeProcessor.ts — shared TSL processing (import extraction, TDZ fix, body parsing)
-    tslToPreviewHTML.ts — TSL → standalone HTML preview (A-Frame + shaderloader 0.3)
+    tslToPreviewHTML.ts — TSL → standalone HTML preview (A-Frame + shaderloader 0.4)
     tslToShaderModule.ts — TSL → shaderloader-compatible ES module (property schema)
     topologicalSort.ts — Kahn's algorithm (warns on cycles)
     layoutEngine.ts   — Dagre auto-layout
@@ -90,11 +90,9 @@ src/
     edgeDisconnectFlag.ts — transient flag for edge disconnect suppression
     nameUtils.ts      — toKebabCase() for export filenames
 public/
-  js/
-    tsl-shim.js             — re-exports window.THREE + THREE.TSL as ESM (consumed by preview iframes)
-    a-frame-shaderloader-0.3.js — A-Frame shader component (TDZ fix + auto-import + property schema)
-    a-frame-shaderloader-0.2.js — legacy shaderloader version
-    aframe-171-a-0.1.min.js — A-Frame 1.7 IIFE bundle (WebGPU)
+  js/                       — VENDORED, do not hand-edit: synced from a-frame-shaderloader/js/ by the fs-vendor-sync vite plugin (vendorSync.test.ts fails on drift)
+    a-frame-shaderloader-0.4.js — A-Frame shader component (rewrites three/tsl imports → globalThis.THREE.TSL, TDZ fix + auto-import + property schema)
+    a-frame-180-a-01.min.js — A-Frame 1.8.0 IIFE bundle, Three.js r184 WebGPU
     aframe-orbit-controls.min.js — orbit controls for preview
   models/
     teapot.obj              — Utah teapot (preview geometry)
@@ -108,11 +106,9 @@ public/
   - `bench-static/` — Three.js WebGPU, static full-coverage sphere @ Quest 3 per-eye (2064×2208), `onSubmittedWorkDone` fence + multi-pass (default 30) defeats vsync clamping
   - `bench-microplane/` — Three.js WebGPU, 512×512 ortho quad, multi-pass; defaults to noise atomics only (per-node calibration via baseline subtraction)
   - Shared infra in `lib/`: `bench-style.css`, `bench-stats.js` (computeStats + exportResults emitting raw JSON + summary CSV + **complexity-suggestion JSON** mapping marginal ms → suggested points), `bench-registry.js` (baseline + 8 presets + 8 noise atomics + saved-groups loader stub — reads `fs:savedGroups` but greys entries lacking a `tslCode` field), `bench-ui.js` (grouped picker with master checkboxes, settings persistence, Reset-to-defaults, start gate, done popup, headset detect)
-  - Three.js WebGPU bundle at `lib/three/`, A-Frame 1.7 IIFE at `components/three/aframe-171-a-0.1.min.js`, `sphere-mover.js` (used by InOut)
+  - Three.js **r184** WebGPU ESM at `lib/three/` (regenerated from `node_modules/three@0.184`; used by the static/microplane benches via import map), A-Frame 1.8.0 IIFE at `components/three/a-frame-180-a-01.min.js` (synced from `a-frame-shaderloader/js/` by fs-vendor-sync; used by InOut), `sphere-mover.js`
   - Launcher at `ShaderCarousel/index.html` adopts each iframe's `<style>` AND `<link rel=stylesheet>` so adopted controls keep styling; `#bench-start-gate` + `#bench-done-popup` stay in the iframe (XR-entry needs the gesture origin to be inside the iframe document)
-- `a-frame-shaderloader/` — shaderloader component dev project (source of public/js builds)
-- `Tests/` — test shader JS files + test HTML page
-- `a-frame-shaderloader/` — shaderloader component dev project (source of public/js builds)
+- `a-frame-shaderloader/` — **single source of truth** for the A-Frame bundle (`build/build.mjs` emits it), the shaderloader component, and orbit-controls. The `fs-vendor-sync` vite plugin copies these into `public/js/` (all three) and `ShaderCarousel/components/three/` (the bundle) at dev/build start — edit only here, never the copies. Also a git submodule + the jsdelivr CDN source for exported shaders.
 - `Tests/` — test shader JS files + test HTML page
 
 ## Key Conventions
@@ -123,7 +119,8 @@ public/
 - **Single ShaderNode**: one component handles all TSL node types dynamically via registry
 - **Node visuals**: per-node designer overrides live in `glyphs/customGlyphs.ts` — `{ svg, justify, scale (glyph-only; spacing fixed), dx/dy (glyph nudge), width (exact, ≥24), height (exact in both layouts, ≥28; shorter than content overflows; independent of glyph scale), text (0.4–2.5× header/value/label fonts via --node-text-scale), sockets (center-relative offsets, 4px snap; op layout natively, rows layout detaches the socket from its row — values follow) }`; frame radius/border are **fixed app-wide**. Connected inputs show edge values (`min…max` ranges, bare `…` when underivable; geometry attributes have analytical ranges). Multi-channel data **arriving on a connected input** stacks the node into N cards (sibling layers behind the card, staggered negative z, single group shadow from the deepest layer). Sockets are **static** — never set `transform` on handle `:hover` (React Flow positions handles via transform) — and never stack. The Node Designer (`node-designer.html`) saves via the dev-server endpoint `/__nd` (any browser), the File System Access API (Chromium), or download; see `NODE_DESIGN_REQUIREMENTS.md`
 - **Light theme by default**: flat design with sharp dark shadows, CSS tokens in `tokens.css`. The Monaco code editor has its own light/dark toggle (`codeEditorTheme`, persisted to `fs:codeEditorTheme`). The React Flow canvas background is user-pickable (`nodeEditorBgColor`, persisted to `fs:nodeEditorBgColor`); cost badges and 1-channel edges auto-flip via `getContrastColor()` so they remain readable on any background.
-- **A-Frame pipeline**: graphToCode → tslToShaderModule → shaderloader 0.3 (runtime TDZ fix + auto-import injection + `export const schema` parsing) → dynamic blob import. The standalone `.html` export embeds the same module as a blob URL.
+- **A-Frame pipeline**: graphToCode → tslToShaderModule → shaderloader 0.4 (runtime TDZ fix + auto-import injection + `export const schema` parsing) → dynamic blob import. The standalone `.html` export embeds the same module as a blob URL.
+- **Centralized vendoring (single source + sync)**: the A-Frame IIFE bundle (`a-frame-180-a-01.min.js`), shaderloader (`a-frame-shaderloader-0.4.js`), and orbit-controls live ONLY in `a-frame-shaderloader/js/`. The `fs-vendor-sync` vite plugin (`vite.config.ts`) copies them into `public/js/` and the bundle into `ShaderCarousel/components/three/` at dev/build start; `src/vendorSync.test.ts` fails on drift. **Never hand-edit the copies** — edit the submodule source and re-run vite. Everything runs **Three.js r184**: the bundle (super-three 0.184), `node_modules/three` (`^0.184.0`), and the carousel's standalone ESM `ShaderCarousel/lib/three/*.js` (regenerated from `node_modules/three`, used by static/microplane benches via import map).
 - **rAF ref pattern**: PreviewNode/MathPreviewNode/EdgeInfoCard overwrite refs for animation — this is correct (avoids stale closures)
 - **Noise nodes**: 8 MaterialX-backed nodes (`perlin`, `perlinVec3`, `fbm`, `fbmVec3`, `cellNoise`, `voronoi`, `voronoiVec2`, `voronoiVec3`) all use the same `pos`/`scale` parameter convention. graphToCode emits them via the `def.category === 'noise'` branch; codeToGraph parses them via `processNoiseCall`; CPU thumbnails come from `noisePreview.ts`; live GPU previews run the generated TSL through the preview iframe (`graphToCode` → `tslToPreviewHTML` → `convertToShaderModule`). There is no `texture` category — `tsl-textures` was removed in favour of three.js's built-in MaterialX noise.
 - **Groups**: selection groups are first-class React Flow nodes (`type: 'group'`) created via Ctrl+G or right-click → Group Selection. They have no registry entry and no shader semantics — `graphToCode`/`cpuEvaluator` ignore the *node*, but call `unwrapCollapsedGroupEdges()` from `edgeUtils.ts` at their entry to translate visually-rewritten boundary edges back to their real child endpoints, so collapse state never affects compiled output. Groups can be recolored, renamed, collapsed (members hidden via `display: none` className — *not* React Flow's `hidden: true`, which would unmount rAF loops), saved to a per-browser library (`fs:savedGroups`), and dragged out of containers. Members never get `extent: 'parent'` — `onNodeDragStop` reconciles `parentId` after every drag instead.
