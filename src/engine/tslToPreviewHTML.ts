@@ -2,19 +2,13 @@
  * Generates a self-contained A-Frame HTML page that renders a TSL shader
  * using the a-frame-shaderloader component. Used for the in-app preview iframe.
  *
- * Loads the IIFE bundle (A-Frame 1.7 + Three.js WebGPU) and the shaderloader
+ * Loads the IIFE bundle (A-Frame 1.8.0 + Three.js r184 WebGPU) and the shaderloader
  * from local files served via Vite's public directory. The editor's TSL code
  * is converted into a shaderloader-compatible ES module, served as a blob URL,
  * and applied via the shaderloader's `shader` component.
  */
 
-import {
-  CHANNEL_TO_PROP,
-  collectImports,
-  extractFnBody,
-  fixTDZ,
-  parseBody,
-} from './tslCodeProcessor';
+import { buildShaderModule } from './tslCodeProcessor';
 import type { MaterialSettings } from '@/types';
 
 export type LightingMode = 'studio' | 'moon' | 'laboratory';
@@ -151,18 +145,11 @@ function getScriptUrls() {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const base = import.meta.env.BASE_URL; // e.g. '/FastShaders/'
   return {
-    iife: `${origin}${base}js/aframe-171-a-0.1.min.js`,
-    shaderloader: `${origin}${base}js/a-frame-shaderloader-0.3.js`,
+    iife: `${origin}${base}js/a-frame-180-a-01.min.js`,
+    shaderloader: `${origin}${base}js/a-frame-shaderloader-0.4.js`,
     orbitControls: `${origin}${base}js/aframe-orbit-controls.min.js`,
   };
 }
-
-/** THREE.FrontSide=0, THREE.BackSide=1, THREE.DoubleSide=2 */
-const SIDE_VALUES: Record<string, number> = {
-  front: 0,
-  back: 1,
-  double: 2,
-};
 
 /**
  * A-Frame component registration for OBJ-backed previews. On `model-loaded`,
@@ -529,157 +516,17 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
 /**
  * Convert editor TSL code (with Fn wrapper) into a shaderloader-compatible
  * ES module that exports a default function returning shader node properties.
+ *
+ * Thin wrapper over the shared `buildShaderModule` so the live preview and the
+ * `.js` export (tslToShaderModule) emit byte-identical shader logic — the only
+ * difference being the export's usage-comment header. The preview auto-detects
+ * property uniforms (no explicit `properties` list).
  */
 function convertToShaderModule(
   tslCode: string,
   materialSettings?: MaterialSettings,
 ): string {
-  const { tslNames } = collectImports(tslCode, true);
-  const body = extractFnBody(tslCode, tslNames);
-  const processedBody = fixTDZ(body, tslNames);
-  const { defLines, channels } = parseBody(processedBody, tslNames);
-
-  // Ensure positionLocal (and normalLocal for normal-based displacement) are available
-  const displacementMode = materialSettings?.displacementMode ?? 'normal';
-  if (channels.position) {
-    if (!tslNames.includes('positionLocal')) tslNames.push('positionLocal');
-    if (displacementMode === 'normal' && !tslNames.includes('normalLocal')) {
-      tslNames.push('normalLocal');
-    }
-  }
-
-  // Rewrite property uniforms so the live overlay can drive them.
-  //
-  // Without this, `const property1 = uniform(1.0)` in the function body would
-  // create an anonymous TSL uniform every render — the shaderloader's
-  // auto-detected `_propertyUniforms.property1` would be a *separate* uniform
-  // instance that's never passed into the function, so mutating its `.value`
-  // (e.g. from a slider drag) would have no visible effect.
-  //
-  // By rewriting each line to `const property1 = params.property1` and
-  // exporting an explicit `schema`, the shaderloader creates the uniforms
-  // up-front, passes them in as `params`, and the function uses *those*
-  // uniforms — so `_propertyUniforms.property1.value = N` reaches the material.
-  const schemaEntries: Record<string, number> = {};
-  const uniformLineRe = /^(\s*)const\s+(\w+)\s*=\s*uniform\(\s*(-?\d+(?:\.\d+)?)\s*\)\s*;?\s*$/;
-  const rewrittenDefLines = defLines.map((line) => {
-    const m = line.match(uniformLineRe);
-    if (!m) return line;
-    const [, indent, name, rawVal] = m;
-    const val = parseFloat(rawVal);
-    schemaEntries[name] = isNaN(val) ? 0 : val;
-    return `${indent}const ${name} = params.${name};`;
-  });
-  const hasParams = Object.keys(schemaEntries).length > 0;
-
-  // Pull `Discard(cond);` calls out of the body so we can re-emit them inside
-  // a small Fn wrapper. `Discard()` calls `.toStack()` which needs an active
-  // TSL execution stack — outside an Fn the call is a silent no-op, so live
-  // uniform changes can't move the discard threshold. Wrapping the color
-  // computation in an Fn restores the stack context.
-  const discardLines: string[] = [];
-  const nonDiscardLines: string[] = [];
-  for (const line of rewrittenDefLines) {
-    if (/^\s*Discard\(/.test(line)) discardLines.push(line);
-    else nonDiscardLines.push(line);
-  }
-  const hasDiscard = discardLines.length > 0;
-  if (hasDiscard && !tslNames.includes('Fn')) tslNames.push('Fn');
-
-  // Build import statements
-  const imports: string[] = [];
-  if (tslNames.length > 0) {
-    imports.push(`import { ${tslNames.join(', ')} } from 'three/tsl';`);
-  }
-
-  // Build return object with node property names (colorNode, normalNode, etc.)
-  // When Discard is present, the `color` channel is routed through __pixel(...)
-  // (defined below) so the Discard runs inside an Fn body. Conditions and the
-  // color node are passed as explicit Fn parameters — see __pixel block below.
-  const discardConds = hasDiscard
-    ? discardLines
-        .map((l) => {
-          const m = l.match(/^\s*Discard\(\s*([\s\S]+?)\s*\)\s*;?\s*$/);
-          return m ? m[1].trim() : '';
-        })
-        .filter(Boolean)
-    : [];
-  const pixelCallArgs = hasDiscard ? [...discardConds, channels.color ?? 'vec3(1, 0, 0)'] : [];
-
-  const returnProps: string[] = [];
-  for (const [ch, ref] of Object.entries(channels)) {
-    const prop = CHANNEL_TO_PROP[ch];
-    if (!prop) continue;
-    if (ch === 'position') {
-      const displacement = displacementMode === 'normal'
-        ? `normalLocal.mul(${ref})`
-        : ref;
-      returnProps.push(`${prop}: positionLocal.add(${displacement})`);
-    } else if (ch === 'color' && hasDiscard) {
-      returnProps.push(`${prop}: __pixel(${pixelCallArgs.join(', ')})`);
-    } else {
-      returnProps.push(`${prop}: ${ref}`);
-    }
-  }
-
-  // The Fn body calls Discard and returns the color. Each discard condition
-  // and the color node are passed as explicit Fn parameters rather than
-  // captured via JS closure — the iframe ships Three.js r173 (via the bundled
-  // A-Frame IIFE), whose Fn-call setup doesn't propagate closure-captured
-  // derived nodes from the outer plain function into the function-body
-  // compilation. The Fn's body would then resolve `return mix1` to a default
-  // (visible as a solid red material on the preview mesh). Passing them as
-  // params routes them through the standard function-call API and forces the
-  // dependency chain to compile correctly. Upstream defs still live in the
-  // outer function so they're built once at material-setup time.
-  const pixelFnLines: string[] = [];
-  if (hasDiscard) {
-    const fnParams = [
-      ...discardConds.map((_, i) => `__c${i}`),
-      '__color',
-    ];
-    pixelFnLines.push(`  const __pixel = Fn(([${fnParams.join(', ')}]) => {`);
-    discardConds.forEach((_, i) => {
-      pixelFnLines.push(`    Discard(__c${i});`);
-    });
-    pixelFnLines.push('    return __color;');
-    pixelFnLines.push('  });');
-  }
-
-  // Material settings supported by the shaderloader
-  if (materialSettings?.transparent) {
-    returnProps.push('transparent: true');
-  }
-  if (materialSettings?.side) {
-    returnProps.push(`side: ${SIDE_VALUES[materialSettings.side] ?? 0}`);
-  }
-  if (materialSettings?.alphaTest) {
-    returnProps.push(`alphaTest: ${materialSettings.alphaTest}`);
-  }
-
-  // Build the explicit schema export so the shaderloader honors original
-  // default values (its fallback `params.X` auto-detection always defaults to 0).
-  const schemaLines: string[] = [];
-  if (hasParams) {
-    const schemaObj = Object.fromEntries(
-      Object.entries(schemaEntries).map(([k, v]) => [k, { type: 'number', default: v }]),
-    );
-    schemaLines.push(`export const schema = ${JSON.stringify(schemaObj)};`);
-    schemaLines.push('');
-  }
-
-  const lines = [
-    ...imports,
-    '',
-    ...schemaLines,
-    `export default function(${hasParams ? 'params' : ''}) {`,
-    ...nonDiscardLines.map(l => '  ' + l.trimStart()),
-    ...pixelFnLines,
-    `  return { ${returnProps.join(', ')} };`,
-    '}',
-  ];
-
-  return lines.join('\n');
+  return buildShaderModule(tslCode, { materialSettings });
 }
 
 export function tslToPreviewHTML(
@@ -756,6 +603,14 @@ export function tslToPreviewHTML(
   lines.push('<html lang="en">');
   lines.push('<head>');
   lines.push('  <meta charset="UTF-8">');
+  // Neutralize WebXR BEFORE A-Frame loads. The editor preview is a desktop
+  // render that never enters XR, but A-Frame 1.8.0 initializes its WebXR path
+  // whenever `navigator.xr` is present — and on the Three.js r184 WebGPU backend
+  // that init can throw "Cannot read properties of undefined (reading 'id')" and
+  // abort the render, especially when a browser extension (e.g. the Immersive
+  // Web Emulator) injects/overrides `navigator.xr`. Hiding it keeps A-Frame on
+  // the plain desktop renderer. (Immersive XR lives in ShaderCarousel, not here.)
+  lines.push(`  <script>try{Object.defineProperty(navigator,"xr",{value:undefined,configurable:true});}catch(e){}<${''}/script>`);
   lines.push(`  <script src="${iife}" onerror="document.getElementById('error').textContent='Failed to load A-Frame bundle'"><${''}/script>`);
   lines.push(`  <script src="${shaderloader}" onerror="document.getElementById('error').textContent='Failed to load shaderloader'"><${''}/script>`);
   lines.push(`  <script src="${orbitControls}" onerror="document.getElementById('error').textContent='Failed to load orbit controls'"><${''}/script>`);

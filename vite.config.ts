@@ -160,6 +160,56 @@ const nodeDesignerSyncPlugin = (): Plugin => ({
     }
   },
 });
+
+/**
+ * Vendor the shared A-Frame preview scripts from a SINGLE source of truth.
+ *
+ * The canonical copies live in the `a-frame-shaderloader/` submodule's `js/`
+ * dir — that's where `build/build.mjs` emits the A-Frame IIFE bundle
+ * (`a-frame-180-a-01.min.js`, r184) and where the shaderloader component +
+ * orbit-controls are maintained (and what the jsdelivr CDN serves for exported
+ * shaders). The FastShaders app (preview iframe) loads them from `public/js/`,
+ * and the ShaderCarousel `bench-inout` page loads the bundle from
+ * `ShaderCarousel/components/three/`.
+ *
+ * Rather than hand-maintaining three copies (which silently drift and pick up
+ * version skew), this plugin copies the canonical files into both consumer
+ * locations at dev/build start. **Edit only the submodule source; the copies
+ * are generated.** `src/vendorSync.test.ts` fails if any copy diverges, so a
+ * stale consumer copy can't ship. Compare-before-write avoids mtime churn and
+ * keeps startup from EPERM-ing on restricted mounts (no unlink).
+ *
+ * Runs at buildStart — before `shaderCarouselCopyPlugin`'s closeBundle copy, so
+ * the carousel deploy picks up the freshly-synced bundle.
+ */
+const VENDOR_SRC = path.resolve(__dirname, 'a-frame-shaderloader/js');
+const VENDOR_TARGETS: { file: string; dests: string[] }[] = [
+  { file: 'a-frame-180-a-01.min.js', dests: ['public/js', 'ShaderCarousel/components/three'] },
+  { file: 'a-frame-shaderloader-0.4.js', dests: ['public/js'] },
+  { file: 'aframe-orbit-controls.min.js', dests: ['public/js'] },
+];
+const vendorSyncPlugin = (): Plugin => ({
+  name: 'fs-vendor-sync',
+  buildStart() {
+    for (const { file, dests } of VENDOR_TARGETS) {
+      try {
+        const srcPath = path.join(VENDOR_SRC, file);
+        if (!existsSync(srcPath)) {
+          console.warn(`[fs-vendor-sync] missing source ${file} — skipped`);
+          continue;
+        }
+        const src = readFileSync(srcPath);
+        for (const dest of dests) {
+          const dstPath = path.resolve(__dirname, dest, file);
+          const dst = existsSync(dstPath) ? readFileSync(dstPath) : null;
+          if (!dst || !src.equals(dst)) writeFileSync(dstPath, src);
+        }
+      } catch (e) {
+        console.warn('[fs-vendor-sync] sync skipped:', (e as Error).message);
+      }
+    }
+  },
+});
 const nodeDesignerEndpointPlugin = (): Plugin => ({
   name: 'fs-node-designer-endpoint',
   apply: 'serve',
@@ -232,7 +282,7 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
 
 export default defineConfig({
   base: '/FastShaders/',
-  plugins: [react(), versionHtmlPlugin(), cspHtmlPlugin(), shaderCarouselCopyPlugin(), nodeDesignerSyncPlugin(), nodeDesignerEndpointPlugin()],
+  plugins: [react(), versionHtmlPlugin(), cspHtmlPlugin(), vendorSyncPlugin(), shaderCarouselCopyPlugin(), nodeDesignerSyncPlugin(), nodeDesignerEndpointPlugin()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
