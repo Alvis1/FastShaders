@@ -2,7 +2,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { cpSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { cpSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, './package.json'), 'utf-8'));
 
@@ -144,17 +144,30 @@ const ND_COSTS = path.resolve(__dirname, 'src/registry/complexity.json');
  */
 const ND_ROOT = path.resolve(__dirname, 'node-designer.html');
 const ND_PUBLIC = path.resolve(__dirname, 'public/node-designer.html');
+
+/**
+ * Copy `srcPath` → `dstPath` only when their bytes differ. Compare-before-write
+ * skips no-op copies (no mtime churn) and writes in place (no unlink — cpSync's
+ * unlink can EPERM on restricted mounts). The dest dir is created if missing so
+ * a fresh/partial checkout doesn't ENOENT. Buffer comparison is binary-safe, so
+ * the same helper serves both the HTML and the minified-JS vendored files.
+ */
+const syncVendoredFile = (srcPath: string, dstPath: string): void => {
+  const src = readFileSync(srcPath);
+  const dst = existsSync(dstPath) ? readFileSync(dstPath) : null;
+  if (dst && src.equals(dst)) return;
+  mkdirSync(path.dirname(dstPath), { recursive: true });
+  writeFileSync(dstPath, src);
+};
+
 const nodeDesignerSyncPlugin = (): Plugin => ({
   name: 'fs-node-designer-sync',
   buildStart() {
     try {
       if (!existsSync(ND_ROOT)) return;
-      // Compare before writing: skips no-op copies (no mtime churn) and writes
-      // in place via writeFileSync (no unlink — cpSync's unlink can EPERM on
-      // restricted mounts). Never let a sync hiccup kill dev/test startup.
-      const src = readFileSync(ND_ROOT, 'utf-8');
-      const dst = existsSync(ND_PUBLIC) ? readFileSync(ND_PUBLIC, 'utf-8') : null;
-      if (src !== dst) writeFileSync(ND_PUBLIC, src, 'utf-8');
+      // Treat the root file as the single source of truth. Never let a sync
+      // hiccup kill dev/test startup.
+      syncVendoredFile(ND_ROOT, ND_PUBLIC);
     } catch (e) {
       console.warn('[fs-node-designer-sync] sync skipped:', (e as Error).message);
     }
@@ -192,20 +205,21 @@ const vendorSyncPlugin = (): Plugin => ({
   name: 'fs-vendor-sync',
   buildStart() {
     for (const { file, dests } of VENDOR_TARGETS) {
-      try {
-        const srcPath = path.join(VENDOR_SRC, file);
-        if (!existsSync(srcPath)) {
-          console.warn(`[fs-vendor-sync] missing source ${file} — skipped`);
-          continue;
+      const srcPath = path.join(VENDOR_SRC, file);
+      if (!existsSync(srcPath)) {
+        console.warn(`[fs-vendor-sync] missing source ${file} — skipped`);
+        continue;
+      }
+      // Per-dest try/catch so a failure copying to one consumer location can't
+      // skip the others (which would ship a silently-stale copy past the drift
+      // test).
+      for (const dest of dests) {
+        const dstPath = path.resolve(__dirname, dest, file);
+        try {
+          syncVendoredFile(srcPath, dstPath);
+        } catch (e) {
+          console.warn(`[fs-vendor-sync] ${dest}/${file} skipped:`, (e as Error).message);
         }
-        const src = readFileSync(srcPath);
-        for (const dest of dests) {
-          const dstPath = path.resolve(__dirname, dest, file);
-          const dst = existsSync(dstPath) ? readFileSync(dstPath) : null;
-          if (!dst || !src.equals(dst)) writeFileSync(dstPath, src);
-        }
-      } catch (e) {
-        console.warn('[fs-vendor-sync] sync skipped:', (e as Error).message);
       }
     }
   },

@@ -484,14 +484,20 @@ export function ShaderPreview() {
   // origin, Chrome's network cache partitioning treats that as a fresh
   // site, and the ~1MB A-Frame bundle re-fetches + re-parses every time.
   // So rebuilds are limited to props that need a fresh document: previewCode +
-  // materialSettings (a new shader module) and `geometry` (the TYPE). Geometry
-  // type is REBUILT, not hot-swapped, because swapping across the
-  // OBJ↔primitive boundary via setAttribute on a live scene crashes the r184
-  // WebGPU renderer ("Cannot read properties of undefined (reading 'id')" in
-  // getAttributes during the render loop). The closure still captures the
-  // current bgColor / lighting / playing / subdivision, so any rebuild emits
-  // HTML with up-to-date values; the useEffects below push those — and
-  // primitive-only subdivision — live via postMessage without rebuilding.
+  // materialSettings (a new shader module) and `geometryRebuildKey`.
+  //
+  // The rebuild key collapses ALL primitives to one bucket so sphere↔cube↔plane
+  // swaps DON'T rebuild — they hot-swap via cheap postMessage (the effect
+  // below). A rebuild is forced only when an OBJ model is involved: any OBJ
+  // target (the key carries the model name, so teapot↔bunny rebuilds too) and
+  // crossing the OBJ↔primitive boundary. That boundary swap via setAttribute on
+  // a live scene is exactly what crashes the r184 WebGPU renderer ("Cannot read
+  // properties of undefined (reading 'id')" in getAttributes), so it must bake
+  // into a fresh document. The closure still captures the current bgColor /
+  // lighting / playing / subdivision, so any rebuild emits HTML with up-to-date
+  // values; the useEffects below push those — and primitive geometry/subdivision
+  // — live via postMessage without rebuilding.
+  const geometryRebuildKey = isObjGeometry(geometry) ? geometry : '__primitive__';
   const previewHtml = useMemo(() => {
     const options: PreviewOptions = {
       geometry,
@@ -508,7 +514,7 @@ export function ShaderPreview() {
     };
     return tslToPreviewHTML(previewCode, options);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewCode, materialSettings, geometry]);
+  }, [previewCode, materialSettings, geometryRebuildKey]);
 
   // Hot-update channels: push appearance changes to the running iframe
   // instead of triggering an iframe rebuild. Idempotency is enforced on
@@ -549,16 +555,17 @@ export function ShaderPreview() {
     );
   }, [playing, geometry]);
 
-  // Live SUBDIVISION updates only. Geometry TYPE changes rebuild the iframe
-  // (see previewHtml useMemo) — posting an OBJ↔primitive swap to the live (old)
-  // iframe is exactly what crashes the r184 WebGPU renderer, so when the type
-  // changes we skip the postMessage and let the rebuild bake the new geometry.
-  // We therefore only hot-swap when the type is unchanged AND it's a primitive.
+  // Live PRIMITIVE geometry + subdivision hot-swap. Any change that stays
+  // entirely within primitives (sphere↔cube↔plane, or just a subdivision tweak)
+  // is posted to the running iframe — the rebuild key (above) deliberately does
+  // NOT rebuild for these. We skip only when an OBJ model is involved on either
+  // side: that crosses/triggers a rebuild which bakes the new geometry, and
+  // posting an OBJ swap to the live r184 WebGPU scene is what crashes it.
   const prevGeometryRef = useRef(geometry);
   useEffect(() => {
-    const typeChanged = prevGeometryRef.current !== geometry;
+    const prevWasObj = isObjGeometry(prevGeometryRef.current);
     prevGeometryRef.current = geometry;
-    if (typeChanged || isObjGeometry(geometry)) return;
+    if (isObjGeometry(geometry) || prevWasObj) return;
     iframeRef.current?.contentWindow?.postMessage(
       {
         type: 'fs:geometry',

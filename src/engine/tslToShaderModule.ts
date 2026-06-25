@@ -21,6 +21,7 @@
  */
 
 import { buildShaderModule } from './tslCodeProcessor';
+import { sanitizeIdentifier } from '@/utils/nameUtils';
 import type { MaterialSettings } from '@/types';
 
 export interface PropertyInfo {
@@ -29,8 +30,10 @@ export interface PropertyInfo {
   defaultValue: number;
 }
 
-// CDN base for the a-frame-shaderloader project
-const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js';
+// CDN base for the a-frame-shaderloader project. Pinned to @master — that is
+// the repo's default branch (it has no `main`), so jsdelivr serves the vendored
+// scripts the exported shader references.
+const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js';
 
 /** Build the usage-comment header prepended to the exported module. */
 function buildHeader(props: PropertyInfo[]): string[] {
@@ -45,12 +48,25 @@ function buildHeader(props: PropertyInfo[]): string[] {
     `//   <script src="${CDN_BASE}/a-frame-shaderloader-0.4.js"><${''}/script>`,
   ];
   if (hasProps) {
-    const propExample = props.map((p) => `${p.name}: ${p.defaultValue}`).join('; ');
+    // Use the sanitized identifier — that's the actual schema key / a-entity
+    // attribute the module exposes (a property named "my speed" → `my_speed`).
+    // Dedupe by sanitized name so two names that collapse to the same key don't
+    // print a duplicate attribute in the example.
+    const seen = new Set<string>();
+    const uniqueProps = props.filter((p) => {
+      const key = sanitizeIdentifier(p.name);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const propExample = uniqueProps
+      .map((p) => `${sanitizeIdentifier(p.name)}: ${p.defaultValue}`)
+      .join('; ');
     header.push(`//   <a-entity shader="src: shader.js; ${propExample}"></a-entity>`);
     header.push('//');
     header.push('// Properties can be updated at runtime:');
-    for (const p of props) {
-      header.push(`//   el.setAttribute('shader', { ${p.name}: value });`);
+    for (const p of uniqueProps) {
+      header.push(`//   el.setAttribute('shader', { ${sanitizeIdentifier(p.name)}: value });`);
     }
   } else {
     header.push('//   <a-entity shader="src: shader.js"></a-entity>');
