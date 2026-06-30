@@ -56,13 +56,22 @@ const versionHtmlPlugin = (): Plugin => ({
  * `frame-src 'self' blob:` authorizes the user-shader iframe;
  * `worker-src 'self' blob:` covers Monaco's web workers.
  */
+// Deploy-target overrides so one repo builds for both GitHub Pages and self-hosting.
+//   FS_BASE           — path the app is served under (default keeps the GitHub Pages build identical)
+//   FS_PREVIEW_ORIGIN — extra origin(s) the sandboxed preview iframe may fetch from at the deploy domain
+//                       (space-separated; the iframe's opaque origin means each must be listed explicitly)
+// Example self-host build:
+//   FS_BASE=/fastshaders/ FS_PREVIEW_ORIGIN='https://alvismisjuns.lv https://www.alvismisjuns.lv' npm run build
+const FS_BASE = process.env.FS_BASE ?? '/FastShaders/';
+const FS_PREVIEW_ORIGIN = process.env.FS_PREVIEW_ORIGIN ?? '';
+
 const CSP_DIRECTIVES = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
   "font-src 'self' https://fonts.gstatic.com data:",
   "img-src 'self' data: blob:",
-  "connect-src 'self' blob: https://cdn.jsdelivr.net https://alvis1.github.io",
+  `connect-src 'self' blob: https://cdn.jsdelivr.net https://alvis1.github.io${FS_PREVIEW_ORIGIN ? ' ' + FS_PREVIEW_ORIGIN : ''}`,
   "frame-src 'self' blob:",
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -295,7 +304,7 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
 });
 
 export default defineConfig({
-  base: '/FastShaders/',
+  base: FS_BASE,
   plugins: [react(), versionHtmlPlugin(), cspHtmlPlugin(), vendorSyncPlugin(), shaderCarouselCopyPlugin(), nodeDesignerSyncPlugin(), nodeDesignerEndpointPlugin()],
   resolve: {
     alias: {
