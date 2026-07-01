@@ -22,6 +22,7 @@ import { MathPreviewNode } from './nodes/MathPreviewNode';
 import { OutputNode } from './nodes/OutputNode';
 import { ClockNode } from './nodes/ClockNode';
 import { GroupNode } from './nodes/GroupNode';
+import { NoteNode } from './nodes/NoteNode';
 import { TypedEdge } from './edges/TypedEdge';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
@@ -34,6 +35,8 @@ import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { bridgeEdgesAcrossDeletedNodes } from '@/utils/edgeUtils';
+import { parseCsv } from '@/utils/csvParser';
+import { makeDataNodeData } from '@/utils/dataNode';
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
 import { getNodeValues } from '@/types';
 import complexityData from '@/registry/complexity.json';
@@ -47,6 +50,7 @@ const nodeTypes = {
   clock: ClockNode,
   output: OutputNode,
   group: GroupNode,
+  note: NoteNode,
 };
 
 const edgeTypes = {
@@ -489,6 +493,15 @@ export function NodeEditor() {
         return;
       }
 
+      // Notes are free-floating background annotations — never anti-overlap-
+      // nudged (which would fling them away from the nodes they're dropped over,
+      // making them seem to vanish), reparented, or inserted onto edges. React
+      // Flow has already committed the drag position, so just bail.
+      if (draggedNode.type === 'note') {
+        dragStartPosRef.current = null;
+        return;
+      }
+
       // Skip work entirely if the node didn't actually move (click without drag).
       const startPos = dragStartPosRef.current;
       dragStartPosRef.current = null;
@@ -524,8 +537,8 @@ export function NodeEditor() {
 
       for (const other of allNodes) {
         if (other.id === draggedNode.id) continue;
-        // Group containers must not push their members aside.
-        if (other.type === 'group') continue;
+        // Group containers + background notes must not push other nodes aside.
+        if (other.type === 'group' || other.type === 'note') continue;
         // Only compare nodes in the same coordinate space (same parent).
         if (other.parentId !== draggedNode.parentId) continue;
         const { w: ow, h: oh } = getNodeSize(other);
@@ -599,7 +612,7 @@ export function NodeEditor() {
       const newParents = new Set<string>();
       let anyParentChanged = false;
       for (const dragged of draggedNodes) {
-        if (dragged.type === 'group') continue;
+        if (dragged.type === 'group' || dragged.type === 'note') continue;
         const { node: updatedNode, targetGroupId, parentChanged } =
           reparentedNode(dragged, allNodes, dragged.position.x, dragged.position.y);
         // A selection-drag doesn't pick up a new parent if the dropped group
@@ -729,9 +742,11 @@ export function NodeEditor() {
       const menuType =
         node.type === 'group'
           ? 'group'
-          : node.data.registryType === 'output'
-            ? 'shader'
-            : 'node';
+          : node.type === 'note'
+            ? 'note'
+            : node.data.registryType === 'output'
+              ? 'shader'
+              : 'node';
       openContextMenu(event.clientX, event.clientY, menuType, node.id);
     },
     [openContextMenu]
@@ -852,10 +867,52 @@ export function NodeEditor() {
     [screenToFlowPosition, addNode],
   );
 
+  // Parse a dropped CSV on the host and place a Data node at the drop point.
+  // Parsing stays here (the sandboxed preview iframe can't read files); the data
+  // travels onward only as validated numbers baked into the node payload.
+  const placeCsvFile = useCallback(
+    (file: File, clientX: number, clientY: number) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = parseCsv(String(reader.result ?? ''));
+        if (!res.ok) {
+          window.alert(`Could not load "${file.name}":\n${res.error}`);
+          return;
+        }
+        const position = screenToFlowPosition({ x: clientX, y: clientY });
+        const cost = (complexityData.costs as Record<string, number>).dataNode ?? 2;
+        const node = {
+          id: generateId(),
+          type: 'shader',
+          position,
+          data: makeDataNodeData(res.data, cost),
+        } as AppNode;
+        addNode(node);
+      };
+      reader.onerror = () => window.alert(`Could not read "${file.name}".`);
+      reader.readAsText(file);
+    },
+    [screenToFlowPosition, addNode],
+  );
+
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
       clearEdgeHighlight();
+
+      // OS file drop (a real file from disk) — a `.csv` becomes a Data node.
+      // Checked first because dataTransfer.files is only populated for genuine
+      // file drops, never for the app's internal tile drags.
+      const files = event.dataTransfer.files;
+      if (files && files.length > 0) {
+        const csv = Array.from(files).find(
+          (f) => f.name.toLowerCase().endsWith('.csv') || f.type === 'text/csv',
+        );
+        if (csv) {
+          placeCsvFile(csv, event.clientX, event.clientY);
+          return;
+        }
+      }
 
       // Saved-group drag payload takes precedence over a regular node-type drag
       // (the two payloads can't both be set at once but we check this one first
@@ -874,7 +931,7 @@ export function NodeEditor() {
       if (!nodeType) return;
       placeTilePayload({ kind: 'node', nodeType }, event.clientX, event.clientY);
     },
-    [clearEdgeHighlight, placeTilePayload],
+    [clearEdgeHighlight, placeTilePayload, placeCsvFile],
   );
 
 

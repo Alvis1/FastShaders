@@ -92,8 +92,14 @@ export interface PortRow {
  *   appended as extra rows after the input port rows
  * - Property nodes hide the `name` key (shown in the header instead)
  */
-export function buildRows(def: { type?: string; inputs: PortDefinition[]; outputs: PortDefinition[]; defaultValues?: Record<string, string | number> }): PortRow[] {
+export function buildRows(
+  def: { type?: string; inputs: PortDefinition[]; outputs: PortDefinition[]; defaultValues?: Record<string, string | number> },
+  outputsOverride?: PortDefinition[],
+): PortRow[] {
   const rows: PortRow[] = [];
+  // Data nodes carry a per-instance output list (one per CSV column); every
+  // other node uses its registry-defined outputs.
+  const outs = outputsOverride ?? def.outputs;
   const allDefaults = def.defaultValues ?? {};
   const defaults = def.type === 'property_float'
     ? Object.fromEntries(Object.entries(allDefaults).filter(([k]) => k !== 'name'))
@@ -135,12 +141,12 @@ export function buildRows(def: { type?: string; inputs: PortDefinition[]; output
       }
     }
 
-    const maxLen = Math.max(orderedKeys.length, def.outputs.length);
+    const maxLen = Math.max(orderedKeys.length, outs.length);
     for (let i = 0; i < maxLen; i++) {
       const entry = orderedKeys[i];
       rows.push({
         input: null,
-        output: def.outputs[i] ?? null,
+        output: outs[i] ?? null,
         settingKey: entry?.key ?? null,
         settingType: entry?.type ?? null,
         vecBaseKey: entry?.baseKey,
@@ -176,14 +182,14 @@ export function buildRows(def: { type?: string; inputs: PortDefinition[]; output
       }
     }
 
-    const maxLen = Math.max(def.inputs.length + extraSettings.length, def.outputs.length);
+    const maxLen = Math.max(def.inputs.length + extraSettings.length, outs.length);
     for (let i = 0; i < maxLen; i++) {
       if (i < def.inputs.length) {
         const inp = def.inputs[i];
         const key = inp.id in defaults ? inp.id : null;
         rows.push({
           input: inp,
-          output: def.outputs[i] ?? null,
+          output: outs[i] ?? null,
           settingKey: key,
           settingType: key ? (String(defaults[key]).startsWith('#') ? 'color' : 'number') : null,
         });
@@ -191,7 +197,7 @@ export function buildRows(def: { type?: string; inputs: PortDefinition[]; output
         const extra = extraSettings[i - def.inputs.length];
         rows.push({
           input: null,
-          output: def.outputs[i] ?? null,
+          output: outs[i] ?? null,
           settingKey: extra?.key ?? null,
           settingType: extra?.type ?? null,
           vecBaseKey: extra?.baseKey,
@@ -201,8 +207,8 @@ export function buildRows(def: { type?: string; inputs: PortDefinition[]; output
   }
 
   // Guarantee at least one row for output-only nodes (e.g. positionGeometry)
-  if (rows.length === 0 && def.outputs.length > 0) {
-    for (const out of def.outputs) {
+  if (rows.length === 0 && outs.length > 0) {
+    for (const out of outs) {
       rows.push({ input: null, output: out, settingKey: null, settingType: null });
     }
   }
@@ -255,7 +261,7 @@ export const ShaderNode = memo(function ShaderNode({
   const textScale = nodeTextScale(data.registryType);
   if (textScale !== 1) (nodeStyle as Record<string, string | number>)['--node-text-scale'] = textScale;
   const headerStyle: CSSProperties = { background: costColor };
-  const rows = useMemo(() => buildRows(def), [def]);
+  const rows = useMemo(() => buildRows(def, data.dynamicOutputs), [def, data.dynamicOutputs]);
 
   // Track which input ports have edges connected
   const connectedInputs = useMemo(
@@ -577,8 +583,12 @@ export const ShaderNode = memo(function ShaderNode({
               </div>
 
               {/* Right side: output handle (outputs[0] moves out of its row
-                  when a designer socket override exists) */}
+                  when a designer socket override exists). Data nodes also show
+                  each column's name (its CSV header) beside the socket. */}
               <div className="shader-node__right">
+                {row.output && data.dynamicOutputs && (
+                  <span className="shader-node__out-label">{row.output.label}</span>
+                )}
                 {row.output && !(rowsOutOff != null && row.output === def.outputs[0]) && (
                   <TypedHandle
                     type="source"

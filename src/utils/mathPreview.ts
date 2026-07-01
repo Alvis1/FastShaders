@@ -83,28 +83,37 @@ export function renderMathPreview(
     const val = func(inputValue);
     const sx = width / 2; // always centered horizontally
     const sy = toScreenY(val);
+    // A non-finite input or result (e.g. an upstream pow(-1, 0.5)=NaN or
+    // exp(1000)=Infinity feeding this preview) would place the dot at NaN coords
+    // (silent canvas no-ops) and print "sin(NaN) = NaN". Degrade to a muted
+    // placeholder readout and skip the undrawable dot instead.
+    const finite = Number.isFinite(inputValue) && Number.isFinite(val);
 
-    // Vertical line from x-axis to dot
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.15)';
-    ctx.lineWidth = 0.5;
-    ctx.setLineDash([2, 2]);
-    ctx.beginPath();
-    ctx.moveTo(sx, yAxisScreen);
-    ctx.lineTo(sx, sy);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    if (finite) {
+      // Vertical line from x-axis to dot
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.15)';
+      ctx.lineWidth = 0.5;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(sx, yAxisScreen);
+      ctx.lineTo(sx, sy);
+      ctx.stroke();
+      ctx.setLineDash([]);
 
-    // Dot
-    ctx.fillStyle = accentColor;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 3, 0, TWO_PI);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
+      // Dot
+      ctx.fillStyle = accentColor;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 3, 0, TWO_PI);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
 
     // Value label with background pill
-    const label = `${funcLabel}(${inputValue.toFixed(1)}) = ${val.toFixed(3)}`;
+    const label = finite
+      ? `${funcLabel}(${inputValue.toFixed(1)}) = ${val.toFixed(3)}`
+      : `${funcLabel}(…) = …`;
     ctx.font = '8px "JetBrains Mono", monospace';
     ctx.textAlign = 'center';
     const metrics = ctx.measureText(label);

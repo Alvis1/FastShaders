@@ -7,7 +7,7 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 ## Features
 
 - **Bi-directional sync** — edit either the graph or the TSL code; changes round-trip in both directions
-- **Node graph editor** — ~70 TSL node types across 10 visible categories
+- **Node graph editor** — ~66 TSL node types across 10 visible categories
 - **Code editor** — Monaco with TSL syntax highlighting, light/dark toggle, inline error/warning squiggles, and a separate read-only Script tab showing the exported `.js` module
 - **Live 3D preview** — WebGPU-rendered preview with five geometries (sphere, cube, plane, Utah teapot, Stanford bunny), three lighting modes (studio / moon / laboratory), subdivision slider, picked background color, orbit camera, and play/pause
 - **MaterialX noise** — 8 built-in noise variants (Perlin, fBm, cell, Worley/Voronoi) backed by `three/tsl`'s MaterialX functions
@@ -15,7 +15,7 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 - **Groups** — Ctrl/Cmd+G to wrap selected nodes in a recolorable, collapsible container; save groups to a per-browser library and drag them onto any graph
 - **Property uniforms** — `property_float` nodes become live-tunable sliders in the preview overlay and component attributes in the A-Frame export
 - **Copy / paste / duplicate** — Cmd/Ctrl+C, Cmd/Ctrl+V, Cmd/Ctrl+D across nodes (internal edges preserved)
-- **VR cost budget** — per-headset cost meter (Quest 2/3/3s, Steam Frame, Pico 4, Apple Vision Pro) with a color-gradient bar (not 
+- **VR cost budget** — per-headset cost meter (Quest 2/3/3s, Steam Frame, Pico 4, Apple Vision Pro) with a color-gradient bar that fills as the graph's GPU cost approaches the selected headset's budget (advisory, not a hard limit)
 
 
 ### Using the shader module with a-frame-shaderloader

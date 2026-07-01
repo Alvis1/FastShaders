@@ -681,6 +681,31 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'HSL', dataType: 'vec3' }],
   },
 
+  // ===== DATA VISUALIZATION =====
+  // Renders a 1-D data signal (wire a Data node column into `signal`) as
+  // density-modulated stripes plus a sequential color ramp. The stripe density
+  // is driven by a CPU-precomputed cumulative-phase texture (baked in
+  // graphToCode from the upstream Data column), so the bars never tear; the
+  // derivative-AA + moiré fade live in the emitted TSL. tslFunction is empty —
+  // graphToCode emits this node specially (no `three/tsl` import by name).
+  {
+    type: 'stripes',
+    label: 'Data Stripes',
+    category: 'color',
+    tslFunction: '',
+    tslImportModule: '',
+    inputs: [{ id: 'signal', label: 'Signal', dataType: 'float' }],
+    outputs: [{ id: 'out', label: 'Color', dataType: 'vec3' }],
+    defaultValues: {
+      baseFrequency: 80,
+      density: 1.5,
+      lowColor: '#1b2a4a',
+      highColor: '#ffd24d',
+    },
+    description:
+      'Visualize a Data node column as density-modulated stripes + color ramp. Wire a Data output into Signal.',
+  },
+
   // ===== OUTPUT =====
   {
     type: 'output',
@@ -714,10 +739,27 @@ const unknownNodeDef: NodeDefinition = {
   description: 'Unknown/unsupported TSL function (preserved for round-tripping)',
 };
 
+// Created exclusively by dropping a CSV onto the canvas — never dragged blank
+// from the palette (it would carry no data), so it's excluded from
+// allDefinitions like `unknown`. Its real outputs are per-instance
+// `dynamicOutputs` (one float per CSV column); the single placeholder here is
+// what graphToCode/shape-inference fall back to. Each output samples its
+// column's DataTexture at uv.x.
+const dataNodeDef: NodeDefinition = {
+  type: 'dataNode',
+  label: 'Data',
+  category: 'input',
+  tslFunction: '',
+  tslImportModule: '',
+  inputs: [],
+  outputs: [{ id: 'col0', label: 'Column', dataType: 'float' }],
+  description: 'A dropped CSV dataset; one float output per column, sampled at uv.x.',
+};
+
 const allDefinitions: NodeDefinition[] = [...definitions];
 
 export const NODE_REGISTRY = new Map<string, NodeDefinition>(
-  [...allDefinitions, unknownNodeDef].map(d => [d.type, d])
+  [...allDefinitions, unknownNodeDef, dataNodeDef].map(d => [d.type, d])
 );
 
 export const TSL_FUNCTION_TO_DEF = new Map<string, NodeDefinition>(

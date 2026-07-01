@@ -11,6 +11,7 @@ import type {
   SyncSource,
   ParseError,
   GroupNodeData,
+  NoteNodeData,
   BoundarySocket,
   TSLDataType,
 } from '@/types';
@@ -125,7 +126,7 @@ interface ContextMenuState {
   open: boolean;
   x: number;
   y: number;
-  type: 'canvas' | 'node' | 'shader' | 'edge' | 'group';
+  type: 'canvas' | 'node' | 'shader' | 'edge' | 'group' | 'note';
   nodeId?: string;
   edgeId?: string;
   /** Source pin info when menu was opened by dragging from an output handle. */
@@ -345,7 +346,7 @@ interface AppState {
   redo: () => void;
 
   // UI actions
-  openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader' | 'edge' | 'group', nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string) => void;
+  openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader' | 'edge' | 'group' | 'note', nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string) => void;
   closeContextMenu: () => void;
   setSplitRatio: (ratio: number) => void;
   setRightSplitRatio: (ratio: number) => void;
@@ -376,6 +377,10 @@ interface AppState {
   deleteGroup: (groupId: string) => void;
   /** Patch a group node's data (label / color). */
   updateGroupData: (groupId: string, data: Partial<GroupNodeData>) => void;
+  /** Add a free-floating sticky note at the given flow-space position. */
+  addNote: (position: { x: number; y: number }) => void;
+  /** Patch a note node's data (heading / text / color / scale). */
+  updateNoteData: (noteId: string, data: Partial<NoteNodeData>) => void;
   /** Collapse/expand a group: hide its children + their edges and shrink to a pill, or restore. */
   toggleGroupCollapsed: (groupId: string) => void;
 
@@ -583,9 +588,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   groupSelection: (nodeIds) => {
     if (nodeIds.length < 2) return null;
     const state = get();
-    // Only group nodes that exist and are not already groups themselves.
+    // Only group nodes that exist and are not already groups/notes themselves.
     const members = state.nodes.filter(
-      (n) => nodeIds.includes(n.id) && n.type !== 'group',
+      (n) => nodeIds.includes(n.id) && n.type !== 'group' && n.type !== 'note',
     );
     if (members.length < 2) return null;
 
@@ -805,6 +810,44 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set((state) => ({
       nodes: state.nodes.map((n) =>
         n.id === groupId ? { ...n, data: { ...n.data, ...data } } : n,
+      ) as AppNode[],
+      syncSource: 'graph',
+      isUndoRedo: false,
+    }));
+  },
+
+  addNote: (position) => {
+    const note = {
+      id: generateId(),
+      type: 'note',
+      position,
+      // React Flow honors width/height directly on the node; NodeResizer mutates them.
+      width: 240,
+      height: 150,
+      // Dragged only by the header bar so the body textarea stays editable.
+      dragHandle: '.note-node__header',
+      data: {
+        registryType: 'note',
+        heading: 'Note',
+        text: '',
+        color: '#fff7cc',
+        headerColor: '#ffd24a',
+        scale: 1,
+      } as NoteNodeData,
+    } as AppNode;
+    get().pushHistory();
+    // Prepend so the note renders BEHIND existing nodes (React Flow stacks later
+    // array entries on top at equal z-index). Notes are never parents/children,
+    // so this can't break the group parent-before-child ordering invariant.
+    set((state) => ({ nodes: [note, ...state.nodes], syncSource: 'graph', isUndoRedo: false }));
+  },
+
+  // No pushHistory here: notes are low-stakes annotations and inline typing
+  // would otherwise flood the 50-entry history buffer on every keystroke.
+  updateNoteData: (noteId, data) => {
+    set((state) => ({
+      nodes: state.nodes.map((n) =>
+        n.id === noteId ? { ...n, data: { ...n.data, ...data } } : n,
       ) as AppNode[],
       syncSource: 'graph',
       isUndoRedo: false,

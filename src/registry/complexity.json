@@ -79,6 +79,9 @@
     "hsl": 15,
     "toHsl": 15,
 
+    "dataNode": 2,
+    "stripes": 18,
+
     "unknown": 0,
     "output": 0
   }

@@ -38,7 +38,9 @@ interface ContentProps {
  *  headers all read identically. Width/height caps keep extreme designs
  *  inside the drawer (those render with a smaller heading, still
  *  proportional). The scale is uniform — an undistorted miniature. */
-const CARD_HEADING_PX = 19.5; // target visual title size (pre tile zoom)
+// Target title size (pre 0.67 tile-zoom). 10px = --font-size-xs, matching the
+// Textures-tab card headers, so every asset card's heading reads identically.
+const CARD_HEADING_PX = 10;
 const CARD_NODE_MAX_W = 300;
 const CARD_NODE_MAX_H = 270;
 function FitNodeHeading({ visualScale, textScale, children }: { visualScale: number; textScale: number; children: React.ReactNode }) {
@@ -592,13 +594,13 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
       {flowType === 'color' ? (
         <ColorCardContent def={def} cost={cost} costTextColor={costTextColor} />
       ) : flowType === 'mathPreview' ? (
-        <MathCardContent {...shared} />
+        <FitNodeHeading visualScale={shared.costScale} textScale={1}><MathCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'preview' ? (
-        <NoiseCardContent {...shared} />
+        <FitNodeHeading visualScale={shared.costScale} textScale={1}><NoiseCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'clock' ? (
-        <ClockCardContent {...shared} />
+        <FitNodeHeading visualScale={shared.costScale} textScale={1}><ClockCardContent {...shared} /></FitNodeHeading>
       ) : def.type === 'slider' ? (
-        <SliderCardContent {...shared} />
+        <FitNodeHeading visualScale={shared.costScale} textScale={1}><SliderCardContent {...shared} /></FitNodeHeading>
       ) : (
         <FitNodeHeading visualScale={shared.costScale} textScale={nodeTextScale(def.type)}><ShaderCardContent {...shared} /></FitNodeHeading>
       )}

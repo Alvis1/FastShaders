@@ -432,10 +432,17 @@ function evaluate(
     case 'voronoi':
     case 'voronoiVec2':
     case 'voronoiVec3': {
+      // `pos`/`scale` may hold a coordinate-source NAME (e.g. 'positionGeometry',
+      // 'uv') rather than a number — Number() of those is NaN, which would poison
+      // the sample and every downstream value (the multiply card showed '…').
+      // Fall back to the centre/unit when a resolved coordinate isn't finite,
+      // matching the unconnected-input default.
+      const finiteOr = (n: number | undefined, fallback: number) =>
+        n !== undefined && Number.isFinite(n) ? n : fallback;
       const posInput = channelInput('pos', 0);
-      const scale = scalarInput('scale', 1);
-      const px = (posInput ? posInput[0] : 0.5) * NOISE_UV_SCALE * scale;
-      const py = (posInput ? (posInput[1] ?? 0.5) : 0.5) * NOISE_UV_SCALE * scale;
+      const scale = finiteOr(scalarInput('scale', 1), 1);
+      const px = finiteOr(posInput?.[0], 0.5) * NOISE_UV_SCALE * scale;
+      const py = finiteOr(posInput?.[1], 0.5) * NOISE_UV_SCALE * scale;
       let v: number;
       if (type === 'perlin' || type === 'perlinVec3') v = (perlin2D(px, py) + 1) * 0.5;
       else if (type === 'fbm' || type === 'fbmVec3') v = (fbm2D(px, py) + 1) * 0.5;
@@ -669,8 +676,12 @@ function computeRange(
   // For nodes without a special range, the actual evaluated value is the
   // tightest possible range. Eval handles all the simple cases (constants,
   // arithmetic on constants, time, etc.) and gives a degenerate range.
+  // Only accept a deterministic value as the range when every channel is finite.
+  // A non-finite eval (NaN/Infinity from a poisoned input) must fall through to
+  // interval arithmetic below — otherwise the range collapses to a NaN range and
+  // the EdgeInfoCard renders '…' instead of the real bounds.
   const det = evaluateNodeOutput(nodeId, nodes, edges, time);
-  if (det && det.length > 0) {
+  if (det && det.length > 0 && det.every(Number.isFinite)) {
     result = rangeOfValue(det);
     cache.set(nodeId, result);
     return result;

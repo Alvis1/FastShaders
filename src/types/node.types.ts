@@ -41,6 +41,14 @@ export interface ShaderNodeData {
   cost: number;
   values: Record<string, string | number>;
   exposedPorts?: string[];
+  /**
+   * Per-instance output ports, overriding the registry definition's static
+   * `outputs`. Used by the Data node, whose output count equals the dropped
+   * CSV's column count (one float output per column). When present, ShaderNode
+   * renders these instead of `def.outputs`; ids are always `col0`, `col1`, …
+   * (labels carry the human column names, never reaching generated code).
+   */
+  dynamicOutputs?: PortDefinition[];
   [key: string]: unknown;
 }
 
@@ -109,6 +117,27 @@ export interface GroupNodeData {
   [key: string]: unknown;
 }
 
+/**
+ * Free-floating annotation ("sticky note") placed on the canvas. Has no shader
+ * semantics — graphToCode/cpuEvaluator ignore it (no registry entry) — so it's
+ * purely a comment. Resizable via NodeResizer (width/height live on the React
+ * Flow node), recolorable, with a scalable heading + body.
+ */
+export interface NoteNodeData {
+  registryType: 'note';
+  /** Heading shown in the (draggable) header bar. Edited via the settings menu. */
+  heading: string;
+  /** Free-form body text (inline-editable). */
+  text: string;
+  /** Body background color (hex). Text auto-contrasts against it. */
+  color: string;
+  /** Header bar color (hex), distinct from the body. */
+  headerColor: string;
+  /** Font-size multiplier for heading + body (1 = default). */
+  scale?: number;
+  [key: string]: unknown;
+}
+
 export type ShaderFlowNode = Node<ShaderNodeData, 'shader'>;
 export type ColorFlowNode = Node<ShaderNodeData, 'color'>;
 export type PreviewFlowNode = Node<ShaderNodeData, 'preview'>;
@@ -116,6 +145,7 @@ export type MathPreviewFlowNode = Node<ShaderNodeData, 'mathPreview'>;
 export type ClockFlowNode = Node<ShaderNodeData, 'clock'>;
 export type OutputFlowNode = Node<OutputNodeData, 'output'>;
 export type GroupFlowNode = Node<GroupNodeData, 'group'>;
+export type NoteFlowNode = Node<NoteNodeData, 'note'>;
 export type AppNode =
   | ShaderFlowNode
   | ColorFlowNode
@@ -123,7 +153,8 @@ export type AppNode =
   | MathPreviewFlowNode
   | ClockFlowNode
   | OutputFlowNode
-  | GroupFlowNode;
+  | GroupFlowNode
+  | NoteFlowNode;
 
 export interface TypedEdgeData {
   dataType: TSLDataType;
@@ -134,7 +165,7 @@ export type AppEdge = Edge<TypedEdgeData>;
 
 /** Safely extract values from any AppNode's data. */
 export function getNodeValues(node: AppNode): Record<string, string | number> {
-  if (node.type === 'output' || node.type === 'group') return {};
+  if (node.type === 'output' || node.type === 'group' || node.type === 'note') return {};
   return (node.data as ShaderNodeData).values ?? {};
 }
 

@@ -1,7 +1,18 @@
 # TSL-Textures Library Analysis
 
-**Package:** tsl-textures v3.0.1
-**Location:** `node_modules/tsl-textures/src/`
+> **⚠️ STATUS: HISTORICAL / ARCHIVAL.** `tsl-textures` was **removed** from
+> FastShaders — it is no longer in `package.json` or `node_modules`, and no
+> `src/` file imports it. The app now uses three.js built-in MaterialX noise
+> (`mx_noise_*`, `mx_fractal_noise_*`, `mx_worley_noise_*`, `mx_cell_noise_float`)
+> exposed through **8 noise nodes** (perlin, perlinVec3, fbm, fbmVec3, cellNoise,
+> voronoi, voronoiVec2, voronoiVec3). The tsl-textures analysis below is retained
+> only as research provenance and does **not** describe the current app. For the
+> live node registry see [`CLAUDE.md`](CLAUDE.md) / `src/registry/nodeRegistry.ts`.
+> (A standalone `tsl-textures.min.js` still ships inside the `a-frame-shaderloader`
+> submodule's own bundle, but the FastShaders app does not import it.)
+
+**Package:** tsl-textures v3.0.1 *(historical — not installed)*
+**Location:** `node_modules/tsl-textures/src/` *(no longer present)*
 **Total Files:** 54 JavaScript source files
 **Total Exports:** 119 functions
 
@@ -136,9 +147,13 @@ Re-exports all 51 texture generators plus all utilities from `tsl-utils.js`.
 
 ## Other Nodes (TSL Built-ins) — from `nodeRegistry.ts`
 
-These are declarative node definitions wrapping `three/tsl` functions. Each is a single registry entry (no custom function body — they call the TSL built-in directly). Defined in `src/registry/nodeRegistry.ts` (540 lines, 4 exported functions).
+> *Pre-migration snapshot — the per-node table below is **incomplete** vs the
+> current registry (it omits the 8 position/camera inputs, the `oneMinus`/Invert
+> node, the entire `logic` category, and 7 of the 8 noise nodes). Corrected
+> totals are in the [Summary below](#summary-by-category-current-registry); the
+> live source of truth is `src/registry/nodeRegistry.ts`.*
 
-Exported functions: `searchNodes()`, `getAllDefinitions()`, `getFlowNodeType()`, + registry maps (`NODE_REGISTRY`, `TSL_FUNCTION_TO_DEF`).
+These are declarative node definitions wrapping `three/tsl` functions. Each is a single registry entry (no custom function body — they call the TSL built-in directly). Defined in `src/registry/nodeRegistry.ts` (~751 lines; 3 exported functions — `searchNodes()`, `getAllDefinitions()`, `getFlowNodeType()` — plus 2 exported maps `NODE_REGISTRY` and `TSL_FUNCTION_TO_DEF`).
 
 | Node | Label | Category | TSL Function | Inputs | Outputs |
 |------|-------|----------|-------------|-------:|--------:|
@@ -191,20 +206,24 @@ Exported functions: `searchNodes()`, `getAllDefinitions()`, `getFlowNodeType()`,
 | output | Output | output | `output` | 6 | 0 |
 | unknown | Unknown | unknown | (varies) | 0 | 1 |
 
-### Summary by Category
+### Summary by Category (current registry)
 
 | Category | Node Count |
 |----------|----------:|
-| Input | 8 |
+| Input | 16 |
 | Type | 6 |
 | Arithmetic | 4 |
-| Math | 14 |
+| Math | 15 |
 | Interpolation | 4 |
+| Logic | 3 |
 | Vector | 7 |
-| Noise | 1 |
+| Noise | 8 |
 | Color | 2 |
 | Output | 1 |
 | Unknown | 1 (hidden) |
-| **Total built-in** | **48** |
-| **+ Textures (tsl-textures)** | **51** |
-| **Grand total** | **99** |
+| **Total registered** | **66** |
+| **incl. hidden `unknown`** | **67** |
+
+There are **no tsl-textures nodes** in the registry. The content browser also
+exposes 8 built-in textures (parsed node graphs from `builtinTextures.ts`, not
+registry nodes) behind an empty `texture` category that backs the Textures tab.

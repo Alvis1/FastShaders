@@ -76,6 +76,14 @@
   white-space: nowrap;
 }
 
+/* Output port label (CSV column headers on the Data node) shown beside the socket */
+.shader-node__out-label {
+  font: 600 calc(9px * var(--node-text-scale, 1)) var(--font-mono);
+  color: rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  margin-right: 2px;
+}
+
 /* ===== Operator layout (2-input glyph node: glyph BETWEEN the two inputs) ===== */
 .shader-node__op {
   position: relative;

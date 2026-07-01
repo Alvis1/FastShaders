@@ -410,3 +410,41 @@ describe('evaluateNodeRange', () => {
     }
   });
 });
+
+describe('non-finite poisoning (noise pos = coordinate-source name)', () => {
+  // Regression: the demo perlin node stores pos: 'positionGeometry' (a coord-source
+  // NAME, not a number). Number('positionGeometry') is NaN, which used to poison the
+  // CPU sample and every downstream value — the `mul → output` edge card rendered '…'.
+  it('samples noise to a finite value when pos names a coordinate source', () => {
+    const n = makeNode('n', 'perlin', { pos: 'positionGeometry' });
+    const out = evaluateNodeOutput('n', [n], [], 0)!;
+    expect(out).not.toBeNull();
+    expect(out.every(Number.isFinite)).toBe(true);
+  });
+
+  it('keeps a downstream multiply finite (the edge-card bug)', () => {
+    const noise = makeNode('noise', 'perlin', { pos: 'positionGeometry' });
+    const prop = makeNode('prop', 'property_float', { value: 1 });
+    const mul = makeNode('mul', 'mul');
+    const edges = [makeEdge('noise', 'out', 'mul', 'a'), makeEdge('prop', 'out', 'mul', 'b')];
+    const ev = evaluateNodeOutput('mul', [noise, prop, mul], edges, 0)!;
+    expect(ev.every(Number.isFinite)).toBe(true);
+    const r = evaluateNodeRange('mul', [noise, prop, mul], edges, 0)!;
+    expect(r).not.toBeNull();
+    expect(r.min.every(Number.isFinite) && r.max.every(Number.isFinite)).toBe(true);
+  });
+
+  it('never collapses a range to NaN even if eval is non-finite', () => {
+    // exp(1000) overflows to Infinity in eval; the range must fall through to
+    // interval arithmetic rather than wrap the Infinity into a NaN range.
+    const big = makeNode('big', 'property_float', { value: 1000 });
+    const e = makeNode('e', 'exp');
+    const edges = [makeEdge('big', 'out', 'e', 'x')];
+    const r = evaluateNodeRange('e', [big, e], edges, 0);
+    // exp has no interval-propagation case → falls through to null rather than a
+    // NaN/Infinity range. Either way it must NOT be a non-finite range.
+    if (r) {
+      expect(r.min.every(Number.isFinite) && r.max.every(Number.isFinite)).toBe(true);
+    }
+  });
+});

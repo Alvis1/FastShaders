@@ -82,6 +82,17 @@ function tabStyle(hex: string, active: boolean): React.CSSProperties {
 export function ContentBrowser() {
   const [activeCategory, setActiveCategory] = useState<BrowserCategory>('all');
   const [search, setSearch] = useState('');
+  // Asset-bar collapse, persisted so it survives reloads.
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('fs:assetBarCollapsed') === '1'; } catch { return false; }
+  });
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((c) => {
+      const next = !c;
+      try { localStorage.setItem('fs:assetBarCollapsed', next ? '1' : '0'); } catch { /* private mode */ }
+      return next;
+    });
+  }, []);
   const savedGroups = useAppStore((s) => s.savedGroups);
   const scrollRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -178,7 +189,16 @@ export function ContentBrowser() {
   }
 
   return (
-    <div className="content-browser">
+    <div className={`content-browser${collapsed ? ' content-browser--collapsed' : ''}`}>
+      <button
+        type="button"
+        className="content-browser__toggle"
+        onClick={toggleCollapsed}
+        title={collapsed ? 'Show asset bar' : 'Hide asset bar'}
+        aria-label={collapsed ? 'Show asset bar' : 'Hide asset bar'}
+      >
+        {collapsed ? '▴' : '▾'}
+      </button>
       <div className="content-browser__scroll-wrapper">
         {tabsArrows.canLeft && <ScrollArrow direction="left" onClick={() => tabsArrows.scrollBy(-1)} />}
         <div className="content-browser__categories" ref={tabsRef}>

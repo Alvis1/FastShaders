@@ -1,9 +1,44 @@
 .content-browser {
+  position: relative;
   border-top: 1px solid var(--border-subtle);
   background: var(--canvas-bg, var(--bg-panel));
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Top-right collapse toggle — hides the asset bar to free canvas space. */
+.content-browser__toggle {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  z-index: 5;
+  width: 24px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+}
+
+.content-browser__toggle:hover {
+  color: var(--text-primary);
+}
+
+/* Collapsed: hide the tabs + cards, leaving a thin strip with the toggle. */
+.content-browser--collapsed {
+  min-height: 22px;
+}
+
+.content-browser--collapsed .content-browser__scroll-wrapper {
+  display: none;
 }
 
 /* ===== Scroll wrapper with arrow buttons ===== */

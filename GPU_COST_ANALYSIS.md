@@ -4,6 +4,14 @@
 > `add = 1 point`. All costs are relative to a single full-rate ALU operation.
 > Budgets assume **3–5 concurrent shaders** in the scene.
 
+> [!warning] Implementation status — read first
+> This file is **research/analysis** that *proposed* revised costs and VR budgets. The shipped `src/registry/complexity.json` and `HEADSET_PRESETS` (`src/store/useAppStore.ts`) adopted **some** proposals and **rejected others**, so not every "New"/"Revised" number below is live:
+> - **Adopted** (match `complexity.json`): `pow` 12, `sin`/`cos` 4, `sqrt` 4, `exp` 5, `div` 4, `hsl`/`toHsl` 15, `normalize`/`length` 7, `distance` 8, `dot` 3, `cross` 6, `abs` 0, constructors 0.
+> - **NOT adopted** (shipped value differs): `mod` is **2** (not 6), `smoothstep` is **7** (not 10), `remap` is **5** (not 7).
+> - **Noise**: the app ships **8** MaterialX noise nodes — `cellNoise` 12, `perlin` 35, `perlinVec3` 75, `fbm` 95, `fbmVec3` 200, `voronoi` 55, `voronoiVec2` 60, `voronoiVec3` 65. There is **no `fractal` node** (the FBM node is `fbm` = 95, not 140).
+> - **Headset budgets**: shipped `maxPoints` are **Pico 4 80, Quest 2 90, Quest 3S 110, Quest 3 200, Steam Frame 220, Vision Pro 350** (`complexity.json` global cap `maxBudget = 350`). The "New maxPoints" column further down (70/75/95/165/160/285) was **not** adopted.
+> - **`tsl-textures` was removed** from the app (see the tsl-textures section banner below); those Tier 1–5 costs are historical research only.
+
 ---
 
 ## Methodology
@@ -112,12 +120,16 @@ Component-wise operations (`add`, `mul`, `mix`, etc.) applied to vectors execute
 
 ### Noise (55–140 pts)
 
+> Note: the shipped registry has **8** noise nodes, not 2, and the FBM node is `fbm` (cost **95** in `complexity.json`) — there is no `fractal` node. Shipped noise costs: cellNoise 12, perlin 35, perlinVec3 75, fbm 95, fbmVec3 200, voronoi 55, voronoiVec2 60, voronoiVec3 65.
+
 | Node                               | Old | New     | Rationale                                                                                                     |
 | ---------------------------------- | --- | ------- | ------------------------------------------------------------------------------------------------------------- |
 | `fractal` (mx_fractal_noise_float) | 80  | **140** | FBM with ~4 octaves of 3D Perlin noise. Each octave ~35 ALU ops (8 gradient lookups). 4 x 35 = ~140[^15][^16] |
 | `voronoi` (mx_worley_noise_float)  | 60  | **55**  | 2D Worley: 9 neighboring cells x (hash + distance). ~50–60 ALU ops[^15]                                       |
 
 ### tsl-textures (10–165 pts)
+
+> **⚠️ HISTORICAL — `tsl-textures` was removed from FastShaders** and replaced by three.js built-in MaterialX noise. The `tslTex_*` nodes below no longer exist in the app or `complexity.json`; `useAppStore.ts` migrates/deletes legacy `tslTex_*` nodes from saved graphs. Retained only as cost-estimation research.
 
 Costs based on internal composition: noise calls, loop iterations, trigonometric operations, voronoi lookups.
 
@@ -256,6 +268,8 @@ Despite having 1.9x the TFLOPS (5.7 vs 3.0), Vision Pro renders **~2.83x more pi
 ### Per-shader budget (3–5 shaders in scene)
 
 Dividing effective FLOPs/px by ~4 (average of 3–5 shaders weighted by screen coverage). Since TFLOPS specs count FMA as 2 FLOPs but we cost FMA as 1 point, the FLOPs-to-points conversion is approximately 1:1 for add-heavy code and 2:1 for FMA-heavy code. We use a **1.5:1** ratio as a middle ground for mixed shader code, giving `maxPoints ≈ FLOPs/px / 4 / 1.5`:
+
+> **Shipped `maxPoints` (not the "New maxPoints" column below):** Pico 4 80, Quest 2 90, Quest 3S 110, Quest 3 200, Steam Frame 220, Vision Pro 350. The proposed values in the table were not adopted as written.
 
 | Device              | Old maxPoints | **New maxPoints** | Change | Practical meaning                                                          |
 | ------------------- | ------------- | ----------------- | ------ | -------------------------------------------------------------------------- |

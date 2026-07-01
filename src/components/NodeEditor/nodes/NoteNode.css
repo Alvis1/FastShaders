@@ -1,0 +1,59 @@
+.note-node {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-node);
+  overflow: hidden;
+}
+
+.note-node--selected {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+/* Colored header bar — the only drag handle (dragHandle on the node). */
+.note-node__header {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  font-family: var(--font-sans);
+  font-weight: 700;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: grab;
+  user-select: none;
+}
+
+.note-node__header:active {
+  cursor: grabbing;
+}
+
+.note-node__body {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: transparent;
+  resize: none;
+  padding: 6px 8px;
+  font-family: var(--font-sans);
+  line-height: 1.4;
+  outline: none;
+  overflow: auto;
+}
+
+.note-node__body::placeholder {
+  opacity: 0.5;
+}
+
+/* Notes sit BEHIND the shader nodes at rest (background annotations), but lift
+   above them while selected/dragging so they stay clickable + grabbable. */
+.react-flow__node.react-flow__node-note {
+  z-index: 0 !important;
+}
+.react-flow__node.react-flow__node-note.selected,
+.react-flow__node.react-flow__node-note.dragging {
+  z-index: 1000 !important;
+}
