@@ -52,10 +52,17 @@ AFRAME.registerComponent("shader", {
     this._currentSrc = tslPath;
 
     try {
+      // Treat `blob:` and `data:` URLs as absolute. When the preview iframe
+      // is sandboxed without `allow-same-origin` its origin is opaque, so
+      // blob URLs minted inside it look like `blob:null/<uuid>` — the
+      // `://` heuristic below misses that form and the loader would
+      // wrongly prefix `./`, producing an unparseable URL.
       const modulePath =
         tslPath.startsWith("./") ||
         tslPath.startsWith("/") ||
-        tslPath.includes("://")
+        tslPath.includes("://") ||
+        tslPath.startsWith("blob:") ||
+        tslPath.startsWith("data:")
           ? tslPath
           : "./" + tslPath;
 
@@ -68,6 +75,10 @@ AFRAME.registerComponent("shader", {
 
       source = autoInjectTSLImports(source);
       source = fixTSLShadowing(source);
+      // Rewrite bare three/three-tsl imports into reads of the single global
+      // THREE the A-Frame IIFE installed (no shim file / import map needed).
+      source = globalizeBareImports(source);
+      // Resolve any remaining relative imports against the module's own URL.
       source = resolveTSLImports(
         source,
         new URL(modulePath, location.href).href,
@@ -327,24 +338,9 @@ function autoInjectTSLImports(source) {
   const bodyLines = source
     .split("\n")
     .filter((l) => !/^\s*(import|export)\s/.test(l));
-  // Strip comments while respecting string literals.
-  // Replace string contents with spaces (preserving length) before stripping comments,
-  // so patterns inside strings like "// not a comment" are not removed.
+  // Strip comments so patterns like "// glow (effect)" don't trigger false matches
   const body = bodyLines
-    .map((l) => {
-      // Mask string literals to avoid false comment matches inside them
-      const masked = l.replace(/(["'`])(?:(?!\1|\\).|\\.)*\1/g, (m) => " ".repeat(m.length));
-      // Find comment start positions in the masked line
-      const lineComment = masked.indexOf("//");
-      const blockStart = masked.indexOf("/*");
-      if (lineComment >= 0 && (blockStart < 0 || lineComment < blockStart)) {
-        return l.slice(0, lineComment);
-      }
-      if (blockStart >= 0) {
-        return l.replace(/\/\*.*?\*\//g, "");
-      }
-      return l;
-    })
+    .map((l) => l.replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, ""))
     .join("\n");
 
   // Detect function calls: name(
@@ -532,55 +528,67 @@ function fixTSLShadowing(source) {
   return fixedLines.join("\n");
 }
 
-// Built-in specifier map so TSL shaders resolve without a page-level import map.
-// Local shims re-export from window.THREE (set by the IIFE bundle), so all code
-// shares a single Three.js instance. Absolute URLs are computed at load time so
-// blob-loaded modules can resolve them.
-const _scriptDir = (document.currentScript && document.currentScript.src) || "";
-const _baseDir = _scriptDir
-  ? _scriptDir.substring(0, _scriptDir.lastIndexOf("/") + 1)
-  : "";
-const _shimUrl = _baseDir + "tsl-shim.js";
-const specifierMap = {
-  three: _shimUrl,
-  "three/webgpu": _shimUrl,
-  "three/tsl": _shimUrl,
-  "tsl-textures": _shimUrl,
+// TSL shaders import from bare specifiers ('three', 'three/webgpu',
+// 'three/tsl', 'tsl-textures'). The A-Frame IIFE bundle installs a SINGLE
+// Three.js instance on the global (window.THREE / window.tslTextures), so
+// instead of resolving those specifiers to an ESM shim file we rewrite each
+// import into a destructure that READS that one global instance. This keeps
+// every shader on the same Three.js as the A-Frame scene (no second instance,
+// no shim file, and no page-level import map — which blob: modules ignore
+// anyway).
+const GLOBAL_SOURCE = {
+  three: "globalThis.THREE",
+  "three/webgpu": "globalThis.THREE",
+  "three/tsl": "globalThis.THREE.TSL",
+  "tsl-textures": "globalThis.tslTextures",
 };
 
-// Resolve a bare specifier using the built-in map.
-// Handles exact matches and prefix matches (keys ending with '/').
-function resolveSpecifier(specifier) {
-  if (specifier in specifierMap) {
-    return specifierMap[specifier];
-  }
-  for (const key in specifierMap) {
-    if (key.endsWith("/") && specifier.startsWith(key)) {
-      return specifierMap[key] + specifier.slice(key.length);
-    }
-  }
-  return null;
+// Rewrite `import ... from '<bare>'` → `const { ... } = <global>;`.
+// Handles named (incl. `x as y` aliases), default, and `* as ns` imports.
+// Relative imports ('./', '../') are left untouched for resolveTSLImports().
+function globalizeBareImports(source) {
+  return source.replace(
+    /\bimport\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2\s*;?/g,
+    function (full, clause, quote, spec) {
+      const target = GLOBAL_SOURCE[spec];
+      if (!target) return full; // relative / unknown — leave for later resolver
+      clause = clause.trim();
+      // Namespace import: `* as NS`
+      const ns = clause.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
+      if (ns) return "const " + ns[1] + " = " + target + ";";
+      // Named import (optionally with a leading default): `Def, { a, b as c }`
+      const brace = clause.indexOf("{");
+      if (brace !== -1) {
+        const lead = clause.slice(0, brace).replace(/,\s*$/, "").trim();
+        const inner = clause.slice(brace + 1, clause.lastIndexOf("}"));
+        const fields = inner
+          .split(",")
+          .map(function (n) { return n.trim(); })
+          .filter(Boolean)
+          .map(function (n) {
+            const a = n.split(/\s+as\s+/);
+            return a.length === 2 ? a[0].trim() + ": " + a[1].trim() : a[0].trim();
+          })
+          .join(", ");
+        let out = "const { " + fields + " } = " + target + ";";
+        if (lead) out = "const " + lead + " = " + target + ";\n" + out;
+        return out;
+      }
+      // Default-only import: `import Def from 'x'`
+      const def = clause.match(/^([A-Za-z_$][\w$]*)$/);
+      if (def) return "const " + def[1] + " = " + target + ";";
+      return full;
+    },
+  );
 }
 
-// Resolve bare import specifiers (e.g. 'three/tsl', 'tsl-textures') to full
-// URLs so the module can be loaded from a Blob URL where import maps don't apply.
+// Resolve RELATIVE import specifiers to absolute URLs so a module loaded from a
+// Blob URL can still reach sibling files. Bare specifiers were already turned
+// into global reads by globalizeBareImports.
 function resolveTSLImports(source, baseUrl) {
   return source.replace(
     /from\s+(['"])([^'"]+)\1/g,
     function (match, quote, specifier) {
-      // Bare specifiers (no ./ or / or :// prefix) — resolve via built-in map
-      if (
-        !specifier.startsWith(".") &&
-        !specifier.startsWith("/") &&
-        !specifier.includes("://")
-      ) {
-        const resolved = resolveSpecifier(specifier);
-        if (resolved) {
-          return "from " + quote + resolved + quote;
-        }
-        return match;
-      }
-      // Relative specifiers — resolve against the original file's URL
       if (
         baseUrl &&
         (specifier.startsWith("./") || specifier.startsWith("../"))

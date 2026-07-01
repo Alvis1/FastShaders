@@ -3,7 +3,7 @@
  * Copyright 2010-2026 Three.js Authors
  * SPDX-License-Identifier: MIT
  */
-const REVISION = '183';
+const REVISION = '184';
 
 /**
  * Represents mouse buttons and interaction types in context of controls.
@@ -2066,6 +2066,28 @@ function warnOnce( ...params ) {
 }
 
 /**
+ * Yields execution to the main thread to allow rendering and other tasks.
+ * Uses scheduler.yield() when available (Chrome 115+), falls back to requestAnimationFrame.
+ *
+ * @return {Promise<void>}
+ */
+function yieldToMain() {
+
+	if ( typeof self !== 'undefined' && typeof self.scheduler !== 'undefined' && typeof self.scheduler.yield !== 'undefined' ) {
+
+		return self.scheduler.yield();
+
+	}
+
+	return new Promise( resolve => {
+
+		requestAnimationFrame( resolve );
+
+	} );
+
+}
+
+/**
  * Asynchronously probes for WebGL sync object completion.
  *
  * This function creates a promise that resolves when the WebGL sync object
@@ -3005,13 +3027,7 @@ const MathUtils = {
  */
 class Vector2 {
 
-	/**
-	 * Constructs a new 2D vector.
-	 *
-	 * @param {number} [x=0] - The x value of this vector.
-	 * @param {number} [y=0] - The y value of this vector.
-	 */
-	constructor( x = 0, y = 0 ) {
+	static {
 
 		/**
 		 * This flag can be used for type testing.
@@ -3021,6 +3037,16 @@ class Vector2 {
 		 * @default true
 		 */
 		Vector2.prototype.isVector2 = true;
+
+	}
+
+	/**
+	 * Constructs a new 2D vector.
+	 *
+	 * @param {number} [x=0] - The x value of this vector.
+	 * @param {number} [y=0] - The y value of this vector.
+	 */
+	constructor( x = 0, y = 0 ) {
 
 		/**
 		 * The x value of this vector.
@@ -4782,14 +4808,7 @@ class Quaternion {
  */
 class Vector3 {
 
-	/**
-	 * Constructs a new 3D vector.
-	 *
-	 * @param {number} [x=0] - The x value of this vector.
-	 * @param {number} [y=0] - The y value of this vector.
-	 * @param {number} [z=0] - The z value of this vector.
-	 */
-	constructor( x = 0, y = 0, z = 0 ) {
+	static {
 
 		/**
 		 * This flag can be used for type testing.
@@ -4799,6 +4818,17 @@ class Vector3 {
 		 * @default true
 		 */
 		Vector3.prototype.isVector3 = true;
+
+	}
+
+	/**
+	 * Constructs a new 3D vector.
+	 *
+	 * @param {number} [x=0] - The x value of this vector.
+	 * @param {number} [y=0] - The y value of this vector.
+	 * @param {number} [z=0] - The z value of this vector.
+	 */
+	constructor( x = 0, y = 0, z = 0 ) {
 
 		/**
 		 * The x value of this vector.
@@ -6040,6 +6070,19 @@ const _quaternion$5 = /*@__PURE__*/ new Quaternion();
  */
 class Matrix3 {
 
+	static {
+
+		/**
+		 * This flag can be used for type testing.
+		 *
+		 * @type {boolean}
+		 * @readonly
+		 * @default true
+		 */
+		Matrix3.prototype.isMatrix3 = true;
+
+	}
+
 	/**
 	 * Constructs a new 3x3 matrix. The arguments are supposed to be
 	 * in row-major order. If no arguments are provided, the constructor
@@ -6056,15 +6099,6 @@ class Matrix3 {
 	 * @param {number} [n33] - 3-3 matrix element.
 	 */
 	constructor( n11, n12, n13, n21, n22, n23, n31, n32, n33 ) {
-
-		/**
-		 * This flag can be used for type testing.
-		 *
-		 * @type {boolean}
-		 * @readonly
-		 * @default true
-		 */
-		Matrix3.prototype.isMatrix3 = true;
 
 		/**
 		 * A column-major list of matrix values.
@@ -7055,7 +7089,7 @@ class Source {
 
 		} else if ( ( typeof VideoFrame !== 'undefined' ) && ( data instanceof VideoFrame ) ) {
 
-			target.set( data.displayHeight, data.displayWidth, 0 );
+			target.set( data.displayWidth, data.displayHeight, 0 );
 
 		} else if ( data !== null ) {
 
@@ -7543,6 +7577,15 @@ class Texture extends EventDispatcher {
 		 */
 		this.pmremVersion = 0;
 
+		/**
+		 * Whether the texture should use one of the 16 bit integer formats which are normalized
+		 * to [0, 1] or [-1, 1] (depending on signed/unsigned) when sampled.
+		 *
+		 * @type {boolean}
+		 * @default false
+		 */
+		this.normalized = false;
+
 	}
 
 	/**
@@ -7583,14 +7626,14 @@ class Texture extends EventDispatcher {
 
 	}
 
-	set image( value = null ) {
+	set image( value ) {
 
 		this.source.data = value;
 
 	}
 
 	/**
-	 * Updates the texture transformation matrix from the from the properties {@link Texture#offset},
+	 * Updates the texture transformation matrix from the properties {@link Texture#offset},
 	 * {@link Texture#repeat}, {@link Texture#rotation}, and {@link Texture#center}.
 	 */
 	updateMatrix() {
@@ -7658,6 +7701,7 @@ class Texture extends EventDispatcher {
 		this.format = source.format;
 		this.internalFormat = source.internalFormat;
 		this.type = source.type;
+		this.normalized = source.normalized;
 
 		this.offset.copy( source.offset );
 		this.repeat.copy( source.repeat );
@@ -7776,6 +7820,7 @@ class Texture extends EventDispatcher {
 			format: this.format,
 			internalFormat: this.internalFormat,
 			type: this.type,
+			normalized: this.normalized,
 			colorSpace: this.colorSpace,
 
 			minFilter: this.minFilter,
@@ -7999,15 +8044,7 @@ Texture.DEFAULT_ANISOTROPY = 1;
  */
 class Vector4 {
 
-	/**
-	 * Constructs a new 4D vector.
-	 *
-	 * @param {number} [x=0] - The x value of this vector.
-	 * @param {number} [y=0] - The y value of this vector.
-	 * @param {number} [z=0] - The z value of this vector.
-	 * @param {number} [w=1] - The w value of this vector.
-	 */
-	constructor( x = 0, y = 0, z = 0, w = 1 ) {
+	static {
 
 		/**
 		 * This flag can be used for type testing.
@@ -8017,6 +8054,18 @@ class Vector4 {
 		 * @default true
 		 */
 		Vector4.prototype.isVector4 = true;
+
+	}
+
+	/**
+	 * Constructs a new 4D vector.
+	 *
+	 * @param {number} [x=0] - The x value of this vector.
+	 * @param {number} [y=0] - The y value of this vector.
+	 * @param {number} [z=0] - The z value of this vector.
+	 * @param {number} [w=1] - The w value of this vector.
+	 */
+	constructor( x = 0, y = 0, z = 0, w = 1 ) {
 
 		/**
 		 * The x value of this vector.
@@ -9398,6 +9447,7 @@ class RenderTarget extends EventDispatcher {
 		if ( source.depthTexture !== null ) this.depthTexture = source.depthTexture.clone();
 
 		this.samples = source.samples;
+		this.multiview = source.multiview;
 
 		return this;
 
@@ -9814,6 +9864,19 @@ class WebGL3DRenderTarget extends WebGLRenderTarget {
  */
 class Matrix4 {
 
+	static {
+
+		/**
+		 * This flag can be used for type testing.
+		 *
+		 * @type {boolean}
+		 * @readonly
+		 * @default true
+		 */
+		Matrix4.prototype.isMatrix4 = true;
+
+	}
+
 	/**
 	 * Constructs a new 4x4 matrix. The arguments are supposed to be
 	 * in row-major order. If no arguments are provided, the constructor
@@ -9837,15 +9900,6 @@ class Matrix4 {
 	 * @param {number} [n44] - 4-4 matrix element.
 	 */
 	constructor( n11, n12, n13, n14, n21, n22, n23, n24, n31, n32, n33, n34, n41, n42, n43, n44 ) {
-
-		/**
-		 * This flag can be used for type testing.
-		 *
-		 * @type {boolean}
-		 * @readonly
-		 * @default true
-		 */
-		Matrix4.prototype.isMatrix4 = true;
 
 		/**
 		 * A column-major list of matrix values.
@@ -13226,11 +13280,7 @@ class Object3D extends EventDispatcher {
 		this.quaternion.copy( source.quaternion );
 		this.scale.copy( source.scale );
 
-		if ( source.pivot !== null ) {
-
-			this.pivot = source.pivot.clone();
-
-		}
+		this.pivot = ( source.pivot !== null ) ? source.pivot.clone() : null;
 
 		this.matrix.copy( source.matrix );
 		this.matrixWorld.copy( source.matrixWorld );
@@ -13448,6 +13498,7 @@ class WebXRController {
 			this._grip.linearVelocity = new Vector3();
 			this._grip.hasAngularVelocity = false;
 			this._grip.angularVelocity = new Vector3();
+			this._grip.eventsEnabled = false;
 
 		}
 
@@ -13657,6 +13708,17 @@ class WebXRController {
 						} else {
 
 							grip.hasAngularVelocity = false;
+
+						}
+
+						// grip update event if enabled
+						if ( grip.eventsEnabled ) {
+
+							grip.dispatchEvent( {
+								type: 'gripUpdated',
+								data: inputSource,
+								target: this
+							} );
 
 						}
 
@@ -15290,7 +15352,7 @@ class Triangle {
 		_v1$5.subVectors( a, b );
 
 		// strictly front facing
-		return ( _v0$2.cross( _v1$5 ).dot( direction ) < 0 ) ? true : false;
+		return _v0$2.cross( _v1$5 ).dot( direction ) < 0;
 
 	}
 
@@ -16622,7 +16684,7 @@ let _id$2 = 0;
  * When working with vector-like data, the `fromBufferAttribute( attribute, index )`
  * helper methods on vector and color class might be helpful. E.g. {@link Vector3#fromBufferAttribute}.
  */
-class BufferAttribute {
+class BufferAttribute extends EventDispatcher {
 
 	/**
 	 * Constructs a new buffer attribute.
@@ -16632,6 +16694,8 @@ class BufferAttribute {
 	 * @param {boolean} [normalized=false] - Whether the data are normalized or not.
 	 */
 	constructor( array, itemSize, normalized = false ) {
+
+		super();
 
 		if ( Array.isArray( array ) ) {
 
@@ -17276,6 +17340,15 @@ class BufferAttribute {
 		if ( this.usage !== StaticDrawUsage ) data.usage = this.usage;
 
 		return data;
+
+	}
+
+	/**
+	 * Disposes of the buffer attribute. Available only in {@link WebGPURenderer}.
+	 */
+	dispose() {
+
+		this.dispatchEvent( { type: 'dispose' } );
 
 	}
 
@@ -23402,12 +23475,12 @@ function checkGeometryIntersection( object, material, raycaster, ray, uv, uv1, n
 
 }
 
-const _basePosition = /*@__PURE__*/ new Vector3();
+const _baseVector = /*@__PURE__*/ new Vector4();
 
 const _skinIndex = /*@__PURE__*/ new Vector4();
 const _skinWeight = /*@__PURE__*/ new Vector4();
 
-const _vector3 = /*@__PURE__*/ new Vector3();
+const _vector4 = /*@__PURE__*/ new Vector4();
 const _matrix4 = /*@__PURE__*/ new Matrix4();
 const _vertex = /*@__PURE__*/ new Vector3();
 
@@ -23703,12 +23776,12 @@ class SkinnedMesh extends Mesh {
 
 	/**
 	 * Applies the bone transform associated with the given index to the given
-	 * vertex position. Returns the updated vector.
+	 * vector. Can be used to transform positions or direction vectors by providing
+	 * a Vector4 with 1 or 0 in the w component respectively. Returns the updated vector.
 	 *
 	 * @param {number} index - The vertex index.
-	 * @param {Vector3} target - The target object that is used to store the method's result.
-	 * the skinned mesh's world matrix will be used instead.
-	 * @return {Vector3} The updated vertex position.
+	 * @param {Vector3|Vector4} target - The target object that is used to store the method's result.
+	 * @return {Vector3|Vector4} The updated vertex attribute data.
 	 */
 	applyBoneTransform( index, target ) {
 
@@ -23718,9 +23791,19 @@ class SkinnedMesh extends Mesh {
 		_skinIndex.fromBufferAttribute( geometry.attributes.skinIndex, index );
 		_skinWeight.fromBufferAttribute( geometry.attributes.skinWeight, index );
 
-		_basePosition.copy( target ).applyMatrix4( this.bindMatrix );
+		if ( target.isVector4 ) {
 
-		target.set( 0, 0, 0 );
+			_baseVector.copy( target );
+			target.set( 0, 0, 0, 0 );
+
+		} else {
+
+			_baseVector.set( ...target, 1 );
+			target.set( 0, 0, 0 );
+
+		}
+
+		_baseVector.applyMatrix4( this.bindMatrix );
 
 		for ( let i = 0; i < 4; i ++ ) {
 
@@ -23732,9 +23815,16 @@ class SkinnedMesh extends Mesh {
 
 				_matrix4.multiplyMatrices( skeleton.bones[ boneIndex ].matrixWorld, skeleton.boneInverses[ boneIndex ] );
 
-				target.addScaledVector( _vector3.copy( _basePosition ).applyMatrix4( _matrix4 ), weight );
+				target.addScaledVector( _vector4.copy( _baseVector ).applyMatrix4( _matrix4 ), weight );
 
 			}
+
+		}
+
+		if ( target.isVector4 ) {
+
+			// ensure the homogenous coordinate remains unchanged after vector operations
+			target.w = _baseVector.w;
 
 		}
 
@@ -24518,10 +24608,19 @@ class InstancedMesh extends Mesh {
 	 *
 	 * @param {number} index - The instance index.
 	 * @param {Color} color - The target object that is used to store the method's result.
+	 * @return {Color} A reference to the target color.
 	 */
 	getColorAt( index, color ) {
 
-		color.fromArray( this.instanceColor.array, index * 3 );
+		if ( this.instanceColor === null ) {
+
+			return color.setRGB( 1, 1, 1 );
+
+		} else {
+
+			return color.fromArray( this.instanceColor.array, index * 3 );
+
+		}
 
 	}
 
@@ -24530,10 +24629,11 @@ class InstancedMesh extends Mesh {
 	 *
 	 * @param {number} index - The instance index.
 	 * @param {Matrix4} matrix - The target object that is used to store the method's result.
+	 * @return {Matrix4} A reference to the target matrix.
 	 */
 	getMatrixAt( index, matrix ) {
 
-		matrix.fromArray( this.instanceMatrix.array, index * 16 );
+		return matrix.fromArray( this.instanceMatrix.array, index * 16 );
 
 	}
 
@@ -24619,6 +24719,7 @@ class InstancedMesh extends Mesh {
 	 *
 	 * @param {number} index - The instance index.
 	 * @param {Color} color - The instance color.
+	 * @return {InstancedMesh} A reference to this instanced mesh.
 	 */
 	setColorAt( index, color ) {
 
@@ -24629,19 +24730,22 @@ class InstancedMesh extends Mesh {
 		}
 
 		color.toArray( this.instanceColor.array, index * 3 );
+		return this;
 
 	}
 
 	/**
 	 * Sets the given local transformation matrix to the defined instance. Make sure you set the `needsUpdate` flag of
-	 * {@link InstancedMesh#instanceMatrix} to `true` after updating all the colors.
+	 * {@link InstancedMesh#instanceMatrix} to `true` after updating all the matrices.
 	 *
 	 * @param {number} index - The instance index.
 	 * @param {Matrix4} matrix - The local transformation.
+	 * @return {InstancedMesh} A reference to this instanced mesh.
 	 */
 	setMatrixAt( index, matrix ) {
 
 		matrix.toArray( this.instanceMatrix.array, index * 16 );
+		return this;
 
 	}
 
@@ -24652,6 +24756,7 @@ class InstancedMesh extends Mesh {
 	 * @param {number} index - The instance index.
 	 * @param {Mesh} object -  A mesh which `morphTargetInfluences` property containing the morph target weights
 	 * of a single instance.
+	 * @return {InstancedMesh} A reference to this instanced mesh.
 	 */
 	setMorphAt( index, object ) {
 
@@ -24682,6 +24787,7 @@ class InstancedMesh extends Mesh {
 		array[ dataIndex ] = morphBaseInfluence;
 
 		array.set( objectInfluences, dataIndex + 1 );
+		return this;
 
 	}
 
@@ -24917,9 +25023,10 @@ class Plane {
 	 *
 	 * @param {Line3} line - The line to compute the intersection for.
 	 * @param {Vector3} target - The target vector that is used to store the method's result.
-	 * @return {?Vector3} The intersection point.
+	 * @param {boolean} [clampToLine=true] - Whether to clamp the intersection to the line segment.
+	 * @return {?Vector3} The intersection point. Returns `null` if no intersection is detected.
 	 */
-	intersectLine( line, target ) {
+	intersectLine( line, target, clampToLine = true ) {
 
 		const direction = line.delta( _vector1 );
 
@@ -24941,7 +25048,7 @@ class Plane {
 
 		const t = - ( line.start.dot( this.normal ) + this.constant ) / denominator;
 
-		if ( t < 0 || t > 1 ) {
+		if ( ( clampToLine === true ) && ( t < 0 || t > 1 ) ) {
 
 			return null;
 
@@ -25861,7 +25968,6 @@ class BatchedMesh extends Mesh {
 		this._multiDrawCounts = new Int32Array( maxInstanceCount );
 		this._multiDrawStarts = new Int32Array( maxInstanceCount );
 		this._multiDrawCount = 0;
-		this._multiDrawInstances = null;
 
 		// Local matrix per geometry by using data texture
 		this._matricesTexture = null;
@@ -26722,7 +26828,23 @@ class BatchedMesh extends Mesh {
 	getColorAt( instanceId, color ) {
 
 		this.validateInstanceId( instanceId );
-		return color.fromArray( this._colorsTexture.image.data, instanceId * 4 );
+		if ( this._colorsTexture === null ) {
+
+			if ( color.isVector4 ) {
+
+				return color.set( 1, 1, 1, 1 );
+
+			} else {
+
+				return color.setRGB( 1, 1, 1 );
+
+			}
+
+		} else {
+
+			return color.fromArray( this._colorsTexture.image.data, instanceId * 4 );
+
+		}
 
 	}
 
@@ -28744,6 +28866,77 @@ class CanvasTexture extends Texture {
 		this.isCanvasTexture = true;
 
 		this.needsUpdate = true;
+
+	}
+
+}
+
+/**
+ * Creates a texture from an HTML element.
+ *
+ * This is almost the same as the base texture class, except that it sets {@link Texture#needsUpdate}
+ * to `true` immediately and listens for the parent canvas's paint events to trigger updates.
+ *
+ * @augments Texture
+ */
+class HTMLTexture extends Texture {
+
+	/**
+	 * Constructs a new texture.
+	 *
+	 * @param {HTMLElement} [element] - The HTML element.
+	 * @param {number} [mapping=Texture.DEFAULT_MAPPING] - The texture mapping.
+	 * @param {number} [wrapS=ClampToEdgeWrapping] - The wrapS value.
+	 * @param {number} [wrapT=ClampToEdgeWrapping] - The wrapT value.
+	 * @param {number} [magFilter=LinearFilter] - The mag filter value.
+	 * @param {number} [minFilter=LinearMipmapLinearFilter] - The min filter value.
+	 * @param {number} [format=RGBAFormat] - The texture format.
+	 * @param {number} [type=UnsignedByteType] - The texture type.
+	 * @param {number} [anisotropy=Texture.DEFAULT_ANISOTROPY] - The anisotropy value.
+	 */
+	constructor( element, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy ) {
+
+		super( element, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy );
+
+		/**
+		 * This flag can be used for type testing.
+		 *
+		 * @type {boolean}
+		 * @readonly
+		 * @default true
+		 */
+		this.isHTMLTexture = true;
+		this.generateMipmaps = false;
+
+		this.needsUpdate = true;
+
+		const parent = element ? element.parentNode : null;
+
+		if ( parent !== null && 'requestPaint' in parent ) {
+
+			parent.onpaint = () => {
+
+				this.needsUpdate = true;
+
+			};
+
+			parent.requestPaint();
+
+		}
+
+	}
+
+	dispose() {
+
+		const parent = this.image ? this.image.parentNode : null;
+
+		if ( parent !== null && 'onpaint' in parent ) {
+
+			parent.onpaint = null;
+
+		}
+
+		super.dispose();
 
 	}
 
@@ -31414,6 +31607,7 @@ function CubicPoly() {
 //
 
 const tmp = /*@__PURE__*/ new Vector3();
+const tmp2 = /*@__PURE__*/ new Vector3();
 const px = /*@__PURE__*/ new CubicPoly();
 const py = /*@__PURE__*/ new CubicPoly();
 const pz = /*@__PURE__*/ new CubicPoly();
@@ -31538,8 +31732,8 @@ class CatmullRomCurve3 extends Curve {
 		} else {
 
 			// extrapolate first point
-			tmp.subVectors( points[ 0 ], points[ 1 ] ).add( points[ 0 ] );
-			p0 = tmp;
+			tmp2.subVectors( points[ 0 ], points[ 1 ] ).add( points[ 0 ] );
+			p0 = tmp2;
 
 		}
 
@@ -37122,10 +37316,7 @@ function cloneUniforms( src ) {
 
 			const property = src[ u ][ p ];
 
-			if ( property && ( property.isColor ||
-				property.isMatrix3 || property.isMatrix4 ||
-				property.isVector2 || property.isVector3 || property.isVector4 ||
-				property.isTexture || property.isQuaternion ) ) {
+			if ( isThreeObject( property ) ) {
 
 				if ( property.isRenderTargetTexture ) {
 
@@ -37140,7 +37331,23 @@ function cloneUniforms( src ) {
 
 			} else if ( Array.isArray( property ) ) {
 
-				dst[ u ][ p ] = property.slice();
+				if ( isThreeObject( property[ 0 ] ) ) {
+
+					const clonedProperty = [];
+
+					for ( let i = 0, l = property.length; i < l; i ++ ) {
+
+						clonedProperty[ i ] = property[ i ].clone();
+
+					}
+
+					dst[ u ][ p ] = clonedProperty;
+
+				} else {
+
+					dst[ u ][ p ] = property.slice();
+
+				}
 
 			} else {
 
@@ -37181,6 +37388,15 @@ function mergeUniforms( uniforms ) {
 	}
 
 	return merged;
+
+}
+
+function isThreeObject( property ) {
+
+	return ( property && ( property.isColor ||
+		property.isMatrix3 || property.isMatrix4 ||
+		property.isVector2 || property.isVector3 || property.isVector4 ||
+		property.isTexture || property.isQuaternion ) );
 
 }
 
@@ -39078,7 +39294,7 @@ class MeshToonMaterial extends Material {
 
 		/**
 		 * Gradient map for toon shading. It's required to set
-		 * {@link Texture#minFilter} and {@link Texture#magFilter} to {@linkNearestFilter}
+		 * {@link Texture#minFilter} and {@link Texture#magFilter} to {@link NearestFilter}
 		 * when using this type of texture.
 		 *
 		 * @type {?Texture}
@@ -43878,7 +44094,6 @@ class FileLoader extends Loader {
 	 * @param {function(any)} onLoad - Executed when the loading process has been finished.
 	 * @param {onProgressCallback} [onProgress] - Executed while the loading is in progress.
 	 * @param {onErrorCallback} [onError] - Executed when errors occur.
-	 * @return {any|undefined} The cached resource if available.
 	 */
 	load( url, onLoad, onProgress, onError ) {
 
@@ -43902,7 +44117,7 @@ class FileLoader extends Loader {
 
 			}, 0 );
 
-			return cached;
+			return;
 
 		}
 
@@ -44719,18 +44934,19 @@ class DataTextureLoader extends Loader {
 
 				texData = scope.parse( buffer );
 
-			} catch ( error ) {
+			} catch ( e ) {
 
 				if ( onError !== undefined ) {
 
-					onError( error );
+					onError( e );
 
 				} else {
 
-					error( error );
-					return;
+					error( e );
 
 				}
+
+				return;
 
 			}
 
@@ -47465,7 +47681,7 @@ class MaterialLoader extends Loader {
 
 			if ( typeof json.vertexColors === 'number' ) {
 
-				material.vertexColors = ( json.vertexColors > 0 ) ? true : false;
+				material.vertexColors = json.vertexColors > 0;
 
 			} else {
 
@@ -48031,6 +48247,8 @@ class BufferGeometryLoader extends Loader {
 
 }
 
+const _customGeometries = {};
+
 /**
  * A loader for loading a JSON resource in the [JSON Object/Scene format](https://github.com/mrdoob/three.js/wiki/JSON-Object-Scene-format-4).
  * The files are internally loaded via {@link FileLoader}.
@@ -48087,11 +48305,11 @@ class ObjectLoader extends Loader {
 
 				json = JSON.parse( text );
 
-			} catch ( error ) {
+			} catch ( e ) {
 
-				if ( onError !== undefined ) onError( error );
+				if ( onError !== undefined ) onError( e );
 
-				error( 'ObjectLoader: Can\'t parse ' + url + '.', error.message );
+				error( 'ObjectLoader: Can\'t parse ' + url + '.', e.message );
 
 				return;
 
@@ -48241,6 +48459,20 @@ class ObjectLoader extends Loader {
 
 	}
 
+	/**
+	 * Registers the given geometry at the internal
+	 * geometry library.
+	 *
+	 * @static
+	 * @param {string} type - The geometry type.
+	 * @param {BufferGeometry.constructor} geometryClass - The geometry class.
+	 */
+	static registerGeometry( type, geometryClass ) {
+
+		_customGeometries[ type ] = geometryClass;
+
+	}
+
 	// internals
 
 	parseShapes( json ) {
@@ -48321,9 +48553,13 @@ class ObjectLoader extends Loader {
 
 							geometry = Geometries[ data.type ].fromJSON( data, shapes );
 
+						} else if ( data.type in _customGeometries ) {
+
+							geometry = _customGeometries[ data.type ].fromJSON( data, shapes );
+
 						} else {
 
-							warn( `ObjectLoader: Unsupported geometry type "${ data.type }"` );
+							warn( `ObjectLoader: Unknown geometry type "${ data.type }". Use .registerGeometry() before starting the deserialization process.` );
 
 						}
 
@@ -48703,6 +48939,7 @@ class ObjectLoader extends Loader {
 				if ( data.premultiplyAlpha !== undefined ) texture.premultiplyAlpha = data.premultiplyAlpha;
 				if ( data.unpackAlignment !== undefined ) texture.unpackAlignment = data.unpackAlignment;
 				if ( data.compareFunction !== undefined ) texture.compareFunction = data.compareFunction;
+				if ( data.normalized !== undefined ) texture.normalized = data.normalized;
 
 				if ( data.userData !== undefined ) texture.userData = data.userData;
 
@@ -49330,6 +49567,9 @@ class ImageBitmapLoader extends Loader {
 	 * Sets the given loader options. The structure of the object must match the `options` parameter of
 	 * [createImageBitmap](https://developer.mozilla.org/en-US/docs/Web/API/Window/createImageBitmap).
 	 *
+	 * Note: When caching is enabled, the cache key is based on the URL only. Loading the same URL with
+	 * different options will return the cached result of the first request.
+	 *
 	 * @param {Object} options - The loader options to set.
 	 * @return {ImageBitmapLoader} A reference to this image bitmap loader.
 	 */
@@ -49348,7 +49588,6 @@ class ImageBitmapLoader extends Loader {
 	 * @param {function(ImageBitmap)} onLoad - Executed when the loading process has been finished.
 	 * @param {onProgressCallback} onProgress - Unsupported in this loader.
 	 * @param {onErrorCallback} onError - Executed when errors occur.
-	 * @return {ImageBitmap|undefined} The image bitmap.
 	 */
 	load( url, onLoad, onProgress, onError ) {
 
@@ -49386,8 +49625,6 @@ class ImageBitmapLoader extends Loader {
 
 						scope.manager.itemEnd( url );
 
-						return imageBitmap;
-
 					}
 
 				} );
@@ -49405,7 +49642,7 @@ class ImageBitmapLoader extends Loader {
 
 			}, 0 );
 
-			return cached;
+			return;
 
 		}
 
@@ -49429,8 +49666,6 @@ class ImageBitmapLoader extends Loader {
 			if ( onLoad ) onLoad( imageBitmap );
 
 			scope.manager.itemEnd( url );
-
-			return imageBitmap;
 
 		} ).catch( function ( e ) {
 
@@ -49478,7 +49713,7 @@ class AudioContext {
 	/**
 	 * Returns the global native audio context.
 	 *
-	 * @return {AudioContext} The native audio context.
+	 * @return {Window.AudioContext} The native audio context.
 	 */
 	static getContext() {
 
@@ -49495,7 +49730,7 @@ class AudioContext {
 	/**
 	 * Allows to set the global native audio context from outside.
 	 *
-	 * @param {AudioContext} value - The native context to set.
+	 * @param {Window.AudioContext} value - The native context to set.
 	 */
 	static setContext( value ) {
 
@@ -49562,11 +49797,21 @@ class AudioLoader extends Loader {
 				const bufferCopy = buffer.slice( 0 );
 
 				const context = AudioContext.getContext();
+
+				const decodeUrl = url + '#decode';
+				scope.manager.itemStart( decodeUrl ); // prevent loading manager from completing too early, see #33378
+
 				context.decodeAudioData( bufferCopy, function ( audioBuffer ) {
 
 					onLoad( audioBuffer );
+					scope.manager.itemEnd( decodeUrl );
 
-				} ).catch( handleError );
+				} ).catch( function ( e ) {
+
+					handleError( e );
+					scope.manager.itemEnd( decodeUrl );
+
+				} );
 
 			} catch ( e ) {
 
@@ -50043,134 +50288,185 @@ class ArrayCamera extends PerspectiveCamera {
 }
 
 /**
- * Class for keeping track of time.
+ * This class is an alternative to {@link Clock} with a different API design and behavior.
+ * The goal is to avoid the conceptual flaws that became apparent in `Clock` over time.
  *
- * @deprecated since r183.
+ * - `Timer` has an `update()` method that updates its internal state. That makes it possible to
+ * call `getDelta()` and `getElapsed()` multiple times per simulation step without getting different values.
+ * - The class can make use of the Page Visibility API to avoid large time delta values when the app
+ * is inactive (e.g. tab switched or browser hidden).
+ *
+ * ```js
+ * const timer = new Timer();
+ * timer.connect( document ); // use Page Visibility API
+ * ```
  */
-class Clock {
+class Timer {
 
 	/**
-	 * Constructs a new clock.
+	 * Constructs a new timer.
+	 */
+	constructor() {
+
+		this._previousTime = 0;
+		this._currentTime = 0;
+		this._startTime = performance.now();
+
+		this._delta = 0;
+		this._elapsed = 0;
+
+		this._timescale = 1;
+
+		this._document = null;
+		this._pageVisibilityHandler = null;
+
+	}
+
+	/**
+	 * Connect the timer to the given document.Calling this method is not mandatory to
+	 * use the timer but enables the usage of the Page Visibility API to avoid large time
+	 * delta values.
 	 *
-	 * @deprecated since 183.
-	 * @param {boolean} [autoStart=true] - Whether to automatically start the clock when
-	 * `getDelta()` is called for the first time.
+	 * @param {Document} document - The document.
 	 */
-	constructor( autoStart = true ) {
+	connect( document ) {
 
-		/**
-		 * If set to `true`, the clock starts automatically when `getDelta()` is called
-		 * for the first time.
-		 *
-		 * @type {boolean}
-		 * @default true
-		 */
-		this.autoStart = autoStart;
+		this._document = document;
 
-		/**
-		 * Holds the time at which the clock's `start()` method was last called.
-		 *
-		 * @type {number}
-		 * @default 0
-		 */
-		this.startTime = 0;
+		// use Page Visibility API to avoid large time delta values
 
-		/**
-		 * Holds the time at which the clock's `start()`, `getElapsedTime()` or
-		 * `getDelta()` methods were last called.
-		 *
-		 * @type {number}
-		 * @default 0
-		 */
-		this.oldTime = 0;
+		if ( document.hidden !== undefined ) {
 
-		/**
-		 * Keeps track of the total time that the clock has been running.
-		 *
-		 * @type {number}
-		 * @default 0
-		 */
-		this.elapsedTime = 0;
+			this._pageVisibilityHandler = handleVisibilityChange.bind( this );
 
-		/**
-		 * Whether the clock is running or not.
-		 *
-		 * @type {boolean}
-		 * @default true
-		 */
-		this.running = false;
+			document.addEventListener( 'visibilitychange', this._pageVisibilityHandler, false );
 
-		warn( 'THREE.Clock: This module has been deprecated. Please use THREE.Timer instead.' ); // @deprecated, r183
+		}
 
 	}
 
 	/**
-	 * Starts the clock. When `autoStart` is set to `true`, the method is automatically
-	 * called by the class.
+	 * Disconnects the timer from the DOM and also disables the usage of the Page Visibility API.
 	 */
-	start() {
+	disconnect() {
 
-		this.startTime = performance.now();
+		if ( this._pageVisibilityHandler !== null ) {
 
-		this.oldTime = this.startTime;
-		this.elapsedTime = 0;
-		this.running = true;
+			this._document.removeEventListener( 'visibilitychange', this._pageVisibilityHandler );
+			this._pageVisibilityHandler = null;
+
+		}
+
+		this._document = null;
 
 	}
 
 	/**
-	 * Stops the clock.
+	 * Returns the time delta in seconds.
+	 *
+	 * @return {number} The time delta in second.
 	 */
-	stop() {
+	getDelta() {
 
-		this.getElapsedTime();
-		this.running = false;
-		this.autoStart = false;
+		return this._delta / 1000;
 
 	}
 
 	/**
 	 * Returns the elapsed time in seconds.
 	 *
-	 * @return {number} The elapsed time.
+	 * @return {number} The elapsed time in second.
 	 */
-	getElapsedTime() {
+	getElapsed() {
 
-		this.getDelta();
-		return this.elapsedTime;
+		return this._elapsed / 1000;
 
 	}
 
 	/**
-	 * Returns the delta time in seconds.
+	 * Returns the timescale.
 	 *
-	 * @return {number} The delta time.
+	 * @return {number} The timescale.
 	 */
-	getDelta() {
+	getTimescale() {
 
-		let diff = 0;
-
-		if ( this.autoStart && ! this.running ) {
-
-			this.start();
-			return 0;
-
-		}
-
-		if ( this.running ) {
-
-			const newTime = performance.now();
-
-			diff = ( newTime - this.oldTime ) / 1000;
-			this.oldTime = newTime;
-
-			this.elapsedTime += diff;
-
-		}
-
-		return diff;
+		return this._timescale;
 
 	}
+
+	/**
+	 * Sets the given timescale which scale the time delta computation
+	 * in `update()`.
+	 *
+	 * @param {number} timescale - The timescale to set.
+	 * @return {Timer} A reference to this timer.
+	 */
+	setTimescale( timescale ) {
+
+		this._timescale = timescale;
+
+		return this;
+
+	}
+
+	/**
+	 * Resets the time computation for the current simulation step.
+	 *
+	 * @return {Timer} A reference to this timer.
+	 */
+	reset() {
+
+		this._currentTime = performance.now() - this._startTime;
+
+		return this;
+
+	}
+
+	/**
+	 * Can be used to free all internal resources. Usually called when
+	 * the timer instance isn't required anymore.
+	 */
+	dispose() {
+
+		this.disconnect();
+
+	}
+
+	/**
+	 * Updates the internal state of the timer. This method should be called
+	 * once per simulation step and before you perform queries against the timer
+	 * (e.g. via `getDelta()`).
+	 *
+	 * @param {number} timestamp - The current time in milliseconds. Can be obtained
+	 * from the `requestAnimationFrame` callback argument. If not provided, the current
+	 * time will be determined with `performance.now`.
+	 * @return {Timer} A reference to this timer.
+	 */
+	update( timestamp ) {
+
+		if ( this._pageVisibilityHandler !== null && this._document.hidden === true ) {
+
+			this._delta = 0;
+
+		} else {
+
+			this._previousTime = this._currentTime;
+			this._currentTime = ( timestamp !== undefined ? timestamp : performance.now() ) - this._startTime;
+
+			this._delta = ( this._currentTime - this._previousTime ) * this._timescale;
+			this._elapsed += this._delta; // _elapsed is the accumulation of all previous deltas
+
+		}
+
+		return this;
+
+	}
+
+}
+
+function handleVisibilityChange() {
+
+	if ( this._document.hidden === false ) this.reset();
 
 }
 
@@ -50241,7 +50537,7 @@ class AudioListener extends Object3D {
 
 		// private
 
-		this._clock = new Clock();
+		this._timer = new Timer();
 
 	}
 
@@ -50346,9 +50642,11 @@ class AudioListener extends Object3D {
 
 		super.updateMatrixWorld( force );
 
+		this._timer.update();
+
 		const listener = this.context.listener;
 
-		this.timeDelta = this._clock.getDelta();
+		this.timeDelta = this._timer.getDelta();
 
 		this.matrixWorld.decompose( _position$1, _quaternion$1, _scale$1 );
 
@@ -53120,6 +53418,15 @@ class AnimationAction {
 
 			const interpolant = tracks[ i ].createInterpolant( null );
 			interpolants[ i ] = interpolant;
+
+			// preserve interpolant settings (like tangent data from BezierInterpolant)
+
+			if ( interpolant.settings ) {
+
+				Object.assign( interpolantSettings, interpolant.settings );
+
+			}
+
 			interpolant.settings = interpolantSettings;
 
 		}
@@ -53926,6 +54233,7 @@ class AnimationAction {
 
 			} else {
 
+				this._loopCount = loopCount;
 				this.time = time;
 
 			}
@@ -53973,7 +54281,7 @@ class AnimationAction {
 
 			} else {
 
-				settings.endingEnd 	 = WrapAroundEnding;
+				settings.endingEnd = WrapAroundEnding;
 
 			}
 
@@ -55621,185 +55929,134 @@ function intersect( object, raycaster, intersects, recursive ) {
 }
 
 /**
- * This class is an alternative to {@link Clock} with a different API design and behavior.
- * The goal is to avoid the conceptual flaws that became apparent in `Clock` over time.
+ * Class for keeping track of time.
  *
- * - `Timer` has an `update()` method that updates its internal state. That makes it possible to
- * call `getDelta()` and `getElapsed()` multiple times per simulation step without getting different values.
- * - The class can make use of the Page Visibility API to avoid large time delta values when the app
- * is inactive (e.g. tab switched or browser hidden).
- *
- * ```js
- * const timer = new Timer();
- * timer.connect( document ); // use Page Visibility API
- * ```
+ * @deprecated since r183.
  */
-class Timer {
+class Clock {
 
 	/**
-	 * Constructs a new timer.
-	 */
-	constructor() {
-
-		this._previousTime = 0;
-		this._currentTime = 0;
-		this._startTime = performance.now();
-
-		this._delta = 0;
-		this._elapsed = 0;
-
-		this._timescale = 1;
-
-		this._document = null;
-		this._pageVisibilityHandler = null;
-
-	}
-
-	/**
-	 * Connect the timer to the given document.Calling this method is not mandatory to
-	 * use the timer but enables the usage of the Page Visibility API to avoid large time
-	 * delta values.
+	 * Constructs a new clock.
 	 *
-	 * @param {Document} document - The document.
+	 * @deprecated since 183.
+	 * @param {boolean} [autoStart=true] - Whether to automatically start the clock when
+	 * `getDelta()` is called for the first time.
 	 */
-	connect( document ) {
+	constructor( autoStart = true ) {
 
-		this._document = document;
+		/**
+		 * If set to `true`, the clock starts automatically when `getDelta()` is called
+		 * for the first time.
+		 *
+		 * @type {boolean}
+		 * @default true
+		 */
+		this.autoStart = autoStart;
 
-		// use Page Visibility API to avoid large time delta values
+		/**
+		 * Holds the time at which the clock's `start()` method was last called.
+		 *
+		 * @type {number}
+		 * @default 0
+		 */
+		this.startTime = 0;
 
-		if ( document.hidden !== undefined ) {
+		/**
+		 * Holds the time at which the clock's `start()`, `getElapsedTime()` or
+		 * `getDelta()` methods were last called.
+		 *
+		 * @type {number}
+		 * @default 0
+		 */
+		this.oldTime = 0;
 
-			this._pageVisibilityHandler = handleVisibilityChange.bind( this );
+		/**
+		 * Keeps track of the total time that the clock has been running.
+		 *
+		 * @type {number}
+		 * @default 0
+		 */
+		this.elapsedTime = 0;
 
-			document.addEventListener( 'visibilitychange', this._pageVisibilityHandler, false );
+		/**
+		 * Whether the clock is running or not.
+		 *
+		 * @type {boolean}
+		 * @default true
+		 */
+		this.running = false;
 
-		}
+		warn( 'Clock: This module has been deprecated. Please use THREE.Timer instead.' ); // @deprecated, r183
 
 	}
 
 	/**
-	 * Disconnects the timer from the DOM and also disables the usage of the Page Visibility API.
+	 * Starts the clock. When `autoStart` is set to `true`, the method is automatically
+	 * called by the class.
 	 */
-	disconnect() {
+	start() {
 
-		if ( this._pageVisibilityHandler !== null ) {
+		this.startTime = performance.now();
 
-			this._document.removeEventListener( 'visibilitychange', this._pageVisibilityHandler );
-			this._pageVisibilityHandler = null;
-
-		}
-
-		this._document = null;
+		this.oldTime = this.startTime;
+		this.elapsedTime = 0;
+		this.running = true;
 
 	}
 
 	/**
-	 * Returns the time delta in seconds.
-	 *
-	 * @return {number} The time delta in second.
+	 * Stops the clock.
 	 */
-	getDelta() {
+	stop() {
 
-		return this._delta / 1000;
+		this.getElapsedTime();
+		this.running = false;
+		this.autoStart = false;
 
 	}
 
 	/**
 	 * Returns the elapsed time in seconds.
 	 *
-	 * @return {number} The elapsed time in second.
+	 * @return {number} The elapsed time.
 	 */
-	getElapsed() {
+	getElapsedTime() {
 
-		return this._elapsed / 1000;
+		this.getDelta();
+		return this.elapsedTime;
 
 	}
 
 	/**
-	 * Returns the timescale.
+	 * Returns the delta time in seconds.
 	 *
-	 * @return {number} The timescale.
+	 * @return {number} The delta time.
 	 */
-	getTimescale() {
+	getDelta() {
 
-		return this._timescale;
+		let diff = 0;
 
-	}
+		if ( this.autoStart && ! this.running ) {
 
-	/**
-	 * Sets the given timescale which scale the time delta computation
-	 * in `update()`.
-	 *
-	 * @param {number} timescale - The timescale to set.
-	 * @return {Timer} A reference to this timer.
-	 */
-	setTimescale( timescale ) {
-
-		this._timescale = timescale;
-
-		return this;
-
-	}
-
-	/**
-	 * Resets the time computation for the current simulation step.
-	 *
-	 * @return {Timer} A reference to this timer.
-	 */
-	reset() {
-
-		this._currentTime = performance.now() - this._startTime;
-
-		return this;
-
-	}
-
-	/**
-	 * Can be used to free all internal resources. Usually called when
-	 * the timer instance isn't required anymore.
-	 */
-	dispose() {
-
-		this.disconnect();
-
-	}
-
-	/**
-	 * Updates the internal state of the timer. This method should be called
-	 * once per simulation step and before you perform queries against the timer
-	 * (e.g. via `getDelta()`).
-	 *
-	 * @param {number} timestamp - The current time in milliseconds. Can be obtained
-	 * from the `requestAnimationFrame` callback argument. If not provided, the current
-	 * time will be determined with `performance.now`.
-	 * @return {Timer} A reference to this timer.
-	 */
-	update( timestamp ) {
-
-		if ( this._pageVisibilityHandler !== null && this._document.hidden === true ) {
-
-			this._delta = 0;
-
-		} else {
-
-			this._previousTime = this._currentTime;
-			this._currentTime = ( timestamp !== undefined ? timestamp : performance.now() ) - this._startTime;
-
-			this._delta = ( this._currentTime - this._previousTime ) * this._timescale;
-			this._elapsed += this._delta; // _elapsed is the accumulation of all previous deltas
+			this.start();
+			return 0;
 
 		}
 
-		return this;
+		if ( this.running ) {
+
+			const newTime = performance.now();
+
+			diff = ( newTime - this.oldTime ) / 1000;
+			this.oldTime = newTime;
+
+			this.elapsedTime += diff;
+
+		}
+
+		return diff;
 
 	}
-
-}
-
-function handleVisibilityChange() {
-
-	if ( this._document.hidden === false ) this.reset();
 
 }
 
@@ -56094,6 +56351,19 @@ class Cylindrical {
  */
 class Matrix2 {
 
+	static {
+
+		/**
+		 * This flag can be used for type testing.
+		 *
+		 * @type {boolean}
+		 * @readonly
+		 * @default true
+		 */
+		Matrix2.prototype.isMatrix2 = true;
+
+	}
+
 	/**
 	 * Constructs a new 2x2 matrix. The arguments are supposed to be
 	 * in row-major order. If no arguments are provided, the constructor
@@ -56105,15 +56375,6 @@ class Matrix2 {
 	 * @param {number} [n22] - 2-2 matrix element.
 	 */
 	constructor( n11, n12, n21, n22 ) {
-
-		/**
-		 * This flag can be used for type testing.
-		 *
-		 * @type {boolean}
-		 * @readonly
-		 * @default true
-		 */
-		Matrix2.prototype.isMatrix2 = true;
 
 		/**
 		 * A column-major list of matrix values.
@@ -56710,6 +56971,9 @@ class Line3 {
 		_startEnd.subVectors( this.end, this.start );
 
 		const startEnd2 = _startEnd.dot( _startEnd );
+
+		if ( startEnd2 === 0 ) return 0;
+
 		const startEnd_startP = _startEnd.dot( _startP );
 
 		let t = startEnd_startP / startEnd2;
@@ -59465,4 +59729,4 @@ if ( typeof window !== 'undefined' ) {
 
 }
 
-export { ACESFilmicToneMapping, AddEquation, AddOperation, AdditiveAnimationBlendMode, AdditiveBlending, AgXToneMapping, AlphaFormat, AlwaysCompare, AlwaysDepth, AlwaysStencilFunc, AmbientLight, AnimationAction, AnimationClip, AnimationLoader, AnimationMixer, AnimationObjectGroup, AnimationUtils, ArcCurve, ArrayCamera, ArrowHelper, AttachedBindMode, Audio, AudioAnalyser, AudioContext, AudioListener, AudioLoader, AxesHelper, BackSide, BasicDepthPacking, BasicShadowMap, BatchedMesh, BezierInterpolant, Bone, BooleanKeyframeTrack, Box2, Box3, Box3Helper, BoxGeometry, BoxHelper, BufferAttribute, BufferGeometry, BufferGeometryLoader, ByteType, Cache, Camera, CameraHelper, CanvasTexture, CapsuleGeometry, CatmullRomCurve3, CineonToneMapping, CircleGeometry, ClampToEdgeWrapping, Clock, Color, ColorKeyframeTrack, ColorManagement, Compatibility, CompressedArrayTexture, CompressedCubeTexture, CompressedTexture, CompressedTextureLoader, ConeGeometry, ConstantAlphaFactor, ConstantColorFactor, Controls, CubeCamera, CubeDepthTexture, CubeReflectionMapping, CubeRefractionMapping, CubeTexture, CubeTextureLoader, CubeUVReflectionMapping, CubicBezierCurve, CubicBezierCurve3, CubicInterpolant, CullFaceBack, CullFaceFront, CullFaceFrontBack, CullFaceNone, Curve, CurvePath, CustomBlending, CustomToneMapping, CylinderGeometry, Cylindrical, Data3DTexture, DataArrayTexture, DataTexture, DataTextureLoader, DataUtils, DecrementStencilOp, DecrementWrapStencilOp, DefaultLoadingManager, DepthFormat, DepthStencilFormat, DepthTexture, DetachedBindMode, DirectionalLight, DirectionalLightHelper, DiscreteInterpolant, DodecahedronGeometry, DoubleSide, DstAlphaFactor, DstColorFactor, DynamicCopyUsage, DynamicDrawUsage, DynamicReadUsage, EdgesGeometry, EllipseCurve, EqualCompare, EqualDepth, EqualStencilFunc, EquirectangularReflectionMapping, EquirectangularRefractionMapping, Euler, EventDispatcher, ExternalTexture, ExtrudeGeometry, FileLoader, Float16BufferAttribute, Float32BufferAttribute, FloatType, Fog, FogExp2, FramebufferTexture, FrontSide, Frustum, FrustumArray, GLBufferAttribute, GLSL1, GLSL3, GreaterCompare, GreaterDepth, GreaterEqualCompare, GreaterEqualDepth, GreaterEqualStencilFunc, GreaterStencilFunc, GridHelper, Group, HalfFloatType, HemisphereLight, HemisphereLightHelper, IcosahedronGeometry, ImageBitmapLoader, ImageLoader, ImageUtils, IncrementStencilOp, IncrementWrapStencilOp, InstancedBufferAttribute, InstancedBufferGeometry, InstancedInterleavedBuffer, InstancedMesh, Int16BufferAttribute, Int32BufferAttribute, Int8BufferAttribute, IntType, InterleavedBuffer, InterleavedBufferAttribute, Interpolant, InterpolateBezier, InterpolateDiscrete, InterpolateLinear, InterpolateSmooth, InterpolationSamplingMode, InterpolationSamplingType, InvertStencilOp, KeepStencilOp, KeyframeTrack, LOD, LatheGeometry, Layers, LessCompare, LessDepth, LessEqualCompare, LessEqualDepth, LessEqualStencilFunc, LessStencilFunc, Light, LightProbe, Line, Line3, LineBasicMaterial, LineCurve, LineCurve3, LineDashedMaterial, LineLoop, LineSegments, LinearFilter, LinearInterpolant, LinearMipMapLinearFilter, LinearMipMapNearestFilter, LinearMipmapLinearFilter, LinearMipmapNearestFilter, LinearSRGBColorSpace, LinearToneMapping, LinearTransfer, Loader, LoaderUtils, LoadingManager, LoopOnce, LoopPingPong, LoopRepeat, MOUSE, Material, MaterialBlending, MaterialLoader, MathUtils, Matrix2, Matrix3, Matrix4, MaxEquation, Mesh, MeshBasicMaterial, MeshDepthMaterial, MeshDistanceMaterial, MeshLambertMaterial, MeshMatcapMaterial, MeshNormalMaterial, MeshPhongMaterial, MeshPhysicalMaterial, MeshStandardMaterial, MeshToonMaterial, MinEquation, MirroredRepeatWrapping, MixOperation, MultiplyBlending, MultiplyOperation, NearestFilter, NearestMipMapLinearFilter, NearestMipMapNearestFilter, NearestMipmapLinearFilter, NearestMipmapNearestFilter, NeutralToneMapping, NeverCompare, NeverDepth, NeverStencilFunc, NoBlending, NoColorSpace, NoNormalPacking, NoToneMapping, NormalAnimationBlendMode, NormalBlending, NormalGAPacking, NormalRGPacking, NotEqualCompare, NotEqualDepth, NotEqualStencilFunc, NumberKeyframeTrack, Object3D, ObjectLoader, ObjectSpaceNormalMap, OctahedronGeometry, OneFactor, OneMinusConstantAlphaFactor, OneMinusConstantColorFactor, OneMinusDstAlphaFactor, OneMinusDstColorFactor, OneMinusSrcAlphaFactor, OneMinusSrcColorFactor, OrthographicCamera, PCFShadowMap, PCFSoftShadowMap, Path, PerspectiveCamera, Plane, PlaneGeometry, PlaneHelper, PointLight, PointLightHelper, Points, PointsMaterial, PolarGridHelper, PolyhedronGeometry, PositionalAudio, PropertyBinding, PropertyMixer, QuadraticBezierCurve, QuadraticBezierCurve3, Quaternion, QuaternionKeyframeTrack, QuaternionLinearInterpolant, R11_EAC_Format, RAD2DEG, RED_GREEN_RGTC2_Format, RED_RGTC1_Format, REVISION, RG11_EAC_Format, RGBADepthPacking, RGBAFormat, RGBAIntegerFormat, RGBA_ASTC_10x10_Format, RGBA_ASTC_10x5_Format, RGBA_ASTC_10x6_Format, RGBA_ASTC_10x8_Format, RGBA_ASTC_12x10_Format, RGBA_ASTC_12x12_Format, RGBA_ASTC_4x4_Format, RGBA_ASTC_5x4_Format, RGBA_ASTC_5x5_Format, RGBA_ASTC_6x5_Format, RGBA_ASTC_6x6_Format, RGBA_ASTC_8x5_Format, RGBA_ASTC_8x6_Format, RGBA_ASTC_8x8_Format, RGBA_BPTC_Format, RGBA_ETC2_EAC_Format, RGBA_PVRTC_2BPPV1_Format, RGBA_PVRTC_4BPPV1_Format, RGBA_S3TC_DXT1_Format, RGBA_S3TC_DXT3_Format, RGBA_S3TC_DXT5_Format, RGBDepthPacking, RGBFormat, RGBIntegerFormat, RGB_BPTC_SIGNED_Format, RGB_BPTC_UNSIGNED_Format, RGB_ETC1_Format, RGB_ETC2_Format, RGB_PVRTC_2BPPV1_Format, RGB_PVRTC_4BPPV1_Format, RGB_S3TC_DXT1_Format, RGDepthPacking, RGFormat, RGIntegerFormat, RawShaderMaterial, Ray, Raycaster, RectAreaLight, RedFormat, RedIntegerFormat, ReinhardToneMapping, RenderTarget, RenderTarget3D, RepeatWrapping, ReplaceStencilOp, ReverseSubtractEquation, ReversedDepthFuncs, RingGeometry, SIGNED_R11_EAC_Format, SIGNED_RED_GREEN_RGTC2_Format, SIGNED_RED_RGTC1_Format, SIGNED_RG11_EAC_Format, SRGBColorSpace, SRGBTransfer, Scene, ShaderMaterial, ShadowMaterial, Shape, ShapeGeometry, ShapePath, ShapeUtils, ShortType, Skeleton, SkeletonHelper, SkinnedMesh, Source, Sphere, SphereGeometry, Spherical, SphericalHarmonics3, SplineCurve, SpotLight, SpotLightHelper, Sprite, SpriteMaterial, SrcAlphaFactor, SrcAlphaSaturateFactor, SrcColorFactor, StaticCopyUsage, StaticDrawUsage, StaticReadUsage, StereoCamera, StreamCopyUsage, StreamDrawUsage, StreamReadUsage, StringKeyframeTrack, SubtractEquation, SubtractiveBlending, TOUCH, TangentSpaceNormalMap, TetrahedronGeometry, Texture, TextureLoader, TextureUtils, Timer, TimestampQuery, TorusGeometry, TorusKnotGeometry, Triangle, TriangleFanDrawMode, TriangleStripDrawMode, TrianglesDrawMode, TubeGeometry, UVMapping, Uint16BufferAttribute, Uint32BufferAttribute, Uint8BufferAttribute, Uint8ClampedBufferAttribute, Uniform, UniformsGroup, UniformsUtils, UnsignedByteType, UnsignedInt101111Type, UnsignedInt248Type, UnsignedInt5999Type, UnsignedIntType, UnsignedShort4444Type, UnsignedShort5551Type, UnsignedShortType, VSMShadowMap, Vector2, Vector3, Vector4, VectorKeyframeTrack, VideoFrameTexture, VideoTexture, WebGL3DRenderTarget, WebGLArrayRenderTarget, WebGLCoordinateSystem, WebGLRenderTarget, WebGPUCoordinateSystem, WebXRController, WireframeGeometry, WrapAroundEnding, ZeroCurvatureEnding, ZeroFactor, ZeroSlopeEnding, ZeroStencilOp, cloneUniforms, createCanvasElement, createElementNS, error, getByteLength, getConsoleFunction, getUnlitUniformColorSpace, isTypedArray, log, mergeUniforms, probeAsync, setConsoleFunction, warn, warnOnce };
+export { ACESFilmicToneMapping, AddEquation, AddOperation, AdditiveAnimationBlendMode, AdditiveBlending, AgXToneMapping, AlphaFormat, AlwaysCompare, AlwaysDepth, AlwaysStencilFunc, AmbientLight, AnimationAction, AnimationClip, AnimationLoader, AnimationMixer, AnimationObjectGroup, AnimationUtils, ArcCurve, ArrayCamera, ArrowHelper, AttachedBindMode, Audio, AudioAnalyser, AudioContext, AudioListener, AudioLoader, AxesHelper, BackSide, BasicDepthPacking, BasicShadowMap, BatchedMesh, BezierInterpolant, Bone, BooleanKeyframeTrack, Box2, Box3, Box3Helper, BoxGeometry, BoxHelper, BufferAttribute, BufferGeometry, BufferGeometryLoader, ByteType, Cache, Camera, CameraHelper, CanvasTexture, CapsuleGeometry, CatmullRomCurve3, CineonToneMapping, CircleGeometry, ClampToEdgeWrapping, Clock, Color, ColorKeyframeTrack, ColorManagement, Compatibility, CompressedArrayTexture, CompressedCubeTexture, CompressedTexture, CompressedTextureLoader, ConeGeometry, ConstantAlphaFactor, ConstantColorFactor, Controls, CubeCamera, CubeDepthTexture, CubeReflectionMapping, CubeRefractionMapping, CubeTexture, CubeTextureLoader, CubeUVReflectionMapping, CubicBezierCurve, CubicBezierCurve3, CubicInterpolant, CullFaceBack, CullFaceFront, CullFaceFrontBack, CullFaceNone, Curve, CurvePath, CustomBlending, CustomToneMapping, CylinderGeometry, Cylindrical, Data3DTexture, DataArrayTexture, DataTexture, DataTextureLoader, DataUtils, DecrementStencilOp, DecrementWrapStencilOp, DefaultLoadingManager, DepthFormat, DepthStencilFormat, DepthTexture, DetachedBindMode, DirectionalLight, DirectionalLightHelper, DiscreteInterpolant, DodecahedronGeometry, DoubleSide, DstAlphaFactor, DstColorFactor, DynamicCopyUsage, DynamicDrawUsage, DynamicReadUsage, EdgesGeometry, EllipseCurve, EqualCompare, EqualDepth, EqualStencilFunc, EquirectangularReflectionMapping, EquirectangularRefractionMapping, Euler, EventDispatcher, ExternalTexture, ExtrudeGeometry, FileLoader, Float16BufferAttribute, Float32BufferAttribute, FloatType, Fog, FogExp2, FramebufferTexture, FrontSide, Frustum, FrustumArray, GLBufferAttribute, GLSL1, GLSL3, GreaterCompare, GreaterDepth, GreaterEqualCompare, GreaterEqualDepth, GreaterEqualStencilFunc, GreaterStencilFunc, GridHelper, Group, HTMLTexture, HalfFloatType, HemisphereLight, HemisphereLightHelper, IcosahedronGeometry, ImageBitmapLoader, ImageLoader, ImageUtils, IncrementStencilOp, IncrementWrapStencilOp, InstancedBufferAttribute, InstancedBufferGeometry, InstancedInterleavedBuffer, InstancedMesh, Int16BufferAttribute, Int32BufferAttribute, Int8BufferAttribute, IntType, InterleavedBuffer, InterleavedBufferAttribute, Interpolant, InterpolateBezier, InterpolateDiscrete, InterpolateLinear, InterpolateSmooth, InterpolationSamplingMode, InterpolationSamplingType, InvertStencilOp, KeepStencilOp, KeyframeTrack, LOD, LatheGeometry, Layers, LessCompare, LessDepth, LessEqualCompare, LessEqualDepth, LessEqualStencilFunc, LessStencilFunc, Light, LightProbe, Line, Line3, LineBasicMaterial, LineCurve, LineCurve3, LineDashedMaterial, LineLoop, LineSegments, LinearFilter, LinearInterpolant, LinearMipMapLinearFilter, LinearMipMapNearestFilter, LinearMipmapLinearFilter, LinearMipmapNearestFilter, LinearSRGBColorSpace, LinearToneMapping, LinearTransfer, Loader, LoaderUtils, LoadingManager, LoopOnce, LoopPingPong, LoopRepeat, MOUSE, Material, MaterialBlending, MaterialLoader, MathUtils, Matrix2, Matrix3, Matrix4, MaxEquation, Mesh, MeshBasicMaterial, MeshDepthMaterial, MeshDistanceMaterial, MeshLambertMaterial, MeshMatcapMaterial, MeshNormalMaterial, MeshPhongMaterial, MeshPhysicalMaterial, MeshStandardMaterial, MeshToonMaterial, MinEquation, MirroredRepeatWrapping, MixOperation, MultiplyBlending, MultiplyOperation, NearestFilter, NearestMipMapLinearFilter, NearestMipMapNearestFilter, NearestMipmapLinearFilter, NearestMipmapNearestFilter, NeutralToneMapping, NeverCompare, NeverDepth, NeverStencilFunc, NoBlending, NoColorSpace, NoNormalPacking, NoToneMapping, NormalAnimationBlendMode, NormalBlending, NormalGAPacking, NormalRGPacking, NotEqualCompare, NotEqualDepth, NotEqualStencilFunc, NumberKeyframeTrack, Object3D, ObjectLoader, ObjectSpaceNormalMap, OctahedronGeometry, OneFactor, OneMinusConstantAlphaFactor, OneMinusConstantColorFactor, OneMinusDstAlphaFactor, OneMinusDstColorFactor, OneMinusSrcAlphaFactor, OneMinusSrcColorFactor, OrthographicCamera, PCFShadowMap, PCFSoftShadowMap, Path, PerspectiveCamera, Plane, PlaneGeometry, PlaneHelper, PointLight, PointLightHelper, Points, PointsMaterial, PolarGridHelper, PolyhedronGeometry, PositionalAudio, PropertyBinding, PropertyMixer, QuadraticBezierCurve, QuadraticBezierCurve3, Quaternion, QuaternionKeyframeTrack, QuaternionLinearInterpolant, R11_EAC_Format, RAD2DEG, RED_GREEN_RGTC2_Format, RED_RGTC1_Format, REVISION, RG11_EAC_Format, RGBADepthPacking, RGBAFormat, RGBAIntegerFormat, RGBA_ASTC_10x10_Format, RGBA_ASTC_10x5_Format, RGBA_ASTC_10x6_Format, RGBA_ASTC_10x8_Format, RGBA_ASTC_12x10_Format, RGBA_ASTC_12x12_Format, RGBA_ASTC_4x4_Format, RGBA_ASTC_5x4_Format, RGBA_ASTC_5x5_Format, RGBA_ASTC_6x5_Format, RGBA_ASTC_6x6_Format, RGBA_ASTC_8x5_Format, RGBA_ASTC_8x6_Format, RGBA_ASTC_8x8_Format, RGBA_BPTC_Format, RGBA_ETC2_EAC_Format, RGBA_PVRTC_2BPPV1_Format, RGBA_PVRTC_4BPPV1_Format, RGBA_S3TC_DXT1_Format, RGBA_S3TC_DXT3_Format, RGBA_S3TC_DXT5_Format, RGBDepthPacking, RGBFormat, RGBIntegerFormat, RGB_BPTC_SIGNED_Format, RGB_BPTC_UNSIGNED_Format, RGB_ETC1_Format, RGB_ETC2_Format, RGB_PVRTC_2BPPV1_Format, RGB_PVRTC_4BPPV1_Format, RGB_S3TC_DXT1_Format, RGDepthPacking, RGFormat, RGIntegerFormat, RawShaderMaterial, Ray, Raycaster, RectAreaLight, RedFormat, RedIntegerFormat, ReinhardToneMapping, RenderTarget, RenderTarget3D, RepeatWrapping, ReplaceStencilOp, ReverseSubtractEquation, ReversedDepthFuncs, RingGeometry, SIGNED_R11_EAC_Format, SIGNED_RED_GREEN_RGTC2_Format, SIGNED_RED_RGTC1_Format, SIGNED_RG11_EAC_Format, SRGBColorSpace, SRGBTransfer, Scene, ShaderMaterial, ShadowMaterial, Shape, ShapeGeometry, ShapePath, ShapeUtils, ShortType, Skeleton, SkeletonHelper, SkinnedMesh, Source, Sphere, SphereGeometry, Spherical, SphericalHarmonics3, SplineCurve, SpotLight, SpotLightHelper, Sprite, SpriteMaterial, SrcAlphaFactor, SrcAlphaSaturateFactor, SrcColorFactor, StaticCopyUsage, StaticDrawUsage, StaticReadUsage, StereoCamera, StreamCopyUsage, StreamDrawUsage, StreamReadUsage, StringKeyframeTrack, SubtractEquation, SubtractiveBlending, TOUCH, TangentSpaceNormalMap, TetrahedronGeometry, Texture, TextureLoader, TextureUtils, Timer, TimestampQuery, TorusGeometry, TorusKnotGeometry, Triangle, TriangleFanDrawMode, TriangleStripDrawMode, TrianglesDrawMode, TubeGeometry, UVMapping, Uint16BufferAttribute, Uint32BufferAttribute, Uint8BufferAttribute, Uint8ClampedBufferAttribute, Uniform, UniformsGroup, UniformsUtils, UnsignedByteType, UnsignedInt101111Type, UnsignedInt248Type, UnsignedInt5999Type, UnsignedIntType, UnsignedShort4444Type, UnsignedShort5551Type, UnsignedShortType, VSMShadowMap, Vector2, Vector3, Vector4, VectorKeyframeTrack, VideoFrameTexture, VideoTexture, WebGL3DRenderTarget, WebGLArrayRenderTarget, WebGLCoordinateSystem, WebGLRenderTarget, WebGPUCoordinateSystem, WebXRController, WireframeGeometry, WrapAroundEnding, ZeroCurvatureEnding, ZeroFactor, ZeroSlopeEnding, ZeroStencilOp, cloneUniforms, createCanvasElement, createElementNS, error, getByteLength, getConsoleFunction, getUnlitUniformColorSpace, isTypedArray, log, mergeUniforms, probeAsync, setConsoleFunction, warn, warnOnce, yieldToMain };

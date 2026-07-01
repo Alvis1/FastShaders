@@ -28,9 +28,9 @@ ShaderCarousel/
 │   ├── bench-stats.js          # computeStats (IQR-filtered) + exportResults
 │   ├── bench-registry.js       # canonical corpus (baseline + presets + noises + saved)
 │   ├── bench-ui.js             # picker, settings, start gate, done popup, headset detect
-│   └── three/                  # Three.js WebGPU bundle (three.webgpu.js, three.tsl.js, three.core.js)
+│   └── three/                  # Three.js r184 WebGPU ESM (three.webgpu.js, three.tsl.js, three.core.js — regenerated from node_modules/three@0.184)
 ├── components/three/
-│   └── aframe-171-a-0.1.min.js # A-Frame 1.7 IIFE (only the InOut bench uses this)
+│   └── a-frame-180-a-01.min.js # A-Frame 1.8.0 IIFE, r184 WebGPU (synced from a-frame-shaderloader/js/ by fs-vendor-sync; only the InOut bench uses this)
 ├── sphere-mover.js             # A-Frame component — linear ping-pong z animation (InOut only)
 ├── bench-inout/                # immersive WebXR bench
 │   ├── index.html
@@ -38,7 +38,7 @@ ShaderCarousel/
 ├── bench-static/               # WebGPU multi-pass on a full-coverage sphere
 │   ├── index.html
 │   └── bench.js
-└── bench-microplane/           # WebGPU multi-pass on a 512² ortho quad
+└── bench-microplane/           # WebGPU multi-pass on a 1024² ortho quad
     ├── index.html
     └── bench.js
 ```
@@ -59,7 +59,7 @@ button counts as a user-gesture origin for `sceneEl.enterVR()`.
 
 | Property | Value |
 |---|---|
-| Backend | A-Frame 1.7 → THREE.WebGLRenderer (only stable WebXR path on Quest 3 Browser today; WebGPU XR is not reliable on Quest yet) |
+| Backend | A-Frame 1.8.0 / Three.js r184 bundle, run on the WebGL backend (only stable WebXR path on Quest 3 Browser today; WebGPU XR is not reliable on Quest yet) |
 | Geometry | Inverted sphere (`THREE.BackSide`), radius 2.5, 64×32 segments |
 | Camera path | sphere-mover linear ping-pong on z (default 10 s cycle: z = −10 → 0 → −10) — the sphere envelops the viewer at z = 0 |
 | Timing | rAF delta inside a one-shot `bench-tick` A-Frame component → fires every render whether `requestAnimationFrame` (flat) or `xr.setAnimationLoop` (in-headset) is driving the loop |
@@ -78,8 +78,8 @@ mirroring real VR content where shaders run on geometry at varied distances.
 | Geometry | Sphere @ `fullCoverageScale = 2.0` at z = −5, every pixel runs the shader |
 | Resolution | **2064 × 2208** — Quest 3 per-eye target, so numbers are directly comparable to InOut |
 | GPU sync | `device.queue.onSubmittedWorkDone()` after each multi-pass batch |
-| Multi-pass | **30 passes per measurement** (default), render in tight loop → one fence → divide elapsed by N |
-| Why multi-pass | A single render at desktop refresh clamps to the vsync floor (8.3 ms @ 120 Hz). 30× amplifies the per-pass cost above that floor — the technique Table 2's macOS column uses |
+| Multi-pass | **≥30 passes per measurement** (minimum; `calibratePasses` adaptively bumps per-shader up to `CALIBRATE_MAX_PASSES` 4000 so each measurement spans ~`CALIBRATE_TARGET_MS` 20 ms), render in tight loop → one fence → divide elapsed by N. The actual count is exported as `calibratedPasses` |
+| Why multi-pass | A single render at desktop refresh clamps to the vsync floor (8.3 ms @ 120 Hz). 30×+ amplifies the per-pass cost above that floor — the technique Table 2's macOS column uses |
 
 Best run on macOS with M-class GPUs to recover the fragment cost numbers the
 paper reports. Outputs feed directly into the complexity-suggestion file.
@@ -90,9 +90,9 @@ paper reports. Outputs feed directly into the complexity-suggestion file.
 |---|---|
 | Backend | `THREE.WebGPURenderer`, ortho camera |
 | Geometry | 2 × 2 plane covering the framebuffer |
-| Resolution | **512 × 512** by default — small enough that ALU dominates over bandwidth, large enough to be measurable |
+| Resolution | **1024 × 1024** by default (raised from 512² so cheap atomics clear `performance.now()` ~1 ms quantization) — large enough to be measurable, ALU still dominates over bandwidth |
 | GPU sync | Same `onSubmittedWorkDone` fence |
-| Multi-pass | 30 passes × 60 frames per shader |
+| Multi-pass | ≥30 passes × 60 frames per shader (passes adaptively calibrated per-shader up to 4000 to span ~20 ms) |
 | Default corpus | **8 noise atomics + baseline** — atomic shaders are what allow per-node cost recovery by subtraction. Presets are available but unchecked by default; the Static bench is where compositions belong |
 | Immersive | **No** — microbench is sensitive to thermal & scheduler variance; immersive XR adds noise |
 
@@ -110,7 +110,7 @@ A-Frame bundle). Groups, in picker display order:
 | **Baseline** | 1 — `ref_baseline` (flat color) | First shader of every run; required for marginal-cost subtraction |
 | **Presets** | 8 — polkaDots, grid, tigerFur, staticNoise, crumpledFabric, gasGiant, marble, wood | Direct ports of FastShaders' `src/registry/builtinTextures.ts`. These are the user-facing texture presets the editor ships |
 | **Noises** | 8 — perlin, perlinVec3, fbm, fbmVec3, cellNoise, voronoi, voronoiVec2, voronoiVec3 | The MaterialX noise primitives the editor's Noise category wraps. Called the way `graphToCode` emits them: bare `positionGeometry`, no scale |
-| **Saved Groups** | 0 — N (per-user) | Pulled from `localStorage['fs:savedGroups']`. Each entry is *listed* by name; entries get an executable `build()` only if the editor has populated a `tslCode: string` field on the saved record. Greyed out otherwise |
+| **Saved Groups** | 0 — N (per-user) | Pulled from `localStorage['fs:savedGroups']` and *listed* by name, but **always greyed-out** — inline `tslCode` execution was removed for security (see "Saved Groups loader status" below) |
 
 The baseline always runs first — the picker forces its checkbox on and disabled.
 
@@ -144,7 +144,7 @@ The intended workflow for re-calibrating `complexity.json`:
 3. Run **Sphere InOut** on a Meta Quest 3 in immersive mode. The ratio of InOut median to Static median quantifies the foveal + stereo + driver immersive overhead — the missing factor in the paper's § 5.2 limitation.
 4. Diff each run's `*-complexity-suggestion-*.json` against the current `complexity.json` to see deltas per-node.
 
-Total bench time per device (with 16-shader defaults): ~5 min combined.
+Total bench time per device (default corpora — 17 shaders for Static/InOut, 9 for MicroPlane): ~5 min combined.
 
 ## Defaults (rationale)
 
@@ -153,12 +153,12 @@ Picked from the existing `face/bench.js` calibration loop + the
 
 | Setting | InOut | Static | MicroPlane | Why |
 |---|---|---|---|---|
-| Duration / cycle | 10 s | 3 s | — | InOut: one full sphere-mover ping-pong; Static: enough to drain compile noise; Micro: bounded by frames |
+| Duration / cycle | 10 s | 6 s | — | InOut: one full sphere-mover ping-pong; Static: enough to drain compile noise; Micro: bounded by frames |
 | Frames per shader | (cycle-driven) | 30 | 60 | More micro frames because per-shader cost is smaller → higher relative jitter |
-| Passes per measurement | 1 (rAF) | 30 | 30 | 30× amplifies cost above vsync floor (paper Table 2 macOS) |
+| Passes per measurement | 1 (rAF) | ≥30 (adaptive) | ≥30 (adaptive) | 30 minimum; `calibratePasses` raises it per-shader up to 4000 to span ~20 ms, amplifying cost above the vsync floor (paper Table 2 macOS) |
 | Warmup | 200 ms | 5 passes | 5 passes | Compile / texture upload spike skip |
 | Log stride | every frame | every frame | every frame | Thinning happens at export, not capture — losing samples kills stats budget |
-| Render size | per-eye XR | 2064 × 2208 | 512 × 512 | InOut: platform-driven; Static: matches XR for direct comparison; Micro: ALU-bound |
+| Render size | per-eye XR | 2064 × 2208 | 1024 × 1024 | InOut: platform-driven; Static: matches XR for direct comparison; Micro: ALU-bound |
 
 A **Reset to defaults** button is wired in every bench's `#controls` and
 restores all of the above plus the picker selection.
@@ -176,21 +176,24 @@ Each bench namespaces its own localStorage keys:
 ## Saved Groups loader status
 
 The picker reads `localStorage['fs:savedGroups']` (same origin as the editor)
-and lists each entry by name. `buildBenchRegistry` checks for an optional
-`tslCode: string` field and, if present, wraps it via
-`new Function('TSL', code)` to produce an executable build function. The
-editor's current `saveGroupToLibrary` (see [`src/store/useAppStore.ts`](../src/store/useAppStore.ts))
-persists `{ id, name, color, nodes, edges }` but **not** `tslCode` —
-so saved groups appear in the picker with a disabled checkbox and the hint
-*"editor needs to export TSL — re-save group in FastShaders v0.1.14+"*.
+and lists each entry by name, but **every entry is currently disabled
+(greyed-out)**: `compileSavedGroup` in `lib/bench-registry.js` always returns
+`{ runnable: false }`. The original loader executed a group's `tslCode` inside a
+`new Function('TSL', "with (TSL) { … }")` wrapper, but that path was **removed
+for security** — a `tslCode` field in `fs:savedGroups` would otherwise be
+arbitrary JS running in the bench origin.
 
-The bench side is ready. The editor extension is:
-- In `saveGroupToLibrary`, after the `SavedGroup` construction, call
-  `graphToCode(saved.nodes, saved.edges)` and assign `saved.tslCode = code`.
-- Bump editor version so users know which save is the executable one.
+Making saved groups benchmarkable therefore needs **two** changes, not one:
+- **Editor side** — `saveGroupToLibrary` (see [`src/store/useAppStore.ts`](../src/store/useAppStore.ts))
+  must persist a `tslCode` field; it currently stores `{ id, name, color, nodes, edges }`
+  only (e.g. call `graphToCode(saved.nodes, saved.edges)` and assign the result).
+- **Bench side** — `compileSavedGroup` must add a **sandboxed** compile step
+  (a worker, or the shaderloader parse pipeline) instead of the removed inline
+  `new Function` path.
 
-Once shipped, saved groups become a first-class benchmarkable corpus — the
-"combinations of nodes" extension paper § 6 future-works.
+Until both land, saved groups stay listed-only. Once shipped they become a
+first-class benchmarkable corpus — the "combinations of nodes" extension the
+paper's § 6 calls out as future work.
 
 ## Operational notes
 
@@ -199,9 +202,11 @@ Once shipped, saved groups become a first-class benchmarkable corpus — the
   `index.html` via `python3 -m http.server`, not `file://`.
 - **Quest 3 testing**: the gh-pages deploy at `/FastShaders/ShaderCarousel/`
   is HTTPS, which is required for WebXR session entry on Quest 3 Browser.
-- **WebGPU vs WebGL**: Static + MicroPlane need WebGPU (no fallback in this
-  version — they explicitly target the fence-sync timing). InOut uses WebGL
-  via the A-Frame IIFE bundle because Quest 3's WebGPU XR is not yet reliable.
+- **WebGPU vs WebGL**: Static + MicroPlane target WebGPU fence sync; if the
+  `WebGPURenderer` initializes on a WebGL backend they fall back to `gl.finish()`
+  (logged as less precise), so prefer a real WebGPU device for accurate timing.
+  InOut uses WebGL via the A-Frame IIFE bundle because Quest 3's WebGPU XR is
+  not yet reliable.
 - **Browsers**: Chrome / Edge / Brave for WebGPU; Meta Quest Browser for the
   InOut immersive path. Safari WebGPU works for Static + MicroPlane on Apple
   Silicon.
