@@ -25,9 +25,9 @@
   padding: 2px 8px;
 }
 
-.node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__title {
-  font-size: 12px;
-}
+/* Title size is normalized by FitNodeHeading (CARD_HEADING_PX) for these cards
+   too, so they keep the 9px base — no fixed override (which would skew the
+   normalization and make their headers differ from the exact-replica cards). */
 
 .node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__cost-badge {
   font-size: 14px;

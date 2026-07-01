@@ -5,6 +5,7 @@ Authoritative spec for how FastShaders **nodes** look and how the **Node Designe
 glyph system, `ShaderNode`, `NodePreviewCard`, or the designer tool.**
 
 Implemented in: `src/components/NodeEditor/nodes/ShaderNode.tsx`,
+`.../nodes/NodeBase.css` (header/body/border/cost-badge + `.node-base__stack`),
 `.../nodes/glyphs/NodeGlyph.tsx`, `.../glyphs/customGlyphs.ts`,
 `.../handles/TypedHandle.{tsx,css}`, `NodePreviewCard.tsx`, and `node-designer.html`
 (root + `public/` copy). See `CONTEXT.md → Node Visual Anatomy` for the prose version.

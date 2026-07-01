@@ -5,8 +5,27 @@ import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
+import { decodeDataNode } from '@/utils/dataNode';
+import { minMax, normalize01, capToWidth, buildPhaseRamp, MAX_TEXTURE_WIDTH } from '@/utils/dataViz';
+import { float32ToBase64, float16ToBase64 } from '@/utils/binaryCodec';
+import { hexToRgb01 } from '@/utils/colorUtils';
 import { getComponentCount } from './cpuEvaluator';
 import { topologicalSort } from './topologicalSort';
+
+/** Format a JS number as a TSL-safe numeric literal (finite or `0`). */
+function num(n: number): string {
+  return Number.isFinite(n) ? String(n) : '0';
+}
+
+/** Inline expression that rebuilds a Float32Array from base64 at module load. */
+function f32Decode(b64: string): string {
+  return `new Float32Array(Uint8Array.from(atob("${b64}"), (c) => c.charCodeAt(0)).buffer)`;
+}
+
+/** Inline expression that rebuilds a Uint16Array (half-float) from base64. */
+function f16Decode(b64: string): string {
+  return `new Uint16Array(Uint8Array.from(atob("${b64}"), (c) => c.charCodeAt(0)).buffer)`;
+}
 
 /** Valid swizzle component handles for split node output. */
 export const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
@@ -174,6 +193,18 @@ export function graphToCode(
       continue;
     }
 
+    // Data / Stripes nodes have no tslFunction (custom emission), so give them
+    // explicit bases instead of the empty-string fallback below.
+    if (def.type === 'dataNode' || def.type === 'stripes') {
+      const baseName = def.type === 'dataNode' ? 'data' : 'stripes';
+      let idx = 1;
+      while (usedNames.has(`${baseName}${idx}`)) idx++;
+      const name = `${baseName}${idx}`;
+      usedNames.add(name);
+      varNames.set(node.id, name);
+      continue;
+    }
+
     let baseName = def.tslFunction;
     // Clean up names for MaterialX functions
     if (baseName.startsWith('mx_')) {
@@ -230,6 +261,9 @@ export function graphToCode(
 
   // Build body lines
   const bodyLines: string[] = [];
+  // Module-scope setup emitted BEFORE the shader Fn — the Data/Stripes nodes
+  // build their `THREE.DataTexture` lookups here (closed over by the Fn body).
+  const setupLines: string[] = [];
 
   for (const node of sorted) {
     const def = registry.get(node.data.registryType);
@@ -287,6 +321,116 @@ export function graphToCode(
         bodyLines.push(`  const ${cVar} = sub(${scaledExpr}, vec2(0.5, 0.5));`);
         bodyLines.push(`  const ${varName} = add(vec2(sub(mul(${cVar}.x, cos(${rotationExpr})), mul(${cVar}.y, sin(${rotationExpr}))), add(mul(${cVar}.x, sin(${rotationExpr})), mul(${cVar}.y, cos(${rotationExpr})))), vec2(0.5, 0.5));`);
       }
+    } else if (def.type === 'dataNode') {
+      // Data node: one float DataTexture per *consumed* column (FloatType +
+      // Nearest = exact values, valid in WebGPU without the float32-filterable
+      // feature). Each column output samples its texture at uv.x. The node
+      // itself produces no value — resolveEdgeRef maps `colN` handles to the
+      // per-column vars emitted here.
+      const nv = getNodeValues(node);
+      const decoded = decodeDataNode(nv);
+      const usedCols = new Set<number>();
+      for (const e of edges) {
+        if (e.source !== node.id) continue;
+        const m = /^col(\d+)$/.exec(e.sourceHandle ?? '');
+        if (m) usedCols.add(Number(m[1]));
+      }
+      if (decoded && usedCols.size > 0) {
+        addImport('three/tsl', 'texture');
+        addImport('three/tsl', 'uv');
+        addImport('three/tsl', 'vec2');
+        for (const ci of [...usedCols].sort((a, b) => a - b)) {
+          const col = decoded.columns[ci];
+          if (!col) continue;
+          const capped = capToWidth(col, MAX_TEXTURE_WIDTH);
+          const texVar = `_${varName}_tex${ci}`;
+          setupLines.push(
+            `const ${texVar} = new globalThis.THREE.DataTexture(${f32Decode(float32ToBase64(capped))}, ${capped.length}, 1, globalThis.THREE.RedFormat, globalThis.THREE.FloatType);`,
+          );
+          setupLines.push(`${texVar}.needsUpdate = true;`);
+          bodyLines.push(`  const ${varName}_col${ci} = texture(${texVar}, vec2(uv().x, 0.5)).x;`);
+        }
+      }
+    } else if (def.type === 'stripes') {
+      // Data Stripes: density-modulated bars + sequential color ramp. Stripe
+      // density comes from a CPU-precomputed cumulative-phase ramp (prefix-sum
+      // of the desired local frequency) baked from the upstream Data column —
+      // so the bars stay continuous (no tearing). Derivative AA + moiré
+      // fade-to-average defeat shimmering when the period drops below a pixel.
+      const nv = getNodeValues(node);
+      const bf = Number(nv.baseFrequency ?? 80);
+      const dens = Number(nv.density ?? 1.5);
+      const lo = hexToRgb01(String(nv.lowColor ?? '#1b2a4a'));
+      const hi = hexToRgb01(String(nv.highColor ?? '#ffd24d'));
+      addImport('three/tsl', 'float');
+      addImport('three/tsl', 'vec3');
+      addImport('three/tsl', 'uv');
+      addImport('three/tsl', 'dFdx');
+      addImport('three/tsl', 'dFdy');
+
+      const signalEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'signal');
+      const signalRef = signalEdge ? resolveEdgeRef(signalEdge, edges, varNames, sorted) : null;
+
+      // Trace the signal to a Data column → bake the cumulative-phase ramp.
+      let phaseTexVar: string | null = null;
+      let totalCycles = bf;
+      let vmin = 0;
+      let vspan = 1;
+      if (signalEdge) {
+        const src = sorted.find((n) => n.id === signalEdge.source);
+        const m = /^col(\d+)$/.exec(signalEdge.sourceHandle ?? '');
+        if (src && src.data.registryType === 'dataNode' && m) {
+          const col = decodeDataNode(getNodeValues(src))?.columns[Number(m[1])];
+          if (col && col.length > 1) {
+            const mm = minMax(col);
+            vmin = mm.min;
+            vspan = Math.max(mm.max - mm.min, 1e-20);
+            const capped = capToWidth(col, MAX_TEXTURE_WIDTH);
+            const ramp = buildPhaseRamp(normalize01(capped, minMax(capped)), bf, dens);
+            totalCycles = ramp.totalCycles;
+            addImport('three/tsl', 'texture');
+            addImport('three/tsl', 'vec2');
+            phaseTexVar = `_${varName}_phase`;
+            setupLines.push(
+              `const ${phaseTexVar} = new globalThis.THREE.DataTexture(${f16Decode(float16ToBase64(ramp.phase01))}, ${ramp.phase01.length}, 1, globalThis.THREE.RedFormat, globalThis.THREE.HalfFloatType);`,
+            );
+            setupLines.push(`${phaseTexVar}.minFilter = globalThis.THREE.LinearFilter;`);
+            setupLines.push(`${phaseTexVar}.magFilter = globalThis.THREE.LinearFilter;`);
+            setupLines.push(`${phaseTexVar}.needsUpdate = true;`);
+          }
+        }
+      }
+
+      const phaseExpr = phaseTexVar
+        ? `texture(${phaseTexVar}, vec2(uv().x, 0.5)).x.mul(${num(totalCycles)})`
+        : `uv().x.mul(${num(bf)})`;
+      const colorT = phaseTexVar && signalRef
+        ? `${signalRef}.sub(${num(vmin)}).div(${num(vspan)}).clamp(0.0, 1.0)`
+        : signalRef
+          ? `${signalRef}.clamp(0.0, 1.0)`
+          : 'uv().x';
+
+      const p = `_${varName}_p`;
+      const tri = `_${varName}_tri`;
+      const fw = `_${varName}_fw`;
+      const ln = `_${varName}_ln`;
+      const lnS = `_${varName}_lnS`;
+      const br = `_${varName}_br`;
+      const t = `_${varName}_t`;
+      const col = `_${varName}_col`;
+      // Continuous phase (NEVER take the derivative of fract(phase)).
+      bodyLines.push(`  const ${p} = ${phaseExpr};`);
+      bodyLines.push(`  const ${tri} = ${p}.fract().mul(2.0).sub(1.0).abs();`);
+      bodyLines.push(`  const ${fw} = dFdx(${p}).abs().add(dFdy(${p}).abs());`);
+      bodyLines.push(`  const ${ln} = ${tri}.smoothstep(float(0.5).sub(${fw}), float(0.5).add(${fw}));`);
+      // Fade dense (sub-pixel) regions to the average band so they don't shimmer.
+      bodyLines.push(`  const ${lnS} = ${ln}.mix(float(0.5), ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`);
+      bodyLines.push(`  const ${br} = float(1.0).sub(${lnS}.mul(0.75));`);
+      bodyLines.push(`  const ${t} = ${colorT};`);
+      bodyLines.push(
+        `  const ${col} = vec3(${num(lo[0])}, ${num(lo[1])}, ${num(lo[2])}).mix(vec3(${num(hi[0])}, ${num(hi[1])}, ${num(hi[2])}), ${t});`,
+      );
+      bodyLines.push(`  const ${varName} = ${col}.mul(${br});`);
     } else if (def.type === 'append') {
       // Append node: concatenate values into a vector. Pick vec2/vec3/vec4 based on the
       // total component count of the inputs (a vec2 + float must become vec3, not vec2).
@@ -429,6 +573,9 @@ export function graphToCode(
     ...importLines,
     '',
     ...helperLines,
+    // Module-scope DataTexture construction (Data/Stripes nodes) — must precede
+    // the shader Fn so its body can close over the textures.
+    ...(setupLines.length ? [...setupLines, ''] : []),
     'const shader = Fn(() => {',
     ...bodyLines,
     ...(discardLine ? [discardLine] : []),
@@ -517,6 +664,17 @@ function resolveEdgeRef(
 ): string | null {
   const sourceNode = sorted.find(n => n.id === edge.source);
   if (!sourceNode) return varNames.get(edge.source) ?? null;
+
+  // Data node: each column output is emitted as its own variable `<var>_colN`
+  // (the node has no single value), so address the column by its handle id.
+  if (
+    sourceNode.data.registryType === 'dataNode' &&
+    edge.sourceHandle &&
+    /^col\d+$/.test(edge.sourceHandle)
+  ) {
+    const base = varNames.get(sourceNode.id);
+    return base ? `${base}_${edge.sourceHandle}` : null;
+  }
 
   // If source is a split node, inline as inputVar.component
   if (sourceNode.data.registryType === 'split' && edge.sourceHandle && edge.sourceHandle !== 'out' && VALID_SWIZZLE.has(edge.sourceHandle)) {

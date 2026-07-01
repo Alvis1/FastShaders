@@ -7,7 +7,7 @@ unified launcher, one shared infrastructure.
 | --- | --- | --- |
 | **Sphere InOut** | [`bench-inout/`](./bench-inout/) | Immersive WebXR (A-Frame WebGL) — sphere ping-pongs through the camera; logs true stereoscopic per-eye frametimes. Quest 3 target. |
 | **Sphere Static** | [`bench-static/`](./bench-static/) | WebGPU multi-pass on a full-coverage sphere @ 2064×2208 (Quest 3 per-eye). 30 passes per measurement defeat desktop vsync clamping. |
-| **MicroPlane** | [`bench-microplane/`](./bench-microplane/) | WebGPU multi-pass on a 512² ortho quad. Defaults to noise atomics + baseline — for deriving per-node points by subtraction. No XR. |
+| **MicroPlane** | [`bench-microplane/`](./bench-microplane/) | WebGPU multi-pass on a 1024² ortho quad (512² was the original default). Defaults to noise atomics + baseline — for deriving per-node points by subtraction. No XR. |
 
 ## Run locally
 

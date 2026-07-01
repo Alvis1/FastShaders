@@ -29,7 +29,7 @@ Bi-directional TSL (Three.js Shading Language) visual shader editor. Users autho
 
 - Framework: **vitest** (configured in `vite.config.ts` so `@/*` alias + TS setup are inherited from the build config). Test files match `src/**/*.test.ts`; environment is `node` (no jsdom — tests target pure logic only).
 - Shared test factories live in `src/test-utils.ts` (`makeNode`, `makeEdge`). Always import these instead of redefining stub builders in each test file — the helpers cast through `unknown as AppNode/AppEdge` to skip React Flow's full Node generic constraints.
-- Current coverage: utilities (`colorUtils`, `idGenerator`, `nameUtils`, `graphTraversal`) + engine core (`topologicalSort`, `cpuEvaluator`, `graphToCode`, `codeToGraph`, plus a `graphToCode ↔ codeToGraph` round-trip invariant suite).
+- Current coverage: utilities (`colorUtils`, `idGenerator`, `nameUtils`, `graphTraversal`) + engine (`topologicalSort`, `cpuEvaluator`, `graphToCode`, `codeToGraph`, `tslToShaderModule`, `tslCodeProcessor`, plus a `graphToCode ↔ codeToGraph` round-trip invariant suite) + a vendor-sync drift guard (`vendorSync.test.ts`).
 
 ## Project Structure
 
@@ -50,7 +50,7 @@ src/
       handles/        — TypedHandle with color-coded data types
       inputs/         — DragNumberInput (drag/click-to-edit number widget)
       menus/          — ContextMenu (dispatcher), AddNodeMenu, NodeSettingsMenu, ShaderSettingsMenu, GroupSettingsMenu, EdgeContextMenu
-      nodes/          — ShaderNode, OutputNode, ColorNode, PreviewNode, MathPreviewNode, ClockNode, GroupNode
+      nodes/          — ShaderNode, OutputNode, ColorNode, PreviewNode, MathPreviewNode, ClockNode, GroupNode, NodeBase.css, glyphs/ (NodeGlyph, customGlyphs)
       NodePreviewCard.tsx — content browser card renderer (CPU/canvas previews)
       SavedGroupCard.tsx  — draggable tile for a user-saved group (Saved Groups tab)
       TextureCard.tsx     — draggable tile for a built-in texture (Textures tab, CPU canvas preview)
@@ -69,8 +69,8 @@ src/
   hooks/
     useSyncEngine.ts  — bidirectional graph↔code sync, undo/redo, complexity calc
   registry/
-    nodeRegistry.ts   — ~55 hardcoded node definitions (8 input, 6 type, 4 arithmetic, 15 math, 4 interpolation, 7 vector, 8 noise, 2 color, 1 output) + hidden `unknown` def
-    nodeCategories.ts — 11 category definitions (input, type, arithmetic, math, interpolation, vector, noise, color, texture, unknown, output)
+    nodeRegistry.ts   — ~66 hardcoded node definitions (16 input, 6 type, 4 arithmetic, 15 math, 4 interpolation, 3 logic, 7 vector, 8 noise, 2 color, 1 output) + hidden `unknown` def (67 total). NB: the 9 unary-math nodes are generated via a `.map()`, so a naive grep of `category: 'math'` undercounts
+    nodeCategories.ts — 12 category definitions (input, type, arithmetic, math, interpolation, logic, vector, noise, color, texture, unknown, output)
     builtinTextures.ts — 8 built-in texture groups (polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) — TSL code parsed to node graphs at startup
     complexity.json   — per-node GPU cost values
   store/
@@ -122,7 +122,7 @@ public/
 - **A-Frame pipeline**: graphToCode → tslToShaderModule → shaderloader 0.4 (runtime TDZ fix + auto-import injection + `export const schema` parsing) → dynamic blob import. The standalone `.html` export embeds the same module as a blob URL.
 - **Centralized vendoring (single source + sync)**: the A-Frame IIFE bundle (`a-frame-180-a-01.min.js`), shaderloader (`a-frame-shaderloader-0.4.js`), and orbit-controls live ONLY in `a-frame-shaderloader/js/`. The `fs-vendor-sync` vite plugin (`vite.config.ts`) copies them into `public/js/` and the bundle into `ShaderCarousel/components/three/` at dev/build start; `src/vendorSync.test.ts` fails on drift. **Never hand-edit the copies** — edit the submodule source and re-run vite. Everything runs **Three.js r184**: the bundle (super-three 0.184), `node_modules/three` (`^0.184.0`), and the carousel's standalone ESM `ShaderCarousel/lib/three/*.js` (regenerated from `node_modules/three`, used by static/microplane benches via import map).
 - **rAF ref pattern**: PreviewNode/MathPreviewNode/EdgeInfoCard overwrite refs for animation — this is correct (avoids stale closures)
-- **Noise nodes**: 8 MaterialX-backed nodes (`perlin`, `perlinVec3`, `fbm`, `fbmVec3`, `cellNoise`, `voronoi`, `voronoiVec2`, `voronoiVec3`) all use the same `pos`/`scale` parameter convention. graphToCode emits them via the `def.category === 'noise'` branch; codeToGraph parses them via `processNoiseCall`; CPU thumbnails come from `noisePreview.ts`; live GPU previews run the generated TSL through the preview iframe (`graphToCode` → `tslToPreviewHTML` → `convertToShaderModule`). There is no `texture` category — `tsl-textures` was removed in favour of three.js's built-in MaterialX noise.
+- **Noise nodes**: 8 MaterialX-backed nodes (`perlin`, `perlinVec3`, `fbm`, `fbmVec3`, `cellNoise`, `voronoi`, `voronoiVec2`, `voronoiVec3`) all use the same `pos`/`scale` parameter convention. graphToCode emits them via the `def.category === 'noise'` branch; codeToGraph parses them via `processNoiseCall`; CPU thumbnails come from `noisePreview.ts`; live GPU previews run the generated TSL through the preview iframe (`graphToCode` → `tslToPreviewHTML` → `convertToShaderModule`). There are no texture *nodes* — `tsl-textures` was removed in favour of three.js's built-in MaterialX noise; the `texture` category exists only to back the content-browser Textures tab (`builtinTextures.ts`) and holds zero node definitions.
 - **Groups**: selection groups are first-class React Flow nodes (`type: 'group'`) created via Ctrl+G or right-click → Group Selection. They have no registry entry and no shader semantics — `graphToCode`/`cpuEvaluator` ignore the *node*, but call `unwrapCollapsedGroupEdges()` from `edgeUtils.ts` at their entry to translate visually-rewritten boundary edges back to their real child endpoints, so collapse state never affects compiled output. Groups can be recolored, renamed, collapsed (members hidden via `display: none` className — *not* React Flow's `hidden: true`, which would unmount rAF loops), saved to a per-browser library (`fs:savedGroups`), and dragged out of containers. Members never get `extent: 'parent'` — `onNodeDragStop` reconciles `parentId` after every drag instead.
 - **History**: circular buffer (50 entries) with undo/redo via `structuredClone`, Cmd+Z/Cmd+Shift+Z shortcuts
 - **localStorage**: auto-saves graph, split ratios, shader name, headset selection, cost colors, canvas bg color, code editor theme, preview prefs (geometry, lighting, subdivision, bg, uniform bounds, uniform values, camera pos, rotation, playing state), saved groups (debounced 300ms). Reset clears camera/rotation/playing and restores lighting/subdivision/uniforms — bg color, uniform bounds, and geometry are treated as user preferences. Uniform values persist by name: removing a property node from the graph keeps the stored value (the iframe ignores `fs:uniform` messages for unknown names), so re-adding a property with the same name restores the user's last tuning.

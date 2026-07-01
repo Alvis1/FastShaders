@@ -22,6 +22,7 @@ import complexityData from '@/registry/complexity.json';
 type ActionItem =
   | { kind: 'group'; key: string; run: () => void }
   | { kind: 'output'; key: string; run: () => void }
+  | { kind: 'note'; key: string; run: () => void }
   | { kind: 'def'; key: string; def: NodeDefinition; run: () => void };
 
 export function AddNodeMenu() {
@@ -31,14 +32,15 @@ export function AddNodeMenu() {
   const contextMenu = useAppStore((s) => s.contextMenu);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const addNode = useAppStore((s) => s.addNode);
+  const addNote = useAppStore((s) => s.addNote);
   const setEdges = useAppStore((s) => s.setEdges);
   const nodes = useAppStore((s) => s.nodes);
   const groupSelection = useAppStore((s) => s.groupSelection);
   const { screenToFlowPosition } = useReactFlow();
 
-  // Selected non-group nodes — gates the "Group Selection" entry
+  // Selected nodes eligible for grouping — excludes groups + notes (annotations).
   const selectedGroupable = useMemo(
-    () => nodes.filter((n) => n.selected && n.type !== 'group'),
+    () => nodes.filter((n) => n.selected && n.type !== 'group' && n.type !== 'note'),
     [nodes],
   );
   const canGroup = selectedGroupable.length >= 2;
@@ -151,6 +153,11 @@ export function AddNodeMenu() {
     closeContextMenu();
   }, [groupSelection, selectedGroupable, closeContextMenu]);
 
+  const handleAddNote = useCallback(() => {
+    addNote(screenToFlowPosition({ x: contextMenu.x, y: contextMenu.y }));
+    closeContextMenu();
+  }, [addNote, screenToFlowPosition, contextMenu.x, contextMenu.y, closeContextMenu]);
+
   // Build the flat keyboard-traversable list in the same order things render.
   // ArrowUp/Down step through this list; Enter runs the focused item's action.
   const actionItems: ActionItem[] = useMemo(() => {
@@ -165,6 +172,9 @@ export function AddNodeMenu() {
         run: () => handleAddNode(NODE_REGISTRY.get('output')!),
       });
     }
+    if (!query.trim()) {
+      items.push({ kind: 'note', key: '__note__', run: handleAddNote });
+    }
     if (grouped) {
       for (const cat of CATEGORIES) {
         if (cat.id === 'output' || !grouped.has(cat.id)) continue;
@@ -178,7 +188,7 @@ export function AddNodeMenu() {
       }
     }
     return items;
-  }, [query, canGroup, nodes, grouped, results, handleGroupSelection, handleAddNode]);
+  }, [query, canGroup, nodes, grouped, results, handleGroupSelection, handleAddNode, handleAddNote]);
 
   // Reset focus to the first item whenever the visible list changes (typing in
   // the search box, selection toggling, output-node presence flipping, etc.).
@@ -279,6 +289,23 @@ export function AddNodeMenu() {
               <span>Output Node</span>
               <span className="context-menu__item-category">output</span>
             </button>
+          </>
+        )}
+
+        {/* Add a free-floating sticky note */}
+        {!query.trim() && (
+          <>
+            <div className="context-menu__category">Annotate</div>
+            <button
+              className={itemClass('__note__')}
+              data-add-node-focused={focusedAttr('__note__')}
+              onClick={handleAddNote}
+              onMouseEnter={() => setFocusedIndex(itemIndexByKey.get('__note__') ?? 0)}
+            >
+              <span>Add Note</span>
+              <span className="context-menu__item-category">note</span>
+            </button>
+            <div className="context-menu__divider" />
           </>
         )}
 

@@ -48,7 +48,11 @@ src/
 │   │   │   ├── OutputNode.tsx         # Output sink (color, normal, position, opacity, roughness)
 │   │   │   ├── OutputNode.css
 │   │   │   ├── GroupNode.tsx          # Selection group container — collapsible, recolorable, savable
-│   │   │   └── GroupNode.css
+│   │   │   ├── GroupNode.css
+│   │   │   ├── NodeBase.css            # shared header/body/border/cost-badge + .node-base__stack layers
+│   │   │   └── glyphs/
+│   │   │       ├── NodeGlyph.tsx       # light-theme SVG glyphs per registry type
+│   │   │       └── customGlyphs.ts     # per-node visual overrides (designer-authored)
 │   │   ├── handles/
 │   │   │   └── TypedHandle.tsx        # Color-coded handles per data type
 │   │   ├── edges/
@@ -88,8 +92,8 @@ src/
 ├── hooks/
 │   └── useSyncEngine.ts               # Bidirectional sync hook (watches graph/code changes)
 ├── registry/
-│   ├── nodeRegistry.ts                # ~55 hardcoded TSL node definitions (incl. 8 MaterialX noise nodes) + hidden `unknown` def
-│   ├── nodeCategories.ts              # Category metadata (id + label) — 11 categories (incl. texture, unknown)
+│   ├── nodeRegistry.ts                # ~66 hardcoded TSL node definitions (incl. 8 MaterialX noise + 3 logic nodes) + hidden `unknown` def (67 total)
+│   ├── nodeCategories.ts              # Category metadata (id + label) — 12 categories (incl. logic, texture, unknown)
 │   ├── builtinTextures.ts             # Built-in texture groups (8 textures: polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) — TSL code parsed to node graphs at startup
 │   └── complexity.json                # GPU cost per operation
 ├── store/
@@ -217,7 +221,7 @@ The generated iframe HTML carries an inline bridge script that talks to the pare
 
 ### Sync Engine (prevents infinite loops)
 
-- **`syncSource`** field: `'graph' | 'code' | 'initial'` — tracks who initiated the change
+- **`syncSource`** field: `'graph' | 'code'` — tracks who initiated the change
 - **`syncInProgress`** flag — blocks nested syncs
 - **Graph → Code**: Real-time on every node/edge change (`graphToCode()`)
 - **Code → Graph**: Manual via Save button / Ctrl+S (`codeToGraph()` with Babel parser, `errorRecovery: true`)
@@ -281,7 +285,7 @@ When writing TSL code to paste into FastShaders (or when generating code for an 
   nodes: AppNode[], edges: AppEdge[]           // Graph data
   code: string, codeErrors: ParseError[]       // Generated code + errors
   totalCost: number                            // Connected node cost sum
-  syncSource: 'graph'|'code'|'initial'         // Loop prevention
+  syncSource: 'graph'|'code'                   // Loop prevention
   syncInProgress: boolean, codeSyncRequested: boolean
   previewCode: string                          // Last code snapshot used by the preview iframe (separate from `code` so typing doesn't thrash the iframe)
   history: HistoryEntry[], historyIndex: number, isUndoRedo: boolean  // 50-entry undo/redo
@@ -359,7 +363,7 @@ Both `FIT_BOUNDS_SCRIPT` and `BRIDGE_SCRIPT_TEMPLATE` are kept as raw template l
 
 ## Node System
 
-### Node Registry (~70 nodes in 11 categories — `unknown` is the 11th, hidden from search)
+### Node Registry (66 registered nodes across 12 categories; 67 total incl. the hidden `unknown` def, which is excluded from search/browser)
 
 | Category          | Nodes                                                                                     |
 | ----------------- | ----------------------------------------------------------------------------------------- |
@@ -897,8 +901,8 @@ interface BoundarySocket {
 - **Spacing**: 4px base scale (--space-1 through --space-8)
 - **Shadows**: 4 levels (sm, md, lg, node). `--shadow-node` is a two-layer combo — tight contact shadow (`0 1px 2px rgba(0,0,0,0.55)`) + slightly diffused offset (`0 3px 6px rgba(0,0,0,0.4)`) — small blur radii keep edges crisp
 - **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red). Costs calibrated against mobile GPU SFU quarter-rate (add=1, sin/cos=4, pow=12). Noise costs: cellNoise=12, perlin=35, perlinVec3=75, fbm=95, fbmVec3=200, voronoi=55, voronoiVec2=60, voronoiVec3=65. Budgets assume 3–5 concurrent shaders in scene.
-- **Category colors**: Each node category has a distinct accent color for the header strip (defined as `--cat-*` CSS vars in [tokens.css](src/styles/tokens.css), consumed by `CATEGORY_COLORS` in [colorUtils.ts](src/utils/colorUtils.ts))
-  - input (#4CAF50), type (#2196F3), arithmetic (#FF9800), math (#9C27B0), interpolation (#00BCD4), vector (#E91E63), noise (#795548), color (#FF5722), unknown (#9E9E9E), output (#f44336)
+- **Category colors**: Each node category has a distinct accent color for the header strip (defined as raw hex in `CAT_HEX` in [colorUtils.ts](src/utils/colorUtils.ts) and published at runtime as `--cat-*` CSS vars on `:root`, consumed by `CATEGORY_COLORS`)
+  - input (#4CAF50), type (#2196F3), arithmetic (#FF9800), math (#9C27B0), interpolation (#00BCD4), logic (#7E57C2), vector (#E91E63), noise (#795548), color (#FF5722), unknown (#9E9E9E), output (#f44336)
   - `--cat-texture: #8D6E63` is used by ContentBrowser for the Textures tab background tint (via `CATEGORY_COLORS.texture` in colorUtils.ts and the `texture` entry in nodeCategories.ts). No node has `category: 'texture'` in the registry, but the category exists as a special tab that shows built-in texture groups.
 
 ---
@@ -925,7 +929,7 @@ Shared constant exported from `graphToCode.ts`, imported by `codeToGraph.ts` (fo
 
 ### Three.js TSL Imports Used
 
-**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, positionLocal, positionWorld, positionView, positionWorldDirection, positionViewDirection, cameraPosition, cameraNear, cameraFar, normalLocal, tangentLocal, time, screenUV, remap, select, greaterThan, lessThan, equal, Discard, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. *(`hsl` and `toHsl` are emitted as module-local `Fn` helpers, not imported — r173's `three/tsl` does not export them. `Discard` is added to imports only when the Output node has a wired `discard` port.)* This generated TSL is what runs in the live preview (via the iframe pipeline), so live preview and generated code stay pixel-for-pixel identical, including the discard path.
+**Code generation** (`graphToCode.ts`): Fn, float, int, vec2, vec3, vec4, color, uniform, uv, add, sub, mul, div, sin, cos, abs, pow, sqrt, exp, log2, floor, round, fract, oneMinus, mod, clamp, min, max, mix, smoothstep, normalize, length, distance, dot, cross, positionGeometry, positionLocal, positionWorld, positionView, positionWorldDirection, positionViewDirection, cameraPosition, cameraNear, cameraFar, normalLocal, tangentLocal, time, screenUV, remap, select, greaterThan, lessThan, equal, Discard, mx_noise_float, mx_noise_vec3, mx_fractal_noise_float, mx_fractal_noise_vec3, mx_cell_noise_float, mx_worley_noise_float, mx_worley_noise_vec2, mx_worley_noise_vec3. *(`hsl` and `toHsl` are emitted as module-local `Fn` helpers, not imported — `three/tsl` (r173 or r184) does not export them. `Discard` is added to imports only when the Output node has a wired `discard` port.)* This generated TSL is what runs in the live preview (via the iframe pipeline), so live preview and generated code stay pixel-for-pixel identical, including the discard path.
 
 ### Persistence (localStorage)
 
@@ -937,6 +941,10 @@ Shared constant exported from `graphToCode.ts`, imported by `codeToGraph.ts` (fo
 - `fs:previewSubdivision` — preview mesh subdivision count (1–256)
 - `fs:previewBgColor` — preview background hex color
 - `fs:previewUniformBounds` — JSON map of `{ uniformName: { min, max } }` per shader uniform slider
+- `fs:previewUniformValues` — JSON map of per-name uniform values (persists tuning by name across graph edits)
+- `fs:previewCameraPos` — last orbit-camera position (survives reloads)
+- `fs:previewRotation` — last object spin angle (degrees)
+- `fs:previewPlaying` — spin play/pause state
 - `fs:shaderName` — shader name (via `loadString()` helper)
 - `fs:headsetId` — selected VR headset (via `loadString()` helper)
 - `fs:costColorLow` — cost gradient low color
@@ -960,78 +968,35 @@ Shared constant exported from `graphToCode.ts`, imported by `codeToGraph.ts` (fo
 
 ### Version Display
 
-- App version is read from `package.json` at build time. Vite's `define` exposes it as a global `__APP_VERSION__` string (declared in `src/vite-env.d.ts`); a custom `fs-version-html` plugin in [vite.config.ts](vite.config.ts) substitutes `%APP_VERSION%` in `index.html` so the deployed HTML self-reports its build via `<meta name="version" content="0.1.8">` (whatever the current `package.json` version is) — visible in DevTools (or via `view-source:`) without running any JS, useful when debugging stale-tab reports.
+- App version is read from `package.json` at build time. Vite's `define` exposes it as a global `__APP_VERSION__` string (declared in `src/vite-env.d.ts`); a custom `fs-version-html` plugin in [vite.config.ts](vite.config.ts) substitutes `%APP_VERSION%` in `index.html` so the deployed HTML self-reports its build via `<meta name="version" content="0.2.7">` (whatever the current `package.json` version is) — visible in DevTools (or via `view-source:`) without running any JS, useful when debugging stale-tab reports.
 - `Toolbar.tsx` renders the same version next to the brand: `FastShaders v{__APP_VERSION__}` (mono font, secondary text color, `.toolbar__version` style). The brand text itself is now a button — clicking it opens a contact popover with the author's name, an email link + Copy button, and a website link + Copy button. Outside-click and Escape close it.
 - Bumping the version requires only editing `package.json`'s `version` field; both the JS bundle and the HTML meta tag pick it up automatically on the next build.
 
 ---
 
-## ShaderFace (GPU Micro-Benchmark)
+## ShaderCarousel (GPU Micro-Benchmark)
 
-Standalone benchmark tool in `ShaderFace/` for empirically measuring per-shader fragment cost. Two modes: **Standard** measures all shaders at fixed 512×512; **Resolution Sweep** steps through increasing resolutions per shader to find the max resolution that fits within VR frame budgets (120/90/72 fps). Produces JSON data to calibrate `complexity.json` performance point weights.
+Standalone benchmark suite in [`ShaderCarousel/`](ShaderCarousel/) for empirically measuring per-shader fragment cost to calibrate `complexity.json`. **(This replaced the earlier `ShaderFace/` tool, which relied on the now-removed `tsl-textures` library.)** Three purpose-built pages share one launcher and one `lib/` infrastructure; each has a centred Start gate (no auto-play). See [`ShaderCarousel/context.md`](ShaderCarousel/context.md) for the authoritative design rationale and the paper-section mapping.
 
-### Architecture
+### The three benches
 
-- **`index.html` + `bench.js`** — Main benchmark (bare Three.js quad, two modes: Standard + Resolution Sweep)
-- **`aframe.html`** — A-Frame pipeline benchmark (measures scene overhead vs bare Three.js; uses A-Frame IIFE bundle + shaderloader from `public/js/`)
-- **`shaderRegistry.js`** — 43 shaders: 1 baseline (flat color), 1 atomic (Voronoi), 41 tsl-textures
-- **`lib/`** — Local copies of `three.webgpu.js`, `three.tsl.js`, `three.core.js`, `tsl-textures-src/`
+- **bench-inout** — A-Frame 1.8.0 / Three.js r184 on the **WebGL** backend; immersive **WebXR** on Quest 3. An inverted sphere ping-pongs through the camera (`sphere-mover`); the Start gate triggers `enterVR()`. rAF deltas are logged via a one-shot `bench-tick` A-Frame component so frames are captured in-headset too.
+- **bench-static** — `THREE.WebGPURenderer`; a full-coverage static sphere at **2064×2208** (Quest 3 per-eye). An `onSubmittedWorkDone()` fence + multi-pass (≥30, adaptively calibrated) defeats desktop vsync clamping.
+- **bench-microplane** — `THREE.WebGPURenderer`; a **1024×1024** ortho quad (raised from the old 512² so cheap atomics clear ~1 ms clock quantization). Defaults to the 8 noise atomics + baseline, for per-node cost recovery by baseline subtraction. No XR.
 
-### Benchmark Modes
+### Shared infrastructure (`lib/`)
 
-**Standard**: Fixed 512×512 quad, all shaders, randomized order, multi-loop. Produces marginal cost ranking.
+- `bench-style.css`, `bench-stats.js` (`computeStats` + `exportResults`), `bench-registry.js` (corpus: baseline + 8 presets + 8 noise atomics + saved-groups loader), `bench-ui.js` (grouped picker, settings persistence, Reset-to-defaults, Start gate, done popup, headset detect).
+- `lib/three/` — Three.js **r184** WebGPU ESM (regenerated from `node_modules/three@0.184`), used by the static/microplane benches via import map.
+- Launcher [`ShaderCarousel/index.html`](ShaderCarousel/index.html) loads each bench in a same-origin iframe and **adopts** its HUD/controls into a sidebar (keeping `<style>` + `<link>` so styling survives); the Start gate and done popup stay inside the iframe so the XR-entry gesture origin is correct.
 
-**Resolution Sweep**: Select shaders via checkbox picker, step through resolutions (default 256→1760, step 128). For each shader at each resolution: warmup + measure + record median. Adds A-Frame scene overhead (configurable constant) to compute total frame time. Reports `maxRes120`, `maxRes90`, `maxRes72` — the largest resolution fitting each FPS budget. Quest 3 per-eye is ~1680×1760, so max res defaults to 1760.
+### Measurement & output
 
-### Measurement Method
+1. **Multi-pass amplification**: render N passes, GPU-sync via `onSubmittedWorkDone()` (WebGPU) or `gl.finish()` (WebGL fallback, less precise), divide wall-clock by N. Static/MicroPlane adaptively calibrate passes per shader (`calibratePasses` → up to `CALIBRATE_MAX_PASSES` 4000) so each measurement spans ~`CALIBRATE_TARGET_MS` 20 ms; the actual count is exported as `calibratedPasses`.
+2. **Marginal cost**: every run's first shader is the flat-color baseline; `marginalMs = medianMs − baselineMs` isolates each shader's contribution above scene + driver overhead.
+3. **Output**: each run writes three files — raw JSON (frames + per-shader stats), a summary CSV (one row per shader), and a **complexity-suggestion JSON** mapping marginal ms → suggested points (`marginalMs / 8.33 × 100`), diffable against `src/registry/complexity.json`.
+4. **Serving**: static HTTP only (e.g. `python3 -m http.server`) — **not** Vite, which interferes with the WebGPU import maps.
 
-1. Multi-pass amplification: render N passes synchronously, divide wall-clock by N
-2. GPU sync via `device.queue.onSubmittedWorkDone()` (WebGPU) or `gl.finish()` (WebGL fallback)
-3. Ramp discard: 5 measurement cycles discarded before recording (GPU DVFS settling)
-4. Randomized shader order per loop (decorrelates thermal drift) — standard mode only
-5. Auto-calibration: passes=0 finds count where baseline ≥10ms (WebGPU) or ≥50ms (WebGL)
-6. Periodic yields every 5 samples (prevents Quest compositor starvation)
-7. Unreliable sync compensation: WebGL fallback enforces min 200 passes (vs 100 for WebGPU)
+### Saved-groups status
 
-### GPU Sync Reliability
-
-Only WebGPU `onSubmittedWorkDone()` provides real GPU sync. Quest Browser falls to WebGL where `gl.finish()` doesn't truly wait for GPU completion — measurements show bimodal distributions. Mac Safari WebGPU is the gold standard (CV% 0–5%). Quest WebGL data is approximate but ranking is consistent for top ~35/41 shaders.
-
-### Serving
-
-Must be served via static HTTP server (VS Code Live Server, `python3 -m http.server`, `serve.sh`) — **not** through Vite, which interferes with the import map. A-Frame benchmark uses scripts from `public/js/`.
-
-### Output
-
-**Standard**: JSON with raw per-sample timing arrays + summary statistics (median, IQR, CV%, outlier filtering via Tukey fences, baseline-subtracted marginal cost). Auto-downloads at 20% increments. Filename: `shaderface-standard-{sessionId}-{tag}.json`.
-
-**Resolution Sweep**: JSON with `sweepResults[]` containing per-shader cost at each resolution + `maxRes120/90/72`. Filename: `shaderface-resolution_sweep-{sessionId}-{tag}.json`.
-
-### Key Findings
-
-**Mac (WebGPU, 120 passes, 2 loops)** — reliable, CV% 0–5%:
-
-| Shader | Marginal (ms) | Notes |
-|--------|-------------:|-------|
-| circleDecor | 0.558 | was severely underestimated in complexity.json |
-| caustics | 0.542 | roughly correct rank |
-| cork | 0.354 | underestimated |
-| turbulentSmoke | 0.275 | overestimated |
-| dalmatianSpots | 0.250 | severely underestimated |
-| protozoa | 0.208 | correct |
-| reticularVeins | 0.200 | underestimated |
-| planet | 0.142 | overestimated |
-| ... (34 more) | 0–0.10 | |
-| dysonSphere | 0.000 | was 165 in complexity.json (20x overestimated) |
-
-**Quest 3 (WebGL, 500 passes, 2 loops)** — noisy but ranking matches Mac for 35/41 shaders:
-
-| Shader | Marginal (ms) | Max FPS @512×512 |
-|--------|-------------:|:---:|
-| cork | 5.54 | 120 |
-| circleDecor | 5.15 | 120 |
-| caustics | 5.00 | 120 |
-| turbulentSmoke | 4.76 | 120 |
-| dalmatianSpots | 4.28 | 120 |
-
-All shaders fit 120fps at 512×512 on Quest 3. Resolution sweep mode determines at what resolution each shader breaks the frame budget.
+The bench picker reads `localStorage['fs:savedGroups']` and lists each saved group, but `compileSavedGroup` currently returns `runnable: false` for all of them: inline `tslCode` execution (`new Function('TSL', …)`) was **removed for security**. Making saved groups benchmarkable requires *both* the editor persisting a `tslCode` field *and* a sandboxed compile step (worker or shaderloader parse path) on the bench side — see `ShaderCarousel/context.md`.
