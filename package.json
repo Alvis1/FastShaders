@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "npm run build && gh-pages -d dist",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "deploy:alvismisjuns": "bash scripts/deploy-alvismisjuns.sh"
   },
   "dependencies": {
     "@babel/parser": "^7.26.0",

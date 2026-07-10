@@ -10,3 +10,5 @@ FastShaders_Third_Draft.docx
 ICVARS_Review_FastShaders.md
 *.tsbuildinfo
 dist-alvismisjuns
+# SFTP deploy credentials (VS Code sftp extension + scripts/deploy-alvismisjuns.sh)
+.vscode/sftp.json
