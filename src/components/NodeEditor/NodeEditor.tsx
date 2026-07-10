@@ -1308,6 +1308,24 @@ export function NodeEditor() {
     };
   }, [getViewport, setViewport]);
 
+  // WebKit rasterizes composited layers ONCE, at the scale in effect when the
+  // layer is created, and merely stretches that bitmap as the viewport zooms
+  // (WebKit bug 27684) — so in Safari (and the desktop WKWebView) nodes go
+  // blurry after zooming in, while Blink re-rasterizes at the new scale.
+  // Rebuilding the layer after each gesture forces a fresh raster at the
+  // final zoom: toggling will-change tears the composited layer down and
+  // recreates it. Chromium-based browsers skip this (unneeded repaint).
+  const onMoveEnd = useCallback(() => {
+    const ua = navigator.userAgent;
+    if (!/AppleWebKit/.test(ua) || /Chrome|Chromium|Edg\/|OPR\//.test(ua)) return;
+    const vp = canvasRef.current?.querySelector<HTMLElement>('.react-flow__viewport');
+    if (!vp) return;
+    vp.style.willChange = 'transform';
+    requestAnimationFrame(() => {
+      vp.style.willChange = '';
+    });
+  }, []);
+
   return (
     <div className="node-editor" style={canvasCssVars}>
       <div className="node-editor__canvas" ref={canvasRef}>
@@ -1336,6 +1354,7 @@ export function NodeEditor() {
           onReconnectEnd={onReconnectEnd}
           onDragOver={onDragOver}
           onDrop={onDrop}
+          onMoveEnd={onMoveEnd}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           defaultEdgeOptions={{ type: 'typed', animated: true }}
