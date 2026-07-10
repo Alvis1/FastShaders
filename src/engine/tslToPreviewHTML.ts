@@ -398,7 +398,10 @@ const ERROR_OVERLAY_SCRIPT = `<script>
  */
 const BRIDGE_SCRIPT_TEMPLATE = `<script>
   window.__savedCameraPos = __SAVED_CAM__;
-  (function() {
+  // Deferred until the WebGPU pre-flight injects the <a-scene> (scene-slot
+  // script in buildPreviewHTML) — every element ref below is captured at
+  // callback time, so the scene must exist first.
+  __fsWhenSceneBooted(function() {
     var entity = document.getElementById("preview-entity");
     var spinEl = document.getElementById("spin-parent");
     var camEl = document.querySelector("[camera]");
@@ -632,7 +635,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         __applyGeometry(msg);
       }
     });
-  })();
+  });
 <\/script>`;
 
 /**
@@ -767,15 +770,26 @@ export function tslToPreviewHTML(
   lines.push(FIT_BOUNDS_SCRIPT);
   lines.push('');
 
-  lines.push(`<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ${bgColor}">`);
-  lines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
+  // The <a-scene> is injected AFTER a WebGPU pre-flight instead of being
+  // parsed statically: three r184 picks its WebGPU backend on
+  // `navigator.gpu != null` ALONE (no adapter check), and Safari 26 exposes
+  // navigator.gpu inside this sandboxed opaque-origin iframe while adapter
+  // requests can still fail there — the renderer's async init then dies and
+  // the preview stays blank forever, because the WebGL2 fallback only fires
+  // when navigator.gpu is absent. Requesting a real adapter first (with a 2s
+  // timeout against a hung requestAdapter) and hiding navigator.gpu when it
+  // can't deliver makes three fall back to WebGL2 deterministically. Scripts
+  // that need the scene run via __fsWhenSceneBooted.
+  const sceneLines: string[] = [];
+  sceneLines.push(`<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ${bgColor}">`);
+  sceneLines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
   // Parent holds the spin (so it tweens cleanly 0→360 on world Y/Z), child
   // holds the static tilt and the shader/geometry. The id stays on the child
   // because that's where the shader component lives (the bridge looks it up
   // by id), and `fit-bounds` needs the OBJ entity for `model-loaded`.
-  lines.push(`  <a-entity id="spin-parent"${spinAttr}>`);
-  lines.push(`    <a-entity id="preview-entity" ${entityAttrs} material="color: #808080" position="0 0 0" rotation="${rotationAttr}"></a-entity>`);
-  lines.push('  </a-entity>');
+  sceneLines.push(`  <a-entity id="spin-parent"${spinAttr}>`);
+  sceneLines.push(`    <a-entity id="preview-entity" ${entityAttrs} material="color: #808080" position="0 0 0" rotation="${rotationAttr}"></a-entity>`);
+  sceneLines.push('  </a-entity>');
 
   // Emit the light rig from LIGHT_PRESETS so the initial HTML and the
   // postMessage hot-update path read the same source of truth.
@@ -786,21 +800,64 @@ export function tslToPreviewHTML(
       light.position ? `position="${light.position}"` : null,
       `intensity="${light.intensity}"`,
     ].filter(Boolean).join(' ');
-    lines.push(`  <a-light ${attrs}></a-light>`);
+    sceneLines.push(`  <a-light ${attrs}></a-light>`);
   }
 
-  lines.push('</a-scene>');
+  sceneLines.push('</a-scene>');
+
+  lines.push('<div id="scene-slot"></div>');
+  lines.push('<script>');
+  lines.push(`  var __fsSceneHTML = ${JSON.stringify(sceneLines.join('\n'))};`);
+  lines.push('  window.__fsSceneBooted = false;');
+  lines.push('  window.__fsWhenSceneBooted = function (fn) {');
+  lines.push('    if (window.__fsSceneBooted) { fn(); return; }');
+  lines.push('    window.addEventListener("fs:scene-booted", fn, { once: true });');
+  lines.push('  };');
+  lines.push('  (function () {');
+  lines.push('    function boot() {');
+  lines.push('      document.getElementById("scene-slot").innerHTML = __fsSceneHTML;');
+  lines.push('      window.__fsSceneBooted = true;');
+  lines.push('      window.dispatchEvent(new Event("fs:scene-booted"));');
+  lines.push('      // Watchdog: a WebGPU DEVICE-level failure (healthy adapter, dead');
+  lines.push('      // device) still white-screens — surface it instead of staying silent.');
+  lines.push('      setTimeout(function () {');
+  lines.push('        var s = document.querySelector("a-scene");');
+  lines.push('        if (s && !s.renderStarted) {');
+  lines.push('          __fsShowStickyError("3D preview failed to start: the " + (navigator.gpu ? "WebGPU" : "WebGL2") + " renderer never began rendering. Reload to retry.");');
+  lines.push('        }');
+  lines.push('      }, 6000);');
+  lines.push('    }');
+  lines.push('    function hideGpu() {');
+  lines.push('      try { Object.defineProperty(Navigator.prototype, "gpu", { get: function () { return undefined; }, configurable: true }); } catch (e) {}');
+  lines.push('      try { Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true }); } catch (e) {}');
+  lines.push('    }');
+  lines.push('    if (!navigator.gpu) { boot(); return; }');
+  lines.push('    var settled = false;');
+  lines.push('    function go(adapter) {');
+  lines.push('      if (settled) return;');
+  lines.push('      settled = true;');
+  lines.push('      if (!adapter) hideGpu();');
+  lines.push('      boot();');
+  lines.push('    }');
+  lines.push('    try {');
+  lines.push('      Promise.resolve(navigator.gpu.requestAdapter()).then(go, function () { go(null); });');
+  lines.push('    } catch (e) { go(null); }');
+  lines.push('    setTimeout(function () { go(null); }, 2000);');
+  lines.push('  })();');
+  lines.push(`<${''}/script>`);
   lines.push('');
 
-  // Set shader attribute after the entity element exists in the DOM
+  // Set shader attribute once the scene (and thus the entity) exists.
   lines.push('<script>');
-  lines.push('  try {');
-  lines.push('    document.getElementById("preview-entity").setAttribute("shader", "src: " + window.__shaderUrl);');
-  lines.push('  } catch (e) {');
-  lines.push('    console.error("[FastShaders Preview]", e);');
-  lines.push('    var errEl = document.getElementById("error");');
-  lines.push('    if (errEl) errEl.textContent = String(e);');
-  lines.push('  }');
+  lines.push('  __fsWhenSceneBooted(function () {');
+  lines.push('    try {');
+  lines.push('      document.getElementById("preview-entity").setAttribute("shader", "src: " + window.__shaderUrl);');
+  lines.push('    } catch (e) {');
+  lines.push('      console.error("[FastShaders Preview]", e);');
+  lines.push('      var errEl = document.getElementById("error");');
+  lines.push('      if (errEl) errEl.textContent = String(e);');
+  lines.push('    }');
+  lines.push('  });');
   lines.push(`<${''}/script>`);
   lines.push('');
 

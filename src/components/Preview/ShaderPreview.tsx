@@ -674,12 +674,18 @@ export function ShaderPreview() {
           sandbox="allow-scripts"
           // Permissions Policy — both default to "denied" on sandboxed
           // frames; without these the browser's fullscreen overlay and any
-          // A-Frame enter-VR button fail silently. fullscreen needs a user
-          // gesture to take effect (the button click counts), so granting
-          // it doesn't open new attack surface beyond what sandbox already
-          // permits. xr-spatial-tracking is the WebXR feature flag; A-Frame
-          // probes for it on init regardless of vr-mode-ui state.
-          allow="fullscreen; xr-spatial-tracking"
+          // A-Frame enter-VR button fail silently. The explicit `*` matters:
+          // a bare feature name means the 'src' allowlist, which can never
+          // match this srcdoc iframe's sandbox-issued OPAQUE origin — Safari
+          // then reports "Fullscreen API is disabled by permissions policy".
+          // fullscreen still needs a user gesture to take effect (the click
+          // counts), so `*` doesn't open new attack surface beyond what
+          // sandbox already permits. xr-spatial-tracking is the WebXR
+          // feature flag; A-Frame probes for it on init regardless of
+          // vr-mode-ui state. allowFullScreen is the legacy attribute some
+          // WebKit paths still consult.
+          allow="fullscreen *; xr-spatial-tracking *"
+          allowFullScreen
         />
         {uniforms.length > 0 && showUniforms && (
           <div className="shader-preview__uniforms">

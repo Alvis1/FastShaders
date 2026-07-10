@@ -111,7 +111,10 @@
 </style>
 </head>
 <body>
-<iframe id="stage" sandbox="allow-scripts" title="Shader stage"></iframe>
+<!-- allow needs the explicit `*`: a bare feature name means the 'src'
+     allowlist, which can never match this srcdoc iframe's sandbox-issued
+     OPAQUE origin — Safari then blocks fullscreen by permissions policy. -->
+<iframe id="stage" sandbox="allow-scripts" allow="fullscreen *; xr-spatial-tracking *" allowfullscreen title="Shader stage"></iframe>
 <div id="error"></div>
 <div id="overlay">Drop shader · model · zip</div>
 <div id="hint">Drag &amp; drop a shader (.js/.tsl), a model (.glb), or a .zip — or click the panel drop area.</div>
@@ -571,16 +574,32 @@
     L.push('})();');
     L.push('<\/script>');
 
-    L.push('<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: #303540">');
-    L.push('  <a-entity camera="fov: 24; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 7; rotateSpeed: 0.5"></a-entity>');
-    L.push('  <a-entity id="spin-parent" animation="property: rotation; from: 45 45 0; to: 45 405 0; loop: true; dur: 12000; easing: linear">');
-    L.push('    <a-entity id="preview-entity" geometry="primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64" material="color: #808080" position="0 0 0" rotation="45 45 0"></a-entity>');
-    L.push('  </a-entity>');
-    L.push('  <a-light type="directional" color="#ffffff" position="-3 4 2" intensity="2.5"></a-light>');
-    L.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
-    L.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
-    L.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
-    L.push('</a-scene>');
+    // The <a-scene> is injected AFTER a WebGPU pre-flight (same rationale as
+    // the editor preview, see tslToPreviewHTML.ts): three r184 picks its
+    // WebGPU backend on `navigator.gpu != null` ALONE, and Safari 26 exposes
+    // navigator.gpu inside this sandboxed opaque-origin iframe while adapter
+    // requests can still fail there — renderer init then dies with no WebGL2
+    // fallback and the stage stays blank. Probe a real adapter (2s cap
+    // against a hung requestAdapter), hide navigator.gpu when it can't
+    // deliver, THEN inject the scene. Scene-dependent code waits via
+    // __fsWhenSceneBooted.
+    var S = [];
+    S.push('<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: #303540">');
+    S.push('  <a-entity camera="fov: 24; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 7; rotateSpeed: 0.5"></a-entity>');
+    S.push('  <a-entity id="spin-parent" animation="property: rotation; from: 45 45 0; to: 45 405 0; loop: true; dur: 12000; easing: linear">');
+    S.push('    <a-entity id="preview-entity" geometry="primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64" material="color: #808080" position="0 0 0" rotation="45 45 0"></a-entity>');
+    S.push('  </a-entity>');
+    S.push('  <a-light type="directional" color="#ffffff" position="-3 4 2" intensity="2.5"></a-light>');
+    S.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
+    S.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
+    S.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
+    S.push('</a-scene>');
+    L.push('<div id="scene-slot"></div>');
+    L.push('<script>');
+    L.push('window.__fsSceneHTML=' + JSON.stringify(S.join('\n')) + ';');
+    L.push('window.__fsSceneBooted=false;window.__fsWhenSceneBooted=function(fn){if(window.__fsSceneBooted){fn();return;}window.addEventListener("fs:scene-booted",fn,{once:true});};');
+    L.push('(function(){function inject(){document.getElementById("scene-slot").innerHTML=window.__fsSceneHTML;window.__fsSceneBooted=true;window.dispatchEvent(new Event("fs:scene-booted"));setTimeout(function(){var s=document.querySelector("a-scene");if(s&&!s.renderStarted)window.fsPost("3D stage failed to start: the "+(navigator.gpu?"WebGPU":"WebGL2")+" renderer never began rendering. Reload to retry.",true);},6000);}function hideGpu(){try{Object.defineProperty(Navigator.prototype,"gpu",{get:function(){return undefined;},configurable:true});}catch(e){}try{Object.defineProperty(navigator,"gpu",{value:undefined,configurable:true});}catch(e){}}if(!navigator.gpu){inject();return;}var settled=false;function go(a){if(settled)return;settled=true;if(!a)hideGpu();inject();}try{Promise.resolve(navigator.gpu.requestAdapter()).then(go,function(){go(null);});}catch(e){go(null);}setTimeout(function(){go(null);},2000);})();');
+    L.push('<\/script>');
 
     // Bridge: receive shader/model/uniform/geometry commands, report readiness +
     // uniform sets back to the parent. All blob URLs are minted here.
@@ -608,9 +627,10 @@
     // times while init settles; no-ops when the size is already right.
     L.push('  function kickResize(){try{var s=document.querySelector("a-scene");if(s&&typeof s.resize==="function")s.resize();else window.dispatchEvent(new Event("resize"));}catch(e){}}');
     L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);}');
-    L.push('  var sceneEl=document.querySelector("a-scene");');
     L.push('  if(!window.AFRAME){toParent({type:"fs:error",message:"A-Frame failed to initialize"});return;}');
-    L.push('  if(sceneEl&&sceneEl.hasLoaded)boot();else if(sceneEl)sceneEl.addEventListener("loaded",boot);else window.addEventListener("DOMContentLoaded",boot);');
+    // The scene arrives via the pre-flight injector above — wire boot to it
+    // (the helper also handles the already-booted case).
+    L.push('  window.__fsWhenSceneBooted(function(){var sceneEl=document.querySelector("a-scene");if(sceneEl&&sceneEl.hasLoaded)boot();else if(sceneEl)sceneEl.addEventListener("loaded",boot);else boot();});');
     L.push('})();');
     L.push('<\/script>');
     L.push('</body></html>');
