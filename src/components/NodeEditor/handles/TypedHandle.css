@@ -40,6 +40,20 @@
   opacity: 1;
 }
 
+/* Drag-reveal: while a wire is hunting near the node, every input socket's
+   name-tooltip is forced visible and floats to the LEFT of the socket —
+   outside the card, behind the dot (z-index) — so the socket and the wire
+   endpoint stay unobstructed while the user reads their target. */
+.typed-handle--reveal[data-tooltip]::after {
+  opacity: 1;
+  bottom: auto;
+  left: auto;
+  top: 50%;
+  right: calc(100% + 6px);
+  transform: translateY(-50%);
+  z-index: -1;
+}
+
 /* On touch devices there's no reliable hover, so port labels never appear and
    users can't tell what each socket does. Pin them on by default. */
 @media (pointer: coarse) {

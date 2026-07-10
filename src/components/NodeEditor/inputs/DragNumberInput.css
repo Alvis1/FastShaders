@@ -109,7 +109,9 @@
 
 .drag-num--compact .drag-num__value,
 .drag-num--compact .drag-num__edit {
-  font-size: calc(7px * var(--node-text-scale, 1));
+  /* Node value font — MUST match .shader-node__edge-val so every number on a
+     node reads at one size. */
+  font-size: calc(7.7px * var(--node-text-scale, 1));
   min-width: calc(16px * var(--node-text-scale, 1));
   color: rgba(0, 0, 0, 0.7);
 }

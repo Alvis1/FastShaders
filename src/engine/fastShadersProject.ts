@@ -93,6 +93,21 @@ export function extractProjectState(
   if (!project.graph || !Array.isArray(project.graph.nodes) || !Array.isArray(project.graph.edges)) {
     return null;
   }
+  // Element-shape gate: applyProjectToStore dereferences `node.data` and
+  // `edge.source`/`edge.target` before the graph reaches the store, so a
+  // crafted block with null or data-less entries would throw mid-apply —
+  // after the shader name and preview prefs were already written. Reject the
+  // block here instead; the caller then degrades to importing the file as a
+  // plain shader script.
+  const isRecord = (v: unknown): v is Record<string, unknown> =>
+    typeof v === 'object' && v !== null && !Array.isArray(v);
+  const validNodes = project.graph.nodes.every(
+    (n) => isRecord(n) && typeof n.id === 'string' && isRecord(n.data),
+  );
+  const validEdges = project.graph.edges.every(
+    (e) => isRecord(e) && typeof e.source === 'string' && typeof e.target === 'string',
+  );
+  if (!validNodes || !validEdges) return null;
 
   const blockEnd = endIdx + END_MARKER.length;
   // Strip the block and any whitespace that bracketed it: leading newlines if

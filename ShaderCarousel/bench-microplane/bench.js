@@ -3,13 +3,17 @@
  * Paper § 3.3: "Recovering individual node costs requires microbenchmarks
  * or regression over a larger shader corpus". This bench gives the
  * regression input — every shader runs against a fixed-size 2D quad
- * (default 512×512), under multi-pass WebGPU fence sync, so the timing is
- * dominated by ALU/bandwidth rather than scene overhead.
+ * (default 1024×1024), multi-pass, so the timing is dominated by
+ * ALU/bandwidth rather than scene overhead. Timing + per-pass cost
+ * derivation live in ../lib/bench-timing.js: GPU timestamp queries when
+ * available (wall-clock fence otherwise) and a two-level (N / 2N) slope
+ * that cancels fixed per-batch overhead.
  *
  * Default corpus = 8 noise atomics + baseline. Presets are available but
  * unchecked by default — they're compositions, more useful in the Static
- * bench. Marginal cost (median − baseline) feeds the complexity.json
- * suggestion emitter directly. */
+ * bench. Marginal cost (slope msPerPass − baseline), scaled to the
+ * 2064×2208 reference pixel count, feeds the complexity.json suggestion
+ * emitter directly. */
 
 import {
   WebGPURenderer, Scene, OrthographicCamera,
@@ -17,9 +21,12 @@ import {
 } from 'three';
 import * as TSL from 'three/tsl';
 import { buildBenchRegistry } from '../lib/bench-registry.js';
-import { computeStats, exportResults } from '../lib/bench-stats.js';
 import {
-  makeLogger, buildPicker, getSelectedIds, wireSettings,
+  statsFromTwoLevelRun, annotateMarginalCost, exportResults,
+} from '../lib/bench-stats.js';
+import { createBenchTimer, CALIBRATE_TARGET_MS } from '../lib/bench-timing.js';
+import {
+  makeLogger, buildPicker, getSelectedIds, wireSettings, readSetting,
   createStartGate, showDonePopup, installErrorOverlay,
 } from '../lib/bench-ui.js';
 
@@ -36,9 +43,11 @@ const DEFAULTS = {
                          // across shaders. 1024² puts cheap atomics into
                          // a measurable range and keeps expensive shaders
                          // tolerable under adaptive pass calibration.
-  'input-frames':  60,   // measurements per shader
+  'input-frames':  60,   // measurement PAIRS per shader (each pair = one
+                         // batch at N passes + one at 2N — see bench-timing's
+                         // slope method)
   'input-passes':  30,   // MINIMUM passes per measurement. Calibration
-                         // (see calibratePasses) may bump this per-shader
+                         // (bench-timing calibrate) may bump this per-shader
                          // until each measurement spans `CALIBRATE_TARGET_MS`,
                          // so 1 ms clock granularity is small relative to
                          // the window. Cheap shaders need more passes.
@@ -46,12 +55,15 @@ const DEFAULTS = {
   'input-stride':  1,
 };
 
-// Target wall-clock per measurement (~5% error at 1ms granularity).
-// Capped at 4000 passes so very-cheap shaders don't run forever; if a
-// shader is so cheap we hit the cap, the measurement is still valid —
-// the recorded per-pass cost will just inherit some clock noise.
-const CALIBRATE_TARGET_MS = 20;
-const CALIBRATE_MAX_PASSES = 4000;
+// Range clamps for the settings inputs (readSetting). frames ≥ 2 because
+// computeStats needs two samples; size bounded to sane render targets.
+const LIMITS = {
+  size:   { min: 64, max: 4096 },
+  frames: { min: 2, max: 1000 },
+  passes: { min: 1, max: 2000 },
+  warmup: { min: 0, max: 100 },
+  stride: { min: 1, max: 100 },
+};
 
 const SETTINGS_KEY = 'shadercarousel:micro:settings';
 const PICKER_KEY = 'shadercarousel:micro:picker';
@@ -84,7 +96,7 @@ const quad = new Mesh(quadGeo, baseMat);
 quad.frustumCulled = false;
 scene.add(quad);
 
-let renderer, gpuDevice, gpuInfo = 'unknown';
+let renderer, timer, gpuInfo = 'unknown', adapterInfo = null;
 let running = false;
 let benchSize = DEFAULTS['input-size'];
 
@@ -94,23 +106,23 @@ async function initRenderer() {
     canvas: $('canvas'),
     antialias: false,
     powerPreference: 'high-performance',
+    trackTimestamp: true, // three degrades this to false when the adapter lacks 'timestamp-query'
   });
   renderer.setPixelRatio(1);
   renderer.setSize(benchSize, benchSize, false);
   await renderer.init();
 
-  const backend = renderer.backend;
-  if (backend?.device) {
-    gpuDevice = backend.device;
-    log('GPU sync: device.queue.onSubmittedWorkDone', 'ok');
-  } else if (backend?.gl) {
-    log('GPU sync: gl.finish() fallback', 'warn');
-  }
+  timer = createBenchTimer({
+    renderer,
+    renderFn: () => renderer.render(scene, camera),
+    log,
+  });
 
   try {
     if (navigator.gpu) {
       const a = await navigator.gpu.requestAdapter();
       const i = a?.info;
+      if (i) adapterInfo = { vendor: i.vendor, architecture: i.architecture, device: i.device, description: i.description };
       gpuInfo = [i?.vendor, i?.architecture, i?.device, i?.description]
         .filter(Boolean).join(' / ') || 'unknown';
     }
@@ -121,79 +133,54 @@ async function initRenderer() {
   log('Ready', 'ok');
 }
 
-async function gpuSync() {
-  if (gpuDevice?.queue?.onSubmittedWorkDone) {
-    await gpuDevice.queue.onSubmittedWorkDone();
-    return;
-  }
-  if (renderer.backend?.gl) { renderer.backend.gl.finish(); return; }
-  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-}
-
-async function measureMultiPass(passes) {
-  const t0 = performance.now();
-  for (let i = 0; i < passes; i++) renderer.render(scene, camera);
-  await gpuSync();
-  return performance.now() - t0;     // total elapsed ms (NOT per-pass)
-}
-
-/**
- * Find the smallest pass count ≥ `minPasses` that makes a measurement
- * span at least `CALIBRATE_TARGET_MS`. Without this, cheap atomics on a
- * fast GPU finish a 30-pass batch in 1–2 ms, where `performance.now()`'s
- * 1 ms quantization (Safari + some Chrome iframe contexts) dominates
- * the signal and every shader appears to "tie".
- *
- * Doubles passes per probe (or scales by a measured ratio when we have a
- * reading > 0). Caps at CALIBRATE_MAX_PASSES so a degenerate near-zero
- * cost can't run forever — at the cap we accept the noise.
- */
-async function calibratePasses(minPasses) {
-  let p = minPasses;
-  await measureMultiPass(p);          // burn one batch to warm the pipeline
-  for (let probe = 0; probe < 10; probe++) {
-    const elapsed = await measureMultiPass(p);
-    if (elapsed >= CALIBRATE_TARGET_MS || p >= CALIBRATE_MAX_PASSES) return p;
-    const scale = elapsed > 0
-      ? Math.max(2, Math.ceil((CALIBRATE_TARGET_MS / elapsed) * 1.2))
-      : 4;
-    p = Math.min(p * scale, CALIBRATE_MAX_PASSES);
-  }
-  return p;
-}
-
-async function benchmarkOne(shaderDef, cfg, baselineMedian) {
+async function benchmarkOne(shaderDef, cfg, baselineMsPerPass) {
   const mat = new MeshBasicNodeMaterial();
   try { mat.colorNode = shaderDef.build(); }
   catch (e) { log(`FAIL ${shaderDef.label}: ${e.message}`, 'err'); return null; }
   quad.material = mat;
 
   // Quick warmup (compile + first-frame texture upload spikes)
-  for (let i = 0; i < cfg.warmup; i++) await measureMultiPass(cfg.passes);
+  for (let i = 0; i < cfg.warmup; i++) await timer.measure(cfg.passes);
 
-  // Per-shader pass calibration. The user's `passes` setting is the
-  // minimum; we bump until each measurement spans CALIBRATE_TARGET_MS.
-  const passes = await calibratePasses(cfg.passes);
-  if (passes !== cfg.passes) {
-    log(`  calibrated ${shaderDef.label} → ${passes} passes/measurement`, 'info');
+  // Per-shader pass calibration: the user's `passes` setting is the
+  // minimum; bench-timing bumps until each batch spans CALIBRATE_TARGET_MS
+  // and returns the two slope levels (N and 2N).
+  const { passesLo, passesHi } = await timer.calibrate(cfg.passes);
+  if (passesLo !== cfg.passes) {
+    log(`  calibrated ${shaderDef.label} → ${passesLo}/${passesHi} passes per lo/hi batch`, 'info');
   }
 
+  // Interleaved lo/hi batches (ABAB) so thermal drift hits both slope
+  // levels symmetrically instead of biasing one.
   const frames = [];
+  const loTotals = [], hiTotals = [];
   let i = 0;
   while (i < cfg.frames && running) {
-    const totalMs = await measureMultiPass(passes);
-    const msPerPass = totalMs / passes;
-    if ((i % cfg.stride) === 0) frames.push({ t: i, frameTime: +msPerPass.toFixed(4), passes });
+    const lo = await timer.measure(passesLo);
+    const hi = await timer.measure(passesHi);
+    loTotals.push(lo.totalMs);
+    hiTotals.push(hi.totalMs);
+    if ((i % cfg.stride) === 0) {
+      frames.push({ t: i, passes: passesLo, totalMs: +lo.totalMs.toFixed(4), gpuMs: lo.gpuMs != null ? +lo.gpuMs.toFixed(4) : null, frameTime: +(lo.totalMs / passesLo).toFixed(4) });
+      frames.push({ t: i, passes: passesHi, totalMs: +hi.totalMs.toFixed(4), gpuMs: hi.gpuMs != null ? +hi.gpuMs.toFixed(4) : null, frameTime: +(hi.totalMs / passesHi).toFixed(4) });
+    }
+    const msPerPass = hi.totalMs / passesHi;
     $('hud-ft').textContent = msPerPass.toFixed(4) + ' ms';
-    if (baselineMedian != null) {
-      $('hud-marginal').textContent = (msPerPass - baselineMedian).toFixed(4) + ' ms';
+    if (baselineMsPerPass != null) {
+      // Use the overhead-free slope (fixed per-batch overhead C cancels in
+      // the difference) so the HUD marginal agrees with the exported
+      // marginalMs — matches bench-stats' statsFromTwoLevelRun slope. The
+      // single-batch hi.totalMs/passesHi is overhead-inclusive and inflates
+      // marginal by C/passes if subtracted directly.
+      const slopeMsPerPass = (hi.totalMs - lo.totalMs) / (passesHi - passesLo);
+      $('hud-marginal').textContent = (slopeMsPerPass - baselineMsPerPass).toFixed(4) + ' ms';
     }
     i++;
     if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
   }
 
   mat.dispose();
-  return { frames, calibratedPasses: passes };
+  return { frames, loTotals, hiTotals, passesLo, passesHi };
 }
 
 async function runBenchmark() {
@@ -201,11 +188,11 @@ async function runBenchmark() {
   $('btn-start').disabled = true; $('btn-stop').disabled = false;
 
   const cfg = {
-    size:    +$('input-size').value   || DEFAULTS['input-size'],
-    frames:  +$('input-frames').value || DEFAULTS['input-frames'],
-    passes:  +$('input-passes').value || DEFAULTS['input-passes'],
-    warmup:  +$('input-warmup').value || DEFAULTS['input-warmup'],
-    stride:  +$('input-stride').value || DEFAULTS['input-stride'],
+    size:    readSetting('input-size',   DEFAULTS['input-size'],   LIMITS.size),
+    frames:  readSetting('input-frames', DEFAULTS['input-frames'], LIMITS.frames),
+    passes:  readSetting('input-passes', DEFAULTS['input-passes'], LIMITS.passes),
+    warmup:  readSetting('input-warmup', DEFAULTS['input-warmup'], LIMITS.warmup),
+    stride:  readSetting('input-stride', DEFAULTS['input-stride'], LIMITS.stride),
   };
 
   if (cfg.size !== benchSize) {
@@ -223,7 +210,7 @@ async function runBenchmark() {
   log(`Running ${shaders.length} shaders @ ${cfg.size}×${cfg.size}, ${cfg.passes} passes × ${cfg.frames} frames`);
 
   const results = [];
-  let baselineMedian = null;
+  let baselineMsPerPass = null;
 
   for (let i = 0; i < shaders.length; i++) {
     if (!running) break;
@@ -234,15 +221,18 @@ async function runBenchmark() {
     $('hud-phase').textContent = 'measuring';
     log(`[${i + 1}/${shaders.length}] ${s.label}…`);
 
-    const out = await benchmarkOne(s, cfg, baselineMedian);
-    if (!out || out.frames.length === 0) continue;
-    const stats = computeStats(out.frames);
-    stats.calibratedPasses = out.calibratedPasses;
-    if (s.id === 'ref_baseline') baselineMedian = stats.medianFt;
+    const out = await benchmarkOne(s, cfg, baselineMsPerPass);
+    if (!out || out.hiTotals.length < 2) {
+      if (out) log(`  skipped ${s.label}: only ${out.hiTotals.length} measurement pair(s) — need ≥2`, 'warn');
+      continue;
+    }
+    const stats = statsFromTwoLevelRun(out);
+    if (s.id === 'ref_baseline') baselineMsPerPass = stats.msPerPass ?? stats.medianFt;
     $('hud-pts').textContent = stats.points;
     results.push({ id: s.id, label: s.label, category: s.category, stats, frames: out.frames });
-    const marg = baselineMedian != null ? (stats.medianFt - baselineMedian).toFixed(4) : '—';
-    log(`  → ${stats.medianFt} ms/pass (marg ${marg}) | ${stats.cvPercent}% CV | ${out.calibratedPasses} passes`, 'ok');
+    const own = stats.msPerPass ?? stats.medianFt;
+    const marg = baselineMsPerPass != null ? (own - baselineMsPerPass).toFixed(4) : '—';
+    log(`  → ${own} ms/pass (slope, marg ${marg}) | ${stats.cvPercent}% CV | ${out.passesLo}/${out.passesHi} passes`, 'ok');
   }
 
   quad.material = baseMat;
@@ -252,35 +242,47 @@ async function runBenchmark() {
   running = false;
   $('btn-start').disabled = false; $('btn-stop').disabled = true;
 
-  showResultsPopup(results, cfg, baselineMedian);
+  showResultsPopup(results, cfg);
 }
 
-function showResultsPopup(results, cfg, baselineMedian) {
+function showResultsPopup(results, cfg) {
+  // Shared annotator (idempotent — exportResults runs it again): adds
+  // marginalMs / marginalMsAtRef / marginalPoints from the slope-based
+  // per-pass costs, normalized to the reference pixel count. This is
+  // where the old ~4.35× point deflation (1024² vs the 2064×2208
+  // currency) gets corrected.
+  annotateMarginalCost(results, { pixels: cfg.size * cfg.size });
   const rows = results.map(r => ({
     label: r.label,
-    medianMs: r.stats.medianFt,
-    marginalMs: baselineMedian != null ? +(r.stats.medianFt - baselineMedian).toFixed(4) : null,
-    points: r.stats.points,
+    medianMs: r.stats.msPerPass ?? r.stats.medianFt,
+    marginalMs: r.stats.marginalMsAtRef ?? r.stats.marginalMs,
+    points: r.stats.marginalPoints,
   }));
 
   const payload = {
     metadata: {
+      schemaVersion: 2,
       bench: 'microplane',
       tool: 'ShaderCarousel — MicroPlane',
       resolution: { width: cfg.size, height: cfg.size, label: 'microplane' },
       date: new Date().toISOString(),
       userAgent: navigator.userAgent,
       gpu: gpuInfo,
+      adapterInfo,
+      timingMethod: timer.timingMethod,
+      quantized: timer.quantized(),
+      clockPinned: null,
+      stereo: false,
       config: cfg,
-      calibration: { targetMs: CALIBRATE_TARGET_MS, maxPasses: CALIBRATE_MAX_PASSES },
-      notes: 'Per-node microbenchmark on a 2×2 ortho quad. Cost = elapsed / passes. Pass count is calibrated per-shader (min = config.passes) so each measurement window is ≥ calibration.targetMs and the recorded ms/pass is not dominated by performance.now() granularity. Per-shader calibrated pass count is in stats.calibratedPasses.',
+      calibration: { targetMs: CALIBRATE_TARGET_MS, maxPasses: timer.maxPasses(), method: 'two-level slope' },
+      notes: 'Per-node microbenchmark on a 2×2 ortho quad, timed via GPU timestamp queries when available (timingMethod) with a wall-clock fence fallback. Each shader is measured at N and 2N passes per batch (stats.passesLo/passesHi); per-pass cost = (median(total@2N) − median(total@N)) / N so fixed per-batch overhead cancels. stats.msPerPass is authoritative; marginal points are normalized to the 2064×2208 reference resolution in the export.',
     },
     shaders: results,
   };
 
   showDonePopup({
     title: 'MicroPlane bench complete',
-    subtitle: `${results.length} shaders @ ${cfg.size}×${cfg.size} on ${gpuInfo}`,
+    subtitle: `${results.length} shaders @ ${cfg.size}×${cfg.size} on ${gpuInfo} (${timer.timingMethod}, points normalized to 2064×2208)`,
     rows,
     onDownload: () => exportResults(payload, 'shadercarousel-microplane'),
     onRunAgain: () => { gateApi.show(); },
@@ -319,7 +321,7 @@ refs.btnReset  .addEventListener('click', () => { settings.reset(); log('Setting
 
 gateApi = createStartGate({
   title: 'MicroPlane — per-node microbench',
-  subtitle: 'Small ortho quad, WebGPU fence sync, multi-pass timing. Defaults to noise atomics + baseline — best for deriving per-node points by subtraction. Does not enter immersive mode.',
+  subtitle: 'Small ortho quad, multi-pass timing (GPU timestamps when available), two-level slope per shader. Defaults to noise atomics + baseline — best for deriving per-node points by subtraction; exported points are normalized to the 2064×2208 reference resolution. Does not enter immersive mode.',
   buttonLabel: '▶ Start MicroPlane bench',
   onStart: runBenchmark,
 });

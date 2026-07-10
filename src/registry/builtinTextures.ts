@@ -17,6 +17,7 @@ export interface BuiltinTexture {
   name: string;
   color: string;
   code: string;
+  description: string;
   totalCost: number;
   nodes: AppNode[];
   edges: AppEdge[];
@@ -473,18 +474,27 @@ interface TextureEntry {
   name: string;
   color: string;
   code: string;
+  description: string;
   titleSize?: number;
 }
 
 const TEXTURE_ENTRIES: TextureEntry[] = [
-  { id: 'polka-dots', name: 'Polka Dots', color: '#3949AB', code: POLKA_DOTS_CODE },
-  { id: 'grid', name: 'Grid', color: '#546E7A', code: GRID_CODE, titleSize: 2 },
-  { id: 'tiger-fur', name: 'Tiger Fur', color: '#F57C00', code: TIGER_FUR_CODE },
-  { id: 'static-noise', name: 'Static Noise', color: '#757575', code: STATIC_NOISE_CODE },
-  { id: 'crumpled-fabric', name: 'Crumpled Fabric', color: '#26A69A', code: CRUMPLED_FABRIC_CODE },
-  { id: 'gas-giant', name: 'Gas Giant', color: '#AB47BC', code: GAS_GIANT_CODE },
-  { id: 'marble', name: 'Marble', color: '#5C6BC0', code: MARBLE_CODE },
-  { id: 'wood', name: 'Wood', color: '#8D6E63', code: WOOD_CODE, titleSize: 2 },
+  { id: 'polka-dots', name: 'Polka Dots', color: '#3949AB', code: POLKA_DOTS_CODE,
+    description: 'A repeating lattice of soft-edged dots — adjustable scale, size and blur.' },
+  { id: 'grid', name: 'Grid', color: '#546E7A', code: GRID_CODE, titleSize: 2,
+    description: 'Graph-paper grid of thin dark lines on a light background.' },
+  { id: 'tiger-fur', name: 'Tiger Fur', color: '#F57C00', code: TIGER_FUR_CODE,
+    description: 'Orange fur with noise-broken dark stripes, fading to a pale belly.' },
+  { id: 'static-noise', name: 'Static Noise', color: '#757575', code: STATIC_NOISE_CODE,
+    description: 'Fine grayscale noise, like analogue TV static.' },
+  { id: 'crumpled-fabric', name: 'Crumpled Fabric', color: '#26A69A', code: CRUMPLED_FABRIC_CODE,
+    description: 'Crinkled cloth-like color pattern — domain-warped noise blending pale cyan, indigo and deep green.' },
+  { id: 'gas-giant', name: 'Gas Giant', color: '#AB47BC', code: GAS_GIANT_CODE,
+    description: 'Banded planet atmosphere with turbulent storm swirls, Jupiter-style.' },
+  { id: 'marble', name: 'Marble', color: '#5C6BC0', code: MARBLE_CODE,
+    description: 'Pale stone run through with sharp noise-driven veins.' },
+  { id: 'wood', name: 'Wood', color: '#8D6E63', code: WOOD_CODE, titleSize: 2,
+    description: 'Concentric growth rings warped by noise, in warm timber tones.' },
 ];
 
 /**
@@ -575,6 +585,7 @@ export function getBuiltinTextures(): BuiltinTexture[] {
       name: entry.name,
       color: entry.color,
       code: entry.code,
+      description: entry.description,
       totalCost,
       nodes: [groupNode, ...laid],
       edges,

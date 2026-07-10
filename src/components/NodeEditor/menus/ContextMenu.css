@@ -6,10 +6,23 @@
   border-radius: var(--border-radius-md);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-  min-width: 200px;
-  max-height: 400px;
+  min-width: 260px;
+  max-height: 520px;
   display: flex;
   flex-direction: column;
+  /* Larger type inside menus: every submenu (and DragNumberInput) sizes its
+     text with these tokens, so scoping bigger values here upsizes ALL context
+     menus in one place — no per-component changes needed. */
+  --font-size-xs: 12px;
+  --font-size-sm: 14px;
+  --font-size-md: 16px;
+}
+
+/* Submenus set checkbox width/height inline (12px) — override so the boxes
+   keep up with the enlarged labels. */
+.context-menu input[type='checkbox'] {
+  width: 14px !important;
+  height: 14px !important;
 }
 
 .context-menu__search {
@@ -29,7 +42,7 @@
 
 .context-menu__list {
   overflow-y: auto;
-  max-height: 340px;
+  max-height: 460px;
 }
 
 .context-menu__category {
@@ -90,7 +103,7 @@
 
 @media (pointer: coarse) {
   .context-menu {
-    min-width: 240px;
+    min-width: 300px;
   }
   .context-menu__item {
     padding: var(--space-3) var(--space-4);

@@ -1,8 +1,11 @@
-import { useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import {
   EdgeLabelRenderer,
   getBezierPath,
+  Position,
+  useStore as useReactFlowStore,
   type EdgeProps,
+  type ReactFlowState,
 } from '@xyflow/react';
 import type { AppEdge, AppNode, TSLDataType } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
@@ -41,6 +44,60 @@ function perp(sx: number, sy: number, tx: number, ty: number): [number, number] 
   const dy = ty - sy;
   const len = Math.sqrt(dx * dx + dy * dy) || 1;
   return [-dy / len, dx / len];
+}
+
+/** React Flow's default bezier curvature (getBezierPath's `curvature`). */
+const BEZIER_CURVATURE = 0.25;
+
+/**
+ * React Flow's control-handle length for one side of a bezier edge: half the
+ * FORWARD distance along that side's exit axis, or a slow sqrt ramp when the
+ * other endpoint is behind it. Mirrors @xyflow/system's calculateControlOffset
+ * — using the straight-line distance instead (as an earlier version did) blows
+ * the handle up on short near-perpendicular hops and hairpins the curve right
+ * before the input socket.
+ */
+function bezierControlOffset(distance: number): number {
+  return distance >= 0 ? 0.5 * distance : BEZIER_CURVATURE * 25 * Math.sqrt(-distance);
+}
+
+/**
+ * Cubic bezier whose SOURCE tangent is a free unit vector instead of one of
+ * React Flow's four cardinal `sourcePosition`s. Used for color-circle sources:
+ * their output socket rides the circle's perimeter, and the edge should leave
+ * perpendicular to the circle (along the radial), not snapped to an axis.
+ * The target side keeps getBezierPath's cardinal behavior so it lands on the
+ * input socket exactly like every other edge. Returns [path, labelX, labelY]
+ * with the label at the curve's t=0.5 point, mirroring getBezierPath.
+ */
+function getRadialBezierPath(params: {
+  sourceX: number;
+  sourceY: number;
+  radial: [number, number];
+  targetX: number;
+  targetY: number;
+  targetPosition: Position;
+}): [string, number, number] {
+  const { sourceX: sx, sourceY: sy, radial: [rx, ry], targetX: tx, targetY: ty, targetPosition } = params;
+  // Source handle: RF's formula projected onto the radial exit axis, with a
+  // small floor so the perpendicular exit stays readable even when the target
+  // sits beside/behind the socket.
+  const k1 = Math.max(bezierControlOffset((tx - sx) * rx + (ty - sy) * ry), 16);
+  const c1x = sx + rx * k1;
+  const c1y = sy + ry * k1;
+  // Target handle: exactly RF's getControlWithCurvature per-axis behavior.
+  let c2x = tx;
+  let c2y = ty;
+  switch (targetPosition) {
+    case Position.Left: c2x = tx - bezierControlOffset(tx - sx); break;
+    case Position.Right: c2x = tx + bezierControlOffset(sx - tx); break;
+    case Position.Top: c2y = ty - bezierControlOffset(ty - sy); break;
+    case Position.Bottom: c2y = ty + bezierControlOffset(sy - ty); break;
+  }
+  // Cubic bezier at t=0.5.
+  const labelX = (sx + 3 * c1x + 3 * c2x + tx) / 8;
+  const labelY = (sy + 3 * c1y + 3 * c2y + ty) / 8;
+  return [`M${sx},${sy} C${c1x},${c1y} ${c2x},${c2y} ${tx},${ty}`, labelX, labelY];
 }
 
 /** Walk upstream from a node to find the concrete data type flowing through it. */
@@ -150,6 +207,33 @@ export function TypedEdge({
   const dataType = resolveDataType(rawType, source, sourceHandleId, target, targetHandleId, nodeMap, incomingByTarget);
   const baseColor = getTypeColor(dataType);
 
+  // Color-circle sources get a radial exit tangent (perpendicular to the
+  // circle) instead of a cardinal one — see getRadialBezierPath. The radial
+  // runs from the circle's center through the measured HANDLE center (not the
+  // edge anchor, which sits on the handle's cardinal side and would skew the
+  // direction a few degrees). handleBounds coords are node-relative, so the
+  // whole computation is node-local; null for other source types.
+  const isColorSource = nodeMap.get(source)?.data.registryType === 'color';
+  const radial = useReactFlowStore(
+    useCallback(
+      (s: ReactFlowState): [number, number] | null => {
+        if (!isColorSource) return null;
+        const n = s.nodeLookup.get(source);
+        if (!n) return null;
+        const cx = (n.measured.width ?? 28) / 2;
+        const cy = (n.measured.height ?? 28) / 2;
+        const h = n.internals.handleBounds?.source?.[0];
+        if (!h) return null;
+        const rdx = h.x + h.width / 2 - cx;
+        const rdy = h.y + h.height / 2 - cy;
+        const rlen = Math.hypot(rdx, rdy);
+        return rlen > 1e-3 ? [rdx / rlen, rdy / rlen] : null;
+      },
+      [source, isColorSource],
+    ),
+    (a, b) => a?.[0] === b?.[0] && a?.[1] === b?.[1],
+  );
+
   // Channel count: take the *larger* of live evaluation length and static shape inference.
   // Why both?
   //  - Live eval handles cases where the static walker can't see through 'any' broadcasting,
@@ -186,14 +270,23 @@ export function TypedEdge({
 
   for (let i = 0; i < offsets.length; i++) {
     const d = offsets[i];
-    const [path, lx, ly] = getBezierPath({
-      sourceX: sourceX + d * px,
-      sourceY: sourceY + d * py,
-      sourcePosition,
-      targetX: targetX + d * px,
-      targetY: targetY + d * py,
-      targetPosition,
-    });
+    const [path, lx, ly] = radial
+      ? getRadialBezierPath({
+          sourceX: sourceX + d * px,
+          sourceY: sourceY + d * py,
+          radial,
+          targetX: targetX + d * px,
+          targetY: targetY + d * py,
+          targetPosition,
+        })
+      : getBezierPath({
+          sourceX: sourceX + d * px,
+          sourceY: sourceY + d * py,
+          sourcePosition,
+          targetX: targetX + d * px,
+          targetY: targetY + d * py,
+          targetPosition,
+        });
     paths.push(path);
     if (i === Math.floor(offsets.length / 2)) {
       labelX = lx;
@@ -202,10 +295,9 @@ export function TypedEdge({
   }
 
   // Center path for the invisible interaction hit area
-  const [centerPath] = getBezierPath({
-    sourceX, sourceY, sourcePosition,
-    targetX, targetY, targetPosition,
-  });
+  const [centerPath] = radial
+    ? getRadialBezierPath({ sourceX, sourceY, radial, targetX, targetY, targetPosition })
+    : getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
 
   const dragStart = useRef<{ x: number; y: number; pointerId: number } | null>(null);
 

@@ -6,7 +6,7 @@ Bi-directional TSL (Three.js Shading Language) visual shader editor. Users build
 
 **Live**: https://Alvis1.github.io/FastShaders/
 
-**Stack**: React 18 + TypeScript + Vite | `@xyflow/react` v12 (node graph) | `@monaco-editor/react` (code editor) | `zustand` v5 (state) | `three` 0.184 (WebGPU + TSL — exclusively `three/tsl` built-ins, including the MaterialX noise family) | `@dagrejs/dagre` (auto-layout) | `@babel/parser` + `traverse` + `types` (code parsing)
+**Stack**: React 18 + TypeScript + Vite | `@xyflow/react` v12 (node graph) | `@monaco-editor/react` + `monaco-editor` (code editor, **bundled locally — no CDN**, see monacoSetup.ts) | `zustand` v5 (state) | `three` 0.184 (WebGPU + TSL — exclusively `three/tsl` built-ins, including the MaterialX noise family) | `@dagrejs/dagre` (auto-layout) | `@babel/parser` + `traverse` + `types` (code parsing) | Tauri v2 (`src-tauri/` — offline desktop shell)
 
 **A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles a custom A-Frame 1.8.0 + Three.js r184 WebGPU in `a-frame-180-a-01.min.js`. The shaderloader (`a-frame-shaderloader-0.4.js`) rewrites the bare `'three/tsl'` import specifier into a `globalThis.THREE.TSL` destructure (via `globalizeBareImports`) so blob-loaded modules read the bundle's single Three.js instance — no shim file needed. It detects Object API (multi-channel) vs Simple API (single node) by checking for any `*Node` property (`colorNode`, `positionNode`, `normalNode`, `opacityNode`, `roughnessNode`, `metalnessNode`, `emissiveNode`). It also manages **property uniforms**: reads `export const schema` from modules (or auto-detects `params.XXX`/`const NAME = uniform(VALUE)` patterns), creates TSL uniforms, passes them to the shader function, and exposes `updateProperty(name, value)` for runtime updates. **Colour helpers**: `hsl` and `toHsl` are *not* exports of `three/tsl` (in r173 or r184 — only `mx_hsvtorgb`/`mx_rgbtohsv` exist). Whenever the graph contains an `hsl` or `toHsl` node, `graphToCode` emits a module-local branchless `Fn` helper at top-of-file; `codeToGraph` detects and `path.skip()`s those helpers so their bodies don't round-trip back into the graph as standalone arithmetic nodes.
 
@@ -23,12 +23,13 @@ src/
 │   ├── CodeEditor/
 │   │   ├── CodeEditor.tsx             # Monaco editor with TSL/Script folder tabs, Save, Load Script, Download Script
 │   │   ├── CodeEditor.css
+│   │   ├── monacoSetup.ts             # Bundles Monaco locally: loader.config({ monaco }) + Vite ?worker workers (no CDN — offline/desktop requirement)
 │   │   └── tslLanguage.ts             # TSL language definition, completions, color picker
 │   ├── Layout/
 │   │   ├── AppLayout.tsx              # Two nested SplitPanes (left: graph | right: code/preview)
 │   │   ├── AppLayout.css
 │   │   ├── SplitPane.tsx              # Draggable divider (pointer-captured, horizontal or vertical)
-│   │   ├── Toolbar.tsx                # Top bar: clickable brand → contact popover, version, shader name input
+│   │   ├── Toolbar.tsx                # Top bar: clickable brand → contact popover, version, shader name input, "Local" desktop-download dropdown (fixed GitHub-release asset names), desktop-only "VR" popover (LAN bench server address + secure-context how-to)
 │   │   ├── Toolbar.css
 │   │   ├── CostBar.tsx                # GPU complexity bar (totalCost vs headset budget)
 │   │   └── CostBar.css
@@ -49,6 +50,8 @@ src/
 │   │   │   ├── OutputNode.css
 │   │   │   ├── GroupNode.tsx          # Selection group container — collapsible, recolorable, savable
 │   │   │   ├── GroupNode.css
+│   │   │   ├── NoteNode.tsx            # Resizable editable text sticky (canvas annotation)
+│   │   │   ├── NoteNode.css
 │   │   │   ├── NodeBase.css            # shared header/body/border/cost-badge + .node-base__stack layers
 │   │   │   └── glyphs/
 │   │   │       ├── NodeGlyph.tsx       # light-theme SVG glyphs per registry type
@@ -67,17 +70,26 @@ src/
 │   │   ├── NodePreviewCard.css
 │   │   ├── SavedGroupCard.tsx         # Draggable tile for a user-saved group (Saved Groups tab)
 │   │   ├── TextureCard.tsx            # Draggable tile for a built-in texture (Textures tab, CPU canvas preview with per-texture renderer)
+│   │   ├── tileDrag.ts                # Touch/pen drag path for palette tiles (iOS has no HTML5 DnD) → 'fs-tile-drop' CustomEvent
 │   │   └── menus/
-│   │       ├── ContextMenu.tsx        # Menu dispatcher (canvas/node/shader/edge/group)
+│   │       ├── ContextMenu.tsx        # Menu dispatcher (canvas/node/shader/edge/group/note/stripes/dataviz)
 │   │       ├── ContextMenu.css
-│   │       ├── AddNodeMenu.tsx        # Searchable node palette, grouped by category, "Group Selection" entry
-│   │       ├── NodeSettingsMenu.tsx   # Node properties, duplicate, delete
+│   │       ├── AddNodeMenu.tsx        # Searchable node palette, grouped by category, "Group Selection" + "Add Note" entries
+│   │       ├── NodeSettingsMenu.tsx   # Node properties, duplicate, delete (+ Image node UV/Texture section)
 │   │       ├── ShaderSettingsMenu.tsx # Output node settings (ports, displacement, material, uniforms)
 │   │       ├── GroupSettingsMenu.tsx  # Rename + recolor + title size + Save to Library + Ungroup
+│   │       ├── StripesSettingsMenu.tsx # Data Stripes node settings (strength, radial rings)
+│   │       ├── DataVizSettingsMenu.tsx # Data Viz node settings (tone curve, radial distribution)
+│   │       ├── NoteSettingsMenu.tsx    # Note recolor / delete
 │   │       └── EdgeContextMenu.tsx    # Edge delete menu
-│   └── Preview/
-│       ├── ShaderPreview.tsx          # WebGPU iframe preview with geometry selector and rotation toggle
-│       └── ShaderPreview.css
+│   ├── Preview/
+│   │   ├── ShaderPreview.tsx          # Sandboxed WebGPU iframe preview (geometry, lighting, subdivision, uniform sliders, camera)
+│   │   └── ShaderPreview.css
+│   ├── Modals/
+│   │   ├── CsvImportModal.tsx         # Over-wide CSV decision dialog (cancel / as-is / transpose rows→columns)
+│   │   └── LimitModal.tsx             # Image / storage-quota limit notices + ignore-limits opt-out
+│   └── Tooltip/
+│       └── TooltipLayer.tsx           # App-wide delegated title-attribute tooltip (portalled to body)
 ├── engine/
 │   ├── graphToCode.ts                 # Graph → TSL code string (import statements + Fn() wrapper)
 │   ├── codeToGraph.ts                 # TSL code → nodes + edges (Babel AST, multi-channel returns, noise/UV patterns, three.js editor compat)
@@ -88,11 +100,13 @@ src/
 │   ├── cpuEvaluator.ts                # CPU-side graph evaluator for real-time values (multi-channel, cycle guard, uses hexToRgb01 from colorUtils)
 │   ├── topologicalSort.ts             # Kahn's algorithm for execution order
 │   ├── evaluateTSLScript.ts           # isDirectAssignmentCode() — detects `model.material.*Node = …` style scripts
-│   └── scriptToTSL.ts                # Reverse of tslToShaderModule — converts .js script back to Fn-wrapped TSL
+│   ├── scriptToTSL.ts                # Reverse of tslToShaderModule — converts .js script back to Fn-wrapped TSL
+│   ├── projectImport.ts              # Shared import path (Load Script / code-panel drop / canvas drop): applyProjectToStore + importShaderText + importShaderZip
+│   └── fastShadersProject.ts         # FASTSHADERS_PROJECT_V1 snapshot embed/extract (trailing block comment; proto-pollution-stripping JSON reviver)
 ├── hooks/
 │   └── useSyncEngine.ts               # Bidirectional sync hook (watches graph/code changes)
 ├── registry/
-│   ├── nodeRegistry.ts                # ~66 hardcoded TSL node definitions (incl. 8 MaterialX noise + 3 logic nodes) + hidden `unknown` def (67 total)
+│   ├── nodeRegistry.ts                # 68 palette-visible node definitions + 3 hidden defs (unknown, dataNode, imageNode) = 71 total. NB 9 of the 10 unary-math nodes (sin…fract) are .map()-generated, so a naive grep undercounts
 │   ├── nodeCategories.ts              # Category metadata (id + label) — 12 categories (incl. logic, texture, unknown)
 │   ├── builtinTextures.ts             # Built-in texture groups (8 textures: polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) — TSL code parsed to node graphs at startup
 │   └── complexity.json                # GPU cost per operation
@@ -111,15 +125,31 @@ src/
 │   ├── mathPreview.ts                 # Sin/math waveform canvas renderer (scrolling curve + dot)
 │   ├── noisePreview.ts               # CPU noise (perlin2D, fbm2D, cellNoise2D, voronoi2D) — all 8 noise variants
 │   ├── nameUtils.ts                   # toKebabCase() for export filenames
-│   └── edgeDisconnectFlag.ts          # Transient flag for edge disconnect suppression
+│   ├── edgeDisconnectFlag.ts          # Transient flag for edge disconnect suppression
+│   ├── chainOperands.ts               # normalizeChainOperands() — compacts variadic arithmetic operand slots after a disconnect
+│   ├── nodeCost.ts                    # nodeCostPoints() — per-node GPU cost, scaling chainable arithmetic by operand count
+│   ├── csvParser.ts                   # Strict adversarial CSV parser (delimiter autodetect, finite-cell, caps) + transposeCsv()
+│   ├── dataNode.ts                    # Data node payload: pack CSV columns column-major → base64 Float32 blob + per-column dynamicOutputs
+│   ├── dataViz.ts                     # Pure DSP for Data Stripes / Data Viz (minMax, normalize01, buildPhaseRamp)
+│   ├── binaryCodec.ts                 # base64 ↔ bytes/Float32 + IEEE-754 half-float (WebGPU can't filter float32 textures)
+│   ├── imageNode.ts                   # Image node payload: validate adversarial data: URL, decode, caps, sanitize, collect files (pure/node-testable)
+│   ├── imageImport.ts                 # Drop-time image re-encode (EXIF strip, WebP→PNG→JPEG, downscale-retry) — DOM-only
+│   ├── zipWriter.ts                   # Dependency-free STORE-method ZIP writer (deterministic, CRC-32) for the shader + images download
+│   └── zipReader.ts                   # ZIP reader (STORE + deflate via DecompressionStream, adversarial caps) for .zip import
 └── styles/
     ├── tokens.css                     # CSS custom properties (colors, spacing, shadows, fonts)
     └── reset.css
 public/
-└── js/                              # VENDORED (do not hand-edit) — synced from a-frame-shaderloader/js/ by the fs-vendor-sync vite plugin; vendorSync.test.ts fails on drift
-    ├── a-frame-shaderloader-0.4.js   # A-Frame shader component (rewrites three/tsl→globalThis.THREE.TSL, TDZ fix + auto-import + property schema)
-    ├── a-frame-180-a-01.min.js       # A-Frame 1.8.0 IIFE bundle, r184 WebGPU
-    └── aframe-orbit-controls.min.js  # Orbit controls for preview
+├── js/                              # VENDORED (do not hand-edit) — synced from a-frame-shaderloader/js/ by the fs-vendor-sync vite plugin; vendorSync.test.ts fails on drift
+│   ├── a-frame-shaderloader-0.4.js   # A-Frame shader component (rewrites three/tsl→globalThis.THREE.TSL, TDZ fix + auto-import + property schema)
+│   ├── a-frame-180-a-01.min.js       # A-Frame 1.8.0 IIFE bundle, r184 WebGPU
+│   └── aframe-orbit-controls.min.js  # Orbit controls for preview
+├── viewer.html                       # Standalone full-screen shader viewer (drop .js/.zip shader or .glb/.gltf model; sandboxed stage). Opened via the toolbar "P" button
+├── node-designer.html                # Glyph design tool (served copy synced from repo root; POSTs to the dev /__nd endpoint)
+├── models/                           # teapot.obj + stanford-bunny.obj (preview geometries; pre-normalized: bbox center at origin, longest axis = 1.6)
+└── logos/                            # Funding-acknowledgment SVGs (shown in the brand popover)
+src-tauri/                            # Tauri v2 desktop shell — tauri.conf.json (dragDropEnabled:false, bundle.resources carousel), icons, capabilities, src/bench_server.rs (LAN bench server)
+.github/workflows/                    # ci.yml (test + typecheck on push/PR) + release.yml (v* tags → desktop binaries + gh-pages deploy in lockstep)
 ```
 
 ---
@@ -183,7 +213,7 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 - **Camera**: FOV 20 with orbit controls (zoom 2–80, rotate 0.5 speed). Initial position `0 0 8`.
 - **Geometry**: Selector dropdown with five options, persisted to localStorage:
   - **Primitives** — `sphere`, `cube`, `plane`. Plane is rendered un-rotated (faces the camera); sphere and cube use a 45/45 tilt so multiple faces are visible.
-  - **OBJ models** — `teapot` (Utah teapot, 15/35/0 tilt) and `bunny` (Stanford bunny, 0/25/0 tilt — silhouette reads better head-on). Backed by static files in `public/models/` (`teapot.obj`, `stanford-bunny.obj`), loaded via A-Frame's `obj-model` component. The custom `fit-bounds` component (registered inline in the iframe) recomputes vertex normals when the source file lacks them, generates spherical UVs from each vertex's direction so TSL shaders that read `uv()` get meaningful values, and recenters/rescales the mesh so the longest axis equals `1.6` (matching primitive framing).
+  - **OBJ models** — `teapot` (Utah teapot, 15/35/0 tilt) and `bunny` (Stanford bunny, 0/25/0 tilt — silhouette reads better head-on). Backed by static files in `public/models/` (`teapot.obj`, `stanford-bunny.obj`), loaded via A-Frame's `obj-model` component. **Both source OBJs are pre-normalized** (2026-07): bounding-box center exactly at the origin, uniform-scaled so the longest axis is exactly `1.6` (teapot 1.6×0.78×0.99, bunny 1.6×1.59×1.24) — every consumer gets centered, same-size meshes without relying on runtime correction, and `positionGeometry`-driven shaders see comparable coordinate ranges (±0.8) on models and primitives alike (previously the raw teapot spanned ±3.2 and the bunny ±0.08, so the same noise shader looked ultra-dense on one and near-constant on the other). The custom `fit-bounds` component (registered inline in the iframe) still recomputes vertex normals when the source file lacks them, generates spherical UVs from each vertex's direction so TSL shaders that read `uv()` get meaningful values, and recenters/rescales the mesh so the longest axis equals `1.6` — that last step is now a no-op for the bundled models but stays as a safety net for arbitrary models (the viewer's drag-dropped `.glb`s).
   - `isObjGeometry(geometry)` in [tslToPreviewHTML.ts](src/engine/tslToPreviewHTML.ts) is the single source of truth for primitive vs OBJ branching.
 - **Subdivision slider**: Symmetrically applied to per-primitive segment fields (`segmentsWidth/Height` for sphere/plane, all three for cube). Range `[1, 256]`, default 64. Built into the geometry attribute by `buildGeoAttr()` in `tslToPreviewHTML.ts`. **Hidden when an OBJ model is selected** — the slider has no meaning for static meshes.
 - **Lighting modes** (dropdown, persisted):
@@ -343,11 +373,11 @@ Generates HTML for the in-app preview iframe:
 1. Uses `tslCodeProcessor` to extract imports, body, fix TDZ, and parse channels.
 2. **Property uniform rewrite**: `convertToShaderModule()` rewrites every `const N = uniform(V)` line to `const N = params.N`, captures `{N: V}` defaults into a schemaEntries map, exports an explicit `export const schema`, and switches the function signature to `function(params)` (only when there are uniforms — otherwise it stays `function()`). Without this, the shaderloader's auto-detected `_propertyUniforms` would be a *separate* uniform instance from the one wired into the material, and the slider overlay would be talking to the wrong object.
 3. Accepts `materialSettings` via `PreviewOptions` — applies displacement wrapping (same normal/offset logic) + transparent/side/alphaTest settings.
-4. **Geometry**: `isObjGeometry(geometry)` branches on primitive vs OBJ. Primitives go through `buildGeoAttr(geometry, subdivision)` which clamps subdivision to `[1, 256]` and applies it to the appropriate per-primitive segment fields. OBJ models (`teapot`, `bunny`) are emitted as `<a-entity obj-model="obj: url(${absUrl})" fit-bounds="size: 1.6">`, with `getModelUrl()` resolving `${origin}${BASE_URL}models/<file>` so the blob iframe can fetch the asset cross-origin-free. The `fit-bounds` A-Frame component is registered via the **`FIT_BOUNDS_SCRIPT`** module-level template literal (single `lines.push` call). On `model-loaded` it runs four post-processing steps per Mesh:
+4. **Geometry**: `isObjGeometry(geometry)` branches on primitive vs OBJ. Primitives go through `buildGeoAttr(geometry, subdivision)` which clamps subdivision to `[1, 256]` and applies it to the appropriate per-primitive segment fields. OBJ models (`teapot`, `bunny`) are emitted as `<a-entity obj-model="obj: url(${absUrl})" fit-bounds="size: 1.6">`, with `getModelUrl()` resolving the asset through `resolveAssetUrl()` — `new URL(base + path, window.location.href)`, which survives non-http schemes (`tauri://`) and relative bases where the old `location.origin` concatenation broke — so the sandboxed iframe receives a fully-qualified URL. The `fit-bounds` A-Frame component is registered via the **`FIT_BOUNDS_SCRIPT`** module-level template literal (single `lines.push` call). On `model-loaded` it runs four post-processing steps per Mesh:
    1. **Merge vertices by quantized position** (4-decimal precision) — `OBJLoader` returns *non-indexed* geometry where every triangle owns its own copies of its 3 vertices, so a position shared by N faces becomes N duplicate vertices each with its own face normal. Per-vertex displacement (`positionLocal + normalLocal * val`) then pushes each duplicate along *its own* normal and the surface splits open. The merge step rebuilds the geometry as indexed (handles both pre-indexed and non-indexed input), discarding old normals and UVs since both index into the old vertex layout.
    2. **`computeVertexNormals`** on the merged geometry — produces averaged smooth normals at every shared vertex regardless of whether the source file had normals. Both bunny and teapot OBJs lack normals; even files that have them get recomputed since the layout changed.
    3. **Auto-detect inverted winding** — the Stanford bunny OBJ uses CW triangles, so `computeVertexNormals` produces inward-facing normals and displacement pushes the surface *into* the mesh. We sample ~200 vertices and compare each `(vertex − centroid) · normal`; if a majority are negative, the winding is reversed. Fix: swap the 2nd and 3rd index of every triangle, then recompute normals. Auto-handles any future model with bad winding without hardcoding per-model flips.
-   4. **Spherical UVs** generated from each vertex's direction relative to the geometry center, then a final recenter + uniform rescale so the longest axis equals `data.size` — bunny (mm) and teapot (tens of units) frame near the primitives.
+   4. **Spherical UVs** generated from each vertex's direction relative to the geometry center, then a final recenter + uniform rescale so the longest axis equals `data.size` — a no-op for the bundled teapot/bunny (their OBJs are pre-normalized to origin-centered / longest axis 1.6) but kept as a safety net for models with arbitrary units and offsets (e.g. viewer drops).
 
    Always emitted (even for primitive previews) — inert if no entity attaches `fit-bounds="..."`.
 5. **Lighting**: `studio` (4-light three-point rig), `moon` (single cool directional + faint ambient), or `laboratory` (white ambient only).
@@ -361,9 +391,36 @@ Both `FIT_BOUNDS_SCRIPT` and `BRIDGE_SCRIPT_TEMPLATE` are kept as raw template l
 
 ---
 
+## Project Files — Save, Import & Export
+
+FastShaders round-trips a whole project through a single self-contained `.js` file (or a `.zip` when images are embedded). One shared import path — [projectImport.ts](src/engine/projectImport.ts) — backs **every** surface (canvas drop, code-panel drop, Load Script).
+
+### Embedded project block (`fastShadersProject.ts`)
+
+- **Download Shader** ([CodeEditor.tsx](src/components/CodeEditor/CodeEditor.tsx)) generates the shaderloader `.js` module (`tslToShaderModule`), then `embedProjectState()` appends a **trailing** block comment `/* FASTSHADERS_PROJECT_V1 … END_FASTSHADERS_PROJECT */` holding `{ version, shaderName, selectedHeadsetId, graph:{nodes,edges}, preview:{…}, ui:{…} }`. Because it comes *after* the code, external tools (A-Frame, a bundler) see a plain TSL module first; drag the same `.js` back into FastShaders and the full graph + preview + UI prefs restore. `*/` inside the JSON is escaped.
+- **Adversarial parse**: `extractProjectState()` parses the block with a JSON reviver that strips `__proto__` / `constructor` / `prototype`, returning `{ project, stripped }`.
+- **No block? bare-script route**: a `.js` without the block is treated as an exported shaderloader module — `scriptToTSL()` reconstructs the Fn-wrapped TSL and a code→graph sync runs.
+
+### Import surfaces (all → `projectImport`)
+
+- **Canvas drop** ([NodeEditor.tsx](src/components/NodeEditor/NodeEditor.tsx) `onDrop`): a real file drop is partitioned once — `.csv` → Data node, image → Image node, `.zip`/`.js` → **project import (replaces the whole graph)**. A project drop is exclusive: it loads exactly one file and alerts about any others (they would race the graph replace).
+- **Code-panel drop + Load Script** ([CodeEditor.tsx](src/components/CodeEditor/CodeEditor.tsx)): accept `.js` and `.zip`.
+- **`applyProjectToStore`** restores the graph (`syncSource: 'graph'`, so code regenerates), writes the `fs:preview*` localStorage keys, fires a `fs:project-imported` window event (ShaderPreview re-reads prefs without a reload), and runs `sanitizeImageNodes()` over the incoming (adversarial) image payloads.
+
+### ZIP export / import
+
+- **Export** ([zipWriter.ts](src/utils/zipWriter.ts)): when the graph embeds images, Download Shader emits a `.zip` instead of a bare `.js` — a dependency-free, deterministic (fixed DOS timestamp) STORE-method archive containing `<name>.js` (self-contained, images inlined as `data:` URLs) + `images/<sanitized-stem>.<real-mime-ext>` + `README.txt`.
+- **Import** ([zipReader.ts](src/utils/zipReader.ts)): a central-directory-driven reader (STORE + DEFLATE via native `DecompressionStream`) with adversarial caps (512 entries, 64 MB total, 512-char names). On import the loose `images/` files are ignored — the payloads ride inside the `.js`; the reader just picks the `.js` carrying the `FASTSHADERS_PROJECT_V1` block.
+
+### Standalone Viewer (`public/viewer.html`)
+
+A separate full-screen player, opened from the toolbar's **P** button, that runs any exported shader without the editor. Drag-drop or file-pick a shader (`.js`/`.mjs`/`.tsl`/`.txt` exporting a default `Fn`), a model (`.glb`/`.gltf`), or a `.zip` (unzipped in-browser via `DecompressionStream`); it renders on the chosen mesh with auto-generated uniform sliders (bounds persisted to `fs:viewerBounds`). Like the in-app preview, **all shader/model execution lives inside a `sandbox="allow-scripts"` iframe with no `allow-same-origin`** (opaque origin) — source and model bytes ship in over `postMessage`, blob URLs are minted inside the iframe, and it deploys anywhere the app does.
+
+---
+
 ## Node System
 
-### Node Registry (66 registered nodes across 12 categories; 67 total incl. the hidden `unknown` def, which is excluded from search/browser)
+### Node Registry (68 palette-visible nodes across 12 categories; 71 total incl. 3 hidden defs — `unknown`, `dataNode`, `imageNode` — excluded from search/browser)
 
 | Category          | Nodes                                                                                     |
 | ----------------- | ----------------------------------------------------------------------------------------- |
@@ -376,9 +433,9 @@ Both `FIT_BOUNDS_SCRIPT` and `BRIDGE_SCRIPT_TEMPLATE` are kept as raw template l
 | **Logic** (3)     | greaterThan, lessThan, equal — per-channel comparisons; feed `select.condition` or the Output node's `discard` port |
 | **Vector** (7)    | normalize, length, distance, dot, cross, split, append                                     |
 | **Noise** (8)     | perlin, perlinVec3, fbm, fbmVec3, cellNoise, voronoi, voronoiVec2, voronoiVec3 (all MaterialX-backed) |
-| **Color** (2)     | hsl, toHsl                                                                                |
+| **Color** (4)     | hsl, toHsl, stripes (Data Stripes), dataviz (Data Viz)                                     |
 | **Output** (1)    | output (color, emissive, normal, displacement, opacity, roughness, discard inputs + materialSettings) |
-| **Unknown** (1, hidden) | `unknown` — round-trip preservation for unrecognized TSL functions parsed from code |
+| **Hidden** (3)    | `unknown` (round-trips unrecognized TSL) · `dataNode` (CSV drop) · `imageNode` (image drop) — none appear in the palette/search |
 
 ### Position & Camera Inputs
 
@@ -527,6 +584,14 @@ Light-theme SVG glyphs (ported from the v14 design mockup) illustrate what a nod
 
 Sockets (`TypedHandle`) are **always visually constant and static** — no hover zoom, scale, movement, animation, or transition. A port looks identical whether idle, hovered, or mid-connection; only the instant text tooltip reacts to hover. Enforced in `TypedHandle.css` via `transition: none !important` and by **not touching `transform` on `:hover` at all — not even `transform: none`**: React Flow positions handles *via* transform (`translate(±50%, -50%)` for the side classes), so any hover transform override — the old `:hover { transform: none }` guard included — moves the socket and makes it jump under the cursor. **Do not re-introduce a `scale()` hover or any hover transform** on handles. Socket size is driven solely by `--handle-size` (10px desktop, 18px coarse-pointer) so every port matches across all node types. Sockets also never render stacked/ghost copies — multi-channel signal comes from the edges and the node-body stack.
 
+#### Drag proximity (connection reveal)
+
+While an output wire is dragged within **snapping distance** of a node — the reveal radius IS the editor's snap radius, one shared `CONNECTION_RADIUS = 40` constant in [connectionReveal.ts](src/components/NodeEditor/nodes/connectionReveal.ts), imported by NodeEditor — three escalating behaviors kick in (the pointer position from React Flow's raw `s.connection.to` is **screen/pane px** and is converted to flow coords with `s.transform` first):
+
+1. **Nodes with named input sockets** force their input name-tooltips visible — floated to the **left** of each socket, behind it (`.typed-handle--reveal`, driven by TypedHandle's `reveal` prop) — so every target is readable while aiming and the socket + wire endpoint stay unobstructed. Applies to ShaderNode's rows layout (incl. designer-detached sockets), PreviewNode, and MathPreviewNode. Opted OUT (hover tooltips still work): **operator cards** (arithmetic, dot/cross/distance — generic a/b operands are noise), the **Output node** and **collapsed groups** (their rows/sockets already carry permanent labels).
+2. **Chainable arithmetic** mounts its NEXT (grow) operand socket.
+3. **Noise and Image nodes** additionally mount their hidden `exposedPorts` parameter sockets as dimmed floating dots on the card's left edge (`RevealSockets.tsx`, spread 25–75% of card height) — the card's resting layout **never changes** during a reveal. Landing the connection makes that port's exposure permanent (`exposeConnectedTarget`, shared by the connect and reconnect gestures); releasing elsewhere hides them again. The **Output node is deliberately excluded** — its hidden channels are exposed only via ShaderSettingsMenu (or auto-exposed when an edge arrives through sync/import).
+
 ### Asset Browser (ContentBrowser + NodePreviewCard)
 
 The asset browser is a horizontal scrollable drawer at the bottom of the node editor, showing all available nodes grouped by category tabs. The Noise category lists all 8 MaterialX noise variants sorted by GPU cost ascending.
@@ -616,6 +681,33 @@ The deterministic evaluator can't sample procedural textures, but the EdgeInfoCa
   5. Anything else → `null` (the EdgeInfoCard renders the `0..1` placeholder).
 - **Time forwarding**: range eval forwards `time` to the deterministic fallback, so a slider connected to `time` updates live in the card.
 - **`portRange(portId, fallback)`** treats unconnected ports as a degenerate `{min:[v], max:[v]}` from inline values, and treats connected-but-unknown upstream as `[0..1]` (conservative normalized assumption).
+
+### Data Node (CSV import)
+
+Dropping a `.csv` on the canvas creates a hidden **Data node** (`type: 'dataNode'`, category `input`, excluded from the palette — its outputs are per-instance):
+
+- **Parsing** ([csvParser.ts](src/utils/csvParser.ts)): strict adversarial parse — delimiter autodetect (`,` `;` tab), multi-row header join, **every data cell must be a finite number**, caps 16 columns / 1M rows. A drop wider than 10 columns queues a `CsvImportModal` (cancel / place as-is / **transpose** rows→columns).
+- **Payload** ([dataNode.ts](src/utils/dataNode.ts)): columns are packed column-major into one base64 **Float32** blob on `values.dataB64`, with per-column `dynamicOutputs` (`col0`, `col1`, …). Column names are UI-only — they never reach codegen.
+- **Code generation** ([graphToCode.ts](src/engine/graphToCode.ts)): `decodeDataNode()` → a baked `THREE.DataTexture` (half-float via [binaryCodec.ts](src/utils/binaryCodec.ts) — WebGPU can't filter float32 textures without an unrequested device feature). A malformed payload degrades to an inert fallback.
+
+### Data Stripes & Data Viz Nodes
+
+Two palette-visible nodes (category `color`) turn a Data node column into a shader pattern:
+
+- **Data Stripes** (`stripes`) — phase-accumulation stripes whose density tracks the data. `buildPhaseRamp()` in [dataViz.ts](src/utils/dataViz.ts) emits a **prefix-sum cumulative phase** ramp (so stripe density never tears), baked into a `HalfFloat` DataTexture; `totalCycles` stays off-texture for float16 precision. Settings via `StripesSettingsMenu` — strength + radial (rings) mode with center X/Y + radius.
+- **Data Viz** (`dataviz`) — a color-ramp heatmap of the normalized column with a tone curve (scale, offset, low/high cutoffs, midpoint, contrast) + radial distribution, set via `DataVizSettingsMenu`. It has **two** outputs (Color `vec3` + Value `float` for displacement) — the only multi-output def besides `split` and the Data node.
+
+Both are emitted by dedicated branches in `graphToCode` (their `tslFunction` is empty; the pure DSP lives in `dataViz.ts`, consumed only by codegen).
+
+### Image Node
+
+Drag-dropped images become a hidden **Image node** (`type: 'imageNode'`, category `texture`, mirrors the Data pipeline). The payload is a whitelisted `data:` URL on `values.imageB64` and is treated as **adversarial**:
+
+- **Drop-time re-encode** ([imageImport.ts](src/utils/imageImport.ts), DOM-only): decode with `createImageBitmap` (honoring EXIF orientation), then canvas re-encode to a bounded `data:` URL — strips EXIF/GPS, WebP→PNG(alpha)→JPEG(Safari) via returned-MIME detect (PNG sources stay lossless within budget), with downscale-retry. SVG is rejected outright. Over-limit images queue a `LimitModal` (600K chars/image soft cap with downscale-retry · 3M total · 64 MP source guard · 8M-char hard ceiling) with an ignore-limits opt-out (`fs:ignoreImageLimits`).
+- **Validation is pure/node-testable** ([imageNode.ts](src/utils/imageNode.ts)): `validImageDataUrl` / `decodeImageNode` / `sanitizeImageNodes` / `collectImageFiles`. The split from the DOM-only `imageImport` is deliberate so validation runs under the node test env.
+- **Code generation** re-encodes the *decoded bytes* (never interpolates the stored string) into flat module-scope statements with top-level `await`: `new Image()` → `try { await decode() } catch` → 1×1 fallback → `THREE.Texture` (RepeatWrapping, pinned flipY, sRGB or linear per `values.colorSpace`). Malformed payloads render an inert `vec3(0,0,0)`.
+- **UV / Texture controls** (`NodeSettingsMenu`): `tileX/tileY`, `offsetX/offsetY`, `repeat` (off → ClampToEdge), `flipX`/`flipY`, and the data-map toggle. The five inputs (`uv`, `tileX/tileY`, `offsetX/offsetY`) follow the same opt-in exposed-port rules as the noise nodes.
+- **Download with images** produces a `.zip` (see *Project Files → ZIP export*); the self-contained `.js` still embeds each image as a `data:` URL, so a bare `.js` remains runnable on its own.
 
 ---
 
@@ -952,6 +1044,11 @@ Shared constant exported from `graphToCode.ts`, imported by `codeToGraph.ts` (fo
 - `fs:nodeEditorBgColor` — canvas background hex color
 - `fs:codeEditorTheme` — Monaco theme (`'vs' | 'vs-dark'`)
 - `fs:savedGroups` — JSON array of `SavedGroup` snapshots (group + members + internal edges)
+- `fs:ignoreImageLimits` — user opted out of image size/pixel caps (set via the LimitModal checkbox)
+- `fs:assetBarCollapsed` — ContentBrowser (asset bar) collapse state
+- `fs:viewerBounds` — standalone `viewer.html` per-uniform slider bounds (that page owns this key, separate from the editor)
+
+> **Not storage keys:** `fs:uniform`, `fs:camera`, `fs:rotation`, `fs:reset-camera`, `fs:bg-color`, `fs:lighting`, `fs:playing`, `fs:geometry`, `fs:preview-ready` are **postMessage** types between ShaderPreview and the preview iframe; `fs:project-imported` is a **window CustomEvent** dispatched by `projectImport`.
 
 ### History System
 
@@ -961,16 +1058,32 @@ Shared constant exported from `graphToCode.ts`, imported by `codeToGraph.ts` (fo
 
 ### Deployment
 
-- **GitHub Pages**: `npm run build && npx gh-pages -d dist`
-- **Vite base path**: `/FastShaders/` (configured in `vite.config.ts`)
-- **Source vs deployed**: `main` holds source, `gh-pages` is the orphan branch with built `dist/` output. There is **no GitHub Actions workflow** — every deploy is a manual `npx gh-pages -d dist` run, so the two branches can drift if you forget to publish.
+- **GitHub Pages** (primary): `npm run deploy` = `npm run build && gh-pages -d dist` for ad-hoc pushes; tagged releases also deploy automatically (see release workflow below).
+- **Configurable base + CSP via env vars** ([vite.config.ts](vite.config.ts)): `FS_BASE` sets the Vite base path (default `/FastShaders/`); `FS_PREVIEW_ORIGIN` appends space-separated origin(s) to the build-time CSP `connect-src` — required because the sandboxed preview iframe has an **opaque origin** (its `'self'` resolves to `null`), so the deploy domain must be whitelisted explicitly; `FS_DESKTOP=1` selects the desktop profile (see "Desktop build" below). No `.env` files exist — these are read from `process.env` (shell env) at build time. Example self-host build: `FS_BASE=/fastshaders/ FS_PREVIEW_ORIGIN='https://alvismisjuns.lv https://www.alvismisjuns.lv' npm run build`. The CSP contains **no CDN origins** — Monaco and the fonts are bundled with the app (offline requirement; never reintroduce `cdn.jsdelivr.net` / `fonts.googleapis.com`); the only remote entry is `https://alvis1.github.io` (opaque-origin iframe fetches) plus any `FS_PREVIEW_ORIGIN`.
+- **Standalone viewer** (`public/viewer.html`) ships inside every deploy at `<base>viewer.html` — no separate pipeline; it loads the vendored A-Frame bundle off the page's own origin, so it works anywhere the app is hosted.
+- **Source vs deployed**: `main` holds source, `gh-pages` is the orphan branch with built `dist/` output. CI: [`ci.yml`](.github/workflows/ci.yml) typechecks + tests on push/PR to `main`; [`release.yml`](.github/workflows/release.yml) runs on `v*` tags and deploys web + desktop **in lockstep** (manual `npm run deploy` between releases can still drift the site ahead of the binaries — the Local dropdown's baked version then leads the release assets until the next tag).
 - **Cache busting**: `index.html` ships with `Cache-Control: no-cache, no-store, must-revalidate` + `Pragma: no-cache` + `Expires: 0` meta tags. Hashed JS/CSS assets in `/assets/` keep their content-hash filenames and stay infinitely cacheable, but the HTML always revalidates — so a fresh deploy never leaves a returning visitor pointed at a 404'd previous-build asset URL. Only costs a tiny 304 round-trip on a ~1 KB file.
+
+### Desktop build (Tauri v2)
+
+The app ships as an **offline desktop app** for Windows and macOS, downloadable from the Toolbar's **Local** dropdown. Everything lives in [`src-tauri/`](src-tauri/) plus a vite build profile. The shell carries exactly one custom Rust module — the LAN bench server below; everything else is config.
+
+- **Offline hardening (applies to the web build too)**: Monaco is bundled locally via [`monacoSetup.ts`](src/components/CodeEditor/monacoSetup.ts) — `loader.config({ monaco })` short-circuits the CDN loader, Vite `?worker` imports emit the editor + TS/JS workers as same-origin assets, and a `manualChunks` entry splits Monaco into its own ~3.8 MB cacheable chunk. Fonts (Inter, JetBrains Mono) are self-hosted via `@fontsource` imports in `main.tsx`. Verified by a Playwright run with **all non-localhost requests blocked**: zero external requests, editor + preview fully functional.
+- **FS_DESKTOP profile** ([vite.config.ts](vite.config.ts)): `FS_DESKTOP=1` — set automatically when the Tauri CLI runs the build hooks (it exports `TAURI_ENV_*`) — switches base to `/`, suppresses the CSP meta (the wrapper's CSP config governs), excludes the WebGPU-only ShaderCarousel from dist (it ships as a Tauri resource instead — next bullet), and defines `__FS_DESKTOP__` so the Local button and SC link hide themselves inside the desktop app (which instead shows the "VR" bench popover).
+- **LAN bench server** ([src-tauri/src/bench_server.rs](src-tauri/src/bench_server.rs) + the "VR" Toolbar popover): the desktop app bundles the full ShaderCarousel suite and serves it over the local network so a headset can run the benches against this exact app version. The `fs-stage-shadercarousel-desktop` vite plugin stages the filtered suite (same exclude set as the web deploy — no benchData, no `https/` TLS material) into `src-tauri/carousel-dist/` (gitignored) at buildStart — this fires for `vite build` AND the dev server, so `tauri dev` gets fresh assets too — and `tauri.conf.json`'s `bundle.resources` maps it into the resource dir. The Rust side exposes `bench_server_start` / `bench_server_stop` / `bench_server_status` commands: a `tiny_http` thread bound to `0.0.0.0:5199` (ephemeral-port fallback), **GET-only, read-only, path-sanitized** (`..`/backslash rejection + canonicalize-prefix check), `Cache-Control: no-cache` so the headset never runs a stale bench; the LAN IP comes from the routing table (`local-ip-address`). The frontend calls these through Tauri's `withGlobalTauri` bridge (`window.__TAURI__`, typed in `vite-env.d.ts`) — only ever accessed behind `__FS_DESKTOP__`. **Secure-context catch**: browsers expose WebXR *and* WebGPU only on secure origins, and `http://<lan-ip>` isn't one — the popover therefore shows, next to the connect URL, the two one-time per-headset fixes (Quest Browser `chrome://flags` → "Insecure origins treated as secure" → add the shown origin; or `adb reverse tcp:5199 tcp:5199` + open `http://localhost:5199/`). Plain HTTP is deliberate: a built-in self-signed cert would still hit a warning interstitial on every headset, so it buys nothing over the flag route.
+- **Critical Tauri config**: `dragDropEnabled: false` in `tauri.conf.json` — without it Tauri's native drop handler swallows OS file drops and every HTML5 import surface (canvas CSV/image/project drops, code-panel drop, viewer drop) silently dies. App version comes from `package.json` via `"version": "../package.json"`.
+- **Renderer**: the preview runs WebGPU where the webview has it (WebView2 on Windows; WKWebView on macOS 26+) and falls back automatically to three's **WebGL2 backend** elsewhere — smoke-tested: the demo shader renders correctly with `navigator.gpu` removed ("WebGPURenderer: WebGPU is not available, running under WebGL2 backend").
+- **Release flow** ([release.yml](.github/workflows/release.yml)): `npm version patch && git push --follow-tags` → test gate → draft GitHub Release → native runners build a macOS **universal** `.dmg` + Windows **NSIS installer** + **portable `.zip`** (FastShaders.exe + the ShaderCarousel resource folder — Windows `resource_dir()` is the exe's directory, so a bare exe would ship the VR bench broken), uploaded under FIXED names (`FastShaders-macOS.dmg`, `FastShaders-Windows-Setup.exe`, `FastShaders-Windows-Portable.zip`) → web deploy to gh-pages (gated on the desktop job — a failed binary build must not leave the live site advertising a version whose binaries never published) → release published. The Local dropdown links to `/releases/latest/download/<fixed-name>` — permanent URLs that always serve the newest release; **keep `DESKTOP_DOWNLOADS` in `Toolbar.tsx` in sync with the workflow's asset names**.
+- **Local dev**: `npm run tauri dev` / `npm run tauri build` (needs a Rust toolchain; CI needs none of your machine). Unsigned builds: Windows shows SmartScreen ("More info → Run anyway"), macOS needs System Settings → "Open Anyway" or `xattr -d com.apple.quarantine` — signing hooks (APPLE_* env) are stubbed in the workflow, pending an Apple Developer ID.
+- **Known-open item**: teapot/bunny OBJ fetches from the opaque-origin preview iframe need CORS headers from Tauri's asset protocol — verify on the first real WKWebView run; fallback is shipping model bytes via postMessage (the viewer.html pattern).
 
 ### Version Display
 
 - App version is read from `package.json` at build time. Vite's `define` exposes it as a global `__APP_VERSION__` string (declared in `src/vite-env.d.ts`); a custom `fs-version-html` plugin in [vite.config.ts](vite.config.ts) substitutes `%APP_VERSION%` in `index.html` so the deployed HTML self-reports its build via `<meta name="version" content="0.2.7">` (whatever the current `package.json` version is) — visible in DevTools (or via `view-source:`) without running any JS, useful when debugging stale-tab reports.
 - `Toolbar.tsx` renders the same version next to the brand: `FastShaders v{__APP_VERSION__}` (mono font, secondary text color, `.toolbar__version` style). The brand text itself is now a button — clicking it opens a contact popover with the author's name, an email link + Copy button, and a website link + Copy button. Outside-click and Escape close it.
-- Bumping the version requires only editing `package.json`'s `version` field; both the JS bundle and the HTML meta tag pick it up automatically on the next build.
+- The **Local** dropdown (top right) shows the same `v{__APP_VERSION__}` next to its "Desktop app" label — with releases deployed in lockstep by `release.yml`, that version matches the binaries behind the download links.
+- The desktop shell reuses the same source of truth: `tauri.conf.json` declares `"version": "../package.json"`.
+- Bumping the version requires only editing `package.json`'s `version` field (or `npm version patch`, which also creates the release tag); the JS bundle, the HTML meta tag, and the desktop app all pick it up automatically on the next build.
 
 ---
 
@@ -981,20 +1094,20 @@ Standalone benchmark suite in [`ShaderCarousel/`](ShaderCarousel/) for empirical
 ### The three benches
 
 - **bench-inout** — A-Frame 1.8.0 / Three.js r184 on the **WebGL** backend; immersive **WebXR** on Quest 3. An inverted sphere ping-pongs through the camera (`sphere-mover`); the Start gate triggers `enterVR()`. rAF deltas are logged via a one-shot `bench-tick` A-Frame component so frames are captured in-headset too.
-- **bench-static** — `THREE.WebGPURenderer`; a full-coverage static sphere at **2064×2208** (Quest 3 per-eye). An `onSubmittedWorkDone()` fence + multi-pass (≥30, adaptively calibrated) defeats desktop vsync clamping.
-- **bench-microplane** — `THREE.WebGPURenderer`; a **1024×1024** ortho quad (raised from the old 512² so cheap atomics clear ~1 ms clock quantization). Defaults to the 8 noise atomics + baseline, for per-node cost recovery by baseline subtraction. No XR.
+- **bench-static** — `THREE.WebGPURenderer`; a full-coverage static sphere at **2064×2208** (Quest 3 per-eye). GPU-timestamp-timed (`trackTimestamp`) with a wall-clock-fence fallback + multi-pass **two-level N/2N slope** defeats desktop vsync clamping.
+- **bench-microplane** — `THREE.WebGPURenderer`; a **1024×1024** ortho quad (raised from the old 512² so cheap atomics clear ~1 ms clock quantization). Defaults to the 8 noise atomics + baseline, for per-node cost recovery by baseline subtraction; marginal ms is normalized to the 2064×2208 currency (`REF_PIXELS`) before points. No XR.
 
 ### Shared infrastructure (`lib/`)
 
-- `bench-style.css`, `bench-stats.js` (`computeStats` + `exportResults`), `bench-registry.js` (corpus: baseline + 8 presets + 8 noise atomics + saved-groups loader), `bench-ui.js` (grouped picker, settings persistence, Reset-to-defaults, Start gate, done popup, headset detect).
+- `bench-style.css`, `bench-stats.js` (`computeStats`, two-level `slopeMsPerPass`, `REF_PIXELS`-normalized `annotateMarginalCost`, validity-gated `buildSuggestion`/`exportResults`, schema v2), `bench-timing.js` (`createBenchTimer` — GPU timestamp queries with wall-clock-fence fallback, two-level slope, quantization heuristic), `bench-registry.js` (corpus: baseline + 8 presets + 8 noise atomics + saved-groups loader), `bench-ui.js` (grouped picker, settings persistence, Reset-to-defaults, Start gate, done popup, headset detect).
 - `lib/three/` — Three.js **r184** WebGPU ESM (regenerated from `node_modules/three@0.184`), used by the static/microplane benches via import map.
 - Launcher [`ShaderCarousel/index.html`](ShaderCarousel/index.html) loads each bench in a same-origin iframe and **adopts** its HUD/controls into a sidebar (keeping `<style>` + `<link>` so styling survives); the Start gate and done popup stay inside the iframe so the XR-entry gesture origin is correct.
 
 ### Measurement & output
 
-1. **Multi-pass amplification**: render N passes, GPU-sync via `onSubmittedWorkDone()` (WebGPU) or `gl.finish()` (WebGL fallback, less precise), divide wall-clock by N. Static/MicroPlane adaptively calibrate passes per shader (`calibratePasses` → up to `CALIBRATE_MAX_PASSES` 4000) so each measurement spans ~`CALIBRATE_TARGET_MS` 20 ms; the actual count is exported as `calibratedPasses`.
-2. **Marginal cost**: every run's first shader is the flat-color baseline; `marginalMs = medianMs − baselineMs` isolates each shader's contribution above scene + driver overhead.
-3. **Output**: each run writes three files — raw JSON (frames + per-shader stats), a summary CSV (one row per shader), and a **complexity-suggestion JSON** mapping marginal ms → suggested points (`marginalMs / 8.33 × 100`), diffable against `src/registry/complexity.json`.
+1. **Multi-pass, two-level slope**: `bench-timing.calibrate` bumps N per shader (until a batch spans ~`CALIBRATE_TARGET_MS` 20 ms) and measures at N and 2N passes/batch. Per-pass cost = (median(total@2N) − median(total@N)) / N, so fixed per-batch overhead C cancels (the old single-level divide-by-N left C/N in every marginal). `totalMs` is GPU-timestamp time when available (`resolveTimestampsAsync`), else wall-clock around a fence (`onSubmittedWorkDone()` / `gl.finish()`).
+2. **Marginal cost**: every run's first shader is the flat-color baseline; `marginalMs = msPerPass − baselineMs` isolates each shader's contribution above scene + driver overhead. `marginalMsAtRef` rescales it to the 2064×2208 reference pixel count so points are in one currency. Baseline missing ⇒ marginal fields are `null` (no silent raw-median fallback).
+3. **Output**: each run writes three files — raw JSON (batches + per-shader stats + schema-v2 provenance), a summary CSV (one row per shader), and a **complexity-suggestion JSON** mapping marginal ms → suggested points (`marginalMsAtRef / 8.33 × 100`), diffable against `src/registry/complexity.json`. `metadata.valid`/`reasons[]` gate whether the numbers are trustworthy; commit runs into `benchData/<device-slug>/`. **The loop is not yet closed — no measured run committed; `complexity.json` is still hand-guessed.**
 4. **Serving**: static HTTP only (e.g. `python3 -m http.server`) — **not** Vite, which interferes with the WebGPU import maps.
 
 ### Saved-groups status

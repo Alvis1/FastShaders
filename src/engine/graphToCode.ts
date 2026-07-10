@@ -2,12 +2,13 @@ import { parseExpression } from '@babel/parser';
 import type { Node } from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode } from '@/types';
 import { getNodeValues } from '@/types';
-import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { decodeDataNode } from '@/utils/dataNode';
+import { decodeImageNode } from '@/utils/imageNode';
 import { minMax, normalize01, capToWidth, buildPhaseRamp, MAX_TEXTURE_WIDTH } from '@/utils/dataViz';
-import { float32ToBase64, float16ToBase64 } from '@/utils/binaryCodec';
+import { float32ToBase64, float16ToBase64, bytesToBase64 } from '@/utils/binaryCodec';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { getComponentCount } from './cpuEvaluator';
 import { topologicalSort } from './topologicalSort';
@@ -25,6 +26,72 @@ function f32Decode(b64: string): string {
 /** Inline expression that rebuilds a Uint16Array (half-float) from base64. */
 function f16Decode(b64: string): string {
   return `new Uint16Array(Uint8Array.from(atob("${b64}"), (c) => c.charCodeAt(0)).buffer)`;
+}
+
+/**
+ * Bounded memo for the multi-MB image decode+re-encode. graph→code re-runs on
+ * every node-identity change — including every drag frame — but an image's
+ * emitted `data:` src never changes with node position, so without this the
+ * whole payload is base64-decoded and re-encoded per frame. Keyed by the
+ * immutable stored `imageB64`; value is the canonical `data:` src or null
+ * (undecodable). Small LRU cap keeps memory bounded across many distinct images.
+ */
+const IMAGE_SRC_CACHE_LIMIT = 24;
+const imageSrcCache = new Map<string, string | null>();
+function memoImageSrc(key: string, compute: () => string | null): string | null {
+  const hit = imageSrcCache.get(key);
+  if (hit !== undefined) {
+    imageSrcCache.delete(key);
+    imageSrcCache.set(key, hit); // refresh LRU recency
+    return hit;
+  }
+  const val = compute();
+  imageSrcCache.set(key, val);
+  if (imageSrcCache.size > IMAGE_SRC_CACHE_LIMIT) {
+    const oldest = imageSrcCache.keys().next().value;
+    if (oldest !== undefined) imageSrcCache.delete(oldest);
+  }
+  return val;
+}
+
+/**
+ * Trace a Stripes/Data-Viz `signal` edge back to its upstream Data column,
+ * capped to the texture budget and normalized to [0, 1]. Returns null when the
+ * signal isn't a Data column or the column is too short to ramp. Shared by both
+ * visualization branches so the WebGPU-filterability recipe lives in one place.
+ */
+function traceSignalColumn(
+  signalEdge: AppEdge | undefined,
+  sorted: AppNode[],
+): { capped: Float32Array; cnorm: Float32Array } | null {
+  if (!signalEdge) return null;
+  const src = sorted.find((n) => n.id === signalEdge.source);
+  const m = /^col(\d+)$/.exec(signalEdge.sourceHandle ?? '');
+  if (!src || src.data.registryType !== 'dataNode' || !m) return null;
+  const col = decodeDataNode(getNodeValues(src))?.columns[Number(m[1])];
+  if (!col || col.length <= 1) return null;
+  const capped = capToWidth(col, MAX_TEXTURE_WIDTH);
+  return { capped, cnorm: normalize01(capped, minMax(capped)) };
+}
+
+/** Emit the setup lines for a filterable 1-D HalfFloat value texture (RedFormat
+ *  + LinearFilter — the only float format WebGPU filters without a feature
+ *  flag). Shared by the Stripes and Data-Viz bakes. */
+function bakeHalfFloatTexture(setupLines: string[], name: string, data: Float32Array): void {
+  setupLines.push(
+    `const ${name} = new globalThis.THREE.DataTexture(${f16Decode(float16ToBase64(data))}, ${data.length}, 1, globalThis.THREE.RedFormat, globalThis.THREE.HalfFloatType);`,
+  );
+  setupLines.push(`${name}.minFilter = globalThis.THREE.LinearFilter;`);
+  setupLines.push(`${name}.magFilter = globalThis.THREE.LinearFilter;`);
+  setupLines.push(`${name}.needsUpdate = true;`);
+}
+
+/** Sampling coordinate in [0, 1]: uv.x (linear) or normalized radius from a
+ *  chosen center (radial/concentric). Shared by Stripes and Data Viz. */
+function radialCoordExpr(radial: boolean, cx: number, cy: number, radius: number): string {
+  return radial
+    ? `uv().sub(vec2(${num(cx)}, ${num(cy)})).length().div(${num(radius)}).clamp(0.0, 1.0)`
+    : 'uv().x';
 }
 
 /** Valid swizzle component handles for split node output. */
@@ -193,10 +260,39 @@ export function graphToCode(
       continue;
     }
 
-    // Data / Stripes nodes have no tslFunction (custom emission), so give them
-    // explicit bases instead of the empty-string fallback below.
-    if (def.type === 'dataNode' || def.type === 'stripes') {
-      const baseName = def.type === 'dataNode' ? 'data' : 'stripes';
+    // Data nodes emit one variable PLUS a `<var>_colN` per consumed column, and
+    // those column identifiers share the Fn-body namespace with property/unknown
+    // names. Reserve exactly the column handles this node will emit (the ones an
+    // edge references) AND require the base's whole column namespace to be free —
+    // otherwise a property renamed `data1_col1` collides with the emitted
+    // `const data1_col1` → duplicate declaration → SyntaxError.
+    if (def.type === 'dataNode') {
+      const refCols = new Set<string>();
+      for (const e of edges) {
+        if (e.source !== node.id) continue;
+        if (/^col\d+$/.test(e.sourceHandle ?? '')) refCols.add(e.sourceHandle as string);
+      }
+      const baseFree = (i: number) => {
+        if (usedNames.has(`data${i}`)) return false;
+        for (const h of refCols) if (usedNames.has(`data${i}_${h}`)) return false;
+        return true;
+      };
+      let idx = 1;
+      while (!baseFree(idx)) idx++;
+      const name = `data${idx}`;
+      usedNames.add(name);
+      for (const h of refCols) usedNames.add(`${name}_${h}`);
+      varNames.set(node.id, name);
+      continue;
+    }
+
+    // Stripes / Data Viz / Image nodes have no tslFunction (custom emission),
+    // so give them explicit bases instead of the empty-string fallback below.
+    if (def.type === 'stripes' || def.type === 'dataviz' || def.type === 'imageNode') {
+      const baseName =
+        def.type === 'stripes' ? 'stripes'
+          : def.type === 'dataviz' ? 'dataviz'
+            : 'image';
       let idx = 1;
       while (usedNames.has(`${baseName}${idx}`)) idx++;
       const name = `${baseName}${idx}`;
@@ -335,21 +431,140 @@ export function graphToCode(
         const m = /^col(\d+)$/.exec(e.sourceHandle ?? '');
         if (m) usedCols.add(Number(m[1]));
       }
-      if (decoded && usedCols.size > 0) {
-        addImport('three/tsl', 'texture');
-        addImport('three/tsl', 'uv');
-        addImport('three/tsl', 'vec2');
+      if (usedCols.size > 0) {
+        // Every referenced column MUST get a declaration: resolveEdgeRef hands
+        // consumers `<var>_colN` unconditionally, so a missing one is a runtime
+        // ReferenceError that kills the whole module. Columns that decode bake a
+        // texture; a missing/undecodable/out-of-range column degrades to an
+        // inert float(0) (mirrors the imageNode fallback), so a tampered or
+        // truncated payload never crashes the shader.
+        addImport('three/tsl', 'float');
+        let bakedAny = false;
         for (const ci of [...usedCols].sort((a, b) => a - b)) {
-          const col = decoded.columns[ci];
-          if (!col) continue;
-          const capped = capToWidth(col, MAX_TEXTURE_WIDTH);
-          const texVar = `_${varName}_tex${ci}`;
-          setupLines.push(
-            `const ${texVar} = new globalThis.THREE.DataTexture(${f32Decode(float32ToBase64(capped))}, ${capped.length}, 1, globalThis.THREE.RedFormat, globalThis.THREE.FloatType);`,
-          );
-          setupLines.push(`${texVar}.needsUpdate = true;`);
-          bodyLines.push(`  const ${varName}_col${ci} = texture(${texVar}, vec2(uv().x, 0.5)).x;`);
+          const col = decoded?.columns[ci];
+          if (col && col.length > 0) {
+            if (!bakedAny) {
+              addImport('three/tsl', 'texture');
+              addImport('three/tsl', 'uv');
+              addImport('three/tsl', 'vec2');
+              bakedAny = true;
+            }
+            const capped = capToWidth(col, MAX_TEXTURE_WIDTH);
+            const texVar = `_${varName}_tex${ci}`;
+            setupLines.push(
+              `const ${texVar} = new globalThis.THREE.DataTexture(${f32Decode(float32ToBase64(capped))}, ${capped.length}, 1, globalThis.THREE.RedFormat, globalThis.THREE.FloatType);`,
+            );
+            setupLines.push(`${texVar}.needsUpdate = true;`);
+            bodyLines.push(`  const ${varName}_col${ci} = texture(${texVar}, vec2(uv().x, 0.5)).x;`);
+          } else {
+            bodyLines.push(`  const ${varName}_col${ci} = float(0.0);`);
+          }
         }
+      }
+    } else if (def.type === 'imageNode') {
+      // Image node: the dropped image rides inside the module as a compressed
+      // data: URL, decoded at module scope with top-level await (the
+      // shaderloader `await import()`s the blob module, so the texture is
+      // ready before first render; a garbage payload fails decode() and falls
+      // back to a 1×1 black texture instead of rejecting the whole module).
+      //
+      // SECURITY: the stored payload is NEVER interpolated verbatim — the
+      // graph JSON is adversarial. decodeImageNode strict-validates it and
+      // the emitted literal is re-encoded from the decoded bytes
+      // (bytesToBase64 → canonical btoa alphabet) with the MIME taken from
+      // the regex whitelist capture, so no attacker-controlled character can
+      // reach this module's source text. Emitted as FLAT statements (never an
+      // async IIFE — codeToGraph's ReturnStatement visitor would mistake its
+      // `return` for the shader output).
+      const nv = getNodeValues(node);
+      // Decode + re-encode is the multi-MB cost; memoize it so a drag frame
+      // (which re-runs graph→code) doesn't re-encode an unchanged image. The key
+      // covers every input decodeImageNode validates — the payload plus the
+      // width/height fields (a bad dimension must still degrade to inert).
+      // srcAttr is the canonical `data:` URL, or null if validation failed.
+      const srcAttr = memoImageSrc(
+        `${Number(nv.width)}x${Number(nv.height)}|${String(nv.imageB64 ?? '')}`,
+        () => {
+          const d = decodeImageNode(nv);
+          return d ? `data:image/${d.mime};base64,${bytesToBase64(d.bytes)}` : null;
+        },
+      );
+      if (!srcAttr) {
+        // Inert fallback — consumers still reference this var, so it must
+        // exist (a missing declaration would be a runtime ReferenceError).
+        addImport('three/tsl', 'vec3');
+        bodyLines.push(`  const ${varName} = vec3(0, 0, 0);`);
+      } else {
+        addImport('three/tsl', 'texture');
+        const uvEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'uv');
+        const uvRef = uvEdge ? resolveEdgeRef(uvEdge, edges, varNames, sorted) : null;
+        if (!uvRef) addImport('three/tsl', 'uv');
+        // UV-space transform settings (NodeSettingsMenu). All Number-coerced —
+        // never interpolate stored strings. The raw sample renders mirrored
+        // left-right in the preview pipeline, so the CORRECTED orientation
+        // (u' = 1-u) is the baked-in default; the user-facing "Flip X" toggle
+        // (default off/unchecked) mirrors RELATIVE to that corrected look —
+        // checking it cancels the correction and yields the raw sample. Each
+        // flip is `1-c`, emitted as mul/add so it composes with a connected
+        // uv source.
+        const numVal = (key: string, dflt: number) => {
+          const v = Number(nv[key]);
+          return Number.isFinite(v) ? v : dflt;
+        };
+        // Tile/offset can be exposed as sockets — a wired edge overrides the
+        // stored value (same contract as the uv node's params). Refs are
+        // generated identifiers, literals go through num(): nothing
+        // attacker-controlled reaches the emitted text.
+        const paramExpr = (key: string, dflt: number): string => {
+          const pEdge = edges.find((e) => e.target === node.id && e.targetHandle === key);
+          if (pEdge) {
+            const ref = resolveEdgeRef(pEdge, edges, varNames, sorted);
+            if (ref) return ref;
+          }
+          return num(numVal(key, dflt));
+        };
+        const mirrorX = numVal('flipX', 0) < 0.5;
+        const mirrorY = numVal('flipY', 0) >= 0.5;
+        const tileX = paramExpr('tileX', 1);
+        const tileY = paramExpr('tileY', 1);
+        const offsetX = paramExpr('offsetX', 0);
+        const offsetY = paramExpr('offsetY', 0);
+        const repeat = numVal('repeat', 1) >= 0.5;
+        let uvExpr = uvRef ?? 'uv()';
+        if (mirrorX || mirrorY) {
+          uvExpr = `${uvExpr}.mul(vec2(${mirrorX ? -1 : 1}, ${mirrorY ? -1 : 1})).add(vec2(${mirrorX ? 1 : 0}, ${mirrorY ? 1 : 0}))`;
+        }
+        if (tileX !== '1' || tileY !== '1') uvExpr = `${uvExpr}.mul(vec2(${tileX}, ${tileY}))`;
+        if (offsetX !== '0' || offsetY !== '0') uvExpr = `${uvExpr}.add(vec2(${offsetX}, ${offsetY}))`;
+        if (uvExpr !== (uvRef ?? 'uv()')) addImport('three/tsl', 'vec2');
+        const isData = String(nv.colorSpace ?? 'color') === 'data';
+        const imgVar = `_${varName}_img`;
+        const okVar = `_${varName}_ok`;
+        const texVar = `_${varName}_tex`;
+        setupLines.push(`const ${imgVar} = new Image();`);
+        setupLines.push(`${imgVar}.src = "${srcAttr}";`);
+        setupLines.push(`let ${okVar} = true;`);
+        setupLines.push(`try { await ${imgVar}.decode(); } catch { ${okVar} = false; }`);
+        setupLines.push(
+          `const ${texVar} = ${okVar} ? new globalThis.THREE.Texture(${imgVar}) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);`,
+        );
+        setupLines.push(`${texVar}.colorSpace = globalThis.THREE.${isData ? 'NoColorSpace' : 'SRGBColorSpace'};`);
+        if (isData) {
+          // Data maps (normal/height): linear values, no mip pre-filtering.
+          setupLines.push(`${texVar}.generateMipmaps = false;`);
+          setupLines.push(`${texVar}.minFilter = globalThis.THREE.LinearFilter;`);
+          setupLines.push(`${texVar}.magFilter = globalThis.THREE.LinearFilter;`);
+        }
+        // Repeat (default) so tiling — via the settings above or the uv node's
+        // tilingU/tilingV — wraps instead of smearing the edge pixels; the
+        // settings menu can switch to clamp. flipY pinned explicitly so
+        // orientation never rides on a three.js default.
+        const wrapMode = repeat ? 'RepeatWrapping' : 'ClampToEdgeWrapping';
+        setupLines.push(`${texVar}.wrapS = globalThis.THREE.${wrapMode};`);
+        setupLines.push(`${texVar}.wrapT = globalThis.THREE.${wrapMode};`);
+        setupLines.push(`${texVar}.flipY = true;`);
+        setupLines.push(`${texVar}.needsUpdate = true;`);
+        bodyLines.push(`  const ${varName} = texture(${texVar}, ${uvExpr}).rgb;`);
       }
     } else if (def.type === 'stripes') {
       // Data Stripes: density-modulated bars + sequential color ramp. Stripe
@@ -362,54 +577,44 @@ export function graphToCode(
       const dens = Number(nv.density ?? 1.5);
       const lo = hexToRgb01(String(nv.lowColor ?? '#1b2a4a'));
       const hi = hexToRgb01(String(nv.highColor ?? '#ffd24d'));
+      // Radial ("target"/tree-ring) mode: index the data by distance from a
+      // choosable center instead of uv.x, so the bands become concentric rings.
+      const radial = Number(nv.radial ?? 0) >= 0.5;
+      const cx = Number(nv.center_x ?? 0.5);
+      const cy = Number(nv.center_y ?? 0.5);
+      const radius = Math.max(Number(nv.radius ?? 0.5), 1e-4);
+      // How strongly the stripes darken the value-color. 0 = a clean value
+      // heatmap (no stripes, colour alone shows the data); ~0.75 = bold stripes.
+      const lineStrength = Math.min(Math.max(Number(nv.lineStrength ?? 0.75), 0), 1);
       addImport('three/tsl', 'float');
       addImport('three/tsl', 'vec3');
       addImport('three/tsl', 'uv');
       addImport('three/tsl', 'dFdx');
       addImport('three/tsl', 'dFdy');
+      if (radial) addImport('three/tsl', 'vec2');
 
       const signalEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'signal');
       const signalRef = signalEdge ? resolveEdgeRef(signalEdge, edges, varNames, sorted) : null;
 
-      // Trace the signal to a Data column → bake the cumulative-phase ramp.
+      // Trace the signal to a Data column → bake a cumulative-phase ramp (stripe
+      // density) AND a normalized-value ramp (color). Both are sampled at the
+      // SAME coordinate, so linear and radial modes stay in sync.
       let phaseTexVar: string | null = null;
+      let valueTexVar: string | null = null;
       let totalCycles = bf;
-      let vmin = 0;
-      let vspan = 1;
-      if (signalEdge) {
-        const src = sorted.find((n) => n.id === signalEdge.source);
-        const m = /^col(\d+)$/.exec(signalEdge.sourceHandle ?? '');
-        if (src && src.data.registryType === 'dataNode' && m) {
-          const col = decodeDataNode(getNodeValues(src))?.columns[Number(m[1])];
-          if (col && col.length > 1) {
-            const mm = minMax(col);
-            vmin = mm.min;
-            vspan = Math.max(mm.max - mm.min, 1e-20);
-            const capped = capToWidth(col, MAX_TEXTURE_WIDTH);
-            const ramp = buildPhaseRamp(normalize01(capped, minMax(capped)), bf, dens);
-            totalCycles = ramp.totalCycles;
-            addImport('three/tsl', 'texture');
-            addImport('three/tsl', 'vec2');
-            phaseTexVar = `_${varName}_phase`;
-            setupLines.push(
-              `const ${phaseTexVar} = new globalThis.THREE.DataTexture(${f16Decode(float16ToBase64(ramp.phase01))}, ${ramp.phase01.length}, 1, globalThis.THREE.RedFormat, globalThis.THREE.HalfFloatType);`,
-            );
-            setupLines.push(`${phaseTexVar}.minFilter = globalThis.THREE.LinearFilter;`);
-            setupLines.push(`${phaseTexVar}.magFilter = globalThis.THREE.LinearFilter;`);
-            setupLines.push(`${phaseTexVar}.needsUpdate = true;`);
-          }
-        }
+      const traced = traceSignalColumn(signalEdge, sorted);
+      if (traced) {
+        const ramp = buildPhaseRamp(traced.cnorm, bf, dens);
+        totalCycles = ramp.totalCycles;
+        addImport('three/tsl', 'texture');
+        addImport('three/tsl', 'vec2');
+        phaseTexVar = `_${varName}_phase`;
+        valueTexVar = `_${varName}_value`;
+        bakeHalfFloatTexture(setupLines, phaseTexVar, ramp.phase01);
+        bakeHalfFloatTexture(setupLines, valueTexVar, traced.cnorm);
       }
 
-      const phaseExpr = phaseTexVar
-        ? `texture(${phaseTexVar}, vec2(uv().x, 0.5)).x.mul(${num(totalCycles)})`
-        : `uv().x.mul(${num(bf)})`;
-      const colorT = phaseTexVar && signalRef
-        ? `${signalRef}.sub(${num(vmin)}).div(${num(vspan)}).clamp(0.0, 1.0)`
-        : signalRef
-          ? `${signalRef}.clamp(0.0, 1.0)`
-          : 'uv().x';
-
+      const coord = `_${varName}_coord`;
       const p = `_${varName}_p`;
       const tri = `_${varName}_tri`;
       const fw = `_${varName}_fw`;
@@ -418,6 +623,20 @@ export function graphToCode(
       const br = `_${varName}_br`;
       const t = `_${varName}_t`;
       const col = `_${varName}_col`;
+
+      // Sampling coordinate in [0,1]: horizontal position (linear), or the
+      // normalized radius from the chosen center (concentric rings) when radial.
+      bodyLines.push(`  const ${coord} = ${radialCoordExpr(radial, cx, cy, radius)};`);
+
+      const phaseExpr = phaseTexVar
+        ? `texture(${phaseTexVar}, vec2(${coord}, 0.5)).x.mul(${num(totalCycles)})`
+        : `${coord}.mul(${num(bf)})`;
+      const colorT = valueTexVar
+        ? `texture(${valueTexVar}, vec2(${coord}, 0.5)).x`
+        : signalRef
+          ? `${signalRef}.clamp(0.0, 1.0)`
+          : coord;
+
       // Continuous phase (NEVER take the derivative of fract(phase)).
       bodyLines.push(`  const ${p} = ${phaseExpr};`);
       bodyLines.push(`  const ${tri} = ${p}.fract().mul(2.0).sub(1.0).abs();`);
@@ -425,12 +644,86 @@ export function graphToCode(
       bodyLines.push(`  const ${ln} = ${tri}.smoothstep(float(0.5).sub(${fw}), float(0.5).add(${fw}));`);
       // Fade dense (sub-pixel) regions to the average band so they don't shimmer.
       bodyLines.push(`  const ${lnS} = ${ln}.mix(float(0.5), ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`);
-      bodyLines.push(`  const ${br} = float(1.0).sub(${lnS}.mul(0.75));`);
+      bodyLines.push(`  const ${br} = float(1.0).sub(${lnS}.mul(${num(lineStrength)}));`);
       bodyLines.push(`  const ${t} = ${colorT};`);
       bodyLines.push(
         `  const ${col} = vec3(${num(lo[0])}, ${num(lo[1])}, ${num(lo[2])}).mix(vec3(${num(hi[0])}, ${num(hi[1])}, ${num(hi[2])}), ${t});`,
       );
       bodyLines.push(`  const ${varName} = ${col}.mul(${br});`);
+    } else if (def.type === 'dataviz') {
+      // Data Viz: a single Data column distributed along one axis (or radially)
+      // as a continuous colour ramp with a full tone curve. Unlike Stripes there
+      // are no bars — colour alone reads the value. The upstream column is baked
+      // into a normalized HalfFloat value texture (filterable) and sampled at the
+      // coord; the tone curve is applied as a chain of TSL ops before the mix.
+      const nv = getNodeValues(node);
+      const scale = Number(nv.scale ?? 1);
+      const offset = Number(nv.offset ?? 0);
+      const contrast = Number(nv.contrast ?? 1);
+      const lowCut = Number(nv.lowCutoff ?? 0);
+      const highCut = Number(nv.highCutoff ?? 1);
+      // Midpoint drives a gamma so the chosen input value maps to output 0.5
+      // (lower midpoint → brighter midtones). Kept strictly inside (0,1) so the
+      // log is finite.
+      const midpoint = Math.min(Math.max(Number(nv.midpoint ?? 0.5), 1e-3), 1 - 1e-3);
+      const lo = hexToRgb01(String(nv.lowColor ?? '#1b2a4a'));
+      const hi = hexToRgb01(String(nv.highColor ?? '#ffd24d'));
+      const radial = Number(nv.radial ?? 0) >= 0.5;
+      const cx = Number(nv.center_x ?? 0.5);
+      const cy = Number(nv.center_y ?? 0.5);
+      const radius = Math.max(Number(nv.radius ?? 0.5), 1e-4);
+      addImport('three/tsl', 'vec3');
+      addImport('three/tsl', 'uv');
+      if (radial) addImport('three/tsl', 'vec2');
+
+      // Trace the signal to a Data column → bake a normalized-value ramp (color).
+      const signalEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'signal');
+      const signalRef = signalEdge ? resolveEdgeRef(signalEdge, edges, varNames, sorted) : null;
+      let valueTexVar: string | null = null;
+      const traced = traceSignalColumn(signalEdge, sorted);
+      if (traced) {
+        addImport('three/tsl', 'texture');
+        addImport('three/tsl', 'vec2');
+        valueTexVar = `_${varName}_value`;
+        bakeHalfFloatTexture(setupLines, valueTexVar, traced.cnorm);
+      }
+
+      const coord = `_${varName}_coord`;
+      bodyLines.push(`  const ${coord} = ${radialCoordExpr(radial, cx, cy, radius)};`);
+
+      // Raw normalized value in [0,1] at this coord.
+      const rawExpr = valueTexVar
+        ? `texture(${valueTexVar}, vec2(${coord}, 0.5)).x`
+        : signalRef
+          ? `${signalRef}.clamp(0.0, 1.0)`
+          : `${coord}`;
+
+      // Tone curve: scale/offset → input cutoffs (levels) → clamp → midpoint
+      // (gamma) → contrast → clamp. Each stage is skipped when it's a no-op so
+      // the emitted expression stays readable for identity settings.
+      let expr = rawExpr;
+      if (scale !== 1 || offset !== 0) {
+        expr = `${expr}.mul(${num(scale)}).add(${num(offset)})`;
+      }
+      if (lowCut !== 0 || highCut !== 1) {
+        const span = highCut - lowCut;
+        const safeSpan = Math.abs(span) < 1e-4 ? (span < 0 ? -1e-4 : 1e-4) : span;
+        expr = `${expr}.sub(${num(lowCut)}).div(${num(safeSpan)})`;
+      }
+      expr = `${expr}.clamp(0.0, 1.0)`;
+      const gamma = Math.log(0.5) / Math.log(midpoint);
+      if (Math.abs(gamma - 1) > 1e-3) {
+        expr = `${expr}.pow(${num(gamma)})`;
+      }
+      if (contrast !== 1) {
+        expr = `${expr}.sub(0.5).mul(${num(contrast)}).add(0.5).clamp(0.0, 1.0)`;
+      }
+
+      const t = `_${varName}_t`;
+      bodyLines.push(`  const ${t} = ${expr};`);
+      bodyLines.push(
+        `  const ${varName} = vec3(${num(lo[0])}, ${num(lo[1])}, ${num(lo[2])}).mix(vec3(${num(hi[0])}, ${num(hi[1])}, ${num(hi[2])}), ${t});`,
+      );
     } else if (def.type === 'append') {
       // Append node: concatenate values into a vector. Pick vec2/vec3/vec4 based on the
       // total component count of the inputs (a vec2 + float must become vec3, not vec2).
@@ -521,6 +814,17 @@ export function graphToCode(
             addImport('three/tsl', 'vec3');
             addImport('three/tsl', 'float');
             channels[ch] = `vec3(float(${ref}))`;
+          } else if (ch === 'normal' && sourceNode?.data.registryType === 'imageNode') {
+            // An image wired into Normal is a tangent-space normal MAP, not a raw
+            // normal — its texels are packed unit vectors in [0,1]. Decode with
+            // TSL's normalMap() node: it remaps [0,1]→[-1,1], applies the TBN
+            // (tangent→view) transform and normalizes. Assigning the raw sample
+            // to normalNode instead would leave every component ≥0, unnormalized
+            // and un-rotated → a flat, blue-biased surface. normalMap() assumes
+            // LINEAR input, so the Image node is auto-switched to the 'data'
+            // colorSpace when it is connected here (NodeEditor onConnect).
+            addImport('three/tsl', 'normalMap');
+            channels[ch] = `normalMap(${ref})`;
           } else {
             channels[ch] = ref;
           }
@@ -676,6 +980,14 @@ function resolveEdgeRef(
     return base ? `${base}_${edge.sourceHandle}` : null;
   }
 
+  // Data Viz: the `value` handle exposes the tone-mapped scalar (`_<var>_t`,
+  // a float 0–1) instead of the coloured `out` vec3 — so displacement can be
+  // driven by the data height independently of the chosen ramp colours.
+  if (sourceNode.data.registryType === 'dataviz' && edge.sourceHandle === 'value') {
+    const base = varNames.get(sourceNode.id);
+    return base ? `_${base}_t` : null;
+  }
+
   // If source is a split node, inline as inputVar.component
   if (sourceNode.data.registryType === 'split' && edge.sourceHandle && edge.sourceHandle !== 'out' && VALID_SWIZZLE.has(edge.sourceHandle)) {
     const splitInputEdge = edges.find(e => e.target === sourceNode.id && e.targetHandle === 'v');
@@ -694,7 +1006,16 @@ function resolveArguments(
   def: NodeDefinition,
   sorted: AppNode[]
 ): string[] {
-  return def.inputs.map((input) => {
+  // Chainable arithmetic emits a variadic call over its wired operands (plus any
+  // interior gaps filled with the identity) — `includeTrailingEmpty=false` drops
+  // the dangling grow socket so we never emit e.g. `add(a, b, 0)`. Stored values
+  // on extension operands (imported `add(x, 2, 3)`) are honored via valuedHandles.
+  const nodeVals = getNodeValues(node);
+  const connected = edges
+    .filter((e) => e.target === node.id && typeof e.targetHandle === 'string')
+    .map((e) => e.targetHandle as string);
+  const inputs = effectiveInputs(def, connected, false, Object.keys(nodeVals));
+  return inputs.map((input) => {
     const edge = edges.find(
       (e) => e.target === node.id && e.targetHandle === input.id
     );
@@ -702,10 +1023,16 @@ function resolveArguments(
       const ref = resolveEdgeRef(edge, edges, varNames, sorted);
       if (ref) return ref;
     }
-    // No connection: use node's stored value or placeholder
-    const nodeValues = getNodeValues(node);
-    const val = nodeValues[input.id];
+    // No connection: use node's stored value, then the registry default for this
+    // port, then the chain identity, then a bare placeholder. Consulting
+    // defaultValues keeps a legacy node (created before the default existed, so
+    // it has no stored value) in sync with the evaluator/UI — e.g. min's unwired
+    // `b` emits `min(a, 1)`, not `min(a, 0)`; an unwired mul operand emits `1`.
+    const val = nodeVals[input.id];
     if (val !== undefined) return String(val);
+    const dflt = def.defaultValues?.[input.id];
+    if (dflt !== undefined) return String(dflt);
+    if (def.chainable && def.chainIdentity !== undefined) return String(def.chainIdentity);
     return '0';
   });
 }

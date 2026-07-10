@@ -1,7 +1,8 @@
 import { useCallback, useRef, useEffect, memo } from 'react';
 import type { BuiltinTexture } from '@/registry/builtinTextures';
 import { perlin2D } from '@/utils/noisePreview';
-import { startTileDrag } from './tileDrag';
+import { startTileDrag, tileGhostZoom } from './tileDrag';
+import { useAssetTooltip } from './AssetTooltip';
 
 export const BUILTIN_TEXTURE_DRAG_TYPE = 'application/fastshaders-builtin-texture';
 
@@ -309,16 +310,20 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
   const onPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+      const tile = event.currentTarget as HTMLElement;
       startTileDrag(
         event.nativeEvent,
         { kind: 'texture', id: texture.id },
-        `<div class="saved-group-card">${(event.currentTarget as HTMLElement).innerHTML}</div>`,
+        `<div class="saved-group-card" style="zoom: ${tileGhostZoom(tile)}">${tile.innerHTML}</div>`,
       );
     },
     [texture.id],
   );
 
   const memberCount = Math.max(0, texture.nodes.length - 1);
+  const { tooltip, tooltipHandlers } = useAssetTooltip(
+    `${texture.description} Drag onto the canvas to add it.`,
+  );
 
   return (
     <div
@@ -326,8 +331,9 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
       draggable
       onDragStart={onDragStart}
       onPointerDown={onPointerDown}
-      title={`${texture.name} texture — drag to canvas`}
+      {...tooltipHandlers}
     >
+      {tooltip}
       <div
         className="saved-group-card__frame"
         style={{

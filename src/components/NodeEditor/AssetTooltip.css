@@ -1,0 +1,18 @@
+.asset-tooltip {
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: var(--z-overlay);
+  max-width: 260px;
+  padding: 5px 9px;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  text-align: left;
+}

@@ -1,13 +1,19 @@
 /* Sphere Static — WebGPU multi-pass benchmark.
  *
- * Paper § 3.3 + Table 2 macOS column: a static fullscreen sphere with
- * `device.queue.onSubmittedWorkDone` fence sync, rendering N passes per
- * measurement so the per-pass cost rises above the display vsync floor.
- * Without multi-pass, desktop screens (60 Hz / 120 Hz) clamp every shader
- * to the same number — losing the cost signal entirely.
+ * Paper § 3.3 + Table 2 macOS column: a static fullscreen sphere,
+ * rendering N passes per measurement so the per-pass cost rises above
+ * the display vsync floor. Without multi-pass, desktop screens (60 Hz /
+ * 120 Hz) clamp every shader to the same number — losing the cost
+ * signal entirely.
  *
- * Resolution matches Quest 3 per-eye (2064 × 2208) so the numbers are
- * directly comparable to the InOut bench's immersive on-device timings. */
+ * Timing + per-pass cost derivation live in ../lib/bench-timing.js:
+ * GPU timestamp queries when the adapter supports them (wall-clock
+ * around an onSubmittedWorkDone fence otherwise), and a two-level
+ * (N / 2N passes) slope so fixed per-batch overhead cancels out of the
+ * per-pass figure.
+ *
+ * Resolution matches Quest 3 per-eye (2064 × 2208) — the reference
+ * pixel count of the point currency (bench-stats REF_PIXELS). */
 
 import {
   WebGPURenderer, Scene, PerspectiveCamera,
@@ -16,9 +22,12 @@ import {
 } from 'three';
 import * as TSL from 'three/tsl';
 import { buildBenchRegistry } from '../lib/bench-registry.js';
-import { computeStats, exportResults } from '../lib/bench-stats.js';
 import {
-  makeLogger, buildPicker, getSelectedIds, wireSettings,
+  statsFromTwoLevelRun, annotateMarginalCost, exportResults,
+} from '../lib/bench-stats.js';
+import { createBenchTimer, CALIBRATE_TARGET_MS } from '../lib/bench-timing.js';
+import {
+  makeLogger, buildPicker, getSelectedIds, wireSettings, readSetting,
   createStartGate, showDonePopup, installErrorOverlay,
 } from '../lib/bench-ui.js';
 
@@ -31,9 +40,11 @@ const Q3_HEIGHT = 2208;
 
 const DEFAULTS = {
   'input-duration': 6,    // seconds per shader (cap; frames or duration ends first)
-  'input-frames':   30,   // measurements per shader (multi-pass × this many)
+  'input-frames':   30,   // measurement PAIRS per shader (each pair = one
+                          // batch at N passes + one at 2N — see bench-timing's
+                          // slope method)
   'input-passes':   30,   // MINIMUM passes per measurement. Calibrated per
-                          // shader (see calibratePasses) so the measurement
+                          // shader (bench-timing calibrate) so the measurement
                           // window spans CALIBRATE_TARGET_MS — without that,
                           // performance.now()'s 1 ms quantization in some
                           // browser/iframe contexts (Safari especially)
@@ -42,10 +53,16 @@ const DEFAULTS = {
   'input-stride':   1,    // log every Nth measurement (1 = every)
 };
 
-// Adaptive-pass calibration target: each measurement should span at least
-// this many ms so the recorded per-pass cost isn't a quantization artefact.
-const CALIBRATE_TARGET_MS = 20;
-const CALIBRATE_MAX_PASSES = 4000;
+// Range clamps for the settings inputs (readSetting). frames ≥ 2 because
+// computeStats needs two samples; passes/duration/stride must be positive
+// or the run loop degenerates.
+const LIMITS = {
+  duration: { min: 1, max: 600 },
+  frames:   { min: 2, max: 1000 },
+  passes:   { min: 1, max: 2000 },
+  warmup:   { min: 0, max: 100 },
+  stride:   { min: 1, max: 100 },
+};
 
 const SETTINGS_KEY = 'shadercarousel:static:settings';
 const PICKER_KEY = 'shadercarousel:static:picker';
@@ -85,7 +102,7 @@ sphere.position.set(0, 0, SPHERE_Z);
 sphere.scale.setScalar(FULL_COVERAGE_SCALE);
 scene.add(sphere);
 
-let renderer, gpuDevice, gpuInfo = 'unknown';
+let renderer, timer, gpuInfo = 'unknown', adapterInfo = null;
 let running = false;
 
 async function initRenderer() {
@@ -94,6 +111,7 @@ async function initRenderer() {
     canvas: $('canvas'),
     antialias: false,
     powerPreference: 'high-performance',
+    trackTimestamp: true, // three degrades this to false when the adapter lacks 'timestamp-query'
   });
   renderer.setPixelRatio(1);
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -101,18 +119,17 @@ async function initRenderer() {
   camera.updateProjectionMatrix();
   await renderer.init();
 
-  const backend = renderer.backend;
-  if (backend?.device) {
-    gpuDevice = backend.device;
-    log('GPU sync: device.queue.onSubmittedWorkDone', 'ok');
-  } else if (backend?.gl) {
-    log('GPU sync: gl.finish() (WebGL fallback — less precise)', 'warn');
-  }
+  timer = createBenchTimer({
+    renderer,
+    renderFn: () => renderer.render(scene, camera),
+    log,
+  });
 
   try {
     if (navigator.gpu) {
       const a = await navigator.gpu.requestAdapter();
       const i = a?.info;
+      if (i) adapterInfo = { vendor: i.vendor, architecture: i.architecture, device: i.device, description: i.description };
       gpuInfo = [i?.vendor, i?.architecture, i?.device, i?.description]
         .filter(Boolean).join(' / ') || 'unknown';
     }
@@ -122,42 +139,6 @@ async function initRenderer() {
 
   renderer.render(scene, camera);
   log('Ready', 'ok');
-}
-
-async function gpuSync() {
-  if (gpuDevice?.queue?.onSubmittedWorkDone) {
-    await gpuDevice.queue.onSubmittedWorkDone();
-    return;
-  }
-  if (renderer.backend?.gl) { renderer.backend.gl.finish(); return; }
-  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-}
-
-/** Render N passes in a tight loop, fence once. Returns *total elapsed ms*
- *  (callers divide by N for per-pass cost). */
-async function measureMultiPass(passes) {
-  const t0 = performance.now();
-  for (let i = 0; i < passes; i++) renderer.render(scene, camera);
-  await gpuSync();
-  return performance.now() - t0;
-}
-
-/** Same adaptive calibration as MicroPlane — see comment there. The
- *  Q3-per-eye sphere is much heavier than the MicroPlane quad, so the
- *  per-shader pass count will usually settle near cfg.passes for the
- *  expensive presets and only inflate for the cheap atomics + baseline. */
-async function calibratePasses(minPasses) {
-  let p = minPasses;
-  await measureMultiPass(p);
-  for (let probe = 0; probe < 10; probe++) {
-    const elapsed = await measureMultiPass(p);
-    if (elapsed >= CALIBRATE_TARGET_MS || p >= CALIBRATE_MAX_PASSES) return p;
-    const scale = elapsed > 0
-      ? Math.max(2, Math.ceil((CALIBRATE_TARGET_MS / elapsed) * 1.2))
-      : 4;
-    p = Math.min(p * scale, CALIBRATE_MAX_PASSES);
-  }
-  return p;
 }
 
 // ── Measurement loop ───────────────────────────────────────────────────────
@@ -171,29 +152,36 @@ async function benchmarkOne(shaderDef, cfg) {
   sphere.scale.setScalar(FULL_COVERAGE_SCALE);
 
   // Warmup
-  for (let i = 0; i < cfg.warmup; i++) await measureMultiPass(cfg.passes);
+  for (let i = 0; i < cfg.warmup; i++) await timer.measure(cfg.passes);
 
-  const passes = await calibratePasses(cfg.passes);
-  if (passes !== cfg.passes) {
-    log(`  calibrated ${shaderDef.label} → ${passes} passes/measurement`, 'info');
+  const { passesLo, passesHi } = await timer.calibrate(cfg.passes);
+  if (passesLo !== cfg.passes) {
+    log(`  calibrated ${shaderDef.label} → ${passesLo}/${passesHi} passes per lo/hi batch`, 'info');
   }
 
+  // Interleaved lo/hi batches (ABAB) so thermal drift hits both slope
+  // levels symmetrically instead of biasing one.
   const frames = [];
+  const loTotals = [], hiTotals = [];
   const start = performance.now();
   let i = 0;
   while (i < cfg.frames && (performance.now() - start) < cfg.duration && running) {
-    const totalMs = await measureMultiPass(passes);
-    const msPerPass = totalMs / passes;
+    const lo = await timer.measure(passesLo);
+    const hi = await timer.measure(passesHi);
+    loTotals.push(lo.totalMs);
+    hiTotals.push(hi.totalMs);
     if ((i % cfg.stride) === 0) {
-      frames.push({ t: +(performance.now() - start).toFixed(1), frameTime: +msPerPass.toFixed(4), passes });
+      const t = +(performance.now() - start).toFixed(1);
+      frames.push({ t, passes: passesLo, totalMs: +lo.totalMs.toFixed(4), gpuMs: lo.gpuMs != null ? +lo.gpuMs.toFixed(4) : null, frameTime: +(lo.totalMs / passesLo).toFixed(4) });
+      frames.push({ t, passes: passesHi, totalMs: +hi.totalMs.toFixed(4), gpuMs: hi.gpuMs != null ? +hi.gpuMs.toFixed(4) : null, frameTime: +(hi.totalMs / passesHi).toFixed(4) });
     }
-    $('hud-ft').textContent = msPerPass.toFixed(4) + ' ms';
+    $('hud-ft').textContent = (hi.totalMs / passesHi).toFixed(4) + ' ms';
     i++;
     if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
   }
 
   mat.dispose();
-  return { frames, calibratedPasses: passes };
+  return { frames, loTotals, hiTotals, passesLo, passesHi };
 }
 
 async function runBenchmark() {
@@ -201,11 +189,11 @@ async function runBenchmark() {
   $('btn-start').disabled = true; $('btn-stop').disabled = false;
 
   const cfg = {
-    duration: (+$('input-duration').value || DEFAULTS['input-duration']) * 1000,
-    frames:   +$('input-frames').value   || DEFAULTS['input-frames'],
-    passes:   +$('input-passes').value   || DEFAULTS['input-passes'],
-    warmup:   +$('input-warmup').value   || DEFAULTS['input-warmup'],
-    stride:   +$('input-stride').value   || DEFAULTS['input-stride'],
+    duration: readSetting('input-duration', DEFAULTS['input-duration'], LIMITS.duration) * 1000,
+    frames:   readSetting('input-frames',   DEFAULTS['input-frames'],   LIMITS.frames),
+    passes:   readSetting('input-passes',   DEFAULTS['input-passes'],   LIMITS.passes),
+    warmup:   readSetting('input-warmup',   DEFAULTS['input-warmup'],   LIMITS.warmup),
+    stride:   readSetting('input-stride',   DEFAULTS['input-stride'],   LIMITS.stride),
   };
 
   // Snap renderer to Quest 3 per-eye for measurement
@@ -232,12 +220,14 @@ async function runBenchmark() {
     log(`[${i + 1}/${shaders.length}] ${s.label}…`);
 
     const out = await benchmarkOne(s, cfg);
-    if (!out || out.frames.length === 0) continue;
-    const stats = computeStats(out.frames);
-    stats.calibratedPasses = out.calibratedPasses;
+    if (!out || out.hiTotals.length < 2) {
+      if (out) log(`  skipped ${s.label}: only ${out.hiTotals.length} measurement pair(s) — need ≥2`, 'warn');
+      continue;
+    }
+    const stats = statsFromTwoLevelRun(out);
     $('hud-pts').textContent = stats.points;
     results.push({ id: s.id, label: s.label, category: s.category, stats, frames: out.frames });
-    log(`  → ${stats.points} pts | ${stats.medianFt} ms/pass | ${stats.cvPercent}% CV | ${out.calibratedPasses} passes`, 'ok');
+    log(`  → ${stats.points} pts | ${stats.msPerPass ?? stats.medianFt} ms/pass (slope) | ${stats.cvPercent}% CV | ${out.passesLo}/${out.passesHi} passes`, 'ok');
   }
 
   // Restore display
@@ -256,36 +246,41 @@ async function runBenchmark() {
 }
 
 function showResultsPopup(results, cfg) {
-  // Annotate marginal cost via exportResults' shared annotator. Done in
-  // showDonePopup ordering: we need marginal columns in the table, so we
-  // compute them inline here (the exporter also computes them — idempotent).
-  const baseline = results.find(r => r.id === 'ref_baseline');
-  const baselineMs = baseline ? baseline.stats.medianFt : 0;
+  // Shared annotator (idempotent — exportResults runs it again): adds
+  // marginalMs / marginalMsAtRef / marginalPoints from the slope-based
+  // per-pass costs, normalized to the reference pixel count.
+  annotateMarginalCost(results, { pixels: Q3_WIDTH * Q3_HEIGHT });
   const rows = results.map(r => ({
     label: r.label,
-    medianMs: r.stats.medianFt,
-    marginalMs: +(r.stats.medianFt - baselineMs).toFixed(4),
-    points: r.stats.points,
+    medianMs: r.stats.msPerPass ?? r.stats.medianFt,
+    marginalMs: r.stats.marginalMsAtRef ?? r.stats.marginalMs,
+    points: r.stats.marginalPoints,
   }));
 
   const payload = {
     metadata: {
+      schemaVersion: 2,
       bench: 'static',
       tool: 'ShaderCarousel — Sphere Static',
       resolution: { width: Q3_WIDTH, height: Q3_HEIGHT, label: 'Quest 3 per-eye' },
       date: new Date().toISOString(),
       userAgent: navigator.userAgent,
       gpu: gpuInfo,
+      adapterInfo,
+      timingMethod: timer.timingMethod,
+      quantized: timer.quantized(),
+      clockPinned: null,
+      stereo: false,
       config: cfg,
-      calibration: { targetMs: CALIBRATE_TARGET_MS, maxPasses: CALIBRATE_MAX_PASSES },
-      notes: 'Static fullscreen sphere, WebGPU fence sync, multi-pass per measurement. Pass count is calibrated per-shader (min = config.passes) so each measurement window is ≥ calibration.targetMs and the recorded ms/pass is not dominated by performance.now() granularity. Per-shader calibrated pass count is in stats.calibratedPasses. Cost = elapsed / calibratedPasses.',
+      calibration: { targetMs: CALIBRATE_TARGET_MS, maxPasses: timer.maxPasses(), method: 'two-level slope' },
+      notes: 'Static fullscreen sphere, multi-pass per measurement, timed via GPU timestamp queries when available (timingMethod) with a wall-clock fence fallback. Each shader is measured at N and 2N passes per batch (stats.passesLo/passesHi); per-pass cost = (median(total@2N) − median(total@N)) / N so fixed per-batch overhead cancels. stats.msPerPass is authoritative; stats.medianFt is the hi-level per-pass median (diagnostic).',
     },
     shaders: results,
   };
 
   showDonePopup({
     title: 'Static bench complete',
-    subtitle: `${results.length} shaders @ ${Q3_WIDTH}×${Q3_HEIGHT} on ${gpuInfo}`,
+    subtitle: `${results.length} shaders @ ${Q3_WIDTH}×${Q3_HEIGHT} on ${gpuInfo} (${timer.timingMethod})`,
     rows,
     onDownload: () => exportResults(payload, 'shadercarousel-static'),
     onRunAgain: () => { gateApi.show(); },
@@ -326,7 +321,7 @@ refs.btnReset  .addEventListener('click', () => { settings.reset(); log('Setting
 
 gateApi = createStartGate({
   title: 'Sphere Static — WebGPU multi-pass',
-  subtitle: 'Full-coverage sphere at Quest 3 per-eye resolution. Renders the shader 30× per measurement (default) and divides by N so per-pass cost rises above the display vsync floor.',
+  subtitle: 'Full-coverage sphere at Quest 3 per-eye resolution. Measures each shader at N and 2N passes per batch (GPU timestamps when available) and takes the slope, so vsync, clock granularity, and per-batch overhead all cancel out of the per-pass cost.',
   buttonLabel: '▶ Start Static bench',
   onStart: runBenchmark,
 });

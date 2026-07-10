@@ -52,8 +52,9 @@ const GROUP_ORDER = ['baseline', 'preset', 'noise', 'saved'];
  * `defaults` is a Set of group names that should be ticked on first load;
  * subsequent loads honour the saved selection in localStorage[storageKey].
  *
- * The baseline (`ref_baseline`) is ALWAYS forced on — it's required for the
- * marginal-cost subtraction in bench-stats. Users can't untick it.
+ * The baseline (`ref_baseline`) defaults on but is user-toggleable.
+ * Without it the export cannot derive marginal cost — bench-stats marks
+ * the suggestion file `valid: false` with a `baseline-missing` reason.
  */
 export function buildPicker(registry, listEl, storageKey, defaults) {
   const saved = readSelection(storageKey);
@@ -178,6 +179,21 @@ function writeSelection(key, ids) {
 }
 
 // ── Settings (numeric inputs) persistence + defaults ────────────────────────
+
+/**
+ * Read a numeric setting input by element id, with an explicit range.
+ * Replaces the benches' `+$(id).value || fallback` pattern, which had two
+ * traps: a typed `0` is falsy so it silently became the default, and
+ * negative values passed straight through (a negative InOut cycle hangs
+ * sphere-mover forever; negative pass counts zero out WebGPU runs).
+ * Non-finite input → fallback; finite input → clamped into [min, max].
+ */
+export function readSetting(id, fallback, { min = 1, max = Infinity } = {}) {
+  const raw = $(id)?.value;
+  const n = Number(raw);
+  if (raw == null || raw === '' || !Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
 
 /**
  * `defaults` is an object whose keys match input IDs (e.g. 'input-duration'),

@@ -79,6 +79,23 @@ function tabStyle(hex: string, active: boolean): React.CSSProperties {
   return { background: `${hex}15`, borderColor: `${hex}33` };
 }
 
+/** Tile-zoom bounds: 0.5× keeps headers legible, 2× keeps a tile per screen. */
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 2;
+/** Zoom step per +/− click or classic mouse-wheel notch (multiplicative). */
+const ZOOM_STEP = 1.15;
+/**
+ * Wheel→zoom exponent per scrolled px, tuned so one classic mouse notch
+ * (~100px deltaY) equals ZOOM_STEP. Trackpad pinches and smooth Ctrl-scrolls
+ * arrive as streams of SMALL-delta wheel events, so the factor must scale with
+ * delta magnitude — a fixed step per event would slam the zoom to its bounds
+ * in a fraction of a second.
+ */
+const WHEEL_ZOOM_K = Math.log(ZOOM_STEP) / 100;
+/** Per-event px cap: a momentum fling shouldn't jump more than ~×1.5 at once. */
+const WHEEL_PX_CAP = 300;
+const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+
 export function ContentBrowser() {
   const [activeCategory, setActiveCategory] = useState<BrowserCategory>('all');
   const [search, setSearch] = useState('');
@@ -93,6 +110,26 @@ export function ContentBrowser() {
       return next;
     });
   }, []);
+  // Tile zoom, persisted. Applied as a `zoom` style on the items strip, so it
+  // compounds with the tiles' own fixed 0.67 zoom.
+  const [zoom, setZoom] = useState(() => {
+    try {
+      const v = parseFloat(localStorage.getItem('fs:assetZoom') ?? '');
+      return Number.isFinite(v) ? clampZoom(v) : 1;
+    } catch { return 1; }
+  });
+  // No rounding here — smooth pinch deltas are tiny factors that 2-decimal
+  // rounding would swallow entirely. Persistence is debounced below (pinches
+  // fire dozens of events per second; a setItem per event would jank).
+  const changeZoom = useCallback((factor: number) => {
+    setZoom((z) => clampZoom(z * factor));
+  }, []);
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      try { localStorage.setItem('fs:assetZoom', zoom.toFixed(3)); } catch { /* private mode */ }
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [zoom]);
   const savedGroups = useAppStore((s) => s.savedGroups);
   const scrollRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -151,13 +188,27 @@ export function ContentBrowser() {
     event.dataTransfer.effectAllowed = 'move';
   }, []);
 
-  // Convert vertical scroll to horizontal scroll (native listener for non-passive)
+  // Convert vertical scroll to horizontal scroll (native listener for non-passive).
+  // On the items strip, Ctrl/Cmd+wheel (and macOS pinch, which arrives as a
+  // ctrlKey wheel) zooms the tiles instead of scrolling.
   useEffect(() => {
     const els = [scrollRef.current, tabsRef.current];
     const handlers: (() => void)[] = [];
     for (const el of els) {
       if (!el) continue;
+      const zoomable = el === scrollRef.current;
       const onWheel = (event: WheelEvent) => {
+        if (zoomable && (event.ctrlKey || event.metaKey)) {
+          event.preventDefault(); // keep the browser from page-zooming
+          if (event.deltaY !== 0) {
+            // Normalize deltaMode (0 px / 1 lines / 2 pages) to px, cap, and
+            // map to an exponential factor so pinch streams zoom smoothly.
+            const px = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 100 : 1);
+            const capped = Math.max(-WHEEL_PX_CAP, Math.min(WHEEL_PX_CAP, px));
+            changeZoom(Math.exp(-capped * WHEEL_ZOOM_K));
+          }
+          return;
+        }
         if (event.deltaY !== 0) {
           event.preventDefault();
           el.scrollLeft += event.deltaY;
@@ -167,7 +218,7 @@ export function ContentBrowser() {
       handlers.push(() => el.removeEventListener('wheel', onWheel));
     }
     return () => handlers.forEach((h) => h());
-  }, []);
+  }, [changeZoom]);
 
   const empty = (msg: string) => <div className="content-browser__empty">{msg}</div>;
 
@@ -190,15 +241,45 @@ export function ContentBrowser() {
 
   return (
     <div className={`content-browser${collapsed ? ' content-browser--collapsed' : ''}`}>
-      <button
-        type="button"
-        className="content-browser__toggle"
-        onClick={toggleCollapsed}
-        title={collapsed ? 'Show asset bar' : 'Hide asset bar'}
-        aria-label={collapsed ? 'Show asset bar' : 'Hide asset bar'}
-      >
-        {collapsed ? '▴' : '▾'}
-      </button>
+      {/* Control cluster — floats OUTSIDE the box, above its top border. */}
+      <div className="content-browser__controls">
+        {!collapsed && (
+          <>
+            {/* aria-disabled (not disabled) at the bounds: a real disabled
+                attribute would drop keyboard focus mid-interaction; the click
+                just no-ops via the clamp. */}
+            <button
+              type="button"
+              className="content-browser__ctrl-btn"
+              onClick={() => changeZoom(1 / ZOOM_STEP)}
+              aria-disabled={zoom <= ZOOM_MIN}
+              title="Smaller tiles (Ctrl/Cmd + scroll)"
+              aria-label="Zoom asset tiles out"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              className="content-browser__ctrl-btn"
+              onClick={() => changeZoom(ZOOM_STEP)}
+              aria-disabled={zoom >= ZOOM_MAX}
+              title="Larger tiles (Ctrl/Cmd + scroll)"
+              aria-label="Zoom asset tiles in"
+            >
+              +
+            </button>
+          </>
+        )}
+        <button
+          type="button"
+          className="content-browser__ctrl-btn"
+          onClick={toggleCollapsed}
+          title={collapsed ? 'Show asset bar' : 'Hide asset bar'}
+          aria-label={collapsed ? 'Show asset bar' : 'Hide asset bar'}
+        >
+          {collapsed ? '▴' : '▾'}
+        </button>
+      </div>
       <div className="content-browser__scroll-wrapper">
         {tabsArrows.canLeft && <ScrollArrow direction="left" onClick={() => tabsArrows.scrollBy(-1)} />}
         <div className="content-browser__categories" ref={tabsRef}>
@@ -249,9 +330,11 @@ export function ContentBrowser() {
         <div
           className="content-browser__items"
           ref={scrollRef}
-          style={{ background: activeCategory !== 'all'
-            ? `${CAT_HEX[activeCategory]}1A`
-            : undefined
+          style={{
+            background: activeCategory !== 'all'
+              ? `${CAT_HEX[activeCategory]}1A`
+              : undefined,
+            zoom,
           }}
         >
           {items}

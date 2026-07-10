@@ -88,7 +88,39 @@ describe('graphToCode: Stripes fallback (signal not from a Data column)', () => 
   it('emits a uv-based stripe with no texture and stays valid', () => {
     expectValidModule(gen.code);
     expect(gen.code).not.toContain('DataTexture');
-    expect(gen.code).toContain('uv().x.mul(24)');
+    expect(gen.code).toContain('const _stripes1_coord = uv().x;'); // linear coordinate
+    expect(gen.code).toContain('_stripes1_coord.mul(24)'); // phase from coord
+    expectValidModule(buildShaderModule(gen.code, {}));
+  });
+});
+
+describe('graphToCode: Stripes radial mode', () => {
+  const data = makeNode('d1', 'dataNode', dataNodeValues());
+  const stripes = makeNode('s1', 'stripes', {
+    baseFrequency: 40,
+    density: 1.5,
+    lowColor: '#000000',
+    highColor: '#ffffff',
+    radial: 1,
+    center_x: 0.25,
+    center_y: 0.75,
+    radius: 0.6,
+  });
+  const output = makeNode('out', 'output', {});
+  const edges = [makeEdge('d1', 'col1', 's1', 'signal'), makeEdge('s1', 'out', 'out', 'color')];
+  const gen = graphToCode([data, stripes, output], edges);
+
+  it('indexes the data by radius from the chosen center', () => {
+    expectValidModule(gen.code);
+    // Radial coordinate = distance from center, scaled by radius, clamped.
+    expect(gen.code).toContain(
+      'const _stripes1_coord = uv().sub(vec2(0.25, 0.75)).length().div(0.6).clamp(0.0, 1.0);',
+    );
+    // Phase AND value both baked, both sampled at the radial coord.
+    expect(gen.code).toContain('_stripes1_phase');
+    expect(gen.code).toContain('_stripes1_value');
+    expect(gen.code).toContain('texture(_stripes1_value, vec2(_stripes1_coord, 0.5))');
+    expect(gen.code).toContain('texture(_stripes1_phase, vec2(_stripes1_coord, 0.5))');
     expectValidModule(buildShaderModule(gen.code, {}));
   });
 });

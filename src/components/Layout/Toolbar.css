@@ -47,7 +47,7 @@
   top: calc(100% + 6px);
   left: 0;
   z-index: 100;
-  min-width: 240px;
+  min-width: 264px;
   padding: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -58,6 +58,15 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
+.toolbar__contact-label {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
 .toolbar__contact-name {
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
@@ -65,6 +74,44 @@
   color: var(--text-primary);
   padding-bottom: 4px;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.toolbar__contact-funding {
+  margin-top: 2px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-width: 260px;
+}
+
+.toolbar__contact-logos {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  margin-top: 2px;
+}
+
+.toolbar__contact-logo {
+  height: 26px;
+  width: auto;
+  object-fit: contain;
+  border-radius: 2px;
+}
+
+/* The EU lockup carries two lines of text — give it a touch more height so
+   the "Co-funded by the European Union" wording stays legible. */
+.toolbar__contact-logo--eu {
+  height: 30px;
+}
+
+/* The NAP2027 emblem is portrait (tall), so at the shared row height it would
+   be too small to read — give it extra height to match the others visually. */
+.toolbar__contact-logo--nap {
+  height: 48px;
 }
 
 .toolbar__contact-row {
@@ -167,6 +214,78 @@
   gap: var(--space-2);
 }
 
+/* "Local" desktop-download dropdown — same popover pattern as the contact
+   popover, but anchored to its own wrapper and opening right-aligned so it
+   never overflows the viewport's right edge. */
+.toolbar__local {
+  position: relative;
+}
+
+.toolbar__local-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 100;
+  min-width: 236px;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+.toolbar__local-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.toolbar__local-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  text-decoration: none;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.toolbar__local-row:hover {
+  border-color: var(--border-focus);
+  background: var(--bg-surface);
+}
+
+.toolbar__local-os {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.toolbar__local-detail {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.toolbar__local-note {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-width: 220px;
+}
+
 .toolbar__sc-link {
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
@@ -191,4 +310,96 @@
 .toolbar__sc-link:focus-visible {
   outline: 1px solid var(--border-focus);
   outline-offset: 2px;
+}
+
+/* --- VR bench popover (desktop builds only) ------------------------------ */
+
+.toolbar__vr-popover {
+  min-width: 300px;
+  max-width: 340px;
+}
+
+.toolbar__vr-note {
+  max-width: none;
+}
+
+.toolbar__vr-live {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: #1a7f37;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.toolbar__vr-action {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  padding: 6px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.toolbar__vr-action:hover:not(:disabled) {
+  border-color: var(--text-accent);
+  color: var(--text-accent);
+}
+
+.toolbar__vr-action:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.toolbar__vr-url-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.toolbar__vr-url {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  padding: 4px 6px;
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+
+.toolbar__vr-hint {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.toolbar__vr-hint ol {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.toolbar__vr-hint code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--bg-surface-hover);
+  padding: 0 3px;
+  border-radius: 2px;
+  overflow-wrap: anywhere;
+}
+
+.toolbar__vr-error {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1.4;
+  color: #b42318;
 }

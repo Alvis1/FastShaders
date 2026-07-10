@@ -136,6 +136,33 @@ describe('graphToCode — input passthrough', () => {
   });
 });
 
+describe('graphToCode — binary-op defaults', () => {
+  it('emits min with its identity (1) for an unwired operand, not 0', () => {
+    // Regression: a legacy min node (no stored `b`) must fall back to the registry
+    // default via resolveArguments so it emits min(a, 1), not the value-eating min(a, 0).
+    const a = makeNode('a', 'float', { value: 0.7 });
+    const mn = makeNode('mn', 'min'); // b unwired + unset
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([a, mn, out], [
+      makeEdge('a', 'out', 'mn', 'a'),
+      makeEdge('mn', 'out', 'out', 'color'),
+    ]);
+    expect(code).toContain('min(float1, 1)');
+    expect(code).not.toContain('min(float1, 0)');
+  });
+
+  it('honours an explicit b = 0 on min', () => {
+    const a = makeNode('a', 'float', { value: 0.7 });
+    const mn = makeNode('mn', 'min', { b: 0 });
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([a, mn, out], [
+      makeEdge('a', 'out', 'mn', 'a'),
+      makeEdge('mn', 'out', 'out', 'color'),
+    ]);
+    expect(code).toContain('min(float1, 0)');
+  });
+});
+
 describe('graphToCode — noise nodes', () => {
   it('emits the MaterialX function call with positionGeometry as default arg', () => {
     const p = makeNode('p', 'perlin', { pos: 'positionGeometry', scale: 1 });

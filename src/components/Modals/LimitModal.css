@@ -1,0 +1,29 @@
+/* LimitModal reuses the CsvImportModal panel/button styles; only the
+   suggestion list and the ignore-limits checkbox row are its own. */
+
+.limit-modal__suggestions {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.limit-modal__ignore {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+
+.limit-modal__ignore input {
+  margin: 2px 0 0;
+  flex: none;
+}

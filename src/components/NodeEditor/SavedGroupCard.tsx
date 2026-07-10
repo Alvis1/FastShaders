@@ -1,7 +1,8 @@
 import { useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import type { SavedGroup } from '@/store/useAppStore';
-import { startTileDrag } from './tileDrag';
+import { startTileDrag, tileGhostZoom } from './tileDrag';
+import { useAssetTooltip } from './AssetTooltip';
 
 export const SAVED_GROUP_DRAG_TYPE = 'application/fastshaders-saved-group';
 
@@ -40,10 +41,11 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
       if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
       // Tap on the X button is a delete, not a drag.
       if ((event.target as HTMLElement).closest('.saved-group-card__delete')) return;
+      const tile = event.currentTarget as HTMLElement;
       startTileDrag(
         event.nativeEvent,
         { kind: 'savedGroup', id: group.id },
-        `<div class="saved-group-card">${(event.currentTarget as HTMLElement).innerHTML}</div>`,
+        `<div class="saved-group-card" style="zoom: ${tileGhostZoom(tile)}">${tile.innerHTML}</div>`,
       );
     },
     [group.id],
@@ -51,6 +53,9 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
 
   // Member count = total saved nodes minus the group container itself.
   const memberCount = Math.max(0, group.nodes.length - 1);
+  const { tooltip, tooltipHandlers } = useAssetTooltip(
+    `Saved group “${group.name}” (${memberCount} ${memberCount === 1 ? 'node' : 'nodes'}) — drag onto the canvas to add a copy.`,
+  );
 
   return (
     <div
@@ -58,8 +63,9 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
       draggable
       onDragStart={onDragStart}
       onPointerDown={onPointerDown}
-      title={`${group.name} — drag to canvas`}
+      {...tooltipHandlers}
     >
+      {tooltip}
       <div
         className="saved-group-card__frame"
         style={{

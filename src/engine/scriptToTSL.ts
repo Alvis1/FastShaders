@@ -24,6 +24,22 @@ const NODE_PROP_TO_CHANNEL: Record<string, string> = {
 const MATERIAL_KEYS = new Set(['transparent', 'side', 'alphaTest']);
 
 export function scriptToTSL(scriptCode: string): string {
+  // Already editor-shaped TSL — a top-level `Fn(...)` wrapper with no
+  // shaderloader `export default function` module wrapper. The conversion
+  // loop below only recognises the module shape and treats everything else
+  // at module scope as stray lines, so converting raw TSL would silently
+  // drop the whole shader body. Pass it through unchanged instead —
+  // codeToGraph parses this form directly (it's the TSL panel's format).
+  // Modules that merely *contain* nested Fn wrappers (e.g. the __pixel
+  // discard form) still have the `export default function` wrapper and take
+  // the conversion path.
+  if (
+    !/^\s*export\s+default\s+function\s*\(/m.test(scriptCode) &&
+    /\bFn\s*\(/.test(scriptCode)
+  ) {
+    return scriptCode;
+  }
+
   // Pre-pass: collapse multi-line `import { ... } from '...'` statements onto a
   // single line. Hand-authored shaderloader scripts often spread the import
   // across many lines, but the line-by-line passthrough below only recognises

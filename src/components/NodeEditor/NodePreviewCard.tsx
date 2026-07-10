@@ -1,8 +1,9 @@
 import { memo, useEffect, useRef, useCallback, useState, type CSSProperties } from 'react';
 import type { NodeDefinition, NodeCategory } from '@/types';
-import { startTileDrag } from './tileDrag';
+import { startTileDrag, tileGhostZoom } from './tileDrag';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, getContrastColor, hexToRgb01 } from '@/utils/colorUtils';
-import { getFlowNodeType } from '@/registry/nodeRegistry';
+import { getFlowNodeType, displayDescription } from '@/registry/nodeRegistry';
+import { useAssetTooltip } from './AssetTooltip';
 import { useAppStore } from '@/store/useAppStore';
 import { buildRows } from './nodes/ShaderNode';
 import { DragNumberInput } from './inputs/DragNumberInput';
@@ -571,14 +572,16 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
   const flowType = getFlowNodeType(def);
 
   const shared: ContentProps = { def, catColor, costColor, costTextColor, costScale, cost, headerTextColor };
+  const { tooltip, tooltipHandlers } = useAssetTooltip(displayDescription(def));
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+      const tile = e.currentTarget as HTMLElement;
       startTileDrag(
         e.nativeEvent,
         { kind: 'node', nodeType: def.type },
-        `<div class="node-preview-card">${(e.currentTarget as HTMLElement).innerHTML}</div>`,
+        `<div class="node-preview-card" style="zoom: ${tileGhostZoom(tile)}">${tile.innerHTML}</div>`,
       );
     },
     [def.type],
@@ -590,7 +593,9 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
       draggable
       onDragStart={(e) => onDragStart(e, def)}
       onPointerDown={onPointerDown}
+      {...tooltipHandlers}
     >
+      {tooltip}
       {flowType === 'color' ? (
         <ColorCardContent def={def} cost={cost} costTextColor={costTextColor} />
       ) : flowType === 'mathPreview' ? (

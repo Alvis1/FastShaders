@@ -81,6 +81,8 @@
 
     "dataNode": 2,
     "stripes": 18,
+    "dataviz": 10,
+    "imageNode": 2,
 
     "unknown": 0,
     "output": 0

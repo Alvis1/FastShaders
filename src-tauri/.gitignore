@@ -1,0 +1,10 @@
+# Rust build output + Tauri codegen
+/target/
+/gen/schemas/
+# LAN bench server assets staged by the vite desktop profile
+# (fs-stage-shadercarousel-desktop). The tracked .gitkeep keeps the dir
+# present on fresh checkouts: tauri-build resolves bundle.resources on EVERY
+# cargo build/check/test, and a missing dir fails the build script before
+# anything compiles (an empty dir is skipped gracefully).
+/carousel-dist/*
+!/carousel-dist/.gitkeep

@@ -27,9 +27,11 @@
 /* global AFRAME, THREE */
 
 import { buildBenchRegistry } from '../lib/bench-registry.js';
-import { computeStats, exportResults, detectVsyncClamping } from '../lib/bench-stats.js';
 import {
-  makeLogger, buildPicker, getSelectedIds, wireSettings,
+  computeStats, annotateMarginalCost, exportResults, detectVsyncClamping,
+} from '../lib/bench-stats.js';
+import {
+  makeLogger, buildPicker, getSelectedIds, wireSettings, readSetting,
   createStartGate, showDonePopup, installErrorOverlay,
   detectHeadset, diagnoseXR,
 } from '../lib/bench-ui.js';
@@ -41,6 +43,15 @@ const DEFAULTS = {
   'input-cycle':     10,   // seconds per shader (one full ping-pong)
   'input-warmup-ms': 200,  // discard frames right after a shader swap
   'input-stride':    1,    // capture every Nth frame past warmup
+};
+
+// Range clamps for the settings inputs (readSetting). A zero/negative
+// cycle would make sphere-mover's t never reach 1 — the cycle-complete
+// event never fires and the bench hangs forever.
+const LIMITS = {
+  cycle:    { min: 2, max: 120 },
+  warmupMs: { min: 0, max: 5000 },
+  stride:   { min: 1, max: 100 },
 };
 
 const SETTINGS_KEY = 'shadercarousel:inout:settings';
@@ -251,67 +262,80 @@ async function runBenchmark() {
   $('btn-start').disabled = true; $('btn-stop').disabled = false;
 
   const cfg = {
-    cycleMs:  (+$('input-cycle').value || DEFAULTS['input-cycle']) * 1000,
-    warmupMs: +$('input-warmup-ms').value || DEFAULTS['input-warmup-ms'],
-    stride:   +$('input-stride').value || DEFAULTS['input-stride'],
+    cycleMs:  readSetting('input-cycle', DEFAULTS['input-cycle'], LIMITS.cycle) * 1000,
+    warmupMs: readSetting('input-warmup-ms', DEFAULTS['input-warmup-ms'], LIMITS.warmupMs),
+    stride:   readSetting('input-stride', DEFAULTS['input-stride'], LIMITS.stride),
   };
 
-  // Enter VR before measurement so timings reflect the immersive path.
+  // try/finally so an exception mid-run can't leave running=true — the
+  // `if (running) return` guard above would otherwise brick Start until
+  // a page reload.
   let xrSucceeded = false;
-  const xr = await diagnoseXR();
-  if (xr.ok) {
-    const ok = await enterVR();
-    if (ok) xrSucceeded = true;
-    else log('Continuing in non-immersive fallback', 'warn');
-  } else {
-    log(`WebXR unavailable (${xr.reason}): ${xr.detail}`, 'warn');
-    log('Running flat — frametimes will not reflect stereoscopic cost', 'warn');
-  }
-
-  // Honour the user's selection — baseline defaults on but is toggleable.
-  // If unticked, marginal-cost columns fall back to raw ms in the export.
-  const selectedIds = new Set(getSelectedIds(refs.pickList));
-  const shaders = registry.filter(s => selectedIds.has(s.id) && !s.disabled);
-  // If selected, baseline runs first so subsequent shaders can subtract.
-  shaders.sort((a, b) => (a.id === 'ref_baseline' ? -1 : b.id === 'ref_baseline' ? 1 : 0));
-
-  log(`Running ${shaders.length} shaders, ${cfg.cycleMs}ms per cycle`);
-
   const results = [];
-  for (let i = 0; i < shaders.length; i++) {
-    if (cancel) break;
-    const s = shaders[i];
-    $('hud-shader').textContent = s.label;
-    $('hud-progress').textContent = `${i + 1}/${shaders.length}`;
-    $('progress-bar').style.width = `${((i + 1) / shaders.length * 100).toFixed(1)}%`;
-    $('hud-phase').textContent = 'measuring';
-    log(`[${i + 1}/${shaders.length}] ${s.label}…`);
+  try {
+    // Enter VR before measurement so timings reflect the immersive path.
+    const xr = await diagnoseXR();
+    if (xr.ok) {
+      const ok = await enterVR();
+      if (ok) xrSucceeded = true;
+      else log('Continuing in non-immersive fallback', 'warn');
+    } else {
+      log(`WebXR unavailable (${xr.reason}): ${xr.detail}`, 'warn');
+      log('Running flat — frametimes will not reflect stereoscopic cost', 'warn');
+    }
 
-    const frames = await cycleOnce(s, cfg);
-    if (!frames || frames.length === 0) continue;
-    const stats = computeStats(frames);
-    $('hud-fps').textContent = stats.avgFps;
-    results.push({ id: s.id, label: s.label, category: s.category, stats, frames });
-    log(`  → ${stats.medianFt} ms | ${stats.avgFps} fps | drift ${stats.thermalDrift}`, 'ok');
+    // Honour the user's selection — baseline defaults on but is toggleable.
+    // If unticked, marginal-cost columns are null in the export and the
+    // suggestion file is marked invalid (baseline-missing).
+    const selectedIds = new Set(getSelectedIds(refs.pickList));
+    const shaders = registry.filter(s => selectedIds.has(s.id) && !s.disabled);
+    // If selected, baseline runs first so subsequent shaders can subtract.
+    shaders.sort((a, b) => (a.id === 'ref_baseline' ? -1 : b.id === 'ref_baseline' ? 1 : 0));
+
+    log(`Running ${shaders.length} shaders, ${cfg.cycleMs}ms per cycle`);
+
+    for (let i = 0; i < shaders.length; i++) {
+      if (cancel) break;
+      const s = shaders[i];
+      $('hud-shader').textContent = s.label;
+      $('hud-progress').textContent = `${i + 1}/${shaders.length}`;
+      $('progress-bar').style.width = `${((i + 1) / shaders.length * 100).toFixed(1)}%`;
+      $('hud-phase').textContent = 'measuring';
+      log(`[${i + 1}/${shaders.length}] ${s.label}…`);
+
+      const frames = await cycleOnce(s, cfg);
+      if (!frames || frames.length < 2) {
+        if (frames) log(`  skipped ${s.label}: only ${frames.length} frame(s) — need ≥2`, 'warn');
+        continue;
+      }
+      const stats = computeStats(frames);
+      $('hud-fps').textContent = stats.avgFps;
+      results.push({ id: s.id, label: s.label, category: s.category, stats, frames });
+      log(`  → ${stats.medianFt} ms | ${stats.avgFps} fps | drift ${stats.thermalDrift}`, 'ok');
+    }
+  } finally {
+    await exitVR();
+    $('hud-phase').textContent = 'done';
+    $('progress-bar').style.width = '100%';
+    log(`Complete: ${results.length} shaders`, 'ok');
+    running = false; cancel = false;
+    $('btn-start').disabled = false; $('btn-stop').disabled = true;
   }
-
-  await exitVR();
-  $('hud-phase').textContent = 'done';
-  $('progress-bar').style.width = '100%';
-  log(`Complete: ${results.length} shaders`, 'ok');
-  running = false; cancel = false;
-  $('btn-start').disabled = false; $('btn-stop').disabled = true;
 
   showResultsPopup(results, cfg, xrSucceeded);
 }
 
 function showResultsPopup(results, cfg, xrSucceeded) {
-  const baseline = results.find(r => r.id === 'ref_baseline');
-  const baselineMs = baseline ? baseline.stats.medianFt : 0;
+  // Shared annotator (idempotent — exportResults runs it again). No
+  // resolution is passed: the headset's real eye-buffer size is unknown
+  // here, so marginal points stay UN-normalized and the suggestion file
+  // is marked invalid (resolution-unknown + raf-delta) — InOut data is
+  // for budget-fit checks and flat↔immersive ratios, not node pricing.
+  annotateMarginalCost(results, {});
   const rows = results.map(r => ({
     label: r.label,
     medianMs: r.stats.medianFt,
-    marginalMs: +(r.stats.medianFt - baselineMs).toFixed(4),
+    marginalMs: r.stats.marginalMs,
     points: r.stats.points,
   }));
 
@@ -333,10 +357,14 @@ function showResultsPopup(results, cfg, xrSucceeded) {
 
   const payload = {
     metadata: {
+      schemaVersion: 2,
       bench: 'inout',
       tool: 'ShaderCarousel — Sphere InOut',
       mode: 'immersive-webxr',
       xrEntered: xrSucceeded,
+      timingMethod: 'raf-delta',
+      stereo: xrSucceeded,
+      clockPinned: null,
       date: new Date().toISOString(),
       userAgent: navigator.userAgent,
       headset: headsetName,

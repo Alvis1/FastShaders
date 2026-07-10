@@ -25,10 +25,12 @@ ShaderCarousel/
 ├── index.html                  # launcher — full-screen iframe + adopted sidebar
 ├── lib/
 │   ├── bench-style.css         # unified theme for all three benches
-│   ├── bench-stats.js          # computeStats (IQR-filtered) + exportResults
+│   ├── bench-stats.js          # computeStats + two-level slope per-pass cost + REF_PIXELS-normalized marginal points + validity-gated complexity-suggestion export (schema v2)
+│   ├── bench-timing.js         # shared GPU timing (Static + MicroPlane): GPU timestamp queries via r184 trackTimestamp with a wall-clock-fence fallback; two-level N/2N slope; pairs-per-pass + 100 µs-quantization detection
 │   ├── bench-registry.js       # canonical corpus (baseline + presets + noises + saved)
 │   ├── bench-ui.js             # picker, settings, start gate, done popup, headset detect
 │   └── three/                  # Three.js r184 WebGPU ESM (three.webgpu.js, three.tsl.js, three.core.js — regenerated from node_modules/three@0.184)
+├── benchData/                  # committed calibration runs (raw JSON + suggestion JSON per device-slug); currently only a README — the loop is NOT yet closed (no measured run committed)
 ├── components/three/
 │   └── a-frame-180-a-01.min.js # A-Frame 1.8.0 IIFE, r184 WebGPU (synced from a-frame-shaderloader/js/ by fs-vendor-sync; only the InOut bench uses this)
 ├── sphere-mover.js             # A-Frame component — linear ping-pong z animation (InOut only)
@@ -77,8 +79,8 @@ mirroring real VR content where shaders run on geometry at varied distances.
 | Backend | `THREE.WebGPURenderer`, antialias off, `high-performance` power preference |
 | Geometry | Sphere @ `fullCoverageScale = 2.0` at z = −5, every pixel runs the shader |
 | Resolution | **2064 × 2208** — Quest 3 per-eye target, so numbers are directly comparable to InOut |
-| GPU sync | `device.queue.onSubmittedWorkDone()` after each multi-pass batch |
-| Multi-pass | **≥30 passes per measurement** (minimum; `calibratePasses` adaptively bumps per-shader up to `CALIBRATE_MAX_PASSES` 4000 so each measurement spans ~`CALIBRATE_TARGET_MS` 20 ms), render in tight loop → one fence → divide elapsed by N. The actual count is exported as `calibratedPasses` |
+| GPU timing | `lib/bench-timing.js` — **GPU timestamp queries** (three r184 `trackTimestamp` + `resolveTimestampsAsync`) when the adapter exposes `timestamp-query`, else a wall-clock fence (`device.queue.onSubmittedWorkDone()`). `timingMethod` (`gpu-timestamp` \| `wallclock-fence`) is exported per run |
+| Multi-pass | **Two-level slope**: each shader is measured at N and 2N passes/batch (`bench-timing.calibrate` bumps N per-shader until a batch spans ~`CALIBRATE_TARGET_MS` 20 ms). Per-pass cost = (median(total@2N) − median(total@N)) / N, so the fixed per-batch overhead C cancels exactly (the old single-level divide-by-N left C/N in every marginal). `passesLo`/`passesHi` are exported |
 | Why multi-pass | A single render at desktop refresh clamps to the vsync floor (8.3 ms @ 120 Hz). 30×+ amplifies the per-pass cost above that floor — the technique Table 2's macOS column uses |
 
 Best run on macOS with M-class GPUs to recover the fragment cost numbers the
@@ -90,9 +92,9 @@ paper reports. Outputs feed directly into the complexity-suggestion file.
 |---|---|
 | Backend | `THREE.WebGPURenderer`, ortho camera |
 | Geometry | 2 × 2 plane covering the framebuffer |
-| Resolution | **1024 × 1024** by default (raised from 512² so cheap atomics clear `performance.now()` ~1 ms quantization) — large enough to be measurable, ALU still dominates over bandwidth |
-| GPU sync | Same `onSubmittedWorkDone` fence |
-| Multi-pass | ≥30 passes × 60 frames per shader (passes adaptively calibrated per-shader up to 4000 to span ~20 ms) |
+| Resolution | **1024 × 1024** by default (raised from 512² so cheap atomics clear `performance.now()` ~1 ms quantization) — large enough to be measurable, ALU still dominates over bandwidth. Marginal ms is scaled by `REF_PIXELS / (w·h)` before the point conversion, so 1024² points land in the same 2064×2208 currency as Static (this corrects the old ~4.35× deflation) |
+| GPU timing | Same `lib/bench-timing.js` — GPU timestamp queries with wall-clock-fence fallback |
+| Multi-pass | Same **two-level N/2N slope** as Static. `input-frames` (default 60) is now the number of measurement **pairs** per shader (one N batch + one 2N batch each), run interleaved ABAB so thermal drift hits both levels symmetrically |
 | Default corpus | **8 noise atomics + baseline** — atomic shaders are what allow per-node cost recovery by subtraction. Presets are available but unchecked by default; the Static bench is where compositions belong |
 | Immersive | **No** — microbench is sensitive to thermal & scheduler variance; immersive XR adds noise |
 
@@ -118,28 +120,54 @@ The baseline always runs first — the picker forces its checkbox on and disable
 
 Per shader, `computeStats` returns:
 
-- `medianFt`, `meanFt`, `p95Ft`, `p99Ft` from an IQR-filtered sample (Q1 − 1.5·IQR, Q3 + 1.5·IQR fence)
+- `medianFt`, `meanFt` — median / mean from an IQR-filtered sample (Q1 − 1.5·IQR, Q3 + 1.5·IQR fence, keeps the median robust)
+- `p95Ft`, `p99Ft` — tail percentiles from the **UNFILTERED** sample (computing tails on the trimmed set made spikes invisible by construction)
 - `sdFt`, `cvPercent` — dispersion and coefficient of variation
 - `points = round(medianFt / 8.33 × 100)` — same anchor across all three benches
 - `thermalDrift` — mean of second half ÷ mean of first half; > 1 means the bench got slower as it ran
 - `outlierCount`, `frameCount`, `filteredCount` for transparency
+- an `n < 2` sample returns the **full stats shape** with `insufficientData: true` (never partial/undefined fields), so downstream CSV/annotation can't silently zero a marginal
 
-`annotateMarginalCost` then adds `baselineMs`, `marginalMs`, `marginalPoints`
-to each result. `marginalMs = medianFt − baselineMs` is the shader's
-contribution above scene + driver fixed overhead — the right quantity to use
-when assigning points in `complexity.json`.
+For the WebGPU benches, `statsFromTwoLevelRun` is the authoritative reducer:
+it feeds the hi-level per-pass values through `computeStats` for dispersion,
+then overwrites `msPerPass` (and recomputes `points`) from the **two-level
+slope** — overhead-free, unlike a median divided by its pass count.
+
+`annotateMarginalCost` then adds `baselineMs`, `marginalMs`, `marginalMsAtRef`,
+`marginalPoints` to each result. `marginalMs = (msPerPass ?? medianFt) −
+baselineMs` is the shader's contribution above scene + driver fixed overhead;
+`marginalMsAtRef = marginalMs × REF_PIXELS / measuredPixels` normalizes it into
+the 2064×2208 currency, and `marginalPoints` converts that via the 8.33 ms
+anchor — the right quantity to assign in `complexity.json`. **When the baseline
+is missing, the marginal fields are `null`** (they no longer silently fall back
+to raw medians, which used to export as clean-looking-but-wrong suggestions).
+
+`buildSuggestion` gates each run: `metadata.valid` is `true` only when it can
+honestly price nodes. Otherwise `valid: false` + machine-readable `reasons[]`
+(`baseline-missing`, `vsync-clamped`, `resolution-unknown`, `raf-delta timing`,
+`insufficient-data`), so a suggestion file can never look clean while its
+numbers are garbage. `detectVsyncClamping` flags runs whose shaders cluster
+tightly around a known refresh period (chiefly an InOut hazard).
 
 `exportResults` writes three files per run:
 
-1. **Raw JSON** — every captured frame + per-shader stats + run metadata (device, GPU, headset, config)
-2. **Summary CSV** — one row per shader, all stats flattened, ready for pivot tables
-3. **complexity-suggestion JSON** — `{ id, label, category, medianMs, marginalMs, suggestedPoints }` per shader. Drop this next to `src/registry/complexity.json` and diff to see what the device-measured points would be
+1. **Raw JSON** — every captured frame/batch + per-shader stats + run metadata (schema v2: `timingMethod`, `quantized`, `adapterInfo`, `stereo`, `clockPinned`, `resolution`, `resolutionScale`, `refPixels`)
+2. **Summary CSV** — one row per shader, all stats flattened (incl. `msPerPass`, `marginalMsAtRef`), ready for pivot tables
+3. **complexity-suggestion JSON** — `{ id, label, category, medianMs, msPerPass, marginalMs, marginalMsAtRef, suggestedPoints }` per shader plus the validity metadata block. Drop this next to `src/registry/complexity.json` and diff — **check `metadata.valid`/`reasons` first**. Commit the raw + suggestion JSON into `benchData/<device-slug>/`; browser downloads evaporate and the loop stays open otherwise
 
 ## Calibration loop (closing the paper's gap)
 
+> **Status (2026-07): the loop has never been closed.** The Phase 0 timing
+> infrastructure is in place (GPU timestamps, two-level slope, REF_PIXELS
+> normalization, validity gating, schema v2, `benchData/`), but **no measured
+> run has been committed** — `benchData/` holds only its README, and every
+> number in `complexity.json` is still hand-guessed. The next step is
+> mechanical: run MicroPlane + Static on desktop Chrome, commit the artifacts,
+> update the noise-family prices with `source: 'measured-desktop-flat'`.
+
 The intended workflow for re-calibrating `complexity.json`:
 
-1. Run **MicroPlane** on a desktop with stable WebGPU (e.g. macOS M-series). Subtract the baseline median from each atomic noise → marginal ms per primitive node. Convert via the `8.33 ms / 100 pts` anchor.
+1. Run **MicroPlane** on a desktop with stable WebGPU (e.g. macOS M-series, or Chrome with `chrome://flags/#enable-webgpu-developer-features` to unquantize the 100 µs GPU timestamps). The two-level slope gives marginal ms per primitive node directly; convert via the `8.33 ms / 100 pts` anchor (already normalized to REF_PIXELS in the export).
 2. Run **Sphere Static** on the same device. The presets are compositions of the atomics — comparing measured composition cost vs. summed atomic cost is the regression input for the "combinations of nodes" work § 6 calls out.
 3. Run **Sphere InOut** on a Meta Quest 3 in immersive mode. The ratio of InOut median to Static median quantifies the foveal + stereo + driver immersive overhead — the missing factor in the paper's § 5.2 limitation.
 4. Diff each run's `*-complexity-suggestion-*.json` against the current `complexity.json` to see deltas per-node.
@@ -154,8 +182,8 @@ Picked from the existing `face/bench.js` calibration loop + the
 | Setting | InOut | Static | MicroPlane | Why |
 |---|---|---|---|---|
 | Duration / cycle | 10 s | 6 s | — | InOut: one full sphere-mover ping-pong; Static: enough to drain compile noise; Micro: bounded by frames |
-| Frames per shader | (cycle-driven) | 30 | 60 | More micro frames because per-shader cost is smaller → higher relative jitter |
-| Passes per measurement | 1 (rAF) | ≥30 (adaptive) | ≥30 (adaptive) | 30 minimum; `calibratePasses` raises it per-shader up to 4000 to span ~20 ms, amplifying cost above the vsync floor (paper Table 2 macOS) |
+| Frames per shader | (cycle-driven) | 30 | 60 | For Static/MicroPlane this is the number of measurement **pairs** (one N + one 2N batch each). More micro pairs because per-shader cost is smaller → higher relative jitter |
+| Passes per measurement | 1 (rAF) | ≥30 (adaptive N, two-level) | ≥30 (adaptive N, two-level) | 30 = minimum N; `bench-timing.calibrate` raises N per-shader (timestamp mode caps at ~500/1000 by the query-pool budget; wall-clock mode at 4000) to span ~20 ms, then measures N and 2N for the slope (paper Table 2 macOS) |
 | Warmup | 200 ms | 5 passes | 5 passes | Compile / texture upload spike skip |
 | Log stride | every frame | every frame | every frame | Thinning happens at export, not capture — losing samples kills stats budget |
 | Render size | per-eye XR | 2064 × 2208 | 1024 × 1024 | InOut: platform-driven; Static: matches XR for direct comparison; Micro: ALU-bound |

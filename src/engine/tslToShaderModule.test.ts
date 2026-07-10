@@ -165,3 +165,35 @@ describe('round-trip: export → scriptToTSL recovers the original channels', ()
     expect(back).toContain('return { color: mix1 };');
   });
 });
+
+describe('scriptToTSL pass-through: raw editor-style TSL is returned unchanged', () => {
+  const RAW_TSL = [
+    'import { Fn, vec3, uv, mx_noise_float, uniform } from "three/tsl";',
+    '',
+    'const shader = Fn(() => {',
+    '  const scale = uniform(2);',
+    '  const n = mx_noise_float(uv().mul(scale));',
+    '  return { color: vec3(n, n, n) };',
+    '});',
+    '',
+    'export default shader;',
+    '',
+  ].join('\n');
+
+  it('returns editor-shaped TSL byte-identical (no body loss)', () => {
+    // Without the pass-through, the conversion loop only recognises the
+    // `export default function` module shape and silently drops the whole
+    // Fn body — a raw-TSL drop imported as an empty graph.
+    expect(scriptToTSL(RAW_TSL)).toBe(RAW_TSL);
+  });
+
+  it('still converts a module that CONTAINS nested Fn wrappers', () => {
+    // The __pixel discard form has Fn( inside the module wrapper — it must
+    // take the conversion path, not the pass-through.
+    const exported = tslToShaderModule(COLOR_DISCARD);
+    expect(exported).toContain('export default function');
+    const back = scriptToTSL(exported);
+    expect(back).toContain('const shader = Fn(() => {');
+    expect(back).not.toContain('export default function');
+  });
+});

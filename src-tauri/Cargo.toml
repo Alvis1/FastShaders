@@ -1,0 +1,29 @@
+# Desktop shell for FastShaders (Tauri v2). The app version shipped to users
+# comes from ../package.json via tauri.conf.json — the crate version below is
+# intentionally static so releases only ever bump package.json.
+[package]
+name = "fastshaders"
+version = "0.0.0"
+description = "FastShaders — TSL visual shader editor (desktop shell)"
+authors = ["Alvis Misjuns"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+# LAN bench server (see src/bench_server.rs): tiny sync HTTP file server +
+# routing-table LAN-IP lookup + URL path decoding.
+tiny_http = "0.12"
+local-ip-address = "0.6"
+percent-encoding = "2"
+
+[profile.release]
+# Small-binary settings: the shell is a thin webview host, favor size.
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

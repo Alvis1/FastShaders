@@ -69,19 +69,61 @@
   display: block;
 }
 
-/* Value(s) arriving on a connected input edge, shown beside the socket */
+/* Value(s) arriving on a connected input edge, shown beside the socket.
+   Font size matches the compact DragNumberInput value (7.7px mono) so every
+   number on a node — editable box or live edge value — reads at ONE size. */
 .shader-node__edge-val {
-  font: 600 calc(9px * var(--node-text-scale, 1)) var(--font-mono);
+  font: 600 calc(7.7px * var(--node-text-scale, 1)) var(--font-mono);
   color: rgba(0, 0, 0, 0.6);
   white-space: nowrap;
 }
 
-/* Output port label (CSV column headers on the Data node) shown beside the socket */
+/* Output port label (CSV column headers on the Data node) shown beside the
+   socket. Wraps so long column headers stay inside the node. */
 .shader-node__out-label {
   font: 600 calc(9px * var(--node-text-scale, 1)) var(--font-mono);
   color: rgba(0, 0, 0, 0.6);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: right;
+  max-width: 120px;
   margin-right: 2px;
+}
+
+/* Source CSV filename shown under the Data node's header (wraps if long). */
+.shader-node__file-name {
+  font: 500 calc(8px * var(--node-text-scale, 1)) var(--font-mono);
+  color: var(--text-secondary);
+  padding: 2px 6px 0;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 180px;
+}
+
+/* Input-port label on the Image node's rows (UV / Tile X / Offset Y …) — the
+   sockets identify themselves by name; the editable numbers live in the
+   context menu only. */
+.shader-node__in-label {
+  font: 600 calc(9px * var(--node-text-scale, 1)) var(--font-mono);
+  color: rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  margin-left: 2px;
+}
+
+/* Image node: embedded-image thumbnail under the header. The size cap is
+   load-bearing — .node-base is width:fit-content, so an unbounded <img> would
+   let the payload dictate node width. No shadow/background/hover of its own:
+   stack layers stay the only depth cue and sockets must never move. */
+.shader-node__image-thumb {
+  display: block;
+  max-width: 180px;
+  max-height: 120px;
+  width: auto;
+  height: auto;
+  margin: 4px 6px 2px;
+  border-radius: 2px;
+  pointer-events: none;
 }
 
 /* ===== Operator layout (2-input glyph node: glyph BETWEEN the two inputs) ===== */

@@ -3,7 +3,7 @@ import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, ParseError, ShaderNodeData } from '@/types';
 import { getNodeValues } from '@/types';
-import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType } from '@/registry/nodeRegistry';
+import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import complexityData from '@/registry/complexity.json';
 import { VALID_SWIZZLE } from './graphToCode';
@@ -487,7 +487,26 @@ function processCall(
 
   for (let i = 0; i < callExpr.arguments.length; i++) {
     const arg = callExpr.arguments[i];
-    const port = def.inputs[inputIdx + i];
+    // Chainable (variadic arithmetic) calls carry more args than the two static
+    // registry ports — synthesize the extra operand ports (c, d, …) so the whole
+    // `add(a, b, c, d)` chain wires up instead of stopping at `b`.
+    const portIndex = inputIdx + i;
+    // graphToCode's effectiveInputs caps chains at MAX_CHAIN_OPERANDS, so any
+    // operand past that would be silently dropped on the next graph→code pass —
+    // changing the computed value (worse for sub/div). Stop here and warn
+    // instead of round-tripping into a different expression.
+    if (def.chainable && portIndex >= MAX_CHAIN_OPERANDS) {
+      errors.push({
+        message: `"${funcName ?? def.type}" has more than ${MAX_CHAIN_OPERANDS} operands; the extras are ignored.`,
+        line: callExpr.loc?.start.line,
+        severity: 'warning',
+      });
+      break;
+    }
+    const port = def.inputs[portIndex]
+      ?? (def.chainable
+        ? { id: chainPortId(portIndex), label: chainPortId(portIndex).toUpperCase(), dataType: 'any' as const }
+        : undefined);
 
     const literalValue = extractLiteral(arg);
 
