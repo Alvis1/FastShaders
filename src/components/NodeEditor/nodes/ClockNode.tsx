@@ -30,7 +30,9 @@ export const ClockNode = memo(function ClockNode({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    // willReadFrequently keeps the canvas CPU-backed: an accelerated canvas
+    // layer makes Safari rasterize the zoomed viewport at 1× (all-node blur).
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
     const size = CLOCK_SIZE;
     const cx = size / 2;

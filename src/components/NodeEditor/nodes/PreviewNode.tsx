@@ -133,7 +133,10 @@ export const PreviewNode = memo(function PreviewNode({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !NOISE_TYPES.has(data.registryType) || hasAnyTime) return;
-    const ctx = canvas.getContext('2d');
+    // willReadFrequently keeps these canvases CPU-backed (both effects): an
+    // accelerated canvas layer makes Safari rasterize the zoomed viewport at
+    // 1× and stretch the bitmap — every node goes blurry.
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
     const resolved = resolveValues(nodes, edges, 0);
     const imageData = renderNoisePreview(data.registryType as NoiseType, PREVIEW_SIZE, resolved, 0, {});
@@ -149,7 +152,7 @@ export const PreviewNode = memo(function PreviewNode({
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !NOISE_TYPES.has(data.registryType) || !hasAnyTime) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
 
     let rafId: number;
