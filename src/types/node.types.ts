@@ -32,7 +32,19 @@ export interface NodeDefinition {
   outputs: PortDefinition[];
   defaultValues?: Record<string, string | number>;
   description?: string;
+  /**
+   * Variadic operand node (arithmetic add/sub/mul/div): renders a growing list
+   * of input sockets — one extra empty socket appears below the last wired
+   * operand — and emits a variadic TSL call (`add(a, b, c, …)`). See
+   * `effectiveInputs` in the registry for the socket-count rule.
+   */
   chainable?: boolean;
+  /**
+   * Identity operand for a `chainable` node: the value an unconnected socket
+   * contributes to the fold (0 for add/sub, 1 for mul/div). Also seeds the
+   * inline default shown in each empty operand box. Only read when `chainable`.
+   */
+  chainIdentity?: number;
 }
 
 export interface ShaderNodeData {
@@ -120,8 +132,9 @@ export interface GroupNodeData {
 /**
  * Free-floating annotation ("sticky note") placed on the canvas. Has no shader
  * semantics — graphToCode/cpuEvaluator ignore it (no registry entry) — so it's
- * purely a comment. Resizable via NodeResizer (width/height live on the React
- * Flow node), recolorable, with a scalable heading + body.
+ * purely a comment. Resizable from the bottom-right corner via NodeResizeControl
+ * (width/height live on the React Flow node), recolorable, with a scalable
+ * heading + body.
  */
 export interface NoteNodeData {
   registryType: 'note';

@@ -54,6 +54,21 @@ describe('binaryCodec: half-float', () => {
     }
   });
 
+  it('round-trips NaN and ±Infinity', () => {
+    expect(Number.isNaN(fromHalfFloat(toHalfFloat(NaN)))).toBe(true);
+    expect(fromHalfFloat(toHalfFloat(Infinity))).toBe(Infinity);
+    expect(fromHalfFloat(toHalfFloat(-Infinity))).toBe(-Infinity);
+  });
+
+  it('saturates large finite values to ±Infinity (not NaN)', () => {
+    expect(fromHalfFloat(toHalfFloat(70000))).toBe(Infinity);
+    expect(fromHalfFloat(toHalfFloat(1e30))).toBe(Infinity);
+    expect(fromHalfFloat(toHalfFloat(-70000))).toBe(-Infinity);
+    // The raw bit patterns are exactly the Inf encodings, never NaN.
+    expect(toHalfFloat(70000)).toBe(0x7c00);
+    expect(toHalfFloat(-70000)).toBe(0xfc00);
+  });
+
   it('float16ToBase64 produces 2 bytes/sample and decodes back', () => {
     const values = [0, 0.5, 1];
     const b64 = float16ToBase64(values);

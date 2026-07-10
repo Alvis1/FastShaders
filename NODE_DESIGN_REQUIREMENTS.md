@@ -155,6 +155,54 @@ socket existence/type, or live-canvas behavior).
     ranges: normals/tangents/view directions `-1…1` per channel;
     `positionGeometry`/`positionLocal` `-0.8…0.8` → displayed `-1…1`.
 
+## Exposed parameter sockets (`exposedPorts`)
+
+One rule for every node with optional parameters — noise (`pos`, `scale`, …),
+the output node's channels, and the Image node (`uv`, `tileX/tileY`,
+`offsetX/offsetY`):
+
+- Parameter sockets are **hidden by default** and opt-in: each parameter gets a
+  checkbox in the node's settings menu; checking it renders the socket, and
+  unchecking removes the socket **and its edges** (`removeEdgesForPort`).
+- A **wired edge always overrides the stored value** for that parameter.
+- **Auto-expose**: parameters that arrive with edges already attached
+  (code→graph sync, project import, localStorage load) are exposed
+  automatically so no edge ever points at a hidden socket.
+- **Drag proximity tooltips**: while an output wire is dragged within
+  snapping distance of a node with named input sockets
+  (`connectionReveal.ts` — the reveal radius IS the editor's snap radius,
+  one shared `CONNECTION_RADIUS` constant; the pointer position is
+  converted screen→flow with the viewport transform first), every input
+  socket forces its name-tooltip visible — **floated to the LEFT of the
+  socket, behind it** (`.typed-handle--reveal`, TypedHandle's `reveal`
+  prop) — so every target is readable while the socket and wire endpoint
+  stay unobstructed. Opted OUT (hover tooltips still work): **operator
+  cards** (arithmetic, dot/cross/distance — generic a/b operands are
+  noise), the **Output node** and **collapsed groups** (their rows/sockets
+  already carry permanent labels).
+- **Drag-to-reveal (noise + Image only)**: within the same radius, the
+  node's hidden parameter sockets mount as **floating dots on the card's
+  left edge** (`RevealSockets.tsx`, evenly spread 25–75 % of the card
+  height), dimmed (`REVEAL_TEMP_OPACITY`) and named by their forced
+  tooltips. The card's resting layout (rows, thumbnail) **never changes**
+  during a reveal — temp sockets are never rows. Landing the connection
+  makes that port's exposure **permanent** (`exposeConnectedTarget`,
+  shared by connect AND reconnect gestures, one undo step with the edge);
+  releasing elsewhere hides them again. **The Output node does NOT
+  drag-reveal its hidden channels** — they are exposed only via
+  ShaderSettingsMenu (or auto-exposed when an edge arrives through
+  sync/import). NB
+  the Output node's default-exposed channels are implicit — every
+  auto-expose union starts from `effectiveExposedPorts()`
+  (`src/utils/exposedPorts.ts`), never `[]`.
+- Exposing/hiding must re-measure React Flow handles — key the
+  `updateNodeInternals` effect on the joined exposed-port ids plus the
+  reveal flag (`exposedKey`), not the count: reveal sockets mount mid-drag
+  and must enter React Flow's bounds map to be snappable.
+- On the card, an exposed Image-node parameter row shows its **port label
+  only** (`.shader-node__in-label`) — parameter values are edited in the
+  settings menu, never inline on the card.
+
 ## Node Designer tool (`node-designer.html`)
 
 18. **Dropdown of existing nodes** (grouped by category) with **search filter**

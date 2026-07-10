@@ -1,5 +1,6 @@
-import { memo, useEffect, useRef, useCallback } from 'react';
-import { Position, type NodeProps } from '@xyflow/react';
+import { memo, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Position, useStore, type NodeProps } from '@xyflow/react';
+import { makeConnectionRevealSelector } from './connectionReveal';
 import type { MathPreviewFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
@@ -34,6 +35,12 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+
+  // A wire hunting nearby forces the input socket's name-tooltip visible
+  // (floated left of the dot) — same rule as every node with input sockets.
+  const near = useStore(
+    useMemo(() => makeConnectionRevealSelector(id, true), [id]),
+  );
 
   const func = MATH_FUNCTIONS[data.registryType] ?? Math.sin;
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
@@ -150,6 +157,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
               id={def.inputs[0].id}
               dataType={def.inputs[0].dataType}
               label={def.inputs[0].label}
+              reveal={near}
             />
           )}
           {!hasConnection && (

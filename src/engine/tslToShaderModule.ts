@@ -36,7 +36,7 @@ export interface PropertyInfo {
 const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js';
 
 /** Build the usage-comment header prepended to the exported module. */
-function buildHeader(props: PropertyInfo[]): string[] {
+function buildHeader(props: PropertyInfo[], tslCode = ''): string[] {
   const hasProps = props.length > 0;
   const header: string[] = [
     '// TSL Shader Module — for use with a-frame-shaderloader',
@@ -73,6 +73,11 @@ function buildHeader(props: PropertyInfo[]): string[] {
   }
   header.push('//');
   header.push('// Also usable directly with Three.js, or any bundler that resolves \'three/tsl\'.');
+  if (tslCode.includes('data:image/')) {
+    header.push('//');
+    header.push('// This shader embeds image texture(s) as data: URLs. If the host page sets a');
+    header.push('// Content-Security-Policy, its img-src directive must allow data:.');
+  }
   return header;
 }
 
@@ -84,7 +89,7 @@ export function tslToShaderModule(
   const props = properties ?? [];
   return buildShaderModule(tslCode, {
     materialSettings,
-    header: buildHeader(props),
+    header: buildHeader(props, tslCode),
     properties: props,
   });
 }

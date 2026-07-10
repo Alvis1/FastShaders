@@ -218,9 +218,24 @@ AFRAME.registerComponent("shader", {
       this.disposeShaderMaterial();
       this._shaderMaterial = material;
       this.applyMaterialToMesh(mesh, material);
+      // Announce success so embedding pages (editor preview, viewer) can
+      // clear any error overlay. Bubbles like every A-Frame entity event.
+      this.el.emit("shader-applied", { src: tslPath });
     } catch (err) {
+      // Staleness guard, mirroring the success path: a superseded apply's
+      // late failure must not revert the material a newer apply installed,
+      // nor surface a stale error over a shader that is rendering fine.
+      if (this._currentSrc !== tslPath) {
+        return;
+      }
       console.error(`Failed to load TSL shader from ${tslPath}`, err);
       this.restoreOriginalMaterials(mesh);
+      // Surface the failure as a DOM event — console.error alone leaves
+      // embedding pages with a silently-fallback material and no signal.
+      this.el.emit("shader-error", {
+        src: tslPath,
+        message: (err && err.message) || String(err),
+      });
     }
   },
   storeOriginalMaterials: function (mesh) {

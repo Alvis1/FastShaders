@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
-import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
 import type { PreviewFlowNode, NodeCategory, AppNode, TSLDataType } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
@@ -63,12 +64,26 @@ export const PreviewNode = memo(function PreviewNode({
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const updateNodeInternals = useUpdateNodeInternals();
 
-  // Tell React Flow to re-measure handles whenever the exposed-port set changes.
-  // Without this, dynamically mounted handles (e.g. `pos` after the user toggles
-  // it on, or after an edge is auto-attached) aren't in React Flow's bounds map,
-  // so any edge connected to them silently fails to render until the page is
-  // reloaded and every handle is measured from scratch.
-  const exposedKey = (data.exposedPorts ?? []).join('|');
+  // An approaching wire reveals ALL param sockets (names on their tooltips)
+  // so any parameter can be wired without a menu round-trip; landing the
+  // connection makes the exposure permanent (onConnect auto-expose).
+  const revealHidden = useStore(
+    useMemo(() => makeConnectionRevealSelector(id, true), [id]),
+  );
+  // Param sockets = permanently exposed ports, plus (while revealing) every
+  // exposable param from the registry defaults. Temporary ones render dimmed.
+  const exposedList = data.exposedPorts ?? [];
+  const paramPorts = useMemo(() => {
+    if (!revealHidden) return exposedList;
+    const all = new Set([...exposedList, ...Object.keys(def.defaultValues ?? {})]);
+    return Array.from(all);
+  }, [revealHidden, exposedList.join('|'), def]);
+
+  // Tell React Flow to re-measure handles whenever the RENDERED port set
+  // changes (settings toggle, auto-attach, or the drag reveal). Without this,
+  // dynamically mounted handles aren't in React Flow's bounds map, so edges
+  // connected to them silently fail to render until a full re-measure.
+  const exposedKey = paramPorts.join('|');
   useEffect(() => {
     updateNodeInternals(id);
   }, [id, exposedKey, updateNodeInternals]);
@@ -183,12 +198,21 @@ export const PreviewNode = memo(function PreviewNode({
         />
       </div>
 
-      {/* Input handles — static + exposed dynamic ports on left side */}
+      {/* Input handles — static + exposed dynamic ports on left side (plus,
+          while a wire is nearby, every hidden param — dimmed — so the drag
+          can snap to it). During the reveal EVERY input socket forces its
+          name-tooltip visible, floated left of the dot, so the user can read
+          each target while aiming (`reveal` prop). */}
       {(() => {
-        const exposed = data.exposedPorts ?? [];
+        const exposedSet = new Set(exposedList);
         const allInputs = [
-          ...def.inputs.map((p) => ({ id: p.id, dataType: p.dataType, label: p.label })),
-          ...exposed.map((key) => ({ id: key, dataType: (key === 'pos' ? 'vec3' : 'float') as TSLDataType, label: key })),
+          ...def.inputs.map((p) => ({ id: p.id, dataType: p.dataType, label: p.label, temp: false })),
+          ...paramPorts.map((key) => ({
+            id: key,
+            dataType: (key === 'pos' ? 'vec3' : 'float') as TSLDataType,
+            label: key,
+            temp: !exposedSet.has(key),
+          })),
         ];
         return allInputs.map((input, i) => (
           <TypedHandle
@@ -198,7 +222,11 @@ export const PreviewNode = memo(function PreviewNode({
             id={input.id}
             dataType={input.dataType}
             label={input.label}
-            style={{ top: handleTop(i, allInputs.length) }}
+            reveal={revealHidden}
+            style={{
+              top: handleTop(i, allInputs.length),
+              ...(input.temp ? { opacity: REVEAL_TEMP_OPACITY } : null),
+            }}
           />
         ));
       })()}

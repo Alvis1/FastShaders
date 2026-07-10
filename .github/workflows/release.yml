@@ -1,0 +1,167 @@
+# Release pipeline: push a version tag and everything ships together.
+#
+#   npm version patch            # bumps package.json + creates the vX.Y.Z tag
+#   git push --follow-tags
+#
+# One tag produces, in lockstep (so the web app's baked __APP_VERSION__ and
+# "Local" download links always match the binaries):
+#   - the web app deployed to gh-pages (same as the local `npm run deploy`)
+#   - FastShaders-macOS.dmg               (universal: Apple Silicon + Intel)
+#   - FastShaders-Windows-Setup.exe       (NSIS installer)
+#   - FastShaders-Windows-Portable.zip    (portable: exe + ShaderCarousel resources — see the packaging step)
+# uploaded to a GitHub Release under those FIXED names — the Toolbar's
+# "Local" dropdown links to /releases/latest/download/<name>, which only
+# stays stable if these filenames never change (see DESKTOP_DOWNLOADS in
+# src/components/Layout/Toolbar.tsx; keep the two lists in sync).
+#
+# The release is created as a draft and only published once every asset is
+# uploaded, so /releases/latest never points at a half-populated release.
+#
+# Desktop builds MUST run on native runners: Tauri cannot cross-compile
+# (macOS needs Xcode tooling, the NSIS bundle needs Windows).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  # Gate: nothing ships if the suite fails at the tagged commit.
+  test:
+    name: Test + create draft release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --verify-tag \
+            --title "FastShaders $GITHUB_REF_NAME" \
+            --notes "$(cat <<'EOF'
+          Offline desktop builds — also downloadable from the **Local** button in the [web editor](https://alvis1.github.io/FastShaders/).
+
+          | Platform | File | Notes |
+          | --- | --- | --- |
+          | Windows | `FastShaders-Windows-Setup.exe` | Installer. SmartScreen may show "Windows protected your PC" — click *More info → Run anyway* (the build is unsigned). |
+          | Windows | `FastShaders-Windows-Portable.zip` | Portable build, no install — unzip anywhere and run `FastShaders.exe` (keep the `ShaderCarousel` folder next to it; the VR bench serves it). Needs the WebView2 runtime (preinstalled on Windows 10/11; the app prompts if missing). |
+          | macOS | `FastShaders-macOS.dmg` | Universal (Apple Silicon + Intel). Unsigned: on first launch use System Settings → Privacy & Security → *Open Anyway*, or run `xattr -d com.apple.quarantine /Applications/FastShaders.app`. |
+          EOF
+          )" || echo "release already exists — continuing"
+
+  desktop:
+    name: Desktop (${{ matrix.platform }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            # Universal binary: one .dmg for Apple Silicon + Intel
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            build-args: --target universal-apple-darwin
+          - platform: windows-latest
+            rust-targets: ''
+            build-args: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      # The Tauri CLI exports TAURI_ENV_* to the beforeBuildCommand, which
+      # flips vite.config.ts into the FS_DESKTOP profile (base '/', no CSP
+      # meta, no ShaderCarousel) automatically.
+      #
+      # macOS signing is intentionally absent. To sign + notarize later, add
+      # the secrets and export them here:
+      #   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+      #   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+      # (see https://v2.tauri.app/distribute/sign/macos/)
+      - name: Build desktop app
+        run: npm run tauri build -- ${{ matrix.build-args }}
+      - name: Upload assets (fixed names)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            mv src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg FastShaders-macOS.dmg
+            gh release upload "$GITHUB_REF_NAME" FastShaders-macOS.dmg --clobber
+          else
+            cp src-tauri/target/release/bundle/nsis/*-setup.exe FastShaders-Windows-Setup.exe
+            # The portable artifact is a zip, NOT the bare exe: the LAN bench
+            # server loads ShaderCarousel from resource_dir(), which on
+            # Windows is the exe's own directory — tauri-build lays bundle
+            # resources out NEXT TO the exe (target/release/ShaderCarousel),
+            # it never embeds them in the binary. A bare exe would ship the
+            # VR bench feature permanently broken; zipping the two together
+            # preserves the layout resource_dir() expects.
+            mkdir portable
+            cp src-tauri/target/release/fastshaders.exe portable/FastShaders.exe
+            cp -r src-tauri/target/release/ShaderCarousel portable/ShaderCarousel
+            (cd portable && 7z a ../FastShaders-Windows-Portable.zip .)
+            gh release upload "$GITHUB_REF_NAME" FastShaders-Windows-Setup.exe FastShaders-Windows-Portable.zip --clobber
+          fi
+
+  # The web deploy rides the same tag so the site's __APP_VERSION__ (shown in
+  # the Local dropdown) always matches the binaries users download from it.
+  # `npm run deploy` still works locally for ad-hoc pushes between releases.
+  # Gated on `desktop`, not just `test`: if a desktop leg fails, gh-pages must
+  # NOT advertise a version whose binaries never got published — the site
+  # would point /releases/latest at the previous release indefinitely.
+  web:
+    name: Deploy web app to gh-pages
+    needs: [test, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          force_orphan: true
+
+  publish:
+    name: Publish release
+    needs: [desktop, web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Undraft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

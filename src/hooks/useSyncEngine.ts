@@ -4,9 +4,9 @@ import { graphToCode } from '@/engine/graphToCode';
 import { codeToGraph } from '@/engine/codeToGraph';
 import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import complexityData from '@/registry/complexity.json';
+import { nodeCostPoints } from '@/utils/nodeCost';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
-import { getNodeExposedPorts } from '@/types';
+import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import type { AppNode } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
 
@@ -236,34 +236,10 @@ export function useSyncEngine() {
             finalNodes = [...groupsToKeep, ...withoutGroups];
           }
 
-          // Auto-expose ports that have incoming edges (so handles render)
-          for (const node of finalNodes) {
-            const def = NODE_REGISTRY.get(node.data.registryType);
-            if (!def) continue;
-            // Only applies to nodes that use exposedPorts (noise, output)
-            const usesExposedPorts = def.category === 'noise' || def.type === 'output';
-            if (!usesExposedPorts) continue;
-
-            const connectedPorts = new Set<string>();
-            for (const e of remappedEdges) {
-              if (e.target === node.id && e.targetHandle) {
-                connectedPorts.add(e.targetHandle);
-              }
-            }
-            if (connectedPorts.size === 0) continue;
-
-            const current = new Set<string>(getNodeExposedPorts(node));
-            let changed = false;
-            for (const port of connectedPorts) {
-              if (!current.has(port)) {
-                current.add(port);
-                changed = true;
-              }
-            }
-            if (changed) {
-              (node.data as Record<string, unknown>).exposedPorts = Array.from(current);
-            }
-          }
+          // Auto-expose ports that have incoming edges (so handles render).
+          // Shared with the load/import paths — one predicate, one union rule
+          // (incl. the Output node's implicit default channels).
+          autoExposeConnectedParamPorts(finalNodes, remappedEdges);
 
           setNodes(finalNodes, 'code');
           setEdges(remappedEdges, 'code');
@@ -294,7 +270,6 @@ export function useSyncEngine() {
   // Recalculate complexity (use ref to avoid double-run when updating output node cost)
   const lastCostRef = useRef(-1);
   useEffect(() => {
-    const costs = complexityData.costs as Record<string, number>;
     const outputNode = nodes.find((n) => n.data.registryType === 'output');
 
     let total = 0;
@@ -329,7 +304,9 @@ export function useSyncEngine() {
           if (node.type === 'group' && node.data.collapsed && node.data.cost) {
             total += node.data.cost;
           } else {
-            total += costs[node.data.registryType] ?? 0;
+            // Variadic arithmetic scales with operand count; everything else is
+            // its flat registry cost (see nodeCostPoints).
+            total += nodeCostPoints(node, edges);
           }
         }
       }

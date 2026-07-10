@@ -12,7 +12,7 @@
  */
 import type { AppNode, AppEdge, TSLDataType } from '@/types';
 import { getNodeValues } from '@/types';
-import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { perlin2D, fbm2D, cellNoise2D, voronoi2D } from '@/utils/noisePreview';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -178,6 +178,7 @@ function evaluate(
   if (!node) return null;
 
   const type = node.data.registryType;
+  const def = NODE_REGISTRY.get(type);
   const values = getNodeValues(node);
 
   const nodeEdges = idx.get(nodeId) ?? [];
@@ -227,6 +228,27 @@ function evaluate(
       result.push(fn(a[i % a.length], b[i % b.length]));
     }
     return result;
+  };
+
+  // Variadic fold over a chainable node's effective operands (add/sub/mul/div,
+  // which grow past a/b). Unconnected operands contribute `identity`; channel
+  // vectors broadcast shorter→longer; left-folds to match TSL's a op b op c … .
+  const naryOp = (identity: number, fn: (a: number, b: number) => number): EvalResult => {
+    const connected = nodeEdges
+      .map((e) => e.targetHandle)
+      .filter((h): h is string => typeof h === 'string');
+    const ports = def ? effectiveInputs(def, connected, false, Object.keys(values)) : [];
+    let acc: number[] | null = null;
+    for (const port of ports) {
+      const inp = channelInput(port.id, identity);
+      if (!inp) return null;
+      if (acc === null) { acc = inp.slice(); continue; }
+      const len = Math.max(acc.length, inp.length);
+      const next: number[] = [];
+      for (let i = 0; i < len; i++) next.push(fn(acc[i % acc.length], inp[i % inp.length]));
+      acc = next;
+    }
+    return acc;
   };
 
   let result: EvalResult = null;
@@ -279,11 +301,11 @@ function evaluate(
       break;
     }
 
-    // Arithmetic (component-wise, broadcast)
-    case 'add': result = binaryOp('a', 0, 'b', 0, (a, b) => a + b); break;
-    case 'sub': result = binaryOp('a', 0, 'b', 0, (a, b) => a - b); break;
-    case 'mul': result = binaryOp('a', 1, 'b', 1, (a, b) => a * b); break;
-    case 'div': result = binaryOp('a', 1, 'b', 1, (a, b) => b !== 0 ? a / b : 0); break;
+    // Arithmetic (component-wise, broadcast, variadic — chainable operands)
+    case 'add': result = naryOp(0, (a, b) => a + b); break;
+    case 'sub': result = naryOp(0, (a, b) => a - b); break;
+    case 'mul': result = naryOp(1, (a, b) => a * b); break;
+    case 'div': result = naryOp(1, (a, b) => b !== 0 ? a / b : 0); break;
 
     // Unary math (component-wise)
     case 'sin': result = unaryOp('x', 0, Math.sin); break;
@@ -300,7 +322,10 @@ function evaluate(
     // Binary math
     case 'pow': result = binaryOp('base', 1, 'exp', 1, Math.pow); break;
     case 'mod': result = binaryOp('x', 0, 'y', 1, (a, b) => b !== 0 ? a % b : 0); break;
-    case 'min': result = binaryOp('a', 0, 'b', 0, Math.min); break;
+    // Unwired second operand falls back to the op's IDENTITY, not 0: min(a, 0)=0
+    // would silently zero any non-negative input. 1 is min's identity over [0,1];
+    // 0 is already max's (max(a,0)=ReLU). Matches the registry defaultValues.
+    case 'min': result = binaryOp('a', 1, 'b', 1, Math.min); break;
     case 'max': result = binaryOp('a', 0, 'b', 0, Math.max); break;
     case 'clamp': {
       const x = channelInput('x', 0);
@@ -620,6 +645,25 @@ function computeRange(
     return { min: [num], max: [num] };
   };
 
+  // Interval fold over a chainable node's effective operands (variadic
+  // arithmetic). Mirrors naryOp in evaluate(): unconnected operands contribute
+  // `identity`, left-folded through the per-op interval rule.
+  const naryRange = (
+    identity: number,
+    fn: (amin: number, amax: number, bmin: number, bmax: number) => [number, number],
+  ): RangeResult => {
+    const connected = nodeEdges
+      .map((e) => e.targetHandle)
+      .filter((h): h is string => typeof h === 'string');
+    const ports = effectiveInputs(def, connected, false, Object.keys(values));
+    let acc: RangeResult | null = null;
+    for (const port of ports) {
+      const r = portRange(port.id, identity);
+      acc = acc === null ? r : broadcastRange(acc, r, fn);
+    }
+    return acc ?? { min: [identity], max: [identity] };
+  };
+
   let result: RangeResult | null = null;
 
   // ─── Special-case nodes with analytical ranges ──────────────────────────
@@ -691,38 +735,26 @@ function computeRange(
   // Reached only when eval failed (= upstream contains a texture). We propagate
   // ranges through the most common ops using interval arithmetic.
   switch (type) {
-    case 'add': {
-      const a = portRange('a', 0);
-      const b = portRange('b', 0);
-      result = broadcastRange(a, b, (amin, amax, bmin, bmax) => [amin + bmin, amax + bmax]);
+    case 'add':
+      result = naryRange(0, (amin, amax, bmin, bmax) => [amin + bmin, amax + bmax]);
       break;
-    }
-    case 'sub': {
-      const a = portRange('a', 0);
-      const b = portRange('b', 0);
-      result = broadcastRange(a, b, (amin, amax, bmin, bmax) => [amin - bmax, amax - bmin]);
+    case 'sub':
+      result = naryRange(0, (amin, amax, bmin, bmax) => [amin - bmax, amax - bmin]);
       break;
-    }
-    case 'mul': {
-      const a = portRange('a', 1);
-      const b = portRange('b', 1);
-      result = broadcastRange(a, b, (amin, amax, bmin, bmax) => {
+    case 'mul':
+      result = naryRange(1, (amin, amax, bmin, bmax) => {
         const corners = [amin * bmin, amin * bmax, amax * bmin, amax * bmax];
         return [Math.min(...corners), Math.max(...corners)];
       });
       break;
-    }
-    case 'div': {
-      const a = portRange('a', 1);
-      const b = portRange('b', 1);
-      result = broadcastRange(a, b, (amin, amax, bmin, bmax) => {
+    case 'div':
+      result = naryRange(1, (amin, amax, bmin, bmax) => {
         // If divisor spans 0 the result is unbounded — fall back to [0, 1]
         if (bmin <= 0 && bmax >= 0) return [0, 1];
         const corners = [amin / bmin, amin / bmax, amax / bmin, amax / bmax];
         return [Math.min(...corners), Math.max(...corners)];
       });
       break;
-    }
     case 'oneMinus': {
       const x = portRange('x', 0);
       result = unaryRange(x, (lo, hi) => [1 - hi, 1 - lo]);
@@ -767,8 +799,10 @@ function computeRange(
       break;
     }
     case 'min': {
-      const a = portRange('a', 0);
-      const b = portRange('b', 0);
+      // Identity fallback (1), matching the evaluator and registry defaults —
+      // an unwired operand is min's identity over [0,1], not the annihilator 0.
+      const a = portRange('a', 1);
+      const b = portRange('b', 1);
       result = broadcastRange(a, b, (amin, amax, bmin, bmax) => [
         Math.min(amin, bmin),
         Math.min(amax, bmax),

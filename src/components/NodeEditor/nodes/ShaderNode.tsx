@@ -1,13 +1,17 @@
-import { memo, useCallback, useMemo, type ChangeEvent, type CSSProperties } from 'react';
-import { Position, type NodeProps } from '@xyflow/react';
+import { memo, useCallback, useEffect, useMemo, type ChangeEvent, type CSSProperties } from 'react';
+import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
-import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
+import { nodeCostPoints } from '@/utils/nodeCost';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { NodeGlyph, hasNodeGlyph, nodeJustify, nodeScale, nodeBox, nodeSockets, nodeTextScale } from './glyphs/NodeGlyph';
 import { evaluateNodeOutput, evaluateNodeRange, getNodeOutputShape } from '@/engine/cpuEvaluator';
+import { makeConnectionRevealSelector } from './connectionReveal';
+import { RevealSockets } from './RevealSockets';
+import { validImageDataUrl } from '@/utils/imageNode';
 import './ShaderNode.css';
 
 function fmtNum(n: number): string {
@@ -230,11 +234,43 @@ export const ShaderNode = memo(function ShaderNode({
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  // A wire being dragged within snapping distance of this node — one shared
+  // signal (see connectionReveal.ts) that drives every proximity behavior:
+  // rows-layout nodes force their input name-tooltips visible (floated left
+  // of each socket) so the user can read their target while aiming (operator
+  // cards opt out — generic a/b labels are noise); chainable arithmetic
+  // mounts its NEXT operand socket; the Image node additionally mounts its
+  // hidden param sockets.
+  const near = useStore(
+    useMemo(() => makeConnectionRevealSelector(id, def.inputs.length > 0), [id, def]),
+  );
+  // Chainable arithmetic exposes its NEXT operand socket only while an output
+  // wire is dragged within reach; at rest the node stays at its wired socket
+  // count — no persistent empty slot cluttering it.
+  const revealGrowth = near && def.chainable === true;
+  // Image node: an approaching wire reveals ALL param sockets (named by their
+  // forced tooltips) so any parameter can be wired without a menu round-trip;
+  // landing the connection makes the exposure permanent (onConnect), releasing
+  // elsewhere hides them again.
+  const revealHidden = near && data.registryType === 'imageNode';
+  // Image node thumbnail: render ONLY the validated data: URL — the stored
+  // value comes from adversarial graph JSON and must never reach <img src>
+  // raw (a remote URL there is a tracking beacon).
+  const imageThumbUrl = useMemo(
+    () => (data.registryType === 'imageNode' ? validImageDataUrl(data.values?.imageB64) : null),
+    [data.registryType, data.values?.imageB64],
+  );
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const costColor = getCostColor(data.cost, costColorLow, costColorHigh);
+  // Variadic arithmetic is priced by operand count (base × operands−1); the
+  // stored data.cost is only its 2-operand base, so recompute live. Everything
+  // else uses its stored cost unchanged.
+  const cost = def.chainable
+    ? nodeCostPoints({ id, type: 'shader', position: { x: 0, y: 0 }, data } as ShaderFlowNode, edges)
+    : data.cost;
+  const costColor = getCostColor(cost, costColorLow, costColorHigh);
   const headerTextColor = getContrastColor(costColor);
-  const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
-  const costScale = getCostScale(data.cost);
+  const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
+  const costScale = getCostScale(cost);
   // Per-node box override (designer): minimum width. Frame style (corner
   // radius, border thickness) is fixed app-wide — only the color varies (category).
   const box = nodeBox(data.registryType);
@@ -250,24 +286,78 @@ export const ShaderNode = memo(function ShaderNode({
     background: 'var(--bg-panel)',
     border: `1.5px solid ${catHex}`,
   };
-  // Exact width override: also lowers min-width so the node can go NARROWER
-  // than its natural fit-content size (header wraps + grows; op body unfloors).
-  if (box.width) {
-    nodeStyle.width = box.width;
-    nodeStyle.minWidth = box.width;
-  }
+  // Exact width override applied below, once we know whether a chainable node
+  // has grown into list mode (which needs a comfortable width, not the compact
+  // designer one).
   // Per-node text scale: multiplies header/value/edge-label font sizes via a
   // CSS variable (layout metrics like the 14px header stay fixed).
   const textScale = nodeTextScale(data.registryType);
   if (textScale !== 1) (nodeStyle as Record<string, string | number>)['--node-text-scale'] = textScale;
   const headerStyle: CSSProperties = { background: costColor };
-  const rows = useMemo(() => buildRows(def, data.dynamicOutputs), [def, data.dynamicOutputs]);
+  // Image node: param sockets follow the SAME opt-in exposedPorts rules as
+  // the noise nodes — hidden until exposed via Node Settings (or auto-exposed
+  // when an edge arrives). The rows layout otherwise ignores exposedPorts,
+  // so filter the registry inputs here. Hidden inputs never mount as rows —
+  // while a dragged wire is nearby (revealHidden) they render as floating
+  // RevealSockets on the left edge instead, so the card layout never changes.
+  const exposedInputs = useMemo(
+    () => new Set(data.exposedPorts ?? []),
+    [data.exposedPorts],
+  );
+  const effDef = useMemo(() => {
+    if (data.registryType !== 'imageNode') return def;
+    // The tile/offset params are context-menu-only for the image node — they
+    // never render as inline widgets. Leaving them in defaultValues makes
+    // buildRows emit one empty setting row per param (dead space under the
+    // thumbnail), so drop them; exposed ports still surface via `inputs`.
+    const inputs = def.inputs.filter((inp) => exposedInputs.has(inp.id));
+    return { ...def, inputs, defaultValues: {} };
+  }, [def, data.registryType, exposedInputs]);
+  const rows = useMemo(() => buildRows(effDef, data.dynamicOutputs), [effDef, data.dynamicOutputs]);
 
   // Track which input ports have edges connected
   const connectedInputs = useMemo(
     () => new Set(edges.filter((e) => e.target === id).map((e) => e.targetHandle)),
     [edges, id],
   );
+
+  // Connected target-handle ids (strings only), used to size a chainable node's
+  // growing operand list.
+  const connectedHandleList = useMemo(
+    () =>
+      edges
+        .filter((e) => e.target === id && typeof e.targetHandle === 'string')
+        .map((e) => e.targetHandle as string),
+    [edges, id],
+  );
+
+  // A chainable (variadic arithmetic) node grows/shrinks its input sockets as
+  // operands are wired. Whenever that count changes, React Flow must re-measure
+  // the handles — their vertical anchors shift and a freshly added socket has no
+  // measured bounds yet — or existing edges snap to stale positions.
+  const updateNodeInternals = useUpdateNodeInternals();
+  const valuedHandleList = useMemo(() => Object.keys(data.values ?? {}), [data.values]);
+  const opSocketCount = def.chainable
+    ? effectiveInputs(def, connectedHandleList, revealGrowth, valuedHandleList).length
+    : def.inputs.length;
+  // The Image node's opt-in sockets re-measure on any exposed-set change (the
+  // count alone can stay equal while the handle ids differ) — same idiom as
+  // PreviewNode's exposedKey. The reveal flag is part of the key: floating
+  // RevealSockets mount mid-drag and must enter React Flow's bounds map to
+  // be snappable.
+  const exposedKey = effDef.inputs.map((inp) => inp.id).join('|') + (revealHidden ? '|R' : '');
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, opSocketCount, exposedKey, updateNodeInternals]);
+
+  // A chainable node with 3+ operands renders as a vertical socket list (the
+  // compact glyph-centered look only fits two). It keeps the SAME authored width
+  // as the 2-op node — growth is vertical only, never wider.
+  const chainListMode = def.chainable === true && opSocketCount > 2;
+  if (box.width) {
+    nodeStyle.width = box.width;
+    nodeStyle.minWidth = box.width;
+  }
 
   // Multi-channel stacked-cards effect: the node stacks only when multi-channel
   // data ARRIVES on its inputs — the widest channel count across connected input
@@ -321,27 +411,46 @@ export const ShaderNode = memo(function ShaderNode({
     [id, data.values, updateNodeData],
   );
 
-  // Operator layout: a 2-input glyph node shows the glyph BETWEEN the two inputs.
-  // Input values stack — `a` above the glyph, `b` below — centered (or justified
-  // per the node's designer override). Output socket is centered on the right.
+  // Operator layout for 2-input glyph nodes. COMPACT (the default, and the only
+  // mode for non-chainable ops): the glyph sits BETWEEN the two inputs — `a`
+  // above, `b` below — output centered on the right. A chainable arithmetic node
+  // with 3+ operands switches to LIST mode: a vertical socket column (no glyph),
+  // each row a value beside its socket, output vertically centered, body growing
+  // with the operand count. See `chainListMode` above.
   if (hasNodeGlyph(data.registryType) && def.inputs.length === 2) {
-    const ins = def.inputs;
-    const justify = nodeJustify(data.registryType);
+    // Chainable arithmetic grows past the two static ports: `effectiveInputs`
+    // appends one empty grow-socket (the editable identity box) below the last
+    // operand — but ONLY while `revealGrowth` is set (a wire is being dragged
+    // near this node). At rest it returns just the wired operands, so a fully
+    // wired a+b stays the compact 2-op look instead of sprouting a dangling
+    // socket. Non-chainable 2-input glyph nodes get their static [a, b] back.
+    const ins = effectiveInputs(def, connectedHandleList, revealGrowth, valuedHandleList);
+    const N = ins.length;
+    const identity = def.chainIdentity ?? 0;
     const scale = nodeScale(data.registryType);
-    // No header-height constant: handles live INSIDE the body container, so
-    // the header may wrap to any number of lines without shifting sockets.
-    // Scale grows the glyph ONLY. Socket/value spacing is fixed: in auto mode
-    // the body keeps its 52px base height and grows just enough to contain a
-    // larger glyph. An explicit designer `height` overrides the body height
-    // without touching the glyph (which may then overflow — designer's call).
     const glyphPx = Math.round(34 * scale);
-    const BODY_H = box.height ?? Math.max(52, glyphPx + 10);
-    // Socket positions are px offsets from the body CENTER (designer-movable,
-    // 4px snap). Defaults reproduce the classic 26% / 74% spots of the 52px body.
-    const sockets = nodeSockets(data.registryType);
-    const DEF_OFF = [-12.5, 12.5];
-    const offOf = (id: string, i: number) => sockets[id] ?? DEF_OFF[i] ?? 0;
-    const outOff = sockets['out'] ?? 0;
+    // COMPACT (N=2): the classic glyph-between-two-inputs operator look — glyph
+    // centered, values centered/designer-justified, designer socket overrides
+    // honored. LIST (N≥3, chainable only): a vertical socket list — no glyph,
+    // sockets evenly stacked, values left of their sockets, output centered, and
+    // the body GROWS with N (the fixed designer height becomes a floor, not a
+    // cap, so operands never spill past the card border).
+    // List-mode rows sit 20% tighter than the classic 2-op spacing.
+    const PITCH = chainListMode ? 19.2 : 25;
+    const BODY_H = chainListMode
+      ? Math.max((N - 1) * PITCH + 26, box.height ?? 52)
+      : (box.height ?? Math.max(52, glyphPx + 10));
+    // Value justification: centered in both modes (designer override may move
+    // it on compact nodes) — numbers always sit in the middle of the node.
+    const justify = chainListMode ? 'center' : nodeJustify(data.registryType);
+    // Socket positions are px offsets from the body CENTER. Compact honors the
+    // designer overrides (a −12 / b +12 / out 0); list ignores them and evenly
+    // spaces every socket, output dead-center.
+    const sockets = chainListMode ? {} : nodeSockets(data.registryType);
+    const DEF_OFF_2 = [-12.5, 12.5];
+    const offOf = (portId: string, i: number) =>
+      sockets[portId] ?? (chainListMode ? -((N - 1) * PITCH) / 2 + i * PITCH : (DEF_OFF_2[i] ?? 0));
+    const outOff = chainListMode ? 0 : (sockets['out'] ?? 0);
     return (
       <div style={wrapStyle}>
         {stackLayers}
@@ -349,7 +458,7 @@ export const ShaderNode = memo(function ShaderNode({
           className={`node-base ${selected ? 'node-base--selected' : ''}`}
           style={nodeStyle}
         >
-        {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
+        {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>}
 
         <div className="node-base__header" style={headerStyle}>
           <span className="node-base__title" style={{ color: headerTextColor }}>
@@ -360,19 +469,28 @@ export const ShaderNode = memo(function ShaderNode({
         </div>
 
         <div className="shader-node__op" style={{ height: BODY_H, ...(box.width ? { minWidth: 0 } : null) }}>
-          <div className="shader-node__op-glyph">
-            <NodeGlyph type={data.registryType} value={Number(data.values?.value ?? 0)} size={34} />
-          </div>
+          {/* Operator glyph only in the compact 2-operand look; the vertical
+              list identifies the op by its header name instead. */}
+          {!chainListMode && (
+            <div className="shader-node__op-glyph">
+              <NodeGlyph type={data.registryType} value={Number(data.values?.value ?? 0)} size={34} />
+            </div>
+          )}
           {ins.map((inp, i) => {
             const top = `${BODY_H / 2 + offOf(inp.id, i)}px`;
             const cls = `shader-node__op-val shader-node__op-val--${justify}`;
+            // Values center via the --center class in both modes.
+            const valStyle = { top };
             if (!connectedInputs.has(inp.id)) {
+              // Unconnected operand — including the trailing grow slot — shows the
+              // editable identity box (0 add/sub, 1 mul/div). Fill it (type or
+              // wire) and the next operand slot appears below.
               return (
-                <div key={`v-${inp.id}`} className={cls} style={{ top }}>
+                <div key={`v-${inp.id}`} className={cls} style={valStyle}>
                   <DragNumberInput
                     compact
                     step={inp.dataType === 'int' ? 1 : undefined}
-                    value={Number(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? 0)}
+                    value={Number(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? identity)}
                     onChange={(v) => handleChange(inp.id, String(inp.dataType === 'int' ? Math.round(v) : v))}
                   />
                 </div>
@@ -381,13 +499,17 @@ export const ShaderNode = memo(function ShaderNode({
             const edge = edges.find((e) => e.target === id && e.targetHandle === inp.id);
             const info = edge ? edgeValueLabel(edge.source, nodes, edges) : null;
             return info ? (
-              <div key={`r-${inp.id}`} className={cls} style={{ top }}>
+              <div key={`r-${inp.id}`} className={cls} style={valStyle}>
                 <span className="shader-node__edge-val" style={info.live ? { color: '#2D6CDF' } : undefined}>{info.text}</span>
               </div>
             ) : null;
           })}
           {/* Handles anchor to the body (not the node top) so a wrapped,
               taller header never shifts socket positions. */}
+          {/* No forced proximity tooltips here: operator cards (arithmetic,
+              dot/cross/distance) have generic a/b operands whose floating
+              labels are pure noise — the glyph-between-sockets look already
+              says where to connect. Hover tooltips still work. */}
           {ins.map((inp, i) => (
             <TypedHandle
               key={`h-${inp.id}`}
@@ -433,7 +555,7 @@ export const ShaderNode = memo(function ShaderNode({
         style={nodeStyle}
       >
       {/* Cost badge above node */}
-      {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
+      {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>}
 
       {/* Header — colored by performance impact (cost) */}
       <div className="node-base__header" style={headerStyle}>
@@ -443,6 +565,20 @@ export const ShaderNode = memo(function ShaderNode({
             : varName ?? data.label}
         </span>
       </div>
+
+      {/* Data/Image node: source filename under the header (wraps if long). */}
+      {(data.registryType === 'dataNode' || data.registryType === 'imageNode') && data.values?.fileName && (
+        <div className="shader-node__file-name" title={String(data.values.fileName)}>
+          {String(data.values.fileName)}
+        </div>
+      )}
+
+      {/* Image node: embedded-image thumbnail (validated URL only — see the
+          imageThumbUrl memo). Sized by CSS, no shadow/hover of its own, so it
+          never fights the socket-static or stack-shadow rules. */}
+      {imageThumbUrl && (
+        <img className="shader-node__image-thumb" src={imageThumbUrl} alt="" draggable={false} />
+      )}
 
       {/* Below-header region: glyph + rows. Wrapping both lets a designer-moved
           output socket position absolutely against this region's center (same
@@ -462,7 +598,11 @@ export const ShaderNode = memo(function ShaderNode({
       <div className="node-base__body">
         {rows.map((row, i) => {
           const inputConnected = row.input ? connectedInputs.has(row.input.id) : false;
-          const showInlineValue = row.input && !inputConnected && !row.settingKey;
+          // Image node's `uv` port never shows an inline number: codegen falls
+          // back to the uv() expression, so an editable scalar here would be a
+          // dead widget (the edge-value label still renders when connected).
+          const showInlineValue =
+            row.input && !inputConnected && !row.settingKey && data.registryType !== 'imageNode';
           // Designer-moved input: its socket + value render detached (below),
           // so this row's left side stays empty.
           const inputMoved = row.input ? sockOv[row.input.id] != null : false;
@@ -497,7 +637,14 @@ export const ShaderNode = memo(function ShaderNode({
                     id={row.input.id}
                     dataType={row.input.dataType}
                     label={row.input.label}
+                    reveal={near}
                   />
+                )}
+                {/* Image node: sockets are identified by their port label — the
+                    editable numbers live in the context menu only (four bare
+                    number boxes under the thumbnail read as noise). */}
+                {row.input && data.registryType === 'imageNode' && (
+                  <span className="shader-node__in-label">{row.input.label}</span>
                 )}
                 {/* Connected input → show the value(s) on the edge next to its socket */}
                 {row.input && inputConnected && (() => {
@@ -522,8 +669,9 @@ export const ShaderNode = memo(function ShaderNode({
                     title={String(Number(data.values.value ?? 0.5).toFixed(2))}
                   />
                 )}
-                {/* Inline setting from defaultValues */}
-                {row.settingKey && row.settingType === 'number' && !inputConnected && !(data.registryType === 'slider' && row.settingKey === 'value') && (
+                {/* Inline setting from defaultValues (imageNode: numbers live
+                    in the context menu only — see the in-label above) */}
+                {row.settingKey && row.settingType === 'number' && !inputConnected && data.registryType !== 'imageNode' && !(data.registryType === 'slider' && row.settingKey === 'value') && (
                   <DragNumberInput
                     compact
                     step={row.input?.dataType === 'int' ? 1 : undefined}
@@ -635,6 +783,7 @@ export const ShaderNode = memo(function ShaderNode({
               id={inp.id}
               dataType={inp.dataType}
               label={inp.label}
+              reveal={near}
               style={{ top }}
             />
           </div>
@@ -651,6 +800,14 @@ export const ShaderNode = memo(function ShaderNode({
         />
       )}
       </div>
+      {/* Image node drag-reveal: hidden param sockets float on the left edge
+          of the card (anchored to .node-base, NOT the rows region — the card
+          layout never changes), named by their forced tooltips. */}
+      {revealHidden && (
+        <RevealSockets
+          ports={def.inputs.filter((inp) => !exposedInputs.has(inp.id))}
+        />
+      )}
       </div>
     </div>
   );

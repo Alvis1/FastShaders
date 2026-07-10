@@ -1,0 +1,68 @@
+.csv-import-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  background: var(--bg-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+.csv-import-modal__panel {
+  width: min(440px, 92vw);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.csv-import-modal__title {
+  font-size: var(--font-size-md);
+  font-weight: 700;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.csv-import-modal__message {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.csv-import-modal__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.csv-import-modal__button {
+  padding: 6px 12px;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.csv-import-modal__button:hover:not(:disabled) {
+  background: var(--bg-surface-hover);
+}
+
+.csv-import-modal__button--primary {
+  border-color: var(--border-focus);
+  color: var(--border-focus);
+  font-weight: 600;
+}
+
+.csv-import-modal__button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

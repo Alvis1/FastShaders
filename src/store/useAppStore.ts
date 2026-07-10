@@ -20,6 +20,13 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
 import complexityData from '@/registry/complexity.json';
 import { bridgeEdgesAcrossDeletedNodes } from '@/utils/edgeUtils';
+import { normalizeChainOperands } from '@/utils/chainOperands';
+import { nodeCostPoints } from '@/utils/nodeCost';
+import { makeDataNodeData } from '@/utils/dataNode';
+import { makeImageNodeData, sanitizeImageNodes } from '@/utils/imageNode';
+import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
+import { encodeImageFile } from '@/utils/imageImport';
+import { transposeCsv, type ParsedCsv } from '@/utils/csvParser';
 
 /**
  * A user-saved group: the group node + every member node + every edge that lives
@@ -58,19 +65,42 @@ function loadSavedGroups(): SavedGroup[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw, safeJsonReviver);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (g): g is SavedGroup =>
-        g && typeof g.id === 'string' && Array.isArray(g.nodes) && Array.isArray(g.edges),
-    );
+    return parsed
+      .filter(
+        (g): g is SavedGroup =>
+          g && typeof g.id === 'string' && Array.isArray(g.nodes) && Array.isArray(g.edges),
+      )
+      // Bound image payloads from a (possibly tampered) localStorage value —
+      // instantiating a group clones these nodes straight into the graph.
+      // Hard violations only, same rule as loadGraph.
+      .map((g) => ({ ...g, nodes: sanitizeImageNodes(g.nodes, false).nodes }));
   } catch {
     return [];
   }
 }
 
+// Once-per-failure-streak guards so a quota-stuck store doesn't re-alert on
+// every debounced write; reset by the next successful write.
+let graphQuotaWarned = false;
+let groupsQuotaWarned = false;
+
 function persistSavedGroups(groups: SavedGroup[]) {
   try {
     localStorage.setItem(SAVED_GROUPS_KEY, JSON.stringify(groups));
-  } catch { /* quota exceeded or private mode */ }
+    groupsQuotaWarned = false;
+  } catch {
+    // Quota exceeded or private mode. The in-memory library stays usable this
+    // session but will NOT survive a reload — tell the user (ground truth:
+    // warn from the actual failure, not a size guess).
+    if (!groupsQuotaWarned) {
+      groupsQuotaWarned = true;
+      useAppStore.getState().enqueueLimitNotice({
+        id: generateId(),
+        kind: 'storage-quota',
+        detail: 'saved groups',
+      });
+    }
+  }
 }
 
 /**
@@ -122,11 +152,47 @@ function cloneGroupSnapshot(
   return { group, members, edges };
 }
 
+/** A dropped CSV whose column count exceeds COLUMN_WARN_THRESHOLD, awaiting the
+ *  user's choice (cancel / place as-is / transpose) via CsvImportModal. Parsed
+ *  once at drop time; position is already in flow coordinates. */
+export interface PendingCsvImport {
+  id: string;
+  fileName: string;
+  columnCount: number;
+  rowCount: number;
+  parsed: ParsedCsv;
+  position: { x: number; y: number };
+}
+
+/**
+ * A limit/storage event awaiting user acknowledgement via LimitModal (shown
+ * one at a time). Drop-time image notices carry the original File + drop
+ * position so "Add anyway" can re-run the import with limits ignored.
+ */
+export interface LimitNotice {
+  id: string;
+  kind:
+    | 'image-too-large'      // still over the per-image budget after downscale retries
+    | 'image-too-many-pixels'// source dimensions exceed the decode guard
+    | 'image-total-cap'      // adding it would cross the all-images budget
+    | 'images-stripped'      // an imported project had payloads over the limits
+    | 'storage-quota';       // a localStorage write actually failed
+  fileName?: string;
+  /** Free-form context for the message (count, sink name, dimensions…). */
+  detail?: string;
+  file?: File;
+  position?: { x: number; y: number };
+  /** For `image-total-cap`: the drop already encoded within the per-image
+   *  budget — "Add anyway" places THIS payload instead of re-encoding at the
+   *  relaxed dimension cap (which would silently produce a heavier image). */
+  encoded?: { dataUrl: string; width: number; height: number };
+}
+
 interface ContextMenuState {
   open: boolean;
   x: number;
   y: number;
-  type: 'canvas' | 'node' | 'shader' | 'edge' | 'group' | 'note';
+  type: 'canvas' | 'node' | 'shader' | 'edge' | 'group' | 'note' | 'stripes' | 'dataviz';
   nodeId?: string;
   edgeId?: string;
   /** Source pin info when menu was opened by dragging from an output handle. */
@@ -166,7 +232,20 @@ const STORAGE_KEY = 'fs:graph';
 function saveGraph(nodes: AppNode[], edges: AppEdge[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes, edges }));
-  } catch { /* quota exceeded or private mode */ }
+    graphQuotaWarned = false;
+  } catch {
+    // Quota exceeded or private mode. Once auto-save starts failing, EVERY
+    // subsequent edit is silently unsaved until the graph shrinks — surface it
+    // once per failure streak so the user can act before a reload loses work.
+    if (!graphQuotaWarned) {
+      graphQuotaWarned = true;
+      useAppStore.getState().enqueueLimitNotice({
+        id: generateId(),
+        kind: 'storage-quota',
+        detail: 'graph auto-save',
+      });
+    }
+  }
 }
 
 export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
@@ -247,6 +326,19 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
         }
       }
 
+      // Migrate: image nodes follow the noise nodes' opt-in exposedPorts rules
+      // — auto-expose any param port that already has an edge so its socket
+      // keeps rendering (graphs saved before the opt-in change, or hand-edited
+      // files, may carry edges without the matching exposedPorts entry). Shared
+      // with the project-import path so the two surfaces stay in lockstep.
+      autoExposeConnectedParamPorts(data.nodes, data.edges);
+
+      // Bound image payloads from a (possibly tampered) localStorage value.
+      // Hard violations only — soft caps were already enforced at drop time,
+      // and stripping a user-approved oversize payload here would clobber it
+      // on the next auto-save.
+      data.nodes = sanitizeImageNodes(data.nodes, false).nodes;
+
       return data;
     }
   } catch { /* corrupt data */ }
@@ -295,6 +387,13 @@ interface AppState {
 
   // UI
   contextMenu: ContextMenuState;
+  /** Queue of over-wide CSV drops awaiting a user decision (shown one at a time). */
+  pendingCsvImports: PendingCsvImport[];
+  /** Queue of limit/storage notices awaiting acknowledgement (LimitModal). */
+  pendingLimitNotices: LimitNotice[];
+  /** User opt-out of the image size limits (persisted; set via the LimitModal
+   *  checkbox). Hard security ceilings still apply. */
+  ignoreImageLimits: boolean;
   splitRatio: number;
   rightSplitRatio: number;
 
@@ -346,8 +445,20 @@ interface AppState {
   redo: () => void;
 
   // UI actions
-  openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader' | 'edge' | 'group' | 'note', nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string) => void;
+  openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader' | 'edge' | 'group' | 'note' | 'stripes' | 'dataviz', nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string) => void;
   closeContextMenu: () => void;
+  /** Add a CSV import awaiting a decision to the queue. */
+  enqueueCsvImport: (item: PendingCsvImport) => void;
+  /** Resolve the head of the CSV-import queue and advance to the next. */
+  resolveCsvImport: (action: 'cancel' | 'continue' | 'transpose') => void;
+  /** Add a limit/storage notice to the LimitModal queue. */
+  enqueueLimitNotice: (notice: LimitNotice) => void;
+  /** Resolve the head of the limit-notice queue. `proceed` re-imports the
+   *  carried file with limits ignored. `ignoreFuture` is the checkbox state —
+   *  it can turn the persisted opt-out on OR off; null (Escape/backdrop)
+   *  leaves it unchanged. */
+  resolveLimitNotice: (action: 'dismiss' | 'proceed', ignoreFuture: boolean | null) => void;
+  setIgnoreImageLimits: (v: boolean) => void;
   setSplitRatio: (ratio: number) => void;
   setRightSplitRatio: (ratio: number) => void;
 
@@ -409,6 +520,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   future: [],
   isUndoRedo: false,
   contextMenu: { open: false, x: 0, y: 0, type: 'canvas' },
+  pendingCsvImports: [],
+  pendingLimitNotices: [],
+  ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
   splitRatio: loadRatio('fs:splitRatio', 0.6),
   rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6),
   shaderName: loadString('fs:shaderName', 'My Shader'),
@@ -424,7 +538,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ nodes, syncSource: source, isUndoRedo: false }),
 
   setEdges: (edges, source = 'graph') =>
-    set({ edges, syncSource: source, isUndoRedo: false }),
+    set((state) => {
+      // Compact grown variadic-arithmetic operands after any disconnect (a gap
+      // row is removed and the rest shift up). Idempotent no-op otherwise.
+      const norm = normalizeChainOperands(state.nodes, edges);
+      return {
+        edges: norm.edges,
+        ...(norm.changed ? { nodes: norm.nodes } : {}),
+        syncSource: source,
+        isUndoRedo: false,
+      };
+    }),
 
   onNodesChange: (changes) =>
     set((state) => ({
@@ -433,10 +557,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
     })),
 
   onEdgesChange: (changes) =>
-    set((state) => ({
-      edges: applyEdgeChanges(changes, state.edges) as AppEdge[],
-      syncSource: 'graph',
-    })),
+    set((state) => {
+      const applied = applyEdgeChanges(changes, state.edges) as AppEdge[];
+      // Only removals can open a gap in a variadic operand list.
+      if (!changes.some((c) => c.type === 'remove')) {
+        return { edges: applied, syncSource: 'graph' as const };
+      }
+      const norm = normalizeChainOperands(state.nodes, applied);
+      return {
+        edges: norm.edges,
+        ...(norm.changed ? { nodes: norm.nodes } : {}),
+        syncSource: 'graph' as const,
+      };
+    }),
 
   addNode: (node) => {
     get().pushHistory();
@@ -445,23 +578,30 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   removeNode: (nodeId) => {
     get().pushHistory();
-    set((state) => ({
-      nodes: state.nodes.filter((n) => n.id !== nodeId),
+    set((state) => {
+      const nodes = state.nodes.filter((n) => n.id !== nodeId);
       // Splice-delete: outgoing edges of the removed node re-parent to its
       // first connected input's upstream so the signal stays wired up.
-      edges: bridgeEdgesAcrossDeletedNodes(state.edges, new Set([nodeId])),
-      syncSource: 'graph',
-      isUndoRedo: false,
-    }));
+      const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, new Set([nodeId]));
+      const norm = normalizeChainOperands(nodes, bridged);
+      return { nodes: norm.nodes, edges: norm.edges, syncSource: 'graph', isUndoRedo: false };
+    });
   },
 
   removeEdge: (edgeId) => {
     get().pushHistory();
-    set((state) => ({
-      edges: state.edges.filter((e) => e.id !== edgeId),
-      syncSource: 'graph',
-      isUndoRedo: false,
-    }));
+    set((state) => {
+      const norm = normalizeChainOperands(
+        state.nodes,
+        state.edges.filter((e) => e.id !== edgeId),
+      );
+      return {
+        edges: norm.edges,
+        ...(norm.changed ? { nodes: norm.nodes } : {}),
+        syncSource: 'graph',
+        isUndoRedo: false,
+      };
+    });
   },
 
   updateNodeData: (nodeId, data) => {
@@ -540,6 +680,82 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   closeContextMenu: () =>
     set({ contextMenu: { open: false, x: 0, y: 0, type: 'canvas' } }),
+
+  enqueueCsvImport: (item) =>
+    set((state) => ({ pendingCsvImports: [...state.pendingCsvImports, item] })),
+
+  resolveCsvImport: (action) => {
+    const head = get().pendingCsvImports[0];
+    if (!head) return;
+    const dequeue = () =>
+      set((state) => ({ pendingCsvImports: state.pendingCsvImports.slice(1) }));
+
+    if (action === 'cancel') { dequeue(); return; }
+
+    let parsed = head.parsed;
+    if (action === 'transpose') {
+      const t = transposeCsv(head.parsed);
+      if (!t.ok) {
+        // Can't transpose (would exceed the column cap) — surface it and skip
+        // rather than placing an invalid node.
+        window.alert(`Could not transpose "${head.fileName}":\n${t.error}`);
+        dequeue();
+        return;
+      }
+      parsed = t.data;
+    }
+
+    const cost = (complexityData.costs as Record<string, number>).dataNode ?? 2;
+    get().addNode({
+      id: generateId(),
+      type: 'shader',
+      position: head.position,
+      data: makeDataNodeData(parsed, cost, head.fileName),
+    } as AppNode);
+    dequeue();
+  },
+
+  enqueueLimitNotice: (notice) =>
+    set((state) => ({ pendingLimitNotices: [...state.pendingLimitNotices, notice] })),
+
+  resolveLimitNotice: (action, ignoreFuture) => {
+    const head = get().pendingLimitNotices[0];
+    if (!head) return;
+    if (ignoreFuture !== null && ignoreFuture !== get().ignoreImageLimits) {
+      get().setIgnoreImageLimits(ignoreFuture);
+    }
+    set((state) => ({ pendingLimitNotices: state.pendingLimitNotices.slice(1) }));
+
+    if (action !== 'proceed' || !head.file || !head.position) return;
+    const { file, position, encoded } = head;
+    const cost = (complexityData.costs as Record<string, number>).imageNode ?? 2;
+    const place = (dataUrl: string, width: number, height: number) =>
+      get().addNode({
+        id: generateId(),
+        type: 'shader',
+        position,
+        data: makeImageNodeData(dataUrl, width, height, cost, file.name),
+      } as AppNode);
+
+    if (encoded) {
+      // Already encoded within the per-image budget (only the total cap hit).
+      place(encoded.dataUrl, encoded.width, encoded.height);
+      return;
+    }
+    // Re-run the import with the soft limits off (hard ceilings still apply).
+    void encodeImageFile(file, true).then((res) => {
+      if (!res.ok) {
+        window.alert(`Could not load "${file.name}" as an image.`);
+        return;
+      }
+      place(res.dataUrl, res.width, res.height);
+    });
+  },
+
+  setIgnoreImageLimits: (v) => {
+    try { localStorage.setItem('fs:ignoreImageLimits', v ? '1' : '0'); } catch { /* */ }
+    set({ ignoreImageLimits: v });
+  },
 
   setSplitRatio: (ratio) => {
     const clamped = Math.max(0.25, Math.min(0.75, ratio));
@@ -797,9 +1013,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // the group sat mid-graph; then drop any edge still touching the removal set.
     const bridged = bridgeEdgesAcrossDeletedNodes(state.edges, toRemove);
     const edges = bridged.filter((e) => !toRemove.has(e.source) && !toRemove.has(e.target));
-    set({
-      nodes: state.nodes.filter((n) => !toRemove.has(n.id)),
+    const norm = normalizeChainOperands(
+      state.nodes.filter((n) => !toRemove.has(n.id)),
       edges,
+    );
+    set({
+      nodes: norm.nodes,
+      edges: norm.edges,
       syncSource: 'graph',
       isUndoRedo: false,
     });
@@ -836,9 +1056,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       } as NoteNodeData,
     } as AppNode;
     get().pushHistory();
-    // Prepend so the note renders BEHIND existing nodes (React Flow stacks later
-    // array entries on top at equal z-index). Notes are never parents/children,
-    // so this can't break the group parent-before-child ordering invariant.
+    // Prepend so the note keeps a stable slot at the front of the array. Its
+    // on-screen layer is driven by the note's CSS z-index (above the graph),
+    // not array order. Notes are never parents/children, so this can't break
+    // the group parent-before-child ordering invariant.
     set((state) => ({ nodes: [note, ...state.nodes], syncSource: 'graph', isUndoRedo: false }));
   },
 
@@ -911,13 +1132,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return data.label || undefined;
     };
 
-    /** Sum of GPU costs of every member node, displayed above the group as a badge. */
-    const costMap = complexityData.costs as Record<string, number>;
+    /** Sum of GPU costs of every member node, displayed above the group as a
+     *  badge. Uses nodeCostPoints so variadic arithmetic members are counted at
+     *  their operand-scaled cost, matching the live total. */
     let groupCostSum = 0;
     for (const m of state.nodes) {
       if (!memberIds.has(m.id)) continue;
-      const rt = m.data.registryType;
-      if (rt) groupCostSum += costMap[rt] ?? 0;
+      groupCostSum += nodeCostPoints(m, state.edges);
     }
 
     // Compact pill size when collapsed; restore to remembered expanded size otherwise.

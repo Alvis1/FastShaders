@@ -28,6 +28,20 @@ export const TILE_DROP_EVENT = 'fs-tile-drop';
 const MOVE_THRESHOLD_PX = 6;
 
 /**
+ * The user-adjustable tile zoom lives as an inline `zoom` style on
+ * `.content-browser__items`; a body-appended drag ghost doesn't inherit it, so
+ * ghost builders bake it into their wrapper (`style="zoom: …"`). Returns a
+ * numeric string safe for HTML interpolation ('1' when unset/invalid).
+ */
+export function tileGhostZoom(tile: HTMLElement): string {
+  const raw = tile
+    .closest<HTMLElement>('.content-browser__items')
+    ?.style.getPropertyValue('zoom');
+  const z = parseFloat(raw ?? '');
+  return Number.isFinite(z) && z > 0 ? String(z) : '1';
+}
+
+/**
  * Begin a touch/pen drag from a tile. Returns immediately; window-level
  * listeners drive the rest of the gesture. Caller should only invoke this for
  * `pointerType === 'touch' | 'pen'`.

@@ -39,11 +39,7 @@
   pointer-events: none;
 }
 
-.color-node .react-flow__handle {
-  top: 50% !important;
-  transform: translateY(-50%) !important;
-}
-
-.color-node .react-flow__handle-right {
-  right: calc(var(--handle-size) / -2) !important;
-}
+/* The output socket is positioned entirely from ColorNode.tsx (inline left/top
+   /transform), so it can ride the circle's perimeter toward whatever it feeds.
+   No !important overrides here — they would beat the inline placement. The
+   base React Flow class rules are overridden by the inline styles. */

@@ -174,6 +174,18 @@ describe('evaluateNodeOutput — binary math and clamp', () => {
     expect(evaluateNodeOutput('mx', [a, b, mx], mxEdges, 0)).toEqual([7]);
   });
 
+  it('min passes the wired input through when b is unwired (identity=1, not annihilator=0)', () => {
+    // Regression: min's unwired `b` used to fall back to 0, so min(a, 0) = 0
+    // silently zeroed any non-negative input. It must fall back to the identity.
+    const a = makeNode('a', 'float', { value: 0.7 });
+    const mn = makeNode('mn', 'min'); // b unwired + unset
+    const edges = [makeEdge('a', 'out', 'mn', 'a')];
+    expect(evaluateNodeOutput('mn', [a, mn], edges, 0)).toEqual([0.7]);
+    // An explicit b = 0 is still honoured (real min against 0).
+    const mn0 = makeNode('mn', 'min', { b: 0 });
+    expect(evaluateNodeOutput('mn', [a, mn0], edges, 0)).toEqual([0]);
+  });
+
   it('clamp pins values to [min, max]', () => {
     const x = makeNode('x', 'vec3', { x: -1, y: 0.5, z: 2 });
     const op = makeNode('op', 'clamp', { min: 0, max: 1 });

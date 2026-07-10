@@ -3,6 +3,9 @@ import { Toolbar } from './Toolbar';
 import { NodeEditor } from '@/components/NodeEditor/NodeEditor';
 import { CodeEditor } from '@/components/CodeEditor/CodeEditor';
 import { ShaderPreview } from '@/components/Preview/ShaderPreview';
+import { CsvImportModal } from '@/components/Modals/CsvImportModal';
+import { LimitModal } from '@/components/Modals/LimitModal';
+import { TooltipLayer } from '@/components/Tooltip/TooltipLayer';
 import { useAppStore } from '@/store/useAppStore';
 import './AppLayout.css';
 
@@ -47,6 +50,9 @@ export function AppLayout() {
           </div>
         }
       />
+      <CsvImportModal />
+      <LimitModal />
+      <TooltipLayer />
     </div>
   );
 }

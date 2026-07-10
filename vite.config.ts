@@ -2,7 +2,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { cpSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { cpSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, './package.json'), 'utf-8'));
 
@@ -43,9 +43,10 @@ const versionHtmlPlugin = (): Plugin => ({
  *     style attributes for theming and layout.
  *   - `blob:` — preview HTML, shader modules, and Monaco workers are loaded
  *     from blob URLs created at runtime.
- *   - `https://cdn.jsdelivr.net` — @monaco-editor/react loads the Monaco
- *     loader.js + workers from there at runtime, and exported A-Frame
- *     HTML pulls the shaderloader bundle from there too.
+ *   - Monaco and the Inter/JetBrains Mono fonts are BUNDLED (monacoSetup.ts,
+ *     @fontsource imports in main.tsx) — no CDN origins in the policy. The
+ *     app must work fully offline (and in the desktop build), so never
+ *     reintroduce cdn.jsdelivr.net / fonts.googleapis.com here.
  *   - `https://alvis1.github.io` — the sandboxed preview iframe has an
  *     opaque origin, so `'self'` resolves to `null` for fetches it makes
  *     under the inherited CSP. The deployed prod origin therefore has to
@@ -60,18 +61,33 @@ const versionHtmlPlugin = (): Plugin => ({
 //   FS_BASE           — path the app is served under (default keeps the GitHub Pages build identical)
 //   FS_PREVIEW_ORIGIN — extra origin(s) the sandboxed preview iframe may fetch from at the deploy domain
 //                       (space-separated; the iframe's opaque origin means each must be listed explicitly)
+//   FS_DESKTOP=1      — desktop (Tauri) build profile: base defaults to '/', the CSP meta is
+//                       suppressed (the wrapper's own CSP config governs; WebKit handles
+//                       custom-scheme origins in meta CSPs unreliably), and the WebGPU-only
+//                       ShaderCarousel suite is left out of dist — instead it is copied into
+//                       src-tauri/carousel-dist/ and bundled as a Tauri resource, which the
+//                       in-app LAN bench server (src-tauri/src/bench_server.rs, "VR" toolbar
+//                       popover) serves to headsets on the local network. Also exposed to the
+//                       app as __FS_DESKTOP__ so desktop-irrelevant UI (Local download button,
+//                       SC link) can hide itself.
 // Example self-host build:
 //   FS_BASE=/fastshaders/ FS_PREVIEW_ORIGIN='https://alvismisjuns.lv https://www.alvismisjuns.lv' npm run build
-const FS_BASE = process.env.FS_BASE ?? '/FastShaders/';
+// Desktop build:
+//   FS_DESKTOP=1 npm run build
+// The Tauri CLI exports TAURI_ENV_* for its beforeDev/beforeBuild hooks, so
+// `tauri dev` / `tauri build` (and tauri-action in CI) get the desktop
+// profile automatically — no cross-platform env-prefix headaches on Windows.
+const FS_DESKTOP = process.env.FS_DESKTOP === '1' || !!process.env.TAURI_ENV_PLATFORM;
+const FS_BASE = process.env.FS_BASE ?? (FS_DESKTOP ? '/' : '/FastShaders/');
 const FS_PREVIEW_ORIGIN = process.env.FS_PREVIEW_ORIGIN ?? '';
 
 const CSP_DIRECTIVES = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
-  "font-src 'self' https://fonts.gstatic.com data:",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
   "img-src 'self' data: blob:",
-  `connect-src 'self' blob: https://cdn.jsdelivr.net https://alvis1.github.io${FS_PREVIEW_ORIGIN ? ' ' + FS_PREVIEW_ORIGIN : ''}`,
+  `connect-src 'self' blob: https://alvis1.github.io${FS_PREVIEW_ORIGIN ? ' ' + FS_PREVIEW_ORIGIN : ''}`,
   "frame-src 'self' blob:",
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -107,16 +123,42 @@ const SHADER_CAROUSEL_EXCLUDE = new Set([
   '.gitattributes',
   'Untitled-2.ipynb',
 ]);
+const copyShaderCarousel = (dst: string) => {
+  const src = path.resolve(__dirname, 'ShaderCarousel');
+  const dstAbs = path.resolve(__dirname, dst);
+  // The desktop copy lives outside dist/ and persists between builds, so
+  // clear it first — stale files must not ride into the bundled resources.
+  rmSync(dstAbs, { recursive: true, force: true });
+  cpSync(src, dstAbs, {
+    recursive: true,
+    filter: (s) => !SHADER_CAROUSEL_EXCLUDE.has(path.basename(s)),
+  });
+};
 const shaderCarouselCopyPlugin = (): Plugin => ({
   name: 'fs-copy-shadercarousel',
   apply: 'build',
   closeBundle() {
-    const src = path.resolve(__dirname, 'ShaderCarousel');
-    const dst = path.resolve(__dirname, 'dist', 'ShaderCarousel');
-    cpSync(src, dst, {
-      recursive: true,
-      filter: (s) => !SHADER_CAROUSEL_EXCLUDE.has(path.basename(s)),
-    });
+    copyShaderCarousel('dist/ShaderCarousel');
+  },
+});
+/**
+ * Desktop variant: stage the carousel where tauri.conf.json's
+ * `bundle.resources` picks it up (`carousel-dist/` → resource dir
+ * `ShaderCarousel/`), for the in-app LAN bench server. Runs at buildStart —
+ * which fires for `vite build` AND the dev server — so `tauri dev` (whose
+ * beforeDevCommand never runs a build) also gets fresh staged assets after
+ * the vendor sync. The dir is gitignored.
+ */
+const shaderCarouselDesktopStagePlugin = (): Plugin => ({
+  name: 'fs-stage-shadercarousel-desktop',
+  buildStart() {
+    copyShaderCarousel('src-tauri/carousel-dist');
+    // Restore the tracked .gitkeep the rmSync inside copyShaderCarousel just
+    // wiped, so staging never dirties the working tree. The placeholder
+    // exists because tauri-build resolves bundle.resources on every cargo
+    // build/check/test — a missing carousel-dist/ fails the build script on
+    // fresh checkouts before any staging has run (empty dir = skipped).
+    writeFileSync(path.resolve(__dirname, 'src-tauri/carousel-dist/.gitkeep'), '');
   },
 });
 
@@ -305,7 +347,15 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
 
 export default defineConfig({
   base: FS_BASE,
-  plugins: [react(), versionHtmlPlugin(), cspHtmlPlugin(), vendorSyncPlugin(), shaderCarouselCopyPlugin(), nodeDesignerSyncPlugin(), nodeDesignerEndpointPlugin()],
+  plugins: [
+    react(),
+    versionHtmlPlugin(),
+    ...(FS_DESKTOP ? [] : [cspHtmlPlugin()]),
+    vendorSyncPlugin(),
+    ...(FS_DESKTOP ? [shaderCarouselDesktopStagePlugin()] : [shaderCarouselCopyPlugin()]),
+    nodeDesignerSyncPlugin(),
+    nodeDesignerEndpointPlugin(),
+  ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -314,6 +364,7 @@ export default defineConfig({
   define: {
     'process.env': { NODE_ENV: JSON.stringify('production') },
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __FS_DESKTOP__: JSON.stringify(FS_DESKTOP),
   },
   server: {
     port: 5173,
@@ -330,6 +381,15 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
+    rollupOptions: {
+      output: {
+        // Monaco is ~4MB of rarely-changing vendor code — its own chunk keeps
+        // the app chunk small and lets browsers cache Monaco across deploys.
+        manualChunks: {
+          monaco: ['monaco-editor'],
+        },
+      },
+    },
   },
   test: {
     environment: 'node',

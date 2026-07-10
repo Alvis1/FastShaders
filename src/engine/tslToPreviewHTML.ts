@@ -74,18 +74,30 @@ export function buildGeoAttr(
 }
 
 /**
- * Resolve the absolute URL of an OBJ model in `public/models/`. The iframe
- * loads from a blob URL, so relative paths won't resolve — we need the full
- * origin-qualified URL.
+ * Resolve an app-served asset path (relative to the Vite base) to a fully-
+ * qualified URL. The preview iframe is sandboxed srcdoc with an opaque
+ * origin, so path-only or relative URLs won't resolve inside it — every URL
+ * handed in must be absolute. Resolving via `new URL(..., location.href)`
+ * works from any scheme the app is served on (https://, tauri://, file://)
+ * and with both absolute ('/FastShaders/') and relative ('./') base paths,
+ * whereas `location.origin + base` concatenation breaks on non-http schemes
+ * and relative bases. (Same pattern as public/viewer.html.)
+ */
+function resolveAssetUrl(pathFromBase: string): string {
+  const base = import.meta.env.BASE_URL;
+  if (typeof window === 'undefined') return `${base}${pathFromBase}`;
+  return new URL(`${base}${pathFromBase}`, window.location.href).href;
+}
+
+/**
+ * Resolve the absolute URL of an OBJ model in `public/models/`.
  *
  * Exported so ShaderPreview can build the same URL when hot-swapping
  * geometry via postMessage.
  */
 export function getModelUrl(geometry: 'teapot' | 'bunny'): string {
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const base = import.meta.env.BASE_URL;
   const file = geometry === 'bunny' ? 'stanford-bunny.obj' : 'teapot.obj';
-  return `${origin}${base}models/${file}`;
+  return resolveAssetUrl(`models/${file}`);
 }
 
 /**
@@ -140,14 +152,12 @@ export const LIGHT_PRESETS: Record<LightingMode, LightSpec[]> = {
 };
 
 // Resolve full absolute URLs for the IIFE bundle and shaderloader at runtime.
-// Blob URL iframes can't resolve path-only URLs, so we need the full origin.
+// The sandboxed iframe can't resolve path-only URLs — see resolveAssetUrl.
 function getScriptUrls() {
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const base = import.meta.env.BASE_URL; // e.g. '/FastShaders/'
   return {
-    iife: `${origin}${base}js/a-frame-180-a-01.min.js`,
-    shaderloader: `${origin}${base}js/a-frame-shaderloader-0.4.js`,
-    orbitControls: `${origin}${base}js/aframe-orbit-controls.min.js`,
+    iife: resolveAssetUrl('js/a-frame-180-a-01.min.js'),
+    shaderloader: resolveAssetUrl('js/a-frame-shaderloader-0.4.js'),
+    orbitControls: resolveAssetUrl('js/aframe-orbit-controls.min.js'),
   };
 }
 
@@ -283,6 +293,94 @@ const FIT_BOUNDS_SCRIPT = `<script>
 <\/script>`;
 
 /**
+ * Error overlay plumbing. Must be the FIRST script in the document so its
+ * hooks exist while the vendored bundles load and while the shader module
+ * fetch/import/build runs.
+ *
+ * Channels that end up in the `#error` div:
+ *   - uncaught errors + unhandled promise rejections
+ *   - `console.error` (mirrored — the shaderloader reports module
+ *     fetch/import/build failures via console.error, and three's WebGPU
+ *     backend logs pipeline/validation errors the same way)
+ *   - `shader-error` events emitted by the shaderloader (structured message,
+ *     fires after its console.error so the cleaner text wins the overlay)
+ * A successful apply emits `shader-applied`, which clears the overlay — so
+ * boot-time noise or a failure fixed by a later re-apply doesn't stick.
+ *
+ * The `#error` div lives in `<body>`, which isn't parsed yet when this runs —
+ * messages are queued until DOMContentLoaded. Events bubble, so listening on
+ * `window` needs no scene/entity reference.
+ */
+const ERROR_OVERLAY_SCRIPT = `<script>
+  (function () {
+    // One current message + its stickiness. The #error div may not be parsed
+    // yet when an error arrives (this script runs first in <head>), so the
+    // state lives here and render() re-applies it whenever possible.
+    // "Sticky" marks resource-load failures (vendored script 404s): a later
+    // successful shader apply must NOT clear those — the failure still
+    // matters (e.g. dead orbit controls) even though the shader works.
+    var current = null;
+    function errEl() { return document.getElementById("error"); }
+    function render() {
+      try {
+        var el = errEl();
+        if (el) el.textContent = current ? current.msg : "";
+      } catch (e) {}
+    }
+    function show(msg, sticky) {
+      try {
+        // A sticky (resource-load) failure is the root cause — don't let
+        // downstream consequences (AFRAME undefined, muted script errors)
+        // displace it.
+        if (current && current.sticky && !sticky) return;
+        msg = String(msg == null ? "Unknown error" : msg).slice(0, 2000);
+        current = { msg: msg, sticky: !!sticky };
+        render();
+      } catch (e) {}
+    }
+    window.__fsShowError = function (msg) { show(msg, false); };
+    window.__fsShowStickyError = function (msg) { show(msg, true); };
+    window.__fsClearError = function () {
+      if (current && current.sticky) return;
+      current = null;
+      render();
+    };
+    document.addEventListener("DOMContentLoaded", render);
+    window.addEventListener("error", function (ev) {
+      var m = ev && ((ev.error && ev.error.message) || ev.message);
+      if (!m) return;
+      // Cross-origin scripts (the vendored bundles, from the opaque srcdoc
+      // origin's perspective) report muted "Script error." with no detail.
+      // When a real message is already recorded (e.g. the script tag's own
+      // onerror), don't let the mute overwrite the root cause.
+      if (/^Script error\\.?$/.test(String(m)) && current) return;
+      show("Error: " + m, false);
+    });
+    window.addEventListener("unhandledrejection", function (ev) {
+      var r = ev && ev.reason;
+      show("Error: " + ((r && r.message) || String(r || "Shader load failed")), false);
+    });
+    var origError = console.error;
+    console.error = function () {
+      try {
+        var parts = [];
+        for (var i = 0; i < arguments.length; i++) {
+          var a = arguments[i];
+          parts.push(a instanceof Error ? (a.message || String(a)) : String(a));
+        }
+        show(parts.join(" "), false);
+      } catch (e) {}
+      return origError.apply(console, arguments);
+    };
+    window.addEventListener("shader-error", function (ev) {
+      var d = ev && ev.detail;
+      show("Shader error: " + ((d && d.message) || "failed to apply"), false);
+    });
+    window.addEventListener("shader-applied", function () { window.__fsClearError(); });
+  })();
+<\/script>`;
+
+/**
  * Iframe ↔ parent bridge: shader uniform readiness + camera persistence.
  *
  * - Shader uniforms: poll for the shaderloader's `_propertyUniforms` (it's
@@ -304,6 +402,30 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
     var entity = document.getElementById("preview-entity");
     var spinEl = document.getElementById("spin-parent");
     var camEl = document.querySelector("[camera]");
+
+    // A fresh boot can record a stale/zero canvas size (the srcdoc swap can
+    // land while the host pane is mid-layout), leaving the scene unpainted
+    // until something re-runs renderer.setSize — the "preview is blank until
+    // I resize the pane" bug. Re-run A-Frame's resize path a few times while
+    // the async WebGPU init settles; when the recorded size already matches,
+    // setSize dedupes and these are no-ops.
+    var sceneEl = document.querySelector("a-scene");
+    function kickResize() {
+      try {
+        if (sceneEl && typeof sceneEl.resize === "function") sceneEl.resize();
+        else window.dispatchEvent(new Event("resize"));
+      } catch (e) {}
+    }
+    function scheduleResizeKicks() {
+      kickResize();
+      setTimeout(kickResize, 250);
+      setTimeout(kickResize, 1000);
+      setTimeout(kickResize, 2500);
+    }
+    if (sceneEl) {
+      if (sceneEl.hasLoaded) scheduleResizeKicks();
+      else sceneEl.addEventListener("loaded", scheduleResizeKicks);
+    }
 
     var shaderRetries = 0;
     function checkShaderReady() {
@@ -603,6 +725,9 @@ export function tslToPreviewHTML(
   lines.push('<html lang="en">');
   lines.push('<head>');
   lines.push('  <meta charset="UTF-8">');
+  // Error overlay hooks first — they must be installed before the bundles
+  // load and before any shader code runs. See ERROR_OVERLAY_SCRIPT.
+  lines.push(ERROR_OVERLAY_SCRIPT);
   // Neutralize WebXR BEFORE A-Frame loads. The editor preview is a desktop
   // render that never enters XR, but A-Frame 1.8.0 initializes its WebXR path
   // whenever `navigator.xr` is present — and on the Three.js r184 WebGPU backend
@@ -611,11 +736,17 @@ export function tslToPreviewHTML(
   // Web Emulator) injects/overrides `navigator.xr`. Hiding it keeps A-Frame on
   // the plain desktop renderer. (Immersive XR lives in ShaderCarousel, not here.)
   lines.push(`  <script>try{Object.defineProperty(navigator,"xr",{value:undefined,configurable:true});}catch(e){}<${''}/script>`);
-  lines.push(`  <script src="${iife}" onerror="document.getElementById('error').textContent='Failed to load A-Frame bundle'"><${''}/script>`);
-  lines.push(`  <script src="${shaderloader}" onerror="document.getElementById('error').textContent='Failed to load shaderloader'"><${''}/script>`);
-  lines.push(`  <script src="${orbitControls}" onerror="document.getElementById('error').textContent='Failed to load orbit controls'"><${''}/script>`);
+  // The onerror attributes route through __fsShowStickyError (never a direct
+  // getElementById — these fire while <head> is still parsing, before the
+  // #error div exists, so a direct lookup would null-deref). Sticky: a load
+  // failure stays visible even if a shader later applies successfully.
+  lines.push(`  <script src="${iife}" onerror="__fsShowStickyError('Failed to load A-Frame bundle')"><${''}/script>`);
+  lines.push(`  <script src="${shaderloader}" onerror="__fsShowStickyError('Failed to load shaderloader')"><${''}/script>`);
+  lines.push(`  <script src="${orbitControls}" onerror="__fsShowStickyError('Failed to load orbit controls')"><${''}/script>`);
   lines.push('  <style>');
-  lines.push('    html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; }');
+  // Body background matches the scene bg so the gap between document load
+  // and the first WebGPU paint shows the chosen color, not a white flash.
+  lines.push(`    html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: ${bgColor}; }`);
   lines.push('    #error { position: absolute; top: 8px; left: 8px; right: 8px; color: #ff6b6b; font: 12px/1.4 monospace; white-space: pre-wrap; z-index: 10; pointer-events: none; }');
   lines.push('  </style>');
   lines.push('</head>');

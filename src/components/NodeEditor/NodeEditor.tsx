@@ -23,6 +23,7 @@ import { OutputNode } from './nodes/OutputNode';
 import { ClockNode } from './nodes/ClockNode';
 import { GroupNode } from './nodes/GroupNode';
 import { NoteNode } from './nodes/NoteNode';
+import { CONNECTION_RADIUS } from './nodes/connectionReveal';
 import { TypedEdge } from './edges/TypedEdge';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
@@ -35,8 +36,12 @@ import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { bridgeEdgesAcrossDeletedNodes } from '@/utils/edgeUtils';
-import { parseCsv } from '@/utils/csvParser';
+import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
+import { makeImageNodeData, totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/utils/imageNode';
+import { usesExposedPorts, effectiveExposedPorts } from '@/utils/exposedPorts';
+import { encodeImageFile, isImageFile, isSvgFile } from '@/utils/imageImport';
+import { importShaderZip, importShaderText, isZipFile } from '@/engine/projectImport';
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
 import { getNodeValues } from '@/types';
 import complexityData from '@/registry/complexity.json';
@@ -57,8 +62,35 @@ const edgeTypes = {
   typed: TypedEdge,
 };
 
-/** Snap radius for edge drag-to-connect (handle-to-handle wiring). */
-const CONNECTION_RADIUS = 40;
+// The edge-snap radius (CONNECTION_RADIUS) lives in connectionReveal.ts —
+// shared with the drag-reveal system so hidden sockets appear at exactly
+// snapping distance.
+
+/**
+ * Landing a connection on a drag-revealed (still hidden) parameter socket
+ * makes the exposure permanent — otherwise the temporary handle unmounts when
+ * the drag ends and the fresh edge points at nothing. Runs under the caller's
+ * pushHistory (connect AND reconnect gestures), so the edge + exposure revert
+ * as one undo step.
+ */
+function exposeConnectedTarget(targetId: string, targetHandle: string | null | undefined): void {
+  if (!targetHandle) return;
+  const nodes = useAppStore.getState().nodes;
+  const tgt = nodes.find((n) => n.id === targetId);
+  if (!tgt || !usesExposedPorts(NODE_REGISTRY.get(tgt.data.registryType))) return;
+  // The Output node's default-exposed channels are implicit (undefined
+  // exposedPorts) — union from the EFFECTIVE list so exposing one new channel
+  // can't hide the defaults.
+  const current = effectiveExposedPorts(tgt);
+  if (current.includes(targetHandle)) return;
+  useAppStore.getState().setNodes(
+    nodes.map((n) =>
+      n.id === tgt.id
+        ? { ...n, data: { ...n.data, exposedPorts: [...current, targetHandle] } }
+        : n,
+    ) as AppNode[],
+  );
+}
 /** Snap radius for drop-on-edge insertion — small so the node center must be basically over the edge. */
 const DROP_ON_EDGE_RADIUS = 8;
 /** Pixels of movement before a node drag is considered "real" (and worth pushing history). */
@@ -724,6 +756,41 @@ export function NodeEditor() {
         data: { dataType: 'any' },
       };
       setEdges(addEdge(newEdge, filtered) as AppEdge[]);
+      // A drag that started as an edge disconnect ended in a successful
+      // connect — onConnectEnd's early-return would leave the flag set and
+      // silently swallow the NEXT empty-space drop's AddNodeMenu.
+      setEdgeDisconnecting(false);
+      exposeConnectedTarget(connection.target, connection.targetHandle);
+
+      // Auto-linearize an image wired into the Output's Normal socket. The
+      // codegen decodes it as a tangent-space normal MAP via normalMap(), which
+      // needs LINEAR sampling — so flip the Image node to the 'data' colorSpace.
+      // Skip when the same image also drives an sRGB channel (color/emissive):
+      // one texture carries a single colorSpace and can't satisfy both, so we
+      // leave the user's choice alone rather than silently wrong-colour it.
+      // Mutating via setNodes here (mirroring updateNodeData's shape, but not
+      // calling it) keeps the connect + colorSpace flip under the single
+      // pushHistory() above → one undo step reverses the whole gesture.
+      if (connection.targetHandle === 'normal') {
+        const nodes = useAppStore.getState().nodes;
+        const src = nodes.find((n) => n.id === connection.source);
+        if (src?.data.registryType === 'imageNode') {
+          const feedsSrgb = currentEdges.some(
+            (e) =>
+              e.source === connection.source &&
+              (e.targetHandle === 'color' || e.targetHandle === 'emissive'),
+          );
+          if (!feedsSrgb && getNodeValues(src).colorSpace !== 'data') {
+            useAppStore.getState().setNodes(
+              nodes.map((n) =>
+                n.id === connection.source
+                  ? { ...n, data: { ...n.data, values: { ...getNodeValues(n), colorSpace: 'data' } } }
+                  : n,
+              ) as AppNode[],
+            );
+          }
+        }
+      }
     },
     [setEdges],
   );
@@ -746,7 +813,11 @@ export function NodeEditor() {
             ? 'note'
             : node.data.registryType === 'output'
               ? 'shader'
-              : 'node';
+              : node.data.registryType === 'stripes'
+                ? 'stripes'
+                : node.data.registryType === 'dataviz'
+                  ? 'dataviz'
+                  : 'node';
       openContextMenu(event.clientX, event.clientY, menuType, node.id);
     },
     [openContextMenu]
@@ -780,6 +851,10 @@ export function NodeEditor() {
       reconnectSuccessful.current = true;
       const currentEdges = useAppStore.getState().edges;
       setEdges(reconnectEdge(oldEdge, newConnection, currentEdges) as AppEdge[]);
+      // Reconnecting onto a drag-revealed hidden socket must expose it too —
+      // under onReconnectStart's pushHistory, same one-undo-step contract as
+      // a fresh connect.
+      exposeConnectedTarget(newConnection.target, newConnection.targetHandle);
     },
     [setEdges]
   );
@@ -880,17 +955,87 @@ export function NodeEditor() {
           return;
         }
         const position = screenToFlowPosition({ x: clientX, y: clientY });
+        // Over-wide CSVs prompt the user (cancel / place as-is / transpose)
+        // rather than dropping a Data node with an unwieldy number of outputs.
+        if (res.data.columns.length > COLUMN_WARN_THRESHOLD) {
+          useAppStore.getState().enqueueCsvImport({
+            id: generateId(),
+            fileName: file.name,
+            columnCount: res.data.columns.length,
+            rowCount: res.data.rowCount,
+            parsed: res.data,
+            position,
+          });
+          return;
+        }
         const cost = (complexityData.costs as Record<string, number>).dataNode ?? 2;
-        const node = {
+        addNode({
           id: generateId(),
           type: 'shader',
           position,
-          data: makeDataNodeData(res.data, cost),
-        } as AppNode;
-        addNode(node);
+          data: makeDataNodeData(res.data, cost, file.name),
+        } as AppNode);
       };
       reader.onerror = () => window.alert(`Could not read "${file.name}".`);
       reader.readAsText(file);
+    },
+    [screenToFlowPosition, addNode],
+  );
+
+  // Re-encode a dropped image on the host and place an Image node at the drop
+  // point. The canvas round-trip strips metadata and bounds the payload; limit
+  // hits surface the LimitModal (with an override) instead of failing silently.
+  const placeImageFile = useCallback(
+    (file: File, clientX: number, clientY: number) => {
+      const position = screenToFlowPosition({ x: clientX, y: clientY });
+      if (isSvgFile(file)) {
+        window.alert(
+          `Could not load "${file.name}":\nSVG images can't be imported — export it as PNG or WebP first.`,
+        );
+        return;
+      }
+      void (async () => {
+        const store = useAppStore.getState();
+        const ignore = store.ignoreImageLimits;
+        const res = await encodeImageFile(file, ignore);
+        if (!res.ok) {
+          if (res.reason === 'too-large' || res.reason === 'pixels') {
+            store.enqueueLimitNotice({
+              id: generateId(),
+              kind: res.reason === 'pixels' ? 'image-too-many-pixels' : 'image-too-large',
+              fileName: file.name,
+              detail: res.width && res.height ? `${res.width}×${res.height}` : undefined,
+              file,
+              position,
+            });
+          } else {
+            window.alert(`Could not load "${file.name}" as an image.`);
+          }
+          return;
+        }
+        // Per-image budget met — now check the whole-project image budget
+        // (every payload is multiplied through auto-save + undo history).
+        if (!ignore && totalImageChars(useAppStore.getState().nodes) + res.dataUrl.length > MAX_TOTAL_IMAGE_CHARS) {
+          store.enqueueLimitNotice({
+            id: generateId(),
+            kind: 'image-total-cap',
+            fileName: file.name,
+            file,
+            position,
+            // Carry the finished encode so "Add anyway" places exactly this
+            // payload instead of re-encoding at the relaxed dimension cap.
+            encoded: { dataUrl: res.dataUrl, width: res.width, height: res.height },
+          });
+          return;
+        }
+        const cost = (complexityData.costs as Record<string, number>).imageNode ?? 2;
+        addNode({
+          id: generateId(),
+          type: 'shader',
+          position,
+          data: makeImageNodeData(res.dataUrl, res.width, res.height, cost, file.name),
+        } as AppNode);
+      })();
     },
     [screenToFlowPosition, addNode],
   );
@@ -900,18 +1045,83 @@ export function NodeEditor() {
       event.preventDefault();
       clearEdgeHighlight();
 
-      // OS file drop (a real file from disk) — a `.csv` becomes a Data node.
-      // Checked first because dataTransfer.files is only populated for genuine
-      // file drops, never for the app's internal tile drags.
+      // OS file drop (a real file from disk) — each `.csv` becomes a Data
+      // node, each image an Image node. Checked first because
+      // dataTransfer.files is only populated for genuine file drops, never
+      // for the app's internal tile drags. Partitioned ONCE and mutually
+      // exclusively (csv test wins) so a mixed drop places everything and no
+      // file can match twice.
       const files = event.dataTransfer.files;
       if (files && files.length > 0) {
-        const csv = Array.from(files).find(
-          (f) => f.name.toLowerCase().endsWith('.csv') || f.type === 'text/csv',
-        );
-        if (csv) {
-          placeCsvFile(csv, event.clientX, event.clientY);
+        const csvs: File[] = [];
+        const images: File[] = [];
+        // A `.zip` export or a shader script (.js/.mjs/.tsl) is a *project* —
+        // importing it REPLACES the whole graph, so it can't be combined with
+        // the loose data-file appends below (they would race the replace and
+        // be lost).
+        const projects: File[] = [];
+        for (const f of Array.from(files)) {
+          const lower = f.name.toLowerCase();
+          if (lower.endsWith('.csv') || f.type === 'text/csv') csvs.push(f);
+          else if (isZipFile(f) || /\.(js|mjs|tsl)$/.test(lower)) projects.push(f);
+          else if (isImageFile(f)) images.push(f);
+        }
+
+        // Project import wins and is exclusive: load exactly one and ignore
+        // everything else (with a notice) rather than clobbering the imported
+        // graph with appended data nodes — or losing one project to another.
+        if (projects.length > 0) {
+          const proj = projects[0];
+          const ignored = projects.length - 1 + csvs.length + images.length;
+          const done = isZipFile(proj)
+            ? importShaderZip(proj).then((result) => {
+                if (result === null) {
+                  window.alert(`"${proj.name}" doesn't contain a FastShaders shader (.js).`);
+                  return false;
+                }
+                return true;
+              })
+            : proj.text().then((text) => {
+                importShaderText(text);
+                return true;
+              });
+          void done
+            .catch((e) => {
+              // Imported files are adversarial input — a crash inside the
+              // import must surface, not silently no-op the drop.
+              window.alert(
+                `Could not import "${proj.name}": ${e instanceof Error ? e.message : String(e)}`,
+              );
+              return false;
+            })
+            .then((ok) => {
+              // The "ignored companions" notice may only follow an import that
+              // actually succeeded — alerting 'Loaded "x"' before (or despite)
+              // a failure gave contradictory feedback.
+              if (ok && ignored > 0) {
+                window.alert(
+                  `Loaded "${proj.name}". ${ignored} other dropped file(s) were ignored — drop a project on its own.`,
+                );
+              }
+            });
           return;
         }
+
+        // No project file: csv + image appends don't conflict (each addNode is a
+        // functional update). Shared cascade so multi-file drops don't overlap.
+        const STEP = 34;
+        let slot = 0;
+        for (const csv of csvs) {
+          const off = STEP * slot++;
+          placeCsvFile(csv, event.clientX + off, event.clientY + off);
+        }
+        for (const img of images) {
+          const off = STEP * slot++;
+          placeImageFile(img, event.clientX + off, event.clientY + off);
+        }
+        // A real file drop never doubles as a tile drag — swallow it even when
+        // nothing matched instead of falling through to the getData branches.
+        return;
       }
 
       // Saved-group drag payload takes precedence over a regular node-type drag
@@ -931,7 +1141,7 @@ export function NodeEditor() {
       if (!nodeType) return;
       placeTilePayload({ kind: 'node', nodeType }, event.clientX, event.clientY);
     },
-    [clearEdgeHighlight, placeTilePayload, placeCsvFile],
+    [clearEdgeHighlight, placeTilePayload, placeCsvFile, placeImageFile],
   );
 
 
@@ -1138,6 +1348,11 @@ export function NodeEditor() {
           panOnDrag={[1, 2]}
           zoomOnScroll
           fitView
+          // Without a cap, fitView blows a small graph (the first-open demo)
+          // up to maxZoom=3 — nodes fill the screen. 1.5 opens the canvas 2x
+          // further out; larger graphs that fit below 1.5 are unaffected, and
+          // manual zoom can still reach 3.
+          fitViewOptions={{ maxZoom: 1.5 }}
           minZoom={0.1}
           maxZoom={3}
           proOptions={{ hideAttribution: true }}

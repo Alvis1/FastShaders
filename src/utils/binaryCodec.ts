@@ -70,7 +70,7 @@ export function toHalfFloat(value: number): number {
   if (exp > 142) {                        // overflow → Inf (or NaN if input NaN)
     bits |= 0x7c00;
     // Preserve NaN-ness: input exp==255 with a non-zero mantissa stays NaN.
-    bits |= (exp === 255 ? 0 : 1) && x & 0x007fffff ? 0x0200 : 0;
+    bits |= exp === 255 && (x & 0x007fffff) !== 0 ? 0x0200 : 0;
     return bits;
   }
   if (exp < 113) {                        // subnormal half

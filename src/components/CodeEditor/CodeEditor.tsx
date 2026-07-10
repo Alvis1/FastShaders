@@ -1,17 +1,16 @@
+import './monacoSetup';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { useAppStore } from '@/store/useAppStore';
 import { registerTSLLanguage } from './tslLanguage';
 import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
-import { scriptToTSL } from '@/engine/scriptToTSL';
-import {
-  embedProjectState,
-  extractProjectState,
-  type FastShadersProject,
-} from '@/engine/fastShadersProject';
+import { embedProjectState, type FastShadersProject } from '@/engine/fastShadersProject';
+import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import { getNodeValues } from '@/types';
 import type { MaterialSettings, OutputNodeData } from '@/types';
 import { toKebabCase } from '@/utils/nameUtils';
+import { collectImageFiles } from '@/utils/imageNode';
+import { buildZip } from '@/utils/zipWriter';
 import './CodeEditor.css';
 
 type CodeTab = 'tsl' | 'script';
@@ -182,11 +181,47 @@ export function CodeEditor() {
         })();
 
     const embedded = embedProjectState(script, buildProjectState());
-    const blob = new Blob([embedded], { type: 'application/javascript' });
+
+    // With embedded images, the download becomes a zip: the (still fully
+    // self-contained) .js plus each image as a regular file for reuse/editing.
+    const images = collectImageFiles(useAppStore.getState().nodes);
+    let blob: Blob;
+    let downloadName: string;
+    if (images.length > 0) {
+      const enc = new TextEncoder();
+      const readme = [
+        'FastShaders export',
+        '==================',
+        '',
+        `${fileBaseName}.js — the shader module. Fully self-contained (the images`,
+        'are embedded inside it as data: URLs): load it with a-frame-shaderloader,',
+        'drop it into the FastShaders viewer, or drag it back into the editor to',
+        'continue working — the full node graph rides along in its',
+        'FASTSHADERS_PROJECT_V1 block.',
+        '',
+        'images/ — the same images as regular files, for reuse or editing.',
+        'Re-drop an edited image onto the editor canvas to swap it in.',
+        '',
+        'Tip: dragging this whole .zip into the FastShaders editor loads the',
+        'project too (it reads the .js inside).',
+        '',
+      ].join('\n');
+      const zip = buildZip([
+        { name: `${fileBaseName}.js`, data: enc.encode(embedded) },
+        ...images.map((f) => ({ name: `images/${f.name}`, data: f.bytes })),
+        { name: 'README.txt', data: enc.encode(readme) },
+      ]);
+      blob = new Blob([zip], { type: 'application/zip' });
+      downloadName = `${fileBaseName}.zip`;
+    } else {
+      blob = new Blob([embedded], { type: 'application/javascript' });
+      downloadName = `${fileBaseName}.js`;
+    }
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${fileBaseName}.js`;
+    a.download = downloadName;
     a.click();
     URL.revokeObjectURL(url);
   }, [activeTab, scriptCode, code, materialSettings, properties, buildProjectState, fileBaseName]);
@@ -197,79 +232,36 @@ export function CodeEditor() {
     fileInputRef.current?.click();
   }, []);
 
-  /**
-   * Apply a FastShaders project snapshot from an imported `.js`. Graph state
-   * is restored via the store (reactively); preview/iframe settings are
-   * written to localStorage and a `fs:project-imported` event lets the
-   * ShaderPreview re-read its in-memory state from those keys.
-   */
-  const applyProjectState = useCallback((project: FastShadersProject) => {
-    useAppStore.getState().pushHistory();
-
-    if (project.shaderName) setShaderName(project.shaderName);
-    if (project.selectedHeadsetId) setSelectedHeadsetId(project.selectedHeadsetId);
-    if (project.ui?.nodeEditorBgColor) setNodeEditorBgColor(project.ui.nodeEditorBgColor);
-    if (project.ui?.codeEditorTheme === 'vs' || project.ui?.codeEditorTheme === 'vs-dark') {
-      setCodeEditorTheme(project.ui.codeEditorTheme);
-    }
-    if (project.ui?.costColorLow) setCostColorLow(project.ui.costColorLow);
-    if (project.ui?.costColorHigh) setCostColorHigh(project.ui.costColorHigh);
-
-    const writeLs = (key: string, value: string | undefined | null) => {
-      if (value === undefined || value === null) return;
-      try { localStorage.setItem(key, value); } catch { /* quota / private mode */ }
-    };
-    const p = project.preview ?? {};
-    if (p.geometry) writeLs('fs:previewGeometry', p.geometry);
-    if (p.lighting) writeLs('fs:previewLighting', p.lighting);
-    if (typeof p.subdivision === 'number') writeLs('fs:previewSubdivision', String(p.subdivision));
-    if (p.bgColor) writeLs('fs:previewBgColor', p.bgColor);
-    if (typeof p.playing === 'boolean') writeLs('fs:previewPlaying', String(p.playing));
-    if (p.uniformValues) writeLs('fs:previewUniformValues', JSON.stringify(p.uniformValues));
-    if (p.uniformBounds) writeLs('fs:previewUniformBounds', JSON.stringify(p.uniformBounds));
-    if (p.cameraPos) writeLs('fs:previewCameraPos', JSON.stringify(p.cameraPos));
-    if (p.rotation) writeLs('fs:previewRotation', JSON.stringify(p.rotation));
-
-    // Restore graph last — switching syncSource to 'graph' will trigger
-    // graphToCode in useSyncEngine, regenerating the editor code to match.
-    useAppStore.setState({
-      nodes: project.graph.nodes,
-      edges: project.graph.edges,
-      syncSource: 'graph',
-      isUndoRedo: false,
-    });
-
-    // Wake up ShaderPreview so it re-reads localStorage and updates its
-    // useState-backed values (geometry/lighting/uniforms/etc.) without a
-    // full page reload.
-    window.dispatchEvent(new CustomEvent('fs:project-imported'));
-  }, [
-    setShaderName,
-    setSelectedHeadsetId,
-    setNodeEditorBgColor,
-    setCodeEditorTheme,
-    setCostColorLow,
-    setCostColorHigh,
-  ]);
-
+  // Project/script import logic is shared with the canvas drop —
+  // see src/engine/projectImport.ts. This wrapper only adds the tab switch.
   const importScriptFile = useCallback((file: File) => {
+    if (isZipFile(file)) {
+      importShaderZip(file)
+        .then((result) => {
+          if (result === null) {
+            window.alert(`"${file.name}" doesn't contain a shader script (.js / .mjs / .tsl).`);
+            return;
+          }
+          setActiveTab('tsl');
+        })
+        .catch(() => {
+          // Imported files are adversarial input — a crash inside the import
+          // must surface, not silently no-op the Load.
+          window.alert(`Could not import "${file.name}" — the file appears corrupted.`);
+        });
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
-      const text = reader.result as string;
-      const projectResult = extractProjectState(text);
-      if (projectResult) {
-        applyProjectState(projectResult.project);
+      try {
+        importShaderText(String(reader.result ?? ''));
         setActiveTab('tsl');
-        return;
+      } catch {
+        window.alert(`Could not import "${file.name}" — the file appears corrupted.`);
       }
-      // Plain TSL module — parse back to TSL and re-sync the graph.
-      const tslCode = scriptToTSL(text);
-      setCode(tslCode, 'code');
-      setActiveTab('tsl');
-      requestCodeSync();
     };
     reader.readAsText(file);
-  }, [setCode, requestCodeSync, applyProjectState]);
+  }, []);
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -309,8 +301,8 @@ export function CodeEditor() {
     setIsDraggingFile(false);
     const file = e.dataTransfer.files[0];
     if (!file) return;
-    if (!/\.js$/i.test(file.name)) {
-      window.alert(`"${file.name}" is not a .js shader script.`);
+    if (!/\.(js|mjs|tsl|zip)$/i.test(file.name)) {
+      window.alert(`"${file.name}" is not a shader script (.js / .mjs / .tsl) or FastShaders .zip.`);
       return;
     }
     importScriptFile(file);
@@ -327,7 +319,7 @@ export function CodeEditor() {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".js"
+        accept=".js,.mjs,.tsl,.zip"
         style={{ display: 'none' }}
         onChange={handleFileChange}
       />
@@ -335,7 +327,7 @@ export function CodeEditor() {
         <div className="code-editor__drop-overlay">
           <div className="code-editor__drop-msg">
             <div className="code-editor__drop-title">Drop shader file</div>
-            <div className="code-editor__drop-sub">.js — replaces the current shader (graph + preview if embedded)</div>
+            <div className="code-editor__drop-sub">.js / .mjs / .tsl or FastShaders .zip — replaces the current shader (graph + preview if embedded)</div>
           </div>
         </div>
       )}
@@ -375,13 +367,13 @@ export function CodeEditor() {
           )}
           {isTSL && (
             <button className="code-editor__action-btn" onClick={handleLoadScript} title="Load a shaderloader .js file into the editor">
-              Load Script
+              Load
             </button>
           )}
           <button
             className="code-editor__action-btn"
             onClick={handleDownloadShader}
-            title="Download .js shader (with embedded FastShaders project so the file can be dragged back in)"
+            title="Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image files alongside when the graph embeds images"
           >
             Download Shader
           </button>
@@ -432,7 +424,7 @@ export function CodeEditor() {
           />
           {isTSL && code.trim() === '' && !isDraggingFile && (
             <div className="code-editor__empty-hint">
-              {'// Drop a .js shader script here to import, or click Load Script above.'}
+              {'// Drop a .js shader script here to import, or click Load above.'}
             </div>
           )}
         </div>

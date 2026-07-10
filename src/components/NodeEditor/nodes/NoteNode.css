@@ -48,10 +48,13 @@
   opacity: 0.5;
 }
 
-/* Notes sit BEHIND the shader nodes at rest (background annotations), but lift
-   above them while selected/dragging so they stay clickable + grabbable. */
+/* Notes float ABOVE the resting graph — both nodes and edges are z-index 0 (and
+   group-attached edges elevate above that), so an unpinned note at 0 gets buried
+   under them. A resting layer of 500 keeps the note readable/grabbable on top of
+   the graph; selected/dragging lifts it to the top tier above other notes. The
+   `!important` is required because React Flow writes an inline z-index per node. */
 .react-flow__node.react-flow__node-note {
-  z-index: 0 !important;
+  z-index: 500 !important;
 }
 .react-flow__node.react-flow__node-note.selected,
 .react-flow__node.react-flow__node-note.dragging {

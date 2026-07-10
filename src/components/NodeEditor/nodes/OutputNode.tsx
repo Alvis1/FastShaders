@@ -1,5 +1,6 @@
 import { memo, useEffect } from 'react';
 import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import type { OutputFlowNode } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
@@ -11,8 +12,9 @@ import './OutputNode.css';
 const PIXEL_PORTS = ['color', 'emissive', 'normal', 'opacity', 'roughness', 'discard'];
 /** Ports that belong to the vertex shader section */
 const VERTEX_PORTS = ['position'];
-/** Ports always visible by default (no need to expose via settings) */
-export const OUTPUT_DEFAULT_EXPOSED = ['color', 'roughness', 'position'];
+// Single source of truth lives with the shared exposedPorts rules; re-exported
+// here for the existing importers (ShaderSettingsMenu, NodeEditor).
+export { OUTPUT_DEFAULT_EXPOSED };
 
 export const OutputNode = memo(function OutputNode({
   id,
@@ -30,22 +32,28 @@ export const OutputNode = memo(function OutputNode({
   const exposedPorts = data.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
   const exposedSet = new Set(exposedPorts);
 
-  // Tell React Flow to re-measure handles whenever the exposed-port set changes.
-  // Without this, dynamically mounted handles (e.g. `emissive` after the user
-  // toggles it on) aren't in React Flow's bounds map, so any edge connected to
-  // them silently fails to render until the page is reloaded.
+  // The Output node opts out of ALL drag-proximity behavior: no hidden-channel
+  // reveal (channels are exposed only via the shader settings menu, or
+  // auto-exposed when an edge arrives through sync/import) and no forced
+  // name-tooltips (its rows already carry permanent labels). Hover tooltips
+  // still work.
+
+  // Tell React Flow to re-measure handles whenever the RENDERED port set
+  // changes (settings toggle). Without this, dynamically mounted handles
+  // (e.g. `emissive` after the user toggles it on) aren't in React Flow's
+  // bounds map, so any edge connected to them silently fails to render until
+  // the page is reloaded.
   const updateNodeInternals = useUpdateNodeInternals();
   const exposedKey = exposedPorts.join('|');
   useEffect(() => {
     updateNodeInternals(id);
   }, [id, exposedKey, updateNodeInternals]);
 
-  const pixelPorts = def.inputs.filter(
-    (p) => PIXEL_PORTS.includes(p.id) && exposedSet.has(p.id)
-  );
-  const vertexPorts = def.inputs.filter(
-    (p) => VERTEX_PORTS.includes(p.id) && exposedSet.has(p.id)
-  );
+  // Only permanently exposed channels render (as rows) — no drag reveal here.
+  const sectionPorts = (ids: string[]) =>
+    def.inputs.filter((p) => ids.includes(p.id) && exposedSet.has(p.id));
+  const pixelPorts = sectionPorts(PIXEL_PORTS);
+  const vertexPorts = sectionPorts(VERTEX_PORTS);
 
   return (
     <div

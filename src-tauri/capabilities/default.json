@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core permissions for the main FastShaders window. The app is a self-contained web frontend — no fs/shell/dialog plugin permissions are granted; file import stays on the HTML5 drag-drop + <input type=file> paths (dragDropEnabled is false in tauri.conf.json so DOM drop events receive the files).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
