@@ -474,14 +474,9 @@ function evaluate(
       else if (type === 'cellNoise') v = cellNoise2D(px, py);
       else v = voronoi2D(px, py);
       // Match the channel count of the registered output port for downstream
-      // dataflow visualizations (single line vs ribbon).
-      if (type === 'perlinVec3' || type === 'fbmVec3' || type === 'voronoiVec3') {
-        result = [v, v, v];
-      } else if (type === 'voronoiVec2') {
-        result = [v, v];
-      } else {
-        result = [v];
-      }
+      // dataflow visualizations (single line vs ribbon). The case labels are
+      // registry keys, so `def` is always present here.
+      result = Array(shapeOfDataType(def!.outputs[0].dataType)).fill(v);
       break;
     }
 
@@ -700,18 +695,9 @@ function computeRange(
   // bound, just with more channels. The visualization layer just needs the
   // overall extent — exact analytical ranges per noise function aren't worth
   // the complexity.
-  if (type === 'perlin' || type === 'fbm' || type === 'cellNoise' || type === 'voronoi') {
-    result = { min: [0], max: [1] };
-    cache.set(nodeId, result);
-    return result;
-  }
-  if (type === 'voronoiVec2') {
-    result = { min: [0, 0], max: [1, 1] };
-    cache.set(nodeId, result);
-    return result;
-  }
-  if (type === 'perlinVec3' || type === 'fbmVec3' || type === 'voronoiVec3') {
-    result = { min: [0, 0, 0], max: [1, 1, 1] };
+  if (def.category === 'noise') {
+    const n = shapeOfDataType(def.outputs[0].dataType);
+    result = { min: Array(n).fill(0), max: Array(n).fill(1) };
     cache.set(nodeId, result);
     return result;
   }
@@ -770,20 +756,14 @@ function computeRange(
       break;
     }
     case 'sin':
-    case 'cos': {
-      // Could be tighter when input range < 2π but [-1, 1] is safe and clear.
-      const x = portRange('x', 0);
-      result = { min: x.min.map(() => -1), max: x.min.map(() => 1) };
-      break;
-    }
-    case 'fract': {
-      const x = portRange('x', 0);
-      result = { min: x.min.map(() => 0), max: x.min.map(() => 1) };
-      break;
-    }
+    case 'cos':
+    case 'fract':
     case 'smoothstep': {
+      // sin/cos span [-1, 1] (could be tighter when input range < 2π but this
+      // is safe and clear); fract/smoothstep span [0, 1]. Shape follows input.
+      const lo = type === 'sin' || type === 'cos' ? -1 : 0;
       const x = portRange('x', 0);
-      result = { min: x.min.map(() => 0), max: x.min.map(() => 1) };
+      result = { min: x.min.map(() => lo), max: x.min.map(() => 1) };
       break;
     }
     case 'sqrt': {
@@ -867,31 +847,17 @@ function computeRange(
       result = { min: Array(len).fill(0), max: Array(len).fill(1) };
       break;
     }
-    case 'vec2': {
-      const x = portRange('x', 0);
-      const y = portRange('y', 0);
-      result = { min: [x.min[0], y.min[0]], max: [x.max[0], y.max[0]] };
-      break;
-    }
-    case 'vec3': {
-      const x = portRange('x', 0);
-      const y = portRange('y', 0);
-      const z = portRange('z', 0);
-      result = {
-        min: [x.min[0], y.min[0], z.min[0]],
-        max: [x.max[0], y.max[0], z.max[0]],
-      };
-      break;
-    }
+    case 'vec2':
+    case 'vec3':
     case 'vec4': {
-      const x = portRange('x', 0);
-      const y = portRange('y', 0);
-      const z = portRange('z', 0);
-      const w = portRange('w', 0);
-      result = {
-        min: [x.min[0], y.min[0], z.min[0], w.min[0]],
-        max: [x.max[0], y.max[0], z.max[0], w.max[0]],
-      };
+      const min: number[] = [];
+      const max: number[] = [];
+      for (const input of def.inputs) {
+        const r = portRange(input.id, 0);
+        min.push(r.min[0]);
+        max.push(r.max[0]);
+      }
+      result = { min, max };
       break;
     }
     case 'append': {

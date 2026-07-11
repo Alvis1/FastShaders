@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import './Toolbar.css';
 
@@ -44,6 +44,37 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * While open, close on a click outside every exempt ref or on Escape.
+ * The handlers read the live `refs` array through a render-updated ref, so
+ * callers may pass a fresh array literal each render without stale capture.
+ */
+function useDismiss(
+  open: boolean,
+  setOpen: (open: boolean) => void,
+  refs: RefObject<HTMLElement | null>[]
+) {
+  const refsRef = useRef(refs);
+  refsRef.current = refs;
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (refsRef.current.some((r) => r.current?.contains(t))) return;
+      setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+}
+
 export function Toolbar() {
   const shaderName = useAppStore((s) => s.shaderName);
   const setShaderName = useAppStore((s) => s.setShaderName);
@@ -72,62 +103,15 @@ export function Toolbar() {
   );
 
   // Close the contact popover on outside click or Escape
-  useEffect(() => {
-    if (!contactOpen) return;
-    const onPointerDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (popoverRef.current?.contains(t)) return;
-      if (brandRef.current?.contains(t)) return;
-      setContactOpen(false);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setContactOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [contactOpen]);
+  useDismiss(contactOpen, setContactOpen, [popoverRef, brandRef]);
 
   // Close the Local (desktop download) dropdown on outside click or Escape.
   // One wrapper ref covers both the trigger and the popover.
-  useEffect(() => {
-    if (!localOpen) return;
-    const onPointerDown = (e: MouseEvent) => {
-      if (localRef.current?.contains(e.target as Node)) return;
-      setLocalOpen(false);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setLocalOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [localOpen]);
+  useDismiss(localOpen, setLocalOpen, [localRef]);
 
   // Close the VR bench popover on outside click or Escape (the server keeps
   // running — closing the panel must not interrupt a bench on the headset).
-  useEffect(() => {
-    if (!vrOpen) return;
-    const onPointerDown = (e: MouseEvent) => {
-      if (vrRef.current?.contains(e.target as Node)) return;
-      setVrOpen(false);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setVrOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [vrOpen]);
+  useDismiss(vrOpen, setVrOpen, [vrRef]);
 
   // Re-sync with the actual server state each time the panel opens — the
   // Rust side owns the truth (e.g. after a failed start or an app reload).
@@ -322,11 +306,11 @@ export function Toolbar() {
         )}
         <a
           className="toolbar__sc-link"
-          href={`${import.meta.env.BASE_URL}viewer.html`}
+          href={`${import.meta.env.BASE_URL}podest.html`}
           target="_blank"
           rel="noreferrer noopener"
-          title="Open Viewer — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
-          aria-label="Open Viewer"
+          title="Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
+          aria-label="Open Podest"
         >
           P
         </a>

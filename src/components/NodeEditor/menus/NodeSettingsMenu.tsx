@@ -1,11 +1,10 @@
-import type { CSSProperties } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getNodeValues, getNodeExposedPorts } from '@/types';
 import type { NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
-import { generateId } from '@/utils/idGenerator';
 import { removeEdgesForPort } from '@/utils/edgeUtils';
+import { rowStyle, labelStyle, colorFieldStyle, nameFieldStyle, NodeActions } from './menuShared';
 
 /** Categories whose nodes always show all ports — no expose/hide checkboxes
  *  needed. Rows-layout ShaderNode ignores exposedPorts for these, so a
@@ -17,37 +16,21 @@ const ALWAYS_EXPOSED_CATEGORIES: Set<NodeCategory> = new Set([
   'input', 'math', 'type', 'arithmetic', 'interpolation', 'logic', 'vector', 'color',
 ]);
 
+const checkLabelStyle = { ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px' } as const;
+const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
+
 interface NodeSettingsMenuProps {
   nodeId: string;
 }
 
 export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   const nodes = useAppStore((s) => s.nodes);
-  const addNode = useAppStore((s) => s.addNode);
-  const removeNode = useAppStore((s) => s.removeNode);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
-  const closeContextMenu = useAppStore((s) => s.closeContextMenu);
 
   const node = nodes.find((n) => n.id === nodeId);
   if (!node) return null;
 
   const def = NODE_REGISTRY.get(node.data.registryType);
-
-  const handleDuplicate = () => {
-    const clone: typeof node = {
-      ...structuredClone(node),
-      id: generateId(),
-      position: { x: node.position.x + 30, y: node.position.y + 30 },
-      selected: false,
-    };
-    addNode(clone);
-    closeContextMenu();
-  };
-
-  const handleDelete = () => {
-    removeNode(nodeId);
-    closeContextMenu();
-  };
 
   const exposedPorts: string[] = getNodeExposedPorts(node);
   const showPortToggles = def ? !ALWAYS_EXPOSED_CATEGORIES.has(def.category as NodeCategory) : false;
@@ -96,25 +79,14 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
         .map((inp) => {
           const isExposed = exposedPorts.includes(inp.id);
           return (
-            <div
-              key={inp.id}
-              style={{
-                padding: 'var(--space-1) var(--space-3)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 'var(--space-2)',
-              }}
-            >
-              <label
-                style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}
-              >
+            <div key={inp.id} style={rowStyle}>
+              <label style={checkLabelStyle}>
                 <input
                   type="checkbox"
                   checked={isExposed}
                   onChange={() => handleTogglePort(inp.id)}
                   title="Expose as input socket"
-                  style={{ width: '12px', height: '12px', margin: 0 }}
+                  style={checkStyle}
                 />
                 {inp.label}
               </label>
@@ -131,26 +103,15 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
           const isExposed = exposedPorts.includes(key);
 
           return (
-            <div
-              key={key}
-              style={{
-                padding: 'var(--space-1) var(--space-3)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 'var(--space-2)',
-              }}
-            >
-              <label
-                style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}
-              >
+            <div key={key} style={rowStyle}>
+              <label style={checkLabelStyle}>
                 {showPortToggles && (
                   <input
                     type="checkbox"
                     checked={isExposed}
                     onChange={() => handleTogglePort(key)}
                     title="Expose as input socket"
-                    style={{ width: '12px', height: '12px', margin: 0 }}
+                    style={checkStyle}
                   />
                 )}
                 {key}
@@ -160,30 +121,14 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
                   type="text"
                   value={String(currentValue)}
                   onChange={(e) => handleValueChange(key, e.target.value)}
-                  style={{
-                    width: '100px',
-                    padding: '2px 6px',
-                    background: 'var(--bg-input)',
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--border-radius-sm)',
-                    fontSize: 'var(--font-size-xs)',
-                    color: 'var(--text-primary)',
-                  }}
+                  style={nameFieldStyle}
                 />
               ) : isColor ? (
                 <input
                   type="color"
                   value={String(currentValue)}
                   onChange={(e) => handleValueChange(key, e.target.value)}
-                  style={{
-                    width: '80px',
-                    padding: '2px 4px',
-                    background: 'var(--bg-input)',
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--border-radius-sm)',
-                    fontSize: 'var(--font-size-xs)',
-                    color: 'var(--text-primary)',
-                  }}
+                  style={colorFieldStyle}
                 />
               ) : isPort ? null : (
                 <DragNumberInput
@@ -207,25 +152,9 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
         const setVal = (key: string, value: string | number) =>
           updateNodeData(nodeId, { values: { ...getNodeValues(node), [key]: value } });
 
-        const rowStyle: CSSProperties = {
-          padding: 'var(--space-1) var(--space-3)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 'var(--space-2)',
-        };
-        const labelStyle: CSSProperties = {
-          fontSize: 'var(--font-size-xs)',
-          color: 'var(--text-secondary)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '4px',
-        };
-        const checkStyle: CSSProperties = { width: '12px', height: '12px', margin: 0 };
-
         const checkboxRow = (label: string, key: string, dflt: boolean, title: string) => (
           <div style={rowStyle}>
-            <label style={labelStyle}>
+            <label style={checkLabelStyle}>
               <input
                 type="checkbox"
                 checked={flagOf(key, dflt)}
@@ -248,7 +177,7 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
             {/* colorSpace keeps its string contract ('color' | 'data') — the
                 emission branch and makeImageNodeData both read it that way. */}
             <div style={rowStyle}>
-              <label style={labelStyle}>
+              <label style={checkLabelStyle}>
                 <input
                   type="checkbox"
                   checked={vals.colorSpace === 'data'}
@@ -263,13 +192,7 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
         );
       })()}
 
-      <div className="context-menu__divider" />
-      <button className="context-menu__item" onClick={handleDuplicate}>
-        Duplicate Node
-      </button>
-      <button className="context-menu__item" onClick={handleDelete} style={{ color: '#e74c3c' }}>
-        Delete Node
-      </button>
+      <NodeActions nodeId={nodeId} />
     </div>
   );
 }

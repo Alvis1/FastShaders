@@ -100,7 +100,7 @@ function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale,
     transformOrigin: 'top left',
   };
   const nodeStyle: CSSProperties = {
-    background: 'var(--bg-panel)',
+    background: 'var(--node-bg)',
     border: `1.5px solid ${catColor}`,
   };
   if (box.width) {
@@ -277,16 +277,49 @@ function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale,
 }
 
 /* ============================================================
+ * CardShell — shared card frame (badge, header, output handle)
+ * ============================================================ */
+
+function canvasCtx(canvas: HTMLCanvasElement | null) {
+  return canvas?.getContext('2d') ?? null;
+}
+
+function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, headerTextColor, children }: ContentProps & { children: React.ReactNode }) {
+  return (
+    <div
+      className="node-base node-preview-card__node"
+      style={{ background: 'var(--node-bg)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+    >
+      {cost > 0 && (
+        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
+      )}
+
+      <div className="node-base__header" style={{ background: costColor }}>
+        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
+      </div>
+
+      {children}
+
+      {def.outputs[0] && (
+        <span
+          className="node-preview-card__handle node-preview-card__handle--right-abs"
+          style={{ background: getTypeColor(def.outputs[0].dataType) }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
  * MathCardContent — waveform canvas (static)
  * ============================================================ */
 
-function MathCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
+function MathCardContent(props: ContentProps) {
+  const { def } = props;
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvasCtx(canvasRef.current);
     if (!ctx) return;
 
     const func = def.type === 'cos' ? Math.cos : Math.sin;
@@ -302,18 +335,7 @@ function MathCardContent({ def, catColor, costColor, costTextColor, costScale, c
   }, [def.type]);
 
   return (
-    <div
-      className="node-base node-preview-card__node"
-      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
-    >
-      {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
-      )}
-
-      <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
-      </div>
-
+    <CardShell {...props}>
       <div className="node-preview-card__canvas-wrap">
         <canvas
           ref={canvasRef}
@@ -329,13 +351,7 @@ function MathCardContent({ def, catColor, costColor, costTextColor, costScale, c
           style={{ background: getTypeColor(def.inputs[0].dataType), bottom: 8 }}
         />
       )}
-      {def.outputs[0] && (
-        <span
-          className="node-preview-card__handle node-preview-card__handle--right-abs"
-          style={{ background: getTypeColor(def.outputs[0].dataType) }}
-        />
-      )}
-    </div>
+    </CardShell>
   );
 }
 
@@ -343,13 +359,12 @@ function MathCardContent({ def, catColor, costColor, costTextColor, costScale, c
  * NoiseCardContent — CPU noise pattern (static)
  * ============================================================ */
 
-function NoiseCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
+function NoiseCardContent(props: ContentProps) {
+  const { def } = props;
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvasCtx(canvasRef.current);
     if (!ctx) return;
 
     const imageData = renderNoisePreview(
@@ -363,18 +378,7 @@ function NoiseCardContent({ def, catColor, costColor, costTextColor, costScale, 
   }, [def.type, def.defaultValues]);
 
   return (
-    <div
-      className="node-base node-preview-card__node"
-      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
-    >
-      {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
-      )}
-
-      <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
-      </div>
-
+    <CardShell {...props}>
       <div className="node-preview-card__canvas-wrap">
         <canvas
           ref={canvasRef}
@@ -383,14 +387,7 @@ function NoiseCardContent({ def, catColor, costColor, costTextColor, costScale, 
           className="node-preview-card__canvas--noise"
         />
       </div>
-
-      {def.outputs[0] && (
-        <span
-          className="node-preview-card__handle node-preview-card__handle--right-abs"
-          style={{ background: getTypeColor(def.outputs[0].dataType) }}
-        />
-      )}
-    </div>
+    </CardShell>
   );
 }
 
@@ -398,13 +395,11 @@ function NoiseCardContent({ def, catColor, costColor, costTextColor, costScale, 
  * ClockCardContent — static clock face
  * ============================================================ */
 
-function ClockCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
+function ClockCardContent(props: ContentProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvasCtx(canvasRef.current);
     if (!ctx) return;
 
     const size = 56;
@@ -453,18 +448,7 @@ function ClockCardContent({ def, catColor, costColor, costTextColor, costScale, 
   }, []);
 
   return (
-    <div
-      className="node-base node-preview-card__node"
-      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
-    >
-      {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
-      )}
-
-      <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
-      </div>
-
+    <CardShell {...props}>
       <div className="node-preview-card__canvas-wrap">
         <canvas
           ref={canvasRef}
@@ -473,14 +457,7 @@ function ClockCardContent({ def, catColor, costColor, costTextColor, costScale, 
           className="node-preview-card__canvas--clock"
         />
       </div>
-
-      {def.outputs[0] && (
-        <span
-          className="node-preview-card__handle node-preview-card__handle--right-abs"
-          style={{ background: getTypeColor(def.outputs[0].dataType) }}
-        />
-      )}
-    </div>
+    </CardShell>
   );
 }
 
@@ -488,25 +465,15 @@ function ClockCardContent({ def, catColor, costColor, costTextColor, costScale, 
  * SliderCardContent — slider with range track preview
  * ============================================================ */
 
-function SliderCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
+function SliderCardContent(props: ContentProps) {
+  const { def } = props;
   const val = Number(def.defaultValues?.value ?? 0.5);
   const min = Number(def.defaultValues?.min ?? 0);
   const max = Number(def.defaultValues?.max ?? 1);
   const pct = max > min ? ((val - min) / (max - min)) * 100 : 50;
 
   return (
-    <div
-      className="node-base node-preview-card__node"
-      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
-    >
-      {cost > 0 && (
-        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
-      )}
-
-      <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
-      </div>
-
+    <CardShell {...props}>
       <div className="node-preview-card__slider-wrap">
         <div className="node-preview-card__slider-track">
           <div className="node-preview-card__slider-fill" style={{ width: `${pct}%` }} />
@@ -518,14 +485,7 @@ function SliderCardContent({ def, catColor, costColor, costTextColor, costScale,
           <span>{max}</span>
         </div>
       </div>
-
-      {def.outputs[0] && (
-        <span
-          className="node-preview-card__handle node-preview-card__handle--right-abs"
-          style={{ background: getTypeColor(def.outputs[0].dataType) }}
-        />
-      )}
-    </div>
+    </CardShell>
   );
 }
 

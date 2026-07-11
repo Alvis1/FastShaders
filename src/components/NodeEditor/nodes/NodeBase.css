@@ -55,7 +55,7 @@
   inset: 0;
   border-radius: var(--border-radius-md);
   border: 1.5px solid; /* color set inline (category) */
-  background: var(--bg-panel);
+  background: var(--node-bg);
   z-index: -1;
   pointer-events: none;
 }
@@ -87,14 +87,6 @@
   min-width: 0;
 }
 
-.node-base__cost {
-  font-size: 8px;
-  color: rgba(0, 0, 0, 0.35);
-  font-weight: 600;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
 /* ===== Body (port rows) ===== */
 .node-base__body {
   padding: 0;
@@ -121,11 +113,4 @@
 
 .node-base__row .react-flow__handle-right {
   right: calc(var(--handle-size) / -2) !important;
-}
-
-/* ===== Port label ===== */
-.node-base__port-label {
-  font-size: 8px;
-  color: rgba(0, 0, 0, 0.55);
-  white-space: nowrap;
 }

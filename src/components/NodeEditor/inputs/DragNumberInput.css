@@ -140,3 +140,23 @@
     min-width: 24px;
   }
 }
+
+/* ===== Dark theme — CHROME variant only =====
+   The base selectors below assume a light input (black washes, white edit fill).
+   Scoping with :not(.drag-num--compact) flips only the menu/chrome inputs and
+   leaves the on-node compact variant untouched, so node value boxes stay light. */
+:root[data-theme="dark"] .drag-num:not(.drag-num--compact) .drag-num__arrow:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+:root[data-theme="dark"] .drag-num:not(.drag-num--compact) .drag-num__arrow:active {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+:root[data-theme="dark"] .drag-num:not(.drag-num--compact) .drag-num__value--dragging {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+:root[data-theme="dark"] .drag-num:not(.drag-num--compact) .drag-num__edit {
+  background: var(--bg-input);
+}

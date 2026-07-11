@@ -194,6 +194,37 @@
   line-height: 1.5;
 }
 
+/* ===== Dark theme touch-ups =====
+   The tabbar/banners are token-driven and flip for free. These few rules borrow
+   text tokens for BUTTON backgrounds (which flip light in dark → invisible label)
+   or use black washes (invisible on dark), so they need explicit dark values. */
+:root[data-theme="dark"] .code-editor__tab:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+:root[data-theme="dark"] .code-editor__theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/* Save = neutral filled button; keep it a dark-stable surface (its --text-secondary
+   fill would otherwise flip to a light gray under white text). */
+:root[data-theme="dark"] .code-editor__save {
+  background: #4a4d52;
+}
+
+:root[data-theme="dark"] .code-editor__save:hover {
+  background: #5a5e65;
+}
+
+/* Action buttons stay accent-blue at rest; only the --text-primary hover breaks. */
+:root[data-theme="dark"] .code-editor__action-btn:hover {
+  background: #3f6fd0;
+}
+
+:root[data-theme="dark"] .code-editor__error-line {
+  color: #ff6b6b;
+}
+
 .code-editor__error-hint {
   font-size: var(--font-size-xs);
   color: var(--text-secondary);

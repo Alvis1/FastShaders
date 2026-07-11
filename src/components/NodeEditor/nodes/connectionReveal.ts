@@ -29,16 +29,14 @@
 import type { ReactFlowState } from '@xyflow/react';
 
 /** The editor's handle-snap radius (flow px) — passed to <ReactFlow
- *  connectionRadius> by NodeEditor. Single source of truth. */
+ *  connectionRadius> by NodeEditor, and the reveal radius: identical by
+ *  design, so hidden sockets appear at exactly the distance a wire could
+ *  snap to them. Single source of truth. */
 export const CONNECTION_RADIUS = 40;
-
-/** Reveal radius — identical to the snap radius by design: hidden sockets
- *  appear at exactly the distance a wire could snap to them. */
-export const CONNECTION_REVEAL_RADIUS = CONNECTION_RADIUS;
 
 /**
  * Selector → true while an output→input connection is being dragged and its
- * free end sits within `CONNECTION_REVEAL_RADIUS` of node `id`'s box. Returns
+ * free end sits within `CONNECTION_RADIUS` of node `id`'s box. Returns
  * a plain boolean so React Flow's `useStore` (Object.is equality) re-renders
  * the node only when it crosses the threshold, not on every mousemove.
  */
@@ -63,7 +61,7 @@ export function makeConnectionRevealSelector(id: string, enabled: boolean) {
     const fy = (c.to.y - vy) / scale;
     const dx = fx < x ? x - fx : fx > x + w ? fx - (x + w) : 0;
     const dy = fy < y ? y - fy : fy > y + h ? fy - (y + h) : 0;
-    return dx * dx + dy * dy <= CONNECTION_REVEAL_RADIUS * CONNECTION_REVEAL_RADIUS;
+    return dx * dx + dy * dy <= CONNECTION_RADIUS * CONNECTION_RADIUS;
   };
 }
 

@@ -175,6 +175,18 @@ export function ShaderSettingsMenu() {
             />
             Along Normal
           </label>
+          <label
+            style={labelStyle}
+            title="Weld shared vertices so the surface deforms as one skin. Off: a cube's faces split apart (each face displaces on its own)."
+          >
+            <input
+              type="checkbox"
+              checked={settings.mergeVertices !== false}
+              onChange={(e) => updateSettings({ mergeVertices: e.target.checked })}
+              style={checkboxStyle}
+            />
+            Merge Vertices
+          </label>
         </>
       )}
 

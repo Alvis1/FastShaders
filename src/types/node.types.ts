@@ -70,6 +70,14 @@ export interface MaterialSettings {
   depthWrite?: boolean;
   /** How displacement is applied: 'normal' = along surface normal, 'offset' = raw vec3 offset. */
   displacementMode?: 'normal' | 'offset';
+  /**
+   * Weld coincident primitive vertices before displacing (default on, i.e.
+   * undefined === true). A BoxGeometry splits every face into its own verts, so
+   * normal-based displacement pushes the shared corners apart and the faces
+   * separate; welding collapses them into one shared, smooth-normal vertex so
+   * the surface deforms as a single skin. Only affects primitive previews with
+   * displacement — OBJ models always weld via fit-bounds. */
+  mergeVertices?: boolean;
   /** Alpha clip threshold. 0 = disabled, >0 = discard fragments below this alpha value. */
   alphaTest?: number;
 }
@@ -180,6 +188,11 @@ export type AppEdge = Edge<TypedEdgeData>;
 export function getNodeValues(node: AppNode): Record<string, string | number> {
   if (node.type === 'output' || node.type === 'group' || node.type === 'note') return {};
   return (node.data as ShaderNodeData).values ?? {};
+}
+
+/** Spread-merge a patch into a node's values (mutates node.data in place). */
+export function setNodeValues(node: AppNode, patch: Record<string, string | number>): void {
+  (node.data as ShaderNodeData).values = { ...getNodeValues(node), ...patch };
 }
 
 /** Safely extract exposedPorts from any AppNode's data. */

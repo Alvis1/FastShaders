@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import type { ReactFlowState } from '@xyflow/react';
-import { makeConnectionRevealSelector, CONNECTION_REVEAL_RADIUS } from './connectionReveal';
+import { makeConnectionRevealSelector, CONNECTION_RADIUS } from './connectionReveal';
 
 // Node box in FLOW coords: (100,100) sized 60×40. The selector receives the
 // connection endpoint in SCREEN/pane pixels and must convert it to flow via the
 // viewport transform before measuring proximity — the coordinate-space bug that
 // made the reveal never fire (screen point compared to a flow box).
 const NODE = { x: 100, y: 100, w: 60, h: 40 };
-const R = CONNECTION_REVEAL_RADIUS;
+const R = CONNECTION_RADIUS;
 
 /** Screen point that lands on flow point (fx, fy) under transform [vx,vy,scale]. */
 function screenFor(fx: number, fy: number, [vx, vy, scale]: [number, number, number]) {

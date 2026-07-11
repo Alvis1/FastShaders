@@ -130,7 +130,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   return (
     <div
       className={`node-base math-preview-node ${selected ? 'node-base--selected' : ''}`}
-      style={{ background: 'var(--bg-panel)', border: `1.5px solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--node-bg)', border: `1.5px solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {/* Cost badge above node */}
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}

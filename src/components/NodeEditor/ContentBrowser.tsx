@@ -6,6 +6,7 @@ import { NodePreviewCard } from './NodePreviewCard';
 import { SavedGroupCard } from './SavedGroupCard';
 import { TextureCard } from './TextureCard';
 import { useAppStore } from '@/store/useAppStore';
+import { readPersisted, usePersistedState } from '@/hooks/usePersistedState';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
 import complexityData from '@/registry/complexity.json';
@@ -96,28 +97,28 @@ const WHEEL_ZOOM_K = Math.log(ZOOM_STEP) / 100;
 const WHEEL_PX_CAP = 300;
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
+// Module-scope (stable identity) per the usePersistedState contract.
+const validateCollapsed = (raw: string | null): boolean => raw === '1';
+const serializeCollapsed = (v: boolean): string => (v ? '1' : '0');
+const validateZoom = (raw: string | null): number => {
+  const v = parseFloat(raw ?? '');
+  return Number.isFinite(v) ? clampZoom(v) : 1;
+};
+
 export function ContentBrowser() {
   const [activeCategory, setActiveCategory] = useState<BrowserCategory>('all');
   const [search, setSearch] = useState('');
   // Asset-bar collapse, persisted so it survives reloads.
-  const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem('fs:assetBarCollapsed') === '1'; } catch { return false; }
-  });
+  const [collapsed, setCollapsed] = usePersistedState('fs:assetBarCollapsed', validateCollapsed, { serialize: serializeCollapsed });
   const toggleCollapsed = useCallback(() => {
-    setCollapsed((c) => {
-      const next = !c;
-      try { localStorage.setItem('fs:assetBarCollapsed', next ? '1' : '0'); } catch { /* private mode */ }
-      return next;
-    });
-  }, []);
+    setCollapsed((c) => !c);
+  }, [setCollapsed]);
   // Tile zoom, persisted. Applied as a `zoom` style on the items strip, so it
-  // compounds with the tiles' own fixed 0.67 zoom.
-  const [zoom, setZoom] = useState(() => {
-    try {
-      const v = parseFloat(localStorage.getItem('fs:assetZoom') ?? '');
-      return Number.isFinite(v) ? clampZoom(v) : 1;
-    } catch { return 1; }
-  });
+  // compounds with the tiles' own fixed 0.67 zoom. Only the read seed goes
+  // through the shared helper — the write side stays local because it is
+  // debounced + toFixed(3) (see the persist effect below), which the
+  // write-per-change hook deliberately doesn't model.
+  const [zoom, setZoom] = useState(() => readPersisted('fs:assetZoom', validateZoom));
   // No rounding here — smooth pinch deltas are tiny factors that 2-decimal
   // rounding would swallow entirely. Persistence is debounced below (pinches
   // fire dozens of events per second; a setItem per event would jank).

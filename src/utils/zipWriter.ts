@@ -5,7 +5,7 @@
  * packages the self-contained `.js` module together with the image files.
  * STORE is deliberate: the payloads are already-compressed WebP/PNG/JPEG
  * (deflate would gain nothing) and method 0 is readable by every unzip tool,
- * including viewer.html's DecompressionStream-based reader.
+ * including podest.html's DecompressionStream-based reader.
  *
  * Pure and deterministic (fixed DOS timestamp) so it runs identically on the
  * host and in node-environment tests.

@@ -7,18 +7,12 @@ import {
   type EdgeProps,
   type ReactFlowState,
 } from '@xyflow/react';
-import type { AppEdge, AppNode, TSLDataType } from '@/types';
+import type { AppEdge, AppNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
-import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { getTypeColor, COUNT_EDGE_COLORS, getContrastColor } from '@/utils/colorUtils';
+import { COUNT_EDGE_COLORS, getContrastColor } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { evaluateNodeOutput, getNodeOutputShape } from '@/engine/cpuEvaluator';
 import { EdgeInfoCard } from './EdgeInfoCard';
-
-/** Type priority for broadcasting: higher = wider type */
-const TYPE_PRIORITY: Record<TSLDataType, number> = {
-  any: -1, int: 0, float: 1, vec2: 2, vec3: 3, color: 3, vec4: 4,
-};
 
 function buildNodeMap(nodes: AppNode[]): Map<string, AppNode> {
   const m = new Map<string, AppNode>();
@@ -100,112 +94,27 @@ function getRadialBezierPath(params: {
   return [`M${sx},${sy} C${c1x},${c1y} ${c2x},${c2y} ${tx},${ty}`, labelX, labelY];
 }
 
-/** Walk upstream from a node to find the concrete data type flowing through it. */
-function resolveUpstreamType(
-  nodeId: string,
-  handleId: string | null | undefined,
-  nodeMap: Map<string, AppNode>,
-  incomingByTarget: Map<string, AppEdge[]>,
-  visited: Set<string>,
-): TSLDataType {
-  if (visited.has(nodeId)) return 'any';
-  visited.add(nodeId);
-
-  const node = nodeMap.get(nodeId);
-  if (!node) return 'any';
-
-  const def = NODE_REGISTRY.get(node.data.registryType);
-  if (!def) return 'any';
-
-  // Check this node's output port first
-  const port = def.outputs.find((o) => o.id === (handleId ?? 'out'));
-  if (port && port.dataType !== 'any') return port.dataType;
-
-  // Walk further upstream: check all inputs, pick the widest concrete type
-  let bestType: TSLDataType = 'any';
-  let bestPriority = -1;
-
-  const incoming = incomingByTarget.get(nodeId);
-  if (incoming) {
-    for (const input of def.inputs) {
-      const upEdge = incoming.find((e) => e.targetHandle === input.id);
-      if (upEdge) {
-        const upType = resolveUpstreamType(upEdge.source, upEdge.sourceHandle, nodeMap, incomingByTarget, visited);
-        const priority = TYPE_PRIORITY[upType] ?? -1;
-        if (priority > bestPriority) {
-          bestPriority = priority;
-          bestType = upType;
-        }
-      }
-    }
-  }
-
-  return bestType;
-}
-
-/** Resolve 'any' to a concrete type by walking upstream, then checking target port. */
-function resolveDataType(
-  edgeType: TSLDataType,
-  sourceId: string,
-  sourceHandleId: string | null | undefined,
-  targetId: string,
-  targetHandleId: string | null | undefined,
-  nodeMap: Map<string, AppNode>,
-  incomingByTarget: Map<string, AppEdge[]>,
-): TSLDataType {
-  if (edgeType !== 'any') return edgeType;
-
-  // Walk upstream from source to find the concrete type flowing through
-  const upstreamType = resolveUpstreamType(sourceId, sourceHandleId, nodeMap, incomingByTarget, new Set());
-  if (upstreamType !== 'any') return upstreamType;
-
-  // Fall back to target input port
-  const tgtNode = nodeMap.get(targetId);
-  if (tgtNode) {
-    const tgtDef = NODE_REGISTRY.get(tgtNode.data.registryType);
-    const tgtPort = tgtDef?.inputs.find((i) => i.id === targetHandleId);
-    if (tgtPort && tgtPort.dataType !== 'any') return tgtPort.dataType;
-  }
-
-  return edgeType;
-}
-
 export function TypedEdge({
   id,
   source,
   target,
   sourceHandleId,
-  targetHandleId,
   sourceX,
   sourceY,
   targetX,
   targetY,
   sourcePosition,
   targetPosition,
-  data,
   selected,
 }: EdgeProps<AppEdge>) {
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
 
-  // Build per-graph lookup structures once per nodes/edges identity (not once per
-  // rendered edge) — React Flow renders one TypedEdge component per edge, so
-  // without memoization these lookups were O(E·N) across the whole canvas.
+  // Build the node lookup once per nodes identity (not once per rendered
+  // edge) — React Flow renders one TypedEdge component per edge, so without
+  // memoization this lookup was O(E·N) across the whole canvas.
   const nodeMap = useMemo(() => buildNodeMap(nodes), [nodes]);
-  const incomingByTarget = useMemo(() => {
-    const m = new Map<string, AppEdge[]>();
-    for (const e of edges) {
-      const list = m.get(e.target);
-      if (list) list.push(e);
-      else m.set(e.target, [e]);
-    }
-    return m;
-  }, [edges]);
-
-  const rawType = data?.dataType ?? 'any';
-  const dataType = resolveDataType(rawType, source, sourceHandleId, target, targetHandleId, nodeMap, incomingByTarget);
-  const baseColor = getTypeColor(dataType);
 
   // Color-circle sources get a radial exit tangent (perpendicular to the
   // circle) instead of a cardinal one — see getRadialBezierPath. The radial
@@ -359,7 +268,7 @@ export function TypedEdge({
         onPointerUp={onInteractionUp}
       />
       {paths.map((path, i) => {
-        const lineColor = channelColors.length > 0 ? channelColors[i] : baseColor;
+        const lineColor = channelColors[i];
         return (
           <path
             key={i}
@@ -379,9 +288,6 @@ export function TypedEdge({
           <EdgeInfoCard
             sourceId={source}
             targetId={target}
-            sourceHandleId={sourceHandleId}
-            targetHandleId={targetHandleId}
-            edgeDataType={dataType}
             labelX={labelX}
             labelY={labelY}
           />

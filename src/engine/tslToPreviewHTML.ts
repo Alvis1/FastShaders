@@ -45,6 +45,29 @@ export interface PreviewOptions {
   initialCameraPosition?: CameraPosition | null;
   /** Spin parent rotation to restore so the object angle survives iframe rebuilds. */
   initialRotation?: CameraPosition | null;
+  /**
+   * Build a top-level (non-sandboxed) immersive-VR page instead of the
+   * sandboxed editor preview. Immersive WebXR can NEVER run inside the
+   * preview iframe: Permissions-Policy cannot delegate xr-spatial-tracking
+   * to an opaque origin, so entry must happen from a top-level document
+   * (ShaderPreview opens an about:blank popup that inherits the app's real
+   * origin). In xr mode the page:
+   *   - hides `navigator.gpu` up front so three r184 auto-falls back to its
+   *     WebGL2 backend — the WebGPU backend hard-throws in
+   *     XRManager.setSession (r173–r184) and Quest Browser has no
+   *     WebXR+WebGPU at all; TSL compiles identically via GLSLNodeBuilder.
+   *     This is the no-bundle-patch equivalent of the proven forceWebGL
+   *     recipe (aframe issue 5749).
+   *   - keeps `navigator.xr` visible (the normal preview hides it because
+   *     A-Frame's XR init path breaks on the WebGPU backend).
+   *   - enables A-Frame's own Enter-VR button (`vr-mode-ui`).
+   *   - loads OBJ models directly by URL — the page is same-origin, so the
+   *     CORS constraint that forces the sandboxed preview onto the
+   *     postMessage model feed does not apply.
+   */
+  xr?: boolean;
+  /** Document title — the XR popup shows the shader name in its tab. */
+  title?: string;
 }
 
 /**
@@ -81,7 +104,7 @@ export function buildGeoAttr(
  * works from any scheme the app is served on (https://, tauri://, file://)
  * and with both absolute ('/FastShaders/') and relative ('./') base paths,
  * whereas `location.origin + base` concatenation breaks on non-http schemes
- * and relative bases. (Same pattern as public/viewer.html.)
+ * and relative bases. (Same pattern as public/podest.html.)
  */
 function resolveAssetUrl(pathFromBase: string): string {
   const base = import.meta.env.BASE_URL;
@@ -89,11 +112,18 @@ function resolveAssetUrl(pathFromBase: string): string {
   return new URL(`${base}${pathFromBase}`, window.location.href).href;
 }
 
+/** Escape text for safe interpolation into HTML content (the <title>). */
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
+  ));
+}
+
 /**
  * Resolve the absolute URL of an OBJ model in `public/models/`.
  *
- * Exported so ShaderPreview can build the same URL when hot-swapping
- * geometry via postMessage.
+ * Exported so ShaderPreview can fetch the model text for the sandboxed
+ * preview's postMessage model feed (and for any future direct-URL use).
  */
 export function getModelUrl(geometry: 'teapot' | 'bunny'): string {
   const file = geometry === 'bunny' ? 'stanford-bunny.obj' : 'teapot.obj';
@@ -287,6 +317,111 @@ const FIT_BOUNDS_SCRIPT = `<script>
         var scale = this.data.size / (Math.max(size.x, size.y, size.z) || 1);
         mesh.position.sub(center.multiplyScalar(scale));
         mesh.scale.setScalar(scale);
+      }
+    });
+  }
+<\/script>`;
+
+/**
+ * `weld-verts` A-Frame component: welds coincident primitive vertices so
+ * per-vertex displacement stays continuous across faces.
+ *
+ * BoxGeometry splits every face into its own 4 vertices (24 total) each
+ * carrying that face's normal + UV. Normal-based displacement
+ * (`positionLocal + normalLocal * h`) then drives the 3 coincident copies at
+ * each corner along 3 different normals, so the faces visibly separate. Welding
+ * collapses same-position vertices into one (with smooth, recomputed normals),
+ * so the surface deforms as a single skin — the same merge `fit-bounds` does
+ * for OBJ models.
+ *
+ * Only attached to primitive entities that actually displace, and only when the
+ * output node's "Merge Vertices" displacement setting is on (default). It
+ * re-welds on every geometry (re)build — the initial mesh plus subdivision /
+ * geometry hot-swaps — via A-Frame's componentinitialized/componentchanged
+ * events (plus a direct call in case geometry initialized first). UVs are
+ * preserved (representative per welded vertex) so texture-driven shaders keep
+ * working; a plane (no coincident verts) is left untouched.
+ *
+ * String literal so the iframe sees raw JS — no Vite transformation pass.
+ */
+const WELD_VERTS_SCRIPT = `<script>
+  if (window.AFRAME && !AFRAME.components["weld-verts"]) {
+    function weldByPosition(geom) {
+      var pos = geom.attributes.position;
+      if (!pos) return null;
+      var uv = geom.attributes.uv;
+      var oldIndex = geom.index;
+      var precision = 1e4; // 4 decimal places
+      var lookup = Object.create(null);
+      var newPositions = [];
+      var newUVs = uv ? [] : null;
+      var remap = new Uint32Array(pos.count);
+      var nextIndex = 0;
+      for (var i = 0; i < pos.count; i++) {
+        var x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        var key = Math.round(x * precision) + "_" + Math.round(y * precision) + "_" + Math.round(z * precision);
+        var idx = lookup[key];
+        if (idx === undefined) {
+          idx = nextIndex++;
+          lookup[key] = idx;
+          newPositions.push(x, y, z);
+          if (newUVs) newUVs.push(uv.getX(i), uv.getY(i));
+        }
+        remap[i] = idx;
+      }
+      // Nothing coincident (e.g. a plane, or an already-welded grid) — leave the
+      // geometry and its original attributes untouched.
+      if (nextIndex === pos.count) return null;
+      var indexCount = oldIndex ? oldIndex.count : pos.count;
+      var Arr = nextIndex < 65535 ? Uint16Array : Uint32Array;
+      var newIndex = new Arr(indexCount);
+      if (oldIndex) {
+        for (var j = 0; j < indexCount; j++) newIndex[j] = remap[oldIndex.getX(j)];
+      } else {
+        for (var k = 0; k < indexCount; k++) newIndex[k] = remap[k];
+      }
+      var merged = new THREE.BufferGeometry();
+      merged.setAttribute("position", new THREE.BufferAttribute(new Float32Array(newPositions), 3));
+      if (newUVs) merged.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(newUVs), 2));
+      merged.setIndex(new THREE.BufferAttribute(newIndex, 1));
+      merged.computeVertexNormals();
+      merged.userData.__welded = true;
+      return merged;
+    }
+
+    AFRAME.registerComponent("weld-verts", {
+      init: function () {
+        this.weld = this.weld.bind(this);
+        var self = this;
+        var onGeom = function (e) { if (e.detail && e.detail.name === "geometry") self.weld(); };
+        // componentinitialized covers the case where the geometry component
+        // inits after this one; componentchanged covers subdivision / geometry
+        // hot-swaps; the direct call covers geometry already being built.
+        this.el.addEventListener("componentinitialized", onGeom);
+        this.el.addEventListener("componentchanged", onGeom);
+        this.weld();
+      },
+      weld: function () {
+        var mesh = this.el.getObject3D("mesh");
+        if (!mesh || !mesh.geometry) return;
+        var g = mesh.geometry;
+        // Already our welded copy — nothing to do (guards against re-welding
+        // when unrelated components change).
+        if (g.userData && g.userData.__welded) return;
+        var welded = weldByPosition(g);
+        if (!welded) {
+          // Mark so we don't rescan the same original every componentchanged.
+          g.userData.__welded = true;
+          return;
+        }
+        mesh.geometry = welded;
+        // Dispose only geometries WE created; the geometry component owns and
+        // disposes the originals it builds.
+        if (this._welded) this._welded.dispose();
+        this._welded = welded;
+      },
+      remove: function () {
+        if (this._welded) { this._welded.dispose(); this._welded = null; }
       }
     });
   }
@@ -667,11 +802,22 @@ export function tslToPreviewHTML(
     subdivision = 64,
     initialCameraPosition = null,
     initialRotation = null,
+    xr = false,
+    title,
   } = options;
 
   const shaderModule = convertToShaderModule(tslCode, materialSettings);
   const isObj = isObjGeometry(geometry);
   const { iife, shaderloader, orbitControls } = getScriptUrls();
+
+  // Weld coincident primitive vertices so displacement stays continuous across
+  // faces (default on). Only relevant when the shader actually displaces —
+  // `positionNode` in the emitted module is the tell — and only for primitives
+  // (OBJ models always weld via fit-bounds). Attaching the `weld-verts`
+  // component to the entity does the work; see WELD_VERTS_SCRIPT.
+  const hasDisplacement = /positionNode\s*:/.test(shaderModule);
+  const weldPrimitive =
+    !isObj && hasDisplacement && materialSettings?.mergeVertices !== false;
 
   // Plane spins on its Z axis (in-plane, like a record), since the flat face
   // is already pointed at the camera. Everything else spins on Y like a turntable.
@@ -715,11 +861,24 @@ export function tslToPreviewHTML(
   //   framing matches the primitives.
   let entityAttrs: string;
   if (isObj) {
-    const url = getModelUrl(geometry as 'teapot' | 'bunny');
-    entityAttrs = `obj-model="obj: url(${url})" fit-bounds="size: 1.6"`;
+    if (xr) {
+      // Top-level XR page: same-origin, CORS never applies — load directly.
+      const url = getModelUrl(geometry as 'teapot' | 'bunny');
+      entityAttrs = `obj-model="obj: url(${url})" fit-bounds="size: 1.6"`;
+    } else {
+      // Sandboxed preview: the iframe's opaque origin makes the OBJ fetch a
+      // CORS request, and generic hosts don't answer it (gh-pages sends
+      // ACAO:*, most others don't — deploy-only teapot/bunny breakage). No
+      // network obj-model here: the PARENT fetches the model text
+      // (same-origin, CORS-free) and posts it in via fs:obj-model; the feed
+      // script below applies it as a blob: URL. Until it arrives the entity
+      // has no mesh and the scene shows the bg color, exactly like the old
+      // still-downloading state.
+      entityAttrs = 'fit-bounds="size: 1.6"';
+    }
   } else {
     const geoAttr = buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane', subdivision);
-    entityAttrs = `geometry="${geoAttr}"`;
+    entityAttrs = `geometry="${geoAttr}"${weldPrimitive ? ' weld-verts' : ''}`;
   }
 
   const lines: string[] = [];
@@ -728,17 +887,32 @@ export function tslToPreviewHTML(
   lines.push('<html lang="en">');
   lines.push('<head>');
   lines.push('  <meta charset="UTF-8">');
-  // Error overlay hooks first — they must be installed before the bundles
+  if (xr) {
+    // XR mode: hide navigator.gpu BEFORE anything can read it (first head
+    // script) so three r184 deterministically picks its WebXR-capable WebGL2
+    // backend — see the `xr` option doc on PreviewOptions. Both the prototype
+    // getter and the instance property are overridden, mirroring hideGpu in
+    // the scene-boot pre-flight (some browsers expose gpu on
+    // Navigator.prototype, where an instance define alone wouldn't stick).
+    lines.push(`  <script>try{Object.defineProperty(Navigator.prototype,"gpu",{get:function(){return undefined;},configurable:true});}catch(e){}try{Object.defineProperty(navigator,"gpu",{value:undefined,configurable:true});}catch(e){}<${''}/script>`);
+  }
+  if (title) {
+    lines.push(`  <title>${escapeHtml(title)}</title>`);
+  }
+  // Error overlay hooks early — they must be installed before the bundles
   // load and before any shader code runs. See ERROR_OVERLAY_SCRIPT.
   lines.push(ERROR_OVERLAY_SCRIPT);
-  // Neutralize WebXR BEFORE A-Frame loads. The editor preview is a desktop
-  // render that never enters XR, but A-Frame 1.8.0 initializes its WebXR path
-  // whenever `navigator.xr` is present — and on the Three.js r184 WebGPU backend
-  // that init can throw "Cannot read properties of undefined (reading 'id')" and
-  // abort the render, especially when a browser extension (e.g. the Immersive
-  // Web Emulator) injects/overrides `navigator.xr`. Hiding it keeps A-Frame on
-  // the plain desktop renderer. (Immersive XR lives in ShaderCarousel, not here.)
-  lines.push(`  <script>try{Object.defineProperty(navigator,"xr",{value:undefined,configurable:true});}catch(e){}<${''}/script>`);
+  if (!xr) {
+    // Neutralize WebXR BEFORE A-Frame loads. The editor preview is a desktop
+    // render that never enters XR, but A-Frame 1.8.0 initializes its WebXR path
+    // whenever `navigator.xr` is present — and on the Three.js r184 WebGPU backend
+    // that init can throw "Cannot read properties of undefined (reading 'id')" and
+    // abort the render, especially when a browser extension (e.g. the Immersive
+    // Web Emulator) injects/overrides `navigator.xr`. Hiding it keeps A-Frame on
+    // the plain desktop renderer. (The XR popup skips this — there navigator.xr
+    // must stay visible, and the WebGL2 fallback avoids the broken init path.)
+    lines.push(`  <script>try{Object.defineProperty(navigator,"xr",{value:undefined,configurable:true});}catch(e){}<${''}/script>`);
+  }
   // The onerror attributes route through __fsShowStickyError (never a direct
   // getElementById — these fire while <head> is still parsing, before the
   // #error div exists, so a direct lookup would null-deref). Sticky: a load
@@ -770,6 +944,13 @@ export function tslToPreviewHTML(
   lines.push(FIT_BOUNDS_SCRIPT);
   lines.push('');
 
+  // Register the weld-verts component used by displaced primitive previews.
+  // Only attached (via entityAttrs) when weldPrimitive; inert otherwise.
+  if (weldPrimitive) {
+    lines.push(WELD_VERTS_SCRIPT);
+    lines.push('');
+  }
+
   // The <a-scene> is injected AFTER a WebGPU pre-flight instead of being
   // parsed statically: three r184 picks its WebGPU backend on
   // `navigator.gpu != null` ALONE (no adapter check), and Safari 26 exposes
@@ -781,7 +962,9 @@ export function tslToPreviewHTML(
   // can't deliver makes three fall back to WebGL2 deterministically. Scripts
   // that need the scene run via __fsWhenSceneBooted.
   const sceneLines: string[] = [];
-  sceneLines.push(`<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ${bgColor}">`);
+  // vr-mode-ui only in xr mode: A-Frame then renders its own Enter-VR button,
+  // which is the immersive entry point for the popup page.
+  sceneLines.push(`<a-scene vr-mode-ui="enabled: ${xr ? 'true' : 'false'}" loading-screen="enabled: false" background="color: ${bgColor}">`);
   sceneLines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
   // Parent holds the spin (so it tweens cleanly 0→360 on world Y/Z), child
   // holds the static tilt and the shader/geometry. The id stays on the child
@@ -846,6 +1029,47 @@ export function tslToPreviewHTML(
   lines.push('  })();');
   lines.push(`<${''}/script>`);
   lines.push('');
+
+  if (isObj && !xr) {
+    // OBJ model feed for the sandboxed preview. The parent fetches the model
+    // text (same-origin — CORS never applies to it) and posts fs:obj-model
+    // after this iframe's load event; a blob: URL is same-origin inside the
+    // sandbox (and allowed by connect-src blob:), so THREE's loader can fetch
+    // it. The listener registers at TOP level — the parent's post can land
+    // before the async WebGPU pre-flight boots the scene, so the payload is
+    // held and applied via __fsWhenSceneBooted once the entity exists.
+    // Rapid geometry switching rebuilds the iframe per OBJ model, so each
+    // document accepts ONLY the geometry it was built for — a late-resolving
+    // fetch for the previous model can never apply here.
+    lines.push('<script>');
+    lines.push(`  var __fsExpectedObj = ${JSON.stringify(geometry)};`);
+    lines.push('  (function () {');
+    lines.push('    var applied = false;');
+    lines.push('    function apply(text) {');
+    lines.push('      if (applied) return;');
+    lines.push('      var entity = document.getElementById("preview-entity");');
+    lines.push('      if (!entity) return;');
+    lines.push('      applied = true;');
+    lines.push('      var url = URL.createObjectURL(new Blob([text]));');
+    lines.push('      entity.setAttribute("obj-model", "obj: url(" + url + ")");');
+    lines.push('    }');
+    lines.push('    window.addEventListener("message", function (e) {');
+    lines.push('      if (e.source !== window.parent) return;');
+    lines.push('      var msg = e.data;');
+    lines.push('      if (!msg || msg.geometry !== __fsExpectedObj) return;');
+    lines.push('      if (msg.type === "fs:obj-model-error") {');
+    lines.push('        // Sticky, like a vendored-script 404: a later successful shader');
+    lines.push('        // apply must not clear it — there is still no mesh to shade.');
+    lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedObj + "): " + msg.message);');
+    lines.push('        return;');
+    lines.push('      }');
+    lines.push('      if (msg.type !== "fs:obj-model" || typeof msg.text !== "string") return;');
+    lines.push('      window.__fsWhenSceneBooted(function () { apply(msg.text); });');
+    lines.push('    });');
+    lines.push('  })();');
+    lines.push(`<${''}/script>`);
+    lines.push('');
+  }
 
   // Set shader attribute once the scene (and thus the entity) exists.
   lines.push('<script>');

@@ -76,6 +76,52 @@ describe('graphToCode — variable naming', () => {
     // mx_noise_float → noise1, not mx_noise_float1
     expect(varNames.get('p')).toBe('noise1');
   });
+
+  // Property names are load-bearing: uniform values persist by name, so the
+  // bare-base-first / suffix-starts-at-2 scheme must never drift.
+  it('gives a property node its bare user name with no suffix', () => {
+    const p = makeNode('p', 'property_float', { name: 'speed', value: 1 });
+    const out = makeNode('out', 'output');
+    const { code, varNames } = graphToCode([p, out], [makeEdge('p', 'out', 'out', 'opacity')]);
+    expect(varNames.get('p')).toBe('speed');
+    expect(code).toContain('const speed = ');
+  });
+
+  it('suffixes a second same-named property starting at 2', () => {
+    const p1 = makeNode('p1', 'property_float', { name: 'speed', value: 1 });
+    const p2 = makeNode('p2', 'property_float', { name: 'speed', value: 2 });
+    const out = makeNode('out', 'output');
+    const { varNames } = graphToCode([p1, p2, out], [makeEdge('p1', 'out', 'out', 'opacity')]);
+    expect(varNames.get('p1')).toBe('speed');
+    expect(varNames.get('p2')).toBe('speed2');
+  });
+
+  it('skips past a taken suffix when resolving a property collision', () => {
+    const p1 = makeNode('p1', 'property_float', { name: 'speed', value: 1 });
+    const p2 = makeNode('p2', 'property_float', { name: 'speed2', value: 2 });
+    const p3 = makeNode('p3', 'property_float', { name: 'speed', value: 3 });
+    const out = makeNode('out', 'output');
+    const { varNames } = graphToCode([p1, p2, p3, out], [makeEdge('p1', 'out', 'out', 'opacity')]);
+    expect(varNames.get('p1')).toBe('speed');
+    expect(varNames.get('p2')).toBe('speed2');
+    expect(varNames.get('p3')).toBe('speed3');
+  });
+
+  it('skips the data base name forward when a column alias is already taken', () => {
+    // The property claims `data1_col0` first (source-order among topological
+    // peers), so the data node's `data1` candidate fails on its col0 alias and
+    // the whole namespace shifts to `data2`/`data2_col0`.
+    const p = makeNode('p', 'property_float', { name: 'data1_col0', value: 0.5 });
+    const d = makeNode('d', 'dataNode', {});
+    const out = makeNode('out', 'output');
+    const { code, varNames } = graphToCode(
+      [p, d, out],
+      [makeEdge('p', 'out', 'out', 'opacity'), makeEdge('d', 'col0', 'out', 'color')],
+    );
+    expect(varNames.get('p')).toBe('data1_col0');
+    expect(varNames.get('d')).toBe('data2');
+    expect(code).toContain('const data2_col0');
+  });
 });
 
 describe('graphToCode — type-constructor formatting', () => {

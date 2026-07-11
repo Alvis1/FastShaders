@@ -23,16 +23,19 @@ import { scriptToTSL } from './scriptToTSL';
  * `fs:project-imported` event lets ShaderPreview re-read its in-memory state
  * from those keys.
  */
-export function applyProjectToStore(project: FastShadersProject): void {
+function applyProjectToStore(project: FastShadersProject): void {
   const store = useAppStore.getState();
   store.pushHistory();
 
   if (project.shaderName) store.setShaderName(project.shaderName);
   if (project.selectedHeadsetId) store.setSelectedHeadsetId(project.selectedHeadsetId);
-  if (project.ui?.nodeEditorBgColor) store.setNodeEditorBgColor(project.ui.nodeEditorBgColor);
+  // Theme BEFORE canvas color: the canvas backdrop is now stored per-theme, so
+  // setNodeEditorBgColor writes into the active theme's slot — set the theme
+  // first, then the color lands where the project expects it.
   if (project.ui?.codeEditorTheme === 'vs' || project.ui?.codeEditorTheme === 'vs-dark') {
     store.setCodeEditorTheme(project.ui.codeEditorTheme);
   }
+  if (project.ui?.nodeEditorBgColor) store.setNodeEditorBgColor(project.ui.nodeEditorBgColor);
   if (project.ui?.costColorLow) store.setCostColorLow(project.ui.costColorLow);
   if (project.ui?.costColorHigh) store.setCostColorHigh(project.ui.costColorHigh);
 

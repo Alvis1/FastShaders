@@ -105,6 +105,30 @@ const cspHtmlPlugin = (): Plugin => ({
 });
 
 /**
+ * Strip the legacy `.woff` fallback src from the vendored @fontsource CSS at
+ * build time. Every woff2 subset rule survives untouched — only the trailing
+ * `, url(...woff) format('woff')` alternative is removed, so no browser that
+ * FastShaders supports loses anything while dist stops shipping a second copy
+ * of every font subset. Fonts stay fully LOCAL (@fontsource files bundled by
+ * Vite) — this only trims which local files get emitted.
+ *
+ * Build-only + `enforce: 'pre'`: dev serves the vendor CSS untouched, and at
+ * build the strip must land before vite:css resolves the url() references
+ * (which is what emits the font assets).
+ */
+const fontsourceWoff2OnlyPlugin = (): Plugin => ({
+  name: 'fs-fontsource-woff2-only',
+  apply: 'build',
+  enforce: 'pre',
+  transform(code, id) {
+    if (!/@fontsource\/.*\.css(\?.*)?$/.test(id)) return null;
+    // `[^)]*\.woff\)` cannot match a `.woff2` url (that ends in `woff2)`),
+    // so only the legacy-format alternative is dropped.
+    return { code: code.replace(/,\s*url\([^)]*\.woff\)\s*format\(['"]woff['"]\)/g, ''), map: null };
+  },
+});
+
+/**
  * Copy the ShaderCarousel/ sibling suite into dist/ShaderCarousel/ so the
  * SC link in the toolbar resolves on the deployed site. ShaderCarousel is
  * served as plain static HTML (it has its own import maps and A-Frame
@@ -123,7 +147,13 @@ const SHADER_CAROUSEL_EXCLUDE = new Set([
   '.gitattributes',
   'Untitled-2.ipynb',
 ]);
-const copyShaderCarousel = (dst: string) => {
+// The web dist already ships this exact bundle at dist/js/ (synced from the
+// same a-frame-shaderloader source into public/js/), so the web carousel copy
+// drops its duplicate and points bench-inout at the app's copy instead. The
+// desktop staging keeps its own — the LAN bench server serves the carousel
+// tree standalone, without dist/js next to it.
+const AFRAME_BUNDLE_REL = path.join('components', 'three', 'a-frame-180-a-01.min.js');
+const copyShaderCarousel = (dst: string, opts?: { shareAppAFrameBundle?: boolean }) => {
   const src = path.resolve(__dirname, 'ShaderCarousel');
   const dstAbs = path.resolve(__dirname, dst);
   // The desktop copy lives outside dist/ and persists between builds, so
@@ -131,14 +161,31 @@ const copyShaderCarousel = (dst: string) => {
   rmSync(dstAbs, { recursive: true, force: true });
   cpSync(src, dstAbs, {
     recursive: true,
-    filter: (s) => !SHADER_CAROUSEL_EXCLUDE.has(path.basename(s)),
+    filter: (s) =>
+      !SHADER_CAROUSEL_EXCLUDE.has(path.basename(s)) &&
+      !(opts?.shareAppAFrameBundle && path.relative(src, s) === AFRAME_BUNDLE_REL),
   });
+  if (opts?.shareAppAFrameBundle) {
+    // Rewrite only the COPIED bench-inout page — the source file must keep
+    // working standalone and in the desktop staging, which has its own copy.
+    const benchInout = path.join(dstAbs, 'bench-inout', 'index.html');
+    const from = '../components/three/a-frame-180-a-01.min.js';
+    const to = '../../js/a-frame-180-a-01.min.js';
+    const html = readFileSync(benchInout, 'utf-8');
+    if (!html.includes(from)) {
+      // Fail the build rather than deploy a bench page whose A-Frame 404s.
+      throw new Error(
+        `[fs-copy-shadercarousel] bench-inout/index.html no longer references ${from} — update the dedupe rewrite`
+      );
+    }
+    writeFileSync(benchInout, html.split(from).join(to));
+  }
 };
 const shaderCarouselCopyPlugin = (): Plugin => ({
   name: 'fs-copy-shadercarousel',
   apply: 'build',
   closeBundle() {
-    copyShaderCarousel('dist/ShaderCarousel');
+    copyShaderCarousel('dist/ShaderCarousel', { shareAppAFrameBundle: true });
   },
 });
 /**
@@ -350,6 +397,7 @@ export default defineConfig({
   plugins: [
     react(),
     versionHtmlPlugin(),
+    fontsourceWoff2OnlyPlugin(),
     ...(FS_DESKTOP ? [] : [cspHtmlPlugin()]),
     vendorSyncPlugin(),
     ...(FS_DESKTOP ? [shaderCarouselDesktopStagePlugin()] : [shaderCarouselCopyPlugin()]),
@@ -383,10 +431,14 @@ export default defineConfig({
     target: 'esnext',
     rollupOptions: {
       output: {
-        // Monaco is ~4MB of rarely-changing vendor code — its own chunk keeps
-        // the app chunk small and lets browsers cache Monaco across deploys.
-        manualChunks: {
-          monaco: ['monaco-editor'],
+        // Monaco is rarely-changing vendor code — its own chunk keeps the app
+        // chunk small and lets browsers cache Monaco across deploys. Function
+        // form (not `{ monaco: ['monaco-editor'] }`): monacoSetup.ts now
+        // cherry-picks deep ESM entries instead of the editor.main package
+        // entry, and the object form would force the full editor.main module
+        // (all language clients + tokenizers) back into the bundle.
+        manualChunks(id) {
+          if (id.includes('node_modules/monaco-editor/') && !id.endsWith('.css')) return 'monaco';
         },
       },
     },

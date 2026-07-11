@@ -173,6 +173,11 @@
   background: rgba(0, 0, 0, 0.02);
 }
 
+/* Dark theme: the black hover wash is invisible on a dark tab — flip to white. */
+:root[data-theme="dark"] .content-browser__cat-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
 /* Active tab: connected to the page below — border on top/sides, no bottom border */
 .content-browser__cat-btn--active {
   color: var(--text-primary);

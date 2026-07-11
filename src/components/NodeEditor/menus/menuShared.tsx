@@ -32,6 +32,15 @@ export const fieldStyle = {
   color: 'var(--text-primary)',
 } as const;
 
+/** Color pickers and small size `<select>`s. */
+export const colorFieldStyle = { ...fieldStyle, width: '80px' } as const;
+
+/** Wide text inputs (group/note names). */
+export const wideFieldStyle = { ...fieldStyle, width: '140px', padding: '2px 6px' } as const;
+
+/** The property-name text input. */
+export const nameFieldStyle = { ...fieldStyle, width: '100px', padding: '2px 6px' } as const;
+
 interface NumberRowProps {
   label: string;
   value: number;

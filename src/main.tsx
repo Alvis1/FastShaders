@@ -3,6 +3,9 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 // Self-hosted fonts (were Google Fonts <link>s in index.html) — the app must
 // render identically offline and in the desktop build, with no CDN reachable.
+// The vendor CSS is used as-is; the fs-fontsource-woff2-only plugin in
+// vite.config.ts strips the legacy .woff fallback src at build so only the
+// woff2 subsets reach dist.
 import '@fontsource/inter/400.css';
 import '@fontsource/inter/500.css';
 import '@fontsource/inter/600.css';

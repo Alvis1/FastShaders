@@ -39,30 +39,6 @@
   padding: 1px 8px;
 }
 
-.node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__port-label {
-  font-size: 11px;
-}
-
-.node-preview-card__row {
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.node-preview-card__left {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
-
-.node-preview-card__right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  min-width: 0;
-}
-
 /* Fake handle dots (inline in rows) */
 .node-preview-card__handle {
   width: 10px;
@@ -71,14 +47,6 @@
   border: 2px solid white;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
   flex-shrink: 0;
-}
-
-.node-preview-card__handle--left {
-  margin-left: -10px;
-}
-
-.node-preview-card__handle--right {
-  margin-right: -10px;
 }
 
 /* Absolutely positioned fake handles (for canvas-based variants) */
@@ -94,37 +62,12 @@
   left: -5px;
 }
 
-.node-preview-card__value {
-  /* follows the per-node designer text scale, like live node values */
-  font-size: calc(10px * var(--node-text-scale, 1));
-  font-family: var(--font-mono);
-  color: rgba(0, 0, 0, 0.5);
-  white-space: nowrap;
-}
-
-.node-preview-card__color-swatch {
-  width: 16px;
-  height: 14px;
-  border-radius: 3px;
-  border: 1px solid rgba(0, 0, 0, 0.15);
-  flex-shrink: 0;
-}
-
 /* --- Canvas-based preview variants --- */
 
 .node-preview-card__canvas-wrap {
   padding: 3px 5px;
   display: flex;
   justify-content: center;
-}
-
-/* Texture canvas (96x96) */
-.node-preview-card__canvas--texture {
-  width: 96px;
-  height: 96px;
-  border-radius: var(--border-radius-sm);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  background: rgba(0, 0, 0, 0.04);
 }
 
 /* Math waveform canvas (72x72) */
@@ -149,20 +92,6 @@
   width: 56px;
   height: 56px;
   border-radius: 50%;
-}
-
-/* GPU placeholder (before WebGPU ready) */
-.node-preview-card__placeholder {
-  width: 96px;
-  height: 96px;
-  border-radius: var(--border-radius-sm);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  background: rgba(0, 0, 0, 0.04);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  color: rgba(0, 0, 0, 0.4);
 }
 
 /* --- Slider preview variant --- */

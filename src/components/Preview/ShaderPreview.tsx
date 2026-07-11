@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getNodeValues } from '@/types';
+import { usePersistedState } from '@/hooks/usePersistedState';
 import {
   GEOMETRY_ROTATIONS,
   LIGHT_PRESETS,
   buildGeoAttr,
+  getModelUrl,
   isObjGeometry,
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
@@ -67,19 +69,13 @@ function BoundInput({
   );
 }
 
-function loadGeometry(): GeometryType {
-  try {
-    const v = localStorage.getItem('fs:previewGeometry');
-    if (v === 'cube' || v === 'plane' || v === 'sphere' || v === 'teapot' || v === 'bunny') return v;
-  } catch { /* */ }
+function validateGeometry(v: string | null): GeometryType {
+  if (v === 'cube' || v === 'plane' || v === 'sphere' || v === 'teapot' || v === 'bunny') return v;
   return 'sphere';
 }
 
-function loadLighting(): LightingMode {
-  try {
-    const v = localStorage.getItem('fs:previewLighting');
-    if (v === 'studio' || v === 'moon' || v === 'laboratory') return v;
-  } catch { /* */ }
+function validateLighting(v: string | null): LightingMode {
+  if (v === 'studio' || v === 'moon' || v === 'laboratory') return v;
   return 'studio';
 }
 
@@ -95,11 +91,8 @@ function isValidCssColor(v: string): boolean {
     /^rgba?\(\s*[\d.,\s%]+\)$/.test(v) ||
     /^[a-zA-Z]{3,20}$/.test(v);
 }
-function loadBgColor(): string {
-  try {
-    const v = localStorage.getItem('fs:previewBgColor');
-    if (v && isValidCssColor(v)) return v;
-  } catch { /* */ }
+function validateBgColor(v: string | null): string {
+  if (v && isValidCssColor(v)) return v;
   return DEFAULT_BG_COLOR;
 }
 
@@ -107,11 +100,9 @@ const SUBDIVISION_MIN = 1;
 const SUBDIVISION_MAX = 256;
 const SUBDIVISION_DEFAULT = 64;
 
-function loadSubdivision(): number {
-  try {
-    const v = parseInt(localStorage.getItem('fs:previewSubdivision') ?? '', 10);
-    if (!isNaN(v) && v >= SUBDIVISION_MIN && v <= SUBDIVISION_MAX) return v;
-  } catch { /* */ }
+function validateSubdivision(raw: string | null): number {
+  const v = parseInt(raw ?? '', 10);
+  if (!isNaN(v) && v >= SUBDIVISION_MIN && v <= SUBDIVISION_MAX) return v;
   return SUBDIVISION_DEFAULT;
 }
 
@@ -126,17 +117,14 @@ function safeJsonReviver(key: string, value: unknown): unknown {
   return value;
 }
 
-function loadCameraPos(): CameraPosition | null {
+function loadVec3(key: string, reject?: (p: CameraPosition) => boolean): CameraPosition | null {
   try {
-    const raw = localStorage.getItem('fs:previewCameraPos');
+    const raw = localStorage.getItem(key);
     if (raw) {
       const p = JSON.parse(raw, safeJsonReviver);
       if (p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
-        // Reject origin-ish values — a prior bug saved (0,0,0) every frame by
-        // reading the camera-entity wrapper instead of the camera itself.
-        // Restoring that would place the camera inside the mesh.
-        if (Math.hypot(p.x, p.y, p.z) < 1) {
-          try { localStorage.removeItem('fs:previewCameraPos'); } catch { /* */ }
+        if (reject?.(p)) {
+          try { localStorage.removeItem(key); } catch { /* */ }
           return null;
         }
         return { x: p.x, y: p.y, z: p.z };
@@ -146,49 +134,64 @@ function loadCameraPos(): CameraPosition | null {
   return null;
 }
 
+function loadCameraPos(): CameraPosition | null {
+  // Reject origin-ish values — a prior bug saved (0,0,0) every frame by
+  // reading the camera-entity wrapper instead of the camera itself.
+  // Restoring that would place the camera inside the mesh.
+  return loadVec3('fs:previewCameraPos', (p) => Math.hypot(p.x, p.y, p.z) < 1);
+}
+
 function loadRotation(): CameraPosition | null {
-  try {
-    const raw = localStorage.getItem('fs:previewRotation');
-    if (raw) {
-      const p = JSON.parse(raw, safeJsonReviver);
-      if (p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number') {
-        return { x: p.x, y: p.y, z: p.z };
-      }
-    }
-  } catch { /* */ }
-  return null;
+  return loadVec3('fs:previewRotation');
 }
 
-function loadPlaying(): boolean {
-  try { return localStorage.getItem('fs:previewPlaying') === 'true'; } catch { return false; }
+function validatePlaying(v: string | null): boolean {
+  return v === 'true';
 }
 
-function loadUniformBounds(): Record<string, UniformBounds> {
-  try {
-    const raw = localStorage.getItem('fs:previewUniformBounds');
-    if (raw) {
-      const parsed = JSON.parse(raw, safeJsonReviver);
-      if (parsed && typeof parsed === 'object') return parsed as Record<string, UniformBounds>;
-    }
-  } catch { /* */ }
+function validateUniformBounds(raw: string | null): Record<string, UniformBounds> {
+  if (raw) {
+    const parsed = JSON.parse(raw, safeJsonReviver);
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, UniformBounds>;
+  }
   return {};
 }
 
-function loadUniformValues(): Record<string, number> {
-  try {
-    const raw = localStorage.getItem('fs:previewUniformValues');
-    if (raw) {
-      const parsed = JSON.parse(raw, safeJsonReviver);
-      if (parsed && typeof parsed === 'object') {
-        const result: Record<string, number> = {};
-        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-          if (typeof v === 'number' && Number.isFinite(v)) result[k] = v;
-        }
-        return result;
+function validateUniformValues(raw: string | null): Record<string, number> {
+  if (raw) {
+    const parsed = JSON.parse(raw, safeJsonReviver);
+    if (parsed && typeof parsed === 'object') {
+      const result: Record<string, number> = {};
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof v === 'number' && Number.isFinite(v)) result[k] = v;
       }
+      return result;
     }
-  } catch { /* */ }
+  }
   return {};
+}
+
+/**
+ * Module-level OBJ text cache: each model is fetched at most once per session
+ * (teapot ~256KB, bunny ~3.1MB). The PARENT does this fetch because it runs
+ * in the app's real origin where CORS never applies — the sandboxed preview
+ * iframe's opaque origin turns the same request into a CORS fetch that
+ * generic hosts reject (the deploy-only teapot/bunny failure). The text is
+ * fed to the iframe via postMessage (fs:obj-model). A failed fetch is
+ * evicted so a transient network error can retry on the next iframe load.
+ */
+const objTextCache = new Map<'teapot' | 'bunny', Promise<string>>();
+function fetchObjText(geometry: 'teapot' | 'bunny'): Promise<string> {
+  let p = objTextCache.get(geometry);
+  if (!p) {
+    p = fetch(getModelUrl(geometry)).then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status} fetching model`);
+      return r.text();
+    });
+    p.catch(() => objTextCache.delete(geometry));
+    objTextCache.set(geometry, p);
+  }
+  return p;
 }
 
 /**
@@ -217,16 +220,20 @@ export function ShaderPreview() {
   const previewCode = useAppStore((s) => s.previewCode);
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
+  const shaderName = useAppStore((s) => s.shaderName);
 
   // Read material settings from the output node
   const outputNode = nodes.find((n) => n.data.registryType === 'output');
   const materialSettings = (outputNode?.data as { materialSettings?: PreviewOptions['materialSettings'] })?.materialSettings;
 
-  const [geometry, setGeometry] = useState<GeometryType>(loadGeometry);
-  const [playing, setPlaying] = useState<boolean>(loadPlaying);
-  const [lighting, setLighting] = useState<LightingMode>(loadLighting);
-  const [subdivision, setSubdivision] = useState<number>(loadSubdivision);
-  const [bgColor, setBgColor] = useState(loadBgColor);
+  // All preview prefs re-read on `fs:project-imported` — a project file
+  // carries them, and the overlay + iframe srcDoc inputs must pick up the
+  // imported values without a page reload.
+  const [geometry, setGeometry] = usePersistedState('fs:previewGeometry', validateGeometry, { reloadOnProjectImport: true });
+  const [playing, setPlaying] = usePersistedState('fs:previewPlaying', validatePlaying, { reloadOnProjectImport: true });
+  const [lighting, setLighting] = usePersistedState('fs:previewLighting', validateLighting, { reloadOnProjectImport: true });
+  const [subdivision, setSubdivision] = usePersistedState('fs:previewSubdivision', validateSubdivision, { reloadOnProjectImport: true });
+  const [bgColor, setBgColor] = usePersistedState('fs:previewBgColor', validateBgColor, { reloadOnProjectImport: true });
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -296,20 +303,14 @@ export function ShaderPreview() {
 
   // Per-uniform min/max — persisted across reloads, keyed by uniform name
   const [showUniforms, setShowUniforms] = useState(true);
-  const [uniformBounds, setUniformBounds] = useState<Record<string, UniformBounds>>(loadUniformBounds);
-  useEffect(() => {
-    try { localStorage.setItem('fs:previewUniformBounds', JSON.stringify(uniformBounds)); } catch { /* */ }
-  }, [uniformBounds]);
+  const [uniformBounds, setUniformBounds] = usePersistedState('fs:previewUniformBounds', validateUniformBounds, { serialize: JSON.stringify, reloadOnProjectImport: true });
 
   // Live slider values — overlay-local (don't write back to the graph, so
   // tweaking a slider doesn't trigger a graph re-sync and tear the iframe
   // down) but persisted to localStorage so refresh + node-graph mutations
   // (rename/delete/re-add of a property node) preserve user tuning, the
   // same way uniformBounds and camera/rotation already do.
-  const [uniformValues, setUniformValues] = useState<Record<string, number>>(loadUniformValues);
-  useEffect(() => {
-    try { localStorage.setItem('fs:previewUniformValues', JSON.stringify(uniformValues)); } catch { /* */ }
-  }, [uniformValues]);
+  const [uniformValues, setUniformValues] = usePersistedState('fs:previewUniformValues', validateUniformValues, { serialize: JSON.stringify, reloadOnProjectImport: true });
   // When the set of uniform names changes, seed any newly-appearing entries
   // from their code-side default. Existing entries (including ones that
   // disappeared earlier and have just come back via undo/rename/re-add) keep
@@ -426,38 +427,12 @@ export function ShaderPreview() {
     });
   }, []);
 
-  // Persist geometry, lighting, subdivision, and bg color selections
-  useEffect(() => {
-    try { localStorage.setItem('fs:previewGeometry', geometry); } catch { /* */ }
-  }, [geometry]);
-  useEffect(() => {
-    try { localStorage.setItem('fs:previewLighting', lighting); } catch { /* */ }
-  }, [lighting]);
-  useEffect(() => {
-    try { localStorage.setItem('fs:previewSubdivision', String(subdivision)); } catch { /* */ }
-  }, [subdivision]);
-  useEffect(() => {
-    try { localStorage.setItem('fs:previewBgColor', bgColor); } catch { /* */ }
-  }, [bgColor]);
-  useEffect(() => {
-    try { localStorage.setItem('fs:previewPlaying', String(playing)); } catch { /* */ }
-  }, [playing]);
-
   // Project-file import (CodeEditor → dispatch `fs:project-imported`):
   // localStorage has already been overwritten with the imported preview prefs
-  // by the time this fires, but our useState values were seeded once at mount
-  // and would still hold the old ones. Re-read the loaders so the overlay,
-  // iframe srcDoc inputs, and uniform sliders pick up the new values without
-  // a full page reload.
+  // by the time this fires. The usePersistedState hooks re-read their own
+  // keys; the camera/rotation refs — seeded once at mount — are re-read here.
   useEffect(() => {
     const handler = () => {
-      setGeometry(loadGeometry());
-      setLighting(loadLighting());
-      setSubdivision(loadSubdivision());
-      setBgColor(loadBgColor());
-      setPlaying(loadPlaying());
-      setUniformBounds(loadUniformBounds());
-      setUniformValues(loadUniformValues());
       cameraPosRef.current = loadCameraPos();
       rotationRef.current = loadRotation();
     };
@@ -580,6 +555,71 @@ export function ShaderPreview() {
     );
   }, [geometry, effectiveSubdivision]);
 
+  // OBJ model feed (see objTextCache above). By the iframe's load event its
+  // top-level fs:obj-model listener is guaranteed installed (all preview
+  // scripts are synchronous), so post-after-load can't lose the message —
+  // same pattern as the fs:preview-ready→uniforms handshake. Runs on EVERY
+  // load, so each geometry-rebuild iframe instance gets its model. The
+  // message carries the geometry name and the iframe only accepts the model
+  // it was built for, so a slow fetch resolving after a rapid teapot→bunny
+  // switch can't apply a stale mesh to the newer document.
+  const handleIframeLoad = useCallback(() => {
+    if (!isObjGeometry(geometry)) return;
+    const geo = geometry as 'teapot' | 'bunny';
+    fetchObjText(geo).then(
+      (text) => {
+        iframeRef.current?.contentWindow?.postMessage(
+          { type: 'fs:obj-model', geometry: geo, text },
+          '*',
+        );
+      },
+      (err: unknown) => {
+        // Surface through the iframe's error overlay instead of failing
+        // silently — the parent has no error surface of its own here.
+        iframeRef.current?.contentWindow?.postMessage(
+          {
+            type: 'fs:obj-model-error',
+            geometry: geo,
+            message: err instanceof Error ? err.message : String(err),
+          },
+          '*',
+        );
+      },
+    );
+  }, [geometry]);
+
+  // Immersive VR entry. Permissions-Policy can never delegate
+  // xr-spatial-tracking to the sandboxed preview iframe's OPAQUE origin —
+  // immersive WebXR must start from a top-level page. An about:blank popup
+  // inherits this window's REAL origin, so the local bundle URLs load, the
+  // OBJ models fetch same-origin (plain obj-model url() — no message feed),
+  // and WebXR is permitted.
+  // SECURITY: the popup runs the APP-GENERATED shader module — the same
+  // safety-gated emission as the preview/export pipeline — at top level in
+  // the app's real origin. That is acceptable for generated code; never
+  // feed raw code-editor text into this path.
+  const handleOpenVR = useCallback(() => {
+    const w = window.open('', '_blank');
+    if (!w) {
+      window.alert('The browser blocked the VR window. Allow popups for this site and try again.');
+      return;
+    }
+    const html = tslToPreviewHTML(previewCode, {
+      geometry,
+      animate: playing,
+      materialSettings,
+      bgColor,
+      lighting,
+      subdivision: effectiveSubdivision,
+      initialCameraPosition: cameraPosRef.current,
+      initialRotation: rotationRef.current,
+      xr: true,
+      title: shaderName,
+    });
+    w.document.write(html);
+    w.document.close();
+  }, [previewCode, geometry, playing, materialSettings, bgColor, lighting, effectiveSubdivision, shaderName]);
+
   return (
     <div className="shader-preview">
       <div className="shader-preview__controls">
@@ -598,6 +638,19 @@ export function ShaderPreview() {
         >
           Reset
         </button>
+        {/* Hidden on desktop: the Tauri app has the LAN "VR" bench flow in
+            the toolbar, and window.open in its webview isn't this feature's
+            target. */}
+        {!__FS_DESKTOP__ && (
+          <button
+            type="button"
+            className="shader-preview__vr-btn"
+            onClick={handleOpenVR}
+            title="Open this shader in a new window with an Enter-VR button (WebXR requires a top-level page)"
+          >
+            VR
+          </button>
+        )}
         <input
           type="color"
           className="shader-preview__bg-color"
@@ -656,6 +709,7 @@ export function ShaderPreview() {
           ref={iframeRef}
           className="shader-preview__iframe"
           srcDoc={containerReady ? previewHtml : undefined}
+          onLoad={handleIframeLoad}
           title="Shader Preview"
           // User-pasted TSL becomes an ES module that runs inside this iframe.
           // Without sandboxing the iframe inherits the FastShaders origin and
