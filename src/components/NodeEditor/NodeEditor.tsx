@@ -35,7 +35,7 @@ import { getCostColor, getContrastColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
-import { bridgeEdgesAcrossDeletedNodes } from '@/utils/edgeUtils';
+import { bridgeEdgesAcrossDeletedNodes, makeTypedEdge } from '@/utils/edgeUtils';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
 import { makeImageNodeData, totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/utils/imageNode';
@@ -267,27 +267,8 @@ function tryInsertOnEdge(
   const inputPort = def.inputs[0];
   const outputPort = def.outputs[0];
 
-  const newEdge1: AppEdge = {
-    id: generateEdgeId(edge.source, edge.sourceHandle ?? 'out', nodeId, inputPort.id),
-    source: edge.source,
-    target: nodeId,
-    sourceHandle: edge.sourceHandle,
-    targetHandle: inputPort.id,
-    type: 'typed',
-    animated: true,
-    data: { dataType: 'any' },
-  };
-
-  const newEdge2: AppEdge = {
-    id: generateEdgeId(nodeId, outputPort.id, edge.target, edge.targetHandle ?? 'in'),
-    source: nodeId,
-    target: edge.target,
-    sourceHandle: outputPort.id,
-    targetHandle: edge.targetHandle,
-    type: 'typed',
-    animated: true,
-    data: { dataType: 'any' },
-  };
+  const newEdge1 = makeTypedEdge(edge.source, edge.sourceHandle, nodeId, inputPort.id);
+  const newEdge2 = makeTypedEdge(nodeId, outputPort.id, edge.target, edge.targetHandle);
 
   store.setEdges(
     store.edges.filter((e) => e.id !== edge.id).concat(newEdge1, newEdge2) as AppEdge[],
@@ -310,6 +291,7 @@ export function NodeEditor() {
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
+  const isDarkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const { screenToFlowPosition, getViewport, setViewport } = useReactFlow();
 
   // Copy/paste clipboard
@@ -740,21 +722,12 @@ export function NodeEditor() {
           !(e.target === connection.target && e.targetHandle === connection.targetHandle),
       );
 
-      const newEdge: AppEdge = {
-        id: generateEdgeId(
-          connection.source,
-          connection.sourceHandle ?? 'out',
-          connection.target,
-          connection.targetHandle ?? 'in',
-        ),
-        source: connection.source,
-        target: connection.target,
-        sourceHandle: connection.sourceHandle,
-        targetHandle: connection.targetHandle,
-        type: 'typed',
-        animated: true,
-        data: { dataType: 'any' },
-      };
+      const newEdge = makeTypedEdge(
+        connection.source,
+        connection.sourceHandle,
+        connection.target,
+        connection.targetHandle,
+      );
       setEdges(addEdge(newEdge, filtered) as AppEdge[]);
       // A drag that started as an edge disconnect ended in a successful
       // connect — onConnectEnd's early-return would leave the flag set and
@@ -1152,6 +1125,12 @@ export function NodeEditor() {
   const contrastShadow = contrastColor === '#000000'
     ? 'rgba(255, 255, 255, 0.65)'
     : 'rgba(0, 0, 0, 0.65)';
+  // The dot-grid and minimap fog are React Flow PROPS (SVG fill / canvas paint),
+  // so tokens.css can't reach them — flip them here. Grid follows the CANVAS
+  // backdrop (subtle either way); the minimap fog follows the app THEME because
+  // the minimap panel itself is --bg-panel.
+  const gridColor = contrastColor === '#000000' ? '#BBBBBB' : 'rgba(255, 255, 255, 0.12)';
+  const minimapMask = isDarkTheme ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.7)';
   const canvasCssVars = {
     '--node-cost-text': contrastColor,
     '--node-cost-text-shadow': contrastShadow,
@@ -1362,7 +1341,7 @@ export function NodeEditor() {
             variant={BackgroundVariant.Cross}
             gap={20}
             size={1}
-            color="#BBBBBB"
+            color={gridColor}
           />
           <Controls
             showInteractive={false}
@@ -1390,7 +1369,7 @@ export function NodeEditor() {
               return getCostColor(cost, costColorLow, costColorHigh);
             }}
             style={{ backgroundColor: 'var(--bg-panel)' }}
-            maskColor="rgba(255, 255, 255, 0.7)"
+            maskColor={minimapMask}
           />
         </ReactFlow>
 

@@ -19,7 +19,7 @@ import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
 import complexityData from '@/registry/complexity.json';
-import { bridgeEdgesAcrossDeletedNodes } from '@/utils/edgeUtils';
+import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges } from '@/utils/edgeUtils';
 import { normalizeChainOperands } from '@/utils/chainOperands';
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { makeDataNodeData } from '@/utils/dataNode';
@@ -155,7 +155,7 @@ function cloneGroupSnapshot(
 /** A dropped CSV whose column count exceeds COLUMN_WARN_THRESHOLD, awaiting the
  *  user's choice (cancel / place as-is / transpose) via CsvImportModal. Parsed
  *  once at drop time; position is already in flow coordinates. */
-export interface PendingCsvImport {
+interface PendingCsvImport {
   id: string;
   fileName: string;
   columnCount: number;
@@ -218,6 +218,26 @@ function loadRatio(key: string, fallback: number): number {
 
 function loadString(key: string, fallback: string): string {
   try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+}
+
+/**
+ * Per-theme node-editor canvas defaults. The canvas backdrop is a user
+ * preference remembered separately for light and dark mode; the dark default is
+ * kept well below getContrastColor()'s 0.55 luminance threshold so 1-channel
+ * edges + cost-badge text auto-flip to light on it.
+ */
+const DEFAULT_CANVAS_BG_LIGHT = '#FAFAFA';
+const DEFAULT_CANVAS_BG_DARK = '#1e1f22';
+
+/**
+ * Stamp `data-theme` on <html> so the chrome tokens in tokens.css flip. The one
+ * dark-mode control is the code-editor sun/moon button (codeEditorTheme), so the
+ * app theme is derived from it: 'vs-dark' → dark, 'vs' → light. An inline script
+ * in index.html sets this before first paint; this keeps it in sync on toggle.
+ */
+function applyThemeAttribute(theme: 'vs' | 'vs-dark'): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.setAttribute('data-theme', theme === 'vs-dark' ? 'dark' : 'light');
 }
 
 function snapshot(nodes: AppNode[], edges: AppEdge[]): HistoryEntry {
@@ -408,10 +428,15 @@ interface AppState {
   costColorLow: string;
   costColorHigh: string;
 
-  // Node editor background color (canvas backdrop)
+  // Node editor background color (canvas backdrop). `nodeEditorBgColor` is the
+  // EFFECTIVE value for the active theme (what the canvas + edge-contrast read);
+  // the light/dark slots below remember each theme's pick independently.
   nodeEditorBgColor: string;
+  nodeEditorBgColorLight: string;
+  nodeEditorBgColorDark: string;
 
-  // Code editor theme ('vs' = light, 'vs-dark' = dark)
+  // Code editor theme ('vs' = light, 'vs-dark' = dark). Also drives the app-wide
+  // dark theme via the `data-theme` attribute on <html>.
   codeEditorTheme: 'vs' | 'vs-dark';
 
   // User's library of saved groups (persisted to localStorage)
@@ -530,7 +555,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   nodeVarNames: {},
   costColorLow: loadString('fs:costColorLow', '#8BC34A'),
   costColorHigh: loadString('fs:costColorHigh', '#FF5722'),
-  nodeEditorBgColor: loadString('fs:nodeEditorBgColor', '#FAFAFA'),
+  nodeEditorBgColorLight: loadString('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
+  nodeEditorBgColorDark: loadString('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK),
+  // Effective canvas backdrop = the active theme's slot.
+  nodeEditorBgColor:
+    loadString('fs:codeEditorTheme', 'vs') === 'vs-dark'
+      ? loadString('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK)
+      : loadString('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
   codeEditorTheme: (loadString('fs:codeEditorTheme', 'vs') === 'vs-dark' ? 'vs-dark' : 'vs'),
   savedGroups: loadSavedGroups(),
 
@@ -792,13 +823,27 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setNodeEditorBgColor: (hex) => {
-    try { localStorage.setItem('fs:nodeEditorBgColor', hex); } catch { /* */ }
-    set({ nodeEditorBgColor: hex });
+    // Remember the pick per theme: the picker edits the ACTIVE theme's canvas
+    // only, so switching themes restores the other theme's backdrop.
+    const isDark = get().codeEditorTheme === 'vs-dark';
+    const key = isDark ? 'fs:nodeEditorBgColorDark' : 'fs:nodeEditorBgColor';
+    try { localStorage.setItem(key, hex); } catch { /* */ }
+    set(
+      isDark
+        ? { nodeEditorBgColor: hex, nodeEditorBgColorDark: hex }
+        : { nodeEditorBgColor: hex, nodeEditorBgColorLight: hex },
+    );
   },
 
   setCodeEditorTheme: (theme) => {
     try { localStorage.setItem('fs:codeEditorTheme', theme); } catch { /* */ }
-    set({ codeEditorTheme: theme });
+    // Flip the app-wide chrome (tokens.css [data-theme="dark"]) and swap the
+    // effective canvas backdrop to the newly-active theme's remembered color.
+    applyThemeAttribute(theme);
+    const state = get();
+    const nodeEditorBgColor =
+      theme === 'vs-dark' ? state.nodeEditorBgColorDark : state.nodeEditorBgColorLight;
+    set({ codeEditorTheme: theme, nodeEditorBgColor });
   },
 
   groupSelection: (nodeIds) => {
@@ -904,9 +949,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const grandParentId = groupNode.parentId;
     const groupData = groupNode.data as GroupNodeData;
     const wasCollapsed = !!groupData.collapsed;
-    const memberIds = new Set(
-      state.nodes.filter((n) => n.parentId === groupId).map((n) => n.id),
-    );
 
     const newNodes: AppNode[] = state.nodes
       .filter((n) => n.id !== groupId)
@@ -943,47 +985,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // `display: none` even though both endpoints still exist.
     let newEdges = state.edges;
     if (wasCollapsed) {
-      const inputSocketLookup = new Map<string, BoundarySocket>();
-      const outputSocketLookup = new Map<string, BoundarySocket>();
-      for (const s of groupData.collapsedInputs ?? []) inputSocketLookup.set(s.socketId, s);
-      for (const s of groupData.collapsedOutputs ?? []) outputSocketLookup.set(s.socketId, s);
-
-      newEdges = state.edges.map((e) => {
-        if (e.source === groupId && e.sourceHandle && outputSocketLookup.has(e.sourceHandle)) {
-          const socket = outputSocketLookup.get(e.sourceHandle)!;
-          return {
-            ...e,
-            id: generateEdgeId(
-              socket.originalNodeId,
-              socket.originalHandleId,
-              e.target,
-              e.targetHandle ?? 'in',
-            ),
-            source: socket.originalNodeId,
-            sourceHandle: socket.originalHandleId,
-          };
-        }
-        if (e.target === groupId && e.targetHandle && inputSocketLookup.has(e.targetHandle)) {
-          const socket = inputSocketLookup.get(e.targetHandle)!;
-          return {
-            ...e,
-            id: generateEdgeId(
-              e.source,
-              e.sourceHandle ?? 'out',
-              socket.originalNodeId,
-              socket.originalHandleId,
-            ),
-            target: socket.originalNodeId,
-            targetHandle: socket.originalHandleId,
-          };
-        }
-        if (memberIds.has(e.source) && memberIds.has(e.target)) {
-          const { className: _c, ...rest } = e as AppEdge & { className?: string };
-          void _c;
-          return rest as AppEdge;
-        }
-        return e;
-      });
+      newEdges = restoreCollapsedEdges(state.edges, state.nodes, groupNode);
     }
 
     set({ nodes: newNodes, edges: newEdges, syncSource: 'graph', isUndoRedo: false });
@@ -1328,50 +1330,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // === Expand ===
     // Restore boundary edges to their original child endpoints, unhide internal
     // edges, unhide member nodes, and clear the synthetic socket lists on the group.
-    const inputSocketLookup = new Map<string, BoundarySocket>();
-    const outputSocketLookup = new Map<string, BoundarySocket>();
-    for (const s of groupData.collapsedInputs ?? []) inputSocketLookup.set(s.socketId, s);
-    for (const s of groupData.collapsedOutputs ?? []) outputSocketLookup.set(s.socketId, s);
-
-    const restoredEdges: AppEdge[] = state.edges.map((e) => {
-      // Output boundary restoration: edge currently points FROM the group, restore source.
-      if (e.source === groupId && e.sourceHandle && outputSocketLookup.has(e.sourceHandle)) {
-        const socket = outputSocketLookup.get(e.sourceHandle)!;
-        return {
-          ...e,
-          id: generateEdgeId(
-            socket.originalNodeId,
-            socket.originalHandleId,
-            e.target,
-            e.targetHandle ?? 'in',
-          ),
-          source: socket.originalNodeId,
-          sourceHandle: socket.originalHandleId,
-        };
-      }
-      // Input boundary restoration: edge currently points TO the group, restore target.
-      if (e.target === groupId && e.targetHandle && inputSocketLookup.has(e.targetHandle)) {
-        const socket = inputSocketLookup.get(e.targetHandle)!;
-        return {
-          ...e,
-          id: generateEdgeId(
-            e.source,
-            e.sourceHandle ?? 'out',
-            socket.originalNodeId,
-            socket.originalHandleId,
-          ),
-          target: socket.originalNodeId,
-          targetHandle: socket.originalHandleId,
-        };
-      }
-      // Internal edges (both endpoints in members) get their hide-class stripped.
-      if (memberIds.has(e.source) && memberIds.has(e.target)) {
-        const { className: _c, ...rest } = e as AppEdge & { className?: string };
-        void _c;
-        return rest as AppEdge;
-      }
-      return e;
-    });
+    const restoredEdges = restoreCollapsedEdges(state.edges, state.nodes, groupNode);
 
     set((s) => ({
       nodes: s.nodes.map((n) => {

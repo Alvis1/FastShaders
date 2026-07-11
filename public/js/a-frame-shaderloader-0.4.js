@@ -350,13 +350,17 @@ function autoInjectTSLImports(source) {
     localDecls.add(dm[1]);
   }
 
+  // Strip block comments across the whole source FIRST — a multi-line `/* … */`
+  // (e.g. FastShaders' trailing FASTSHADERS_PROJECT_V1 JSON block) would
+  // otherwise leak its JSON keys into the identifier scan below and get
+  // auto-injected as bogus imports. The per-line `/* … */` strip that used to
+  // live here only caught single-line block comments.
   const bodyLines = source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("\n")
     .filter((l) => !/^\s*(import|export)\s/.test(l));
-  // Strip comments so patterns like "// glow (effect)" don't trigger false matches
-  const body = bodyLines
-    .map((l) => l.replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, ""))
-    .join("\n");
+  // Strip line comments so patterns like "// glow (effect)" don't false-match
+  const body = bodyLines.map((l) => l.replace(/\/\/.*$/, "")).join("\n");
 
   // Detect function calls: name(
   const callRegex = /(?<![.\w])([a-zA-Z_$]\w*)\s*\(/g;
@@ -561,9 +565,16 @@ const GLOBAL_SOURCE = {
 // Rewrite `import ... from '<bare>'` → `const { ... } = <global>;`.
 // Handles named (incl. `x as y` aliases), default, and `* as ns` imports.
 // Relative imports ('./', '../') are left untouched for resolveTSLImports().
+// The `import` keyword is anchored to the start of a line (only leading
+// horizontal whitespace) so the word "import" or a `{` inside a preceding
+// comment — e.g. FastShaders' own "(no import map, no shim)" usage header and
+// its `el.setAttribute('shader', { name: value })` example — can't start a
+// spurious multi-line match that swallows the real `import ... from 'three/tsl'`
+// and mangles it into a broken destructure ("Missing initializer in
+// destructuring declaration"). ES `import` statements are always line-leading.
 function globalizeBareImports(source) {
   return source.replace(
-    /\bimport\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2\s*;?/g,
+    /^[ \t]*import\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2[ \t]*;?/gm,
     function (full, clause, quote, spec) {
       const target = GLOBAL_SOURCE[spec];
       if (!target) return full; // relative / unknown — leave for later resolver

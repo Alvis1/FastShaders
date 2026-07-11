@@ -90,6 +90,12 @@
   color: #c0392b;
 }
 
+/* Dark theme: #c0392b is only marginally legible on a dark menu — brighten it. */
+:root[data-theme="dark"] .context-menu__item--danger,
+:root[data-theme="dark"] .context-menu__item--danger:hover {
+  color: #ff6b5e;
+}
+
 .context-menu__item-category {
   font-size: var(--font-size-xs);
   color: var(--text-muted);

@@ -403,3 +403,21 @@
   line-height: 1.4;
   color: #b42318;
 }
+
+/* ===== Dark theme touch-ups =====
+   The toolbar + popovers are token-driven and darken for free. These few
+   hardcoded values don't: the popover drop shadows vanish against a dark
+   backdrop, and the status green/red are tuned for a light surface. */
+:root[data-theme="dark"] .toolbar__contact-popover,
+:root[data-theme="dark"] .toolbar__local-popover,
+:root[data-theme="dark"] .toolbar__vr-popover {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="dark"] .toolbar__vr-live {
+  color: #3fb950;
+}
+
+:root[data-theme="dark"] .toolbar__vr-error {
+  color: #ff7b72;
+}

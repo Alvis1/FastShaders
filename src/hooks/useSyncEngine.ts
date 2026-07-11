@@ -86,7 +86,7 @@ export function useSyncEngine() {
 
       setSyncInProgress(true);
       try {
-        const result = codeToGraph(codeStr, NODE_REGISTRY);
+        const result = codeToGraph(codeStr);
         const hasBlockingErrors = result.errors.some(e => e.severity !== 'warning');
         if (!hasBlockingErrors) {
           if (!skipHistory) {

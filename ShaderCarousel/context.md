@@ -29,7 +29,7 @@ ShaderCarousel/
 │   ├── bench-timing.js         # shared GPU timing (Static + MicroPlane): GPU timestamp queries via r184 trackTimestamp with a wall-clock-fence fallback; two-level N/2N slope; pairs-per-pass + 100 µs-quantization detection
 │   ├── bench-registry.js       # canonical corpus (baseline + presets + noises + saved)
 │   ├── bench-ui.js             # picker, settings, start gate, done popup, headset detect
-│   └── three/                  # Three.js r184 WebGPU ESM (three.webgpu.js, three.tsl.js, three.core.js — regenerated from node_modules/three@0.184)
+│   └── three/                  # Three.js r184 WebGPU ESM (three.webgpu.min.js, three.tsl.min.js, three.core.min.js — official .min builds copied from node_modules/three@0.184)
 ├── benchData/                  # committed calibration runs (raw JSON + suggestion JSON per device-slug); currently only a README — the loop is NOT yet closed (no measured run committed)
 ├── components/three/
 │   └── a-frame-180-a-01.min.js # A-Frame 1.8.0 IIFE, r184 WebGPU (synced from a-frame-shaderloader/js/ by fs-vendor-sync; only the InOut bench uses this)

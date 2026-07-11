@@ -29,6 +29,13 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Dark theme: the frosted cost pill floats over the dark canvas, so its
+   near-white fill would read as a bright blob — darken it to a translucent
+   panel while keeping the blur/border. */
+:root[data-theme="dark"] .node-editor__cost-overlay .cost-bar {
+  background: rgba(35, 37, 41, 0.85);
+}
+
 /* Override React Flow default node styles */
 .node-editor .react-flow__node {
   border: none;

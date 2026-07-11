@@ -93,7 +93,9 @@
 /* Source CSV filename shown under the Data node's header (wraps if long). */
 .shader-node__file-name {
   font: 500 calc(8px * var(--node-text-scale, 1)) var(--font-mono);
-  color: var(--text-secondary);
+  /* Literal (not --text-secondary) so it stays a dark-gray on the always-light
+     node body in dark mode — the node must render identically in both themes. */
+  color: #555555;
   padding: 2px 6px 0;
   line-height: 1.25;
   white-space: normal;

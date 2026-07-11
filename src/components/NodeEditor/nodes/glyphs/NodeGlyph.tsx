@@ -50,7 +50,7 @@ const OPERATORS: Record<string, { text: string; serif?: boolean; size?: number }
 };
 
 /** Registry types that have a glyph. Live-preview types are excluded on purpose. */
-export const NODE_GLYPH_TYPES = new Set<string>([
+const NODE_GLYPH_TYPES = new Set<string>([
   ...Object.keys(MATH_PLOTS),
   ...Object.keys(OPERATORS),
   'floor', 'round', 'fract',

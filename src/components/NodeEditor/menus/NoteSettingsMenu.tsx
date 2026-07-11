@@ -1,32 +1,10 @@
 import { useAppStore } from '@/store/useAppStore';
 import type { NoteFlowNode } from '@/types';
+import { rowStyle, labelStyle, colorFieldStyle, wideFieldStyle } from './menuShared';
 
 interface NoteSettingsMenuProps {
   nodeId: string;
 }
-
-const rowStyle = {
-  padding: 'var(--space-1) var(--space-3)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 'var(--space-2)',
-} as const;
-
-const labelStyle = {
-  fontSize: 'var(--font-size-xs)',
-  color: 'var(--text-secondary)',
-} as const;
-
-const fieldStyle = {
-  width: '140px',
-  padding: '2px 6px',
-  background: 'var(--bg-input)',
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--border-radius-sm)',
-  fontSize: 'var(--font-size-xs)',
-  color: 'var(--text-primary)',
-} as const;
 
 export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
   const nodes = useAppStore((s) => s.nodes);
@@ -50,7 +28,7 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
           value={heading ?? ''}
           onChange={(e) => updateNoteData(nodeId, { heading: e.target.value })}
           autoFocus
-          style={fieldStyle}
+          style={wideFieldStyle}
         />
       </div>
 
@@ -60,7 +38,7 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
           type="color"
           value={headerColor ?? '#ffd24a'}
           onChange={(e) => updateNoteData(nodeId, { headerColor: e.target.value })}
-          style={{ ...fieldStyle, width: '80px', padding: '2px 4px' }}
+          style={colorFieldStyle}
         />
       </div>
 
@@ -70,7 +48,7 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
           type="color"
           value={color ?? '#fff7cc'}
           onChange={(e) => updateNoteData(nodeId, { color: e.target.value })}
-          style={{ ...fieldStyle, width: '80px', padding: '2px 4px' }}
+          style={colorFieldStyle}
         />
       </div>
 
@@ -79,7 +57,7 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
         <select
           value={scale ?? 1}
           onChange={(e) => updateNoteData(nodeId, { scale: Number(e.target.value) })}
-          style={{ ...fieldStyle, width: '80px', padding: '2px 4px' }}
+          style={colorFieldStyle}
         >
           <option value={1}>1x</option>
           <option value={1.5}>1.5x</option>

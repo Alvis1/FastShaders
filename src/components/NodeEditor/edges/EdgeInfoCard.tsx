@@ -3,15 +3,11 @@ import { useAppStore } from '@/store/useAppStore';
 import { COUNT_CARD_COLORS, COUNT_LABELS } from '@/utils/colorUtils';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { evaluateNodeRange, getNodeOutputShape, type RangeResult } from '@/engine/cpuEvaluator';
-import type { TSLDataType } from '@/types';
 import './EdgeInfoCard.css';
 
 interface EdgeInfoCardProps {
   sourceId: string;
   targetId: string;
-  sourceHandleId: string | null | undefined;
-  targetHandleId: string | null | undefined;
-  edgeDataType: TSLDataType;
   labelX: number;
   labelY: number;
 }
@@ -19,9 +15,6 @@ interface EdgeInfoCardProps {
 export function EdgeInfoCard({
   sourceId,
   targetId,
-  sourceHandleId,
-  targetHandleId,
-  edgeDataType,
   labelX,
   labelY,
 }: EdgeInfoCardProps) {
@@ -29,11 +22,6 @@ export function EdgeInfoCard({
   const edges = useAppStore((s) => s.edges);
   const sourceNode = nodes.find((n) => n.id === sourceId);
   const targetNode = nodes.find((n) => n.id === targetId);
-  // Suppress unused-var warnings — these props are kept for callers but the card no longer
-  // renders type info, so the resolved-type lookup chain has been removed.
-  void sourceHandleId;
-  void targetHandleId;
-  void edgeDataType;
 
   const [range, setRange] = useState<RangeResult | null>(null);
 

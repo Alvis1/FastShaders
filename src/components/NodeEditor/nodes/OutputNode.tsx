@@ -58,7 +58,7 @@ export const OutputNode = memo(function OutputNode({
   return (
     <div
       className={`output-node ${selected ? 'output-node--selected' : ''}`}
-      style={{ background: 'var(--bg-panel)', border: '1.5px solid var(--cat-output)' }}
+      style={{ background: 'var(--node-bg)', border: '1.5px solid var(--cat-output)' }}
     >
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>

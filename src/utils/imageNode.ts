@@ -54,10 +54,10 @@ export const MAX_SOURCE_PIXELS = 64_000_000;
 
 /** Upper bound for the stored width/height fields (matches WebGPU's
  *  guaranteed maxTextureDimension2D). */
-export const MAX_IMAGE_DIM_FIELD = 8192;
+const MAX_IMAGE_DIM_FIELD = 8192;
 
-export const IMAGE_MIME_TYPES = ['png', 'jpeg', 'webp'] as const;
-export type ImageMime = (typeof IMAGE_MIME_TYPES)[number];
+const IMAGE_MIME_TYPES = ['png', 'jpeg', 'webp'] as const;
+type ImageMime = (typeof IMAGE_MIME_TYPES)[number];
 
 /**
  * Whole-URL whitelist. Everything outside `[A-Za-z0-9+/=]` (plus the fixed

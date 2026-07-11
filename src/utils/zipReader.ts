@@ -7,7 +7,7 @@
  * there are always final, which sidesteps streamed zips whose local headers
  * defer sizes to data descriptors. Deflate uses the native
  * `DecompressionStream('deflate-raw')` — no dependency (same approach as
- * viewer.html's reader).
+ * podest.html's reader).
  *
  * Treat archives as ADVERSARIAL input: every offset is bounds-checked, the
  * entry count is capped, and — critically — each entry is inflated

@@ -283,7 +283,7 @@ export const ShaderNode = memo(function ShaderNode({
     transformOrigin: 'top left',
   };
   const nodeStyle: CSSProperties = {
-    background: 'var(--bg-panel)',
+    background: 'var(--node-bg)',
     border: `1.5px solid ${catHex}`,
   };
   // Exact width override applied below, once we know whether a chainable node

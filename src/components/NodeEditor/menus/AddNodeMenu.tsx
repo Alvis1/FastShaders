@@ -10,7 +10,8 @@ import {
 import { CATEGORIES } from '@/registry/nodeCategories';
 import type { NodeDefinition, AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
 import { getNodeValues } from '@/types';
-import { generateId, generateEdgeId } from '@/utils/idGenerator';
+import { generateId } from '@/utils/idGenerator';
+import { makeTypedEdge } from '@/utils/edgeUtils';
 import complexityData from '@/registry/complexity.json';
 
 /**
@@ -131,16 +132,7 @@ export function AddNodeMenu() {
       if (firstInput) {
         const store = useAppStore.getState();
         store.pushHistory();
-        const newEdge: AppEdge = {
-          id: generateEdgeId(sourceNodeId, sourceHandleId, newNodeId, firstInput.id),
-          source: sourceNodeId,
-          target: newNodeId,
-          sourceHandle: sourceHandleId,
-          targetHandle: firstInput.id,
-          type: 'typed',
-          animated: true,
-          data: { dataType: 'any' },
-        };
+        const newEdge = makeTypedEdge(sourceNodeId, sourceHandleId, newNodeId, firstInput.id);
         setEdges([...store.edges, newEdge] as AppEdge[]);
       }
     }

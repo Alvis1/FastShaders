@@ -195,7 +195,7 @@ export function CodeEditor() {
         '',
         `${fileBaseName}.js — the shader module. Fully self-contained (the images`,
         'are embedded inside it as data: URLs): load it with a-frame-shaderloader,',
-        'drop it into the FastShaders viewer, or drag it back into the editor to',
+        'drop it into Podest (the FastShaders viewer), or drag it back into the editor to',
         'continue working — the full node graph rides along in its',
         'FASTSHADERS_PROJECT_V1 block.',
         '',
@@ -380,8 +380,8 @@ export function CodeEditor() {
           <button
             className="code-editor__theme-toggle"
             onClick={() => setCodeEditorTheme(isDark ? 'vs' : 'vs-dark')}
-            title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
-            aria-label="Toggle code editor theme"
+            title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label="Toggle dark mode"
           >
             {isDark ? '\u263C' : '\u263E'}
           </button>

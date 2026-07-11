@@ -5,7 +5,8 @@ import { AppLayout } from './components/Layout/AppLayout';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import complexityData from './registry/complexity.json';
 import type { AppNode, AppEdge, OutputNodeData, ShaderNodeData } from './types';
-import { generateId, generateEdgeId } from './utils/idGenerator';
+import { generateId } from './utils/idGenerator';
+import { makeTypedEdge } from './utils/edgeUtils';
 
 function SyncController() {
   useSyncEngine();
@@ -94,67 +95,13 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
     },
   ];
 
-  const edges = [
-    {
-      id: generateEdgeId(perlinId, 'out', mixId, 't'),
-      source: perlinId,
-      target: mixId,
-      sourceHandle: 'out',
-      targetHandle: 't',
-      type: 'typed' as const,
-      animated: true,
-      data: { dataType: 'color' as const },
-    },
-    {
-      id: generateEdgeId(perlinId, 'out', subId, 'a'),
-      source: perlinId,
-      target: subId,
-      sourceHandle: 'out',
-      targetHandle: 'a',
-      type: 'typed' as const,
-      animated: true,
-      data: { dataType: 'color' as const },
-    },
-    {
-      id: generateEdgeId(color1Id, 'out', mixId, 'a'),
-      source: color1Id,
-      target: mixId,
-      sourceHandle: 'out',
-      targetHandle: 'a',
-      type: 'typed' as const,
-      animated: true,
-      data: { dataType: 'color' as const },
-    },
-    {
-      id: generateEdgeId(color2Id, 'out', mixId, 'b'),
-      source: color2Id,
-      target: mixId,
-      sourceHandle: 'out',
-      targetHandle: 'b',
-      type: 'typed' as const,
-      animated: true,
-      data: { dataType: 'color' as const },
-    },
-    {
-      id: generateEdgeId(mixId, 'out', outputId, 'color'),
-      source: mixId,
-      target: outputId,
-      sourceHandle: 'out',
-      targetHandle: 'color',
-      type: 'typed' as const,
-      animated: true,
-      data: { dataType: 'any' as const },
-    },
-    {
-      id: generateEdgeId(subId, 'out', outputId, 'position'),
-      source: subId,
-      target: outputId,
-      sourceHandle: 'out',
-      targetHandle: 'position',
-      type: 'typed' as const,
-      animated: true,
-      data: { dataType: 'any' as const },
-    },
+  const edges: AppEdge[] = [
+    makeTypedEdge(perlinId, 'out', mixId, 't', 'color'),
+    makeTypedEdge(perlinId, 'out', subId, 'a', 'color'),
+    makeTypedEdge(color1Id, 'out', mixId, 'a', 'color'),
+    makeTypedEdge(color2Id, 'out', mixId, 'b', 'color'),
+    makeTypedEdge(mixId, 'out', outputId, 'color', 'any'),
+    makeTypedEdge(subId, 'out', outputId, 'position', 'any'),
   ];
 
   return { nodes, edges };

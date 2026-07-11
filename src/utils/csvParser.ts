@@ -28,7 +28,7 @@ export type CsvParseResult =
 
 /** Hard caps — generous for real datasets, tight enough to refuse abuse. */
 export const MAX_COLUMNS = 16;
-export const MAX_ROWS = 1_000_000;
+const MAX_ROWS = 1_000_000;
 
 /** Soft UX gate: above this column count, prompt the user before placing a
  *  Data node (vs. the hard MAX_COLUMNS cap, which rejects outright). */

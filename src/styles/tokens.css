@@ -1,4 +1,8 @@
 :root {
+  /* Native form controls (checkboxes, selects, spinners, scrollbars) follow the
+     app theme — flipped to `dark` by the [data-theme="dark"] block below. */
+  color-scheme: light;
+
   /* ===== DATA TYPE COLORS ===== */
   --type-float: #3366CC;
   --type-int: #20B2AA;
@@ -20,6 +24,11 @@
   --bg-surface-hover: #F0F0F0;
   --bg-input: #FFFFFF;
   --bg-overlay: rgba(0, 0, 0, 0.3);
+
+  /* Graph-node body fill. THEME-INVARIANT on purpose — nodes must look identical
+     in light and dark mode (see the dark block below), so the node bodies read
+     this instead of --bg-panel, which darkens with the chrome. */
+  --node-bg: #FFFFFF;
 
   /* ===== BORDERS ===== */
   --border-subtle: #E0E0E0;
@@ -88,6 +97,48 @@
   --z-controls: 10;
   --z-menu: 100;
   --z-overlay: 1000;
+}
+
+/* ===== DARK THEME =====
+   App-wide dark mode, toggled by the code-editor sun/moon button which stamps
+   `data-theme="dark"` on <html>. Only CHROME tokens flip here — the surrounding
+   UI (toolbar, panels, menus, modals, code-editor wrapper, canvas backdrop).
+
+   DELIBERATELY NOT redefined, so graph nodes render identically in both themes:
+     --node-bg, --text-on-node, --shadow-node(-selected), --cost-*, --type-*,
+     --cat-* (published from JS), --border-focus, --text-accent, --node-cost-*.
+   The one chrome token that also reaches node scope, --text-secondary, is read
+   there via a fixed literal instead (ShaderNode.css .shader-node__file-name).
+
+   The node-editor CANVAS backdrop is NOT a token — it's the per-theme
+   `nodeEditorBgColor` store value (dark default), which also drives the
+   1-channel edge / cost-badge contrast flip via getContrastColor(). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-app: #17181b;
+  --bg-panel: #232529;
+  --bg-surface: #1e2023;
+  --bg-surface-hover: #2c2f34;
+  --bg-input: #17181a;
+  --bg-overlay: rgba(0, 0, 0, 0.55);
+
+  /* Border ramp stays lowest→highest contrast (subtle < default < strong) so
+     panel dividers don't become the brightest lines on a dark screen. */
+  --border-subtle: #2f3237;
+  --border-default: #43464c;
+  --border-strong: #5a5e65;
+
+  --text-primary: #e8e9ea;
+  --text-secondary: #b0b3b8;
+  --text-muted: #82858b;
+
+  /* Chrome elevation shadows deepened so panels/menus/popovers still separate
+     against the dark backdrop (a light-theme black shadow just fades into it).
+     Node shadows (--shadow-node*) are intentionally left untouched above. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 4px 14px rgba(0, 0, 0, 0.6);
 }
 
 /* ===== TOUCH / COARSE-POINTER OVERRIDES =====

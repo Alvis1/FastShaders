@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { codeToGraph } from './codeToGraph';
 import { getNodeValues } from '@/types';
@@ -207,6 +209,229 @@ describe('codeToGraph — UV tiling pattern', () => {
     expect(vals.tilingV).toBe(2);
     // The mul wrapper should NOT show up as its own node
     expect(result.nodes.find((n) => n.data.registryType === 'mul')).toBeUndefined();
+  });
+});
+
+describe('codeToGraph — member-init declarations (const f1 = worley.x)', () => {
+  it('wires a swizzle declaration through a split node instead of dropping it', () => {
+    const result = codeToGraph(`
+      import { Fn, mx_worley_noise_vec3, positionGeometry, sub } from 'three/tsl';
+      const shader = Fn(() => {
+        const worley = mx_worley_noise_vec3(positionGeometry);
+        const f1 = worley.x;
+        const f2 = worley.y;
+        const edge = sub(f2, f1);
+        return edge;
+      });
+      export default shader;
+    `);
+    const worley = result.nodes.find((n) => n.data.registryType === 'voronoiVec3')!;
+    const split = result.nodes.find((n) => n.data.registryType === 'split')!;
+    const subNode = result.nodes.find((n) => n.data.registryType === 'sub')!;
+    expect(worley).toBeDefined();
+    expect(split).toBeDefined();
+    // One shared split node fed by the worley output
+    expect(result.nodes.filter((n) => n.data.registryType === 'split')).toHaveLength(1);
+    expect(
+      result.edges.find((e) => e.source === worley.id && e.target === split.id && e.targetHandle === 'v'),
+    ).toBeDefined();
+    // sub(f2, f1) → split.y → sub.a, split.x → sub.b (NOT two disconnected operands)
+    expect(
+      result.edges.find(
+        (e) => e.source === split.id && e.sourceHandle === 'y' && e.target === subNode.id && e.targetHandle === 'a',
+      ),
+    ).toBeDefined();
+    expect(
+      result.edges.find(
+        (e) => e.source === split.id && e.sourceHandle === 'x' && e.target === subNode.id && e.targetHandle === 'b',
+      ),
+    ).toBeDefined();
+    expect(result.errors).toEqual([]);
+  });
+
+  it('maps color-channel swizzle aliases (.r/.g/.b/.a) onto the xyzw split handles', () => {
+    const result = codeToGraph(`
+      import { Fn, vec3, sin } from 'three/tsl';
+      const shader = Fn(() => {
+        const v = vec3(1, 2, 3);
+        const red = v.r;
+        const s = sin(red);
+        return s;
+      });
+      export default shader;
+    `);
+    const split = result.nodes.find((n) => n.data.registryType === 'split')!;
+    const sinNode = result.nodes.find((n) => n.data.registryType === 'sin')!;
+    expect(
+      result.edges.find(
+        (e) => e.source === split.id && e.sourceHandle === 'x' && e.target === sinNode.id && e.targetHandle === 'x',
+      ),
+    ).toBeDefined();
+  });
+
+  it('warns (without blocking sync) on a swizzle that has no graph representation', () => {
+    const result = codeToGraph(`
+      import { Fn, vec3 } from 'three/tsl';
+      const shader = Fn(() => {
+        const v = vec3(1, 2, 3);
+        const xy = v.xy;
+        return v;
+      });
+      export default shader;
+    `);
+    const warning = result.errors.find((e) => e.severity === 'warning');
+    expect(warning?.message).toMatch(/v\.xy/);
+    expect(result.errors.every((e) => e.severity === 'warning')).toBe(true);
+  });
+
+  it('imports Tests/morph-triangles-watercolor.tsl.js without dropping the worley split wiring', () => {
+    const fixture = readFileSync(
+      fileURLToPath(new URL('../../Tests/morph-triangles-watercolor.tsl.js', import.meta.url)),
+      'utf8',
+    );
+    const result = codeToGraph(fixture);
+
+    // The `const f1 = worley.x; const f2 = worley.y; sub(f2, f1)` pattern must
+    // wire through a split node — historically both operands were silently
+    // dropped and the graph degraded to sub(0, 0).
+    const worley = result.nodes.find((n) => n.data.registryType === 'voronoiVec3')!;
+    const split = result.nodes.find((n) => n.data.registryType === 'split')!;
+    const subNode = result.nodes.find((n) => n.data.registryType === 'sub')!;
+    expect(worley).toBeDefined();
+    expect(split).toBeDefined();
+    expect(subNode).toBeDefined();
+    expect(
+      result.edges.find((e) => e.source === worley.id && e.target === split.id && e.targetHandle === 'v'),
+    ).toBeDefined();
+    const subInputs = result.edges.filter((e) => e.target === subNode.id);
+    expect(subInputs.map((e) => e.targetHandle).sort()).toEqual(['a', 'b']);
+    expect(subInputs.every((e) => e.source === split.id)).toBe(true);
+    // Nothing in this fixture should degrade silently OR loudly
+    expect(result.errors).toEqual([]);
+  });
+});
+
+describe('codeToGraph — .toVar() chain deduplication', () => {
+  it('sin(time).toVar() produces exactly one sin node (no orphaned duplicate)', () => {
+    const result = codeToGraph(`
+      import { Fn, time, sin } from 'three/tsl';
+      const shader = Fn(() => {
+        const blink = sin(time).toVar();
+        return blink;
+      });
+      export default shader;
+    `);
+    expect(result.nodes.filter((n) => n.data.registryType === 'sin')).toHaveLength(1);
+    expect(result.nodes.filter((n) => n.data.registryType === 'time')).toHaveLength(1);
+    // time → sin.x is wired exactly once
+    const sinNode = result.nodes.find((n) => n.data.registryType === 'sin')!;
+    expect(result.edges.filter((e) => e.target === sinNode.id)).toHaveLength(1);
+  });
+
+  it('a.mul(b).toVar() produces exactly one mul node with both operands wired', () => {
+    const result = codeToGraph(`
+      import { Fn, float } from 'three/tsl';
+      const shader = Fn(() => {
+        const a = float(2);
+        const b = float(3);
+        const m = a.mul(b).toVar();
+        return m;
+      });
+      export default shader;
+    `);
+    const muls = result.nodes.filter((n) => n.data.registryType === 'mul');
+    expect(muls).toHaveLength(1);
+    const handles = result.edges
+      .filter((e) => e.target === muls[0].id)
+      .map((e) => e.targetHandle)
+      .sort();
+    expect(handles).toEqual(['a', 'b']);
+    // The toVar alias resolves — the return wires from the mul node
+    const output = result.nodes.find((n) => n.data.registryType === 'output')!;
+    expect(
+      result.edges.find((e) => e.source === muls[0].id && e.target === output.id && e.targetHandle === 'color'),
+    ).toBeDefined();
+  });
+});
+
+describe('codeToGraph — bare-global member args and computed constants', () => {
+  it('wires positionGeometry.y as a call argument via an input node + split', () => {
+    const result = codeToGraph(`
+      import { Fn, sin, positionGeometry } from 'three/tsl';
+      const shader = Fn(() => {
+        const s = sin(positionGeometry.y);
+        return s;
+      });
+      export default shader;
+    `);
+    const posNode = result.nodes.find((n) => n.data.registryType === 'positionGeometry')!;
+    const split = result.nodes.find((n) => n.data.registryType === 'split')!;
+    const sinNode = result.nodes.find((n) => n.data.registryType === 'sin')!;
+    expect(posNode).toBeDefined();
+    expect(split).toBeDefined();
+    expect(
+      result.edges.find((e) => e.source === posNode.id && e.target === split.id && e.targetHandle === 'v'),
+    ).toBeDefined();
+    expect(
+      result.edges.find(
+        (e) => e.source === split.id && e.sourceHandle === 'y' && e.target === sinNode.id && e.targetHandle === 'x',
+      ),
+    ).toBeDefined();
+    // Correctly wired — no warning needed
+    expect(result.errors).toEqual([]);
+  });
+
+  it('wires a swizzle chain receiver (pos.x.mul(2)) through the split node', () => {
+    const result = codeToGraph(`
+      import { Fn, positionGeometry } from 'three/tsl';
+      const shader = Fn(() => {
+        const pos = positionGeometry;
+        const m = pos.x.mul(2);
+        return m;
+      });
+      export default shader;
+    `);
+    const split = result.nodes.find((n) => n.data.registryType === 'split')!;
+    const mulNode = result.nodes.find((n) => n.data.registryType === 'mul')!;
+    expect(
+      result.edges.find(
+        (e) => e.source === split.id && e.sourceHandle === 'x' && e.target === mulNode.id && e.targetHandle === 'a',
+      ),
+    ).toBeDefined();
+    // The literal 2 lands on port b, not a
+    expect(getNodeValues(mulNode).b).toBe(2);
+  });
+
+  it('folds simple constant BinaryExpressions of numeric literals (1/6)', () => {
+    const result = codeToGraph(`
+      import { Fn, time, mul } from 'three/tsl';
+      const shader = Fn(() => {
+        const m = mul(time, 1 / 6);
+        return m;
+      });
+      export default shader;
+    `);
+    const mulNode = result.nodes.find((n) => n.data.registryType === 'mul')!;
+    expect(getNodeValues(mulNode).b).toBe(1 / 6);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('warns (severity warning) on unfoldable computed args like Math.PI', () => {
+    const result = codeToGraph(`
+      import { Fn, time, mul } from 'three/tsl';
+      const shader = Fn(() => {
+        const m = mul(time, Math.PI);
+        return m;
+      });
+      export default shader;
+    `);
+    const warning = result.errors.find((e) => e.severity === 'warning');
+    expect(warning?.message).toMatch(/Math\.PI/);
+    // Warnings must not block sync
+    expect(result.errors.every((e) => e.severity === 'warning')).toBe(true);
+    // The mul node still exists with time wired
+    const mulNode = result.nodes.find((n) => n.data.registryType === 'mul')!;
+    expect(result.edges.some((e) => e.target === mulNode.id && e.targetHandle === 'a')).toBe(true);
   });
 });
 

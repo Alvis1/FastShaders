@@ -1,6 +1,31 @@
 import { useAppStore } from '@/store/useAppStore';
-import type { AppEdge, AppNode, GroupNodeData } from '@/types';
+import type { AppEdge, AppNode, BoundarySocket, GroupNodeData, TSLDataType } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
+
+/**
+ * The one canonical edge factory: every edge in the app is a typed animated
+ * edge whose id is derived from its endpoints. Handles may be null/undefined
+ * (React Flow `Connection`s) — the id falls back to 'out'/'in' but the edge
+ * object keeps the raw values.
+ */
+export function makeTypedEdge(
+  source: string,
+  sourceHandle: string | null | undefined,
+  target: string,
+  targetHandle: string | null | undefined,
+  dataType: TSLDataType = 'any',
+): AppEdge {
+  return {
+    id: generateEdgeId(source, sourceHandle ?? 'out', target, targetHandle ?? 'in'),
+    source,
+    sourceHandle,
+    target,
+    targetHandle,
+    type: 'typed',
+    animated: true,
+    data: { dataType },
+  };
+}
 
 /**
  * When one or more nodes are deleted, splice their outgoing edges onto the
@@ -164,5 +189,71 @@ export function unwrapCollapsedGroupEdges(nodes: AppNode[], edges: AppEdge[]): A
     if (collapsedGroupIds.has(e.source)) return false;
     if (collapsedGroupIds.has(e.target)) return false;
     return true;
+  });
+}
+
+/**
+ * Restore a collapsed group's boundary edges to their original child endpoints
+ * (with regenerated ids) and strip the `fs-collapsed-edge` hide-class from
+ * internal edges. Shared by expand and ungroup.
+ *
+ * Unlike `unwrapCollapsedGroupEdges` (a read-only view for the engines), this
+ * produces the edges that get *committed back to the store*, so ids are
+ * regenerated and hide-classes stripped.
+ */
+export function restoreCollapsedEdges(
+  edges: AppEdge[],
+  nodes: AppNode[],
+  groupNode: AppNode,
+): AppEdge[] {
+  const groupId = groupNode.id;
+  const groupData = groupNode.data as GroupNodeData;
+  const memberIds = new Set(
+    nodes.filter((n) => n.parentId === groupId).map((n) => n.id),
+  );
+
+  const inputSocketLookup = new Map<string, BoundarySocket>();
+  const outputSocketLookup = new Map<string, BoundarySocket>();
+  for (const s of groupData.collapsedInputs ?? []) inputSocketLookup.set(s.socketId, s);
+  for (const s of groupData.collapsedOutputs ?? []) outputSocketLookup.set(s.socketId, s);
+
+  return edges.map((e) => {
+    // Output boundary restoration: edge currently points FROM the group, restore source.
+    if (e.source === groupId && e.sourceHandle && outputSocketLookup.has(e.sourceHandle)) {
+      const socket = outputSocketLookup.get(e.sourceHandle)!;
+      return {
+        ...e,
+        id: generateEdgeId(
+          socket.originalNodeId,
+          socket.originalHandleId,
+          e.target,
+          e.targetHandle ?? 'in',
+        ),
+        source: socket.originalNodeId,
+        sourceHandle: socket.originalHandleId,
+      };
+    }
+    // Input boundary restoration: edge currently points TO the group, restore target.
+    if (e.target === groupId && e.targetHandle && inputSocketLookup.has(e.targetHandle)) {
+      const socket = inputSocketLookup.get(e.targetHandle)!;
+      return {
+        ...e,
+        id: generateEdgeId(
+          e.source,
+          e.sourceHandle ?? 'out',
+          socket.originalNodeId,
+          socket.originalHandleId,
+        ),
+        target: socket.originalNodeId,
+        targetHandle: socket.originalHandleId,
+      };
+    }
+    // Internal edges (both endpoints in members) get their hide-class stripped.
+    if (memberIds.has(e.source) && memberIds.has(e.target)) {
+      const { className: _c, ...rest } = e as AppEdge & { className?: string };
+      void _c;
+      return rest as AppEdge;
+    }
+    return e;
   });
 }

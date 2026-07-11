@@ -6,14 +6,7 @@
 import type { MaterialSettings } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 
-/** A-Frame geometry component strings with high segment counts for TSL effects */
-export const AFRAME_GEO: Record<string, string> = {
-  sphere: 'primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64',
-  box: 'primitive: box; width: 1.4; height: 1.4; depth: 1.4',
-  plane: 'primitive: plane; width: 2; height: 2',
-};
-
-export const CHANNEL_TO_PROP: Record<string, string> = {
+const CHANNEL_TO_PROP: Record<string, string> = {
   color: 'colorNode',
   emissive: 'emissiveNode',
   normal: 'normalNode',
@@ -22,17 +15,17 @@ export const CHANNEL_TO_PROP: Record<string, string> = {
   roughness: 'roughnessNode',
 };
 
-export interface TSLImports {
+interface TSLImports {
   tslNames: string[];
 }
 
-export interface ProcessedBody {
+interface ProcessedBody {
   defLines: string[];
   channels: Record<string, string>;
 }
 
 /** Collect imported names from 'three/tsl'. */
-export function collectImports(tslCode: string, excludeFn = false): TSLImports {
+function collectImports(tslCode: string, excludeFn = false): TSLImports {
   const tslNames: string[] = [];
 
   const tslImportRe = /import\s*\{([^}]+)\}\s*from\s*['"]three\/tsl['"]/g;
@@ -47,7 +40,7 @@ export function collectImports(tslCode: string, excludeFn = false): TSLImports {
   return { tslNames };
 }
 
-export interface ExtractedFn {
+interface ExtractedFn {
   /** The statements inside the main `Fn(() => { ... })` wrapper. */
   body: string;
   /** Non-`three/tsl` import lines that precede the main Fn (preserved verbatim). */
@@ -72,7 +65,7 @@ export interface ExtractedFn {
  * ideal here; this stays string-based but no longer silently discards the
  * preamble.)
  */
-export function extractFnBody(tslCode: string, tslNames: string[]): ExtractedFn {
+function extractFnBody(tslCode: string, tslNames: string[]): ExtractedFn {
   const fnStart = tslCode.indexOf('Fn(() => {');
   let body = '';
   let head = '';
@@ -117,7 +110,7 @@ export function extractFnBody(tslCode: string, tslNames: string[]): ExtractedFn 
   return { body, preambleImports, preambleDecls };
 }
 
-export interface TDZResult {
+interface TDZResult {
   body: string;
   /**
    * Locals renamed because they shadowed an imported TSL name, mapped
@@ -135,7 +128,7 @@ export interface TDZResult {
  * 2. Rename local variables that shadow imported function names
  * 3. Fix bare numeric first-arg in MaterialX noise calls
  */
-export function fixTDZ(body: string, tslNames: string[]): TDZResult {
+function fixTDZ(body: string, tslNames: string[]): TDZResult {
   let processedBody = body;
   const importedNames = new Set(tslNames);
   const renames = new Map<string, string>();
@@ -188,7 +181,7 @@ export function fixTDZ(body: string, tslNames: string[]): TDZResult {
  * across lines is handled rather than silently dropped. A genuinely unbalanced
  * `Discard(` is left in place (loud syntax error) instead of vanishing.
  */
-export function extractDiscards(bodyText: string): { conds: string[]; rest: string } {
+function extractDiscards(bodyText: string): { conds: string[]; rest: string } {
   const conds: string[] = [];
   let rest = '';
   let lastCopied = 0;
@@ -230,7 +223,7 @@ export function extractDiscards(bodyText: string): { conds: string[]; rest: stri
 }
 
 /** Parse processed body into definition lines and output channels. */
-export function parseBody(
+function parseBody(
   processedBody: string,
   tslNames: string[],
 ): ProcessedBody {
@@ -269,13 +262,13 @@ export function parseBody(
 }
 
 /** THREE.FrontSide=0, THREE.BackSide=1, THREE.DoubleSide=2 */
-export const SIDE_VALUES: Record<string, number> = {
+const SIDE_VALUES: Record<string, number> = {
   front: 0,
   back: 1,
   double: 2,
 };
 
-export interface ShaderModuleProperty {
+interface ShaderModuleProperty {
   name: string;
   defaultValue: number;
 }

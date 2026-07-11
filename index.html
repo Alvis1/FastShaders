@@ -20,6 +20,20 @@
     <meta name="version" content="%APP_VERSION%" />
     <title>FastShaders - TSL Visual Shader Editor</title>
     <!-- Fonts are self-hosted (@fontsource imports in main.tsx) so the app works offline. -->
+    <!--
+      Stamp the persisted theme before first paint so a dark-mode session doesn't
+      flash light while the JS/CSS bundle loads. The store re-applies data-theme
+      on init and on every toggle; the inline background mirrors tokens.css
+      --bg-app so the pre-CSS frame matches too.
+    -->
+    <script>
+      try {
+        var dark = localStorage.getItem('fs:codeEditorTheme') === 'vs-dark';
+        var el = document.documentElement;
+        el.setAttribute('data-theme', dark ? 'dark' : 'light');
+        el.style.background = dark ? '#17181b' : '#F5F5F5';
+      } catch (e) { /* private mode / storage disabled — default light */ }
+    </script>
   </head>
   <body>
     <div id="root"></div>

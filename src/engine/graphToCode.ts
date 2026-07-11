@@ -227,6 +227,33 @@ export function graphToCode(
   const varNames = new Map<string, string>();
   const usedNames = new Set<string>();
 
+  /**
+   * Claim the first free variable name for `base`: `base1`, `base2`, … —
+   * or, with `bareFirst`, the bare `base` before falling back to `base2`,
+   * `base3`, …. `extraFree` AND-composes with the built-in usedNames check;
+   * `aliases` lists companion identifiers a candidate would also emit (e.g. a
+   * data node's `<name>_colN` columns) — a candidate is only claimable when
+   * every alias passes the same composed check, and claiming reserves the name
+   * AND all its aliases.
+   */
+  const claimName = (
+    base: string,
+    opts: {
+      bareFirst?: boolean;
+      extraFree?: (candidate: string) => boolean;
+      aliases?: (name: string) => string[];
+    } = {}
+  ): string => {
+    const free = (c: string) => !usedNames.has(c) && (opts.extraFree?.(c) ?? true);
+    const claimable = (c: string) => free(c) && (opts.aliases?.(c) ?? []).every(free);
+    let idx = 1;
+    let name = opts.bareFirst ? base : `${base}${idx}`;
+    while (!claimable(name)) name = `${base}${++idx}`;
+    usedNames.add(name);
+    for (const alias of opts.aliases?.(name) ?? []) usedNames.add(alias);
+    return name;
+  };
+
   for (const node of sorted) {
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
@@ -236,14 +263,7 @@ export function graphToCode(
       const nodeValues = getNodeValues(node);
       const rawName = String(nodeValues.name ?? 'property1');
       const baseName = sanitizeIdentifier(rawName);
-
-      let name = baseName;
-      let i = 1;
-      while (usedNames.has(name)) {
-        name = `${baseName}${++i}`;
-      }
-      usedNames.add(name);
-      varNames.set(node.id, name);
+      varNames.set(node.id, claimName(baseName, { bareFirst: true }));
       continue;
     }
 
@@ -252,37 +272,25 @@ export function graphToCode(
       const nv = getNodeValues(node);
       let baseName = String(nv.functionName ?? 'unknown').replace(/[^a-zA-Z0-9_$]/g, '_');
       if (!baseName) baseName = 'unknown';
-      let idx = 1;
-      while (usedNames.has(`${baseName}${idx}`)) idx++;
-      const name = `${baseName}${idx}`;
-      usedNames.add(name);
-      varNames.set(node.id, name);
+      varNames.set(node.id, claimName(baseName));
       continue;
     }
 
     // Data nodes emit one variable PLUS a `<var>_colN` per consumed column, and
     // those column identifiers share the Fn-body namespace with property/unknown
-    // names. Reserve exactly the column handles this node will emit (the ones an
-    // edge references) AND require the base's whole column namespace to be free —
-    // otherwise a property renamed `data1_col1` collides with the emitted
-    // `const data1_col1` → duplicate declaration → SyntaxError.
+    // names. Claim the column handles this node will emit (the ones an edge
+    // references) as aliases so the base only lands where its whole column
+    // namespace is free — otherwise a property renamed `data1_col1` collides
+    // with the emitted `const data1_col1` → duplicate declaration → SyntaxError.
     if (def.type === 'dataNode') {
       const refCols = new Set<string>();
       for (const e of edges) {
         if (e.source !== node.id) continue;
         if (/^col\d+$/.test(e.sourceHandle ?? '')) refCols.add(e.sourceHandle as string);
       }
-      const baseFree = (i: number) => {
-        if (usedNames.has(`data${i}`)) return false;
-        for (const h of refCols) if (usedNames.has(`data${i}_${h}`)) return false;
-        return true;
-      };
-      let idx = 1;
-      while (!baseFree(idx)) idx++;
-      const name = `data${idx}`;
-      usedNames.add(name);
-      for (const h of refCols) usedNames.add(`${name}_${h}`);
-      varNames.set(node.id, name);
+      varNames.set(node.id, claimName('data', {
+        aliases: (name) => [...refCols].map((h) => `${name}_${h}`),
+      }));
       continue;
     }
 
@@ -293,11 +301,7 @@ export function graphToCode(
         def.type === 'stripes' ? 'stripes'
           : def.type === 'dataviz' ? 'dataviz'
             : 'image';
-      let idx = 1;
-      while (usedNames.has(`${baseName}${idx}`)) idx++;
-      const name = `${baseName}${idx}`;
-      usedNames.add(name);
-      varNames.set(node.id, name);
+      varNames.set(node.id, claimName(baseName));
       continue;
     }
 
@@ -308,13 +312,7 @@ export function graphToCode(
     }
 
     // Always number from 1 to avoid shadowing TSL imports (color1, add1, etc.)
-    let idx = 1;
-    while (usedNames.has(`${baseName}${idx}`)) {
-      idx++;
-    }
-    const name = `${baseName}${idx}`;
-    usedNames.add(name);
-    varNames.set(node.id, name);
+    varNames.set(node.id, claimName(baseName));
   }
 
   // Collect imports grouped by module

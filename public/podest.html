@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>FastShaders — Viewer</title>
+<title>Podest</title>
 <!--
-  Standalone full-screen TSL shader viewer.
+  Podest — standalone full-screen TSL shader viewer.
 
   Drag-and-drop:
     • Shader script (.js / .mjs / .tsl) — a FastShaders export OR any TSL ES
@@ -29,8 +29,8 @@
   page's origin), so it deploys anywhere the app does (e.g. alvismisjuns.podest.lv).
   Reached from the editor's "P" toolbar button.
 
-  Dev:      http://localhost:5173/FastShaders/viewer.html
-  Deployed: <origin>/FastShaders/viewer.html
+  Dev:      http://localhost:5173/FastShaders/podest.html
+  Deployed: <origin>/FastShaders/podest.html
 -->
 <style>
   :root {
@@ -87,6 +87,9 @@
   .btn:hover { border-color: var(--accent); color: var(--accent); }
   .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
   .btn[hidden] { display: none; }
+  .ctl-label { flex-shrink: 0; min-width: 72px; font-size: 12px; color: var(--text-dim); }
+  .color-input { width: 34px; height: 28px; flex-shrink: 0; padding: 0; border: 1px solid var(--panel-border); border-radius: 5px; background: #fff; cursor: pointer; }
+  .speed-slider { flex: 1; min-width: 0; accent-color: var(--accent); cursor: pointer; margin: 0; }
 
   /* ── Uniform sliders ────────────────────────────────────────────── */
   #uniforms { display: flex; flex-direction: column; gap: 12px; }
@@ -117,11 +120,11 @@
 <iframe id="stage" sandbox="allow-scripts" allow="fullscreen *; xr-spatial-tracking *" allowfullscreen title="Shader stage"></iframe>
 <div id="error"></div>
 <div id="overlay">Drop shader · model · zip</div>
-<div id="hint">Drag &amp; drop a shader (.js/.tsl), a model (.glb), or a .zip — or click the panel drop area.</div>
+<div id="hint">Drop a shader (.js/.tsl), a model (.glb), or a .zip anywhere — or click the panel drop area.</div>
 
 <div id="panel">
   <div class="panel__head" id="panel-head">
-    <span class="panel__title">FastShaders Viewer</span>
+    <span class="panel__title">Podest</span>
     <button class="panel__collapse" id="panel-collapse" title="Collapse">▾</button>
   </div>
   <div class="panel__body">
@@ -149,6 +152,14 @@
         <button class="btn" id="mat-toggle" hidden title="Switch between the shader and the model's own materials">Show model materials</button>
         <button class="btn" id="reset-view" title="Reset camera">Reset view</button>
       </div>
+      <div class="controls-row" style="margin-top:6px;">
+        <label class="ctl-label" for="bg-color">Background</label>
+        <input type="color" id="bg-color" class="color-input" title="Scene background color" />
+      </div>
+      <div class="controls-row" style="margin-top:6px;">
+        <label class="ctl-label" for="spin-speed">Spin speed</label>
+        <input type="range" id="spin-speed" class="speed-slider" min="0.1" max="4" step="0.05" title="Auto-rotate speed (use the Spin button to stop)" />
+      </div>
     </div>
 
     <div class="section">
@@ -172,6 +183,7 @@
   // Per-geometry resting tilt, matching the in-app preview.
   var ROTATIONS = { sphere: "45 45 0", cube: "45 45 0", plane: "0 0 0", teapot: "15 35 0", bunny: "0 25 0", model: "0 0 0" };
 
+  var DEFAULT_BG = "#303540", SPIN_BASE_DUR = 12000;  // dur at speed 1×
   var state = {
     shaderSource: null,    // text of the current shader module (null = none)
     shaderName: null,
@@ -179,10 +191,14 @@
     modelName: null,
     geometry: "sphere",
     showMaterials: false,  // model-materials mode (shader detached in the iframe)
-    spinning: true,
+    spinning: readStr("fs:viewerSpin", "1") !== "0",
+    spinSpeed: clampSpeed(readNum("fs:viewerSpinSpeed", 1)),
+    bgColor: isHex6(readStr("fs:viewerBg", DEFAULT_BG)) ? readStr("fs:viewerBg", DEFAULT_BG) : DEFAULT_BG,
     bounds: loadBounds(),  // { uniformName: {min,max} } persisted here (top origin)
     values: {},            // last slider value per uniform name
   };
+  // A slower/faster rotation is a longer/shorter animation duration.
+  function spinDur() { return Math.round(SPIN_BASE_DUR / (state.spinSpeed || 1)); }
   var objCache = {};       // built-in OBJ bytes, fetched once
 
   // fromStage tags errors relayed from the sandboxed stage iframe (fs:error).
@@ -209,9 +225,18 @@
   function loadBounds() { try { return JSON.parse(localStorage.getItem("fs:viewerBounds") || "{}") || {}; } catch (e) { return {}; } }
   function saveBounds() { try { localStorage.setItem("fs:viewerBounds", JSON.stringify(state.bounds)); } catch (e) {} }
 
+  // Small persisted-preference readers (all guarded — private-mode / disabled
+  // storage must degrade to the default, never throw).
+  function readStr(k, d) { try { var v = localStorage.getItem(k); return (v === null || v === "") ? d : v; } catch (e) { return d; } }
+  function readNum(k, d) { var n = parseFloat(readStr(k, "")); return isFinite(n) ? n : d; }
+  function writePref(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function isHex6(s) { return /^#[0-9a-fA-F]{6}$/.test(String(s)); }
+  function clampSpeed(s) { return Math.min(4, Math.max(0.1, isFinite(s) ? s : 1)); }
+
   // ── postMessage bridge to the sandboxed stage iframe ────────────────
   var stageReady = false;
   var outQueue = [];
+  var iframeDrag = false;  // is a file being dragged over the stage iframe?
   function post(msg) {
     if (stageReady && stage.contentWindow) stage.contentWindow.postMessage(msg, "*");
     else outQueue.push(msg);
@@ -235,6 +260,20 @@
       // errors (vendored-script load failures) still matter after a
       // successful apply (see showError).
       if (errorFromStage && !errorSticky) clearError();
+    } else if (m.type === "fs:drag") {
+      // A drag entered/left/moved over the stage iframe (which fills the
+      // viewport and swallows drag events over that whole area) — mirror the
+      // drop overlay. Repeated on:true beats also re-arm the safety timeout.
+      iframeDrag = !!m.on; refreshOverlay();
+    } else if (m.type === "fs:dropped") {
+      // Files were dropped ONTO the stage iframe; it forwarded the File objects
+      // here so a drop anywhere loads through the same path as a panel drop.
+      // Zero BOTH drag counters (a stage drop produces no parent dragleave, so
+      // dragDepth would otherwise stay >0 and keep the veil up) and accept only
+      // real File objects — a forged message can't crash the loader.
+      dragDepth = 0; iframeDrag = false; refreshOverlay();
+      var dropped = Array.isArray(m.files) ? m.files.filter(function (f) { return f instanceof File; }) : [];
+      if (dropped.length) handleFiles(dropped);
     }
   });
 
@@ -483,12 +522,27 @@
   }
 
   // ── Wiring: drag/drop, file picker, controls ────────────────────────
-  var dragDepth = 0;
-  window.addEventListener("dragenter", function (e) { e.preventDefault(); if (dragDepth++ === 0) overlay.classList.add("show"); });
-  window.addEventListener("dragover", function (e) { e.preventDefault(); });
-  window.addEventListener("dragleave", function (e) { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; overlay.classList.remove("show"); } });
+  // Files drop ANYWHERE. Two regions feed the same handler: parent-owned
+  // chrome (the panel) via these window listeners, and the full-screen stage
+  // iframe — whose own document swallows drag/drop, so it forwards them over
+  // postMessage (fs:drag / fs:dropped, handled above). The overlay shows while
+  // EITHER region reports an active drag; refreshOverlay merges both signals
+  // and arms a safety timeout so an aborted drag (Esc, or a drop outside the
+  // window, which fires no reliable leave event) can never strand the veil up:
+  // a live drag keeps re-arming it (panel dragover + the iframe's dragover
+  // heartbeat), so it only fires once the drag has genuinely stopped.
+  var dragDepth = 0, overlayTimer = null;
+  function refreshOverlay() {
+    var show = dragDepth > 0 || iframeDrag;
+    overlay.classList.toggle("show", show);
+    if (overlayTimer) { clearTimeout(overlayTimer); overlayTimer = null; }
+    if (show) overlayTimer = setTimeout(function () { dragDepth = 0; iframeDrag = false; overlay.classList.remove("show"); overlayTimer = null; }, 1500);
+  }
+  window.addEventListener("dragenter", function (e) { e.preventDefault(); dragDepth++; refreshOverlay(); });
+  window.addEventListener("dragover", function (e) { e.preventDefault(); if (dragDepth > 0 || iframeDrag) refreshOverlay(); });
+  window.addEventListener("dragleave", function (e) { e.preventDefault(); if (--dragDepth < 0) dragDepth = 0; refreshOverlay(); });
   window.addEventListener("drop", function (e) {
-    e.preventDefault(); dragDepth = 0; overlay.classList.remove("show");
+    e.preventDefault(); dragDepth = 0; iframeDrag = false; refreshOverlay();
     if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
   });
 
@@ -513,10 +567,35 @@
   });
 
   var spinToggle = document.getElementById("spin-toggle");
+  spinToggle.classList.toggle("active", state.spinning);
   spinToggle.addEventListener("click", function () {
     state.spinning = !state.spinning;
     spinToggle.classList.toggle("active", state.spinning);
-    post({ type: "fs:spin", playing: state.spinning });
+    writePref("fs:viewerSpin", state.spinning ? "1" : "0");
+    post({ type: "fs:spin", playing: state.spinning, dur: spinDur() });
+  });
+
+  // Rotation speed — a longer/shorter spin animation. Only re-issues the
+  // animation while spinning; the stored speed is applied when spin resumes.
+  var spinSpeedEl = document.getElementById("spin-speed");
+  spinSpeedEl.value = state.spinSpeed;
+  spinSpeedEl.addEventListener("input", function () {
+    var s = clampSpeed(parseFloat(spinSpeedEl.value));
+    state.spinSpeed = s;
+    writePref("fs:viewerSpinSpeed", String(s));
+    if (state.spinning) post({ type: "fs:spin", playing: true, dur: spinDur() });
+  });
+
+  // Background color — an <input type=color> only ever yields #rrggbb, but
+  // validate before it crosses into the iframe's attribute string anyway.
+  var bgColorEl = document.getElementById("bg-color");
+  bgColorEl.value = state.bgColor;
+  bgColorEl.addEventListener("input", function () {
+    var c = bgColorEl.value;
+    if (!isHex6(c)) return;
+    state.bgColor = c;
+    writePref("fs:viewerBg", c);
+    post({ type: "fs:background", color: c });
   });
 
   document.getElementById("reset-view").addEventListener("click", function () { post({ type: "fs:reset-camera" }); });
@@ -536,6 +615,14 @@
     var iife = dir + "js/a-frame-180-a-01.min.js";
     var loader = dir + "js/a-frame-shaderloader-0.4.js";
     var orbit = dir + "js/aframe-orbit-controls.min.js";
+    // Bake the persisted background + spin prefs straight into the initial scene
+    // so boot matches the saved state without a post-ready restart. bg is
+    // validated (#rrggbb) so it is safe to inline into the markup; when spin is
+    // off at boot the animation attribute is simply omitted.
+    var bg = isHex6(state.bgColor) ? state.bgColor : DEFAULT_BG;
+    var spinAttr = state.spinning
+      ? ' animation="property: rotation; from: 45 45 0; to: 45 405 0; loop: true; dur: ' + spinDur() + '; easing: linear"'
+      : '';
     var L = [];
     L.push('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" />');
     // Forward uncaught errors + unhandled rejections to the parent so a
@@ -556,10 +643,34 @@
     // Desktop viewer: neutralize WebXR before A-Frame loads (r184 WebGPU XR init
     // can throw when navigator.xr is present).
     L.push('<script>try{Object.defineProperty(navigator,"xr",{value:undefined,configurable:true});}catch(e){}<\/script>');
+
+    // ── Drop-anywhere forwarding ────────────────────────────────────────
+    // This iframe fills the viewport, so its own document captures drag/drop
+    // over that whole area and they never reach the parent. Forward them so a
+    // file can be dropped ANYWHERE, not just on the side panel. Only a drag
+    // SIGNAL (fs:drag, with a throttled dragover heartbeat so the parent's
+    // safety timeout stays armed while a drag hovers the stage) and the dropped
+    // File objects (fs:dropped) cross the boundary; the parent reads/loads them
+    // through the same path as a panel drop. preventDefault on dragover+drop
+    // stops the browser navigating to the file. Installed BEFORE the heavy
+    // A-Frame <script src> tags so an early drop (first ~1-3s) is caught rather
+    // than navigating the frame. The forwarded files round-trip straight back
+    // into THIS sandbox as a new shader/model — no reach into the top document.
+    L.push('<script>');
+    L.push('(function(){');
+    L.push('  function toParent(m){try{parent.postMessage(m,"*");}catch(e){}}');
+    L.push('  var depth=0,lastBeat=0;');
+    L.push('  addEventListener("dragenter",function(e){e.preventDefault();if(depth++===0)toParent({type:"fs:drag",on:true});});');
+    L.push('  addEventListener("dragover",function(e){e.preventDefault();try{if(e.dataTransfer)e.dataTransfer.dropEffect="copy";}catch(_){}var t=Date.now();if(t-lastBeat>250){lastBeat=t;toParent({type:"fs:drag",on:true});}});');
+    L.push('  addEventListener("dragleave",function(e){e.preventDefault();if(--depth<=0){depth=0;toParent({type:"fs:drag",on:false});}});');
+    L.push('  addEventListener("drop",function(e){e.preventDefault();depth=0;var f=e.dataTransfer&&e.dataTransfer.files?Array.prototype.slice.call(e.dataTransfer.files):[];toParent({type:"fs:drag",on:false});toParent({type:"fs:dropped",files:f});});');
+    L.push('})();');
+    L.push('<\/script>');
+
     L.push('<script src="' + iife + '" onerror="fsPost(\'Failed to load the A-Frame bundle\', true)"><\/script>');
     L.push('<script src="' + loader + '" onerror="fsPost(\'Failed to load the shaderloader\', true)"><\/script>');
     L.push('<script src="' + orbit + '" onerror="fsPost(\'Failed to load orbit controls\', true)"><\/script>');
-    L.push('<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#303540;}</style>');
+    L.push('<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:' + bg + ';}</style>');
     L.push('</head><body>');
 
     // fit-bounds: recenter + rescale loaded OBJ/GLTF meshes. regen:true rebuilds
@@ -584,9 +695,9 @@
     // deliver, THEN inject the scene. Scene-dependent code waits via
     // __fsWhenSceneBooted.
     var S = [];
-    S.push('<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: #303540">');
+    S.push('<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ' + bg + '">');
     S.push('  <a-entity camera="fov: 24; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 7; rotateSpeed: 0.5"></a-entity>');
-    S.push('  <a-entity id="spin-parent" animation="property: rotation; from: 45 45 0; to: 45 405 0; loop: true; dur: 12000; easing: linear">');
+    S.push('  <a-entity id="spin-parent"' + spinAttr + '>');
     S.push('    <a-entity id="preview-entity" geometry="primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64" material="color: #808080" position="0 0 0" rotation="45 45 0"></a-entity>');
     S.push('  </a-entity>');
     S.push('  <a-light type="directional" color="#ffffff" position="-3 4 2" intensity="2.5"></a-light>');
@@ -618,9 +729,14 @@
     L.push('  function setPrimitive(attr,rot){clearGeo();entity.setAttribute("material","color: #808080");entity.setAttribute("geometry",attr);entity.setAttribute("rotation",rot||"45 45 0");if(attached){setTimeout(function(){var c=entity.components&&entity.components.shader;if(c&&typeof c.applyShader==="function")c.applyShader();reportUniforms();},0);}}');
     L.push('  function setModel(kind,bytes,regen,rot){clearGeo();try{if(modelUrl)URL.revokeObjectURL(modelUrl);}catch(e){}var mime=kind==="obj"?"text/plain":"model/gltf-binary";modelUrl=URL.createObjectURL(new Blob([bytes],{type:mime}));entity.setAttribute("fit-bounds","size: 1.6; regen: "+(regen?"true":"false"));if(kind==="obj")entity.setAttribute("obj-model","obj: url("+modelUrl+")");else entity.setAttribute("gltf-model","url("+modelUrl+")");entity.setAttribute("rotation",rot||"0 0 0");if(attached)reportUniforms();}');
     L.push('  function setUniform(name,value){var comp=entity&&entity.components&&entity.components.shader;if(comp&&comp._propertyUniforms&&comp._propertyUniforms[name])comp._propertyUniforms[name].value=value;}');
-    L.push('  function setSpin(playing){if(!spinEl)return;if(playing){var r=spinEl.object3D&&spinEl.object3D.rotation;var fx=r?r.x*180/Math.PI:45,fy=r?r.y*180/Math.PI:45,fz=r?r.z*180/Math.PI:0;spinEl.setAttribute("animation","property: rotation; from: "+fx+" "+fy+" "+fz+"; to: "+fx+" "+(fy+360)+" "+fz+"; loop: true; dur: 12000; easing: linear");}else{var rr=spinEl.object3D&&spinEl.object3D.rotation;spinEl.removeAttribute("animation");if(rr)spinEl.setAttribute("rotation",(rr.x*180/Math.PI)+" "+(rr.y*180/Math.PI)+" "+(rr.z*180/Math.PI));}}');
+    L.push('  function setSpin(playing,dur){if(!spinEl)return;var d=dur>0?dur:12000;if(playing){var r=spinEl.object3D&&spinEl.object3D.rotation;var fx=r?r.x*180/Math.PI:45,fy=r?r.y*180/Math.PI:45,fz=r?r.z*180/Math.PI:0;spinEl.setAttribute("animation","property: rotation; from: "+fx+" "+fy+" "+fz+"; to: "+fx+" "+(fy+360)+" "+fz+"; loop: true; dur: "+d+"; easing: linear");}else{var rr=spinEl.object3D&&spinEl.object3D.rotation;spinEl.removeAttribute("animation");if(rr)spinEl.setAttribute("rotation",(rr.x*180/Math.PI)+" "+(rr.y*180/Math.PI)+" "+(rr.z*180/Math.PI));}}');
+    // setBackground: color is validated #rrggbb on the parent before it is sent.
+    // Belt-and-suspenders — the A-Frame background component (setAttribute) plus a
+    // direct scene.background + renderer clear-color set, so the WebGPU stage
+    // repaints live regardless of the component's runtime update behavior.
+    L.push('  function setBackground(color){var s=document.querySelector("a-scene");if(s){s.setAttribute("background","color: "+color);try{var col=new THREE.Color(color);if(s.object3D)s.object3D.background=col;if(s.renderer&&s.renderer.setClearColor)s.renderer.setClearColor(col,1);}catch(e){}}try{document.body.style.background=color;}catch(e){}}');
     L.push('  function resetCamera(){var oc=camEl&&camEl.components&&camEl.components["orbit-controls"];if(oc&&oc.controls&&typeof oc.controls.reset==="function")oc.controls.reset();}');
-    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:spin":setSpin(m.playing);break;case"fs:reset-camera":resetCamera();break;}});');
+    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;}});');
     // kickResize: a fresh WebGPU boot can record a stale/zero canvas size,
     // leaving the scene unpainted until renderer.setSize re-runs (the "blank
     // until the window is resized" bug) — re-run A-Frame's resize path a few
@@ -633,6 +749,7 @@
     L.push('  window.__fsWhenSceneBooted(function(){var sceneEl=document.querySelector("a-scene");if(sceneEl&&sceneEl.hasLoaded)boot();else if(sceneEl)sceneEl.addEventListener("loaded",boot);else boot();});');
     L.push('})();');
     L.push('<\/script>');
+
     L.push('</body></html>');
     return L.join("\n");
   }

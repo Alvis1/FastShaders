@@ -332,7 +332,10 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "append": {
+    "height": 42,
     "sockets": {
+      "a": -12,
+      "b": 12,
       "out": 0
     }
   },
