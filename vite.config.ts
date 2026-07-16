@@ -3,16 +3,37 @@ import { defineConfig, type Plugin, type Connect } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { cpSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
-// Relative, not '@/' — this config is bundled by esbuild's config loader, which
-// doesn't apply the app's path alias. descriptionSplice is deliberately
-// dependency-light (Babel only, no DOM, no app imports) so it can be shared
-// between the browser page and this Node-side endpoint.
-import {
-  locateRegistryDescriptions,
-  locateTextureDescriptions,
-  spliceDescriptions,
-  type DescriptionSlot,
-} from './src/registry/descriptionSplice';
+
+/**
+ * Shape of `src/registry/descriptionSplice.ts`, declared structurally rather
+ * than imported.
+ *
+ * A static import would be the obvious move, and it is the one thing that can't
+ * work here: this file is the sole member of `tsconfig.node.json`, which is
+ * `composite` and must therefore list every file it pulls in — but everything
+ * under src/ already belongs to `tsconfig.json`. One file, two projects, and
+ * `tsc --noEmit` fails TS6305 on any clean checkout while passing locally
+ * against a stale build. So the endpoint loads the real module through Vite's
+ * `server.ssrLoadModule` at request time (below) and these types describe it.
+ * Keep them in sync with descriptionSplice.ts — `npm test` covers the module's
+ * behaviour, and a mismatch here surfaces as a dev-only endpoint failure.
+ */
+interface DescriptionSlot {
+  key: string;
+  start: number;
+  end: number;
+  value: string;
+  form: 'property' | 'tuple';
+}
+interface SpliceModule {
+  locateRegistryDescriptions: (source: string) => DescriptionSlot[];
+  locateTextureDescriptions: (source: string) => DescriptionSlot[];
+  spliceDescriptions: (
+    source: string,
+    slots: DescriptionSlot[],
+    patch: Record<string, string>,
+  ) => string;
+}
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, './package.json'), 'utf-8'));
 
@@ -416,6 +437,7 @@ function ndReadBody(req: Connect.IncomingMessage, send: NdSend, cb: (parsed: unk
  * multi-line values, so this is defence in depth rather than the only gate.
  */
 function ndWriteDescriptions(
+  splice: SpliceModule,
   file: string,
   patch: Record<string, unknown>,
   locate: (src: string) => DescriptionSlot[],
@@ -429,7 +451,7 @@ function ndWriteDescriptions(
     if (typeof value !== 'string') throw new Error(`non-string description for ${key}`);
     clean[key] = value;
   }
-  const next = spliceDescriptions(source, slots, clean);
+  const next = splice.spliceDescriptions(source, slots, clean);
   // Compare-before-write: an all-no-op patch (every value unchanged) must not
   // touch mtime, or it would kick HMR for nothing.
   if (next !== source) writeFileSync(file, next, 'utf-8');
@@ -469,12 +491,26 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
   name: 'fs-node-designer-endpoint',
   apply: 'serve',
   configureServer(server) {
+    // Load the splice module through Vite itself, on first use. `ssrLoadModule`
+    // transpiles the TS and resolves its imports, so the endpoint runs the SAME
+    // code the browser page and the unit tests do — no duplicate implementation
+    // — while `tsc` sees no import from this project into src/. See SpliceModule
+    // above for why a plain import is not an option.
+    let splicePromise: Promise<SpliceModule> | null = null;
+    const loadSplice = () =>
+      (splicePromise ??= server
+        .ssrLoadModule('/src/registry/descriptionSplice.ts')
+        .then((m) => m as unknown as SpliceModule));
+
     server.middlewares.use('/__nd', (req, res) => {
       const send: NdSend = (code, obj) => {
         res.statusCode = code;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(obj));
       };
+      // Any rejection below (including a failed ssrLoadModule) must answer the
+      // request — an unhandled one would hang the tool on a silent pending fetch.
+      const fail = (e: unknown) => send(500, { error: String((e as Error).message) });
       try {
         if (req.method === 'GET' && req.url === '/glyphs') {
           send(200, { content: existsSync(ND_GLYPHS) ? readFileSync(ND_GLYPHS, 'utf-8') : '' });
@@ -485,13 +521,15 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
           // when this 404s. In practice that only happens when the page is opened
           // outside `npm run dev` (file://, or a preview server) — the page is not
           // a build entry, so there is no deployed copy of it to probe from.
-          const registry = Object.fromEntries(
-            locateRegistryDescriptions(readFileSync(ND_REGISTRY, 'utf-8')).map((s) => [s.key, s.value]),
-          );
-          const textures = Object.fromEntries(
-            locateTextureDescriptions(readFileSync(ND_TEXTURES, 'utf-8')).map((s) => [s.key, s.value]),
-          );
-          send(200, { registry, textures });
+          loadSplice().then((splice) => {
+            const registry = Object.fromEntries(
+              splice.locateRegistryDescriptions(readFileSync(ND_REGISTRY, 'utf-8')).map((s) => [s.key, s.value]),
+            );
+            const textures = Object.fromEntries(
+              splice.locateTextureDescriptions(readFileSync(ND_TEXTURES, 'utf-8')).map((s) => [s.key, s.value]),
+            );
+            send(200, { registry, textures });
+          }, fail);
         } else if (req.method === 'GET' && req.url === '/citations') {
           send(200, JSON.parse(readFileSync(ND_CITATIONS, 'utf-8')));
         } else if (req.method === 'POST' && req.url === '/glyphs') {
@@ -509,30 +547,33 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
           if (!ndGuardWrite(req, send)) return;
           ndReadBody(req, send, (parsed) => {
             const { registry, textures } = (parsed ?? {}) as { registry?: unknown; textures?: unknown };
-            try {
-              const n = ndWriteDescriptions(
-                ND_REGISTRY, (registry ?? {}) as Record<string, unknown>, locateRegistryDescriptions);
-              const t = ndWriteDescriptions(
-                ND_TEXTURES, (textures ?? {}) as Record<string, unknown>, locateTextureDescriptions);
-              send(200, { ok: true, registry: n, textures: t });
-            } catch (e) {
-              // A rejected patch is the tool sending something wrong, not a
-              // server fault — 400 so node-editor.html surfaces the reason verbatim.
-              send(400, { error: String((e as Error).message) });
-            }
+            loadSplice().then((splice) => {
+              try {
+                const n = ndWriteDescriptions(splice,
+                  ND_REGISTRY, (registry ?? {}) as Record<string, unknown>, splice.locateRegistryDescriptions);
+                const t = ndWriteDescriptions(splice,
+                  ND_TEXTURES, (textures ?? {}) as Record<string, unknown>, splice.locateTextureDescriptions);
+                send(200, { ok: true, registry: n, textures: t });
+              } catch (e) {
+                // A rejected patch is the tool sending something wrong, not a
+                // server fault — 400 so node-editor.html surfaces the reason verbatim.
+                send(400, { error: String((e as Error).message) });
+              }
+            }, fail);
           });
         } else if (req.method === 'POST' && req.url === '/citations') {
           if (!ndGuardWrite(req, send)) return;
           ndReadBody(req, send, (parsed) => {
             const { nodes, textures } = (parsed ?? {}) as { nodes?: unknown; textures?: unknown };
+            loadSplice().then((splice) => {
             try {
               // Keys are checked against the registry/texture sources rather
               // than the current citations.json: the point is to add refs to
               // nodes that don't have one yet.
               const validNodes = new Set(
-                locateRegistryDescriptions(readFileSync(ND_REGISTRY, 'utf-8')).map((s) => s.key));
+                splice.locateRegistryDescriptions(readFileSync(ND_REGISTRY, 'utf-8')).map((s) => s.key));
               const validTextures = new Set(
-                locateTextureDescriptions(readFileSync(ND_TEXTURES, 'utf-8')).map((s) => s.key));
+                splice.locateTextureDescriptions(readFileSync(ND_TEXTURES, 'utf-8')).map((s) => s.key));
               const next = {
                 nodes: ndValidateCitations(nodes ?? {}, validNodes, 'nodes'),
                 textures: ndValidateCitations(textures ?? {}, validTextures, 'textures'),
@@ -546,6 +587,7 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
             } catch (e) {
               send(400, { error: String((e as Error).message) });
             }
+            }, fail);
           });
         } else {
           send(404, { error: 'not found' });
