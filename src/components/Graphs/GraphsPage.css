@@ -1,0 +1,428 @@
+/* node-editor.html — internal dev tool: dense, clear, tokens-only (light + dark). */
+
+/* The page CANNOT scroll by growing: reset.css pins html/body/#root to
+   height:100% with overflow:hidden (right for the main app — a fixed-viewport
+   SPA of split panes — and inherited here because nodeEditor.tsx reuses the same
+   reset). A `min-height: 100vh` root just overflows #root and gets clipped, so
+   the rows past the fold become unreachable. Fill the viewport exactly and let
+   the table area below be the one scrollport instead, which also keeps the top
+   bar and filter chips fixed while 76 rows scroll under them. */
+.gp {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+
+.gp__top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-sm);
+}
+
+.gp__h1 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.gp__meta {
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.gp__search {
+  width: 320px;
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+}
+
+.gp__search:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.gp__spacer {
+  flex: 1 1 auto;
+}
+
+.gp__savemsg {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gp__dirtypill {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  color: #B45309;
+  background: #FEF3C7;
+  border: 1px solid #FDE68A;
+  white-space: nowrap;
+}
+
+:root[data-theme='dark'] .gp__dirtypill {
+  color: #FCD34D;
+  background: rgba(180, 83, 9, 0.22);
+  border-color: rgba(252, 211, 77, 0.35);
+}
+
+.gp__save {
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: #fff;
+  background: var(--border-focus);
+  border: 1px solid var(--border-focus);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.gp__save:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── Dev-only notice (mirrors node-designer.html's .devnote) ─────────────── */
+
+.gp__devnote {
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: #92400E;
+  background: #FEF3C7;
+  border-bottom: 1px solid #FDE68A;
+}
+
+.gp__devnote code {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.07);
+}
+
+:root[data-theme='dark'] .gp__devnote {
+  color: #FCD34D;
+  background: rgba(180, 83, 9, 0.2);
+  border-bottom-color: rgba(252, 211, 77, 0.3);
+}
+
+:root[data-theme='dark'] .gp__devnote code {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ── Category chips ──────────────────────────────────────────────────────── */
+
+.gp__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.gp__catbtn {
+  padding: 2px var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.gp__catbtn:hover {
+  background: var(--bg-surface-hover);
+}
+
+.gp__catclear {
+  border-style: dashed;
+}
+
+.gp__count {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+/* ── Table ───────────────────────────────────────────────────────────────── */
+
+/* The page's single scrollport, in both axes (the table has a 1100px min-width,
+   so narrow windows scroll sideways here rather than on the body).
+   `min-height: 0` is load-bearing: a flex item's default `min-height: auto`
+   refuses to shrink below its content, so without it this grows to fit all 76
+   rows and pushes the overflow back out to the clipped root — no scrollbar. */
+.gp__tablewrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 var(--space-4) var(--space-8);
+}
+
+.gp__table {
+  width: 100%;
+  min-width: 1100px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+/* top:0, not the top bar's height — the scrollport is .gp__tablewrap, which
+   already starts below the fixed chrome. Offsetting again would float the
+   header down and let rows slide under the gap. */
+.gp__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: var(--space-2);
+  text-align: left;
+  vertical-align: top;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: var(--bg-panel);
+  border-bottom: 2px solid var(--border-default);
+}
+
+.gp__sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.gp__sortable:hover {
+  color: var(--text-primary);
+}
+
+.gp__hint {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.gp__hint code {
+  font-family: var(--font-mono);
+}
+
+.gp__table tbody tr {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.gp__table tbody tr:hover {
+  background: var(--bg-surface-hover);
+}
+
+.gp__table tbody tr.is-dirty {
+  background: rgba(251, 191, 36, 0.12);
+  box-shadow: inset 3px 0 0 #F59E0B;
+}
+
+.gp__table td {
+  padding: var(--space-2);
+  vertical-align: top;
+}
+
+/* Column widths */
+.gp__c-kind { width: 58px; }
+.gp__c-name { width: 150px; }
+.gp__c-cat { width: 96px; }
+.gp__c-graph { width: 132px; }
+.gp__c-desc { width: auto; }
+.gp__c-alias { width: 190px; }
+.gp__c-cite { width: 170px; }
+.gp__c-tsl { width: 150px; }
+
+/* ── Cells ───────────────────────────────────────────────────────────────── */
+
+.gp__kind {
+  display: inline-block;
+  padding: 1px 5px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  border-radius: var(--border-radius-sm);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+}
+
+.gp__kind--texture {
+  border-color: var(--cat-texture);
+  color: var(--cat-texture);
+}
+
+.gp__name {
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.gp__type {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.gp__chip {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  border-radius: 999px;
+}
+
+/* The reused content-browser tiles are draggable and their click adds a node to
+   a canvas (tileDrag's tileActivationProps) — neither means anything here, and
+   the tooltip they carry would show the SAVED description while the row's
+   textarea shows the edited one. Dropping pointer events kills all three at once
+   and hands every interaction to the cell's button, which opens the graph. */
+.gp__preview {
+  display: block;
+  pointer-events: none;
+}
+
+/* The tiles are laid out for the asset strip (zoom:0.67 + a 20px top gutter for
+   the cost badge). Pull that gutter back so rows stay dense. */
+.gp__preview .node-preview-card,
+.gp__preview .saved-group-card {
+  padding-top: 6px;
+  cursor: inherit;
+}
+
+.gp__graphbtn,
+.gp__codebtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* Must follow the shared .gp__graphbtn/.gp__codebtn rule above — same
+   specificity, so source order is what lets these win. The graph cell stacks a
+   preview tile over its node count, unlike the inline TSL button. */
+.gp__graphbtn {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  padding: var(--space-1);
+  white-space: normal;
+}
+
+.gp__graphbtn:hover,
+.gp__codebtn:hover {
+  border-color: var(--border-focus);
+  color: var(--text-accent);
+}
+
+/* ── Designable vs live-canvas rows ──────────────────────────────────────────
+   The Graph cell has two destinations: designable rows (getFlowNodeType === 'shader')
+   open the Node Designer; the live-canvas nodes + textures open the read-only graph
+   viewer, because they have no glyph the designer could edit. That MUST be legible
+   before the click, so a designable cell carries a solid accent frame + an "✎ design
+   glyph" footer, while the others keep the default hairline and read "N nodes · view".
+   Accent tokens are theme-invariant (deliberately not redefined in the dark block),
+   so this reads the same in both themes. */
+.gp__graphbtn.is-designable {
+  border-color: var(--border-focus);
+}
+
+.gp__graphbtn.is-designable:hover {
+  background: var(--bg-surface-hover);
+  box-shadow: 0 0 0 1px var(--border-focus);
+}
+
+.gp__act {
+  color: var(--text-accent);
+  font-weight: 600;
+}
+
+.gp__tsl {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+/* ── Inputs ──────────────────────────────────────────────────────────────── */
+
+.gp__ta,
+.gp__in {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+}
+
+.gp__ta {
+  resize: vertical;
+  overflow: hidden;
+  min-height: 28px;
+  display: block;
+}
+
+.gp__in--url {
+  margin-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.gp__ta:focus,
+.gp__in:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  background: var(--bg-panel);
+}
+
+.gp__ta::placeholder,
+.gp__in::placeholder {
+  color: var(--text-muted);
+}

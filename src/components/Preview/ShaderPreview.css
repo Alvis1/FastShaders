@@ -74,6 +74,39 @@
   border-color: var(--border-focus);
 }
 
+.shader-preview__fs-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.shader-preview__fs-btn:hover {
+  border-color: var(--border-focus);
+}
+
+/* When the preview pane is the fullscreen element, let it fill the screen and
+   keep its own dark backdrop (the iframe paints its scene bg on top). */
+.shader-preview:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  background: var(--bg-panel);
+}
+.shader-preview:-webkit-full-screen {
+  width: 100vw;
+  height: 100vh;
+  background: var(--bg-panel);
+}
+
 .shader-preview__bg-color {
   width: 27px;
   height: 27px;
@@ -149,6 +182,47 @@
   flex: 1;
   position: relative;
   overflow: hidden;
+}
+
+/* "Compiling shader…" pill shown between a fresh srcDoc and the first painted
+   frame, so a multi-second WebGPU boot reads as progress rather than a crash.
+   pointer-events:none — it must never eat a drag on the model — and it clears on
+   fs:preview-ready / fs:preview-error so it can't sit over the error message. */
+.shader-preview__compiling {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.shader-preview__compiling-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: shader-preview-pulse 1s ease-in-out infinite;
+}
+
+@keyframes shader-preview-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .shader-preview__iframe {

@@ -1,8 +1,18 @@
 /// <reference types="vitest/config" />
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, type Plugin, type Connect } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { cpSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'fs';
+// Relative, not '@/' — this config is bundled by esbuild's config loader, which
+// doesn't apply the app's path alias. descriptionSplice is deliberately
+// dependency-light (Babel only, no DOM, no app imports) so it can be shared
+// between the browser page and this Node-side endpoint.
+import {
+  locateRegistryDescriptions,
+  locateTextureDescriptions,
+  spliceDescriptions,
+  type DescriptionSlot,
+} from './src/registry/descriptionSplice';
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, './package.json'), 'utf-8'));
 
@@ -221,13 +231,36 @@ const shaderCarouselDesktopStagePlugin = (): Plugin => ({
  *   GET  /__nd/costs  → { content } — complexity.json text (cost parity refresh)
  *   POST /__nd/glyphs { content }   — rewrite customGlyphs.ts
  *
+ * `node-editor.html` shares the endpoint for its own writes:
+ *
+ *   GET  /__nd/descriptions → { registry, textures } — on-disk description text,
+ *                             keyed by node type / texture id. Also the tool's
+ *                             availability probe.
+ *   POST /__nd/descriptions { registry, textures }   — splice descriptions in place
+ *   GET  /__nd/citations    → { nodes, textures } — parsed citations.json
+ *   POST /__nd/citations    { nodes, textures }   — rewrite citations.json
+ *
+ * Both tools probe these routes to decide whether saving is possible at all,
+ * so a 404 here is a supported state, not an error: the deployed copies render
+ * fine and simply disable Save.
+ *
  * Serve-only (`apply: 'serve'`) — never part of a production build. Writes
- * exactly one hard-coded path; client-supplied paths are never honored.
- * Mounted at server root (outside the Vite base) so the tool can call
+ * only hard-coded paths; client-supplied paths are never honored.
+ * Mounted at server root (outside the Vite base) so the tools can call
  * absolute `/__nd/*` URLs.
+ *
+ * Note the asymmetry between the two write shapes. `/glyphs` takes finished
+ * file text because the designer owns that file's entire contents. Descriptions
+ * are the opposite: they live inside two hand-maintained modules full of
+ * comments and section banners, so the client posts DATA (a key → text patch)
+ * and the splice happens here, server-side. Accepting `.ts` text from the page
+ * would make the browser the author of a module the dev server imports.
  */
 const ND_GLYPHS = path.resolve(__dirname, 'src/components/NodeEditor/nodes/glyphs/customGlyphs.ts');
 const ND_COSTS = path.resolve(__dirname, 'src/registry/complexity.json');
+const ND_REGISTRY = path.resolve(__dirname, 'src/registry/nodeRegistry.ts');
+const ND_TEXTURES = path.resolve(__dirname, 'src/registry/builtinTextures.ts');
+const ND_CITATIONS = path.resolve(__dirname, 'src/registry/citations.json');
 
 /**
  * Keep `public/node-designer.html` in sync with the repo-root source.
@@ -322,12 +355,122 @@ const vendorSyncPlugin = (): Plugin => ({
     }
   },
 });
+type NdSend = (code: number, obj: unknown) => void;
+
+/**
+ * CSRF / cross-origin write guard, shared by every POST route below.
+ *
+ * While `npm run dev` runs, any other tab in the developer's browser could
+ * fire a CORS "simple" POST at localhost and rewrite a source file the dev
+ * server imports — `customGlyphs.ts` renders its SVG via
+ * dangerouslySetInnerHTML, and `nodeRegistry.ts` is executable module code —
+ * yielding dev-origin stored XSS / source injection. Two cheap, independent
+ * checks close it. Returns false when the request has been answered already.
+ */
+function ndGuardWrite(req: Connect.IncomingMessage, send: NdSend): boolean {
+  //   1. Reject any request whose Origin isn't a loopback host. A cross-site
+  //      page's Origin (set by the browser, unforgeable) is its own domain;
+  //      same-origin requests omit Origin or send a localhost one.
+  const origin = req.headers.origin;
+  if (origin) {
+    let loopback = false;
+    try {
+      const h = new URL(origin).hostname;
+      loopback = h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+    } catch { loopback = false; }
+    if (!loopback) { send(403, { error: 'forbidden origin' }); return false; }
+  }
+  //   2. Require application/json. A true cross-origin POST with this
+  //      content-type is a "non-simple" request, so the browser must
+  //      preflight it — and this endpoint answers no preflight, so the
+  //      write never fires. The same-origin tools already send JSON.
+  if (!String(req.headers['content-type'] ?? '').includes('application/json')) {
+    send(415, { error: 'content-type must be application/json' });
+    return false;
+  }
+  return true;
+}
+
+/** Accumulate a JSON request body behind a sanity cap, then hand it to `cb`. */
+function ndReadBody(req: Connect.IncomingMessage, send: NdSend, cb: (parsed: unknown) => void): void {
+  let body = '';
+  req.on('data', (c) => {
+    body += c;
+    if (body.length > 5_000_000) req.destroy(); // sanity cap
+  });
+  req.on('end', () => {
+    try {
+      cb(JSON.parse(body));
+    } catch (e) {
+      send(500, { error: String((e as Error).message) });
+    }
+  });
+}
+
+/**
+ * Validate a `{ [key]: string }` description patch and splice it into `file`.
+ *
+ * `valid` comes from the locator reading the very file being written, so an
+ * unknown key can't create one: the patch may only reach descriptions that
+ * already exist. `spliceDescriptions` itself rejects unknown keys and
+ * multi-line values, so this is defence in depth rather than the only gate.
+ */
+function ndWriteDescriptions(
+  file: string,
+  patch: Record<string, unknown>,
+  locate: (src: string) => DescriptionSlot[],
+): number {
+  const source = readFileSync(file, 'utf-8');
+  const slots = locate(source);
+  const valid = new Set(slots.map((s) => s.key));
+  const clean: Record<string, string> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (!valid.has(key)) throw new Error(`unknown key: ${key}`);
+    if (typeof value !== 'string') throw new Error(`non-string description for ${key}`);
+    clean[key] = value;
+  }
+  const next = spliceDescriptions(source, slots, clean);
+  // Compare-before-write: an all-no-op patch (every value unchanged) must not
+  // touch mtime, or it would kick HMR for nothing.
+  if (next !== source) writeFileSync(file, next, 'utf-8');
+  return Object.keys(clean).length;
+}
+
+/** Reject anything that isn't a plain `{ ref, url? }` citation record. */
+function ndValidateCitations(group: unknown, valid: Set<string>, label: string): Record<string, unknown> {
+  if (group === null || typeof group !== 'object' || Array.isArray(group)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(group as Record<string, unknown>)) {
+    if (!valid.has(key)) throw new Error(`unknown ${label} key: ${key}`);
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`${label}.${key} must be an object`);
+    }
+    const { ref, url } = entry as { ref?: unknown; url?: unknown };
+    if (typeof ref !== 'string' || !ref.trim()) throw new Error(`${label}.${key}.ref must be a non-empty string`);
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u001f\u007f]/.test(ref)) throw new Error(`${label}.${key}.ref must be single-line`);
+    if (url !== undefined) {
+      if (typeof url !== 'string') throw new Error(`${label}.${key}.url must be a string`);
+      let ok = false;
+      try {
+        const p = new URL(url).protocol;
+        ok = p === 'http:' || p === 'https:';
+      } catch { ok = false; }
+      if (!ok) throw new Error(`${label}.${key}.url must be an absolute http(s) URL`);
+    }
+    out[key] = url === undefined ? { ref } : { ref, url };
+  }
+  return out;
+}
+
 const nodeDesignerEndpointPlugin = (): Plugin => ({
   name: 'fs-node-designer-endpoint',
   apply: 'serve',
   configureServer(server) {
     server.middlewares.use('/__nd', (req, res) => {
-      const send = (code: number, obj: unknown) => {
+      const send: NdSend = (code, obj) => {
         res.statusCode = code;
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(obj));
@@ -337,49 +480,71 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
           send(200, { content: existsSync(ND_GLYPHS) ? readFileSync(ND_GLYPHS, 'utf-8') : '' });
         } else if (req.method === 'GET' && req.url === '/costs') {
           send(200, { content: readFileSync(ND_COSTS, 'utf-8') });
+        } else if (req.method === 'GET' && req.url === '/descriptions') {
+          // Doubles as node-editor.html's availability probe: it disables Save
+          // when this 404s. In practice that only happens when the page is opened
+          // outside `npm run dev` (file://, or a preview server) — the page is not
+          // a build entry, so there is no deployed copy of it to probe from.
+          const registry = Object.fromEntries(
+            locateRegistryDescriptions(readFileSync(ND_REGISTRY, 'utf-8')).map((s) => [s.key, s.value]),
+          );
+          const textures = Object.fromEntries(
+            locateTextureDescriptions(readFileSync(ND_TEXTURES, 'utf-8')).map((s) => [s.key, s.value]),
+          );
+          send(200, { registry, textures });
+        } else if (req.method === 'GET' && req.url === '/citations') {
+          send(200, JSON.parse(readFileSync(ND_CITATIONS, 'utf-8')));
         } else if (req.method === 'POST' && req.url === '/glyphs') {
-          // CSRF / cross-origin write guard. While `npm run dev` runs, any
-          // other tab in the developer's browser could fire a CORS "simple"
-          // POST at localhost and overwrite customGlyphs.ts — whose SVG is
-          // rendered via dangerouslySetInnerHTML — yielding dev-origin stored
-          // XSS / source injection. Two cheap, independent checks close it:
-          //   1. Reject any request whose Origin isn't a loopback host. A
-          //      cross-site page's Origin (set by the browser, unforgeable)
-          //      is its own domain; same-origin requests omit Origin or send
-          //      a localhost one.
-          const origin = req.headers.origin;
-          if (origin) {
-            let loopback = false;
-            try {
-              const h = new URL(origin).hostname;
-              loopback = h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
-            } catch { loopback = false; }
-            if (!loopback) { send(403, { error: 'forbidden origin' }); return; }
-          }
-          //   2. Require application/json. A true cross-origin POST with this
-          //      content-type is a "non-simple" request, so the browser must
-          //      preflight it — and this endpoint answers no preflight, so the
-          //      write never fires. The same-origin tool already sends JSON.
-          if (!String(req.headers['content-type'] ?? '').includes('application/json')) {
-            send(415, { error: 'content-type must be application/json' });
-            return;
-          }
-          let body = '';
-          req.on('data', (c) => {
-            body += c;
-            if (body.length > 5_000_000) req.destroy(); // sanity cap
+          if (!ndGuardWrite(req, send)) return;
+          ndReadBody(req, send, (parsed) => {
+            const { content } = (parsed ?? {}) as { content?: unknown };
+            if (typeof content !== 'string' || !content.includes('export const CUSTOM_GLYPHS')) {
+              send(400, { error: 'unexpected content' });
+              return;
+            }
+            writeFileSync(ND_GLYPHS, content, 'utf-8');
+            send(200, { ok: true });
           });
-          req.on('end', () => {
+        } else if (req.method === 'POST' && req.url === '/descriptions') {
+          if (!ndGuardWrite(req, send)) return;
+          ndReadBody(req, send, (parsed) => {
+            const { registry, textures } = (parsed ?? {}) as { registry?: unknown; textures?: unknown };
             try {
-              const { content } = JSON.parse(body) as { content?: unknown };
-              if (typeof content !== 'string' || !content.includes('export const CUSTOM_GLYPHS')) {
-                send(400, { error: 'unexpected content' });
-                return;
-              }
-              writeFileSync(ND_GLYPHS, content, 'utf-8');
-              send(200, { ok: true });
+              const n = ndWriteDescriptions(
+                ND_REGISTRY, (registry ?? {}) as Record<string, unknown>, locateRegistryDescriptions);
+              const t = ndWriteDescriptions(
+                ND_TEXTURES, (textures ?? {}) as Record<string, unknown>, locateTextureDescriptions);
+              send(200, { ok: true, registry: n, textures: t });
             } catch (e) {
-              send(500, { error: String((e as Error).message) });
+              // A rejected patch is the tool sending something wrong, not a
+              // server fault — 400 so node-editor.html surfaces the reason verbatim.
+              send(400, { error: String((e as Error).message) });
+            }
+          });
+        } else if (req.method === 'POST' && req.url === '/citations') {
+          if (!ndGuardWrite(req, send)) return;
+          ndReadBody(req, send, (parsed) => {
+            const { nodes, textures } = (parsed ?? {}) as { nodes?: unknown; textures?: unknown };
+            try {
+              // Keys are checked against the registry/texture sources rather
+              // than the current citations.json: the point is to add refs to
+              // nodes that don't have one yet.
+              const validNodes = new Set(
+                locateRegistryDescriptions(readFileSync(ND_REGISTRY, 'utf-8')).map((s) => s.key));
+              const validTextures = new Set(
+                locateTextureDescriptions(readFileSync(ND_TEXTURES, 'utf-8')).map((s) => s.key));
+              const next = {
+                nodes: ndValidateCitations(nodes ?? {}, validNodes, 'nodes'),
+                textures: ndValidateCitations(textures ?? {}, validTextures, 'textures'),
+              };
+              writeFileSync(ND_CITATIONS, JSON.stringify(next, null, 2) + '\n', 'utf-8');
+              send(200, {
+                ok: true,
+                nodes: Object.keys(next.nodes).length,
+                textures: Object.keys(next.textures).length,
+              });
+            } catch (e) {
+              send(400, { error: String((e as Error).message) });
             }
           });
         } else {

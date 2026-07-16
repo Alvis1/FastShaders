@@ -67,6 +67,30 @@ Implemented in: `src/components/NodeEditor/nodes/ShaderNode.tsx`,
   (`pointer-events: none`).
 - The designer previews the body stack via the connected inputs' channel selectors.
 
+## Edge rendering & routing
+
+- Edges (`TypedEdge`) are cubic beziers whose control-point math lives in
+  `edges/bezierGeometry.ts` — the **single source of truth shared by the renderer
+  AND the drop-on-edge hit test** (`NodeEditor.findNearestEdge`). Never fork the
+  curve math: if the drawn path and the measured path drift, a node highlights an
+  edge it won't actually snap onto (or vice-versa). Color-circle sources exit
+  along the **radial** (perpendicular to the circle), everything else along the
+  handle's cardinal side (`getHandlePosition(center=false)`).
+- **Routing waypoints**: an edge may carry `data.waypoints: {x,y}[]` (flow
+  coords). When present the wire is drawn as a **Catmull-Rom spline through
+  source → …waypoints… → target** (`splinePath`/`catmullRomToBeziers`), overriding
+  the radial/cardinal exit — routing intent wins. Draggable dots (`EdgeWaypointHandles`)
+  are **scale-compensated** (radius ÷ zoom, so constant on-screen size) and only
+  mount for edges that actually have waypoints (the per-edge zoom subscription
+  costs only routed edges). Add via double-click on the edge or right-click →
+  "Add routing point"; remove via double-click on a dot (which **must**
+  `stopPropagation` so it doesn't also fire the edge's add-waypoint dblclick or
+  the pane's zoom-on-dblclick). Waypoints are **visual-only** — engine-invisible,
+  persisted with the graph (localStorage/undo) and carried across a code→graph
+  resync by endpoint match (`useSyncEngine`); a fresh `.js`/zip import starts
+  without them. The drop-on-edge hit test measures routed edges against the SAME
+  spline (`distancePointToSpline`), preserving the highlight≡snap invariant.
+
 ## Glyph (visualization)
 
 9. Each node may have a light-theme SVG glyph (`NodeGlyph.tsx`, `0 0 56 56` space).

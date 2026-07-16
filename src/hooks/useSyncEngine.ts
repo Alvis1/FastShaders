@@ -93,6 +93,21 @@ export function useSyncEngine() {
             useAppStore.getState().pushHistory();
           }
           const oldNodes = useAppStore.getState().nodes;
+          // Routing waypoints live on edge.data and aren't reconstructable from
+          // the code text — carry them across the resync by matching edges on
+          // their (source,sourceHandle,target,targetHandle) tuple, mirroring how
+          // group nodes are preserved below. Keyed on the OLD node ids (the
+          // remapped edges resolve back to those via idMap).
+          const oldEdges = useAppStore.getState().edges;
+          const waypointKey = (s: string, sh: string | null | undefined, t: string, th: string | null | undefined) =>
+            `${s}\0${sh ?? 'out'}\0${t}\0${th ?? 'in'}`;
+          const oldWaypoints = new Map<string, Array<{ x: number; y: number }>>();
+          for (const oe of oldEdges) {
+            const wps = (oe.data as { waypoints?: Array<{ x: number; y: number }> } | undefined)?.waypoints;
+            if (wps && wps.length) {
+              oldWaypoints.set(waypointKey(oe.source, oe.sourceHandle, oe.target, oe.targetHandle), wps);
+            }
+          }
 
           // Build ID mapping: newId → oldId (preserves React Flow identity)
           const idMap = new Map<string, string>();
@@ -167,11 +182,13 @@ export function useSyncEngine() {
             .map((e) => {
               const src = idMap.get(e.source) ?? e.source;
               const tgt = idMap.get(e.target) ?? e.target;
+              const wps = oldWaypoints.get(waypointKey(src, e.sourceHandle, tgt, e.targetHandle));
               return {
                 ...e,
                 source: src,
                 target: tgt,
                 id: generateEdgeId(src, e.sourceHandle ?? 'out', tgt, e.targetHandle ?? 'out'),
+                ...(wps ? { data: { ...e.data, dataType: e.data?.dataType ?? 'any', waypoints: wps } } : {}),
               };
             });
 

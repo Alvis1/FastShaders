@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import type { SavedGroup } from '@/store/useAppStore';
-import { startTileDrag, tileGhostZoom } from './tileDrag';
+import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
 
 export const SAVED_GROUP_DRAG_TYPE = 'application/fastshaders-saved-group';
@@ -54,7 +54,7 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
   // Member count = total saved nodes minus the group container itself.
   const memberCount = Math.max(0, group.nodes.length - 1);
   const { tooltip, tooltipHandlers } = useAssetTooltip(
-    `Saved group “${group.name}” (${memberCount} ${memberCount === 1 ? 'node' : 'nodes'}) — drag onto the canvas to add a copy.`,
+    `Saved group “${group.name}” (${memberCount} ${memberCount === 1 ? 'node' : 'nodes'}) — click, or drag onto the canvas, to add a copy.`,
   );
 
   return (
@@ -63,6 +63,7 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
       draggable
       onDragStart={onDragStart}
       onPointerDown={onPointerDown}
+      {...tileActivationProps({ kind: 'savedGroup', id: group.id }, `Add saved group ${group.name}`)}
       {...tooltipHandlers}
     >
       {tooltip}

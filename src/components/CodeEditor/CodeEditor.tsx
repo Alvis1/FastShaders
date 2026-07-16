@@ -361,8 +361,12 @@ export function CodeEditor() {
             ) : null;
           })()}
           {isTSL && (
-            <button className="code-editor__save" onClick={requestCodeSync}>
-              Save
+            <button
+              className="code-editor__save"
+              onClick={requestCodeSync}
+              title="Compile this TSL into the node graph — your work is auto-saved separately"
+            >
+              Apply to Graph
             </button>
           )}
           {isTSL && (
@@ -403,7 +407,7 @@ export function CodeEditor() {
               </div>
             ))}
             {errors.length > 0 ? (
-              <div className="code-editor__error-hint">Fix the errors above, then press Save to update the node view.</div>
+              <div className="code-editor__error-hint">Fix the errors above, then press Apply to Graph to update the node view.</div>
             ) : (
               <div className="code-editor__error-hint">Unknown functions are preserved as-is in the graph.</div>
             )}

@@ -63,7 +63,7 @@
 
 .code-editor__tab {
   padding: 5px 16px 4px;
-  font-size: 9px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--text-secondary);
   background: var(--bg-surface);
@@ -97,7 +97,7 @@
 }
 
 .code-editor__errors {
-  font-size: 9px;
+  font-size: var(--font-size-xs);
   color: #e74c3c;
   background: rgba(231, 76, 60, 0.15);
   padding: 2px 8px;
@@ -105,7 +105,7 @@
 }
 
 .code-editor__warnings {
-  font-size: 9px;
+  font-size: var(--font-size-xs);
   color: #e67e22;
   background: rgba(230, 126, 34, 0.15);
   padding: 2px 8px;
@@ -114,7 +114,7 @@
 
 .code-editor__save {
   padding: 4px 14px;
-  font-size: 9px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: white;
   background: var(--text-secondary);
@@ -130,7 +130,7 @@
 
 .code-editor__action-btn {
   padding: 4px 14px;
-  font-size: 9px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
   color: white;
   background: var(--text-accent);
@@ -151,7 +151,7 @@
   width: 30px;
   height: 28px;
   padding: 0;
-  font-size: 9px;
+  font-size: var(--font-size-xs);
   line-height: 1;
   color: var(--text-secondary);
   background: transparent;

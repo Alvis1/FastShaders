@@ -7,9 +7,11 @@ import {
   addEdge,
   reconnectEdge,
   useReactFlow,
+  Position,
   type OnConnect,
   type Connection,
   type Edge,
+  type InternalNode,
   BackgroundVariant,
   SelectionMode,
 } from '@xyflow/react';
@@ -25,6 +27,7 @@ import { GroupNode } from './nodes/GroupNode';
 import { NoteNode } from './nodes/NoteNode';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
 import { TypedEdge } from './edges/TypedEdge';
+import { cardinalControlPoint, radialControlPoint, distancePointToCubicBezier, distancePointToSpline, insertWaypointOrdered } from './edges/bezierGeometry';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
@@ -91,30 +94,15 @@ function exposeConnectedTarget(targetId: string, targetHandle: string | null | u
     ) as AppNode[],
   );
 }
-/** Snap radius for drop-on-edge insertion — small so the node center must be basically over the edge. */
-const DROP_ON_EDGE_RADIUS = 8;
+/** Snap radius for drop-on-edge insertion, in SCREEN px. 1.5× the original 8px
+ *  so the node center no longer has to sit almost exactly on the curve. Divided
+ *  by the viewport zoom at the call site so the acceptance band is a constant
+ *  on-screen distance at every zoom level (a fixed FLOW-space radius shrinks to
+ *  a sub-pixel target when zoomed out — part of the "sometimes doesn't detect"
+ *  report). */
+const DROP_ON_EDGE_RADIUS = 12;
 /** Pixels of movement before a node drag is considered "real" (and worth pushing history). */
 const DRAG_HISTORY_THRESHOLD = 2;
-
-/** Minimum distance from point (cx,cy) to a cubic bezier with given source, target, and control-point offset. */
-function bezierDist(
-  sx: number, sy: number, tx: number, ty: number, cp: number,
-  cx: number, cy: number,
-): number {
-  let min = Infinity;
-  for (let t = 0; t <= 1; t += 0.05) {
-    const mt = 1 - t;
-    const mt2 = mt * mt;
-    const mt3 = mt2 * mt;
-    const t2 = t * t;
-    const t3 = t2 * t;
-    const bx = mt3 * sx + 3 * mt2 * t * (sx + cp) + 3 * mt * t2 * (tx - cp) + t3 * tx;
-    const by = mt3 * sy + 3 * mt2 * t * sy + 3 * mt * t2 * ty + t3 * ty;
-    const d = Math.hypot(bx - cx, by - cy);
-    if (d < min) min = d;
-  }
-  return min;
-}
 
 type Measured = AppNode & { measured?: { width?: number; height?: number } };
 function getNodeSize(n: AppNode) {
@@ -141,36 +129,102 @@ function nodeAbsolutePos(node: AppNode, allNodes: AppNode[]): { x: number; y: nu
   return { x, y };
 }
 
+type GetInternalNode = (id: string) => InternalNode | undefined;
+
 /**
- * Find the closest edge to (cx, cy) in flow-space within DROP_ON_EDGE_RADIUS.
- * `excludeNodeId` skips edges connected to the node being dragged.
+ * The edge anchor React Flow actually draws from/to for one handle, in
+ * flow-space: the handle box's CARDINAL-side midpoint (Right → right edge, Left
+ * → left edge, …), exactly what @xyflow/system's getHandlePosition(center=false)
+ * returns. Also reports the handle's node-local CENTER (`localCx/localCy`) so a
+ * color-circle source can reconstruct its radial exit vector. Falls back to the
+ * node's mid-left/mid-right edge when handle bounds haven't been measured yet.
+ * Reading the ACTUAL handle (not the node's vertical center) is what lets a drop
+ * land on an edge feeding a non-centered socket — e.g. the Output node's
+ * displacement/normal rows, or the `b` input of an arithmetic node.
+ */
+function handleAnchor(
+  node: InternalNode,
+  handleId: string | null | undefined,
+  kind: 'source' | 'target',
+): { x: number; y: number; position: Position; localCx: number; localCy: number } {
+  const pos = node.internals.positionAbsolute;
+  const bounds = node.internals.handleBounds?.[kind];
+  const h = (handleId ? bounds?.find((b) => b.id === handleId) : undefined) ?? bounds?.[0];
+  if (h) {
+    const localCx = h.x + h.width / 2;
+    const localCy = h.y + h.height / 2;
+    let x = pos.x + localCx;
+    let y = pos.y + localCy;
+    switch (h.position) {
+      case Position.Left:   x = pos.x + h.x; break;
+      case Position.Right:  x = pos.x + h.x + h.width; break;
+      case Position.Top:    y = pos.y + h.y; break;
+      case Position.Bottom: y = pos.y + h.y + h.height; break;
+    }
+    return { x, y, position: h.position, localCx, localCy };
+  }
+  const w = node.measured?.width ?? 120;
+  const ht = node.measured?.height ?? 40;
+  return kind === 'source'
+    ? { x: pos.x + w, y: pos.y + ht / 2, position: Position.Right, localCx: w, localCy: ht / 2 }
+    : { x: pos.x, y: pos.y + ht / 2, position: Position.Left, localCx: 0, localCy: ht / 2 };
+}
+
+/**
+ * Find the closest edge to (cx, cy) in flow-space within `radius` (flow px).
+ * `excludeNodeId` skips edges connected to the node being dragged. Distance is
+ * measured against the SAME cubic bezier TypedEdge renders — exact handle
+ * anchors, React Flow's control-point math, and the color-circle radial exit —
+ * so what highlights is exactly what snaps. Invisible edges (collapsed-group
+ * internals / hidden boundary edges) are skipped so a node can't splice onto an
+ * edge the user can't see.
  */
 function findNearestEdge(
   cx: number, cy: number,
-  allNodes: AppNode[], allEdges: AppEdge[],
+  allEdges: AppEdge[],
+  getInternalNode: GetInternalNode,
+  radius: number,
   excludeNodeId?: string,
 ): string | null {
   let bestId: string | null = null;
-  let bestDist = DROP_ON_EDGE_RADIUS;
+  let bestDist = radius;
 
   for (const edge of allEdges) {
+    if (edge.hidden) continue;
+    if ((edge as { className?: string }).className?.includes('fs-collapsed-edge')) continue;
     if (excludeNodeId && (edge.source === excludeNodeId || edge.target === excludeNodeId)) continue;
-    const srcNode = allNodes.find((n) => n.id === edge.source);
-    const tgtNode = allNodes.find((n) => n.id === edge.target);
+    const srcNode = getInternalNode(edge.source);
+    const tgtNode = getInternalNode(edge.target);
     if (!srcNode || !tgtNode) continue;
 
-    // Use absolute positions so grouped and top-level nodes compare correctly
-    const srcAbs = nodeAbsolutePos(srcNode, allNodes);
-    const tgtAbs = nodeAbsolutePos(tgtNode, allNodes);
-    const { w: sw, h: sh } = getNodeSize(srcNode);
-    const { h: th } = getNodeSize(tgtNode);
-    const sx = srcAbs.x + sw;
-    const sy = srcAbs.y + sh / 2;
-    const tx = tgtAbs.x;
-    const ty = tgtAbs.y + th / 2;
-    const cp = Math.max(Math.abs(tx - sx) * 0.5, 50);
+    const s = handleAnchor(srcNode, edge.sourceHandle, 'source');
+    const t = handleAnchor(tgtNode, edge.targetHandle, 'target');
 
-    const d = bezierDist(sx, sy, tx, ty, cp, cx, cy);
+    // Routed edges (user waypoints) draw a spline, not a single bezier — measure
+    // against the SAME spline so what highlights is exactly what snaps.
+    const wps = (edge.data?.waypoints ?? []) as { x: number; y: number }[];
+    let d: number;
+    if (wps.length) {
+      d = distancePointToSpline(
+        [[s.x, s.y], ...wps.map((w) => [w.x, w.y] as [number, number]), [t.x, t.y]],
+        cx, cy,
+      );
+    } else {
+      // Color nodes are circles whose output rides the perimeter and exits along
+      // the radial (TypedEdge's getRadialBezierPath) — everything else uses the
+      // cardinal exit. Match whichever this edge is actually drawn with.
+      let c1x: number, c1y: number;
+      const rdx = s.localCx - (srcNode.measured?.width ?? 28) / 2;
+      const rdy = s.localCy - (srcNode.measured?.height ?? 28) / 2;
+      const rlen = Math.hypot(rdx, rdy);
+      if (srcNode.type === 'color' && rlen > 1e-3) {
+        [c1x, c1y] = radialControlPoint(s.x, s.y, rdx / rlen, rdy / rlen, t.x, t.y);
+      } else {
+        [c1x, c1y] = cardinalControlPoint(s.position, s.x, s.y, t.x, t.y);
+      }
+      const [c2x, c2y] = cardinalControlPoint(t.position, t.x, t.y, s.x, s.y);
+      d = distancePointToCubicBezier(s.x, s.y, c1x, c1y, c2x, c2y, t.x, t.y, cx, cy);
+    }
     if (d < bestDist) {
       bestDist = d;
       bestId = edge.id;
@@ -251,15 +305,18 @@ function reparentedNode(
 
 /**
  * Try to insert `nodeId` (with registry def `def`) onto the nearest edge at
- * flow-space center (cx, cy). Returns true if an insertion was made.
+ * flow-space center (cx, cy) within `radius` (flow px). Returns true if an
+ * insertion was made.
  */
 function tryInsertOnEdge(
   nodeId: string,
   def: { inputs: { id: string }[]; outputs: { id: string }[] },
   cx: number, cy: number,
+  getInternalNode: GetInternalNode,
+  radius: number,
 ): boolean {
   const store = useAppStore.getState();
-  const edgeId = findNearestEdge(cx, cy, store.nodes, store.edges, nodeId);
+  const edgeId = findNearestEdge(cx, cy, store.edges, getInternalNode, radius, nodeId);
   if (!edgeId) return false;
   const edge = store.edges.find((e) => e.id === edgeId);
   if (!edge) return false;
@@ -271,7 +328,13 @@ function tryInsertOnEdge(
   const newEdge2 = makeTypedEdge(nodeId, outputPort.id, edge.target, edge.targetHandle);
 
   store.setEdges(
-    store.edges.filter((e) => e.id !== edge.id).concat(newEdge1, newEdge2) as AppEdge[],
+    store.edges
+      .filter((e) => e.id !== edge.id)
+      // Inputs are single-connection. If the inserted node's first input was
+      // already wired (e.g. re-dragging an already-connected node onto another
+      // edge), drop that stale edge so the port doesn't end up double-fed.
+      .filter((e) => !(e.target === nodeId && e.targetHandle === inputPort.id))
+      .concat(newEdge1, newEdge2) as AppEdge[],
   );
   return true;
 }
@@ -292,7 +355,7 @@ export function NodeEditor() {
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
   const isDarkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
-  const { screenToFlowPosition, getViewport, setViewport } = useReactFlow();
+  const { screenToFlowPosition, getViewport, setViewport, getInternalNode } = useReactFlow();
 
   // Copy/paste clipboard
   const clipboardRef = useRef<AppNode[]>([]);
@@ -343,9 +406,12 @@ export function NodeEditor() {
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
       const mod = e.metaKey || e.ctrlKey;
+      // Normalized so Caps Lock (which reports 'C' rather than 'c') doesn't
+      // silently break every accelerator below.
+      const key = e.key.toLowerCase();
 
       // Ctrl+C — copy selected nodes
-      if (mod && e.key === 'c') {
+      if (mod && key === 'c') {
         const selected = useAppStore.getState().nodes.filter((n) => n.selected);
         if (selected.length > 0) {
           clipboardRef.current = structuredClone(selected);
@@ -353,7 +419,7 @@ export function NodeEditor() {
       }
 
       // Ctrl+V — paste copied nodes
-      if (mod && e.key === 'v') {
+      if (mod && key === 'v') {
         if (clipboardRef.current.length === 0) return;
         e.preventDefault();
         const clones = pasteNodes(clipboardRef.current);
@@ -362,7 +428,7 @@ export function NodeEditor() {
       }
 
       // Ctrl+G — group selected nodes (Ctrl+Shift+G ungroups the selected group)
-      if (mod && e.key.toLowerCase() === 'g') {
+      if (mod && key === 'g') {
         e.preventDefault();
         const store = useAppStore.getState();
         const selected = store.nodes.filter((n) => n.selected);
@@ -382,7 +448,7 @@ export function NodeEditor() {
       }
 
       // Ctrl+D — duplicate selected
-      if (mod && e.key === 'd') {
+      if (mod && key === 'd') {
         const selected = useAppStore.getState().nodes.filter((n) => n.selected);
         if (selected.length === 0) return;
         e.preventDefault();
@@ -484,10 +550,11 @@ export function NodeEditor() {
       const absPos = nodeAbsolutePos(draggedNode, store.nodes);
       const cx = absPos.x + nw / 2;
       const cy = absPos.y + nh / 2;
+      const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
 
-      updateEdgeHighlight(findNearestEdge(cx, cy, store.nodes, store.edges, draggedNode.id));
+      updateEdgeHighlight(findNearestEdge(cx, cy, store.edges, getInternalNode, radius, draggedNode.id));
     },
-    [clearEdgeHighlight, updateEdgeHighlight],
+    [clearEdgeHighlight, updateEdgeHighlight, getInternalNode, getViewport],
   );
 
   // Drop-on-edge: insert dragged node between source and target
@@ -540,7 +607,8 @@ export function NodeEditor() {
       // --- Drop-on-edge insertion ---
       const def = NODE_REGISTRY.get(draggedNode.data.registryType);
       if (def && def.inputs.length > 0 && def.outputs.length > 0) {
-        tryInsertOnEdge(draggedNode.id, def, cx, cy);
+        const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
+        tryInsertOnEdge(draggedNode.id, def, cx, cy, getInternalNode, radius);
       }
 
       // --- Anti-overlap: nudge node if it sits on top of another ---
@@ -606,7 +674,7 @@ export function NodeEditor() {
 
       store.setNodes(updated);
     },
-    [clearEdgeHighlight],
+    [clearEdgeHighlight, getInternalNode, getViewport],
   );
 
   // Multi-node drag: React Flow fires this for selection drags (instead of
@@ -804,6 +872,31 @@ export function NodeEditor() {
     [openContextMenu]
   );
 
+  // Double-click an edge → drop a routing waypoint at the click point. Ordered
+  // by minimum detour so it lands on the right part of the wire regardless of
+  // click order (see insertWaypointOrdered). Node centers approximate the wire
+  // endpoints well enough for ordering. Double-clicking a waypoint dot removes
+  // it (handled in EdgeWaypointHandles, which stops propagation).
+  const onEdgeDoubleClick = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      event.stopPropagation();
+      const src = getInternalNode(edge.source);
+      const tgt = getInternalNode(edge.target);
+      if (!src || !tgt) return;
+      const p = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const center = (n: InternalNode) => ({
+        x: n.internals.positionAbsolute.x + (n.measured?.width ?? 120) / 2,
+        y: n.internals.positionAbsolute.y + (n.measured?.height ?? 40) / 2,
+      });
+      const store = useAppStore.getState();
+      const current = store.edges.find((e) => e.id === edge.id);
+      const wps = (current?.data?.waypoints ?? []) as { x: number; y: number }[];
+      const next = insertWaypointOrdered(center(src), center(tgt), wps, p);
+      store.setEdgeWaypoints(edge.id, next, { history: true });
+    },
+    [screenToFlowPosition, getInternalNode]
+  );
+
   const onSelectionContextMenu = useCallback(
     (event: React.MouseEvent) => {
       event.preventDefault();
@@ -851,8 +944,9 @@ export function NodeEditor() {
     // Highlight the nearest edge for drop-on-edge insertion preview (asset browser drags).
     const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const store = useAppStore.getState();
-    updateEdgeHighlight(findNearestEdge(pos.x, pos.y, store.nodes, store.edges));
-  }, [screenToFlowPosition, updateEdgeHighlight]);
+    const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
+    updateEdgeHighlight(findNearestEdge(pos.x, pos.y, store.edges, getInternalNode, radius));
+  }, [screenToFlowPosition, updateEdgeHighlight, getInternalNode, getViewport]);
 
   // Place a node/group/texture at the given screen point. Shared by both the
   // HTML5 onDrop path (desktop) and the touch tileDrag path (iPad/phone).
@@ -909,10 +1003,11 @@ export function NodeEditor() {
       }
 
       if (newNodeId && def.inputs.length > 0 && def.outputs.length > 0) {
-        tryInsertOnEdge(newNodeId, def, position.x, position.y);
+        const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
+        tryInsertOnEdge(newNodeId, def, position.x, position.y, getInternalNode, radius);
       }
     },
-    [screenToFlowPosition, addNode],
+    [screenToFlowPosition, addNode, getInternalNode, getViewport],
   );
 
   // Parse a dropped CSV on the host and place a Data node at the drop point.
@@ -1147,6 +1242,28 @@ export function NodeEditor() {
   // then restore it on the next frame.
   const canvasRef = useRef<HTMLDivElement>(null);
 
+  // Keyboard entry point for adding a node. The graph was otherwise pointer-only
+  // — the Add-Node menu could be reached ONLY by right-click or by dropping a
+  // wire, so a keyboard user had no way to author a node at all. Shift+A mirrors
+  // Blender's Add shortcut and opens the menu at the canvas centre; the menu
+  // already autofocuses its search box and handles Arrow/Enter from there.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.metaKey || e.ctrlKey || e.altKey || !e.shiftKey) return;
+      if (e.key.toLowerCase() !== 'a') return;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      e.preventDefault();
+      useAppStore
+        .getState()
+        .openContextMenu(rect.left + rect.width / 2, rect.top + rect.height / 2, 'canvas');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Touch/pen long-press → context menu. We dispatch a synthetic `contextmenu`
   // MouseEvent on the original DOM target so React Flow's existing per-element
   // handlers (onPaneContextMenu / onNodeContextMenu / onEdgeContextMenu /
@@ -1308,6 +1425,7 @@ export function NodeEditor() {
           onPaneContextMenu={onPaneContextMenu}
           onNodeContextMenu={onNodeContextMenu}
           onEdgeContextMenu={onEdgeContextMenu}
+          onEdgeDoubleClick={onEdgeDoubleClick}
           onSelectionContextMenu={onSelectionContextMenu}
           onPaneClick={closeContextMenu}
           onReconnectStart={onReconnectStart}
@@ -1326,6 +1444,12 @@ export function NodeEditor() {
           selectionMode={SelectionMode.Partial}
           panOnDrag={[1, 2]}
           zoomOnScroll
+          // Double-click is reserved for edge routing waypoints (add on an edge,
+          // remove on a point). React Flow attaches onEdgeDoubleClick as a plain
+          // synthetic handler, so it CANNOT stopPropagation the pane's native
+          // d3 `dblclick.zoom` (which fires first, at an ancestor) — leaving it
+          // on would zoom the canvas every time a waypoint is placed/removed.
+          zoomOnDoubleClick={false}
           fitView
           // Without a cap, fitView blows a small graph (the first-open demo)
           // up to maxZoom=3 — nodes fill the screen. 1.5 opens the canvas 2x

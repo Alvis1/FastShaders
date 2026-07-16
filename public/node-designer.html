@@ -28,6 +28,11 @@
   /* local-only notice — hidden automatically once the dev-server endpoint responds */
   .devnote{background:#FEF3C7;border-bottom:1px solid #FDE68A;color:#92400E;font-size:11.5px;padding:6px 14px;line-height:1.5}
   .devnote code{font-family:var(--mono);font-size:10.5px;background:rgba(255,255,255,.6);border-radius:3px;padding:0 3px}
+  /* ?node=<type> asked for something the designer can't design — shown instead of a silent fallback */
+  .notice{display:none;position:relative;padding-right:32px}
+  .notice.show{display:block}
+  .notice button{position:absolute;top:4px;right:8px;border:none;background:transparent;color:#92400E;font-size:14px;line-height:1;padding:2px 6px}
+  .notice button:hover{background:rgba(255,255,255,.6)}
 
   .main{flex:1;display:flex;min-height:0}
   /* ============================= stage ============================= */
@@ -154,6 +159,7 @@
     <button id="saveAllBtn" class="primary" title="Save all changed nodes (⌘/Ctrl+S)">Save all</button>
   </div>
   <div class="devnote" id="devNote">⚠ <b>Local tool</b> — run <code>npm run dev</code> and open <code>http://localhost:5173/FastShaders/node-designer.html</code>. Saving writes <code>customGlyphs.ts</code> through the dev server and <b>works locally only</b> (the <code>/__nd</code> endpoint exists in dev only; elsewhere Save falls back to a download).</div>
+  <div class="devnote notice" id="ndNotice">⚠ <b>Nothing to design for <code id="ndNoticeType"></code></b> — the designer covers <b>ShaderNode-rendered nodes only</b>; glyphs don't apply to live-canvas nodes (the noise family, <code>sin</code>/<code>cos</code>, <code>color</code>, <code>time</code>, <code>output</code>), and unknown types don't exist in the registry. Showing <code id="ndNoticeFallback"></code> instead.<button id="ndNoticeX" title="Dismiss">×</button></div>
 
   <div class="main">
     <div class="stage" id="stage">
@@ -253,7 +259,7 @@
    src/registry/complexity.json whenever the folder is linked) ================= */
 const CAT = {input:'#4CAF50',type:'#2196F3',arithmetic:'#FF9800',math:'#9C27B0',interpolation:'#00BCD4',logic:'#7E57C2',vector:'#E91E63',color:'#FF5722'};
 const TYPE_COLORS={float:'#3366CC',int:'#20B2AA',vec2:'#4A90E2',vec3:'#E040FB',vec4:'#AB47BC',color:'#E8A317',any:'#607D8B'};
-const COSTS={positionGeometry:0,positionLocal:0,positionWorld:0,positionView:0,positionWorldDirection:7,positionViewDirection:7,cameraPosition:0,cameraNear:0,cameraFar:0,normalLocal:0,tangentLocal:0,screenUV:0,uv:2,property_float:0,slider:0,float:0,int:0,vec2:0,vec3:0,vec4:0,add:1,sub:1,mul:1,div:4,abs:0,sqrt:4,exp:5,log2:4,floor:1,round:1,fract:1,oneMinus:1,pow:12,mod:2,clamp:2,min:1,max:1,mix:2,smoothstep:7,remap:5,select:2,greaterThan:1,lessThan:1,equal:1,normalize:7,length:7,distance:8,dot:3,cross:6,split:0,append:1,hsl:15,toHsl:15};
+const COSTS={positionGeometry:0,positionLocal:0,positionWorld:0,positionView:0,positionWorldDirection:7,positionViewDirection:7,cameraPosition:0,cameraNear:0,cameraFar:0,normalLocal:0,tangentLocal:0,screenUV:0,uv:2,property_float:0,slider:0,float:0,int:0,vec2:0,vec3:0,vec4:0,add:1,sub:1,mul:1,div:4,abs:0,sqrt:4,exp:5,log2:4,floor:1,round:1,fract:1,oneMinus:1,pow:12,mod:2,clamp:2,min:1,max:1,mix:2,smoothstep:7,remap:5,select:2,greaterThan:1,lessThan:1,equal:1,normalize:7,length:7,distance:8,dot:3,cross:6,split:0,append:1,hsl:15,toHsl:15,stripes:18,dataviz:10};
 /* ShaderNode-rendered nodes only (glyphs apply; live-canvas nodes are excluded).
    [type, label, category, inputs[[id,type]], outputs[[id,type]], defaults?] */
 const NODES=[
@@ -264,9 +270,17 @@ const NODES=[
  ['mix','Mix','interpolation',[['a','any'],['b','any'],['t','float']],[['out','any']]],['smoothstep','Smoothstep','interpolation',[['edge0','float'],['edge1','float'],['x','float']],[['out','float']]],['remap','Remap','interpolation',[['x','float'],['inLow','float'],['inHigh','float'],['outLow','float'],['outHigh','float']],[['out','float']]],['select','Select','interpolation',[['condition','float'],['a','any'],['b','any']],[['out','any']]],
  ['greaterThan','Greater Than','logic',[['a','any'],['b','any']],[['out','any']]],['lessThan','Less Than','logic',[['a','any'],['b','any']],[['out','any']]],['equal','Equal','logic',[['a','any'],['b','any']],[['out','any']]],
  ['normalize','Normalize','vector',[['v','vec3']],[['out','vec3']]],['length','Length','vector',[['v','vec3']],[['out','float']]],['distance','Distance','vector',[['a','vec3'],['b','vec3']],[['out','float']]],['dot','Dot Product','vector',[['a','vec3'],['b','vec3']],[['out','float']]],['cross','Cross Product','vector',[['a','vec3'],['b','vec3']],[['out','vec3']]],['split','Split','vector',[['v','any']],[['x','float'],['y','float'],['z','float'],['w','float']]],['append','Append','vector',[['a','any'],['b','any']],[['out','any']]],
- ['hsl','HSL to RGB','color',[['h','float'],['s','float'],['l','float']],[['out','vec3']]],['toHsl','RGB to HSL','color',[['rgb','vec3']],[['out','vec3']]]
+ ['hsl','HSL to RGB','color',[['h','float'],['s','float'],['l','float']],[['out','vec3']]],['toHsl','RGB to HSL','color',[['rgb','vec3']],[['out','vec3']]],['stripes','Data Stripes','color',[['signal','float']],[['out','vec3']],{baseFrequency:80,density:1.5,lowColor:'#1b2a4a',highColor:'#ffd24d'}],['dataviz','Data Viz','color',[['signal','float']],[['out','vec3'],['value','float']],{lowColor:'#1b2a4a',highColor:'#ffd24d'}]
 ];
-const NODE_BY_TYPE={}; NODES.forEach(n=>NODE_BY_TYPE[n[0]]={type:n[0],label:n[1],cat:n[2],in:n[3],out:n[4],def:n[5]||null});
+/* Object.create(null), not {} — this map is a MEMBERSHIP TEST, and a plain
+   object inherits Object.prototype, so NODE_BY_TYPE['constructor'] (or
+   'toString', '__proto__', 'valueOf'…) answers truthy for a node that doesn't
+   exist. That matters because the lookup key is now attacker-supplied via
+   ?node=: a crafted link would pass every `if(!NODE_BY_TYPE[t])` guard, reach
+   selectNode, and persist the bogus type to nd:lastNode BEFORE crashing on
+   n.in.length — poisoning every later BARE load until localStorage is cleared
+   by hand. A prototype-free map makes the guards mean what they say. */
+const NODE_BY_TYPE=Object.create(null); NODES.forEach(n=>NODE_BY_TYPE[n[0]]={type:n[0],label:n[1],cat:n[2],in:n[3],out:n[4],def:n[5]||null});
 /* channel count per data type (mirrors LINE_COUNT in colorUtils) */
 const LINE_COUNT={float:1,int:1,any:1,vec2:2,vec3:3,color:3,vec4:4};
 /* per-channel edge colors (mirrors COUNT_EDGE_COLORS; 1-ch flips to contrast vs canvas) */
@@ -568,10 +582,13 @@ function defOffFor(key){if(key==='out')return 0;const n=NODE_BY_TYPE[state.type]
 function opBodyH(){return state.height>0?Math.max(28,state.height):Math.max(52,Math.round(34*state.scale)+10);}
 const ui={zoom:parseFloat(lsGet('nd:zoom','1'))||1,panX:0,panY:0,bg:lsGet('nd:stageBg','#FAFAFA')};
 let savedGlyphs={};                                     // contents of customGlyphs.ts
-let sessionEdits={};                                    // per-type WIP designs (stash)
-try{sessionEdits=JSON.parse(lsGet('nd:edits','{}'))||{};}catch(e){sessionEdits={};}
+let sessionEdits=Object.create(null);                    // per-type WIP designs (stash; null-proto — probed with `in`)
+/* Rehydrate onto a prototype-free object: this JSON comes from localStorage, so
+   "__proto__"/"constructor" can arrive as own keys, and every read below is an
+   `in` check that would otherwise walk the prototype chain. */
+try{Object.assign(sessionEdits,JSON.parse(lsGet('nd:edits','{}'))||{});}catch(e){sessionEdits=Object.create(null);}
 Object.values(sessionEdits).forEach(d=>sanitizeDesign(d)); // strip pre-rework fields
-const previews={};                                      // per-type socket preview states (session only)
+const previews=Object.create(null);                     // per-type socket preview states (session only; null-proto — keyed by node type, see NODE_BY_TYPE)
 let copyBuf=null;
 let dirHandle=null;
 let devApi=false;                                       // dev-server save endpoint reachable
@@ -1317,8 +1334,19 @@ document.addEventListener('keydown',e=>{
 /* init */
 applyBg();applyView();
 rebuildDropdown();
+/* ?node=<type> deep-link. The param is attacker-controllable (it arrives in a
+   link), so it is ONLY ever a key lookup into NODE_BY_TYPE and is echoed with
+   textContent, never innerHTML. An unknown/undesignable type must NOT silently
+   fall back — say so, then use the normal last-node behaviour. */
 const last=lsGet('nd:lastNode','mul');
-selectNode(NODE_BY_TYPE[last]?last:'mul');
+const fallback=NODE_BY_TYPE[last]?last:'mul';
+const want=new URLSearchParams(location.search).get('node');
+if(want&&!NODE_BY_TYPE[want]){
+ el('ndNoticeType').textContent=want;el('ndNoticeFallback').textContent=fallback;
+ el('ndNotice').classList.add('show');
+ el('ndNoticeX').onclick=()=>el('ndNotice').classList.remove('show');
+}
+selectNode(want&&NODE_BY_TYPE[want]?want:fallback);
 /* Persistence, in order of preference:
    1. dev-server endpoint (/__nd, any browser) → 2. File System Access API
    (Chromium) → 3. download fallback. Explain WHY when only download remains. */

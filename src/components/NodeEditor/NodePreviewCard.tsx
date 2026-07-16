@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useCallback, useState, type CSSProperties } from 'react';
 import type { NodeDefinition, NodeCategory } from '@/types';
-import { startTileDrag, tileGhostZoom } from './tileDrag';
+import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, getContrastColor, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType, displayDescription } from '@/registry/nodeRegistry';
 import { useAssetTooltip } from './AssetTooltip';
@@ -553,6 +553,7 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
       draggable
       onDragStart={(e) => onDragStart(e, def)}
       onPointerDown={onPointerDown}
+      {...tileActivationProps({ kind: 'node', nodeType: def.type }, `Add ${def.label} node`)}
       {...tooltipHandlers}
     >
       {tooltip}

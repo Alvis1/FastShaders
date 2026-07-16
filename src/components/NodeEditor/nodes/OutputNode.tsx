@@ -60,9 +60,11 @@ export const OutputNode = memo(function OutputNode({
       className={`output-node ${selected ? 'output-node--selected' : ''}`}
       style={{ background: 'var(--node-bg)', border: '1.5px solid var(--cat-output)' }}
     >
+      {/* Bare number, matching every ShaderNode badge — the unit is spelled out
+          once on the CostBar meter rather than repeated on every node. */}
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>
-          {cost} pts
+          {cost}
         </span>
       )}
 

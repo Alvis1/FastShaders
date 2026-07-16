@@ -28,6 +28,8 @@ export function CostBar() {
         className="cost-bar__headset-select"
         value={selectedHeadsetId}
         onChange={handleHeadsetChange}
+        title="Target headset — sets the points budget this bar measures your shader against"
+        aria-label="Target VR headset"
       >
         {VR_HEADSETS.map((h) => (
           <option key={h.id} value={h.id}>
@@ -37,8 +39,11 @@ export function CostBar() {
       </select>
       <div className="cost-bar__labels">
         <span className="cost-bar__label-end">0</span>
-        <span className={`cost-bar__value ${over ? 'cost-bar__value--over' : ''}`}>
-          {totalCost} / {maxBudget}
+        <span
+          className={`cost-bar__value ${over ? 'cost-bar__value--over' : ''}`}
+          title={`Estimated GPU cost: ${totalCost} of ${maxBudget} points for ${headset.label}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.${over ? ' You are over budget.' : ''}`}
+        >
+          {totalCost} / {maxBudget} pts
         </span>
         <span className="cost-bar__label-end">{maxBudget}</span>
       </div>

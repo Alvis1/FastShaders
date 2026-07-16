@@ -7,7 +7,9 @@
   box-shadow: var(--shadow-lg);
   overflow: hidden;
   min-width: 260px;
-  max-height: 520px;
+  /* Never taller than the viewport — ContextMenu.tsx clamps x/y to keep the
+     menu on-screen, and this keeps it from overflowing on short windows. */
+  max-height: min(520px, calc(100vh - 16px));
   display: flex;
   flex-direction: column;
   /* Larger type inside menus: every submenu (and DragNumberInput) sizes its
@@ -40,9 +42,12 @@
   color: var(--text-muted);
 }
 
+/* Fills whatever the flex column has left under the search box, so the list
+   shrinks with the viewport instead of being pinned to a fixed height. */
 .context-menu__list {
   overflow-y: auto;
-  max-height: 460px;
+  flex: 1;
+  min-height: 0;
 }
 
 .context-menu__category {
@@ -99,6 +104,29 @@
 .context-menu__item-category {
   font-size: var(--font-size-xs);
   color: var(--text-muted);
+}
+
+/* Node rows in AddNodeMenu carry a description line, so they stack instead of
+   using the single-row label/value layout every other menu item wants. Scoped
+   to a modifier because `.context-menu__item` is shared by all submenus. */
+.context-menu__item--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.context-menu__item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.context-menu__item-desc {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  line-height: 1.35;
+  white-space: normal;
 }
 
 .context-menu__divider {

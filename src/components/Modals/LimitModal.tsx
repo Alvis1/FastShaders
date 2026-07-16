@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import type { LimitNotice } from '@/store/useAppStore';
 import {
@@ -58,7 +58,7 @@ function copyFor(n: LimitNotice): NoticeCopy {
           'Prefer more, smaller textures over a few large ones — drop the resolution and tile them via the UV node.',
           'Delete Image nodes you no longer use (their pixels stay embedded until removed).',
           'Reuse one Image node for several effects instead of importing the file again.',
-          'Export the project (Download Script) as a backup before going over the budget.',
+          'Export the project (Download Shader) as a backup before going over the budget.',
         ],
         canProceed: true,
         showIgnoreToggle: true,
@@ -101,6 +101,7 @@ export function LimitModal() {
   const head = useAppStore((s) => s.pendingLimitNotices[0] ?? null);
   const resolve = useAppStore((s) => s.resolveLimitNotice);
   const [ignoreFuture, setIgnoreFuture] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // A fresh notice starts from the persisted opt-out state, so the checkbox
@@ -111,25 +112,37 @@ export function LimitModal() {
   useEffect(() => {
     if (!head) return;
     const onKey = (e: KeyboardEvent) => {
-      // Escape = walk away: don't commit the checkbox either way.
-      if (e.key === 'Escape') resolve('dismiss', null);
+      // Every dismissal path commits the checkbox. It's a persisted global
+      // preference, orthogonal to whether THIS image gets added, so its fate
+      // must not depend on which cancel gesture was used — the Cancel button
+      // already commits it, and Escape meaning something different was a trap.
+      if (e.key === 'Escape') resolve('dismiss', ignoreFuture);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [head, resolve]);
+  }, [head, resolve, ignoreFuture]);
+
+  // Move focus into the dialog so keyboard users land on it and screen readers
+  // announce it, rather than leaving focus behind on the canvas.
+  useEffect(() => {
+    if (head) panelRef.current?.focus();
+  }, [head?.id]);
 
   if (!head) return null;
   const copy = copyFor(head);
 
   return (
-    <div className="csv-import-modal__backdrop" onClick={() => resolve('dismiss', null)}>
+    <div className="csv-import-modal__backdrop" onClick={() => resolve('dismiss', ignoreFuture)}>
       <div
+        ref={panelRef}
         className="csv-import-modal__panel"
         role="dialog"
         aria-modal="true"
+        aria-labelledby="limit-modal-title"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="csv-import-modal__title">{copy.title}</div>
+        <div className="csv-import-modal__title" id="limit-modal-title">{copy.title}</div>
         <div className="csv-import-modal__message">{copy.message}</div>
         <ul className="limit-modal__suggestions">
           {copy.suggestions.map((s, i) => (

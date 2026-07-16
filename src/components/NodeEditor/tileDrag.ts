@@ -9,7 +9,13 @@
  *
  * Mouse drags keep using `draggable` + HTML5 DnD — that flow already handles
  * drop-on-edge highlighting and works fine on desktop.
+ *
+ * It also owns click/keyboard activation (`tileActivationProps`), which routes
+ * through the same drop event so every way of adding a tile — mouse drag, touch
+ * drag, click, Enter — ends up in one placement implementation.
  */
+
+import type { KeyboardEvent } from 'react';
 
 export type TilePayload =
   | { kind: 'node'; nodeType: string }
@@ -26,6 +32,45 @@ export interface TileDropEventDetail {
 export const TILE_DROP_EVENT = 'fs-tile-drop';
 
 const MOVE_THRESHOLD_PX = 6;
+
+/**
+ * Add a tile's content without dragging, aimed at the centre of the canvas.
+ * Dispatches the same `fs-tile-drop` event the touch path uses, so placement
+ * (including drop-on-edge splicing) stays a single implementation.
+ * No-ops when the canvas isn't mounted.
+ */
+export function dropTileAtCanvasCenter(payload: TilePayload): void {
+  const canvas = document.querySelector<HTMLElement>('.node-editor__canvas');
+  if (!canvas) return;
+  const r = canvas.getBoundingClientRect();
+  const detail: TileDropEventDetail = {
+    payload,
+    clientX: r.left + r.width / 2,
+    clientY: r.top + r.height / 2,
+  };
+  canvas.dispatchEvent(new CustomEvent(TILE_DROP_EVENT, { detail, bubbles: false }));
+}
+
+/**
+ * Props making a palette tile activatable by click and by keyboard. Tiles were
+ * drag-only, which is fiddly on a trackpad and impossible for keyboard and
+ * motor-impaired users — and it meant the two node catalogs disagreed about how
+ * you add a thing (the right-click menu was click-to-add, the palette was not).
+ */
+export function tileActivationProps(payload: TilePayload, label: string) {
+  const activate = () => dropTileAtCanvasCenter(payload);
+  return {
+    role: 'button',
+    tabIndex: 0,
+    'aria-label': label,
+    onClick: activate,
+    onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      activate();
+    },
+  };
+}
 
 /**
  * The user-adjustable tile zoom lives as an inline `zoom` style on
