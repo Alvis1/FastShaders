@@ -59,3 +59,27 @@ a {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--border-strong);
 }
+
+/* Honour the OS "reduce motion" preference.
+   Every edge in the graph is created with `animated: true` (edgeUtils.ts), which
+   drives React Flow's infinite `dashdraw` marching-ants loop — canvas-wide
+   perpetual motion with no way to stop it is exactly what vestibular users need
+   to be able to switch off. Durations collapse rather than being removed so
+   state changes stay instant instead of breaking.
+   NB the 3D preview's own animation is deliberately left alone: it's the content
+   the user came to see, and it already has an explicit play/pause control. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .react-flow__edge-path,
+  .react-flow__connection-path {
+    animation: none !important;
+  }
+}

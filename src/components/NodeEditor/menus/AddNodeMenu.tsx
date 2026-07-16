@@ -238,6 +238,26 @@ export function AddNodeMenu() {
   const focusedAttr = (key: string) =>
     itemIndexByKey.get(key) === focusedIndex ? 'true' : undefined;
 
+  // One row renderer for both the grouped and flat-search lists. Surfacing
+  // def.description here puts the explanation at the moment of choosing —
+  // previously it only existed as a palette-tile hover tooltip, so users picked
+  // between ~68 node types by bare name.
+  const renderDefRow = (def: NodeDefinition) => (
+    <button
+      key={def.type}
+      className={`${itemClass(def.type)} context-menu__item--stacked`}
+      data-add-node-focused={focusedAttr(def.type)}
+      onClick={() => handleAddNode(def)}
+      onMouseEnter={() => setFocusedIndex(itemIndexByKey.get(def.type) ?? 0)}
+    >
+      <span className="context-menu__item-head">
+        <span>{def.label}</span>
+        <span className="context-menu__item-category">{def.category}</span>
+      </span>
+      {def.description && <span className="context-menu__item-desc">{def.description}</span>}
+    </button>
+  );
+
   return (
     <>
       <input
@@ -306,33 +326,11 @@ export function AddNodeMenu() {
             CATEGORIES.filter((c) => grouped.has(c.id) && c.id !== 'output').map((cat) => (
               <div key={cat.id}>
                 <div className="context-menu__category">{cat.label}</div>
-                {grouped.get(cat.id)!.map((def) => (
-                  <button
-                    key={def.type}
-                    className={itemClass(def.type)}
-                    data-add-node-focused={focusedAttr(def.type)}
-                    onClick={() => handleAddNode(def)}
-                    onMouseEnter={() => setFocusedIndex(itemIndexByKey.get(def.type) ?? 0)}
-                  >
-                    <span>{def.label}</span>
-                    <span className="context-menu__item-category">{def.category}</span>
-                  </button>
-                ))}
+                {grouped.get(cat.id)!.map(renderDefRow)}
               </div>
             ))
           : // Flat search results
-            results.map((def) => (
-              <button
-                key={def.type}
-                className={itemClass(def.type)}
-                data-add-node-focused={focusedAttr(def.type)}
-                onClick={() => handleAddNode(def)}
-                onMouseEnter={() => setFocusedIndex(itemIndexByKey.get(def.type) ?? 0)}
-              >
-                <span>{def.label}</span>
-                <span className="context-menu__item-category">{def.category}</span>
-              </button>
-            ))}
+            results.map(renderDefRow)}
       </div>
     </>
   );

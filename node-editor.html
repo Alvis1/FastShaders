@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FastShaders — Node & Graph Overview</title>
+    <!--
+      LOCALHOST TOOL — deliberately NOT a build entry.
+
+      Open it at http://localhost:5173/FastShaders/node-editor.html while
+      `npm run dev` runs. Vite serves root HTML directly in dev, but `dist` only
+      contains what `rollupOptions.input` names, and that key is intentionally
+      unset — Vite's implicit `input || resolve('index.html')` default is the ONLY
+      reason `dist/index.html` is emitted at all. Naming inputs here to ship this
+      page would mean listing `main` too, and forgetting it drops the whole app
+      from dist with a green build and a silent `tsc` — which the gh-pages deploy
+      (`force_orphan: true`) would then publish over the live site. Saving only
+      works through the dev server's `/__nd` endpoints anyway, so shipping a
+      read-only copy buys nothing worth that risk.
+
+      Consequence to know: on the deployed site this URL does not 404 — the SPA
+      fallback quietly serves the main editor instead.
+    -->
+    <!--
+      Stamp the persisted theme before first paint so a dark-mode session doesn't
+      flash light while the JS/CSS bundle loads. Copied verbatim from index.html —
+      the store re-applies data-theme on init and on every toggle; the inline
+      background mirrors tokens.css --bg-app so the pre-CSS frame matches too.
+    -->
+    <script>
+      try {
+        var dark = localStorage.getItem('fs:codeEditorTheme') === 'vs-dark';
+        var el = document.documentElement;
+        el.setAttribute('data-theme', dark ? 'dark' : 'light');
+        el.style.background = dark ? '#17181b' : '#F5F5F5';
+      } catch (e) { /* private mode / storage disabled — default light */ }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/nodeEditor.tsx"></script>
+  </body>
+</html>

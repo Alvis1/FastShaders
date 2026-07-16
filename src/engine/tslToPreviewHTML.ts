@@ -471,6 +471,14 @@ const ERROR_OVERLAY_SCRIPT = `<script>
         msg = String(msg == null ? "Unknown error" : msg).slice(0, 2000);
         current = { msg: msg, sticky: !!sticky };
         render();
+        // Tell the parent an error is on screen. A failed shader never reaches
+        // the fs:preview-ready handshake (checkShaderReady polls for bound
+        // uniforms and simply gives up), so this is the parent's only signal to
+        // drop the "Compiling shader…" overlay — otherwise it would cover the
+        // very message the user needs to read.
+        try {
+          window.parent.postMessage({ type: "fs:preview-error", message: msg }, "*");
+        } catch (e) {}
       } catch (e) {}
     }
     window.__fsShowError = function (msg) { show(msg, false); };
@@ -1014,6 +1022,23 @@ export function tslToPreviewHTML(
   lines.push('      try { Object.defineProperty(Navigator.prototype, "gpu", { get: function () { return undefined; }, configurable: true }); } catch (e) {}');
   lines.push('      try { Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true }); } catch (e) {}');
   lines.push('    }');
+  // three r184's WebGPU backend does not paint reliably on Apple's WebKit: an
+  // adapter can be granted (so the pre-flight below keeps WebGPU) yet no frame
+  // ever renders — a flat-color pane with no error, exactly the reported
+  // symptom. WebKit's WebGL2 path (GLSLNodeBuilder) is solid and compiles TSL
+  // identically, so force it there — the same move the XR popup makes. This must
+  // cover ALL WebKit, not just desktop Safari: every browser on iOS/iPadOS is
+  // WKWebView (Chrome/Firefox/Edge for iOS included), and iPadOS 13+ desktop-
+  // mode reports as Macintosh. Vendor can be blanked by privacy settings, so
+  // desktop Safari is matched by UA shape (WebKit, no Chromium/Gecko token).
+  lines.push('    function __fsForceWebGL2() {');
+  lines.push('      var ua = navigator.userAgent || "";');
+  lines.push('      if (/iPad|iPhone|iPod/.test(ua)) return true;');
+  lines.push('      if (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1) return true;');
+  lines.push('      if (/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(ua)) return false;');
+  lines.push('      return /Safari|AppleWebKit/.test(ua);');
+  lines.push('    }');
+  lines.push('    if (__fsForceWebGL2()) { hideGpu(); boot(); return; }');
   lines.push('    if (!navigator.gpu) { boot(); return; }');
   lines.push('    var settled = false;');
   lines.push('    function go(adapter) {');

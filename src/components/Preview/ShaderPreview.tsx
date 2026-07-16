@@ -23,6 +23,13 @@ interface UniformBounds {
   max: number;
 }
 
+/** Safari still exposes fullscreen only under the webkit-prefixed names. */
+type FsElement = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
+type FsDocument = Document & {
+  webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => Promise<void> | void;
+};
+
 /**
  * Number input that buffers in-progress text as a string so the user can type
  * partial values like "-" or "1e" without the controlled-input round-trip
@@ -99,6 +106,30 @@ function validateBgColor(v: string | null): string {
 const SUBDIVISION_MIN = 1;
 const SUBDIVISION_MAX = 256;
 const SUBDIVISION_DEFAULT = 64;
+
+/**
+ * How long the generated TSL must hold still before the preview iframe is
+ * rebuilt. Long enough to swallow a pointermove stream from a value scrub,
+ * short enough to still feel like live editing on a deliberate edit.
+ */
+const PREVIEW_REBUILD_DEBOUNCE_MS = 200;
+
+/** Failsafe: never leave the "Compiling…" overlay up longer than this. */
+const COMPILE_OVERLAY_TIMEOUT_MS = 12000;
+
+/**
+ * Trailing-debounce a value: the first value is adopted immediately (so initial
+ * paint isn't delayed) and each subsequent change waits for `delayMs` of quiet.
+ */
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    if (Object.is(value, settled)) return;
+    const id = setTimeout(() => setSettled(value), delayMs);
+    return () => clearTimeout(id);
+  }, [value, settled, delayMs]);
+  return settled;
+}
 
 function validateSubdivision(raw: string | null): number {
   const v = parseInt(raw ?? '', 10);
@@ -237,6 +268,39 @@ export function ShaderPreview() {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Fullscreen toggle for the whole preview pane (controls + canvas + property
+  // sliders stay visible). The iframe already carries `allow="fullscreen *"`,
+  // but nothing ever *triggered* fullscreen — A-Frame's own vr-mode-ui button
+  // is disabled for the editor preview, so there was no affordance at all. We
+  // fullscreen the parent-owned root element (not the sandboxed iframe), so no
+  // Permissions-Policy delegation is involved; Safari needs the webkit-prefixed
+  // request/exit/element APIs, hence the fallbacks below.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const doc = document as FsDocument;
+    const onChange = () => {
+      const fsEl = document.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
+      setIsFullscreen(fsEl === rootRef.current);
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+    };
+  }, []);
+  const handleToggleFullscreen = useCallback(() => {
+    const el = rootRef.current as FsElement | null;
+    const doc = document as FsDocument;
+    const fsEl = document.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
+    if (fsEl) {
+      (document.exitFullscreen ?? doc.webkitExitFullscreen)?.call(document);
+    } else if (el) {
+      (el.requestFullscreen ?? el.webkitRequestFullscreen)?.call(el);
+    }
+  }, []);
 
   // Defer the iframe's srcDoc until the container element has non-zero
   // dimensions. Without this gate, on first page load the iframe boots
@@ -248,6 +312,14 @@ export function ShaderPreview() {
   // → srcDoc rewrite → iframe rebuild, which happened to land after
   // layout had settled.
   const [containerReady, setContainerReady] = useState(false);
+
+  // A-Frame's own loading screen is disabled, so between a fresh srcDoc and the
+  // first painted frame — a WebGPU pre-flight, a ~1MB bundle fetch/parse and a
+  // shader compile, i.e. seconds — the pane was simply blank, which is
+  // indistinguishable from a crash. Cleared by fs:preview-ready (success) or
+  // fs:preview-error (failure), with a timeout below so it can never stick.
+  const [compiling, setCompiling] = useState(true);
+
   useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
@@ -350,7 +422,14 @@ export function ShaderPreview() {
       if (e.source !== iframeRef.current?.contentWindow) return;
       const data = e.data as { type?: string; x?: number; y?: number; z?: number } | null;
       if (!data || typeof data.type !== 'string') return;
+      if (data.type === 'fs:preview-error') {
+        // The shader failed: no fs:preview-ready is coming. Drop the overlay so
+        // the iframe's error message is readable.
+        setCompiling(false);
+        return;
+      }
       if (data.type === 'fs:preview-ready') {
+        setCompiling(false);
         const win = iframeRef.current?.contentWindow;
         if (!win) return;
         // Uniforms aren't baked into the iframe HTML — shaderloader
@@ -472,6 +551,16 @@ export function ShaderPreview() {
   // lighting / playing / subdivision, so any rebuild emits HTML with up-to-date
   // values; the useEffects below push those — and primitive geometry/subdivision
   // — live via postMessage without rebuilding.
+  //
+  // Only PROPERTY uniforms have a hot-update path; every other value (a Math
+  // operand, a Mix factor, a noise scale, a vec component) is baked into the
+  // generated TSL, so editing one lands here as a fresh document. DragNumberInput
+  // fires a change per pointermove, so scrubbing one of those undebounced
+  // restarts the rebuild faster than it can ever finish and the pane just
+  // flickers until the drag stops. Debouncing collapses a whole scrub into a
+  // single rebuild on release. Trailing-only, so first paint isn't delayed.
+  const debouncedPreviewCode = useDebounced(previewCode, PREVIEW_REBUILD_DEBOUNCE_MS);
+
   const geometryRebuildKey = isObjGeometry(geometry) ? geometry : '__primitive__';
   const previewHtml = useMemo(() => {
     const options: PreviewOptions = {
@@ -487,9 +576,19 @@ export function ShaderPreview() {
       initialCameraPosition: cameraPosRef.current,
       initialRotation: rotationRef.current,
     };
-    return tslToPreviewHTML(previewCode, options);
+    return tslToPreviewHTML(debouncedPreviewCode, options);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewCode, materialSettings, geometryRebuildKey]);
+  }, [debouncedPreviewCode, materialSettings, geometryRebuildKey]);
+
+  // A new srcDoc means a full document reload, so raise the overlay again. Only
+  // rebuilds go through here — the postMessage hot-update channels below mutate
+  // the live scene and must NOT flash it.
+  useEffect(() => {
+    if (!containerReady) return;
+    setCompiling(true);
+    const id = setTimeout(() => setCompiling(false), COMPILE_OVERLAY_TIMEOUT_MS);
+    return () => clearTimeout(id);
+  }, [previewHtml, containerReady]);
 
   // Hot-update channels: push appearance changes to the running iframe
   // instead of triggering an iframe rebuild. Idempotency is enforced on
@@ -621,14 +720,24 @@ export function ShaderPreview() {
   }, [previewCode, geometry, playing, materialSettings, bgColor, lighting, effectiveSubdivision, shaderName]);
 
   return (
-    <div className="shader-preview">
+    <div className="shader-preview" ref={rootRef}>
       <div className="shader-preview__controls">
         <button
           className="shader-preview__play-btn"
           onClick={() => setPlaying((p) => !p)}
           title={playing ? 'Pause rotation' : 'Play rotation'}
+          aria-label={playing ? 'Pause rotation' : 'Play rotation'}
         >
           {playing ? '\u23F8' : '\u25B6'}
+        </button>
+        <button
+          type="button"
+          className="shader-preview__fs-btn"
+          onClick={handleToggleFullscreen}
+          title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen preview'}
+          aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen preview'}
+        >
+          {isFullscreen ? '\u2715' : '\u26F6'}
         </button>
         <button
           type="button"
@@ -657,12 +766,14 @@ export function ShaderPreview() {
           value={bgColor}
           onChange={(e) => setBgColor(e.target.value)}
           title="Background color"
+          aria-label="Preview background color"
         />
         <select
           className="shader-preview__geo-select"
           value={lighting}
           onChange={(e) => setLighting(e.target.value as LightingMode)}
           title="Lighting mode"
+          aria-label="Lighting mode"
         >
           <option value="studio">light: Studio</option>
           <option value="moon">light: Moon</option>
@@ -672,6 +783,8 @@ export function ShaderPreview() {
           className="shader-preview__geo-select"
           value={geometry}
           onChange={(e) => setGeometry(e.target.value as GeometryType)}
+          title="Preview geometry — drag the model to orbit, scroll to zoom"
+          aria-label="Preview geometry"
         >
           <option value="sphere">Sphere</option>
           <option value="cube">Cube</option>
@@ -705,6 +818,12 @@ export function ShaderPreview() {
         )}
       </div>
       <div className="shader-preview__body" ref={bodyRef}>
+        {compiling && (
+          <div className="shader-preview__compiling" role="status" aria-live="polite">
+            <span className="shader-preview__compiling-dot" />
+            Compiling shader…
+          </div>
+        )}
         <iframe
           ref={iframeRef}
           className="shader-preview__iframe"

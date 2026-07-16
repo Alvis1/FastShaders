@@ -126,11 +126,11 @@
 /* Search field — sits before all tabs */
 .content-browser__search {
   flex-shrink: 0;
-  width: 110px;
+  width: 124px;
   padding: 3px 8px;
   margin-right: 6px;
   margin-bottom: 3px;
-  font-size: 7px;
+  font-size: var(--font-size-xs);
   font-family: var(--font-sans);
   font-weight: 600;
   color: var(--text-primary);
@@ -154,7 +154,7 @@
 .content-browser__cat-btn {
   flex-shrink: 0;
   padding: 5px 14px 4px;
-  font-size: 9px;
+  font-size: var(--font-size-xs);
   font-family: var(--font-sans);
   font-weight: 600;
   cursor: pointer;

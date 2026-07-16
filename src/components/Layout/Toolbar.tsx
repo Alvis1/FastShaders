@@ -78,6 +78,8 @@ function useDismiss(
 export function Toolbar() {
   const shaderName = useAppStore((s) => s.shaderName);
   const setShaderName = useAppStore((s) => s.setShaderName);
+  const canUndo = useAppStore((s) => s.past.length > 0);
+  const canRedo = useAppStore((s) => s.future.length > 0);
 
   const [contactOpen, setContactOpen] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -249,8 +251,33 @@ export function Toolbar() {
           </div>
         )}
       </div>
+      {/* Undo / redo were keyboard-only with no UI at all — the sole recovery
+          path from a destructive action (dropping a project replaces the whole
+          graph) was a shortcut users had no way to discover. */}
+      <div className="toolbar__history">
+        <button
+          type="button"
+          className="toolbar__history-btn"
+          onClick={() => useAppStore.getState().undo()}
+          disabled={!canUndo}
+          title="Undo (Ctrl+Z / ⌘Z)"
+          aria-label="Undo"
+        >
+          ↶
+        </button>
+        <button
+          type="button"
+          className="toolbar__history-btn"
+          onClick={() => useAppStore.getState().redo()}
+          disabled={!canRedo}
+          title="Redo (Ctrl+Shift+Z / ⇧⌘Z)"
+          aria-label="Redo"
+        >
+          ↷
+        </button>
+      </div>
       <div className="toolbar__center">
-        <span className="toolbar__name-label">Script name:</span>
+        <span className="toolbar__name-label">Shader name:</span>
         <input
           className="toolbar__name-input"
           type="text"

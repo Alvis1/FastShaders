@@ -3,6 +3,7 @@ import {
   EdgeLabelRenderer,
   getBezierPath,
   Position,
+  useReactFlow,
   useStore as useReactFlowStore,
   type EdgeProps,
   type ReactFlowState,
@@ -12,7 +13,98 @@ import { useAppStore } from '@/store/useAppStore';
 import { COUNT_EDGE_COLORS, getContrastColor } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { evaluateNodeOutput, getNodeOutputShape } from '@/engine/cpuEvaluator';
+import { bezierControlOffset, radialControlPoint, splinePath } from './bezierGeometry';
 import { EdgeInfoCard } from './EdgeInfoCard';
+
+type Waypoint = { x: number; y: number };
+
+/**
+ * Draggable dots for an edge's routing waypoints. Rendered only when an edge
+ * actually has waypoints, so the (per-edge) zoom subscription below only costs
+ * the few routed edges — not every wire on the canvas. Dots are scale-
+ * compensated (radius ÷ zoom) so they stay a constant on-screen size. Drag to
+ * move, double-click to remove. History is pushed once per gesture.
+ */
+function EdgeWaypointHandles({
+  edgeId,
+  waypoints,
+  bgColor,
+}: {
+  edgeId: string;
+  waypoints: Waypoint[];
+  bgColor: string;
+}) {
+  const zoom = useReactFlowStore((s: ReactFlowState) => s.transform[2]);
+  const { screenToFlowPosition } = useReactFlow();
+  const dragRef = useRef<{ index: number; startX: number; startY: number; moved: boolean } | null>(null);
+  const fill = getContrastColor(bgColor);
+  const stroke = fill === '#ffffff' ? '#000000' : '#ffffff';
+  const r = 5 / zoom;
+
+  const onPointerDown = (e: React.PointerEvent, index: number) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    (e.target as SVGElement).setPointerCapture(e.pointerId);
+    // Don't push history yet — a plain click (or the two clicks of a
+    // double-click-to-remove) must NOT create undo entries. History is pushed
+    // lazily on the first real movement (below), so a drag = exactly one entry.
+    dragRef.current = { index, startX: e.clientX, startY: e.clientY, moved: false };
+  };
+  const endDrag = (e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    // Capture may already be gone after a pointercancel — releasing then throws.
+    try { (e.target as SVGElement).releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    dragRef.current = null;
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    // A stale drag (e.g. after a swallowed pointercancel) would otherwise make a
+    // no-button hover drag the point around — bail if the button isn't held.
+    if (e.buttons === 0) { endDrag(e); return; }
+    if (!d.moved) {
+      if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < 2) return;
+      d.moved = true;
+      useAppStore.getState().pushHistory();
+    }
+    const p = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    const store = useAppStore.getState();
+    const edge = store.edges.find((ed) => ed.id === edgeId);
+    const wps = ((edge?.data?.waypoints ?? []) as Waypoint[]).slice();
+    if (d.index >= wps.length) return;
+    wps[d.index] = { x: p.x, y: p.y };
+    store.setEdgeWaypoints(edgeId, wps);
+  };
+  const onDoubleClick = (e: React.MouseEvent, index: number) => {
+    e.stopPropagation();
+    const store = useAppStore.getState();
+    const edge = store.edges.find((ed) => ed.id === edgeId);
+    const wps = ((edge?.data?.waypoints ?? []) as Waypoint[]).filter((_, i) => i !== index);
+    store.setEdgeWaypoints(edgeId, wps, { history: true });
+  };
+
+  return (
+    <g>
+      {waypoints.map((w, i) => (
+        <circle
+          key={i}
+          cx={w.x}
+          cy={w.y}
+          r={r}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={1.5 / zoom}
+          style={{ cursor: 'grab', pointerEvents: 'all' }}
+          onPointerDown={(e) => onPointerDown(e, i)}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onDoubleClick={(e) => onDoubleClick(e, i)}
+        />
+      ))}
+    </g>
+  );
+}
 
 function buildNodeMap(nodes: AppNode[]): Map<string, AppNode> {
   const m = new Map<string, AppNode>();
@@ -40,21 +132,6 @@ function perp(sx: number, sy: number, tx: number, ty: number): [number, number] 
   return [-dy / len, dx / len];
 }
 
-/** React Flow's default bezier curvature (getBezierPath's `curvature`). */
-const BEZIER_CURVATURE = 0.25;
-
-/**
- * React Flow's control-handle length for one side of a bezier edge: half the
- * FORWARD distance along that side's exit axis, or a slow sqrt ramp when the
- * other endpoint is behind it. Mirrors @xyflow/system's calculateControlOffset
- * — using the straight-line distance instead (as an earlier version did) blows
- * the handle up on short near-perpendicular hops and hairpins the curve right
- * before the input socket.
- */
-function bezierControlOffset(distance: number): number {
-  return distance >= 0 ? 0.5 * distance : BEZIER_CURVATURE * 25 * Math.sqrt(-distance);
-}
-
 /**
  * Cubic bezier whose SOURCE tangent is a free unit vector instead of one of
  * React Flow's four cardinal `sourcePosition`s. Used for color-circle sources:
@@ -75,10 +152,8 @@ function getRadialBezierPath(params: {
   const { sourceX: sx, sourceY: sy, radial: [rx, ry], targetX: tx, targetY: ty, targetPosition } = params;
   // Source handle: RF's formula projected onto the radial exit axis, with a
   // small floor so the perpendicular exit stays readable even when the target
-  // sits beside/behind the socket.
-  const k1 = Math.max(bezierControlOffset((tx - sx) * rx + (ty - sy) * ry), 16);
-  const c1x = sx + rx * k1;
-  const c1y = sy + ry * k1;
+  // sits beside/behind the socket. Shared with the drop-on-edge hit test.
+  const [c1x, c1y] = radialControlPoint(sx, sy, rx, ry, tx, ty);
   // Target handle: exactly RF's getControlWithCurvature per-axis behavior.
   let c2x = tx;
   let c2y = ty;
@@ -106,6 +181,7 @@ export function TypedEdge({
   sourcePosition,
   targetPosition,
   selected,
+  data,
 }: EdgeProps<AppEdge>) {
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
@@ -173,29 +249,50 @@ export function TypedEdge({
   const strokeWidth = count >= 4 ? 0.8 : count >= 3 ? 1 : count >= 2 ? 1.2 : selected ? 2 : 1.5;
 
   const [px, py] = perp(sourceX, sourceY, targetX, targetY);
+  const waypoints = (data?.waypoints ?? []) as Waypoint[];
+  const hasWaypoints = waypoints.length > 0;
   const paths: string[] = [];
   let labelX = 0;
   let labelY = 0;
 
   for (let i = 0; i < offsets.length; i++) {
     const d = offsets[i];
-    const [path, lx, ly] = radial
-      ? getRadialBezierPath({
-          sourceX: sourceX + d * px,
-          sourceY: sourceY + d * py,
-          radial,
-          targetX: targetX + d * px,
-          targetY: targetY + d * py,
-          targetPosition,
-        })
-      : getBezierPath({
-          sourceX: sourceX + d * px,
-          sourceY: sourceY + d * py,
-          sourcePosition,
-          targetX: targetX + d * px,
-          targetY: targetY + d * py,
-          targetPosition,
-        });
+    let path: string;
+    let lx: number;
+    let ly: number;
+    if (hasWaypoints) {
+      // Route through the user's waypoints as a smooth spline. The per-channel
+      // perpendicular offset is applied to EVERY point so parallel multi-channel
+      // lines stay parallel. An explicit route overrides the color-circle radial
+      // exit — routing intent wins over the socket's natural exit tangent.
+      const pts: Array<[number, number]> = [
+        [sourceX + d * px, sourceY + d * py],
+        ...waypoints.map((w) => [w.x + d * px, w.y + d * py] as [number, number]),
+        [targetX + d * px, targetY + d * py],
+      ];
+      path = splinePath(pts);
+      const mid = pts[Math.floor(pts.length / 2)];
+      lx = mid[0];
+      ly = mid[1];
+    } else if (radial) {
+      [path, lx, ly] = getRadialBezierPath({
+        sourceX: sourceX + d * px,
+        sourceY: sourceY + d * py,
+        radial,
+        targetX: targetX + d * px,
+        targetY: targetY + d * py,
+        targetPosition,
+      });
+    } else {
+      [path, lx, ly] = getBezierPath({
+        sourceX: sourceX + d * px,
+        sourceY: sourceY + d * py,
+        sourcePosition,
+        targetX: targetX + d * px,
+        targetY: targetY + d * py,
+        targetPosition,
+      });
+    }
     paths.push(path);
     if (i === Math.floor(offsets.length / 2)) {
       labelX = lx;
@@ -204,9 +301,15 @@ export function TypedEdge({
   }
 
   // Center path for the invisible interaction hit area
-  const [centerPath] = radial
-    ? getRadialBezierPath({ sourceX, sourceY, radial, targetX, targetY, targetPosition })
-    : getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+  const centerPath = hasWaypoints
+    ? splinePath([
+        [sourceX, sourceY],
+        ...waypoints.map((w) => [w.x, w.y] as [number, number]),
+        [targetX, targetY],
+      ])
+    : radial
+      ? getRadialBezierPath({ sourceX, sourceY, radial, targetX, targetY, targetPosition })[0]
+      : getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })[0];
 
   const dragStart = useRef<{ x: number; y: number; pointerId: number } | null>(null);
 
@@ -283,6 +386,9 @@ export function TypedEdge({
           />
         );
       })}
+      {hasWaypoints && (
+        <EdgeWaypointHandles edgeId={id} waypoints={waypoints} bgColor={nodeEditorBgColor} />
+      )}
       {selected && (
         <EdgeLabelRenderer>
           <EdgeInfoCard

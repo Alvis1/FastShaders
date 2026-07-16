@@ -249,7 +249,31 @@ function snapshot(nodes: AppNode[], edges: AppEdge[]): HistoryEntry {
 
 const STORAGE_KEY = 'fs:graph';
 
+/**
+ * Graph auto-save is a side effect of importing this module (see the
+ * `useAppStore.subscribe` at the bottom of the file), and `fs:graph` is a
+ * single slot with no versioning or merge — last writer wins outright.
+ *
+ * That is fine while the editor is the only page mounting this store, but
+ * `node-editor.html` mounts it too, purely to render read-only previews. Its
+ * `nodes` hold whichever graph is being previewed — never the user's work —
+ * so a write from there would destroy the real graph, unrecoverably (history
+ * is in-memory only). Note the store's own actions `.map()` over `nodes`,
+ * which yields a fresh array identity even when nothing matches, so an
+ * incidental action on a page with an empty store is enough to arm the
+ * subscribe and persist `{nodes: [], edges: []}`.
+ *
+ * Any entry point that mounts this store WITHOUT owning the user's graph must
+ * call `setGraphPersistence(false)` before its first store write.
+ */
+let graphPersistence = true;
+
+export function setGraphPersistence(enabled: boolean): void {
+  graphPersistence = enabled;
+}
+
 function saveGraph(nodes: AppNode[], edges: AppEdge[]) {
+  if (!graphPersistence) return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes, edges }));
     graphQuotaWarned = false;
@@ -450,6 +474,16 @@ interface AppState {
   addNode: (node: AppNode) => void;
   removeNode: (nodeId: string) => void;
   removeEdge: (edgeId: string) => void;
+  /**
+   * Replace an edge's routing waypoints (visual-only). `history` pushes an undo
+   * entry (once per gesture: at drag-start / on add / on remove — NOT on every
+   * drag-move frame). Passing `undefined`/`[]` clears them.
+   */
+  setEdgeWaypoints: (
+    edgeId: string,
+    waypoints: Array<{ x: number; y: number }> | undefined,
+    opts?: { history?: boolean },
+  ) => void;
   updateNodeData: (nodeId: string, data: Partial<AppNode['data']>) => void;
 
   // Code actions
@@ -468,6 +502,20 @@ interface AppState {
   pushHistory: () => void;
   undo: () => void;
   redo: () => void;
+  /**
+   * While true, `pushHistory` collapses to the single snapshot taken by
+   * `beginInteraction`. See `beginInteraction`.
+   */
+  coalescingHistory: boolean;
+  /**
+   * Bracket a continuous gesture (e.g. scrubbing a DragNumberInput) so it lands
+   * as ONE undo entry. Snapshots the pre-gesture state once, then suppresses
+   * further pushes — which also stops the per-frame `structuredClone` of the
+   * entire graph — until `endInteraction`. Safe to call when already bracketing.
+   */
+  beginInteraction: () => void;
+  /** End the gesture opened by `beginInteraction`. Idempotent. */
+  endInteraction: () => void;
 
   // UI actions
   openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader' | 'edge' | 'group' | 'note' | 'stripes' | 'dataviz', nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string) => void;
@@ -480,8 +528,10 @@ interface AppState {
   enqueueLimitNotice: (notice: LimitNotice) => void;
   /** Resolve the head of the limit-notice queue. `proceed` re-imports the
    *  carried file with limits ignored. `ignoreFuture` is the checkbox state —
-   *  it can turn the persisted opt-out on OR off; null (Escape/backdrop)
-   *  leaves it unchanged. */
+   *  it can turn the persisted opt-out on OR off. Every dismissal path in the
+   *  UI commits it (the preference is orthogonal to whether this one image is
+   *  added, so it must not depend on which cancel gesture was used); null is
+   *  still honoured as "leave unchanged" for non-UI callers. */
   resolveLimitNotice: (action: 'dismiss' | 'proceed', ignoreFuture: boolean | null) => void;
   setIgnoreImageLimits: (v: boolean) => void;
   setSplitRatio: (ratio: number) => void;
@@ -635,6 +685,27 @@ export const useAppStore = create<AppState>()((set, get) => ({
     });
   },
 
+  setEdgeWaypoints: (edgeId, waypoints, opts) => {
+    if (opts?.history) get().pushHistory();
+    set((state) => ({
+      edges: state.edges.map((e) =>
+        e.id === edgeId
+          ? {
+              ...e,
+              data: {
+                ...(e.data ?? { dataType: 'any' }),
+                waypoints: waypoints && waypoints.length ? waypoints : undefined,
+              },
+            }
+          : e,
+      ) as AppEdge[],
+      // Waypoints are visual — mark the change graph-sourced so the sync engine
+      // regenerates code (a no-op string it dedupes) without a code→graph loop.
+      syncSource: 'graph',
+      isUndoRedo: false,
+    }));
+  },
+
   updateNodeData: (nodeId, data) => {
     get().pushHistory();
     set((state) => ({
@@ -666,9 +737,38 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setSyncInProgress: (v) => set({ syncInProgress: v }),
 
+  coalescingHistory: false,
+
+  beginInteraction: () =>
+    set((state) => {
+      if (state.coalescingHistory) return {};
+      // Snapshots inline rather than delegating to pushHistory because — unlike
+      // pushHistory — this deliberately does NOT honour `isUndoRedo`. That flag
+      // guards the sync engine's own reconciliation right after an undo; a
+      // pointer gesture is unambiguously a fresh user mutation, and letting a
+      // not-yet-cleared flag suppress THIS snapshot while coalescing is switched
+      // on would swallow the entire gesture's history and leave it unundoable.
+      return {
+        past: [...state.past, snapshot(state.nodes, state.edges)].slice(-MAX_HISTORY),
+        future: [],
+        coalescingHistory: true,
+        isUndoRedo: false,
+      };
+    }),
+
+  endInteraction: () => {
+    if (!get().coalescingHistory) return;
+    set({ coalescingHistory: false });
+  },
+
   pushHistory: () =>
     set((state) => {
       if (state.isUndoRedo) return {};
+      // One snapshot per bracketed gesture. A value scrub fires a change per
+      // pointermove frame; without this each frame would deep-clone the whole
+      // graph (megabytes once images are embedded) AND bury undo under dozens
+      // of sub-pixel entries.
+      if (state.coalescingHistory) return {};
       const entry = snapshot(state.nodes, state.edges);
       return {
         past: [...state.past, entry].slice(-MAX_HISTORY),

@@ -173,6 +173,44 @@
   gap: var(--space-2);
 }
 
+/* Undo / redo. Its own group rather than part of __center so it doesn't shift
+   the centred shader-name field. */
+.toolbar__history {
+  flex-shrink: 0;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.toolbar__history-btn {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-lg);
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast),
+    background var(--transition-fast), opacity var(--transition-fast);
+}
+
+.toolbar__history-btn:hover:not(:disabled) {
+  border-color: var(--border-focus);
+  color: var(--border-focus);
+  background: var(--bg-panel);
+}
+
+.toolbar__history-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.toolbar__history-btn:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
 .toolbar__name-label {
   font-family: var(--font-sans);
   font-size: var(--font-size-lg);

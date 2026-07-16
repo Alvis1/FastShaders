@@ -1,7 +1,7 @@
 import { useCallback, useRef, useEffect, memo } from 'react';
 import type { BuiltinTexture } from '@/registry/builtinTextures';
 import { perlin2D } from '@/utils/noisePreview';
-import { startTileDrag, tileGhostZoom } from './tileDrag';
+import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
 
 export const BUILTIN_TEXTURE_DRAG_TYPE = 'application/fastshaders-builtin-texture';
@@ -254,7 +254,7 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
 
   const memberCount = Math.max(0, texture.nodes.length - 1);
   const { tooltip, tooltipHandlers } = useAssetTooltip(
-    `${texture.description} Drag onto the canvas to add it.`,
+    `${texture.description} Click, or drag onto the canvas, to add it.`,
   );
 
   return (
@@ -263,6 +263,7 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
       draggable
       onDragStart={onDragStart}
       onPointerDown={onPointerDown}
+      {...tileActivationProps({ kind: 'texture', id: texture.id }, `Add ${texture.name} texture`)}
       {...tooltipHandlers}
     >
       {tooltip}

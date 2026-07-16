@@ -1,0 +1,74 @@
+{
+  "nodes": {
+    "perlin": {
+      "ref": "Perlin, K. (1985). An Image Synthesizer. SIGGRAPH '85, 287–296. Implemented via MaterialX mx_noise_float as improved Perlin gradient noise (quintic fade; cf. Perlin, K. (2002). Improving Noise. ACM TOG 21(3), 681–682).",
+      "url": "https://doi.org/10.1145/325334.325247"
+    },
+    "perlinVec3": {
+      "ref": "Perlin, K. (1985). An Image Synthesizer. SIGGRAPH '85, 287–296. Implemented via MaterialX mx_noise_vec3 as improved Perlin gradient noise (quintic fade; cf. Perlin, K. (2002). Improving Noise. ACM TOG 21(3), 681–682).",
+      "url": "https://doi.org/10.1145/325334.325247"
+    },
+    "fbm": {
+      "ref": "Mandelbrot, B. B., & Van Ness, J. W. (1968). Fractional Brownian Motions, Fractional Noises and Applications. SIAM Review, 10(4), 422–437. Realized as a sum of Perlin noise octaves (MaterialX mx_fractal_noise_float); cf. Ebert, D. S., Musgrave, F. K., Peachey, D., Perlin, K., & Worley, S. (2003). Texturing & Modeling: A Procedural Approach (3rd ed.). Morgan Kaufmann.",
+      "url": "https://doi.org/10.1137/1010093"
+    },
+    "fbmVec3": {
+      "ref": "Mandelbrot, B. B., & Van Ness, J. W. (1968). Fractional Brownian Motions, Fractional Noises and Applications. SIAM Review, 10(4), 422–437. Realized as a sum of Perlin noise octaves (MaterialX mx_fractal_noise_vec3); cf. Ebert, D. S., Musgrave, F. K., Peachey, D., Perlin, K., & Worley, S. (2003). Texturing & Modeling: A Procedural Approach (3rd ed.). Morgan Kaufmann.",
+      "url": "https://doi.org/10.1137/1010093"
+    },
+    "cellNoise": {
+      "ref": "MaterialX Specification v1.39, standard node 'cellnoise3d' — 3D cellular noise (one hashed random value per integer cell). Academy Software Foundation. Implemented via MaterialX mx_cell_noise_float; distinct from Worley cellular noise, as it carries no distance-to-feature-point term.",
+      "url": "https://github.com/AcademySoftwareFoundation/MaterialX/blob/main/documents/Specification/MaterialX.StandardNodes.md"
+    },
+    "voronoi": {
+      "ref": "Worley, S. (1996). A Cellular Texture Basis Function. SIGGRAPH '96, 291–294. Implemented via MaterialX mx_worley_noise_float (F1 distance, centered jitter).",
+      "url": "https://doi.org/10.1145/237170.237267"
+    },
+    "voronoiVec2": {
+      "ref": "Worley, S. (1996). A Cellular Texture Basis Function. SIGGRAPH '96, 291–294. Implemented via MaterialX mx_worley_noise_vec2 (F1/F2 distances, centered jitter).",
+      "url": "https://doi.org/10.1145/237170.237267"
+    },
+    "voronoiVec3": {
+      "ref": "Worley, S. (1996). A Cellular Texture Basis Function. SIGGRAPH '96, 291–294. Implemented via MaterialX mx_worley_noise_vec3 (F1/F2/F3 distances, centered jitter).",
+      "url": "https://doi.org/10.1145/237170.237267"
+    },
+    "hsl": {
+      "ref": "Joblove, G. H., & Greenberg, D. (1978). Color Spaces for Computer Graphics. SIGGRAPH '78, 20–25 — origin of the HSL (double-hexcone) color model.",
+      "url": "https://doi.org/10.1145/800248.807362"
+    },
+    "toHsl": {
+      "ref": "Joblove, G. H., & Greenberg, D. (1978). Color Spaces for Computer Graphics. SIGGRAPH '78, 20–25 — origin of the HSL (double-hexcone) color model; this node is the inverse (RGB→HSL) transform.",
+      "url": "https://doi.org/10.1145/800248.807362"
+    }
+  },
+  "textures": {
+    "polka-dots": {
+      "ref": "Adapted from Boytchev, P. — tsl-textures v3.0.1, 'Polka dots' (src/polka-dots.js), MIT © 2024. Upstream's size/blur falloff and shading tail are retained; the spherical-Fibonacci dot-distance term is replaced by a 3D fract lattice and the colors are re-chosen.",
+      "url": "https://github.com/boytchev/tsl-textures"
+    },
+    "tiger-fur": {
+      "ref": "Adapted from Boytchev, P. — tsl-textures v3.0.1, 'Tiger fur' (src/tiger-fur.js), MIT © 2024. Upstream parameter defaults and stripe/belly structure are retained; flattened for FastShaders and the 'hairs' parameter dropped.",
+      "url": "https://github.com/boytchev/tsl-textures"
+    },
+    "static-noise": {
+      "ref": "Adapted from Boytchev, P. — tsl-textures v3.0.1, 'Static noise' (src/static-noise.js), MIT © 2024. Retains the quantized-time sin(round(t))×1000 noise-offset idiom in screen space; the balance/contrast/delay parameters are dropped.",
+      "url": "https://github.com/boytchev/tsl-textures"
+    },
+    "crumpled-fabric": {
+      "ref": "Ported from Boytchev, P. — tsl-textures v3.0.1, 'Crumpled fabric' (src/crumpled-fabric.js), MIT © 2024. Upstream defaults, colors and the 4-iteration domain-warped noise are retained; the loop is unrolled for FastShaders.",
+      "url": "https://github.com/boytchev/tsl-textures"
+    },
+    "gas-giant": {
+      "ref": "Adapted from Boytchev, P. — tsl-textures v3.0.1, 'Gas giant' (src/gas-giant.js), MIT © 2024. Upstream parameter defaults and the banding/turbulence structure are retained; upstream's HSL color path is dropped in favour of direct color mixing.",
+      "url": "https://github.com/boytchev/tsl-textures"
+    },
+    "marble": {
+      "ref": "Adapted from Boytchev, P. — tsl-textures v3.0.1, 'Marble' (src/marble.js), MIT © 2024. Upstream vein/background colors are retained; the scale/thinness/noise parameters are reworked into scale/sharpness/detail.",
+      "url": "https://github.com/boytchev/tsl-textures"
+    },
+    "wood": {
+      "ref": "Adapted from Boytchev, P. — tsl-textures v3.0.1, 'Wood' (src/wood.js), MIT © 2024. All six upstream parameter defaults and both colors are retained; flattened for FastShaders.",
+      "url": "https://github.com/boytchev/tsl-textures"
+    }
+  }
+}

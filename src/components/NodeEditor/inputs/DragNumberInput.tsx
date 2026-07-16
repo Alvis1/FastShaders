@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from 'react';
+import { useAppStore } from '@/store/useAppStore';
 import './DragNumberInput.css';
 
 interface DragNumberInputProps {
@@ -83,6 +84,13 @@ export function DragNumberInput({
       const dx = e.clientX - dragRef.current.startX;
 
       if (!dragRef.current.moved && Math.abs(dx) < DRAG_THRESHOLD) return;
+      if (!dragRef.current.moved) {
+        // Snapshot the pre-drag state ONCE, before the first onChange, so the
+        // whole scrub collapses to a single undo step and the graph isn't
+        // deep-cloned on every frame. Deliberately not done on pointerdown: a
+        // press that turns out to be a click-to-edit would push a no-op entry.
+        useAppStore.getState().beginInteraction();
+      }
       dragRef.current.moved = true;
       setDragging(true);
 
@@ -99,6 +107,7 @@ export function DragNumberInput({
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
       dragRef.current.isDown = false;
       setDragging(false);
+      useAppStore.getState().endInteraction();
 
       // If no significant movement, treat as click → edit mode
       if (!dragRef.current.moved) {
@@ -106,6 +115,25 @@ export function DragNumberInput({
       }
     },
     [startEdit],
+  );
+
+  // A cancelled gesture (pointer stolen, touch interrupted) never fires
+  // pointerup, so close the history bracket here too — leaving it open would
+  // silently stop recording undo for the rest of the session.
+  const onPointerCancel = useCallback((e: React.PointerEvent) => {
+    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    dragRef.current.isDown = false;
+    dragRef.current.moved = false;
+    setDragging(false);
+    useAppStore.getState().endInteraction();
+  }, []);
+
+  // Same guarantee if this unmounts mid-drag (e.g. the node is deleted).
+  useEffect(
+    () => () => {
+      if (dragRef.current.isDown) useAppStore.getState().endInteraction();
+    },
+    [],
   );
 
   // Arrow button handlers
@@ -143,6 +171,7 @@ export function DragNumberInput({
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
         >
           {displayValue}
         </span>

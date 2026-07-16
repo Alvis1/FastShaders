@@ -179,6 +179,16 @@ export type AppNode =
 
 export interface TypedEdgeData {
   dataType: TSLDataType;
+  /**
+   * Optional user-placed routing waypoints (flow-space coords) the wire curves
+   * smoothly through. Purely visual — graphToCode/cpuEvaluator never read them,
+   * so they don't affect the compiled shader; they persist with the graph
+   * (localStorage autosave, save/load, undo) and are carried across a code→graph
+   * resync by endpoint match (useSyncEngine), though a fresh `.js`/zip import
+   * starts without them (the exported code carries no geometry). Added/removed
+   * via double-click on the edge / on a point, or the edge context menu.
+   */
+  waypoints?: Array<{ x: number; y: number }>;
   [key: string]: unknown;
 }
 
