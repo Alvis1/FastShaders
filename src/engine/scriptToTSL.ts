@@ -4,12 +4,23 @@
  *
  * Reverses the transforms applied by tslToShaderModule.ts:
  *   - `export default function(params) {` → `const shader = Fn(() => {`
- *   - `const name = params.name;` → `const name = uniform(default);`
+ *   - every `params.name` reference → a `const name = uniform(default);` hoisted
+ *     to the top of the Fn body, plus the reference rewritten to bare `name`
+ *     (AST-driven — see hoistParamUniforms)
  *   - `export const schema = { ... }` → consumed for defaults, stripped
  *   - `{ colorNode: x }` → `{ color: x }` (strip Node suffix)
  *   - Adds Fn (and uniform if needed) back to the import line
  *   - Strips header comment block
  */
+
+import { parse } from '@babel/parser';
+import _traverse from '@babel/traverse';
+import * as t from '@babel/types';
+
+// Handle babel traverse CJS/ESM interop
+const traverse = (typeof (_traverse as unknown as { default?: unknown }).default === 'function'
+  ? (_traverse as unknown as { default: typeof _traverse }).default
+  : _traverse) as typeof _traverse;
 
 const NODE_PROP_TO_CHANNEL: Record<string, string> = {
   colorNode: 'color',
@@ -68,50 +79,27 @@ export function scriptToTSL(scriptCode: string): string {
   // this, the generic nested-Fn skip below swallows the wrapper whole.
   scriptCode = inlineIIFEAssignments(scriptCode);
 
+  const schemaDefaults = extractSchemaDefaults(scriptCode);
+
+  // Pre-pass: turn `params.X` references into hoisted uniform locals. Only the
+  // exact `const X = params.X;` shape used to be reversed, so any other position
+  // — most commonly an inline call argument, `mul(time, params.Bands)` —
+  // survived into the TSL as a member expression codeToGraph cannot represent,
+  // silently pinning the port to its default.
+  const params = hoistParamUniforms(scriptCode, schemaDefaults);
+  scriptCode = params.code;
+
   const lines = scriptCode.split('\n');
+  // Brace/paren depth is tracked against a masked copy so a `{`, `}` or `"` in
+  // a string literal or comment can't move it — a stray `"a } b"` used to close
+  // the shader function early and silently drop the rest of the body. The mask
+  // preserves length and newlines, so it stays line-aligned with `lines`.
+  const maskedLines = maskNonCode(scriptCode).split('\n');
   const outLines: string[] = [];
 
-  // --- First pass: extract schema defaults ---
-  const schemaDefaults = new Map<string, number>();
-  let inSchema = false;
-  let schemaBraceDepth = 0;
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (/^export\s+const\s+schema\s*=\s*\{/.test(trimmed)) {
-      inSchema = true;
-      schemaBraceDepth = 0;
-      for (const ch of trimmed) {
-        if (ch === '{') schemaBraceDepth++;
-        if (ch === '}') schemaBraceDepth--;
-      }
-      // Single-line schema
-      if (schemaBraceDepth <= 0) {
-        const propMatches = trimmed.matchAll(/(\w+)\s*:\s*\{[^}]*default\s*:\s*([^,}]+)/g);
-        for (const m of propMatches) {
-          const val = parseFloat(m[2].trim());
-          if (!isNaN(val)) schemaDefaults.set(m[1], val);
-        }
-        inSchema = false;
-      }
-      continue;
-    }
-    if (inSchema) {
-      for (const ch of trimmed) {
-        if (ch === '{') schemaBraceDepth++;
-        if (ch === '}') schemaBraceDepth--;
-      }
-      // Extract: name: { type: 'number', default: 1.5 },
-      const propMatch = trimmed.match(/^(\w+)\s*:\s*\{[^}]*default\s*:\s*([^,}]+)/);
-      if (propMatch) {
-        const val = parseFloat(propMatch[2].trim());
-        if (!isNaN(val)) schemaDefaults.set(propMatch[1], val);
-      }
-      if (schemaBraceDepth <= 0) inSchema = false;
-      continue;
-    }
-  }
-
-  const hasProperties = schemaDefaults.size > 0;
+  // A hoisted param needs `uniform` imported even when the module ships no
+  // schema block (defaults then fall back to 1.0, as they always have).
+  const hasProperties = schemaDefaults.size > 0 || params.hoisted.length > 0;
   let insideFn = false;
   let fnBraceDepth = 0;
   let skipSchema = false;
@@ -120,8 +108,11 @@ export function scriptToTSL(scriptCode: string): string {
   let keepHelper = false;
   let helperBraces = 0;
 
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     const trimmed = line.trim();
+    /** Same line with string/comment contents blanked — count braces on this. */
+    const maskedTrimmed = (maskedLines[li] ?? line).trim();
 
     // Skip header comments
     if (!insideFn && trimmed.startsWith('//')) continue;
@@ -214,25 +205,25 @@ export function scriptToTSL(scriptCode: string): string {
       // These appear when graphToCode emits an unknown node's rawExpression containing
       // the original Fn wrapper, and tslToShaderModule passes it through verbatim.
       if (skipNestedFn > 0) {
-        for (const ch of trimmed) {
+        for (const ch of maskedTrimmed) {
           if (ch === '{') skipNestedFn++;
           if (ch === '}') skipNestedFn--;
         }
         // Also track outer fnBraceDepth so the closing } count stays correct
-        for (const ch of trimmed) {
+        for (const ch of maskedTrimmed) {
           if (ch === '{') fnBraceDepth++;
           if (ch === '}') fnBraceDepth--;
         }
         continue;
       }
-      if (/\bFn\s*\(/.test(trimmed)) {
+      if (/\bFn\s*\(/.test(maskedTrimmed)) {
         skipNestedFn = 0;
-        for (const ch of trimmed) {
+        for (const ch of maskedTrimmed) {
           if (ch === '{') skipNestedFn++;
           if (ch === '}') skipNestedFn--;
         }
         // Also track outer fnBraceDepth
-        for (const ch of trimmed) {
+        for (const ch of maskedTrimmed) {
           if (ch === '{') fnBraceDepth++;
           if (ch === '}') fnBraceDepth--;
         }
@@ -240,7 +231,7 @@ export function scriptToTSL(scriptCode: string): string {
         continue;
       }
 
-      for (const ch of trimmed) {
+      for (const ch of maskedTrimmed) {
         if (ch === '{') fnBraceDepth++;
         if (ch === '}') fnBraceDepth--;
       }
@@ -256,21 +247,15 @@ export function scriptToTSL(scriptCode: string): string {
 
       const indent = line.match(/^(\s*)/)?.[1] ?? '';
 
-      // Reverse `const name = params.name;` → `const name = uniform(default);`
-      const paramsMatch = trimmed.match(/^const\s+(\w+)\s*=\s*params\.(\w+)\s*;?$/);
-      if (paramsMatch && paramsMatch[1] === paramsMatch[2]) {
-        const varName = paramsMatch[1];
-        const defaultVal = schemaDefaults.get(varName) ?? 1.0;
-        outLines.push(`${indent}const ${varName} = uniform(${defaultVal});`);
-        continue;
-      }
-
       // Reverse multi-channel return: { colorNode: x } → { color: x }.
       // Shorthand entries `{ colorNode }` are treated as `{ colorNode: colorNode }`
       // so the channel rename still applies.
       const objReturnMatch = trimmed.match(/^return\s*\{(.+)\}\s*;?$/);
       if (objReturnMatch) {
-        const entries = objReturnMatch[1].split(',').map(entry => {
+        // Top-level commas only: a plain `.split(',')` tears a nested call apart
+        // (`colorNode: mix(a, b, c)` → `mix(a` / `b` / `c)`), and each fragment
+        // then looks like an ES6 shorthand property and gets echoed as `x: x`.
+        const entries = splitTopLevelArgs(objReturnMatch[1]).map(entry => {
           const trimmedEntry = entry.trim();
           if (!trimmedEntry) return null;
           const colonIdx = trimmedEntry.indexOf(':');
@@ -336,19 +321,308 @@ function collapseMultilineImports(scriptCode: string): string {
 /**
  * Collapse multi-line `return { ... };` statements onto a single line so the
  * objReturn handler in scriptToTSL can rewrite channel keys uniformly.
+ *
+ * Brace-balanced by construction. The obvious `return\s*\{([\s\S]*?)\}` regex
+ * is wrong twice over, and both failures corrupt real shaders silently:
+ *
+ *   - Non-greedy `*?` stops at the FIRST `}`, so any nested brace — an
+ *     object-literal argument like `mx_noise_float({ scale: 2 })` — ends the
+ *     match early and injects `};` mid-argument-list.
+ *   - Joining the body without stripping comments lets a trailing `// note`
+ *     swallow the closing `};`, because the collapse removes the newline that
+ *     used to terminate the comment.
+ *
+ * So: mask comments/strings, walk braces to the real closer, strip comments out
+ * of the body, and split on TOP-LEVEL commas only (a plain `.split(',')` would
+ * tear `mix(a, b, c)` into pieces).
  */
 function collapseMultilineReturns(scriptCode: string): string {
-  return scriptCode.replace(
-    /(^[ \t]*)return\s*\{([\s\S]*?)\}\s*;?/gm,
-    (_, indent: string, body: string) => {
-      const cleanBody = body
-        .split(',')
-        .map((e) => e.trim())
-        .filter(Boolean)
-        .join(', ');
-      return `${indent}return { ${cleanBody} };`;
-    },
+  const masked = maskNonCode(scriptCode);
+  const headRe = /(^[ \t]*)return\s*\{/gm;
+  const edits: Array<{ start: number; end: number; text: string }> = [];
+
+  let m: RegExpExecArray | null;
+  while ((m = headRe.exec(masked)) !== null) {
+    const indent = m[1];
+    const bodyStart = m.index + m[0].length; // just past the `{`
+    const bodyEnd = findMatchingBrace(masked, bodyStart);
+    if (bodyEnd === -1) continue;
+
+    // Consume optional trailing whitespace + `;` so the rewrite replaces the
+    // whole statement rather than leaving a stray terminator behind.
+    let p = bodyEnd + 1;
+    while (p < masked.length && /[ \t]/.test(masked[p])) p++;
+    if (masked[p] === ';') p++;
+
+    const body = stripComments(scriptCode.slice(bodyStart, bodyEnd));
+    const cleanBody = splitTopLevelArgs(body)
+      .map((e) => e.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .join(', ');
+
+    edits.push({ start: m.index, end: p, text: `${indent}return { ${cleanBody} };` });
+    // Skip past the statement we just consumed so a nested `return {` inside it
+    // can't produce an overlapping edit.
+    headRe.lastIndex = p;
+  }
+
+  let out = scriptCode;
+  for (let k = edits.length - 1; k >= 0; k--) {
+    const e = edits[k];
+    out = out.slice(0, e.start) + e.text + out.slice(e.end);
+  }
+  return out;
+}
+
+/**
+ * Pull `default:` values out of the module's `export const schema = { ... }`
+ * block. Read before any pre-pass runs, since the hoist needs them and the
+ * pre-passes never touch the schema block.
+ */
+function extractSchemaDefaults(scriptCode: string): Map<string, number> {
+  const schemaDefaults = new Map<string, number>();
+  let inSchema = false;
+  let schemaBraceDepth = 0;
+  for (const line of scriptCode.split('\n')) {
+    const trimmed = line.trim();
+    if (/^export\s+const\s+schema\s*=\s*\{/.test(trimmed)) {
+      inSchema = true;
+      schemaBraceDepth = 0;
+      for (const ch of trimmed) {
+        if (ch === '{') schemaBraceDepth++;
+        if (ch === '}') schemaBraceDepth--;
+      }
+      // Single-line schema
+      if (schemaBraceDepth <= 0) {
+        const propMatches = trimmed.matchAll(/(\w+)\s*:\s*\{[^}]*default\s*:\s*([^,}]+)/g);
+        for (const m of propMatches) {
+          const val = parseFloat(m[2].trim());
+          if (!isNaN(val)) schemaDefaults.set(m[1], val);
+        }
+        inSchema = false;
+      }
+      continue;
+    }
+    if (inSchema) {
+      for (const ch of trimmed) {
+        if (ch === '{') schemaBraceDepth++;
+        if (ch === '}') schemaBraceDepth--;
+      }
+      // Extract: name: { type: 'number', default: 1.5 },
+      const propMatch = trimmed.match(/^(\w+)\s*:\s*\{[^}]*default\s*:\s*([^,}]+)/);
+      if (propMatch) {
+        const val = parseFloat(propMatch[2].trim());
+        if (!isNaN(val)) schemaDefaults.set(propMatch[1], val);
+      }
+      if (schemaBraceDepth <= 0) inSchema = false;
+      continue;
+    }
+  }
+  return schemaDefaults;
+}
+
+/**
+ * Rewrite every `params.<name>` reference in the default-exported function into
+ * a `const <name> = uniform(<schema default>);` hoisted to the top of its body.
+ *
+ * Parsed, not pattern-matched. What's being rewritten is a *binding*, and the
+ * distinctions that decide correctness are all structural ones a regex cannot
+ * see: `params.X` in code vs. in a string or comment; `const X = params.X;` vs.
+ * the same line carrying a trailing comment; a `let`/`var`/comma declarator; a
+ * reference sitting above its own declaration. Every one of those, guessed
+ * textually, silently emits TSL that throws (`const X = X;`) or names a local
+ * that was never declared — worse than the untouched `params.X` this is meant
+ * to fix. The AST answers them directly.
+ *
+ * Only OFFSETS come from the AST; the text is spliced. Regenerating from the
+ * AST would reformat the module out from under the line-oriented passes that
+ * run after this one.
+ *
+ * Returns the untouched source (and no hoists) on anything unexpected — an
+ * unparseable module, a missing/destructured `params`, a name collision — so a
+ * shape this can't model degrades to the old behaviour rather than to broken
+ * output.
+ */
+function hoistParamUniforms(
+  scriptCode: string,
+  schemaDefaults: Map<string, number>,
+): { code: string; hoisted: string[] } {
+  const unchanged = { code: scriptCode, hoisted: [] as string[] };
+
+  let ast: t.File;
+  try {
+    ast = parse(scriptCode, {
+      sourceType: 'module',
+      plugins: ['typescript'],
+      errorRecovery: true,
+    });
+  } catch {
+    return unchanged;
+  }
+
+  // Locate `export default function (params) { ... }` and its parameter name.
+  let fn: t.FunctionDeclaration | t.FunctionExpression | null = null;
+  for (const stmt of ast.program.body) {
+    if (!t.isExportDefaultDeclaration(stmt)) continue;
+    const d = stmt.declaration;
+    if (t.isFunctionDeclaration(d) || t.isFunctionExpression(d)) fn = d;
+  }
+  if (!fn || fn.params.length !== 1 || !t.isIdentifier(fn.params[0])) return unchanged;
+  const fnParam = fn.params[0];
+  const paramsName = fnParam.name;
+  const bodyStart = fn.body.start;
+  if (bodyStart == null) return unchanged;
+
+  // Every `params.X` inside the function, and every declarator of the shape
+  // `const X = params.X;` (which the hoist replaces outright).
+  const refs: Array<{ start: number; end: number; name: string }> = [];
+  const order: string[] = [];
+  const seen = new Set<string>();
+  // A list, not a name-keyed map: the same param may be self-declared in more
+  // than one scope, and every one of those declarations has to be dealt with.
+  const selfDecls: Array<{
+    name: string;
+    declarator: t.VariableDeclarator;
+    parent: t.VariableDeclaration;
+  }> = [];
+  const declared = new Set<string>();
+
+  const readParamRef = (node: t.Node): string | null => {
+    if (!t.isMemberExpression(node) || node.computed) return null;
+    if (!t.isIdentifier(node.object) || node.object.name !== paramsName) return null;
+    if (!t.isIdentifier(node.property)) return null;
+    return node.property.name;
+  };
+
+  /**
+   * Is this `params` OUR params? Resolved through scope rather than by nearest
+   * enclosing function: a reference nested in an inner arrow still binds to the
+   * outer parameter, while a helper that declares its own `params` shadows it.
+   */
+  const bindsOurParams = (path: { scope: { getBinding(n: string): { identifier: t.Node } | undefined } }): boolean =>
+    path.scope.getBinding(paramsName)?.identifier === fnParam;
+
+  try {
+    traverse(ast, {
+      // Any binding anywhere in the module — imports, functions, every declarator
+      // (including destructured and comma-separated ones). A param whose name is
+      // already bound cannot be hoisted under that name without shadowing or
+      // double-declaring it.
+      ImportDeclaration(path) {
+        for (const s of path.node.specifiers) declared.add(s.local.name);
+      },
+      FunctionDeclaration(path) {
+        if (path.node.id) declared.add(path.node.id.name);
+      },
+      VariableDeclarator(path) {
+        const isSelfDecl =
+          t.isIdentifier(path.node.id) &&
+          path.node.init != null &&
+          readParamRef(path.node.init) === path.node.id.name &&
+          bindsOurParams(path);
+        if (isSelfDecl) {
+          selfDecls.push({
+            name: (path.node.id as t.Identifier).name,
+            declarator: path.node,
+            parent: path.parent as t.VariableDeclaration,
+          });
+          return;
+        }
+        for (const name of Object.keys(t.getBindingIdentifiers(path.node))) declared.add(name);
+      },
+      MemberExpression(path) {
+        const name = readParamRef(path.node);
+        if (name == null) return;
+        if (!bindsOurParams(path)) return; // a helper that shadows `params`
+        if (path.node.start == null || path.node.end == null) return;
+        refs.push({ start: path.node.start, end: path.node.end, name });
+        if (!seen.has(name)) { seen.add(name); order.push(name); }
+      },
+    });
+  } catch {
+    // `errorRecovery` lets parse() return an AST for source it could only
+    // partially understand; building scope over one of those throws (a
+    // duplicate declaration, say). The import must survive that — the editor
+    // still needs to show the user their text so they can fix it.
+    return unchanged;
+  }
+
+  if (!order.length) return unchanged;
+
+  // `Fn` and `uniform` are injected into the import line by the caller, so a
+  // param named either of those would collide once emitted.
+  const blocked = new Set(
+    order.filter((n) => declared.has(n) || n === 'Fn' || n === 'uniform'),
   );
+  const hoisted = order.filter((n) => !blocked.has(n));
+  if (!hoisted.length) return unchanged;
+
+  type Edit = { start: number; end: number; text: string };
+
+  /** Source text of [start, end) with any `params.X` inside it resolved to `X`. */
+  const rewriteWithin = (start: number, end: number): string => {
+    let text = scriptCode.slice(start, end);
+    const inner = refs
+      .filter((r) => r.start >= start && r.end <= end && !blocked.has(r.name))
+      .sort((a, b) => b.start - a.start);
+    for (const r of inner) {
+      text = text.slice(0, r.start - start) + r.name + text.slice(r.end - start);
+    }
+    return text;
+  };
+
+  // Drop `const X = params.X;` — the hoist supersedes it, and leaving it would
+  // rewrite into the self-reference `const X = X;`.
+  //
+  // Rewritten one STATEMENT at a time, from its surviving declarators. Excising
+  // declarators individually looks simpler but is wrong: neighbours both claim
+  // the comma between them, so `const A = params.A, B = params.B;` yields two
+  // overlapping ranges, and the second splice lands on text the first already
+  // moved.
+  const hoistedSet = new Set(hoisted);
+  const dropped = new Map<t.VariableDeclaration, Set<t.VariableDeclarator>>();
+  for (const s of selfDecls) {
+    if (!hoistedSet.has(s.name)) continue;
+    let set = dropped.get(s.parent);
+    if (!set) { set = new Set(); dropped.set(s.parent, set); }
+    set.add(s.declarator);
+  }
+
+  const rewritten: Edit[] = [];
+  for (const [parent, drop] of dropped) {
+    if (parent.start == null || parent.end == null) continue;
+    const survivors = parent.declarations.filter((d) => !drop.has(d));
+    if (!survivors.length) {
+      rewritten.push({ start: parent.start, end: parent.end, text: '' });
+      continue;
+    }
+    if (survivors.some((d) => d.start == null || d.end == null)) continue;
+    const parts = survivors.map((d) => rewriteWithin(d.start as number, d.end as number));
+    rewritten.push({
+      start: parent.start,
+      end: parent.end,
+      text: `${parent.kind} ${parts.join(', ')};`,
+    });
+  }
+
+  // A `params.X` inside a statement rewritten above is already handled by that
+  // statement's replacement text; emitting a second edit for it would overlap.
+  const edits: Edit[] = rewritten.slice();
+  for (const r of refs) {
+    if (blocked.has(r.name)) continue;
+    if (rewritten.some((rm) => r.start >= rm.start && r.end <= rm.end)) continue;
+    edits.push({ start: r.start, end: r.end, text: r.name });
+  }
+
+  const hoistText = hoisted
+    .map((n) => `\n  const ${n} = uniform(${schemaDefaults.get(n) ?? 1.0});`)
+    .join('');
+  edits.push({ start: bodyStart + 1, end: bodyStart + 1, text: hoistText });
+
+  edits.sort((a, b) => b.start - a.start || b.end - a.end);
+  let out = scriptCode;
+  for (const e of edits) out = out.slice(0, e.start) + e.text + out.slice(e.end);
+  return { code: out, hoisted };
 }
 
 /**
@@ -357,11 +631,14 @@ function collapseMultilineReturns(scriptCode: string): string {
  * discard conditions and color expression back out of a `__pixel(...)` call.
  */
 function splitTopLevelArgs(s: string): string[] {
+  // Depth is counted on the mask so a bracket or comma inside a string literal
+  // or comment can't move it — `foo("}")` must stay one argument.
+  const masked = maskNonCode(s);
   const args: string[] = [];
   let depth = 0;
   let last = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked[i];
     if (c === '(' || c === '[' || c === '{') depth++;
     else if (c === ')' || c === ']' || c === '}') depth--;
     else if (c === ',' && depth === 0) {
@@ -372,6 +649,97 @@ function splitTopLevelArgs(s: string): string[] {
   const tail = s.slice(last).trim();
   if (tail) args.push(tail);
   return args;
+}
+
+/** Per-character source classes produced by classifySource. */
+const CLS_CODE = 0;
+/** Inside a `//` or block comment, including its delimiters. */
+const CLS_COMMENT = 1;
+/** Inside a string/template literal, excluding the surrounding quotes. */
+const CLS_STRING = 2;
+
+/**
+ * Classify every character of a JS source as code, comment, or string body.
+ *
+ * Both `maskNonCode` and `stripComments` derive from this single scan, so the
+ * two can't disagree about where a comment ends — which matters because a `}`,
+ * a `,` or a `//` sitting inside a comment or a string must never steer a
+ * brace/argument scan.
+ *
+ * A line comment stops *before* its terminating newline, so stripping one
+ * leaves the line break intact. Regex literals are not modelled: TSL shader
+ * bodies don't contain them, and `/` in any other position is division, which
+ * this scanner already treats as code.
+ */
+function classifySource(src: string): Uint8Array {
+  const cls = new Uint8Array(src.length);
+  type State = 'code' | 'line' | 'block' | 'sq' | 'dq' | 'tmpl';
+  let state: State = 'code';
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (state === 'code') {
+      if (c === '/' && d === '/') { cls[i] = cls[i + 1] = CLS_COMMENT; i += 2; state = 'line'; continue; }
+      if (c === '/' && d === '*') { cls[i] = cls[i + 1] = CLS_COMMENT; i += 2; state = 'block'; continue; }
+      if (c === "'") { state = 'sq'; i++; continue; }
+      if (c === '"') { state = 'dq'; i++; continue; }
+      if (c === '`') { state = 'tmpl'; i++; continue; }
+      i++;
+      continue;
+    }
+    if (state === 'line') {
+      if (c === '\n') { state = 'code'; i++; continue; }
+      cls[i] = CLS_COMMENT;
+      i++;
+      continue;
+    }
+    if (state === 'block') {
+      if (c === '*' && d === '/') { cls[i] = cls[i + 1] = CLS_COMMENT; i += 2; state = 'code'; continue; }
+      cls[i] = CLS_COMMENT;
+      i++;
+      continue;
+    }
+    // String-ish states: sq / dq / tmpl.
+    if (c === '\\') { cls[i] = CLS_STRING; if (i + 1 < src.length) cls[i + 1] = CLS_STRING; i += 2; continue; }
+    const closes = (state === 'sq' && c === "'") || (state === 'dq' && c === '"') || (state === 'tmpl' && c === '`');
+    if (closes) { state = 'code'; i++; continue; }
+    cls[i] = CLS_STRING;
+    i++;
+    continue;
+  }
+  return cls;
+}
+
+/**
+ * Blank the *contents* of comments and string literals with spaces, preserving
+ * the source's length and its newlines. Index-based scans (head matching, brace
+ * balancing) run over the mask and then slice the original at the same offsets.
+ */
+function maskNonCode(src: string): string {
+  const cls = classifySource(src);
+  const out = src.split('');
+  for (let i = 0; i < out.length; i++) {
+    if (cls[i] !== CLS_CODE && out[i] !== '\n') out[i] = ' ';
+  }
+  return out.join('');
+}
+
+/**
+ * Remove comments, leaving code and string literals untouched. Each comment run
+ * collapses to a single space so neighbouring tokens can't glue together
+ * (`a/*c*​/b` → `a b`, never `ab`).
+ */
+function stripComments(src: string): string {
+  const cls = classifySource(src);
+  let out = '';
+  for (let i = 0; i < src.length; i++) {
+    if (cls[i] !== CLS_COMMENT) { out += src[i]; continue; }
+    while (i < src.length && cls[i] === CLS_COMMENT) i++;
+    out += ' ';
+    i--;
+  }
+  return out;
 }
 
 /**
