@@ -23,7 +23,7 @@ import { parse } from '@babel/parser';
 
 const LOADER = path.resolve(
   __dirname,
-  '../public/js/a-frame-shaderloader-0.4.js',
+  '../public/js/a-frame-shaderloader-0.5.js',
 );
 
 // Eval the vendored A-Frame component file in a sandbox that stubs the browser
@@ -65,7 +65,7 @@ const parsesAsModule = (code: string): boolean => {
 const EXPORT_WITH_PROPERTY = `// TSL Shader Module — for use with a-frame-shaderloader
 //
 // HTML setup — these two scripts are all you need (no import map, no shim):
-//   a-frame-shaderloader-0.4.js rewrites the three/tsl import to that bundle
+//   a-frame-shaderloader-0.5.js rewrites the three/tsl import to that bundle
 //   <a-entity shader="src: shader.js; ecomindspeed: 0.5289"></a-entity>
 //
 // Properties can be updated at runtime:

@@ -219,24 +219,28 @@
   white-space: nowrap;
 }
 
+/* Left-aligned so the name reads as a continuation of the "Shader name:" label
+   sitting next to it — centring floated it into the middle of the 200–400px
+   field, visually detached from its own label. The always-visible border + input
+   background are the editable affordance: with a transparent border this looked
+   like static text until you happened to hover it. */
 .toolbar__name-input {
   font-family: var(--font-sans);
   font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--text-primary);
-  background: transparent;
-  border: 1px solid transparent;
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
   border-radius: var(--border-radius-sm);
   padding: var(--space-1) var(--space-3);
-  text-align: center;
+  text-align: left;
   min-width: 200px;
   max-width: 400px;
   transition: border-color var(--transition-fast), background var(--transition-fast);
 }
 
 .toolbar__name-input:hover {
-  border-color: var(--border-subtle);
-  background: var(--bg-surface);
+  border-color: var(--border-focus);
 }
 
 .toolbar__name-input:focus {
@@ -348,6 +352,24 @@
 .toolbar__sc-link:focus-visible {
   outline: 1px solid var(--border-focus);
   outline-offset: 2px;
+}
+
+/* Language toggle in its active (Latvian) state — a filled chip so the current
+   language reads at a glance. Button variant shares the .toolbar__sc-link look;
+   these resets keep it identical to the neighbouring anchor chips. */
+button.toolbar__sc-link {
+  font: inherit;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.toolbar__sc-link--active,
+.toolbar__sc-link--active:hover {
+  background: var(--border-focus);
+  border-color: var(--border-focus);
+  color: #fff;
 }
 
 /* --- VR bench popover (desktop builds only) ------------------------------ */

@@ -1,6 +1,6 @@
 import type { AppNode, AppEdge } from '@/types';
 import { getNodeValues } from '@/types';
-import { NODE_REGISTRY, MAX_CHAIN_OPERANDS, chainPortId, chainPortIndex } from '@/registry/nodeRegistry';
+import { NODE_REGISTRY, MAX_CHAIN_OPERANDS, chainPortId, chainPortIndex, growsOperands } from '@/registry/nodeRegistry';
 import { generateEdgeId } from '@/utils/idGenerator';
 
 /**
@@ -45,7 +45,7 @@ export function normalizeChainOperands(
 
   for (const node of nodes) {
     const def = NODE_REGISTRY.get(node.data.registryType);
-    if (!def?.chainable || inCollapsedGroup(node)) continue;
+    if (!def || !growsOperands(def) || inCollapsedGroup(node)) continue;
 
     const values = getNodeValues(node);
     const operandEdges = new Map<number, AppEdge>();

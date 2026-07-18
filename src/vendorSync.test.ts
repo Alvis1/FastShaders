@@ -25,6 +25,7 @@ const SRC = path.join(ROOT, 'a-frame-shaderloader/js');
 const COPIES: Record<string, string[]> = {
   'a-frame-180-a-01.min.js': ['public/js', 'ShaderCarousel/components/three'],
   'a-frame-shaderloader-0.4.js': ['public/js'],
+  'a-frame-shaderloader-0.5.js': ['public/js'],
   'aframe-orbit-controls.min.js': ['public/js'],
 };
 

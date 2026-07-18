@@ -1,4 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import type { NoteFlowNode } from '@/types';
 import { rowStyle, labelStyle, colorFieldStyle, wideFieldStyle } from './menuShared';
 
@@ -8,6 +9,7 @@ interface NoteSettingsMenuProps {
 
 export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
   const nodes = useAppStore((s) => s.nodes);
+  const language = useAppStore((s) => s.language);
   const updateNoteData = useAppStore((s) => s.updateNoteData);
   const removeNode = useAppStore((s) => s.removeNode);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
@@ -19,10 +21,10 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
 
   return (
     <div className="context-menu__list">
-      <div className="context-menu__category">Note</div>
+      <div className="context-menu__category">{t('Note', language)}</div>
 
       <div style={rowStyle}>
-        <label style={labelStyle}>heading</label>
+        <label style={labelStyle}>{t('heading', language)}</label>
         <input
           type="text"
           value={heading ?? ''}
@@ -33,7 +35,7 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
       </div>
 
       <div style={rowStyle}>
-        <label style={labelStyle}>header color</label>
+        <label style={labelStyle}>{t('header color', language)}</label>
         <input
           type="color"
           value={headerColor ?? '#ffd24a'}
@@ -43,7 +45,7 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
       </div>
 
       <div style={rowStyle}>
-        <label style={labelStyle}>body color</label>
+        <label style={labelStyle}>{t('body color', language)}</label>
         <input
           type="color"
           value={color ?? '#fff7cc'}
@@ -53,16 +55,16 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
       </div>
 
       <div style={rowStyle}>
-        <label style={labelStyle}>text size</label>
+        <label style={labelStyle}>{t('text size', language)}</label>
         <select
           value={scale ?? 1}
           onChange={(e) => updateNoteData(nodeId, { scale: Number(e.target.value) })}
           style={colorFieldStyle}
         >
-          <option value={1}>1x</option>
-          <option value={1.5}>1.5x</option>
-          <option value={2}>2x</option>
-          <option value={3}>3x</option>
+          <option value={1}>{t('1x', language)}</option>
+          <option value={1.5}>{t('1.5x', language)}</option>
+          <option value={2}>{t('2x', language)}</option>
+          <option value={3}>{t('3x', language)}</option>
         </select>
       </div>
 
@@ -74,7 +76,7 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
           closeContextMenu();
         }}
       >
-        Delete Note
+        {t('Delete Note', language)}
       </button>
     </div>
   );

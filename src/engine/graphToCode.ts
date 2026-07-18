@@ -98,6 +98,19 @@ function radialCoordExpr(radial: boolean, cx: number, cy: number, radius: number
 export const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
 
 /**
+ * `#rrggbb` → the `0xrrggbb` literal the colour constructors take.
+ *
+ * Stored hex values arrive from `.fastshader` files and pasted source, i.e.
+ * ADVERSARIAL input: this used to be a bare `0x${val.slice(1)}`, so a hex of
+ * `#ff0000); somethingElse(` was spliced verbatim into the generated module.
+ * Anything that isn't a literal 6-digit hex degrades to black.
+ */
+export function hexLiteral(value: unknown): string {
+  const s = String(value ?? '');
+  return /^#[0-9a-fA-F]{6}$/.test(s) ? `0x${s.slice(1)}` : '0x000000';
+}
+
+/**
  * Identifiers that must never appear anywhere in an `unknown`-node expression.
  * These are the gateways to code execution / exfiltration / navigation. Used
  * both as callee names and as referenced/member identifiers, so a payload
@@ -254,16 +267,26 @@ export function graphToCode(
     return name;
   };
 
+  // Property nodes claim their user-defined names FIRST, before any other node
+  // gets a variable. A property's name is its public API — the schema key, the
+  // <a-entity> attribute, the setAttribute() key — while every other var name
+  // is private to the module body. Claiming in plain topological order let an
+  // ordinary node steal a property's name (a Color swatch emitted first claims
+  // `color1`, bumping a property NAMED color1 to `color12`), and the exported
+  // schema/usage header then documented a key the body never read.
+  for (const node of sorted) {
+    if (node.data.registryType !== 'property_float' && node.data.registryType !== 'property_color') continue;
+    const nodeValues = getNodeValues(node);
+    const rawName = String(nodeValues.name ?? 'property1');
+    varNames.set(node.id, claimName(sanitizeIdentifier(rawName), { bareFirst: true }));
+  }
+
   for (const node of sorted) {
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
 
-    // Property nodes use their user-defined name as the variable name
-    if (node.data.registryType === 'property_float') {
-      const nodeValues = getNodeValues(node);
-      const rawName = String(nodeValues.name ?? 'property1');
-      const baseName = sanitizeIdentifier(rawName);
-      varNames.set(node.id, claimName(baseName, { bareFirst: true }));
+    // Property nodes: already claimed in the pre-pass above.
+    if (node.data.registryType === 'property_float' || node.data.registryType === 'property_color') {
       continue;
     }
 
@@ -723,11 +746,12 @@ export function graphToCode(
         `  const ${varName} = vec3(${num(lo[0])}, ${num(lo[1])}, ${num(lo[2])}).mix(vec3(${num(hi[0])}, ${num(hi[1])}, ${num(hi[2])}), ${t});`,
       );
     } else if (def.type === 'append') {
-      // Append node: concatenate values into a vector. Pick vec2/vec3/vec4 based on the
-      // total component count of the inputs (a vec2 + float must become vec3, not vec2).
-      const args = resolveArguments(node, edges, varNames, def, sorted);
-      const total = computeAppendOutputSize(node, edges, sorted);
-      const ctor = total === 2 ? 'vec2' : total === 3 ? 'vec3' : 'vec4';
+      // Append node: concatenate operands into a vector. The constructor follows
+      // the TOTAL component count (a vec2 + float must become vec3, not vec2),
+      // and both it and the argument list are capped at vec4.
+      const raw = resolveArguments(node, edges, varNames, def, sorted);
+      const channels = appendOperandChannels(node, edges, sorted, def);
+      const { ctor, args } = buildAppendConstructor(raw, channels);
       addImport('three/tsl', ctor);
       bodyLines.push(`  const ${varName} = ${ctor}(${args.join(', ')});`);
     } else if (def.inputs.length === 0 && def.category === 'input' && !def.defaultValues) {
@@ -754,13 +778,21 @@ export function graphToCode(
       }
 
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${posExpr});`);
+    } else if (def.type === 'property_color') {
+      // Colour uniform. The generic branch below would emit `uniform(0xff0000)`
+      // — a FLOAT uniform holding 16711680 — so wrap the literal in color() to
+      // get a real vec3-valued uniform. buildShaderModule rewrites this whole
+      // line to `params.<name>` and records the hex as the schema default.
+      const nv = getNodeValues(node);
+      addImport('three/tsl', 'color');
+      bodyLines.push(`  const ${varName} = uniform(color(${hexLiteral(nv.hex)}));`);
     } else if (def.inputs.length === 0 && def.defaultValues) {
       // Type constructors with default values
       const nodeValues = getNodeValues(node);
       const defaultKey = Object.keys(def.defaultValues)[0];
       const val = nodeValues?.[defaultKey] ?? Object.values(def.defaultValues)[0];
       const formatted = typeof val === 'string' && val.startsWith('#')
-        ? `0x${val.slice(1)}`
+        ? hexLiteral(val)
         : val;
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${formatted});`);
     } else if (def.type === 'hsl' || def.type === 'toHsl') {
@@ -936,25 +968,58 @@ const TO_HSL_HELPER_LINES = [
 ];
 
 /**
- * Compute the total component count produced by an append node by summing the channel
- * counts of its two inputs (connected = evaluate upstream; unconnected = scalar = 1).
- * Result is clamped to [2, 4] since GLSL has no vec5+.
+ * Build an append node's vector constructor over ALL its wired operands.
+ *
+ * The output size is the SUM of the operands' channel counts (connected =
+ * evaluate upstream; unconnected = scalar = 1), and a GPU vector holds at most
+ * 4 — there is no vec5. So the sum is capped at 4, and, crucially, the
+ * ARGUMENTS are capped with it: an operand that would overflow the vec4 is
+ * swizzled down to the components that still fit, and operands past the fourth
+ * channel are dropped entirely.
+ *
+ * Trimming the arguments is what makes the cap real. Clamping only the
+ * constructor emitted `vec4(vec3A, vec3B)` for two vec3s — a 4-slot
+ * constructor handed 6 components, which is not valid TSL.
  */
-function computeAppendOutputSize(
+function buildAppendConstructor(
+  args: string[],
+  channels: number[],
+): { ctor: 'vec2' | 'vec3' | 'vec4'; args: string[] } {
+  const out: string[] = [];
+  let total = 0;
+  for (let i = 0; i < args.length && total < 4; i++) {
+    const room = 4 - total;
+    const ch = Math.max(1, channels[i] ?? 1);
+    if (ch <= room) {
+      out.push(args[i]);
+      total += ch;
+    } else {
+      // ch > room implies ch >= 2, so this operand is a vector and `.xyzw`
+      // swizzling is well-formed.
+      out.push(`${args[i]}.${'xyzw'.slice(0, room)}`);
+      total += room;
+    }
+  }
+  // Two base sockets are always present, so total >= 2 and vec2 is the floor.
+  const size = Math.min(Math.max(total, 2), 4);
+  return { ctor: size === 2 ? 'vec2' : size === 3 ? 'vec3' : 'vec4', args: out };
+}
+
+/** Channel count each of an append node's operands contributes, in socket order. */
+function appendOperandChannels(
   node: AppNode,
   edges: AppEdge[],
   nodes: AppNode[],
-): number {
-  let total = 0;
-  for (const inputId of ['a', 'b'] as const) {
-    const edge = edges.find((e) => e.target === node.id && e.targetHandle === inputId);
-    if (edge) {
-      total += getComponentCount(edge.source, nodes, edges);
-    } else {
-      total += 1;
-    }
-  }
-  return Math.min(Math.max(total, 2), 4);
+  def: NodeDefinition,
+): number[] {
+  const connected = edges
+    .filter((e) => e.target === node.id && typeof e.targetHandle === 'string')
+    .map((e) => e.targetHandle as string);
+  const inputs = effectiveInputs(def, connected, false, Object.keys(getNodeValues(node)));
+  return inputs.map((input) => {
+    const edge = edges.find((e) => e.target === node.id && e.targetHandle === input.id);
+    return edge ? getComponentCount(edge.source, nodes, edges) : 1;
+  });
 }
 
 /** Resolve a source edge reference, looking through split nodes to inline swizzle. */

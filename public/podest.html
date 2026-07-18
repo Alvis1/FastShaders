@@ -25,7 +25,7 @@
   and their blob URLs are minted there.
 
   Self-contained: the iframe loads the SAME vendored A-Frame 1.8.0 + Three.js
-  r184 WebGPU bundle and shaderloader 0.4 the app uses (absolute URLs off this
+  r184 WebGPU bundle and shaderloader 0.5 the app uses (absolute URLs off this
   page's origin), so it deploys anywhere the app does (e.g. alvismisjuns.podest.lv).
   Reached from the editor's "P" toolbar button.
 
@@ -99,6 +99,7 @@
   .u-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .u-val { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--accent); background: #fff; border: 1px solid var(--panel-border); border-radius: 4px; width: 62px; text-align: right; padding: 1px 4px; flex-shrink: 0; }
   .u-slider { width: 100%; accent-color: var(--accent); cursor: pointer; margin: 0; }
+  .u-color { width: 44px; height: 22px; padding: 0; border: 1px solid var(--panel-border); border-radius: 4px; background: #fff; cursor: pointer; flex-shrink: 0; }
   .u-bounds { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-dim); }
   .u-bounds input { width: 52px; font: inherit; font-size: 10px; color: var(--text-dim); background: #fff; border: 1px solid var(--panel-border); border-radius: 4px; padding: 1px 3px; text-align: center; }
   .u-bounds span { flex: 1; text-align: center; }
@@ -362,11 +363,34 @@
       return;
     }
     names.forEach(function (name) {
+      // Colour uniform (reported as '#rrggbb'): a picker row — bounds/slider
+      // are meaningless for a colour.
+      if (typeof map[name] === "string") {
+        var cDef = /^#[0-9a-fA-F]{6}$/.test(map[name]) ? map[name] : "#ffffff";
+        var cCur = Object.prototype.hasOwnProperty.call(state.values, name) && typeof state.values[name] === "string"
+          ? state.values[name] : cDef;
+        state.values[name] = cCur;
+        var cRow = document.createElement("div");
+        cRow.className = "u-row";
+        cRow.innerHTML =
+          '<div class="u-head"><span class="u-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
+          '<input class="u-color" type="color" /></div>';
+        var cInput = cRow.querySelector(".u-color");
+        cInput.value = cCur;
+        cInput.addEventListener("input", function () {
+          state.values[name] = cInput.value;
+          post({ type: "fs:uniform", name: name, value: cInput.value });
+        });
+        post({ type: "fs:uniform", name: name, value: cCur });
+        uniformsEl.appendChild(cRow);
+        return;
+      }
       var def = typeof map[name] === "number" ? map[name] : 0;
       // hasOwnProperty guards: a uniform named 'constructor'/'toString'/etc.
       // must not resolve to an inherited Object.prototype member (which would
       // throw DataCloneError when postMessage'd and abort the whole forEach).
-      var current = Object.prototype.hasOwnProperty.call(state.values, name) ? state.values[name] : def;
+      var current = Object.prototype.hasOwnProperty.call(state.values, name) && typeof state.values[name] === "number"
+        ? state.values[name] : def;
       state.values[name] = current;
       var b = (Object.prototype.hasOwnProperty.call(state.bounds, name) && state.bounds[name]) || guessBounds(def);
       state.bounds[name] = b;
@@ -613,7 +637,7 @@
   function buildStageDoc() {
     var dir = new URL(".", window.location.href).href; // e.g. https://host/FastShaders/
     var iife = dir + "js/a-frame-180-a-01.min.js";
-    var loader = dir + "js/a-frame-shaderloader-0.4.js";
+    var loader = dir + "js/a-frame-shaderloader-0.5.js";
     var orbit = dir + "js/aframe-orbit-controls.min.js";
     // Bake the persisted background + spin prefs straight into the initial scene
     // so boot matches the saved state without a post-ready restart. bg is
@@ -718,7 +742,9 @@
     L.push('(function(){');
     L.push('  var entity,spinEl,camEl,shaderUrl=null,modelUrl=null,attached=false;');
     L.push('  function toParent(m){try{parent.postMessage(m,"*");}catch(e){}}');
-    L.push('  function reportUniforms(){var tries=0;(function poll(){if(!attached){toParent({type:"fs:uniforms",uniforms:{}});return;}var comp=entity&&entity.components&&entity.components.shader;var u=comp&&comp._propertyUniforms;if(u){var out={};for(var k in u){out[k]=(u[k]&&typeof u[k].value==="number")?u[k].value:0;}toParent({type:"fs:uniforms",uniforms:out});return;}if(tries++<120)setTimeout(poll,50);else toParent({type:"fs:uniforms",uniforms:{}});})();}');
+    // Colour uniforms (shaderloader 0.5) hold a THREE.Color — report them as
+    // '#rrggbb' strings so the parent builds a picker; numbers stay numbers.
+    L.push('  function reportUniforms(){var tries=0;(function poll(){if(!attached){toParent({type:"fs:uniforms",uniforms:{}});return;}var comp=entity&&entity.components&&entity.components.shader;var u=comp&&comp._propertyUniforms;if(u){var out={};for(var k in u){var v=u[k]&&u[k].value;out[k]=(typeof v==="number")?v:(v&&v.isColor)?("#"+v.getHexString()):0;}toParent({type:"fs:uniforms",uniforms:out});return;}if(tries++<120)setTimeout(poll,50);else toParent({type:"fs:uniforms",uniforms:{}});})();}');
     // Re-arm the report whenever the shaderloader (re)applies: a model that
     // parses longer than the poll window (~6s) would otherwise leave the
     // parent stuck on the empty-uniforms report until a manual re-drop.
@@ -728,7 +754,9 @@
     L.push('  function clearGeo(){var comp=entity.components&&entity.components.shader;if(comp&&attached)comp._propertyUniforms=null;entity.removeAttribute("geometry");entity.removeAttribute("obj-model");entity.removeAttribute("gltf-model");entity.removeAttribute("fit-bounds");entity.removeAttribute("material");}');
     L.push('  function setPrimitive(attr,rot){clearGeo();entity.setAttribute("material","color: #808080");entity.setAttribute("geometry",attr);entity.setAttribute("rotation",rot||"45 45 0");if(attached){setTimeout(function(){var c=entity.components&&entity.components.shader;if(c&&typeof c.applyShader==="function")c.applyShader();reportUniforms();},0);}}');
     L.push('  function setModel(kind,bytes,regen,rot){clearGeo();try{if(modelUrl)URL.revokeObjectURL(modelUrl);}catch(e){}var mime=kind==="obj"?"text/plain":"model/gltf-binary";modelUrl=URL.createObjectURL(new Blob([bytes],{type:mime}));entity.setAttribute("fit-bounds","size: 1.6; regen: "+(regen?"true":"false"));if(kind==="obj")entity.setAttribute("obj-model","obj: url("+modelUrl+")");else entity.setAttribute("gltf-model","url("+modelUrl+")");entity.setAttribute("rotation",rot||"0 0 0");if(attached)reportUniforms();}');
-    L.push('  function setUniform(name,value){var comp=entity&&entity.components&&entity.components.shader;if(comp&&comp._propertyUniforms&&comp._propertyUniforms[name])comp._propertyUniforms[name].value=value;}');
+    // Colour uniforms mutate in place via .set() — assigning a hex string to
+    // .value would replace the THREE.Color object with a string.
+    L.push('  function setUniform(name,value){var comp=entity&&entity.components&&entity.components.shader;if(!comp||!comp._propertyUniforms||!comp._propertyUniforms[name])return;var u=comp._propertyUniforms[name];if(u.value&&u.value.isColor){try{u.value.set(value);}catch(e){}}else{u.value=value;}}');
     L.push('  function setSpin(playing,dur){if(!spinEl)return;var d=dur>0?dur:12000;if(playing){var r=spinEl.object3D&&spinEl.object3D.rotation;var fx=r?r.x*180/Math.PI:45,fy=r?r.y*180/Math.PI:45,fz=r?r.z*180/Math.PI:0;spinEl.setAttribute("animation","property: rotation; from: "+fx+" "+fy+" "+fz+"; to: "+fx+" "+(fy+360)+" "+fz+"; loop: true; dur: "+d+"; easing: linear");}else{var rr=spinEl.object3D&&spinEl.object3D.rotation;spinEl.removeAttribute("animation");if(rr)spinEl.setAttribute("rotation",(rr.x*180/Math.PI)+" "+(rr.y*180/Math.PI)+" "+(rr.z*180/Math.PI));}}');
     // setBackground: color is validated #rrggbb on the parent before it is sent.
     // Belt-and-suspenders — the A-Frame background component (setAttribute) plus a

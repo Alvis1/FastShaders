@@ -1,10 +1,12 @@
 import { useAppStore } from '@/store/useAppStore';
+import { t, formatNodeLabel, portLabel } from '@/i18n';
 import { getNodeValues, getNodeExposedPorts } from '@/types';
 import type { NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { removeEdgesForPort } from '@/utils/edgeUtils';
 import { rowStyle, labelStyle, colorFieldStyle, nameFieldStyle, NodeActions } from './menuShared';
+import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/propertyConvert';
 
 /** Categories whose nodes always show all ports — no expose/hide checkboxes
  *  needed. Rows-layout ShaderNode ignores exposedPorts for these, so a
@@ -26,6 +28,7 @@ interface NodeSettingsMenuProps {
 export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
+  const language = useAppStore((s) => s.language);
 
   const node = nodes.find((n) => n.id === nodeId);
   if (!node) return null;
@@ -37,7 +40,7 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
 
   const handleValueChange = (key: string, value: string | number) => {
     // For the property name field, keep as string (don't parse as number)
-    if (key === 'name' && node.data.registryType === 'property_float') {
+    if (key === 'name' && (node.data.registryType === 'property_float' || node.data.registryType === 'property_color')) {
       updateNodeData(nodeId, {
         values: { ...getNodeValues(node), [key]: String(value) },
       });
@@ -66,10 +69,10 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
 
   return (
     <div className="context-menu__list">
-      <div className="context-menu__category">Node Settings</div>
+      <div className="context-menu__category">{t('Node Settings', language)}</div>
       <div style={{ padding: 'var(--space-2) var(--space-3)' }}>
         <div style={{ fontSize: 'var(--font-size-sm)', color: 'var(--text-secondary)', marginBottom: 'var(--space-2)' }}>
-          {def?.label ?? node.data.registryType}
+          {def ? formatNodeLabel(def.label, node.data.registryType, language) : node.data.registryType}
         </div>
       </div>
 
@@ -85,10 +88,10 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
                   type="checkbox"
                   checked={isExposed}
                   onChange={() => handleTogglePort(inp.id)}
-                  title="Expose as input socket"
+                  title={t('Expose as input socket', language)}
                   style={checkStyle}
                 />
-                {inp.label}
+                {portLabel(inp.label, language)}
               </label>
             </div>
           );
@@ -97,7 +100,9 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
       {def?.defaultValues &&
         Object.entries(def.defaultValues).map(([key, defaultVal]) => {
           const isColor = typeof defaultVal === 'string' && defaultVal.startsWith('#');
-          const isPropertyName = key === 'name' && node.data.registryType === 'property_float';
+          const isPropertyName =
+            key === 'name' &&
+            (node.data.registryType === 'property_float' || node.data.registryType === 'property_color');
           const isPort = typeof defaultVal === 'string' && !defaultVal.startsWith('#') && !isPropertyName;
           const currentValue = getNodeValues(node)[key] ?? defaultVal;
           const isExposed = exposedPorts.includes(key);
@@ -110,7 +115,7 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
                     type="checkbox"
                     checked={isExposed}
                     onChange={() => handleTogglePort(key)}
-                    title="Expose as input socket"
+                    title={t('Expose as input socket', language)}
                     style={checkStyle}
                   />
                 )}
@@ -169,11 +174,11 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
         return (
           <>
             <div className="context-menu__divider" />
-            <div className="context-menu__category">Image</div>
-            {checkboxRow('Repeat (tile the image)', 'repeat', true,
-              'On: the image wraps/tiles. Off: edge pixels clamp beyond 0–1 UV.')}
-            {checkboxRow('Flip X', 'flipX', false, 'Mirror the image left–right')}
-            {checkboxRow('Flip Y', 'flipY', false, 'Mirror the image top–bottom')}
+            <div className="context-menu__category">{t('Image', language)}</div>
+            {checkboxRow(t('Repeat (tile the image)', language), 'repeat', true,
+              t('On: the image wraps/tiles. Off: edge pixels clamp beyond 0–1 UV.', language))}
+            {checkboxRow(t('Flip X', language), 'flipX', false, t('Mirror the image left–right', language))}
+            {checkboxRow(t('Flip Y', language), 'flipY', false, t('Mirror the image top–bottom', language))}
             {/* colorSpace keeps its string contract ('color' | 'data') — the
                 emission branch and makeImageNodeData both read it that way. */}
             <div style={rowStyle}>
@@ -182,12 +187,38 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
                   type="checkbox"
                   checked={vals.colorSpace === 'data'}
                   onChange={() => setVal('colorSpace', vals.colorSpace === 'data' ? 'color' : 'data')}
-                  title="Sample as linear data (normal/height maps) instead of sRGB color"
+                  title={t('Sample as linear data (normal/height maps) instead of sRGB color', language)}
                   style={checkStyle}
                 />
-                Data map (linear, no mipmaps)
+                {t('Data map (linear, no mipmaps)', language)}
               </label>
             </div>
+          </>
+        );
+      })()}
+
+      {/* Constant ↔ uniform conversion: Float/Color become a named Property
+          (uniform) node in place — same id, position and outgoing edges — and
+          Property nodes convert back. One history entry, undoable. */}
+      {(() => {
+        const registryType = node.data.registryType;
+        const target = uniformTypeFor(registryType) ?? constantTypeFor(registryType);
+        if (!target) return null;
+        const toUniform = uniformTypeFor(registryType) !== null;
+        const handleConvert = () => {
+          const store = useAppStore.getState();
+          const converted = convertPropertyNode(node, target, store.nodes);
+          if (!converted) return;
+          store.pushHistory();
+          store.setNodes(store.nodes.map((n) => (n.id === nodeId ? converted : n)));
+          store.closeContextMenu();
+        };
+        return (
+          <>
+            <div className="context-menu__divider" />
+            <button className="context-menu__item" onClick={handleConvert}>
+              {toUniform ? t('Convert to Property (uniform)', language) : t('Convert to Constant', language)}
+            </button>
           </>
         );
       })()}

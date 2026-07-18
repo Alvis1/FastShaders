@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import './Toolbar.css';
 
 const CONTACT = {
@@ -80,6 +81,8 @@ export function Toolbar() {
   const setShaderName = useAppStore((s) => s.setShaderName);
   const canUndo = useAppStore((s) => s.past.length > 0);
   const canRedo = useAppStore((s) => s.future.length > 0);
+  const language = useAppStore((s) => s.language);
+  const setLanguage = useAppStore((s) => s.setLanguage);
 
   const [contactOpen, setContactOpen] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -167,7 +170,7 @@ export function Toolbar() {
           onClick={() => setContactOpen((o) => !o)}
           aria-haspopup="dialog"
           aria-expanded={contactOpen}
-          title="About / Contact"
+          title={t('About / Contact', language)}
         >
           FastShaders
         </button>
@@ -177,9 +180,9 @@ export function Toolbar() {
             ref={popoverRef}
             className="toolbar__contact-popover"
             role="dialog"
-            aria-label="Contact"
+            aria-label={t('Contact', language)}
           >
-            <div className="toolbar__contact-label">Author</div>
+            <div className="toolbar__contact-label">{t('Author', language)}</div>
             <div className="toolbar__contact-name">{CONTACT.name}</div>
             <div className="toolbar__contact-row">
               <a
@@ -193,7 +196,7 @@ export function Toolbar() {
                 className="toolbar__contact-copy"
                 onClick={() => handleCopy('email', CONTACT.email)}
               >
-                {copiedKey === 'email' ? 'Copied' : 'Copy'}
+                {copiedKey === 'email' ? t('Copied', language) : t('Copy', language)}
               </button>
             </div>
             <div className="toolbar__contact-row">
@@ -210,14 +213,14 @@ export function Toolbar() {
                 className="toolbar__contact-copy"
                 onClick={() => handleCopy('web', CONTACT.websiteUrl)}
               >
-                {copiedKey === 'web' ? 'Copied' : 'Copy'}
+                {copiedKey === 'web' ? t('Copied', language) : t('Copy', language)}
               </button>
             </div>
             <div className="toolbar__contact-funding">
-              This research was supported by the project No. 1.1.1.8/1/24/I/001
-              VeA and ViA Doctoral Grants, co-funded by the European Union
-              (European Regional Development Fund) and the Latvian state budget
-              within the European Union Cohesion Policy Programme 2021–2027.
+              {t(
+                'This research was supported by the project No. 1.1.1.8/1/24/I/001 VeA and ViA Doctoral Grants, co-funded by the European Union (European Regional Development Fund) and the Latvian state budget within the European Union Cohesion Policy Programme 2021–2027.',
+                language,
+              )}
             </div>
             <div className="toolbar__contact-logos">
               <img
@@ -260,8 +263,8 @@ export function Toolbar() {
           className="toolbar__history-btn"
           onClick={() => useAppStore.getState().undo()}
           disabled={!canUndo}
-          title="Undo (Ctrl+Z / ⌘Z)"
-          aria-label="Undo"
+          title={t('Undo (Ctrl+Z / ⌘Z)', language)}
+          aria-label={t('Undo', language)}
         >
           ↶
         </button>
@@ -270,20 +273,20 @@ export function Toolbar() {
           className="toolbar__history-btn"
           onClick={() => useAppStore.getState().redo()}
           disabled={!canRedo}
-          title="Redo (Ctrl+Shift+Z / ⇧⌘Z)"
-          aria-label="Redo"
+          title={t('Redo (Ctrl+Shift+Z / ⇧⌘Z)', language)}
+          aria-label={t('Redo', language)}
         >
           ↷
         </button>
       </div>
       <div className="toolbar__center">
-        <span className="toolbar__name-label">Shader name:</span>
+        <span className="toolbar__name-label">{t('Shader name:', language)}</span>
         <input
           className="toolbar__name-input"
           type="text"
           value={shaderName}
           onChange={handleNameChange}
-          placeholder="Shader name..."
+          placeholder={t('Shader name...', language)}
           spellCheck={false}
         />
       </div>
@@ -298,18 +301,18 @@ export function Toolbar() {
               onClick={() => setLocalOpen((o) => !o)}
               aria-haspopup="menu"
               aria-expanded={localOpen}
-              title="Download the offline desktop app (Windows / macOS)"
+              title={t('Download the offline desktop app (Windows / macOS)', language)}
             >
-              Local
+              {t('Local', language)}
             </button>
             {localOpen && (
               <div
                 className="toolbar__local-popover"
                 role="menu"
-                aria-label="Download desktop app"
+                aria-label={t('Download desktop app', language)}
               >
                 <div className="toolbar__local-header">
-                  <span className="toolbar__contact-label">Desktop app</span>
+                  <span className="toolbar__contact-label">{t('Desktop app', language)}</span>
                   <span className="toolbar__version">v{__APP_VERSION__}</span>
                 </div>
                 {DESKTOP_DOWNLOADS.map((d) => (
@@ -325,12 +328,29 @@ export function Toolbar() {
                   </a>
                 ))}
                 <div className="toolbar__local-note">
-                  Runs fully offline. Rebuilt automatically with every release.
+                  {t('Runs fully offline. Rebuilt automatically with every release.', language)}
                 </div>
               </div>
             )}
           </div>
         )}
+        {/* Language toggle (English ⇄ Latvian). Latvian is a display-only
+            overlay — see src/i18n. Shows "LV" and pressed-highlights when
+            Latvian is active. */}
+        <button
+          type="button"
+          className={`toolbar__sc-link${language === 'lv' ? ' toolbar__sc-link--active' : ''}`}
+          onClick={() => setLanguage(language === 'lv' ? 'en' : 'lv')}
+          aria-pressed={language === 'lv'}
+          title={
+            language === 'lv'
+              ? 'Pārslēgt uz angļu valodu (Switch to English)'
+              : 'Pārslēgt uz latviešu valodu (Switch to Latvian)'
+          }
+          aria-label={t('Switch language', language)}
+        >
+          LV
+        </button>
         <a
           className="toolbar__sc-link"
           href={`${import.meta.env.BASE_URL}podest.html`}

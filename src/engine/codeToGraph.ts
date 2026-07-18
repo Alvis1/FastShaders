@@ -236,6 +236,21 @@ export function codeToGraph(code: string): CodeToGraphResult {
 }
 
 /** Push a typed animated edge, deriving its ID from the endpoints. */
+/**
+ * A `color(0xNNN)` literal → its `#rrggbb` string. Colour literals arrive from
+ * `.fastshader` files and pasted source, i.e. ADVERSARIAL input: a raw
+ * `Math.round(lit).toString(16)` of an out-of-range or negative value produces
+ * a malformed hex (`#1000000`, `#0000-1`) that then reaches the swatch and the
+ * `<input type=color>`. Anything outside a 24-bit colour degrades to black —
+ * mirroring graphToCode's `hexLiteral` on the emit side.
+ */
+function toHex6(lit: number): string {
+  const n = Math.round(lit);
+  return Number.isFinite(n) && n >= 0 && n <= 0xffffff
+    ? '#' + n.toString(16).padStart(6, '0')
+    : '#000000';
+}
+
 function addEdge(
   edges: AppEdge[],
   source: string,
@@ -433,6 +448,31 @@ function processCall(
   // Creating an unknown node for Fn would pollute the graph and trigger a warning.
   if (funcName === 'Fn') return;
 
+  // Colour uniform: `uniform(color(0xff0000))` → property_color. The
+  // TSL_FUNCTION_TO_DEF map deliberately points bare `uniform` at
+  // property_float (it owns the numeric form — see the map's comment in the
+  // registry), so the colour form is recognised from the ARGUMENT shape here.
+  // Without this branch the generic path would build a color node wired into a
+  // property_float — a different graph than the one that emitted the code.
+  if (funcName === 'uniform' && callExpr.arguments.length === 1) {
+    const uArg = callExpr.arguments[0];
+    if (t.isCallExpression(uArg) && t.isIdentifier(uArg.callee) && uArg.callee.name === 'color') {
+      const colorDef = NODE_REGISTRY.get('property_color');
+      const lit = uArg.arguments.length === 1 ? extractLiteral(uArg.arguments[0]) : undefined;
+      if (colorDef && typeof lit === 'number') {
+        const nodeId = generateId();
+        const node = createNode(nodeId, colorDef, varName);
+        setNodeValues(node, {
+          hex: toHex6(lit),
+          name: varName,
+        });
+        nodes.push(node);
+        varToNodeId.set(varName, nodeId);
+        return;
+      }
+    }
+  }
+
   // Look up definition
   let def = TSL_FUNCTION_TO_DEF.get(funcName);
   // Also try the registry type directly (e.g. for 'noise' mapping to 'mx_noise_float')
@@ -577,7 +617,7 @@ function processCall(
         const key = defaultKeys[i] ?? 'value';
         // Handle hex color literals: color(0xff0000) → '#ff0000'
         if (key === 'hex' && typeof literalValue === 'number') {
-          extractedValues[key] = '#' + Math.round(literalValue).toString(16).padStart(6, '0');
+          extractedValues[key] = toHex6(literalValue);
         } else {
           extractedValues[key] = literalValue;
         }

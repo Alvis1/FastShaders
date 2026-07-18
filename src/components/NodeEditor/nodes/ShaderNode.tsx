@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, type ChangeEvent, type CSSProperties } from 'react';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
-import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
+import { NODE_REGISTRY, effectiveInputs, growsOperands } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
+import { portLabel } from '@/i18n';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { TypedHandle } from '../handles/TypedHandle';
@@ -105,7 +106,7 @@ export function buildRows(
   // other node uses its registry-defined outputs.
   const outs = outputsOverride ?? def.outputs;
   const allDefaults = def.defaultValues ?? {};
-  const defaults = def.type === 'property_float'
+  const defaults = def.type === 'property_float' || def.type === 'property_color'
     ? Object.fromEntries(Object.entries(allDefaults).filter(([k]) => k !== 'name'))
     : def.type === 'slider'
       ? Object.fromEntries(Object.entries(allDefaults).filter(([k]) => k !== 'min' && k !== 'max'))
@@ -232,6 +233,7 @@ export const ShaderNode = memo(function ShaderNode({
   const edges = useAppStore((s) => s.edges);
   const nodes = useAppStore((s) => s.nodes);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
+  const language = useAppStore((s) => s.language);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   // A wire being dragged within snapping distance of this node — one shared
@@ -244,10 +246,11 @@ export const ShaderNode = memo(function ShaderNode({
   const near = useStore(
     useMemo(() => makeConnectionRevealSelector(id, def.inputs.length > 0), [id, def]),
   );
-  // Chainable arithmetic exposes its NEXT operand socket only while an output
-  // wire is dragged within reach; at rest the node stays at its wired socket
-  // count — no persistent empty slot cluttering it.
-  const revealGrowth = near && def.chainable === true;
+  // A socket-growing node (variadic arithmetic, append) exposes its NEXT
+  // operand socket only while an output wire is dragged within reach; at rest
+  // the node stays at its wired socket count — no persistent empty slot
+  // cluttering it.
+  const revealGrowth = near && growsOperands(def);
   // Image node: an approaching wire reveals ALL param sockets (named by their
   // forced tooltips) so any parameter can be wired without a menu round-trip;
   // landing the connection makes the exposure permanent (onConnect), releasing
@@ -331,13 +334,14 @@ export const ShaderNode = memo(function ShaderNode({
     [edges, id],
   );
 
-  // A chainable (variadic arithmetic) node grows/shrinks its input sockets as
-  // operands are wired. Whenever that count changes, React Flow must re-measure
-  // the handles — their vertical anchors shift and a freshly added socket has no
-  // measured bounds yet — or existing edges snap to stale positions.
+  // A socket-growing node (variadic arithmetic, append) grows/shrinks its input
+  // sockets as operands are wired. Whenever that count changes, React Flow must
+  // re-measure the handles — their vertical anchors shift and a freshly added
+  // socket has no measured bounds yet — or existing edges snap to stale
+  // positions.
   const updateNodeInternals = useUpdateNodeInternals();
   const valuedHandleList = useMemo(() => Object.keys(data.values ?? {}), [data.values]);
-  const opSocketCount = def.chainable
+  const opSocketCount = growsOperands(def)
     ? effectiveInputs(def, connectedHandleList, revealGrowth, valuedHandleList).length
     : def.inputs.length;
   // The Image node's opt-in sockets re-measure on any exposed-set change (the
@@ -350,10 +354,10 @@ export const ShaderNode = memo(function ShaderNode({
     updateNodeInternals(id);
   }, [id, opSocketCount, exposedKey, updateNodeInternals]);
 
-  // A chainable node with 3+ operands renders as a vertical socket list (the
-  // compact glyph-centered look only fits two). It keeps the SAME authored width
-  // as the 2-op node — growth is vertical only, never wider.
-  const chainListMode = def.chainable === true && opSocketCount > 2;
+  // A socket-growing node with 3+ operands renders as a vertical socket list
+  // (the compact glyph-centered look only fits two). It keeps the SAME authored
+  // width as the 2-op node — growth is vertical only, never wider.
+  const chainListMode = growsOperands(def) && opSocketCount > 2;
   if (box.width) {
     nodeStyle.width = box.width;
     nodeStyle.minWidth = box.width;
@@ -364,17 +368,25 @@ export const ShaderNode = memo(function ShaderNode({
   // edges (mirrors TypedEdge's count). N channels read as N total cards: the
   // card itself plus N−1 offset layers. Source/constructor nodes (no
   // multi-channel input) never stack. Sockets stay single — consistency rule.
-  const inChannels = useMemo(() => {
+  // Channels arriving per connected input handle, and the widest across all of
+  // them. Built in one pass: channelCount() runs a full upstream CPU eval, so
+  // each distinct source is evaluated at most once (a node can have several
+  // edges from one source, and every socket tooltip wants this number).
+  const { inChannels, inputChannels } = useMemo(() => {
+    const bySource = new Map<string, number>();
+    const byHandle = new Map<string, number>();
     let widest = 1;
-    // channelCount() runs a full upstream CPU eval, so evaluate each distinct
-    // source at most once (a node can have several edges from one source).
-    const seen = new Set<string>();
     for (const e of edges) {
-      if (e.target !== id || seen.has(e.source)) continue;
-      seen.add(e.source);
-      widest = Math.max(widest, channelCount(e.source, nodes, edges));
+      if (e.target !== id) continue;
+      let c = bySource.get(e.source);
+      if (c === undefined) {
+        c = channelCount(e.source, nodes, edges);
+        bySource.set(e.source, c);
+      }
+      if (typeof e.targetHandle === 'string') byHandle.set(e.targetHandle, c);
+      widest = Math.max(widest, c);
     }
-    return Math.min(widest, 4);
+    return { inChannels: Math.min(widest, 4), inputChannels: byHandle };
   }, [id, nodes, edges]);
 
   /** Offset card layers behind the node body (channels − 1, so N-ch = N cards).
@@ -462,7 +474,7 @@ export const ShaderNode = memo(function ShaderNode({
 
         <div className="node-base__header" style={headerStyle}>
           <span className="node-base__title" style={{ color: headerTextColor }}>
-            {data.registryType === 'property_float' && data.values?.name
+            {(data.registryType === 'property_float' || data.registryType === 'property_color') && data.values?.name
               ? String(data.values.name)
               : varName ?? data.label}
           </span>
@@ -560,7 +572,7 @@ export const ShaderNode = memo(function ShaderNode({
       {/* Header — colored by performance impact (cost) */}
       <div className="node-base__header" style={headerStyle}>
         <span className="node-base__title" style={{ color: headerTextColor }}>
-          {data.registryType === 'property_float' && data.values?.name
+          {(data.registryType === 'property_float' || data.registryType === 'property_color') && data.values?.name
             ? String(data.values.name)
             : varName ?? data.label}
         </span>
@@ -638,13 +650,14 @@ export const ShaderNode = memo(function ShaderNode({
                     dataType={row.input.dataType}
                     label={row.input.label}
                     reveal={near}
+                    channels={inputChannels.get(row.input.id)}
                   />
                 )}
                 {/* Image node: sockets are identified by their port label — the
                     editable numbers live in the context menu only (four bare
                     number boxes under the thumbnail read as noise). */}
                 {row.input && data.registryType === 'imageNode' && (
-                  <span className="shader-node__in-label">{row.input.label}</span>
+                  <span className="shader-node__in-label">{portLabel(row.input.label, language)}</span>
                 )}
                 {/* Connected input → show the value(s) on the edge next to its socket */}
                 {row.input && inputConnected && (() => {

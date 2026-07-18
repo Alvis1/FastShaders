@@ -1,9 +1,11 @@
 import { useCallback, type ChangeEvent } from 'react';
 import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import './CostBar.css';
 
 export function CostBar() {
   const totalCost = useAppStore((s) => s.totalCost);
+  const language = useAppStore((s) => s.language);
   const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
   const setSelectedHeadsetId = useAppStore((s) => s.setSelectedHeadsetId);
   const costColorLow = useAppStore((s) => s.costColorLow);
@@ -28,12 +30,12 @@ export function CostBar() {
         className="cost-bar__headset-select"
         value={selectedHeadsetId}
         onChange={handleHeadsetChange}
-        title="Target headset — sets the points budget this bar measures your shader against"
-        aria-label="Target VR headset"
+        title={t('Target headset — sets the points budget this bar measures your shader against', language)}
+        aria-label={t('Target VR headset', language)}
       >
         {VR_HEADSETS.map((h) => (
           <option key={h.id} value={h.id}>
-            {h.label} ({h.maxPoints} pts)
+            {h.label} ({h.maxPoints} {t('pts', language)})
           </option>
         ))}
       </select>
@@ -41,9 +43,9 @@ export function CostBar() {
         <span className="cost-bar__label-end">0</span>
         <span
           className={`cost-bar__value ${over ? 'cost-bar__value--over' : ''}`}
-          title={`Estimated GPU cost: ${totalCost} of ${maxBudget} points for ${headset.label}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.${over ? ' You are over budget.' : ''}`}
+          title={`${t('Estimated GPU cost: {total} of {max} points for {headset}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.', language).replace('{total}', String(totalCost)).replace('{max}', String(maxBudget)).replace('{headset}', headset.label)}${over ? t(' You are over budget.', language) : ''}`}
         >
-          {totalCost} / {maxBudget} pts
+          {totalCost} / {maxBudget} {t('pts', language)}
         </span>
         <span className="cost-bar__label-end">{maxBudget}</span>
       </div>
@@ -53,7 +55,7 @@ export function CostBar() {
           className="cost-bar__pole-picker"
           value={costColorLow}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setCostColorLow(e.target.value)}
-          title="Low impact color"
+          title={t('Low impact color', language)}
         />
         <div
           className="cost-bar__track"
@@ -71,7 +73,7 @@ export function CostBar() {
           className="cost-bar__pole-picker"
           value={costColorHigh}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setCostColorHigh(e.target.value)}
-          title="High impact color"
+          title={t('High impact color', language)}
         />
       </div>
     </div>

@@ -20,6 +20,22 @@ import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
 const NOISE_UV_SCALE = 4;
 
+/**
+ * An append node's operand ports in socket order. Append grows past its base
+ * a/b sockets, so both the shape inference and the fold below must iterate the
+ * EFFECTIVE list — the same one graphToCode emits from — or the CPU preview
+ * silently ignores every operand past `b`.
+ */
+function appendOperands(nodeId: string, nodes: AppNode[], edges: AppEdge[]) {
+  const node = nodes.find((n) => n.id === nodeId);
+  const def = NODE_REGISTRY.get(node?.data.registryType ?? '');
+  if (!node || !def) return [];
+  const connected = edges
+    .filter((e) => e.target === nodeId && typeof e.targetHandle === 'string')
+    .map((e) => e.targetHandle as string);
+  return effectiveInputs(def, connected, false, Object.keys(getNodeValues(node)));
+}
+
 /** Result: array of channel values, or null if unevaluable. */
 export type EvalResult = number[] | null;
 
@@ -104,14 +120,15 @@ export function getNodeOutputShape(
   }
 
   // 2. 'any' output — infer from inputs.
-  // Append concatenates: total = sum of input shapes (clamped to [2, 4]).
+  // Append concatenates: total = sum of ALL its operand shapes (it grows past
+  // a/b), clamped to [2, 4] — the vec4 ceiling graphToCode also emits under.
   if (def.type === 'append') {
     let total = 0;
-    for (const inputId of ['a', 'b'] as const) {
-      const e = edges.find((edge) => edge.target === nodeId && edge.targetHandle === inputId);
+    for (const inp of appendOperands(nodeId, nodes, edges)) {
+      const e = edges.find((edge) => edge.target === nodeId && edge.targetHandle === inp.id);
       total += e ? getNodeOutputShape(e.source, nodes, edges, visited, nidx) : 1;
     }
-    return Math.min(Math.max(total, 1), 4);
+    return Math.min(Math.max(total, 2), 4);
   }
 
   // 3. Default broadcast: output shape = max of all connected input shapes (vec3 + scalar = vec3).
@@ -295,7 +312,8 @@ function evaluate(
     case 'vec4':
       result = [scalarInput('x', 0), scalarInput('y', 0), scalarInput('z', 0), scalarInput('w', 0)];
       break;
-    case 'color': {
+    case 'color':
+    case 'property_color': {
       const hex = String(values.hex ?? '#ff0000');
       result = [...hexToRgb01(hex)];
       break;
@@ -437,11 +455,23 @@ function evaluate(
       break;
     }
     case 'append': {
-      const a = channelInput('a', 0);
-      const b = channelInput('b', 0);
-      if (a && b) {
-        result = [...a, ...b];
+      // Concatenate every operand, truncated at 4 channels — mirrors
+      // buildAppendConstructor in graphToCode, so the CPU preview shows exactly
+      // what the emitted vecN holds rather than a longer phantom vector.
+      const parts: number[] = [];
+      let unevaluable = false;
+      for (const inp of appendOperands(nodeId, nodes, edges)) {
+        if (parts.length >= 4) break;
+        const v = channelInput(inp.id, 0);
+        // Null propagation: one unevaluable operand makes the whole append
+        // unevaluable, as with the a/b pair before it.
+        if (!v) {
+          unevaluable = true;
+          break;
+        }
+        parts.push(...v.slice(0, 4 - parts.length));
       }
+      if (!unevaluable && parts.length > 0) result = parts;
       break;
     }
 
@@ -861,12 +891,18 @@ function computeRange(
       break;
     }
     case 'append': {
-      const a = portRange('a', 0);
-      const b = portRange('b', 0);
-      result = {
-        min: [...a.min, ...b.min].slice(0, 4),
-        max: [...a.max, ...b.max].slice(0, 4),
-      };
+      // Concatenate every operand's range, truncated at 4 channels — the same
+      // effective-operand walk evaluate() does, so grown operands past `b`
+      // keep their bounds instead of silently dropping out of the interval.
+      const min: number[] = [];
+      const max: number[] = [];
+      for (const inp of appendOperands(nodeId, nodes, edges)) {
+        if (min.length >= 4) break;
+        const r = portRange(inp.id, 0);
+        min.push(...r.min.slice(0, 4 - min.length));
+        max.push(...r.max.slice(0, 4 - max.length));
+      }
+      result = { min, max };
       break;
     }
     case 'normalize': {

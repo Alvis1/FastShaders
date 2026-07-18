@@ -165,8 +165,8 @@ const fontsourceWoff2OnlyPlugin = (): Plugin => ({
  * served as plain static HTML (it has its own import maps and A-Frame
  * pipeline) and is intentionally outside Vite's module graph.
  *
- * Excludes benchmark output (sphere/benchData) and incidental dev files
- * (Untitled-2.ipynb, .DS_Store, .vscode, .git*) from the deploy.
+ * Excludes benchmark output (benchData) and incidental dev files
+ * (.DS_Store, .vscode, .git*) from the deploy.
  */
 const SHADER_CAROUSEL_EXCLUDE = new Set([
   'benchData',
@@ -176,7 +176,6 @@ const SHADER_CAROUSEL_EXCLUDE = new Set([
   '.git',
   '.gitignore',
   '.gitattributes',
-  'Untitled-2.ipynb',
 ]);
 // The web dist already ships this exact bundle at dist/js/ (synced from the
 // same a-frame-shaderloader source into public/js/), so the web carousel copy
@@ -327,6 +326,31 @@ const nodeDesignerSyncPlugin = (): Plugin => ({
 });
 
 /**
+ * Publish the canonical Latvian node/category labels to `public/node-i18n.json`.
+ *
+ * `src/i18n/node-i18n.json` is imported by the React app AND fetched (as
+ * `/FastShaders/node-i18n.json`) by the standalone Node Designer
+ * (node-designer.html) for its EN/LV switch. Rather than maintain two copies,
+ * this plugin copies the source file into `public/` at dev/build start — the
+ * same single-source + copy-on-diff pattern the node-designer HTML sync uses.
+ * `src/i18n/i18nSync.test.ts` fails on drift.
+ */
+const I18N_SRC = path.resolve(__dirname, 'src/i18n/node-i18n.json');
+const I18N_PUBLIC = path.resolve(__dirname, 'public/node-i18n.json');
+
+const i18nSyncPlugin = (): Plugin => ({
+  name: 'fs-i18n-sync',
+  buildStart() {
+    try {
+      if (!existsSync(I18N_SRC)) return;
+      syncVendoredFile(I18N_SRC, I18N_PUBLIC);
+    } catch (e) {
+      console.warn('[fs-i18n-sync] sync skipped:', (e as Error).message);
+    }
+  },
+});
+
+/**
  * Vendor the shared A-Frame preview scripts from a SINGLE source of truth.
  *
  * The canonical copies live in the `a-frame-shaderloader/` submodule's `js/`
@@ -351,6 +375,7 @@ const VENDOR_SRC = path.resolve(__dirname, 'a-frame-shaderloader/js');
 const VENDOR_TARGETS: { file: string; dests: string[] }[] = [
   { file: 'a-frame-180-a-01.min.js', dests: ['public/js', 'ShaderCarousel/components/three'] },
   { file: 'a-frame-shaderloader-0.4.js', dests: ['public/js'] },
+  { file: 'a-frame-shaderloader-0.5.js', dests: ['public/js'] },
   { file: 'aframe-orbit-controls.min.js', dests: ['public/js'] },
 ];
 const vendorSyncPlugin = (): Plugin => ({
@@ -609,6 +634,7 @@ export default defineConfig({
     vendorSyncPlugin(),
     ...(FS_DESKTOP ? [shaderCarouselDesktopStagePlugin()] : [shaderCarouselCopyPlugin()]),
     nodeDesignerSyncPlugin(),
+    i18nSyncPlugin(),
     nodeDesignerEndpointPlugin(),
   ],
   resolve: {

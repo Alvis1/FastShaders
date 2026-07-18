@@ -3,6 +3,7 @@ import type { NodeDefinition, NodeCategory } from '@/types';
 import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, getContrastColor, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType, displayDescription } from '@/registry/nodeRegistry';
+import { formatNodeLabel, nodeDescription } from '@/i18n';
 import { useAssetTooltip } from './AssetTooltip';
 import { useAppStore } from '@/store/useAppStore';
 import { buildRows } from './nodes/ShaderNode';
@@ -80,6 +81,7 @@ function FitNodeHeading({ visualScale, textScale, children }: { visualScale: num
  * ============================================================ */
 
 function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale, cost , headerTextColor }: ContentProps) {
+  const language = useAppStore((s) => s.language);
   // EXACT static replica of the live ShaderNode: same classes, same widgets
   // (real DragNumberInput, real handle styling via the react-flow/typed-handle
   // classes), same structure, and all per-node designer overrides (operator
@@ -104,8 +106,13 @@ function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale,
     border: `1.5px solid ${catColor}`,
   };
   if (box.width) {
-    nodeStyle.width = box.width;
+    // Latvian node names are longer than English. Floor the card at its designed
+    // width but, in Latvian, leave `width` unset so it GROWS (fit-content under
+    // the card wrapper) to keep a long name like "Vektoriālais reizinājums" on
+    // one line — at most two rows via the CSS clamp — instead of wrapping into a
+    // tall stack. English keeps the exact designer width (short labels fit).
     nodeStyle.minWidth = box.width;
+    if (language !== 'lv') nodeStyle.width = box.width;
   }
   if (textScale !== 1) (nodeStyle as Record<string, string | number>)['--node-text-scale'] = textScale;
 
@@ -134,7 +141,9 @@ function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale,
       )}
       <div className="node-base__header" style={{ background: costColor }}>
         <span className="node-base__title" style={{ color: headerTextColor }}>
-          {def.type === 'property_float' ? String(dv.name ?? def.label) : def.label}
+          {def.type === 'property_float'
+            ? String(dv.name ?? def.label)
+            : formatNodeLabel(def.label, def.type, language, false)}
         </span>
       </div>
     </>
@@ -285,6 +294,7 @@ function canvasCtx(canvas: HTMLCanvasElement | null) {
 }
 
 function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, headerTextColor, children }: ContentProps & { children: React.ReactNode }) {
+  const language = useAppStore((s) => s.language);
   return (
     <div
       className="node-base node-preview-card__node"
@@ -295,7 +305,7 @@ function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, h
       )}
 
       <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>{def.label}</span>
+        <span className="node-base__title" style={{ color: headerTextColor }}>{formatNodeLabel(def.label, def.type, language, false)}</span>
       </div>
 
       {children}
@@ -524,6 +534,7 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
   const cost = costs[def.type] ?? 0;
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  const language = useAppStore((s) => s.language);
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
   const costColor = getCostColor(cost, costColorLow, costColorHigh);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
@@ -532,7 +543,9 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
   const flowType = getFlowNodeType(def);
 
   const shared: ContentProps = { def, catColor, costColor, costTextColor, costScale, cost, headerTextColor };
-  const { tooltip, tooltipHandlers } = useAssetTooltip(displayDescription(def));
+  const { tooltip, tooltipHandlers } = useAssetTooltip(
+    nodeDescription(displayDescription(def), def.type, language),
+  );
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {

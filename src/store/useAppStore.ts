@@ -17,6 +17,7 @@ import type {
 } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { autoLayout } from '@/engine/layoutEngine';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
 import complexityData from '@/registry/complexity.json';
 import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges } from '@/utils/edgeUtils';
@@ -238,6 +239,18 @@ const DEFAULT_CANVAS_BG_DARK = '#1e1f22';
 function applyThemeAttribute(theme: 'vs' | 'vs-dark'): void {
   if (typeof document === 'undefined') return;
   document.documentElement.setAttribute('data-theme', theme === 'vs-dark' ? 'dark' : 'light');
+}
+
+/**
+ * Stamp `lang` on <html> so the document advertises its UI language (a11y +
+ * spellcheck). Latvian is a display-only overlay — nothing stored, generated,
+ * or searched changes — so this attribute + a React re-render is all a language
+ * switch needs. Mirrors applyThemeAttribute; an inline guard in index.html sets
+ * it before first paint and this keeps it in sync on toggle.
+ */
+function applyLangAttribute(lang: 'en' | 'lv'): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.setAttribute('lang', lang);
 }
 
 function snapshot(nodes: AppNode[], edges: AppEdge[]): HistoryEntry {
@@ -463,6 +476,11 @@ interface AppState {
   // dark theme via the `data-theme` attribute on <html>.
   codeEditorTheme: 'vs' | 'vs-dark';
 
+  // UI language ('en' = English, 'lv' = Latvian). Latvian is a display-only
+  // overlay resolved at render (with English fallback); canonical English is
+  // kept everywhere strings are stored, generated, or searched. See src/i18n.
+  language: 'en' | 'lv';
+
   // User's library of saved groups (persisted to localStorage)
   savedGroups: SavedGroup[];
 
@@ -554,9 +572,19 @@ interface AppState {
   // Code editor theme actions
   setCodeEditorTheme: (theme: 'vs' | 'vs-dark') => void;
 
+  // Language actions
+  setLanguage: (lang: 'en' | 'lv') => void;
+
   // Group actions
   /** Wraps the given node ids in a new group node and returns the group id (or null if <2 nodes). */
   groupSelection: (nodeIds: string[]) => string | null;
+  /**
+   * Auto-layout the currently selected nodes in place (right-click a selection
+   * → Organize): re-runs the top-aligned longest-path layout on just the
+   * selected subgraph, re-anchored at the selection's old top-left corner.
+   * A selected group rides as one unit (its members follow via parentId).
+   */
+  organizeSelection: () => void;
   /** Dissolves a group: detaches member parentIds and restores absolute positions, then deletes the group node. */
   ungroup: (groupId: string) => void;
   /** Delete a group AND every member node inside it. Edges are spliced across the removal set. */
@@ -613,6 +641,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       ? loadString('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK)
       : loadString('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
   codeEditorTheme: (loadString('fs:codeEditorTheme', 'vs') === 'vs-dark' ? 'vs-dark' : 'vs'),
+  language: (loadString('fs:lang', 'en') === 'lv' ? 'lv' : 'en'),
   savedGroups: loadSavedGroups(),
 
   setNodes: (nodes, source = 'graph') =>
@@ -946,6 +975,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ codeEditorTheme: theme, nodeEditorBgColor });
   },
 
+  setLanguage: (lang) => {
+    try { localStorage.setItem('fs:lang', lang); } catch { /* */ }
+    applyLangAttribute(lang);
+    set({ language: lang });
+  },
+
   groupSelection: (nodeIds) => {
     if (nodeIds.length < 2) return null;
     const state = get();
@@ -1035,6 +1070,134 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
     set({ nodes: reordered, syncSource: 'graph', isUndoRedo: false });
     return groupId;
+  },
+
+  organizeSelection: () => {
+    const state = get();
+    const byId = new Map(state.nodes.map((n) => [n.id, n]));
+    // Notes are free-floating annotations — the graph layout has no meaningful
+    // place for them, so they stay put.
+    const selected = state.nodes.filter((n) => n.selected && n.type !== 'note');
+    if (selected.length < 2) return;
+    const selectedIds = new Set(selected.map((n) => n.id));
+
+    // Layout units: a selected node rides with its parent when that parent (or
+    // any ancestor group) is also selected — laying both out independently
+    // would move the member twice.
+    const hasSelectedAncestor = (n: AppNode): boolean => {
+      let pid = n.parentId;
+      while (pid) {
+        if (selectedIds.has(pid)) return true;
+        pid = byId.get(pid)?.parentId;
+      }
+      return false;
+    };
+    const units = selected.filter((n) => !hasSelectedAncestor(n));
+    if (units.length < 2) return;
+    const unitIds = new Set(units.map((n) => n.id));
+
+    // Absolute position of a (possibly group-nested) node.
+    const absOf = (n: AppNode): { x: number; y: number } => {
+      let x = n.position.x;
+      let y = n.position.y;
+      let pid = n.parentId;
+      while (pid) {
+        const p = byId.get(pid);
+        if (!p) break;
+        x += p.position.x;
+        y += p.position.y;
+        pid = p.parentId;
+      }
+      return { x, y };
+    };
+
+    // Edges between units, with endpoints lifted to their unit: an edge into a
+    // selected group's member connects the GROUP unit (collapsed groups already
+    // carry rewritten boundary edges pointing at the group node itself).
+    const unitOf = (id: string): string | null => {
+      let n = byId.get(id);
+      while (n) {
+        if (unitIds.has(n.id)) return n.id;
+        n = n.parentId ? byId.get(n.parentId) : undefined;
+      }
+      return null;
+    };
+    const seenPairs = new Set<string>();
+    const unitEdges: AppEdge[] = [];
+    for (const e of state.edges) {
+      const src = unitOf(e.source);
+      const tgt = unitOf(e.target);
+      if (!src || !tgt || src === tgt) continue;
+      const key = `${src}\0${tgt}`;
+      if (seenPairs.has(key)) continue;
+      seenPairs.add(key);
+      unitEdges.push({ ...e, source: src, target: tgt });
+    }
+
+    // Lay out the units in absolute space (autoLayout assigns fresh positions;
+    // spreading keeps `measured` on each node so the real DOM boxes are used),
+    // then translate the result back onto the selection's old top-left corner
+    // so the organized cluster stays where the user had it.
+    const absUnits = units.map((n) => ({ ...n, position: absOf(n) }) as AppNode);
+    const laid = autoLayout(absUnits, unitEdges, 'LR');
+    let oldMinX = Infinity, oldMinY = Infinity, newMinX = Infinity, newMinY = Infinity;
+    for (const n of absUnits) {
+      oldMinX = Math.min(oldMinX, n.position.x);
+      oldMinY = Math.min(oldMinY, n.position.y);
+    }
+    for (const n of laid) {
+      newMinX = Math.min(newMinX, n.position.x);
+      newMinY = Math.min(newMinY, n.position.y);
+    }
+    const dx = oldMinX - newMinX;
+    const dy = oldMinY - newMinY;
+    const newAbs = new Map(
+      laid.map((n) => [n.id, { x: n.position.x + dx, y: n.position.y + dy }]),
+    );
+
+    // Frame (w/h) of a node, same source precedence NodeEditor uses for its
+    // group-containment test: measured DOM box → explicit props → data dims.
+    const frameSize = (n: AppNode, gw: number, gh: number): { w: number; h: number } => {
+      const m = (n as { measured?: { width?: number; height?: number } }).measured;
+      const sz = n as AppNode & { width?: number; height?: number };
+      const d = n.data as { width?: number; height?: number };
+      return { w: m?.width ?? sz.width ?? d.width ?? gw, h: m?.height ?? sz.height ?? d.height ?? gh };
+    };
+
+    get().pushHistory();
+    set({
+      nodes: state.nodes.map((n) => {
+        const abs = newAbs.get(n.id);
+        if (!abs) return n;
+        // A repositioned member's parent group is always UNSELECTED (a selected
+        // parent would make this node a non-unit, so it wouldn't be in newAbs),
+        // hence its frame is unmoved. If the layout pushed the member's CENTRE
+        // out of that frame, DETACH it — same guard the drag path applies via
+        // reparentedNode. Leaving it parented-but-outside would hide it (no cue)
+        // the moment the group is collapsed (memberIds = parentId === groupId).
+        if (n.parentId) {
+          const parent = byId.get(n.parentId);
+          const pAbs = parent ? absOf(parent) : { x: 0, y: 0 };
+          if (parent?.type === 'group' && !(parent.data as { collapsed?: boolean }).collapsed) {
+            const { w: gw, h: gh } = frameSize(parent, 200, 120);
+            const { w: nw, h: nh } = frameSize(n, 120, 40);
+            const cx = abs.x + nw / 2;
+            const cy = abs.y + nh / 2;
+            const inside = cx >= pAbs.x && cx <= pAbs.x + gw && cy >= pAbs.y && cy <= pAbs.y + gh;
+            if (!inside) {
+              const { parentId: _pid, ...rest } = n as AppNode & { parentId?: string };
+              void _pid;
+              return { ...rest, position: abs } as AppNode;
+            }
+          }
+          // Still inside — keep membership, back to parent-relative coords.
+          return { ...n, position: { x: abs.x - pAbs.x, y: abs.y - pAbs.y } } as AppNode;
+        }
+        return { ...n, position: abs } as AppNode;
+      }),
+      syncSource: 'graph',
+      isUndoRedo: false,
+    });
   },
 
   ungroup: (groupId) => {

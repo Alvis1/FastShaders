@@ -1,4 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import type { ShaderFlowNode } from '@/types';
 import { getNodeValues } from '@/types';
 import { rowStyle, labelStyle, NumberRow, NodeActions } from './menuShared';
@@ -15,6 +16,7 @@ interface StripesSettingsMenuProps {
 export function StripesSettingsMenu({ nodeId }: StripesSettingsMenuProps) {
   const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
+  const language = useAppStore((s) => s.language);
 
   const node = nodes.find((n) => n.id === nodeId) as ShaderFlowNode | undefined;
   if (!node || node.data.registryType !== 'stripes') return null;
@@ -35,13 +37,13 @@ export function StripesSettingsMenu({ nodeId }: StripesSettingsMenuProps) {
 
   return (
     <div className="context-menu__list">
-      <div className="context-menu__category">Data Stripes</div>
+      <div className="context-menu__category">{t('Data Stripes', language)}</div>
 
       {/* 0 = clean value heatmap (colour only); higher = bolder stripes. */}
-      {numRow('lineStrength', 'stripe strength', 0.75, 0)}
+      {numRow('lineStrength', t('stripe strength', language), 0.75, 0)}
 
       <label style={{ ...rowStyle, cursor: 'pointer' }}>
-        <span style={labelStyle}>radial (rings)</span>
+        <span style={labelStyle}>{t('radial (rings)', language)}</span>
         <input
           type="checkbox"
           checked={radial}
@@ -51,9 +53,9 @@ export function StripesSettingsMenu({ nodeId }: StripesSettingsMenuProps) {
 
       {radial && (
         <>
-          {numRow('center_x', 'center X', 0.5)}
-          {numRow('center_y', 'center Y', 0.5)}
-          {numRow('radius', 'radius', 0.5, 0.05)}
+          {numRow('center_x', t('center X', language), 0.5)}
+          {numRow('center_y', t('center Y', language), 0.5)}
+          {numRow('radius', t('radius', language), 0.5, 0.05)}
         </>
       )}
 

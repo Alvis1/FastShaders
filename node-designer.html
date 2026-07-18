@@ -148,6 +148,7 @@
   <div class="topbar">
     <h1>Node Designer</h1>
     <span class="sub">FastShaders</span>
+    <button class="mini" id="langBtn" title="Switch node names to Latvian (Pārslēgt uz latviešu)">LV</button>
     <input type="search" id="search" placeholder="search nodes…  ( / )" style="width:150px" />
     <select id="nodeSel" style="min-width:200px" title="● unsaved changes · ◆ has saved design"></select>
     <button class="mini" id="prevBtn" title="Previous node (Alt+↑)">↑</button>
@@ -263,7 +264,7 @@ const COSTS={positionGeometry:0,positionLocal:0,positionWorld:0,positionView:0,p
 /* ShaderNode-rendered nodes only (glyphs apply; live-canvas nodes are excluded).
    [type, label, category, inputs[[id,type]], outputs[[id,type]], defaults?] */
 const NODES=[
- ['positionGeometry','Position','input',[],[['out','vec3']]],['positionLocal','Position (local)','input',[],[['out','vec3']]],['positionWorld','Position (world)','input',[],[['out','vec3']]],['positionView','Position (view)','input',[],[['out','vec3']]],['positionWorldDirection','View Dir (world)','input',[],[['out','vec3']]],['positionViewDirection','View Dir (view)','input',[],[['out','vec3']]],['cameraPosition','Camera Position','input',[],[['out','vec3']]],['cameraNear','Camera Near','input',[],[['out','float']]],['cameraFar','Camera Far','input',[],[['out','float']]],['normalLocal','Normal','input',[],[['out','vec3']]],['tangentLocal','Tangent','input',[],[['out','vec3']]],['screenUV','Screen UV','input',[],[['out','vec2']]],['uv','UV','input',[['channel','int'],['tilingU','float'],['tilingV','float'],['rotation','float']],[['out','vec2']],{channel:0,tilingU:1,tilingV:1,rotation:0}],['property_float','Property (float)','input',[],[['out','float']],{value:1}],['slider','Slider','input',[],[['out','float']],{value:0.5}],
+ ['positionGeometry','Position','input',[],[['out','vec3']]],['positionLocal','Position (local)','input',[],[['out','vec3']]],['positionWorld','Position (world)','input',[],[['out','vec3']]],['positionView','Position (view)','input',[],[['out','vec3']]],['positionWorldDirection','View Dir (world)','input',[],[['out','vec3']]],['positionViewDirection','View Dir (view)','input',[],[['out','vec3']]],['cameraPosition','Camera Position','input',[],[['out','vec3']]],['cameraNear','Camera Near','input',[],[['out','float']]],['cameraFar','Camera Far','input',[],[['out','float']]],['normalLocal','Normal','input',[],[['out','vec3']]],['tangentLocal','Tangent','input',[],[['out','vec3']]],['screenUV','Screen UV','input',[],[['out','vec2']]],['uv','UV','input',[['channel','int'],['tilingU','float'],['tilingV','float'],['rotation','float']],[['out','vec2']],{channel:0,tilingU:1,tilingV:1,rotation:0}],['property_float','Property (float)','input',[],[['out','float']],{value:1}],['property_color','Property (color)','input',[],[['out','color']],{hex:'#ff0000'}],['slider','Slider','input',[],[['out','float']],{value:0.5}],
  ['float','Float','type',[],[['out','float']],{value:0}],['int','Int','type',[],[['out','int']],{value:0}],['vec2','Vec2','type',[['x','float'],['y','float']],[['out','vec2']]],['vec3','Vec3','type',[['x','float'],['y','float'],['z','float']],[['out','vec3']]],['vec4','Vec4','type',[['x','float'],['y','float'],['z','float'],['w','float']],[['out','vec4']]],
  ['add','Add','arithmetic',[['a','any'],['b','any']],[['out','any']]],['sub','Subtract','arithmetic',[['a','any'],['b','any']],[['out','any']]],['mul','Multiply','arithmetic',[['a','any'],['b','any']],[['out','any']]],['div','Divide','arithmetic',[['a','any'],['b','any']],[['out','any']]],
  ['abs','Abs','math',[['x','any']],[['out','any']]],['sqrt','Sqrt','math',[['x','any']],[['out','any']]],['exp','Exp','math',[['x','any']],[['out','any']]],['log2','Log2','math',[['x','any']],[['out','any']]],['floor','Floor','math',[['x','any']],[['out','any']]],['round','Round','math',[['x','any']],[['out','any']]],['fract','Fract','math',[['x','any']],[['out','any']]],['oneMinus','Invert (oneMinus)','math',[['x','any']],[['out','any']]],['pow','Power','math',[['base','any'],['exp','float']],[['out','any']]],['mod','Mod','math',[['x','any'],['y','any']],[['out','any']]],['clamp','Clamp','math',[['x','any'],['min','any'],['max','any']],[['out','any']]],['min','Min','math',[['a','any'],['b','any']],[['out','any']]],['max','Max','math',[['a','any'],['b','any']],[['out','any']]],
@@ -281,6 +282,45 @@ const NODES=[
    n.in.length — poisoning every later BARE load until localStorage is cleared
    by hand. A prototype-free map makes the guards mean what they say. */
 const NODE_BY_TYPE=Object.create(null); NODES.forEach(n=>NODE_BY_TYPE[n[0]]={type:n[0],label:n[1],cat:n[2],in:n[3],out:n[4],def:n[5]||null});
+/* --- i18n (EN/LV), display-only. Fed from the SAME node-i18n.json the React
+   app imports (the fs-i18n-sync vite plugin copies it to public/, served at
+   /FastShaders/node-i18n.json). Fetched relative to the document so the base is
+   honoured; degrades to English on any failure. Object.create(null) mirrors
+   NODE_BY_TYPE — keys come from the fetched JSON but stay a pure membership map. */
+let ND_LANG=(localStorage.getItem('nd:lang')==='lv')?'lv':'en';
+const ND_I18N={nodes:Object.create(null),categories:Object.create(null)};
+/* Primary display word: the Latvian term in LV mode (falls back to English). */
+function ndBaseLabel(type){
+ const en=(NODE_BY_TYPE[type]&&NODE_BY_TYPE[type].label)||type;
+ return (ND_LANG==='lv'&&ND_I18N.nodes[type])?ND_I18N.nodes[type]:en;
+}
+/* Bilingual "Latviešu (English)" for the preview card header — the surface a
+   designer sizes glyph widths against, so it must show the real rendered label. */
+function ndNodeLabel(type){
+ const en=(NODE_BY_TYPE[type]&&NODE_BY_TYPE[type].label)||type;
+ const lv=ND_I18N.nodes[type];
+ return (ND_LANG==='lv'&&lv)?lv+' ('+en+')':en;
+}
+function ndCatLabel(cat){
+ const lv=ND_I18N.categories[cat];
+ return (ND_LANG==='lv'&&lv)?lv+' ('+cat+')':cat;
+}
+async function ndLoadI18n(){
+ try{const r=await fetch('node-i18n.json',{cache:'no-cache'});if(!r.ok)return;
+  const j=await r.json();
+  if(j&&j.nodes)Object.keys(j.nodes).forEach(k=>{ND_I18N.nodes[k]=j.nodes[k];});
+  if(j&&j.categories)Object.keys(j.categories).forEach(k=>{ND_I18N.categories[k]=j.categories[k];});
+ }catch(e){/* offline / not built — stay English */}
+}
+function updateLangBtn(){
+ const b=el('langBtn');if(!b)return;
+ b.textContent='LV';
+ if(ND_LANG==='lv'){b.style.background='#2563eb';b.style.color='#fff';b.style.borderColor='#2563eb';}
+ else{b.style.background='';b.style.color='';b.style.borderColor='';}
+ b.title=ND_LANG==='lv'
+  ?'Rāda latviešu nosaukumus — klikšķini, lai atgrieztos pie English'
+  :'Switch node names to Latvian (Pārslēgt uz latviešu)';
+}
 /* channel count per data type (mirrors LINE_COUNT in colorUtils) */
 const LINE_COUNT={float:1,int:1,any:1,vec2:2,vec3:3,color:3,vec4:4};
 /* per-channel edge colors (mirrors COUNT_EDGE_COLORS; 1-ch flips to contrast vs canvas) */
@@ -681,15 +721,15 @@ function refreshDirtyUI(){
 let filterText='';
 function visibleNodes(){
  const q=filterText.trim().toLowerCase();
- return q?NODES.filter(n=>n[0].toLowerCase().includes(q)||n[1].toLowerCase().includes(q)):NODES;
+ return q?NODES.filter(n=>n[0].toLowerCase().includes(q)||n[1].toLowerCase().includes(q)||(ND_I18N.nodes[n[0]]||'').toLowerCase().includes(q)):NODES;
 }
 function rebuildDropdown(){
  const sel=el('nodeSel');const cur=state.type;sel.innerHTML='';
  const groups={};visibleNodes().forEach(n=>{(groups[n[2]]=groups[n[2]]||[]).push(n);});
- Object.keys(groups).forEach(cat=>{const og=document.createElement('optgroup');og.label=cat;
+ Object.keys(groups).forEach(cat=>{const og=document.createElement('optgroup');og.label=ndCatLabel(cat);
   groups[cat].forEach(n=>{const o=document.createElement('option');o.value=n[0];
    const mark=isDirty(n[0])?'● ':(savedGlyphs[n[0]]?'◆ ':'');
-   o.textContent=mark+n[1]+' ('+n[0]+')';og.appendChild(o);});
+   o.textContent=mark+ndBaseLabel(n[0])+' ('+n[0]+')';og.appendChild(o);});
   sel.appendChild(og);});
  if(cur&&sel.querySelector('option[value="'+cur+'"]'))sel.value=cur;
 }
@@ -710,8 +750,8 @@ function selectNode(type){
 /* ---------------- inspector rendering ---------------- */
 function renderInfo(){
  const n=NODE_BY_TYPE[state.type];const cat=CAT[n.cat]||'#888';const cost=COSTS[state.type]??0;
- el('iType').textContent=n.type+'  ·  '+n.label;
- const ic=el('iCat');ic.querySelector('.dot').style.background=cat;ic.querySelector('span:last-child').textContent=n.cat;
+ el('iType').textContent=n.type+'  ·  '+ndBaseLabel(n.type);
+ const ic=el('iCat');ic.querySelector('.dot').style.background=cat;ic.querySelector('span:last-child').textContent=ndCatLabel(n.cat);
  const io=el('iCost');io.querySelector('.dot').style.background=costColor(cost);io.querySelector('span:last-child').textContent=cost+' pts';
  el('pasteBtn').disabled=!copyBuf;
 }
@@ -820,7 +860,7 @@ function renderNode(){
  const hd=document.createElement('div');hd.className='node-hd';
  hd.style.background=costColor(cost);hd.style.color=contrast(costColor(cost));
  hd.style.borderRadius=FRAME.radius+'px '+FRAME.radius+'px 0 0';
- hd.textContent=state.type==='property_float'?'property1':n.label;node.appendChild(hd);
+ hd.textContent=state.type==='property_float'?'property1':ndNodeLabel(state.type);node.appendChild(hd);
 
  /* multi-channel stack: appears only when multi-channel data ARRIVES on a
     connected input — widest count wins; N channels read as N total cards */
@@ -1118,8 +1158,8 @@ function populateLoadList(){
  NODES.forEach(n=>{
   const t=n[0];
   const d=(t in sessionEdits)?sessionEdits[t]:savedGlyphs[t];
-  if(d&&d.svg)custom.push(['c:'+t,n[1]+' ('+t+')'+(t===state.type?' — current':'')]);
-  if(builtinGlyph(t))builtins.push(['b:'+t,n[1]+' ('+t+')']);
+  if(d&&d.svg)custom.push(['c:'+t,ndBaseLabel(t)+' ('+t+')'+(t===state.type?' — current':'')]);
+  if(builtinGlyph(t))builtins.push(['b:'+t,ndBaseLabel(t)+' ('+t+')']);
  });
  addGroup('Saved / session designs',custom);
  addGroup('Built-in glyphs',builtins);
@@ -1347,6 +1387,12 @@ if(want&&!NODE_BY_TYPE[want]){
  el('ndNoticeX').onclick=()=>el('ndNotice').classList.remove('show');
 }
 selectNode(want&&NODE_BY_TYPE[want]?want:fallback);
+/* language toggle (EN/LV). Latvian labels are fetched async (ndLoadI18n); on
+   toggle AND on first load we rebuild the picker + re-render the current node so
+   every label site refreshes. Display-only — nothing about the design changes. */
+el('langBtn').onclick=()=>{ND_LANG=(ND_LANG==='lv')?'en':'lv';lsSet('nd:lang',ND_LANG);updateLangBtn();rebuildDropdown();selectNode(state.type);};
+updateLangBtn();
+ndLoadI18n().then(()=>{rebuildDropdown();if(state.type)selectNode(state.type);});
 /* Persistence, in order of preference:
    1. dev-server endpoint (/__nd, any browser) → 2. File System Access API
    (Chromium) → 3. download fallback. Explain WHY when only download remains. */

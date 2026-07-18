@@ -11,7 +11,9 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 - **Bi-directional sync** — edit either the graph or the TSL code; changes round-trip in both directions
 - **Node graph editor** — 68 built-in TSL node types across 10 categories
 - **Drag-aware sockets** — dragging a wire near a node labels its input sockets with their names; noise and Image nodes also reveal their hidden parameter sockets so you can wire a parameter without opening its settings first
-- **Code editor** — Monaco with TSL syntax highlighting, light/dark toggle, inline error/warning squiggles, and a separate read-only Script tab showing the exported `.js` module
+- **Wire editing** — drop a node onto a wire to splice it into that connection, and double-click a wire to add draggable routing points it curves through
+- **Code editor** — Monaco with TSL syntax highlighting, a sun/moon toggle that drives app-wide dark mode (not just the editor — it flips the whole editor's chrome and remembers a canvas background per theme), inline error/warning squiggles, and a separate read-only Script tab showing the exported `.js` module
+- **Bilingual — Latviešu / English** — an **LV** toggle (top-right, next to **SC**) switches the whole editor to Latvian: node names read as `Reizināt (Multiply)` — the Latvian term with the original English kept in brackets — alongside high-school-level (vidusskola) Latvian node descriptions, category names, socket labels, and UI chrome. Search also matches Latvian terms. It's display-only: node types, generated TSL, and `.fastshader` files stay canonical English, so a graph authored in Latvian is byte-identical to the same graph in English. The Node Designer (`node-designer.html`) has its own EN/LV switch
 - **Live 3D preview** — WebGPU-rendered preview (automatic WebGL2 fallback) with five geometries (sphere, cube, plane, Utah teapot, Stanford bunny — all normalized to the same centered bounds), three lighting modes (studio / moon / laboratory), subdivision slider, picked background color, orbit camera, and play/pause
 - **MaterialX noise** — 8 built-in noise variants (Perlin, fBm, cell, Worley/Voronoi) backed by `three/tsl`'s MaterialX functions
 - **Built-in textures** — 8 procedural texture presets (polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) draggable from the palette
@@ -32,8 +34,10 @@ The **Local** button (top right in the editor) offers three downloads, rebuilt a
 | Platform | File | Notes |
 | --- | --- | --- |
 | Windows | `FastShaders-Windows-Setup.exe` | Installer. Unsigned — SmartScreen may warn: *More info → Run anyway* |
-| Windows | `FastShaders-Windows-Portable.exe` | Single portable file, no install (needs the WebView2 runtime, preinstalled on Windows 10/11) |
+| Windows | `FastShaders-Windows-Portable.zip` | Portable build, no install: unzip anywhere and run `FastShaders.exe` — keep the `ShaderCarousel` folder next to it (the VR bench serves it). Needs the WebView2 runtime, preinstalled on Windows 10/11 |
 | macOS | `FastShaders-macOS.dmg` | Universal (Apple Silicon + Intel). Unsigned — first launch via System Settings → Privacy & Security → *Open Anyway* |
+
+The desktop build adds a **VR** button in the toolbar: it starts an in-app server that serves the bundled ShaderCarousel GPU-benchmark suite to a VR headset over your local network, so you can benchmark shaders on a real headset.
 
 The preview uses WebGPU when the system webview provides it and falls back to WebGL2 otherwise. To build locally: install a [Rust toolchain](https://rustup.rs), then `npm run tauri build` (or `npm run tauri dev` while developing). Releases are produced by CI on version tags (`npm version patch && git push --follow-tags`).
 
@@ -41,14 +45,14 @@ The preview uses WebGPU when the system webview provides it and falls back to We
 
 ```html
 <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/a-frame-180-a-01.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/a-frame-shaderloader-0.4.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@main/js/a-frame-shaderloader-0.5.js"></script>
 
 <a-scene>
   <a-sphere shader="src: myshader.js" position="0 1.5 -3"></a-sphere>
 </a-scene>
 ```
 
-Those two scripts are all you need: `a-frame-180-a-01.min.js` bundles **A-Frame 1.8.0 + Three.js r184 (WebGPU)**, and `a-frame-shaderloader-0.4.js` rewrites the module's `import … from 'three/tsl'` to read that bundle's single Three.js instance — so **no import map and no shim are required**. The exported `.js` also works directly with Three.js, or any bundler that resolves `three/tsl`.
+Those two scripts are all you need: `a-frame-180-a-01.min.js` bundles **A-Frame 1.8.0 + Three.js r184 (WebGPU)**, and `a-frame-shaderloader-0.5.js` rewrites the module's `import … from 'three/tsl'` to read that bundle's single Three.js instance — so **no import map and no shim are required**. The exported `.js` also works directly with Three.js, or any bundler that resolves `three/tsl`.
 
 ## Tech Stack
 

@@ -1,4 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import type { GroupFlowNode } from '@/types';
 import { rowStyle, labelStyle, colorFieldStyle, wideFieldStyle } from './menuShared';
 
@@ -8,6 +9,7 @@ interface GroupSettingsMenuProps {
 
 export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
   const nodes = useAppStore((s) => s.nodes);
+  const language = useAppStore((s) => s.language);
   const updateGroupData = useAppStore((s) => s.updateGroupData);
   const ungroup = useAppStore((s) => s.ungroup);
   const deleteGroup = useAppStore((s) => s.deleteGroup);
@@ -21,10 +23,10 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
 
   return (
     <div className="context-menu__list">
-      <div className="context-menu__category">Group</div>
+      <div className="context-menu__category">{t('Group', language)}</div>
 
       <div style={rowStyle}>
-        <label style={labelStyle}>name</label>
+        <label style={labelStyle}>{t('name', language)}</label>
         <input
           type="text"
           value={label}
@@ -35,7 +37,7 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
       </div>
 
       <div style={rowStyle}>
-        <label style={labelStyle}>color</label>
+        <label style={labelStyle}>{t('color', language)}</label>
         <input
           type="color"
           value={color}
@@ -45,16 +47,16 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
       </div>
 
       <div style={rowStyle}>
-        <label style={labelStyle}>title size</label>
+        <label style={labelStyle}>{t('title size', language)}</label>
         <select
           value={titleSize ?? 1}
           onChange={(e) => updateGroupData(nodeId, { titleSize: Number(e.target.value) })}
           style={colorFieldStyle}
         >
-          <option value={1}>1x</option>
-          <option value={1.5}>1.5x</option>
-          <option value={2}>2x</option>
-          <option value={3}>3x</option>
+          <option value={1}>{t('1x', language)}</option>
+          <option value={1.5}>{t('1.5x', language)}</option>
+          <option value={2}>{t('2x', language)}</option>
+          <option value={3}>{t('3x', language)}</option>
         </select>
       </div>
 
@@ -66,7 +68,7 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
           closeContextMenu();
         }}
       >
-        Save to Library
+        {t('Save to Library', language)}
       </button>
       <button
         className="context-menu__item"
@@ -75,7 +77,7 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
           closeContextMenu();
         }}
       >
-        Ungroup
+        {t('Ungroup', language)}
       </button>
       <button
         className="context-menu__item context-menu__item--danger"
@@ -84,7 +86,7 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
           closeContextMenu();
         }}
       >
-        Delete Group
+        {t('Delete Group', language)}
       </button>
     </div>
   );

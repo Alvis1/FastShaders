@@ -379,8 +379,22 @@ function collapseMultilineReturns(scriptCode: string): string {
  * block. Read before any pre-pass runs, since the hoist needs them and the
  * pre-passes never touch the schema block.
  */
-function extractSchemaDefaults(scriptCode: string): Map<string, number> {
-  const schemaDefaults = new Map<string, number>();
+/**
+ * One schema `default:` literal → its typed value. Numbers stay numbers;
+ * a quoted '#rrggbb' string is a COLOUR default (shaderloader 0.5 schema) and
+ * must survive as a string — parseFloat('#…') is NaN, and dropping it used to
+ * silently degrade a re-imported colour property to a float uniform of 1.
+ */
+function parseSchemaDefault(raw: string): number | string | undefined {
+  const trimmed = raw.trim();
+  const quoted = trimmed.match(/^['"](#[0-9a-fA-F]{6})['"]$/);
+  if (quoted) return quoted[1].toLowerCase();
+  const val = parseFloat(trimmed);
+  return isNaN(val) ? undefined : val;
+}
+
+function extractSchemaDefaults(scriptCode: string): Map<string, number | string> {
+  const schemaDefaults = new Map<string, number | string>();
   let inSchema = false;
   let schemaBraceDepth = 0;
   for (const line of scriptCode.split('\n')) {
@@ -396,8 +410,8 @@ function extractSchemaDefaults(scriptCode: string): Map<string, number> {
       if (schemaBraceDepth <= 0) {
         const propMatches = trimmed.matchAll(/(\w+)\s*:\s*\{[^}]*default\s*:\s*([^,}]+)/g);
         for (const m of propMatches) {
-          const val = parseFloat(m[2].trim());
-          if (!isNaN(val)) schemaDefaults.set(m[1], val);
+          const val = parseSchemaDefault(m[2]);
+          if (val !== undefined) schemaDefaults.set(m[1], val);
         }
         inSchema = false;
       }
@@ -408,11 +422,11 @@ function extractSchemaDefaults(scriptCode: string): Map<string, number> {
         if (ch === '{') schemaBraceDepth++;
         if (ch === '}') schemaBraceDepth--;
       }
-      // Extract: name: { type: 'number', default: 1.5 },
+      // Extract: name: { type: 'number', default: 1.5 } / { type: 'color', default: '#22aa5e' }
       const propMatch = trimmed.match(/^(\w+)\s*:\s*\{[^}]*default\s*:\s*([^,}]+)/);
       if (propMatch) {
-        const val = parseFloat(propMatch[2].trim());
-        if (!isNaN(val)) schemaDefaults.set(propMatch[1], val);
+        const val = parseSchemaDefault(propMatch[2]);
+        if (val !== undefined) schemaDefaults.set(propMatch[1], val);
       }
       if (schemaBraceDepth <= 0) inSchema = false;
       continue;
@@ -445,7 +459,7 @@ function extractSchemaDefaults(scriptCode: string): Map<string, number> {
  */
 function hoistParamUniforms(
   scriptCode: string,
-  schemaDefaults: Map<string, number>,
+  schemaDefaults: Map<string, number | string>,
 ): { code: string; hoisted: string[] } {
   const unchanged = { code: scriptCode, hoisted: [] as string[] };
 
@@ -615,7 +629,14 @@ function hoistParamUniforms(
   }
 
   const hoistText = hoisted
-    .map((n) => `\n  const ${n} = uniform(${schemaDefaults.get(n) ?? 1.0});`)
+    .map((n) => {
+      const d = schemaDefaults.get(n) ?? 1.0;
+      // Colour default → the colour-uniform form codeToGraph parses back to a
+      // property_color; a bare number stays the float-uniform form.
+      return typeof d === 'string'
+        ? `\n  const ${n} = uniform(color(0x${d.slice(1)}));`
+        : `\n  const ${n} = uniform(${d});`;
+    })
     .join('');
   edits.push({ start: bodyStart + 1, end: bodyStart + 1, text: hoistText });
 
