@@ -1,4 +1,5 @@
 import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
+import { t, portLabel } from '@/i18n';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { OUTPUT_DEFAULT_EXPOSED } from '../nodes/OutputNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
@@ -12,6 +13,7 @@ const OPTIONAL_OUTPUT_PORTS = ['roughness', 'emissive', 'normal', 'discard'];
 
 export function ShaderSettingsMenu() {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
+  const language = useAppStore((s) => s.language);
   const totalCost = useAppStore((s) => s.totalCost);
   const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
   const nodes = useAppStore((s) => s.nodes);
@@ -122,7 +124,7 @@ export function ShaderSettingsMenu() {
 
   return (
     <div className="context-menu__list">
-      <div className="context-menu__category">Shader Settings</div>
+      <div className="context-menu__category">{t('Shader Settings', language)}</div>
       <div
         style={{
           padding: 'var(--space-2) var(--space-3)',
@@ -130,9 +132,9 @@ export function ShaderSettingsMenu() {
           color: 'var(--text-secondary)',
         }}
       >
-        <div>Total Cost: <strong style={{ color: 'var(--text-primary)' }}>{totalCost}</strong> pts</div>
+        <div>{t('Total Cost:', language)} <strong style={{ color: 'var(--text-primary)' }}>{totalCost}</strong> {t('pts', language)}</div>
         <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
-          Budget: {headset.maxPoints} pts max ({headset.label})
+          {t('Budget:', language)} {headset.maxPoints} {t('pts max', language)} ({headset.label})
         </div>
       </div>
 
@@ -140,7 +142,7 @@ export function ShaderSettingsMenu() {
       {outputDef && (
         <>
           <div className="context-menu__divider" />
-          <div className="context-menu__category">Output Ports</div>
+          <div className="context-menu__category">{t('Output Ports', language)}</div>
           {OPTIONAL_OUTPUT_PORTS.map((portId) => {
             const port = outputDef.inputs.find((p) => p.id === portId);
             if (!port) return null;
@@ -152,7 +154,7 @@ export function ShaderSettingsMenu() {
                   onChange={() => handleTogglePort(portId)}
                   style={checkboxStyle}
                 />
-                {port.label}
+                {portLabel(port.label, language)}
               </label>
             );
           })}
@@ -163,7 +165,7 @@ export function ShaderSettingsMenu() {
       {exposedSet.has('position') && (
         <>
           <div className="context-menu__divider" />
-          <div className="context-menu__category">Displacement</div>
+          <div className="context-menu__category">{t('Displacement', language)}</div>
           <label style={labelStyle}>
             <input
               type="checkbox"
@@ -173,11 +175,11 @@ export function ShaderSettingsMenu() {
               }
               style={checkboxStyle}
             />
-            Along Normal
+            {t('Along Normal', language)}
           </label>
           <label
             style={labelStyle}
-            title="Weld shared vertices so the surface deforms as one skin. Off: a cube's faces split apart (each face displaces on its own)."
+            title={t("Weld shared vertices so the surface deforms as one skin. Off: a cube's faces split apart (each face displaces on its own).", language)}
           >
             <input
               type="checkbox"
@@ -185,13 +187,13 @@ export function ShaderSettingsMenu() {
               onChange={(e) => updateSettings({ mergeVertices: e.target.checked })}
               style={checkboxStyle}
             />
-            Merge Vertices
+            {t('Merge Vertices', language)}
           </label>
         </>
       )}
 
       <div className="context-menu__divider" />
-      <div className="context-menu__category">Material</div>
+      <div className="context-menu__category">{t('Material', language)}</div>
 
       <label style={labelStyle}>
         <input
@@ -200,7 +202,7 @@ export function ShaderSettingsMenu() {
           onChange={(e) => handleTransparentChange(e.target.checked)}
           style={checkboxStyle}
         />
-        Transparent
+        {t('Transparent', language)}
       </label>
 
       <label style={labelStyle}>
@@ -210,7 +212,7 @@ export function ShaderSettingsMenu() {
           onChange={(e) => handleAlphaClipChange(e.target.checked)}
           style={checkboxStyle}
         />
-        Alpha Clip
+        {t('Alpha Clip', language)}
       </label>
 
       {!!settings.alphaTest && (
@@ -231,15 +233,15 @@ export function ShaderSettingsMenu() {
       )}
 
       <div style={{ ...labelStyle, cursor: 'default' }}>
-        <span>Side</span>
+        <span>{t('Side', language)}</span>
         <select
           value={settings.side ?? 'front'}
           onChange={(e) => updateSettings({ side: e.target.value as MaterialSettings['side'] })}
           style={selectStyle}
         >
-          <option value="front">Front</option>
-          <option value="back">Back</option>
-          <option value="double">Double</option>
+          <option value="front">{t('Front', language)}</option>
+          <option value="back">{t('Back', language)}</option>
+          <option value="double">{t('Double', language)}</option>
         </select>
       </div>
 
@@ -251,7 +253,7 @@ export function ShaderSettingsMenu() {
             onChange={(e) => updateSettings({ depthWrite: e.target.checked })}
             style={checkboxStyle}
           />
-          Depth Write
+          {t('Depth Write', language)}
         </label>
       )}
 
@@ -260,7 +262,7 @@ export function ShaderSettingsMenu() {
       {uniformNodes.length > 0 && (
         <>
           <div className="context-menu__divider" />
-          <div className="context-menu__category">Uniforms</div>
+          <div className="context-menu__category">{t('Uniforms', language)}</div>
           {uniformNodes.map((n) => {
             const v = getNodeValues(n);
             const name = String(v.name ?? 'property');
@@ -279,7 +281,7 @@ export function ShaderSettingsMenu() {
                   type="text"
                   value={name}
                   onChange={(e) => updateUniform(n.id, 'name', e.target.value)}
-                  title="Uniform name"
+                  title={t('Uniform name', language)}
                   style={{
                     flex: 1,
                     minWidth: 0,
@@ -303,7 +305,7 @@ export function ShaderSettingsMenu() {
 
       <div className="context-menu__divider" />
       <button className="context-menu__item" onClick={closeContextMenu}>
-        Close
+        {t('Close', language)}
       </button>
     </div>
   );

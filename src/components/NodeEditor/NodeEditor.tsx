@@ -11,6 +11,7 @@ import {
   type OnConnect,
   type Connection,
   type Edge,
+  type FinalConnectionState,
   type InternalNode,
   BackgroundVariant,
   SelectionMode,
@@ -32,21 +33,40 @@ import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
 import { BUILTIN_TEXTURE_DRAG_TYPE } from './TextureCard';
-import { TILE_DROP_EVENT, type TileDropEventDetail, type TilePayload } from './tileDrag';
+import {
+  TILE_DROP_EVENT,
+  TILE_DRAG_MOVE_EVENT,
+  TILE_DRAG_END_EVENT,
+  getHtml5TileDrag,
+  endHtml5TileDrag,
+  type TileDropEventDetail,
+  type TilePayload,
+} from './tileDrag';
+import {
+  pickDropTargetNode,
+  planDragConnect,
+  wouldCreateCycle,
+  type ConnectHandle,
+  type DragConnectEndpoints,
+  type DragConnectPlan,
+  type NodeBox,
+} from './dragConnect';
+import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
 import { CostBar } from '@/components/Layout/CostBar';
-import { getCostColor, getContrastColor } from '@/utils/colorUtils';
+import { getCostColor, getCostScale, getContrastColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
-import { bridgeEdgesAcrossDeletedNodes, makeTypedEdge } from '@/utils/edgeUtils';
+import { bridgeEdgesAcrossDeletedNodes, makeTypedEdge, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
 import { makeImageNodeData, totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/utils/imageNode';
 import { usesExposedPorts, effectiveExposedPorts } from '@/utils/exposedPorts';
 import { encodeImageFile, isImageFile, isSvgFile } from '@/utils/imageImport';
 import { importShaderZip, importShaderText, isZipFile } from '@/engine/projectImport';
-import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
+import type { AppNode, AppEdge, NodeDefinition, ShaderNodeData, OutputNodeData } from '@/types';
 import { getNodeValues } from '@/types';
+import { nextPropertyName } from '@/utils/propertyConvert';
 import complexityData from '@/registry/complexity.json';
 import './NodeEditor.css';
 
@@ -103,6 +123,13 @@ function exposeConnectedTarget(targetId: string, targetHandle: string | null | u
 const DROP_ON_EDGE_RADIUS = 12;
 /** Pixels of movement before a node drag is considered "real" (and worth pushing history). */
 const DRAG_HISTORY_THRESHOLD = 2;
+/** Drag-connect: flow-px gap between the two handle anchors when the dropped
+ *  node snaps into place beside the node it just connected to. */
+const CONNECT_SNAP_GAP = 48;
+/** Placeholder node id when planning a drag-connect for a palette tile whose
+ *  node doesn't exist yet — a fresh id matches no edge, so it can neither
+ *  cycle nor occupy anything. Swapped for the real id at drop. */
+const TILE_PHANTOM_ID = '__fs-tile-drag__';
 
 type Measured = AppNode & { measured?: { width?: number; height?: number } };
 function getNodeSize(n: AppNode) {
@@ -168,6 +195,144 @@ function handleAnchor(
   return kind === 'source'
     ? { x: pos.x + w, y: pos.y + ht / 2, position: Position.Right, localCx: w, localCy: ht / 2 }
     : { x: pos.x, y: pos.y + ht / 2, position: Position.Left, localCx: 0, localCy: ht / 2 };
+}
+
+/**
+ * Drag-connect adapter: a node's MOUNTED handles of one kind as plain
+ * absolute-flow-space points for the pure planner. Mounted is the right
+ * filter — hidden `exposedPorts` parameters have no handle to aim a tooltip
+ * at, and React Flow can only draw an edge to a handle that exists.
+ * `ignoreSourceId` exempts edges from the drag gesture's own counterpart when
+ * computing `occupied` — re-docking a node onto the peer it already feeds must
+ * re-recognize that connection, not treat the socket as taken by a stranger
+ * and silently double-feed a second input.
+ */
+function mountedHandles(
+  node: InternalNode,
+  kind: 'source' | 'target',
+  edges: AppEdge[],
+  ignoreSourceId?: string,
+): ConnectHandle[] {
+  const pos = node.internals.positionAbsolute;
+  const bounds = node.internals.handleBounds?.[kind] ?? [];
+  const handles: ConnectHandle[] = [];
+  for (const b of bounds) {
+    if (b.id == null) continue;
+    handles.push({
+      id: b.id,
+      cx: pos.x + b.x + b.width / 2,
+      cy: pos.y + b.y + b.height / 2,
+      ...(kind === 'target'
+        ? {
+            occupied: edges.some(
+              (e) =>
+                e.target === node.id && e.targetHandle === b.id && e.source !== ignoreSourceId,
+            ),
+          }
+        : {}),
+    });
+  }
+  return handles;
+}
+
+/**
+ * Position delta that snaps a just-connected node beside its peer: connecting
+ * handles vertically aligned, a wire's length (CONNECT_SNAP_GAP) apart on the
+ * connection's side. Shared by the node-drag drop and the tile-drop snap so
+ * both gestures land identically.
+ */
+function connectSnapOffset(
+  plan: DragConnectPlan,
+  di: InternalNode,
+  hi: InternalNode,
+): { dx: number; dy: number } {
+  const feedHover = plan.mode === 'feed-hover';
+  const staticAnchor = feedHover
+    ? handleAnchor(hi, plan.targetHandle, 'target')
+    : handleAnchor(hi, plan.sourceHandle, 'source');
+  const dragAnchor = feedHover
+    ? handleAnchor(di, plan.sourceHandle, 'source')
+    : handleAnchor(di, plan.targetHandle, 'target');
+  return {
+    dx: staticAnchor.x + (feedHover ? -CONNECT_SNAP_GAP : CONNECT_SNAP_GAP) - dragAnchor.x,
+    dy: staticAnchor.y - dragAnchor.y,
+  };
+}
+
+/** Node types whose card renders CSS-scaled by cost (transform-origin top-left). */
+const COST_SCALED_TYPES = new Set(['shader', 'clock', 'preview', 'mathPreview']);
+
+/** Whether dropping this tile could splice into an edge — only node tiles
+ *  with both inputs and outputs qualify (placeTilePayload's own guard).
+ *  Anything else must not get the drop-on-edge highlight: it would promise
+ *  an insertion the drop never performs. */
+function tileCanSplice(payload: TilePayload): boolean {
+  if (payload.kind !== 'node') return false;
+  const def = NODE_REGISTRY.get(payload.nodeType);
+  return !!def && def.inputs.length > 0 && def.outputs.length > 0;
+}
+
+/**
+ * Visible size of a node's card. Cost-scaled node types render up to 1.35×
+ * LARGER than the measured layout box (transform-origin top-left, transform
+ * doesn't affect layout), so anything aiming at what the user SEES — target
+ * boxes and the dragged node's own center alike — must scale the measured box.
+ */
+function nodeVisualSize(node: AppNode): { w: number; h: number } {
+  const s = getNodeSize(node);
+  const scale = COST_SCALED_TYPES.has(node.type ?? '')
+    ? getCostScale((node.data as { cost?: number }).cost ?? 0)
+    : 1;
+  return { w: s.w * scale, h: s.h * scale };
+}
+
+/**
+ * Visual absolute bounding box of one node — boxes follow the VISIBLE card,
+ * otherwise exactly the expensive nodes users aim at grow a dead band along
+ * their right/bottom edges.
+ */
+function nodeVisualBox(node: AppNode, allNodes: AppNode[]): NodeBox {
+  const p = nodeAbsolutePos(node, allNodes);
+  const s = nodeVisualSize(node);
+  return { id: node.id, x: p.x, y: p.y, w: s.w, h: s.h };
+}
+
+/** Absolute bounding boxes of every legal drag-connect target. */
+function connectTargetBoxes(draggedId: string, allNodes: AppNode[]): NodeBox[] {
+  const boxes: NodeBox[] = [];
+  for (const other of allNodes) {
+    if (other.id === draggedId) continue;
+    if (other.type === 'group' || other.type === 'note') continue;
+    if ((other.className ?? '').includes('fs-collapsed-member')) continue;
+    boxes.push(nodeVisualBox(other, allNodes));
+  }
+  return boxes;
+}
+
+/**
+ * Boxes for the post-connect make-room cascade: every visible movable node in
+ * absolute coords, the just-connected pair marked fixed, and the placed
+ * node's box taken at its SNAPPED position (the store still holds the raw
+ * drop position when this runs).
+ */
+function makeRoomBoxes(
+  allNodes: AppNode[],
+  placedId: string,
+  placedAbs: { x: number; y: number },
+  peerId: string,
+): CascadeBox[] {
+  const out: CascadeBox[] = [];
+  for (const n of allNodes) {
+    if (n.type === 'group' || n.type === 'note') continue;
+    if ((n.className ?? '').includes('fs-collapsed-member')) continue;
+    const box = nodeVisualBox(n, allNodes);
+    if (n.id === placedId) {
+      box.x = placedAbs.x;
+      box.y = placedAbs.y;
+    }
+    out.push({ ...box, fixed: n.id === placedId || n.id === peerId });
+  }
+  return out;
 }
 
 /**
@@ -355,7 +520,8 @@ export function NodeEditor() {
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
   const isDarkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
-  const { screenToFlowPosition, getViewport, setViewport, getInternalNode } = useReactFlow();
+  const { screenToFlowPosition, flowToScreenPosition, getViewport, setViewport, getInternalNode } =
+    useReactFlow();
 
   // Copy/paste clipboard
   const clipboardRef = useRef<AppNode[]>([]);
@@ -519,6 +685,297 @@ export function NodeEditor() {
     dragStartPosRef.current = { x: node.position.x, y: node.position.y };
   }, []);
 
+  // --- Drag-connect preview (drag a node ONTO a node to wire them) ---
+  // Imperative DOM highlight + tooltip, same pattern as the drop-on-edge edge
+  // highlight: classes and a floating label are cheaper than re-rendering the
+  // graph 60×/s mid-drag. The ref holds the plan the drop will commit.
+  const connectPreviewRef = useRef<DragConnectPlan | null>(null);
+  const connectTooltipRef = useRef<HTMLDivElement | null>(null);
+
+  const clearConnectPreview = useCallback(() => {
+    const plan = connectPreviewRef.current;
+    if (!plan) return;
+    const hoverId = plan.mode === 'feed-hover' ? plan.target : plan.source;
+    document
+      .querySelector(`.react-flow__node[data-id="${CSS.escape(hoverId)}"]`)
+      ?.classList.remove('fs-connect-target');
+    document
+      .querySelector(
+        `.react-flow__node[data-id="${CSS.escape(plan.target)}"] .react-flow__handle.target[data-handleid="${CSS.escape(plan.targetHandle)}"]`,
+      )
+      ?.classList.remove('fs-connect-socket');
+    connectTooltipRef.current?.remove();
+    connectTooltipRef.current = null;
+    connectPreviewRef.current = null;
+  }, []);
+
+  /** Show (or move) the drag-connect preview for `plan`; tooltip floats left
+   *  of the chosen input socket and tracks it every drag frame. */
+  const showConnectPreview = useCallback(
+    (plan: DragConnectPlan, tooltipText: string) => {
+      const prev = connectPreviewRef.current;
+      const same =
+        prev &&
+        prev.source === plan.source &&
+        prev.sourceHandle === plan.sourceHandle &&
+        prev.target === plan.target &&
+        prev.targetHandle === plan.targetHandle;
+      if (!same) {
+        clearConnectPreview();
+        const hoverId = plan.mode === 'feed-hover' ? plan.target : plan.source;
+        document
+          .querySelector(`.react-flow__node[data-id="${CSS.escape(hoverId)}"]`)
+          ?.classList.add('fs-connect-target');
+        document
+          .querySelector(
+            `.react-flow__node[data-id="${CSS.escape(plan.target)}"] .react-flow__handle.target[data-handleid="${CSS.escape(plan.targetHandle)}"]`,
+          )
+          ?.classList.add('fs-connect-socket');
+        const tip = document.createElement('div');
+        tip.className = 'fs-connect-tooltip';
+        canvasRef.current?.appendChild(tip);
+        connectTooltipRef.current = tip;
+        connectPreviewRef.current = plan;
+      } else {
+        connectPreviewRef.current = plan;
+      }
+      const tip = connectTooltipRef.current;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (tip && rect) {
+        tip.textContent = tooltipText;
+        const screen = flowToScreenPosition({ x: plan.chosen.cx, y: plan.chosen.cy });
+        tip.style.left = `${screen.x - rect.left}px`;
+        tip.style.top = `${screen.y - rect.top}px`;
+      }
+    },
+    [clearConnectPreview, flowToScreenPosition],
+  );
+
+  /** Tooltip for a connect plan. `defFor` resolves a node id to its registry
+   *  def — the tile path maps the phantom id to the in-flight tile's def.
+   *  feed-hover reads "→ input"; feed-dragged names the static node too,
+   *  since the flow direction reverses; multi-output sources (Data-node
+   *  columns) name their chosen output. */
+  const buildConnectTooltip = useCallback(
+    (
+      plan: DragConnectPlan,
+      endpoints: DragConnectEndpoints,
+      defFor: (nodeId: string) => NodeDefinition | undefined,
+      hoverLabel: string,
+    ): string => {
+      const inLabel =
+        defFor(plan.target)?.inputs.find((i) => i.id === plan.targetHandle)?.label ??
+        plan.targetHandle;
+      const srcOutputs =
+        plan.mode === 'feed-hover' ? endpoints.draggedOutputs : endpoints.hoverOutputs;
+      const srcHandleLabel =
+        defFor(plan.source)?.outputs.find((o) => o.id === plan.sourceHandle)?.label ??
+        plan.sourceHandle;
+      const srcPart =
+        plan.mode === 'feed-hover'
+          ? srcOutputs.length > 1
+            ? `${srcHandleLabel} `
+            : ''
+          : `${hoverLabel}${srcOutputs.length > 1 ? ` ${srcHandleLabel}` : ''} `;
+      return `${srcPart}→ ${inLabel}`;
+    },
+    [],
+  );
+
+  /**
+   * Drag-connect preview for a palette tile in flight (HTML5 dragover or the
+   * touch tileDrag move stream). The node doesn't exist yet, so it plans as a
+   * PHANTOM: def-derived handle ids all sitting at the cursor — vertical tile
+   * movement therefore picks the hover node's socket by cursor alignment,
+   * while the tile side always offers its first free port (mirroring
+   * tryInsertOnEdge's first-port convention). Returns whether the cursor is
+   * over a node body at all, so the caller can suppress the drop-on-edge
+   * preview (never-both rule, same as node drags).
+   */
+  const previewTileConnect = useCallback(
+    (payload: TilePayload, clientX: number, clientY: number): boolean => {
+      if (payload.kind !== 'node') {
+        clearConnectPreview();
+        return false;
+      }
+      const def = NODE_REGISTRY.get(payload.nodeType);
+      if (!def) {
+        clearConnectPreview();
+        return false;
+      }
+      const pos = screenToFlowPosition({ x: clientX, y: clientY });
+      const store = useAppStore.getState();
+      const boxes = connectTargetBoxes(TILE_PHANTOM_ID, store.nodes);
+      const hoverId = pickDropTargetNode(pos.x, pos.y, boxes);
+      const hoverBox = hoverId ? boxes.find((b) => b.id === hoverId) : undefined;
+      if (!hoverBox) {
+        clearConnectPreview();
+        return false;
+      }
+      const hi = getInternalNode(hoverBox.id);
+      const hoverNode = store.nodes.find((n) => n.id === hoverBox.id);
+      if (!hi || !hoverNode) {
+        clearConnectPreview();
+        return true;
+      }
+      const logicalEdges = unwrapCollapsedGroupEdges(store.nodes, store.edges);
+      const phantomPorts = (ports: { id: string }[]): ConnectHandle[] =>
+        ports.map((p) => ({ id: p.id, cx: pos.x, cy: pos.y }));
+      const endpoints: DragConnectEndpoints = {
+        draggedId: TILE_PHANTOM_ID,
+        hoverId: hoverBox.id,
+        draggedCenterX: pos.x,
+        hoverCenterX: hoverBox.x + hoverBox.w / 2,
+        draggedInputs: phantomPorts(def.inputs),
+        draggedOutputs: phantomPorts(def.outputs),
+        hoverInputs: mountedHandles(hi, 'target', logicalEdges),
+        hoverOutputs: mountedHandles(hi, 'source', logicalEdges),
+      };
+      const plan = planDragConnect(endpoints, logicalEdges);
+      if (!plan) {
+        clearConnectPreview();
+        return true;
+      }
+      const defFor = (id: string) => {
+        if (id === TILE_PHANTOM_ID) return def;
+        const n = store.nodes.find((nn) => nn.id === id);
+        return n ? NODE_REGISTRY.get(n.data.registryType) : undefined;
+      };
+      showConnectPreview(
+        plan,
+        buildConnectTooltip(
+          plan,
+          endpoints,
+          defFor,
+          (hoverNode.data as { label?: string }).label ?? 'out',
+        ),
+      );
+      return true;
+    },
+    [
+      screenToFlowPosition,
+      getInternalNode,
+      clearConnectPreview,
+      showConnectPreview,
+      buildConnectTooltip,
+    ],
+  );
+
+  /**
+   * Snap a just-created tile node beside the peer it connected to, then make
+   * room (same overlap cascade as node-drag connects). Deferred two frames —
+   * React Flow hasn't measured the new node's handles at drop time. No
+   * history push: it rides addNode's entry, so undo reverses
+   * add + connect + snap + cascade together.
+   */
+  const scheduleTileConnectSnap = useCallback(
+    (nodeId: string, plan: DragConnectPlan) => {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const store = useAppStore.getState();
+          const hoverId = plan.mode === 'feed-hover' ? plan.target : plan.source;
+          const di = getInternalNode(nodeId);
+          const hi = getInternalNode(hoverId);
+          const node = store.nodes.find((n) => n.id === nodeId);
+          if (!di || !hi || !node) return;
+          const { dx, dy } = connectSnapOffset(plan, di, hi);
+          const abs = nodeAbsolutePos(node, store.nodes);
+          const shifts = resolveOverlapCascade(
+            makeRoomBoxes(store.nodes, nodeId, { x: abs.x + dx, y: abs.y + dy }, hoverId),
+          );
+          if (!dx && !dy && shifts.length === 0) return;
+          // Same position→membership reconciliation as the node-drag path:
+          // the snapped node and every cascade-shifted neighbor re-derive
+          // their group parent from where they actually landed.
+          const shiftById = new Map(shifts.map((s) => [s.id, s]));
+          const newParents = new Set<string>();
+          const next: AppNode[] = store.nodes.map((n) => {
+            const s = n.id === nodeId ? { dx, dy } : shiftById.get(n.id);
+            if (!s) return n;
+            const { node: moved, targetGroupId: g, parentChanged: pc } =
+              reparentedNode(n, store.nodes, n.position.x + s.dx, n.position.y + s.dy);
+            if (pc && g) newParents.add(g);
+            return moved;
+          });
+          for (const parentId of newParents) {
+            for (;;) {
+              const parentIdx = next.findIndex((p) => p.id === parentId);
+              if (parentIdx < 0) break;
+              const childIdx = next.findIndex(
+                (n, i) => i < parentIdx
+                  && (n as AppNode & { parentId?: string }).parentId === parentId,
+              );
+              if (childIdx < 0) break;
+              const [item] = next.splice(childIdx, 1);
+              next.splice(parentIdx, 0, item);
+            }
+          }
+          store.setNodes(next);
+        }),
+      );
+    },
+    [getInternalNode],
+  );
+
+  /**
+   * Commit a connection: single-input enforcement, edge add, hidden-socket
+   * exposure, and the image→normal colorSpace flip. History is the CALLER's
+   * responsibility — wire drags (onConnect) and drag-connect drops
+   * (onNodeDragStop) each bracket it under their own single pushHistory.
+   */
+  const applyConnection = useCallback(
+    (connection: Connection) => {
+      // Read fresh edges from store to avoid stale closure
+      const currentEdges = useAppStore.getState().edges;
+
+      // Enforce single-input: remove any existing edge to the same target handle
+      const filtered = currentEdges.filter(
+        (e) =>
+          !(e.target === connection.target && e.targetHandle === connection.targetHandle),
+      );
+
+      const newEdge = makeTypedEdge(
+        connection.source,
+        connection.sourceHandle,
+        connection.target,
+        connection.targetHandle,
+      );
+      setEdges(addEdge(newEdge, filtered) as AppEdge[]);
+      exposeConnectedTarget(connection.target, connection.targetHandle);
+
+      // Auto-linearize an image wired into the Output's Normal socket. The
+      // codegen decodes it as a tangent-space normal MAP via normalMap(), which
+      // needs LINEAR sampling — so flip the Image node to the 'data' colorSpace.
+      // Skip when the same image also drives an sRGB channel (color/emissive):
+      // one texture carries a single colorSpace and can't satisfy both, so we
+      // leave the user's choice alone rather than silently wrong-colour it.
+      // Mutating via setNodes here (mirroring updateNodeData's shape, but not
+      // calling it) keeps the connect + colorSpace flip under the caller's
+      // single pushHistory() → one undo step reverses the whole gesture.
+      if (connection.targetHandle === 'normal') {
+        const nodes = useAppStore.getState().nodes;
+        const src = nodes.find((n) => n.id === connection.source);
+        if (src?.data.registryType === 'imageNode') {
+          const feedsSrgb = currentEdges.some(
+            (e) =>
+              e.source === connection.source &&
+              (e.targetHandle === 'color' || e.targetHandle === 'emissive'),
+          );
+          if (!feedsSrgb && getNodeValues(src).colorSpace !== 'data') {
+            useAppStore.getState().setNodes(
+              nodes.map((n) =>
+                n.id === connection.source
+                  ? { ...n, data: { ...n.data, values: { ...getNodeValues(n), colorSpace: 'data' } } }
+                  : n,
+              ) as AppNode[],
+            );
+          }
+        }
+      }
+    },
+    [setEdges],
+  );
+
   /** Set or clear the CSS highlight on the nearest candidate edge. */
   const updateEdgeHighlight = useCallback(
     (bestId: string | null) => {
@@ -535,26 +992,101 @@ export function NodeEditor() {
     [clearEdgeHighlight],
   );
 
-  // Highlight the nearest edge when dragging a node close to it (drop-on-edge preview).
+  // Drag preview: hovering another node's BODY proposes a drag-connect
+  // (highlight + socket tooltip); otherwise fall back to the drop-on-edge
+  // nearest-edge highlight.
   const onNodeDrag = useCallback(
-    (_event: React.MouseEvent, draggedNode: AppNode) => {
-      if (draggedNode.type === 'group') return;
+    (_event: React.MouseEvent, draggedNode: AppNode, draggedNodes: AppNode[]) => {
+      if (draggedNode.type === 'group' || draggedNode.type === 'note') return;
+
+      const store = useAppStore.getState();
+      // Visible size, not the measured box: cost-scaled cards render bigger,
+      // so the tested point must be the center the user actually sees.
+      const { w: nw, h: nh } = nodeVisualSize(draggedNode);
+      const absPos = nodeAbsolutePos(draggedNode, store.nodes);
+      const cx = absPos.x + nw / 2;
+      const cy = absPos.y + nh / 2;
+
+      const boxes = connectTargetBoxes(draggedNode.id, store.nodes);
+      const hoverBox = (() => {
+        const id = pickDropTargetNode(cx, cy, boxes);
+        return id ? boxes.find((b) => b.id === id) : undefined;
+      })();
+      if (hoverBox) {
+        // --- Drag-connect: single-node drags only (a multi-select clump has
+        // no one "connecting" node). Wins over the drop-on-edge preview.
+        if (draggedNodes.length === 1) {
+          const hoverId = hoverBox.id;
+          const di = getInternalNode(draggedNode.id);
+          const hi = getInternalNode(hoverId);
+          const hoverNode = store.nodes.find((n) => n.id === hoverId);
+          // Plan against the LOGICAL graph: while a group is collapsed its
+          // boundary edges are rewritten onto the group node, which would
+          // contract all members into one vertex and fabricate cycles.
+          const logicalEdges = unwrapCollapsedGroupEdges(store.nodes, store.edges);
+          const endpoints =
+            di && hi && hoverNode
+              ? {
+                  draggedId: draggedNode.id,
+                  hoverId,
+                  draggedCenterX: cx,
+                  hoverCenterX: hoverBox.x + hoverBox.w / 2,
+                  draggedInputs: mountedHandles(di, 'target', logicalEdges, hoverId),
+                  draggedOutputs: mountedHandles(di, 'source', logicalEdges),
+                  hoverInputs: mountedHandles(hi, 'target', logicalEdges, draggedNode.id),
+                  hoverOutputs: mountedHandles(hi, 'source', logicalEdges),
+                }
+              : null;
+          const plan = endpoints ? planDragConnect(endpoints, logicalEdges) : null;
+          if (plan && endpoints && hoverNode) {
+            clearEdgeHighlight();
+            const defFor = (id: string) => {
+              const n = store.nodes.find((nn) => nn.id === id);
+              return n ? NODE_REGISTRY.get(n.data.registryType) : undefined;
+            };
+            showConnectPreview(
+              plan,
+              buildConnectTooltip(
+                plan,
+                endpoints,
+                defFor,
+                (hoverNode.data as { label?: string }).label ?? 'out',
+              ),
+            );
+            return;
+          }
+        }
+        // Over a node body with nothing to connect (nothing connectable, or a
+        // multi-select clump) — suppress the edge preview too. The drop
+        // suppresses splicing over any node body (overNodeBody in
+        // onNodeDragStop), and splicing onto a wire hidden UNDER a node would
+        // be a misfire anyway; showing a highlight here would promise an
+        // insertion the drop never performs.
+        clearConnectPreview();
+        clearEdgeHighlight();
+        return;
+      }
+      clearConnectPreview();
+
+      // --- Drop-on-edge preview ---
       const def = NODE_REGISTRY.get(draggedNode.data.registryType);
       if (!def || def.inputs.length === 0 || def.outputs.length === 0) {
         clearEdgeHighlight();
         return;
       }
-
-      const store = useAppStore.getState();
-      const { w: nw, h: nh } = getNodeSize(draggedNode);
-      const absPos = nodeAbsolutePos(draggedNode, store.nodes);
-      const cx = absPos.x + nw / 2;
-      const cy = absPos.y + nh / 2;
       const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
 
       updateEdgeHighlight(findNearestEdge(cx, cy, store.edges, getInternalNode, radius, draggedNode.id));
     },
-    [clearEdgeHighlight, updateEdgeHighlight, getInternalNode, getViewport],
+    [
+      clearConnectPreview,
+      showConnectPreview,
+      buildConnectTooltip,
+      clearEdgeHighlight,
+      updateEdgeHighlight,
+      getInternalNode,
+      getViewport,
+    ],
   );
 
   // Drop-on-edge: insert dragged node between source and target
@@ -562,9 +1094,32 @@ export function NodeEditor() {
   const onNodeDragStop = useCallback(
     (_event: React.MouseEvent, draggedNode: AppNode) => {
       const store = useAppStore.getState();
-      const allNodes = store.nodes;
 
       clearEdgeHighlight();
+      // Capture the drag-connect plan the preview promised, then tear the
+      // preview down — the drop commits exactly what the tooltip showed.
+      let connectPlan = connectPreviewRef.current;
+      clearConnectPreview();
+      // The graph can mutate mid-drag without a drag frame to refresh the
+      // preview (Cmd+Z with the pointer held still — the keydown handler has
+      // no drag guard). Committing a stale plan would insert a dangling edge
+      // that persists in the store, so re-validate both endpoints — and
+      // re-check acyclicity: an undo can RESTORE edges that make the captured
+      // plan a cycle planDragConnect would never have offered.
+      if (connectPlan) {
+        const ids = new Set(store.nodes.map((n) => n.id));
+        if (!ids.has(connectPlan.source) || !ids.has(connectPlan.target)) {
+          connectPlan = null;
+        } else if (
+          wouldCreateCycle(
+            unwrapCollapsedGroupEdges(store.nodes, store.edges),
+            connectPlan.source,
+            connectPlan.target,
+          )
+        ) {
+          connectPlan = null;
+        }
+      }
 
       // Group nodes are pure containers — they should never trigger drop-on-edge,
       // never anti-overlap-nudge, and never push history beyond what React Flow
@@ -583,10 +1138,14 @@ export function NodeEditor() {
         return;
       }
 
-      // Skip work entirely if the node didn't actually move (click without drag).
+      // Skip work entirely if the node didn't actually move (click without
+      // drag) — UNLESS a connect preview is showing: React Flow starts drags
+      // at 1px, so a sub-threshold drop can carry a plan whose tooltip/rings
+      // promised a connection (stacked nodes), and discarding it would make
+      // the preview lie.
       const startPos = dragStartPosRef.current;
       dragStartPosRef.current = null;
-      if (startPos) {
+      if (startPos && !connectPlan) {
         const moved = Math.hypot(
           draggedNode.position.x - startPos.x,
           draggedNode.position.y - startPos.y,
@@ -594,57 +1153,114 @@ export function NodeEditor() {
         if (moved < DRAG_HISTORY_THRESHOLD) return;
       }
 
-      const { w: nw, h: nh } = getNodeSize(draggedNode);
-      // Use absolute position for edge-proximity so grouped nodes compare correctly
-      const absPos = nodeAbsolutePos(draggedNode, allNodes);
-      const cx = absPos.x + nw / 2;
-      const cy = absPos.y + nh / 2;
-
-      // History snapshot covers BOTH the position change and any drop-on-edge insertion.
+      // History snapshot covers the position change plus any drag-connect or
+      // drop-on-edge mutation — one undo step for the whole gesture.
       // Pushed once here (not in onNodeDragStart) so click-only events don't add no-op entries.
       store.pushHistory();
 
-      // --- Drop-on-edge insertion ---
-      const def = NODE_REGISTRY.get(draggedNode.data.registryType);
-      if (def && def.inputs.length > 0 && def.outputs.length > 0) {
-        const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
-        tryInsertOnEdge(draggedNode.id, def, cx, cy, getInternalNode, radius);
+      // --- Drag-connect: commit the previewed connection ---
+      if (connectPlan) {
+        applyConnection({
+          source: connectPlan.source,
+          sourceHandle: connectPlan.sourceHandle,
+          target: connectPlan.target,
+          targetHandle: connectPlan.targetHandle,
+        });
       }
 
-      // --- Anti-overlap: nudge node if it sits on top of another ---
+      // applyConnection can rewrite node data (hidden-socket exposure, image
+      // colorSpace flip), so re-read state and work from the FRESH dragged
+      // node — building the final setNodes from the stale array would
+      // silently revert those changes.
+      const allNodes = useAppStore.getState().nodes;
+      const freshDragged = allNodes.find((n) => n.id === draggedNode.id) ?? draggedNode;
+
+      const { w: nw, h: nh } = getNodeSize(freshDragged);
+      // Use absolute position for edge-proximity so grouped nodes compare correctly,
+      // and the VISIBLE center (cost-scaled cards render bigger than their
+      // measured box) so the drop tests the same point the drag preview did.
+      const absPos = nodeAbsolutePos(freshDragged, allNodes);
+      const { w: vw, h: vh } = nodeVisualSize(freshDragged);
+      const cx = absPos.x + vw / 2;
+      const cy = absPos.y + vh / 2;
+
+      // --- Drop-on-edge insertion (a drop that just connected never also
+      // splices, and neither does a drop over any node BODY — the drag
+      // preview suppressed the edge highlight there, so splicing onto a wire
+      // hidden under the node would commit something never previewed) ---
+      const def = NODE_REGISTRY.get(freshDragged.data.registryType);
+      const overNodeBody =
+        connectPlan != null ||
+        pickDropTargetNode(cx, cy, connectTargetBoxes(freshDragged.id, allNodes)) != null;
+      if (!overNodeBody && def && def.inputs.length > 0 && def.outputs.length > 0) {
+        const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
+        tryInsertOnEdge(freshDragged.id, def, cx, cy, getInternalNode, radius);
+      }
+
+      // --- Placement clean-up ---
       const GAP = 10;
-      let posX = draggedNode.position.x;
-      let posY = draggedNode.position.y;
+      let posX = freshDragged.position.x;
+      let posY = freshDragged.position.y;
       let nudged = false;
+      let cascadeShifts: CascadeShift[] = [];
 
-      for (const other of allNodes) {
-        if (other.id === draggedNode.id) continue;
-        // Group containers + background notes must not push other nodes aside.
-        if (other.type === 'group' || other.type === 'note') continue;
-        // Only compare nodes in the same coordinate space (same parent).
-        if (other.parentId !== draggedNode.parentId) continue;
-        const { w: ow, h: oh } = getNodeSize(other);
-
-        // Check AABB overlap
-        const overlapX = Math.min(posX + nw, other.position.x + ow) - Math.max(posX, other.position.x);
-        const overlapY = Math.min(posY + nh, other.position.y + oh) - Math.max(posY, other.position.y);
-
-        if (overlapX > 0 && overlapY > 0) {
-          // Compute push-out distance for each direction
-          const pushRight = (other.position.x + ow + GAP) - posX;
-          const pushLeft = posX + nw - (other.position.x - GAP);
-          const pushDown = (other.position.y + oh + GAP) - posY;
-          const pushUp = posY + nh - (other.position.y - GAP);
-
-          // Pick smallest push-out
-          const minPush = Math.min(pushRight, pushLeft, pushDown, pushUp);
-
-          if (minPush === pushRight) posX += pushRight;
-          else if (minPush === pushLeft) posX -= pushLeft;
-          else if (minPush === pushDown) posY += pushDown;
-          else posY -= pushUp;
-
+      if (connectPlan) {
+        // Drag-connect drop: snap beside the node it just wired to —
+        // connecting handles aligned, a wire's length apart — then MAKE ROOM:
+        // the connected pair stays fixed (the alignment is the point of the
+        // gesture) and everything they overlap is pushed out, knock-on pushes
+        // rippling outward (overlapCascade.ts). The dragged node itself is
+        // never nudged off its alignment.
+        const hoverId =
+          connectPlan.mode === 'feed-hover' ? connectPlan.target : connectPlan.source;
+        const di = getInternalNode(freshDragged.id);
+        const hi = getInternalNode(hoverId);
+        if (di && hi) {
+          const { dx, dy } = connectSnapOffset(connectPlan, di, hi);
+          posX += dx;
+          posY += dy;
           nudged = true;
+        }
+        const placedAbs = {
+          x: absPos.x + (posX - freshDragged.position.x),
+          y: absPos.y + (posY - freshDragged.position.y),
+        };
+        cascadeShifts = resolveOverlapCascade(
+          makeRoomBoxes(allNodes, freshDragged.id, placedAbs, hoverId),
+          GAP,
+        );
+      } else {
+        // --- Anti-overlap: nudge the dropped node itself off whatever it
+        // landed on (plain moves and drop-on-edge splices; single pass) ---
+        for (const other of allNodes) {
+          if (other.id === freshDragged.id) continue;
+          // Group containers + background notes must not push other nodes aside.
+          if (other.type === 'group' || other.type === 'note') continue;
+          // Only compare nodes in the same coordinate space (same parent).
+          if (other.parentId !== freshDragged.parentId) continue;
+          const { w: ow, h: oh } = getNodeSize(other);
+
+          // Check AABB overlap
+          const overlapX = Math.min(posX + nw, other.position.x + ow) - Math.max(posX, other.position.x);
+          const overlapY = Math.min(posY + nh, other.position.y + oh) - Math.max(posY, other.position.y);
+
+          if (overlapX > 0 && overlapY > 0) {
+            // Compute push-out distance for each direction
+            const pushRight = (other.position.x + ow + GAP) - posX;
+            const pushLeft = posX + nw - (other.position.x - GAP);
+            const pushDown = (other.position.y + oh + GAP) - posY;
+            const pushUp = posY + nh - (other.position.y - GAP);
+
+            // Pick smallest push-out
+            const minPush = Math.min(pushRight, pushLeft, pushDown, pushUp);
+
+            if (minPush === pushRight) posX += pushRight;
+            else if (minPush === pushLeft) posX -= pushLeft;
+            else if (minPush === pushDown) posY += pushDown;
+            else posY -= pushUp;
+
+            nudged = true;
+          }
         }
       }
 
@@ -652,29 +1268,51 @@ export function NodeEditor() {
       // bounds, attach it; if it lands outside its current parent, detach it.
       // React Flow doesn't reparent on its own, so this is the only place that
       // mutates parentId based on drag.
-      const finalPosX = nudged ? posX : draggedNode.position.x;
-      const finalPosY = nudged ? posY : draggedNode.position.y;
+      const finalPosX = nudged ? posX : freshDragged.position.x;
+      const finalPosY = nudged ? posY : freshDragged.position.y;
       const { node: updatedNode, targetGroupId, parentChanged } =
-        reparentedNode(draggedNode, allNodes, finalPosX, finalPosY);
-      if (!nudged && !parentChanged) return;
+        reparentedNode(freshDragged, allNodes, finalPosX, finalPosY);
+      if (!nudged && !parentChanged && cascadeShifts.length === 0) return;
 
-      const updated: AppNode[] = allNodes.map((n) =>
-        n.id === draggedNode.id ? updatedNode : n,
-      );
+      // Cascade deltas are absolute-space, applied to local positions — a
+      // delta is parent-invariant, so grouped neighbors shift correctly too.
+      // Every shifted node gets the SAME position→membership reconciliation a
+      // user drag gets (reparentedNode): a member pushed out of its group
+      // frame detaches — otherwise it would invisibly vanish on collapse and
+      // ride the group's drags from a distance — and a free node pushed
+      // inside a frame attaches.
+      const shiftById = new Map(cascadeShifts.map((s) => [s.id, s]));
+      const newParents = new Set<string>();
+      if (parentChanged && targetGroupId) newParents.add(targetGroupId);
+      const updated: AppNode[] = allNodes.map((n) => {
+        if (n.id === freshDragged.id) return updatedNode;
+        const s = shiftById.get(n.id);
+        if (!s) return n;
+        const { node: shifted, targetGroupId: g, parentChanged: pc } =
+          reparentedNode(n, allNodes, n.position.x + s.dx, n.position.y + s.dy);
+        if (pc && g) newParents.add(g);
+        return shifted;
+      });
 
-      // React Flow requires the parent to come BEFORE its children in the array.
-      if (parentChanged && targetGroupId) {
-        const draggedIdx = updated.findIndex((n) => n.id === draggedNode.id);
-        const groupIdx = updated.findIndex((n) => n.id === targetGroupId);
-        if (draggedIdx >= 0 && groupIdx >= 0 && draggedIdx < groupIdx) {
-          const [draggedItem] = updated.splice(draggedIdx, 1);
-          updated.splice(groupIdx, 0, draggedItem);
+      // React Flow requires each parent to come BEFORE its children in the
+      // array — lift any child of a newly adopted group above it.
+      for (const parentId of newParents) {
+        for (;;) {
+          const parentIdx = updated.findIndex((p) => p.id === parentId);
+          if (parentIdx < 0) break;
+          const childIdx = updated.findIndex(
+            (n, i) => i < parentIdx
+              && (n as AppNode & { parentId?: string }).parentId === parentId,
+          );
+          if (childIdx < 0) break;
+          const [item] = updated.splice(childIdx, 1);
+          updated.splice(parentIdx, 0, item);
         }
       }
 
       store.setNodes(updated);
     },
-    [clearEdgeHighlight, getInternalNode, getViewport],
+    [clearEdgeHighlight, clearConnectPreview, applyConnection, getInternalNode, getViewport],
   );
 
   // Multi-node drag: React Flow fires this for selection drags (instead of
@@ -753,23 +1391,27 @@ export function NodeEditor() {
   );
 
   const onConnectEnd = useCallback(
-    (event: MouseEvent | TouchEvent) => {
-      if (connectSucceeded.current) {
-        pendingSourceRef.current = null;
-        return;
-      }
+    (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
+      const pending = pendingSourceRef.current;
+      pendingSourceRef.current = null;
+      if (connectSucceeded.current) return;
       // If this connection was initiated from an edge disconnect, don't open the menu
       if (isEdgeDisconnecting) {
         setEdgeDisconnecting(false);
-        pendingSourceRef.current = null;
         return;
       }
+      // Dropped ON a socket (or within CONNECTION_RADIUS of one), but no edge
+      // was made — the connection was rejected as invalid: wrong direction,
+      // self-connect, or a cycle. React Flow sets `toHandle` for the snapped
+      // handle regardless of validity, so it distinguishes "aimed at a socket
+      // and missed" from "let go over empty canvas". Only the latter is a
+      // request to add a node; popping the menu over the socket the user was
+      // aiming at is just noise on top of a failed connect.
+      if (connectionState.toHandle) return;
       // Connection dropped on empty space — open add-node menu with source pin info
       const clientX = 'clientX' in event ? event.clientX : event.changedTouches[0].clientX;
       const clientY = 'clientY' in event ? event.clientY : event.changedTouches[0].clientY;
-      const pending = pendingSourceRef.current;
       openContextMenu(clientX, clientY, 'canvas', undefined, undefined, pending?.nodeId, pending?.handleId);
-      pendingSourceRef.current = null;
     },
     [openContextMenu],
   );
@@ -781,59 +1423,13 @@ export function NodeEditor() {
     (connection: Connection) => {
       connectSucceeded.current = true;
       useAppStore.getState().pushHistory();
-      // Read fresh edges from store to avoid stale closure
-      const currentEdges = useAppStore.getState().edges;
-
-      // Enforce single-input: remove any existing edge to the same target handle
-      const filtered = currentEdges.filter(
-        (e) =>
-          !(e.target === connection.target && e.targetHandle === connection.targetHandle),
-      );
-
-      const newEdge = makeTypedEdge(
-        connection.source,
-        connection.sourceHandle,
-        connection.target,
-        connection.targetHandle,
-      );
-      setEdges(addEdge(newEdge, filtered) as AppEdge[]);
+      applyConnection(connection);
       // A drag that started as an edge disconnect ended in a successful
       // connect — onConnectEnd's early-return would leave the flag set and
       // silently swallow the NEXT empty-space drop's AddNodeMenu.
       setEdgeDisconnecting(false);
-      exposeConnectedTarget(connection.target, connection.targetHandle);
-
-      // Auto-linearize an image wired into the Output's Normal socket. The
-      // codegen decodes it as a tangent-space normal MAP via normalMap(), which
-      // needs LINEAR sampling — so flip the Image node to the 'data' colorSpace.
-      // Skip when the same image also drives an sRGB channel (color/emissive):
-      // one texture carries a single colorSpace and can't satisfy both, so we
-      // leave the user's choice alone rather than silently wrong-colour it.
-      // Mutating via setNodes here (mirroring updateNodeData's shape, but not
-      // calling it) keeps the connect + colorSpace flip under the single
-      // pushHistory() above → one undo step reverses the whole gesture.
-      if (connection.targetHandle === 'normal') {
-        const nodes = useAppStore.getState().nodes;
-        const src = nodes.find((n) => n.id === connection.source);
-        if (src?.data.registryType === 'imageNode') {
-          const feedsSrgb = currentEdges.some(
-            (e) =>
-              e.source === connection.source &&
-              (e.targetHandle === 'color' || e.targetHandle === 'emissive'),
-          );
-          if (!feedsSrgb && getNodeValues(src).colorSpace !== 'data') {
-            useAppStore.getState().setNodes(
-              nodes.map((n) =>
-                n.id === connection.source
-                  ? { ...n, data: { ...n.data, values: { ...getNodeValues(n), colorSpace: 'data' } } }
-                  : n,
-              ) as AppNode[],
-            );
-          }
-        }
-      }
     },
-    [setEdges],
+    [applyConnection],
   );
 
   const onPaneContextMenu = useCallback(
@@ -941,17 +1537,48 @@ export function NodeEditor() {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
 
+    // Drag-connect preview for a node tile in flight (payload comes from
+    // tileDrag's module record — dataTransfer is unreadable during dragover).
+    // Over a node body the drop-on-edge preview is suppressed, same
+    // never-both rule as node drags.
+    const tile = getHtml5TileDrag();
+    if (tile) {
+      if (previewTileConnect(tile, event.clientX, event.clientY)) {
+        clearEdgeHighlight();
+        return;
+      }
+      // A tile that can't splice (value/source nodes: no inputs) must not
+      // get the edge highlight either — the drop won't insert it.
+      if (!tileCanSplice(tile)) {
+        clearEdgeHighlight();
+        return;
+      }
+    }
+
     // Highlight the nearest edge for drop-on-edge insertion preview (asset browser drags).
     const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const store = useAppStore.getState();
     const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
     updateEdgeHighlight(findNearestEdge(pos.x, pos.y, store.edges, getInternalNode, radius));
-  }, [screenToFlowPosition, updateEdgeHighlight, getInternalNode, getViewport]);
+  }, [previewTileConnect, clearEdgeHighlight, screenToFlowPosition, updateEdgeHighlight, getInternalNode, getViewport]);
 
   // Place a node/group/texture at the given screen point. Shared by both the
   // HTML5 onDrop path (desktop) and the touch tileDrag path (iPad/phone).
   const placeTilePayload = useCallback(
-    (payload: TilePayload, clientX: number, clientY: number) => {
+    (payload: TilePayload, clientX: number, clientY: number, activate = false) => {
+      // Capture the drag-connect plan the drag preview promised (set by HTML5
+      // dragover or the touch move stream). Guards: only PHANTOM plans belong
+      // to a tile gesture (a live node-drag preview must not be hijacked),
+      // and click/Enter activation never previewed anything, so a plan found
+      // there is stale by definition (e.g. a swallowed dragend) — drop it.
+      const captured = connectPreviewRef.current;
+      const tilePlan =
+        !activate &&
+        captured &&
+        (captured.source === TILE_PHANTOM_ID || captured.target === TILE_PHANTOM_ID)
+          ? captured
+          : null;
+      clearConnectPreview();
       const position = screenToFlowPosition({ x: clientX, y: clientY });
 
       if (payload.kind === 'savedGroup') {
@@ -982,15 +1609,11 @@ export function NodeEditor() {
         newNodeId = newNode.id;
       } else {
         let values = { ...def.defaultValues };
-        if (def.type === 'property_float') {
-          let maxNum = 0;
-          for (const n of currentNodes) {
-            if (n.data.registryType !== 'property_float') continue;
-            const name = String(getNodeValues(n)?.name ?? '');
-            const m = name.match(/^property(\d+)$/);
-            if (m) maxNum = Math.max(maxNum, Number(m[1]));
-          }
-          values = { ...values, name: `property${maxNum + 1}` };
+        // Auto-name property nodes — same shared sequence as AddNodeMenu and
+        // the convert-to-uniform action, so tile drops can't mint duplicates.
+        if (def.type === 'property_float' || def.type === 'property_color') {
+          const prefix = def.type === 'property_color' ? 'color' : 'property';
+          values = { ...values, name: nextPropertyName(prefix, currentNodes) };
         }
         const newNode = {
           id: generateId(),
@@ -1002,12 +1625,53 @@ export function NodeEditor() {
         newNodeId = newNode.id;
       }
 
-      if (newNodeId && def.inputs.length > 0 && def.outputs.length > 0) {
-        const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
-        tryInsertOnEdge(newNodeId, def, position.x, position.y, getInternalNode, radius);
+      if (!newNodeId) return;
+
+      // --- Drag-connect: commit the previewed plan against the real node id.
+      // Rides addNode's pushHistory — add + connect + snap = one undo step.
+      if (tilePlan) {
+        const source = tilePlan.source === TILE_PHANTOM_ID ? newNodeId : tilePlan.source;
+        const target = tilePlan.target === TILE_PHANTOM_ID ? newNodeId : tilePlan.target;
+        const liveIds = new Set(useAppStore.getState().nodes.map((n) => n.id));
+        if (liveIds.has(source) && liveIds.has(target)) {
+          applyConnection({
+            source,
+            sourceHandle: tilePlan.sourceHandle,
+            target,
+            targetHandle: tilePlan.targetHandle,
+          });
+          scheduleTileConnectSnap(newNodeId, tilePlan);
+          return;
+        }
+      }
+
+      // --- Drop-on-edge insertion. DRAG drops never splice under a node
+      // body (the drag preview suppressed the edge highlight there, so
+      // nothing was promised); click/Enter adds showed no preview either way
+      // and keep their historical unconditional splice at canvas centre. ---
+      if (def.inputs.length > 0 && def.outputs.length > 0) {
+        const overNodeBody =
+          !activate &&
+          pickDropTargetNode(
+            position.x,
+            position.y,
+            connectTargetBoxes(newNodeId, useAppStore.getState().nodes),
+          ) != null;
+        if (!overNodeBody) {
+          const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
+          tryInsertOnEdge(newNodeId, def, position.x, position.y, getInternalNode, radius);
+        }
       }
     },
-    [screenToFlowPosition, addNode, getInternalNode, getViewport],
+    [
+      screenToFlowPosition,
+      addNode,
+      getInternalNode,
+      getViewport,
+      clearConnectPreview,
+      applyConnection,
+      scheduleTileConnectSnap,
+    ],
   );
 
   // Parse a dropped CSV on the host and place a Data node at the drop point.
@@ -1121,6 +1785,12 @@ export function NodeEditor() {
       // file can match twice.
       const files = event.dataTransfer.files;
       if (files && files.length > 0) {
+        // A drop carrying OS files is never a tile drag — any live tile
+        // payload record or connect preview is stale (a swallowed dragend
+        // can leave both armed) and must be healed here, or the next
+        // palette interaction would inherit a plan it never previewed.
+        clearConnectPreview();
+        endHtml5TileDrag();
         const csvs: File[] = [];
         const images: File[] = [];
         // A `.zip` export or a shader script (.js/.mjs/.tsl) is a *project* —
@@ -1206,10 +1876,14 @@ export function NodeEditor() {
         return;
       }
       const nodeType = event.dataTransfer.getData('application/reactflow-type');
-      if (!nodeType) return;
+      if (!nodeType) {
+        // Unrecognized drop — tear down any preview armed during its dragover.
+        clearConnectPreview();
+        return;
+      }
       placeTilePayload({ kind: 'node', nodeType }, event.clientX, event.clientY);
     },
-    [clearEdgeHighlight, placeTilePayload, placeCsvFile, placeImageFile],
+    [clearEdgeHighlight, clearConnectPreview, placeTilePayload, placeCsvFile, placeImageFile],
   );
 
 
@@ -1283,18 +1957,57 @@ export function NodeEditor() {
   });
 
   // Touch-drag landing pad: tiles (NodePreviewCard / SavedGroupCard /
-  // TextureCard) dispatch this event on the canvas when their finger drag
-  // releases over it. Routes through the same placement logic as HTML5 DnD.
+  // TextureCard) dispatch these events on the canvas — moves drive the same
+  // drag-connect / drop-on-edge previews HTML5 dragover shows, the drop
+  // routes through the same placement logic as HTML5 DnD, and end (any drag
+  // teardown, including HTML5 dragend) clears the previews.
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
-    const handler = (event: Event) => {
+    const onDropEvt = (event: Event) => {
       const detail = (event as CustomEvent<TileDropEventDetail>).detail;
-      placeTilePayload(detail.payload, detail.clientX, detail.clientY);
+      placeTilePayload(detail.payload, detail.clientX, detail.clientY, detail.activate ?? false);
     };
-    el.addEventListener(TILE_DROP_EVENT, handler);
-    return () => el.removeEventListener(TILE_DROP_EVENT, handler);
-  }, [placeTilePayload]);
+    const onMoveEvt = (event: Event) => {
+      const detail = (event as CustomEvent<TileDropEventDetail>).detail;
+      if (previewTileConnect(detail.payload, detail.clientX, detail.clientY)) {
+        clearEdgeHighlight();
+        return;
+      }
+      // Only payloads the drop can actually splice get the edge highlight
+      // (saved groups / textures / input-only nodes never splice).
+      if (!tileCanSplice(detail.payload)) {
+        clearEdgeHighlight();
+        return;
+      }
+      const pos = screenToFlowPosition({ x: detail.clientX, y: detail.clientY });
+      const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
+      updateEdgeHighlight(
+        findNearestEdge(pos.x, pos.y, useAppStore.getState().edges, getInternalNode, radius),
+      );
+    };
+    const onEndEvt = () => {
+      clearConnectPreview();
+      clearEdgeHighlight();
+    };
+    el.addEventListener(TILE_DROP_EVENT, onDropEvt);
+    el.addEventListener(TILE_DRAG_MOVE_EVENT, onMoveEvt);
+    el.addEventListener(TILE_DRAG_END_EVENT, onEndEvt);
+    return () => {
+      el.removeEventListener(TILE_DROP_EVENT, onDropEvt);
+      el.removeEventListener(TILE_DRAG_MOVE_EVENT, onMoveEvt);
+      el.removeEventListener(TILE_DRAG_END_EVENT, onEndEvt);
+    };
+  }, [
+    placeTilePayload,
+    previewTileConnect,
+    clearConnectPreview,
+    clearEdgeHighlight,
+    updateEdgeHighlight,
+    screenToFlowPosition,
+    getInternalNode,
+    getViewport,
+  ]);
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
@@ -1406,7 +2119,31 @@ export function NodeEditor() {
 
   return (
     <div className="node-editor" style={canvasCssVars}>
-      <div className="node-editor__canvas" ref={canvasRef}>
+      <div
+        className="node-editor__canvas"
+        ref={canvasRef}
+        // HTML5 drag wandering off the canvas (into the code editor / assets
+        // bar) must tear down the live previews — dragover stops firing here,
+        // so nothing else would. relatedTarget is the element being entered;
+        // moves between the canvas's own children are not a leave. Safari
+        // leaves relatedTarget null on dragleave (WebKit bug 66547, fixed
+        // only in 2026 builds), so fall back to coordinates there — a leave
+        // fired inside the canvas rect is a child-boundary crossing, and
+        // clearing on it would flicker the preview every crossing.
+        onDragLeave={(e) => {
+          const rt = e.relatedTarget as Node | null;
+          if (rt && e.currentTarget.contains(rt)) return;
+          if (!rt) {
+            const r = e.currentTarget.getBoundingClientRect();
+            if (
+              e.clientX > r.left && e.clientX < r.right &&
+              e.clientY > r.top && e.clientY < r.bottom
+            ) return;
+          }
+          clearConnectPreview();
+          clearEdgeHighlight();
+        }}
+      >
         <div className="node-editor__cost-overlay">
           <CostBar />
         </div>

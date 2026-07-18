@@ -33,10 +33,21 @@ export interface NodeDefinition {
   defaultValues?: Record<string, string | number>;
   description?: string;
   /**
-   * Variadic operand node (arithmetic add/sub/mul/div): renders a growing list
-   * of input sockets — one extra empty socket appears below the last wired
-   * operand — and emits a variadic TSL call (`add(a, b, c, …)`). See
-   * `effectiveInputs` in the registry for the socket-count rule.
+   * Grows its operand sockets: one extra empty socket appears below the last
+   * wired operand. See `effectiveInputs` in the registry for the count rule.
+   *
+   * This is the UI/socket half only. `chainable` additionally means the node
+   * FOLDS its operands (see below); `append` grows sockets but builds a vector,
+   * so it sets this flag alone.
+   */
+  variadic?: boolean;
+  /**
+   * Variadic operand node that folds (arithmetic add/sub/mul/div): emits a
+   * variadic TSL call (`add(a, b, c, …)`), fills absent operands with
+   * `chainIdentity`, and is priced as N−1 operations. Implies `variadic`.
+   *
+   * Do NOT set this for a node that merely grows sockets — nodeCost's N−1
+   * scaling and the evaluator's identity fold both assume a real fold.
    */
   chainable?: boolean;
   /**
@@ -45,6 +56,14 @@ export interface NodeDefinition {
    * inline default shown in each empty operand box. Only read when `chainable`.
    */
   chainIdentity?: number;
+  /**
+   * Per-node ceiling on grown operand sockets, below the global
+   * MAX_CHAIN_OPERANDS. Arithmetic folds over any number of operands, but
+   * `append` builds a VECTOR — and GPU vector types stop at vec4 — so it caps
+   * at 4. Only read when the node grows operands (`chainable` or `variadic`
+   * — see growsOperands()).
+   */
+  maxOperands?: number;
 }
 
 export interface ShaderNodeData {
@@ -208,4 +227,13 @@ export function setNodeValues(node: AppNode, patch: Record<string, string | numb
 /** Safely extract exposedPorts from any AppNode's data. */
 export function getNodeExposedPorts(node: AppNode): string[] {
   return (node.data as ShaderNodeData).exposedPorts ?? [];
+}
+
+/**
+ * TSL type name for a channel count — the vocabulary sockets are labelled in.
+ * Clamped to vec4: GPU vector types stop at four components.
+ */
+export function channelTypeName(channels: number): TSLDataType {
+  if (channels <= 1) return 'float';
+  return (channels === 2 ? 'vec2' : channels === 3 ? 'vec3' : 'vec4') as TSLDataType;
 }

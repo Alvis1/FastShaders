@@ -8,7 +8,7 @@ Bi-directional TSL (Three.js Shading Language) visual shader editor. Users build
 
 **Stack**: React 18 + TypeScript + Vite | `@xyflow/react` v12 (node graph) | `@monaco-editor/react` + `monaco-editor` (code editor, **bundled locally — no CDN**, see monacoSetup.ts) | `zustand` v5 (state) | `three` 0.184 (WebGPU + TSL — exclusively `three/tsl` built-ins, including the MaterialX noise family) | `@dagrejs/dagre` (auto-layout) | `@babel/parser` + `traverse` + `types` (code parsing) | Tauri v2 (`src-tauri/` — offline desktop shell)
 
-**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles a custom A-Frame 1.8.0 + Three.js r184 WebGPU in `a-frame-180-a-01.min.js`. The shaderloader (`a-frame-shaderloader-0.4.js`) rewrites the bare `'three/tsl'` import specifier into a `globalThis.THREE.TSL` destructure (via `globalizeBareImports`) so blob-loaded modules read the bundle's single Three.js instance — no shim file needed. It detects Object API (multi-channel) vs Simple API (single node) by checking for any `*Node` property (`colorNode`, `positionNode`, `normalNode`, `opacityNode`, `roughnessNode`, `metalnessNode`, `emissiveNode`). It also manages **property uniforms**: reads `export const schema` from modules (or auto-detects `params.XXX`/`const NAME = uniform(VALUE)` patterns), creates TSL uniforms, passes them to the shader function, and exposes `updateProperty(name, value)` for runtime updates. **Colour helpers**: `hsl` and `toHsl` are *not* exports of `three/tsl` (in r173 or r184 — only `mx_hsvtorgb`/`mx_rgbtohsv` exist). Whenever the graph contains an `hsl` or `toHsl` node, `graphToCode` emits a module-local branchless `Fn` helper at top-of-file; `codeToGraph` detects and `path.skip()`s those helpers so their bodies don't round-trip back into the graph as standalone arithmetic nodes.
+**A-Frame integration**: Exports use the [a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader) IIFE bundle which bundles a custom A-Frame 1.8.0 + Three.js r184 WebGPU in `a-frame-180-a-01.min.js`. The shaderloader (`a-frame-shaderloader-0.5.js`; 0.4 stays frozen for previously-exported shaders) rewrites the bare `'three/tsl'` import specifier into a `globalThis.THREE.TSL` destructure (via `globalizeBareImports`) so blob-loaded modules read the bundle's single Three.js instance — no shim file needed. It detects Object API (multi-channel) vs Simple API (single node) by checking for any `*Node` property (`colorNode`, `positionNode`, `normalNode`, `opacityNode`, `roughnessNode`, `metalnessNode`, `emissiveNode`). It also manages **property uniforms**: reads `export const schema` from modules (or auto-detects `params.XXX`/`const NAME = uniform(VALUE)` patterns), creates TSL uniforms, passes them to the shader function, and exposes `updateProperty(name, value)` for runtime updates. **Colour helpers**: `hsl` and `toHsl` are *not* exports of `three/tsl` (in r173 or r184 — only `mx_hsvtorgb`/`mx_rgbtohsv` exist). Whenever the graph contains an `hsl` or `toHsl` node, `graphToCode` emits a module-local branchless `Fn` helper at top-of-file; `codeToGraph` detects and `path.skip()`s those helpers so their bodies don't round-trip back into the graph as standalone arithmetic nodes.
 
 ---
 
@@ -59,7 +59,9 @@ src/
 │   │   ├── handles/
 │   │   │   └── TypedHandle.tsx        # Color-coded handles per data type
 │   │   ├── edges/
-│   │   │   ├── TypedEdge.tsx          # Multi-channel colored edges, drag-to-disconnect, info card
+│   │   │   ├── TypedEdge.tsx          # Multi-channel colored edges, drag-to-disconnect, routing waypoints, info card
+│   │   │   ├── bezierGeometry.ts      # Shared render↔hit-test curve math (control points, Catmull-Rom waypoint splines, point-to-spline distance)
+│   │   │   ├── bezierGeometry.test.ts # Unit tests for the curve/spline math
 │   │   │   ├── EdgeInfoCard.tsx       # Live value display on edges (per-channel, animated)
 │   │   │   └── EdgeInfoCard.css
 │   │   ├── inputs/
@@ -71,6 +73,8 @@ src/
 │   │   ├── SavedGroupCard.tsx         # Draggable tile for a user-saved group (Saved Groups tab)
 │   │   ├── TextureCard.tsx            # Draggable tile for a built-in texture (Textures tab, CPU canvas preview with per-texture renderer)
 │   │   ├── tileDrag.ts                # Touch/pen drag path for palette tiles (iOS has no HTML5 DnD) → 'fs-tile-drop' CustomEvent
+│   │   ├── AssetTooltip.tsx           # Hover-dwell tooltip for asset-bar tiles (body portal, viewport-clamped)
+│   │   ├── AssetTooltip.css
 │   │   └── menus/
 │   │       ├── ContextMenu.tsx        # Menu dispatcher (canvas/node/shader/edge/group/note/stripes/dataviz)
 │   │       ├── ContextMenu.css
@@ -81,7 +85,7 @@ src/
 │   │       ├── StripesSettingsMenu.tsx # Data Stripes node settings (strength, radial rings)
 │   │       ├── DataVizSettingsMenu.tsx # Data Viz node settings (tone curve, radial distribution)
 │   │       ├── NoteSettingsMenu.tsx    # Note recolor / delete
-│   │       └── EdgeContextMenu.tsx    # Edge delete menu
+│   │       └── EdgeContextMenu.tsx    # Edge delete + Add routing point menu
 │   ├── Preview/
 │   │   ├── ShaderPreview.tsx          # Sandboxed WebGPU iframe preview (geometry, lighting, subdivision, uniform sliders, camera)
 │   │   └── ShaderPreview.css
@@ -141,7 +145,8 @@ src/
     └── reset.css
 public/
 ├── js/                              # VENDORED (do not hand-edit) — synced from a-frame-shaderloader/js/ by the fs-vendor-sync vite plugin; vendorSync.test.ts fails on drift
-│   ├── a-frame-shaderloader-0.4.js   # A-Frame shader component (rewrites three/tsl→globalThis.THREE.TSL, TDZ fix + auto-import + property schema)
+│   ├── a-frame-shaderloader-0.5.js   # A-Frame shader component (rewrites three/tsl→globalThis.THREE.TSL, TDZ fix + auto-import + typed property schema: number/color/map)
+│   ├── a-frame-shaderloader-0.4.js   # FROZEN previous loader — shaders exported before 0.5 reference it from the CDN
 │   ├── a-frame-180-a-01.min.js       # A-Frame 1.8.0 IIFE bundle, r184 WebGPU
 │   └── aframe-orbit-controls.min.js  # Orbit controls for preview
 ├── podest.html                       # "Podest" — standalone full-screen shader viewer (drop .js/.zip shader or .glb/.gltf model; sandboxed stage). Opened via the toolbar "P" button
@@ -323,18 +328,37 @@ When writing TSL code to paste into FastShaders (or when generating code for an 
   shaderName: string, selectedHeadsetId: string // Toolbar state
   contextMenu: {
     open: boolean, x: number, y: number,
-    type: 'canvas' | 'node' | 'shader' | 'edge' | 'group',
+    type: 'canvas' | 'node' | 'shader' | 'edge' | 'group' | 'note' | 'stripes' | 'dataviz',
     nodeId?: string, edgeId?: string,
     sourceNodeId?: string, sourceHandleId?: string  // for handle-drop AddNodeMenu
   }
   // Groups
   savedGroups: SavedGroup[]                       // user-saved group library (localStorage `fs:savedGroups`)
   // Canvas + editor look-and-feel
-  nodeEditorBgColor: string                       // React Flow canvas background hex
-  codeEditorTheme: 'vs' | 'vs-dark'               // Monaco theme
+  nodeEditorBgColor: string                       // React Flow canvas background hex (active-theme value)
+  nodeEditorBgColorLight: string, nodeEditorBgColorDark: string  // per-theme canvas bg slots
+  codeEditorTheme: 'vs' | 'vs-dark'               // app-wide theme (Monaco + <html data-theme>)
   costColorLow: string, costColorHigh: string     // cost gradient endpoints
+  language: 'en' | 'lv'                           // UI language (display-only overlay)
 }
 ```
+
+---
+
+## Internationalization (English / Latvian) — `src/i18n/`
+
+A **display-only** English/Latvian overlay. The **LV** toolbar button (next to **SC**) toggles `store.language`, which is persisted to `fs:lang`, stamped on `<html lang>` (inline FOUC guard in `index.html`, mirroring the theme guard), and consumed at render.
+
+**Invariant:** Latvian never touches anything stored, generated, or matched by the engine. Node `type`s, TSL identifiers (`varName`), generated shader code, `.fastshader` payloads, `data.label`, and search's canonical English fields all stay English. Every lookup **falls back to English** when a Latvian string is missing, so partial coverage never breaks the UI. **On-canvas node headers are deliberately NOT translated** — they show the generated TSL variable name (`mul1`, `perlin1`) so the graph mirrors the code. The bilingual `Latviešu (English)` labels live where you *pick and read about* a node: the Add-node menu, the content browser, tooltips, the **Node-Settings menu** (its node-name line + port-toggle labels), and the Node Designer.
+
+**Data & single source of truth:**
+- `src/i18n/node-i18n.json` — `{ nodes: {type→LV label}, categories: {id→LV label} }`. The `fs-i18n-sync` vite plugin copies it to `public/node-i18n.json` at dev/build start so the standalone Node Designer fetches the SAME table (relative `fetch('node-i18n.json')`, degrades to EN). `src/i18n/i18nSync.test.ts` fails on drift — edit the source, never the public copy.
+- `src/i18n/lv.json` — React-only `{ descriptions: {type→LV}, ports: {EN label→LV}, ui: {EN string→LV} }`.
+- `src/i18n/index.ts` — pure helpers (no store dep, node-testable): `formatNodeLabel(enLabel, type, lang, bilingual=true)` → `Reizināt (Multiply)` on roomy surfaces, Latvian-only (`bilingual=false`) on tight palette tiles, bilingual on the Node-Settings menu name line; `formatCategoryLabel`, `nodeDescription`, `portLabel` (canvas socket tooltips via `TypedHandle`, the `ShaderSettingsMenu` output-port rows, and the `NodeSettingsMenu` port-toggle labels), `t(enKey, lang)` (UI strings keyed by their English text), and `nodeSearchLV(type)` (OR'd into `searchNodes` + ContentBrowser's `matchesDef`). `src/i18n/useLanguage.ts` is the store-reading hook. Latvian asset-drawer cards widen to fit-content (floored at the designer width) with the header clamped to two lines (`html[lang="lv"]` CSS) so long palette-tile names like `Vektoriālais reizinājums` stay readable.
+
+**Node Designer** (`node-designer.html`): its own `LV` topbar toggle (persisted to `nd:lang`) fetches `node-i18n.json` and re-renders every label site (`ndBaseLabel`/`ndNodeLabel`/`ndCatLabel`); the preview card header shows the full `Latviešu (English)` form so glyph widths are designed against the real rendered label.
+
+**Translations** were produced high-school-level (vidusskola) from authoritative Latvian math/graphics terminology, adversarially reviewed for grammar, terminology, and brevity; descriptions match the English length (one short 3rd-person-present clause). To regenerate the data files from a vetted `final-translations.json`, the transform splits it into `node-i18n.json` + `lv.json` (labels/categories vs descriptions/ports/ui).
 
 ---
 
@@ -762,8 +786,17 @@ When an edge is selected, an info card appears at the midpoint showing live valu
 - **Click** → Selects edge, shows EdgeInfoCard (live value badge at edge midpoint)
 - **Drag** (>5px threshold) → Disconnects edge from target, starts new connection from source handle
   - Uses pointer capture + synthetic mousedown dispatch on source handle via `requestAnimationFrame`
-- **Right-click** → Opens EdgeContextMenu (delete option)
+- **Right-click** → Opens EdgeContextMenu (Delete + "Add routing point")
+- **Double-click edge** → Drops a routing waypoint at the click point (see Routing Waypoints below)
 - **Invisible hit area**: 20px wide transparent stroke path for easy interaction
+
+### Routing Waypoints
+
+Edges can be curved through user-placed points so wires route around nodes.
+
+- **Add**: double-click an edge, or right-click → **"Add routing point"** (EdgeContextMenu). Both funnel through `insertWaypointOrdered()` + `store.setEdgeWaypoints(edgeId, next, { history: true })`. **Remove**: double-click the point dot.
+- **Storage & scope**: waypoints live on `edge.data.waypoints` (an array of `{x, y}` in **flow coords**) and are **visual-only** — `graphToCode`/`cpuEvaluator` never read them. They persist via the localStorage graph autosave and participate in undo (`setEdgeWaypoints` pushes history once per gesture), and are carried across a code→graph resync by endpoint match in `useSyncEngine` (like groups; a fresh `.js`/zip import starts without them).
+- **Spline**: the wire curves through the points as a Catmull-Rom spline. **The renderer and the drop-on-edge hit test share [bezierGeometry.ts](src/components/NodeEditor/edges/bezierGeometry.ts)** — a routed edge is measured against the SAME spline it draws (`distancePointToSpline`), so what highlights on hover is exactly what snaps.
 
 ---
 
@@ -778,6 +811,7 @@ When an edge is selected, an info card appears at the midpoint showing live valu
 - **Ctrl+V**: Paste copied nodes (shared `pasteNodes()` helper — offset +30px, clone edges between copied nodes)
 - **Ctrl+D**: Duplicate selected (reuses `pasteNodes()` helper)
 - **Ctrl+G**: Group selected (≥2 non-group nodes); **Ctrl+Shift+G** ungroups any selected group
+- **Shift+A**: Open the Add Node menu at canvas centre (search autofocused; keyboard-only node adding)
 - **Delete/Backspace**: Remove selected nodes and/or selected edges. React Flow's built-in delete is disabled (`deleteKeyCode={null}`); the manual handler in `NodeEditor.tsx` reads both `n.selected` and `edge.selected`. Deleting a group dissolves it first (children lifted) so they aren't orphaned with a dangling `parentId`. **Splice-delete**: the outgoing edges of a deleted node are re-parented to the upstream source of its first connected input via `bridgeEdgesAcrossDeletedNodes()`, so chains like `X → A → B → C` with A+B selected collapse to `X → C`. Multi-output deleted nodes fan out from the same live upstream; single-input-per-port is preserved by dropping duplicate bridges. Same helper is wired into `store.removeNode`, so every deletion path (Delete key, context menu, programmatic) behaves identically.
 
 ### Mouse Interactions
@@ -790,16 +824,16 @@ When an edge is selected, an info card appears at the midpoint showing live valu
 - **Right-click node**: Opens NodeSettingsMenu (edit values, duplicate, delete)
 - **Right-click output node**: Opens ShaderSettingsMenu (cost, ports, displacement, material, uniforms)
 - **Right-click group**: Opens GroupSettingsMenu (rename, recolor, save to library, ungroup)
-- **Right-click edge**: Opens EdgeContextMenu (delete)
+- **Right-click edge**: Opens EdgeContextMenu (delete + Add routing point)
 - **Drag from handle → release on empty space**: Opens AddNodeMenu at drop position
-- **Drop node on edge**: Inserts node between source and target (bezier curve proximity detection, `CONNECTION_RADIUS` = 40px threshold, shared with `connectionRadius` prop). Works both for existing nodes dragged on the canvas **and** for new nodes dragged from the asset browser.
+- **Drop node on edge**: Inserts node between source and target (curve-proximity detection via the shared `bezierGeometry.ts` math, within `DROP_ON_EDGE_RADIUS` = 12 screen-px ÷ zoom). Works both for existing nodes dragged on the canvas **and** for new nodes dragged from the asset browser. (Distinct from `CONNECTION_RADIUS` = 40, the separate wire-snap/reveal radius passed to React Flow's `connectionRadius` prop.)
 
 ### Drop-on-Edge Insertion
 
 When a node is dragged and dropped near an existing edge:
 
-1. Samples 20 points along the cubic bezier curve between source/target (via `bezierDist()`)
-2. `findNearestEdge()` returns the closest edge within `CONNECTION_RADIUS` (40px)
+1. Measures the cursor's distance to each edge's drawn curve via the shared [bezierGeometry.ts](src/components/NodeEditor/edges/bezierGeometry.ts) math — `distancePointToCubicBezier()` for a plain edge, `distancePointToSpline()` for a routed (waypoint) edge — so hit-testing always matches the exact spline the renderer draws
+2. `findNearestEdge()` returns the closest edge within `DROP_ON_EDGE_RADIUS` (12 screen-px ÷ current zoom)
 3. `tryInsertOnEdge()` removes the original edge and creates two new edges through the dropped node
 4. Uses first input and first output ports of the dropped node's registry definition
 
@@ -807,7 +841,7 @@ When a node is dragged and dropped near an existing edge:
 - **Existing nodes** — `onNodeDrag` highlights the candidate edge (thick stroke via `fs-edge-drop-target` CSS class, applied directly to the DOM via ref — not store — to avoid rerenders on every drag frame). `onNodeDragStop` calls `tryInsertOnEdge()`.
 - **Asset browser drags** — `onDragOver` converts screen coords to flow-space via `screenToFlowPosition` and highlights the candidate edge. `onDrop` creates the node via `addNode` then calls `tryInsertOnEdge()`.
 
-Both paths share the same module-level helpers (`getNodeSize`, `bezierDist`, `findNearestEdge`, `tryInsertOnEdge`) to avoid duplication.
+Both paths share the same module-level helpers (`getNodeSize`, `findNearestEdge`, `tryInsertOnEdge`), with the curve/spline distance math factored into `bezierGeometry.ts` (`bezierDist` no longer exists), to avoid duplication.
 
 History is pushed once in `onNodeDragStop` (covering both the position change and any edge insertion). Click-only events (no drag) are skipped via `DRAG_HISTORY_THRESHOLD = 2px` so the undo buffer isn't polluted with no-ops.
 
@@ -850,6 +884,9 @@ Routes to specific menu based on `contextMenu.type`:
 - `'shader'` → ShaderSettingsMenu
 - `'edge'` → EdgeContextMenu
 - `'group'` → GroupSettingsMenu
+- `'note'` → NoteSettingsMenu
+- `'stripes'` → StripesSettingsMenu
+- `'dataviz'` → DataVizSettingsMenu
 
 ### AddNodeMenu
 
@@ -971,24 +1008,27 @@ interface BoundarySocket {
 
 ## Canvas Background + Auto-Contrast
 
-- **`nodeEditorBgColor`** store field (localStorage `fs:nodeEditorBgColor`, default `#FAFAFA`). Wired to React Flow's root via `style={{ background }}` and to a color swatch button slotted inside the React Flow `<Controls>` next to the +/- buttons (custom CSS in [NodeEditor.css](src/components/NodeEditor/NodeEditor.css)). Also passed as `--canvas-bg` CSS variable on the `.node-editor` wrapper, consumed by the content browser (`background: var(--canvas-bg, var(--bg-panel))`) so the asset drawer background matches the canvas.
-- **Background pattern**: `BackgroundVariant.Cross` — cross/plus pattern with `gap: 20`, `size: 1`, `color: #BBBBBB`.
+- **`nodeEditorBgColor`** store field — the effective active-theme canvas color, remembered **per theme** as `nodeEditorBgColorLight` / `nodeEditorBgColorDark` (localStorage `fs:nodeEditorBgColor` / `fs:nodeEditorBgColorDark`; light default `#FAFAFA`, dark default `#1e1f22`). Wired to React Flow's root via `style={{ background }}` and to a color swatch button slotted inside the React Flow `<Controls>` next to the +/- buttons (custom CSS in [NodeEditor.css](src/components/NodeEditor/NodeEditor.css)). Also passed as `--canvas-bg` CSS variable on the `.node-editor` wrapper, consumed by the content browser (`background: var(--canvas-bg, var(--bg-panel))`) so the asset drawer background matches the canvas.
+- **Background pattern**: `BackgroundVariant.Cross` — cross/plus pattern with `gap: 20`, `size: 1`. The grid `color` is theme/contrast-driven (light: `#BBBBBB`; dark canvas: `rgba(255,255,255,0.12)`), computed in `NodeEditor.tsx` and passed as a prop.
 - **`getContrastColor(hex)`** in [colorUtils.ts](src/utils/colorUtils.ts) returns `'#000000'` or `'#ffffff'` based on Rec. 601 luminance (threshold 0.55).
 - **Cost badges** — [NodeBase.css](src/components/NodeEditor/nodes/NodeBase.css) defines `.react-flow .node-base__cost-badge` that reads `--node-cost-text` / `--node-cost-text-shadow` CSS vars set on the `.node-editor` wrapper from `getContrastColor(nodeEditorBgColor)`. The `!important` is needed to override the inline cost-gradient color the components still pass — that inline color only applies to NodePreviewCard tiles in the asset bar (outside React Flow's scope), where it should keep cost-gradient text.
 - **1-channel edges** — [TypedEdge.tsx](src/components/NodeEditor/edges/TypedEdge.tsx) reads `nodeEditorBgColor` and substitutes `getContrastColor()` for the single-channel edge color (formerly hardcoded `#000000`). Multi-channel R/G/B(A) edges keep their saturated colors.
 
 ---
 
-## Code Editor Theme Toggle
+## Theme Toggle (App-Wide Dark Mode)
 
-- **`codeEditorTheme: 'vs' | 'vs-dark'`** store field, persisted to `fs:codeEditorTheme`.
-- Sun/moon button in the code editor tab bar (after Save / Load Script / Download Script). Applies the chosen theme to both Monaco editors (TSL, Script).
+- **`codeEditorTheme: 'vs' | 'vs-dark'`** store field, persisted to `fs:codeEditorTheme`. The sun/moon button in the code editor tab bar (after Save / Load Script / Download Script) is the **one** dark-mode control for the whole app — not just Monaco.
+- **`setCodeEditorTheme(theme)`** does two things: (1) applies the theme to both Monaco editors (TSL, Script), and (2) stamps `data-theme="dark"` (or `"light"`) on `<html>` via `applyThemeAttribute()`. An inline FOUC guard in `index.html` sets that attribute from `fs:codeEditorTheme` **before first paint**, so the chrome never flashes light while the bundle loads; the store re-applies it on every toggle.
+- **Chrome tokens flip, node visuals don't**: `data-theme="dark"` flips only the CHROME tokens redefined in the `:root[data-theme="dark"]` block of [tokens.css](src/styles/tokens.css) (backgrounds, text, borders, chrome shadows, `color-scheme`). **Graph nodes render identically in both themes** — node bodies read the theme-invariant `--node-bg` (not `--bg-panel`), and `--shadow-node*` / `--type-*` / `--cost-*` / `--cat-*` are deliberately **not** redefined in the dark block.
+- **Canvas background is remembered PER THEME**: the store keeps `nodeEditorBgColorLight` / `nodeEditorBgColorDark` (persisted to `fs:nodeEditorBgColor` / `fs:nodeEditorBgColorDark`; light default `#FAFAFA`, dark default `#1e1f22`), and `nodeEditorBgColor` is the effective active-theme value the toggle swaps in. The color swatch writes back to whichever per-theme slot is active.
+- **React Flow surfaces flip via props, not tokens**: the dot-grid color and the minimap mask are computed in [NodeEditor.tsx](src/components/NodeEditor/NodeEditor.tsx) from `isDarkTheme` (the grid also tracks canvas contrast) and passed as props, since they're SVG fill / canvas paint rather than CSS-token-driven.
 
 ---
 
 ## Design System (tokens.css)
 
-- **Theme**: Light, flat design — node shadows tuned **dark + sharp** so they read against any canvas background, not feathery
+- **Theme**: Light by default, with an app-wide **dark mode** toggled by the code-editor sun/moon button (see "Theme Toggle" below) — flat design, node shadows tuned **dark + sharp** so they read against any canvas background, not feathery. Only chrome tokens flip in the `:root[data-theme="dark"]` block; graph nodes stay theme-invariant.
 - **Font**: Inter (sans), JetBrains Mono (mono)
 - **Spacing**: 4px base scale (--space-1 through --space-8)
 - **Shadows**: 4 levels (sm, md, lg, node). `--shadow-node` is a two-layer combo — tight contact shadow (`0 1px 2px rgba(0,0,0,0.55)`) + slightly diffused offset (`0 3px 6px rgba(0,0,0,0.4)`) — small blur radii keep edges crisp
@@ -1041,11 +1081,13 @@ Shared constant exported from `graphToCode.ts`, imported by `codeToGraph.ts` (fo
 - `fs:headsetId` — selected VR headset (via `loadString()` helper)
 - `fs:costColorLow` — cost gradient low color
 - `fs:costColorHigh` — cost gradient high color
-- `fs:nodeEditorBgColor` — canvas background hex color
-- `fs:codeEditorTheme` — Monaco theme (`'vs' | 'vs-dark'`)
+- `fs:nodeEditorBgColor` — canvas background hex color (light theme; also holds the active-theme value)
+- `fs:nodeEditorBgColorDark` — canvas background hex color for the dark theme (per-theme slot; default `#1e1f22`)
+- `fs:codeEditorTheme` — app-wide theme (`'vs' | 'vs-dark'`): themes Monaco AND stamps `data-theme` on `<html>`
 - `fs:savedGroups` — JSON array of `SavedGroup` snapshots (group + members + internal edges)
 - `fs:ignoreImageLimits` — user opted out of image size/pixel caps (set via the LimitModal checkbox)
 - `fs:assetBarCollapsed` — ContentBrowser (asset bar) collapse state
+- `fs:assetZoom` — ContentBrowser (asset bar) tile zoom level (Ctrl/Cmd+wheel over the strip or the floating +/− buttons)
 - `fs:viewerBounds` — standalone `podest.html` per-uniform slider bounds (that page owns this key, separate from the editor). Sibling keys `fs:viewerBg`, `fs:viewerSpinSpeed`, `fs:viewerSpin` persist that page's background color and spin speed/on-off
 
 > **Not storage keys:** `fs:uniform`, `fs:camera`, `fs:rotation`, `fs:reset-camera`, `fs:bg-color`, `fs:lighting`, `fs:playing`, `fs:geometry`, `fs:preview-ready` are **postMessage** types between ShaderPreview and the preview iframe; `fs:project-imported` is a **window CustomEvent** dispatched by `projectImport`.

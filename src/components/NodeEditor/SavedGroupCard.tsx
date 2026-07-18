@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import type { SavedGroup } from '@/store/useAppStore';
-import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
+import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
 
 export const SAVED_GROUP_DRAG_TYPE = 'application/fastshaders-saved-group';
@@ -24,6 +24,11 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
     (event: React.DragEvent) => {
       event.dataTransfer.setData(SAVED_GROUP_DRAG_TYPE, group.id);
       event.dataTransfer.effectAllowed = 'move';
+      // Record the payload for dragover (dataTransfer is unreadable there) so
+      // the canvas can withhold the drop-on-edge highlight — a group drop
+      // never splices, and the preview must not promise one. Teardown rides
+      // ContentBrowser's root onDragEnd (endHtml5TileDrag).
+      setHtml5TileDrag({ kind: 'savedGroup', id: group.id });
     },
     [group.id],
   );

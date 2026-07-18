@@ -1,5 +1,6 @@
 import { useReactFlow, type InternalNode } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import { insertWaypointOrdered } from '../edges/bezierGeometry';
 
 interface EdgeContextMenuProps {
@@ -9,6 +10,7 @@ interface EdgeContextMenuProps {
 export function EdgeContextMenu({ edgeId }: EdgeContextMenuProps) {
   const removeEdge = useAppStore((s) => s.removeEdge);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
+  const language = useAppStore((s) => s.language);
   const { getInternalNode, screenToFlowPosition } = useReactFlow();
 
   const handleDelete = () => {
@@ -40,10 +42,10 @@ export function EdgeContextMenu({ edgeId }: EdgeContextMenuProps) {
   return (
     <div className="context-menu__list">
       <button className="context-menu__item" onClick={handleAddPoint}>
-        Add routing point
+        {t('Add routing point', language)}
       </button>
       <button className="context-menu__item" onClick={handleDelete} style={{ color: '#e74c3c' }}>
-        Delete Connection
+        {t('Delete Connection', language)}
       </button>
     </div>
   );

@@ -32,6 +32,8 @@
         var el = document.documentElement;
         el.setAttribute('data-theme', dark ? 'dark' : 'light');
         el.style.background = dark ? '#17181b' : '#F5F5F5';
+        // Stamp the persisted UI language too; the store re-applies it on init.
+        el.setAttribute('lang', localStorage.getItem('fs:lang') === 'lv' ? 'lv' : 'en');
       } catch (e) { /* private mode / storage disabled — default light */ }
     </script>
   </head>

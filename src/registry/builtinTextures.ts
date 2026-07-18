@@ -8,7 +8,7 @@
 
 import type { AppNode, AppEdge, GroupNodeData } from '@/types';
 import { codeToGraph } from '@/engine/codeToGraph';
-import { autoLayout } from '@/engine/layoutEngine';
+import { autoLayout, estimateNodeSize } from '@/engine/layoutEngine';
 import { generateId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 
@@ -542,16 +542,17 @@ export function getBuiltinTextures(): BuiltinTexture[] {
       }
     }
 
-    // Compute bounding box for the group container
-    const NODE_W = 160;
-    const NODE_H = 80;
+    // Compute bounding box for the group container from each node's real
+    // estimated footprint (a flat placeholder here would clip the tall noise
+    // PreviewNodes at the frame's bottom edge).
     const PAD = 20;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of laid) {
+      const s = estimateNodeSize(n);
       minX = Math.min(minX, n.position.x);
       minY = Math.min(minY, n.position.y);
-      maxX = Math.max(maxX, n.position.x + NODE_W);
-      maxY = Math.max(maxY, n.position.y + NODE_H);
+      maxX = Math.max(maxX, n.position.x + s.width);
+      maxY = Math.max(maxY, n.position.y + s.height);
     }
 
     // Create group container

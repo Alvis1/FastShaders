@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import { MAX_COLUMNS } from '@/utils/csvParser';
 import './CsvImportModal.css';
 
@@ -12,6 +13,7 @@ import './CsvImportModal.css';
 export function CsvImportModal() {
   const head = useAppStore((s) => s.pendingCsvImports[0] ?? null);
   const resolve = useAppStore((s) => s.resolveCsvImport);
+  const language = useAppStore((s) => s.language);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -46,18 +48,18 @@ export function CsvImportModal() {
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="csv-import-modal__title" id="csv-import-modal-title">Import “{head.fileName}”</div>
+        <div className="csv-import-modal__title" id="csv-import-modal-title">{t('Import', language)} “{head.fileName}”</div>
         <div className="csv-import-modal__message">
-          This CSV has <strong>{head.columnCount} columns</strong> and{' '}
-          <strong>{head.rowCount} rows</strong>. A Data node exposes one output per column,
-          so a wide table gets unwieldy — you can convert rows to columns instead.
+          {t('This CSV has {columnCount} columns and {rowCount} rows. A Data node exposes one output per column, so a wide table gets unwieldy — you can convert rows to columns instead.', language)
+            .replace('{columnCount}', String(head.columnCount))
+            .replace('{rowCount}', String(head.rowCount))}
         </div>
         <div className="csv-import-modal__buttons">
           <button className="csv-import-modal__button" onClick={() => resolve('cancel')}>
-            Cancel
+            {t('Cancel', language)}
           </button>
           <button className="csv-import-modal__button" onClick={() => resolve('continue')}>
-            Continue as-is
+            {t('Continue as-is', language)}
           </button>
           <button
             className="csv-import-modal__button csv-import-modal__button--primary"
@@ -65,11 +67,13 @@ export function CsvImportModal() {
             title={
               canTranspose
                 ? undefined
-                : `Transposing would make ${head.rowCount} columns (max ${MAX_COLUMNS}).`
+                : t('Transposing would make {rowCount} columns (max {MAX_COLUMNS}).', language)
+                    .replace('{rowCount}', String(head.rowCount))
+                    .replace('{MAX_COLUMNS}', String(MAX_COLUMNS))
             }
             onClick={() => resolve('transpose')}
           >
-            Convert rows → columns
+            {t('Convert rows → columns', language)}
           </button>
         </div>
       </div>

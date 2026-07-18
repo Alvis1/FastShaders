@@ -270,7 +270,8 @@ const SIDE_VALUES: Record<string, number> = {
 
 interface ShaderModuleProperty {
   name: string;
-  defaultValue: number;
+  /** float property → number; colour property → '#rrggbb' hex string. */
+  defaultValue: number | string;
 }
 
 export interface BuildShaderModuleOptions {
@@ -364,21 +365,48 @@ export function buildShaderModule(
   for (const [orig, renamed] of renames) reverseRename.set(renamed, orig);
 
   const explicit = !!(properties && properties.length > 0);
-  const schemaEntries: Record<string, number> = {};
+  // number → a float uniform; `#rrggbb` string → a colour (vec3) uniform.
+  // shaderloader 0.5+ reads the schema `type` to decide which to build.
+  const schemaEntries: Record<string, number | string> = {};
   // Export declares all properties up-front so the a-entity API documents them
   // even when a property node isn't wired (no `uniform()` line). Wired ones get
   // their default overwritten below from the code literal, keeping the schema
   // default identical to the preview's auto-detected value (#9 parity). Schema
   // keys are sanitized to match graphToCode's generated var names.
   if (explicit) {
-    for (const p of properties!) schemaEntries[sanitizeIdentifier(p.name)] = p.defaultValue;
+    // Mirror graphToCode's claimName disambiguation: two property names that
+    // sanitize to the same identifier ('my speed' / 'my-speed' → my_speed) get
+    // my_speed, my_speed2, … — matching the emitted variable names, so this
+    // declared-up-front pass and the wired-line rewrite below agree on keys.
+    // The old raw-keyed version was last-wins: an UNWIRED property colliding
+    // with another silently vanished from the exported schema.
+    const taken = new Set<string>();
+    for (const p of properties!) {
+      const base = sanitizeIdentifier(p.name);
+      let key = base;
+      for (let i = 2; taken.has(key); i++) key = `${base}${i}`;
+      taken.add(key);
+      schemaEntries[key] = p.defaultValue;
+    }
   }
   // Accept any numeric literal — including scientific notation (`1e-7`) and
   // leading-dot (`.5`), both of which `String(value)` can produce — so a
   // property at an extreme value isn't left as an undriveable literal uniform.
   const uniformLineRe =
     /^(\s*)const\s+(\w+)\s*=\s*uniform\(\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*\)\s*;?\s*$/;
+  // Colour uniforms: `const X = uniform(color(0xrrggbb))`. Matched separately
+  // because the numeric pattern above deliberately accepts only a bare literal
+  // — `[^)]+`-style greediness here would also swallow unrelated calls.
+  const uniformColorLineRe =
+    /^(\s*)const\s+(\w+)\s*=\s*uniform\(\s*color\(\s*0x([0-9a-fA-F]{6})\s*\)\s*\)\s*;?\s*$/;
   const rewrittenDefLines = defLines.map((line) => {
+    const mc = line.match(uniformColorLineRe);
+    if (mc) {
+      const [, indent, codeVar, hex] = mc;
+      const schemaKey = reverseRename.get(codeVar) ?? codeVar;
+      schemaEntries[schemaKey] = `#${hex.toLowerCase()}`;
+      return `${indent}const ${codeVar} = params.${schemaKey};`;
+    }
     const m = line.match(uniformLineRe);
     if (!m) return line;
     const [, indent, codeVar, rawVal] = m;
@@ -453,7 +481,13 @@ export function buildShaderModule(
   if (hasParams) {
     schemaLines.push('export const schema = {');
     for (const [name, def] of Object.entries(schemaEntries)) {
-      schemaLines.push(`  ${name}: { type: 'number', default: ${def} },`);
+      // A colour default is a hex STRING and must be quoted + typed so the
+      // loader builds a Color-valued uniform instead of parseFloat-ing it to 0.
+      schemaLines.push(
+        typeof def === 'string'
+          ? `  ${name}: { type: 'color', default: '${def}' },`
+          : `  ${name}: { type: 'number', default: ${def} },`,
+      );
     }
     schemaLines.push('};');
     schemaLines.push('');

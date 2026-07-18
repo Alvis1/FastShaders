@@ -2,6 +2,7 @@ import './monacoSetup';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import { registerTSLLanguage } from './tslLanguage';
 import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
 import { embedProjectState, type FastShadersProject } from '@/engine/fastShadersProject';
@@ -33,6 +34,7 @@ const READONLY_EDITOR_OPTIONS = { ...BASE_EDITOR_OPTIONS, readOnly: true };
 
 export function CodeEditor() {
   const code = useAppStore((s) => s.code);
+  const language = useAppStore((s) => s.language);
   const codeErrors = useAppStore((s) => s.codeErrors);
   const setCode = useAppStore((s) => s.setCode);
   const requestCodeSync = useAppStore((s) => s.requestCodeSync);
@@ -57,12 +59,19 @@ export function CodeEditor() {
   const materialSettings = (outputNode?.data as OutputNodeData | undefined)?.materialSettings;
   const [activeTab, setActiveTab] = useState<CodeTab>('tsl');
 
-  // Extract property definitions from property_float nodes
+  // Extract property definitions from property_float / property_color nodes
   const properties: PropertyInfo[] = useMemo(() =>
     nodes
-      .filter((n) => n.data.registryType === 'property_float')
+      .filter((n) => n.data.registryType === 'property_float' || n.data.registryType === 'property_color')
       .map((n) => {
         const values = getNodeValues(n);
+        if (n.data.registryType === 'property_color') {
+          return {
+            name: String(values.name ?? 'color1'),
+            type: 'color' as const,
+            defaultValue: String(values.hex ?? '#ff0000'),
+          };
+        }
         return {
           name: String(values.name ?? 'property1'),
           type: 'float' as const,
@@ -326,8 +335,8 @@ export function CodeEditor() {
       {isDraggingFile && (
         <div className="code-editor__drop-overlay">
           <div className="code-editor__drop-msg">
-            <div className="code-editor__drop-title">Drop shader file</div>
-            <div className="code-editor__drop-sub">.js / .mjs / .tsl or FastShaders .zip — replaces the current shader (graph + preview if embedded)</div>
+            <div className="code-editor__drop-title">{t('Drop shader file', language)}</div>
+            <div className="code-editor__drop-sub">{t('.js / .mjs / .tsl or FastShaders .zip — replaces the current shader (graph + preview if embedded)', language)}</div>
           </div>
         </div>
       )}
@@ -343,7 +352,7 @@ export function CodeEditor() {
             className={`code-editor__tab ${activeTab === 'script' ? 'code-editor__tab--active' : ''}`}
             onClick={() => setActiveTab('script')}
           >
-            Script
+            {t('Script', language)}
           </button>
         </div>
         <div className="code-editor__actions">
@@ -352,11 +361,11 @@ export function CodeEditor() {
             const warnCount = codeErrors.filter(e => e.severity === 'warning').length;
             return errorCount > 0 ? (
               <span className="code-editor__errors">
-                {errorCount} error{errorCount > 1 ? 's' : ''}
+                {errorCount} {t(errorCount > 1 ? 'errors' : 'error', language)}
               </span>
             ) : warnCount > 0 ? (
               <span className="code-editor__warnings">
-                {warnCount} warning{warnCount > 1 ? 's' : ''}
+                {warnCount} {t(warnCount > 1 ? 'warnings' : 'warning', language)}
               </span>
             ) : null;
           })()}
@@ -364,28 +373,28 @@ export function CodeEditor() {
             <button
               className="code-editor__save"
               onClick={requestCodeSync}
-              title="Compile this TSL into the node graph — your work is auto-saved separately"
+              title={t('Compile this TSL into the node graph — your work is auto-saved separately', language)}
             >
-              Apply to Graph
+              {t('Apply to Graph', language)}
             </button>
           )}
           {isTSL && (
-            <button className="code-editor__action-btn" onClick={handleLoadScript} title="Load a shaderloader .js file into the editor">
-              Load
+            <button className="code-editor__action-btn" onClick={handleLoadScript} title={t('Load a shaderloader .js file into the editor', language)}>
+              {t('Load', language)}
             </button>
           )}
           <button
             className="code-editor__action-btn"
             onClick={handleDownloadShader}
-            title="Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image files alongside when the graph embeds images"
+            title={t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image files alongside when the graph embeds images', language)}
           >
-            Download Shader
+            {t('Download Shader', language)}
           </button>
           <button
             className="code-editor__theme-toggle"
             onClick={() => setCodeEditorTheme(isDark ? 'vs' : 'vs-dark')}
-            title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-            aria-label="Toggle dark mode"
+            title={isDark ? t('Switch to light mode', language) : t('Switch to dark mode', language)}
+            aria-label={t('Toggle dark mode', language)}
           >
             {isDark ? '\u263C' : '\u263E'}
           </button>
@@ -398,18 +407,18 @@ export function CodeEditor() {
           <div className={errors.length > 0 ? 'code-editor__error-details' : 'code-editor__warning-details'}>
             {errors.map((err, i) => (
               <div key={`e${i}`} className="code-editor__error-line">
-                {err.line ? `Line ${err.line}: ` : ''}{err.message}
+                {err.line ? t('Line {n}: ', language).replace('{n}', String(err.line)) : ''}{err.message}
               </div>
             ))}
             {warnings.map((err, i) => (
               <div key={`w${i}`} className="code-editor__warning-line">
-                {err.line ? `Line ${err.line}: ` : ''}{err.message}
+                {err.line ? t('Line {n}: ', language).replace('{n}', String(err.line)) : ''}{err.message}
               </div>
             ))}
             {errors.length > 0 ? (
-              <div className="code-editor__error-hint">Fix the errors above, then press Apply to Graph to update the node view.</div>
+              <div className="code-editor__error-hint">{t('Fix the errors above, then press Apply to Graph to update the node view.', language)}</div>
             ) : (
-              <div className="code-editor__error-hint">Unknown functions are preserved as-is in the graph.</div>
+              <div className="code-editor__error-hint">{t('Unknown functions are preserved as-is in the graph.', language)}</div>
             )}
           </div>
         );
@@ -428,7 +437,7 @@ export function CodeEditor() {
           />
           {isTSL && code.trim() === '' && !isDraggingFile && (
             <div className="code-editor__empty-hint">
-              {'// Drop a .js shader script here to import, or click Load above.'}
+              {t('// Drop a .js shader script here to import, or click Load above.', language)}
             </div>
           )}
         </div>

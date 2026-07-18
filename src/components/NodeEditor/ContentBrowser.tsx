@@ -5,8 +5,10 @@ import { getBuiltinTextures } from '@/registry/builtinTextures';
 import { NodePreviewCard } from './NodePreviewCard';
 import { SavedGroupCard } from './SavedGroupCard';
 import { TextureCard } from './TextureCard';
+import { setHtml5TileDrag, endHtml5TileDrag } from './tileDrag';
 import { useAppStore } from '@/store/useAppStore';
 import { readPersisted, usePersistedState } from '@/hooks/usePersistedState';
+import { formatCategoryLabel, nodeSearchLV, t } from '@/i18n';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
 import complexityData from '@/registry/complexity.json';
@@ -132,6 +134,7 @@ export function ContentBrowser() {
     return () => window.clearTimeout(t);
   }, [zoom]);
   const savedGroups = useAppStore((s) => s.savedGroups);
+  const language = useAppStore((s) => s.language);
   const scrollRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
   const tabsArrows = useScrollArrows(tabsRef);
@@ -147,7 +150,9 @@ export function ContentBrowser() {
     (d: NodeDefinition) =>
       d.label.toLowerCase().includes(q) ||
       d.type.toLowerCase().includes(q) ||
-      (d.description ?? '').toLowerCase().includes(q),
+      (d.description ?? '').toLowerCase().includes(q) ||
+      // Latvian label/description too, so a Latvian user can search in Latvian.
+      nodeSearchLV(d.type).includes(q),
     [q],
   );
 
@@ -187,6 +192,10 @@ export function ContentBrowser() {
   const onDragStart = useCallback((event: React.DragEvent, def: NodeDefinition) => {
     event.dataTransfer.setData('application/reactflow-type', def.type);
     event.dataTransfer.effectAllowed = 'move';
+    // dataTransfer data is unreadable during dragover (spec), so record the
+    // payload for NodeEditor's live drag-connect preview. Cleared on dragend
+    // (the root div's endHtml5TileDrag catches every tile's dragend bubble).
+    setHtml5TileDrag({ kind: 'node', nodeType: def.type });
   }, []);
 
   // Convert vertical scroll to horizontal scroll (native listener for non-passive).
@@ -241,7 +250,13 @@ export function ContentBrowser() {
   }
 
   return (
-    <div className={`content-browser${collapsed ? ' content-browser--collapsed' : ''}`}>
+    <div
+      className={`content-browser${collapsed ? ' content-browser--collapsed' : ''}`}
+      // Catches every tile's dragend bubble — including cancelled drags (Esc,
+      // released outside the canvas) — so the drag payload record and any live
+      // canvas previews are always torn down.
+      onDragEnd={endHtml5TileDrag}
+    >
       {/* Control cluster — floats OUTSIDE the box, above its top border. */}
       <div className="content-browser__controls">
         {!collapsed && (
@@ -287,7 +302,7 @@ export function ContentBrowser() {
           <input
             className="content-browser__search"
             type="text"
-            placeholder="Search…"
+            placeholder={t('Search…', language)}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -304,7 +319,7 @@ export function ContentBrowser() {
             }
             onClick={() => setActiveCategory('all')}
           >
-            All
+            {t('All', language)}
           </button>
           {displayCategories.map((cat) => (
             <button
@@ -313,7 +328,7 @@ export function ContentBrowser() {
               style={tabStyle(CAT_HEX[cat.id], activeCategory === cat.id)}
               onClick={() => setActiveCategory(cat.id)}
             >
-              {cat.label}
+              {formatCategoryLabel(cat.label, cat.id, language)}
             </button>
           ))}
           <button
@@ -321,7 +336,7 @@ export function ContentBrowser() {
             style={tabStyle(CAT_HEX.saved, activeCategory === 'saved')}
             onClick={() => setActiveCategory('saved')}
           >
-            Saved Groups {savedGroups.length > 0 ? `(${savedGroups.length})` : ''}
+            {t('Saved Groups', language)} {savedGroups.length > 0 ? `(${savedGroups.length})` : ''}
           </button>
         </div>
         {tabsArrows.canRight && <ScrollArrow direction="right" onClick={() => tabsArrows.scrollBy(1)} />}

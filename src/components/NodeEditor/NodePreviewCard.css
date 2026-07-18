@@ -15,6 +15,18 @@
   pointer-events: none;
 }
 
+/* Latvian asset cards: node names are longer, so a header may need two lines.
+   Cap it at two and ellipsize beyond — the card itself widens to fit-content
+   (see ShaderCardContent) so two lines is almost always enough and the ellipsis
+   rarely triggers. Scoped to lang=lv so the English drawer is untouched. */
+html[lang="lv"] .node-preview-card .node-base__title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* Override node-base sizes for larger preview cards — EXCEPT the ShaderNode
    replica (`--exact`), which must keep 1:1 live proportions (designer parity). */
 .node-preview-card .node-base:not(.node-preview-card__node--exact) {

@@ -1,4 +1,5 @@
 import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
+import { nodeSearchLV } from '@/i18n';
 
 const definitions: NodeDefinition[] = [
   // ===== INPUT NODES =====
@@ -165,6 +166,21 @@ const definitions: NodeDefinition[] = [
     defaultValues: { value: 1.0, name: 'property1' },
     description:
       'Named float uniform — appears as an adjustable property slider in the preview and the exported shader. Also: uniform, parameter',
+  },
+  {
+    // The Colour node's uniform counterpart — what a Color converts INTO.
+    // Deliberately NOT `type: 'color'`, so getFlowNodeType leaves it on the
+    // standard square card (the swatch ColorNode has nowhere to put a name).
+    type: 'property_color',
+    label: 'Property (color)',
+    category: 'input',
+    tslFunction: 'uniform',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Color', dataType: 'color' }],
+    defaultValues: { hex: '#ff0000', name: 'color1' },
+    description:
+      'Named colour uniform (a vec3) — appears as an adjustable property in the preview and the exported shader. Also: uniform, parameter, swatch, rgb',
   },
   {
     type: 'slider',
@@ -627,6 +643,17 @@ const definitions: NodeDefinition[] = [
       { id: 'b', label: 'B', dataType: 'any' },
     ],
     outputs: [{ id: 'out', label: 'Output', dataType: 'any' }],
+    // Grows sockets like the arithmetic ops, but `variadic` NOT `chainable`:
+    // append builds a vector, it doesn't fold. (chainable would price it as
+    // N−1 operations and fold absent operands through an identity — neither
+    // applies to a constructor.)
+    //
+    // Capped at 4 operands because there is no vec5. Note the real limit is on
+    // CHANNELS, not sockets — 4 floats fill a vec4, but so do 2 vec2s — so the
+    // emitter, not this count, guarantees the constructor never overflows.
+    // See buildAppendConstructor in graphToCode.
+    variadic: true,
+    maxOperands: 4,
     description: 'Combine values into a vector. Also: Combine, Join',
   },
 
@@ -887,8 +914,19 @@ export const NODE_REGISTRY = new Map<string, NodeDefinition>(
   [...allDefinitions, unknownNodeDef, dataNodeDef, imageNodeDef].map(d => [d.type, d])
 );
 
+/**
+ * TSL call name → the def that parses it. Last writer wins, so any def sharing
+ * a tslFunction with an earlier one must be excluded here:
+ *  - `slider` shares `float` with the Float node.
+ *  - `property_color` shares `uniform` with `property_float`. property_float
+ *    OWNS the bare `uniform(N)` form; a colour uniform is `uniform(color(...))`
+ *    and codeToGraph detects it from the ARGUMENT, not this map. Without the
+ *    exclusion every existing `uniform(1.0)` parsed back as a colour node.
+ */
 export const TSL_FUNCTION_TO_DEF = new Map<string, NodeDefinition>(
-  allDefinitions.filter(d => d.tslFunction && d.type !== 'slider').map(d => [d.tslFunction, d])
+  allDefinitions
+    .filter((d) => d.tslFunction && d.type !== 'slider' && d.type !== 'property_color')
+    .map((d) => [d.tslFunction, d]),
 );
 
 /** Positional operand-port id for a chainable node: 0→'a' … 25→'z', then 'arg26'+. */
@@ -910,6 +948,17 @@ export function chainPortIndex(handle: string): number {
  * operand list, the emitted call string, or the per-frame CPU fold).
  */
 export const MAX_CHAIN_OPERANDS = 64;
+
+/**
+ * Does this node grow operand sockets as they're wired?
+ *
+ * True for the arithmetic folds (`chainable`) AND for `append`, which grows
+ * sockets without folding. Use this for socket/layout questions; test
+ * `chainable` directly for fold semantics (identity fallback, N−1 pricing).
+ */
+export function growsOperands(def: NodeDefinition | undefined): boolean {
+  return !!def && (def.chainable === true || def.variadic === true);
+}
 
 /**
  * Effective input ports for a node instance. `chainable` (variadic arithmetic)
@@ -936,7 +985,7 @@ export function effectiveInputs(
   includeTrailingEmpty = true,
   valuedHandles: Iterable<string> = [],
 ): PortDefinition[] {
-  if (!def.chainable) return def.inputs;
+  if (!growsOperands(def)) return def.inputs;
   let connectedMax = -1;
   for (const h of connectedHandles) {
     const i = chainPortIndex(h);
@@ -952,6 +1001,7 @@ export function effectiveInputs(
   // The trailing empty slot follows the last CONNECTED operand only; valued
   // operands keep their own row but never open a new one.
   const count = Math.min(
+    def.maxOperands ?? MAX_CHAIN_OPERANDS,
     MAX_CHAIN_OPERANDS,
     Math.max(
       def.inputs.length,
@@ -984,7 +1034,10 @@ export function searchNodes(query: string): NodeDefinition[] {
     d.label.toLowerCase().includes(q) ||
     d.type.toLowerCase().includes(q) ||
     d.tslFunction.toLowerCase().includes(q) ||
-    d.description?.toLowerCase().includes(q)
+    d.description?.toLowerCase().includes(q) ||
+    // Latvian label/description, so search works in Latvian too (empty when
+    // untranslated). Canonical English fields above are always matched.
+    nodeSearchLV(d.type).includes(q)
   );
 }
 

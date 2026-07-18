@@ -72,11 +72,24 @@ export const PreviewNode = memo(function PreviewNode({
   );
   // Param sockets = permanently exposed ports, plus (while revealing) every
   // exposable param from the registry defaults. Temporary ones render dimmed.
+  //
+  // Sockets follow the REGISTRY's defaultValues order, not the stored
+  // exposedPorts order. `exposedPorts` records the order the user ticked the
+  // boxes in (NodeSettingsMenu's toggle appends to a Set), so exposing `scale`
+  // before `pos` used to render the sockets scale-over-pos while the settings
+  // menu — which maps Object.entries(def.defaultValues) — still listed pos
+  // first. Same list, two orders. Registry order is the one the menu shows, so
+  // it wins here too. OutputNode/ShaderNode already get this for free by
+  // filtering def.inputs; noise params live in defaultValues instead.
   const exposedList = data.exposedPorts ?? [];
   const paramPorts = useMemo(() => {
-    if (!revealHidden) return exposedList;
-    const all = new Set([...exposedList, ...Object.keys(def.defaultValues ?? {})]);
-    return Array.from(all);
+    const registryOrder = Object.keys(def.defaultValues ?? {});
+    const wanted = new Set(revealHidden ? [...exposedList, ...registryOrder] : exposedList);
+    const ordered = registryOrder.filter((k) => wanted.has(k));
+    // Anything exposed that the registry doesn't declare (legacy or
+    // hand-edited .fastshader) keeps its stored order, appended after.
+    for (const k of wanted) if (!ordered.includes(k)) ordered.push(k);
+    return ordered;
   }, [revealHidden, exposedList.join('|'), def]);
 
   // Tell React Flow to re-measure handles whenever the RENDERED port set

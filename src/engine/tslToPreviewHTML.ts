@@ -186,7 +186,7 @@ export const LIGHT_PRESETS: Record<LightingMode, LightSpec[]> = {
 function getScriptUrls() {
   return {
     iife: resolveAssetUrl('js/a-frame-180-a-01.min.js'),
-    shaderloader: resolveAssetUrl('js/a-frame-shaderloader-0.4.js'),
+    shaderloader: resolveAssetUrl('js/a-frame-shaderloader-0.5.js'),
     orbitControls: resolveAssetUrl('js/aframe-orbit-controls.min.js'),
   };
 }
@@ -762,7 +762,15 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         var comp = entity && entity.components && entity.components.shader;
         if (!comp || !comp._propertyUniforms) return;
         var u = comp._propertyUniforms[msg.name];
-        if (u) u.value = msg.value;
+        if (!u) return;
+        // Colour uniforms hold a THREE.Color — assigning a hex string to
+        // .value would replace the Color object with a string the renderer
+        // can't read; .set() mutates it in place instead.
+        if (u.value && u.value.isColor) {
+          try { u.value.set(msg.value); } catch (err) { /* bad colour string — keep last */ }
+        } else {
+          u.value = msg.value;
+        }
       } else if (msg.type === "fs:reset-camera") {
         var oc = camEl && camEl.components && camEl.components["orbit-controls"];
         if (oc && oc.controls && typeof oc.controls.reset === "function") {

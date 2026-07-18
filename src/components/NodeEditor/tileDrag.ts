@@ -26,12 +26,54 @@ export interface TileDropEventDetail {
   payload: TilePayload;
   clientX: number;
   clientY: number;
+  /** True for click/Enter activation (dropTileAtCanvasCenter) — a plain add
+   *  aimed at the canvas centre, with none of the drag-preview semantics. */
+  activate?: boolean;
 }
 
 /** Custom-event name dispatched on `.node-editor__canvas` when a touch drag drops on it. */
 export const TILE_DROP_EVENT = 'fs-tile-drop';
 
+/** Fired on `.node-editor__canvas` for every touch-drag move over it (detail:
+ *  TileDropEventDetail) — powers the live drag-connect / drop-on-edge preview.
+ *  HTML5 mouse drags use NodeEditor's onDragOver instead. */
+export const TILE_DRAG_MOVE_EVENT = 'fs-tile-drag-move';
+
+/** Fired on `.node-editor__canvas` when a tile drag ends any way other than
+ *  dropping on it (touch cleanup, HTML5 dragend after a cancel/outside drop,
+ *  the finger wandering off the canvas) so drag previews get torn down. */
+export const TILE_DRAG_END_EVENT = 'fs-tile-drag-end';
+
 const MOVE_THRESHOLD_PX = 6;
+
+/**
+ * HTML5 dnd hides the drag payload until drop (`dataTransfer.getData` returns
+ * '' during dragover by spec), so tiles ALSO record their payload here on
+ * dragstart — this is what lets NodeEditor.onDragOver plan a drag-connect
+ * preview for the node type in flight. Cleared on dragend.
+ */
+let html5TilePayload: TilePayload | null = null;
+
+export function setHtml5TileDrag(payload: TilePayload): void {
+  html5TilePayload = payload;
+}
+
+export function getHtml5TileDrag(): TilePayload | null {
+  return html5TilePayload;
+}
+
+/** dragend hook for palette tiles: forget the payload and tell the canvas to
+ *  drop any live previews (covers cancelled drags — Esc, drop outside). */
+export function endHtml5TileDrag(): void {
+  html5TilePayload = null;
+  dispatchTileDragEnd();
+}
+
+function dispatchTileDragEnd(): void {
+  document
+    .querySelector('.node-editor__canvas')
+    ?.dispatchEvent(new CustomEvent(TILE_DRAG_END_EVENT, { bubbles: false }));
+}
 
 /**
  * Add a tile's content without dragging, aimed at the centre of the canvas.
@@ -47,6 +89,7 @@ export function dropTileAtCanvasCenter(payload: TilePayload): void {
     payload,
     clientX: r.left + r.width / 2,
     clientY: r.top + r.height / 2,
+    activate: true,
   };
   canvas.dispatchEvent(new CustomEvent(TILE_DROP_EVENT, { detail, bubbles: false }));
 }
@@ -91,11 +134,19 @@ export function tileGhostZoom(tile: HTMLElement): string {
  * listeners drive the rest of the gesture. Caller should only invoke this for
  * `pointerType === 'touch' | 'pen'`.
  */
+// One touch tile drag at a time: NodeEditor's preview state (and the plan a
+// drop commits) is single-gesture, so a second finger starting a concurrent
+// drag could hand its plan to the OTHER finger's drop. Later starts are
+// ignored until the active gesture's cleanup.
+let touchDragActive = false;
+
 export function startTileDrag(
   startEvent: PointerEvent,
   payload: TilePayload,
   ghostHtml: string,
 ): void {
+  if (touchDragActive) return;
+  touchDragActive = true;
   let dragging = false;
   let ghost: HTMLDivElement | null = null;
   const startX = startEvent.clientX;
@@ -124,11 +175,15 @@ export function startTileDrag(
   };
 
   const cleanup = () => {
+    touchDragActive = false;
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
     window.removeEventListener('pointercancel', onUp);
     if (ghost?.parentNode) ghost.parentNode.removeChild(ghost);
     ghost = null;
+    // Runs AFTER onUp's drop dispatch (synchronous), so a landed drop has
+    // already captured its preview before this teardown broadcast.
+    dispatchTileDragEnd();
   };
 
   const onMove = (e: PointerEvent) => {
@@ -141,6 +196,18 @@ export function startTileDrag(
     e.preventDefault();
     ensureGhost(e.clientX, e.clientY);
     moveGhost(e.clientX, e.clientY);
+    // Stream the position to the canvas for the live drag-connect /
+    // drop-on-edge preview (the ghost is pointer-events: none, so
+    // elementFromPoint sees through it). Off-canvas → previews torn down.
+    const canvas = document
+      .elementFromPoint(e.clientX, e.clientY)
+      ?.closest('.node-editor__canvas');
+    if (canvas) {
+      const detail: TileDropEventDetail = { payload, clientX: e.clientX, clientY: e.clientY };
+      canvas.dispatchEvent(new CustomEvent(TILE_DRAG_MOVE_EVENT, { detail, bubbles: false }));
+    } else {
+      dispatchTileDragEnd();
+    }
   };
 
   const onUp = (e: PointerEvent) => {

@@ -1,4 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import type { ShaderFlowNode } from '@/types';
 import { getNodeValues } from '@/types';
 import { rowStyle, labelStyle, NumberRow, NodeActions } from './menuShared';
@@ -16,6 +17,7 @@ interface DataVizSettingsMenuProps {
 export function DataVizSettingsMenu({ nodeId }: DataVizSettingsMenuProps) {
   const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
+  const language = useAppStore((s) => s.language);
 
   const node = nodes.find((n) => n.id === nodeId) as ShaderFlowNode | undefined;
   if (!node || node.data.registryType !== 'dataviz') return null;
@@ -45,26 +47,26 @@ export function DataVizSettingsMenu({ nodeId }: DataVizSettingsMenuProps) {
 
   return (
     <div className="context-menu__list">
-      <div className="context-menu__category">Data Viz — tone</div>
+      <div className="context-menu__category">{t('Data Viz — tone', language)}</div>
 
       {/* Pre-scale + shift of the raw normalized value. */}
-      {numRow('scale', 'scale', 1)}
-      {numRow('offset', 'offset', 0)}
+      {numRow('scale', t('scale', language), 1)}
+      {numRow('offset', t('offset', language), 0)}
 
       {/* Input levels: values below low / above high map to the ramp ends. */}
-      {numRow('lowCutoff', 'low cutoff', 0, 0.05, 0, 1)}
-      {numRow('highCutoff', 'high cutoff', 1, 0.05, 0, 1)}
+      {numRow('lowCutoff', t('low cutoff', language), 0, 0.05, 0, 1)}
+      {numRow('highCutoff', t('high cutoff', language), 1, 0.05, 0, 1)}
 
       {/* Midpoint (gamma): value that maps to the ramp's centre. Lower = brighter. */}
-      {numRow('midpoint', 'midpoint', 0.5, 0.02, 0.01, 0.99)}
+      {numRow('midpoint', t('midpoint', language), 0.5, 0.02, 0.01, 0.99)}
 
       {/* Contrast around the midpoint (1 = none). */}
-      {numRow('contrast', 'contrast', 1, 0.05, 0)}
+      {numRow('contrast', t('contrast', language), 1, 0.05, 0)}
 
-      <div className="context-menu__category">Data Viz — shape</div>
+      <div className="context-menu__category">{t('Data Viz — shape', language)}</div>
 
       <label style={{ ...rowStyle, cursor: 'pointer' }}>
-        <span style={labelStyle}>radial</span>
+        <span style={labelStyle}>{t('radial', language)}</span>
         <input
           type="checkbox"
           checked={radial}
@@ -74,9 +76,9 @@ export function DataVizSettingsMenu({ nodeId }: DataVizSettingsMenuProps) {
 
       {radial && (
         <>
-          {numRow('center_x', 'center X', 0.5)}
-          {numRow('center_y', 'center Y', 0.5)}
-          {numRow('radius', 'radius', 0.5, 0.05, 0.05)}
+          {numRow('center_x', t('center X', language), 0.5)}
+          {numRow('center_y', t('center Y', language), 0.5)}
+          {numRow('radius', t('radius', language), 0.5, 0.05, 0.05)}
         </>
       )}
 

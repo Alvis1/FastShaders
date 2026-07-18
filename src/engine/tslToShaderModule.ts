@@ -26,8 +26,9 @@ import type { MaterialSettings } from '@/types';
 
 export interface PropertyInfo {
   name: string;
-  type: 'float';
-  defaultValue: number;
+  type: 'float' | 'color';
+  /** float → number; color → '#rrggbb' hex string. */
+  defaultValue: number | string;
 }
 
 // CDN base for the a-frame-shaderloader project. Pinned to @master — that is
@@ -43,9 +44,9 @@ function buildHeader(props: PropertyInfo[], tslCode = ''): string[] {
     '//',
     '// HTML setup — these two scripts are all you need (no import map, no shim):',
     '//   a-frame-180-a-01.min.js = A-Frame 1.8.0 + Three.js r184 (WebGPU) bundle',
-    '//   a-frame-shaderloader-0.4.js rewrites the three/tsl import to that bundle',
+    '//   a-frame-shaderloader-0.5.js rewrites the three/tsl import to that bundle',
     `//   <script src="${CDN_BASE}/a-frame-180-a-01.min.js"><${''}/script>`,
-    `//   <script src="${CDN_BASE}/a-frame-shaderloader-0.4.js"><${''}/script>`,
+    `//   <script src="${CDN_BASE}/a-frame-shaderloader-0.5.js"><${''}/script>`,
   ];
   if (hasProps) {
     // Use the sanitized identifier — that's the actual schema key / a-entity

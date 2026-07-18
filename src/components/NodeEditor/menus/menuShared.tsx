@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import { generateId } from '@/utils/idGenerator';
 
 /**
@@ -93,6 +94,7 @@ export function NodeActions({ nodeId }: { nodeId: string }) {
   const addNode = useAppStore((s) => s.addNode);
   const removeNode = useAppStore((s) => s.removeNode);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
+  const language = useAppStore((s) => s.language);
 
   const handleDuplicate = () => {
     const node = nodes.find((n) => n.id === nodeId);
@@ -115,10 +117,10 @@ export function NodeActions({ nodeId }: { nodeId: string }) {
     <>
       <div className="context-menu__divider" />
       <button className="context-menu__item" onClick={handleDuplicate}>
-        Duplicate Node
+        {t('Duplicate Node', language)}
       </button>
       <button className="context-menu__item" onClick={handleDelete} style={{ color: '#e74c3c' }}>
-        Delete Node
+        {t('Delete Node', language)}
       </button>
     </>
   );

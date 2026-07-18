@@ -1,3 +1,23 @@
+/* The dropped wire held between its source socket and the add-node menu.
+   Screen-space overlay, decorative only — it must never eat pointer events
+   aimed at the canvas or the menu, and it sits just under the menu so the
+   wire tucks behind the panel's corner rather than crossing it. */
+.connection-stub {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: calc(var(--z-menu) - 1);
+  overflow: visible;
+}
+
+.connection-stub path {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
 .context-menu {
   position: fixed;
   z-index: var(--z-menu);
@@ -18,6 +38,46 @@
   --font-size-xs: 12px;
   --font-size-sm: 14px;
   --font-size-md: 16px;
+}
+
+/* The add-node menu is the one menu whose rows carry a full sentence of
+   description. With only a min-width, the fixed-position box shrink-to-fits to
+   its widest row laid out on ONE line — and the longest description in the
+   registry (Data Viz, 274 chars) prefers ~1600px, so the menu just took every
+   pixel between the click point and the viewport edge (measured: 1212px of menu
+   on a 1512px window). `--item-desc`'s `white-space: normal` never got to wrap
+   anything because the box always grew instead. An explicit width is what turns
+   the wrapping on. Scoped to a modifier because the settings menus share
+   `.context-menu` and need room for their slider + number rows. */
+.context-menu--add-node {
+  width: 400px;
+}
+
+/* Long words (node labels, em-dashed clauses) must break rather than push the
+   fixed-width box wider. Inherited, so this covers the rows' spans too. */
+.context-menu--add-node .context-menu__item {
+  overflow-wrap: break-word;
+}
+
+/* Flex items default to `min-width: auto`, which floors the label at its
+   longest word and would shove the category tag out of the row. */
+.context-menu--add-node .context-menu__item-head > span:first-child {
+  min-width: 0;
+}
+
+/* The category is a short tag — it keeps its line and never wraps mid-word. */
+.context-menu--add-node .context-menu__item-category {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* GPU cost, inline after the node name. Tabular figures so the numbers line up
+   between rows; the colour is set inline from the user's cost gradient. */
+.context-menu__item-cost {
+  margin-left: var(--space-2);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Submenus set checkbox width/height inline (12px) — override so the boxes

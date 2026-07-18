@@ -313,6 +313,76 @@ describe('graphToCode — append output sizing', () => {
     expect(code).toMatch(/const append1 = vec3\(/);
     expect(code).not.toMatch(/const append1 = vec2\(/);
   });
+
+  /** The emitted constructor and its argument list must always agree — a vecN
+   *  handed more than N components is not valid TSL. */
+  const componentsOf = (call: string): number => {
+    const args = call.slice(call.indexOf('(') + 1, call.lastIndexOf(')')).split(',');
+    return args.reduce((sum, a) => {
+      const swizzle = /\.([xyzw]+)\s*$/.exec(a.trim());
+      if (swizzle) return sum + swizzle[1].length;
+      if (/vec4/.test(a)) return sum + 4;
+      if (/vec3|positionGeometry|normalLocal/.test(a)) return sum + 3;
+      if (/vec2|uv/.test(a)) return sum + 2;
+      return sum + 1;
+    }, 0);
+  };
+
+  it('grows to a 4th operand and emits vec4 for four floats', () => {
+    const nodes = [
+      ...['f1', 'f2', 'f3', 'f4'].map((n, i) => makeNode(n, 'float', { value: i })),
+      makeNode('ap', 'append'),
+      makeNode('out', 'output'),
+    ];
+    const edges = [
+      ...['a', 'b', 'c', 'd'].map((h, i) => makeEdge(`f${i + 1}`, 'out', 'ap', h)),
+      makeEdge('ap', 'out', 'out', 'color'),
+    ];
+    const { code } = graphToCode(nodes, edges);
+    const line = code.split('\n').find((l) => l.includes('const append1 ='))!;
+    expect(line).toMatch(/= vec4\(/);
+    expect(componentsOf(line)).toBe(4);
+  });
+
+  it('truncates past 4 channels instead of overfilling the constructor', () => {
+    // vec3 + vec3 = 6 channels. Previously emitted `vec4(posA, posB)` — a
+    // 4-slot constructor handed 6 components.
+    const p1 = makeNode('p1', 'positionGeometry');
+    const p2 = makeNode('p2', 'positionGeometry');
+    const ap = makeNode('ap', 'append');
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([p1, p2, ap, out], [
+      makeEdge('p1', 'out', 'ap', 'a'),
+      makeEdge('p2', 'out', 'ap', 'b'),
+      makeEdge('ap', 'out', 'out', 'color'),
+    ]);
+    const line = code.split('\n').find((l) => l.includes('const append1 ='))!;
+    expect(line).toMatch(/= vec4\(/);
+    expect(componentsOf(line)).toBe(4);
+    // The overflowing operand is swizzled down to the components that fit.
+    expect(line).toMatch(/\.x\b/);
+  });
+
+  it('drops operands entirely once the vec4 is already full', () => {
+    // uv + uv fills all 4 channels, so the third operand cannot appear.
+    const nodes = [
+      makeNode('u1', 'uv'),
+      makeNode('u2', 'uv'),
+      makeNode('f', 'float', { value: 9 }),
+      makeNode('ap', 'append'),
+      makeNode('out', 'output'),
+    ];
+    const { code } = graphToCode(nodes, [
+      makeEdge('u1', 'out', 'ap', 'a'),
+      makeEdge('u2', 'out', 'ap', 'b'),
+      makeEdge('f', 'out', 'ap', 'c'),
+      makeEdge('ap', 'out', 'out', 'color'),
+    ]);
+    const line = code.split('\n').find((l) => l.includes('const append1 ='))!;
+    expect(line).toMatch(/= vec4\(/);
+    expect(componentsOf(line)).toBe(4);
+    expect(line).not.toMatch(/float1/);
+  });
 });
 
 describe('graphToCode — output shape', () => {

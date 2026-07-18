@@ -29,11 +29,11 @@ describe('locateRegistryDescriptions', () => {
   const defs = getAllDefinitions();
 
   it('finds one slot per definition, keyed by node type', () => {
-    // 68 = getAllDefinitions().length. NODE_REGISTRY.size is 71 because the three
+    // 69 = getAllDefinitions().length. NODE_REGISTRY.size is 72 because the three
     // hidden defs (unknown/dataNode/imageNode) are separate consts outside the
     // `definitions` array, so they are correctly not located here.
-    expect(slots).toHaveLength(68);
-    expect(defs).toHaveLength(68);
+    expect(slots).toHaveLength(69);
+    expect(defs).toHaveLength(69);
     expect(new Set(slots.map(s => s.key))).toEqual(new Set(defs.map(d => d.type)));
   });
 
@@ -177,9 +177,9 @@ describe('splitAliases / joinAliases', () => {
   const defs = getAllDefinitions();
   const tailed = defs.filter(d => d.description?.includes('Also:'));
 
-  it('27 definitions carry an "Also:" tail', () => {
+  it('28 definitions carry an "Also:" tail', () => {
     // Measured against the live registry; separator is uniformly " Also: ".
-    expect(tailed).toHaveLength(27);
+    expect(tailed).toHaveLength(28);
   });
 
   it('round-trips every tailed description byte-exactly', () => {
@@ -252,7 +252,7 @@ describe('escaped-apostrophe safety', () => {
     // ...and must decode back to exactly the value we asked for.
     const relocated = locateRegistryDescriptions(out);
     expect(relocated.find(s => s.key === 'tangentLocal')!.value).toBe(nasty);
-    expect(relocated).toHaveLength(68);
+    expect(relocated).toHaveLength(69);
 
     // Still a single-line edit.
     const changed = registrySource

@@ -118,6 +118,44 @@
   opacity: 1 !important;
 }
 
+/* Drag-connect: ring the node a dragged node is hovering — releasing will
+   wire them. Outline sits on the wrapper (works for every node shape,
+   including the circular Color node) and stays outside the card so the
+   theme-invariant node visuals are untouched. */
+.node-editor .react-flow__node.fs-connect-target {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 4px;
+  border-radius: var(--border-radius-md);
+}
+
+/* Drag-connect: the input socket vertical alignment picked. Box-shadow ring
+   only — handles are positioned via transform, so transform is off-limits
+   (see TypedHandle.css), and sockets never move or scale. */
+.node-editor .react-flow__handle.fs-connect-socket {
+  box-shadow:
+    0 0 0 3px var(--border-focus),
+    0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+/* Drag-connect tooltip: names the socket the drop will plug into. Floats to
+   the LEFT of the chosen input socket (same side as the drag-reveal name
+   labels), in screen-space so it stays readable at any zoom. */
+.fs-connect-tooltip {
+  position: absolute;
+  transform: translate(-100%, -50%) translateX(-14px);
+  z-index: var(--z-menu);
+  pointer-events: none;
+  white-space: nowrap;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border-focus);
+  border-radius: var(--border-radius-sm);
+  padding: 2px 8px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
 /* Custom canvas background color picker, slotted into the React Flow Controls
    right next to the +/- buttons. The native color input is hidden behind a
    visible swatch that follows React Flow's button styling. */

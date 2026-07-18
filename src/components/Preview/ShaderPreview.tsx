@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import { getNodeValues } from '@/types';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import {
@@ -15,7 +16,17 @@ import './ShaderPreview.css';
 
 interface UniformInfo {
   name: string;
-  defaultValue: number;
+  kind: 'float' | 'color';
+  /** float → number; color → '#rrggbb' hex string. */
+  defaultValue: number | string;
+}
+
+/** A persistable uniform value: finite number (float) or '#rrggbb' (colour). */
+function isValidUniformValue(v: unknown): v is number | string {
+  return (
+    (typeof v === 'number' && Number.isFinite(v)) ||
+    (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v))
+  );
 }
 
 interface UniformBounds {
@@ -188,13 +199,13 @@ function validateUniformBounds(raw: string | null): Record<string, UniformBounds
   return {};
 }
 
-function validateUniformValues(raw: string | null): Record<string, number> {
+function validateUniformValues(raw: string | null): Record<string, number | string> {
   if (raw) {
     const parsed = JSON.parse(raw, safeJsonReviver);
     if (parsed && typeof parsed === 'object') {
-      const result: Record<string, number> = {};
+      const result: Record<string, number | string> = {};
       for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-        if (typeof v === 'number' && Number.isFinite(v)) result[k] = v;
+        if (isValidUniformValue(v)) result[k] = v;
       }
       return result;
     }
@@ -235,14 +246,25 @@ function fetchObjText(geometry: 'teapot' | 'bunny'): Promise<string> {
 function extractUniforms(code: string): UniformInfo[] {
   const result: UniformInfo[] = [];
   const seen = new Set<string>();
-  const regex = /\bconst\s+(\w+)\s*=\s*uniform\(\s*([^)]+)\s*\)/g;
+  // Colour pass FIRST: the numeric regex's `[^)]+` stops at the first ')', so
+  // it also matches `uniform(color(0xff0000)` with a garbage capture — colour
+  // names must be claimed before the numeric pass sees them. Same ordering rule
+  // as the shaderloader's autoDetectSchema.
+  const colorRegex = /\bconst\s+(\w+)\s*=\s*uniform\(\s*color\(\s*0x([0-9a-fA-F]{6})\s*\)\s*\)/g;
   let m: RegExpExecArray | null;
+  while ((m = colorRegex.exec(code)) !== null) {
+    const name = m[1];
+    if (seen.has(name)) continue;
+    seen.add(name);
+    result.push({ name, kind: 'color', defaultValue: `#${m[2].toLowerCase()}` });
+  }
+  const regex = /\bconst\s+(\w+)\s*=\s*uniform\(\s*([^)]+)\s*\)/g;
   while ((m = regex.exec(code)) !== null) {
     const name = m[1];
     if (seen.has(name)) continue;
     seen.add(name);
     const val = parseFloat(m[2]);
-    result.push({ name, defaultValue: isNaN(val) ? 0 : val });
+    result.push({ name, kind: 'float', defaultValue: isNaN(val) ? 0 : val });
   }
   return result;
 }
@@ -252,6 +274,7 @@ export function ShaderPreview() {
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
   const shaderName = useAppStore((s) => s.shaderName);
+  const language = useAppStore((s) => s.language);
 
   // Read material settings from the output node
   const outputNode = nodes.find((n) => n.data.registryType === 'output');
@@ -349,11 +372,16 @@ export function ShaderPreview() {
   const rotationRef = useRef<CameraPosition | null>(loadRotation());
 
   // Property uniforms detected from the generated code, filtered to only those
-  // whose property_float node has at least one outgoing edge (i.e. is connected).
+  // whose property node has at least one outgoing edge (i.e. is connected).
+  // BOTH property kinds must be scanned: with only property_float here, the
+  // presence of one float property made the connected-names set float-only and
+  // silently filtered every colour picker out of the overlay.
   const uniforms = useMemo(() => {
     const all = extractUniforms(previewCode);
     // If no property nodes exist (e.g. direct-assignment mode), show all
-    const propertyNodes = nodes.filter((n) => n.data.registryType === 'property_float');
+    const propertyNodes = nodes.filter(
+      (n) => n.data.registryType === 'property_float' || n.data.registryType === 'property_color',
+    );
     if (propertyNodes.length === 0) return all;
     // Build set of connected property node IDs (have at least one outgoing edge)
     const connectedIds = new Set<string>();
@@ -394,7 +422,7 @@ export function ShaderPreview() {
   useEffect(() => {
     setUniformValues((prev) => {
       let changed = false;
-      const next: Record<string, number> = { ...prev };
+      const next: Record<string, number | string> = { ...prev };
       for (const u of uniforms) {
         if (!(u.name in prev)) {
           next[u.name] = u.defaultValue;
@@ -408,6 +436,10 @@ export function ShaderPreview() {
 
   // Refs for the message handler so it doesn't need to re-bind on every change
   const uniformValuesRef = useRef(uniformValues);
+  const uniformKindsRef = useRef<Map<string, 'float' | 'color'>>(new Map());
+  useEffect(() => {
+    uniformKindsRef.current = new Map(uniforms.map((u) => [u.name, u.kind]));
+  }, [uniforms]);
   useEffect(() => { uniformValuesRef.current = uniformValues; }, [uniformValues]);
 
   // Single message handler for all iframe → parent traffic:
@@ -441,6 +473,15 @@ export function ShaderPreview() {
         // did at boot — that's what was causing the post-refresh red
         // material (the re-push was racing with shader application).
         for (const [name, value] of Object.entries(uniformValuesRef.current)) {
+          // Values persist by NAME across shader edits, so a name can come
+          // back as a different KIND (float property deleted, colour property
+          // re-added under the same name). A '#hex' string parseFloats to NaN
+          // on a float uniform and a number is garbage to a THREE.Color —
+          // push only kind-consistent values and let the schema default stand
+          // otherwise. Names not in the current shader still pass through
+          // unchanged (the iframe ignores unknown names).
+          const kind = uniformKindsRef.current.get(name);
+          if (kind && typeof value !== (kind === 'color' ? 'string' : 'number')) continue;
           win.postMessage({ type: 'fs:uniform', name, value }, '*');
         }
       } else if (data.type === 'fs:camera') {
@@ -485,7 +526,7 @@ export function ShaderPreview() {
     // the overlay reflects the change, AND push to the iframe immediately
     // (the rebuild path's fs:preview-ready handler is a safety net for the
     // case where lighting/subdivision did trigger a rebuild).
-    const defaults: Record<string, number> = {};
+    const defaults: Record<string, number | string> = {};
     for (const u of uniforms) {
       defaults[u.name] = u.defaultValue;
       win?.postMessage({ type: 'fs:uniform', name: u.name, value: u.defaultValue }, '*');
@@ -493,8 +534,8 @@ export function ShaderPreview() {
     setUniformValues(defaults);
   }, [uniforms]);
 
-  // Slider drag → live uniform update via postMessage
-  const handleUniformChange = useCallback((name: string, value: number) => {
+  // Slider drag / colour pick → live uniform update via postMessage
+  const handleUniformChange = useCallback((name: string, value: number | string) => {
     setUniformValues((prev) => ({ ...prev, [name]: value }));
     iframeRef.current?.contentWindow?.postMessage({ type: 'fs:uniform', name, value }, '*');
   }, []);
@@ -725,8 +766,8 @@ export function ShaderPreview() {
         <button
           className="shader-preview__play-btn"
           onClick={() => setPlaying((p) => !p)}
-          title={playing ? 'Pause rotation' : 'Play rotation'}
-          aria-label={playing ? 'Pause rotation' : 'Play rotation'}
+          title={playing ? t('Pause rotation', language) : t('Play rotation', language)}
+          aria-label={playing ? t('Pause rotation', language) : t('Play rotation', language)}
         >
           {playing ? '\u23F8' : '\u25B6'}
         </button>
@@ -734,8 +775,8 @@ export function ShaderPreview() {
           type="button"
           className="shader-preview__fs-btn"
           onClick={handleToggleFullscreen}
-          title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen preview'}
-          aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen preview'}
+          title={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
+          aria-label={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
         >
           {isFullscreen ? '\u2715' : '\u26F6'}
         </button>
@@ -743,9 +784,9 @@ export function ShaderPreview() {
           type="button"
           className="shader-preview__reset-btn"
           onClick={handleReset}
-          title="Reset camera, lighting, subdivision, and uniform values to defaults"
+          title={t('Reset camera, lighting, subdivision, and uniform values to defaults', language)}
         >
-          Reset
+          {t('Reset', language)}
         </button>
         {/* Hidden on desktop: the Tauri app has the LAN "VR" bench flow in
             the toolbar, and window.open in its webview isn't this feature's
@@ -755,7 +796,7 @@ export function ShaderPreview() {
             type="button"
             className="shader-preview__vr-btn"
             onClick={handleOpenVR}
-            title="Open this shader in a new window with an Enter-VR button (WebXR requires a top-level page)"
+            title={t('Open this shader in a new window with an Enter-VR button (WebXR requires a top-level page)', language)}
           >
             VR
           </button>
@@ -765,35 +806,35 @@ export function ShaderPreview() {
           className="shader-preview__bg-color"
           value={bgColor}
           onChange={(e) => setBgColor(e.target.value)}
-          title="Background color"
-          aria-label="Preview background color"
+          title={t('Background color', language)}
+          aria-label={t('Preview background color', language)}
         />
         <select
           className="shader-preview__geo-select"
           value={lighting}
           onChange={(e) => setLighting(e.target.value as LightingMode)}
-          title="Lighting mode"
-          aria-label="Lighting mode"
+          title={t('Lighting mode', language)}
+          aria-label={t('Lighting mode', language)}
         >
-          <option value="studio">light: Studio</option>
-          <option value="moon">light: Moon</option>
-          <option value="laboratory">light: Laboratory</option>
+          <option value="studio">{t('light: Studio', language)}</option>
+          <option value="moon">{t('light: Moon', language)}</option>
+          <option value="laboratory">{t('light: Laboratory', language)}</option>
         </select>
         <select
           className="shader-preview__geo-select"
           value={geometry}
           onChange={(e) => setGeometry(e.target.value as GeometryType)}
-          title="Preview geometry — drag the model to orbit, scroll to zoom"
-          aria-label="Preview geometry"
+          title={t('Preview geometry — drag the model to orbit, scroll to zoom', language)}
+          aria-label={t('Preview geometry', language)}
         >
-          <option value="sphere">Sphere</option>
-          <option value="cube">Cube</option>
-          <option value="plane">Plane</option>
-          <option value="teapot">Utah Teapot</option>
-          <option value="bunny">Stanford Bunny</option>
+          <option value="sphere">{t('Sphere', language)}</option>
+          <option value="cube">{t('Cube', language)}</option>
+          <option value="plane">{t('Plane', language)}</option>
+          <option value="teapot">{t('Utah Teapot', language)}</option>
+          <option value="bunny">{t('Stanford Bunny', language)}</option>
         </select>
         {!isObjGeometry(geometry) && (
-          <label className="shader-preview__subdivision" title="Mesh subdivision">
+          <label className="shader-preview__subdivision" title={t('Mesh subdivision', language)}>
             <input
               type="range"
               min={SUBDIVISION_MIN}
@@ -811,9 +852,9 @@ export function ShaderPreview() {
             type="button"
             className={`shader-preview__props-btn${showUniforms ? ' shader-preview__props-btn--active' : ''}`}
             onClick={() => setShowUniforms((v) => !v)}
-            title={showUniforms ? 'Hide properties' : 'Show properties'}
+            title={showUniforms ? t('Hide properties', language) : t('Show properties', language)}
           >
-            Properties
+            {t('Properties', language)}
           </button>
         )}
       </div>
@@ -821,7 +862,7 @@ export function ShaderPreview() {
         {compiling && (
           <div className="shader-preview__compiling" role="status" aria-live="polite">
             <span className="shader-preview__compiling-dot" />
-            Compiling shader…
+            {t('Compiling shader…', language)}
           </div>
         )}
         <iframe
@@ -829,7 +870,7 @@ export function ShaderPreview() {
           className="shader-preview__iframe"
           srcDoc={containerReady ? previewHtml : undefined}
           onLoad={handleIframeLoad}
-          title="Shader Preview"
+          title={t('Shader Preview', language)}
           // User-pasted TSL becomes an ES module that runs inside this iframe.
           // Without sandboxing the iframe inherits the FastShaders origin and
           // would expose parent localStorage / cookies / same-origin fetch to
@@ -864,7 +905,29 @@ export function ShaderPreview() {
           <div className="shader-preview__uniforms">
             {uniforms.map((u) => {
               const bounds = uniformBounds[u.name] ?? { min: 0, max: 1 };
-              const value = uniformValues[u.name] ?? u.defaultValue;
+              const raw = uniformValues[u.name] ?? u.defaultValue;
+              // Colour uniform: a swatch picker row — bounds/slider are
+              // meaningless for a colour, so the row is just name + picker.
+              if (u.kind === 'color') {
+                const hex = typeof raw === 'string' ? raw : String(u.defaultValue);
+                return (
+                  <div key={u.name} className="shader-preview__uniform-row">
+                    <div className="shader-preview__uniform-header">
+                      <span className="shader-preview__uniform-name" title={u.name}>{u.name}</span>
+                      <span className="shader-preview__uniform-value">{hex}</span>
+                    </div>
+                    <div className="shader-preview__uniform-controls">
+                      <input
+                        type="color"
+                        className="shader-preview__uniform-color"
+                        value={hex}
+                        onChange={(e) => handleUniformChange(u.name, e.target.value)}
+                      />
+                    </div>
+                  </div>
+                );
+              }
+              const value = typeof raw === 'number' ? raw : Number(u.defaultValue) || 0;
               const span = bounds.max - bounds.min;
               const step = span > 0 ? span / 200 : 0.01;
               return (
@@ -878,7 +941,7 @@ export function ShaderPreview() {
                       className="shader-preview__uniform-bound"
                       value={bounds.min}
                       onCommit={(n) => handleBoundsChange(u.name, 'min', n)}
-                      title="Min"
+                      title={t('Min', language)}
                     />
                     <input
                       type="range"
@@ -893,7 +956,7 @@ export function ShaderPreview() {
                       className="shader-preview__uniform-bound"
                       value={bounds.max}
                       onCommit={(n) => handleBoundsChange(u.name, 'max', n)}
-                      title="Max"
+                      title={t('Max', language)}
                     />
                   </div>
                 </div>

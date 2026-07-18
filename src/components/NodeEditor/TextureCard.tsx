@@ -1,7 +1,7 @@
 import { useCallback, useRef, useEffect, memo } from 'react';
 import type { BuiltinTexture } from '@/registry/builtinTextures';
 import { perlin2D } from '@/utils/noisePreview';
-import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
+import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
 
 export const BUILTIN_TEXTURE_DRAG_TYPE = 'application/fastshaders-builtin-texture';
@@ -235,6 +235,11 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
     (event: React.DragEvent) => {
       event.dataTransfer.setData(BUILTIN_TEXTURE_DRAG_TYPE, texture.id);
       event.dataTransfer.effectAllowed = 'move';
+      // Record the payload for dragover (dataTransfer is unreadable there) so
+      // the canvas can withhold the drop-on-edge highlight — a texture drop
+      // never splices, and the preview must not promise one. Teardown rides
+      // ContentBrowser's root onDragEnd (endHtml5TileDrag).
+      setHtml5TileDrag({ kind: 'texture', id: texture.id });
     },
     [texture.id],
   );

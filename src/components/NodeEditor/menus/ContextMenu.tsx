@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { AddNodeMenu } from './AddNodeMenu';
+import { ConnectionStub } from './ConnectionStub';
 import { NodeSettingsMenu } from './NodeSettingsMenu';
 import { ShaderSettingsMenu } from './ShaderSettingsMenu';
 import { EdgeContextMenu } from './EdgeContextMenu';
@@ -14,7 +15,9 @@ import './ContextMenu.css';
 const EDGE_MARGIN = 8;
 
 export function ContextMenu() {
-  const { open, x, y, type, nodeId, edgeId } = useAppStore((s) => s.contextMenu);
+  const { open, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId } = useAppStore(
+    (s) => s.contextMenu,
+  );
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
 
@@ -36,21 +39,33 @@ export function ContextMenu() {
   if (!open) return null;
 
   return (
-    <div
-      ref={ref}
-      className="context-menu"
-      style={{ left: pos.left, top: pos.top }}
-      onClick={(e) => e.stopPropagation()}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      {type === 'canvas' && <AddNodeMenu />}
-      {type === 'node' && nodeId && <NodeSettingsMenu nodeId={nodeId} />}
-      {type === 'shader' && <ShaderSettingsMenu />}
-      {type === 'edge' && edgeId && <EdgeContextMenu edgeId={edgeId} />}
-      {type === 'group' && nodeId && <GroupSettingsMenu nodeId={nodeId} />}
-      {type === 'note' && nodeId && <NoteSettingsMenu nodeId={nodeId} />}
-      {type === 'stripes' && nodeId && <StripesSettingsMenu nodeId={nodeId} />}
-      {type === 'dataviz' && nodeId && <DataVizSettingsMenu nodeId={nodeId} />}
-    </div>
+    <>
+      {/* A wire dropped on empty canvas opens this menu with its source pin
+          pending; redraw that wire to the menu so the pending connection stays
+          visible instead of being invisible state. */}
+      {type === 'canvas' && sourceNodeId && sourceHandleId && (
+        <ConnectionStub
+          sourceNodeId={sourceNodeId}
+          sourceHandleId={sourceHandleId}
+          to={pos}
+        />
+      )}
+      <div
+        ref={ref}
+        className={`context-menu${type === 'canvas' ? ' context-menu--add-node' : ''}`}
+        style={{ left: pos.left, top: pos.top }}
+        onClick={(e) => e.stopPropagation()}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {type === 'canvas' && <AddNodeMenu />}
+        {type === 'node' && nodeId && <NodeSettingsMenu nodeId={nodeId} />}
+        {type === 'shader' && <ShaderSettingsMenu />}
+        {type === 'edge' && edgeId && <EdgeContextMenu edgeId={edgeId} />}
+        {type === 'group' && nodeId && <GroupSettingsMenu nodeId={nodeId} />}
+        {type === 'note' && nodeId && <NoteSettingsMenu nodeId={nodeId} />}
+        {type === 'stripes' && nodeId && <StripesSettingsMenu nodeId={nodeId} />}
+        {type === 'dataviz' && nodeId && <DataVizSettingsMenu nodeId={nodeId} />}
+      </div>
+    </>
   );
 }

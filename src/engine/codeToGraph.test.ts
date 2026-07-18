@@ -101,6 +101,33 @@ describe('codeToGraph — literal extraction', () => {
     expect(getNodeValues(color).hex).toBe('#abcdef');
   });
 
+  it('clamps out-of-range / negative colour literals to a safe hex (adversarial input)', () => {
+    // `.fastshader`/pasted source is adversarial: a literal beyond 24 bits or a
+    // negative would otherwise store a malformed hex ('#1000000', '#0000-1').
+    const oob = codeToGraph(`
+      import { Fn, color } from 'three/tsl';
+      const shader = Fn(() => {
+        const c = color(0x1000000);
+        return c;
+      });
+      export default shader;
+    `);
+    const cOob = oob.nodes.find((n) => n.data.registryType === 'color')!;
+    expect(getNodeValues(cOob).hex).toBe('#000000');
+
+    // property_color path (uniform(color(...))) shares the same guard.
+    const neg = codeToGraph(`
+      import { Fn, uniform, color } from 'three/tsl';
+      const shader = Fn(() => {
+        const p = uniform(color(-1));
+        return p;
+      });
+      export default shader;
+    `);
+    const pNeg = neg.nodes.find((n) => n.data.registryType === 'property_color')!;
+    expect(getNodeValues(pNeg).hex).toBe('#000000');
+  });
+
   it('captures a float literal as a numeric value', () => {
     const result = codeToGraph(`
       import { Fn, float } from 'three/tsl';

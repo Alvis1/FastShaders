@@ -329,6 +329,21 @@
   gap: 2px;
 }
 
+/* Colour-uniform picker: fills the controls row where a float shows
+   bound + slider + bound. The controls row is a 32px/1fr/32px grid, so a
+   single child must span all three tracks or it sits in the first 32px.
+   Kept short so rows stay the same height. */
+.shader-preview__uniform-color {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
+  background: var(--bg-input, #fff);
+  cursor: pointer;
+}
+
 .shader-preview__uniform-bound {
   width: 100%;
   font-size: 10px;
