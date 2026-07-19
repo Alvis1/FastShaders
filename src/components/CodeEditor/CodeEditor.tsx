@@ -42,6 +42,7 @@ export function CodeEditor() {
   const setShaderName = useAppStore((s) => s.setShaderName);
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
+  const drawings = useAppStore((s) => s.drawings);
   const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
   const setSelectedHeadsetId = useAppStore((s) => s.setSelectedHeadsetId);
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
@@ -143,6 +144,7 @@ export function CodeEditor() {
       shaderName,
       selectedHeadsetId,
       graph: { nodes, edges },
+      ...(drawings.length ? { drawings } : {}),
       preview: {
         geometry: ls('fs:previewGeometry') ?? undefined,
         lighting: ls('fs:previewLighting') ?? undefined,
@@ -169,6 +171,7 @@ export function CodeEditor() {
     selectedHeadsetId,
     nodes,
     edges,
+    drawings,
     nodeEditorBgColor,
     codeEditorTheme,
     costColorLow,

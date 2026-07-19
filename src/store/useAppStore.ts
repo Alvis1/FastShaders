@@ -26,6 +26,7 @@ import { nodeCostPoints } from '@/utils/nodeCost';
 import { makeDataNodeData } from '@/utils/dataNode';
 import { makeImageNodeData, sanitizeImageNodes } from '@/utils/imageNode';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
+import { sanitizeDrawings, MAX_STROKES, MAX_TOTAL_POINTS, type DrawStroke } from '@/utils/drawings';
 import { encodeImageFile } from '@/utils/imageImport';
 import { transposeCsv, type ParsedCsv } from '@/utils/csvParser';
 
@@ -204,6 +205,11 @@ interface ContextMenuState {
 interface HistoryEntry {
   nodes: AppNode[];
   edges: AppEdge[];
+  // Board drawings ride history too, but BY REFERENCE (not structuredClone):
+  // committed strokes are immutable and every drawings mutation replaces the
+  // array, so the old reference is a safe, pointer-sized snapshot — this keeps
+  // 40k-point ink out of the 50-entry deep-clone buffer.
+  drawings: DrawStroke[];
 }
 
 const MAX_HISTORY = 50;
@@ -253,10 +259,11 @@ function applyLangAttribute(lang: 'en' | 'lv'): void {
   document.documentElement.setAttribute('lang', lang);
 }
 
-function snapshot(nodes: AppNode[], edges: AppEdge[]): HistoryEntry {
+function snapshot(nodes: AppNode[], edges: AppEdge[], drawings: DrawStroke[]): HistoryEntry {
   return {
     nodes: structuredClone(nodes),
     edges: structuredClone(edges),
+    drawings, // by reference — see HistoryEntry
   };
 }
 
@@ -285,10 +292,13 @@ export function setGraphPersistence(enabled: boolean): void {
   graphPersistence = enabled;
 }
 
-function saveGraph(nodes: AppNode[], edges: AppEdge[]) {
+function saveGraph(nodes: AppNode[], edges: AppEdge[], drawings: DrawStroke[]) {
   if (!graphPersistence) return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes, edges }));
+    // Board drawings share the graph slot — visual siblings of nodes/edges,
+    // loaded/saved together. Omitted when empty to keep old files unchanged.
+    const payload = drawings.length ? { nodes, edges, drawings } : { nodes, edges };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     graphQuotaWarned = false;
   } catch {
     // Quota exceeded or private mode. Once auto-save starts failing, EVERY
@@ -305,7 +315,7 @@ function saveGraph(nodes: AppNode[], edges: AppEdge[]) {
   }
 }
 
-export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
+export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[]; drawings: DrawStroke[] } | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
@@ -396,6 +406,9 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[] } | null {
       // on the next auto-save.
       data.nodes = sanitizeImageNodes(data.nodes, false).nodes;
 
+      // Board drawings are adversarial too (tampered localStorage) — bound them.
+      data.drawings = sanitizeDrawings(data.drawings);
+
       return data;
     }
   } catch { /* corrupt data */ }
@@ -484,6 +497,18 @@ interface AppState {
   // User's library of saved groups (persisted to localStorage)
   savedGroups: SavedGroup[];
 
+  // Board drawings (freehand ink annotations) — VISUAL-ONLY, like notes /
+  // waypoints. Separate slice so graphToCode / cpuEvaluator / the sync engine
+  // never see them; they ride graph autosave + history + the project embed.
+  drawings: DrawStroke[];
+  // Draw-tool prefs (persisted). `drawToolActive` / `drawEraser` are session
+  // UI state (not persisted).
+  drawColor: string;
+  drawOpacity: number;
+  drawWidth: number;
+  drawToolActive: boolean;
+  drawEraser: boolean;
+
   // Graph actions
   setNodes: (nodes: AppNode[], source?: SyncSource) => void;
   setEdges: (edges: AppEdge[], source?: SyncSource) => void;
@@ -503,6 +528,22 @@ interface AppState {
     opts?: { history?: boolean },
   ) => void;
   updateNodeData: (nodeId: string, data: Partial<AppNode['data']>) => void;
+
+  // Drawing actions
+  /** Commit one finished stroke (one undo entry). Caps drop the oldest ink. */
+  addStroke: (stroke: DrawStroke) => void;
+  /** Remove strokes by id (eraser / clear-selection); one undo entry. */
+  eraseStrokeIds: (ids: string[]) => void;
+  /** Drop every stroke (one undo entry). */
+  clearDrawings: () => void;
+  /** Replace the drawings array wholesale WITHOUT history (load / import / undo internals). */
+  setDrawings: (drawings: DrawStroke[]) => void;
+  setDrawColor: (color: string) => void;
+  setDrawOpacity: (opacity: number) => void;
+  setDrawWidth: (width: number) => void;
+  /** Enter/leave draw mode. Leaving also clears the eraser sub-mode. */
+  setDrawToolActive: (active: boolean) => void;
+  setDrawEraser: (eraser: boolean) => void;
 
   // Code actions
   setCode: (code: string, source?: SyncSource) => void;
@@ -644,6 +685,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
   language: (loadString('fs:lang', 'en') === 'lv' ? 'lv' : 'en'),
   savedGroups: loadSavedGroups(),
 
+  // Drawings are hydrated from fs:graph by App.tsx (loadGraph) alongside the
+  // graph; tool prefs are their own persisted keys.
+  drawings: [],
+  drawColor: (() => { const c = loadString('fs:drawColor', '#e8455f'); return /^#[0-9a-fA-F]{6}$/.test(c) ? c.toLowerCase() : '#e8455f'; })(),
+  drawOpacity: (() => { const v = parseFloat(loadString('fs:drawOpacity', '1')); return isNaN(v) ? 1 : Math.min(1, Math.max(0.05, v)); })(),
+  drawWidth: (() => { const v = parseFloat(loadString('fs:drawWidth', '3')); return isNaN(v) ? 3 : Math.min(200, Math.max(0.5, v)); })(),
+  drawToolActive: false,
+  drawEraser: false,
+
   setNodes: (nodes, source = 'graph') =>
     set({ nodes, syncSource: source, isUndoRedo: false }),
 
@@ -746,6 +796,60 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }));
   },
 
+  // ── Drawing actions ──────────────────────────────────────────────────────
+  // Drawings are visual-only: these NEVER touch syncSource, so the graph→code
+  // effect (which watches nodes/edges) doesn't re-run. History + autosave pick
+  // them up via `drawings` identity.
+  addStroke: (stroke) => {
+    get().pushHistory();
+    set((state) => {
+      let next = [...state.drawings, stroke];
+      // Cap the stroke count — the board is full, drop the OLDEST ink.
+      if (next.length > MAX_STROKES) next = next.slice(next.length - MAX_STROKES);
+      // Cap the total point budget the same way.
+      let total = next.reduce((n, s) => n + s.points.length, 0);
+      while (total > MAX_TOTAL_POINTS * 2 && next.length > 1) {
+        total -= next[0].points.length;
+        next = next.slice(1);
+      }
+      return { drawings: next, isUndoRedo: false };
+    });
+  },
+
+  eraseStrokeIds: (ids) => {
+    if (!ids.length) return;
+    const drop = new Set(ids);
+    if (!get().drawings.some((s) => drop.has(s.id))) return;
+    get().pushHistory();
+    set((state) => ({ drawings: state.drawings.filter((s) => !drop.has(s.id)), isUndoRedo: false }));
+  },
+
+  clearDrawings: () => {
+    if (!get().drawings.length) return;
+    get().pushHistory();
+    set({ drawings: [], isUndoRedo: false });
+  },
+
+  setDrawings: (drawings) => set({ drawings }),
+
+  setDrawColor: (color) => {
+    const c = /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : get().drawColor;
+    try { localStorage.setItem('fs:drawColor', c); } catch { /* quota */ }
+    set({ drawColor: c });
+  },
+  setDrawOpacity: (opacity) => {
+    const o = Math.min(1, Math.max(0.05, Number.isFinite(opacity) ? opacity : 1));
+    try { localStorage.setItem('fs:drawOpacity', String(o)); } catch { /* quota */ }
+    set({ drawOpacity: o });
+  },
+  setDrawWidth: (width) => {
+    const w = Math.min(200, Math.max(0.5, Number.isFinite(width) ? width : 3));
+    try { localStorage.setItem('fs:drawWidth', String(w)); } catch { /* quota */ }
+    set({ drawWidth: w });
+  },
+  setDrawToolActive: (active) => set(active ? { drawToolActive: true } : { drawToolActive: false, drawEraser: false }),
+  setDrawEraser: (eraser) => set({ drawEraser: eraser }),
+
   setCode: (code, source = 'code') => {
     // Skip no-op: prevents Monaco onChange from flipping syncSource after programmatic updates
     if (code === get().code && source === 'code') return;
@@ -778,7 +882,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // not-yet-cleared flag suppress THIS snapshot while coalescing is switched
       // on would swallow the entire gesture's history and leave it unundoable.
       return {
-        past: [...state.past, snapshot(state.nodes, state.edges)].slice(-MAX_HISTORY),
+        past: [...state.past, snapshot(state.nodes, state.edges, state.drawings)].slice(-MAX_HISTORY),
         future: [],
         coalescingHistory: true,
         isUndoRedo: false,
@@ -798,7 +902,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // graph (megabytes once images are embedded) AND bury undo under dozens
       // of sub-pixel entries.
       if (state.coalescingHistory) return {};
-      const entry = snapshot(state.nodes, state.edges);
+      const entry = snapshot(state.nodes, state.edges, state.drawings);
       return {
         past: [...state.past, entry].slice(-MAX_HISTORY),
         future: [],
@@ -809,10 +913,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set((state) => {
       const prev = state.past[state.past.length - 1];
       if (!prev) return {};
-      const current = snapshot(state.nodes, state.edges);
+      const current = snapshot(state.nodes, state.edges, state.drawings);
       return {
         nodes: structuredClone(prev.nodes),
         edges: structuredClone(prev.edges),
+        drawings: prev.drawings, // by reference — immutable strokes
         past: state.past.slice(0, -1),
         future: [...state.future, current].slice(-MAX_HISTORY),
         syncSource: 'graph',
@@ -824,10 +929,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set((state) => {
       const next = state.future[state.future.length - 1];
       if (!next) return {};
-      const current = snapshot(state.nodes, state.edges);
+      const current = snapshot(state.nodes, state.edges, state.drawings);
       return {
         nodes: structuredClone(next.nodes),
         edges: structuredClone(next.edges),
+        drawings: next.drawings, // by reference — immutable strokes
         future: state.future.slice(0, -1),
         past: [...state.past, current].slice(-MAX_HISTORY),
         syncSource: 'graph',
@@ -1703,9 +1809,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 useAppStore.subscribe(
   (state, prev) => {
-    if (state.nodes !== prev.nodes || state.edges !== prev.edges) {
+    if (state.nodes !== prev.nodes || state.edges !== prev.edges || state.drawings !== prev.drawings) {
       if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => saveGraph(state.nodes, state.edges), 300);
+      saveTimer = setTimeout(() => saveGraph(state.nodes, state.edges, state.drawings), 300);
     }
   },
 );

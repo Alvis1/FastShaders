@@ -1,4 +1,5 @@
 import type { AppNode, AppEdge } from '@/types';
+import type { DrawStroke } from '@/utils/drawings';
 
 /**
  * Snapshot of FastShaders editor state embedded into a downloaded `.js` shader
@@ -12,6 +13,8 @@ export interface FastShadersProject {
   shaderName: string;
   selectedHeadsetId?: string;
   graph: { nodes: AppNode[]; edges: AppEdge[] };
+  /** Board drawings (freehand ink) — visual-only, sanitized on import. */
+  drawings?: DrawStroke[];
   preview: {
     geometry?: string;
     lighting?: string;

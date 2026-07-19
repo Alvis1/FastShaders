@@ -11,6 +11,7 @@
 
 import { useAppStore } from '@/store/useAppStore';
 import { sanitizeImageNodes } from '@/utils/imageNode';
+import { sanitizeDrawings } from '@/utils/drawings';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { generateId } from '@/utils/idGenerator';
 import { readZip, type ZipReadEntry } from '@/utils/zipReader';
@@ -73,11 +74,15 @@ function applyProjectToStore(project: FastShadersProject): void {
     });
   }
 
+  // Board drawings are adversarial too — bound them before they enter the store.
+  const drawings = sanitizeDrawings(project.drawings);
+
   // Restore graph last — switching syncSource to 'graph' will trigger
   // graphToCode in useSyncEngine, regenerating the editor code to match.
   useAppStore.setState({
     nodes: sanitized.nodes,
     edges: project.graph.edges,
+    drawings,
     syncSource: 'graph',
     isUndoRedo: false,
   });
