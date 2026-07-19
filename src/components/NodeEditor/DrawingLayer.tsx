@@ -50,7 +50,12 @@ export const DrawingLayer = memo(function DrawingLayer({
         // 1×1 + overflow:visible: a 0×0 SVG disables rendering per spec, so the
         // root stays 1px and paths draw outside it. Positioned at the flow
         // origin; ViewportPortal supplies the pan/zoom transform.
-        style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, overflow: 'visible', pointerEvents: 'none' }}
+        //
+        // zIndex:-1 puts the ink BEHIND edges and nodes: the viewport-portal div
+        // has no z-index of its own (not a stacking context), so a negative
+        // z-index resolves against the viewport's context, below the z:0 edges
+        // and nodes — ink reads as a backdrop the graph sits on.
+        style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, overflow: 'visible', pointerEvents: 'none', zIndex: -1 }}
         aria-hidden="true"
       >
         {groups.map((g) => (

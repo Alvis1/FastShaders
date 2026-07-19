@@ -2310,7 +2310,14 @@ export function NodeEditor() {
           panActivationKeyCode={null}
           edgesReconnectable
           connectionRadius={CONNECTION_RADIUS}
-          selectionOnDrag
+          // Draw mode owns the left-drag gesture: turn React Flow's rubber-band
+          // selection, node dragging, and element selection OFF while drawing,
+          // so a stroke never also starts (and strands) a selection box. The
+          // draw-capture handler still swallows the pointerdown; these props are
+          // the declarative belt-and-suspenders that actually keep RF idle.
+          selectionOnDrag={!drawToolActive}
+          nodesDraggable={!drawToolActive}
+          elementsSelectable={!drawToolActive}
           selectionMode={SelectionMode.Partial}
           panOnDrag={[1, 2]}
           zoomOnScroll
