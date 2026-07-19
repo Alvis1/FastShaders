@@ -28,7 +28,16 @@ import { GroupNode } from './nodes/GroupNode';
 import { NoteNode } from './nodes/NoteNode';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
 import { TypedEdge } from './edges/TypedEdge';
-import { cardinalControlPoint, radialControlPoint, distancePointToCubicBezier, distancePointToSpline, insertWaypointOrdered } from './edges/bezierGeometry';
+import { cardinalControlPoint, radialControlPoint, distancePointToCubicBezier, distancePointToSpline, insertWaypointOrdered, splinePath } from './edges/bezierGeometry';
+import { DrawingLayer } from './DrawingLayer';
+import { DrawToolbar } from './DrawToolbar';
+import {
+  quantizeOpacity,
+  strokePointPairs,
+  strokeBounds,
+  MAX_POINTS_PER_STROKE,
+  type DrawStroke,
+} from '@/utils/drawings';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
@@ -520,6 +529,11 @@ export function NodeEditor() {
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
   const isDarkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
+  const drawToolActive = useAppStore((s) => s.drawToolActive);
+  const drawEraser = useAppStore((s) => s.drawEraser);
+  // Live in-progress stroke path, written imperatively by the draw-capture
+  // handler (below) and rendered inside DrawingLayer's live opacity group.
+  const livePathRef = useRef<SVGPathElement | null>(null);
   const { screenToFlowPosition, flowToScreenPosition, getViewport, setViewport, getInternalNode } =
     useReactFlow();
 
@@ -570,6 +584,12 @@ export function NodeEditor() {
       // Skip if user is typing in an input/textarea
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      // Esc leaves draw mode (before any accelerator).
+      if (e.key === 'Escape' && useAppStore.getState().drawToolActive) {
+        useAppStore.getState().setDrawToolActive(false);
+        return;
+      }
 
       const mod = e.metaKey || e.ctrlKey;
       // Normalized so Caps Lock (which reports 'C' rather than 'c') doesn't
@@ -2068,6 +2088,10 @@ export function NodeEditor() {
     };
 
     const onDown = (e: PointerEvent) => {
+      // Draw mode owns primary-button gestures — the draw-capture handler runs
+      // instead (it stopImmediatePropagation's, but bail here too in case order
+      // ever changes).
+      if (useAppStore.getState().drawToolActive) { lastDownAt = 0; return; }
       // Primary button only (e.button === 0 for left-click / first-touch / pen-tip).
       if (e.button !== 0 || isInteractive(e.target)) {
         lastDownAt = 0;
@@ -2117,10 +2141,119 @@ export function NodeEditor() {
     };
   }, [getViewport, setViewport]);
 
+  // Draw mode: freehand ink capture. Same capture-phase pattern as the
+  // double-tap pan — a pointerdown listener on the canvas that, when draw mode
+  // is active, swallows the gesture (stopImmediatePropagation, so React Flow
+  // never pans / selects / node-drags) and draws instead. Pen strokes update
+  // livePathRef imperatively per move (no store write until release, so no
+  // per-frame graph clone) and commit as ONE undo entry via addStroke; the
+  // eraser removes strokes under the cursor, bracketed into one undo entry.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+
+    let drawing = false;
+    let ptrId = -1;
+    let erasing = false;
+    const pts: number[] = [];
+    let lastScreen = { x: 0, y: 0 };
+
+    const isChrome = (t: EventTarget | null) =>
+      !!(t as HTMLElement | null)?.closest(
+        'input, textarea, select, button, .nodrag, [contenteditable="true"], .react-flow__minimap, .react-flow__controls, .react-flow__panel',
+      );
+    const flow = (e: PointerEvent) => screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    const updateLive = () => livePathRef.current?.setAttribute('d', splinePath(strokePointPairs(pts)));
+
+    const eraseAt = (fx: number, fy: number) => {
+      const store = useAppStore.getState();
+      const rad = 12 / getViewport().zoom; // eraser radius, screen px → flow units
+      const hit: string[] = [];
+      for (const s of store.drawings) {
+        const b = strokeBounds(s.points);
+        const pad = rad + s.width / 2;
+        if (fx < b.minX - pad || fx > b.maxX + pad || fy < b.minY - pad || fy > b.maxY + pad) continue;
+        if (distancePointToSpline(strokePointPairs(s.points), fx, fy) <= pad) hit.push(s.id);
+      }
+      if (hit.length) store.eraseStrokeIds(hit);
+    };
+
+    const onDown = (e: PointerEvent) => {
+      const store = useAppStore.getState();
+      if (!store.drawToolActive || e.button !== 0 || isChrome(e.target)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      drawing = true;
+      ptrId = e.pointerId;
+      erasing = store.drawEraser;
+      try { el.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+      lastScreen = { x: e.clientX, y: e.clientY };
+      const p = flow(e);
+      if (erasing) {
+        store.beginInteraction(); // one undo entry for the whole erase gesture
+        eraseAt(p.x, p.y);
+      } else {
+        pts.length = 0;
+        pts.push(p.x, p.y);
+        updateLive();
+      }
+    };
+
+    const onMove = (e: PointerEvent) => {
+      if (!drawing || e.pointerId !== ptrId) return;
+      const p = flow(e);
+      if (erasing) { eraseAt(p.x, p.y); return; }
+      // Decimate: drop samples < 2 screen px from the last kept point, and stop
+      // at the per-stroke cap.
+      const dx = e.clientX - lastScreen.x, dy = e.clientY - lastScreen.y;
+      if (dx * dx + dy * dy < 4) return;
+      if (pts.length / 2 >= MAX_POINTS_PER_STROKE) return;
+      lastScreen = { x: e.clientX, y: e.clientY };
+      pts.push(p.x, p.y);
+      updateLive();
+    };
+
+    const onUp = (e: PointerEvent) => {
+      if (!drawing || e.pointerId !== ptrId) return;
+      drawing = false;
+      ptrId = -1;
+      try { el.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+      const store = useAppStore.getState();
+      if (erasing) {
+        store.endInteraction();
+        erasing = false;
+        return;
+      }
+      if (pts.length >= 4) {
+        store.addStroke({
+          id: generateId(),
+          color: store.drawColor,
+          opacity: quantizeOpacity(store.drawOpacity),
+          width: store.drawWidth,
+          points: pts.slice(),
+        } satisfies DrawStroke);
+      }
+      // Committed stroke now renders from the store — clear the live path.
+      livePathRef.current?.setAttribute('d', '');
+      pts.length = 0;
+    };
+
+    el.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      el.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [screenToFlowPosition, getViewport]);
+
   return (
     <div className="node-editor" style={canvasCssVars}>
       <div
-        className="node-editor__canvas"
+        className={`node-editor__canvas${drawToolActive ? ' fs-draw-active' : ''}${drawToolActive && drawEraser ? ' fs-erase-active' : ''}`}
         ref={canvasRef}
         // HTML5 drag wandering off the canvas (into the code editor / assets
         // bar) must tear down the live previews — dragover stops firing here,
@@ -2232,6 +2365,8 @@ export function NodeEditor() {
             style={{ backgroundColor: 'var(--bg-panel)' }}
             maskColor={minimapMask}
           />
+          <DrawingLayer livePathRef={livePathRef} />
+          <DrawToolbar />
         </ReactFlow>
 
         {contextMenu.open && <ContextMenu />}

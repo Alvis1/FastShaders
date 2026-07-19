@@ -118,6 +118,7 @@ export default function App() {
     const { nodes, edges } = saved ?? createInitialNodes();
     useAppStore.getState().setNodes(nodes, 'graph');
     useAppStore.getState().setEdges(edges, 'graph');
+    if (saved?.drawings?.length) useAppStore.getState().setDrawings(saved.drawings);
   }, []);
 
   return (
