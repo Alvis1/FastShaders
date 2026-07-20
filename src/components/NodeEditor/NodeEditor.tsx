@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -536,6 +536,26 @@ export function NodeEditor() {
   const livePathRef = useRef<SVGPathElement | null>(null);
   const { screenToFlowPosition, flowToScreenPosition, getViewport, setViewport, getInternalNode } =
     useReactFlow();
+
+  // True while a two-finger touch navigation gesture (pan / pinch-zoom) is in
+  // progress — lets the draw handler pause its stroke so a second finger
+  // navigates instead of corrupting the ink. Only ever set on coarse pointers.
+  const twoFingerNavRef = useRef(false);
+  // Coarse pointer = touch/pen tablet (e.g. iPad). Drives the touch
+  // interaction model: ONE finger manipulates (drag nodes/edges, marquee
+  // select), TWO fingers navigate (pan + pinch-zoom), long-press opens the
+  // menu. On a mouse (`pointer: fine`) this stays false and the desktop
+  // model (panOnDrag={[1,2]}, double-tap-drag pan) is left completely intact.
+  const [isCoarsePointer, setIsCoarsePointer] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(pointer: coarse)').matches,
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(pointer: coarse)');
+    const onChange = () => setIsCoarsePointer(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
   // Copy/paste clipboard
   const clipboardRef = useRef<AppNode[]>([]);
@@ -2073,7 +2093,10 @@ export function NodeEditor() {
   // ourselves. Pointer events cover mouse, trackpad, touch and pen uniformly.
   useEffect(() => {
     const el = canvasRef.current;
-    if (!el) return;
+    // Coarse pointers pan with two fingers (the touch-nav effect below), so
+    // the one-finger double-tap-drag pan is disabled there — two quick finger
+    // taps would otherwise false-trigger it. Desktop/trackpad keep it.
+    if (!el || isCoarsePointer) return;
 
     let lastDownAt = 0;
     let panning = false;
@@ -2139,7 +2162,7 @@ export function NodeEditor() {
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [getViewport, setViewport]);
+  }, [getViewport, setViewport, isCoarsePointer]);
 
   // Draw mode: freehand ink capture. Same capture-phase pattern as the
   // double-tap pan — a pointerdown listener on the canvas that, when draw mode
@@ -2180,7 +2203,9 @@ export function NodeEditor() {
 
     const onDown = (e: PointerEvent) => {
       const store = useAppStore.getState();
-      if (!store.drawToolActive || e.button !== 0 || isChrome(e.target)) return;
+      // Only the primary finger/pen draws — a second finger is a two-finger
+      // navigation gesture (handled by the touch-nav effect), never more ink.
+      if (!store.drawToolActive || e.button !== 0 || !e.isPrimary || isChrome(e.target)) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       drawing = true;
@@ -2200,7 +2225,9 @@ export function NodeEditor() {
     };
 
     const onMove = (e: PointerEvent) => {
-      if (!drawing || e.pointerId !== ptrId) return;
+      // Pause the stroke while a second finger navigates (pan/pinch-zoom); it
+      // resumes when the nav gesture ends and the primary finger keeps moving.
+      if (!drawing || e.pointerId !== ptrId || twoFingerNavRef.current) return;
       const p = flow(e);
       if (erasing) { eraseAt(p.x, p.y); return; }
       // Decimate: drop samples < 2 screen px from the last kept point, and stop
@@ -2249,6 +2276,80 @@ export function NodeEditor() {
       window.removeEventListener('pointercancel', onUp);
     };
   }, [screenToFlowPosition, getViewport]);
+
+  // Two-finger touch navigation: pan (centroid drag) + pinch-zoom, anchored to
+  // the pinch centre. On coarse pointers React Flow's own drag-to-pan is OFF
+  // (panOnDrag={false}) so ONE finger is free to drag nodes/edges and marquee
+  // select — but that same flag also disables React Flow's native touch
+  // pan/zoom, so we re-create the two-finger gesture here (same capture-phase
+  // pattern as the draw + double-tap-pan handlers). We stopImmediatePropagation
+  // so a second finger cleanly takes over from any in-progress one-finger node
+  // drag (its touchmoves never reach React Flow's d3-drag). One-finger touches
+  // (touches.length !== 2) are ignored and flow straight through to React Flow.
+  // Not attached on a mouse — desktop is untouched.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el || !isCoarsePointer) return;
+
+    let active = false;
+    let d0 = 1;      // initial pinch distance
+    let cx0 = 0, cy0 = 0;        // initial centroid (client)
+    let z0 = 1, vpx0 = 0, vpy0 = 0;   // viewport at gesture start
+    let fx = 0, fy = 0;          // flow point under the initial centroid
+    const clampZ = (z: number) => Math.min(3, Math.max(0.1, z));
+    const centroid = (t: TouchList) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+    const spread = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      active = true;
+      twoFingerNavRef.current = true;
+      const c = centroid(e.touches);
+      cx0 = c.x; cy0 = c.y;
+      d0 = spread(e.touches) || 1;
+      const vp = getViewport();
+      z0 = vp.zoom; vpx0 = vp.x; vpy0 = vp.y;
+      const f = screenToFlowPosition({ x: cx0, y: cy0 });
+      fx = f.x; fy = f.y;
+    };
+
+    const onMove = (e: TouchEvent) => {
+      if (!active || e.touches.length < 2) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const c = centroid(e.touches);
+      const z = clampZ(z0 * (spread(e.touches) / d0));
+      // screen = flow*zoom + viewport (+ container origin). Holding the flow
+      // point (fx,fy) under the moving centroid gives pan+zoom without needing
+      // the container origin: vp = vp0 + (centreΔ) + flowPt*(z0 − z).
+      setViewport({
+        x: vpx0 + (c.x - cx0) + fx * (z0 - z),
+        y: vpy0 + (c.y - cy0) + fy * (z0 - z),
+        zoom: z,
+      });
+    };
+
+    const onEnd = (e: TouchEvent) => {
+      if (!active) return;
+      if (e.touches.length < 2) {
+        active = false;
+        twoFingerNavRef.current = false;
+      }
+    };
+
+    el.addEventListener('touchstart', onStart, { capture: true, passive: false });
+    el.addEventListener('touchmove', onMove, { capture: true, passive: false });
+    el.addEventListener('touchend', onEnd, { capture: true });
+    el.addEventListener('touchcancel', onEnd, { capture: true });
+    return () => {
+      el.removeEventListener('touchstart', onStart, { capture: true } as EventListenerOptions);
+      el.removeEventListener('touchmove', onMove, { capture: true } as EventListenerOptions);
+      el.removeEventListener('touchend', onEnd, { capture: true } as EventListenerOptions);
+      el.removeEventListener('touchcancel', onEnd, { capture: true } as EventListenerOptions);
+    };
+  }, [isCoarsePointer, getViewport, setViewport, screenToFlowPosition]);
 
   return (
     <div className="node-editor" style={canvasCssVars}>
@@ -2319,7 +2420,11 @@ export function NodeEditor() {
           nodesDraggable={!drawToolActive}
           elementsSelectable={!drawToolActive}
           selectionMode={SelectionMode.Partial}
-          panOnDrag={[1, 2]}
+          // Desktop (mouse): pan with middle/right button, left is free for
+          // select/move. Touch/pen (coarse): turn drag-to-pan OFF so ONE finger
+          // drags nodes/edges and marquee-selects; TWO fingers pan + pinch-zoom
+          // via the touch-nav effect above.
+          panOnDrag={isCoarsePointer ? false : [1, 2]}
           zoomOnScroll
           // Double-click is reserved for edge routing waypoints (add on an edge,
           // remove on a point). React Flow attaches onEdgeDoubleClick as a plain
