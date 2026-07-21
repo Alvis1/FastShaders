@@ -26,6 +26,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "width": 58
   },
   "positionLocal": {
+    "svg": "<g transform=\"translate(28 28)\"><g stroke=\"#8A8F9C\" stroke-width=\".6\" fill=\"none\"><line x1=\"-22\" y1=\"-18\" x2=\"22\" y2=\"-18\" stroke-width=\".8\"></line><circle cx=\"0\" cy=\"-18\" r=\"1.2\" fill=\"#8A8F9C\" stroke=\"none\"></circle><line x1=\"-22\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"-11\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"0\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"11\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"22\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"-22\" y1=\"20\" x2=\"22\" y2=\"20\"></line><line x1=\"-17\" y1=\"10\" x2=\"17\" y2=\"10\"></line><line x1=\"-13\" y1=\"2\" x2=\"13\" y2=\"2\"></line><line x1=\"-10\" y1=\"-4\" x2=\"10\" y2=\"-4\"></line></g><rect x=\"-12\" y=\"4\" width=\"24\" height=\"12\" fill=\"rgba(0,0,0,0.04)\" stroke=\"#2B2B2B\" stroke-width=\"1.4\"></rect><circle cx=\"-5.5\" cy=\"8.5\" r=\"3\" fill=\"#F57C00\"></circle></g>",
     "scale": 1.6,
     "dy": -4,
     "width": 48,
