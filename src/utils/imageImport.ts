@@ -23,7 +23,17 @@ import {
 } from './imageNode';
 
 export type EncodeImageResult =
-  | { ok: true; dataUrl: string; width: number; height: number }
+  | {
+      ok: true;
+      dataUrl: string;
+      /** Final (possibly downscaled) encoded dimensions. */
+      width: number;
+      height: number;
+      /** Original decoded source dimensions — the caller compares these against
+       *  the device cap to decide whether to warn about downscaling. */
+      sourceWidth: number;
+      sourceHeight: number;
+    }
   | {
       ok: false;
       reason: 'svg' | 'load' | 'pixels' | 'too-large';
@@ -125,15 +135,19 @@ function encodeCanvas(
 /**
  * Decode + re-encode a dropped image into a bounded data-URL payload.
  *
- * `ignoreLimits` relaxes the soft caps (larger dimension budget, no
- * per-image char cap, no source-pixel guard) but the hard ceiling still
- * applies. Within limits, an over-budget encode retries at halved
- * dimensions ("more textures at smaller res" beats one huge one) before
- * giving up with `too-large` — the caller then offers the override dialog.
+ * `deviceMaxDim` caps the longest side to the selected target headset's
+ * recommended texture size (see `VR_HEADSETS[].maxTextureDim`); the caller
+ * warns when the source exceeded it. `ignoreLimits` relaxes the soft caps
+ * (dimension cap floored at `MAX_IMAGE_DIM_RELAXED`, no per-image char cap, no
+ * source-pixel guard) but the hard ceiling still applies. Within limits, an
+ * over-budget encode retries at halved dimensions ("more textures at smaller
+ * res" beats one huge one) before giving up with `too-large` — the caller then
+ * offers the override dialog.
  */
 export async function encodeImageFile(
   file: File,
   ignoreLimits: boolean,
+  deviceMaxDim: number = MAX_IMAGE_DIM,
 ): Promise<EncodeImageResult> {
   if (isSvgFile(file)) return { ok: false, reason: 'svg' };
 
@@ -147,7 +161,12 @@ export async function encodeImageFile(
       return { ok: false, reason: 'pixels', width: decoded.width, height: decoded.height };
     }
 
-    const dimCap = ignoreLimits ? MAX_IMAGE_DIM_RELAXED : MAX_IMAGE_DIM;
+    // Normal drops cap the longest side at the selected device's recommended
+    // texture size; ignoring limits relaxes to at least MAX_IMAGE_DIM_RELAXED
+    // (never below the device cap, so a high-end target keeps its headroom).
+    const dimCap = ignoreLimits
+      ? Math.max(deviceMaxDim, MAX_IMAGE_DIM_RELAXED)
+      : deviceMaxDim;
     let scale = Math.min(1, dimCap / Math.max(decoded.width, decoded.height));
     const budget = ignoreLimits ? HARD_MAX_IMAGE_ENCODED_CHARS : MAX_IMAGE_ENCODED_CHARS;
     // PNG sources stay lossless when they fit — see encodeCanvas.
@@ -170,7 +189,16 @@ export async function encodeImageFile(
       if (alphaKnown === null) alphaKnown = hasAlpha(ctx, w, h);
 
       const dataUrl = encodeCanvas(canvas, alphaKnown, preferLossless, budget);
-      if (dataUrl.length <= budget) return { ok: true, dataUrl, width: w, height: h };
+      if (dataUrl.length <= budget) {
+        return {
+          ok: true,
+          dataUrl,
+          width: w,
+          height: h,
+          sourceWidth: decoded.width,
+          sourceHeight: decoded.height,
+        };
+      }
       if (Math.max(w, h) <= MIN_DIM) break;
       scale /= 2;
     }

@@ -13,6 +13,9 @@ import './LimitModal.css';
 const kb = (chars: number) => `${Math.round((chars * 0.75) / 1024)} KB`;
 const mp = (px: number) => `${Math.round(px / 1e6)} MP`;
 
+/** Which persisted preference this notice's checkbox toggles. */
+type TogglePref = 'ignore-limits' | 'hide-downscale-warning';
+
 interface NoticeCopy {
   title: string;
   message: string;
@@ -20,12 +23,16 @@ interface NoticeCopy {
   suggestions: string[];
   /** Whether the notice offers "Add anyway" (drop-time imports only). */
   canProceed: boolean;
-  /** Whether the ignore-limits checkbox makes sense for this notice. */
-  showIgnoreToggle: boolean;
+  /** The persisted opt-out checkbox this notice offers, if any. */
+  toggle: { label: string; pref: TogglePref } | null;
 }
 
 function copyFor(n: LimitNotice, language: Language): NoticeCopy {
   const name = n.fileName ? `“${n.fileName}”` : t('This image', language);
+  const ignoreToggle = {
+    label: t('Ignore image size limits from now on (may slow the editor and break auto-save)', language),
+    pref: 'ignore-limits' as const,
+  };
   switch (n.kind) {
     case 'image-too-large':
       return {
@@ -40,7 +47,7 @@ function copyFor(n: LimitNotice, language: Language): NoticeCopy {
           t('Lower the source resolution — the preview rarely benefits beyond 1024px.', language),
         ],
         canProceed: true,
-        showIgnoreToggle: true,
+        toggle: ignoreToggle,
       };
     case 'image-too-many-pixels':
       return {
@@ -54,7 +61,7 @@ function copyFor(n: LimitNotice, language: Language): NoticeCopy {
           t('Split a huge atlas/panorama into several smaller images and combine them with UV nodes.', language),
         ],
         canProceed: true,
-        showIgnoreToggle: true,
+        toggle: ignoreToggle,
       };
     case 'image-total-cap':
       return {
@@ -69,8 +76,28 @@ function copyFor(n: LimitNotice, language: Language): NoticeCopy {
           t('Export the project (Download Shader) as a backup before going over the budget.', language),
         ],
         canProceed: true,
-        showIgnoreToggle: true,
+        toggle: ignoreToggle,
       };
+    case 'image-device-downscaled': {
+      const d = n.downscale;
+      const dim = (w?: number, h?: number) => (w && h ? `${w}×${h}` : '');
+      const device = d?.deviceLabel || t('your device', language);
+      return {
+        title: t('Image resized for {device}', language).replace('{device}', () => device),
+        message: t('{name} ({src}) is larger than the recommended texture size for {device} ({cap}px). It was downscaled to {final} to keep the shader fast on that headset.', language)
+          .replace('{name}', () => name)
+          .replace('{src}', () => dim(d?.sourceW, d?.sourceH))
+          .replace('{device}', () => device)
+          .replace('{cap}', () => String(d?.cap ?? ''))
+          .replace('{final}', () => dim(d?.finalW, d?.finalH)),
+        suggestions: [
+          t('Pick a more powerful target headset in the cost bar to allow larger textures.', language),
+          t('Or re-import with “Ignore image size limits” ticked to keep more resolution (heavier project, may slow the editor).', language),
+        ],
+        canProceed: false,
+        toggle: { label: t('Don’t show this warning again', language), pref: 'hide-downscale-warning' },
+      };
+    }
     case 'images-stripped':
       return {
         title: t('Some images were not loaded', language),
@@ -81,7 +108,7 @@ function copyFor(n: LimitNotice, language: Language): NoticeCopy {
           t('Or re-add the images at a smaller resolution — several small textures beat one big one.', language),
         ],
         canProceed: false,
-        showIgnoreToggle: true,
+        toggle: ignoreToggle,
       };
     case 'storage-quota':
       return {
@@ -96,7 +123,7 @@ function copyFor(n: LimitNotice, language: Language): NoticeCopy {
         canProceed: false,
         // Shown here too so the opt-out can be turned back OFF from the place
         // where its consequences (quota failures) surface.
-        showIgnoreToggle: true,
+        toggle: ignoreToggle,
       };
   }
 }
@@ -111,27 +138,42 @@ export function LimitModal() {
   const head = useAppStore((s) => s.pendingLimitNotices[0] ?? null);
   const resolve = useAppStore((s) => s.resolveLimitNotice);
   const language = useAppStore((s) => s.language);
-  const [ignoreFuture, setIgnoreFuture] = useState(false);
+  const [checkboxOn, setCheckboxOn] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  // The device-downscale notice hides a warning (`hideImageDownscaleWarning`);
+  // every other notice toggles the size-limit opt-out (`ignoreImageLimits`).
+  const isDownscale = head?.kind === 'image-device-downscaled';
+
+  // Commit the checkbox to its persisted preference and advance the queue. The
+  // preference is orthogonal to whether THIS image is added, so every dismissal
+  // path commits it — Cancel, Escape, and the backdrop must not differ.
+  const commit = (action: 'dismiss' | 'proceed') => {
+    if (isDownscale) {
+      useAppStore.getState().setHideImageDownscaleWarning(checkboxOn);
+      resolve(action, null); // leave `ignoreImageLimits` unchanged
+    } else {
+      resolve(action, checkboxOn);
+    }
+  };
+
   useEffect(() => {
-    // A fresh notice starts from the persisted opt-out state, so the checkbox
-    // both enables AND disables it (unchecking turns the limits back on).
-    setIgnoreFuture(useAppStore.getState().ignoreImageLimits);
-  }, [head?.id]);
+    // A fresh notice starts from its checkbox's persisted state, so the box both
+    // enables AND disables the preference (unchecking turns it back off).
+    const st = useAppStore.getState();
+    setCheckboxOn(isDownscale ? st.hideImageDownscaleWarning : st.ignoreImageLimits);
+  }, [head?.id, isDownscale]);
 
   useEffect(() => {
     if (!head) return;
     const onKey = (e: KeyboardEvent) => {
-      // Every dismissal path commits the checkbox. It's a persisted global
-      // preference, orthogonal to whether THIS image gets added, so its fate
-      // must not depend on which cancel gesture was used — the Cancel button
-      // already commits it, and Escape meaning something different was a trap.
-      if (e.key === 'Escape') resolve('dismiss', ignoreFuture);
+      if (e.key === 'Escape') commit('dismiss');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [head, resolve, ignoreFuture]);
+    // `commit` closes over the current head/checkboxOn — re-bind when they change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [head, checkboxOn, isDownscale]);
 
   // Move focus into the dialog so keyboard users land on it and screen readers
   // announce it, rather than leaving focus behind on the canvas.
@@ -143,7 +185,7 @@ export function LimitModal() {
   const copy = copyFor(head, language);
 
   return (
-    <div className="csv-import-modal__backdrop" onClick={() => resolve('dismiss', ignoreFuture)}>
+    <div className="csv-import-modal__backdrop" onClick={() => commit('dismiss')}>
       <div
         ref={panelRef}
         className="csv-import-modal__panel"
@@ -160,27 +202,27 @@ export function LimitModal() {
             <li key={i}>{s}</li>
           ))}
         </ul>
-        {copy.showIgnoreToggle && (
+        {copy.toggle && (
           <label className="limit-modal__ignore">
             <input
               type="checkbox"
-              checked={ignoreFuture}
-              onChange={(e) => setIgnoreFuture(e.target.checked)}
+              checked={checkboxOn}
+              onChange={(e) => setCheckboxOn(e.target.checked)}
             />
-            {t('Ignore image size limits from now on (may slow the editor and break auto-save)', language)}
+            {copy.toggle.label}
           </label>
         )}
         <div className="csv-import-modal__buttons">
           <button
             className="csv-import-modal__button"
-            onClick={() => resolve('dismiss', ignoreFuture)}
+            onClick={() => commit('dismiss')}
           >
             {copy.canProceed ? t('Cancel', language) : t('OK', language)}
           </button>
           {copy.canProceed && (
             <button
               className="csv-import-modal__button csv-import-modal__button--primary"
-              onClick={() => resolve('proceed', ignoreFuture)}
+              onClick={() => commit('proceed')}
             >
               {t('Add anyway', language)}
             </button>

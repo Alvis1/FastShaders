@@ -177,6 +177,7 @@ export interface LimitNotice {
     | 'image-too-large'      // still over the per-image budget after downscale retries
     | 'image-too-many-pixels'// source dimensions exceed the decode guard
     | 'image-total-cap'      // adding it would cross the all-images budget
+    | 'image-device-downscaled' // resized to fit the target device's texture cap (informational)
     | 'images-stripped'      // an imported project had payloads over the limits
     | 'storage-quota';       // a localStorage write actually failed
   fileName?: string;
@@ -188,6 +189,16 @@ export interface LimitNotice {
    *  budget — "Add anyway" places THIS payload instead of re-encoding at the
    *  relaxed dimension cap (which would silently produce a heavier image). */
   encoded?: { dataUrl: string; width: number; height: number };
+  /** For `image-device-downscaled`: informational context only — the node is
+   *  already placed; this notice just tells the user what was resized and why. */
+  downscale?: {
+    deviceLabel: string;
+    cap: number;
+    sourceW: number;
+    sourceH: number;
+    finalW: number;
+    finalH: number;
+  };
 }
 
 interface ContextMenuState {
@@ -419,16 +430,26 @@ export interface VRHeadset {
   id: string;
   label: string;
   maxPoints: number;
+  /** Recommended max texture (longest-side) dimension for this device's GPU.
+   *  Dropped images are downscaled to fit it (see `encodeImageFile`); it is an
+   *  upper bound, not a target — the per-image byte budget can shrink further. */
+  maxTextureDim: number;
 }
 
 export const VR_HEADSETS: VRHeadset[] = [
-  { id: 'quest3', label: 'Meta Quest 3', maxPoints: 200 },
-  { id: 'quest3s', label: 'Meta Quest 3s', maxPoints: 110 },
-  { id: 'quest2', label: 'Meta Quest 2', maxPoints: 90 },
-  { id: 'steamframe', label: 'Steam Frame', maxPoints: 220 },
-  { id: 'pico4', label: 'Pico 4', maxPoints: 80 },
-  { id: 'visionpro', label: 'Apple Vision Pro (M5)', maxPoints: 350 },
+  { id: 'quest3', label: 'Meta Quest 3', maxPoints: 200, maxTextureDim: 2048 },
+  { id: 'quest3s', label: 'Meta Quest 3s', maxPoints: 110, maxTextureDim: 2048 },
+  { id: 'quest2', label: 'Meta Quest 2', maxPoints: 90, maxTextureDim: 1024 },
+  { id: 'steamframe', label: 'Steam Frame', maxPoints: 220, maxTextureDim: 2048 },
+  { id: 'pico4', label: 'Pico 4', maxPoints: 80, maxTextureDim: 1024 },
+  { id: 'visionpro', label: 'Apple Vision Pro (M5)', maxPoints: 350, maxTextureDim: 4096 },
 ];
+
+/** Recommended max texture dimension for a headset id (falls back to the first
+ *  preset for an unknown id — matches CostBar's headset lookup). */
+export function deviceMaxTextureDim(headsetId: string): number {
+  return (VR_HEADSETS.find((h) => h.id === headsetId) ?? VR_HEADSETS[0]).maxTextureDim;
+}
 
 interface AppState {
   // Graph
@@ -464,6 +485,10 @@ interface AppState {
   /** User opt-out of the image size limits (persisted; set via the LimitModal
    *  checkbox). Hard security ceilings still apply. */
   ignoreImageLimits: boolean;
+  /** Suppress the informational "image resized for your device" notice
+   *  (persisted; set via that notice's "Don't show again" checkbox). Distinct
+   *  from `ignoreImageLimits` — this hides a warning, it doesn't lift a cap. */
+  hideImageDownscaleWarning: boolean;
   splitRatio: number;
   rightSplitRatio: number;
 
@@ -593,6 +618,7 @@ interface AppState {
    *  still honoured as "leave unchanged" for non-UI callers. */
   resolveLimitNotice: (action: 'dismiss' | 'proceed', ignoreFuture: boolean | null) => void;
   setIgnoreImageLimits: (v: boolean) => void;
+  setHideImageDownscaleWarning: (v: boolean) => void;
   setSplitRatio: (ratio: number) => void;
   setRightSplitRatio: (ratio: number) => void;
 
@@ -667,6 +693,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   pendingCsvImports: [],
   pendingLimitNotices: [],
   ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
+  hideImageDownscaleWarning: loadString('fs:hideImageDownscaleWarning', '0') === '1',
   splitRatio: loadRatio('fs:splitRatio', 0.6),
   rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6),
   shaderName: loadString('fs:shaderName', 'My Shader'),
@@ -1009,7 +1036,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return;
     }
     // Re-run the import with the soft limits off (hard ceilings still apply).
-    void encodeImageFile(file, true).then((res) => {
+    // Still honour the device cap as the dimension floor (see encodeImageFile).
+    void encodeImageFile(file, true, deviceMaxTextureDim(get().selectedHeadsetId)).then((res) => {
       if (!res.ok) {
         window.alert(`Could not load "${file.name}" as an image.`);
         return;
@@ -1021,6 +1049,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setIgnoreImageLimits: (v) => {
     try { localStorage.setItem('fs:ignoreImageLimits', v ? '1' : '0'); } catch { /* */ }
     set({ ignoreImageLimits: v });
+  },
+
+  setHideImageDownscaleWarning: (v) => {
+    try { localStorage.setItem('fs:hideImageDownscaleWarning', v ? '1' : '0'); } catch { /* */ }
+    set({ hideImageDownscaleWarning: v });
   },
 
   setSplitRatio: (ratio) => {

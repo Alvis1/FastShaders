@@ -16,7 +16,7 @@ import {
   BackgroundVariant,
   SelectionMode,
 } from '@xyflow/react';
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
 import { useLongPress } from '@/hooks/useLongPress';
 import { ShaderNode } from './nodes/ShaderNode';
 import { ColorNode } from './nodes/ColorNode';
@@ -1769,7 +1769,9 @@ export function NodeEditor() {
       void (async () => {
         const store = useAppStore.getState();
         const ignore = store.ignoreImageLimits;
-        const res = await encodeImageFile(file, ignore);
+        const headset = VR_HEADSETS.find((h) => h.id === store.selectedHeadsetId) ?? VR_HEADSETS[0];
+        const deviceCap = headset.maxTextureDim;
+        const res = await encodeImageFile(file, ignore, deviceCap);
         if (!res.ok) {
           if (res.reason === 'too-large' || res.reason === 'pixels') {
             store.enqueueLimitNotice({
@@ -1807,6 +1809,28 @@ export function NodeEditor() {
           position,
           data: makeImageNodeData(res.dataUrl, res.width, res.height, cost, file.name),
         } as AppNode);
+        // Device-aware downscale notice (informational; the node is already
+        // placed). Only when the source exceeded the target headset's texture
+        // cap, the user hasn't opted out of size limits, and hasn't hidden it.
+        if (
+          !ignore &&
+          !store.hideImageDownscaleWarning &&
+          Math.max(res.sourceWidth, res.sourceHeight) > deviceCap
+        ) {
+          store.enqueueLimitNotice({
+            id: generateId(),
+            kind: 'image-device-downscaled',
+            fileName: file.name,
+            downscale: {
+              deviceLabel: headset.label,
+              cap: deviceCap,
+              sourceW: res.sourceWidth,
+              sourceH: res.sourceHeight,
+              finalW: res.width,
+              finalH: res.height,
+            },
+          });
+        }
       })();
     },
     [screenToFlowPosition, addNode],
