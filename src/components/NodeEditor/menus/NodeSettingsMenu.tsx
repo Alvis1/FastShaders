@@ -171,10 +171,37 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
             </label>
           </div>
         );
+
+        // Read-only source info: format, encoded (post-downscale) resolution,
+        // and payload size (base64 chars → ~3/4 bytes). Reflects what's actually
+        // stored/emitted, so it also shows the effect of the device downscale.
+        const url = typeof vals.imageB64 === 'string' ? vals.imageB64 : '';
+        const mimeMatch = /^data:image\/(png|jpeg|webp);base64,/.exec(url);
+        const format = mimeMatch ? (mimeMatch[1] === 'jpeg' ? 'JPEG' : mimeMatch[1].toUpperCase()) : '—';
+        const w = Number(vals.width) || 0;
+        const h = Number(vals.height) || 0;
+        const resolution = w && h ? `${w} × ${h}` : '—';
+        const bytes = mimeMatch ? Math.round((url.length - url.indexOf(',') - 1) * 0.75) : 0;
+        const size =
+          bytes <= 0 ? '—'
+            : bytes < 1024 ? `${bytes} B`
+              : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB`
+                : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        const infoRow = (label: string, value: string) => (
+          <div style={rowStyle}>
+            <span style={labelStyle}>{label}</span>
+            <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
+              {value}
+            </span>
+          </div>
+        );
         return (
           <>
             <div className="context-menu__divider" />
             <div className="context-menu__category">{t('Image', language)}</div>
+            {infoRow(t('Format', language), format)}
+            {infoRow(t('Resolution', language), resolution)}
+            {infoRow(t('Size', language), size)}
             {checkboxRow(t('Repeat (tile the image)', language), 'repeat', true,
               t('On: the image wraps/tiles. Off: edge pixels clamp beyond 0–1 UV.', language))}
             {checkboxRow(t('Flip X', language), 'flipX', false, t('Mirror the image left–right', language))}
