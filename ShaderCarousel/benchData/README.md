@@ -10,6 +10,43 @@ The benches export three browser downloads per run:
 evaporate; this directory is what closes the measure → suggest → `complexity.json`
 loop and keeps every update to the point table auditable back to a run.
 
+## Calibration corpus + `fit-calibration.mjs`
+
+`lib/bench-registry.js` has two opt-in groups built for pricing nodes precisely
+(both OFF by default — tick their master checkboxes in the picker, ideally in
+**MicroPlane**):
+
+- **Calibration (k-sweep)** — `calib_<op>_x{1,4,16}`: each op evaluated k times on
+  **distinct, runtime-varying, independent** inputs, accumulated into the output.
+  Marginal per-pass cost is linear in k; the slope is one op instance's cost.
+  `calib_scaffold_x{1,4,16}` is the same loop *without* the op — its slope is the
+  per-copy overhead, subtracted out. DCE/CSE-safe by construction: per-fragment +
+  per-copy distinct seeds wrapped in a non-linear `fract()` (so the scaffold can't
+  algebraically collapse), everything sunk into the returned colour. Copies are
+  *independent* (not a serial chain) so the slope measures **throughput**, which
+  is what a high-occupancy VR shader should be priced against.
+- **Combinations** — additivity (`combo_sin4_sqrt4`, `combo_perlin4_voronoi4`:
+  does `cost(A+B) ≈ cost(A)+cost(B)`?), ILP (`combo_sqrt_parallel8` vs
+  `_chain8`: throughput vs latency), an end-to-end `combo_model_check` (documented
+  node inventory ≈127 pts — does the sum predict the whole?), and two DCE
+  sentinels (`combo_dce_dropped`/`_kept`: fBm×4 weighted 0 vs 0.25 — dropped should
+  measure ≈ baseline, proving the accumulation elsewhere is load-bearing).
+
+**To analyse a MicroPlane run:**
+
+```
+node fit-calibration.mjs shadercarousel-microplane-<ts>.json
+```
+
+Fits the k-sweep by OLS (per op: net ms/copy, R², suggested points, diff vs the
+current table, `mispriced`/`nonlinear?` flags), then reports additivity ratios,
+the sqrt ILP ratio, and the DCE-sentinel check. Low R² ⟹ the op isn't a clean
+line (amortization / register-pressure — the slope is an average, not a constant).
+`below-scaffold` ⟹ the op is under the timer floor at this resolution; raise
+`input-size` or `K_LEVELS`. See `METHODS.md` for how this fits into the full
+recovery pipeline (isolation → composed-corpus NNLS/DoE regression → static
+cross-check) and why the shipped table stays additive.
+
 ## Layout
 
 ```

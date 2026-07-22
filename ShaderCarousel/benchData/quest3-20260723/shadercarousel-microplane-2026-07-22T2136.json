@@ -1,0 +1,7861 @@
+{
+  "metadata": {
+    "schemaVersion": 2,
+    "bench": "microplane",
+    "tool": "ShaderCarousel — MicroPlane",
+    "resolution": {
+      "width": 1024,
+      "height": 1024,
+      "label": "microplane"
+    },
+    "date": "2026-07-22T21:34:35.428Z",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/149.0.0.24.3.1013217646 Chrome/149.0.7827.197 VR Safari/537.36",
+    "gpu": "qualcomm / adreno-7xx",
+    "adapterInfo": {
+      "vendor": "qualcomm",
+      "architecture": "adreno-7xx",
+      "device": "",
+      "description": ""
+    },
+    "timingMethod": "gpu-timestamp",
+    "quantized": false,
+    "clockPinned": null,
+    "stereo": false,
+    "config": {
+      "size": 1024,
+      "frames": 60,
+      "passes": 30,
+      "warmup": 5,
+      "stride": 1
+    },
+    "calibration": {
+      "targetMs": 20,
+      "maxPasses": 333,
+      "method": "two-level slope"
+    },
+    "notes": "Per-node microbenchmark on a 2×2 ortho quad, timed via GPU timestamp queries when available (timingMethod) with a wall-clock fence fallback. Each shader is measured at N and 2N passes per batch (stats.passesLo/passesHi); per-pass cost = (median(total@2N) − median(total@N)) / N so fixed per-batch overhead cancels. stats.msPerPass is authoritative; marginal points are normalized to the 2064×2208 reference resolution in the export."
+  },
+  "shaders": [
+    {
+      "id": "ref_baseline",
+      "label": "Flat Color (baseline)",
+      "category": "baseline",
+      "stats": {
+        "points": 6,
+        "medianFt": 0.5128,
+        "meanFt": 0.5117,
+        "p95Ft": 0.5436,
+        "p99Ft": 0.567,
+        "sdFt": 0.0268,
+        "cvPercent": 5.23,
+        "avgFps": 1954.4,
+        "thermalDrift": 1.014,
+        "frameCount": 60,
+        "filteredCount": 60,
+        "outlierCount": 0,
+        "msPerPass": 0.52729,
+        "overheadMsPerBatch": -0.8694,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 0.5273,
+        "marginalMs": 0,
+        "marginalMsAtRef": 0,
+        "marginalPoints": 0
+      },
+      "frames": [
+        {
+          "t": 0,
+          "passes": 30,
+          "totalMs": 16.7111,
+          "gpuMs": 16.7111,
+          "frameTime": 0.557
+        },
+        {
+          "t": 0,
+          "passes": 60,
+          "totalMs": 32.8166,
+          "gpuMs": 32.8166,
+          "frameTime": 0.5469
+        },
+        {
+          "t": 1,
+          "passes": 30,
+          "totalMs": 14.6483,
+          "gpuMs": 14.6483,
+          "frameTime": 0.4883
+        },
+        {
+          "t": 1,
+          "passes": 60,
+          "totalMs": 27.5463,
+          "gpuMs": 27.5463,
+          "frameTime": 0.4591
+        },
+        {
+          "t": 2,
+          "passes": 30,
+          "totalMs": 16.6302,
+          "gpuMs": 16.6302,
+          "frameTime": 0.5543
+        },
+        {
+          "t": 2,
+          "passes": 60,
+          "totalMs": 29.5895,
+          "gpuMs": 29.5895,
+          "frameTime": 0.4932
+        },
+        {
+          "t": 3,
+          "passes": 30,
+          "totalMs": 16.9092,
+          "gpuMs": 16.9092,
+          "frameTime": 0.5636
+        },
+        {
+          "t": 3,
+          "passes": 60,
+          "totalMs": 27.2865,
+          "gpuMs": 27.2865,
+          "frameTime": 0.4548
+        },
+        {
+          "t": 4,
+          "passes": 30,
+          "totalMs": 14.7822,
+          "gpuMs": 14.7822,
+          "frameTime": 0.4927
+        },
+        {
+          "t": 4,
+          "passes": 60,
+          "totalMs": 29.0417,
+          "gpuMs": 29.0417,
+          "frameTime": 0.484
+        },
+        {
+          "t": 5,
+          "passes": 30,
+          "totalMs": 12.9538,
+          "gpuMs": 12.9538,
+          "frameTime": 0.4318
+        },
+        {
+          "t": 5,
+          "passes": 60,
+          "totalMs": 32.5514,
+          "gpuMs": 32.5514,
+          "frameTime": 0.5425
+        },
+        {
+          "t": 6,
+          "passes": 30,
+          "totalMs": 14.9481,
+          "gpuMs": 14.9481,
+          "frameTime": 0.4983
+        },
+        {
+          "t": 6,
+          "passes": 60,
+          "totalMs": 32.3915,
+          "gpuMs": 32.3915,
+          "frameTime": 0.5399
+        },
+        {
+          "t": 7,
+          "passes": 30,
+          "totalMs": 16.5533,
+          "gpuMs": 16.5533,
+          "frameTime": 0.5518
+        },
+        {
+          "t": 7,
+          "passes": 60,
+          "totalMs": 32.2748,
+          "gpuMs": 32.2748,
+          "frameTime": 0.5379
+        },
+        {
+          "t": 8,
+          "passes": 30,
+          "totalMs": 14.4032,
+          "gpuMs": 14.4032,
+          "frameTime": 0.4801
+        },
+        {
+          "t": 8,
+          "passes": 60,
+          "totalMs": 28.8471,
+          "gpuMs": 28.8471,
+          "frameTime": 0.4808
+        },
+        {
+          "t": 9,
+          "passes": 30,
+          "totalMs": 14.4116,
+          "gpuMs": 14.4116,
+          "frameTime": 0.4804
+        },
+        {
+          "t": 9,
+          "passes": 60,
+          "totalMs": 27.409,
+          "gpuMs": 27.409,
+          "frameTime": 0.4568
+        },
+        {
+          "t": 10,
+          "passes": 30,
+          "totalMs": 14.6717,
+          "gpuMs": 14.6717,
+          "frameTime": 0.4891
+        },
+        {
+          "t": 10,
+          "passes": 60,
+          "totalMs": 29.1602,
+          "gpuMs": 29.1602,
+          "frameTime": 0.486
+        },
+        {
+          "t": 11,
+          "passes": 30,
+          "totalMs": 14.5139,
+          "gpuMs": 14.5139,
+          "frameTime": 0.4838
+        },
+        {
+          "t": 11,
+          "passes": 60,
+          "totalMs": 31.1075,
+          "gpuMs": 31.1075,
+          "frameTime": 0.5185
+        },
+        {
+          "t": 12,
+          "passes": 30,
+          "totalMs": 14.5698,
+          "gpuMs": 14.5698,
+          "frameTime": 0.4857
+        },
+        {
+          "t": 12,
+          "passes": 60,
+          "totalMs": 29.1421,
+          "gpuMs": 29.1421,
+          "frameTime": 0.4857
+        },
+        {
+          "t": 13,
+          "passes": 30,
+          "totalMs": 17.814,
+          "gpuMs": 17.814,
+          "frameTime": 0.5938
+        },
+        {
+          "t": 13,
+          "passes": 60,
+          "totalMs": 30.7613,
+          "gpuMs": 30.7613,
+          "frameTime": 0.5127
+        },
+        {
+          "t": 14,
+          "passes": 30,
+          "totalMs": 16.2777,
+          "gpuMs": 16.2777,
+          "frameTime": 0.5426
+        },
+        {
+          "t": 14,
+          "passes": 60,
+          "totalMs": 28.9205,
+          "gpuMs": 28.9205,
+          "frameTime": 0.482
+        },
+        {
+          "t": 15,
+          "passes": 30,
+          "totalMs": 16.2406,
+          "gpuMs": 16.2406,
+          "frameTime": 0.5414
+        },
+        {
+          "t": 15,
+          "passes": 60,
+          "totalMs": 30.7276,
+          "gpuMs": 30.7276,
+          "frameTime": 0.5121
+        },
+        {
+          "t": 16,
+          "passes": 30,
+          "totalMs": 17.7965,
+          "gpuMs": 17.7965,
+          "frameTime": 0.5932
+        },
+        {
+          "t": 16,
+          "passes": 60,
+          "totalMs": 27.5859,
+          "gpuMs": 27.5859,
+          "frameTime": 0.4598
+        },
+        {
+          "t": 17,
+          "passes": 30,
+          "totalMs": 15.994,
+          "gpuMs": 15.994,
+          "frameTime": 0.5331
+        },
+        {
+          "t": 17,
+          "passes": 60,
+          "totalMs": 30.8325,
+          "gpuMs": 30.8325,
+          "frameTime": 0.5139
+        },
+        {
+          "t": 18,
+          "passes": 30,
+          "totalMs": 14.598,
+          "gpuMs": 14.598,
+          "frameTime": 0.4866
+        },
+        {
+          "t": 18,
+          "passes": 60,
+          "totalMs": 30.739,
+          "gpuMs": 30.739,
+          "frameTime": 0.5123
+        },
+        {
+          "t": 19,
+          "passes": 30,
+          "totalMs": 16.0505,
+          "gpuMs": 16.0505,
+          "frameTime": 0.535
+        },
+        {
+          "t": 19,
+          "passes": 60,
+          "totalMs": 29.2821,
+          "gpuMs": 29.2821,
+          "frameTime": 0.488
+        },
+        {
+          "t": 20,
+          "passes": 30,
+          "totalMs": 16.2056,
+          "gpuMs": 16.2056,
+          "frameTime": 0.5402
+        },
+        {
+          "t": 20,
+          "passes": 60,
+          "totalMs": 32.4735,
+          "gpuMs": 32.4735,
+          "frameTime": 0.5412
+        },
+        {
+          "t": 21,
+          "passes": 30,
+          "totalMs": 14.4611,
+          "gpuMs": 14.4611,
+          "frameTime": 0.482
+        },
+        {
+          "t": 21,
+          "passes": 60,
+          "totalMs": 32.5599,
+          "gpuMs": 32.5599,
+          "frameTime": 0.5427
+        },
+        {
+          "t": 22,
+          "passes": 30,
+          "totalMs": 14.5938,
+          "gpuMs": 14.5938,
+          "frameTime": 0.4865
+        },
+        {
+          "t": 22,
+          "passes": 60,
+          "totalMs": 32.4609,
+          "gpuMs": 32.4609,
+          "frameTime": 0.541
+        },
+        {
+          "t": 23,
+          "passes": 30,
+          "totalMs": 14.719,
+          "gpuMs": 14.719,
+          "frameTime": 0.4906
+        },
+        {
+          "t": 23,
+          "passes": 60,
+          "totalMs": 30.7749,
+          "gpuMs": 30.7749,
+          "frameTime": 0.5129
+        },
+        {
+          "t": 24,
+          "passes": 30,
+          "totalMs": 17.6965,
+          "gpuMs": 17.6965,
+          "frameTime": 0.5899
+        },
+        {
+          "t": 24,
+          "passes": 60,
+          "totalMs": 29.1657,
+          "gpuMs": 29.1657,
+          "frameTime": 0.4861
+        },
+        {
+          "t": 25,
+          "passes": 30,
+          "totalMs": 14.3779,
+          "gpuMs": 14.3779,
+          "frameTime": 0.4793
+        },
+        {
+          "t": 25,
+          "passes": 60,
+          "totalMs": 29.2836,
+          "gpuMs": 29.2836,
+          "frameTime": 0.4881
+        },
+        {
+          "t": 26,
+          "passes": 30,
+          "totalMs": 13.0132,
+          "gpuMs": 13.0132,
+          "frameTime": 0.4338
+        },
+        {
+          "t": 26,
+          "passes": 60,
+          "totalMs": 32.3309,
+          "gpuMs": 32.3309,
+          "frameTime": 0.5388
+        },
+        {
+          "t": 27,
+          "passes": 30,
+          "totalMs": 16.1851,
+          "gpuMs": 16.1851,
+          "frameTime": 0.5395
+        },
+        {
+          "t": 27,
+          "passes": 60,
+          "totalMs": 34.1062,
+          "gpuMs": 34.1062,
+          "frameTime": 0.5684
+        },
+        {
+          "t": 28,
+          "passes": 30,
+          "totalMs": 16.2806,
+          "gpuMs": 16.2806,
+          "frameTime": 0.5427
+        },
+        {
+          "t": 28,
+          "passes": 60,
+          "totalMs": 30.7354,
+          "gpuMs": 30.7354,
+          "frameTime": 0.5123
+        },
+        {
+          "t": 29,
+          "passes": 30,
+          "totalMs": 14.6713,
+          "gpuMs": 14.6713,
+          "frameTime": 0.489
+        },
+        {
+          "t": 29,
+          "passes": 60,
+          "totalMs": 32.6025,
+          "gpuMs": 32.6025,
+          "frameTime": 0.5434
+        },
+        {
+          "t": 30,
+          "passes": 30,
+          "totalMs": 18.0248,
+          "gpuMs": 18.0248,
+          "frameTime": 0.6008
+        },
+        {
+          "t": 30,
+          "passes": 60,
+          "totalMs": 31.0123,
+          "gpuMs": 31.0123,
+          "frameTime": 0.5169
+        },
+        {
+          "t": 31,
+          "passes": 30,
+          "totalMs": 15.0156,
+          "gpuMs": 15.0156,
+          "frameTime": 0.5005
+        },
+        {
+          "t": 31,
+          "passes": 60,
+          "totalMs": 28.966,
+          "gpuMs": 28.966,
+          "frameTime": 0.4828
+        },
+        {
+          "t": 32,
+          "passes": 30,
+          "totalMs": 14.8037,
+          "gpuMs": 14.8037,
+          "frameTime": 0.4935
+        },
+        {
+          "t": 32,
+          "passes": 60,
+          "totalMs": 29.0793,
+          "gpuMs": 29.0793,
+          "frameTime": 0.4847
+        },
+        {
+          "t": 33,
+          "passes": 30,
+          "totalMs": 14.9741,
+          "gpuMs": 14.9741,
+          "frameTime": 0.4991
+        },
+        {
+          "t": 33,
+          "passes": 60,
+          "totalMs": 30.818,
+          "gpuMs": 30.818,
+          "frameTime": 0.5136
+        },
+        {
+          "t": 34,
+          "passes": 30,
+          "totalMs": 14.9506,
+          "gpuMs": 14.9506,
+          "frameTime": 0.4984
+        },
+        {
+          "t": 34,
+          "passes": 60,
+          "totalMs": 32.4409,
+          "gpuMs": 32.4409,
+          "frameTime": 0.5407
+        },
+        {
+          "t": 35,
+          "passes": 30,
+          "totalMs": 13.2624,
+          "gpuMs": 13.2624,
+          "frameTime": 0.4421
+        },
+        {
+          "t": 35,
+          "passes": 60,
+          "totalMs": 32.163,
+          "gpuMs": 32.163,
+          "frameTime": 0.5361
+        },
+        {
+          "t": 36,
+          "passes": 30,
+          "totalMs": 16.5871,
+          "gpuMs": 16.5871,
+          "frameTime": 0.5529
+        },
+        {
+          "t": 36,
+          "passes": 60,
+          "totalMs": 32.4337,
+          "gpuMs": 32.4337,
+          "frameTime": 0.5406
+        },
+        {
+          "t": 37,
+          "passes": 30,
+          "totalMs": 14.8368,
+          "gpuMs": 14.8368,
+          "frameTime": 0.4946
+        },
+        {
+          "t": 37,
+          "passes": 60,
+          "totalMs": 29.2103,
+          "gpuMs": 29.2103,
+          "frameTime": 0.4868
+        },
+        {
+          "t": 38,
+          "passes": 30,
+          "totalMs": 16.4186,
+          "gpuMs": 16.4186,
+          "frameTime": 0.5473
+        },
+        {
+          "t": 38,
+          "passes": 60,
+          "totalMs": 30.516,
+          "gpuMs": 30.516,
+          "frameTime": 0.5086
+        },
+        {
+          "t": 39,
+          "passes": 30,
+          "totalMs": 14.9563,
+          "gpuMs": 14.9563,
+          "frameTime": 0.4985
+        },
+        {
+          "t": 39,
+          "passes": 60,
+          "totalMs": 30.6761,
+          "gpuMs": 30.6761,
+          "frameTime": 0.5113
+        },
+        {
+          "t": 40,
+          "passes": 30,
+          "totalMs": 16.4744,
+          "gpuMs": 16.4744,
+          "frameTime": 0.5491
+        },
+        {
+          "t": 40,
+          "passes": 60,
+          "totalMs": 29.3344,
+          "gpuMs": 29.3344,
+          "frameTime": 0.4889
+        },
+        {
+          "t": 41,
+          "passes": 30,
+          "totalMs": 14.6998,
+          "gpuMs": 14.6998,
+          "frameTime": 0.49
+        },
+        {
+          "t": 41,
+          "passes": 60,
+          "totalMs": 31.0271,
+          "gpuMs": 31.0271,
+          "frameTime": 0.5171
+        },
+        {
+          "t": 42,
+          "passes": 30,
+          "totalMs": 18.159,
+          "gpuMs": 18.159,
+          "frameTime": 0.6053
+        },
+        {
+          "t": 42,
+          "passes": 60,
+          "totalMs": 30.7138,
+          "gpuMs": 30.7138,
+          "frameTime": 0.5119
+        },
+        {
+          "t": 43,
+          "passes": 30,
+          "totalMs": 16.29,
+          "gpuMs": 16.29,
+          "frameTime": 0.543
+        },
+        {
+          "t": 43,
+          "passes": 60,
+          "totalMs": 30.5633,
+          "gpuMs": 30.5633,
+          "frameTime": 0.5094
+        },
+        {
+          "t": 44,
+          "passes": 30,
+          "totalMs": 14.6244,
+          "gpuMs": 14.6244,
+          "frameTime": 0.4875
+        },
+        {
+          "t": 44,
+          "passes": 60,
+          "totalMs": 32.1962,
+          "gpuMs": 32.1962,
+          "frameTime": 0.5366
+        },
+        {
+          "t": 45,
+          "passes": 30,
+          "totalMs": 17.9574,
+          "gpuMs": 17.9574,
+          "frameTime": 0.5986
+        },
+        {
+          "t": 45,
+          "passes": 60,
+          "totalMs": 31.0494,
+          "gpuMs": 31.0494,
+          "frameTime": 0.5175
+        },
+        {
+          "t": 46,
+          "passes": 30,
+          "totalMs": 14.4193,
+          "gpuMs": 14.4193,
+          "frameTime": 0.4806
+        },
+        {
+          "t": 46,
+          "passes": 60,
+          "totalMs": 30.8632,
+          "gpuMs": 30.8632,
+          "frameTime": 0.5144
+        },
+        {
+          "t": 47,
+          "passes": 30,
+          "totalMs": 14.8237,
+          "gpuMs": 14.8237,
+          "frameTime": 0.4941
+        },
+        {
+          "t": 47,
+          "passes": 60,
+          "totalMs": 33.9579,
+          "gpuMs": 33.9579,
+          "frameTime": 0.566
+        },
+        {
+          "t": 48,
+          "passes": 30,
+          "totalMs": 16.2779,
+          "gpuMs": 16.2779,
+          "frameTime": 0.5426
+        },
+        {
+          "t": 48,
+          "passes": 60,
+          "totalMs": 29.1586,
+          "gpuMs": 29.1586,
+          "frameTime": 0.486
+        },
+        {
+          "t": 49,
+          "passes": 30,
+          "totalMs": 12.742,
+          "gpuMs": 12.742,
+          "frameTime": 0.4247
+        },
+        {
+          "t": 49,
+          "passes": 60,
+          "totalMs": 29.31,
+          "gpuMs": 29.31,
+          "frameTime": 0.4885
+        },
+        {
+          "t": 50,
+          "passes": 30,
+          "totalMs": 14.6706,
+          "gpuMs": 14.6706,
+          "frameTime": 0.489
+        },
+        {
+          "t": 50,
+          "passes": 60,
+          "totalMs": 32.4897,
+          "gpuMs": 32.4897,
+          "frameTime": 0.5415
+        },
+        {
+          "t": 51,
+          "passes": 30,
+          "totalMs": 17.9071,
+          "gpuMs": 17.9071,
+          "frameTime": 0.5969
+        },
+        {
+          "t": 51,
+          "passes": 60,
+          "totalMs": 32.5702,
+          "gpuMs": 32.5702,
+          "frameTime": 0.5428
+        },
+        {
+          "t": 52,
+          "passes": 30,
+          "totalMs": 14.2555,
+          "gpuMs": 14.2555,
+          "frameTime": 0.4752
+        },
+        {
+          "t": 52,
+          "passes": 60,
+          "totalMs": 30.7826,
+          "gpuMs": 30.7826,
+          "frameTime": 0.513
+        },
+        {
+          "t": 53,
+          "passes": 30,
+          "totalMs": 14.9031,
+          "gpuMs": 14.9031,
+          "frameTime": 0.4968
+        },
+        {
+          "t": 53,
+          "passes": 60,
+          "totalMs": 28.9841,
+          "gpuMs": 28.9841,
+          "frameTime": 0.4831
+        },
+        {
+          "t": 54,
+          "passes": 30,
+          "totalMs": 11.4969,
+          "gpuMs": 11.4969,
+          "frameTime": 0.3832
+        },
+        {
+          "t": 54,
+          "passes": 60,
+          "totalMs": 32.2334,
+          "gpuMs": 32.2334,
+          "frameTime": 0.5372
+        },
+        {
+          "t": 55,
+          "passes": 30,
+          "totalMs": 15.0454,
+          "gpuMs": 15.0454,
+          "frameTime": 0.5015
+        },
+        {
+          "t": 55,
+          "passes": 60,
+          "totalMs": 30.8284,
+          "gpuMs": 30.8284,
+          "frameTime": 0.5138
+        },
+        {
+          "t": 56,
+          "passes": 30,
+          "totalMs": 18.1174,
+          "gpuMs": 18.1174,
+          "frameTime": 0.6039
+        },
+        {
+          "t": 56,
+          "passes": 60,
+          "totalMs": 32.1538,
+          "gpuMs": 32.1538,
+          "frameTime": 0.5359
+        },
+        {
+          "t": 57,
+          "passes": 30,
+          "totalMs": 13.0697,
+          "gpuMs": 13.0697,
+          "frameTime": 0.4357
+        },
+        {
+          "t": 57,
+          "passes": 60,
+          "totalMs": 30.6043,
+          "gpuMs": 30.6043,
+          "frameTime": 0.5101
+        },
+        {
+          "t": 58,
+          "passes": 30,
+          "totalMs": 16.683,
+          "gpuMs": 16.683,
+          "frameTime": 0.5561
+        },
+        {
+          "t": 58,
+          "passes": 60,
+          "totalMs": 30.5064,
+          "gpuMs": 30.5064,
+          "frameTime": 0.5084
+        },
+        {
+          "t": 59,
+          "passes": 30,
+          "totalMs": 14.6632,
+          "gpuMs": 14.6632,
+          "frameTime": 0.4888
+        },
+        {
+          "t": 59,
+          "passes": 60,
+          "totalMs": 30.8687,
+          "gpuMs": 30.8687,
+          "frameTime": 0.5145
+        }
+      ]
+    },
+    {
+      "id": "noise_perlin",
+      "label": "Perlin",
+      "category": "noise",
+      "stats": {
+        "points": 13,
+        "medianFt": 1.0556,
+        "meanFt": 1.0459,
+        "p95Ft": 1.0867,
+        "p99Ft": 1.0879,
+        "sdFt": 0.0238,
+        "cvPercent": 2.28,
+        "avgFps": 956.1,
+        "thermalDrift": 1,
+        "frameCount": 60,
+        "filteredCount": 55,
+        "outlierCount": 5,
+        "msPerPass": 1.05287,
+        "overheadMsPerBatch": -0.8943,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 0.5273,
+        "marginalMs": 0.5256,
+        "marginalMsAtRef": 2.2843,
+        "marginalPoints": 27
+      },
+      "frames": [
+        {
+          "t": 0,
+          "passes": 30,
+          "totalMs": 31.8607,
+          "gpuMs": 31.8607,
+          "frameTime": 1.062
+        },
+        {
+          "t": 0,
+          "passes": 60,
+          "totalMs": 65.2307,
+          "gpuMs": 65.2307,
+          "frameTime": 1.0872
+        },
+        {
+          "t": 1,
+          "passes": 30,
+          "totalMs": 34.0425,
+          "gpuMs": 34.0425,
+          "frameTime": 1.1348
+        },
+        {
+          "t": 1,
+          "passes": 60,
+          "totalMs": 62.5183,
+          "gpuMs": 62.5183,
+          "frameTime": 1.042
+        },
+        {
+          "t": 2,
+          "passes": 30,
+          "totalMs": 30.6141,
+          "gpuMs": 30.6141,
+          "frameTime": 1.0205
+        },
+        {
+          "t": 2,
+          "passes": 60,
+          "totalMs": 60.2304,
+          "gpuMs": 60.2304,
+          "frameTime": 1.0038
+        },
+        {
+          "t": 3,
+          "passes": 30,
+          "totalMs": 30.3049,
+          "gpuMs": 30.3049,
+          "frameTime": 1.0102
+        },
+        {
+          "t": 3,
+          "passes": 60,
+          "totalMs": 63.3361,
+          "gpuMs": 63.3361,
+          "frameTime": 1.0556
+        },
+        {
+          "t": 4,
+          "passes": 30,
+          "totalMs": 30.3018,
+          "gpuMs": 30.3018,
+          "frameTime": 1.0101
+        },
+        {
+          "t": 4,
+          "passes": 60,
+          "totalMs": 63.4344,
+          "gpuMs": 63.4344,
+          "frameTime": 1.0572
+        },
+        {
+          "t": 5,
+          "passes": 30,
+          "totalMs": 33.5269,
+          "gpuMs": 33.5269,
+          "frameTime": 1.1176
+        },
+        {
+          "t": 5,
+          "passes": 60,
+          "totalMs": 61.8157,
+          "gpuMs": 61.8157,
+          "frameTime": 1.0303
+        },
+        {
+          "t": 6,
+          "passes": 30,
+          "totalMs": 28.6733,
+          "gpuMs": 28.6733,
+          "frameTime": 0.9558
+        },
+        {
+          "t": 6,
+          "passes": 60,
+          "totalMs": 58.6247,
+          "gpuMs": 58.6247,
+          "frameTime": 0.9771
+        },
+        {
+          "t": 7,
+          "passes": 30,
+          "totalMs": 30.2645,
+          "gpuMs": 30.2645,
+          "frameTime": 1.0088
+        },
+        {
+          "t": 7,
+          "passes": 60,
+          "totalMs": 62.0373,
+          "gpuMs": 62.0373,
+          "frameTime": 1.034
+        },
+        {
+          "t": 8,
+          "passes": 30,
+          "totalMs": 33.3676,
+          "gpuMs": 33.3676,
+          "frameTime": 1.1123
+        },
+        {
+          "t": 8,
+          "passes": 60,
+          "totalMs": 63.5839,
+          "gpuMs": 63.5839,
+          "frameTime": 1.0597
+        },
+        {
+          "t": 9,
+          "passes": 30,
+          "totalMs": 28.8697,
+          "gpuMs": 28.8697,
+          "frameTime": 0.9623
+        },
+        {
+          "t": 9,
+          "passes": 60,
+          "totalMs": 62.1219,
+          "gpuMs": 62.1219,
+          "frameTime": 1.0354
+        },
+        {
+          "t": 10,
+          "passes": 30,
+          "totalMs": 33.5868,
+          "gpuMs": 33.5868,
+          "frameTime": 1.1196
+        },
+        {
+          "t": 10,
+          "passes": 60,
+          "totalMs": 61.8444,
+          "gpuMs": 61.8444,
+          "frameTime": 1.0307
+        },
+        {
+          "t": 11,
+          "passes": 30,
+          "totalMs": 31.9282,
+          "gpuMs": 31.9282,
+          "frameTime": 1.0643
+        },
+        {
+          "t": 11,
+          "passes": 60,
+          "totalMs": 63.4654,
+          "gpuMs": 63.4654,
+          "frameTime": 1.0578
+        },
+        {
+          "t": 12,
+          "passes": 30,
+          "totalMs": 28.722,
+          "gpuMs": 28.722,
+          "frameTime": 0.9574
+        },
+        {
+          "t": 12,
+          "passes": 60,
+          "totalMs": 60.5784,
+          "gpuMs": 60.5784,
+          "frameTime": 1.0096
+        },
+        {
+          "t": 13,
+          "passes": 30,
+          "totalMs": 33.8766,
+          "gpuMs": 33.8766,
+          "frameTime": 1.1292
+        },
+        {
+          "t": 13,
+          "passes": 60,
+          "totalMs": 61.7258,
+          "gpuMs": 61.7258,
+          "frameTime": 1.0288
+        },
+        {
+          "t": 14,
+          "passes": 30,
+          "totalMs": 30.2341,
+          "gpuMs": 30.2341,
+          "frameTime": 1.0078
+        },
+        {
+          "t": 14,
+          "passes": 60,
+          "totalMs": 63.672,
+          "gpuMs": 63.672,
+          "frameTime": 1.0612
+        },
+        {
+          "t": 15,
+          "passes": 30,
+          "totalMs": 33.9326,
+          "gpuMs": 33.9326,
+          "frameTime": 1.1311
+        },
+        {
+          "t": 15,
+          "passes": 60,
+          "totalMs": 58.7214,
+          "gpuMs": 58.7214,
+          "frameTime": 0.9787
+        },
+        {
+          "t": 16,
+          "passes": 30,
+          "totalMs": 30.076,
+          "gpuMs": 30.076,
+          "frameTime": 1.0025
+        },
+        {
+          "t": 16,
+          "passes": 60,
+          "totalMs": 63.6093,
+          "gpuMs": 63.6093,
+          "frameTime": 1.0602
+        },
+        {
+          "t": 17,
+          "passes": 30,
+          "totalMs": 31.8753,
+          "gpuMs": 31.8753,
+          "frameTime": 1.0625
+        },
+        {
+          "t": 17,
+          "passes": 60,
+          "totalMs": 60.6713,
+          "gpuMs": 60.6713,
+          "frameTime": 1.0112
+        },
+        {
+          "t": 18,
+          "passes": 30,
+          "totalMs": 31.7757,
+          "gpuMs": 31.7757,
+          "frameTime": 1.0592
+        },
+        {
+          "t": 18,
+          "passes": 60,
+          "totalMs": 61.8024,
+          "gpuMs": 61.8024,
+          "frameTime": 1.03
+        },
+        {
+          "t": 19,
+          "passes": 30,
+          "totalMs": 30.1753,
+          "gpuMs": 30.1753,
+          "frameTime": 1.0058
+        },
+        {
+          "t": 19,
+          "passes": 60,
+          "totalMs": 64.8464,
+          "gpuMs": 64.8464,
+          "frameTime": 1.0808
+        },
+        {
+          "t": 20,
+          "passes": 30,
+          "totalMs": 31.8433,
+          "gpuMs": 31.8433,
+          "frameTime": 1.0614
+        },
+        {
+          "t": 20,
+          "passes": 60,
+          "totalMs": 63.7583,
+          "gpuMs": 63.7583,
+          "frameTime": 1.0626
+        },
+        {
+          "t": 21,
+          "passes": 30,
+          "totalMs": 30.2519,
+          "gpuMs": 30.2519,
+          "frameTime": 1.0084
+        },
+        {
+          "t": 21,
+          "passes": 60,
+          "totalMs": 63.7061,
+          "gpuMs": 63.7061,
+          "frameTime": 1.0618
+        },
+        {
+          "t": 22,
+          "passes": 30,
+          "totalMs": 33.5337,
+          "gpuMs": 33.5337,
+          "frameTime": 1.1178
+        },
+        {
+          "t": 22,
+          "passes": 60,
+          "totalMs": 63.4407,
+          "gpuMs": 63.4407,
+          "frameTime": 1.0573
+        },
+        {
+          "t": 23,
+          "passes": 30,
+          "totalMs": 31.926,
+          "gpuMs": 31.926,
+          "frameTime": 1.0642
+        },
+        {
+          "t": 23,
+          "passes": 60,
+          "totalMs": 63.4798,
+          "gpuMs": 63.4798,
+          "frameTime": 1.058
+        },
+        {
+          "t": 24,
+          "passes": 30,
+          "totalMs": 28.9426,
+          "gpuMs": 28.9426,
+          "frameTime": 0.9648
+        },
+        {
+          "t": 24,
+          "passes": 60,
+          "totalMs": 59.8689,
+          "gpuMs": 59.8689,
+          "frameTime": 0.9978
+        },
+        {
+          "t": 25,
+          "passes": 30,
+          "totalMs": 30.1636,
+          "gpuMs": 30.1636,
+          "frameTime": 1.0055
+        },
+        {
+          "t": 25,
+          "passes": 60,
+          "totalMs": 62.3634,
+          "gpuMs": 62.3634,
+          "frameTime": 1.0394
+        },
+        {
+          "t": 26,
+          "passes": 30,
+          "totalMs": 32.3685,
+          "gpuMs": 32.3685,
+          "frameTime": 1.0789
+        },
+        {
+          "t": 26,
+          "passes": 60,
+          "totalMs": 64.5377,
+          "gpuMs": 64.5377,
+          "frameTime": 1.0756
+        },
+        {
+          "t": 27,
+          "passes": 30,
+          "totalMs": 32.6001,
+          "gpuMs": 32.6001,
+          "frameTime": 1.0867
+        },
+        {
+          "t": 27,
+          "passes": 60,
+          "totalMs": 61.7945,
+          "gpuMs": 61.7945,
+          "frameTime": 1.0299
+        },
+        {
+          "t": 28,
+          "passes": 30,
+          "totalMs": 30.3173,
+          "gpuMs": 30.3173,
+          "frameTime": 1.0106
+        },
+        {
+          "t": 28,
+          "passes": 60,
+          "totalMs": 63.457,
+          "gpuMs": 63.457,
+          "frameTime": 1.0576
+        },
+        {
+          "t": 29,
+          "passes": 30,
+          "totalMs": 30.266,
+          "gpuMs": 30.266,
+          "frameTime": 1.0089
+        },
+        {
+          "t": 29,
+          "passes": 60,
+          "totalMs": 60.855,
+          "gpuMs": 60.855,
+          "frameTime": 1.0143
+        },
+        {
+          "t": 30,
+          "passes": 30,
+          "totalMs": 29.1131,
+          "gpuMs": 29.1131,
+          "frameTime": 0.9704
+        },
+        {
+          "t": 30,
+          "passes": 60,
+          "totalMs": 65.3428,
+          "gpuMs": 65.3428,
+          "frameTime": 1.089
+        },
+        {
+          "t": 31,
+          "passes": 30,
+          "totalMs": 32.0234,
+          "gpuMs": 32.0234,
+          "frameTime": 1.0674
+        },
+        {
+          "t": 31,
+          "passes": 60,
+          "totalMs": 63.5101,
+          "gpuMs": 63.5101,
+          "frameTime": 1.0585
+        },
+        {
+          "t": 32,
+          "passes": 30,
+          "totalMs": 30.2579,
+          "gpuMs": 30.2579,
+          "frameTime": 1.0086
+        },
+        {
+          "t": 32,
+          "passes": 60,
+          "totalMs": 61.6806,
+          "gpuMs": 61.6806,
+          "frameTime": 1.028
+        },
+        {
+          "t": 33,
+          "passes": 30,
+          "totalMs": 28.6577,
+          "gpuMs": 28.6577,
+          "frameTime": 0.9553
+        },
+        {
+          "t": 33,
+          "passes": 60,
+          "totalMs": 60.3138,
+          "gpuMs": 60.3138,
+          "frameTime": 1.0052
+        },
+        {
+          "t": 34,
+          "passes": 30,
+          "totalMs": 30.3793,
+          "gpuMs": 30.3793,
+          "frameTime": 1.0126
+        },
+        {
+          "t": 34,
+          "passes": 60,
+          "totalMs": 63.3714,
+          "gpuMs": 63.3714,
+          "frameTime": 1.0562
+        },
+        {
+          "t": 35,
+          "passes": 30,
+          "totalMs": 30.5039,
+          "gpuMs": 30.5039,
+          "frameTime": 1.0168
+        },
+        {
+          "t": 35,
+          "passes": 60,
+          "totalMs": 65.2284,
+          "gpuMs": 65.2284,
+          "frameTime": 1.0871
+        },
+        {
+          "t": 36,
+          "passes": 30,
+          "totalMs": 33.7955,
+          "gpuMs": 33.7955,
+          "frameTime": 1.1265
+        },
+        {
+          "t": 36,
+          "passes": 60,
+          "totalMs": 64.0405,
+          "gpuMs": 64.0405,
+          "frameTime": 1.0673
+        },
+        {
+          "t": 37,
+          "passes": 30,
+          "totalMs": 30.1475,
+          "gpuMs": 30.1475,
+          "frameTime": 1.0049
+        },
+        {
+          "t": 37,
+          "passes": 60,
+          "totalMs": 61.9925,
+          "gpuMs": 61.9925,
+          "frameTime": 1.0332
+        },
+        {
+          "t": 38,
+          "passes": 30,
+          "totalMs": 33.5916,
+          "gpuMs": 33.5916,
+          "frameTime": 1.1197
+        },
+        {
+          "t": 38,
+          "passes": 60,
+          "totalMs": 61.8656,
+          "gpuMs": 61.8656,
+          "frameTime": 1.0311
+        },
+        {
+          "t": 39,
+          "passes": 30,
+          "totalMs": 30.3082,
+          "gpuMs": 30.3082,
+          "frameTime": 1.0103
+        },
+        {
+          "t": 39,
+          "passes": 60,
+          "totalMs": 61.6589,
+          "gpuMs": 61.6589,
+          "frameTime": 1.0276
+        },
+        {
+          "t": 40,
+          "passes": 30,
+          "totalMs": 31.8435,
+          "gpuMs": 31.8435,
+          "frameTime": 1.0614
+        },
+        {
+          "t": 40,
+          "passes": 60,
+          "totalMs": 58.7086,
+          "gpuMs": 58.7086,
+          "frameTime": 0.9785
+        },
+        {
+          "t": 41,
+          "passes": 30,
+          "totalMs": 30.7696,
+          "gpuMs": 30.7696,
+          "frameTime": 1.0257
+        },
+        {
+          "t": 41,
+          "passes": 60,
+          "totalMs": 63.4237,
+          "gpuMs": 63.4237,
+          "frameTime": 1.0571
+        },
+        {
+          "t": 42,
+          "passes": 30,
+          "totalMs": 33.6752,
+          "gpuMs": 33.6752,
+          "frameTime": 1.1225
+        },
+        {
+          "t": 42,
+          "passes": 60,
+          "totalMs": 61.8685,
+          "gpuMs": 61.8685,
+          "frameTime": 1.0311
+        },
+        {
+          "t": 43,
+          "passes": 30,
+          "totalMs": 31.9239,
+          "gpuMs": 31.9239,
+          "frameTime": 1.0641
+        },
+        {
+          "t": 43,
+          "passes": 60,
+          "totalMs": 63.9607,
+          "gpuMs": 63.9607,
+          "frameTime": 1.066
+        },
+        {
+          "t": 44,
+          "passes": 30,
+          "totalMs": 30.3081,
+          "gpuMs": 30.3081,
+          "frameTime": 1.0103
+        },
+        {
+          "t": 44,
+          "passes": 60,
+          "totalMs": 65.1674,
+          "gpuMs": 65.1674,
+          "frameTime": 1.0861
+        },
+        {
+          "t": 45,
+          "passes": 30,
+          "totalMs": 31.948,
+          "gpuMs": 31.948,
+          "frameTime": 1.0649
+        },
+        {
+          "t": 45,
+          "passes": 60,
+          "totalMs": 63.5846,
+          "gpuMs": 63.5846,
+          "frameTime": 1.0597
+        },
+        {
+          "t": 46,
+          "passes": 30,
+          "totalMs": 31.877,
+          "gpuMs": 31.877,
+          "frameTime": 1.0626
+        },
+        {
+          "t": 46,
+          "passes": 60,
+          "totalMs": 58.7423,
+          "gpuMs": 58.7423,
+          "frameTime": 0.979
+        },
+        {
+          "t": 47,
+          "passes": 30,
+          "totalMs": 30.2692,
+          "gpuMs": 30.2692,
+          "frameTime": 1.009
+        },
+        {
+          "t": 47,
+          "passes": 60,
+          "totalMs": 60.4291,
+          "gpuMs": 60.4291,
+          "frameTime": 1.0072
+        },
+        {
+          "t": 48,
+          "passes": 30,
+          "totalMs": 31.9987,
+          "gpuMs": 31.9987,
+          "frameTime": 1.0666
+        },
+        {
+          "t": 48,
+          "passes": 60,
+          "totalMs": 64.0456,
+          "gpuMs": 64.0456,
+          "frameTime": 1.0674
+        },
+        {
+          "t": 49,
+          "passes": 30,
+          "totalMs": 28.9007,
+          "gpuMs": 28.9007,
+          "frameTime": 0.9634
+        },
+        {
+          "t": 49,
+          "passes": 60,
+          "totalMs": 65.2022,
+          "gpuMs": 65.2022,
+          "frameTime": 1.0867
+        },
+        {
+          "t": 50,
+          "passes": 30,
+          "totalMs": 31.8979,
+          "gpuMs": 31.8979,
+          "frameTime": 1.0633
+        },
+        {
+          "t": 50,
+          "passes": 60,
+          "totalMs": 63.5201,
+          "gpuMs": 63.5201,
+          "frameTime": 1.0587
+        },
+        {
+          "t": 51,
+          "passes": 30,
+          "totalMs": 31.9027,
+          "gpuMs": 31.9027,
+          "frameTime": 1.0634
+        },
+        {
+          "t": 51,
+          "passes": 60,
+          "totalMs": 61.9321,
+          "gpuMs": 61.9321,
+          "frameTime": 1.0322
+        },
+        {
+          "t": 52,
+          "passes": 30,
+          "totalMs": 30.3161,
+          "gpuMs": 30.3161,
+          "frameTime": 1.0105
+        },
+        {
+          "t": 52,
+          "passes": 60,
+          "totalMs": 55.4566,
+          "gpuMs": 55.4566,
+          "frameTime": 0.9243
+        },
+        {
+          "t": 53,
+          "passes": 30,
+          "totalMs": 30.1601,
+          "gpuMs": 30.1601,
+          "frameTime": 1.0053
+        },
+        {
+          "t": 53,
+          "passes": 60,
+          "totalMs": 61.9752,
+          "gpuMs": 61.9752,
+          "frameTime": 1.0329
+        },
+        {
+          "t": 54,
+          "passes": 30,
+          "totalMs": 33.513,
+          "gpuMs": 33.513,
+          "frameTime": 1.1171
+        },
+        {
+          "t": 54,
+          "passes": 60,
+          "totalMs": 62.1926,
+          "gpuMs": 62.1926,
+          "frameTime": 1.0365
+        },
+        {
+          "t": 55,
+          "passes": 30,
+          "totalMs": 30.2847,
+          "gpuMs": 30.2847,
+          "frameTime": 1.0095
+        },
+        {
+          "t": 55,
+          "passes": 60,
+          "totalMs": 60.2631,
+          "gpuMs": 60.2631,
+          "frameTime": 1.0044
+        },
+        {
+          "t": 56,
+          "passes": 30,
+          "totalMs": 30.0913,
+          "gpuMs": 30.0913,
+          "frameTime": 1.003
+        },
+        {
+          "t": 56,
+          "passes": 60,
+          "totalMs": 61.6651,
+          "gpuMs": 61.6651,
+          "frameTime": 1.0278
+        },
+        {
+          "t": 57,
+          "passes": 30,
+          "totalMs": 31.883,
+          "gpuMs": 31.883,
+          "frameTime": 1.0628
+        },
+        {
+          "t": 57,
+          "passes": 60,
+          "totalMs": 63.6401,
+          "gpuMs": 63.6401,
+          "frameTime": 1.0607
+        },
+        {
+          "t": 58,
+          "passes": 30,
+          "totalMs": 28.7596,
+          "gpuMs": 28.7596,
+          "frameTime": 0.9587
+        },
+        {
+          "t": 58,
+          "passes": 60,
+          "totalMs": 62.1592,
+          "gpuMs": 62.1592,
+          "frameTime": 1.036
+        },
+        {
+          "t": 59,
+          "passes": 30,
+          "totalMs": 33.5833,
+          "gpuMs": 33.5833,
+          "frameTime": 1.1194
+        },
+        {
+          "t": 59,
+          "passes": 60,
+          "totalMs": 63.5628,
+          "gpuMs": 63.5628,
+          "frameTime": 1.0594
+        }
+      ]
+    },
+    {
+      "id": "noise_perlinVec3",
+      "label": "Perlin (vec3)",
+      "category": "noise",
+      "stats": {
+        "points": 17,
+        "medianFt": 1.4619,
+        "meanFt": 1.4591,
+        "p95Ft": 1.52,
+        "p99Ft": 1.5472,
+        "sdFt": 0.0273,
+        "cvPercent": 1.87,
+        "avgFps": 685.4,
+        "thermalDrift": 0.995,
+        "frameCount": 60,
+        "filteredCount": 52,
+        "outlierCount": 8,
+        "msPerPass": 1.43184,
+        "overheadMsPerBatch": 1.3149,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 0.5273,
+        "marginalMs": 0.9045,
+        "marginalMsAtRef": 3.9313,
+        "marginalPoints": 47
+      },
+      "frames": [
+        {
+          "t": 0,
+          "passes": 30,
+          "totalMs": 45.6854,
+          "gpuMs": 45.6854,
+          "frameTime": 1.5228
+        },
+        {
+          "t": 0,
+          "passes": 60,
+          "totalMs": 86.6464,
+          "gpuMs": 86.6464,
+          "frameTime": 1.4441
+        },
+        {
+          "t": 1,
+          "passes": 30,
+          "totalMs": 44.4364,
+          "gpuMs": 44.4364,
+          "frameTime": 1.4812
+        },
+        {
+          "t": 1,
+          "passes": 60,
+          "totalMs": 89.8039,
+          "gpuMs": 89.8039,
+          "frameTime": 1.4967
+        },
+        {
+          "t": 2,
+          "passes": 30,
+          "totalMs": 45.9243,
+          "gpuMs": 45.9243,
+          "frameTime": 1.5308
+        },
+        {
+          "t": 2,
+          "passes": 60,
+          "totalMs": 88.2063,
+          "gpuMs": 88.2063,
+          "frameTime": 1.4701
+        },
+        {
+          "t": 3,
+          "passes": 30,
+          "totalMs": 44.0442,
+          "gpuMs": 44.0442,
+          "frameTime": 1.4681
+        },
+        {
+          "t": 3,
+          "passes": 60,
+          "totalMs": 86.3596,
+          "gpuMs": 86.3596,
+          "frameTime": 1.4393
+        },
+        {
+          "t": 4,
+          "passes": 30,
+          "totalMs": 44.2545,
+          "gpuMs": 44.2545,
+          "frameTime": 1.4751
+        },
+        {
+          "t": 4,
+          "passes": 60,
+          "totalMs": 88.1908,
+          "gpuMs": 88.1908,
+          "frameTime": 1.4698
+        },
+        {
+          "t": 5,
+          "passes": 30,
+          "totalMs": 47.3246,
+          "gpuMs": 47.3246,
+          "frameTime": 1.5775
+        },
+        {
+          "t": 5,
+          "passes": 60,
+          "totalMs": 94.3844,
+          "gpuMs": 94.3844,
+          "frameTime": 1.5731
+        },
+        {
+          "t": 6,
+          "passes": 30,
+          "totalMs": 44.2385,
+          "gpuMs": 44.2385,
+          "frameTime": 1.4746
+        },
+        {
+          "t": 6,
+          "passes": 60,
+          "totalMs": 87.9778,
+          "gpuMs": 87.9778,
+          "frameTime": 1.4663
+        },
+        {
+          "t": 7,
+          "passes": 30,
+          "totalMs": 44.3916,
+          "gpuMs": 44.3916,
+          "frameTime": 1.4797
+        },
+        {
+          "t": 7,
+          "passes": 60,
+          "totalMs": 86.4693,
+          "gpuMs": 86.4693,
+          "frameTime": 1.4412
+        },
+        {
+          "t": 8,
+          "passes": 30,
+          "totalMs": 45.9192,
+          "gpuMs": 45.9192,
+          "frameTime": 1.5306
+        },
+        {
+          "t": 8,
+          "passes": 60,
+          "totalMs": 89.387,
+          "gpuMs": 89.387,
+          "frameTime": 1.4898
+        },
+        {
+          "t": 9,
+          "passes": 30,
+          "totalMs": 44.1942,
+          "gpuMs": 44.1942,
+          "frameTime": 1.4731
+        },
+        {
+          "t": 9,
+          "passes": 60,
+          "totalMs": 89.7284,
+          "gpuMs": 89.7284,
+          "frameTime": 1.4955
+        },
+        {
+          "t": 10,
+          "passes": 30,
+          "totalMs": 45.5917,
+          "gpuMs": 45.5917,
+          "frameTime": 1.5197
+        },
+        {
+          "t": 10,
+          "passes": 60,
+          "totalMs": 88.3544,
+          "gpuMs": 88.3544,
+          "frameTime": 1.4726
+        },
+        {
+          "t": 11,
+          "passes": 30,
+          "totalMs": 45.8443,
+          "gpuMs": 45.8443,
+          "frameTime": 1.5281
+        },
+        {
+          "t": 11,
+          "passes": 60,
+          "totalMs": 83.0491,
+          "gpuMs": 83.0491,
+          "frameTime": 1.3842
+        },
+        {
+          "t": 12,
+          "passes": 30,
+          "totalMs": 44.1699,
+          "gpuMs": 44.1699,
+          "frameTime": 1.4723
+        },
+        {
+          "t": 12,
+          "passes": 60,
+          "totalMs": 88.1129,
+          "gpuMs": 88.1129,
+          "frameTime": 1.4685
+        },
+        {
+          "t": 13,
+          "passes": 30,
+          "totalMs": 44.38,
+          "gpuMs": 44.38,
+          "frameTime": 1.4793
+        },
+        {
+          "t": 13,
+          "passes": 60,
+          "totalMs": 84.5898,
+          "gpuMs": 84.5898,
+          "frameTime": 1.4098
+        },
+        {
+          "t": 14,
+          "passes": 30,
+          "totalMs": 44.3448,
+          "gpuMs": 44.3448,
+          "frameTime": 1.4782
+        },
+        {
+          "t": 14,
+          "passes": 60,
+          "totalMs": 91.752,
+          "gpuMs": 91.752,
+          "frameTime": 1.5292
+        },
+        {
+          "t": 15,
+          "passes": 30,
+          "totalMs": 44.2477,
+          "gpuMs": 44.2477,
+          "frameTime": 1.4749
+        },
+        {
+          "t": 15,
+          "passes": 60,
+          "totalMs": 84.9653,
+          "gpuMs": 84.9653,
+          "frameTime": 1.4161
+        },
+        {
+          "t": 16,
+          "passes": 30,
+          "totalMs": 44.1305,
+          "gpuMs": 44.1305,
+          "frameTime": 1.471
+        },
+        {
+          "t": 16,
+          "passes": 60,
+          "totalMs": 86.4981,
+          "gpuMs": 86.4981,
+          "frameTime": 1.4416
+        },
+        {
+          "t": 17,
+          "passes": 30,
+          "totalMs": 45.7504,
+          "gpuMs": 45.7504,
+          "frameTime": 1.525
+        },
+        {
+          "t": 17,
+          "passes": 60,
+          "totalMs": 88.2986,
+          "gpuMs": 88.2986,
+          "frameTime": 1.4716
+        },
+        {
+          "t": 18,
+          "passes": 30,
+          "totalMs": 44.2156,
+          "gpuMs": 44.2156,
+          "frameTime": 1.4739
+        },
+        {
+          "t": 18,
+          "passes": 60,
+          "totalMs": 89.9407,
+          "gpuMs": 89.9407,
+          "frameTime": 1.499
+        },
+        {
+          "t": 19,
+          "passes": 30,
+          "totalMs": 44.4001,
+          "gpuMs": 44.4001,
+          "frameTime": 1.48
+        },
+        {
+          "t": 19,
+          "passes": 60,
+          "totalMs": 83.1792,
+          "gpuMs": 83.1792,
+          "frameTime": 1.3863
+        },
+        {
+          "t": 20,
+          "passes": 30,
+          "totalMs": 44.4389,
+          "gpuMs": 44.4389,
+          "frameTime": 1.4813
+        },
+        {
+          "t": 20,
+          "passes": 60,
+          "totalMs": 85.0297,
+          "gpuMs": 85.0297,
+          "frameTime": 1.4172
+        },
+        {
+          "t": 21,
+          "passes": 30,
+          "totalMs": 45.9785,
+          "gpuMs": 45.9785,
+          "frameTime": 1.5326
+        },
+        {
+          "t": 21,
+          "passes": 60,
+          "totalMs": 88.1247,
+          "gpuMs": 88.1247,
+          "frameTime": 1.4687
+        },
+        {
+          "t": 22,
+          "passes": 30,
+          "totalMs": 43.9757,
+          "gpuMs": 43.9757,
+          "frameTime": 1.4659
+        },
+        {
+          "t": 22,
+          "passes": 60,
+          "totalMs": 88.4139,
+          "gpuMs": 88.4139,
+          "frameTime": 1.4736
+        },
+        {
+          "t": 23,
+          "passes": 30,
+          "totalMs": 44.1624,
+          "gpuMs": 44.1624,
+          "frameTime": 1.4721
+        },
+        {
+          "t": 23,
+          "passes": 60,
+          "totalMs": 88.3625,
+          "gpuMs": 88.3625,
+          "frameTime": 1.4727
+        },
+        {
+          "t": 24,
+          "passes": 30,
+          "totalMs": 44.2089,
+          "gpuMs": 44.2089,
+          "frameTime": 1.4736
+        },
+        {
+          "t": 24,
+          "passes": 60,
+          "totalMs": 91.4456,
+          "gpuMs": 91.4456,
+          "frameTime": 1.5241
+        },
+        {
+          "t": 25,
+          "passes": 30,
+          "totalMs": 44.2085,
+          "gpuMs": 44.2085,
+          "frameTime": 1.4736
+        },
+        {
+          "t": 25,
+          "passes": 60,
+          "totalMs": 81.6236,
+          "gpuMs": 81.6236,
+          "frameTime": 1.3604
+        },
+        {
+          "t": 26,
+          "passes": 30,
+          "totalMs": 44.246,
+          "gpuMs": 44.246,
+          "frameTime": 1.4749
+        },
+        {
+          "t": 26,
+          "passes": 60,
+          "totalMs": 90.0522,
+          "gpuMs": 90.0522,
+          "frameTime": 1.5009
+        },
+        {
+          "t": 27,
+          "passes": 30,
+          "totalMs": 44.3048,
+          "gpuMs": 44.3048,
+          "frameTime": 1.4768
+        },
+        {
+          "t": 27,
+          "passes": 60,
+          "totalMs": 86.5541,
+          "gpuMs": 86.5541,
+          "frameTime": 1.4426
+        },
+        {
+          "t": 28,
+          "passes": 30,
+          "totalMs": 45.8603,
+          "gpuMs": 45.8603,
+          "frameTime": 1.5287
+        },
+        {
+          "t": 28,
+          "passes": 60,
+          "totalMs": 84.8735,
+          "gpuMs": 84.8735,
+          "frameTime": 1.4146
+        },
+        {
+          "t": 29,
+          "passes": 30,
+          "totalMs": 44.3542,
+          "gpuMs": 44.3542,
+          "frameTime": 1.4785
+        },
+        {
+          "t": 29,
+          "passes": 60,
+          "totalMs": 86.4908,
+          "gpuMs": 86.4908,
+          "frameTime": 1.4415
+        },
+        {
+          "t": 30,
+          "passes": 30,
+          "totalMs": 44.3379,
+          "gpuMs": 44.3379,
+          "frameTime": 1.4779
+        },
+        {
+          "t": 30,
+          "passes": 60,
+          "totalMs": 86.5968,
+          "gpuMs": 86.5968,
+          "frameTime": 1.4433
+        },
+        {
+          "t": 31,
+          "passes": 30,
+          "totalMs": 44.4381,
+          "gpuMs": 44.4381,
+          "frameTime": 1.4813
+        },
+        {
+          "t": 31,
+          "passes": 60,
+          "totalMs": 81.7528,
+          "gpuMs": 81.7528,
+          "frameTime": 1.3625
+        },
+        {
+          "t": 32,
+          "passes": 30,
+          "totalMs": 44.0547,
+          "gpuMs": 44.0547,
+          "frameTime": 1.4685
+        },
+        {
+          "t": 32,
+          "passes": 60,
+          "totalMs": 89.9824,
+          "gpuMs": 89.9824,
+          "frameTime": 1.4997
+        },
+        {
+          "t": 33,
+          "passes": 30,
+          "totalMs": 45.8504,
+          "gpuMs": 45.8504,
+          "frameTime": 1.5283
+        },
+        {
+          "t": 33,
+          "passes": 60,
+          "totalMs": 88.1949,
+          "gpuMs": 88.1949,
+          "frameTime": 1.4699
+        },
+        {
+          "t": 34,
+          "passes": 30,
+          "totalMs": 44.1691,
+          "gpuMs": 44.1691,
+          "frameTime": 1.4723
+        },
+        {
+          "t": 34,
+          "passes": 60,
+          "totalMs": 86.999,
+          "gpuMs": 86.999,
+          "frameTime": 1.45
+        },
+        {
+          "t": 35,
+          "passes": 30,
+          "totalMs": 44.3171,
+          "gpuMs": 44.3171,
+          "frameTime": 1.4772
+        },
+        {
+          "t": 35,
+          "passes": 60,
+          "totalMs": 87.4519,
+          "gpuMs": 87.4519,
+          "frameTime": 1.4575
+        },
+        {
+          "t": 36,
+          "passes": 30,
+          "totalMs": 42.5537,
+          "gpuMs": 42.5537,
+          "frameTime": 1.4185
+        },
+        {
+          "t": 36,
+          "passes": 60,
+          "totalMs": 86.7802,
+          "gpuMs": 86.7802,
+          "frameTime": 1.4463
+        },
+        {
+          "t": 37,
+          "passes": 30,
+          "totalMs": 45.9676,
+          "gpuMs": 45.9676,
+          "frameTime": 1.5323
+        },
+        {
+          "t": 37,
+          "passes": 60,
+          "totalMs": 88.4936,
+          "gpuMs": 88.4936,
+          "frameTime": 1.4749
+        },
+        {
+          "t": 38,
+          "passes": 30,
+          "totalMs": 44.1511,
+          "gpuMs": 44.1511,
+          "frameTime": 1.4717
+        },
+        {
+          "t": 38,
+          "passes": 60,
+          "totalMs": 88.3472,
+          "gpuMs": 88.3472,
+          "frameTime": 1.4725
+        },
+        {
+          "t": 39,
+          "passes": 30,
+          "totalMs": 44.3465,
+          "gpuMs": 44.3465,
+          "frameTime": 1.4782
+        },
+        {
+          "t": 39,
+          "passes": 60,
+          "totalMs": 88.0415,
+          "gpuMs": 88.0415,
+          "frameTime": 1.4674
+        },
+        {
+          "t": 40,
+          "passes": 30,
+          "totalMs": 44.1954,
+          "gpuMs": 44.1954,
+          "frameTime": 1.4732
+        },
+        {
+          "t": 40,
+          "passes": 60,
+          "totalMs": 86.8041,
+          "gpuMs": 86.8041,
+          "frameTime": 1.4467
+        },
+        {
+          "t": 41,
+          "passes": 30,
+          "totalMs": 44.2877,
+          "gpuMs": 44.2877,
+          "frameTime": 1.4763
+        },
+        {
+          "t": 41,
+          "passes": 60,
+          "totalMs": 89.701,
+          "gpuMs": 89.701,
+          "frameTime": 1.495
+        },
+        {
+          "t": 42,
+          "passes": 30,
+          "totalMs": 42.6836,
+          "gpuMs": 42.6836,
+          "frameTime": 1.4228
+        },
+        {
+          "t": 42,
+          "passes": 60,
+          "totalMs": 91.1882,
+          "gpuMs": 91.1882,
+          "frameTime": 1.5198
+        },
+        {
+          "t": 43,
+          "passes": 30,
+          "totalMs": 44.3156,
+          "gpuMs": 44.3156,
+          "frameTime": 1.4772
+        },
+        {
+          "t": 43,
+          "passes": 60,
+          "totalMs": 86.6468,
+          "gpuMs": 86.6468,
+          "frameTime": 1.4441
+        },
+        {
+          "t": 44,
+          "passes": 30,
+          "totalMs": 44.2126,
+          "gpuMs": 44.2126,
+          "frameTime": 1.4738
+        },
+        {
+          "t": 44,
+          "passes": 60,
+          "totalMs": 85.1968,
+          "gpuMs": 85.1968,
+          "frameTime": 1.4199
+        },
+        {
+          "t": 45,
+          "passes": 30,
+          "totalMs": 42.6707,
+          "gpuMs": 42.6707,
+          "frameTime": 1.4224
+        },
+        {
+          "t": 45,
+          "passes": 60,
+          "totalMs": 86.7323,
+          "gpuMs": 86.7323,
+          "frameTime": 1.4455
+        },
+        {
+          "t": 46,
+          "passes": 30,
+          "totalMs": 44.1737,
+          "gpuMs": 44.1737,
+          "frameTime": 1.4725
+        },
+        {
+          "t": 46,
+          "passes": 60,
+          "totalMs": 85.0606,
+          "gpuMs": 85.0606,
+          "frameTime": 1.4177
+        },
+        {
+          "t": 47,
+          "passes": 30,
+          "totalMs": 44.0546,
+          "gpuMs": 44.0546,
+          "frameTime": 1.4685
+        },
+        {
+          "t": 47,
+          "passes": 60,
+          "totalMs": 85.1848,
+          "gpuMs": 85.1848,
+          "frameTime": 1.4197
+        },
+        {
+          "t": 48,
+          "passes": 30,
+          "totalMs": 44.1352,
+          "gpuMs": 44.1352,
+          "frameTime": 1.4712
+        },
+        {
+          "t": 48,
+          "passes": 60,
+          "totalMs": 86.7513,
+          "gpuMs": 86.7513,
+          "frameTime": 1.4459
+        },
+        {
+          "t": 49,
+          "passes": 30,
+          "totalMs": 45.8303,
+          "gpuMs": 45.8303,
+          "frameTime": 1.5277
+        },
+        {
+          "t": 49,
+          "passes": 60,
+          "totalMs": 86.6457,
+          "gpuMs": 86.6457,
+          "frameTime": 1.4441
+        },
+        {
+          "t": 50,
+          "passes": 30,
+          "totalMs": 44.3961,
+          "gpuMs": 44.3961,
+          "frameTime": 1.4799
+        },
+        {
+          "t": 50,
+          "passes": 60,
+          "totalMs": 89.3689,
+          "gpuMs": 89.3689,
+          "frameTime": 1.4895
+        },
+        {
+          "t": 51,
+          "passes": 30,
+          "totalMs": 44.3081,
+          "gpuMs": 44.3081,
+          "frameTime": 1.4769
+        },
+        {
+          "t": 51,
+          "passes": 60,
+          "totalMs": 86.4062,
+          "gpuMs": 86.4062,
+          "frameTime": 1.4401
+        },
+        {
+          "t": 52,
+          "passes": 30,
+          "totalMs": 44.3809,
+          "gpuMs": 44.3809,
+          "frameTime": 1.4794
+        },
+        {
+          "t": 52,
+          "passes": 60,
+          "totalMs": 86.7587,
+          "gpuMs": 86.7587,
+          "frameTime": 1.446
+        },
+        {
+          "t": 53,
+          "passes": 30,
+          "totalMs": 42.7522,
+          "gpuMs": 42.7522,
+          "frameTime": 1.4251
+        },
+        {
+          "t": 53,
+          "passes": 60,
+          "totalMs": 88.2563,
+          "gpuMs": 88.2563,
+          "frameTime": 1.4709
+        },
+        {
+          "t": 54,
+          "passes": 30,
+          "totalMs": 42.525,
+          "gpuMs": 42.525,
+          "frameTime": 1.4175
+        },
+        {
+          "t": 54,
+          "passes": 60,
+          "totalMs": 88.1479,
+          "gpuMs": 88.1479,
+          "frameTime": 1.4691
+        },
+        {
+          "t": 55,
+          "passes": 30,
+          "totalMs": 42.8315,
+          "gpuMs": 42.8315,
+          "frameTime": 1.4277
+        },
+        {
+          "t": 55,
+          "passes": 60,
+          "totalMs": 89.7418,
+          "gpuMs": 89.7418,
+          "frameTime": 1.4957
+        },
+        {
+          "t": 56,
+          "passes": 30,
+          "totalMs": 44.1633,
+          "gpuMs": 44.1633,
+          "frameTime": 1.4721
+        },
+        {
+          "t": 56,
+          "passes": 60,
+          "totalMs": 86.6585,
+          "gpuMs": 86.6585,
+          "frameTime": 1.4443
+        },
+        {
+          "t": 57,
+          "passes": 30,
+          "totalMs": 42.7503,
+          "gpuMs": 42.7503,
+          "frameTime": 1.425
+        },
+        {
+          "t": 57,
+          "passes": 60,
+          "totalMs": 79.8966,
+          "gpuMs": 79.8966,
+          "frameTime": 1.3316
+        },
+        {
+          "t": 58,
+          "passes": 30,
+          "totalMs": 44.2858,
+          "gpuMs": 44.2858,
+          "frameTime": 1.4762
+        },
+        {
+          "t": 58,
+          "passes": 60,
+          "totalMs": 90.0443,
+          "gpuMs": 90.0443,
+          "frameTime": 1.5007
+        },
+        {
+          "t": 59,
+          "passes": 30,
+          "totalMs": 44.202,
+          "gpuMs": 44.202,
+          "frameTime": 1.4734
+        },
+        {
+          "t": 59,
+          "passes": 60,
+          "totalMs": 84.725,
+          "gpuMs": 84.725,
+          "frameTime": 1.4121
+        }
+      ]
+    },
+    {
+      "id": "noise_fbm",
+      "label": "fBm",
+      "category": "noise",
+      "stats": {
+        "points": 29,
+        "medianFt": 2.4379,
+        "meanFt": 2.4325,
+        "p95Ft": 2.4996,
+        "p99Ft": 2.5182,
+        "sdFt": 0.0426,
+        "cvPercent": 1.75,
+        "avgFps": 411.1,
+        "thermalDrift": 0.99,
+        "frameCount": 60,
+        "filteredCount": 60,
+        "outlierCount": 0,
+        "msPerPass": 2.45691,
+        "overheadMsPerBatch": -1.1377,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 0.5273,
+        "marginalMs": 1.9296,
+        "marginalMsAtRef": 8.3865,
+        "marginalPoints": 101
+      },
+      "frames": [
+        {
+          "t": 0,
+          "passes": 30,
+          "totalMs": 72.5467,
+          "gpuMs": 72.5467,
+          "frameTime": 2.4182
+        },
+        {
+          "t": 0,
+          "passes": 60,
+          "totalMs": 147.9359,
+          "gpuMs": 147.9359,
+          "frameTime": 2.4656
+        },
+        {
+          "t": 1,
+          "passes": 30,
+          "totalMs": 73.9464,
+          "gpuMs": 73.9464,
+          "frameTime": 2.4649
+        },
+        {
+          "t": 1,
+          "passes": 60,
+          "totalMs": 147.9626,
+          "gpuMs": 147.9626,
+          "frameTime": 2.466
+        },
+        {
+          "t": 2,
+          "passes": 30,
+          "totalMs": 75.9851,
+          "gpuMs": 75.9851,
+          "frameTime": 2.5328
+        },
+        {
+          "t": 2,
+          "passes": 60,
+          "totalMs": 146.4328,
+          "gpuMs": 146.4328,
+          "frameTime": 2.4405
+        },
+        {
+          "t": 3,
+          "passes": 30,
+          "totalMs": 72.7828,
+          "gpuMs": 72.7828,
+          "frameTime": 2.4261
+        },
+        {
+          "t": 3,
+          "passes": 60,
+          "totalMs": 146.0389,
+          "gpuMs": 146.0389,
+          "frameTime": 2.434
+        },
+        {
+          "t": 4,
+          "passes": 30,
+          "totalMs": 72.5925,
+          "gpuMs": 72.5925,
+          "frameTime": 2.4198
+        },
+        {
+          "t": 4,
+          "passes": 60,
+          "totalMs": 146.4512,
+          "gpuMs": 146.4512,
+          "frameTime": 2.4409
+        },
+        {
+          "t": 5,
+          "passes": 30,
+          "totalMs": 70.7689,
+          "gpuMs": 70.7689,
+          "frameTime": 2.359
+        },
+        {
+          "t": 5,
+          "passes": 60,
+          "totalMs": 146.2831,
+          "gpuMs": 146.2831,
+          "frameTime": 2.4381
+        },
+        {
+          "t": 6,
+          "passes": 30,
+          "totalMs": 75.5332,
+          "gpuMs": 75.5332,
+          "frameTime": 2.5178
+        },
+        {
+          "t": 6,
+          "passes": 60,
+          "totalMs": 146.2071,
+          "gpuMs": 146.2071,
+          "frameTime": 2.4368
+        },
+        {
+          "t": 7,
+          "passes": 30,
+          "totalMs": 72.8153,
+          "gpuMs": 72.8153,
+          "frameTime": 2.4272
+        },
+        {
+          "t": 7,
+          "passes": 60,
+          "totalMs": 151.5653,
+          "gpuMs": 151.5653,
+          "frameTime": 2.5261
+        },
+        {
+          "t": 8,
+          "passes": 30,
+          "totalMs": 71.4247,
+          "gpuMs": 71.4247,
+          "frameTime": 2.3808
+        },
+        {
+          "t": 8,
+          "passes": 60,
+          "totalMs": 147.8603,
+          "gpuMs": 147.8603,
+          "frameTime": 2.4643
+        },
+        {
+          "t": 9,
+          "passes": 30,
+          "totalMs": 70.7424,
+          "gpuMs": 70.7424,
+          "frameTime": 2.3581
+        },
+        {
+          "t": 9,
+          "passes": 60,
+          "totalMs": 144.4527,
+          "gpuMs": 144.4527,
+          "frameTime": 2.4075
+        },
+        {
+          "t": 10,
+          "passes": 30,
+          "totalMs": 72.7167,
+          "gpuMs": 72.7167,
+          "frameTime": 2.4239
+        },
+        {
+          "t": 10,
+          "passes": 60,
+          "totalMs": 145.9204,
+          "gpuMs": 145.9204,
+          "frameTime": 2.432
+        },
+        {
+          "t": 11,
+          "passes": 30,
+          "totalMs": 74.0242,
+          "gpuMs": 74.0242,
+          "frameTime": 2.4675
+        },
+        {
+          "t": 11,
+          "passes": 60,
+          "totalMs": 146.2955,
+          "gpuMs": 146.2955,
+          "frameTime": 2.4383
+        },
+        {
+          "t": 12,
+          "passes": 30,
+          "totalMs": 74.0947,
+          "gpuMs": 74.0947,
+          "frameTime": 2.4698
+        },
+        {
+          "t": 12,
+          "passes": 60,
+          "totalMs": 150.0226,
+          "gpuMs": 150.0226,
+          "frameTime": 2.5004
+        },
+        {
+          "t": 13,
+          "passes": 30,
+          "totalMs": 72.4741,
+          "gpuMs": 72.4741,
+          "frameTime": 2.4158
+        },
+        {
+          "t": 13,
+          "passes": 60,
+          "totalMs": 141.5008,
+          "gpuMs": 141.5008,
+          "frameTime": 2.3583
+        },
+        {
+          "t": 14,
+          "passes": 30,
+          "totalMs": 74.5824,
+          "gpuMs": 74.5824,
+          "frameTime": 2.4861
+        },
+        {
+          "t": 14,
+          "passes": 60,
+          "totalMs": 147.5534,
+          "gpuMs": 147.5534,
+          "frameTime": 2.4592
+        },
+        {
+          "t": 15,
+          "passes": 30,
+          "totalMs": 73.9504,
+          "gpuMs": 73.9504,
+          "frameTime": 2.465
+        },
+        {
+          "t": 15,
+          "passes": 60,
+          "totalMs": 150.7664,
+          "gpuMs": 150.7664,
+          "frameTime": 2.5128
+        },
+        {
+          "t": 16,
+          "passes": 30,
+          "totalMs": 72.25,
+          "gpuMs": 72.25,
+          "frameTime": 2.4083
+        },
+        {
+          "t": 16,
+          "passes": 60,
+          "totalMs": 149.9709,
+          "gpuMs": 149.9709,
+          "frameTime": 2.4995
+        },
+        {
+          "t": 17,
+          "passes": 30,
+          "totalMs": 74.1746,
+          "gpuMs": 74.1746,
+          "frameTime": 2.4725
+        },
+        {
+          "t": 17,
+          "passes": 60,
+          "totalMs": 147.7066,
+          "gpuMs": 147.7066,
+          "frameTime": 2.4618
+        },
+        {
+          "t": 18,
+          "passes": 30,
+          "totalMs": 72.4564,
+          "gpuMs": 72.4564,
+          "frameTime": 2.4152
+        },
+        {
+          "t": 18,
+          "passes": 60,
+          "totalMs": 146.4104,
+          "gpuMs": 146.4104,
+          "frameTime": 2.4402
+        },
+        {
+          "t": 19,
+          "passes": 30,
+          "totalMs": 68.6928,
+          "gpuMs": 68.6928,
+          "frameTime": 2.2898
+        },
+        {
+          "t": 19,
+          "passes": 60,
+          "totalMs": 147.8163,
+          "gpuMs": 147.8163,
+          "frameTime": 2.4636
+        },
+        {
+          "t": 20,
+          "passes": 30,
+          "totalMs": 74.0645,
+          "gpuMs": 74.0645,
+          "frameTime": 2.4688
+        },
+        {
+          "t": 20,
+          "passes": 60,
+          "totalMs": 144.4683,
+          "gpuMs": 144.4683,
+          "frameTime": 2.4078
+        },
+        {
+          "t": 21,
+          "passes": 30,
+          "totalMs": 72.4679,
+          "gpuMs": 72.4679,
+          "frameTime": 2.4156
+        },
+        {
+          "t": 21,
+          "passes": 60,
+          "totalMs": 149.2466,
+          "gpuMs": 149.2466,
+          "frameTime": 2.4874
+        },
+        {
+          "t": 22,
+          "passes": 30,
+          "totalMs": 74.021,
+          "gpuMs": 74.021,
+          "frameTime": 2.4674
+        },
+        {
+          "t": 22,
+          "passes": 60,
+          "totalMs": 141.0845,
+          "gpuMs": 141.0845,
+          "frameTime": 2.3514
+        },
+        {
+          "t": 23,
+          "passes": 30,
+          "totalMs": 73.6917,
+          "gpuMs": 73.6917,
+          "frameTime": 2.4564
+        },
+        {
+          "t": 23,
+          "passes": 60,
+          "totalMs": 147.3547,
+          "gpuMs": 147.3547,
+          "frameTime": 2.4559
+        },
+        {
+          "t": 24,
+          "passes": 30,
+          "totalMs": 72.3842,
+          "gpuMs": 72.3842,
+          "frameTime": 2.4128
+        },
+        {
+          "t": 24,
+          "passes": 60,
+          "totalMs": 149.4454,
+          "gpuMs": 149.4454,
+          "frameTime": 2.4908
+        },
+        {
+          "t": 25,
+          "passes": 30,
+          "totalMs": 72.2756,
+          "gpuMs": 72.2756,
+          "frameTime": 2.4092
+        },
+        {
+          "t": 25,
+          "passes": 60,
+          "totalMs": 147.7146,
+          "gpuMs": 147.7146,
+          "frameTime": 2.4619
+        },
+        {
+          "t": 26,
+          "passes": 30,
+          "totalMs": 74.0763,
+          "gpuMs": 74.0763,
+          "frameTime": 2.4692
+        },
+        {
+          "t": 26,
+          "passes": 60,
+          "totalMs": 142.6593,
+          "gpuMs": 142.6593,
+          "frameTime": 2.3777
+        },
+        {
+          "t": 27,
+          "passes": 30,
+          "totalMs": 74.0072,
+          "gpuMs": 74.0072,
+          "frameTime": 2.4669
+        },
+        {
+          "t": 27,
+          "passes": 60,
+          "totalMs": 141.3905,
+          "gpuMs": 141.3905,
+          "frameTime": 2.3565
+        },
+        {
+          "t": 28,
+          "passes": 30,
+          "totalMs": 72.5279,
+          "gpuMs": 72.5279,
+          "frameTime": 2.4176
+        },
+        {
+          "t": 28,
+          "passes": 60,
+          "totalMs": 144.5468,
+          "gpuMs": 144.5468,
+          "frameTime": 2.4091
+        },
+        {
+          "t": 29,
+          "passes": 30,
+          "totalMs": 69.1698,
+          "gpuMs": 69.1698,
+          "frameTime": 2.3057
+        },
+        {
+          "t": 29,
+          "passes": 60,
+          "totalMs": 146.4137,
+          "gpuMs": 146.4137,
+          "frameTime": 2.4402
+        },
+        {
+          "t": 30,
+          "passes": 30,
+          "totalMs": 69.0167,
+          "gpuMs": 69.0167,
+          "frameTime": 2.3006
+        },
+        {
+          "t": 30,
+          "passes": 60,
+          "totalMs": 141.094,
+          "gpuMs": 141.094,
+          "frameTime": 2.3516
+        },
+        {
+          "t": 31,
+          "passes": 30,
+          "totalMs": 72.6937,
+          "gpuMs": 72.6937,
+          "frameTime": 2.4231
+        },
+        {
+          "t": 31,
+          "passes": 60,
+          "totalMs": 143.0646,
+          "gpuMs": 143.0646,
+          "frameTime": 2.3844
+        },
+        {
+          "t": 32,
+          "passes": 30,
+          "totalMs": 73.9517,
+          "gpuMs": 73.9517,
+          "frameTime": 2.4651
+        },
+        {
+          "t": 32,
+          "passes": 60,
+          "totalMs": 145.9173,
+          "gpuMs": 145.9173,
+          "frameTime": 2.432
+        },
+        {
+          "t": 33,
+          "passes": 30,
+          "totalMs": 72.2318,
+          "gpuMs": 72.2318,
+          "frameTime": 2.4077
+        },
+        {
+          "t": 33,
+          "passes": 60,
+          "totalMs": 145.8908,
+          "gpuMs": 145.8908,
+          "frameTime": 2.4315
+        },
+        {
+          "t": 34,
+          "passes": 30,
+          "totalMs": 72.3776,
+          "gpuMs": 72.3776,
+          "frameTime": 2.4126
+        },
+        {
+          "t": 34,
+          "passes": 60,
+          "totalMs": 146.008,
+          "gpuMs": 146.008,
+          "frameTime": 2.4335
+        },
+        {
+          "t": 35,
+          "passes": 30,
+          "totalMs": 75.5745,
+          "gpuMs": 75.5745,
+          "frameTime": 2.5192
+        },
+        {
+          "t": 35,
+          "passes": 60,
+          "totalMs": 147.436,
+          "gpuMs": 147.436,
+          "frameTime": 2.4573
+        },
+        {
+          "t": 36,
+          "passes": 30,
+          "totalMs": 67.5317,
+          "gpuMs": 67.5317,
+          "frameTime": 2.2511
+        },
+        {
+          "t": 36,
+          "passes": 60,
+          "totalMs": 147.7388,
+          "gpuMs": 147.7388,
+          "frameTime": 2.4623
+        },
+        {
+          "t": 37,
+          "passes": 30,
+          "totalMs": 70.7006,
+          "gpuMs": 70.7006,
+          "frameTime": 2.3567
+        },
+        {
+          "t": 37,
+          "passes": 60,
+          "totalMs": 144.8267,
+          "gpuMs": 144.8267,
+          "frameTime": 2.4138
+        },
+        {
+          "t": 38,
+          "passes": 30,
+          "totalMs": 70.9113,
+          "gpuMs": 70.9113,
+          "frameTime": 2.3637
+        },
+        {
+          "t": 38,
+          "passes": 60,
+          "totalMs": 142.4719,
+          "gpuMs": 142.4719,
+          "frameTime": 2.3745
+        },
+        {
+          "t": 39,
+          "passes": 30,
+          "totalMs": 72.2807,
+          "gpuMs": 72.2807,
+          "frameTime": 2.4094
+        },
+        {
+          "t": 39,
+          "passes": 60,
+          "totalMs": 146.4089,
+          "gpuMs": 146.4089,
+          "frameTime": 2.4401
+        },
+        {
+          "t": 40,
+          "passes": 30,
+          "totalMs": 70.5624,
+          "gpuMs": 70.5624,
+          "frameTime": 2.3521
+        },
+        {
+          "t": 40,
+          "passes": 60,
+          "totalMs": 148.4277,
+          "gpuMs": 148.4277,
+          "frameTime": 2.4738
+        },
+        {
+          "t": 41,
+          "passes": 30,
+          "totalMs": 70.9337,
+          "gpuMs": 70.9337,
+          "frameTime": 2.3645
+        },
+        {
+          "t": 41,
+          "passes": 60,
+          "totalMs": 145.0481,
+          "gpuMs": 145.0481,
+          "frameTime": 2.4175
+        },
+        {
+          "t": 42,
+          "passes": 30,
+          "totalMs": 69.1998,
+          "gpuMs": 69.1998,
+          "frameTime": 2.3067
+        },
+        {
+          "t": 42,
+          "passes": 60,
+          "totalMs": 145.2464,
+          "gpuMs": 145.2464,
+          "frameTime": 2.4208
+        },
+        {
+          "t": 43,
+          "passes": 30,
+          "totalMs": 73.841,
+          "gpuMs": 73.841,
+          "frameTime": 2.4614
+        },
+        {
+          "t": 43,
+          "passes": 60,
+          "totalMs": 147.4076,
+          "gpuMs": 147.4076,
+          "frameTime": 2.4568
+        },
+        {
+          "t": 44,
+          "passes": 30,
+          "totalMs": 72.737,
+          "gpuMs": 72.737,
+          "frameTime": 2.4246
+        },
+        {
+          "t": 44,
+          "passes": 60,
+          "totalMs": 148.3779,
+          "gpuMs": 148.3779,
+          "frameTime": 2.473
+        },
+        {
+          "t": 45,
+          "passes": 30,
+          "totalMs": 72.7254,
+          "gpuMs": 72.7254,
+          "frameTime": 2.4242
+        },
+        {
+          "t": 45,
+          "passes": 60,
+          "totalMs": 143.0234,
+          "gpuMs": 143.0234,
+          "frameTime": 2.3837
+        },
+        {
+          "t": 46,
+          "passes": 30,
+          "totalMs": 72.0919,
+          "gpuMs": 72.0919,
+          "frameTime": 2.4031
+        },
+        {
+          "t": 46,
+          "passes": 60,
+          "totalMs": 144.9901,
+          "gpuMs": 144.9901,
+          "frameTime": 2.4165
+        },
+        {
+          "t": 47,
+          "passes": 30,
+          "totalMs": 70.7213,
+          "gpuMs": 70.7213,
+          "frameTime": 2.3574
+        },
+        {
+          "t": 47,
+          "passes": 60,
+          "totalMs": 146.0285,
+          "gpuMs": 146.0285,
+          "frameTime": 2.4338
+        },
+        {
+          "t": 48,
+          "passes": 30,
+          "totalMs": 72.6426,
+          "gpuMs": 72.6426,
+          "frameTime": 2.4214
+        },
+        {
+          "t": 48,
+          "passes": 60,
+          "totalMs": 144.3843,
+          "gpuMs": 144.3843,
+          "frameTime": 2.4064
+        },
+        {
+          "t": 49,
+          "passes": 30,
+          "totalMs": 73.8376,
+          "gpuMs": 73.8376,
+          "frameTime": 2.4613
+        },
+        {
+          "t": 49,
+          "passes": 60,
+          "totalMs": 148.5794,
+          "gpuMs": 148.5794,
+          "frameTime": 2.4763
+        },
+        {
+          "t": 50,
+          "passes": 30,
+          "totalMs": 72.3226,
+          "gpuMs": 72.3226,
+          "frameTime": 2.4108
+        },
+        {
+          "t": 50,
+          "passes": 60,
+          "totalMs": 141.4273,
+          "gpuMs": 141.4273,
+          "frameTime": 2.3571
+        },
+        {
+          "t": 51,
+          "passes": 30,
+          "totalMs": 72.3931,
+          "gpuMs": 72.3931,
+          "frameTime": 2.4131
+        },
+        {
+          "t": 51,
+          "passes": 60,
+          "totalMs": 141.1982,
+          "gpuMs": 141.1982,
+          "frameTime": 2.3533
+        },
+        {
+          "t": 52,
+          "passes": 30,
+          "totalMs": 74.5189,
+          "gpuMs": 74.5189,
+          "frameTime": 2.484
+        },
+        {
+          "t": 52,
+          "passes": 60,
+          "totalMs": 141.8429,
+          "gpuMs": 141.8429,
+          "frameTime": 2.364
+        },
+        {
+          "t": 53,
+          "passes": 30,
+          "totalMs": 72.1651,
+          "gpuMs": 72.1651,
+          "frameTime": 2.4055
+        },
+        {
+          "t": 53,
+          "passes": 60,
+          "totalMs": 143.5135,
+          "gpuMs": 143.5135,
+          "frameTime": 2.3919
+        },
+        {
+          "t": 54,
+          "passes": 30,
+          "totalMs": 72.8577,
+          "gpuMs": 72.8577,
+          "frameTime": 2.4286
+        },
+        {
+          "t": 54,
+          "passes": 60,
+          "totalMs": 142.4067,
+          "gpuMs": 142.4067,
+          "frameTime": 2.3734
+        },
+        {
+          "t": 55,
+          "passes": 30,
+          "totalMs": 72.3284,
+          "gpuMs": 72.3284,
+          "frameTime": 2.4109
+        },
+        {
+          "t": 55,
+          "passes": 60,
+          "totalMs": 146.2706,
+          "gpuMs": 146.2706,
+          "frameTime": 2.4378
+        },
+        {
+          "t": 56,
+          "passes": 30,
+          "totalMs": 71.8835,
+          "gpuMs": 71.8835,
+          "frameTime": 2.3961
+        },
+        {
+          "t": 56,
+          "passes": 60,
+          "totalMs": 148.2125,
+          "gpuMs": 148.2125,
+          "frameTime": 2.4702
+        },
+        {
+          "t": 57,
+          "passes": 30,
+          "totalMs": 74.4653,
+          "gpuMs": 74.4653,
+          "frameTime": 2.4822
+        },
+        {
+          "t": 57,
+          "passes": 60,
+          "totalMs": 146.3685,
+          "gpuMs": 146.3685,
+          "frameTime": 2.4395
+        },
+        {
+          "t": 58,
+          "passes": 30,
+          "totalMs": 74.2045,
+          "gpuMs": 74.2045,
+          "frameTime": 2.4735
+        },
+        {
+          "t": 58,
+          "passes": 60,
+          "totalMs": 147.9379,
+          "gpuMs": 147.9379,
+          "frameTime": 2.4656
+        },
+        {
+          "t": 59,
+          "passes": 30,
+          "totalMs": 75.1803,
+          "gpuMs": 75.1803,
+          "frameTime": 2.506
+        },
+        {
+          "t": 59,
+          "passes": 60,
+          "totalMs": 146.0585,
+          "gpuMs": 146.0585,
+          "frameTime": 2.4343
+        }
+      ]
+    },
+    {
+      "id": "noise_fbmVec3",
+      "label": "fBm (vec3)",
+      "category": "noise",
+      "stats": {
+        "points": 49,
+        "medianFt": 4.1251,
+        "meanFt": 4.1262,
+        "p95Ft": 4.1722,
+        "p99Ft": 4.1753,
+        "sdFt": 0.0293,
+        "cvPercent": 0.71,
+        "avgFps": 242.4,
+        "thermalDrift": 1.001,
+        "frameCount": 60,
+        "filteredCount": 57,
+        "outlierCount": 3,
+        "msPerPass": 4.12146,
+        "overheadMsPerBatch": 0.145,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 0.5273,
+        "marginalMs": 3.5942,
+        "marginalMsAtRef": 15.621,
+        "marginalPoints": 188
+      },
+      "frames": [
+        {
+          "t": 0,
+          "passes": 30,
+          "totalMs": 123.9242,
+          "gpuMs": 123.9242,
+          "frameTime": 4.1308
+        },
+        {
+          "t": 0,
+          "passes": 60,
+          "totalMs": 244.9876,
+          "gpuMs": 244.9876,
+          "frameTime": 4.0831
+        },
+        {
+          "t": 1,
+          "passes": 30,
+          "totalMs": 124.7352,
+          "gpuMs": 124.7352,
+          "frameTime": 4.1578
+        },
+        {
+          "t": 1,
+          "passes": 60,
+          "totalMs": 245.4362,
+          "gpuMs": 245.4362,
+          "frameTime": 4.0906
+        },
+        {
+          "t": 2,
+          "passes": 30,
+          "totalMs": 126.6613,
+          "gpuMs": 126.6613,
+          "frameTime": 4.222
+        },
+        {
+          "t": 2,
+          "passes": 60,
+          "totalMs": 246.7635,
+          "gpuMs": 246.7635,
+          "frameTime": 4.1127
+        },
+        {
+          "t": 3,
+          "passes": 30,
+          "totalMs": 122.6868,
+          "gpuMs": 122.6868,
+          "frameTime": 4.0896
+        },
+        {
+          "t": 3,
+          "passes": 60,
+          "totalMs": 249.4005,
+          "gpuMs": 249.4005,
+          "frameTime": 4.1567
+        },
+        {
+          "t": 4,
+          "passes": 30,
+          "totalMs": 123.2745,
+          "gpuMs": 123.2745,
+          "frameTime": 4.1091
+        },
+        {
+          "t": 4,
+          "passes": 60,
+          "totalMs": 246.0779,
+          "gpuMs": 246.0779,
+          "frameTime": 4.1013
+        },
+        {
+          "t": 5,
+          "passes": 30,
+          "totalMs": 124.7207,
+          "gpuMs": 124.7207,
+          "frameTime": 4.1574
+        },
+        {
+          "t": 5,
+          "passes": 60,
+          "totalMs": 246.7854,
+          "gpuMs": 246.7854,
+          "frameTime": 4.1131
+        },
+        {
+          "t": 6,
+          "passes": 30,
+          "totalMs": 124.4081,
+          "gpuMs": 124.4081,
+          "frameTime": 4.1469
+        },
+        {
+          "t": 6,
+          "passes": 60,
+          "totalMs": 250.4216,
+          "gpuMs": 250.4216,
+          "frameTime": 4.1737
+        },
+        {
+          "t": 7,
+          "passes": 30,
+          "totalMs": 124.1346,
+          "gpuMs": 124.1346,
+          "frameTime": 4.1378
+        },
+        {
+          "t": 7,
+          "passes": 60,
+          "totalMs": 247.2654,
+          "gpuMs": 247.2654,
+          "frameTime": 4.1211
+        },
+        {
+          "t": 8,
+          "passes": 30,
+          "totalMs": 126.8287,
+          "gpuMs": 126.8287,
+          "frameTime": 4.2276
+        },
+        {
+          "t": 8,
+          "passes": 60,
+          "totalMs": 247.6014,
+          "gpuMs": 247.6014,
+          "frameTime": 4.1267
+        },
+        {
+          "t": 9,
+          "passes": 30,
+          "totalMs": 122.9651,
+          "gpuMs": 122.9651,
+          "frameTime": 4.0988
+        },
+        {
+          "t": 9,
+          "passes": 60,
+          "totalMs": 247.383,
+          "gpuMs": 247.383,
+          "frameTime": 4.1231
+        },
+        {
+          "t": 10,
+          "passes": 30,
+          "totalMs": 122.9867,
+          "gpuMs": 122.9867,
+          "frameTime": 4.0996
+        },
+        {
+          "t": 10,
+          "passes": 60,
+          "totalMs": 247.3064,
+          "gpuMs": 247.3064,
+          "frameTime": 4.1218
+        },
+        {
+          "t": 11,
+          "passes": 30,
+          "totalMs": 121.2594,
+          "gpuMs": 121.2594,
+          "frameTime": 4.042
+        },
+        {
+          "t": 11,
+          "passes": 60,
+          "totalMs": 250.4392,
+          "gpuMs": 250.4392,
+          "frameTime": 4.174
+        },
+        {
+          "t": 12,
+          "passes": 30,
+          "totalMs": 122.6056,
+          "gpuMs": 122.6056,
+          "frameTime": 4.0869
+        },
+        {
+          "t": 12,
+          "passes": 60,
+          "totalMs": 246.9323,
+          "gpuMs": 246.9323,
+          "frameTime": 4.1155
+        },
+        {
+          "t": 13,
+          "passes": 30,
+          "totalMs": 124.3622,
+          "gpuMs": 124.3622,
+          "frameTime": 4.1454
+        },
+        {
+          "t": 13,
+          "passes": 60,
+          "totalMs": 245.4995,
+          "gpuMs": 245.4995,
+          "frameTime": 4.0917
+        },
+        {
+          "t": 14,
+          "passes": 30,
+          "totalMs": 124.3395,
+          "gpuMs": 124.3395,
+          "frameTime": 4.1447
+        },
+        {
+          "t": 14,
+          "passes": 60,
+          "totalMs": 246.5981,
+          "gpuMs": 246.5981,
+          "frameTime": 4.11
+        },
+        {
+          "t": 15,
+          "passes": 30,
+          "totalMs": 122.3014,
+          "gpuMs": 122.3014,
+          "frameTime": 4.0767
+        },
+        {
+          "t": 15,
+          "passes": 60,
+          "totalMs": 248.4961,
+          "gpuMs": 248.4961,
+          "frameTime": 4.1416
+        },
+        {
+          "t": 16,
+          "passes": 30,
+          "totalMs": 122.5771,
+          "gpuMs": 122.5771,
+          "frameTime": 4.0859
+        },
+        {
+          "t": 16,
+          "passes": 60,
+          "totalMs": 245.5762,
+          "gpuMs": 245.5762,
+          "frameTime": 4.0929
+        },
+        {
+          "t": 17,
+          "passes": 30,
+          "totalMs": 120.9896,
+          "gpuMs": 120.9896,
+          "frameTime": 4.033
+        },
+        {
+          "t": 17,
+          "passes": 60,
+          "totalMs": 246.1989,
+          "gpuMs": 246.1989,
+          "frameTime": 4.1033
+        },
+        {
+          "t": 18,
+          "passes": 30,
+          "totalMs": 122.5274,
+          "gpuMs": 122.5274,
+          "frameTime": 4.0842
+        },
+        {
+          "t": 18,
+          "passes": 60,
+          "totalMs": 249.7003,
+          "gpuMs": 249.7003,
+          "frameTime": 4.1617
+        },
+        {
+          "t": 19,
+          "passes": 30,
+          "totalMs": 122.6264,
+          "gpuMs": 122.6264,
+          "frameTime": 4.0875
+        },
+        {
+          "t": 19,
+          "passes": 60,
+          "totalMs": 241.5594,
+          "gpuMs": 241.5594,
+          "frameTime": 4.026
+        },
+        {
+          "t": 20,
+          "passes": 30,
+          "totalMs": 122.7225,
+          "gpuMs": 122.7225,
+          "frameTime": 4.0908
+        },
+        {
+          "t": 20,
+          "passes": 60,
+          "totalMs": 248.7326,
+          "gpuMs": 248.7326,
+          "frameTime": 4.1455
+        },
+        {
+          "t": 21,
+          "passes": 30,
+          "totalMs": 124.2806,
+          "gpuMs": 124.2806,
+          "frameTime": 4.1427
+        },
+        {
+          "t": 21,
+          "passes": 60,
+          "totalMs": 243.1513,
+          "gpuMs": 243.1513,
+          "frameTime": 4.0525
+        },
+        {
+          "t": 22,
+          "passes": 30,
+          "totalMs": 123.6531,
+          "gpuMs": 123.6531,
+          "frameTime": 4.1218
+        },
+        {
+          "t": 22,
+          "passes": 60,
+          "totalMs": 246.7658,
+          "gpuMs": 246.7658,
+          "frameTime": 4.1128
+        },
+        {
+          "t": 23,
+          "passes": 30,
+          "totalMs": 121.3121,
+          "gpuMs": 121.3121,
+          "frameTime": 4.0437
+        },
+        {
+          "t": 23,
+          "passes": 60,
+          "totalMs": 250.3257,
+          "gpuMs": 250.3257,
+          "frameTime": 4.1721
+        },
+        {
+          "t": 24,
+          "passes": 30,
+          "totalMs": 124.769,
+          "gpuMs": 124.769,
+          "frameTime": 4.159
+        },
+        {
+          "t": 24,
+          "passes": 60,
+          "totalMs": 247.5066,
+          "gpuMs": 247.5066,
+          "frameTime": 4.1251
+        },
+        {
+          "t": 25,
+          "passes": 30,
+          "totalMs": 127.088,
+          "gpuMs": 127.088,
+          "frameTime": 4.2363
+        },
+        {
+          "t": 25,
+          "passes": 60,
+          "totalMs": 245.176,
+          "gpuMs": 245.176,
+          "frameTime": 4.0863
+        },
+        {
+          "t": 26,
+          "passes": 30,
+          "totalMs": 123.3491,
+          "gpuMs": 123.3491,
+          "frameTime": 4.1116
+        },
+        {
+          "t": 26,
+          "passes": 60,
+          "totalMs": 247.9606,
+          "gpuMs": 247.9606,
+          "frameTime": 4.1327
+        },
+        {
+          "t": 27,
+          "passes": 30,
+          "totalMs": 122.8808,
+          "gpuMs": 122.8808,
+          "frameTime": 4.096
+        },
+        {
+          "t": 27,
+          "passes": 60,
+          "totalMs": 250.2202,
+          "gpuMs": 250.2202,
+          "frameTime": 4.1703
+        },
+        {
+          "t": 28,
+          "passes": 30,
+          "totalMs": 124.2415,
+          "gpuMs": 124.2415,
+          "frameTime": 4.1414
+        },
+        {
+          "t": 28,
+          "passes": 60,
+          "totalMs": 247.4818,
+          "gpuMs": 247.4818,
+          "frameTime": 4.1247
+        },
+        {
+          "t": 29,
+          "passes": 30,
+          "totalMs": 124.5571,
+          "gpuMs": 124.5571,
+          "frameTime": 4.1519
+        },
+        {
+          "t": 29,
+          "passes": 60,
+          "totalMs": 248.0808,
+          "gpuMs": 248.0808,
+          "frameTime": 4.1347
+        },
+        {
+          "t": 30,
+          "passes": 30,
+          "totalMs": 126.0862,
+          "gpuMs": 126.0862,
+          "frameTime": 4.2029
+        },
+        {
+          "t": 30,
+          "passes": 60,
+          "totalMs": 248.6293,
+          "gpuMs": 248.6293,
+          "frameTime": 4.1438
+        },
+        {
+          "t": 31,
+          "passes": 30,
+          "totalMs": 124.1971,
+          "gpuMs": 124.1971,
+          "frameTime": 4.1399
+        },
+        {
+          "t": 31,
+          "passes": 60,
+          "totalMs": 248.5291,
+          "gpuMs": 248.5291,
+          "frameTime": 4.1422
+        },
+        {
+          "t": 32,
+          "passes": 30,
+          "totalMs": 120.5416,
+          "gpuMs": 120.5416,
+          "frameTime": 4.0181
+        },
+        {
+          "t": 32,
+          "passes": 60,
+          "totalMs": 250.3188,
+          "gpuMs": 250.3188,
+          "frameTime": 4.172
+        },
+        {
+          "t": 33,
+          "passes": 30,
+          "totalMs": 124.1589,
+          "gpuMs": 124.1589,
+          "frameTime": 4.1386
+        },
+        {
+          "t": 33,
+          "passes": 60,
+          "totalMs": 248.4445,
+          "gpuMs": 248.4445,
+          "frameTime": 4.1407
+        },
+        {
+          "t": 34,
+          "passes": 30,
+          "totalMs": 122.8664,
+          "gpuMs": 122.8664,
+          "frameTime": 4.0955
+        },
+        {
+          "t": 34,
+          "passes": 60,
+          "totalMs": 247.5758,
+          "gpuMs": 247.5758,
+          "frameTime": 4.1263
+        },
+        {
+          "t": 35,
+          "passes": 30,
+          "totalMs": 122.5914,
+          "gpuMs": 122.5914,
+          "frameTime": 4.0864
+        },
+        {
+          "t": 35,
+          "passes": 60,
+          "totalMs": 246.7561,
+          "gpuMs": 246.7561,
+          "frameTime": 4.1126
+        },
+        {
+          "t": 36,
+          "passes": 30,
+          "totalMs": 120.7469,
+          "gpuMs": 120.7469,
+          "frameTime": 4.0249
+        },
+        {
+          "t": 36,
+          "passes": 60,
+          "totalMs": 242.2503,
+          "gpuMs": 242.2503,
+          "frameTime": 4.0375
+        },
+        {
+          "t": 37,
+          "passes": 30,
+          "totalMs": 122.3554,
+          "gpuMs": 122.3554,
+          "frameTime": 4.0785
+        },
+        {
+          "t": 37,
+          "passes": 60,
+          "totalMs": 246.9766,
+          "gpuMs": 246.9766,
+          "frameTime": 4.1163
+        },
+        {
+          "t": 38,
+          "passes": 30,
+          "totalMs": 124.304,
+          "gpuMs": 124.304,
+          "frameTime": 4.1435
+        },
+        {
+          "t": 38,
+          "passes": 60,
+          "totalMs": 247.5661,
+          "gpuMs": 247.5661,
+          "frameTime": 4.1261
+        },
+        {
+          "t": 39,
+          "passes": 30,
+          "totalMs": 124.5489,
+          "gpuMs": 124.5489,
+          "frameTime": 4.1516
+        },
+        {
+          "t": 39,
+          "passes": 60,
+          "totalMs": 248.1314,
+          "gpuMs": 248.1314,
+          "frameTime": 4.1355
+        },
+        {
+          "t": 40,
+          "passes": 30,
+          "totalMs": 124.2967,
+          "gpuMs": 124.2967,
+          "frameTime": 4.1432
+        },
+        {
+          "t": 40,
+          "passes": 60,
+          "totalMs": 249.7308,
+          "gpuMs": 249.7308,
+          "frameTime": 4.1622
+        },
+        {
+          "t": 41,
+          "passes": 30,
+          "totalMs": 122.5907,
+          "gpuMs": 122.5907,
+          "frameTime": 4.0864
+        },
+        {
+          "t": 41,
+          "passes": 60,
+          "totalMs": 245.345,
+          "gpuMs": 245.345,
+          "frameTime": 4.0891
+        },
+        {
+          "t": 42,
+          "passes": 30,
+          "totalMs": 124.1888,
+          "gpuMs": 124.1888,
+          "frameTime": 4.1396
+        },
+        {
+          "t": 42,
+          "passes": 60,
+          "totalMs": 246.6278,
+          "gpuMs": 246.6278,
+          "frameTime": 4.1105
+        },
+        {
+          "t": 43,
+          "passes": 30,
+          "totalMs": 122.6098,
+          "gpuMs": 122.6098,
+          "frameTime": 4.087
+        },
+        {
+          "t": 43,
+          "passes": 60,
+          "totalMs": 248.6326,
+          "gpuMs": 248.6326,
+          "frameTime": 4.1439
+        },
+        {
+          "t": 44,
+          "passes": 30,
+          "totalMs": 124.4671,
+          "gpuMs": 124.4671,
+          "frameTime": 4.1489
+        },
+        {
+          "t": 44,
+          "passes": 60,
+          "totalMs": 248.6041,
+          "gpuMs": 248.6041,
+          "frameTime": 4.1434
+        },
+        {
+          "t": 45,
+          "passes": 30,
+          "totalMs": 124.2504,
+          "gpuMs": 124.2504,
+          "frameTime": 4.1417
+        },
+        {
+          "t": 45,
+          "passes": 60,
+          "totalMs": 248.7672,
+          "gpuMs": 248.7672,
+          "frameTime": 4.1461
+        },
+        {
+          "t": 46,
+          "passes": 30,
+          "totalMs": 127.558,
+          "gpuMs": 127.558,
+          "frameTime": 4.2519
+        },
+        {
+          "t": 46,
+          "passes": 60,
+          "totalMs": 248.0029,
+          "gpuMs": 248.0029,
+          "frameTime": 4.1334
+        },
+        {
+          "t": 47,
+          "passes": 30,
+          "totalMs": 124.6947,
+          "gpuMs": 124.6947,
+          "frameTime": 4.1565
+        },
+        {
+          "t": 47,
+          "passes": 60,
+          "totalMs": 248.0891,
+          "gpuMs": 248.0891,
+          "frameTime": 4.1348
+        },
+        {
+          "t": 48,
+          "passes": 30,
+          "totalMs": 125.2284,
+          "gpuMs": 125.2284,
+          "frameTime": 4.1743
+        },
+        {
+          "t": 48,
+          "passes": 60,
+          "totalMs": 249.2893,
+          "gpuMs": 249.2893,
+          "frameTime": 4.1548
+        },
+        {
+          "t": 49,
+          "passes": 30,
+          "totalMs": 122.6198,
+          "gpuMs": 122.6198,
+          "frameTime": 4.0873
+        },
+        {
+          "t": 49,
+          "passes": 60,
+          "totalMs": 244.7867,
+          "gpuMs": 244.7867,
+          "frameTime": 4.0798
+        },
+        {
+          "t": 50,
+          "passes": 30,
+          "totalMs": 122.1599,
+          "gpuMs": 122.1599,
+          "frameTime": 4.072
+        },
+        {
+          "t": 50,
+          "passes": 60,
+          "totalMs": 241.9929,
+          "gpuMs": 241.9929,
+          "frameTime": 4.0332
+        },
+        {
+          "t": 51,
+          "passes": 30,
+          "totalMs": 123.9838,
+          "gpuMs": 123.9838,
+          "frameTime": 4.1328
+        },
+        {
+          "t": 51,
+          "passes": 60,
+          "totalMs": 245.0194,
+          "gpuMs": 245.0194,
+          "frameTime": 4.0837
+        },
+        {
+          "t": 52,
+          "passes": 30,
+          "totalMs": 123.1989,
+          "gpuMs": 123.1989,
+          "frameTime": 4.1066
+        },
+        {
+          "t": 52,
+          "passes": 60,
+          "totalMs": 246.4865,
+          "gpuMs": 246.4865,
+          "frameTime": 4.1081
+        },
+        {
+          "t": 53,
+          "passes": 30,
+          "totalMs": 122.7865,
+          "gpuMs": 122.7865,
+          "frameTime": 4.0929
+        },
+        {
+          "t": 53,
+          "passes": 60,
+          "totalMs": 246.8624,
+          "gpuMs": 246.8624,
+          "frameTime": 4.1144
+        },
+        {
+          "t": 54,
+          "passes": 30,
+          "totalMs": 123.3922,
+          "gpuMs": 123.3922,
+          "frameTime": 4.1131
+        },
+        {
+          "t": 54,
+          "passes": 60,
+          "totalMs": 243.7003,
+          "gpuMs": 243.7003,
+          "frameTime": 4.0617
+        },
+        {
+          "t": 55,
+          "passes": 30,
+          "totalMs": 122.6874,
+          "gpuMs": 122.6874,
+          "frameTime": 4.0896
+        },
+        {
+          "t": 55,
+          "passes": 60,
+          "totalMs": 247.3141,
+          "gpuMs": 247.3141,
+          "frameTime": 4.1219
+        },
+        {
+          "t": 56,
+          "passes": 30,
+          "totalMs": 126.1374,
+          "gpuMs": 126.1374,
+          "frameTime": 4.2046
+        },
+        {
+          "t": 56,
+          "passes": 60,
+          "totalMs": 250.6312,
+          "gpuMs": 250.6312,
+          "frameTime": 4.1772
+        },
+        {
+          "t": 57,
+          "passes": 30,
+          "totalMs": 124.8029,
+          "gpuMs": 124.8029,
+          "frameTime": 4.1601
+        },
+        {
+          "t": 57,
+          "passes": 60,
+          "totalMs": 250.2818,
+          "gpuMs": 250.2818,
+          "frameTime": 4.1714
+        },
+        {
+          "t": 58,
+          "passes": 30,
+          "totalMs": 125.2934,
+          "gpuMs": 125.2934,
+          "frameTime": 4.1764
+        },
+        {
+          "t": 58,
+          "passes": 60,
+          "totalMs": 246.7158,
+          "gpuMs": 246.7158,
+          "frameTime": 4.1119
+        },
+        {
+          "t": 59,
+          "passes": 30,
+          "totalMs": 123.2689,
+          "gpuMs": 123.2689,
+          "frameTime": 4.109
+        },
+        {
+          "t": 59,
+          "passes": 60,
+          "totalMs": 249.6445,
+          "gpuMs": 249.6445,
+          "frameTime": 4.1607
+        }
+      ]
+    },
+    {
+      "id": "noise_cellNoise",
+      "label": "Cell Noise",
+      "category": "noise",
+      "stats": {
+        "points": 6,
+        "medianFt": 0.5037,
+        "meanFt": 0.4948,
+        "p95Ft": 0.5349,
+        "p99Ft": 0.562,
+        "sdFt": 0.0325,
+        "cvPercent": 6.57,
+        "avgFps": 2021,
+        "thermalDrift": 1.053,
+        "frameCount": 60,
+        "filteredCount": 60,
+        "outlierCount": 0,
+        "msPerPass": 0.51981,
+        "overheadMsPerBatch": -0.9666,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 0.5273,
+        "marginalMs": -0.0075,
+        "marginalMsAtRef": -0.0325,
+        "marginalPoints": 0
+      },
+      "frames": [
+        {
+          "t": 0,
+          "passes": 30,
+          "totalMs": 12.7262,
+          "gpuMs": 12.7262,
+          "frameTime": 0.4242
+        },
+        {
+          "t": 0,
+          "passes": 60,
+          "totalMs": 26.7225,
+          "gpuMs": 26.7225,
+          "frameTime": 0.4454
+        },
+        {
+          "t": 1,
+          "passes": 30,
+          "totalMs": 14.8681,
+          "gpuMs": 14.8681,
+          "frameTime": 0.4956
+        },
+        {
+          "t": 1,
+          "passes": 60,
+          "totalMs": 28.328,
+          "gpuMs": 28.328,
+          "frameTime": 0.4721
+        },
+        {
+          "t": 2,
+          "passes": 30,
+          "totalMs": 14.8071,
+          "gpuMs": 14.8071,
+          "frameTime": 0.4936
+        },
+        {
+          "t": 2,
+          "passes": 60,
+          "totalMs": 26.6697,
+          "gpuMs": 26.6697,
+          "frameTime": 0.4445
+        },
+        {
+          "t": 3,
+          "passes": 30,
+          "totalMs": 14.1665,
+          "gpuMs": 14.1665,
+          "frameTime": 0.4722
+        },
+        {
+          "t": 3,
+          "passes": 60,
+          "totalMs": 26.5714,
+          "gpuMs": 26.5714,
+          "frameTime": 0.4429
+        },
+        {
+          "t": 4,
+          "passes": 30,
+          "totalMs": 11.0082,
+          "gpuMs": 11.0082,
+          "frameTime": 0.3669
+        },
+        {
+          "t": 4,
+          "passes": 60,
+          "totalMs": 26.8881,
+          "gpuMs": 26.8881,
+          "frameTime": 0.4481
+        },
+        {
+          "t": 5,
+          "passes": 30,
+          "totalMs": 14.1333,
+          "gpuMs": 14.1333,
+          "frameTime": 0.4711
+        },
+        {
+          "t": 5,
+          "passes": 60,
+          "totalMs": 25.4577,
+          "gpuMs": 25.4577,
+          "frameTime": 0.4243
+        },
+        {
+          "t": 6,
+          "passes": 30,
+          "totalMs": 17.6604,
+          "gpuMs": 17.6604,
+          "frameTime": 0.5887
+        },
+        {
+          "t": 6,
+          "passes": 60,
+          "totalMs": 30.7642,
+          "gpuMs": 30.7642,
+          "frameTime": 0.5127
+        },
+        {
+          "t": 7,
+          "passes": 30,
+          "totalMs": 15.9575,
+          "gpuMs": 15.9575,
+          "frameTime": 0.5319
+        },
+        {
+          "t": 7,
+          "passes": 60,
+          "totalMs": 31.1702,
+          "gpuMs": 31.1702,
+          "frameTime": 0.5195
+        },
+        {
+          "t": 8,
+          "passes": 30,
+          "totalMs": 12.8906,
+          "gpuMs": 12.8906,
+          "frameTime": 0.4297
+        },
+        {
+          "t": 8,
+          "passes": 60,
+          "totalMs": 27.1701,
+          "gpuMs": 27.1701,
+          "frameTime": 0.4528
+        },
+        {
+          "t": 9,
+          "passes": 30,
+          "totalMs": 14.5189,
+          "gpuMs": 14.5189,
+          "frameTime": 0.484
+        },
+        {
+          "t": 9,
+          "passes": 60,
+          "totalMs": 29.2288,
+          "gpuMs": 29.2288,
+          "frameTime": 0.4871
+        },
+        {
+          "t": 10,
+          "passes": 30,
+          "totalMs": 12.7303,
+          "gpuMs": 12.7303,
+          "frameTime": 0.4243
+        },
+        {
+          "t": 10,
+          "passes": 60,
+          "totalMs": 27.1897,
+          "gpuMs": 27.1897,
+          "frameTime": 0.4532
+        },
+        {
+          "t": 11,
+          "passes": 30,
+          "totalMs": 14.5798,
+          "gpuMs": 14.5798,
+          "frameTime": 0.486
+        },
+        {
+          "t": 11,
+          "passes": 60,
+          "totalMs": 28.9343,
+          "gpuMs": 28.9343,
+          "frameTime": 0.4822
+        },
+        {
+          "t": 12,
+          "passes": 30,
+          "totalMs": 12.8248,
+          "gpuMs": 12.8248,
+          "frameTime": 0.4275
+        },
+        {
+          "t": 12,
+          "passes": 60,
+          "totalMs": 28.8464,
+          "gpuMs": 28.8464,
+          "frameTime": 0.4808
+        },
+        {
+          "t": 13,
+          "passes": 30,
+          "totalMs": 16.1002,
+          "gpuMs": 16.1002,
+          "frameTime": 0.5367
+        },
+        {
+          "t": 13,
+          "passes": 60,
+          "totalMs": 33.9284,
+          "gpuMs": 33.9284,
+          "frameTime": 0.5655
+        },
+        {
+          "t": 14,
+          "passes": 30,
+          "totalMs": 13.0516,
+          "gpuMs": 13.0516,
+          "frameTime": 0.4351
+        },
+        {
+          "t": 14,
+          "passes": 60,
+          "totalMs": 28.8737,
+          "gpuMs": 28.8737,
+          "frameTime": 0.4812
+        },
+        {
+          "t": 15,
+          "passes": 30,
+          "totalMs": 14.6914,
+          "gpuMs": 14.6914,
+          "frameTime": 0.4897
+        },
+        {
+          "t": 15,
+          "passes": 60,
+          "totalMs": 27.6705,
+          "gpuMs": 27.6705,
+          "frameTime": 0.4612
+        },
+        {
+          "t": 16,
+          "passes": 30,
+          "totalMs": 12.6708,
+          "gpuMs": 12.6708,
+          "frameTime": 0.4224
+        },
+        {
+          "t": 16,
+          "passes": 60,
+          "totalMs": 28.9928,
+          "gpuMs": 28.9928,
+          "frameTime": 0.4832
+        },
+        {
+          "t": 17,
+          "passes": 30,
+          "totalMs": 16.3234,
+          "gpuMs": 16.3234,
+          "frameTime": 0.5441
+        },
+        {
+          "t": 17,
+          "passes": 60,
+          "totalMs": 32.1912,
+          "gpuMs": 32.1912,
+          "frameTime": 0.5365
+        },
+        {
+          "t": 18,
+          "passes": 30,
+          "totalMs": 13.0873,
+          "gpuMs": 13.0873,
+          "frameTime": 0.4362
+        },
+        {
+          "t": 18,
+          "passes": 60,
+          "totalMs": 31.8578,
+          "gpuMs": 31.8578,
+          "frameTime": 0.531
+        },
+        {
+          "t": 19,
+          "passes": 30,
+          "totalMs": 17.9885,
+          "gpuMs": 17.9885,
+          "frameTime": 0.5996
+        },
+        {
+          "t": 19,
+          "passes": 60,
+          "totalMs": 29.292,
+          "gpuMs": 29.292,
+          "frameTime": 0.4882
+        },
+        {
+          "t": 20,
+          "passes": 30,
+          "totalMs": 16.1621,
+          "gpuMs": 16.1621,
+          "frameTime": 0.5387
+        },
+        {
+          "t": 20,
+          "passes": 60,
+          "totalMs": 29.0952,
+          "gpuMs": 29.0952,
+          "frameTime": 0.4849
+        },
+        {
+          "t": 21,
+          "passes": 30,
+          "totalMs": 16.2591,
+          "gpuMs": 16.2591,
+          "frameTime": 0.542
+        },
+        {
+          "t": 21,
+          "passes": 60,
+          "totalMs": 28.6303,
+          "gpuMs": 28.6303,
+          "frameTime": 0.4772
+        },
+        {
+          "t": 22,
+          "passes": 30,
+          "totalMs": 16.2525,
+          "gpuMs": 16.2525,
+          "frameTime": 0.5417
+        },
+        {
+          "t": 22,
+          "passes": 60,
+          "totalMs": 29.0191,
+          "gpuMs": 29.0191,
+          "frameTime": 0.4837
+        },
+        {
+          "t": 23,
+          "passes": 30,
+          "totalMs": 14.5431,
+          "gpuMs": 14.5431,
+          "frameTime": 0.4848
+        },
+        {
+          "t": 23,
+          "passes": 60,
+          "totalMs": 30.4088,
+          "gpuMs": 30.4088,
+          "frameTime": 0.5068
+        },
+        {
+          "t": 24,
+          "passes": 30,
+          "totalMs": 14.6878,
+          "gpuMs": 14.6878,
+          "frameTime": 0.4896
+        },
+        {
+          "t": 24,
+          "passes": 60,
+          "totalMs": 28.5461,
+          "gpuMs": 28.5461,
+          "frameTime": 0.4758
+        },
+        {
+          "t": 25,
+          "passes": 30,
+          "totalMs": 16.365,
+          "gpuMs": 16.365,
+          "frameTime": 0.5455
+        },
+        {
+          "t": 25,
+          "passes": 60,
+          "totalMs": 27.4885,
+          "gpuMs": 27.4885,
+          "frameTime": 0.4581
+        },
+        {
+          "t": 26,
+          "passes": 30,
+          "totalMs": 14.4251,
+          "gpuMs": 14.4251,
+          "frameTime": 0.4808
+        },
+        {
+          "t": 26,
+          "passes": 60,
+          "totalMs": 31.7701,
+          "gpuMs": 31.7701,
+          "frameTime": 0.5295
+        },
+        {
+          "t": 27,
+          "passes": 30,
+          "totalMs": 13.0477,
+          "gpuMs": 13.0477,
+          "frameTime": 0.4349
+        },
+        {
+          "t": 27,
+          "passes": 60,
+          "totalMs": 30.3916,
+          "gpuMs": 30.3916,
+          "frameTime": 0.5065
+        },
+        {
+          "t": 28,
+          "passes": 30,
+          "totalMs": 14.4325,
+          "gpuMs": 14.4325,
+          "frameTime": 0.4811
+        },
+        {
+          "t": 28,
+          "passes": 60,
+          "totalMs": 26.8087,
+          "gpuMs": 26.8087,
+          "frameTime": 0.4468
+        },
+        {
+          "t": 29,
+          "passes": 30,
+          "totalMs": 14.5864,
+          "gpuMs": 14.5864,
+          "frameTime": 0.4862
+        },
+        {
+          "t": 29,
+          "passes": 60,
+          "totalMs": 28.8386,
+          "gpuMs": 28.8386,
+          "frameTime": 0.4806
+        },
+        {
+          "t": 30,
+          "passes": 30,
+          "totalMs": 15.888,
+          "gpuMs": 15.888,
+          "frameTime": 0.5296
+        },
+        {
+          "t": 30,
+          "passes": 60,
+          "totalMs": 30.3582,
+          "gpuMs": 30.3582,
+          "frameTime": 0.506
+        },
+        {
+          "t": 31,
+          "passes": 30,
+          "totalMs": 14.5672,
+          "gpuMs": 14.5672,
+          "frameTime": 0.4856
+        },
+        {
+          "t": 31,
+          "passes": 60,
+          "totalMs": 27.1048,
+          "gpuMs": 27.1048,
+          "frameTime": 0.4517
+        },
+        {
+          "t": 32,
+          "passes": 30,
+          "totalMs": 17.7502,
+          "gpuMs": 17.7502,
+          "frameTime": 0.5917
+        },
+        {
+          "t": 32,
+          "passes": 60,
+          "totalMs": 31.7889,
+          "gpuMs": 31.7889,
+          "frameTime": 0.5298
+        },
+        {
+          "t": 33,
+          "passes": 30,
+          "totalMs": 14.3556,
+          "gpuMs": 14.3556,
+          "frameTime": 0.4785
+        },
+        {
+          "t": 33,
+          "passes": 60,
+          "totalMs": 30.2865,
+          "gpuMs": 30.2865,
+          "frameTime": 0.5048
+        },
+        {
+          "t": 34,
+          "passes": 30,
+          "totalMs": 16.1251,
+          "gpuMs": 16.1251,
+          "frameTime": 0.5375
+        },
+        {
+          "t": 34,
+          "passes": 60,
+          "totalMs": 31.9555,
+          "gpuMs": 31.9555,
+          "frameTime": 0.5326
+        },
+        {
+          "t": 35,
+          "passes": 30,
+          "totalMs": 14.1097,
+          "gpuMs": 14.1097,
+          "frameTime": 0.4703
+        },
+        {
+          "t": 35,
+          "passes": 60,
+          "totalMs": 30.4656,
+          "gpuMs": 30.4656,
+          "frameTime": 0.5078
+        },
+        {
+          "t": 36,
+          "passes": 30,
+          "totalMs": 12.8586,
+          "gpuMs": 12.8586,
+          "frameTime": 0.4286
+        },
+        {
+          "t": 36,
+          "passes": 60,
+          "totalMs": 28.896,
+          "gpuMs": 28.896,
+          "frameTime": 0.4816
+        },
+        {
+          "t": 37,
+          "passes": 30,
+          "totalMs": 17.8721,
+          "gpuMs": 17.8721,
+          "frameTime": 0.5957
+        },
+        {
+          "t": 37,
+          "passes": 60,
+          "totalMs": 31.8461,
+          "gpuMs": 31.8461,
+          "frameTime": 0.5308
+        },
+        {
+          "t": 38,
+          "passes": 30,
+          "totalMs": 14.3493,
+          "gpuMs": 14.3493,
+          "frameTime": 0.4783
+        },
+        {
+          "t": 38,
+          "passes": 60,
+          "totalMs": 30.5486,
+          "gpuMs": 30.5486,
+          "frameTime": 0.5091
+        },
+        {
+          "t": 39,
+          "passes": 30,
+          "totalMs": 14.5374,
+          "gpuMs": 14.5374,
+          "frameTime": 0.4846
+        },
+        {
+          "t": 39,
+          "passes": 60,
+          "totalMs": 26.9466,
+          "gpuMs": 26.9466,
+          "frameTime": 0.4491
+        },
+        {
+          "t": 40,
+          "passes": 30,
+          "totalMs": 16.1552,
+          "gpuMs": 16.1552,
+          "frameTime": 0.5385
+        },
+        {
+          "t": 40,
+          "passes": 60,
+          "totalMs": 32.0593,
+          "gpuMs": 32.0593,
+          "frameTime": 0.5343
+        },
+        {
+          "t": 41,
+          "passes": 30,
+          "totalMs": 17.969,
+          "gpuMs": 17.969,
+          "frameTime": 0.599
+        },
+        {
+          "t": 41,
+          "passes": 60,
+          "totalMs": 27.0091,
+          "gpuMs": 27.0091,
+          "frameTime": 0.4502
+        },
+        {
+          "t": 42,
+          "passes": 30,
+          "totalMs": 17.6266,
+          "gpuMs": 17.6266,
+          "frameTime": 0.5876
+        },
+        {
+          "t": 42,
+          "passes": 60,
+          "totalMs": 31.8179,
+          "gpuMs": 31.8179,
+          "frameTime": 0.5303
+        },
+        {
+          "t": 43,
+          "passes": 30,
+          "totalMs": 14.6077,
+          "gpuMs": 14.6077,
+          "frameTime": 0.4869
+        },
+        {
+          "t": 43,
+          "passes": 60,
+          "totalMs": 30.2608,
+          "gpuMs": 30.2608,
+          "frameTime": 0.5043
+        },
+        {
+          "t": 44,
+          "passes": 30,
+          "totalMs": 14.6876,
+          "gpuMs": 14.6876,
+          "frameTime": 0.4896
+        },
+        {
+          "t": 44,
+          "passes": 60,
+          "totalMs": 32.0868,
+          "gpuMs": 32.0868,
+          "frameTime": 0.5348
+        },
+        {
+          "t": 45,
+          "passes": 30,
+          "totalMs": 12.8527,
+          "gpuMs": 12.8527,
+          "frameTime": 0.4284
+        },
+        {
+          "t": 45,
+          "passes": 60,
+          "totalMs": 31.8366,
+          "gpuMs": 31.8366,
+          "frameTime": 0.5306
+        },
+        {
+          "t": 46,
+          "passes": 30,
+          "totalMs": 16.1272,
+          "gpuMs": 16.1272,
+          "frameTime": 0.5376
+        },
+        {
+          "t": 46,
+          "passes": 60,
+          "totalMs": 30.2652,
+          "gpuMs": 30.2652,
+          "frameTime": 0.5044
+        },
+        {
+          "t": 47,
+          "passes": 30,
+          "totalMs": 16.3041,
+          "gpuMs": 16.3041,
+          "frameTime": 0.5435
+        },
+        {
+          "t": 47,
+          "passes": 60,
+          "totalMs": 30.3843,
+          "gpuMs": 30.3843,
+          "frameTime": 0.5064
+        },
+        {
+          "t": 48,
+          "passes": 30,
+          "totalMs": 16.1416,
+          "gpuMs": 16.1416,
+          "frameTime": 0.5381
+        },
+        {
+          "t": 48,
+          "passes": 60,
+          "totalMs": 30.3434,
+          "gpuMs": 30.3434,
+          "frameTime": 0.5057
+        },
+        {
+          "t": 49,
+          "passes": 30,
+          "totalMs": 14.6132,
+          "gpuMs": 14.6132,
+          "frameTime": 0.4871
+        },
+        {
+          "t": 49,
+          "passes": 60,
+          "totalMs": 29.8528,
+          "gpuMs": 29.8528,
+          "frameTime": 0.4975
+        },
+        {
+          "t": 50,
+          "passes": 30,
+          "totalMs": 15.923,
+          "gpuMs": 15.923,
+          "frameTime": 0.5308
+        },
+        {
+          "t": 50,
+          "passes": 60,
+          "totalMs": 33.5745,
+          "gpuMs": 33.5745,
+          "frameTime": 0.5596
+        },
+        {
+          "t": 51,
+          "passes": 30,
+          "totalMs": 14.6548,
+          "gpuMs": 14.6548,
+          "frameTime": 0.4885
+        },
+        {
+          "t": 51,
+          "passes": 60,
+          "totalMs": 30.2163,
+          "gpuMs": 30.2163,
+          "frameTime": 0.5036
+        },
+        {
+          "t": 52,
+          "passes": 30,
+          "totalMs": 14.2565,
+          "gpuMs": 14.2565,
+          "frameTime": 0.4752
+        },
+        {
+          "t": 52,
+          "passes": 60,
+          "totalMs": 32.0034,
+          "gpuMs": 32.0034,
+          "frameTime": 0.5334
+        },
+        {
+          "t": 53,
+          "passes": 30,
+          "totalMs": 14.6419,
+          "gpuMs": 14.6419,
+          "frameTime": 0.4881
+        },
+        {
+          "t": 53,
+          "passes": 60,
+          "totalMs": 30.1381,
+          "gpuMs": 30.1381,
+          "frameTime": 0.5023
+        },
+        {
+          "t": 54,
+          "passes": 30,
+          "totalMs": 15.9409,
+          "gpuMs": 15.9409,
+          "frameTime": 0.5314
+        },
+        {
+          "t": 54,
+          "passes": 60,
+          "totalMs": 30.2273,
+          "gpuMs": 30.2273,
+          "frameTime": 0.5038
+        },
+        {
+          "t": 55,
+          "passes": 30,
+          "totalMs": 15.9467,
+          "gpuMs": 15.9467,
+          "frameTime": 0.5316
+        },
+        {
+          "t": 55,
+          "passes": 60,
+          "totalMs": 31.7381,
+          "gpuMs": 31.7381,
+          "frameTime": 0.529
+        },
+        {
+          "t": 56,
+          "passes": 30,
+          "totalMs": 14.2874,
+          "gpuMs": 14.2874,
+          "frameTime": 0.4762
+        },
+        {
+          "t": 56,
+          "passes": 60,
+          "totalMs": 30.3908,
+          "gpuMs": 30.3908,
+          "frameTime": 0.5065
+        },
+        {
+          "t": 57,
+          "passes": 30,
+          "totalMs": 14.3126,
+          "gpuMs": 14.3126,
+          "frameTime": 0.4771
+        },
+        {
+          "t": 57,
+          "passes": 60,
+          "totalMs": 26.9845,
+          "gpuMs": 26.9845,
+          "frameTime": 0.4497
+        },
+        {
+          "t": 58,
+          "passes": 30,
+          "totalMs": 12.7512,
+          "gpuMs": 12.7512,
+          "frameTime": 0.425
+        },
+        {
+          "t": 58,
+          "passes": 60,
+          "totalMs": 31.8864,
+          "gpuMs": 31.8864,
+          "frameTime": 0.5314
+        },
+        {
+          "t": 59,
+          "passes": 30,
+          "totalMs": 14.8156,
+          "gpuMs": 14.8156,
+          "frameTime": 0.4939
+        },
+        {
+          "t": 59,
+          "passes": 60,
+          "totalMs": 30.2965,
+          "gpuMs": 30.2965,
+          "frameTime": 0.5049
+        }
+      ]
+    },
+    {
+      "id": "noise_voronoi",
+      "label": "Voronoi F1",
+      "category": "noise",
+      "stats": {
+        "points": 61,
+        "medianFt": 5.1633,
+        "meanFt": 5.1669,
+        "p95Ft": 5.2195,
+        "p99Ft": 5.2493,
+        "sdFt": 0.034,
+        "cvPercent": 0.66,
+        "avgFps": 193.5,
+        "thermalDrift": 0.996,
+        "frameCount": 60,
+        "filteredCount": 59,
+        "outlierCount": 1,
+        "msPerPass": 5.1108,
+        "overheadMsPerBatch": 3.0993,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 0.5273,
+        "marginalMs": 4.5835,
+        "marginalMsAtRef": 19.9208,
+        "marginalPoints": 239
+      },
+      "frames": [
+        {
+          "t": 0,
+          "passes": 30,
+          "totalMs": 156.8536,
+          "gpuMs": 156.8536,
+          "frameTime": 5.2285
+        },
+        {
+          "t": 0,
+          "passes": 60,
+          "totalMs": 309.8803,
+          "gpuMs": 309.8803,
+          "frameTime": 5.1647
+        },
+        {
+          "t": 1,
+          "passes": 30,
+          "totalMs": 153.1627,
+          "gpuMs": 153.1627,
+          "frameTime": 5.1054
+        },
+        {
+          "t": 1,
+          "passes": 60,
+          "totalMs": 308.0389,
+          "gpuMs": 308.0389,
+          "frameTime": 5.134
+        },
+        {
+          "t": 2,
+          "passes": 30,
+          "totalMs": 157.0659,
+          "gpuMs": 157.0659,
+          "frameTime": 5.2355
+        },
+        {
+          "t": 2,
+          "passes": 60,
+          "totalMs": 312.4624,
+          "gpuMs": 312.4624,
+          "frameTime": 5.2077
+        },
+        {
+          "t": 3,
+          "passes": 30,
+          "totalMs": 155.0424,
+          "gpuMs": 155.0424,
+          "frameTime": 5.1681
+        },
+        {
+          "t": 3,
+          "passes": 60,
+          "totalMs": 311.1632,
+          "gpuMs": 311.1632,
+          "frameTime": 5.1861
+        },
+        {
+          "t": 4,
+          "passes": 30,
+          "totalMs": 150.2688,
+          "gpuMs": 150.2688,
+          "frameTime": 5.009
+        },
+        {
+          "t": 4,
+          "passes": 60,
+          "totalMs": 311.7193,
+          "gpuMs": 311.7193,
+          "frameTime": 5.1953
+        },
+        {
+          "t": 5,
+          "passes": 30,
+          "totalMs": 156.4256,
+          "gpuMs": 156.4256,
+          "frameTime": 5.2142
+        },
+        {
+          "t": 5,
+          "passes": 60,
+          "totalMs": 309.5055,
+          "gpuMs": 309.5055,
+          "frameTime": 5.1584
+        },
+        {
+          "t": 6,
+          "passes": 30,
+          "totalMs": 153.9947,
+          "gpuMs": 153.9947,
+          "frameTime": 5.1332
+        },
+        {
+          "t": 6,
+          "passes": 60,
+          "totalMs": 311.8348,
+          "gpuMs": 311.8348,
+          "frameTime": 5.1972
+        },
+        {
+          "t": 7,
+          "passes": 30,
+          "totalMs": 154.7472,
+          "gpuMs": 154.7472,
+          "frameTime": 5.1582
+        },
+        {
+          "t": 7,
+          "passes": 60,
+          "totalMs": 306.1878,
+          "gpuMs": 306.1878,
+          "frameTime": 5.1031
+        },
+        {
+          "t": 8,
+          "passes": 30,
+          "totalMs": 154.5747,
+          "gpuMs": 154.5747,
+          "frameTime": 5.1525
+        },
+        {
+          "t": 8,
+          "passes": 60,
+          "totalMs": 308.3523,
+          "gpuMs": 308.3523,
+          "frameTime": 5.1392
+        },
+        {
+          "t": 9,
+          "passes": 30,
+          "totalMs": 156.4212,
+          "gpuMs": 156.4212,
+          "frameTime": 5.214
+        },
+        {
+          "t": 9,
+          "passes": 60,
+          "totalMs": 310.3014,
+          "gpuMs": 310.3014,
+          "frameTime": 5.1717
+        },
+        {
+          "t": 10,
+          "passes": 30,
+          "totalMs": 158.0672,
+          "gpuMs": 158.0672,
+          "frameTime": 5.2689
+        },
+        {
+          "t": 10,
+          "passes": 60,
+          "totalMs": 309.5526,
+          "gpuMs": 309.5526,
+          "frameTime": 5.1592
+        },
+        {
+          "t": 11,
+          "passes": 30,
+          "totalMs": 156.9277,
+          "gpuMs": 156.9277,
+          "frameTime": 5.2309
+        },
+        {
+          "t": 11,
+          "passes": 60,
+          "totalMs": 315.1206,
+          "gpuMs": 315.1206,
+          "frameTime": 5.252
+        },
+        {
+          "t": 12,
+          "passes": 30,
+          "totalMs": 156.6869,
+          "gpuMs": 156.6869,
+          "frameTime": 5.2229
+        },
+        {
+          "t": 12,
+          "passes": 60,
+          "totalMs": 311.4089,
+          "gpuMs": 311.4089,
+          "frameTime": 5.1901
+        },
+        {
+          "t": 13,
+          "passes": 30,
+          "totalMs": 158.4185,
+          "gpuMs": 158.4185,
+          "frameTime": 5.2806
+        },
+        {
+          "t": 13,
+          "passes": 60,
+          "totalMs": 313.1573,
+          "gpuMs": 313.1573,
+          "frameTime": 5.2193
+        },
+        {
+          "t": 14,
+          "passes": 30,
+          "totalMs": 156.6033,
+          "gpuMs": 156.6033,
+          "frameTime": 5.2201
+        },
+        {
+          "t": 14,
+          "passes": 60,
+          "totalMs": 308.591,
+          "gpuMs": 308.591,
+          "frameTime": 5.1432
+        },
+        {
+          "t": 15,
+          "passes": 30,
+          "totalMs": 156.5087,
+          "gpuMs": 156.5087,
+          "frameTime": 5.217
+        },
+        {
+          "t": 15,
+          "passes": 60,
+          "totalMs": 305.6463,
+          "gpuMs": 305.6463,
+          "frameTime": 5.0941
+        },
+        {
+          "t": 16,
+          "passes": 30,
+          "totalMs": 155.0019,
+          "gpuMs": 155.0019,
+          "frameTime": 5.1667
+        },
+        {
+          "t": 16,
+          "passes": 60,
+          "totalMs": 313.4312,
+          "gpuMs": 313.4312,
+          "frameTime": 5.2239
+        },
+        {
+          "t": 17,
+          "passes": 30,
+          "totalMs": 156.8026,
+          "gpuMs": 156.8026,
+          "frameTime": 5.2268
+        },
+        {
+          "t": 17,
+          "passes": 60,
+          "totalMs": 308.5488,
+          "gpuMs": 308.5488,
+          "frameTime": 5.1425
+        },
+        {
+          "t": 18,
+          "passes": 30,
+          "totalMs": 156.8689,
+          "gpuMs": 156.8689,
+          "frameTime": 5.229
+        },
+        {
+          "t": 18,
+          "passes": 60,
+          "totalMs": 314.8423,
+          "gpuMs": 314.8423,
+          "frameTime": 5.2474
+        },
+        {
+          "t": 19,
+          "passes": 30,
+          "totalMs": 156.4736,
+          "gpuMs": 156.4736,
+          "frameTime": 5.2158
+        },
+        {
+          "t": 19,
+          "passes": 60,
+          "totalMs": 313.1172,
+          "gpuMs": 313.1172,
+          "frameTime": 5.2186
+        },
+        {
+          "t": 20,
+          "passes": 30,
+          "totalMs": 155.1512,
+          "gpuMs": 155.1512,
+          "frameTime": 5.1717
+        },
+        {
+          "t": 20,
+          "passes": 60,
+          "totalMs": 310.2724,
+          "gpuMs": 310.2724,
+          "frameTime": 5.1712
+        },
+        {
+          "t": 21,
+          "passes": 30,
+          "totalMs": 158.3166,
+          "gpuMs": 158.3166,
+          "frameTime": 5.2772
+        },
+        {
+          "t": 21,
+          "passes": 60,
+          "totalMs": 308.2886,
+          "gpuMs": 308.2886,
+          "frameTime": 5.1381
+        },
+        {
+          "t": 22,
+          "passes": 30,
+          "totalMs": 156.9017,
+          "gpuMs": 156.9017,
+          "frameTime": 5.2301
+        },
+        {
+          "t": 22,
+          "passes": 60,
+          "totalMs": 308.4485,
+          "gpuMs": 308.4485,
+          "frameTime": 5.1408
+        },
+        {
+          "t": 23,
+          "passes": 30,
+          "totalMs": 156.6383,
+          "gpuMs": 156.6383,
+          "frameTime": 5.2213
+        },
+        {
+          "t": 23,
+          "passes": 60,
+          "totalMs": 311.654,
+          "gpuMs": 311.654,
+          "frameTime": 5.1942
+        },
+        {
+          "t": 24,
+          "passes": 30,
+          "totalMs": 153.2034,
+          "gpuMs": 153.2034,
+          "frameTime": 5.1068
+        },
+        {
+          "t": 24,
+          "passes": 60,
+          "totalMs": 310.3205,
+          "gpuMs": 310.3205,
+          "frameTime": 5.172
+        },
+        {
+          "t": 25,
+          "passes": 30,
+          "totalMs": 151.7873,
+          "gpuMs": 151.7873,
+          "frameTime": 5.0596
+        },
+        {
+          "t": 25,
+          "passes": 60,
+          "totalMs": 310.0275,
+          "gpuMs": 310.0275,
+          "frameTime": 5.1671
+        },
+        {
+          "t": 26,
+          "passes": 30,
+          "totalMs": 156.9554,
+          "gpuMs": 156.9554,
+          "frameTime": 5.2318
+        },
+        {
+          "t": 26,
+          "passes": 60,
+          "totalMs": 311.9197,
+          "gpuMs": 311.9197,
+          "frameTime": 5.1987
+        },
+        {
+          "t": 27,
+          "passes": 30,
+          "totalMs": 153.544,
+          "gpuMs": 153.544,
+          "frameTime": 5.1181
+        },
+        {
+          "t": 27,
+          "passes": 60,
+          "totalMs": 311.7314,
+          "gpuMs": 311.7314,
+          "frameTime": 5.1955
+        },
+        {
+          "t": 28,
+          "passes": 30,
+          "totalMs": 156.728,
+          "gpuMs": 156.728,
+          "frameTime": 5.2243
+        },
+        {
+          "t": 28,
+          "passes": 60,
+          "totalMs": 309.6998,
+          "gpuMs": 309.6998,
+          "frameTime": 5.1617
+        },
+        {
+          "t": 29,
+          "passes": 30,
+          "totalMs": 154.8707,
+          "gpuMs": 154.8707,
+          "frameTime": 5.1624
+        },
+        {
+          "t": 29,
+          "passes": 60,
+          "totalMs": 309.9455,
+          "gpuMs": 309.9455,
+          "frameTime": 5.1658
+        },
+        {
+          "t": 30,
+          "passes": 30,
+          "totalMs": 155.323,
+          "gpuMs": 155.323,
+          "frameTime": 5.1774
+        },
+        {
+          "t": 30,
+          "passes": 60,
+          "totalMs": 311.2924,
+          "gpuMs": 311.2924,
+          "frameTime": 5.1882
+        },
+        {
+          "t": 31,
+          "passes": 30,
+          "totalMs": 153.6851,
+          "gpuMs": 153.6851,
+          "frameTime": 5.1228
+        },
+        {
+          "t": 31,
+          "passes": 60,
+          "totalMs": 310.622,
+          "gpuMs": 310.622,
+          "frameTime": 5.177
+        },
+        {
+          "t": 32,
+          "passes": 30,
+          "totalMs": 153.1092,
+          "gpuMs": 153.1092,
+          "frameTime": 5.1036
+        },
+        {
+          "t": 32,
+          "passes": 60,
+          "totalMs": 306.9712,
+          "gpuMs": 306.9712,
+          "frameTime": 5.1162
+        },
+        {
+          "t": 33,
+          "passes": 30,
+          "totalMs": 154.7792,
+          "gpuMs": 154.7792,
+          "frameTime": 5.1593
+        },
+        {
+          "t": 33,
+          "passes": 60,
+          "totalMs": 309.8416,
+          "gpuMs": 309.8416,
+          "frameTime": 5.164
+        },
+        {
+          "t": 34,
+          "passes": 30,
+          "totalMs": 156.8332,
+          "gpuMs": 156.8332,
+          "frameTime": 5.2278
+        },
+        {
+          "t": 34,
+          "passes": 60,
+          "totalMs": 309.7953,
+          "gpuMs": 309.7953,
+          "frameTime": 5.1633
+        },
+        {
+          "t": 35,
+          "passes": 30,
+          "totalMs": 156.448,
+          "gpuMs": 156.448,
+          "frameTime": 5.2149
+        },
+        {
+          "t": 35,
+          "passes": 60,
+          "totalMs": 307.8168,
+          "gpuMs": 307.8168,
+          "frameTime": 5.1303
+        },
+        {
+          "t": 36,
+          "passes": 30,
+          "totalMs": 158.5092,
+          "gpuMs": 158.5092,
+          "frameTime": 5.2836
+        },
+        {
+          "t": 36,
+          "passes": 60,
+          "totalMs": 309.2911,
+          "gpuMs": 309.2911,
+          "frameTime": 5.1549
+        },
+        {
+          "t": 37,
+          "passes": 30,
+          "totalMs": 157.2145,
+          "gpuMs": 157.2145,
+          "frameTime": 5.2405
+        },
+        {
+          "t": 37,
+          "passes": 60,
+          "totalMs": 309.4738,
+          "gpuMs": 309.4738,
+          "frameTime": 5.1579
+        },
+        {
+          "t": 38,
+          "passes": 30,
+          "totalMs": 156.4131,
+          "gpuMs": 156.4131,
+          "frameTime": 5.2138
+        },
+        {
+          "t": 38,
+          "passes": 60,
+          "totalMs": 309.1824,
+          "gpuMs": 309.1824,
+          "frameTime": 5.153
+        },
+        {
+          "t": 39,
+          "passes": 30,
+          "totalMs": 156.8622,
+          "gpuMs": 156.8622,
+          "frameTime": 5.2287
+        },
+        {
+          "t": 39,
+          "passes": 60,
+          "totalMs": 309.2497,
+          "gpuMs": 309.2497,
+          "frameTime": 5.1542
+        },
+        {
+          "t": 40,
+          "passes": 30,
+          "totalMs": 156.6862,
+          "gpuMs": 156.6862,
+          "frameTime": 5.2229
+        },
+        {
+          "t": 40,
+          "passes": 60,
+          "totalMs": 310.9763,
+          "gpuMs": 310.9763,
+          "frameTime": 5.1829
+        },
+        {
+          "t": 41,
+          "passes": 30,
+          "totalMs": 154.6258,
+          "gpuMs": 154.6258,
+          "frameTime": 5.1542
+        },
+        {
+          "t": 41,
+          "passes": 60,
+          "totalMs": 309.491,
+          "gpuMs": 309.491,
+          "frameTime": 5.1582
+        },
+        {
+          "t": 42,
+          "passes": 30,
+          "totalMs": 158.1773,
+          "gpuMs": 158.1773,
+          "frameTime": 5.2726
+        },
+        {
+          "t": 42,
+          "passes": 60,
+          "totalMs": 312.0615,
+          "gpuMs": 312.0615,
+          "frameTime": 5.201
+        },
+        {
+          "t": 43,
+          "passes": 30,
+          "totalMs": 153.3725,
+          "gpuMs": 153.3725,
+          "frameTime": 5.1124
+        },
+        {
+          "t": 43,
+          "passes": 60,
+          "totalMs": 308.2121,
+          "gpuMs": 308.2121,
+          "frameTime": 5.1369
+        },
+        {
+          "t": 44,
+          "passes": 30,
+          "totalMs": 154.9934,
+          "gpuMs": 154.9934,
+          "frameTime": 5.1664
+        },
+        {
+          "t": 44,
+          "passes": 60,
+          "totalMs": 309.6978,
+          "gpuMs": 309.6978,
+          "frameTime": 5.1616
+        },
+        {
+          "t": 45,
+          "passes": 30,
+          "totalMs": 154.8086,
+          "gpuMs": 154.8086,
+          "frameTime": 5.1603
+        },
+        {
+          "t": 45,
+          "passes": 60,
+          "totalMs": 312.6073,
+          "gpuMs": 312.6073,
+          "frameTime": 5.2101
+        },
+        {
+          "t": 46,
+          "passes": 30,
+          "totalMs": 154.9901,
+          "gpuMs": 154.9901,
+          "frameTime": 5.1663
+        },
+        {
+          "t": 46,
+          "passes": 60,
+          "totalMs": 311.1113,
+          "gpuMs": 311.1113,
+          "frameTime": 5.1852
+        },
+        {
+          "t": 47,
+          "passes": 30,
+          "totalMs": 154.8473,
+          "gpuMs": 154.8473,
+          "frameTime": 5.1616
+        },
+        {
+          "t": 47,
+          "passes": 60,
+          "totalMs": 306.1349,
+          "gpuMs": 306.1349,
+          "frameTime": 5.1022
+        },
+        {
+          "t": 48,
+          "passes": 30,
+          "totalMs": 154.7126,
+          "gpuMs": 154.7126,
+          "frameTime": 5.1571
+        },
+        {
+          "t": 48,
+          "passes": 60,
+          "totalMs": 306.0877,
+          "gpuMs": 306.0877,
+          "frameTime": 5.1015
+        },
+        {
+          "t": 49,
+          "passes": 30,
+          "totalMs": 151.6631,
+          "gpuMs": 151.6631,
+          "frameTime": 5.0554
+        },
+        {
+          "t": 49,
+          "passes": 60,
+          "totalMs": 302.6901,
+          "gpuMs": 302.6901,
+          "frameTime": 5.0448
+        },
+        {
+          "t": 50,
+          "passes": 30,
+          "totalMs": 158.0148,
+          "gpuMs": 158.0148,
+          "frameTime": 5.2672
+        },
+        {
+          "t": 50,
+          "passes": 60,
+          "totalMs": 312.9902,
+          "gpuMs": 312.9902,
+          "frameTime": 5.2165
+        },
+        {
+          "t": 51,
+          "passes": 30,
+          "totalMs": 158.1239,
+          "gpuMs": 158.1239,
+          "frameTime": 5.2708
+        },
+        {
+          "t": 51,
+          "passes": 60,
+          "totalMs": 309.5263,
+          "gpuMs": 309.5263,
+          "frameTime": 5.1588
+        },
+        {
+          "t": 52,
+          "passes": 30,
+          "totalMs": 154.886,
+          "gpuMs": 154.886,
+          "frameTime": 5.1629
+        },
+        {
+          "t": 52,
+          "passes": 60,
+          "totalMs": 307.8214,
+          "gpuMs": 307.8214,
+          "frameTime": 5.1304
+        },
+        {
+          "t": 53,
+          "passes": 30,
+          "totalMs": 156.6911,
+          "gpuMs": 156.6911,
+          "frameTime": 5.223
+        },
+        {
+          "t": 53,
+          "passes": 60,
+          "totalMs": 309.4871,
+          "gpuMs": 309.4871,
+          "frameTime": 5.1581
+        },
+        {
+          "t": 54,
+          "passes": 30,
+          "totalMs": 156.282,
+          "gpuMs": 156.282,
+          "frameTime": 5.2094
+        },
+        {
+          "t": 54,
+          "passes": 60,
+          "totalMs": 311.2034,
+          "gpuMs": 311.2034,
+          "frameTime": 5.1867
+        },
+        {
+          "t": 55,
+          "passes": 30,
+          "totalMs": 153.0278,
+          "gpuMs": 153.0278,
+          "frameTime": 5.1009
+        },
+        {
+          "t": 55,
+          "passes": 60,
+          "totalMs": 307.9387,
+          "gpuMs": 307.9387,
+          "frameTime": 5.1323
+        },
+        {
+          "t": 56,
+          "passes": 30,
+          "totalMs": 156.4291,
+          "gpuMs": 156.4291,
+          "frameTime": 5.2143
+        },
+        {
+          "t": 56,
+          "passes": 60,
+          "totalMs": 308.0567,
+          "gpuMs": 308.0567,
+          "frameTime": 5.1343
+        },
+        {
+          "t": 57,
+          "passes": 30,
+          "totalMs": 154.7312,
+          "gpuMs": 154.7312,
+          "frameTime": 5.1577
+        },
+        {
+          "t": 57,
+          "passes": 60,
+          "totalMs": 309.5123,
+          "gpuMs": 309.5123,
+          "frameTime": 5.1585
+        },
+        {
+          "t": 58,
+          "passes": 30,
+          "totalMs": 158.0214,
+          "gpuMs": 158.0214,
+          "frameTime": 5.2674
+        },
+        {
+          "t": 58,
+          "passes": 60,
+          "totalMs": 309.8634,
+          "gpuMs": 309.8634,
+          "frameTime": 5.1644
+        },
+        {
+          "t": 59,
+          "passes": 30,
+          "totalMs": 156.6681,
+          "gpuMs": 156.6681,
+          "frameTime": 5.2223
+        },
+        {
+          "t": 59,
+          "passes": 60,
+          "totalMs": 309.352,
+          "gpuMs": 309.352,
+          "frameTime": 5.1559
+        }
+      ]
+    },
+    {
+      "id": "noise_voronoiVec2",
+      "label": "Voronoi F1/F2",
+      "category": "noise",
+      "stats": {
+        "points": 64,
+        "medianFt": 5.3616,
+        "meanFt": 5.3653,
+        "p95Ft": 5.4139,
+        "p99Ft": 5.4303,
+        "sdFt": 0.032,
+        "cvPercent": 0.6,
+        "avgFps": 186.4,
+        "thermalDrift": 0.826,
+        "frameCount": 60,
+        "filteredCount": 48,
+        "outlierCount": 12,
+        "msPerPass": 5.35639,
+        "overheadMsPerBatch": 0.0059,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 0.5273,
+        "marginalMs": 4.8291,
+        "marginalMsAtRef": 20.9882,
+        "marginalPoints": 252
+      },
+      "frames": [
+        {
+          "t": 0,
+          "passes": 30,
+          "totalMs": 157.4672,
+          "gpuMs": 157.4672,
+          "frameTime": 5.2489
+        },
+        {
+          "t": 0,
+          "passes": 60,
+          "totalMs": 321.5857,
+          "gpuMs": 321.5857,
+          "frameTime": 5.3598
+        },
+        {
+          "t": 1,
+          "passes": 30,
+          "totalMs": 157.481,
+          "gpuMs": 157.481,
+          "frameTime": 5.2494
+        },
+        {
+          "t": 1,
+          "passes": 60,
+          "totalMs": 323.1479,
+          "gpuMs": 323.1479,
+          "frameTime": 5.3858
+        },
+        {
+          "t": 2,
+          "passes": 30,
+          "totalMs": 160.3648,
+          "gpuMs": 160.3648,
+          "frameTime": 5.3455
+        },
+        {
+          "t": 2,
+          "passes": 60,
+          "totalMs": 319.8252,
+          "gpuMs": 319.8252,
+          "frameTime": 5.3304
+        },
+        {
+          "t": 3,
+          "passes": 30,
+          "totalMs": 162.2006,
+          "gpuMs": 162.2006,
+          "frameTime": 5.4067
+        },
+        {
+          "t": 3,
+          "passes": 60,
+          "totalMs": 322.6559,
+          "gpuMs": 322.6559,
+          "frameTime": 5.3776
+        },
+        {
+          "t": 4,
+          "passes": 30,
+          "totalMs": 162.2575,
+          "gpuMs": 162.2575,
+          "frameTime": 5.4086
+        },
+        {
+          "t": 4,
+          "passes": 60,
+          "totalMs": 321.473,
+          "gpuMs": 321.473,
+          "frameTime": 5.3579
+        },
+        {
+          "t": 5,
+          "passes": 30,
+          "totalMs": 160.8177,
+          "gpuMs": 160.8177,
+          "frameTime": 5.3606
+        },
+        {
+          "t": 5,
+          "passes": 60,
+          "totalMs": 324.1552,
+          "gpuMs": 324.1552,
+          "frameTime": 5.4026
+        },
+        {
+          "t": 6,
+          "passes": 30,
+          "totalMs": 163.8375,
+          "gpuMs": 163.8375,
+          "frameTime": 5.4612
+        },
+        {
+          "t": 6,
+          "passes": 60,
+          "totalMs": 320.0963,
+          "gpuMs": 320.0963,
+          "frameTime": 5.3349
+        },
+        {
+          "t": 7,
+          "passes": 30,
+          "totalMs": 162.334,
+          "gpuMs": 162.334,
+          "frameTime": 5.4111
+        },
+        {
+          "t": 7,
+          "passes": 60,
+          "totalMs": 319.7458,
+          "gpuMs": 319.7458,
+          "frameTime": 5.3291
+        },
+        {
+          "t": 8,
+          "passes": 30,
+          "totalMs": 160.6342,
+          "gpuMs": 160.6342,
+          "frameTime": 5.3545
+        },
+        {
+          "t": 8,
+          "passes": 60,
+          "totalMs": 324.4572,
+          "gpuMs": 324.4572,
+          "frameTime": 5.4076
+        },
+        {
+          "t": 9,
+          "passes": 30,
+          "totalMs": 163.8516,
+          "gpuMs": 163.8516,
+          "frameTime": 5.4617
+        },
+        {
+          "t": 9,
+          "passes": 60,
+          "totalMs": 322.9113,
+          "gpuMs": 322.9113,
+          "frameTime": 5.3819
+        },
+        {
+          "t": 10,
+          "passes": 30,
+          "totalMs": 157.1781,
+          "gpuMs": 157.1781,
+          "frameTime": 5.2393
+        },
+        {
+          "t": 10,
+          "passes": 60,
+          "totalMs": 322.7462,
+          "gpuMs": 322.7462,
+          "frameTime": 5.3791
+        },
+        {
+          "t": 11,
+          "passes": 30,
+          "totalMs": 162.7571,
+          "gpuMs": 162.7571,
+          "frameTime": 5.4252
+        },
+        {
+          "t": 11,
+          "passes": 60,
+          "totalMs": 322.819,
+          "gpuMs": 322.819,
+          "frameTime": 5.3803
+        },
+        {
+          "t": 12,
+          "passes": 30,
+          "totalMs": 162.1164,
+          "gpuMs": 162.1164,
+          "frameTime": 5.4039
+        },
+        {
+          "t": 12,
+          "passes": 60,
+          "totalMs": 320.9805,
+          "gpuMs": 320.9805,
+          "frameTime": 5.3497
+        },
+        {
+          "t": 13,
+          "passes": 30,
+          "totalMs": 160.69,
+          "gpuMs": 160.69,
+          "frameTime": 5.3563
+        },
+        {
+          "t": 13,
+          "passes": 60,
+          "totalMs": 321.6582,
+          "gpuMs": 321.6582,
+          "frameTime": 5.361
+        },
+        {
+          "t": 14,
+          "passes": 30,
+          "totalMs": 163.9053,
+          "gpuMs": 163.9053,
+          "frameTime": 5.4635
+        },
+        {
+          "t": 14,
+          "passes": 60,
+          "totalMs": 322.9012,
+          "gpuMs": 322.9012,
+          "frameTime": 5.3817
+        },
+        {
+          "t": 15,
+          "passes": 30,
+          "totalMs": 160.6569,
+          "gpuMs": 160.6569,
+          "frameTime": 5.3552
+        },
+        {
+          "t": 15,
+          "passes": 60,
+          "totalMs": 323.0821,
+          "gpuMs": 323.0821,
+          "frameTime": 5.3847
+        },
+        {
+          "t": 16,
+          "passes": 30,
+          "totalMs": 161.997,
+          "gpuMs": 161.997,
+          "frameTime": 5.3999
+        },
+        {
+          "t": 16,
+          "passes": 60,
+          "totalMs": 324.8342,
+          "gpuMs": 324.8342,
+          "frameTime": 5.4139
+        },
+        {
+          "t": 17,
+          "passes": 30,
+          "totalMs": 157.4849,
+          "gpuMs": 157.4849,
+          "frameTime": 5.2495
+        },
+        {
+          "t": 17,
+          "passes": 60,
+          "totalMs": 322.672,
+          "gpuMs": 322.672,
+          "frameTime": 5.3779
+        },
+        {
+          "t": 18,
+          "passes": 30,
+          "totalMs": 163.8964,
+          "gpuMs": 163.8964,
+          "frameTime": 5.4632
+        },
+        {
+          "t": 18,
+          "passes": 60,
+          "totalMs": 321.4118,
+          "gpuMs": 321.4118,
+          "frameTime": 5.3569
+        },
+        {
+          "t": 19,
+          "passes": 30,
+          "totalMs": 160.645,
+          "gpuMs": 160.645,
+          "frameTime": 5.3548
+        },
+        {
+          "t": 19,
+          "passes": 60,
+          "totalMs": 322.7805,
+          "gpuMs": 322.7805,
+          "frameTime": 5.3797
+        },
+        {
+          "t": 20,
+          "passes": 30,
+          "totalMs": 161.1037,
+          "gpuMs": 161.1037,
+          "frameTime": 5.3701
+        },
+        {
+          "t": 20,
+          "passes": 60,
+          "totalMs": 321.2911,
+          "gpuMs": 321.2911,
+          "frameTime": 5.3549
+        },
+        {
+          "t": 21,
+          "passes": 30,
+          "totalMs": 160.4691,
+          "gpuMs": 160.4691,
+          "frameTime": 5.349
+        },
+        {
+          "t": 21,
+          "passes": 60,
+          "totalMs": 320.7828,
+          "gpuMs": 320.7828,
+          "frameTime": 5.3464
+        },
+        {
+          "t": 22,
+          "passes": 30,
+          "totalMs": 159.4947,
+          "gpuMs": 159.4947,
+          "frameTime": 5.3165
+        },
+        {
+          "t": 22,
+          "passes": 60,
+          "totalMs": 321.5725,
+          "gpuMs": 321.5725,
+          "frameTime": 5.3595
+        },
+        {
+          "t": 23,
+          "passes": 30,
+          "totalMs": 162.3502,
+          "gpuMs": 162.3502,
+          "frameTime": 5.4117
+        },
+        {
+          "t": 23,
+          "passes": 60,
+          "totalMs": 317.6768,
+          "gpuMs": 317.6768,
+          "frameTime": 5.2946
+        },
+        {
+          "t": 24,
+          "passes": 30,
+          "totalMs": 160.6176,
+          "gpuMs": 160.6176,
+          "frameTime": 5.3539
+        },
+        {
+          "t": 24,
+          "passes": 60,
+          "totalMs": 325.8416,
+          "gpuMs": 325.8416,
+          "frameTime": 5.4307
+        },
+        {
+          "t": 25,
+          "passes": 30,
+          "totalMs": 159.1145,
+          "gpuMs": 159.1145,
+          "frameTime": 5.3038
+        },
+        {
+          "t": 25,
+          "passes": 60,
+          "totalMs": 320.058,
+          "gpuMs": 320.058,
+          "frameTime": 5.3343
+        },
+        {
+          "t": 26,
+          "passes": 30,
+          "totalMs": 160.9564,
+          "gpuMs": 160.9564,
+          "frameTime": 5.3652
+        },
+        {
+          "t": 26,
+          "passes": 60,
+          "totalMs": 322.6238,
+          "gpuMs": 322.6238,
+          "frameTime": 5.3771
+        },
+        {
+          "t": 27,
+          "passes": 30,
+          "totalMs": 159.5,
+          "gpuMs": 159.5,
+          "frameTime": 5.3167
+        },
+        {
+          "t": 27,
+          "passes": 60,
+          "totalMs": 321.5401,
+          "gpuMs": 321.5401,
+          "frameTime": 5.359
+        },
+        {
+          "t": 28,
+          "passes": 30,
+          "totalMs": 160.7053,
+          "gpuMs": 160.7053,
+          "frameTime": 5.3568
+        },
+        {
+          "t": 28,
+          "passes": 60,
+          "totalMs": 324.8823,
+          "gpuMs": 324.8823,
+          "frameTime": 5.4147
+        },
+        {
+          "t": 29,
+          "passes": 30,
+          "totalMs": 163.9113,
+          "gpuMs": 163.9113,
+          "frameTime": 5.4637
+        },
+        {
+          "t": 29,
+          "passes": 60,
+          "totalMs": 322.6748,
+          "gpuMs": 322.6748,
+          "frameTime": 5.3779
+        },
+        {
+          "t": 30,
+          "passes": 30,
+          "totalMs": 161.0364,
+          "gpuMs": 161.0364,
+          "frameTime": 5.3679
+        },
+        {
+          "t": 30,
+          "passes": 60,
+          "totalMs": 319.5894,
+          "gpuMs": 319.5894,
+          "frameTime": 5.3265
+        },
+        {
+          "t": 31,
+          "passes": 30,
+          "totalMs": 161.0155,
+          "gpuMs": 161.0155,
+          "frameTime": 5.3672
+        },
+        {
+          "t": 31,
+          "passes": 60,
+          "totalMs": 322.8758,
+          "gpuMs": 322.8758,
+          "frameTime": 5.3813
+        },
+        {
+          "t": 32,
+          "passes": 30,
+          "totalMs": 159.1181,
+          "gpuMs": 159.1181,
+          "frameTime": 5.3039
+        },
+        {
+          "t": 32,
+          "passes": 60,
+          "totalMs": 316.526,
+          "gpuMs": 316.526,
+          "frameTime": 5.2754
+        },
+        {
+          "t": 33,
+          "passes": 30,
+          "totalMs": 159.3387,
+          "gpuMs": 159.3387,
+          "frameTime": 5.3113
+        },
+        {
+          "t": 33,
+          "passes": 60,
+          "totalMs": 321.1087,
+          "gpuMs": 321.1087,
+          "frameTime": 5.3518
+        },
+        {
+          "t": 34,
+          "passes": 30,
+          "totalMs": 160.6548,
+          "gpuMs": 160.6548,
+          "frameTime": 5.3552
+        },
+        {
+          "t": 34,
+          "passes": 60,
+          "totalMs": 320.8971,
+          "gpuMs": 320.8971,
+          "frameTime": 5.3483
+        },
+        {
+          "t": 35,
+          "passes": 30,
+          "totalMs": 160.9385,
+          "gpuMs": 160.9385,
+          "frameTime": 5.3646
+        },
+        {
+          "t": 35,
+          "passes": 60,
+          "totalMs": 320.0784,
+          "gpuMs": 320.0784,
+          "frameTime": 5.3346
+        },
+        {
+          "t": 36,
+          "passes": 30,
+          "totalMs": 163.9172,
+          "gpuMs": 163.9172,
+          "frameTime": 5.4639
+        },
+        {
+          "t": 36,
+          "passes": 60,
+          "totalMs": 319.5838,
+          "gpuMs": 319.5838,
+          "frameTime": 5.3264
+        },
+        {
+          "t": 37,
+          "passes": 30,
+          "totalMs": 162.2356,
+          "gpuMs": 162.2356,
+          "frameTime": 5.4079
+        },
+        {
+          "t": 37,
+          "passes": 60,
+          "totalMs": 324.4399,
+          "gpuMs": 324.4399,
+          "frameTime": 5.4073
+        },
+        {
+          "t": 38,
+          "passes": 30,
+          "totalMs": 162.3029,
+          "gpuMs": 162.3029,
+          "frameTime": 5.4101
+        },
+        {
+          "t": 38,
+          "passes": 60,
+          "totalMs": 322.4976,
+          "gpuMs": 322.4976,
+          "frameTime": 5.375
+        },
+        {
+          "t": 39,
+          "passes": 30,
+          "totalMs": 162.8,
+          "gpuMs": 162.8,
+          "frameTime": 5.4267
+        },
+        {
+          "t": 39,
+          "passes": 60,
+          "totalMs": 321.2961,
+          "gpuMs": 321.2961,
+          "frameTime": 5.3549
+        },
+        {
+          "t": 40,
+          "passes": 30,
+          "totalMs": 164.0075,
+          "gpuMs": 164.0075,
+          "frameTime": 5.4669
+        },
+        {
+          "t": 40,
+          "passes": 60,
+          "totalMs": 321.7348,
+          "gpuMs": 321.7348,
+          "frameTime": 5.3622
+        },
+        {
+          "t": 41,
+          "passes": 30,
+          "totalMs": 160.6045,
+          "gpuMs": 160.6045,
+          "frameTime": 5.3535
+        },
+        {
+          "t": 41,
+          "passes": 60,
+          "totalMs": 324.5808,
+          "gpuMs": 324.5808,
+          "frameTime": 5.4097
+        },
+        {
+          "t": 42,
+          "passes": 30,
+          "totalMs": 162.4671,
+          "gpuMs": 162.4671,
+          "frameTime": 5.4156
+        },
+        {
+          "t": 42,
+          "passes": 60,
+          "totalMs": 320.2004,
+          "gpuMs": 320.2004,
+          "frameTime": 5.3367
+        },
+        {
+          "t": 43,
+          "passes": 30,
+          "totalMs": 162.5055,
+          "gpuMs": 162.5055,
+          "frameTime": 5.4168
+        },
+        {
+          "t": 43,
+          "passes": 60,
+          "totalMs": 322.7356,
+          "gpuMs": 322.7356,
+          "frameTime": 5.3789
+        },
+        {
+          "t": 44,
+          "passes": 30,
+          "totalMs": 158.9091,
+          "gpuMs": 158.9091,
+          "frameTime": 5.297
+        },
+        {
+          "t": 44,
+          "passes": 60,
+          "totalMs": 319.414,
+          "gpuMs": 319.414,
+          "frameTime": 5.3236
+        },
+        {
+          "t": 45,
+          "passes": 30,
+          "totalMs": 162.3235,
+          "gpuMs": 162.3235,
+          "frameTime": 5.4108
+        },
+        {
+          "t": 45,
+          "passes": 60,
+          "totalMs": 322.55,
+          "gpuMs": 322.55,
+          "frameTime": 5.3758
+        },
+        {
+          "t": 46,
+          "passes": 30,
+          "totalMs": 162.1411,
+          "gpuMs": 162.1411,
+          "frameTime": 5.4047
+        },
+        {
+          "t": 46,
+          "passes": 60,
+          "totalMs": 325.806,
+          "gpuMs": 325.806,
+          "frameTime": 5.4301
+        },
+        {
+          "t": 47,
+          "passes": 30,
+          "totalMs": 160.9955,
+          "gpuMs": 160.9955,
+          "frameTime": 5.3665
+        },
+        {
+          "t": 47,
+          "passes": 60,
+          "totalMs": 321.367,
+          "gpuMs": 321.367,
+          "frameTime": 5.3561
+        },
+        {
+          "t": 48,
+          "passes": 30,
+          "totalMs": 161.4435,
+          "gpuMs": 161.4435,
+          "frameTime": 5.3815
+        },
+        {
+          "t": 48,
+          "passes": 60,
+          "totalMs": 257.7826,
+          "gpuMs": 257.7826,
+          "frameTime": 4.2964
+        },
+        {
+          "t": 49,
+          "passes": 30,
+          "totalMs": 107.6906,
+          "gpuMs": 107.6906,
+          "frameTime": 3.5897
+        },
+        {
+          "t": 49,
+          "passes": 60,
+          "totalMs": 176.7899,
+          "gpuMs": 176.7899,
+          "frameTime": 2.9465
+        },
+        {
+          "t": 50,
+          "passes": 30,
+          "totalMs": 88.378,
+          "gpuMs": 88.378,
+          "frameTime": 2.9459
+        },
+        {
+          "t": 50,
+          "passes": 60,
+          "totalMs": 176.6675,
+          "gpuMs": 176.6675,
+          "frameTime": 2.9445
+        },
+        {
+          "t": 51,
+          "passes": 30,
+          "totalMs": 88.2868,
+          "gpuMs": 88.2868,
+          "frameTime": 2.9429
+        },
+        {
+          "t": 51,
+          "passes": 60,
+          "totalMs": 176.6492,
+          "gpuMs": 176.6492,
+          "frameTime": 2.9442
+        },
+        {
+          "t": 52,
+          "passes": 30,
+          "totalMs": 88.4124,
+          "gpuMs": 88.4124,
+          "frameTime": 2.9471
+        },
+        {
+          "t": 52,
+          "passes": 60,
+          "totalMs": 176.4701,
+          "gpuMs": 176.4701,
+          "frameTime": 2.9412
+        },
+        {
+          "t": 53,
+          "passes": 30,
+          "totalMs": 88.2588,
+          "gpuMs": 88.2588,
+          "frameTime": 2.942
+        },
+        {
+          "t": 53,
+          "passes": 60,
+          "totalMs": 175.6552,
+          "gpuMs": 175.6552,
+          "frameTime": 2.9276
+        },
+        {
+          "t": 54,
+          "passes": 30,
+          "totalMs": 87.8319,
+          "gpuMs": 87.8319,
+          "frameTime": 2.9277
+        },
+        {
+          "t": 54,
+          "passes": 60,
+          "totalMs": 175.6116,
+          "gpuMs": 175.6116,
+          "frameTime": 2.9269
+        },
+        {
+          "t": 55,
+          "passes": 30,
+          "totalMs": 87.8572,
+          "gpuMs": 87.8572,
+          "frameTime": 2.9286
+        },
+        {
+          "t": 55,
+          "passes": 60,
+          "totalMs": 175.6149,
+          "gpuMs": 175.6149,
+          "frameTime": 2.9269
+        },
+        {
+          "t": 56,
+          "passes": 30,
+          "totalMs": 87.7819,
+          "gpuMs": 87.7819,
+          "frameTime": 2.9261
+        },
+        {
+          "t": 56,
+          "passes": 60,
+          "totalMs": 175.495,
+          "gpuMs": 175.495,
+          "frameTime": 2.9249
+        },
+        {
+          "t": 57,
+          "passes": 30,
+          "totalMs": 87.8442,
+          "gpuMs": 87.8442,
+          "frameTime": 2.9281
+        },
+        {
+          "t": 57,
+          "passes": 60,
+          "totalMs": 175.6726,
+          "gpuMs": 175.6726,
+          "frameTime": 2.9279
+        },
+        {
+          "t": 58,
+          "passes": 30,
+          "totalMs": 87.7709,
+          "gpuMs": 87.7709,
+          "frameTime": 2.9257
+        },
+        {
+          "t": 58,
+          "passes": 60,
+          "totalMs": 175.7061,
+          "gpuMs": 175.7061,
+          "frameTime": 2.9284
+        },
+        {
+          "t": 59,
+          "passes": 30,
+          "totalMs": 87.8546,
+          "gpuMs": 87.8546,
+          "frameTime": 2.9285
+        },
+        {
+          "t": 59,
+          "passes": 60,
+          "totalMs": 175.6435,
+          "gpuMs": 175.6435,
+          "frameTime": 2.9274
+        }
+      ]
+    },
+    {
+      "id": "noise_voronoiVec3",
+      "label": "Voronoi F1/F2/F3",
+      "category": "noise",
+      "stats": {
+        "points": 61,
+        "medianFt": 5.1745,
+        "meanFt": 5.1958,
+        "p95Ft": 5.4648,
+        "p99Ft": 5.5163,
+        "sdFt": 0.1511,
+        "cvPercent": 2.91,
+        "avgFps": 192.5,
+        "thermalDrift": 1.135,
+        "frameCount": 60,
+        "filteredCount": 49,
+        "outlierCount": 11,
+        "msPerPass": 5.12031,
+        "overheadMsPerBatch": 2.3806,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 0.5273,
+        "marginalMs": 4.593,
+        "marginalMsAtRef": 19.9621,
+        "marginalPoints": 240
+      },
+      "frames": [
+        {
+          "t": 0,
+          "passes": 30,
+          "totalMs": 89.8202,
+          "gpuMs": 89.8202,
+          "frameTime": 2.994
+        },
+        {
+          "t": 0,
+          "passes": 60,
+          "totalMs": 179.4707,
+          "gpuMs": 179.4707,
+          "frameTime": 2.9912
+        },
+        {
+          "t": 1,
+          "passes": 30,
+          "totalMs": 89.7839,
+          "gpuMs": 89.7839,
+          "frameTime": 2.9928
+        },
+        {
+          "t": 1,
+          "passes": 60,
+          "totalMs": 179.4927,
+          "gpuMs": 179.4927,
+          "frameTime": 2.9915
+        },
+        {
+          "t": 2,
+          "passes": 30,
+          "totalMs": 89.7444,
+          "gpuMs": 89.7444,
+          "frameTime": 2.9915
+        },
+        {
+          "t": 2,
+          "passes": 60,
+          "totalMs": 179.5141,
+          "gpuMs": 179.5141,
+          "frameTime": 2.9919
+        },
+        {
+          "t": 3,
+          "passes": 30,
+          "totalMs": 89.6537,
+          "gpuMs": 89.6537,
+          "frameTime": 2.9885
+        },
+        {
+          "t": 3,
+          "passes": 60,
+          "totalMs": 179.5338,
+          "gpuMs": 179.5338,
+          "frameTime": 2.9922
+        },
+        {
+          "t": 4,
+          "passes": 30,
+          "totalMs": 89.9083,
+          "gpuMs": 89.9083,
+          "frameTime": 2.9969
+        },
+        {
+          "t": 4,
+          "passes": 60,
+          "totalMs": 179.6017,
+          "gpuMs": 179.6017,
+          "frameTime": 2.9934
+        },
+        {
+          "t": 5,
+          "passes": 30,
+          "totalMs": 89.7833,
+          "gpuMs": 89.7833,
+          "frameTime": 2.9928
+        },
+        {
+          "t": 5,
+          "passes": 60,
+          "totalMs": 179.52,
+          "gpuMs": 179.52,
+          "frameTime": 2.992
+        },
+        {
+          "t": 6,
+          "passes": 30,
+          "totalMs": 89.7518,
+          "gpuMs": 89.7518,
+          "frameTime": 2.9917
+        },
+        {
+          "t": 6,
+          "passes": 60,
+          "totalMs": 180.2774,
+          "gpuMs": 180.2774,
+          "frameTime": 3.0046
+        },
+        {
+          "t": 7,
+          "passes": 30,
+          "totalMs": 90.5365,
+          "gpuMs": 90.5365,
+          "frameTime": 3.0179
+        },
+        {
+          "t": 7,
+          "passes": 60,
+          "totalMs": 232.3855,
+          "gpuMs": 232.3855,
+          "frameTime": 3.8731
+        },
+        {
+          "t": 8,
+          "passes": 30,
+          "totalMs": 152.9474,
+          "gpuMs": 152.9474,
+          "frameTime": 5.0982
+        },
+        {
+          "t": 8,
+          "passes": 60,
+          "totalMs": 289.858,
+          "gpuMs": 289.858,
+          "frameTime": 4.831
+        },
+        {
+          "t": 9,
+          "passes": 30,
+          "totalMs": 138.1347,
+          "gpuMs": 138.1347,
+          "frameTime": 4.6045
+        },
+        {
+          "t": 9,
+          "passes": 60,
+          "totalMs": 307.5465,
+          "gpuMs": 307.5465,
+          "frameTime": 5.1258
+        },
+        {
+          "t": 10,
+          "passes": 30,
+          "totalMs": 152.7161,
+          "gpuMs": 152.7161,
+          "frameTime": 5.0905
+        },
+        {
+          "t": 10,
+          "passes": 60,
+          "totalMs": 307.7918,
+          "gpuMs": 307.7918,
+          "frameTime": 5.1299
+        },
+        {
+          "t": 11,
+          "passes": 30,
+          "totalMs": 155.9629,
+          "gpuMs": 155.9629,
+          "frameTime": 5.1988
+        },
+        {
+          "t": 11,
+          "passes": 60,
+          "totalMs": 308.0798,
+          "gpuMs": 308.0798,
+          "frameTime": 5.1347
+        },
+        {
+          "t": 12,
+          "passes": 30,
+          "totalMs": 165.7982,
+          "gpuMs": 165.7982,
+          "frameTime": 5.5266
+        },
+        {
+          "t": 12,
+          "passes": 60,
+          "totalMs": 327.9671,
+          "gpuMs": 327.9671,
+          "frameTime": 5.4661
+        },
+        {
+          "t": 13,
+          "passes": 30,
+          "totalMs": 163.4731,
+          "gpuMs": 163.4731,
+          "frameTime": 5.4491
+        },
+        {
+          "t": 13,
+          "passes": 60,
+          "totalMs": 322.0314,
+          "gpuMs": 322.0314,
+          "frameTime": 5.3672
+        },
+        {
+          "t": 14,
+          "passes": 30,
+          "totalMs": 163.9324,
+          "gpuMs": 163.9324,
+          "frameTime": 5.4644
+        },
+        {
+          "t": 14,
+          "passes": 60,
+          "totalMs": 327.7284,
+          "gpuMs": 327.7284,
+          "frameTime": 5.4621
+        },
+        {
+          "t": 15,
+          "passes": 30,
+          "totalMs": 167.5609,
+          "gpuMs": 167.5609,
+          "frameTime": 5.5854
+        },
+        {
+          "t": 15,
+          "passes": 60,
+          "totalMs": 327.4146,
+          "gpuMs": 327.4146,
+          "frameTime": 5.4569
+        },
+        {
+          "t": 16,
+          "passes": 30,
+          "totalMs": 167.3428,
+          "gpuMs": 167.3428,
+          "frameTime": 5.5781
+        },
+        {
+          "t": 16,
+          "passes": 60,
+          "totalMs": 332.3676,
+          "gpuMs": 332.3676,
+          "frameTime": 5.5395
+        },
+        {
+          "t": 17,
+          "passes": 30,
+          "totalMs": 163.0155,
+          "gpuMs": 163.0155,
+          "frameTime": 5.4338
+        },
+        {
+          "t": 17,
+          "passes": 60,
+          "totalMs": 326.6459,
+          "gpuMs": 326.6459,
+          "frameTime": 5.4441
+        },
+        {
+          "t": 18,
+          "passes": 30,
+          "totalMs": 163.5836,
+          "gpuMs": 163.5836,
+          "frameTime": 5.4528
+        },
+        {
+          "t": 18,
+          "passes": 60,
+          "totalMs": 327.8818,
+          "gpuMs": 327.8818,
+          "frameTime": 5.4647
+        },
+        {
+          "t": 19,
+          "passes": 30,
+          "totalMs": 160.5397,
+          "gpuMs": 160.5397,
+          "frameTime": 5.3513
+        },
+        {
+          "t": 19,
+          "passes": 60,
+          "totalMs": 324.1262,
+          "gpuMs": 324.1262,
+          "frameTime": 5.4021
+        },
+        {
+          "t": 20,
+          "passes": 30,
+          "totalMs": 157.798,
+          "gpuMs": 157.798,
+          "frameTime": 5.2599
+        },
+        {
+          "t": 20,
+          "passes": 60,
+          "totalMs": 318.9952,
+          "gpuMs": 318.9952,
+          "frameTime": 5.3166
+        },
+        {
+          "t": 21,
+          "passes": 30,
+          "totalMs": 143.3189,
+          "gpuMs": 143.3189,
+          "frameTime": 4.7773
+        },
+        {
+          "t": 21,
+          "passes": 60,
+          "totalMs": 252.8292,
+          "gpuMs": 252.8292,
+          "frameTime": 4.2138
+        },
+        {
+          "t": 22,
+          "passes": 30,
+          "totalMs": 114.0667,
+          "gpuMs": 114.0667,
+          "frameTime": 3.8022
+        },
+        {
+          "t": 22,
+          "passes": 60,
+          "totalMs": 226.7269,
+          "gpuMs": 226.7269,
+          "frameTime": 3.7788
+        },
+        {
+          "t": 23,
+          "passes": 30,
+          "totalMs": 115.4336,
+          "gpuMs": 115.4336,
+          "frameTime": 3.8478
+        },
+        {
+          "t": 23,
+          "passes": 60,
+          "totalMs": 297.7249,
+          "gpuMs": 297.7249,
+          "frameTime": 4.9621
+        },
+        {
+          "t": 24,
+          "passes": 30,
+          "totalMs": 155.9359,
+          "gpuMs": 155.9359,
+          "frameTime": 5.1979
+        },
+        {
+          "t": 24,
+          "passes": 60,
+          "totalMs": 300.9928,
+          "gpuMs": 300.9928,
+          "frameTime": 5.0165
+        },
+        {
+          "t": 25,
+          "passes": 30,
+          "totalMs": 145.9864,
+          "gpuMs": 145.9864,
+          "frameTime": 4.8662
+        },
+        {
+          "t": 25,
+          "passes": 60,
+          "totalMs": 294.0869,
+          "gpuMs": 294.0869,
+          "frameTime": 4.9014
+        },
+        {
+          "t": 26,
+          "passes": 30,
+          "totalMs": 152.7233,
+          "gpuMs": 152.7233,
+          "frameTime": 5.0908
+        },
+        {
+          "t": 26,
+          "passes": 60,
+          "totalMs": 308.515,
+          "gpuMs": 308.515,
+          "frameTime": 5.1419
+        },
+        {
+          "t": 27,
+          "passes": 30,
+          "totalMs": 154.9369,
+          "gpuMs": 154.9369,
+          "frameTime": 5.1646
+        },
+        {
+          "t": 27,
+          "passes": 60,
+          "totalMs": 309.7884,
+          "gpuMs": 309.7884,
+          "frameTime": 5.1631
+        },
+        {
+          "t": 28,
+          "passes": 30,
+          "totalMs": 156.0909,
+          "gpuMs": 156.0909,
+          "frameTime": 5.203
+        },
+        {
+          "t": 28,
+          "passes": 60,
+          "totalMs": 296.14,
+          "gpuMs": 296.14,
+          "frameTime": 4.9357
+        },
+        {
+          "t": 29,
+          "passes": 30,
+          "totalMs": 147.51,
+          "gpuMs": 147.51,
+          "frameTime": 4.917
+        },
+        {
+          "t": 29,
+          "passes": 60,
+          "totalMs": 307.1801,
+          "gpuMs": 307.1801,
+          "frameTime": 5.1197
+        },
+        {
+          "t": 30,
+          "passes": 30,
+          "totalMs": 146.7959,
+          "gpuMs": 146.7959,
+          "frameTime": 4.8932
+        },
+        {
+          "t": 30,
+          "passes": 60,
+          "totalMs": 293.2748,
+          "gpuMs": 293.2748,
+          "frameTime": 4.8879
+        },
+        {
+          "t": 31,
+          "passes": 30,
+          "totalMs": 153.8502,
+          "gpuMs": 153.8502,
+          "frameTime": 5.1283
+        },
+        {
+          "t": 31,
+          "passes": 60,
+          "totalMs": 308.9157,
+          "gpuMs": 308.9157,
+          "frameTime": 5.1486
+        },
+        {
+          "t": 32,
+          "passes": 30,
+          "totalMs": 156.0973,
+          "gpuMs": 156.0973,
+          "frameTime": 5.2032
+        },
+        {
+          "t": 32,
+          "passes": 60,
+          "totalMs": 310.5036,
+          "gpuMs": 310.5036,
+          "frameTime": 5.1751
+        },
+        {
+          "t": 33,
+          "passes": 30,
+          "totalMs": 156.1518,
+          "gpuMs": 156.1518,
+          "frameTime": 5.2051
+        },
+        {
+          "t": 33,
+          "passes": 60,
+          "totalMs": 308.47,
+          "gpuMs": 308.47,
+          "frameTime": 5.1412
+        },
+        {
+          "t": 34,
+          "passes": 30,
+          "totalMs": 156.0169,
+          "gpuMs": 156.0169,
+          "frameTime": 5.2006
+        },
+        {
+          "t": 34,
+          "passes": 60,
+          "totalMs": 310.8627,
+          "gpuMs": 310.8627,
+          "frameTime": 5.181
+        },
+        {
+          "t": 35,
+          "passes": 30,
+          "totalMs": 153.3605,
+          "gpuMs": 153.3605,
+          "frameTime": 5.112
+        },
+        {
+          "t": 35,
+          "passes": 60,
+          "totalMs": 311.0582,
+          "gpuMs": 311.0582,
+          "frameTime": 5.1843
+        },
+        {
+          "t": 36,
+          "passes": 30,
+          "totalMs": 164.9002,
+          "gpuMs": 164.9002,
+          "frameTime": 5.4967
+        },
+        {
+          "t": 36,
+          "passes": 60,
+          "totalMs": 330.0109,
+          "gpuMs": 330.0109,
+          "frameTime": 5.5002
+        },
+        {
+          "t": 37,
+          "passes": 30,
+          "totalMs": 164.8108,
+          "gpuMs": 164.8108,
+          "frameTime": 5.4937
+        },
+        {
+          "t": 37,
+          "passes": 60,
+          "totalMs": 319.7687,
+          "gpuMs": 319.7687,
+          "frameTime": 5.3295
+        },
+        {
+          "t": 38,
+          "passes": 30,
+          "totalMs": 157.4294,
+          "gpuMs": 157.4294,
+          "frameTime": 5.2476
+        },
+        {
+          "t": 38,
+          "passes": 60,
+          "totalMs": 311.3172,
+          "gpuMs": 311.3172,
+          "frameTime": 5.1886
+        },
+        {
+          "t": 39,
+          "passes": 30,
+          "totalMs": 155.1004,
+          "gpuMs": 155.1004,
+          "frameTime": 5.17
+        },
+        {
+          "t": 39,
+          "passes": 60,
+          "totalMs": 319.9492,
+          "gpuMs": 319.9492,
+          "frameTime": 5.3325
+        },
+        {
+          "t": 40,
+          "passes": 30,
+          "totalMs": 157.3791,
+          "gpuMs": 157.3791,
+          "frameTime": 5.246
+        },
+        {
+          "t": 40,
+          "passes": 60,
+          "totalMs": 323.7759,
+          "gpuMs": 323.7759,
+          "frameTime": 5.3963
+        },
+        {
+          "t": 41,
+          "passes": 30,
+          "totalMs": 156.1499,
+          "gpuMs": 156.1499,
+          "frameTime": 5.205
+        },
+        {
+          "t": 41,
+          "passes": 60,
+          "totalMs": 312.3526,
+          "gpuMs": 312.3526,
+          "frameTime": 5.2059
+        },
+        {
+          "t": 42,
+          "passes": 30,
+          "totalMs": 156.4921,
+          "gpuMs": 156.4921,
+          "frameTime": 5.2164
+        },
+        {
+          "t": 42,
+          "passes": 60,
+          "totalMs": 312.3113,
+          "gpuMs": 312.3113,
+          "frameTime": 5.2052
+        },
+        {
+          "t": 43,
+          "passes": 30,
+          "totalMs": 155.0325,
+          "gpuMs": 155.0325,
+          "frameTime": 5.1677
+        },
+        {
+          "t": 43,
+          "passes": 60,
+          "totalMs": 310.0445,
+          "gpuMs": 310.0445,
+          "frameTime": 5.1674
+        },
+        {
+          "t": 44,
+          "passes": 30,
+          "totalMs": 156.2133,
+          "gpuMs": 156.2133,
+          "frameTime": 5.2071
+        },
+        {
+          "t": 44,
+          "passes": 60,
+          "totalMs": 312.0815,
+          "gpuMs": 312.0815,
+          "frameTime": 5.2014
+        },
+        {
+          "t": 45,
+          "passes": 30,
+          "totalMs": 157.5505,
+          "gpuMs": 157.5505,
+          "frameTime": 5.2517
+        },
+        {
+          "t": 45,
+          "passes": 60,
+          "totalMs": 312.2433,
+          "gpuMs": 312.2433,
+          "frameTime": 5.2041
+        },
+        {
+          "t": 46,
+          "passes": 30,
+          "totalMs": 154.671,
+          "gpuMs": 154.671,
+          "frameTime": 5.1557
+        },
+        {
+          "t": 46,
+          "passes": 60,
+          "totalMs": 308.8938,
+          "gpuMs": 308.8938,
+          "frameTime": 5.1482
+        },
+        {
+          "t": 47,
+          "passes": 30,
+          "totalMs": 156.1639,
+          "gpuMs": 156.1639,
+          "frameTime": 5.2055
+        },
+        {
+          "t": 47,
+          "passes": 60,
+          "totalMs": 309.4259,
+          "gpuMs": 309.4259,
+          "frameTime": 5.1571
+        },
+        {
+          "t": 48,
+          "passes": 30,
+          "totalMs": 156.0386,
+          "gpuMs": 156.0386,
+          "frameTime": 5.2013
+        },
+        {
+          "t": 48,
+          "passes": 60,
+          "totalMs": 309.6597,
+          "gpuMs": 309.6597,
+          "frameTime": 5.161
+        },
+        {
+          "t": 49,
+          "passes": 30,
+          "totalMs": 156.1797,
+          "gpuMs": 156.1797,
+          "frameTime": 5.206
+        },
+        {
+          "t": 49,
+          "passes": 60,
+          "totalMs": 310.7559,
+          "gpuMs": 310.7559,
+          "frameTime": 5.1793
+        },
+        {
+          "t": 50,
+          "passes": 30,
+          "totalMs": 154.9128,
+          "gpuMs": 154.9128,
+          "frameTime": 5.1638
+        },
+        {
+          "t": 50,
+          "passes": 60,
+          "totalMs": 312.3195,
+          "gpuMs": 312.3195,
+          "frameTime": 5.2053
+        },
+        {
+          "t": 51,
+          "passes": 30,
+          "totalMs": 156.0536,
+          "gpuMs": 156.0536,
+          "frameTime": 5.2018
+        },
+        {
+          "t": 51,
+          "passes": 60,
+          "totalMs": 308.9412,
+          "gpuMs": 308.9412,
+          "frameTime": 5.149
+        },
+        {
+          "t": 52,
+          "passes": 30,
+          "totalMs": 156.0863,
+          "gpuMs": 156.0863,
+          "frameTime": 5.2029
+        },
+        {
+          "t": 52,
+          "passes": 60,
+          "totalMs": 309.2235,
+          "gpuMs": 309.2235,
+          "frameTime": 5.1537
+        },
+        {
+          "t": 53,
+          "passes": 30,
+          "totalMs": 156.0991,
+          "gpuMs": 156.0991,
+          "frameTime": 5.2033
+        },
+        {
+          "t": 53,
+          "passes": 60,
+          "totalMs": 309.5386,
+          "gpuMs": 309.5386,
+          "frameTime": 5.159
+        },
+        {
+          "t": 54,
+          "passes": 30,
+          "totalMs": 156.2004,
+          "gpuMs": 156.2004,
+          "frameTime": 5.2067
+        },
+        {
+          "t": 54,
+          "passes": 60,
+          "totalMs": 311.2051,
+          "gpuMs": 311.2051,
+          "frameTime": 5.1868
+        },
+        {
+          "t": 55,
+          "passes": 30,
+          "totalMs": 154.7629,
+          "gpuMs": 154.7629,
+          "frameTime": 5.1588
+        },
+        {
+          "t": 55,
+          "passes": 60,
+          "totalMs": 308.0284,
+          "gpuMs": 308.0284,
+          "frameTime": 5.1338
+        },
+        {
+          "t": 56,
+          "passes": 30,
+          "totalMs": 156.1156,
+          "gpuMs": 156.1156,
+          "frameTime": 5.2039
+        },
+        {
+          "t": 56,
+          "passes": 60,
+          "totalMs": 309.4363,
+          "gpuMs": 309.4363,
+          "frameTime": 5.1573
+        },
+        {
+          "t": 57,
+          "passes": 30,
+          "totalMs": 154.8488,
+          "gpuMs": 154.8488,
+          "frameTime": 5.1616
+        },
+        {
+          "t": 57,
+          "passes": 60,
+          "totalMs": 310.472,
+          "gpuMs": 310.472,
+          "frameTime": 5.1745
+        },
+        {
+          "t": 58,
+          "passes": 30,
+          "totalMs": 156.2255,
+          "gpuMs": 156.2255,
+          "frameTime": 5.2075
+        },
+        {
+          "t": 58,
+          "passes": 60,
+          "totalMs": 310.5281,
+          "gpuMs": 310.5281,
+          "frameTime": 5.1755
+        },
+        {
+          "t": 59,
+          "passes": 30,
+          "totalMs": 154.6966,
+          "gpuMs": 154.6966,
+          "frameTime": 5.1566
+        },
+        {
+          "t": 59,
+          "passes": 60,
+          "totalMs": 309.7048,
+          "gpuMs": 309.7048,
+          "frameTime": 5.1617
+        }
+      ]
+    }
+  ]
+}

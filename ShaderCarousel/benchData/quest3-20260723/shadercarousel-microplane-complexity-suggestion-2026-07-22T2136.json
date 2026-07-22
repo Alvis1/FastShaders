@@ -1,0 +1,113 @@
+{
+  "metadata": {
+    "schemaVersion": 2,
+    "bench": "microplane",
+    "source": "shadercarousel-microplane-2026-07-22T2136.json",
+    "generatedAt": "2026-07-22T21:36:51.090Z",
+    "device": "qualcomm / adreno-7xx",
+    "adapterInfo": {
+      "vendor": "qualcomm",
+      "architecture": "adreno-7xx",
+      "device": "",
+      "description": ""
+    },
+    "browser": "Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/149.0.0.24.3.1013217646 Chrome/149.0.7827.197 VR Safari/537.36",
+    "timingMethod": "gpu-timestamp",
+    "quantized": false,
+    "clockPinned": null,
+    "stereo": false,
+    "resolution": {
+      "width": 1024,
+      "height": 1024,
+      "label": "microplane"
+    },
+    "refPixels": 4557312,
+    "resolutionScale": 4.3462,
+    "budgetMs": 8.33,
+    "valid": true,
+    "reasons": [],
+    "note": "Suggested complexity points derived from measured marginal per-pass cost (slope-based msPerPass − baseline, scaled to the 2064×2208 reference resolution). suggestedPoints = round(marginalMsAtRef / budgetMs × 100). Do not merge runs with different timingMethod/device/stereo without ratio bridging."
+  },
+  "suggestions": [
+    {
+      "id": "noise_perlin",
+      "label": "Perlin",
+      "category": "noise",
+      "medianMs": 1.0556,
+      "msPerPass": 1.05287,
+      "marginalMs": 0.5256,
+      "marginalMsAtRef": 2.2843,
+      "suggestedPoints": 27
+    },
+    {
+      "id": "noise_perlinVec3",
+      "label": "Perlin (vec3)",
+      "category": "noise",
+      "medianMs": 1.4619,
+      "msPerPass": 1.43184,
+      "marginalMs": 0.9045,
+      "marginalMsAtRef": 3.9313,
+      "suggestedPoints": 47
+    },
+    {
+      "id": "noise_fbm",
+      "label": "fBm",
+      "category": "noise",
+      "medianMs": 2.4379,
+      "msPerPass": 2.45691,
+      "marginalMs": 1.9296,
+      "marginalMsAtRef": 8.3865,
+      "suggestedPoints": 101
+    },
+    {
+      "id": "noise_fbmVec3",
+      "label": "fBm (vec3)",
+      "category": "noise",
+      "medianMs": 4.1251,
+      "msPerPass": 4.12146,
+      "marginalMs": 3.5942,
+      "marginalMsAtRef": 15.621,
+      "suggestedPoints": 188
+    },
+    {
+      "id": "noise_cellNoise",
+      "label": "Cell Noise",
+      "category": "noise",
+      "medianMs": 0.5037,
+      "msPerPass": 0.51981,
+      "marginalMs": -0.0075,
+      "marginalMsAtRef": -0.0325,
+      "suggestedPoints": 0
+    },
+    {
+      "id": "noise_voronoi",
+      "label": "Voronoi F1",
+      "category": "noise",
+      "medianMs": 5.1633,
+      "msPerPass": 5.1108,
+      "marginalMs": 4.5835,
+      "marginalMsAtRef": 19.9208,
+      "suggestedPoints": 239
+    },
+    {
+      "id": "noise_voronoiVec2",
+      "label": "Voronoi F1/F2",
+      "category": "noise",
+      "medianMs": 5.3616,
+      "msPerPass": 5.35639,
+      "marginalMs": 4.8291,
+      "marginalMsAtRef": 20.9882,
+      "suggestedPoints": 252
+    },
+    {
+      "id": "noise_voronoiVec3",
+      "label": "Voronoi F1/F2/F3",
+      "category": "noise",
+      "medianMs": 5.1745,
+      "msPerPass": 5.12031,
+      "marginalMs": 4.593,
+      "marginalMsAtRef": 19.9621,
+      "suggestedPoints": 240
+    }
+  ]
+}
