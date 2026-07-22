@@ -6,10 +6,37 @@
   <title>Sphere InOut — immersive WebXR bench</title>
   <link rel="stylesheet" href="../lib/bench-style.css">
 
-  <!-- A-Frame 1.8.0 IIFE bundle, Three.js r184 WebGPU build.
-       WebGL backend on Quest 3 is the only stable WebXR path right now —
-       the Three.js WebGPU XR manager doesn't reliably submit XR frames on
-       Meta Quest Browser (paper § 5.2 + carousel.html notes). -->
+  <!-- Force three's WebGL2 backend BEFORE A-Frame builds its renderer.
+       ────────────────────────────────────────────────────────────────
+       This bench enters an immersive XR session. When `navigator.gpu`
+       exists, A-Frame's r184 WebGPURenderer selects the WebGPU backend,
+       but three's XRManager.setSession() runs:
+           this._gl = renderer.getContext();
+           this._gl.getContextAttributes();
+       and a WebGPU context has no `getContextAttributes` — so entering VR
+       throws "getContextAttributes is not a function" (minified: `s.get…`).
+       Hiding `navigator.gpu` makes the same WebGPURenderer fall back to the
+       WebGL2 backend, whose getContext() returns a real WebGL2 context that
+       DOES expose getContextAttributes — and WebGL2 is anyway the only
+       stable WebXR path on Quest 3 today (see carousel.html / paper § 5.2).
+       Same move the editor preview + XR popup already make. The real
+       navigator.gpu is stashed on window.__benchGpu so the bench can still
+       report adapter info. MUST run before the A-Frame bundle below. -->
+  <script>
+    (function () {
+      try {
+        var gpu = navigator.gpu;
+        if (gpu) {
+          window.__benchGpu = gpu;
+          Object.defineProperty(navigator, 'gpu', { value: undefined, configurable: true });
+        }
+      } catch (e) { /* navigator.gpu absent or non-configurable — nothing to do */ }
+    })();
+  </script>
+
+  <!-- A-Frame 1.8.0 IIFE bundle, Three.js r184 WebGPU build. With the guard
+       above, the WebGPURenderer initialises on the WebGL2 backend — the only
+       stable WebXR path on Meta Quest Browser (paper § 5.2 + carousel.html). -->
   <script src="../components/three/a-frame-180-a-01.min.js"></script>
 
   <!-- Sphere mover (linear ping-pong over `duration` ms; emits cycle-complete
