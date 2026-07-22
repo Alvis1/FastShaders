@@ -128,15 +128,19 @@ async function initFromAFrame() {
   registry = buildBenchRegistry(THREE.TSL);
   applyMaterial(registry[0].build());
 
-  // GPU adapter info (best-effort; on WebGL backend this is via the
-  // unmasked-renderer extension when available).
+  // GPU adapter info (best-effort). The index.html guard hides
+  // navigator.gpu to force the WebGL2 XR backend, stashing the real one on
+  // window.__benchGpu — so prefer that for the (richer) WebGPU adapter
+  // string, and fall back to the WebGL unmasked-renderer extension.
   try {
-    if (navigator.gpu) {
-      const a = await navigator.gpu.requestAdapter();
+    const gpu = window.__benchGpu || navigator.gpu;
+    if (gpu) {
+      const a = await gpu.requestAdapter();
       const i = a?.info;
       gpuInfo = [i?.vendor, i?.architecture, i?.device, i?.description]
         .filter(Boolean).join(' / ') || 'unknown';
-    } else {
+    }
+    if (gpuInfo === 'unknown') {
       const gl = renderer.getContext?.();
       const dbg = gl?.getExtension?.('WEBGL_debug_renderer_info');
       if (dbg) gpuInfo = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || 'unknown';
