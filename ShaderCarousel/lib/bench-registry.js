@@ -30,9 +30,9 @@
  */
 export function buildBenchRegistry(TSL) {
   const {
-    abs, add, clamp, color, cos, div, exp, fract, max, min, mix, mul,
-    oneMinus, positionGeometry, pow, round, screenUV, sin, smoothstep, sqrt,
-    sub, time, uniform, vec3,
+    abs, add, clamp, color, cos, div, dot, exp, fract, max, min, mix, mul,
+    normalize, oneMinus, positionGeometry, pow, round, screenUV, sin,
+    smoothstep, sqrt, sub, time, uniform, vec3,
     mx_noise_float, mx_noise_vec3,
     mx_fractal_noise_float, mx_fractal_noise_vec3,
     mx_cell_noise_float,
@@ -220,6 +220,189 @@ export function buildBenchRegistry(TSL) {
     build: safeWrap(label, fn),
   }));
 
+  // ── Calibration corpus (k-copy isolation sweeps + combinations) ─────────
+  //
+  // Purpose: recover PRECISE per-node marginal cost by regression rather than
+  // hand-guessing complexity.json. Two ideas do the work:
+  //
+  //   1. k-COPY AMORTIZATION. Evaluate one target op k times on DISTINCT,
+  //      runtime-varying inputs and accumulate into the output. The marginal
+  //      per-pass cost measured at k ∈ {1,4,16} is linear in k with slope =
+  //      cost of one op instance. Run the whole family and fit the slope
+  //      (bench-stats already gives per-shader ms/pass via the two-level
+  //      N/2N method; a second fit over k isolates the node).
+  //
+  //   2. A SCAFFOLD CONTROL. Every calib shader carries identical per-copy
+  //      overhead: the seed transform + the accumulate. `calib_scaffold_x*`
+  //      is that loop with the op removed, so (op slope − scaffold slope)
+  //      isolates the op — finer than subtracting the flat baseline, which
+  //      matters for cheap ops whose seed cost isn't negligible.
+  //
+  // DEAD-CODE / CSE SAFETY (the whole thing is worthless if the compiler
+  // folds it away):
+  //   • `seed()` is a per-fragment (positionGeometry) AND per-copy (i)
+  //     distinct value, so no two copies common-subexpression-merge and the
+  //     compiler can't hoist to a uniform/vertex stage.
+  //   • It is wrapped in `fract()` — a NON-LINEAR guard. Without it the
+  //     scaffold's Σ of linear transforms would algebraically collapse to a
+  //     single mul+add and stop scaling with k, breaking the control.
+  //   • Every copy accumulates into the returned colour, so nothing is
+  //     dead-code-eliminated (see the two `combo_dce_*` sentinels, which
+  //     deliberately CAN be eliminated and should measure ≈ baseline).
+  //
+  // Edit K_LEVELS / OPS to change the sweep. These default OFF in the picker
+  // (not in any bench's DEFAULT_GROUPS) — tick "Calibration" to run them,
+  // ideally in MicroPlane where per-node points are derived.
+  const K_LEVELS = [1, 4, 16];
+
+  // seed(p0, i): distinct, runtime-varying, non-collapsible per-copy input in
+  // [0,1)³. Primes-ish constants avoid coincidental CSE between copies.
+  const seed = (p0, i) =>
+    fract(add(mul(p0, 1 + i * 0.13717), vec3(i * 0.7919, i * 1.3313, i * 0.5171)));
+
+  // kCopy(k, opFn): k distinct evaluations of opFn, accumulated (DCE-safe).
+  // The trailing `mul(acc, 1/k)` keeps the output in-gamut; it's one op,
+  // independent of k, so it cancels in the slope.
+  const kCopy = (k, opFn) => () => {
+    const p0 = positionGeometry;
+    let acc = vec3(0);
+    for (let i = 0; i < k; i++) acc = add(acc, opFn(seed(p0, i)));
+    return mul(acc, 1 / k);
+  };
+
+  // Isolation ops. Each takes a seeded vec3 p ∈ [0,1)³ and returns a vec3 —
+  // exactly one "node instance" as the editor would emit it on vec3 data
+  // (so the measured cost maps straight onto a complexity.json entry). Binary
+  // ops derive their 2nd operand from p via a (free) swizzle.
+  const OPS = [
+    ['mul',        'mul',        (p) => mul(p, p.yzx)],
+    ['add',        'add',        (p) => add(p, p.zxy)],
+    ['mix',        'mix',        (p) => mix(p, p.yzx, 0.5)],
+    ['clamp',      'clamp',      (p) => clamp(p, 0, 1)],
+    ['smoothstep', 'smoothstep', (p) => smoothstep(0, 1, p)],
+    ['sin',        'sin',        (p) => sin(p)],
+    ['sqrt',       'sqrt',       (p) => sqrt(p)],                    // p ≥ 0 (fract)
+    ['div',        'div',        (p) => div(p, add(p.yzx, 0.1))],    // denom ≥ 0.1
+    ['exp',        'exp',        (p) => exp(p)],                     // p < 1 → no overflow
+    ['pow',        'pow',        (p) => pow(p, vec3(2.2))],
+    ['dot',        'dot',        (p) => vec3(dot(p, p.yzx))],
+    ['normalize',  'normalize',  (p) => normalize(add(p, 0.1))],
+    ['perlin',     'Perlin',     (p) => vec3(mx_noise_float(p))],
+    ['fbm',        'fBm',        (p) => vec3(mx_fractal_noise_float(p))],
+    ['cellNoise',  'Cell',       (p) => vec3(mx_cell_noise_float(p))],
+    ['voronoi',    'Voronoi',    (p) => vec3(mx_worley_noise_float(p))],
+  ];
+
+  const calib = [];
+  for (const k of K_LEVELS) {
+    calib.push({
+      id: `calib_scaffold_x${k}`, label: `scaffold ×${k}`,
+      category: 'calib', group: 'calib',
+      build: safeWrap(`scaffold x${k}`, kCopy(k, (p) => p)),
+    });
+  }
+  for (const [id, label, opFn] of OPS) {
+    for (const k of K_LEVELS) {
+      calib.push({
+        id: `calib_${id}_x${k}`, label: `${label} ×${k}`,
+        category: 'calib', group: 'calib',
+        build: safeWrap(`${id} x${k}`, kCopy(k, opFn)),
+      });
+    }
+  }
+
+  // ── Combinations (additivity, ILP, and DCE-integrity probes) ────────────
+  // These answer "does sum-of-parts predict the whole?" and validate the
+  // measurement itself. Each documents its node inventory so the team can
+  // compute predicted points from complexity.json and compare.
+  const combos = [
+    {
+      // Additive check: predicted ≈ 4·(sin−scaffold) + 4·(sqrt−scaffold).
+      id: 'combo_sin4_sqrt4', label: 'sin×4 + sqrt×4 (additivity)',
+      build: safeWrap('combo sin4 sqrt4', () => {
+        const p0 = positionGeometry;
+        let a = vec3(0), b = vec3(0);
+        for (let i = 0; i < 4; i++) a = add(a, sin(seed(p0, i)));
+        for (let i = 0; i < 4; i++) b = add(b, sqrt(seed(p0, i + 4)));
+        return mul(add(a, b), 0.125);
+      }),
+    },
+    {
+      // Additive check on the expensive/uncertain end (voronoi is suspected
+      // ~4× underpriced — this + the isolation sweep localise that).
+      id: 'combo_perlin4_voronoi4', label: 'Perlin×4 + Voronoi×4 (additivity)',
+      build: safeWrap('combo perlin4 voronoi4', () => {
+        const p0 = positionGeometry;
+        let a = vec3(0), b = vec3(0);
+        for (let i = 0; i < 4; i++) a = add(a, vec3(mx_noise_float(seed(p0, i))));
+        for (let i = 0; i < 4; i++) b = add(b, vec3(mx_worley_noise_float(seed(p0, i + 4))));
+        return mul(add(a, b), 0.125);
+      }),
+    },
+    {
+      // Throughput: 8 INDEPENDENT sqrt (SFU) — schedules in parallel.
+      id: 'combo_sqrt_parallel8', label: 'sqrt×8 parallel (throughput)',
+      build: safeWrap('combo sqrt parallel8', () => {
+        const p0 = positionGeometry;
+        let acc = vec3(0);
+        for (let i = 0; i < 8; i++) acc = add(acc, sqrt(seed(p0, i)));
+        return mul(acc, 0.125);
+      }),
+    },
+    {
+      // Latency: the SAME 8 sqrt in a dependency CHAIN — can't parallelise.
+      // chain − parallel exposes how much the point model (a throughput
+      // count) under/over-states serial SFU work.
+      id: 'combo_sqrt_chain8', label: 'sqrt×8 chained (latency)',
+      build: safeWrap('combo sqrt chain8', () => {
+        const p0 = positionGeometry;
+        let v = seed(p0, 0);
+        for (let i = 1; i <= 8; i++) v = sqrt(add(mul(v, 0.999), 0.001));
+        return v;
+      }),
+    },
+    {
+      // End-to-end model check. Inventory: 3 perlin + 2 sin + 1 smoothstep +
+      // 1 mix + ~4 mul + 1 oneMinus. Predicted pts (current table) ≈
+      // 3·35 + 2·4 + 7 + 2 + 4·1 + 1 = 127. Compare to measured marginal pts.
+      id: 'combo_model_check', label: 'model check (3·perlin+2·sin+…)',
+      build: safeWrap('combo model check', () => {
+        const p0 = positionGeometry;
+        const n1 = mx_noise_float(seed(p0, 0));
+        const n2 = mx_noise_float(seed(p0, 1));
+        const n3 = mx_noise_float(seed(p0, 2));
+        const s1 = sin(mul(n1, 6.2832));
+        const s2 = sin(mul(n2, 6.2832));
+        const m = mix(vec3(n3), vec3(s1), smoothstep(0, 1, s2));
+        return mul(m, oneMinus(mul(n1, n2)));
+      }),
+    },
+    {
+      // DCE sentinel (dropped): fBm×4 multiplied by 0 → a correct compiler
+      // eliminates the whole chain, so this should measure ≈ baseline. If it
+      // costs like fBm×4, the backend isn't DCE-ing zero-weighted work.
+      id: 'combo_dce_dropped', label: 'DCE sentinel: fBm×4 × 0 (≈baseline)',
+      build: safeWrap('combo dce dropped', () => {
+        const p0 = positionGeometry;
+        let acc = vec3(0);
+        for (let i = 0; i < 4; i++) acc = add(acc, vec3(mx_fractal_noise_float(seed(p0, i))));
+        return add(color(0x888888), mul(acc, 0));
+      }),
+    },
+    {
+      // DCE sentinel (kept): identical fBm×4 but weight 0.25. dropped−kept
+      // ≈ −(fBm×4 cost) proves the delta is DCE, not noise — and confirms
+      // the accumulation in every calib shader above is load-bearing.
+      id: 'combo_dce_kept', label: 'DCE sentinel: fBm×4 × 0.25 (kept)',
+      build: safeWrap('combo dce kept', () => {
+        const p0 = positionGeometry;
+        let acc = vec3(0);
+        for (let i = 0; i < 4; i++) acc = add(acc, vec3(mx_fractal_noise_float(seed(p0, i))));
+        return add(color(0x222222), mul(acc, 0.25));
+      }),
+    },
+  ].map(c => ({ ...c, category: 'combo', group: 'combo' }));
+
   // ── Saved Groups (from editor localStorage) ─────────────────────────────
   // The editor's saveGroupToLibrary persists graph snapshots, not TSL code.
   // Until it also writes a `tslCode: string` field on SavedGroup, the bench
@@ -227,7 +410,7 @@ export function buildBenchRegistry(TSL) {
   // to persist `tslCode`, the bench picks it up here without further changes.
   const saved = loadSavedGroups(TSL);
 
-  return [baseline, ...presets, ...noises, ...saved];
+  return [baseline, ...presets, ...noises, ...calib, ...combos, ...saved];
 }
 
 function loadSavedGroups(TSL) {

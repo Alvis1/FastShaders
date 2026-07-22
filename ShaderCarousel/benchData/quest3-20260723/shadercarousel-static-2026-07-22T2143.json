@@ -1,0 +1,2591 @@
+{
+  "metadata": {
+    "schemaVersion": 2,
+    "bench": "static",
+    "tool": "ShaderCarousel — Sphere Static",
+    "resolution": {
+      "width": 2064,
+      "height": 2208,
+      "label": "Quest 3 per-eye"
+    },
+    "date": "2026-07-22T21:40:36.441Z",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/149.0.0.24.3.1013217646 Chrome/149.0.7827.197 VR Safari/537.36",
+    "gpu": "qualcomm / adreno-7xx",
+    "adapterInfo": {
+      "vendor": "qualcomm",
+      "architecture": "adreno-7xx",
+      "device": "",
+      "description": ""
+    },
+    "timingMethod": "gpu-timestamp",
+    "quantized": false,
+    "clockPinned": null,
+    "stereo": false,
+    "config": {
+      "duration": 6000,
+      "frames": 30,
+      "passes": 30,
+      "warmup": 5,
+      "stride": 1
+    },
+    "calibration": {
+      "targetMs": 20,
+      "maxPasses": 333,
+      "method": "two-level slope"
+    },
+    "notes": "Static fullscreen sphere, multi-pass per measurement, timed via GPU timestamp queries when available (timingMethod) with a wall-clock fence fallback. Each shader is measured at N and 2N passes per batch (stats.passesLo/passesHi); per-pass cost = (median(total@2N) − median(total@N)) / N so fixed per-batch overhead cancels. stats.msPerPass is authoritative; stats.medianFt is the hi-level per-pass median (diagnostic)."
+  },
+  "shaders": [
+    {
+      "id": "ref_baseline",
+      "label": "Flat Color (baseline)",
+      "category": "baseline",
+      "stats": {
+        "points": 36,
+        "medianFt": 3.0668,
+        "meanFt": 3.0738,
+        "p95Ft": 3.6648,
+        "p99Ft": 3.6781,
+        "sdFt": 0.0364,
+        "cvPercent": 1.19,
+        "avgFps": 325.3,
+        "thermalDrift": 0.938,
+        "frameCount": 19,
+        "filteredCount": 15,
+        "outlierCount": 4,
+        "msPerPass": 3.02059,
+        "overheadMsPerBatch": 3.3031,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 0,
+        "marginalMsAtRef": 0,
+        "marginalPoints": 0
+      },
+      "frames": [
+        {
+          "t": 383.8,
+          "passes": 30,
+          "totalMs": 107.717,
+          "gpuMs": 107.717,
+          "frameTime": 3.5906
+        },
+        {
+          "t": 383.8,
+          "passes": 60,
+          "totalMs": 206.7317,
+          "gpuMs": 206.7317,
+          "frameTime": 3.4455
+        },
+        {
+          "t": 753.6,
+          "passes": 30,
+          "totalMs": 95.0234,
+          "gpuMs": 95.0234,
+          "frameTime": 3.1674
+        },
+        {
+          "t": 753.6,
+          "passes": 60,
+          "totalMs": 219.7742,
+          "gpuMs": 219.7742,
+          "frameTime": 3.6629
+        },
+        {
+          "t": 1151.1,
+          "passes": 30,
+          "totalMs": 119.7947,
+          "gpuMs": 119.7947,
+          "frameTime": 3.9932
+        },
+        {
+          "t": 1151.1,
+          "passes": 60,
+          "totalMs": 220.8829,
+          "gpuMs": 220.8829,
+          "frameTime": 3.6814
+        },
+        {
+          "t": 1508.9,
+          "passes": 30,
+          "totalMs": 114.677,
+          "gpuMs": 114.677,
+          "frameTime": 3.8226
+        },
+        {
+          "t": 1508.9,
+          "passes": 60,
+          "totalMs": 198.6026,
+          "gpuMs": 198.6026,
+          "frameTime": 3.31
+        },
+        {
+          "t": 1820.2,
+          "passes": 30,
+          "totalMs": 93.9983,
+          "gpuMs": 93.9983,
+          "frameTime": 3.1333
+        },
+        {
+          "t": 1820.2,
+          "passes": 60,
+          "totalMs": 187.1589,
+          "gpuMs": 187.1589,
+          "frameTime": 3.1193
+        },
+        {
+          "t": 2133.8,
+          "passes": 30,
+          "totalMs": 97.3847,
+          "gpuMs": 97.3847,
+          "frameTime": 3.2462
+        },
+        {
+          "t": 2133.8,
+          "passes": 60,
+          "totalMs": 184.0106,
+          "gpuMs": 184.0106,
+          "frameTime": 3.0668
+        },
+        {
+          "t": 2445.7,
+          "passes": 30,
+          "totalMs": 88.7637,
+          "gpuMs": 88.7637,
+          "frameTime": 2.9588
+        },
+        {
+          "t": 2445.7,
+          "passes": 60,
+          "totalMs": 185.2647,
+          "gpuMs": 185.2647,
+          "frameTime": 3.0877
+        },
+        {
+          "t": 2755,
+          "passes": 30,
+          "totalMs": 95.3615,
+          "gpuMs": 95.3615,
+          "frameTime": 3.1787
+        },
+        {
+          "t": 2755,
+          "passes": 60,
+          "totalMs": 182.6087,
+          "gpuMs": 182.6087,
+          "frameTime": 3.0435
+        },
+        {
+          "t": 3066.1,
+          "passes": 30,
+          "totalMs": 92.8149,
+          "gpuMs": 92.8149,
+          "frameTime": 3.0938
+        },
+        {
+          "t": 3066.1,
+          "passes": 60,
+          "totalMs": 183.5595,
+          "gpuMs": 183.5595,
+          "frameTime": 3.0593
+        },
+        {
+          "t": 3375.7,
+          "passes": 30,
+          "totalMs": 91.5718,
+          "gpuMs": 91.5718,
+          "frameTime": 3.0524
+        },
+        {
+          "t": 3375.7,
+          "passes": 60,
+          "totalMs": 186.9209,
+          "gpuMs": 186.9209,
+          "frameTime": 3.1153
+        },
+        {
+          "t": 3692.1,
+          "passes": 30,
+          "totalMs": 93.2163,
+          "gpuMs": 93.2163,
+          "frameTime": 3.1072
+        },
+        {
+          "t": 3692.1,
+          "passes": 60,
+          "totalMs": 190.0403,
+          "gpuMs": 190.0403,
+          "frameTime": 3.1673
+        },
+        {
+          "t": 4002.5,
+          "passes": 30,
+          "totalMs": 94.7661,
+          "gpuMs": 94.7661,
+          "frameTime": 3.1589
+        },
+        {
+          "t": 4002.5,
+          "passes": 60,
+          "totalMs": 184.5181,
+          "gpuMs": 184.5181,
+          "frameTime": 3.0753
+        },
+        {
+          "t": 4309.8,
+          "passes": 30,
+          "totalMs": 91.7787,
+          "gpuMs": 91.7787,
+          "frameTime": 3.0593
+        },
+        {
+          "t": 4309.8,
+          "passes": 60,
+          "totalMs": 182.5335,
+          "gpuMs": 182.5335,
+          "frameTime": 3.0422
+        },
+        {
+          "t": 4618.6,
+          "passes": 30,
+          "totalMs": 93.9209,
+          "gpuMs": 93.9209,
+          "frameTime": 3.1307
+        },
+        {
+          "t": 4618.6,
+          "passes": 60,
+          "totalMs": 184.5386,
+          "gpuMs": 184.5386,
+          "frameTime": 3.0756
+        },
+        {
+          "t": 4930.4,
+          "passes": 30,
+          "totalMs": 91.8155,
+          "gpuMs": 91.8155,
+          "frameTime": 3.0605
+        },
+        {
+          "t": 4930.4,
+          "passes": 60,
+          "totalMs": 185.4514,
+          "gpuMs": 185.4514,
+          "frameTime": 3.0909
+        },
+        {
+          "t": 5238.7,
+          "passes": 30,
+          "totalMs": 88.4847,
+          "gpuMs": 88.4847,
+          "frameTime": 2.9495
+        },
+        {
+          "t": 5238.7,
+          "passes": 60,
+          "totalMs": 182.4314,
+          "gpuMs": 182.4314,
+          "frameTime": 3.0405
+        },
+        {
+          "t": 5546.5,
+          "passes": 30,
+          "totalMs": 95.0576,
+          "gpuMs": 95.0576,
+          "frameTime": 3.1686
+        },
+        {
+          "t": 5546.5,
+          "passes": 60,
+          "totalMs": 181.6195,
+          "gpuMs": 181.6195,
+          "frameTime": 3.027
+        },
+        {
+          "t": 5851.4,
+          "passes": 30,
+          "totalMs": 91.4287,
+          "gpuMs": 91.4287,
+          "frameTime": 3.0476
+        },
+        {
+          "t": 5851.4,
+          "passes": 60,
+          "totalMs": 182.6169,
+          "gpuMs": 182.6169,
+          "frameTime": 3.0436
+        },
+        {
+          "t": 6157.2,
+          "passes": 30,
+          "totalMs": 89.6991,
+          "gpuMs": 89.6991,
+          "frameTime": 2.99
+        },
+        {
+          "t": 6157.2,
+          "passes": 60,
+          "totalMs": 183.1105,
+          "gpuMs": 183.1105,
+          "frameTime": 3.0518
+        }
+      ]
+    },
+    {
+      "id": "preset_polkaDots",
+      "label": "Polka Dots",
+      "category": "preset",
+      "stats": {
+        "points": 40,
+        "medianFt": 3.3492,
+        "meanFt": 3.3397,
+        "p95Ft": 3.3819,
+        "p99Ft": 3.4011,
+        "sdFt": 0.0339,
+        "cvPercent": 1.01,
+        "avgFps": 299.4,
+        "thermalDrift": 1.002,
+        "frameCount": 19,
+        "filteredCount": 19,
+        "outlierCount": 0,
+        "msPerPass": 3.32876,
+        "overheadMsPerBatch": 1.2261,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 0.3082,
+        "marginalMsAtRef": 0.3082,
+        "marginalPoints": 4
+      },
+      "frames": [
+        {
+          "t": 333.1,
+          "passes": 30,
+          "totalMs": 96.8257,
+          "gpuMs": 96.8257,
+          "frameTime": 3.2275
+        },
+        {
+          "t": 333.1,
+          "passes": 60,
+          "totalMs": 201.9608,
+          "gpuMs": 201.9608,
+          "frameTime": 3.366
+        },
+        {
+          "t": 666.3,
+          "passes": 30,
+          "totalMs": 98.7727,
+          "gpuMs": 98.7727,
+          "frameTime": 3.2924
+        },
+        {
+          "t": 666.3,
+          "passes": 60,
+          "totalMs": 202.4795,
+          "gpuMs": 202.4795,
+          "frameTime": 3.3747
+        },
+        {
+          "t": 994.9,
+          "passes": 30,
+          "totalMs": 96.5983,
+          "gpuMs": 96.5983,
+          "frameTime": 3.2199
+        },
+        {
+          "t": 994.9,
+          "passes": 60,
+          "totalMs": 199.5811,
+          "gpuMs": 199.5811,
+          "frameTime": 3.3264
+        },
+        {
+          "t": 1329.4,
+          "passes": 30,
+          "totalMs": 101.089,
+          "gpuMs": 101.089,
+          "frameTime": 3.3696
+        },
+        {
+          "t": 1329.4,
+          "passes": 60,
+          "totalMs": 198.6089,
+          "gpuMs": 198.6089,
+          "frameTime": 3.3101
+        },
+        {
+          "t": 1663.1,
+          "passes": 30,
+          "totalMs": 103.9362,
+          "gpuMs": 103.9362,
+          "frameTime": 3.4645
+        },
+        {
+          "t": 1663.1,
+          "passes": 60,
+          "totalMs": 201.1625,
+          "gpuMs": 201.1625,
+          "frameTime": 3.3527
+        },
+        {
+          "t": 1996.7,
+          "passes": 30,
+          "totalMs": 102.9637,
+          "gpuMs": 102.9637,
+          "frameTime": 3.4321
+        },
+        {
+          "t": 1996.7,
+          "passes": 60,
+          "totalMs": 199.2585,
+          "gpuMs": 199.2585,
+          "frameTime": 3.321
+        },
+        {
+          "t": 2328.3,
+          "passes": 30,
+          "totalMs": 102.6044,
+          "gpuMs": 102.6044,
+          "frameTime": 3.4201
+        },
+        {
+          "t": 2328.3,
+          "passes": 60,
+          "totalMs": 197.1294,
+          "gpuMs": 197.1294,
+          "frameTime": 3.2855
+        },
+        {
+          "t": 2662.7,
+          "passes": 30,
+          "totalMs": 97.8227,
+          "gpuMs": 97.8227,
+          "frameTime": 3.2608
+        },
+        {
+          "t": 2662.7,
+          "passes": 60,
+          "totalMs": 196.6428,
+          "gpuMs": 196.6428,
+          "frameTime": 3.2774
+        },
+        {
+          "t": 2994.4,
+          "passes": 30,
+          "totalMs": 100.9959,
+          "gpuMs": 100.9959,
+          "frameTime": 3.3665
+        },
+        {
+          "t": 2994.4,
+          "passes": 60,
+          "totalMs": 204.3544,
+          "gpuMs": 204.3544,
+          "frameTime": 3.4059
+        },
+        {
+          "t": 3328.8,
+          "passes": 30,
+          "totalMs": 102.6675,
+          "gpuMs": 102.6675,
+          "frameTime": 3.4223
+        },
+        {
+          "t": 3328.8,
+          "passes": 60,
+          "totalMs": 202.6658,
+          "gpuMs": 202.6658,
+          "frameTime": 3.3778
+        },
+        {
+          "t": 3664.6,
+          "passes": 30,
+          "totalMs": 102.4433,
+          "gpuMs": 102.4433,
+          "frameTime": 3.4148
+        },
+        {
+          "t": 3664.6,
+          "passes": 60,
+          "totalMs": 201.5143,
+          "gpuMs": 201.5143,
+          "frameTime": 3.3586
+        },
+        {
+          "t": 3995.9,
+          "passes": 30,
+          "totalMs": 100.018,
+          "gpuMs": 100.018,
+          "frameTime": 3.3339
+        },
+        {
+          "t": 3995.9,
+          "passes": 60,
+          "totalMs": 198.943,
+          "gpuMs": 198.943,
+          "frameTime": 3.3157
+        },
+        {
+          "t": 4328.2,
+          "passes": 30,
+          "totalMs": 102.3175,
+          "gpuMs": 102.3175,
+          "frameTime": 3.4106
+        },
+        {
+          "t": 4328.2,
+          "passes": 60,
+          "totalMs": 199.8341,
+          "gpuMs": 199.8341,
+          "frameTime": 3.3306
+        },
+        {
+          "t": 4664.7,
+          "passes": 30,
+          "totalMs": 103.6021,
+          "gpuMs": 103.6021,
+          "frameTime": 3.4534
+        },
+        {
+          "t": 4664.7,
+          "passes": 60,
+          "totalMs": 200.9519,
+          "gpuMs": 200.9519,
+          "frameTime": 3.3492
+        },
+        {
+          "t": 4997.7,
+          "passes": 30,
+          "totalMs": 101.7376,
+          "gpuMs": 101.7376,
+          "frameTime": 3.3913
+        },
+        {
+          "t": 4997.7,
+          "passes": 60,
+          "totalMs": 201.4082,
+          "gpuMs": 201.4082,
+          "frameTime": 3.3568
+        },
+        {
+          "t": 5333.4,
+          "passes": 30,
+          "totalMs": 100.5609,
+          "gpuMs": 100.5609,
+          "frameTime": 3.352
+        },
+        {
+          "t": 5333.4,
+          "passes": 60,
+          "totalMs": 199.0779,
+          "gpuMs": 199.0779,
+          "frameTime": 3.318
+        },
+        {
+          "t": 5663,
+          "passes": 30,
+          "totalMs": 98.1247,
+          "gpuMs": 98.1247,
+          "frameTime": 3.2708
+        },
+        {
+          "t": 5663,
+          "passes": 60,
+          "totalMs": 201.2553,
+          "gpuMs": 201.2553,
+          "frameTime": 3.3543
+        },
+        {
+          "t": 5998.3,
+          "passes": 30,
+          "totalMs": 101.1505,
+          "gpuMs": 101.1505,
+          "frameTime": 3.3717
+        },
+        {
+          "t": 5998.3,
+          "passes": 60,
+          "totalMs": 202.7562,
+          "gpuMs": 202.7562,
+          "frameTime": 3.3793
+        },
+        {
+          "t": 6332.4,
+          "passes": 30,
+          "totalMs": 100.8186,
+          "gpuMs": 100.8186,
+          "frameTime": 3.3606
+        },
+        {
+          "t": 6332.4,
+          "passes": 60,
+          "totalMs": 197.6795,
+          "gpuMs": 197.6795,
+          "frameTime": 3.2947
+        }
+      ]
+    },
+    {
+      "id": "preset_grid",
+      "label": "Grid",
+      "category": "preset",
+      "stats": {
+        "points": 39,
+        "medianFt": 3.3255,
+        "meanFt": 3.3189,
+        "p95Ft": 3.376,
+        "p99Ft": 3.3768,
+        "sdFt": 0.0327,
+        "cvPercent": 0.98,
+        "avgFps": 301.3,
+        "thermalDrift": 1.014,
+        "frameCount": 19,
+        "filteredCount": 18,
+        "outlierCount": 1,
+        "msPerPass": 3.25915,
+        "overheadMsPerBatch": 3.8512,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 0.2386,
+        "marginalMsAtRef": 0.2386,
+        "marginalPoints": 3
+      },
+      "frames": [
+        {
+          "t": 329.8,
+          "passes": 30,
+          "totalMs": 98.936,
+          "gpuMs": 98.936,
+          "frameTime": 3.2979
+        },
+        {
+          "t": 329.8,
+          "passes": 60,
+          "totalMs": 200.5198,
+          "gpuMs": 200.5198,
+          "frameTime": 3.342
+        },
+        {
+          "t": 661.1,
+          "passes": 30,
+          "totalMs": 98.9231,
+          "gpuMs": 98.9231,
+          "frameTime": 3.2974
+        },
+        {
+          "t": 661.1,
+          "passes": 60,
+          "totalMs": 200.0434,
+          "gpuMs": 200.0434,
+          "frameTime": 3.3341
+        },
+        {
+          "t": 993.4,
+          "passes": 30,
+          "totalMs": 99.4597,
+          "gpuMs": 99.4597,
+          "frameTime": 3.3153
+        },
+        {
+          "t": 993.4,
+          "passes": 60,
+          "totalMs": 191.8854,
+          "gpuMs": 191.8854,
+          "frameTime": 3.1981
+        },
+        {
+          "t": 1325.8,
+          "passes": 30,
+          "totalMs": 101.7183,
+          "gpuMs": 101.7183,
+          "frameTime": 3.3906
+        },
+        {
+          "t": 1325.8,
+          "passes": 60,
+          "totalMs": 195.3803,
+          "gpuMs": 195.3803,
+          "frameTime": 3.2563
+        },
+        {
+          "t": 1654.1,
+          "passes": 30,
+          "totalMs": 97.3566,
+          "gpuMs": 97.3566,
+          "frameTime": 3.2452
+        },
+        {
+          "t": 1654.1,
+          "passes": 60,
+          "totalMs": 197.0254,
+          "gpuMs": 197.0254,
+          "frameTime": 3.2838
+        },
+        {
+          "t": 1982.6,
+          "passes": 30,
+          "totalMs": 100.1068,
+          "gpuMs": 100.1068,
+          "frameTime": 3.3369
+        },
+        {
+          "t": 1982.6,
+          "passes": 60,
+          "totalMs": 196.7645,
+          "gpuMs": 196.7645,
+          "frameTime": 3.2794
+        },
+        {
+          "t": 2312,
+          "passes": 30,
+          "totalMs": 96.8303,
+          "gpuMs": 96.8303,
+          "frameTime": 3.2277
+        },
+        {
+          "t": 2312,
+          "passes": 60,
+          "totalMs": 198.9584,
+          "gpuMs": 198.9584,
+          "frameTime": 3.316
+        },
+        {
+          "t": 2644.1,
+          "passes": 30,
+          "totalMs": 100.5924,
+          "gpuMs": 100.5924,
+          "frameTime": 3.3531
+        },
+        {
+          "t": 2644.1,
+          "passes": 60,
+          "totalMs": 198.6131,
+          "gpuMs": 198.6131,
+          "frameTime": 3.3102
+        },
+        {
+          "t": 2974,
+          "passes": 30,
+          "totalMs": 102.5653,
+          "gpuMs": 102.5653,
+          "frameTime": 3.4188
+        },
+        {
+          "t": 2974,
+          "passes": 60,
+          "totalMs": 196.7774,
+          "gpuMs": 196.7774,
+          "frameTime": 3.2796
+        },
+        {
+          "t": 3309.2,
+          "passes": 30,
+          "totalMs": 102.2541,
+          "gpuMs": 102.2541,
+          "frameTime": 3.4085
+        },
+        {
+          "t": 3309.2,
+          "passes": 60,
+          "totalMs": 202.5543,
+          "gpuMs": 202.5543,
+          "frameTime": 3.3759
+        },
+        {
+          "t": 3645,
+          "passes": 30,
+          "totalMs": 102.0902,
+          "gpuMs": 102.0902,
+          "frameTime": 3.403
+        },
+        {
+          "t": 3645,
+          "passes": 60,
+          "totalMs": 199.7832,
+          "gpuMs": 199.7832,
+          "frameTime": 3.3297
+        },
+        {
+          "t": 3976.8,
+          "passes": 30,
+          "totalMs": 100.6596,
+          "gpuMs": 100.6596,
+          "frameTime": 3.3553
+        },
+        {
+          "t": 3976.8,
+          "passes": 60,
+          "totalMs": 197.1486,
+          "gpuMs": 197.1486,
+          "frameTime": 3.2858
+        },
+        {
+          "t": 4311.4,
+          "passes": 30,
+          "totalMs": 101.6257,
+          "gpuMs": 101.6257,
+          "frameTime": 3.3875
+        },
+        {
+          "t": 4311.4,
+          "passes": 60,
+          "totalMs": 197.6629,
+          "gpuMs": 197.6629,
+          "frameTime": 3.2944
+        },
+        {
+          "t": 4644.1,
+          "passes": 30,
+          "totalMs": 101.8626,
+          "gpuMs": 101.8626,
+          "frameTime": 3.3954
+        },
+        {
+          "t": 4644.1,
+          "passes": 60,
+          "totalMs": 199.6651,
+          "gpuMs": 199.6651,
+          "frameTime": 3.3278
+        },
+        {
+          "t": 4978.5,
+          "passes": 30,
+          "totalMs": 99.4531,
+          "gpuMs": 99.4531,
+          "frameTime": 3.3151
+        },
+        {
+          "t": 4978.5,
+          "passes": 60,
+          "totalMs": 200.3358,
+          "gpuMs": 200.3358,
+          "frameTime": 3.3389
+        },
+        {
+          "t": 5309.8,
+          "passes": 30,
+          "totalMs": 102.6807,
+          "gpuMs": 102.6807,
+          "frameTime": 3.4227
+        },
+        {
+          "t": 5309.8,
+          "passes": 60,
+          "totalMs": 200.8762,
+          "gpuMs": 200.8762,
+          "frameTime": 3.3479
+        },
+        {
+          "t": 5644.9,
+          "passes": 30,
+          "totalMs": 102.2416,
+          "gpuMs": 102.2416,
+          "frameTime": 3.4081
+        },
+        {
+          "t": 5644.9,
+          "passes": 60,
+          "totalMs": 202.6189,
+          "gpuMs": 202.6189,
+          "frameTime": 3.377
+        },
+        {
+          "t": 5979.4,
+          "passes": 30,
+          "totalMs": 103.3581,
+          "gpuMs": 103.3581,
+          "frameTime": 3.4453
+        },
+        {
+          "t": 5979.4,
+          "passes": 60,
+          "totalMs": 200.2417,
+          "gpuMs": 200.2417,
+          "frameTime": 3.3374
+        },
+        {
+          "t": 6311.8,
+          "passes": 30,
+          "totalMs": 101.784,
+          "gpuMs": 101.784,
+          "frameTime": 3.3928
+        },
+        {
+          "t": 6311.8,
+          "passes": 60,
+          "totalMs": 199.4003,
+          "gpuMs": 199.4003,
+          "frameTime": 3.3233
+        }
+      ]
+    },
+    {
+      "id": "preset_tigerFur",
+      "label": "Tiger Fur",
+      "category": "preset",
+      "stats": {
+        "points": 75,
+        "medianFt": 6.2879,
+        "meanFt": 6.2866,
+        "p95Ft": 6.3462,
+        "p99Ft": 6.3535,
+        "sdFt": 0.0138,
+        "cvPercent": 0.22,
+        "avgFps": 159.1,
+        "thermalDrift": 1.001,
+        "frameCount": 10,
+        "filteredCount": 8,
+        "outlierCount": 2,
+        "msPerPass": 6.28805,
+        "overheadMsPerBatch": 0.1907,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 3.2675,
+        "marginalMsAtRef": 3.2675,
+        "marginalPoints": 39
+      },
+      "frames": [
+        {
+          "t": 597.2,
+          "passes": 30,
+          "totalMs": 189.0606,
+          "gpuMs": 189.0606,
+          "frameTime": 6.302
+        },
+        {
+          "t": 597.2,
+          "passes": 60,
+          "totalMs": 375.4758,
+          "gpuMs": 375.4758,
+          "frameTime": 6.2579
+        },
+        {
+          "t": 1199.2,
+          "passes": 30,
+          "totalMs": 188.2022,
+          "gpuMs": 188.2022,
+          "frameTime": 6.2734
+        },
+        {
+          "t": 1199.2,
+          "passes": 60,
+          "totalMs": 377.6408,
+          "gpuMs": 377.6408,
+          "frameTime": 6.294
+        },
+        {
+          "t": 1798.9,
+          "passes": 30,
+          "totalMs": 190.4226,
+          "gpuMs": 190.4226,
+          "frameTime": 6.3474
+        },
+        {
+          "t": 1798.9,
+          "passes": 60,
+          "totalMs": 380.1085,
+          "gpuMs": 380.1085,
+          "frameTime": 6.3351
+        },
+        {
+          "t": 2398.9,
+          "passes": 30,
+          "totalMs": 191.9444,
+          "gpuMs": 191.9444,
+          "frameTime": 6.3981
+        },
+        {
+          "t": 2398.9,
+          "passes": 60,
+          "totalMs": 376.628,
+          "gpuMs": 376.628,
+          "frameTime": 6.2771
+        },
+        {
+          "t": 2998.1,
+          "passes": 30,
+          "totalMs": 188.5432,
+          "gpuMs": 188.5432,
+          "frameTime": 6.2848
+        },
+        {
+          "t": 2998.1,
+          "passes": 60,
+          "totalMs": 378.453,
+          "gpuMs": 378.453,
+          "frameTime": 6.3076
+        },
+        {
+          "t": 3600,
+          "passes": 30,
+          "totalMs": 188.6039,
+          "gpuMs": 188.6039,
+          "frameTime": 6.2868
+        },
+        {
+          "t": 3600,
+          "passes": 60,
+          "totalMs": 377.0466,
+          "gpuMs": 377.0466,
+          "frameTime": 6.2841
+        },
+        {
+          "t": 4205.9,
+          "passes": 30,
+          "totalMs": 189.4032,
+          "gpuMs": 189.4032,
+          "frameTime": 6.3134
+        },
+        {
+          "t": 4205.9,
+          "passes": 60,
+          "totalMs": 381.3203,
+          "gpuMs": 381.3203,
+          "frameTime": 6.3553
+        },
+        {
+          "t": 4807.7,
+          "passes": 30,
+          "totalMs": 189.729,
+          "gpuMs": 189.729,
+          "frameTime": 6.3243
+        },
+        {
+          "t": 4807.7,
+          "passes": 60,
+          "totalMs": 377.3069,
+          "gpuMs": 377.3069,
+          "frameTime": 6.2884
+        },
+        {
+          "t": 5407.3,
+          "passes": 30,
+          "totalMs": 188.3187,
+          "gpuMs": 188.3187,
+          "frameTime": 6.2773
+        },
+        {
+          "t": 5407.3,
+          "passes": 60,
+          "totalMs": 377.2427,
+          "gpuMs": 377.2427,
+          "frameTime": 6.2874
+        },
+        {
+          "t": 6009.2,
+          "passes": 30,
+          "totalMs": 188.1409,
+          "gpuMs": 188.1409,
+          "frameTime": 6.2714
+        },
+        {
+          "t": 6009.2,
+          "passes": 60,
+          "totalMs": 377.7948,
+          "gpuMs": 377.7948,
+          "frameTime": 6.2966
+        }
+      ]
+    },
+    {
+      "id": "preset_staticNoise",
+      "label": "Static Noise",
+      "category": "preset",
+      "stats": {
+        "points": 72,
+        "medianFt": 6.0083,
+        "meanFt": 5.9904,
+        "p95Ft": 7.223,
+        "p99Ft": 7.3011,
+        "sdFt": 0.0358,
+        "cvPercent": 0.6,
+        "avgFps": 166.9,
+        "thermalDrift": 0.929,
+        "frameCount": 10,
+        "filteredCount": 8,
+        "outlierCount": 2,
+        "msPerPass": 5.99947,
+        "overheadMsPerBatch": 0.8067,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 2.9789,
+        "marginalMsAtRef": 2.9789,
+        "marginalPoints": 36
+      },
+      "frames": [
+        {
+          "t": 571.9,
+          "passes": 30,
+          "totalMs": 179.1974,
+          "gpuMs": 179.1974,
+          "frameTime": 5.9732
+        },
+        {
+          "t": 571.9,
+          "passes": 60,
+          "totalMs": 360.4759,
+          "gpuMs": 360.4759,
+          "frameTime": 6.0079
+        },
+        {
+          "t": 1144.6,
+          "passes": 30,
+          "totalMs": 177.5895,
+          "gpuMs": 177.5895,
+          "frameTime": 5.9196
+        },
+        {
+          "t": 1144.6,
+          "passes": 60,
+          "totalMs": 356.3702,
+          "gpuMs": 356.3702,
+          "frameTime": 5.9395
+        },
+        {
+          "t": 1791.5,
+          "passes": 30,
+          "totalMs": 183.0194,
+          "gpuMs": 183.0194,
+          "frameTime": 6.1006
+        },
+        {
+          "t": 1791.5,
+          "passes": 60,
+          "totalMs": 426.2136,
+          "gpuMs": 426.2136,
+          "frameTime": 7.1036
+        },
+        {
+          "t": 2496.5,
+          "passes": 30,
+          "totalMs": 221.1744,
+          "gpuMs": 221.1744,
+          "frameTime": 7.3725
+        },
+        {
+          "t": 2496.5,
+          "passes": 60,
+          "totalMs": 439.2395,
+          "gpuMs": 439.2395,
+          "frameTime": 7.3207
+        },
+        {
+          "t": 3148.4,
+          "passes": 30,
+          "totalMs": 217.5429,
+          "gpuMs": 217.5429,
+          "frameTime": 7.2514
+        },
+        {
+          "t": 3148.4,
+          "passes": 60,
+          "totalMs": 356.6702,
+          "gpuMs": 356.6702,
+          "frameTime": 5.9445
+        },
+        {
+          "t": 3726.7,
+          "passes": 30,
+          "totalMs": 179.2266,
+          "gpuMs": 179.2266,
+          "frameTime": 5.9742
+        },
+        {
+          "t": 3726.7,
+          "passes": 60,
+          "totalMs": 361.0343,
+          "gpuMs": 361.0343,
+          "frameTime": 6.0172
+        },
+        {
+          "t": 4307.2,
+          "passes": 30,
+          "totalMs": 184.1516,
+          "gpuMs": 184.1516,
+          "frameTime": 6.1384
+        },
+        {
+          "t": 4307.2,
+          "passes": 60,
+          "totalMs": 357.1131,
+          "gpuMs": 357.1131,
+          "frameTime": 5.9519
+        },
+        {
+          "t": 4886,
+          "passes": 30,
+          "totalMs": 180.5534,
+          "gpuMs": 180.5534,
+          "frameTime": 6.0184
+        },
+        {
+          "t": 4886,
+          "passes": 60,
+          "totalMs": 360.5159,
+          "gpuMs": 360.5159,
+          "frameTime": 6.0086
+        },
+        {
+          "t": 5464,
+          "passes": 30,
+          "totalMs": 181.0285,
+          "gpuMs": 181.0285,
+          "frameTime": 6.0343
+        },
+        {
+          "t": 5464,
+          "passes": 60,
+          "totalMs": 361.3346,
+          "gpuMs": 361.3346,
+          "frameTime": 6.0222
+        },
+        {
+          "t": 6047.7,
+          "passes": 30,
+          "totalMs": 180.2184,
+          "gpuMs": 180.2184,
+          "frameTime": 6.0073
+        },
+        {
+          "t": 6047.7,
+          "passes": 60,
+          "totalMs": 361.885,
+          "gpuMs": 361.885,
+          "frameTime": 6.0314
+        }
+      ]
+    },
+    {
+      "id": "preset_crumpledFabric",
+      "label": "Crumpled Fabric",
+      "category": "preset",
+      "stats": {
+        "points": 455,
+        "medianFt": 36.5019,
+        "meanFt": 36.5019,
+        "p95Ft": 36.5242,
+        "p99Ft": 36.5262,
+        "sdFt": 0.0247,
+        "cvPercent": 0.07,
+        "avgFps": 27.4,
+        "thermalDrift": 1.001,
+        "frameCount": 2,
+        "filteredCount": 2,
+        "outlierCount": 0,
+        "msPerPass": 37.8839,
+        "overheadMsPerBatch": -82.9173,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 34.8633,
+        "marginalMsAtRef": 34.8633,
+        "marginalPoints": 419
+      },
+      "frames": [
+        {
+          "t": 3360.4,
+          "passes": 30,
+          "totalMs": 1095.9325,
+          "gpuMs": 1095.9325,
+          "frameTime": 36.5311
+        },
+        {
+          "t": 3360.4,
+          "passes": 60,
+          "totalMs": 2188.6337,
+          "gpuMs": 2188.6337,
+          "frameTime": 36.4772
+        },
+        {
+          "t": 6622.3,
+          "passes": 30,
+          "totalMs": 1011.2667,
+          "gpuMs": 1011.2667,
+          "frameTime": 33.7089
+        },
+        {
+          "t": 6622.3,
+          "passes": 60,
+          "totalMs": 2191.5994,
+          "gpuMs": 2191.5994,
+          "frameTime": 36.5267
+        }
+      ]
+    },
+    {
+      "id": "preset_gasGiant",
+      "label": "Gas Giant",
+      "category": "preset",
+      "stats": {
+        "points": 254,
+        "medianFt": 20.8382,
+        "meanFt": 20.8027,
+        "p95Ft": 21.3406,
+        "p99Ft": 21.3719,
+        "sdFt": 0.4776,
+        "cvPercent": 2.3,
+        "avgFps": 48.1,
+        "thermalDrift": 1.003,
+        "frameCount": 4,
+        "filteredCount": 4,
+        "outlierCount": 0,
+        "msPerPass": 21.13365,
+        "overheadMsPerBatch": -17.7282,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 18.1131,
+        "marginalMsAtRef": 18.1131,
+        "marginalPoints": 217
+      },
+      "frames": [
+        {
+          "t": 1852.1,
+          "passes": 30,
+          "totalMs": 590.9097,
+          "gpuMs": 590.9097,
+          "frameTime": 19.697
+        },
+        {
+          "t": 1852.1,
+          "passes": 60,
+          "totalMs": 1209.2851,
+          "gpuMs": 1209.2851,
+          "frameTime": 20.1548
+        },
+        {
+          "t": 3823.1,
+          "passes": 30,
+          "totalMs": 621.0774,
+          "gpuMs": 621.0774,
+          "frameTime": 20.7026
+        },
+        {
+          "t": 3823.1,
+          "passes": 60,
+          "totalMs": 1282.7861,
+          "gpuMs": 1282.7861,
+          "frameTime": 21.3798
+        },
+        {
+          "t": 5801.7,
+          "passes": 30,
+          "totalMs": 642.4613,
+          "gpuMs": 642.4613,
+          "frameTime": 21.4154
+        },
+        {
+          "t": 5801.7,
+          "passes": 60,
+          "totalMs": 1267.1022,
+          "gpuMs": 1267.1022,
+          "frameTime": 21.1184
+        },
+        {
+          "t": 7725.1,
+          "passes": 30,
+          "totalMs": 611.4853,
+          "gpuMs": 611.4853,
+          "frameTime": 20.3828
+        },
+        {
+          "t": 7725.1,
+          "passes": 60,
+          "totalMs": 1233.4796,
+          "gpuMs": 1233.4796,
+          "frameTime": 20.558
+        }
+      ]
+    },
+    {
+      "id": "preset_marble",
+      "label": "Marble",
+      "category": "preset",
+      "stats": {
+        "points": 161,
+        "medianFt": 14.2474,
+        "meanFt": 14.3902,
+        "p95Ft": 15.43,
+        "p99Ft": 15.4415,
+        "sdFt": 0.9692,
+        "cvPercent": 6.73,
+        "avgFps": 69.5,
+        "thermalDrift": 0.89,
+        "frameCount": 5,
+        "filteredCount": 5,
+        "outlierCount": 0,
+        "msPerPass": 13.42922,
+        "overheadMsPerBatch": 49.0913,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 10.4086,
+        "marginalMsAtRef": 10.4086,
+        "marginalPoints": 125
+      },
+      "frames": [
+        {
+          "t": 1430.8,
+          "passes": 30,
+          "totalMs": 472.4725,
+          "gpuMs": 472.4725,
+          "frameTime": 15.7491
+        },
+        {
+          "t": 1430.8,
+          "passes": 60,
+          "totalMs": 926.6608,
+          "gpuMs": 926.6608,
+          "frameTime": 15.4443
+        },
+        {
+          "t": 2822.7,
+          "passes": 30,
+          "totalMs": 451.9678,
+          "gpuMs": 451.9678,
+          "frameTime": 15.0656
+        },
+        {
+          "t": 2822.7,
+          "passes": 60,
+          "totalMs": 922.3545,
+          "gpuMs": 922.3545,
+          "frameTime": 15.3726
+        },
+        {
+          "t": 4085.1,
+          "passes": 30,
+          "totalMs": 475.0686,
+          "gpuMs": 475.0686,
+          "frameTime": 15.8356
+        },
+        {
+          "t": 4085.1,
+          "passes": 60,
+          "totalMs": 768.4983,
+          "gpuMs": 768.4983,
+          "frameTime": 12.8083
+        },
+        {
+          "t": 5380.3,
+          "passes": 30,
+          "totalMs": 429.8932,
+          "gpuMs": 429.8932,
+          "frameTime": 14.3298
+        },
+        {
+          "t": 5380.3,
+          "passes": 60,
+          "totalMs": 844.7029,
+          "gpuMs": 844.7029,
+          "frameTime": 14.0784
+        },
+        {
+          "t": 6696.7,
+          "passes": 30,
+          "totalMs": 435.6324,
+          "gpuMs": 435.6324,
+          "frameTime": 14.5211
+        },
+        {
+          "t": 6696.7,
+          "passes": 60,
+          "totalMs": 854.8444,
+          "gpuMs": 854.8444,
+          "frameTime": 14.2474
+        }
+      ]
+    },
+    {
+      "id": "preset_wood",
+      "label": "Wood",
+      "category": "preset",
+      "stats": {
+        "points": 227,
+        "medianFt": 19.0868,
+        "meanFt": 19.0842,
+        "p95Ft": 19.1462,
+        "p99Ft": 19.1537,
+        "sdFt": 0.0525,
+        "cvPercent": 0.28,
+        "avgFps": 52.4,
+        "thermalDrift": 0.996,
+        "frameCount": 4,
+        "filteredCount": 4,
+        "outlierCount": 0,
+        "msPerPass": 18.94859,
+        "overheadMsPerBatch": 8.291,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 15.928,
+        "marginalMsAtRef": 15.928,
+        "marginalPoints": 191
+      },
+      "frames": [
+        {
+          "t": 1780.2,
+          "passes": 30,
+          "totalMs": 577.3708,
+          "gpuMs": 577.3708,
+          "frameTime": 19.2457
+        },
+        {
+          "t": 1780.2,
+          "passes": 60,
+          "totalMs": 1144.8035,
+          "gpuMs": 1144.8035,
+          "frameTime": 19.0801
+        },
+        {
+          "t": 3554,
+          "passes": 30,
+          "totalMs": 576.5975,
+          "gpuMs": 576.5975,
+          "frameTime": 19.2199
+        },
+        {
+          "t": 3554,
+          "passes": 60,
+          "totalMs": 1149.3321,
+          "gpuMs": 1149.3321,
+          "frameTime": 19.1555
+        },
+        {
+          "t": 5326.2,
+          "passes": 30,
+          "totalMs": 576.9001,
+          "gpuMs": 576.9001,
+          "frameTime": 19.23
+        },
+        {
+          "t": 5326.2,
+          "passes": 60,
+          "totalMs": 1145.6097,
+          "gpuMs": 1145.6097,
+          "frameTime": 19.0935
+        },
+        {
+          "t": 7097,
+          "passes": 30,
+          "totalMs": 565.0752,
+          "gpuMs": 565.0752,
+          "frameTime": 18.8358
+        },
+        {
+          "t": 7097,
+          "passes": 60,
+          "totalMs": 1140.4645,
+          "gpuMs": 1140.4645,
+          "frameTime": 19.0077
+        }
+      ]
+    },
+    {
+      "id": "noise_perlin",
+      "label": "Perlin",
+      "category": "noise",
+      "stats": {
+        "points": 72,
+        "medianFt": 6.0235,
+        "meanFt": 6.034,
+        "p95Ft": 6.1191,
+        "p99Ft": 6.1214,
+        "sdFt": 0.0492,
+        "cvPercent": 0.82,
+        "avgFps": 165.7,
+        "thermalDrift": 1.004,
+        "frameCount": 11,
+        "filteredCount": 10,
+        "outlierCount": 1,
+        "msPerPass": 6.00442,
+        "overheadMsPerBatch": 0.5701,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 2.9838,
+        "marginalMsAtRef": 2.9838,
+        "marginalPoints": 36
+      },
+      "frames": [
+        {
+          "t": 571.3,
+          "passes": 30,
+          "totalMs": 179.605,
+          "gpuMs": 179.605,
+          "frameTime": 5.9868
+        },
+        {
+          "t": 571.3,
+          "passes": 60,
+          "totalMs": 350.3958,
+          "gpuMs": 350.3958,
+          "frameTime": 5.8399
+        },
+        {
+          "t": 1145.2,
+          "passes": 30,
+          "totalMs": 178.9961,
+          "gpuMs": 178.9961,
+          "frameTime": 5.9665
+        },
+        {
+          "t": 1145.2,
+          "passes": 60,
+          "totalMs": 358.0004,
+          "gpuMs": 358.0004,
+          "frameTime": 5.9667
+        },
+        {
+          "t": 1723.8,
+          "passes": 30,
+          "totalMs": 182.4001,
+          "gpuMs": 182.4001,
+          "frameTime": 6.08
+        },
+        {
+          "t": 1723.8,
+          "passes": 60,
+          "totalMs": 361.9805,
+          "gpuMs": 361.9805,
+          "frameTime": 6.033
+        },
+        {
+          "t": 2303.4,
+          "passes": 30,
+          "totalMs": 178.8816,
+          "gpuMs": 178.8816,
+          "frameTime": 5.9627
+        },
+        {
+          "t": 2303.4,
+          "passes": 60,
+          "totalMs": 363.1195,
+          "gpuMs": 363.1195,
+          "frameTime": 6.052
+        },
+        {
+          "t": 2885.9,
+          "passes": 30,
+          "totalMs": 182.188,
+          "gpuMs": 182.188,
+          "frameTime": 6.0729
+        },
+        {
+          "t": 2885.9,
+          "passes": 60,
+          "totalMs": 367.3158,
+          "gpuMs": 367.3158,
+          "frameTime": 6.1219
+        },
+        {
+          "t": 3466,
+          "passes": 30,
+          "totalMs": 180.7027,
+          "gpuMs": 180.7027,
+          "frameTime": 6.0234
+        },
+        {
+          "t": 3466,
+          "passes": 60,
+          "totalMs": 360.3011,
+          "gpuMs": 360.3011,
+          "frameTime": 6.005
+        },
+        {
+          "t": 4046.5,
+          "passes": 30,
+          "totalMs": 184.1371,
+          "gpuMs": 184.1371,
+          "frameTime": 6.1379
+        },
+        {
+          "t": 4046.5,
+          "passes": 60,
+          "totalMs": 359.3497,
+          "gpuMs": 359.3497,
+          "frameTime": 5.9892
+        },
+        {
+          "t": 4631.2,
+          "passes": 30,
+          "totalMs": 181.2412,
+          "gpuMs": 181.2412,
+          "frameTime": 6.0414
+        },
+        {
+          "t": 4631.2,
+          "passes": 60,
+          "totalMs": 360.8354,
+          "gpuMs": 360.8354,
+          "frameTime": 6.0139
+        },
+        {
+          "t": 5209.4,
+          "passes": 30,
+          "totalMs": 180.302,
+          "gpuMs": 180.302,
+          "frameTime": 6.0101
+        },
+        {
+          "t": 5209.4,
+          "passes": 60,
+          "totalMs": 359.7557,
+          "gpuMs": 359.7557,
+          "frameTime": 5.9959
+        },
+        {
+          "t": 5790.1,
+          "passes": 30,
+          "totalMs": 185.6041,
+          "gpuMs": 185.6041,
+          "frameTime": 6.1868
+        },
+        {
+          "t": 5790.1,
+          "passes": 60,
+          "totalMs": 362.7851,
+          "gpuMs": 362.7851,
+          "frameTime": 6.0464
+        },
+        {
+          "t": 6371.1,
+          "passes": 30,
+          "totalMs": 180.4925,
+          "gpuMs": 180.4925,
+          "frameTime": 6.0164
+        },
+        {
+          "t": 6371.1,
+          "passes": 60,
+          "totalMs": 366.9718,
+          "gpuMs": 366.9718,
+          "frameTime": 6.1162
+        }
+      ]
+    },
+    {
+      "id": "noise_perlinVec3",
+      "label": "Perlin (vec3)",
+      "category": "noise",
+      "stats": {
+        "points": 104,
+        "medianFt": 8.6857,
+        "meanFt": 8.6731,
+        "p95Ft": 8.7064,
+        "p99Ft": 8.7081,
+        "sdFt": 0.0356,
+        "cvPercent": 0.41,
+        "avgFps": 115.3,
+        "thermalDrift": 1.005,
+        "frameCount": 8,
+        "filteredCount": 8,
+        "outlierCount": 0,
+        "msPerPass": 8.64752,
+        "overheadMsPerBatch": 2.292,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 5.6269,
+        "marginalMsAtRef": 5.6269,
+        "marginalPoints": 68
+      },
+      "frames": [
+        {
+          "t": 819.4,
+          "passes": 30,
+          "totalMs": 262.2934,
+          "gpuMs": 262.2934,
+          "frameTime": 8.7431
+        },
+        {
+          "t": 819.4,
+          "passes": 60,
+          "totalMs": 522.5101,
+          "gpuMs": 522.5101,
+          "frameTime": 8.7085
+        },
+        {
+          "t": 1641.8,
+          "passes": 30,
+          "totalMs": 261.0357,
+          "gpuMs": 261.0357,
+          "frameTime": 8.7012
+        },
+        {
+          "t": 1641.8,
+          "passes": 60,
+          "totalMs": 516.9536,
+          "gpuMs": 516.9536,
+          "frameTime": 8.6159
+        },
+        {
+          "t": 2458.3,
+          "passes": 30,
+          "totalMs": 259.4629,
+          "gpuMs": 259.4629,
+          "frameTime": 8.6488
+        },
+        {
+          "t": 2458.3,
+          "passes": 60,
+          "totalMs": 516.8885,
+          "gpuMs": 516.8885,
+          "frameTime": 8.6148
+        },
+        {
+          "t": 3277.9,
+          "passes": 30,
+          "totalMs": 262.3949,
+          "gpuMs": 262.3949,
+          "frameTime": 8.7465
+        },
+        {
+          "t": 3277.9,
+          "passes": 60,
+          "totalMs": 520.1727,
+          "gpuMs": 520.1727,
+          "frameTime": 8.6695
+        },
+        {
+          "t": 4095.5,
+          "passes": 30,
+          "totalMs": 261.9239,
+          "gpuMs": 261.9239,
+          "frameTime": 8.7308
+        },
+        {
+          "t": 4095.5,
+          "passes": 60,
+          "totalMs": 522.1435,
+          "gpuMs": 522.1435,
+          "frameTime": 8.7024
+        },
+        {
+          "t": 4914.1,
+          "passes": 30,
+          "totalMs": 256.9242,
+          "gpuMs": 256.9242,
+          "frameTime": 8.5641
+        },
+        {
+          "t": 4914.1,
+          "passes": 60,
+          "totalMs": 522.125,
+          "gpuMs": 522.125,
+          "frameTime": 8.7021
+        },
+        {
+          "t": 5735.9,
+          "passes": 30,
+          "totalMs": 261.511,
+          "gpuMs": 261.511,
+          "frameTime": 8.717
+        },
+        {
+          "t": 5735.9,
+          "passes": 60,
+          "totalMs": 521.6927,
+          "gpuMs": 521.6927,
+          "frameTime": 8.6949
+        },
+        {
+          "t": 6553.8,
+          "passes": 30,
+          "totalMs": 263.8369,
+          "gpuMs": 263.8369,
+          "frameTime": 8.7946
+        },
+        {
+          "t": 6553.8,
+          "passes": 60,
+          "totalMs": 520.5932,
+          "gpuMs": 520.5932,
+          "frameTime": 8.6766
+        }
+      ]
+    },
+    {
+      "id": "noise_fbm",
+      "label": "fBm",
+      "category": "noise",
+      "stats": {
+        "points": 142,
+        "medianFt": 11.8527,
+        "meanFt": 11.8428,
+        "p95Ft": 11.9099,
+        "p99Ft": 11.9228,
+        "sdFt": 0.019,
+        "cvPercent": 0.16,
+        "avgFps": 84.4,
+        "thermalDrift": 0.998,
+        "frameCount": 6,
+        "filteredCount": 5,
+        "outlierCount": 1,
+        "msPerPass": 11.83669,
+        "overheadMsPerBatch": 1.1538,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 8.8161,
+        "marginalMsAtRef": 8.8161,
+        "marginalPoints": 106
+      },
+      "frames": [
+        {
+          "t": 1102.4,
+          "passes": 30,
+          "totalMs": 356.7523,
+          "gpuMs": 356.7523,
+          "frameTime": 11.8917
+        },
+        {
+          "t": 1102.4,
+          "passes": 60,
+          "totalMs": 708.852,
+          "gpuMs": 708.852,
+          "frameTime": 11.8142
+        },
+        {
+          "t": 2205.7,
+          "passes": 30,
+          "totalMs": 356.7695,
+          "gpuMs": 356.7695,
+          "frameTime": 11.8923
+        },
+        {
+          "t": 2205.7,
+          "passes": 60,
+          "totalMs": 715.5612,
+          "gpuMs": 715.5612,
+          "frameTime": 11.926
+        },
+        {
+          "t": 3306.8,
+          "passes": 30,
+          "totalMs": 355.7568,
+          "gpuMs": 355.7568,
+          "frameTime": 11.8586
+        },
+        {
+          "t": 3306.8,
+          "passes": 60,
+          "totalMs": 711.6964,
+          "gpuMs": 711.6964,
+          "frameTime": 11.8616
+        },
+        {
+          "t": 4410.3,
+          "passes": 30,
+          "totalMs": 354.1513,
+          "gpuMs": 354.1513,
+          "frameTime": 11.805
+        },
+        {
+          "t": 4410.3,
+          "passes": 60,
+          "totalMs": 711.1596,
+          "gpuMs": 711.1596,
+          "frameTime": 11.8527
+        },
+        {
+          "t": 5512.5,
+          "passes": 30,
+          "totalMs": 357.004,
+          "gpuMs": 357.004,
+          "frameTime": 11.9001
+        },
+        {
+          "t": 5512.5,
+          "passes": 60,
+          "totalMs": 711.5511,
+          "gpuMs": 711.5511,
+          "frameTime": 11.8592
+        },
+        {
+          "t": 6614.8,
+          "passes": 30,
+          "totalMs": 355.4162,
+          "gpuMs": 355.4162,
+          "frameTime": 11.8472
+        },
+        {
+          "t": 6614.8,
+          "passes": 60,
+          "totalMs": 709.5834,
+          "gpuMs": 709.5834,
+          "frameTime": 11.8264
+        }
+      ]
+    },
+    {
+      "id": "noise_fbmVec3",
+      "label": "fBm (vec3)",
+      "category": "noise",
+      "stats": {
+        "points": 227,
+        "medianFt": 19.0117,
+        "meanFt": 19.0039,
+        "p95Ft": 19.0354,
+        "p99Ft": 19.0364,
+        "sdFt": 0.0319,
+        "cvPercent": 0.17,
+        "avgFps": 52.6,
+        "thermalDrift": 1.001,
+        "frameCount": 4,
+        "filteredCount": 4,
+        "outlierCount": 0,
+        "msPerPass": 18.89694,
+        "overheadMsPerBatch": 6.8828,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 15.8764,
+        "marginalMsAtRef": 15.8764,
+        "marginalPoints": 191
+      },
+      "frames": [
+        {
+          "t": 1765.4,
+          "passes": 30,
+          "totalMs": 576.0333,
+          "gpuMs": 576.0333,
+          "frameTime": 19.2011
+        },
+        {
+          "t": 1765.4,
+          "passes": 60,
+          "totalMs": 1141.6795,
+          "gpuMs": 1141.6795,
+          "frameTime": 19.028
+        },
+        {
+          "t": 3527.6,
+          "passes": 30,
+          "totalMs": 573.5184,
+          "gpuMs": 573.5184,
+          "frameTime": 19.1173
+        },
+        {
+          "t": 3527.6,
+          "passes": 60,
+          "totalMs": 1137.3344,
+          "gpuMs": 1137.3344,
+          "frameTime": 18.9556
+        },
+        {
+          "t": 5293.4,
+          "passes": 30,
+          "totalMs": 571.5987,
+          "gpuMs": 571.5987,
+          "frameTime": 19.0533
+        },
+        {
+          "t": 5293.4,
+          "passes": 60,
+          "totalMs": 1142.1994,
+          "gpuMs": 1142.1994,
+          "frameTime": 19.0367
+        },
+        {
+          "t": 7057.7,
+          "passes": 30,
+          "totalMs": 574.0639,
+          "gpuMs": 574.0639,
+          "frameTime": 19.1355
+        },
+        {
+          "t": 7057.7,
+          "passes": 60,
+          "totalMs": 1139.7194,
+          "gpuMs": 1139.7194,
+          "frameTime": 18.9953
+        }
+      ]
+    },
+    {
+      "id": "noise_cellNoise",
+      "label": "Cell Noise",
+      "category": "noise",
+      "stats": {
+        "points": 43,
+        "medianFt": 3.6302,
+        "meanFt": 3.6357,
+        "p95Ft": 3.7003,
+        "p99Ft": 3.7146,
+        "sdFt": 0.0473,
+        "cvPercent": 1.3,
+        "avgFps": 275,
+        "thermalDrift": 1.02,
+        "frameCount": 17,
+        "filteredCount": 16,
+        "outlierCount": 1,
+        "msPerPass": 3.59485,
+        "overheadMsPerBatch": 1.8829,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 0.5743,
+        "marginalMsAtRef": 0.5743,
+        "marginalPoints": 7
+      },
+      "frames": [
+        {
+          "t": 358.7,
+          "passes": 30,
+          "totalMs": 108.2143,
+          "gpuMs": 108.2143,
+          "frameTime": 3.6071
+        },
+        {
+          "t": 358.7,
+          "passes": 60,
+          "totalMs": 219.3083,
+          "gpuMs": 219.3083,
+          "frameTime": 3.6551
+        },
+        {
+          "t": 722.9,
+          "passes": 30,
+          "totalMs": 111.5737,
+          "gpuMs": 111.5737,
+          "frameTime": 3.7191
+        },
+        {
+          "t": 722.9,
+          "passes": 60,
+          "totalMs": 214.5735,
+          "gpuMs": 214.5735,
+          "frameTime": 3.5762
+        },
+        {
+          "t": 1079.8,
+          "passes": 30,
+          "totalMs": 108.826,
+          "gpuMs": 108.826,
+          "frameTime": 3.6275
+        },
+        {
+          "t": 1079.8,
+          "passes": 60,
+          "totalMs": 213.1461,
+          "gpuMs": 213.1461,
+          "frameTime": 3.5524
+        },
+        {
+          "t": 1434.7,
+          "passes": 30,
+          "totalMs": 106.4708,
+          "gpuMs": 106.4708,
+          "frameTime": 3.549
+        },
+        {
+          "t": 1434.7,
+          "passes": 60,
+          "totalMs": 209.0937,
+          "gpuMs": 209.0937,
+          "frameTime": 3.4849
+        },
+        {
+          "t": 1793.6,
+          "passes": 30,
+          "totalMs": 109.1801,
+          "gpuMs": 109.1801,
+          "frameTime": 3.6393
+        },
+        {
+          "t": 1793.6,
+          "passes": 60,
+          "totalMs": 213.8981,
+          "gpuMs": 213.8981,
+          "frameTime": 3.565
+        },
+        {
+          "t": 2154.2,
+          "passes": 30,
+          "totalMs": 109.7283,
+          "gpuMs": 109.7283,
+          "frameTime": 3.6576
+        },
+        {
+          "t": 2154.2,
+          "passes": 60,
+          "totalMs": 218.0461,
+          "gpuMs": 218.0461,
+          "frameTime": 3.6341
+        },
+        {
+          "t": 2518.1,
+          "passes": 30,
+          "totalMs": 109.8893,
+          "gpuMs": 109.8893,
+          "frameTime": 3.663
+        },
+        {
+          "t": 2518.1,
+          "passes": 60,
+          "totalMs": 217.0624,
+          "gpuMs": 217.0624,
+          "frameTime": 3.6177
+        },
+        {
+          "t": 2882.2,
+          "passes": 30,
+          "totalMs": 106.6668,
+          "gpuMs": 106.6668,
+          "frameTime": 3.5556
+        },
+        {
+          "t": 2882.2,
+          "passes": 60,
+          "totalMs": 217.5737,
+          "gpuMs": 217.5737,
+          "frameTime": 3.6262
+        },
+        {
+          "t": 3247.2,
+          "passes": 30,
+          "totalMs": 108.7768,
+          "gpuMs": 108.7768,
+          "frameTime": 3.6259
+        },
+        {
+          "t": 3247.2,
+          "passes": 60,
+          "totalMs": 221.7488,
+          "gpuMs": 221.7488,
+          "frameTime": 3.6958
+        },
+        {
+          "t": 3609.2,
+          "passes": 30,
+          "totalMs": 110.6165,
+          "gpuMs": 110.6165,
+          "frameTime": 3.6872
+        },
+        {
+          "t": 3609.2,
+          "passes": 60,
+          "totalMs": 216.545,
+          "gpuMs": 216.545,
+          "frameTime": 3.6091
+        },
+        {
+          "t": 3976.9,
+          "passes": 30,
+          "totalMs": 112.479,
+          "gpuMs": 112.479,
+          "frameTime": 3.7493
+        },
+        {
+          "t": 3976.9,
+          "passes": 60,
+          "totalMs": 221.3973,
+          "gpuMs": 221.3973,
+          "frameTime": 3.69
+        },
+        {
+          "t": 4338.5,
+          "passes": 30,
+          "totalMs": 107.1857,
+          "gpuMs": 107.1857,
+          "frameTime": 3.5729
+        },
+        {
+          "t": 4338.5,
+          "passes": 60,
+          "totalMs": 220.8512,
+          "gpuMs": 220.8512,
+          "frameTime": 3.6809
+        },
+        {
+          "t": 4701.2,
+          "passes": 30,
+          "totalMs": 108.7945,
+          "gpuMs": 108.7945,
+          "frameTime": 3.6265
+        },
+        {
+          "t": 4701.2,
+          "passes": 60,
+          "totalMs": 217.0993,
+          "gpuMs": 217.0993,
+          "frameTime": 3.6183
+        },
+        {
+          "t": 5065.1,
+          "passes": 30,
+          "totalMs": 109.8789,
+          "gpuMs": 109.8789,
+          "frameTime": 3.6626
+        },
+        {
+          "t": 5065.1,
+          "passes": 60,
+          "totalMs": 220.4091,
+          "gpuMs": 220.4091,
+          "frameTime": 3.6735
+        },
+        {
+          "t": 5427.3,
+          "passes": 30,
+          "totalMs": 109.7387,
+          "gpuMs": 109.7387,
+          "frameTime": 3.658
+        },
+        {
+          "t": 5427.3,
+          "passes": 60,
+          "totalMs": 219.4439,
+          "gpuMs": 219.4439,
+          "frameTime": 3.6574
+        },
+        {
+          "t": 5793.5,
+          "passes": 30,
+          "totalMs": 112.1682,
+          "gpuMs": 112.1682,
+          "frameTime": 3.7389
+        },
+        {
+          "t": 5793.5,
+          "passes": 60,
+          "totalMs": 223.0901,
+          "gpuMs": 223.0901,
+          "frameTime": 3.7182
+        },
+        {
+          "t": 6154.8,
+          "passes": 30,
+          "totalMs": 110.0992,
+          "gpuMs": 110.0992,
+          "frameTime": 3.67
+        },
+        {
+          "t": 6154.8,
+          "passes": 60,
+          "totalMs": 216.1073,
+          "gpuMs": 216.1073,
+          "frameTime": 3.6018
+        }
+      ]
+    },
+    {
+      "id": "noise_voronoi",
+      "label": "Voronoi F1",
+      "category": "noise",
+      "stats": {
+        "points": 268,
+        "medianFt": 22.4418,
+        "meanFt": 22.4692,
+        "p95Ft": 22.5609,
+        "p99Ft": 22.5715,
+        "sdFt": 0.077,
+        "cvPercent": 0.34,
+        "avgFps": 44.5,
+        "thermalDrift": 1.002,
+        "frameCount": 3,
+        "filteredCount": 3,
+        "outlierCount": 0,
+        "msPerPass": 22.33377,
+        "overheadMsPerBatch": 6.4813,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 19.3132,
+        "marginalMsAtRef": 19.3132,
+        "marginalPoints": 232
+      },
+      "frames": [
+        {
+          "t": 2092.6,
+          "passes": 30,
+          "totalMs": 672.828,
+          "gpuMs": 672.828,
+          "frameTime": 22.4276
+        },
+        {
+          "t": 2092.6,
+          "passes": 60,
+          "totalMs": 1346.5073,
+          "gpuMs": 1346.5073,
+          "frameTime": 22.4418
+        },
+        {
+          "t": 4174.8,
+          "passes": 30,
+          "totalMs": 677.612,
+          "gpuMs": 677.612,
+          "frameTime": 22.5871
+        },
+        {
+          "t": 4174.8,
+          "passes": 60,
+          "totalMs": 1354.4462,
+          "gpuMs": 1354.4462,
+          "frameTime": 22.5741
+        },
+        {
+          "t": 6249.7,
+          "passes": 30,
+          "totalMs": 676.4943,
+          "gpuMs": 676.4943,
+          "frameTime": 22.5498
+        },
+        {
+          "t": 6249.7,
+          "passes": 60,
+          "totalMs": 1343.4944,
+          "gpuMs": 1343.4944,
+          "frameTime": 22.3916
+        }
+      ]
+    },
+    {
+      "id": "noise_voronoiVec2",
+      "label": "Voronoi F1/F2",
+      "category": "noise",
+      "stats": {
+        "points": 273,
+        "medianFt": 22.8244,
+        "meanFt": 22.8144,
+        "p95Ft": 22.986,
+        "p99Ft": 23.0004,
+        "sdFt": 0.1591,
+        "cvPercent": 0.7,
+        "avgFps": 43.8,
+        "thermalDrift": 1.013,
+        "frameCount": 3,
+        "filteredCount": 3,
+        "outlierCount": 0,
+        "msPerPass": 22.77406,
+        "overheadMsPerBatch": 3.0183,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 19.7535,
+        "marginalMsAtRef": 19.7535,
+        "marginalPoints": 237
+      },
+      "frames": [
+        {
+          "t": 2102.8,
+          "passes": 30,
+          "totalMs": 682.3072,
+          "gpuMs": 682.3072,
+          "frameTime": 22.7436
+        },
+        {
+          "t": 2102.8,
+          "passes": 60,
+          "totalMs": 1356.8864,
+          "gpuMs": 1356.8864,
+          "frameTime": 22.6148
+        },
+        {
+          "t": 4228.7,
+          "passes": 30,
+          "totalMs": 690.468,
+          "gpuMs": 690.468,
+          "frameTime": 23.0156
+        },
+        {
+          "t": 4228.7,
+          "passes": 60,
+          "totalMs": 1369.4619,
+          "gpuMs": 1369.4619,
+          "frameTime": 22.8244
+        },
+        {
+          "t": 6357.8,
+          "passes": 30,
+          "totalMs": 686.2401,
+          "gpuMs": 686.2401,
+          "frameTime": 22.8747
+        },
+        {
+          "t": 6357.8,
+          "passes": 60,
+          "totalMs": 1380.2397,
+          "gpuMs": 1380.2397,
+          "frameTime": 23.004
+        }
+      ]
+    },
+    {
+      "id": "noise_voronoiVec3",
+      "label": "Voronoi F1/F2/F3",
+      "category": "noise",
+      "stats": {
+        "points": 282,
+        "medianFt": 23.3695,
+        "meanFt": 23.3392,
+        "p95Ft": 23.4615,
+        "p99Ft": 23.4696,
+        "sdFt": 0.1224,
+        "cvPercent": 0.52,
+        "avgFps": 42.8,
+        "thermalDrift": 0.992,
+        "frameCount": 3,
+        "filteredCount": 3,
+        "outlierCount": 0,
+        "msPerPass": 23.48531,
+        "overheadMsPerBatch": -6.9507,
+        "passesLo": 30,
+        "passesHi": 60,
+        "baselineMs": 3.0206,
+        "marginalMs": 20.4647,
+        "marginalMsAtRef": 20.4647,
+        "marginalPoints": 246
+      },
+      "frames": [
+        {
+          "t": 2155.7,
+          "passes": 30,
+          "totalMs": 697.0338,
+          "gpuMs": 697.0338,
+          "frameTime": 23.2345
+        },
+        {
+          "t": 2155.7,
+          "passes": 60,
+          "totalMs": 1408.3007,
+          "gpuMs": 1408.3007,
+          "frameTime": 23.4717
+        },
+        {
+          "t": 4307.6,
+          "passes": 30,
+          "totalMs": 697.6085,
+          "gpuMs": 697.6085,
+          "frameTime": 23.2536
+        },
+        {
+          "t": 4307.6,
+          "passes": 60,
+          "totalMs": 1390.589,
+          "gpuMs": 1390.589,
+          "frameTime": 23.1765
+        },
+        {
+          "t": 6468.2,
+          "passes": 30,
+          "totalMs": 705.9868,
+          "gpuMs": 705.9868,
+          "frameTime": 23.5329
+        },
+        {
+          "t": 6468.2,
+          "passes": 60,
+          "totalMs": 1402.1677,
+          "gpuMs": 1402.1677,
+          "frameTime": 23.3695
+        }
+      ]
+    }
+  ]
+}
