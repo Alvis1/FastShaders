@@ -541,20 +541,34 @@ export function NodeEditor() {
   // progress — lets the draw handler pause its stroke so a second finger
   // navigates instead of corrupting the ink. Only ever set on coarse pointers.
   const twoFingerNavRef = useRef(false);
-  // Coarse pointer = touch/pen tablet (e.g. iPad). Drives the touch
-  // interaction model: ONE finger manipulates (drag nodes/edges, marquee
-  // select), TWO fingers navigate (pan + pinch-zoom), long-press opens the
-  // menu. On a mouse (`pointer: fine`) this stays false and the desktop
-  // model (panOnDrag={[1,2]}, double-tap-drag pan) is left completely intact.
-  const [isCoarsePointer, setIsCoarsePointer] = useState(
-    () => typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(pointer: coarse)').matches,
-  );
+  // Coarse pointer = touch/pen (e.g. iPad). Drives the touch interaction model:
+  // ONE finger manipulates (drag nodes/edges, marquee select), TWO fingers
+  // navigate (pan + pinch-zoom), long-press opens the menu. A mouse keeps the
+  // desktop model (panOnDrag={[1,2]}, double-tap-drag pan) completely intact.
+  //
+  // NB matchMedia('(pointer: coarse)') LIES on iPad: iPadOS Safari does
+  // desktop-class browsing and reports (pointer: fine)/(hover: hover), so the
+  // media query alone leaves iPad stuck in the desktop model. navigator.
+  // maxTouchPoints is the reliable signal (iPad reports 5 even in desktop
+  // mode) — the same trick tslToPreviewHTML already uses. `any-pointer` catches
+  // touch even when the primary pointer is a paired trackpad.
+  const [isCoarsePointer, setIsCoarsePointer] = useState(() => {
+    if (typeof navigator !== 'undefined' && (navigator.maxTouchPoints ?? 0) > 0) return true;
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia('(any-pointer: coarse)').matches || window.matchMedia('(pointer: coarse)').matches;
+  });
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    const mq = window.matchMedia('(pointer: coarse)');
-    const onChange = () => setIsCoarsePointer(mq.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
+    // Adapt to the device actually in use: a mouse/trackpad → desktop model, a
+    // finger/pen → touch model. Only flips on a real change (React bails on an
+    // equal value), and a single gesture is always one pointer type, so this
+    // never re-renders mid-drag. Keeps a hybrid device (iPad + Magic Keyboard,
+    // or a touchscreen laptop) correct for whichever input the user reaches for.
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse') setIsCoarsePointer(false);
+      else if (e.pointerType === 'touch' || e.pointerType === 'pen') setIsCoarsePointer(true);
+    };
+    window.addEventListener('pointerdown', onPointerDown, { capture: true });
+    return () => window.removeEventListener('pointerdown', onPointerDown, { capture: true } as EventListenerOptions);
   }, []);
 
   // Copy/paste clipboard
