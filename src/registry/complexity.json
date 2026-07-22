@@ -1,6 +1,6 @@
 {
   "meta": {
-    "description": "Performance cost map for TSL functions. Higher = more GPU cycles. Baseline: add = 1. SFU ops (sin/cos/sqrt/rcp) = 4 (quarter-rate on mobile GPUs). Budgets assume 3-5 shaders in scene.",
+    "description": "Performance cost map for TSL functions. Higher = more GPU cycles. Baseline: add = 1. SFU ops (sin/cos/sqrt/rcp) = 4 (quarter-rate on mobile GPUs). Budgets assume 3-5 shaders in scene. Noise family (voronoi/fbm) recalibrated 2026-07-23 from measured Adreno 740 (Quest 3) GPU-timestamp benchmarks (Static + MicroPlane agree); voronoi was ~4x underpriced. See ShaderCarousel/benchData/ (run data + METHODS.md).",
     "maxBudget": 350
   },
   "costs": {
@@ -70,12 +70,12 @@
 
     "perlin": 35,
     "perlinVec3": 75,
-    "fbm": 95,
-    "fbmVec3": 200,
+    "fbm": 105,
+    "fbmVec3": 190,
     "cellNoise": 12,
-    "voronoi": 55,
-    "voronoiVec2": 60,
-    "voronoiVec3": 65,
+    "voronoi": 230,
+    "voronoiVec2": 235,
+    "voronoiVec3": 245,
 
     "hsl": 15,
     "toHsl": 15,
