@@ -147,8 +147,11 @@
    These rules are additive; desktop layouts are untouched. */
 @media (pointer: coarse) {
   :root {
-    /* Bigger port disc — 18px visual, still centered on the same anchor.
-       React Flow's internal hit area scales with this. */
-    --handle-size: 18px;
+    /* A small touch bump for the port disc (12px vs the 10px design), still
+       centered on the same anchor. The editor's own snap radius
+       (CONNECTION_RADIUS) does the real hit-catching on touch, so the disc
+       stays close to its designed size and node proportions read correctly.
+       18px here rendered ~2x oversized on iPad. */
+    --handle-size: 12px;
   }
 }

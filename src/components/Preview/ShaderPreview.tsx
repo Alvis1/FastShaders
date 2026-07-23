@@ -8,10 +8,13 @@ import {
   LIGHT_PRESETS,
   buildGeoAttr,
   getModelUrl,
+  isModelGeometry,
   isObjGeometry,
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
+import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
+import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import './ShaderPreview.css';
 
 interface UniformInfo {
@@ -89,7 +92,21 @@ function BoundInput({
 
 function validateGeometry(v: string | null): GeometryType {
   if (v === 'cube' || v === 'plane' || v === 'sphere' || v === 'teapot' || v === 'bunny') return v;
+  // 'custom' is only valid while a mesh is actually loaded. The store is read
+  // IMPERATIVELY on purpose: this validator must keep a stable module-scope
+  // identity (usePersistedState requirement), yet still see a mesh that a
+  // project import committed synchronously right before dispatching the
+  // fs:project-imported re-read. On a fresh boot previewMesh is always null
+  // (never persisted), so a stale persisted 'custom' degrades to sphere.
+  if (v === 'custom' && useAppStore.getState().previewMesh) return 'custom';
   return 'sphere';
+}
+
+/** Middle-ellipsis so a long dropped-file name can't blow out the controls bar. */
+function truncateMiddle(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const half = Math.floor((max - 1) / 2);
+  return `${s.slice(0, half)}…${s.slice(s.length - half)}`;
 }
 
 function validateLighting(v: string | null): LightingMode {
@@ -275,6 +292,8 @@ export function ShaderPreview() {
   const edges = useAppStore((s) => s.edges);
   const shaderName = useAppStore((s) => s.shaderName);
   const language = useAppStore((s) => s.language);
+  const previewMesh = useAppStore((s) => s.previewMesh);
+  const setPreviewMesh = useAppStore((s) => s.setPreviewMesh);
 
   // Read material settings from the output node
   const outputNode = nodes.find((n) => n.data.registryType === 'output');
@@ -371,6 +390,143 @@ export function ShaderPreview() {
   const cameraPosRef = useRef<CameraPosition | null>(loadCameraPos());
   const rotationRef = useRef<CameraPosition | null>(loadRotation());
 
+  // ── Model / file drop surface ──────────────────────────────────────────
+  // Two regions feed the same handler (podest's exact pattern): the parent-
+  // owned chrome (controls bar, overlays) via the root element's drag props,
+  // and the sandboxed iframe — which swallows drag events over the whole 3D
+  // view, so the generated document forwards them over postMessage
+  // (fs:preview-drag signal + fs:preview-drop File objects; see the forwarder
+  // in tslToPreviewHTML.ts). The veil shows while EITHER region reports an
+  // active drag, with a safety timeout so an aborted drag (Esc / drop outside
+  // the window — no reliable leave event) can never strand it; a live drag
+  // keeps re-arming the timeout via the dragover heartbeat.
+  const [dropVeil, setDropVeil] = useState(false);
+  const [dropNotice, setDropNotice] = useState<string | null>(null);
+  const dragDepthRef = useRef(0);
+  const iframeDragRef = useRef(false);
+  const veilTimerRef = useRef<number | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
+
+  const refreshDropVeil = useCallback(() => {
+    const show = dragDepthRef.current > 0 || iframeDragRef.current;
+    setDropVeil(show);
+    if (veilTimerRef.current !== null) {
+      window.clearTimeout(veilTimerRef.current);
+      veilTimerRef.current = null;
+    }
+    if (show) {
+      veilTimerRef.current = window.setTimeout(() => {
+        dragDepthRef.current = 0;
+        iframeDragRef.current = false;
+        setDropVeil(false);
+        veilTimerRef.current = null;
+      }, 1500);
+    }
+  }, []);
+
+  /** Transient parent-owned notice (invalid drop, unreadable file, …). */
+  const showDropNotice = useCallback((msg: string) => {
+    setDropNotice(msg);
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = window.setTimeout(() => {
+      setDropNotice(null);
+      noticeTimerRef.current = null;
+    }, 6000);
+  }, []);
+
+  useEffect(() => () => {
+    if (veilTimerRef.current !== null) window.clearTimeout(veilTimerRef.current);
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+  }, []);
+
+  const loadMeshFile = useCallback(async (file: File) => {
+    try {
+      // Size gate BEFORE the read — a hostile/oversized drop must not force a
+      // multi-hundred-MB arrayBuffer allocation just to be rejected.
+      if (file.size > MESH_MAX_BYTES) {
+        showDropNotice(`${t('Model too large', language)} (${(file.size / 1024 / 1024).toFixed(1)} MB — max ${MESH_MAX_BYTES / 1024 / 1024} MB).`);
+        return;
+      }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      // createPreviewMesh sanitizes the name at the store boundary — every
+      // consumer (zip export entry, README text, option label) reads the
+      // stored value, never the raw file name.
+      const result = createPreviewMesh(file.name, bytes);
+      if ('error' in result) {
+        // The util's fixed error strings double as t() keys (English falls
+        // through for the dynamic ones).
+        showDropNotice(t(result.error, language));
+        return;
+      }
+      setPreviewMesh(result.mesh);
+      setGeometry('custom');
+    } catch (e) {
+      showDropNotice(`${t('Could not read the model file', language)}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [setPreviewMesh, setGeometry, showDropNotice, language]);
+
+  // One dispatch for every preview drop, wherever it landed. A model file
+  // becomes the custom preview mesh; a shader .js/.zip routes through the
+  // SAME shared project-import path the canvas and code-panel drops use
+  // (there is no event-bubbling fallback — forwarded iframe drops arrive as
+  // postMessage, so this surface must handle or reject everything itself).
+  const handleDroppedFiles = useCallback((files: File[], source: 'dom' | 'iframe' = 'dom') => {
+    const model = files.find((f) => detectMeshKind(f.name) !== null);
+    const zip = files.find((f) => isZipFile(f));
+    const script = zip ? null : files.find((f) => /\.(js|mjs|tsl|txt)$/i.test(f.name)) ?? null;
+
+    // SECURITY: an iframe-forwarded drop is only as trustworthy as the
+    // sandbox that forwarded it — adversarial shader code can forge
+    // fs:preview-drop with a File it constructed itself. A shader import
+    // REPLACES the whole project, so iframe-originated .js/.zip needs an
+    // explicit user click; a model file only swaps the session preview mesh
+    // (low blast radius) and stays immediate. Parent-chrome drops are real
+    // DOM events and skip the prompt.
+    let shaderFile = zip ?? script;
+    if (shaderFile && source === 'iframe') {
+      const ok = window.confirm(
+        `${t('Load the dropped shader file? It replaces the current project.', language)}\n(${shaderFile.name})`,
+      );
+      if (!ok) shaderFile = null;
+    }
+
+    // Shader import FIRST (it clears/overwrites the mesh — see
+    // importShaderText/importShaderZip), THEN the dropped model — so a
+    // combined shader+model drop deterministically shows the dropped model
+    // (podest's pairing semantics) instead of racing two file reads.
+    let shaderP: Promise<unknown> | null = null;
+    if (shaderFile && zip && shaderFile === zip) {
+      shaderP = importShaderZip(zip).then(
+        (r) => { if (r === null) showDropNotice(t('The zip holds no shader script', language)); },
+        (e: unknown) => showDropNotice(String(e instanceof Error ? e.message : e)),
+      );
+    } else if (shaderFile) {
+      shaderP = shaderFile.text().then(
+        (text) => { importShaderText(text); },
+        (e: unknown) => showDropNotice(String(e instanceof Error ? e.message : e)),
+      );
+    }
+    if (model) {
+      if (shaderP) void shaderP.finally(() => { void loadMeshFile(model); });
+      else void loadMeshFile(model);
+    }
+    if (!model && !zip && !script) {
+      showDropNotice(t('Drop a 3D model (.obj / .glb / .gltf) or a shader (.js / .zip)', language));
+    }
+  }, [loadMeshFile, showDropNotice, language]);
+
+  // Ref mirror so the mount-once message handler below sees the latest
+  // dispatch without re-binding (same pattern as uniformValuesRef).
+  const handleDroppedFilesRef = useRef(handleDroppedFiles);
+  useEffect(() => { handleDroppedFilesRef.current = handleDroppedFiles; }, [handleDroppedFiles]);
+
+  // If the mesh is cleared while 'custom' is selected (a bare .js import
+  // clears stale meshes and — on the script path — fires no prefs re-read),
+  // fall back to a sphere so the select never points at an unmounted option.
+  useEffect(() => {
+    if (geometry === 'custom' && !previewMesh) setGeometry('sphere');
+  }, [geometry, previewMesh, setGeometry]);
+
   // Property uniforms detected from the generated code, filtered to only those
   // whose property node has at least one outgoing edge (i.e. is connected).
   // BOTH property kinds must be scanned: with only property_float here, the
@@ -452,8 +608,31 @@ export function ShaderPreview() {
       // The iframe is sandboxed (allow-scripts only, no allow-same-origin),
       // so e.origin will be "null"; identity is verified via e.source instead.
       if (e.source !== iframeRef.current?.contentWindow) return;
-      const data = e.data as { type?: string; x?: number; y?: number; z?: number } | null;
+      const data = e.data as {
+        type?: string; x?: number; y?: number; z?: number;
+        on?: boolean; files?: unknown;
+      } | null;
       if (!data || typeof data.type !== 'string') return;
+      if (data.type === 'fs:preview-drag') {
+        // Drag entered/left the iframe region — mirror the drop veil.
+        iframeDragRef.current = !!data.on;
+        refreshDropVeil();
+        return;
+      }
+      if (data.type === 'fs:preview-drop') {
+        // Files dropped ON the iframe, forwarded as structured-cloned File
+        // objects. Zero both drag signals (an iframe drop produces no parent
+        // dragleave) and accept only real Files — a forged message from
+        // adversarial shader code can't smuggle anything else into the loader.
+        dragDepthRef.current = 0;
+        iframeDragRef.current = false;
+        refreshDropVeil();
+        const dropped = Array.isArray(data.files)
+          ? data.files.filter((f): f is File => f instanceof File)
+          : [];
+        if (dropped.length) handleDroppedFilesRef.current(dropped, 'iframe');
+        return;
+      }
       if (data.type === 'fs:preview-error') {
         // The shader failed: no fs:preview-ready is coming. Drop the overlay so
         // the iframe's error message is readable.
@@ -560,11 +739,11 @@ export function ShaderPreview() {
     return () => window.removeEventListener('fs:project-imported', handler);
   }, []);
 
-  // OBJ-backed geometries ignore the subdivision slider entirely. Folding the
-  // value to a constant in the dep list (instead of the live state) means
-  // dragging the slider while a teapot/bunny is selected doesn't rebuild the
-  // iframe to produce identical HTML.
-  const effectiveSubdivision = isObjGeometry(geometry) ? 0 : subdivision;
+  // Model-backed geometries (built-in OBJs + a dropped mesh) ignore the
+  // subdivision slider entirely. Folding the value to a constant in the dep
+  // list (instead of the live state) means dragging the slider while a model
+  // is selected doesn't rebuild the iframe to produce identical HTML.
+  const effectiveSubdivision = isModelGeometry(geometry) ? 0 : subdivision;
 
   // Generate the iframe's HTML payload. We pass it via `srcDoc` rather than
   // building a blob URL because the iframe is sandboxed without
@@ -602,7 +781,12 @@ export function ShaderPreview() {
   // single rebuild on release. Trailing-only, so first paint isn't delayed.
   const debouncedPreviewCode = useDebounced(previewCode, PREVIEW_REBUILD_DEBOUNCE_MS);
 
-  const geometryRebuildKey = isObjGeometry(geometry) ? geometry : '__primitive__';
+  // Dropped meshes key on their id so re-dropping a file (same name, new
+  // bytes) still forces a fresh document — the feed only ever applies to the
+  // document built for exactly that mesh instance.
+  const geometryRebuildKey = isModelGeometry(geometry)
+    ? (geometry === 'custom' ? `custom:${previewMesh?.id ?? 0}` : geometry)
+    : '__primitive__';
   const previewHtml = useMemo(() => {
     const options: PreviewOptions = {
       geometry,
@@ -611,6 +795,9 @@ export function ShaderPreview() {
       bgColor,
       lighting,
       subdivision: effectiveSubdivision,
+      customModel: geometry === 'custom' && previewMesh
+        ? { kind: previewMesh.kind, id: previewMesh.id }
+        : null,
       // Read from the ref at memo time so the user's current camera angle
       // survives setting changes (subdivision, lighting, etc.) without
       // joining the dep list (which would cause an infinite rebuild loop).
@@ -673,14 +860,17 @@ export function ShaderPreview() {
   // Live PRIMITIVE geometry + subdivision hot-swap. Any change that stays
   // entirely within primitives (sphere↔cube↔plane, or just a subdivision tweak)
   // is posted to the running iframe — the rebuild key (above) deliberately does
-  // NOT rebuild for these. We skip only when an OBJ model is involved on either
-  // side: that crosses/triggers a rebuild which bakes the new geometry, and
-  // posting an OBJ swap to the live r184 WebGPU scene is what crashes it.
+  // NOT rebuild for these. We skip only when a model (built-in OBJ or dropped
+  // mesh) is involved on EITHER side: that crosses/triggers a rebuild which
+  // bakes the new geometry, and posting a model swap to the live r184 WebGPU
+  // scene is what crashes it. Both sides of the guard matter — a custom→sphere
+  // switch with only the current-side checked would post a primitive attr into
+  // the live model document.
   const prevGeometryRef = useRef(geometry);
   useEffect(() => {
-    const prevWasObj = isObjGeometry(prevGeometryRef.current);
+    const prevWasModel = isModelGeometry(prevGeometryRef.current);
     prevGeometryRef.current = geometry;
-    if (isObjGeometry(geometry) || prevWasObj) return;
+    if (isModelGeometry(geometry) || prevWasModel) return;
     iframeRef.current?.contentWindow?.postMessage(
       {
         type: 'fs:geometry',
@@ -704,7 +894,25 @@ export function ShaderPreview() {
   // it was built for, so a slow fetch resolving after a rapid teapot→bunny
   // switch can't apply a stale mesh to the newer document.
   const handleIframeLoad = useCallback(() => {
-    if (!isObjGeometry(geometry)) return;
+    if (!isModelGeometry(geometry)) return;
+    if (geometry === 'custom') {
+      // Dropped mesh: no fetch — post the stored payload. The exact
+      // Uint8Array VIEW is posted (never `.buffer`, whose extent can differ)
+      // and structured-cloned, so the store's copy stays live for the zip
+      // export and every later rebuild. This copy happens once per iframe
+      // rebuild (debounced 200ms), which is the price of a fresh document —
+      // text formats are pre-decoded at load time (PreviewMesh.text).
+      const mesh = previewMesh;
+      const win = iframeRef.current?.contentWindow;
+      if (!mesh || !win) return;
+      const key = `custom:${mesh.id}`;
+      if (mesh.kind === 'glb') {
+        win.postMessage({ type: 'fs:obj-model', geometry: key, kind: 'glb', bytes: mesh.bytes }, '*');
+      } else {
+        win.postMessage({ type: 'fs:obj-model', geometry: key, kind: mesh.kind, text: mesh.text ?? '' }, '*');
+      }
+      return;
+    }
     const geo = geometry as 'teapot' | 'bunny';
     fetchObjText(geo).then(
       (text) => {
@@ -726,7 +934,7 @@ export function ShaderPreview() {
         );
       },
     );
-  }, [geometry]);
+  }, [geometry, previewMesh]);
 
   // Immersive VR entry. Permissions-Policy can never delegate
   // xr-spatial-tracking to the sandboxed preview iframe's OPAQUE origin —
@@ -738,11 +946,27 @@ export function ShaderPreview() {
   // safety-gated emission as the preview/export pipeline — at top level in
   // the app's real origin. That is acceptable for generated code; never
   // feed raw code-editor text into this path.
+  // Blob URL for the custom mesh in the XR popup. The popup is same-origin,
+  // so a parent-minted URL loads directly there. Revoked only when replaced —
+  // an open popup may still be reading it, so leak-until-next-mint (bounded:
+  // one URL) beats revoking under a live loader.
+  const vrModelUrlRef = useRef<string | null>(null);
   const handleOpenVR = useCallback(() => {
     const w = window.open('', '_blank');
     if (!w) {
       window.alert('The browser blocked the VR window. Allow popups for this site and try again.');
       return;
+    }
+    let customModel: PreviewOptions['customModel'] = null;
+    if (geometry === 'custom' && previewMesh) {
+      if (vrModelUrlRef.current) {
+        try { URL.revokeObjectURL(vrModelUrlRef.current); } catch { /* */ }
+      }
+      const blob = previewMesh.kind === 'glb'
+        ? new Blob([previewMesh.bytes], { type: 'model/gltf-binary' })
+        : new Blob([previewMesh.bytes]);
+      vrModelUrlRef.current = URL.createObjectURL(blob);
+      customModel = { kind: previewMesh.kind, id: previewMesh.id, url: vrModelUrlRef.current };
     }
     const html = tslToPreviewHTML(previewCode, {
       geometry,
@@ -751,6 +975,7 @@ export function ShaderPreview() {
       bgColor,
       lighting,
       subdivision: effectiveSubdivision,
+      customModel,
       initialCameraPosition: cameraPosRef.current,
       initialRotation: rotationRef.current,
       xr: true,
@@ -758,10 +983,44 @@ export function ShaderPreview() {
     });
     w.document.write(html);
     w.document.close();
-  }, [previewCode, geometry, playing, materialSettings, bgColor, lighting, effectiveSubdivision, shaderName]);
+  }, [previewCode, geometry, previewMesh, playing, materialSettings, bgColor, lighting, effectiveSubdivision, shaderName]);
 
   return (
-    <div className="shader-preview" ref={rootRef}>
+    <div
+      className="shader-preview"
+      ref={rootRef}
+      // Parent-side half of the drop surface (controls bar + overlays; the
+      // iframe forwards its own region — see the fs:preview-drag handler).
+      // Gated on the Files type so internal drags (palette tiles, node drags)
+      // pass through untouched.
+      onDragEnter={(e) => {
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        dragDepthRef.current++;
+        refreshDropVeil();
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        refreshDropVeil();
+      }}
+      onDragLeave={(e) => {
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        if (--dragDepthRef.current < 0) dragDepthRef.current = 0;
+        refreshDropVeil();
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        dragDepthRef.current = 0;
+        iframeDragRef.current = false;
+        refreshDropVeil();
+        const files = Array.from(e.dataTransfer.files ?? []);
+        if (files.length) handleDroppedFiles(files);
+      }}
+    >
       <div className="shader-preview__controls">
         <button
           className="shader-preview__play-btn"
@@ -824,7 +1083,7 @@ export function ShaderPreview() {
           className="shader-preview__geo-select"
           value={geometry}
           onChange={(e) => setGeometry(e.target.value as GeometryType)}
-          title={t('Preview geometry — drag the model to orbit, scroll to zoom', language)}
+          title={t('Preview geometry — drag the model to orbit, scroll to zoom; drop a 3D model (.obj / .glb / .gltf) on the preview to shade your own mesh', language)}
           aria-label={t('Preview geometry', language)}
         >
           <option value="sphere">{t('Sphere', language)}</option>
@@ -832,8 +1091,11 @@ export function ShaderPreview() {
           <option value="plane">{t('Plane', language)}</option>
           <option value="teapot">{t('Utah Teapot', language)}</option>
           <option value="bunny">{t('Stanford Bunny', language)}</option>
+          {previewMesh && (
+            <option value="custom">{`${t('Model:', language)} ${truncateMiddle(previewMesh.name, 24)}`}</option>
+          )}
         </select>
-        {!isObjGeometry(geometry) && (
+        {!isModelGeometry(geometry) && (
           <label className="shader-preview__subdivision" title={t('Mesh subdivision', language)}>
             <input
               type="range"
@@ -864,6 +1126,14 @@ export function ShaderPreview() {
             <span className="shader-preview__compiling-dot" />
             {t('Compiling shader…', language)}
           </div>
+        )}
+        {dropVeil && (
+          <div className="shader-preview__drop-veil">
+            {t('Drop a 3D model (.obj / .glb / .gltf) or a shader (.js / .zip)', language)}
+          </div>
+        )}
+        {dropNotice && (
+          <div className="shader-preview__drop-notice" role="alert">{dropNotice}</div>
         )}
         <iframe
           ref={iframeRef}

@@ -11,7 +11,7 @@
     • Shader script (.js / .mjs / .tsl) — a FastShaders export OR any TSL ES
       module that `export default`s a Fn and imports from 'three/tsl'. Its
       property uniforms become live sliders (auto-detected by the shaderloader).
-    • 3D model (.glb / .gltf) — becomes the mesh the shader runs on; a toggle
+    • 3D model (.glb / .gltf / .obj) — becomes the mesh the shader runs on; a toggle
       switches between the shader and the model's own PBR materials.
     • Archive (.zip) — unzipped in-browser (native DecompressionStream, no
       dependency); the first shader script + first model inside are loaded.
@@ -121,7 +121,7 @@
 <iframe id="stage" sandbox="allow-scripts" allow="fullscreen *; xr-spatial-tracking *" allowfullscreen title="Shader stage"></iframe>
 <div id="error"></div>
 <div id="overlay">Drop shader · model · zip</div>
-<div id="hint">Drop a shader (.js/.tsl), a model (.glb), or a .zip anywhere — or click the panel drop area.</div>
+<div id="hint">Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip anywhere — or click the panel drop area.</div>
 
 <div id="panel">
   <div class="panel__head" id="panel-head">
@@ -131,9 +131,9 @@
   <div class="panel__body">
     <div class="dropzone" id="dropzone">
       <strong>Drop a file</strong>
-      shader (.js / .tsl) · model (.glb) · archive (.zip)
+      shader (.js / .tsl) · model (.glb / .gltf / .obj) · archive (.zip)
     </div>
-    <input type="file" id="file-input" accept=".js,.mjs,.tsl,.txt,.glb,.gltf,.zip" multiple hidden />
+    <input type="file" id="file-input" accept=".js,.mjs,.tsl,.txt,.glb,.gltf,.obj,.zip" multiple hidden />
 
     <div class="loaded" id="loaded" hidden></div>
 
@@ -188,8 +188,9 @@
   var state = {
     shaderSource: null,    // text of the current shader module (null = none)
     shaderName: null,
-    modelBytes: null,      // ArrayBuffer of a dropped GLB (null = none)
+    modelBytes: null,      // ArrayBuffer of a dropped model (null = none)
     modelName: null,
+    modelKind: null,       // "obj" | "gltf" — set by loadModelBuffer
     geometry: "sphere",
     showMaterials: false,  // model-materials mode (shader detached in the iframe)
     spinning: readStr("fs:viewerSpin", "1") !== "0",
@@ -300,7 +301,8 @@
   function setGeometry(kind) {
     state.geometry = kind;
     if (kind === "model" && state.modelBytes) {
-      post({ type: "fs:model", modelType: "gltf", bytes: state.modelBytes, regen: false, rotation: ROTATIONS[kind] });
+      var mk = state.modelKind === "obj" ? "obj" : "gltf";
+      post({ type: "fs:model", modelType: mk, bytes: state.modelBytes, regen: mk === "obj", rotation: ROTATIONS[kind] });
     } else if (isObjKey(kind)) {
       ensureObjBytes(kind)
         .then(function (buf) { post({ type: "fs:model", modelType: "obj", bytes: buf, regen: true, rotation: ROTATIONS[kind] }); })
@@ -331,6 +333,10 @@
     // messaging regardless of whether the source was a File or a zip slice.
     var ab = buf instanceof ArrayBuffer ? buf : buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
     state.modelBytes = ab;
+    // A dropped OBJ takes the obj-model + regen path (normals/UVs rebuilt —
+    // OBJLoader output is non-indexed, same as the built-in teapot/bunny);
+    // glb/gltf keep their authored data (regen:false).
+    state.modelKind = extOf(name || "") === "obj" ? "obj" : "gltf";
     state.modelName = name || "model.glb";
     if (!geoSelect.querySelector('option[value="model"]')) {
       var opt = document.createElement("option");
@@ -453,7 +459,7 @@
   // ── File dispatch ───────────────────────────────────────────────────
   function extOf(name) { var i = name.lastIndexOf("."); return i < 0 ? "" : name.slice(i + 1).toLowerCase(); }
   function isShaderName(n) { var e = extOf(n); return e === "js" || e === "mjs" || e === "tsl" || e === "txt"; }
-  function isModelName(n) { var e = extOf(n); return e === "glb" || e === "gltf"; }
+  function isModelName(n) { var e = extOf(n); return e === "glb" || e === "gltf" || e === "obj"; }
   function junkName(n) { var base = n.split("/").pop(); return n.indexOf("__MACOSX") !== -1 || base.charAt(0) === "."; }
 
   function handleFiles(files) {
@@ -464,7 +470,7 @@
     var model = list.find(function (f) { return isModelName(f.name); });
     if (model) model.arrayBuffer().then(function (buf) { loadModelBuffer(buf, model.name); }).catch(function (e) { showError("Could not read file: " + e.message); });
     if (shader) shader.text().then(function (t) { loadShaderText(t, shader.name); }).catch(function (e) { showError("Could not read file: " + e.message); });
-    if (!shader && !model) showError("Unrecognized file. Drop a shader (.js/.tsl), a model (.glb), or a .zip.");
+    if (!shader && !model) showError("Unrecognized file. Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip.");
   }
 
   function handleZip(file) {
@@ -475,7 +481,7 @@
       var model = usable.find(function (e) { return isModelName(e.name); });
       if (model) loadModelBuffer(model.data, model.name.split("/").pop());
       if (shader) loadShaderText(new TextDecoder().decode(shader.data), shader.name.split("/").pop());
-      if (!shader && !model) showError("Zip contained no shader (.js/.tsl) or model (.glb).");
+      if (!shader && !model) showError("Zip contained no shader (.js/.tsl) or model (.glb/.gltf/.obj).");
     }).catch(function (e) { showError("Could not read zip: " + e.message); });
   }
 
@@ -699,6 +705,15 @@
     L.push('<script src="' + iife + '" onerror="fsPost(\'Failed to load the A-Frame bundle\', true)"><\/script>');
     L.push('<script src="' + loader + '" onerror="fsPost(\'Failed to load the shaderloader\', true)"><\/script>');
     L.push('<script src="' + orbit + '" onerror="fsPost(\'Failed to load orbit controls\', true)"><\/script>');
+    // SECURITY: a dropped .gltf/.glb can reference buffers/textures by
+    // ABSOLUTE http(s) URL — GLTFLoader would fetch them from inside this
+    // sandbox, leaking the viewer's IP to whatever host a shared file names
+    // (this page ships no CSP anywhere it is deployed). Everything the stage
+    // legitimately loads through THREE's loading managers is a blob: URL
+    // minted here or a data: URI — allowlist exactly those and neutralize the
+    // rest to an inert data: URL so the request never leaves the sandbox.
+    // Same guard as the editor preview (tslToPreviewHTML.ts).
+    L.push('<script>try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{console.warn("[Podest] blocked non-blob resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<\/script>');
     L.push('<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:' + bg + ';}</style>');
     L.push('</head><body>');
 
@@ -775,7 +790,7 @@
     // until the window is resized" bug) — re-run A-Frame's resize path a few
     // times while init settles; no-ops when the size is already right.
     L.push('  function kickResize(){try{var s=document.querySelector("a-scene");if(s&&typeof s.resize==="function")s.resize();else window.dispatchEvent(new Event("resize"));}catch(e){}}');
-    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);}');
+    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");entity.addEventListener("model-error",function(){fsPost("Failed to load the 3D model: the file could not be parsed (corrupt, or a DRACO/meshopt-compressed glTF - not supported).");});toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);}');
     L.push('  if(!window.AFRAME){toParent({type:"fs:error",message:"A-Frame failed to initialize"});return;}');
     // The scene arrives via the pre-flight injector above — wire boot to it
     // (the helper also handles the already-booted case).

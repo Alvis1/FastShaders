@@ -11,7 +11,7 @@ import { getNodeValues } from '@/types';
 import type { MaterialSettings, OutputNodeData } from '@/types';
 import { toKebabCase } from '@/utils/nameUtils';
 import { collectImageFiles } from '@/utils/imageNode';
-import { buildZip } from '@/utils/zipWriter';
+import { buildExportBundle } from '@/utils/exportBundle';
 import './CodeEditor.css';
 
 type CodeTab = 'tsl' | 'script';
@@ -194,41 +194,20 @@ export function CodeEditor() {
 
     const embedded = embedProjectState(script, buildProjectState());
 
-    // With embedded images, the download becomes a zip: the (still fully
-    // self-contained) .js plus each image as a regular file for reuse/editing.
-    const images = collectImageFiles(useAppStore.getState().nodes);
-    let blob: Blob;
-    let downloadName: string;
-    if (images.length > 0) {
-      const enc = new TextEncoder();
-      const readme = [
-        'FastShaders export',
-        '==================',
-        '',
-        `${fileBaseName}.js — the shader module. Fully self-contained (the images`,
-        'are embedded inside it as data: URLs): load it with a-frame-shaderloader,',
-        'drop it into Podest (the FastShaders viewer), or drag it back into the editor to',
-        'continue working — the full node graph rides along in its',
-        'FASTSHADERS_PROJECT_V1 block.',
-        '',
-        'images/ — the same images as regular files, for reuse or editing.',
-        'Re-drop an edited image onto the editor canvas to swap it in.',
-        '',
-        'Tip: dragging this whole .zip into the FastShaders editor loads the',
-        'project too (it reads the .js inside).',
-        '',
-      ].join('\n');
-      const zip = buildZip([
-        { name: `${fileBaseName}.js`, data: enc.encode(embedded) },
-        ...images.map((f) => ({ name: `images/${f.name}`, data: f.bytes })),
-        { name: 'README.txt', data: enc.encode(readme) },
-      ]);
-      blob = new Blob([zip], { type: 'application/zip' });
-      downloadName = `${fileBaseName}.zip`;
-    } else {
-      blob = new Blob([embedded], { type: 'application/javascript' });
-      downloadName = `${fileBaseName}.js`;
-    }
+    // With embedded images and/or a custom preview mesh, the download becomes
+    // a zip: the (still fully self-contained) .js plus each image as a regular
+    // file for reuse/editing, plus the model under models/ so the shader+mesh
+    // pair drops straight into Podest or an A-Frame page. Assembly is pure —
+    // see exportBundle.ts.
+    const state = useAppStore.getState();
+    const bundle = buildExportBundle(
+      fileBaseName,
+      embedded,
+      collectImageFiles(state.nodes),
+      state.previewMesh,
+    );
+    const blob = new Blob([bundle.bytes], { type: bundle.mime });
+    const downloadName = bundle.fileName;
 
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -389,7 +368,7 @@ export function CodeEditor() {
           <button
             className="code-editor__action-btn"
             onClick={handleDownloadShader}
-            title={t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image files alongside when the graph embeds images', language)}
+            title={t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}
           >
             {t('Download Shader', language)}
           </button>

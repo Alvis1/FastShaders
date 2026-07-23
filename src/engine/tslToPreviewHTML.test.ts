@@ -28,11 +28,56 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
     // The broken deploy path: obj-model="obj: url(https://…)" fetched from the
     // sandbox's opaque origin is a CORS request generic hosts don't answer.
     expect(html).not.toContain(esc('obj-model="obj: url('));
-    expect(html).toContain(esc('fit-bounds="size: 1.6"'));
+    // regen is explicit (podest's fit-bounds twin defaults the OPPOSITE way).
+    expect(html).toContain(esc('fit-bounds="size: 1.6; regen: true"'));
     // Stale-model guard: each rebuilt iframe accepts only its own geometry.
     expect(html).toContain('var __fsExpectedObj = "teapot";');
     expect(html).toContain('msg.type === "fs:obj-model-error"');
-    expect(html).toContain('URL.createObjectURL(new Blob([text]))');
+    expect(html).toContain('URL.createObjectURL(blob)');
+  });
+
+  it('sandboxed custom glb: gltf-model feed keyed on the mesh id, regen off, loader URL allowlist on', () => {
+    const html = tslToPreviewHTML(TSL, {
+      geometry: 'custom',
+      customModel: { kind: 'glb', id: 7 },
+    });
+    expect(html).toContain(esc('fit-bounds="size: 1.6; regen: false"'));
+    expect(html).toContain('var __fsExpectedObj = "custom:7";');
+    expect(html).toContain('entity.setAttribute("gltf-model"');
+    // No network model URL — bytes arrive via the postMessage feed only.
+    expect(html).not.toContain(esc('gltf-model="url('));
+    // SECURITY: hostile .gltf external-URI refs are neutralized at the loader.
+    expect(html).toContain('setURLModifier');
+  });
+
+  it('sandboxed custom obj: keeps the regen path of the built-ins', () => {
+    const html = tslToPreviewHTML(TSL, {
+      geometry: 'custom',
+      customModel: { kind: 'obj', id: 3 },
+    });
+    expect(html).toContain(esc('fit-bounds="size: 1.6; regen: true"'));
+    expect(html).toContain('var __fsExpectedObj = "custom:3";');
+  });
+
+  it('custom without a mesh descriptor degrades to a sphere document', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'custom' });
+    expect(html).toContain(esc('geometry="primitive: sphere'));
+    expect(html).not.toContain('__fsExpectedObj');
+  });
+
+  it('xr custom glb: direct gltf-model blob url, no feed, origin-widened URL allowlist', () => {
+    const html = tslToPreviewHTML(TSL, {
+      geometry: 'custom',
+      customModel: { kind: 'glb', id: 2, url: 'blob:https://example/abc' },
+      xr: true,
+    });
+    expect(html).toContain(esc('gltf-model="url(blob:https://example/abc)"'));
+    expect(html).not.toContain('fs:obj-model');
+    // SECURITY: the dropped mesh is adversarial in the XR popup too — it runs
+    // at the app's REAL origin with network access, so the loader allowlist
+    // must be present (blob:/data: plus same-origin for built-in models).
+    expect(html).toContain('setURLModifier');
+    expect(html).toContain('window.location.origin');
   });
 
   it('xr teapot: direct obj-model url, gpu hider first, xr NOT hidden, VR UI on, escaped title', () => {

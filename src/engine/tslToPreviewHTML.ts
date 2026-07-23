@@ -10,16 +10,27 @@
 
 import { buildShaderModule } from './tslCodeProcessor';
 import type { MaterialSettings } from '@/types';
+import type { PreviewMeshKind } from '@/utils/previewMesh';
 
 export type LightingMode = 'studio' | 'moon' | 'laboratory';
 
-export type GeometryType = 'sphere' | 'cube' | 'plane' | 'teapot' | 'bunny';
+export type GeometryType = 'sphere' | 'cube' | 'plane' | 'teapot' | 'bunny' | 'custom';
 
-/** Geometry types backed by an OBJ model file rather than an A-Frame primitive. */
+/** Geometry types backed by a BUILT-IN OBJ model file (public/models/). */
 const OBJ_GEOMETRIES: ReadonlySet<GeometryType> = new Set(['teapot', 'bunny']);
 
 export function isObjGeometry(geometry: GeometryType): boolean {
   return OBJ_GEOMETRIES.has(geometry);
+}
+
+/**
+ * True for every model-file-backed geometry — the built-in OBJs plus the
+ * user's dropped mesh (`custom`). These share the non-primitive plumbing:
+ * no subdivision slider, mesh delivered via the postMessage model feed, and
+ * geometry changes force an iframe rebuild instead of a live hot-swap.
+ */
+export function isModelGeometry(geometry: GeometryType): boolean {
+  return isObjGeometry(geometry) || geometry === 'custom';
 }
 
 export interface CameraPosition {
@@ -68,6 +79,16 @@ export interface PreviewOptions {
   xr?: boolean;
   /** Document title — the XR popup shows the shader name in its tab. */
   title?: string;
+  /**
+   * Descriptor of the user's dropped mesh — required when `geometry` is
+   * `'custom'`. `id` is the mesh's monotonic identity: it keys the model feed
+   * so a slow post for a previous mesh can't apply to a newer document. The
+   * BYTES never ride in the generated HTML — the sandboxed preview receives
+   * them via the postMessage model feed (same security model as podest.html);
+   * only the same-origin XR popup loads directly via `url` (a parent-minted
+   * blob URL, omitted in the sandboxed case).
+   */
+  customModel?: { kind: PreviewMeshKind; id: number; url?: string } | null;
 }
 
 /**
@@ -141,6 +162,8 @@ export const GEOMETRY_ROTATIONS: Record<GeometryType, string> = {
   plane: '0 0 0',
   teapot: '15 35 0',
   bunny: '0 25 0',
+  // Dropped models keep their authored upright orientation (same as podest).
+  custom: '0 0 0',
 };
 
 /**
@@ -253,14 +276,47 @@ const FIT_BOUNDS_SCRIPT = `<script>
       return merged;
     }
 
+    // Spherical UVs from each vertex's direction relative to the local center
+    // — shared by the regen path (always) and the preserve path (only when the
+    // source mesh has no UVs at all).
+    function sphericalUVs(g, c) {
+      var pos = g.attributes.position;
+      var uvs = new Float32Array(pos.count * 2);
+      var v = new THREE.Vector3();
+      var TWO_PI = Math.PI * 2;
+      for (var i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).sub(c);
+        var len = v.length();
+        if (len > 0) v.multiplyScalar(1 / len);
+        uvs[i * 2] = Math.atan2(v.z, v.x) / TWO_PI + 0.5;
+        uvs[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, v.y))) / Math.PI + 0.5;
+      }
+      g.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+    }
+
     AFRAME.registerComponent("fit-bounds", {
-      schema: { size: { type: "number", default: 1.6 } },
+      // regen:true rebuilds normals + spherical UVs (built-in OBJ primitives +
+      // dropped OBJs — OBJLoader output is non-indexed, see mergeByPosition).
+      // regen:false preserves a dropped GLB's authored normals/UVs and only
+      // synthesizes UVs when the mesh has none (same split as podest.html).
+      schema: { size: { type: "number", default: 1.6 }, regen: { type: "boolean", default: true } },
       init: function () { this.el.addEventListener("model-loaded", this.fit.bind(this)); },
       fit: function () {
         var mesh = this.el.getObject3D("mesh");
         if (!mesh) return;
+        var regen = this.data.regen;
         mesh.traverse(function (node) {
           if (!node.isMesh || !node.geometry) return;
+          if (!regen) {
+            var g0 = node.geometry;
+            if (!g0.attributes.uv && g0.attributes.position) {
+              g0.computeBoundingBox();
+              var c0 = new THREE.Vector3();
+              g0.boundingBox.getCenter(c0);
+              sphericalUVs(g0, c0);
+            }
+            return;
+          }
           var g = mergeByPosition(node.geometry);
           g.computeVertexNormals();
           var pos = g.attributes.position;
@@ -294,17 +350,7 @@ const FIT_BOUNDS_SCRIPT = `<script>
             idx.needsUpdate = true;
             g.computeVertexNormals();
           }
-          var uvs = new Float32Array(pos.count * 2);
-          var v = new THREE.Vector3();
-          var TWO_PI = Math.PI * 2;
-          for (var i = 0; i < pos.count; i++) {
-            v.fromBufferAttribute(pos, i).sub(c);
-            var len = v.length();
-            if (len > 0) v.multiplyScalar(1 / len);
-            uvs[i * 2] = Math.atan2(v.z, v.x) / TWO_PI + 0.5;
-            uvs[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, v.y))) / Math.PI + 0.5;
-          }
-          g.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+          sphericalUVs(g, c);
           node.geometry = g;
         });
         mesh.updateMatrixWorld(true);
@@ -810,7 +856,6 @@ export function tslToPreviewHTML(
   options: PreviewOptions = {},
 ): string {
   const {
-    geometry = 'sphere',
     animate = false,
     materialSettings,
     bgColor = '#808080',
@@ -821,19 +866,34 @@ export function tslToPreviewHTML(
     xr = false,
     title,
   } = options;
+  const customModel = options.customModel ?? null;
+  // A 'custom' geometry without its mesh descriptor can't render — degrade to
+  // a sphere rather than emitting a modelless document (defensive; the
+  // ShaderPreview UI gates the 'custom' option on a loaded mesh).
+  const requestedGeometry = options.geometry ?? 'sphere';
+  const geometry: GeometryType =
+    requestedGeometry === 'custom' && !customModel ? 'sphere' : requestedGeometry;
 
   const shaderModule = convertToShaderModule(tslCode, materialSettings);
   const isObj = isObjGeometry(geometry);
+  const isModel = isModelGeometry(geometry);
+  const isCustom = geometry === 'custom';
+  // The dropped mesh's feed key: ties every model message to the document
+  // built for exactly this mesh instance (see PreviewOptions.customModel.id).
+  const customKey = isCustom && customModel ? `custom:${customModel.id}` : null;
+  // Dropped OBJs get the full normals/UV regen (OBJLoader output is
+  // non-indexed, like the built-ins); GLB/glTF keep their authored data.
+  const customRegen = customModel?.kind === 'obj';
   const { iife, shaderloader, orbitControls } = getScriptUrls();
 
   // Weld coincident primitive vertices so displacement stays continuous across
   // faces (default on). Only relevant when the shader actually displaces —
   // `positionNode` in the emitted module is the tell — and only for primitives
-  // (OBJ models always weld via fit-bounds). Attaching the `weld-verts`
-  // component to the entity does the work; see WELD_VERTS_SCRIPT.
+  // (model files weld via fit-bounds' regen path instead). Attaching the
+  // `weld-verts` component to the entity does the work; see WELD_VERTS_SCRIPT.
   const hasDisplacement = /positionNode\s*:/.test(shaderModule);
   const weldPrimitive =
-    !isObj && hasDisplacement && materialSettings?.mergeVertices !== false;
+    !isModel && hasDisplacement && materialSettings?.mergeVertices !== false;
 
   // Plane spins on its Z axis (in-plane, like a record), since the flat face
   // is already pointed at the camera. Everything else spins on Y like a turntable.
@@ -876,21 +936,31 @@ export function tslToPreviewHTML(
   //   and rescales the loaded mesh into a unit-ish bounding box so the camera
   //   framing matches the primitives.
   let entityAttrs: string;
-  if (isObj) {
+  if (isModel) {
+    // regen is ALWAYS explicit — podest.html registers a fit-bounds twin whose
+    // schema default is the opposite (false), so relying on either default
+    // would flip behavior in a future copy-paste between the two.
+    const fitBoundsAttr = `fit-bounds="size: 1.6; regen: ${!isCustom || customRegen ? 'true' : 'false'}"`;
     if (xr) {
       // Top-level XR page: same-origin, CORS never applies — load directly.
-      const url = getModelUrl(geometry as 'teapot' | 'bunny');
-      entityAttrs = `obj-model="obj: url(${url})" fit-bounds="size: 1.6"`;
+      // Custom meshes use the parent-minted blob URL (same-origin here too).
+      const url = isCustom
+        ? customModel?.url ?? ''
+        : getModelUrl(geometry as 'teapot' | 'bunny');
+      const modelAttr = isCustom && customModel?.kind !== 'obj'
+        ? `gltf-model="url(${url})"`
+        : `obj-model="obj: url(${url})"`;
+      entityAttrs = `${modelAttr} ${fitBoundsAttr}`;
     } else {
-      // Sandboxed preview: the iframe's opaque origin makes the OBJ fetch a
+      // Sandboxed preview: the iframe's opaque origin makes a model fetch a
       // CORS request, and generic hosts don't answer it (gh-pages sends
       // ACAO:*, most others don't — deploy-only teapot/bunny breakage). No
-      // network obj-model here: the PARENT fetches the model text
-      // (same-origin, CORS-free) and posts it in via fs:obj-model; the feed
-      // script below applies it as a blob: URL. Until it arrives the entity
-      // has no mesh and the scene shows the bg color, exactly like the old
-      // still-downloading state.
-      entityAttrs = 'fit-bounds="size: 1.6"';
+      // network obj-model here: the PARENT supplies the model (built-ins are
+      // fetched same-origin, dropped meshes come from memory) and posts it in
+      // via fs:obj-model; the feed script below applies it as a blob: URL.
+      // Until it arrives the entity has no mesh and the scene shows the bg
+      // color, exactly like the old still-downloading state.
+      entityAttrs = fitBoundsAttr;
     }
   } else {
     const geoAttr = buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane', subdivision);
@@ -928,6 +998,32 @@ export function tslToPreviewHTML(
     // the plain desktop renderer. (The XR popup skips this — there navigator.xr
     // must stay visible, and the WebGL2 fallback avoids the broken init path.)
     lines.push(`  <script>try{Object.defineProperty(navigator,"xr",{value:undefined,configurable:true});}catch(e){}<${''}/script>`);
+    // Drag/drop forwarding (same pattern as podest.html): this iframe covers
+    // the whole preview body, so its document captures drag events over that
+    // area and they never reach the parent — without preventDefault a drop
+    // would even navigate the frame. Forward a drag SIGNAL and the dropped
+    // File objects to the parent (ShaderPreview), which owns validation and
+    // loading; the files never execute here. Installed BEFORE the heavy
+    // bundle <script src> tags so an early drop is caught. The dragover
+    // heartbeat (250ms) keeps the parent's overlay safety-timeout armed.
+    lines.push('  <script>');
+    lines.push('  (function () {');
+    lines.push('    function toParent(m) { try { parent.postMessage(m, "*"); } catch (e) {} }');
+    lines.push('    // Only FILE drags participate — internal drags (palette tiles, text');
+    lines.push('    // selections) must neither raise the parent veil nor be intercepted.');
+    lines.push('    function hasFiles(e) { var t = e.dataTransfer && e.dataTransfer.types; return !!t && Array.prototype.indexOf.call(t, "Files") !== -1; }');
+    lines.push('    var depth = 0, lastBeat = 0, lastEvt = 0;');
+    lines.push('    // dragenter/dragleave pairing is NOT guaranteed for a drag aborted');
+    lines.push('    // with Esc or dropped outside the window — a stale depth would make');
+    lines.push('    // every later leave under-count and stop the on:false signal forever.');
+    lines.push('    // A fresh drag after >1s of drag-silence starts from depth 0.');
+    lines.push('    function touch() { var t = Date.now(); if (t - lastEvt > 1000) depth = 0; lastEvt = t; }');
+    lines.push('    addEventListener("dragenter", function (e) { if (!hasFiles(e)) return; e.preventDefault(); touch(); if (depth++ === 0) toParent({ type: "fs:preview-drag", on: true }); });');
+    lines.push('    addEventListener("dragover", function (e) { if (!hasFiles(e)) return; e.preventDefault(); touch(); try { if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; } catch (err) {} var t = Date.now(); if (t - lastBeat > 250) { lastBeat = t; toParent({ type: "fs:preview-drag", on: true }); } });');
+    lines.push('    addEventListener("dragleave", function (e) { if (!hasFiles(e)) return; e.preventDefault(); touch(); if (--depth <= 0) { depth = 0; toParent({ type: "fs:preview-drag", on: false }); } });');
+    lines.push('    addEventListener("drop", function (e) { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; lastEvt = 0; var f = e.dataTransfer && e.dataTransfer.files ? Array.prototype.slice.call(e.dataTransfer.files) : []; toParent({ type: "fs:preview-drag", on: false }); if (f.length) toParent({ type: "fs:preview-drop", files: f }); });');
+    lines.push('  })();');
+    lines.push(`  <${''}/script>`);
   }
   // The onerror attributes route through __fsShowStickyError (never a direct
   // getElementById — these fire while <head> is still parsing, before the
@@ -936,6 +1032,25 @@ export function tslToPreviewHTML(
   lines.push(`  <script src="${iife}" onerror="__fsShowStickyError('Failed to load A-Frame bundle')"><${''}/script>`);
   lines.push(`  <script src="${shaderloader}" onerror="__fsShowStickyError('Failed to load shaderloader')"><${''}/script>`);
   lines.push(`  <script src="${orbitControls}" onerror="__fsShowStickyError('Failed to load orbit controls')"><${''}/script>`);
+  // SECURITY: dropped model files are adversarial input. A .gltf/.glb can
+  // reference buffers or textures by ABSOLUTE http(s) URL — GLTFLoader
+  // would fetch them, leaking the viewer's IP to an attacker-controlled
+  // host (a CSP is not present in dev or desktop builds, so it cannot be
+  // the control). Neutralized URLs land on an inert data: URL — the request
+  // never leaves the page and the loader surfaces a normal parse error; a
+  // console.warn records what was blocked. Same guard in podest.html.
+  if (!xr) {
+    // Sandboxed stage: everything it legitimately loads through THREE's
+    // loading managers is a blob: URL minted inside the iframe or a data:
+    // URI — allowlist exactly those.
+    lines.push(`  <script>try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{console.warn("[FastShaders] blocked non-blob resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<${''}/script>`);
+  } else {
+    // XR popup: same-origin page with REAL network access — and the dropped
+    // custom mesh is exactly as adversarial here as in the sandbox. Allowlist
+    // blob:/data: PLUS this origin (the built-in teapot/bunny load by real
+    // same-origin URL on this page); everything else is neutralized.
+    lines.push(`  <script>try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{if(new URL(s,window.location.href).origin===window.location.origin)return s;}catch(e){}try{console.warn("[FastShaders] blocked non-origin resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<${''}/script>`);
+  }
   lines.push('  <style>');
   // Body background matches the scene bg so the gap between document load
   // and the first WebGPU paint shows the chosen color, not a white flash.
@@ -1063,28 +1178,38 @@ export function tslToPreviewHTML(
   lines.push(`<${''}/script>`);
   lines.push('');
 
-  if (isObj && !xr) {
-    // OBJ model feed for the sandboxed preview. The parent fetches the model
-    // text (same-origin — CORS never applies to it) and posts fs:obj-model
+  if (isModel && !xr) {
+    // Model feed for the sandboxed preview. The parent supplies the model
+    // (built-in OBJs are fetched same-origin — CORS never applies to it;
+    // dropped meshes come from the store's bytes) and posts fs:obj-model
     // after this iframe's load event; a blob: URL is same-origin inside the
     // sandbox (and allowed by connect-src blob:), so THREE's loader can fetch
     // it. The listener registers at TOP level — the parent's post can land
     // before the async WebGPU pre-flight boots the scene, so the payload is
     // held and applied via __fsWhenSceneBooted once the entity exists.
-    // Rapid geometry switching rebuilds the iframe per OBJ model, so each
-    // document accepts ONLY the geometry it was built for — a late-resolving
-    // fetch for the previous model can never apply here.
+    // Rapid geometry switching rebuilds the iframe per model, so each
+    // document accepts ONLY the model key it was built for (built-ins key on
+    // the geometry name, dropped meshes on their custom:<id> identity) — a
+    // late-resolving feed for the previous model can never apply here.
     lines.push('<script>');
-    lines.push(`  var __fsExpectedObj = ${JSON.stringify(geometry)};`);
+    lines.push(`  var __fsExpectedObj = ${JSON.stringify(customKey ?? geometry)};`);
+    lines.push(`  var __fsExpectedLabel = ${JSON.stringify(isCustom ? 'custom model' : geometry)};`);
     lines.push('  (function () {');
     lines.push('    var applied = false;');
-    lines.push('    function apply(text) {');
+    lines.push('    function apply(kind, payload) {');
     lines.push('      if (applied) return;');
     lines.push('      var entity = document.getElementById("preview-entity");');
     lines.push('      if (!entity) return;');
     lines.push('      applied = true;');
-    lines.push('      var url = URL.createObjectURL(new Blob([text]));');
-    lines.push('      entity.setAttribute("obj-model", "obj: url(" + url + ")");');
+    lines.push('      // A model that fails to PARSE (corrupt bytes, DRACO/meshopt-compressed');
+    lines.push('      // glTF — no decoder is bundled) must surface, not die in the console.');
+    lines.push('      entity.addEventListener("model-error", function () {');
+    lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): the file could not be parsed (corrupt, or a DRACO/meshopt-compressed glTF — not supported).");');
+    lines.push('      });');
+    lines.push('      var blob = kind === "glb" ? new Blob([payload], { type: "model/gltf-binary" }) : new Blob([payload]);');
+    lines.push('      var url = URL.createObjectURL(blob);');
+    lines.push('      if (kind === "glb" || kind === "gltf") entity.setAttribute("gltf-model", "url(" + url + ")");');
+    lines.push('      else entity.setAttribute("obj-model", "obj: url(" + url + ")");');
     lines.push('    }');
     lines.push('    window.addEventListener("message", function (e) {');
     lines.push('      if (e.source !== window.parent) return;');
@@ -1093,11 +1218,17 @@ export function tslToPreviewHTML(
     lines.push('      if (msg.type === "fs:obj-model-error") {');
     lines.push('        // Sticky, like a vendored-script 404: a later successful shader');
     lines.push('        // apply must not clear it — there is still no mesh to shade.');
-    lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedObj + "): " + msg.message);');
+    lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): " + msg.message);');
     lines.push('        return;');
     lines.push('      }');
-    lines.push('      if (msg.type !== "fs:obj-model" || typeof msg.text !== "string") return;');
-    lines.push('      window.__fsWhenSceneBooted(function () { apply(msg.text); });');
+    lines.push('      if (msg.type !== "fs:obj-model") return;');
+    lines.push('      // obj/gltf ride as text; glb as binary. Anything else is dropped.');
+    lines.push('      var kind = msg.kind === "glb" || msg.kind === "gltf" ? msg.kind : "obj";');
+    lines.push('      var payload = kind === "glb" ? msg.bytes : msg.text;');
+    lines.push('      if (kind === "glb") {');
+    lines.push('        if (!(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) return;');
+    lines.push('      } else if (typeof payload !== "string") return;');
+    lines.push('      window.__fsWhenSceneBooted(function () { apply(kind, payload); });');
     lines.push('    });');
     lines.push('  })();');
     lines.push(`<${''}/script>`);
@@ -1134,10 +1265,15 @@ export function tslToPreviewHTML(
   const initialLightingKey = JSON.stringify(JSON.stringify(lights));
   const initialPlayingKey = JSON.stringify(JSON.stringify({ p: !!animate, f: animFrom, t: animTo }));
   const initialGeometryKey = JSON.stringify(JSON.stringify(
-    isObj
+    isModel
       ? {
           o: true,
-          m: `obj: url(${getModelUrl(geometry as 'teapot' | 'bunny')})`,
+          // Dropped meshes key on their custom:<id> identity — the parent
+          // never hot-swaps models (any model change rebuilds the iframe),
+          // so the key only needs to be unique per document.
+          m: isCustom
+            ? customKey
+            : `obj: url(${getModelUrl(geometry as 'teapot' | 'bunny')})`,
           g: null,
           r: rotationAttr,
         }

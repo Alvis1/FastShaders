@@ -18,13 +18,20 @@ Bi-directional TSL (Three.js Shading Language) visual shader editor. Users build
 src/
 ├── App.tsx                            # Root + SyncController (graph↔code sync orchestration)
 ├── main.tsx                           # Entry point
-├── vite-env.d.ts                      # Type declarations (Vite env + __APP_VERSION__)
+├── nodeEditor.tsx                     # React root for node-editor.html (renders GraphsPage)
+├── nodeEditorBootstrap.ts             # MUST be nodeEditor.tsx's FIRST import — disables the store's graph autosave so that shared-origin page can't overwrite the user's real fs:graph
+├── test-utils.ts                      # Shared test factories (makeNode, makeEdge) — import these instead of redefining stub builders per test file
+├── vite-env.d.ts                      # Type declarations (Vite env + __APP_VERSION__ + __FS_DESKTOP__ + window.__TAURI__)
 ├── components/
 │   ├── CodeEditor/
 │   │   ├── CodeEditor.tsx             # Monaco editor with TSL/Script folder tabs, Save, Load Script, Download Script
 │   │   ├── CodeEditor.css
 │   │   ├── monacoSetup.ts             # Bundles Monaco locally: loader.config({ monaco }) + Vite ?worker workers (no CDN — offline/desktop requirement)
 │   │   └── tslLanguage.ts             # TSL language definition, completions, color picker
+│   ├── Graphs/
+│   │   ├── GraphsPage.tsx             # node-editor.html root — node/texture registry overview + description/citation editor (+ .css)
+│   │   ├── GraphModal.tsx             # (+ .css)
+│   │   └── DesignerModal.tsx          # (+ .css)
 │   ├── Layout/
 │   │   ├── AppLayout.tsx              # Two nested SplitPanes (left: graph | right: code/preview)
 │   │   ├── AppLayout.css
@@ -32,26 +39,35 @@ src/
 │   │   ├── Toolbar.tsx                # Top bar: clickable brand → contact popover, version, shader name input, "Local" desktop-download dropdown (fixed GitHub-release asset names), desktop-only "VR" popover (LAN bench server address + secure-context how-to)
 │   │   ├── Toolbar.css
 │   │   ├── CostBar.tsx                # GPU complexity bar (totalCost vs headset budget)
-│   │   └── CostBar.css
+│   │   ├── CostBar.css
+│   │   ├── PreviewLink.tsx            # Decorative "symbolic edge" wire from the Output node to the 3D preview window (+ .css)
+│   │   └── previewLinkGeometry.ts     # Pure geometry for PreviewLink (+ .test.ts)
 │   ├── NodeEditor/
 │   │   ├── NodeEditor.tsx             # React Flow canvas + keyboard shortcuts + interaction handlers
 │   │   ├── NodeEditor.css
+│   │   ├── dragConnect.ts             # Pure drag-node-onto-node connect decision logic (+ .test.ts)
+│   │   ├── overlapCascade.ts          # Post-snap make-room BFS — pushes overlapped nodes off the connected pair (+ .test.ts)
+│   │   ├── DrawingLayer.tsx           # Board-drawing ink layer — SVG via React Flow's ViewportPortal, strokes in flow coords (deliberately NOT a <canvas>)
+│   │   ├── DrawToolbar.tsx            # Drawing tool strip
 │   │   ├── nodes/
 │   │   │   ├── ShaderNode.tsx         # Generic node for all TSL types (dynamic from registry, vec3/vec2 grouped display)
 │   │   │   ├── ShaderNode.css
 │   │   │   ├── ColorNode.tsx          # Color picker node
+│   │   │   ├── ColorNode.css
 │   │   │   ├── PreviewNode.tsx        # Noise preview with animated CPU canvas (all 8 MaterialX noise variants)
 │   │   │   ├── PreviewNode.css
 │   │   │   ├── MathPreviewNode.tsx    # Math function preview with scrolling waveform (sin, cos)
 │   │   │   ├── MathPreviewNode.css
 │   │   │   ├── ClockNode.tsx          # Time node with animated analog clock face
 │   │   │   ├── ClockNode.css
-│   │   │   ├── OutputNode.tsx         # Output sink (color, normal, position, opacity, roughness)
+│   │   │   ├── OutputNode.tsx         # Output sink (color, emissive, normal, displacement/position, opacity, roughness, discard)
 │   │   │   ├── OutputNode.css
 │   │   │   ├── GroupNode.tsx          # Selection group container — collapsible, recolorable, savable
 │   │   │   ├── GroupNode.css
 │   │   │   ├── NoteNode.tsx            # Resizable editable text sticky (canvas annotation)
 │   │   │   ├── NoteNode.css
+│   │   │   ├── RevealSockets.tsx       # Drag-to-reveal hidden parameter sockets (dimmed floating dots)
+│   │   │   ├── connectionReveal.ts     # Reveal decision logic + shared CONNECTION_RADIUS (+ .test.ts)
 │   │   │   ├── NodeBase.css            # shared header/body/border/cost-badge + .node-base__stack layers
 │   │   │   └── glyphs/
 │   │   │       ├── NodeGlyph.tsx       # light-theme SVG glyphs per registry type
@@ -72,7 +88,7 @@ src/
 │   │   ├── NodePreviewCard.css
 │   │   ├── SavedGroupCard.tsx         # Draggable tile for a user-saved group (Saved Groups tab)
 │   │   ├── TextureCard.tsx            # Draggable tile for a built-in texture (Textures tab, CPU canvas preview with per-texture renderer)
-│   │   ├── tileDrag.ts                # Touch/pen drag path for palette tiles (iOS has no HTML5 DnD) → 'fs-tile-drop' CustomEvent
+│   │   ├── tileDrag.ts                # Single placement path for palette tiles (touch/pen drag, click/Enter via tileActivationProps, HTML5 dragstart payload records) → 'fs-tile-drop' CustomEvent → NodeEditor's placeTilePayload; also streams touch drag-move/end preview events
 │   │   ├── AssetTooltip.tsx           # Hover-dwell tooltip for asset-bar tiles (body portal, viewport-clamped)
 │   │   ├── AssetTooltip.css
 │   │   └── menus/
@@ -85,6 +101,9 @@ src/
 │   │       ├── StripesSettingsMenu.tsx # Data Stripes node settings (strength, radial rings)
 │   │       ├── DataVizSettingsMenu.tsx # Data Viz node settings (tone curve, radial distribution)
 │   │       ├── NoteSettingsMenu.tsx    # Note recolor / delete
+│   │       ├── ConnectionStub.tsx     # Screen-space wire from the source handle to the AddNodeMenu on wire-drop-on-empty-canvas
+│   │       ├── menuShared.tsx         # Shared row styles + NumberRow + NodeActions
+│   │       ├── recentNodes.ts         # fs:recentNodes recency list for AddNodeMenu (+ .test.ts)
 │   │       └── EdgeContextMenu.tsx    # Edge delete + Add routing point menu
 │   ├── Preview/
 │   │   ├── ShaderPreview.tsx          # Sandboxed WebGPU iframe preview (geometry, lighting, subdivision, uniform sliders, camera)
@@ -93,7 +112,8 @@ src/
 │   │   ├── CsvImportModal.tsx         # Over-wide CSV decision dialog (cancel / as-is / transpose rows→columns)
 │   │   └── LimitModal.tsx             # Image / storage-quota limit notices + ignore-limits opt-out
 │   └── Tooltip/
-│       └── TooltipLayer.tsx           # App-wide delegated title-attribute tooltip (portalled to body)
+│       ├── TooltipLayer.tsx           # App-wide delegated title-attribute tooltip (portalled to body)
+│       └── TooltipLayer.css
 ├── engine/
 │   ├── graphToCode.ts                 # Graph → TSL code string (import statements + Fn() wrapper)
 │   ├── codeToGraph.ts                 # TSL code → nodes + edges (Babel AST, multi-channel returns, noise/UV patterns, three.js editor compat)
@@ -108,12 +128,21 @@ src/
 │   ├── projectImport.ts              # Shared import path (Load Script / code-panel drop / canvas drop): applyProjectToStore + importShaderText + importShaderZip
 │   └── fastShadersProject.ts         # FASTSHADERS_PROJECT_V1 snapshot embed/extract (trailing block comment; proto-pollution-stripping JSON reviver)
 ├── hooks/
-│   └── useSyncEngine.ts               # Bidirectional sync hook (watches graph/code changes)
+│   ├── useSyncEngine.ts               # Bidirectional sync hook (watches graph/code changes)
+│   ├── useLongPress.ts                # Sustained touch/pen press → callback (touch context menus; mouse ignored)
+│   └── usePersistedState.ts           # useState mirrored to localStorage (validate-on-seed, throw-safe)
+├── i18n/
+│   ├── index.ts                       # Pure helpers (formatNodeLabel, nodeDescription, portLabel, t, …)
+│   ├── useLanguage.ts                 # Store-reading language hook
+│   ├── node-i18n.json                 # LV node/category labels — synced to public/ by fs-i18n-sync
+│   └── lv.json                        # LV descriptions / port labels / UI strings
 ├── registry/
-│   ├── nodeRegistry.ts                # 68 palette-visible node definitions + 3 hidden defs (unknown, dataNode, imageNode) = 71 total. NB 9 of the 10 unary-math nodes (sin…fract) are .map()-generated, so a naive grep undercounts
+│   ├── nodeRegistry.ts                # 69 palette-visible node definitions + 3 hidden defs (unknown, dataNode, imageNode) = 72 total. NB 9 of the 10 unary-math nodes (sin…fract) are .map()-generated, so a naive grep undercounts
 │   ├── nodeCategories.ts              # Category metadata (id + label) — 12 categories (incl. logic, texture, unknown)
 │   ├── builtinTextures.ts             # Built-in texture groups (8 textures: polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) — TSL code parsed to node graphs at startup
-│   └── complexity.json                # GPU cost per operation
+│   ├── complexity.json                # GPU cost per operation
+│   ├── citations.ts                   # + citations.json — sparse per-node/texture academic provenance references (ref + optional DOI/url)
+│   └── descriptionSplice.ts           # Byte-range splice of a `description` string literal in registry source (node-editor.html description editor)
 ├── store/
 │   └── useAppStore.ts                 # Zustand store (nodes, edges, code, sync, history, UI)
 ├── types/
@@ -124,6 +153,9 @@ src/
 ├── utils/
 │   ├── colorUtils.ts                  # Cost color gradient, type→color mapping, CATEGORY_COLORS, hexToRgb01, getContrastColor (auto-flip text against bg)
 │   ├── edgeUtils.ts                   # removeEdgesForPort(), unwrapCollapsedGroupEdges() (group boundary rewrite), bridgeEdgesAcrossDeletedNodes() (splice-delete)
+│   ├── exposedPorts.ts                # Single home for the opt-in parameter-socket (`exposedPorts`) rules shared by render, settings menus, connect/sync/import auto-expose
+│   ├── drawings.ts                    # Board drawing-layer data model (DrawStroke) + pure helpers backing DrawingLayer — visual-only ink, quantized opacity isolation groups
+│   ├── propertyConvert.ts             # Constant ↔ uniform conversion pairs (float↔property_float, color↔property_color) for Node Settings "Convert to …"
 │   ├── graphTraversal.ts             # hasTimeUpstream() — BFS time-node detection with O(1) Map lookup
 │   ├── idGenerator.ts                 # generateId(), generateEdgeId()
 │   ├── mathPreview.ts                 # Sin/math waveform canvas renderer (scrolling curve + dot)
@@ -149,8 +181,10 @@ public/
 │   ├── a-frame-shaderloader-0.4.js   # FROZEN previous loader — shaders exported before 0.5 reference it from the CDN
 │   ├── a-frame-180-a-01.min.js       # A-Frame 1.8.0 IIFE bundle, r184 WebGPU
 │   └── aframe-orbit-controls.min.js  # Orbit controls for preview
-├── podest.html                       # "Podest" — standalone full-screen shader viewer (drop .js/.zip shader or .glb/.gltf model; sandboxed stage). Opened via the toolbar "P" button
+├── podest.html                       # "Podest" — standalone full-screen shader viewer (drop .js/.zip shader or .glb/.gltf/.obj model; sandboxed stage). Opened via the toolbar "P" button
 ├── node-designer.html                # Glyph design tool (served copy synced from repo root; POSTs to the dev /__nd endpoint)
+├── node-i18n.json                    # SYNCED copy of src/i18n/node-i18n.json (fs-i18n-sync vite plugin; i18nSync.test.ts fails on drift) — do not hand-edit; fetched by the standalone Node Designer
+├── webgpu-xr-demo.html               # Standalone three.js WebGPURenderer + TSL + immersive-WebXR demo page (forceWebGL default for Quest Browser; header comment documents the r184 XR/WebGPU findings)
 ├── models/                           # teapot.obj + stanford-bunny.obj (preview geometries; pre-normalized: bbox center at origin, longest axis = 1.6)
 └── logos/                            # Funding-acknowledgment SVGs (shown in the brand popover)
 src-tauri/                            # Tauri v2 desktop shell — tauri.conf.json (dragDropEnabled:false, bundle.resources carousel), icons, capabilities, src/bench_server.rs (LAN bench server)
@@ -201,7 +235,7 @@ The code editor has two tabs styled as folder tabs (active tab visually connects
   - The shaderloader handles TDZ fixes and missing import injection at runtime
   - Download Script button for `.js` export (for use with `<a-entity shader="src: myshader.js; propName: value">`)
 
-The Script tab reads `materialSettings` and `properties` (from `property_float` nodes) in `CodeEditor.tsx` and threads them to the generator.
+The Script tab reads `materialSettings` and `properties` (from `property_float` and `property_color` nodes) in `CodeEditor.tsx` and threads them to the generator.
 
 The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-initialization freezes.
 
@@ -216,7 +250,7 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 - **Rendered in iframe** via blob URL from `tslToPreviewHTML.ts`
 - **Renderer**: A-Frame scene with `a-frame-shaderloader` (loads local IIFE bundle via Vite public dir)
 - **Camera**: FOV 20 with orbit controls (zoom 2–80, rotate 0.5 speed). Initial position `0 0 8`.
-- **Geometry**: Selector dropdown with five options, persisted to localStorage:
+- **Geometry**: Selector dropdown with five built-in options (plus a `custom` entry when a mesh is dropped — see below), persisted to localStorage:
   - **Primitives** — `sphere`, `cube`, `plane`. Plane is rendered un-rotated (faces the camera); sphere and cube use a 45/45 tilt so multiple faces are visible.
   - **OBJ models** — `teapot` (Utah teapot, 15/35/0 tilt) and `bunny` (Stanford bunny, 0/25/0 tilt — silhouette reads better head-on). Backed by static files in `public/models/` (`teapot.obj`, `stanford-bunny.obj`), loaded via A-Frame's `obj-model` component. **Both source OBJs are pre-normalized** (2026-07): bounding-box center exactly at the origin, uniform-scaled so the longest axis is exactly `1.6` (teapot 1.6×0.78×0.99, bunny 1.6×1.59×1.24) — every consumer gets centered, same-size meshes without relying on runtime correction, and `positionGeometry`-driven shaders see comparable coordinate ranges (±0.8) on models and primitives alike (previously the raw teapot spanned ±3.2 and the bunny ±0.08, so the same noise shader looked ultra-dense on one and near-constant on the other). The custom `fit-bounds` component (registered inline in the iframe) still recomputes vertex normals when the source file lacks them, generates spherical UVs from each vertex's direction so TSL shaders that read `uv()` get meaningful values, and recenters/rescales the mesh so the longest axis equals `1.6` — that last step is now a no-op for the bundled models but stays as a safety net for arbitrary models (the viewer's drag-dropped `.glb`s).
   - `isObjGeometry(geometry)` in [tslToPreviewHTML.ts](src/engine/tslToPreviewHTML.ts) is the single source of truth for primitive vs OBJ branching.
@@ -274,44 +308,36 @@ The Babel-based parser handles these patterns:
 - **Append node detection**: `vec2(ref1, ref2)` where at least one argument is a variable reference or member expression creates an `append` node (not a `vec2` type constructor). This matches the `graphToCode` output for append nodes.
 - **Noise functions**: All 8 MaterialX noise variants (`mx_noise_float`, `mx_noise_vec3`, `mx_fractal_noise_float`, `mx_fractal_noise_vec3`, `mx_cell_noise_float`, `mx_worley_noise_float`, `mx_worley_noise_vec2`, `mx_worley_noise_vec3`) — accept either a bare position node or a `pos.mul(scale)` / `mul(pos, scale)` expression as the first arg. The parser unwraps the `.mul(scale)` chain into the `scale` value (round-trip with `graphToCode`'s `${posExpr}.mul(${scaleExpr})` emit).
 - **UV tiling**: `mul(uv(), vec2(x, y))` pattern detected and converted to a single UV node with tiling values
-- **Property nodes**: `uniform(value)` calls → `property_float` nodes with variable name as property name
+- **Property nodes**: `uniform(value)` calls → `property_float` nodes with variable name as property name; `uniform(color(0x…))` → `property_color` nodes
 - **Three.js editor flat form**: `output = expr;` top-level assignments and `.toVar()` / `.toConst()` passthrough chains
 
 ### TSL Code Authoring Constraints
 
 When writing TSL code to paste into FastShaders (or when generating code for an AI/LLM to paste), the following constraints must be respected for the code→graph parser (`codeToGraph.ts`) to produce a correct graph and a working GPU preview:
 
-1. **Every intermediate result must be a named `const` variable.** The `VariableDeclarator` visitor only processes `const x = someCall(...)` statements. Inline/nested call expressions as function arguments (e.g. `smoothstep(float(0.01), float(0.35), x)`) are **silently dropped** — the argument processing loop handles `Identifier` (variable references), `MemberExpression` (`.x`/`.y`), and `NumericLiteral`, but not `CallExpression`. This means:
-   - **Bad**: `smoothstep(float(0.01), float(0.35), x)` → first two args lost, compiles as `smoothstep(0, 0, x)` → WGSL error
-   - **Good**: `const lo = float(0.01);` then `const hi = float(0.35);` then `smoothstep(lo, hi, x)`
-   - **Also good**: `smoothstep(0.01, 0.35, x)` — raw numeric literals work directly
+1. **Inline/nested call expressions as function arguments are supported.** The argument-processing loop handles `Identifier` (variable references), `MemberExpression` (`.x`/`.y`), `NumericLiteral`, and `CallExpression`: an inline call like `smoothstep(float(0.01), float(0.35), x)` is processed under a synthetic variable (`__arg${n}_${i}`) via recursive `processCall`, and its output node is wired into the input port. Named `const` intermediates remain the canonical style `graphToCode` emits (and what a round-trip regenerates — the synthetic nodes become named consts on the way back out), but they are no longer required for correctness.
+   - `smoothstep(float(0.01), float(0.35), x)` → float nodes for 0.01/0.35 wired into the smoothstep node's edge inputs
+   - `smoothstep(0.01, 0.35, x)` — raw numeric literals also work directly
 
-2. **Prefer function-form calls over method chains on non-variable objects.** Method chains like `a.mul(b)` work when `a` is a named variable (the parser reads `objectVarName`). But `float(0.45).sub(x)` fails because the callee object is a `CallExpression`, not an `Identifier` — `objectVarName` is undefined, so the first operand is lost. Break chains into named steps:
-   - **Bad**: `float(0.45).sub(softness)` → first operand lost
-   - **Good**: `const base = float(0.45);` then `base.sub(softness)`
-   - **Also good**: `sub(0.45, softness)` — function form with literal
+2. **Method chains on non-variable receivers are supported.** Chains like `a.mul(b)` work when `a` is a named variable, and the parser also handles call-expression receivers — `float(0.45).sub(softness)` or `positionWorld.sub(cameraPosition).length()` — by recursing on the receiver under a synthetic `__chain` variable and wiring it as the first input. Swizzle receivers (`pos.x.mul(2)`) resolve through a split node the same way. Function-form (`sub(0.45, softness)`), chained, and named-step styles are all equivalent; named steps (`const base = float(0.45);` then `base.sub(softness)`) remain the canonical style `graphToCode` emits, so they round-trip byte-identically.
 
-3. **Use raw numeric literals instead of `float()` wrappers where possible.** `mix(8, 512, t)` is cleaner and guaranteed to parse (the literal handler catches `NumericLiteral`). `float()` works too, but only if the result is stored in a named variable first.
+3. **Use raw numeric literals instead of `float()` wrappers where possible.** `mix(8, 512, t)` is cleaner and guaranteed to parse (the literal handler catches `NumericLiteral`). `float()` works too — inline (processed as a synthetic node) or stored in a named variable.
 
 4. **The `Fn` wrapper is silently skipped.** `const shader = Fn(() => { ... })` is the canonical output format from `graphToCode`. `codeToGraph` explicitly skips `Fn` calls (no unknown node, no warning) — Babel's `traverse` already enters the arrow function body and processes its contents via the inner `VariableDeclarator` and `ReturnStatement` visitors.
 
-5. **`uniform()` calls must be inside the `Fn` body.** Property uniforms declared outside the arrow function (e.g. at module top level) won't be traversed by the `VariableDeclarator` visitor inside the `Fn` body, and won't create `property_float` nodes. Place them as the first statements inside `Fn(() => { ... })`.
+5. **`uniform()` declarations are parsed wherever they appear** (module scope or `Fn` body) — the `VariableDeclarator` visitor traverses the whole program, not just the `Fn` body. Keep them inside `Fn(() => { ... })` only to match the canonical `graphToCode` emission format.
 
-6. **Function arguments that are supported**: `Identifier` (variable name), `MemberExpression` (`var.x`), `NumericLiteral`, `UnaryExpression` (negative numbers like `-0.5`), `StringLiteral`. Anything else (call expressions, binary expressions, template literals) as a direct argument is silently ignored.
+6. **Function arguments that are supported**: `Identifier` (variable name), `MemberExpression` (`var.x`), `NumericLiteral`, `UnaryExpression` (negative numbers like `-0.5`), `StringLiteral`, inline `CallExpression` (processed as a synthetic node), and compile-time-constant `BinaryExpression`s (folded to numbers, e.g. `1 / 6`, `2 ** -3`). Non-constant computed expressions (template literals, variable-dependent binary math) produce a parse warning instead of being silently ignored.
 
-7. **Method chains on named variables are fine.** `coords.mul(cellScale)` works because `coords` resolves to a node ID via `objectVarName`. The chain creates a `mul` node with the object wired to the first input. Multiple chaining (`a.mul(b).add(c)`) works only if each step is a named variable:
-   - **Bad**: `coords.mul(cellScale).add(offset)` → `.add()` sees a `CallExpression` object, not a variable
-   - **Good**: `const scaled = coords.mul(cellScale);` then `scaled.add(offset)`
+7. **Method chains on named variables are fine — including multi-step chains.** `coords.mul(cellScale)` works because `coords` resolves to a node ID via `objectVarName`. Multiple chaining (`coords.mul(cellScale).add(offset)`) also works: the parser recurses on the call-expression receiver under a synthetic `__chain` variable, so each step becomes its own node without a named intermediate const. Named intermediate steps (`const scaled = coords.mul(cellScale);` then `scaled.add(offset)`) are stylistic, not required.
 
-8. **MemberExpression assignments are silently dropped.** `const z = positionGeometry.z;` is a `MemberExpression` initializer, NOT a function call — the `VariableDeclarator` visitor ignores it entirely. The variable `z` never enters `varToNodeId`, and every downstream reference silently disconnects. Workaround: assign the *parent* object to a named variable first, then use swizzle as function arguments:
-   - **Bad**: `const z = positionGeometry.z;` then `mul(z, 2)` → `z` undefined, argument lost
-   - **Good**: `const pos = positionGeometry;` then `mul(pos.z, 2)` → creates split node, wires `.z` output
+8. **MemberExpression initializers are supported.** `const z = positionGeometry.z;` resolves through `resolveMemberExpr`, wiring the variable to the appropriate component handle of a shared split node (one split per source variable) — and since `resolveMemberExpr` falls back to `ensureBareInputNode`, undeclared built-ins like `positionGeometry` are auto-materialised (no alias workaround needed). Unrepresentable member initializers (non-identifier object/property, invalid swizzle) emit a visible parse warning ("Cannot represent … left unwired") instead of silently disconnecting.
 
-9. **`resolveMemberExpr` does not call `ensureBareInputNode`.** When `someVar.x` appears as a function argument, `resolveMemberExpr` looks up `someVar` in `varToNodeId`. If `someVar` is a built-in input like `positionGeometry` that was never explicitly declared, the lookup returns `null` and the argument is **silently dropped**. Unlike the `Identifier` handler (which falls back to `ensureBareInputNode` to auto-materialise input nodes), `resolveMemberExpr` has no such fallback. Always declare built-in inputs with an alias first: `const pos = positionGeometry;` before using `pos.x`, `pos.y`, `pos.z`.
+9. **`resolveMemberExpr` auto-materialises bare built-in inputs.** When `someVar.x` appears as a function argument, `resolveMemberExpr` looks up `someVar` in `varToNodeId` and, like the `Identifier` handler, falls back to `ensureBareInputNode` — so `positionGeometry.y` works without a prior `const pos = positionGeometry;` alias, creating the input node and a shared split node on demand. The fallback only covers zero-argument, no-default `category: 'input'` definitions (time, positionGeometry, uv, …); anything parameterised must still be declared explicitly or the argument is silently dropped.
 
-10. **`scriptToTSL` only handles shaderloader script format.** The "Load Script" button in the TSL editor runs `scriptToTSL()` which expects `export default function(params) { ... }` + `export const schema = { ... }` format. Files already in `Fn()` form will have their entire body stripped because the `Fn(` keyword triggers the nested-Fn skip logic (line 155). For pasting code directly into the TSL editor, use the canonical `Fn()` format and click Save — do NOT use "Load Script".
+10. **`scriptToTSL` accepts both shaderloader modules and canonical Fn-form TSL.** The "Load Script" button runs `scriptToTSL()`, which reverses the `export default function(params) { ... }` + `export const schema = { ... }` shaderloader format — and passes already-Fn-shaped TSL through unchanged (raw-TSL detection at the top of `scriptToTSL`), so loading an Fn-form file is safe.
 
-**Summary rule of thumb**: Write TSL code in SSA-like form — one operation per line, every result named, arguments are either variable names or numeric literals. For built-in inputs used with swizzle (`.x`, `.y`, `.z`), always declare an alias first (`const pos = positionGeometry;`). This is the same style that `graphToCode` emits, so round-tripping is lossless.
+**Summary rule of thumb**: SSA-like form — one operation per line, every result named — is exactly what `graphToCode` emits, so writing it round-trips byte-identically. It is no longer a correctness requirement: the parser also accepts inline call arguments, nested method chains, swizzle initializers (`const z = pos.z;`), bare-input swizzles (`positionGeometry.x` with no alias), and compile-time constant arithmetic (`1 / 6`); constructs it genuinely cannot represent now surface as visible warnings instead of silently dropping.
 
 ### Zustand Store Shape
 
@@ -323,7 +349,8 @@ When writing TSL code to paste into FastShaders (or when generating code for an 
   syncSource: 'graph'|'code'                   // Loop prevention
   syncInProgress: boolean, codeSyncRequested: boolean
   previewCode: string                          // Last code snapshot used by the preview iframe (separate from `code` so typing doesn't thrash the iframe)
-  history: HistoryEntry[], historyIndex: number, isUndoRedo: boolean  // 50-entry undo/redo
+  past: HistoryEntry[], future: HistoryEntry[], isUndoRedo: boolean  // undo/redo stacks, 50-entry cap; entries snapshot nodes+edges+drawings
+  coalescingHistory: boolean                   // beginInteraction/endInteraction gesture bracketing
   splitRatio: number, rightSplitRatio: number  // Panel sizes (localStorage)
   shaderName: string, selectedHeadsetId: string // Toolbar state
   contextMenu: {
@@ -340,6 +367,11 @@ When writing TSL code to paste into FastShaders (or when generating code for an 
   codeEditorTheme: 'vs' | 'vs-dark'               // app-wide theme (Monaco + <html data-theme>)
   costColorLow: string, costColorHigh: string     // cost gradient endpoints
   language: 'en' | 'lv'                           // UI language (display-only overlay)
+  pendingCsvImports: PendingCsvImport[], pendingLimitNotices: LimitNotice[]  // modal queues
+  ignoreImageLimits: boolean, hideImageDownscaleWarning: boolean  // LimitModal opt-outs
+  nodeVarNames: Record<string, string>            // node id → generated TSL var name
+  drawings: DrawStroke[]                          // canvas ink annotations (ride history + autosave + project embed)
+  drawColor, drawOpacity, drawWidth, drawToolActive, drawEraser  // draw tool state (prefs persisted; active/eraser session-only)
 }
 ```
 
@@ -366,16 +398,18 @@ A **display-only** English/Latvian overlay. The **LV** toolbar button (next to *
 
 ### Shared TSL Code Processor (`tslCodeProcessor.ts`)
 
-Common processing logic used by `tslToPreviewHTML.ts` (and indirectly by the other pipelines):
+Exports one shared entry point, **`buildShaderModule(tslCode, options)`** (plus its `BuildShaderModuleOptions` type), used directly by both `tslToShaderModule.ts` (the "Download Shader" export) and `tslToPreviewHTML.ts` (whose `convertToShaderModule` is a thin wrapper) — shared verbatim so the exported file and the live preview can never diverge. Internally it runs:
 
-- **`collectImports(code, excludeFn?)`** — extracts `three/tsl` import names (returns `{ tslNames }`)
-- **`extractFnBody(code, tslNames)`** — extracts the body inside `Fn(() => { ... })`
-- **`fixTDZ(body, tslNames)`** — fixes Temporal Dead Zone issues:
+- **`collectImports`** — extracts `three/tsl` import names (returns `{ tslNames }`)
+- **`extractFnBody`** — extracts the body inside `Fn(() => { ... })`; also preserves module-scope preamble imports and declarations (e.g. graphToCode's HSL helper Fns), re-emitted at module scope
+- **`fixTDZ`** — fixes Temporal Dead Zone issues:
   1. Removes self-referencing bare declarations (`const X = X;`)
   2. Renames locals that shadow imported function names (`const color = color(...)` → `const _color = color(...)`) — regex uses `(?!\s*[:(])` to preserve object property keys in return statements
   3. Fixes bare numeric first-arg in MaterialX noise calls (`mx_noise_float(0)` → `mx_noise_float(uv())`)
-- **`parseBody(body, tslNames)`** — splits into definition lines and output channels (simple or multi-channel return)
-- **`AFRAME_GEO`** / **`CHANNEL_TO_PROP`** — shared constants
+- **`parseBody`** — splits into definition lines and output channels (simple or multi-channel return)
+- **`extractDiscards`** — splits bare `Discard();` lines out of the parsed definition lines
+
+These helper names (and the `CHANNEL_TO_PROP` channel→material-property map — `color` → `colorNode`, `position` → `positionNode`, etc.) are private implementation details, not importable API; the old `AFRAME_GEO` constant no longer exists.
 
 ### Shader Script Export (`tslToShaderModule.ts`)
 
@@ -433,22 +467,33 @@ FastShaders round-trips a whole project through a single self-contained `.js` fi
 
 ### ZIP export / import
 
-- **Export** ([zipWriter.ts](src/utils/zipWriter.ts)): when the graph embeds images, Download Shader emits a `.zip` instead of a bare `.js` — a dependency-free, deterministic (fixed DOS timestamp) STORE-method archive containing `<name>.js` (self-contained, images inlined as `data:` URLs) + `images/<sanitized-stem>.<real-mime-ext>` + `README.txt`.
+- **Export** ([zipWriter.ts](src/utils/zipWriter.ts) + [exportBundle.ts](src/utils/exportBundle.ts)): when the graph embeds images and/or a custom preview mesh is loaded, Download Shader emits a `.zip` instead of a bare `.js` — a dependency-free, deterministic (fixed DOS timestamp) STORE-method archive containing `<name>.js` (self-contained, images inlined as `data:` URLs) + `images/<sanitized-stem>.<real-mime-ext>` + `models/<sanitized-name>` (the dropped mesh, when present) + `README.txt` (with an A-Frame gltf-model/obj-model + shader pairing snippet when a model rides along). The js-vs-zip decision, entry list, and README text are pure and unit-tested (`exportBundle.test.ts`).
 - **Import** ([zipReader.ts](src/utils/zipReader.ts)): a central-directory-driven reader (STORE + DEFLATE via native `DecompressionStream`) with adversarial caps (512 entries, 64 MB total, 512-char names). On import the loose `images/` files are ignored — the payloads ride inside the `.js`; the reader just picks the `.js` carrying the `FASTSHADERS_PROJECT_V1` block.
+- **Custom preview mesh restore**: `importShaderZip` also picks the first `.obj`/`.glb`/`.gltf` entry (junk-filtered), validates + sanitizes it via `createPreviewMesh` ([previewMesh.ts](src/utils/previewMesh.ts)), stores it as the session `previewMesh`, and forces the preview geometry to `custom` (podest's shader+model pairing semantics). A MODEL-ONLY zip loads the mesh and returns `'model'` (callers treat it as success). A zip WITHOUT a model — and every bare text import — CLEARS the session mesh, so a stale model can neither satisfy an imported project's `custom` pref nor leak into the next export's zip. The mesh is session-only: never in history, autosave, or the project embed.
+
+### Custom preview mesh — drop a 3D model on the preview
+
+Dropping a `.obj`/`.glb`/`.gltf` anywhere on the 3D preview loads it as the `custom` preview geometry (a `Model: <name>` option appears in the geometry select). Key mechanics:
+
+- **Drop surface**: the sandboxed iframe swallows drag events over the whole 3D view, so the generated preview document forwards them (`fs:preview-drag` signal + `fs:preview-drop` File objects — podest's forwarder pattern; the forwarder only reacts to FILE drags, so palette-tile drags pass untouched); ShaderPreview's root handles chrome-area drops. A `.js`/`.zip` dropped on the preview routes through the shared `projectImport` path — but an IFRAME-forwarded shader drop requires a `window.confirm` first: adversarial sandboxed code can forge `fs:preview-drop` with a File it constructed, and a project import replaces the whole graph (a model file only swaps the session mesh, so it stays immediate). A combined shader+model drop is SEQUENCED — shader import first (it clears/overwrites the mesh), then the dropped model — so the dropped model deterministically wins. Anything else surfaces a transient notice. A veil overlay (with the accepted-formats hint) shows during any file drag.
+- **State**: the mesh lives in the store's session-only `previewMesh` slice (`{name, kind, bytes, text?, id}` — [previewMesh.ts](src/utils/previewMesh.ts) validates: 64 MB cap, glb magic check, name sanitized at the store boundary). `id` is monotonic — it keys the iframe rebuild (`custom:<id>`) and the model feed, so re-drops force a fresh document and stale feeds can't cross documents.
+- **Feed**: the model reaches the iframe over the generalized `fs:obj-model` postMessage feed — glb as bytes (the exact Uint8Array view, structured-cloned; the store copy stays live for export), obj/gltf as text decoded once at load. `fit-bounds` gets an explicit `regen` flag: `true` for obj (rebuild normals/UVs — non-indexed loader output), `false` for glb/gltf (preserve authored data, synthesize spherical UVs only when missing).
+- **Security**: model files are adversarial. Bytes cross only via postMessage + iframe-minted blob URLs, and the sandboxed stage installs `THREE.DefaultLoadingManager.setURLModifier` allowlisting `blob:`/`data:` — a hostile `.gltf` naming absolute http(s) buffer/texture URIs cannot phone home from the sandbox (CSP is absent in dev/desktop/podest, so the modifier is the real control). Podest's stage carries the same guard, and the XR popup — which runs at the app's REAL origin — installs an origin-widened variant (`blob:`/`data:`/same-origin, so the built-in teapot/bunny URLs still load).
+- **Lifecycle**: `validateGeometry` accepts `'custom'` only while a mesh is loaded (imperative store read — the validator must stay module-scope stable yet see a mesh committed synchronously by a zip import). Reset keeps the mesh (geometry is a user preference); the XR popup loads it via a parent-minted blob URL (same-origin there). DRACO/meshopt GLBs are unsupported (no decoder bundled) — the loader error surfaces in the iframe overlay.
 
 ### Standalone Viewer — "Podest" (`public/podest.html`)
 
-A separate full-screen player, opened from the toolbar's **P** button, that runs any exported shader without the editor. Drag-drop (**anywhere** — over the panel or the full-screen stage) or file-pick a shader (`.js`/`.mjs`/`.tsl`/`.txt` exporting a default `Fn`), a model (`.glb`/`.gltf`), or a `.zip` (unzipped in-browser via `DecompressionStream`); it renders on the chosen mesh with auto-generated uniform sliders (bounds persisted to `fs:viewerBounds`). Scene controls include a background-color picker and a rotation-speed slider (plus the Spin on/off toggle), persisted to `fs:viewerBg` / `fs:viewerSpinSpeed` / `fs:viewerSpin`. Like the in-app preview, **all shader/model execution lives inside a `sandbox="allow-scripts"` iframe with no `allow-same-origin`** (opaque origin) — source and model bytes ship in over `postMessage`, blob URLs are minted inside the iframe, and it deploys anywhere the app does.
+A separate full-screen player, opened from the toolbar's **P** button, that runs any exported shader without the editor. Drag-drop (**anywhere** — over the panel or the full-screen stage) or file-pick a shader (`.js`/`.mjs`/`.tsl`/`.txt` exporting a default `Fn`), a model (`.glb`/`.gltf`/`.obj` — OBJ takes the regen path: normals/UVs rebuilt like the built-in teapot/bunny), or a `.zip` (unzipped in-browser via `DecompressionStream`); it renders on the chosen mesh with auto-generated uniform sliders (bounds persisted to `fs:viewerBounds`). Scene controls include a background-color picker and a rotation-speed slider (plus the Spin on/off toggle), persisted to `fs:viewerBg` / `fs:viewerSpinSpeed` / `fs:viewerSpin`. Like the in-app preview, **all shader/model execution lives inside a `sandbox="allow-scripts"` iframe with no `allow-same-origin`** (opaque origin) — source and model bytes ship in over `postMessage`, blob URLs are minted inside the iframe, and it deploys anywhere the app does.
 
 ---
 
 ## Node System
 
-### Node Registry (68 palette-visible nodes across 12 categories; 71 total incl. 3 hidden defs — `unknown`, `dataNode`, `imageNode` — excluded from search/browser)
+### Node Registry (69 palette-visible nodes across 12 categories; 72 total incl. 3 hidden defs — `unknown`, `dataNode`, `imageNode` — excluded from search/browser)
 
 | Category          | Nodes                                                                                     |
 | ----------------- | ----------------------------------------------------------------------------------------- |
-| **Input** (16)    | positionGeometry, positionLocal, positionWorld, positionView, positionWorldDirection, positionViewDirection, cameraPosition, cameraNear, cameraFar, normalLocal, tangentLocal, time, screenUV, uv, property_float, slider |
+| **Input** (17)    | positionGeometry, positionLocal, positionWorld, positionView, positionWorldDirection, positionViewDirection, cameraPosition, cameraNear, cameraFar, normalLocal, tangentLocal, time, screenUV, uv, property_float, property_color, slider |
 | **Type** (6)      | float, int, vec2, vec3, vec4, color                                                       |
 | **Arithmetic** (4)| add, sub, mul, div                                                                        |
 | **Math (unary)**  | sin, cos, abs, sqrt, exp, log2, floor, round, fract, oneMinus (Invert) — 10 total          |
@@ -682,7 +727,7 @@ CPU-side evaluator that walks the node graph and computes values using JS math e
 - **`evaluateNodeScalar(nodeId, nodes, edges, time)`** → first channel as `number | null`
 - **Multi-channel**: Returns `[x]` for scalar, `[x,y]` for vec2, `[r,g,b]` for vec3/color, `[x,y,z,w]` for vec4
 - **Component-wise broadcasting**: Operations like scalar × vec3 broadcast shorter to longer
-- **Cycle guard** ([cpuEvaluator.ts:151-156](src/engine/cpuEvaluator.ts#L151-L156)): Before recursing, `evaluate` writes a `null` sentinel into the cache for the current `nodeId`. Any cyclic back-edge hits the sentinel via the `cache.has(nodeId)` check at the top and returns null instead of recursing forever. The real result overwrites the sentinel at the end of the function. Without this guard, a graph cycle (which `topologicalSort` warns about but still produces output for) would crash `<TypedEdge>` with `Maximum call stack size exceeded` on every render and blank out the entire edge layer.
+- **Cycle guard** ([cpuEvaluator.ts:184-189](src/engine/cpuEvaluator.ts#L184-L189)): Before recursing, `evaluate` writes a `null` sentinel into the cache for the current `nodeId`. Any cyclic back-edge hits the sentinel via the `cache.has(nodeId)` check at the top and returns null instead of recursing forever. The real result overwrites the sentinel at the end of the function. Without this guard, a graph cycle (which `topologicalSort` warns about but still produces output for) would crash `<TypedEdge>` with `Maximum call stack size exceeded` on every render and blank out the entire edge layer.
 - **Strict null propagation** (important): When an input port is connected to an upstream node, the upstream result is authoritative — including `null`. The `channelInput` helper does NOT silently fall back to the inline value when an edge exists. This was a bug fix: previously `sub(perlinNoise, 0.5)` would compute `sub(0, 0.5) = -0.5` (length 1) because perlinNoise returned null and channelInput substituted the inline default, fooling the visualization layer into thinking a 3-channel chain was a single float.
 - **Supported nodes**: time, float/int/property_float/slider, screenUV, uv (with tiling/rotation), vec2/vec3/vec4/color constructors, all arithmetic (add/sub/mul/div), all unary math (sin/cos/abs/sqrt/exp/log2/floor/round/fract/oneMinus), binary math (pow/mod/min/max/clamp), interpolation (mix/smoothstep/remap/select), vector ops (length/distance/dot/normalize/cross/append), all 8 MaterialX noise variants (sampled at UV center, scaled)
 - Returns `null` for unevaluable nodes (positionGeometry, normalLocal, tangentLocal, anything downstream of one — evaluation can't sample geometry attributes on the CPU)
@@ -826,7 +871,8 @@ Edges can be curved through user-placed points so wires route around nodes.
 - **Right-click group**: Opens GroupSettingsMenu (rename, recolor, save to library, ungroup)
 - **Right-click edge**: Opens EdgeContextMenu (delete + Add routing point)
 - **Drag from handle → release on empty space**: Opens AddNodeMenu at drop position
-- **Drop node on edge**: Inserts node between source and target (curve-proximity detection via the shared `bezierGeometry.ts` math, within `DROP_ON_EDGE_RADIUS` = 12 screen-px ÷ zoom). Works both for existing nodes dragged on the canvas **and** for new nodes dragged from the asset browser. (Distinct from `CONNECTION_RADIUS` = 40, the separate wire-snap/reveal radius passed to React Flow's `connectionRadius` prop.)
+- **Drop node on edge**: Inserts node between source and target (curve-proximity detection via the shared `bezierGeometry.ts` math, within `DROP_ON_EDGE_RADIUS` = 12 screen-px ÷ zoom). Works both for existing nodes dragged on the canvas **and** for new nodes dragged from the asset browser. (Distinct from `CONNECTION_RADIUS` = 40, the separate wire-snap/reveal radius passed to React Flow's `connectionRadius` prop.) Suppressed while a drag-connect preview is active — node-body hover wins over the edge highlight, and the drop never splices over a node body (what wasn't previewed is never committed).
+- **Drag node onto node (drag-connect, `dragConnect.ts`)**: dragging a node so its CENTER lands on another node's body proposes a connection — the hovered node and the chosen input socket ring, a tooltip names it, and releasing commits exactly what the tooltip showed. Direction follows the side (dragged left of hover → dragged.out feeds hover.in), vertical alignment picks the best (output, input) pair, free inputs beat occupied, and cycles are never offered (checks run on the unwrapped logical graph). The drop snaps the node beside its peer and `overlapCascade.ts` makes room. Palette tiles drag-connect too (planned as a `TILE_PHANTOM_ID` phantom; click/Enter adds never connect). Wire-connects and drop-connects share one `applyConnection` (single-input enforcement, hidden-socket exposure, image→normal colorSpace flip).
 
 ### Drop-on-Edge Insertion
 
@@ -847,7 +893,7 @@ History is pushed once in `onNodeDragStop` (covering both the position change an
 
 ### Anti-Overlap
 
-After dropping a node, `onNodeDragStop` checks for AABB overlap with all other nodes. If overlapping, computes the minimum push-out direction (right/left/down/up) and nudges the node with a 10px gap. Group containers are skipped — they don't push their members aside.
+After a **non-connect** drop, `onNodeDragStop` checks for AABB overlap with all other nodes; if overlapping, it computes the minimum push-out direction (right/left/down/up) and nudges the dropped node with a 10px gap. **Connect drops** (see *Drag node onto node* above) instead keep the newly connected pair fixed and make room via `overlapCascade.ts` — overlapped nodes escape along the cheapest single axis (+10px gap) that clears all offenders and the settled set, with knock-on pushes rippling outward (BFS, settle-once). Group containers are skipped in both paths — they don't push their members aside.
 
 ### Drag-In / Drag-Out Group Reparenting
 
@@ -891,7 +937,7 @@ Routes to specific menu based on `contextMenu.type`:
 ### AddNodeMenu
 
 - Auto-focused search input
-- Grouped by category when not searching, flat list when searching
+- Grouped by category when not searching, flat list when searching; in browse view (empty search) a **Recent** section floats above the category list — the last-used node types, newest first (deduped, capped at 6, `output` excluded, persisted to `fs:recentNodes` via `recentNodes.ts`; display-order only, throw-safe so private mode just means no recents). Recent rows participate in keyboard navigation under distinct `recent:`-prefixed keys, so a def appearing both there and in its category is two independent focus stops
 - **Keyboard navigation** — full ArrowUp / ArrowDown / Home / End / Enter handling on the search input. A `focusedIndex` state walks a flat `actionItems[]` list built in **render order** (Group Selection entry → Output entry → grouped/flat defs) so the highlight follows what's actually drawn. Reset to 0 whenever the visible list changes (`useEffect` keyed on `actionItems.length` and `query`). The focused row gets `.context-menu__item--focused` (stronger background + 2px inset accent) and is scrolled into view via `el.scrollIntoView({ block: 'nearest' })` after every move. Mouse `onMouseEnter` syncs `focusedIndex` to the hovered row so keyboard and mouse stay in agreement. Enter runs `actionItems[focusedIndex].run()` — adds the highlighted node, runs Group Selection, or adds the Output entry as appropriate.
 - **Enter without arrows** — still works: when the user types and presses Enter without arrowing, `focusedIndex` is 0 (auto-reset on query change) so Enter adds the top-ranked search result, preserving the original "type `invert` + Enter" workflow.
 - Maps node to React Flow type: output→`'output'`, time→`'clock'`, color→`'color'`, noise category→`'preview'`, sin/cos→`'mathPreview'`, else→`'shader'`
@@ -1032,7 +1078,7 @@ interface BoundarySocket {
 - **Font**: Inter (sans), JetBrains Mono (mono)
 - **Spacing**: 4px base scale (--space-1 through --space-8)
 - **Shadows**: 4 levels (sm, md, lg, node). `--shadow-node` is a two-layer combo — tight contact shadow (`0 1px 2px rgba(0,0,0,0.55)`) + slightly diffused offset (`0 3px 6px rgba(0,0,0,0.4)`) — small blur radii keep edges crisp
-- **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red). Costs calibrated against mobile GPU SFU quarter-rate (add=1, sin/cos=4, pow=12). Noise costs: cellNoise=12, perlin=35, perlinVec3=75, fbm=95, fbmVec3=200, voronoi=55, voronoiVec2=60, voronoiVec3=65. Budgets assume 3–5 concurrent shaders in scene.
+- **Cost visualization**: Nodes scale (up to 1.35x) and blend color based on GPU cost (green→amber→red). Costs calibrated against mobile GPU SFU quarter-rate (add=1, sin/cos=4, pow=12). Noise costs (recalibrated 2026-07-23 from measured Quest 3 / Adreno 740 GPU-timestamp benchmarks — see `ShaderCarousel/benchData/`): cellNoise=12, perlin=35, perlinVec3=75, fbm=105, fbmVec3=190, voronoi=230, voronoiVec2=235, voronoiVec3=245. Budgets assume 3–5 concurrent shaders in scene.
 - **Category colors**: Each node category has a distinct accent color for the header strip (defined as raw hex in `CAT_HEX` in [colorUtils.ts](src/utils/colorUtils.ts) and published at runtime as `--cat-*` CSS vars on `:root`, consumed by `CATEGORY_COLORS`)
   - input (#4CAF50), type (#2196F3), arithmetic (#FF9800), math (#9C27B0), interpolation (#00BCD4), logic (#7E57C2), vector (#E91E63), noise (#795548), color (#FF5722), unknown (#9E9E9E), output (#f44336)
   - `--cat-texture: #8D6E63` is used by ContentBrowser for the Textures tab background tint (via `CATEGORY_COLORS.texture` in colorUtils.ts and the `texture` entry in nodeCategories.ts). No node has `category: 'texture'` in the registry, but the category exists as a special tab that shows built-in texture groups.
@@ -1088,14 +1134,19 @@ Shared constant exported from `graphToCode.ts`, imported by `codeToGraph.ts` (fo
 - `fs:ignoreImageLimits` — user opted out of image size/pixel caps (set via the LimitModal checkbox)
 - `fs:assetBarCollapsed` — ContentBrowser (asset bar) collapse state
 - `fs:assetZoom` — ContentBrowser (asset bar) tile zoom level (Ctrl/Cmd+wheel over the strip or the floating +/− buttons)
+- `fs:recentNodes` — recently-added node types, floated to the top of the AddNodeMenu browse view (`recentNodes.ts`)
+- `fs:lang` — UI language (`'en' | 'lv'`), see *Internationalization*
+- `fs:hideImageDownscaleWarning` — user opted out of the image downscale notice
+- `fs:drawColor` / `fs:drawOpacity` / `fs:drawWidth` — canvas drawing-layer pen preferences (DrawingLayer/DrawToolbar)
 - `fs:viewerBounds` — standalone `podest.html` per-uniform slider bounds (that page owns this key, separate from the editor). Sibling keys `fs:viewerBg`, `fs:viewerSpinSpeed`, `fs:viewerSpin` persist that page's background color and spin speed/on-off
 
-> **Not storage keys:** `fs:uniform`, `fs:camera`, `fs:rotation`, `fs:reset-camera`, `fs:bg-color`, `fs:lighting`, `fs:playing`, `fs:geometry`, `fs:preview-ready` are **postMessage** types between ShaderPreview and the preview iframe; `fs:project-imported` is a **window CustomEvent** dispatched by `projectImport`.
+> **Not storage keys:** `fs:uniform`, `fs:camera`, `fs:rotation`, `fs:reset-camera`, `fs:bg-color`, `fs:lighting`, `fs:playing`, `fs:geometry`, `fs:preview-ready`, `fs:preview-error`, `fs:obj-model`, `fs:obj-model-error`, `fs:preview-drag`, `fs:preview-drop` are **postMessage** types between ShaderPreview and the preview iframe; `fs:scene-booted` is a plain **window Event** dispatched and consumed inside the preview iframe (and `podest.html`) itself as the scene-injection handshake; `fs:project-imported` is a **window CustomEvent** dispatched by `projectImport`.
 
 ### History System
 
 - 50-entry undo/redo stack
 - `pushHistory()` called before: node drag, connection, paste, duplicate, delete, edge drag-to-disconnect
+- **Gesture bracketing**: `beginInteraction()`/`endInteraction()` snapshot ONCE up front and suppress `pushHistory` until the gesture ends — a DragNumberInput scrub or waypoint drag is one undo entry, not one per pointermove frame (also avoids `structuredClone`-ing the whole graph 60×/s). `beginInteraction` deliberately ignores `isUndoRedo`; DragNumberInput brackets on first move and closes on pointerup/pointercancel/unmount.
 - `isUndoRedo` flag prevents sync during undo/redo operations
 
 ### Deployment
@@ -1164,7 +1215,7 @@ Standalone benchmark suite in [`ShaderCarousel/`](ShaderCarousel/) for empirical
 
 ### Shared infrastructure (`lib/`)
 
-- `bench-style.css`, `bench-stats.js` (`computeStats`, two-level `slopeMsPerPass`, `REF_PIXELS`-normalized `annotateMarginalCost`, validity-gated `buildSuggestion`/`exportResults`, schema v2), `bench-timing.js` (`createBenchTimer` — GPU timestamp queries with wall-clock-fence fallback, two-level slope, quantization heuristic), `bench-registry.js` (corpus: baseline + 8 presets + 8 noise atomics + saved-groups loader), `bench-ui.js` (grouped picker, settings persistence, Reset-to-defaults, Start gate, done popup, headset detect).
+- `bench-style.css`, `bench-stats.js` (`computeStats`, two-level `slopeMsPerPass`, `REF_PIXELS`-normalized `annotateMarginalCost`, validity-gated `buildSuggestion`/`exportResults`, schema v2), `bench-timing.js` (`createBenchTimer` — GPU timestamp queries with wall-clock-fence fallback, two-level slope, quantization heuristic), `bench-registry.js` (corpus: baseline + 8 presets + 8 noise atomics + a DCE-safe **calibration corpus** — a `calib` k-sweep group plus 7 `combo` additivity/throughput/latency/model-check entries incl. two `combo_dce_*` sentinels, off by default (picker groups "Calibration (k-sweep)" / "Combinations") — + saved-groups loader), `bench-driver.js` (shared WebGPU measurement driver for bench-static/bench-microplane — initRenderer / benchmarkOne / runBenchmark / results-popup / boot wiring, extracted from ~220 formerly-duplicated lines), `bench-ui.js` (grouped picker, settings persistence, Reset-to-defaults, Start gate, done popup, headset detect).
 - `lib/three/` — Three.js **r184** WebGPU ESM (regenerated from `node_modules/three@0.184`), used by the static/microplane benches via import map.
 - Launcher [`ShaderCarousel/index.html`](ShaderCarousel/index.html) loads each bench in a same-origin iframe and **adopts** its HUD/controls into a sidebar (keeping `<style>` + `<link>` so styling survives); the Start gate and done popup stay inside the iframe so the XR-entry gesture origin is correct.
 
@@ -1172,7 +1223,7 @@ Standalone benchmark suite in [`ShaderCarousel/`](ShaderCarousel/) for empirical
 
 1. **Multi-pass, two-level slope**: `bench-timing.calibrate` bumps N per shader (until a batch spans ~`CALIBRATE_TARGET_MS` 20 ms) and measures at N and 2N passes/batch. Per-pass cost = (median(total@2N) − median(total@N)) / N, so fixed per-batch overhead C cancels (the old single-level divide-by-N left C/N in every marginal). `totalMs` is GPU-timestamp time when available (`resolveTimestampsAsync`), else wall-clock around a fence (`onSubmittedWorkDone()` / `gl.finish()`).
 2. **Marginal cost**: every run's first shader is the flat-color baseline; `marginalMs = msPerPass − baselineMs` isolates each shader's contribution above scene + driver overhead. `marginalMsAtRef` rescales it to the 2064×2208 reference pixel count so points are in one currency. Baseline missing ⇒ marginal fields are `null` (no silent raw-median fallback).
-3. **Output**: each run writes three files — raw JSON (batches + per-shader stats + schema-v2 provenance), a summary CSV (one row per shader), and a **complexity-suggestion JSON** mapping marginal ms → suggested points (`marginalMsAtRef / 8.33 × 100`), diffable against `src/registry/complexity.json`. `metadata.valid`/`reasons[]` gate whether the numbers are trustworthy; commit runs into `benchData/<device-slug>/`. **The loop is not yet closed — no measured run committed; `complexity.json` is still hand-guessed.**
+3. **Output**: each run writes three files — raw JSON (batches + per-shader stats + schema-v2 provenance), a summary CSV (one row per shader), and a **complexity-suggestion JSON** mapping marginal ms → suggested points (`marginalMsAtRef / 8.33 × 100`), diffable against `src/registry/complexity.json`. `metadata.valid`/`reasons[]` gate whether the numbers are trustworthy; commit runs into `benchData/<device-slug>/`. **The loop closed 2026-07-23**: the first measured run is committed at `ShaderCarousel/benchData/quest3-20260723/` (Static + MicroPlane agree), and the noise family in `complexity.json` was repriced from it (voronoi was ~4x underpriced: 55 → 230). `ShaderCarousel/benchData/METHODS.md` documents the methodology and `ShaderCarousel/benchData/fit-calibration.mjs` fits the calibration corpus.
 4. **Serving**: static HTTP only (e.g. `python3 -m http.server`) — **not** Vite, which interferes with the WebGPU import maps.
 
 ### Saved-groups status
