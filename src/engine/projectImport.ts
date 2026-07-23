@@ -15,6 +15,7 @@ import { sanitizeDrawings } from '@/utils/drawings';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { generateId } from '@/utils/idGenerator';
 import { readZip, type ZipReadEntry } from '@/utils/zipReader';
+import { createPreviewMesh, detectMeshKind, type PreviewMesh } from '@/utils/previewMesh';
 import { extractProjectState, type FastShadersProject } from './fastShadersProject';
 import { scriptToTSL } from './scriptToTSL';
 
@@ -93,9 +94,21 @@ function applyProjectToStore(project: FastShadersProject): void {
 /**
  * Import shader source text: a FASTSHADERS_PROJECT_V1 block restores the full
  * project; a bare shaderloader script is parsed back to TSL and re-synced.
+ *
+ * A text import carries no model, so it CLEARS any session preview mesh —
+ * otherwise a stale mesh would silently satisfy the incoming project's
+ * 'custom' geometry pref and get bundled into the next export's zip. The zip
+ * path passes `keepPreviewMesh` because it decides mesh presence from the
+ * archive itself (and must set the mesh BEFORE the prefs re-read fires).
  */
-export function importShaderText(text: string): 'project' | 'script' {
+export function importShaderText(
+  text: string,
+  opts?: { keepPreviewMesh?: boolean },
+): 'project' | 'script' {
   const projectResult = extractProjectState(text);
+  // Clear AFTER the parse — an import that dies in extractProjectState (the
+  // throw propagates to the caller's error surface) must not wipe the mesh.
+  if (!opts?.keepPreviewMesh) useAppStore.getState().setPreviewMesh(null);
   if (projectResult) {
     applyProjectToStore(projectResult.project);
     return 'project';
@@ -121,16 +134,58 @@ export function isZipFile(file: File): boolean {
  * the archive is unreadable or holds no script — the caller owns the
  * user-facing message.
  */
-export async function importShaderZip(file: File): Promise<'project' | 'script' | null> {
+/** Zip housekeeping entries that must never win a file-pick (same as podest). */
+function isJunkEntry(name: string): boolean {
+  return name.includes('__MACOSX') || (name.split('/').pop() ?? '').startsWith('.');
+}
+
+export async function importShaderZip(file: File): Promise<'project' | 'script' | 'model' | null> {
   let entries: ZipReadEntry[];
   try {
     entries = await readZip(new Uint8Array(await file.arrayBuffer()));
   } catch {
     return null;
   }
+
+  // A model in the archive becomes the custom preview mesh (the mesh-carrying
+  // export writes one under models/). Entry names are attacker-controlled;
+  // createPreviewMesh validates and sanitizes at this boundary.
+  const modelEntry = entries.find((e) => !isJunkEntry(e.name) && detectMeshKind(e.name) !== null);
+  let mesh: PreviewMesh | null = null;
+  if (modelEntry) {
+    const result = createPreviewMesh(modelEntry.name.split('/').pop() ?? modelEntry.name, modelEntry.data);
+    if ('mesh' in result) mesh = result.mesh;
+  }
+
+  const showMesh = () => {
+    // A zip that ships a model always SHOWS it (podest's shader+model pairing
+    // semantics): a script-only zip never touches prefs, and an older project
+    // block predating the mesh feature would otherwise leave the model
+    // invisible. Write the pref and (re-)fire the prefs re-read.
+    try { localStorage.setItem('fs:previewGeometry', 'custom'); } catch { /* quota / private mode */ }
+    // typeof guard: this module is also exercised by node-env unit tests.
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fs:project-imported'));
+    }
+  };
+
   const dec = new TextDecoder();
   const scripts = entries.filter((e) => /\.(js|mjs|tsl)$/i.test(e.name)).map((e) => dec.decode(e.data));
-  if (scripts.length === 0) return null;
+  if (scripts.length === 0) {
+    // Model-only zip: still a meaningful drop — load the mesh instead of
+    // rejecting the archive outright (the caller treats 'model' as success).
+    if (!mesh) return null;
+    useAppStore.getState().setPreviewMesh(mesh);
+    showMesh();
+    return 'model';
+  }
   const withProject = scripts.find((t) => t.includes('FASTSHADERS_PROJECT_V1'));
-  return importShaderText(withProject ?? scripts[0]);
+
+  // Set — or, when the archive has none, CLEAR — the mesh BEFORE the text
+  // import: applyProjectToStore dispatches the prefs re-read synchronously,
+  // and validateGeometry's 'custom' gate reads the store at that moment.
+  useAppStore.getState().setPreviewMesh(mesh);
+  const imported = importShaderText(withProject ?? scripts[0], { keepPreviewMesh: true });
+  if (mesh) showMesh();
+  return imported;
 }

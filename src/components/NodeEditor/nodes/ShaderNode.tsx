@@ -414,6 +414,24 @@ export const ShaderNode = memo(function ShaderNode({
       ))
     : null;
 
+  // Selection outline for a stacked node must enclose the WHOLE stack, not just
+  // the top card. A single rounded-rect frame spans the union of the card and
+  // its downward-offset layers (same width, extended down by the deepest
+  // layer's offset) and carries the focus outline; the top card's own outline
+  // is suppressed while stacked (see `.node-base--stacked.node-base--selected`).
+  // It renders ABOVE the card (z-index) so the card can't paint over the top/
+  // side edges, and is pointer-events:none so it never blocks sockets.
+  const stackFrame = stackLayerCount > 0 && selected ? (
+    <div
+      className="node-base__stack-frame"
+      style={{ bottom: -(stackLayerCount * STACK_STEP_Y) }}
+    />
+  ) : null;
+
+  const cardClass =
+    `node-base${selected ? ' node-base--selected' : ''}` +
+    `${stackLayerCount > 0 ? ' node-base--stacked' : ''}`;
+
   const handleChange = useCallback(
     (key: string, raw: string) => {
       const num = parseFloat(raw);
@@ -466,8 +484,9 @@ export const ShaderNode = memo(function ShaderNode({
     return (
       <div style={wrapStyle}>
         {stackLayers}
+        {stackFrame}
         <div
-          className={`node-base ${selected ? 'node-base--selected' : ''}`}
+          className={cardClass}
           style={nodeStyle}
         >
         {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>}
@@ -562,8 +581,9 @@ export const ShaderNode = memo(function ShaderNode({
   return (
     <div style={wrapStyle}>
       {stackLayers}
+      {stackFrame}
       <div
-        className={`node-base ${selected ? 'node-base--selected' : ''}`}
+        className={cardClass}
         style={nodeStyle}
       >
       {/* Cost badge above node */}

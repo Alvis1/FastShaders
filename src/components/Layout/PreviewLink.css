@@ -1,0 +1,47 @@
+/* Symbolic Output→preview link. Mounted inside `.react-flow` at z-index -1
+   (the same layer as React Flow's background grid): above the opaque canvas
+   background, but BEHIND the node cards (pane z1, viewport/nodes z2). The
+   canvas pane's `overflow: hidden` clips it at the divider, so it tucks behind
+   the code/preview frames. `pointer-events: none` keeps the canvas fully
+   interactive. */
+.preview-link {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: -1;
+  transition: opacity 160ms ease;
+}
+
+.preview-link__path {
+  /* Contrast vars come from NodeEditor's canvasCssVars (set on `.node-editor`,
+     an ancestor): they follow the USER-PICKED canvas background per theme via
+     getContrastColor — the same auto-flip cost badges and 1-channel edges use —
+     so the wire stays visible on a dark canvas. The shadow var is the
+     CONTRASTING halo (white on light bg, black on dark), matching the
+     cost-badge treatment. */
+  stroke: var(--node-cost-text, #000);
+  stroke-width: 4.5;
+  stroke-linecap: butt;
+  /* Bold, closely-spaced dashes flowing toward the preview imply "the Output
+     feeds the view". */
+  stroke-dasharray: 6 3;
+  opacity: 0.8;
+  filter: drop-shadow(0 0 2px var(--node-cost-text-shadow, rgba(0, 0, 0, 0.35)));
+  animation: preview-link-flow 0.9s linear infinite;
+}
+
+@keyframes preview-link-flow {
+  to {
+    /* One dash period is 6 + 3 = 9; shift two periods for a smooth loop. */
+    stroke-dashoffset: -18;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-link__path {
+    animation: none;
+  }
+}

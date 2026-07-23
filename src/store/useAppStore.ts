@@ -27,6 +27,7 @@ import { makeDataNodeData } from '@/utils/dataNode';
 import { makeImageNodeData, sanitizeImageNodes } from '@/utils/imageNode';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { sanitizeDrawings, MAX_STROKES, MAX_TOTAL_POINTS, type DrawStroke } from '@/utils/drawings';
+import type { PreviewMesh } from '@/utils/previewMesh';
 import { encodeImageFile } from '@/utils/imageImport';
 import { transposeCsv, type ParsedCsv } from '@/utils/csvParser';
 
@@ -522,6 +523,12 @@ interface AppState {
   // User's library of saved groups (persisted to localStorage)
   savedGroups: SavedGroup[];
 
+  // Custom preview mesh (a dropped/imported .obj/.glb/.gltf) — the model the
+  // preview's 'custom' geometry renders. SESSION-ONLY: deliberately absent
+  // from history snapshots, graph autosave, and the project embed (the bytes
+  // can be tens of MB; the zip export carries the model as a file instead).
+  previewMesh: PreviewMesh | null;
+
   // Board drawings (freehand ink annotations) — VISUAL-ONLY, like notes /
   // waypoints. Separate slice so graphToCode / cpuEvaluator / the sync engine
   // never see them; they ride graph autosave + history + the project embed.
@@ -624,6 +631,8 @@ interface AppState {
 
   // Shader name + headset actions
   setShaderName: (name: string) => void;
+  /** Load/replace/clear the custom preview mesh (session-only, no history). */
+  setPreviewMesh: (mesh: PreviewMesh | null) => void;
   setSelectedHeadsetId: (id: string) => void;
 
   // Node variable name actions
@@ -711,6 +720,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   codeEditorTheme: (loadString('fs:codeEditorTheme', 'vs') === 'vs-dark' ? 'vs-dark' : 'vs'),
   language: (loadString('fs:lang', 'en') === 'lv' ? 'lv' : 'en'),
   savedGroups: loadSavedGroups(),
+  previewMesh: null,
 
   // Drawings are hydrated from fs:graph by App.tsx (loadGraph) alongside the
   // graph; tool prefs are their own persisted keys.
@@ -1072,6 +1082,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try { localStorage.setItem('fs:shaderName', name); } catch { /* */ }
     set({ shaderName: name });
   },
+
+  setPreviewMesh: (mesh) => set({ previewMesh: mesh }),
 
   setSelectedHeadsetId: (id) => {
     try { localStorage.setItem('fs:headsetId', id); } catch { /* */ }

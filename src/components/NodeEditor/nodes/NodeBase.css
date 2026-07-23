@@ -43,6 +43,31 @@
   outline-offset: -1px;
 }
 
+/* A stacked (multi-channel) node draws its selection outline on a separate
+   frame that encloses the whole stack (see .node-base__stack-frame), so the
+   top card must NOT also outline itself — that would ring only the top card. */
+.node-base--stacked.node-base--selected {
+  outline: none;
+}
+
+/* Selection frame for a stacked node: a rounded rect spanning the union of the
+   card and its downward-offset layers. Sized inline (`bottom` extends it below
+   the card by the deepest layer's offset). Sits above the card so its top/side
+   edges aren't painted over; transparent + pointer-events:none so it only ever
+   shows the outline and never blocks sockets. */
+.node-base__stack-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* bottom set inline: -(stackLayerCount * STACK_STEP_Y) */
+  z-index: 1;
+  border-radius: var(--border-radius-md);
+  outline: 2px solid var(--border-focus);
+  outline-offset: -1px;
+  pointer-events: none;
+}
+
 /* ===== Multi-channel stack layers =====
    When multi-channel data (2–4 ch) ARRIVES on a node's connected inputs,
    offset "card" layers render so N channels read as N stacked cards. Layers

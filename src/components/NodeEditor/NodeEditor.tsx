@@ -62,6 +62,7 @@ import {
 } from './dragConnect';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
 import { CostBar } from '@/components/Layout/CostBar';
+import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { getCostColor, getCostScale, getContrastColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
@@ -542,16 +543,22 @@ export function NodeEditor() {
   // navigates instead of corrupting the ink. Only ever set on coarse pointers.
   const twoFingerNavRef = useRef(false);
   // Coarse pointer = touch/pen (e.g. iPad). Drives the touch interaction model:
-  // ONE finger manipulates (drag nodes/edges, marquee select), TWO fingers
-  // navigate (pan + pinch-zoom), long-press opens the menu. A mouse keeps the
-  // desktop model (panOnDrag={[1,2]}, double-tap-drag pan) completely intact.
+  // ONE finger manipulates (drag nodes/edges; tap selects — marquee stays a
+  // mouse-only affordance, see selectionOnDrag), TWO fingers navigate
+  // (pan + pinch-zoom), long-press opens the menu. A mouse keeps the desktop
+  // model (panOnDrag={[1,2]}, double-tap-drag pan) completely intact.
   //
-  // NB matchMedia('(pointer: coarse)') LIES on iPad: iPadOS Safari does
-  // desktop-class browsing and reports (pointer: fine)/(hover: hover), so the
-  // media query alone leaves iPad stuck in the desktop model. navigator.
-  // maxTouchPoints is the reliable signal (iPad reports 5 even in desktop
-  // mode) — the same trick tslToPreviewHTML already uses. `any-pointer` catches
-  // touch even when the primary pointer is a paired trackpad.
+  // NB matchMedia('(pointer: coarse)') is unreliable as the SOLE signal on
+  // iPad: with a trackpad/Magic Keyboard paired the primary pointer reports
+  // fine — though on a bare iPad the coarse query DOES match, which is why
+  // the @media (pointer: coarse) CSS sizing layer is live there. navigator.
+  // maxTouchPoints is the signal that holds across all configurations (iPad
+  // reports 5 even in desktop mode) — the same trick tslToPreviewHTML already
+  // uses. `any-pointer` catches touch even when the primary pointer is a
+  // paired trackpad. The CSS layer deliberately keys on the STATIC primary-
+  // pointer query while this JS model uses the broader dynamic signal — the
+  // divergence is intentional (sizing follows the device class, interaction
+  // follows the pointer actually in use).
   const [isCoarsePointer, setIsCoarsePointer] = useState(() => {
     if (typeof navigator !== 'undefined' && (navigator.maxTouchPoints ?? 0) > 0) return true;
     if (typeof window === 'undefined' || !window.matchMedia) return false;
@@ -2454,14 +2461,23 @@ export function NodeEditor() {
           // so a stroke never also starts (and strands) a selection box. The
           // draw-capture handler still swallows the pointerdown; these props are
           // the declarative belt-and-suspenders that actually keep RF idle.
-          selectionOnDrag={!drawToolActive}
+          // Also OFF on coarse pointers. With panOnDrag={false} on touch, the
+          // FIRST finger of a two-finger pan lands on the pane; React Flow then
+          // starts a marquee (pointer-driven) before the second finger arrives,
+          // and a touchstart can't retroactively cancel that pointer selection —
+          // so an empty-canvas two-finger pan came out as a selection box. (Over
+          // a node the first finger starts a node-drag instead, which is why the
+          // two-finger nav only worked over nodes.) Dropping selectionOnDrag on
+          // touch leaves the two-finger nav effect unopposed. Rubber-band
+          // marquee-select stays a mouse-only affordance; tap still selects.
+          selectionOnDrag={!drawToolActive && !isCoarsePointer}
           nodesDraggable={!drawToolActive}
           elementsSelectable={!drawToolActive}
           selectionMode={SelectionMode.Partial}
           // Desktop (mouse): pan with middle/right button, left is free for
           // select/move. Touch/pen (coarse): turn drag-to-pan OFF so ONE finger
-          // drags nodes/edges and marquee-selects; TWO fingers pan + pinch-zoom
-          // via the touch-nav effect above.
+          // drags nodes/edges; TWO fingers pan + pinch-zoom via the touch-nav
+          // effect above.
           panOnDrag={isCoarsePointer ? false : [1, 2]}
           zoomOnScroll
           // Double-click is reserved for edge routing waypoints (add on an edge,
@@ -2487,6 +2503,10 @@ export function NodeEditor() {
             size={1}
             color={gridColor}
           />
+          {/* Symbolic Output→preview wire. Sits at z-index -1 (behind node
+              cards, above the canvas bg) and is clipped by the pane, so it
+              tucks behind the code/preview frames. */}
+          <PreviewLink />
           <Controls
             showInteractive={false}
             style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}

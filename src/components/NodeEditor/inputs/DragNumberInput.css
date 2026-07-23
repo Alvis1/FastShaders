@@ -120,24 +120,26 @@
    below the 44px Apple HIG minimum. Widen the touch target without changing
    layout flow more than necessary. */
 @media (pointer: coarse) {
-  .drag-num {
+  /* CHROME inputs only (context menus / settings panels): widen for touch.
+     Scoped :not(--compact) so the ON-NODE compact number boxes keep their
+     DESIGNED size — enlarging those (7.7->10px font, 16->24px min-width)
+     rendered them ~2x too big on iPad and broke node proportions. The zoomable
+     canvas + drag-to-adjust handle on-node touch precision; only the tiny
+     compact arrows get a small nudge so they stay tappable. */
+  .drag-num:not(.drag-num--compact) {
     height: 32px;
   }
-  .drag-num__arrow {
+  .drag-num:not(.drag-num--compact) .drag-num__arrow {
     width: 28px;
     font-size: 12px;
   }
-  .drag-num--compact {
-    height: 20px;
-  }
   .drag-num--compact .drag-num__arrow {
-    width: 14px;
-    font-size: 9px;
-  }
-  .drag-num--compact .drag-num__value,
-  .drag-num--compact .drag-num__edit {
-    font-size: 10px;
-    min-width: 24px;
+    width: 10px;
+    /* Touch floor of 8px, but never SMALLER than the designer text scale's
+       desktop size (base is 5px × --node-text-scale, which passes 8px at
+       scale 1.6) — a hardcoded 8px would shrink the arrows on exactly the
+       nodes the designer made bigger. */
+    font-size: max(8px, calc(5px * var(--node-text-scale, 1)));
   }
 }
 

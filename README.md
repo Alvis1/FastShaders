@@ -9,21 +9,25 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 ## Features
 
 - **Bi-directional sync** — edit either the graph or the TSL code; changes round-trip in both directions
-- **Node graph editor** — 68 built-in TSL node types across 10 categories
+- **Node graph editor** — 69 built-in TSL node types across 10 categories, added via the searchable palette (drag, or click/Enter to place), the right-click canvas menu, **Shift+A** quick-add (fully keyboard-driven), or by dropping a wire on empty canvas
 - **Drag-aware sockets** — dragging a wire near a node labels its input sockets with their names; noise and Image nodes also reveal their hidden parameter sockets so you can wire a parameter without opening its settings first
 - **Wire editing** — drop a node onto a wire to splice it into that connection, and double-click a wire to add draggable routing points it curves through
+- **Drag-to-connect** — drag a node (or a palette tile) onto another node to wire them: a preview ring and tooltip show exactly which sockets will connect, and the drop snaps the node into place next to its new peer
 - **Code editor** — Monaco with TSL syntax highlighting, a sun/moon toggle that drives app-wide dark mode (not just the editor — it flips the whole editor's chrome and remembers a canvas background per theme), inline error/warning squiggles, and a separate read-only Script tab showing the exported `.js` module
-- **Bilingual — Latviešu / English** — an **LV** toggle (top-right, next to **SC**) switches the whole editor to Latvian: node names read as `Reizināt (Multiply)` — the Latvian term with the original English kept in brackets — alongside high-school-level (vidusskola) Latvian node descriptions, category names, socket labels, and UI chrome. Search also matches Latvian terms. It's display-only: node types, generated TSL, and `.fastshader` files stay canonical English, so a graph authored in Latvian is byte-identical to the same graph in English. The Node Designer (`node-designer.html`) has its own EN/LV switch
-- **Live 3D preview** — WebGPU-rendered preview (automatic WebGL2 fallback) with five geometries (sphere, cube, plane, Utah teapot, Stanford bunny — all normalized to the same centered bounds), three lighting modes (studio / moon / laboratory), subdivision slider, picked background color, orbit camera, and play/pause
+- **Bilingual — Latviešu / English** — an **LV** toggle (top-right, next to the **P** viewer button) switches the whole editor to Latvian: node names read as `Reizināt (Multiply)` — the Latvian term with the original English kept in brackets — alongside high-school-level (vidusskola) Latvian node descriptions, category names, socket labels, and UI chrome. Search also matches Latvian terms. It's display-only: node types, generated TSL, and exported `.js`/`.zip` project files stay canonical English, so a graph authored in Latvian is byte-identical to the same graph in English. The Node Designer (`node-designer.html`) has its own EN/LV switch
+- **Live 3D preview** — WebGPU-rendered preview (automatic WebGL2 fallback) with five geometries (sphere, cube, plane, Utah teapot, Stanford bunny — all normalized to the same centered bounds), three lighting modes (studio / moon / laboratory), subdivision slider, picked background color, orbit camera, play/pause, and a fullscreen toggle
+- **Custom preview meshes** — drop a `.obj` / `.glb` / `.gltf` onto the 3D preview to run your shader on your own model; “Download Shader” then becomes a `.zip` that bundles the model next to the `.js`, ready for Podest or a plain A-Frame page (and re-importing that zip restores the mesh)
 - **MaterialX noise** — 8 built-in noise variants (Perlin, fBm, cell, Worley/Voronoi) backed by `three/tsl`'s MaterialX functions
 - **Built-in textures** — 8 procedural texture presets (polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) draggable from the palette
 - **CSV data import** — drop a `.csv` onto the canvas to create a Data node, then drive shaders from real data with the **Data Stripes** and **Data Viz** nodes (columns baked into GPU textures)
 - **Image textures** — drop an image to create an Image node (re-encoded and validated on import) with UV tiling / offset / flip controls
-- **Project save & restore** — "Download Shader" embeds the whole project inside the exported `.js`; drop that `.js` (or a `.zip` when images are included) back in — on the canvas, the code panel, or via Load Script — to restore the graph, preview settings, and UI prefs
-- **Standalone viewer** — a separate full-screen player (opened from the toolbar) that runs any exported shader `.js`/`.zip` or a `.glb`/`.gltf` model, sandboxed, with auto uniform sliders
+- **Project save & restore** — "Download Shader" embeds the whole project inside the exported `.js`; drop that `.js` (or a `.zip` when images or a custom preview mesh are included) back in — on the canvas, the code panel, or via Load Script — to restore the graph, preview settings, and UI prefs
+- **Standalone viewer** — a separate full-screen player (opened from the toolbar) that runs any exported shader `.js`/`.zip` or a `.glb`/`.gltf`/`.obj` model, sandboxed, with auto uniform sliders
 - **Groups** — Ctrl/Cmd+G to wrap selected nodes in a recolorable, collapsible container; save groups to a per-browser library and drag them onto any graph
-- **Property uniforms** — `property_float` nodes become live-tunable sliders in the preview overlay and component attributes in the A-Frame export
+- **Notes & ink** — sticky-note annotations and freehand drawing on the canvas; both are visual-only (never affect the compiled shader) and are saved with the project
+- **Property uniforms** — `property_float` and `property_color` nodes become live-tunable sliders / color pickers in the preview overlay and component attributes in the A-Frame export
 - **Copy / paste / duplicate** — Cmd/Ctrl+C, Cmd/Ctrl+V, Cmd/Ctrl+D across nodes (internal edges preserved)
+- **Undo / redo** — Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (50-step history), plus Undo/Redo buttons in the toolbar
 - **VR cost budget** — per-headset cost meter (Quest 2/3/3s, Steam Frame, Pico 4, Apple Vision Pro) with a color-gradient bar that fills as the graph's GPU cost approaches the selected headset's budget (advisory, not a hard limit)
 - **Offline desktop app** — a lightweight Tauri build for Windows and macOS, downloadable from the **Local** button in the editor's toolbar; the whole editor (Monaco and fonts included) is bundled, so it runs with no internet at all
 
@@ -37,7 +41,7 @@ The **Local** button (top right in the editor) offers three downloads, rebuilt a
 | Windows | `FastShaders-Windows-Portable.zip` | Portable build, no install: unzip anywhere and run `FastShaders.exe` — keep the `ShaderCarousel` folder next to it (the VR bench serves it). Needs the WebView2 runtime, preinstalled on Windows 10/11 |
 | macOS | `FastShaders-macOS.dmg` | Universal (Apple Silicon + Intel). Unsigned — first launch via System Settings → Privacy & Security → *Open Anyway* |
 
-The desktop build adds a **VR** button in the toolbar: it starts an in-app server that serves the bundled ShaderCarousel GPU-benchmark suite to a VR headset over your local network, so you can benchmark shaders on a real headset.
+The desktop build adds a **VR** button in the toolbar: it starts an in-app server that serves the bundled ShaderCarousel GPU-benchmark suite to a VR headset over your local network, so you can benchmark shaders on a real headset. In the web build, the **SC** toolbar button opens the same ShaderCarousel viewer & benchmark suite directly in a new browser tab (WebGPU required).
 
 The preview uses WebGPU when the system webview provides it and falls back to WebGL2 otherwise. To build locally: install a [Rust toolchain](https://rustup.rs), then `npm run tauri build` (or `npm run tauri dev` while developing). Releases are produced by CI on version tags (`npm version patch && git push --follow-tags`).
 
