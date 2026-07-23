@@ -6,6 +6,7 @@ import { DragNumberInput } from '../inputs/DragNumberInput';
 import { getNodeValues } from '@/types';
 import type { MaterialSettings, OutputNodeData, ShaderNodeData } from '@/types';
 import { removeEdgesForPort } from '@/utils/edgeUtils';
+import { toggleExposedPort } from '@/utils/exposedPorts';
 
 /** Ports that can be toggled on/off in the output node settings.
  *  Opacity is excluded — it's auto-managed by transparent/alphaTest. */
@@ -84,15 +85,9 @@ export function ShaderSettingsMenu() {
 
   const handleTogglePort = (portId: string) => {
     if (!outputNode) return;
-    const current = new Set(exposedPorts);
-    if (current.has(portId)) {
-      current.delete(portId);
-      // Remove edges connected to the port being hidden
-      removeEdgesForPort(outputNode.id, portId);
-    } else {
-      current.add(portId);
-    }
-    updateNodeData(outputNode.id, { exposedPorts: Array.from(current) } as Partial<OutputNodeData>);
+    updateNodeData(outputNode.id, {
+      exposedPorts: toggleExposedPort(outputNode.id, exposedPorts, portId),
+    } as Partial<OutputNodeData>);
   };
 
   const checkboxStyle: React.CSSProperties = {

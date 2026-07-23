@@ -80,6 +80,17 @@ import { nextPropertyName } from '@/utils/propertyConvert';
 import complexityData from '@/registry/complexity.json';
 import './NodeEditor.css';
 
+// Constant ReactFlow prop objects, hoisted so their identities are stable —
+// NodeEditor re-renders every drag frame (it feeds ReactFlow the nodes), and
+// a freshly-allocated options object per render defeats the memoization
+// inside @xyflow/react's GraphView/Controls/MiniMap 60x/s during drags.
+const DEFAULT_EDGE_OPTIONS = { type: 'typed', animated: true } as const;
+const FIT_VIEW_OPTIONS = { maxZoom: 1.5 } as const;
+const PRO_OPTIONS = { hideAttribution: true } as const;
+const DESKTOP_PAN_ON_DRAG = [1, 2];
+const CONTROLS_STYLE = { background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' } as const;
+const MINIMAP_STYLE = { backgroundColor: 'var(--bg-panel)' } as const;
+
 const nodeTypes = {
   shader: ShaderNode,
   color: ColorNode,
@@ -1985,6 +1996,10 @@ export function NodeEditor() {
   // the minimap panel itself is --bg-panel.
   const gridColor = contrastColor === '#000000' ? '#BBBBBB' : 'rgba(255, 255, 255, 0.12)';
   const minimapMask = isDarkTheme ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.7)';
+  const minimapNodeColor = useCallback(
+    (node: AppNode) => getCostColor((node.data as { cost?: number }).cost ?? 0, costColorLow, costColorHigh),
+    [costColorLow, costColorHigh],
+  );
   const canvasCssVars = {
     '--node-cost-text': contrastColor,
     '--node-cost-text-shadow': contrastShadow,
@@ -2451,7 +2466,7 @@ export function NodeEditor() {
           onDrop={onDrop}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
-          defaultEdgeOptions={{ type: 'typed', animated: true }}
+          defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
           deleteKeyCode={null}
           panActivationKeyCode={null}
           edgesReconnectable
@@ -2478,7 +2493,7 @@ export function NodeEditor() {
           // select/move. Touch/pen (coarse): turn drag-to-pan OFF so ONE finger
           // drags nodes/edges; TWO fingers pan + pinch-zoom via the touch-nav
           // effect above.
-          panOnDrag={isCoarsePointer ? false : [1, 2]}
+          panOnDrag={isCoarsePointer ? false : DESKTOP_PAN_ON_DRAG}
           zoomOnScroll
           // Double-click is reserved for edge routing waypoints (add on an edge,
           // remove on a point). React Flow attaches onEdgeDoubleClick as a plain
@@ -2491,10 +2506,10 @@ export function NodeEditor() {
           // up to maxZoom=3 — nodes fill the screen. 1.5 opens the canvas 2x
           // further out; larger graphs that fit below 1.5 are unaffected, and
           // manual zoom can still reach 3.
-          fitViewOptions={{ maxZoom: 1.5 }}
+          fitViewOptions={FIT_VIEW_OPTIONS}
           minZoom={0.1}
           maxZoom={3}
-          proOptions={{ hideAttribution: true }}
+          proOptions={PRO_OPTIONS}
           style={{ background: nodeEditorBgColor }}
         >
           <Background
@@ -2509,7 +2524,7 @@ export function NodeEditor() {
           <PreviewLink />
           <Controls
             showInteractive={false}
-            style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' }}
+            style={CONTROLS_STYLE}
           >
             <label
               className="react-flow__controls-button node-editor__bg-color-btn"
@@ -2528,11 +2543,8 @@ export function NodeEditor() {
           </Controls>
           <MiniMap
             position="top-left"
-            nodeColor={(node) => {
-              const cost = ((node as AppNode).data as { cost?: number }).cost ?? 0;
-              return getCostColor(cost, costColorLow, costColorHigh);
-            }}
-            style={{ backgroundColor: 'var(--bg-panel)' }}
+            nodeColor={minimapNodeColor}
+            style={MINIMAP_STYLE}
             maskColor={minimapMask}
           />
           <DrawingLayer livePathRef={livePathRef} />

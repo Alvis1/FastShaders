@@ -9,7 +9,7 @@ import { nodeCostPoints } from '@/utils/nodeCost';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { NodeGlyph, hasNodeGlyph, nodeJustify, nodeScale, nodeBox, nodeSockets, nodeTextScale } from './glyphs/NodeGlyph';
-import { evaluateNodeOutput, evaluateNodeRange, getNodeOutputShape } from '@/engine/cpuEvaluator';
+import { evaluateNodeOutput, evaluateNodeRange, getNodeOutputShape, getTargetEdges } from '@/engine/cpuEvaluator';
 import { makeConnectionRevealSelector } from './connectionReveal';
 import { RevealSockets } from './RevealSockets';
 import { validImageDataUrl } from '@/utils/imageNode';
@@ -230,8 +230,6 @@ export const ShaderNode = memo(function ShaderNode({
   if (!def) return null;
 
   const updateNodeData = useAppStore((s) => s.updateNodeData);
-  const edges = useAppStore((s) => s.edges);
-  const nodes = useAppStore((s) => s.nodes);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const language = useAppStore((s) => s.language);
   const costColorLow = useAppStore((s) => s.costColorLow);
@@ -264,12 +262,69 @@ export const ShaderNode = memo(function ShaderNode({
     [data.registryType, data.values?.imageB64],
   );
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
+
+  // ── Edge-derived render inputs, without a whole-array subscription ──────
+  // The store's nodes/edges arrays get a NEW identity on every drag
+  // pointermove, so subscribing to them re-rendered every card on the canvas
+  // 60×/s (memo() bypassed). Instead, fold everything edge-derived this card
+  // renders — connected sockets, per-input value labels, channel widths —
+  // into ONE primitive string via the shared evaluator ctx (cheap cache hits
+  // per graph version): position-only notifies produce an identical string
+  // and Object.is bails before any re-render. The heavy structures are then
+  // rebuilt from getState() only when the key actually changes.
+  const edgeKey = useAppStore((s) => {
+    let key = '';
+    for (const e of getTargetEdges(s.nodes, s.edges, id)) {
+      const th = typeof e.targetHandle === 'string' ? e.targetHandle : '';
+      const label = th ? edgeValueLabel(e.source, s.nodes, s.edges) : null;
+      const ch = channelCount(e.source, s.nodes, s.edges);
+      key += `${e.source}\u0000${th}\u0000${label ? label.text : ''}\u0000${label?.live ? 1 : 0}\u0000${ch}\u0001`;
+    }
+    return key;
+  });
+  const graphInfo = useMemo(() => {
+    const { nodes: allNodes, edges: allEdges } = useAppStore.getState();
+    const targetEdges = getTargetEdges(allNodes, allEdges, id);
+    const connectedInputs = new Set<string | null | undefined>();
+    const connectedHandleList: string[] = [];
+    const labelByHandle = new Map<string, { text: string; live: boolean }>();
+    const inputChannels = new Map<string, number>();
+    const bySource = new Map<string, number>();
+    let widest = 1;
+    for (const e of targetEdges) {
+      connectedInputs.add(e.targetHandle);
+      let c = bySource.get(e.source);
+      if (c === undefined) {
+        c = channelCount(e.source, allNodes, allEdges);
+        bySource.set(e.source, c);
+      }
+      if (typeof e.targetHandle === 'string') {
+        connectedHandleList.push(e.targetHandle);
+        labelByHandle.set(e.targetHandle, edgeValueLabel(e.source, allNodes, allEdges));
+        inputChannels.set(e.targetHandle, c);
+      }
+      widest = Math.max(widest, c);
+    }
+    return {
+      connectedInputs,
+      connectedHandleList,
+      labelByHandle,
+      inputChannels,
+      inChannels: Math.min(widest, 4),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, edgeKey]);
+
   // Variadic arithmetic is priced by operand count (base × operands−1); the
   // stored data.cost is only its 2-operand base, so recompute live. Everything
-  // else uses its stored cost unchanged.
-  const cost = def.chainable
-    ? nodeCostPoints({ id, type: 'shader', position: { x: 0, y: 0 }, data } as ShaderFlowNode, edges)
-    : data.cost;
+  // else uses its stored cost unchanged. Primitive selector — the O(E) scan
+  // runs per store notify but only chainable nodes pay it, and the number
+  // result bails re-renders.
+  const cost = useAppStore((s) =>
+    def.chainable
+      ? nodeCostPoints({ id, type: 'shader', position: { x: 0, y: 0 }, data } as ShaderFlowNode, s.edges)
+      : data.cost,
+  );
   const costColor = getCostColor(cost, costColorLow, costColorHigh);
   const headerTextColor = getContrastColor(costColor);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
@@ -318,21 +373,10 @@ export const ShaderNode = memo(function ShaderNode({
   }, [def, data.registryType, exposedInputs]);
   const rows = useMemo(() => buildRows(effDef, data.dynamicOutputs), [effDef, data.dynamicOutputs]);
 
-  // Track which input ports have edges connected
-  const connectedInputs = useMemo(
-    () => new Set(edges.filter((e) => e.target === id).map((e) => e.targetHandle)),
-    [edges, id],
-  );
-
-  // Connected target-handle ids (strings only), used to size a chainable node's
-  // growing operand list.
-  const connectedHandleList = useMemo(
-    () =>
-      edges
-        .filter((e) => e.target === id && typeof e.targetHandle === 'string')
-        .map((e) => e.targetHandle as string),
-    [edges, id],
-  );
+  // Connected input sockets + the chainable growth list — derived once per
+  // edgeKey change (see graphInfo above).
+  const connectedInputs = graphInfo.connectedInputs;
+  const connectedHandleList = graphInfo.connectedHandleList;
 
   // A socket-growing node (variadic arithmetic, append) grows/shrinks its input
   // sockets as operands are wired. Whenever that count changes, React Flow must
@@ -372,22 +416,7 @@ export const ShaderNode = memo(function ShaderNode({
   // them. Built in one pass: channelCount() runs a full upstream CPU eval, so
   // each distinct source is evaluated at most once (a node can have several
   // edges from one source, and every socket tooltip wants this number).
-  const { inChannels, inputChannels } = useMemo(() => {
-    const bySource = new Map<string, number>();
-    const byHandle = new Map<string, number>();
-    let widest = 1;
-    for (const e of edges) {
-      if (e.target !== id) continue;
-      let c = bySource.get(e.source);
-      if (c === undefined) {
-        c = channelCount(e.source, nodes, edges);
-        bySource.set(e.source, c);
-      }
-      if (typeof e.targetHandle === 'string') byHandle.set(e.targetHandle, c);
-      widest = Math.max(widest, c);
-    }
-    return { inChannels: Math.min(widest, 4), inputChannels: byHandle };
-  }, [id, nodes, edges]);
+  const { inChannels, inputChannels } = graphInfo;
 
   /** Offset card layers behind the node body (channels − 1, so N-ch = N cards).
    *  z-index staggers downward (−1, −2, −3): deeper layers paint FIRST, so each
@@ -527,8 +556,7 @@ export const ShaderNode = memo(function ShaderNode({
                 </div>
               );
             }
-            const edge = edges.find((e) => e.target === id && e.targetHandle === inp.id);
-            const info = edge ? edgeValueLabel(edge.source, nodes, edges) : null;
+            const info = graphInfo.labelByHandle.get(inp.id) ?? null;
             return info ? (
               <div key={`r-${inp.id}`} className={cls} style={valStyle}>
                 <span className="shader-node__edge-val" style={info.live ? { color: '#2D6CDF' } : undefined}>{info.text}</span>
@@ -681,8 +709,7 @@ export const ShaderNode = memo(function ShaderNode({
                 )}
                 {/* Connected input → show the value(s) on the edge next to its socket */}
                 {row.input && inputConnected && (() => {
-                  const edge = edges.find((e) => e.target === id && e.targetHandle === row.input!.id);
-                  const info = edge ? edgeValueLabel(edge.source, nodes, edges) : null;
+                  const info = graphInfo.labelByHandle.get(row.input!.id) ?? null;
                   return info ? (
                     <span className="shader-node__edge-val" style={info.live ? { color: '#2D6CDF' } : undefined}>
                       {info.text}
@@ -790,8 +817,7 @@ export const ShaderNode = memo(function ShaderNode({
         if (off == null) return null;
         const top = calcTop(off);
         const connected = connectedInputs.has(inp.id);
-        const edge = connected ? edges.find((e) => e.target === id && e.targetHandle === inp.id) : undefined;
-        const info = edge ? edgeValueLabel(edge.source, nodes, edges) : null;
+        const info = connected ? graphInfo.labelByHandle.get(inp.id) ?? null : null;
         return (
           <div key={`mv-${inp.id}`} style={{ display: 'contents' }}>
             <div className={`shader-node__op-val shader-node__op-val--${rowsJustify}`} style={{ top }}>

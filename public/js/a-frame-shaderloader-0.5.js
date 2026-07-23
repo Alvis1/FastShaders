@@ -288,6 +288,9 @@ AFRAME.registerComponent("shader", {
         if (shaderResult.alphaTest !== undefined) {
           material.alphaTest = shaderResult.alphaTest;
         }
+        if (shaderResult.depthWrite !== undefined) {
+          material.depthWrite = shaderResult.depthWrite;
+        }
       } else {
         // Simple API: return a single node (backward compatible)
         material.colorNode = shaderResult;

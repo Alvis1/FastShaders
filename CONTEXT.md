@@ -133,7 +133,6 @@ src/
 │   └── usePersistedState.ts           # useState mirrored to localStorage (validate-on-seed, throw-safe)
 ├── i18n/
 │   ├── index.ts                       # Pure helpers (formatNodeLabel, nodeDescription, portLabel, t, …)
-│   ├── useLanguage.ts                 # Store-reading language hook
 │   ├── node-i18n.json                 # LV node/category labels — synced to public/ by fs-i18n-sync
 │   └── lv.json                        # LV descriptions / port labels / UI strings
 ├── registry/
@@ -386,7 +385,7 @@ A **display-only** English/Latvian overlay. The **LV** toolbar button (next to *
 **Data & single source of truth:**
 - `src/i18n/node-i18n.json` — `{ nodes: {type→LV label}, categories: {id→LV label} }`. The `fs-i18n-sync` vite plugin copies it to `public/node-i18n.json` at dev/build start so the standalone Node Designer fetches the SAME table (relative `fetch('node-i18n.json')`, degrades to EN). `src/i18n/i18nSync.test.ts` fails on drift — edit the source, never the public copy.
 - `src/i18n/lv.json` — React-only `{ descriptions: {type→LV}, ports: {EN label→LV}, ui: {EN string→LV} }`.
-- `src/i18n/index.ts` — pure helpers (no store dep, node-testable): `formatNodeLabel(enLabel, type, lang, bilingual=true)` → `Reizināt (Multiply)` on roomy surfaces, Latvian-only (`bilingual=false`) on tight palette tiles, bilingual on the Node-Settings menu name line; `formatCategoryLabel`, `nodeDescription`, `portLabel` (canvas socket tooltips via `TypedHandle`, the `ShaderSettingsMenu` output-port rows, and the `NodeSettingsMenu` port-toggle labels), `t(enKey, lang)` (UI strings keyed by their English text), and `nodeSearchLV(type)` (OR'd into `searchNodes` + ContentBrowser's `matchesDef`). `src/i18n/useLanguage.ts` is the store-reading hook. Latvian asset-drawer cards widen to fit-content (floored at the designer width) with the header clamped to two lines (`html[lang="lv"]` CSS) so long palette-tile names like `Vektoriālais reizinājums` stay readable.
+- `src/i18n/index.ts` — pure helpers (no store dep, node-testable): `formatNodeLabel(enLabel, type, lang, bilingual=true)` → `Reizināt (Multiply)` on roomy surfaces, Latvian-only (`bilingual=false`) on tight palette tiles, bilingual on the Node-Settings menu name line; `formatCategoryLabel`, `nodeDescription`, `portLabel` (canvas socket tooltips via `TypedHandle`, the `ShaderSettingsMenu` output-port rows, and the `NodeSettingsMenu` port-toggle labels), `t(enKey, lang)` (UI strings keyed by their English text), and `nodeSearchLV(type)` (OR'd into `searchNodes` + ContentBrowser's `matchesDef`). Components read the language via a plain `useAppStore((s) => s.language)` selector. Latvian asset-drawer cards widen to fit-content (floored at the designer width) with the header clamped to two lines (`html[lang="lv"]` CSS) so long palette-tile names like `Vektoriālais reizinājums` stay readable.
 
 **Node Designer** (`node-designer.html`): its own `LV` topbar toggle (persisted to `nd:lang`) fetches `node-i18n.json` and re-renders every label site (`ndBaseLabel`/`ndNodeLabel`/`ndCatLabel`); the preview card header shows the full `Latviešu (English)` form so glyph widths are designed against the real rendered label.
 
