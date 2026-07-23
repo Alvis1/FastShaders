@@ -84,7 +84,6 @@ src/
     usePersistedState.ts — useState mirrored to localStorage (validate-on-seed, throw-safe)
   i18n/
     index.ts          — t()/node-label lookup: display-only EN/LV overlay, every key falls back to English
-    useLanguage.ts    — hook subscribing to the store's active language
     lv.json           — Latvian descriptions, socket labels, and UI chrome (React-only)
     node-i18n.json    — SINGLE SOURCE for node + category labels; the fs-i18n-sync vite plugin copies it to public/node-i18n.json so node-designer.html fetches the same data (i18nSync.test.ts fails on drift)
   registry/

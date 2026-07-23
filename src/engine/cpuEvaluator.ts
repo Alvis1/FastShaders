@@ -26,18 +26,159 @@ const NOISE_UV_SCALE = 4;
  * EFFECTIVE list — the same one graphToCode emits from — or the CPU preview
  * silently ignores every operand past `b`.
  */
-function appendOperands(nodeId: string, nodes: AppNode[], edges: AppEdge[]) {
-  const node = nodes.find((n) => n.id === nodeId);
+function appendOperands(
+  nodeId: string,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  nodeIndex?: Map<string, AppNode>,
+  edgeIndex?: Map<string, AppEdge[]>,
+) {
+  const node = nodeIndex ? nodeIndex.get(nodeId) : nodes.find((n) => n.id === nodeId);
   const def = NODE_REGISTRY.get(node?.data.registryType ?? '');
   if (!node || !def) return [];
-  const connected = edges
-    .filter((e) => e.target === nodeId && typeof e.targetHandle === 'string')
+  const targetEdges = edgeIndex
+    ? edgeIndex.get(nodeId) ?? []
+    : edges.filter((e) => e.target === nodeId);
+  const connected = targetEdges
+    .filter((e) => typeof e.targetHandle === 'string')
     .map((e) => e.targetHandle as string);
   return effectiveInputs(def, connected, false, Object.keys(getNodeValues(node)));
 }
 
 /** Result: array of channel values, or null if unevaluable. */
 export type EvalResult = number[] | null;
+
+/**
+ * Shared per-graph evaluation context. Every public entry point routes
+ * through it, so ALL consumers evaluating against the SAME (nodes, edges)
+ * arrays — every ShaderNode card, every TypedEdge, EdgeInfoCard, codegen's
+ * getComponentCount calls — share ONE collapsed-group unwrap, one pair of
+ * node/edge indexes, and one result cache per graph version, instead of
+ * paying a full recursive re-walk per consumer.
+ *
+ * Keyed by ARRAY IDENTITY via WeakMap: the zustand store replaces both
+ * arrays on every mutation (never mutates in place), so identity IS the
+ * graph version, and WeakMap keeps retired graphs collectable.
+ *
+ * Time-dependent results get buckets: `0` (the static reads all card /
+ * edge labels use) stays cached for the graph's lifetime; non-zero times
+ * (the rAF-animated preview/edge-info consumers) get a tiny insertion-order
+ * LRU of buckets (see TIME_BUCKETS_MAX) — equivalent cost to the old
+ * per-call cache, but shared within a frame.
+ *
+ * Known limit (deliberate): in a CYCLIC graph — already pathological, and
+ * warned about by topologicalSort — a cached value can depend on which node
+ * the walk entered from, and the persistent cache pins the first entry's
+ * answer for the graph version's lifetime. Pre-context behavior was also
+ * entry-order-dependent (per call instead of per version); acyclic graphs,
+ * the only supported shape, are unaffected.
+ */
+interface EvalCtx {
+  /** Unwrapped edges (collapsed-group boundary edges resolved to real endpoints). */
+  edges: AppEdge[];
+  nodeIndex: Map<string, AppNode>;
+  edgeIndex: Map<string, AppEdge[]>;
+  evalCache0: Map<string, EvalResult>;
+  evalCachesT: Map<number, Map<string, EvalResult>>;
+  rangeCache0: Map<string, RangeResult | null>;
+  rangeCachesT: Map<number, Map<string, RangeResult | null>>;
+  shapeCache: Map<string, number>;
+  /** Lazy unwrapped-edge-by-id lookup (getUnwrappedEdge). */
+  edgeById: Map<string, AppEdge> | null;
+}
+
+/**
+ * How many distinct non-zero times keep a live cache bucket per graph
+ * version. Animated consumers (PreviewNode, MathPreviewNode, EdgeInfoCard)
+ * each run their own clock, so their per-frame times differ — a single
+ * rolling bucket would thrash between them within one frame. A tiny
+ * insertion-order LRU gives each concurrent clock its own bucket while stale
+ * times still age out.
+ */
+const TIME_BUCKETS_MAX = 4;
+
+function timeBucket<V>(buckets: Map<number, Map<string, V>>, time: number): Map<string, V> {
+  let cache = buckets.get(time);
+  if (!cache) {
+    if (buckets.size >= TIME_BUCKETS_MAX) {
+      const oldest = buckets.keys().next().value;
+      if (oldest !== undefined) buckets.delete(oldest);
+    }
+    cache = new Map();
+    buckets.set(time, cache);
+  }
+  return cache;
+}
+
+const ctxByNodes = new WeakMap<AppNode[], WeakMap<AppEdge[], EvalCtx>>();
+
+function getCtx(nodes: AppNode[], edges: AppEdge[]): EvalCtx {
+  let byEdges = ctxByNodes.get(nodes);
+  if (!byEdges) {
+    byEdges = new WeakMap();
+    ctxByNodes.set(nodes, byEdges);
+  }
+  let ctx = byEdges.get(edges);
+  if (!ctx) {
+    const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
+    ctx = {
+      edges: unwrapped,
+      nodeIndex: buildNodeIndex(nodes),
+      edgeIndex: buildEdgeIndex(unwrapped),
+      evalCache0: new Map(),
+      evalCachesT: new Map(),
+      rangeCache0: new Map(),
+      rangeCachesT: new Map(),
+      shapeCache: new Map(),
+      edgeById: null,
+    };
+    byEdges.set(edges, ctx);
+    // Internal recursion (e.g. computeRange → evaluateNodeOutput) re-enters
+    // the public API with the UNWRAPPED array — register the ctx under that
+    // key too so the re-entry lands on the same context. (No collapsed
+    // groups → unwrap returns the input array and this is a no-op.)
+    if (unwrapped !== edges) byEdges.set(unwrapped, ctx);
+  }
+  return ctx;
+}
+
+function evalCacheFor(ctx: EvalCtx, time: number): Map<string, EvalResult> {
+  if (time === 0) return ctx.evalCache0;
+  return timeBucket(ctx.evalCachesT, time);
+}
+
+function rangeCacheFor(ctx: EvalCtx, time: number): Map<string, RangeResult | null> {
+  if (time === 0) return ctx.rangeCache0;
+  return timeBucket(ctx.rangeCachesT, time);
+}
+
+/**
+ * Resolve an edge id to its UNWRAPPED edge — the logical connection with
+ * collapsed-group boundary endpoints translated to their real producers.
+ * Lets edge-level consumers (TypedEdge, EdgeInfoCard) evaluate the REAL
+ * source, agreeing with what ShaderNode's cards derive via getTargetEdges —
+ * a group id itself has no registry def and would read as 1-channel '…'.
+ */
+export function getUnwrappedEdge(nodes: AppNode[], edges: AppEdge[], edgeId: string): AppEdge | undefined {
+  const ctx = getCtx(nodes, edges);
+  if (!ctx.edgeById) {
+    ctx.edgeById = new Map();
+    for (const e of ctx.edges) ctx.edgeById.set(e.id, e);
+  }
+  return ctx.edgeById.get(edgeId);
+}
+
+/**
+ * Edges arriving at `nodeId`, resolved against the shared ctx — O(1) per call
+ * once the ctx exists for this graph version. NB these are the UNWRAPPED
+ * edges: a collapsed-group boundary edge reports its REAL producer, matching
+ * what the evaluator itself sees. Exposed for render-layer consumers
+ * (ShaderNode) so per-node derivations don't scan the full edge array per
+ * component per store notify.
+ */
+export function getTargetEdges(nodes: AppNode[], edges: AppEdge[], nodeId: string): AppEdge[] {
+  return getCtx(nodes, edges).edgeIndex.get(nodeId) ?? [];
+}
 
 /** Evaluate the output of a specific node, given the current time. */
 export function evaluateNodeOutput(
@@ -46,14 +187,16 @@ export function evaluateNodeOutput(
   edges: AppEdge[],
   time: number,
 ): EvalResult {
-  // See unwrapCollapsedGroupEdges for why this is needed: collapsed groups
-  // visually re-route boundary edges to a synthetic socket, but the evaluator
-  // needs to follow the wire to the real producer.
-  edges = unwrapCollapsedGroupEdges(nodes, edges);
-  const cache = new Map<string, EvalResult>();
-  const nodeIndex = buildNodeIndex(nodes);
-  const edgeIndex = buildEdgeIndex(edges);
-  return evaluate(nodeId, nodes, edges, time, cache, edgeIndex, nodeIndex);
+  const ctx = getCtx(nodes, edges);
+  const cache = evalCacheFor(ctx, time);
+  try {
+    return evaluate(nodeId, nodes, ctx.edges, time, cache, ctx.edgeIndex, ctx.nodeIndex);
+  } catch (e) {
+    // The cache is persistent per graph version — an exception mid-walk would
+    // otherwise leave cycle-guard sentinels behind as poisoned nulls.
+    cache.clear();
+    throw e;
+  }
 }
 
 /**
@@ -100,13 +243,33 @@ export function getNodeOutputShape(
   visited: Set<string> = new Set(),
   nodeIndex?: Map<string, AppNode>,
 ): number {
-  // Only unwrap on the top-level call (visited starts empty); subsequent
-  // recursive calls below pass an already-unwrapped edges array.
-  if (visited.size === 0) edges = unwrapCollapsedGroupEdges(nodes, edges);
+  // Top-level calls (fresh visited set) route through the shared ctx: cached
+  // result, pre-unwrapped edges, prebuilt indexes. Mid-recursion re-entries
+  // (legacy callers passing their own visited/nodeIndex) skip the cache —
+  // a shape computed under a cycle short-circuit is entry-point dependent
+  // and must not be memoized as the node's canonical shape.
+  if (visited.size === 0) {
+    const ctx = getCtx(nodes, edges);
+    const hit = ctx.shapeCache.get(nodeId);
+    if (hit !== undefined) return hit;
+    const result = computeShape(nodeId, nodes, ctx.edges, visited, ctx.nodeIndex, ctx.edgeIndex);
+    ctx.shapeCache.set(nodeId, result);
+    return result;
+  }
+  return computeShape(nodeId, nodes, edges, visited, nodeIndex ?? buildNodeIndex(nodes), undefined);
+}
+
+function computeShape(
+  nodeId: string,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  visited: Set<string>,
+  nidx: Map<string, AppNode>,
+  edgeIndex: Map<string, AppEdge[]> | undefined,
+): number {
   if (visited.has(nodeId)) return 1;
   visited.add(nodeId);
 
-  const nidx = nodeIndex ?? buildNodeIndex(nodes);
   const node = nidx.get(nodeId);
   if (!node) return 1;
   const def = NODE_REGISTRY.get(node.data.registryType);
@@ -119,14 +282,18 @@ export function getNodeOutputShape(
     if (concrete > 0) return concrete;
   }
 
+  const targetEdges = edgeIndex
+    ? edgeIndex.get(nodeId) ?? []
+    : edges.filter((e) => e.target === nodeId);
+
   // 2. 'any' output — infer from inputs.
   // Append concatenates: total = sum of ALL its operand shapes (it grows past
   // a/b), clamped to [2, 4] — the vec4 ceiling graphToCode also emits under.
   if (def.type === 'append') {
     let total = 0;
-    for (const inp of appendOperands(nodeId, nodes, edges)) {
-      const e = edges.find((edge) => edge.target === nodeId && edge.targetHandle === inp.id);
-      total += e ? getNodeOutputShape(e.source, nodes, edges, visited, nidx) : 1;
+    for (const inp of appendOperands(nodeId, nodes, edges, nidx, edgeIndex)) {
+      const e = targetEdges.find((edge) => edge.targetHandle === inp.id);
+      total += e ? computeShape(e.source, nodes, edges, visited, nidx, edgeIndex) : 1;
     }
     return Math.min(Math.max(total, 2), 4);
   }
@@ -134,9 +301,9 @@ export function getNodeOutputShape(
   // 3. Default broadcast: output shape = max of all connected input shapes (vec3 + scalar = vec3).
   let maxShape = 1;
   for (const input of def.inputs) {
-    const e = edges.find((edge) => edge.target === nodeId && edge.targetHandle === input.id);
+    const e = targetEdges.find((edge) => edge.targetHandle === input.id);
     if (e) {
-      const s = getNodeOutputShape(e.source, nodes, edges, visited, nidx);
+      const s = computeShape(e.source, nodes, edges, visited, nidx, edgeIndex);
       if (s > maxShape) maxShape = s;
     }
   }
@@ -460,7 +627,7 @@ function evaluate(
       // what the emitted vecN holds rather than a longer phantom vector.
       const parts: number[] = [];
       let unevaluable = false;
-      for (const inp of appendOperands(nodeId, nodes, edges)) {
+      for (const inp of appendOperands(nodeId, nodes, edges, nidx, idx)) {
         if (parts.length >= 4) break;
         const v = channelInput(inp.id, 0);
         // Null propagation: one unevaluable operand makes the whole append
@@ -597,9 +764,15 @@ export function evaluateNodeRange(
   edges: AppEdge[],
   time: number = 0,
 ): RangeResult | null {
-  edges = unwrapCollapsedGroupEdges(nodes, edges);
-  const cache = new Map<string, RangeResult | null>();
-  return computeRange(nodeId, nodes, edges, time, cache);
+  const ctx = getCtx(nodes, edges);
+  const cache = rangeCacheFor(ctx, time);
+  try {
+    return computeRange(nodeId, nodes, ctx.edges, time, cache, ctx.nodeIndex, ctx.edgeIndex);
+  } catch (e) {
+    // Persistent cache — don't leave cycle-guard sentinels behind on a throw.
+    cache.clear();
+    throw e;
+  }
 }
 
 function rangeOfValue(v: number[]): RangeResult {
@@ -643,24 +816,28 @@ function computeRange(
   edges: AppEdge[],
   time: number,
   cache: Map<string, RangeResult | null>,
+  nodeIndex?: Map<string, AppNode>,
+  edgeIndex?: Map<string, AppEdge[]>,
 ): RangeResult | null {
   if (cache.has(nodeId)) return cache.get(nodeId)!;
   cache.set(nodeId, null); // cycle protection — overwritten below
 
-  const node = nodes.find((n) => n.id === nodeId);
+  const node = nodeIndex ? nodeIndex.get(nodeId) : nodes.find((n) => n.id === nodeId);
   if (!node) return null;
   const def = NODE_REGISTRY.get(node.data.registryType);
   if (!def) return null;
 
   const type = node.data.registryType;
   const values = getNodeValues(node);
-  const nodeEdges = edges.filter((e) => e.target === nodeId);
+  const nodeEdges = edgeIndex
+    ? edgeIndex.get(nodeId) ?? []
+    : edges.filter((e) => e.target === nodeId);
 
   // Resolve a port's range — uses upstream node range if connected, else inline value
   const portRange = (portId: string, fallback: number): RangeResult => {
     const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
-      const r = computeRange(edge.source, nodes, edges, time, cache);
+      const r = computeRange(edge.source, nodes, edges, time, cache, nodeIndex, edgeIndex);
       if (r) return r;
       // Upstream is unknown — assume normalized [0, 1] (typical shader range)
       return { min: [0], max: [1] };
@@ -896,7 +1073,7 @@ function computeRange(
       // keep their bounds instead of silently dropping out of the interval.
       const min: number[] = [];
       const max: number[] = [];
-      for (const inp of appendOperands(nodeId, nodes, edges)) {
+      for (const inp of appendOperands(nodeId, nodes, edges, nodeIndex, edgeIndex)) {
         if (min.length >= 4) break;
         const r = portRange(inp.id, 0);
         min.push(...r.min.slice(0, 4 - min.length));

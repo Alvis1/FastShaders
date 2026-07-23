@@ -15,6 +15,7 @@ import type {
   BoundarySocket,
   TSLDataType,
 } from '@/types';
+import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { autoLayout } from '@/engine/layoutEngine';
@@ -1540,10 +1541,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const nodeLabel = (nodeId: string): string | undefined => {
       const n = nodeById.get(nodeId);
       if (!n) return undefined;
-      const data = n.data as { label?: string; values?: { name?: string }; registryType?: string };
-      // Property nodes are named by the user — show that instead of the generic label.
-      if (data.registryType === 'property_float' && data.values?.name) {
-        return String(data.values.name);
+      const data = n.data as { label?: string; registryType?: string };
+      // Property nodes are named by the user — show that instead of the
+      // generic label. Values go through getNodeValues (the convention —
+      // never cast node.data for values).
+      if (data.registryType === 'property_float') {
+        const name = getNodeValues(n).name;
+        if (name) return String(name);
       }
       return data.label || undefined;
     };

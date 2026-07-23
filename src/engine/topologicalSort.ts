@@ -19,8 +19,10 @@ export function topologicalSort(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
     .map((n) => n.id);
   const sorted: string[] = [];
 
-  while (queue.length > 0) {
-    const id = queue.shift()!;
+  // Head-index walk instead of Array.shift(): shift() re-indexes the whole
+  // queue per pop (O(V²) worst case), and this runs on every codegen pass.
+  for (let head = 0; head < queue.length; head++) {
+    const id = queue[head];
     sorted.push(id);
     for (const neighbor of adjacency.get(id) ?? []) {
       const deg = (inDegree.get(neighbor) ?? 0) - 1;

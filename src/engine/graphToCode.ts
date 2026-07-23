@@ -208,16 +208,43 @@ function isSafeExprNode(node: Node | null | undefined): boolean {
  * compiles and the editor shows the magenta unknown-node tile, instead of
  * mid-flight surprising the user with attacker JS.
  */
+/**
+ * Verdict cache: codegen re-runs on every graph change (per keystroke while
+ * scrubbing), and each pass re-parsed every unknown node's rawExpression with
+ * Babel. The verdict is a pure function of the string, so memoize it —
+ * size-capped so pathological churn (many distinct adversarial expressions)
+ * can't grow it unboundedly.
+ */
+const unknownExprVerdicts = new Map<string, boolean>();
+const UNKNOWN_EXPR_CACHE_MAX = 500;
+/** Expressions above this aren't cached — rawExpression is adversarial input,
+ *  and 500 pinned multi-hundred-KB strings would be a memory hold. */
+const UNKNOWN_EXPR_CACHE_MAX_LEN = 4096;
+
 function isSafeUnknownExpression(expr: string): boolean {
+  const cached = unknownExprVerdicts.get(expr);
+  if (cached !== undefined) return cached;
+  let verdict = false;
   try {
     const ast = parseExpression(expr, { sourceType: 'module', plugins: ['typescript'] });
-    if (ast.type !== 'CallExpression') return false;
-    if (ast.callee.type !== 'Identifier') return false;
-    // Deep-validate the whole call (callee name + every argument subtree).
-    return isSafeExprNode(ast);
+    verdict =
+      ast.type === 'CallExpression' &&
+      ast.callee.type === 'Identifier' &&
+      // Deep-validate the whole call (callee name + every argument subtree).
+      isSafeExprNode(ast);
   } catch {
-    return false;
+    verdict = false;
   }
+  if (expr.length <= UNKNOWN_EXPR_CACHE_MAX_LEN) {
+    // Evict oldest-first (Map preserves insertion order) instead of a
+    // wholesale clear, so a hot graph keeps its working set warm.
+    if (unknownExprVerdicts.size >= UNKNOWN_EXPR_CACHE_MAX) {
+      const oldest = unknownExprVerdicts.keys().next().value;
+      if (oldest !== undefined) unknownExprVerdicts.delete(oldest);
+    }
+    unknownExprVerdicts.set(expr, verdict);
+  }
+  return verdict;
 }
 
 export function graphToCode(

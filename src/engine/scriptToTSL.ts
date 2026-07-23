@@ -16,6 +16,7 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
+import { maskNonCode, splitTopLevelArgs, stripComments } from './tslCodeProcessor';
 
 // Handle babel traverse CJS/ESM interop
 const traverse = (typeof (_traverse as unknown as { default?: unknown }).default === 'function'
@@ -32,7 +33,7 @@ const NODE_PROP_TO_CHANNEL: Record<string, string> = {
 };
 
 /** Material settings keys injected by tslToShaderModule that should be stripped */
-const MATERIAL_KEYS = new Set(['transparent', 'side', 'alphaTest']);
+const MATERIAL_KEYS = new Set(['transparent', 'side', 'alphaTest', 'depthWrite']);
 
 export function scriptToTSL(scriptCode: string): string {
   // Already editor-shaped TSL — a top-level `Fn(...)` wrapper with no
@@ -646,122 +647,6 @@ function hoistParamUniforms(
   return { code: out, hoisted };
 }
 
-/**
- * Split a comma-separated argument list on its *top-level* commas only —
- * commas nested inside (), [], or {} stay with their group. Used to pull the
- * discard conditions and color expression back out of a `__pixel(...)` call.
- */
-function splitTopLevelArgs(s: string): string[] {
-  // Depth is counted on the mask so a bracket or comma inside a string literal
-  // or comment can't move it — `foo("}")` must stay one argument.
-  const masked = maskNonCode(s);
-  const args: string[] = [];
-  let depth = 0;
-  let last = 0;
-  for (let i = 0; i < masked.length; i++) {
-    const c = masked[i];
-    if (c === '(' || c === '[' || c === '{') depth++;
-    else if (c === ')' || c === ']' || c === '}') depth--;
-    else if (c === ',' && depth === 0) {
-      args.push(s.slice(last, i).trim());
-      last = i + 1;
-    }
-  }
-  const tail = s.slice(last).trim();
-  if (tail) args.push(tail);
-  return args;
-}
-
-/** Per-character source classes produced by classifySource. */
-const CLS_CODE = 0;
-/** Inside a `//` or block comment, including its delimiters. */
-const CLS_COMMENT = 1;
-/** Inside a string/template literal, excluding the surrounding quotes. */
-const CLS_STRING = 2;
-
-/**
- * Classify every character of a JS source as code, comment, or string body.
- *
- * Both `maskNonCode` and `stripComments` derive from this single scan, so the
- * two can't disagree about where a comment ends — which matters because a `}`,
- * a `,` or a `//` sitting inside a comment or a string must never steer a
- * brace/argument scan.
- *
- * A line comment stops *before* its terminating newline, so stripping one
- * leaves the line break intact. Regex literals are not modelled: TSL shader
- * bodies don't contain them, and `/` in any other position is division, which
- * this scanner already treats as code.
- */
-function classifySource(src: string): Uint8Array {
-  const cls = new Uint8Array(src.length);
-  type State = 'code' | 'line' | 'block' | 'sq' | 'dq' | 'tmpl';
-  let state: State = 'code';
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    const d = src[i + 1];
-    if (state === 'code') {
-      if (c === '/' && d === '/') { cls[i] = cls[i + 1] = CLS_COMMENT; i += 2; state = 'line'; continue; }
-      if (c === '/' && d === '*') { cls[i] = cls[i + 1] = CLS_COMMENT; i += 2; state = 'block'; continue; }
-      if (c === "'") { state = 'sq'; i++; continue; }
-      if (c === '"') { state = 'dq'; i++; continue; }
-      if (c === '`') { state = 'tmpl'; i++; continue; }
-      i++;
-      continue;
-    }
-    if (state === 'line') {
-      if (c === '\n') { state = 'code'; i++; continue; }
-      cls[i] = CLS_COMMENT;
-      i++;
-      continue;
-    }
-    if (state === 'block') {
-      if (c === '*' && d === '/') { cls[i] = cls[i + 1] = CLS_COMMENT; i += 2; state = 'code'; continue; }
-      cls[i] = CLS_COMMENT;
-      i++;
-      continue;
-    }
-    // String-ish states: sq / dq / tmpl.
-    if (c === '\\') { cls[i] = CLS_STRING; if (i + 1 < src.length) cls[i + 1] = CLS_STRING; i += 2; continue; }
-    const closes = (state === 'sq' && c === "'") || (state === 'dq' && c === '"') || (state === 'tmpl' && c === '`');
-    if (closes) { state = 'code'; i++; continue; }
-    cls[i] = CLS_STRING;
-    i++;
-    continue;
-  }
-  return cls;
-}
-
-/**
- * Blank the *contents* of comments and string literals with spaces, preserving
- * the source's length and its newlines. Index-based scans (head matching, brace
- * balancing) run over the mask and then slice the original at the same offsets.
- */
-function maskNonCode(src: string): string {
-  const cls = classifySource(src);
-  const out = src.split('');
-  for (let i = 0; i < out.length; i++) {
-    if (cls[i] !== CLS_CODE && out[i] !== '\n') out[i] = ' ';
-  }
-  return out.join('');
-}
-
-/**
- * Remove comments, leaving code and string literals untouched. Each comment run
- * collapses to a single space so neighbouring tokens can't glue together
- * (`a/*c*​/b` → `a b`, never `ab`).
- */
-function stripComments(src: string): string {
-  const cls = classifySource(src);
-  let out = '';
-  for (let i = 0; i < src.length; i++) {
-    if (cls[i] !== CLS_COMMENT) { out += src[i]; continue; }
-    while (i < src.length && cls[i] === CLS_COMMENT) i++;
-    out += ' ';
-    i--;
-  }
-  return out;
-}
 
 /**
  * Given an index just past an opening `{`, return the index of its matching

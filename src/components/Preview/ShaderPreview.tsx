@@ -14,6 +14,7 @@ import {
 } from '@/engine/tslToPreviewHTML';
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
+import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import './ShaderPreview.css';
 
@@ -288,16 +289,47 @@ function extractUniforms(code: string): UniformInfo[] {
 
 export function ShaderPreview() {
   const previewCode = useAppStore((s) => s.previewCode);
-  const nodes = useAppStore((s) => s.nodes);
-  const edges = useAppStore((s) => s.edges);
   const shaderName = useAppStore((s) => s.shaderName);
   const language = useAppStore((s) => s.language);
   const previewMesh = useAppStore((s) => s.previewMesh);
   const setPreviewMesh = useAppStore((s) => s.setPreviewMesh);
 
-  // Read material settings from the output node
-  const outputNode = nodes.find((n) => n.data.registryType === 'output');
-  const materialSettings = (outputNode?.data as { materialSettings?: PreviewOptions['materialSettings'] })?.materialSettings;
+  // Material settings from the output node. Narrow selector: a position/
+  // selection-only store notify replaces the node OBJECT but keeps its .data
+  // (and thus materialSettings) reference — Object.is bails, so the whole
+  // ~1000-line panel no longer re-renders on every drag pointermove the way
+  // the old whole-array nodes/edges subscriptions made it.
+  const materialSettings = useAppStore((s) =>
+    (s.nodes.find((n) => n.data.registryType === 'output')?.data as
+      { materialSettings?: PreviewOptions['materialSettings'] } | undefined)?.materialSettings,
+  );
+
+  // Connected property-uniform names, folded to a primitive key ('*' = no
+  // property nodes exist → the overlay shows every detected uniform). Only a
+  // real membership change re-renders; the O(N+E) scan runs once per store
+  // notify for this single component. Names go through sanitizeIdentifier —
+  // the same mapping codegen applies, so the key tokens match the uniform
+  // names extractUniforms reads out of the GENERATED code (a raw name with
+  // spaces now still matches its sanitized uniform), sanitized names (\w+)
+  // can never collide with the space separator, and a property literally
+  // named '*' can't fake the no-properties sentinel.
+  const connectedPropNamesKey = useAppStore((s) => {
+    let hasProp = false;
+    const connectedIds = new Set<string>();
+    for (const e of s.edges) connectedIds.add(e.source);
+    const names: string[] = [];
+    for (const n of s.nodes) {
+      const t = n.data.registryType;
+      if (t !== 'property_float' && t !== 'property_color') continue;
+      hasProp = true;
+      if (connectedIds.has(n.id)) {
+        const name = getNodeValues(n).name;
+        if (name != null && name !== '') names.push(sanitizeIdentifier(String(name)));
+      }
+    }
+    if (!hasProp) return '*';
+    return names.sort().join(' ');
+  });
 
   // All preview prefs re-read on `fs:project-imported` — a project file
   // carries them, and the overlay + iframe srcDoc inputs must pick up the
@@ -534,28 +566,11 @@ export function ShaderPreview() {
   // silently filtered every colour picker out of the overlay.
   const uniforms = useMemo(() => {
     const all = extractUniforms(previewCode);
-    // If no property nodes exist (e.g. direct-assignment mode), show all
-    const propertyNodes = nodes.filter(
-      (n) => n.data.registryType === 'property_float' || n.data.registryType === 'property_color',
-    );
-    if (propertyNodes.length === 0) return all;
-    // Build set of connected property node IDs (have at least one outgoing edge)
-    const connectedIds = new Set<string>();
-    for (const e of edges) {
-      if (propertyNodes.some((n) => n.id === e.source)) {
-        connectedIds.add(e.source);
-      }
-    }
-    // Map connected IDs to their variable names (values.name)
-    const connectedNames = new Set<string>();
-    for (const n of propertyNodes) {
-      if (connectedIds.has(n.id)) {
-        const name = getNodeValues(n).name;
-        if (name != null && name !== '') connectedNames.add(String(name));
-      }
-    }
+    // If no property nodes exist (e.g. direct-assignment mode), show all.
+    if (connectedPropNamesKey === '*') return all;
+    const connectedNames = new Set(connectedPropNamesKey.split(' ').filter(Boolean));
     return all.filter((u) => connectedNames.has(u.name));
-  }, [previewCode, nodes, edges]);
+  }, [previewCode, connectedPropNamesKey]);
 
   // Per-uniform min/max — persisted across reloads, keyed by uniform name
   const [showUniforms, setShowUniforms] = useState(true);

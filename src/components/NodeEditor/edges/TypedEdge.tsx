@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import {
   EdgeLabelRenderer,
   getBezierPath,
@@ -8,11 +8,11 @@ import {
   type EdgeProps,
   type ReactFlowState,
 } from '@xyflow/react';
-import type { AppEdge, AppNode } from '@/types';
+import type { AppEdge } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { COUNT_EDGE_COLORS, getContrastColor } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
-import { evaluateNodeOutput, getNodeOutputShape } from '@/engine/cpuEvaluator';
+import { evaluateNodeOutput, getNodeOutputShape, getUnwrappedEdge } from '@/engine/cpuEvaluator';
 import { bezierControlOffset, radialControlPoint, splinePath } from './bezierGeometry';
 import { EdgeInfoCard } from './EdgeInfoCard';
 
@@ -106,12 +106,6 @@ function EdgeWaypointHandles({
   );
 }
 
-function buildNodeMap(nodes: AppNode[]): Map<string, AppNode> {
-  const m = new Map<string, AppNode>();
-  for (const n of nodes) m.set(n.id, n);
-  return m;
-}
-
 const GAP = 3.5 / 3;
 
 function getOffsets(count: number): number[] {
@@ -183,14 +177,7 @@ export function TypedEdge({
   selected,
   data,
 }: EdgeProps<AppEdge>) {
-  const nodes = useAppStore((s) => s.nodes);
-  const edges = useAppStore((s) => s.edges);
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
-
-  // Build the node lookup once per nodes identity (not once per rendered
-  // edge) — React Flow renders one TypedEdge component per edge, so without
-  // memoization this lookup was O(E·N) across the whole canvas.
-  const nodeMap = useMemo(() => buildNodeMap(nodes), [nodes]);
 
   // Color-circle sources get a radial exit tangent (perpendicular to the
   // circle) instead of a cardinal one — see getRadialBezierPath. The radial
@@ -198,7 +185,17 @@ export function TypedEdge({
   // edge anchor, which sits on the handle's cardinal side and would skew the
   // direction a few degrees). handleBounds coords are node-relative, so the
   // whole computation is node-local; null for other source types.
-  const isColorSource = nodeMap.get(source)?.data.registryType === 'color';
+  // Read from React Flow's own O(1) nodeLookup (primitive result, so this
+  // never re-renders the edge) instead of subscribing to the app store's
+  // whole nodes array — that array's identity changes every drag pointermove
+  // and re-rendered EVERY edge per frame.
+  const isColorSource = useReactFlowStore(
+    useCallback(
+      (s: ReactFlowState) =>
+        (s.nodeLookup.get(source)?.data as { registryType?: string } | undefined)?.registryType === 'color',
+      [source],
+    ),
+  );
   const radial = useReactFlowStore(
     useCallback(
       (s: ReactFlowState): [number, number] | null => {
@@ -227,16 +224,28 @@ export function TypedEdge({
   //  - Static shape handles cases where eval returns null or a shorter array, e.g. anything
   //    downstream of a procedural texture (perlinNoise → sub → ...): eval returns null because
   //    the texture is unevaluable, but the static walker still knows sub's output is vec3 (color).
+  // Boundary edges from a collapsed group carry the GROUP id as their raw
+  // source/target — resolve the LOGICAL endpoints (the real producer/consumer)
+  // so the wire's channel count and the info card agree with what the target
+  // node's card shows (its labels resolve through the same unwrap).
+  const logicalSource = useAppStore(
+    (s) => getUnwrappedEdge(s.nodes, s.edges, id)?.source ?? source,
+  );
+  const logicalTarget = useAppStore(
+    (s) => getUnwrappedEdge(s.nodes, s.edges, id)?.target ?? target,
+  );
+
   // Taking max means each path catches the gaps of the other.
-  // Memoized on [source, nodes, edges] so the two full CPU graph evaluations
-  // (each O(N+E) with an upstream walk) don't re-run on re-renders that aren't
-  // graph changes — e.g. selecting this edge or changing the canvas bg color.
-  const count = useMemo(() => {
-    const evaluated = evaluateNodeOutput(source, nodes, edges, 0);
+  // Computed IN the selector: the shared evaluator ctx makes both calls cache
+  // hits per graph version, and the primitive result means a store notify
+  // whose count is unchanged (every drag pointermove) bails before re-render.
+  const count = useAppStore((s) => {
+    const src = getUnwrappedEdge(s.nodes, s.edges, id)?.source ?? source;
+    const evaluated = evaluateNodeOutput(src, s.nodes, s.edges, 0);
     const evalLen = evaluated?.length ?? 0;
-    const shapeLen = getNodeOutputShape(source, nodes, edges);
+    const shapeLen = getNodeOutputShape(src, s.nodes, s.edges);
     return Math.min(Math.max(evalLen, shapeLen, 1), 4);
-  }, [source, nodes, edges]);
+  });
   // 1-channel edges flip black ↔ white so they remain visible against the
   // user-picked canvas background. Multi-channel edges keep their RGB(A)
   // colors — those already read against any background.
@@ -392,8 +401,8 @@ export function TypedEdge({
       {selected && (
         <EdgeLabelRenderer>
           <EdgeInfoCard
-            sourceId={source}
-            targetId={target}
+            sourceId={logicalSource}
+            targetId={logicalTarget}
             labelX={labelX}
             labelY={labelY}
           />

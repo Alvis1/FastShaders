@@ -9,6 +9,7 @@
 
 import type { AppNode, AppEdge, NodeDefinition, ShaderNodeData } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { removeEdgesForPort } from '@/utils/edgeUtils';
 
 /** Output-node channels visible by default (no need to expose via settings).
  *  These are IMPLICIT — a fresh Output node has `exposedPorts: undefined` —
@@ -51,4 +52,26 @@ export function autoExposeConnectedParamPorts(nodes: AppNode[], edges: AppEdge[]
     if (missing.length === 0) continue;
     (node.data as ShaderNodeData).exposedPorts = [...current, ...missing];
   }
+}
+
+/**
+ * Toggle one exposed parameter socket and return the NEXT exposedPorts array
+ * for the caller's updateNodeData. Hiding a port drops its edges (the
+ * documented rule — a hidden socket must not keep live wires). Single
+ * implementation shared by NodeSettingsMenu and ShaderSettingsMenu, which
+ * previously carried drifting copies of this logic.
+ */
+export function toggleExposedPort(
+  nodeId: string,
+  exposedPorts: readonly string[],
+  portId: string,
+): string[] {
+  const current = new Set(exposedPorts);
+  if (current.has(portId)) {
+    current.delete(portId);
+    removeEdgesForPort(nodeId, portId);
+  } else {
+    current.add(portId);
+  }
+  return Array.from(current);
 }

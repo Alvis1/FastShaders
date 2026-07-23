@@ -4,7 +4,7 @@ import { getNodeValues, getNodeExposedPorts } from '@/types';
 import type { NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
-import { removeEdgesForPort } from '@/utils/edgeUtils';
+import { toggleExposedPort } from '@/utils/exposedPorts';
 import { rowStyle, labelStyle, colorFieldStyle, nameFieldStyle, NodeActions } from './menuShared';
 import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/propertyConvert';
 
@@ -56,15 +56,7 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   };
 
   const handleTogglePort = (key: string) => {
-    const current = new Set(exposedPorts);
-    if (current.has(key)) {
-      current.delete(key);
-      // Remove edges connected to the port being hidden
-      removeEdgesForPort(nodeId, key);
-    } else {
-      current.add(key);
-    }
-    updateNodeData(nodeId, { exposedPorts: Array.from(current) });
+    updateNodeData(nodeId, { exposedPorts: toggleExposedPort(nodeId, exposedPorts, key) });
   };
 
   return (
