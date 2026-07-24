@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Podest</title>
+<!--
+  Podest — standalone full-screen TSL shader viewer.
+
+  Drag-and-drop:
+    • Shader script (.js / .mjs / .tsl) — a FastShaders export OR any TSL ES
+      module that `export default`s a Fn and imports from 'three/tsl'. Its
+      property uniforms become live sliders (auto-detected by the shaderloader).
+    • 3D model (.glb / .gltf / .obj) — becomes the mesh the shader runs on; a toggle
+      switches between the shader and the model's own PBR materials.
+    • Archive (.zip) — unzipped in-browser (native DecompressionStream, no
+      dependency); the first shader script + first model inside are loaded.
+
+  SECURITY MODEL — the same as the in-app preview: dropped/shared shader code is
+  treated as ADVERSARIAL and executes ONLY inside a sandboxed iframe
+  (sandbox="allow-scripts", NO allow-same-origin → opaque origin). The top-level
+  document (this page, its localStorage, the drop UI) is never reachable by
+  shader code; the two sides talk exclusively over postMessage. Blob URLs are
+  origin-scoped, so shader source and model bytes are shipped into the iframe
+  and their blob URLs are minted there.
+
+  Self-contained: the iframe loads the SAME vendored A-Frame 1.8.0 + Three.js
+  r184 WebGPU bundle and shaderloader 0.5 the app uses (absolute URLs off this
+  page's origin), so it deploys anywhere the app does (e.g. alvismisjuns.podest.lv).
+  Reached from the editor's "P" toolbar button.
+
+  Dev:      http://localhost:5173/FastShaders/podest.html
+  Deployed: <origin>/FastShaders/podest.html
+-->
+<style>
+  :root {
+    --panel-bg: #f7f7f8;
+    --panel-border: #d7d7db;
+    --text: #1b1c1f;
+    --text-dim: #6a6c72;
+    --accent: #2f6df6;
+    --shadow: 4px 4px 0 rgba(0, 0, 0, 0.12);
+  }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #202227;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #stage { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+
+  /* ── Property panel ─────────────────────────────────────────────── */
+  #panel {
+    position: fixed; top: 12px; right: 12px; z-index: 20;
+    width: 288px; max-height: calc(100vh - 24px);
+    display: flex; flex-direction: column;
+    background: var(--panel-bg); border: 1px solid var(--panel-border);
+    border-radius: 8px; box-shadow: var(--shadow);
+    color: var(--text); font-size: 13px; overflow: hidden;
+  }
+  #panel.collapsed .panel__body { display: none; }
+  .panel__head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px; border-bottom: 1px solid var(--panel-border);
+    cursor: pointer; user-select: none;
+  }
+  .panel__title { font-weight: 700; letter-spacing: -0.01em; }
+  .panel__collapse { background: none; border: none; font-size: 15px; color: var(--text-dim); cursor: pointer; line-height: 1; padding: 0 2px; }
+  .panel__body { overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+
+  .dropzone {
+    border: 1.5px dashed var(--panel-border); border-radius: 6px;
+    padding: 14px 10px; text-align: center; color: var(--text-dim);
+    cursor: pointer; transition: border-color .12s, color .12s, background .12s; line-height: 1.4;
+  }
+  .dropzone:hover { border-color: var(--accent); color: var(--accent); }
+  .dropzone strong { display: block; color: var(--text); font-size: 13px; margin-bottom: 2px; }
+
+  .loaded { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-dim); }
+  .loaded .row { display: flex; gap: 6px; align-items: baseline; }
+  .loaded .row span:first-child { flex-shrink: 0; }
+  .loaded .name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .section__label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 6px; }
+  .controls-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  select, .btn {
+    font: inherit; font-size: 12px; background: #fff; color: var(--text);
+    border: 1px solid var(--panel-border); border-radius: 5px; padding: 5px 8px; cursor: pointer;
+  }
+  select { flex: 1; min-width: 0; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn[hidden] { display: none; }
+  .ctl-label { flex-shrink: 0; min-width: 72px; font-size: 12px; color: var(--text-dim); }
+  .color-input { width: 34px; height: 28px; flex-shrink: 0; padding: 0; border: 1px solid var(--panel-border); border-radius: 5px; background: #fff; cursor: pointer; }
+  .speed-slider { flex: 1; min-width: 0; accent-color: var(--accent); cursor: pointer; margin: 0; }
+
+  /* ── Uniform sliders ────────────────────────────────────────────── */
+  #uniforms { display: flex; flex-direction: column; gap: 12px; }
+  #uniforms .empty { color: var(--text-dim); font-size: 11px; font-style: italic; }
+  .u-row { display: flex; flex-direction: column; gap: 4px; }
+  .u-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .u-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .u-val { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--accent); background: #fff; border: 1px solid var(--panel-border); border-radius: 4px; width: 62px; text-align: right; padding: 1px 4px; flex-shrink: 0; }
+  .u-slider { width: 100%; accent-color: var(--accent); cursor: pointer; margin: 0; }
+  .u-color { width: 44px; height: 22px; padding: 0; border: 1px solid var(--panel-border); border-radius: 4px; background: #fff; cursor: pointer; flex-shrink: 0; }
+  .u-bounds { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-dim); }
+  .u-bounds input { width: 52px; font: inherit; font-size: 10px; color: var(--text-dim); background: #fff; border: 1px solid var(--panel-border); border-radius: 4px; padding: 1px 3px; text-align: center; }
+  .u-bounds span { flex: 1; text-align: center; }
+
+  /* ── Drop overlay + error ───────────────────────────────────────── */
+  #overlay { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(30, 40, 70, 0.55); backdrop-filter: blur(2px); color: #fff; font-size: 22px; font-weight: 700; pointer-events: none; }
+  #overlay.show { display: flex; }
+  /* max-height + overflow bound the banner — its text is sandbox-controlled
+     (fs:error), so it must not be able to grow over the whole page. */
+  #error { position: fixed; top: 12px; left: 12px; z-index: 30; max-width: 42vw; max-height: 40vh; overflow-y: auto; color: #fff; background: rgba(180, 40, 40, 0.92); font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; padding: 8px 12px; border-radius: 6px; display: none; }
+  #error.show { display: block; }
+  #hint { position: fixed; bottom: 12px; left: 12px; z-index: 20; color: rgba(255,255,255,0.6); font-size: 11px; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+</style>
+</head>
+<body>
+<!-- allow needs the explicit `*`: a bare feature name means the 'src'
+     allowlist, which can never match this srcdoc iframe's sandbox-issued
+     OPAQUE origin — Safari then blocks fullscreen by permissions policy. -->
+<iframe id="stage" sandbox="allow-scripts" allow="fullscreen *; xr-spatial-tracking *" allowfullscreen title="Shader stage"></iframe>
+<div id="error"></div>
+<div id="overlay">Drop shader · model · zip</div>
+<div id="hint">Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip anywhere — or click the panel drop area.</div>
+
+<div id="panel">
+  <div class="panel__head" id="panel-head">
+    <span class="panel__title">Podest</span>
+    <button class="panel__collapse" id="panel-collapse" title="Collapse">▾</button>
+  </div>
+  <div class="panel__body">
+    <div class="dropzone" id="dropzone">
+      <strong>Drop a file</strong>
+      shader (.js / .tsl) · model (.glb / .gltf / .obj) · archive (.zip)
+    </div>
+    <input type="file" id="file-input" accept=".js,.mjs,.tsl,.txt,.glb,.gltf,.obj,.zip" multiple hidden />
+
+    <div class="loaded" id="loaded" hidden></div>
+
+    <div class="section">
+      <div class="section__label">Scene</div>
+      <div class="controls-row">
+        <select id="geo-select">
+          <option value="sphere">Sphere</option>
+          <option value="cube">Cube</option>
+          <option value="plane">Plane</option>
+          <option value="teapot">Teapot</option>
+          <option value="bunny">Bunny</option>
+        </select>
+        <button class="btn active" id="spin-toggle" title="Toggle auto-rotate">Spin</button>
+      </div>
+      <div class="controls-row" style="margin-top:6px;">
+        <button class="btn" id="mat-toggle" hidden title="Switch between the shader and the model's own materials">Show model materials</button>
+        <button class="btn" id="reset-view" title="Reset camera">Reset view</button>
+      </div>
+      <div class="controls-row" style="margin-top:6px;">
+        <label class="ctl-label" for="bg-color">Background</label>
+        <input type="color" id="bg-color" class="color-input" title="Scene background color" />
+      </div>
+      <div class="controls-row" style="margin-top:6px;">
+        <label class="ctl-label" for="spin-speed">Spin speed</label>
+        <input type="range" id="spin-speed" class="speed-slider" min="0.1" max="4" step="0.05" title="Auto-rotate speed (use the Spin button to stop)" />
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section__label">Properties</div>
+      <div id="uniforms"><div class="empty">Load a shader to expose its properties.</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var stage = document.getElementById("stage");
+  var errEl = document.getElementById("error");
+  var loadedEl = document.getElementById("loaded");
+  var uniformsEl = document.getElementById("uniforms");
+  var matToggle = document.getElementById("mat-toggle");
+  var geoSelect = document.getElementById("geo-select");
+  var overlay = document.getElementById("overlay");
+
+  // Per-geometry resting tilt, matching the in-app preview.
+  var ROTATIONS = { sphere: "45 45 0", cube: "45 45 0", plane: "0 0 0", teapot: "15 35 0", bunny: "0 25 0", model: "0 0 0" };
+
+  var DEFAULT_BG = "#303540", SPIN_BASE_DUR = 12000;  // dur at speed 1×
+  var state = {
+    shaderSource: null,    // text of the current shader module (null = none)
+    shaderName: null,
+    modelBytes: null,      // ArrayBuffer of a dropped model (null = none)
+    modelName: null,
+    modelKind: null,       // "obj" | "gltf" — set by loadModelBuffer
+    geometry: "sphere",
+    showMaterials: false,  // model-materials mode (shader detached in the iframe)
+    spinning: readStr("fs:viewerSpin", "1") !== "0",
+    spinSpeed: clampSpeed(readNum("fs:viewerSpinSpeed", 1)),
+    bgColor: isHex6(readStr("fs:viewerBg", DEFAULT_BG)) ? readStr("fs:viewerBg", DEFAULT_BG) : DEFAULT_BG,
+    bounds: loadBounds(),  // { uniformName: {min,max} } persisted here (top origin)
+    values: {},            // last slider value per uniform name
+  };
+  // A slower/faster rotation is a longer/shorter animation duration.
+  function spinDur() { return Math.round(SPIN_BASE_DUR / (state.spinSpeed || 1)); }
+  var objCache = {};       // built-in OBJ bytes, fetched once
+
+  // fromStage tags errors relayed from the sandboxed stage iframe (fs:error).
+  // Only those may be cleared by the stage's fs:applied — trusted-page errors
+  // (zip/file-read failures etc.) must never be clearable from the sandbox.
+  // Length-capped: the text is sandbox-controlled on the fs:error path.
+  var errorFromStage = false, errorSticky = false;
+  function showError(msg, fromStage, sticky) {
+    errEl.textContent = String(msg).slice(0, 2000);
+    errEl.classList.add("show");
+    errorFromStage = !!fromStage;
+    errorSticky = !!sticky;
+  }
+  function clearError() { errEl.classList.remove("show"); errEl.textContent = ""; errorFromStage = false; errorSticky = false; }
+
+  // Escape dynamic strings (esp. dropped file names from shared archives) before
+  // they enter innerHTML/title on this trusted top document.
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function loadBounds() { try { return JSON.parse(localStorage.getItem("fs:viewerBounds") || "{}") || {}; } catch (e) { return {}; } }
+  function saveBounds() { try { localStorage.setItem("fs:viewerBounds", JSON.stringify(state.bounds)); } catch (e) {} }
+
+  // Small persisted-preference readers (all guarded — private-mode / disabled
+  // storage must degrade to the default, never throw).
+  function readStr(k, d) { try { var v = localStorage.getItem(k); return (v === null || v === "") ? d : v; } catch (e) { return d; } }
+  function readNum(k, d) { var n = parseFloat(readStr(k, "")); return isFinite(n) ? n : d; }
+  function writePref(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function isHex6(s) { return /^#[0-9a-fA-F]{6}$/.test(String(s)); }
+  function clampSpeed(s) { return Math.min(4, Math.max(0.1, isFinite(s) ? s : 1)); }
+
+  // ── postMessage bridge to the sandboxed stage iframe ────────────────
+  var stageReady = false;
+  var outQueue = [];
+  var iframeDrag = false;  // is a file being dragged over the stage iframe?
+  function post(msg) {
+    if (stageReady && stage.contentWindow) stage.contentWindow.postMessage(msg, "*");
+    else outQueue.push(msg);
+  }
+  window.addEventListener("message", function (e) {
+    // Accept only the stage iframe; it has an opaque origin so we can't check by
+    // origin — identity via contentWindow is the reliable guard.
+    if (e.source !== stage.contentWindow) return;
+    var m = e.data; if (!m) return;
+    if (m.type === "fs:ready") {
+      stageReady = true;
+      var q = outQueue; outQueue = [];
+      q.forEach(function (x) { stage.contentWindow.postMessage(x, "*"); });
+    } else if (m.type === "fs:uniforms") {
+      if (!state.showMaterials) onUniforms(m.uniforms || {});
+    } else if (m.type === "fs:error") {
+      showError(m.message || "Shader stage error", true, !!m.sticky);
+    } else if (m.type === "fs:applied") {
+      // A shader applied successfully — clear a stale stage failure. Trusted
+      // top-page errors are out of the sandbox's reach, and sticky stage
+      // errors (vendored-script load failures) still matter after a
+      // successful apply (see showError).
+      if (errorFromStage && !errorSticky) clearError();
+    } else if (m.type === "fs:drag") {
+      // A drag entered/left/moved over the stage iframe (which fills the
+      // viewport and swallows drag events over that whole area) — mirror the
+      // drop overlay. Repeated on:true beats also re-arm the safety timeout.
+      iframeDrag = !!m.on; refreshOverlay();
+    } else if (m.type === "fs:dropped") {
+      // Files were dropped ONTO the stage iframe; it forwarded the File objects
+      // here so a drop anywhere loads through the same path as a panel drop.
+      // Zero BOTH drag counters (a stage drop produces no parent dragleave, so
+      // dragDepth would otherwise stay >0 and keep the veil up) and accept only
+      // real File objects — a forged message can't crash the loader.
+      dragDepth = 0; iframeDrag = false; refreshOverlay();
+      var dropped = Array.isArray(m.files) ? m.files.filter(function (f) { return f instanceof File; }) : [];
+      if (dropped.length) handleFiles(dropped);
+    }
+  });
+
+  // ── Geometry / model plumbing (all applied inside the iframe) ────────
+  function isObjKey(k) { return k === "teapot" || k === "bunny"; }
+  function primAttr(kind) {
+    if (kind === "cube") return "primitive: box; width: 1.4; height: 1.4; depth: 1.4; segmentsWidth: 48; segmentsHeight: 48; segmentsDepth: 48";
+    if (kind === "plane") return "primitive: plane; width: 2; height: 2; segmentsWidth: 64; segmentsHeight: 64";
+    return "primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64";
+  }
+  // Built-in OBJ models are fetched same-origin HERE (always works) and their
+  // bytes shipped into the iframe, so the sandbox never needs cross-origin CORS.
+  function ensureObjBytes(kind) {
+    if (objCache[kind]) return Promise.resolve(objCache[kind]);
+    var file = kind === "bunny" ? "stanford-bunny.obj" : "teapot.obj";
+    var url = new URL("models/" + file, window.location.href).href;
+    return fetch(url).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.arrayBuffer();
+    }).then(function (buf) { objCache[kind] = buf; return buf; });
+  }
+
+  function setGeometry(kind) {
+    state.geometry = kind;
+    if (kind === "model" && state.modelBytes) {
+      var mk = state.modelKind === "obj" ? "obj" : "gltf";
+      post({ type: "fs:model", modelType: mk, bytes: state.modelBytes, regen: mk === "obj", rotation: ROTATIONS[kind] });
+    } else if (isObjKey(kind)) {
+      ensureObjBytes(kind)
+        .then(function (buf) { post({ type: "fs:model", modelType: "obj", bytes: buf, regen: true, rotation: ROTATIONS[kind] }); })
+        .catch(function (e) { showError("Could not load " + kind + ": " + e.message); });
+    } else {
+      post({ type: "fs:geometry", geometryAttr: primAttr(kind), rotation: ROTATIONS[kind] });
+    }
+  }
+
+  // ── Shader / model loading ──────────────────────────────────────────
+  function loadShaderText(text, name) {
+    clearError();
+    state.shaderSource = text;
+    // Display name only — drop the .js/.mjs/.tsl extension from the panel.
+    // Extension-only names (a file literally called ".js") strip to "", so
+    // fall back to the raw name rather than hiding the row.
+    var displayName = name ? String(name).replace(/\.[^./\\]+$/, "") : "";
+    state.shaderName = displayName || (name ? String(name) : "shader");
+    state.showMaterials = false;
+    matToggle.classList.remove("active");
+    matToggle.textContent = "Show model materials";
+    post({ type: "fs:shader", source: text });
+    updateLoaded();
+  }
+
+  function loadModelBuffer(buf, name) {
+    // Normalize to a standalone ArrayBuffer so it survives structured-clone
+    // messaging regardless of whether the source was a File or a zip slice.
+    var ab = buf instanceof ArrayBuffer ? buf : buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    state.modelBytes = ab;
+    // A dropped OBJ takes the obj-model + regen path (normals/UVs rebuilt —
+    // OBJLoader output is non-indexed, same as the built-in teapot/bunny);
+    // glb/gltf keep their authored data (regen:false).
+    state.modelKind = extOf(name || "") === "obj" ? "obj" : "gltf";
+    state.modelName = name || "model.glb";
+    if (!geoSelect.querySelector('option[value="model"]')) {
+      var opt = document.createElement("option");
+      opt.value = "model"; opt.textContent = "Loaded model";
+      geoSelect.appendChild(opt);
+    }
+    geoSelect.value = "model";
+    matToggle.hidden = false;
+    setGeometry("model");
+    updateLoaded();
+  }
+
+  // ── Uniform sliders ─────────────────────────────────────────────────
+  function guessBounds(def) {
+    var d = Number(def) || 0, min = 0, max = 1;
+    if (d < 0) { min = Math.min(-1, d * 2); max = Math.max(1, -d); }
+    else if (d > 1) { max = d * 2; }
+    if (min === max) { min = d - 1; max = d + 1; }
+    return { min: min, max: max };
+  }
+
+  // Called with the iframe-reported { name: defaultValue } map after each apply.
+  function onUniforms(map) {
+    uniformsEl.innerHTML = "";
+    var names = Object.keys(map);
+    if (!names.length) {
+      uniformsEl.innerHTML = state.shaderSource
+        ? '<div class="empty">This shader exposes no adjustable properties.</div>'
+        : '<div class="empty">Load a shader to expose its properties.</div>';
+      return;
+    }
+    names.forEach(function (name) {
+      // Colour uniform (reported as '#rrggbb'): a picker row — bounds/slider
+      // are meaningless for a colour.
+      if (typeof map[name] === "string") {
+        var cDef = /^#[0-9a-fA-F]{6}$/.test(map[name]) ? map[name] : "#ffffff";
+        var cCur = Object.prototype.hasOwnProperty.call(state.values, name) && typeof state.values[name] === "string"
+          ? state.values[name] : cDef;
+        state.values[name] = cCur;
+        var cRow = document.createElement("div");
+        cRow.className = "u-row";
+        cRow.innerHTML =
+          '<div class="u-head"><span class="u-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
+          '<input class="u-color" type="color" /></div>';
+        var cInput = cRow.querySelector(".u-color");
+        cInput.value = cCur;
+        cInput.addEventListener("input", function () {
+          state.values[name] = cInput.value;
+          post({ type: "fs:uniform", name: name, value: cInput.value });
+        });
+        post({ type: "fs:uniform", name: name, value: cCur });
+        uniformsEl.appendChild(cRow);
+        return;
+      }
+      var def = typeof map[name] === "number" ? map[name] : 0;
+      // hasOwnProperty guards: a uniform named 'constructor'/'toString'/etc.
+      // must not resolve to an inherited Object.prototype member (which would
+      // throw DataCloneError when postMessage'd and abort the whole forEach).
+      var current = Object.prototype.hasOwnProperty.call(state.values, name) && typeof state.values[name] === "number"
+        ? state.values[name] : def;
+      state.values[name] = current;
+      var b = (Object.prototype.hasOwnProperty.call(state.bounds, name) && state.bounds[name]) || guessBounds(def);
+      state.bounds[name] = b;
+
+      var row = document.createElement("div");
+      row.className = "u-row";
+      row.innerHTML =
+        '<div class="u-head"><span class="u-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
+        '<input class="u-val" type="number" step="any" /></div>' +
+        '<input class="u-slider" type="range" />' +
+        '<div class="u-bounds"><input class="u-min" type="number" step="any" /><span>min · max</span><input class="u-max" type="number" step="any" /></div>';
+
+      var valInput = row.querySelector(".u-val");
+      var slider = row.querySelector(".u-slider");
+      var minInput = row.querySelector(".u-min");
+      var maxInput = row.querySelector(".u-max");
+
+      function syncRange() { slider.min = b.min; slider.max = b.max; slider.step = ((b.max - b.min) / 200) || 0.001; }
+      function setValue(v, fromSlider) {
+        if (isNaN(v)) return;
+        state.values[name] = v;
+        post({ type: "fs:uniform", name: name, value: v });
+        valInput.value = Number(v.toFixed(4));
+        if (!fromSlider) slider.value = v;
+      }
+      syncRange();
+      minInput.value = b.min; maxInput.value = b.max;
+      slider.value = current;
+      valInput.value = Number(current.toFixed ? current.toFixed(4) : current);
+      // Push the restored/current value into the freshly-applied shader.
+      post({ type: "fs:uniform", name: name, value: current });
+
+      slider.addEventListener("input", function () { setValue(parseFloat(slider.value), true); });
+      valInput.addEventListener("change", function () { setValue(parseFloat(valInput.value), false); });
+      minInput.addEventListener("change", function () {
+        var m = parseFloat(minInput.value); if (isNaN(m)) return;
+        b.min = m; state.bounds[name] = b; saveBounds(); syncRange(); slider.value = state.values[name];
+      });
+      maxInput.addEventListener("change", function () {
+        var m = parseFloat(maxInput.value); if (isNaN(m)) return;
+        b.max = m; state.bounds[name] = b; saveBounds(); syncRange(); slider.value = state.values[name];
+      });
+
+      uniformsEl.appendChild(row);
+    });
+  }
+
+  function showMaterialsMessage() {
+    uniformsEl.innerHTML = '<div class="empty">Model materials shown — switch to the shader to tune properties.</div>';
+  }
+
+  function updateLoaded() {
+    var rows = [];
+    if (state.shaderName) rows.push('<div class="row"><span>Shader:</span><span class="name" title="' + esc(state.shaderName) + '">' + esc(state.shaderName) + "</span></div>");
+    if (state.modelName) rows.push('<div class="row"><span>Model:</span><span class="name" title="' + esc(state.modelName) + '">' + esc(state.modelName) + "</span></div>");
+    loadedEl.innerHTML = rows.join("");
+    loadedEl.hidden = rows.length === 0;
+  }
+
+  // ── File dispatch ───────────────────────────────────────────────────
+  function extOf(name) { var i = name.lastIndexOf("."); return i < 0 ? "" : name.slice(i + 1).toLowerCase(); }
+  function isShaderName(n) { var e = extOf(n); return e === "js" || e === "mjs" || e === "tsl" || e === "txt"; }
+  function isModelName(n) { var e = extOf(n); return e === "glb" || e === "gltf" || e === "obj"; }
+  function junkName(n) { var base = n.split("/").pop(); return n.indexOf("__MACOSX") !== -1 || base.charAt(0) === "."; }
+
+  function handleFiles(files) {
+    var list = Array.prototype.slice.call(files);
+    var zip = list.find(function (f) { return extOf(f.name) === "zip"; });
+    if (zip) { handleZip(zip); return; }
+    var shader = list.find(function (f) { return isShaderName(f.name); });
+    var model = list.find(function (f) { return isModelName(f.name); });
+    if (model) model.arrayBuffer().then(function (buf) { loadModelBuffer(buf, model.name); }).catch(function (e) { showError("Could not read file: " + e.message); });
+    if (shader) shader.text().then(function (t) { loadShaderText(t, shader.name); }).catch(function (e) { showError("Could not read file: " + e.message); });
+    if (!shader && !model) showError("Unrecognized file. Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip.");
+  }
+
+  function handleZip(file) {
+    clearError();
+    file.arrayBuffer().then(unzip).then(function (entries) {
+      var usable = entries.filter(function (e) { return !junkName(e.name); });
+      var shader = usable.find(function (e) { return isShaderName(e.name); });
+      var model = usable.find(function (e) { return isModelName(e.name); });
+      if (model) loadModelBuffer(model.data, model.name.split("/").pop());
+      if (shader) loadShaderText(new TextDecoder().decode(shader.data), shader.name.split("/").pop());
+      if (!shader && !model) showError("Zip contained no shader (.js/.tsl) or model (.glb/.gltf/.obj).");
+    }).catch(function (e) { showError("Could not read zip: " + e.message); });
+  }
+
+  // Adversarial-input caps — mirror src/utils/zipReader.ts so a shared archive
+  // can't balloon memory (decompression bomb) or slip in a blank shader.
+  var MAX_ENTRIES = 512;
+  var MAX_TOTAL_UNCOMPRESSED = 64 * 1024 * 1024; // 64 MB across all entries
+  var MAX_NAME_LENGTH = 256;
+
+  // Minimal in-browser unzip: parse the ZIP central directory and inflate
+  // deflate entries with the native DecompressionStream (no dependency).
+  // Entries are inflated SEQUENTIALLY and the running total is checked against
+  // ACTUAL inflated bytes, so a bomb aborts before every entry balloons —
+  // declared sizes are never trusted.
+  async function unzip(buf) {
+    var dv = new DataView(buf), bytes = new Uint8Array(buf), eocd = -1;
+    for (var i = buf.byteLength - 22; i >= 0; i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+    if (eocd < 0) throw new Error("not a zip archive");
+    var count = dv.getUint16(eocd + 10, true), p = dv.getUint32(eocd + 16, true);
+    if (count > MAX_ENTRIES) throw new Error("too many entries (" + count + ")");
+    var entries = [], totalInflated = 0;
+    for (var n = 0; n < count; n++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) break;
+      var method = dv.getUint16(p + 10, true);
+      var compSize = dv.getUint32(p + 20, true);
+      var nameLen = dv.getUint16(p + 28, true);
+      var extraLen = dv.getUint16(p + 30, true);
+      var commentLen = dv.getUint16(p + 32, true);
+      var localOff = dv.getUint32(p + 42, true);
+      if (nameLen > MAX_NAME_LENGTH) throw new Error("entry name too long");
+      var name = new TextDecoder().decode(bytes.subarray(p + 46, p + 46 + nameLen));
+      var lhNameLen = dv.getUint16(localOff + 26, true);
+      var lhExtraLen = dv.getUint16(localOff + 28, true);
+      var dataStart = localOff + 30 + lhNameLen + lhExtraLen;
+      var comp = bytes.subarray(dataStart, dataStart + compSize);
+      p += 46 + nameLen + extraLen + commentLen;
+      if (name.endsWith("/")) continue;
+      var entry = await inflateEntry(name, method, comp, MAX_TOTAL_UNCOMPRESSED - totalInflated);
+      totalInflated += entry.data.length;
+      entries.push(entry);
+    }
+    return entries;
+  }
+  function inflateEntry(name, method, comp, maxBytes) {
+    if (method === 0) {
+      if (comp.length > maxBytes) return Promise.reject(new Error("archive too large"));
+      return Promise.resolve({ name: name, data: comp.slice() });
+    }
+    if (method !== 8) return Promise.reject(new Error("unsupported compression method " + method));
+    // Read the inflate stream in chunks and abort the moment the OUTPUT exceeds
+    // the remaining budget — a single bomb entry can't fully materialize first.
+    var reader = new Blob([comp]).stream().pipeThrough(new DecompressionStream("deflate-raw")).getReader();
+    var chunks = [], total = 0;
+    function pump() {
+      return reader.read().then(function (r) {
+        if (r.done) {
+          var out = new Uint8Array(total), off = 0;
+          for (var i = 0; i < chunks.length; i++) { out.set(chunks[i], off); off += chunks[i].length; }
+          return { name: name, data: out };
+        }
+        total += r.value.length;
+        if (total > maxBytes) return reader.cancel().then(function () { throw new Error("archive too large"); });
+        chunks.push(r.value);
+        return pump();
+      });
+    }
+    return pump();
+  }
+
+  // ── Wiring: drag/drop, file picker, controls ────────────────────────
+  // Files drop ANYWHERE. Two regions feed the same handler: parent-owned
+  // chrome (the panel) via these window listeners, and the full-screen stage
+  // iframe — whose own document swallows drag/drop, so it forwards them over
+  // postMessage (fs:drag / fs:dropped, handled above). The overlay shows while
+  // EITHER region reports an active drag; refreshOverlay merges both signals
+  // and arms a safety timeout so an aborted drag (Esc, or a drop outside the
+  // window, which fires no reliable leave event) can never strand the veil up:
+  // a live drag keeps re-arming it (panel dragover + the iframe's dragover
+  // heartbeat), so it only fires once the drag has genuinely stopped.
+  var dragDepth = 0, overlayTimer = null;
+  function refreshOverlay() {
+    var show = dragDepth > 0 || iframeDrag;
+    overlay.classList.toggle("show", show);
+    if (overlayTimer) { clearTimeout(overlayTimer); overlayTimer = null; }
+    if (show) overlayTimer = setTimeout(function () { dragDepth = 0; iframeDrag = false; overlay.classList.remove("show"); overlayTimer = null; }, 1500);
+  }
+  window.addEventListener("dragenter", function (e) { e.preventDefault(); dragDepth++; refreshOverlay(); });
+  window.addEventListener("dragover", function (e) { e.preventDefault(); if (dragDepth > 0 || iframeDrag) refreshOverlay(); });
+  window.addEventListener("dragleave", function (e) { e.preventDefault(); if (--dragDepth < 0) dragDepth = 0; refreshOverlay(); });
+  window.addEventListener("drop", function (e) {
+    e.preventDefault(); dragDepth = 0; iframeDrag = false; refreshOverlay();
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+  });
+
+  var fileInput = document.getElementById("file-input");
+  document.getElementById("dropzone").addEventListener("click", function () { fileInput.click(); });
+  fileInput.addEventListener("change", function () { if (fileInput.files.length) handleFiles(fileInput.files); fileInput.value = ""; });
+
+  geoSelect.addEventListener("change", function () { setGeometry(geoSelect.value); });
+
+  matToggle.addEventListener("click", function () {
+    state.showMaterials = !state.showMaterials;
+    if (state.showMaterials) {
+      post({ type: "fs:detach-shader" });
+      matToggle.classList.add("active");
+      matToggle.textContent = "Show shader";
+      showMaterialsMessage();
+    } else {
+      matToggle.classList.remove("active");
+      matToggle.textContent = "Show model materials";
+      if (state.shaderSource) post({ type: "fs:shader", source: state.shaderSource });
+    }
+  });
+
+  var spinToggle = document.getElementById("spin-toggle");
+  spinToggle.classList.toggle("active", state.spinning);
+  spinToggle.addEventListener("click", function () {
+    state.spinning = !state.spinning;
+    spinToggle.classList.toggle("active", state.spinning);
+    writePref("fs:viewerSpin", state.spinning ? "1" : "0");
+    post({ type: "fs:spin", playing: state.spinning, dur: spinDur() });
+  });
+
+  // Rotation speed — a longer/shorter spin animation. Only re-issues the
+  // animation while spinning; the stored speed is applied when spin resumes.
+  var spinSpeedEl = document.getElementById("spin-speed");
+  spinSpeedEl.value = state.spinSpeed;
+  spinSpeedEl.addEventListener("input", function () {
+    var s = clampSpeed(parseFloat(spinSpeedEl.value));
+    state.spinSpeed = s;
+    writePref("fs:viewerSpinSpeed", String(s));
+    if (state.spinning) post({ type: "fs:spin", playing: true, dur: spinDur() });
+  });
+
+  // Background color — an <input type=color> only ever yields #rrggbb, but
+  // validate before it crosses into the iframe's attribute string anyway.
+  var bgColorEl = document.getElementById("bg-color");
+  bgColorEl.value = state.bgColor;
+  bgColorEl.addEventListener("input", function () {
+    var c = bgColorEl.value;
+    if (!isHex6(c)) return;
+    state.bgColor = c;
+    writePref("fs:viewerBg", c);
+    post({ type: "fs:background", color: c });
+  });
+
+  document.getElementById("reset-view").addEventListener("click", function () { post({ type: "fs:reset-camera" }); });
+
+  var panel = document.getElementById("panel");
+  document.getElementById("panel-head").addEventListener("click", function () {
+    var collapsed = panel.classList.toggle("collapsed");
+    document.getElementById("panel-collapse").textContent = collapsed ? "▸" : "▾";
+  });
+
+  // ── Build the sandboxed stage iframe ────────────────────────────────
+  // The A-Frame scene, shaderloader, and ALL shader/model execution live here.
+  // Absolute URLs (off this page's origin) let the opaque-origin iframe load the
+  // vendored bundle via classic <script src> (no CORS needed for script exec).
+  function buildStageDoc() {
+    var dir = new URL(".", window.location.href).href; // e.g. https://host/FastShaders/
+    var iife = dir + "js/a-frame-180-a-01.min.js";
+    var loader = dir + "js/a-frame-shaderloader-0.5.js";
+    var orbit = dir + "js/aframe-orbit-controls.min.js";
+    // Bake the persisted background + spin prefs straight into the initial scene
+    // so boot matches the saved state without a post-ready restart. bg is
+    // validated (#rrggbb) so it is safe to inline into the markup; when spin is
+    // off at boot the animation attribute is simply omitted.
+    var bg = isHex6(state.bgColor) ? state.bgColor : DEFAULT_BG;
+    // Pure-Y spin on the spin-parent: the per-geometry tilt lives on the
+    // preview-entity (ROTATIONS), so imported models keep their upright base
+    // orientation instead of inheriting a 45° forward tilt from the parent.
+    // This also matches the runtime setSpin path (which reads the idle parent
+    // rotation of 0 0 0), so a boot-with-spin looks identical to a toggle.
+    var spinAttr = state.spinning
+      ? ' animation="property: rotation; from: 0 0 0; to: 0 360 0; loop: true; dur: ' + spinDur() + '; easing: linear"'
+      : '';
+    var L = [];
+    L.push('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" />');
+    // Forward uncaught errors + unhandled rejections to the parent so a
+    // throwing/failing shader surfaces as an error instead of a misleading "no
+    // properties" message. The shaderloader swallows its own import()/build
+    // rejection (console.error only), so unhandledrejection is the key hook;
+    // installed first thing, before A-Frame/shaderloader load.
+    // Error relay, installed before anything else loads. fsPost tags that a
+    // real message was already sent so the muted cross-origin "Script error."
+    // cascade (bundle 404 → AFRAME-undefined in the other vendored scripts)
+    // can't displace the root cause on the parent's last-wins banner. The
+    // console.error mirror exists because the shaderloader swallows module
+    // fetch/import/build failures into console.error (no throw, no
+    // rejection); shader-error / shader-applied are its structured events
+    // (they bubble to window). fs:applied clears the parent's stage-error
+    // overlay. Messages are length-capped — shader code controls them.
+    L.push('<script>window.__fsPosted=false;window.fsPost=function(m,sticky){try{window.__fsPosted=true;parent.postMessage({type:"fs:error",message:String(m).slice(0,2000),sticky:!!sticky},"*");}catch(e){}};window.onerror=function(msg,url,line,col,err){if(/^Script error\\.?$/.test(String(msg||""))&&window.__fsPosted)return;fsPost((err&&err.stack)||msg||"Shader error");};window.onunhandledrejection=function(ev){var r=ev&&ev.reason;fsPost((r&&r.stack)||r||"Shader load failed");};(function(){var ce=console.error;console.error=function(){try{var p=[];for(var i=0;i<arguments.length;i++){var a=arguments[i];p.push(a instanceof Error?(a.message||String(a)):String(a));}fsPost(p.join(" "));}catch(e){}return ce.apply(console,arguments);};})();window.addEventListener("shader-error",function(ev){var d=ev&&ev.detail;fsPost("Shader error: "+((d&&d.message)||"failed to apply"));});window.addEventListener("shader-applied",function(){try{parent.postMessage({type:"fs:applied"},"*");}catch(e){}});<\/script>');
+    // Desktop viewer: neutralize WebXR before A-Frame loads (r184 WebGPU XR init
+    // can throw when navigator.xr is present).
+    L.push('<script>try{Object.defineProperty(navigator,"xr",{value:undefined,configurable:true});}catch(e){}<\/script>');
+
+    // ── Drop-anywhere forwarding ────────────────────────────────────────
+    // This iframe fills the viewport, so its own document captures drag/drop
+    // over that whole area and they never reach the parent. Forward them so a
+    // file can be dropped ANYWHERE, not just on the side panel. Only a drag
+    // SIGNAL (fs:drag, with a throttled dragover heartbeat so the parent's
+    // safety timeout stays armed while a drag hovers the stage) and the dropped
+    // File objects (fs:dropped) cross the boundary; the parent reads/loads them
+    // through the same path as a panel drop. preventDefault on dragover+drop
+    // stops the browser navigating to the file. Installed BEFORE the heavy
+    // A-Frame <script src> tags so an early drop (first ~1-3s) is caught rather
+    // than navigating the frame. The forwarded files round-trip straight back
+    // into THIS sandbox as a new shader/model — no reach into the top document.
+    L.push('<script>');
+    L.push('(function(){');
+    L.push('  function toParent(m){try{parent.postMessage(m,"*");}catch(e){}}');
+    L.push('  var depth=0,lastBeat=0;');
+    L.push('  addEventListener("dragenter",function(e){e.preventDefault();if(depth++===0)toParent({type:"fs:drag",on:true});});');
+    L.push('  addEventListener("dragover",function(e){e.preventDefault();try{if(e.dataTransfer)e.dataTransfer.dropEffect="copy";}catch(_){}var t=Date.now();if(t-lastBeat>250){lastBeat=t;toParent({type:"fs:drag",on:true});}});');
+    L.push('  addEventListener("dragleave",function(e){e.preventDefault();if(--depth<=0){depth=0;toParent({type:"fs:drag",on:false});}});');
+    L.push('  addEventListener("drop",function(e){e.preventDefault();depth=0;var f=e.dataTransfer&&e.dataTransfer.files?Array.prototype.slice.call(e.dataTransfer.files):[];toParent({type:"fs:drag",on:false});toParent({type:"fs:dropped",files:f});});');
+    L.push('})();');
+    L.push('<\/script>');
+
+    L.push('<script src="' + iife + '" onerror="fsPost(\'Failed to load the A-Frame bundle\', true)"><\/script>');
+    L.push('<script src="' + loader + '" onerror="fsPost(\'Failed to load the shaderloader\', true)"><\/script>');
+    L.push('<script src="' + orbit + '" onerror="fsPost(\'Failed to load orbit controls\', true)"><\/script>');
+    // SECURITY: a dropped .gltf/.glb can reference buffers/textures by
+    // ABSOLUTE http(s) URL — GLTFLoader would fetch them from inside this
+    // sandbox, leaking the viewer's IP to whatever host a shared file names
+    // (this page ships no CSP anywhere it is deployed). Everything the stage
+    // legitimately loads through THREE's loading managers is a blob: URL
+    // minted here or a data: URI — allowlist exactly those and neutralize the
+    // rest to an inert data: URL so the request never leaves the sandbox.
+    // Same guard as the editor preview (tslToPreviewHTML.ts).
+    L.push('<script>try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{console.warn("[Podest] blocked non-blob resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<\/script>');
+    L.push('<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:' + bg + ';}</style>');
+    L.push('</head><body>');
+
+    // fit-bounds: recenter + rescale loaded OBJ/GLTF meshes. regen:true rebuilds
+    // normals + spherical UVs for the built-in OBJ primitives; regen:false
+    // preserves a dropped GLB's own data and only synthesizes UVs when missing.
+    L.push('<script>');
+    L.push('(function(){');
+    L.push('  if(!window.AFRAME||AFRAME.components["fit-bounds"])return;');
+    L.push('  function mergeByPosition(geom){var pos=geom.attributes.position;if(!pos)return geom;var oldIndex=geom.index,precision=1e4,lookup=Object.create(null),newPositions=[],remap=new Uint32Array(pos.count),nextIndex=0;for(var i=0;i<pos.count;i++){var x=pos.getX(i),y=pos.getY(i),z=pos.getZ(i);var key=Math.round(x*precision)+"_"+Math.round(y*precision)+"_"+Math.round(z*precision);var idx=lookup[key];if(idx===undefined){idx=nextIndex++;lookup[key]=idx;newPositions.push(x,y,z);}remap[i]=idx;}var indexCount=oldIndex?oldIndex.count:pos.count;var Arr=nextIndex<65535?Uint16Array:Uint32Array;var newIndex=new Arr(indexCount);if(oldIndex){for(var j=0;j<indexCount;j++)newIndex[j]=remap[oldIndex.getX(j)];}else{for(var k=0;k<indexCount;k++)newIndex[k]=remap[k];}var merged=new THREE.BufferGeometry();merged.setAttribute("position",new THREE.BufferAttribute(new Float32Array(newPositions),3));merged.setIndex(new THREE.BufferAttribute(newIndex,1));return merged;}');
+    L.push('  function sphericalUVs(g,c){var pos=g.attributes.position;var uvs=new Float32Array(pos.count*2);var v=new THREE.Vector3(),TWO_PI=Math.PI*2;for(var i=0;i<pos.count;i++){v.fromBufferAttribute(pos,i).sub(c);var len=v.length();if(len>0)v.multiplyScalar(1/len);uvs[i*2]=Math.atan2(v.z,v.x)/TWO_PI+0.5;uvs[i*2+1]=Math.asin(Math.max(-1,Math.min(1,v.y)))/Math.PI+0.5;}g.setAttribute("uv",new THREE.BufferAttribute(uvs,2));}');
+    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var mesh=this.el.getObject3D("mesh");if(!mesh)return;var regen=this.data.regen;mesh.traverse(function(node){if(!node.isMesh||!node.geometry)return;var g=node.geometry,c=new THREE.Vector3();if(regen){g=mergeByPosition(node.geometry);g.computeVertexNormals();g.computeBoundingBox();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var s=0;s<pos.count;s+=step){var dot=(pos.getX(s)-c.x)*nrm.getX(s)+(pos.getY(s)-c.y)*nrm.getY(s)+(pos.getZ(s)-c.z)*nrm.getZ(s);if(dot<0)inward++;sampled++;}if(sampled>0&&inward*2>sampled){var idx=g.index;for(var t=0;t+2<idx.count;t+=3){var b=idx.getX(t+1);idx.setX(t+1,idx.getX(t+2));idx.setX(t+2,b);}idx.needsUpdate=true;g.computeVertexNormals();}sphericalUVs(g,c);node.geometry=g;}else if(!g.attributes.uv){g.computeBoundingBox();g.boundingBox.getCenter(c);sphericalUVs(g,c);}});mesh.updateMatrixWorld(true);var box=new THREE.Box3().setFromObject(mesh);if(box.isEmpty())return;var size=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(size);box.getCenter(center);var scale=this.data.size/(Math.max(size.x,size.y,size.z)||1);mesh.position.sub(center.multiplyScalar(scale));mesh.scale.setScalar(scale);}});');
+    L.push('})();');
+    L.push('<\/script>');
+
+    // The <a-scene> is injected AFTER a WebGPU pre-flight (same rationale as
+    // the editor preview, see tslToPreviewHTML.ts): three r184 picks its
+    // WebGPU backend on `navigator.gpu != null` ALONE, and Safari 26 exposes
+    // navigator.gpu inside this sandboxed opaque-origin iframe while adapter
+    // requests can still fail there — renderer init then dies with no WebGL2
+    // fallback and the stage stays blank. Probe a real adapter (2s cap
+    // against a hung requestAdapter), hide navigator.gpu when it can't
+    // deliver, THEN inject the scene. Scene-dependent code waits via
+    // __fsWhenSceneBooted.
+    var S = [];
+    S.push('<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ' + bg + '">');
+    S.push('  <a-entity camera="fov: 24; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 7; rotateSpeed: 0.5"></a-entity>');
+    S.push('  <a-entity id="spin-parent"' + spinAttr + '>');
+    S.push('    <a-entity id="preview-entity" geometry="primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64" material="color: #808080" position="0 0 0" rotation="45 45 0"></a-entity>');
+    S.push('  </a-entity>');
+    S.push('  <a-light type="directional" color="#ffffff" position="-3 4 2" intensity="2.5"></a-light>');
+    S.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
+    S.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
+    S.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
+    S.push('</a-scene>');
+    L.push('<div id="scene-slot"></div>');
+    L.push('<script>');
+    L.push('window.__fsSceneHTML=' + JSON.stringify(S.join('\n')) + ';');
+    L.push('window.__fsSceneBooted=false;window.__fsWhenSceneBooted=function(fn){if(window.__fsSceneBooted){fn();return;}window.addEventListener("fs:scene-booted",fn,{once:true});};');
+    L.push('(function(){function inject(){document.getElementById("scene-slot").innerHTML=window.__fsSceneHTML;window.__fsSceneBooted=true;window.dispatchEvent(new Event("fs:scene-booted"));setTimeout(function(){var s=document.querySelector("a-scene");if(s&&!s.renderStarted)window.fsPost("3D stage failed to start: the "+(navigator.gpu?"WebGPU":"WebGL2")+" renderer never began rendering. Reload to retry.",true);},6000);}function hideGpu(){try{Object.defineProperty(Navigator.prototype,"gpu",{get:function(){return undefined;},configurable:true});}catch(e){}try{Object.defineProperty(navigator,"gpu",{value:undefined,configurable:true});}catch(e){}}function __fsForceWebGL2(){var ua=navigator.userAgent||"";if(/iPad|iPhone|iPod/.test(ua))return true;if(navigator.platform==="MacIntel"&&(navigator.maxTouchPoints||0)>1)return true;if(/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(ua))return false;return /Safari|AppleWebKit/.test(ua);}if(__fsForceWebGL2()){hideGpu();inject();return;}if(!navigator.gpu){inject();return;}var settled=false;function go(a){if(settled)return;settled=true;if(!a)hideGpu();inject();}try{Promise.resolve(navigator.gpu.requestAdapter()).then(go,function(){go(null);});}catch(e){go(null);}setTimeout(function(){go(null);},2000);})();');
+    L.push('<\/script>');
+
+    // Bridge: receive shader/model/uniform/geometry commands, report readiness +
+    // uniform sets back to the parent. All blob URLs are minted here.
+    L.push('<script>');
+    L.push('(function(){');
+    L.push('  var entity,spinEl,camEl,shaderUrl=null,modelUrl=null,attached=false;');
+    L.push('  function toParent(m){try{parent.postMessage(m,"*");}catch(e){}}');
+    // Colour uniforms (shaderloader 0.5) hold a THREE.Color — report them as
+    // '#rrggbb' strings so the parent builds a picker; numbers stay numbers.
+    L.push('  function reportUniforms(){var tries=0;(function poll(){if(!attached){toParent({type:"fs:uniforms",uniforms:{}});return;}var comp=entity&&entity.components&&entity.components.shader;var u=comp&&comp._propertyUniforms;if(u){var out={};for(var k in u){var v=u[k]&&u[k].value;out[k]=(typeof v==="number")?v:(v&&v.isColor)?("#"+v.getHexString()):0;}toParent({type:"fs:uniforms",uniforms:out});return;}if(tries++<120)setTimeout(poll,50);else toParent({type:"fs:uniforms",uniforms:{}});})();}');
+    // Re-arm the report whenever the shaderloader (re)applies: a model that
+    // parses longer than the poll window (~6s) would otherwise leave the
+    // parent stuck on the empty-uniforms report until a manual re-drop.
+    L.push('  window.addEventListener("shader-applied",function(){if(attached)reportUniforms();});');
+    L.push('  function applyShaderSource(src){try{if(shaderUrl)URL.revokeObjectURL(shaderUrl);}catch(e){}shaderUrl=URL.createObjectURL(new Blob([src],{type:"text/javascript"}));attached=true;entity.setAttribute("shader","src: "+shaderUrl);var comp=entity.components&&entity.components.shader;if(comp)comp._propertyUniforms=null;reportUniforms();}');
+    L.push('  function detachShader(){attached=false;entity.removeAttribute("shader");}');
+    L.push('  function clearGeo(){var comp=entity.components&&entity.components.shader;if(comp&&attached)comp._propertyUniforms=null;entity.removeAttribute("geometry");entity.removeAttribute("obj-model");entity.removeAttribute("gltf-model");entity.removeAttribute("fit-bounds");entity.removeAttribute("material");}');
+    L.push('  function setPrimitive(attr,rot){clearGeo();entity.setAttribute("material","color: #808080");entity.setAttribute("geometry",attr);entity.setAttribute("rotation",rot||"45 45 0");if(attached){setTimeout(function(){var c=entity.components&&entity.components.shader;if(c&&typeof c.applyShader==="function")c.applyShader();reportUniforms();},0);}}');
+    L.push('  function setModel(kind,bytes,regen,rot){clearGeo();try{if(modelUrl)URL.revokeObjectURL(modelUrl);}catch(e){}var mime=kind==="obj"?"text/plain":"model/gltf-binary";modelUrl=URL.createObjectURL(new Blob([bytes],{type:mime}));entity.setAttribute("fit-bounds","size: 1.6; regen: "+(regen?"true":"false"));if(kind==="obj")entity.setAttribute("obj-model","obj: url("+modelUrl+")");else entity.setAttribute("gltf-model","url("+modelUrl+")");entity.setAttribute("rotation",rot||"0 0 0");if(attached)reportUniforms();}');
+    // Colour uniforms mutate in place via .set() — assigning a hex string to
+    // .value would replace the THREE.Color object with a string.
+    L.push('  function setUniform(name,value){var comp=entity&&entity.components&&entity.components.shader;if(!comp||!comp._propertyUniforms||!comp._propertyUniforms[name])return;var u=comp._propertyUniforms[name];if(u.value&&u.value.isColor){try{u.value.set(value);}catch(e){}}else{u.value=value;}}');
+    L.push('  function setSpin(playing,dur){if(!spinEl)return;var d=dur>0?dur:12000;if(playing){var r=spinEl.object3D&&spinEl.object3D.rotation;var fx=r?r.x*180/Math.PI:45,fy=r?r.y*180/Math.PI:45,fz=r?r.z*180/Math.PI:0;spinEl.setAttribute("animation","property: rotation; from: "+fx+" "+fy+" "+fz+"; to: "+fx+" "+(fy+360)+" "+fz+"; loop: true; dur: "+d+"; easing: linear");}else{var rr=spinEl.object3D&&spinEl.object3D.rotation;spinEl.removeAttribute("animation");if(rr)spinEl.setAttribute("rotation",(rr.x*180/Math.PI)+" "+(rr.y*180/Math.PI)+" "+(rr.z*180/Math.PI));}}');
+    // setBackground: color is validated #rrggbb on the parent before it is sent.
+    // Belt-and-suspenders — the A-Frame background component (setAttribute) plus a
+    // direct scene.background + renderer clear-color set, so the WebGPU stage
+    // repaints live regardless of the component's runtime update behavior.
+    L.push('  function setBackground(color){var s=document.querySelector("a-scene");if(s){s.setAttribute("background","color: "+color);try{var col=new THREE.Color(color);if(s.object3D)s.object3D.background=col;if(s.renderer&&s.renderer.setClearColor)s.renderer.setClearColor(col,1);}catch(e){}}try{document.body.style.background=color;}catch(e){}}');
+    L.push('  function resetCamera(){var oc=camEl&&camEl.components&&camEl.components["orbit-controls"];if(oc&&oc.controls&&typeof oc.controls.reset==="function")oc.controls.reset();}');
+    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;}});');
+    // kickResize: a fresh WebGPU boot can record a stale/zero canvas size,
+    // leaving the scene unpainted until renderer.setSize re-runs (the "blank
+    // until the window is resized" bug) — re-run A-Frame's resize path a few
+    // times while init settles; no-ops when the size is already right.
+    L.push('  function kickResize(){try{var s=document.querySelector("a-scene");if(s&&typeof s.resize==="function")s.resize();else window.dispatchEvent(new Event("resize"));}catch(e){}}');
+    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");entity.addEventListener("model-error",function(){fsPost("Failed to load the 3D model: the file could not be parsed (corrupt, or a DRACO/meshopt-compressed glTF - not supported).");});toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);}');
+    L.push('  if(!window.AFRAME){toParent({type:"fs:error",message:"A-Frame failed to initialize"});return;}');
+    // The scene arrives via the pre-flight injector above — wire boot to it
+    // (the helper also handles the already-booted case).
+    L.push('  window.__fsWhenSceneBooted(function(){var sceneEl=document.querySelector("a-scene");if(sceneEl&&sceneEl.hasLoaded)boot();else if(sceneEl)sceneEl.addEventListener("loaded",boot);else boot();});');
+    L.push('})();');
+    L.push('<\/script>');
+
+    L.push('</body></html>');
+    return L.join("\n");
+  }
+
+  stage.setAttribute("srcdoc", buildStageDoc());
+})();
+</script>
+</body>
+</html>

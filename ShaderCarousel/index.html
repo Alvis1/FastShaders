@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShaderCarousel — TSL shader viewer &amp; benchmarks</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #eee; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+  #frame { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: #000; }
+
+  /*
+    Left sidebar — the mode selector plus the current sub-tool's UI.
+    On iframe load we adopt the sub-tool's <style> tags AND move its
+    #hud / #controls / #shader-picker / #log elements into #tool-ui.
+    The sub-tool's own JS keeps wiring those elements (event listeners
+    survive node adoption) so its buttons, inputs and live status keep
+    working — they just live in this sidebar now.
+  */
+  #sidebar {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    bottom: 16px;
+    z-index: 1000;
+    width: 380px;
+    max-width: calc(100vw - 32px);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    pointer-events: auto;
+  }
+
+  #mode-overlay {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    background: rgba(0, 0, 0, 0.78);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    flex-shrink: 0;
+  }
+  #mode-overlay label {
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9aa;
+    flex-shrink: 0;
+  }
+  #mode-select {
+    flex: 1;
+    min-width: 0;                    /* allow shrinking inside flex parent */
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 28px 8px 12px;
+    background: #1b1b1b;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 8px;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    /* Truncate the selected option's text when it can't fit, so it stays
+       inside the rounded box instead of bleeding past the right border. */
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+    background-image:
+      linear-gradient(45deg, transparent 50%, #888 50%),
+      linear-gradient(135deg, #888 50%, transparent 50%);
+    background-position:
+      calc(100% - 16px) 50%,
+      calc(100% - 11px) 50%;
+    background-size: 6px 6px, 6px 6px;
+    background-repeat: no-repeat;
+  }
+  #mode-select:hover { border-color: #888; }
+  #mode-select:focus { outline: 2px solid #4af; outline-offset: 1px; }
+
+  #hide-overlay {
+    flex-shrink: 0;
+    background: transparent;
+    border: 0;
+    color: #888;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+  #hide-overlay:hover { color: #fff; }
+
+  /* Container that receives the adopted sub-tool DOM. */
+  #tool-ui {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px 16px;
+    background: rgba(0, 0, 0, 0.78);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  /* Static brand header at the top of the sub-tool box. The `tool-static`
+     class is also the marker that `teardownAdopted` uses to skip removal
+     on mode switch — only adopted children get cleared. */
+  #tool-ui .tool-header {
+    margin: -4px 0 0 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: #fff;
+    flex-shrink: 0;
+  }
+
+  /*
+    Override the sub-tools' position: fixed; rules — these target #hud,
+    #controls, #shader-picker, #log via ID, so re-parented elements still
+    have those rules applying. We force them into static flow inside the
+    sidebar and let them stretch to its width.
+  */
+  #tool-ui #hud,
+  #tool-ui #controls,
+  #tool-ui #shader-picker,
+  #tool-ui #log,
+  #tool-ui #progress-bar,
+  #tool-ui #benchmark-overlay {
+    position: static !important;
+    inset: auto !important;
+    top: auto !important;
+    right: auto !important;
+    bottom: auto !important;
+    left: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    border-radius: 6px;
+    flex-wrap: wrap;
+  }
+  #tool-ui #hud { padding: 10px 12px; }
+  #tool-ui #controls { padding: 10px 12px; }
+  #tool-ui #progress-bar { height: 3px !important; }
+  #tool-ui #log {
+    display: block !important;
+    max-height: 180px;
+    height: 180px !important;
+    overflow-y: auto !important;
+    font-size: 11px !important;
+  }
+  #tool-ui #log:not(.visible) { display: none !important; }
+  #tool-ui #shader-picker {
+    display: block !important;
+    max-height: 280px;
+    height: 280px !important;
+    overflow-y: auto !important;
+  }
+  #tool-ui #shader-picker:not(.visible) { display: none !important; }
+  #tool-ui #benchmark-overlay {
+    font-size: 14px !important;
+    padding: 10px 12px;
+    background: rgba(0,0,0,0.5);
+  }
+
+  /* When no tool UI is present, show a small status note. */
+  #tool-empty {
+    padding: 14px 16px;
+    background: rgba(0, 0, 0, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    font-size: 13px;
+    color: #aaa;
+    line-height: 1.5;
+  }
+  #tool-empty.hidden { display: none; }
+  #tool-empty strong { color: #fff; }
+
+  /* Collapsed state — press M or click × to hide everything */
+  #toggle-overlay {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 1001;
+    width: 36px;
+    height: 36px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.78);
+    color: #ccc;
+    font-size: 20px;
+    line-height: 34px;
+    text-align: center;
+    cursor: pointer;
+    display: none;
+  }
+  body.overlay-hidden #sidebar { display: none; }
+  body.overlay-hidden #toggle-overlay { display: block; }
+</style>
+</head>
+<body>
+  <div id="sidebar">
+    <div id="mode-overlay" role="region" aria-label="Mode selector">
+      <label for="mode-select">Mode</label>
+      <select id="mode-select" aria-label="Benchmark mode">
+        <option value="bench-inout">Sphere InOut — immersive WebXR</option>
+        <option value="bench-static">Sphere Static — WebGPU multi-pass</option>
+        <option value="bench-microplane">MicroPlane — per-node microbench</option>
+      </select>
+      <button id="hide-overlay" type="button" aria-label="Hide sidebar" title="Hide (press M to show)">×</button>
+    </div>
+
+    <div id="tool-ui" aria-live="polite">
+      <div class="tool-header tool-static">ShaderCarousel</div>
+    </div>
+    <div id="tool-empty" class="hidden"></div>
+  </div>
+
+  <button id="toggle-overlay" type="button" aria-label="Show sidebar" title="Show sidebar (M)">≡</button>
+
+  <iframe
+    id="frame"
+    title="ShaderCarousel mode frame"
+    allow="xr-spatial-tracking; fullscreen; accelerometer; gyroscope; magnetometer"
+    allowfullscreen></iframe>
+
+  <script>
+    const MODES = {
+      'bench-inout':      './bench-inout/index.html',
+      'bench-static':     './bench-static/index.html',
+      'bench-microplane': './bench-microplane/index.html',
+    };
+    const EMPTY_MESSAGES = {};
+    const DEFAULT_MODE = 'bench-static';
+    const STORAGE_KEY = 'shaderCarousel:mode';
+
+    // IDs that we lift out of each sub-tool and into #tool-ui. Order
+    // matters — that's the order they stack in the sidebar.
+    const ADOPT_IDS = ['hud', 'progress-bar', 'controls', 'shader-picker', 'log', 'benchmark-overlay'];
+
+    const select = document.getElementById('mode-select');
+    const frame = document.getElementById('frame');
+    const sidebar = document.getElementById('sidebar');
+    const toolUi = document.getElementById('tool-ui');
+    const toolEmpty = document.getElementById('tool-empty');
+    const hideBtn = document.getElementById('hide-overlay');
+    const showBtn = document.getElementById('toggle-overlay');
+
+    /** Style elements adopted from the current iframe — removed on mode change. */
+    let adoptedStyles = [];
+    /** MutationObservers that watch for late-arriving overlays (e.g. bench-start-gate inserted after onload). */
+    let observers = [];
+
+    function resolveInitialMode() {
+      const url = new URL(window.location.href);
+      const queryMode = url.searchParams.get('mode');
+      if (queryMode && MODES[queryMode]) return queryMode;
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored && MODES[stored]) return stored;
+      return DEFAULT_MODE;
+    }
+
+    function teardownAdopted() {
+      // Drop everything we adopted from the previous iframe. Static
+      // children (`.tool-static`, e.g. the ShaderCarousel brand header
+      // at the top of #tool-ui) are kept across mode switches so they
+      // don't flash in and out as the user picks a different bench.
+      [...toolUi.children].forEach((c) => {
+        if (!c.classList.contains('tool-static')) toolUi.removeChild(c);
+      });
+      toolUi.className = '';
+      adoptedStyles.forEach((s) => s.remove());
+      adoptedStyles = [];
+      observers.forEach((o) => o.disconnect());
+      observers = [];
+      // Restore document.body to just our own classes — the mirrored
+      // iframe classes from the previous mode shouldn't leak forward.
+      const preserved = PARENT_BODY_CLASSES.filter((c) => document.body.classList.contains(c));
+      document.body.className = preserved.join(' ');
+    }
+
+    function moveById(doc, id) {
+      const el = doc.getElementById(id);
+      if (!el || el.parentElement === toolUi) return false;
+      toolUi.appendChild(el); // appendChild auto-adopts across documents.
+      return true;
+    }
+
+    /** Classes the parent owns and must keep, even while mirroring the iframe's body. */
+    const PARENT_BODY_CLASSES = ['overlay-hidden'];
+
+    function mirrorBodyClass(doc) {
+      // Some sub-tools (notably face/index.html) toggle body class names
+      // (e.g. "mode-sweep") to switch which controls are visible. Their
+      // CSS targets `body.mode-sweep .sweep-only` etc., so once we move
+      // the controls into the parent doc those rules stop matching. We
+      // forward the iframe body's class list onto BOTH document.body
+      // (so body-anchored rules still apply) and #tool-ui (for any
+      // sidebar-scoped overrides we add ourselves).
+      const sync = () => {
+        const preserved = PARENT_BODY_CLASSES.filter((c) => document.body.classList.contains(c));
+        const iframeClasses = doc.body.className.split(/\s+/).filter(Boolean);
+        document.body.className = [...preserved, ...iframeClasses].join(' ');
+        toolUi.className = iframeClasses.join(' ');
+      };
+      sync();
+      const observer = new MutationObserver(sync);
+      observer.observe(doc.body, { attributes: true, attributeFilter: ['class'] });
+      observers.push(observer);
+    }
+
+    function adoptStyles(doc) {
+      // Copy every <style> AND every <link rel="stylesheet"> from the
+      // iframe so the moved elements keep their look. The new bench pages
+      // (bench-inout, bench-static, bench-microplane) load shared CSS
+      // via <link rel="stylesheet" href="../lib/bench-style.css"> — we
+      // need to forward those too, otherwise the adopted #hud/#controls
+      // render unstyled in the sidebar.
+      doc.querySelectorAll('style, link[rel="stylesheet"]').forEach((node) => {
+        let clone;
+        if (node.tagName === 'LINK') {
+          // Resolve the href against the iframe's base so it points at the
+          // shared lib/ rather than a path relative to the parent doc.
+          clone = document.createElement('link');
+          clone.rel = 'stylesheet';
+          clone.href = new URL(node.getAttribute('href'), doc.baseURI).href;
+        } else {
+          clone = node.cloneNode(true);
+        }
+        document.head.appendChild(clone);
+        adoptedStyles.push(clone);
+      });
+    }
+
+    function adoptIframeUI() {
+      // Same-origin iframe → we can reach in directly.
+      let doc;
+      try { doc = frame.contentDocument; } catch { return; }
+      if (!doc || !doc.body) return;
+
+      adoptStyles(doc);
+      mirrorBodyClass(doc);
+
+      let movedAny = false;
+      for (const id of ADOPT_IDS) {
+        if (moveById(doc, id)) movedAny = true;
+      }
+
+      // Bench pages may inject DOM lazily. Watch the iframe body and
+      // adopt any of the known IDs that show up later.
+      const lateObserver = new MutationObserver(() => {
+        for (const id of ADOPT_IDS) moveById(doc, id);
+      });
+      lateObserver.observe(doc.body, { childList: true, subtree: true });
+      observers.push(lateObserver);
+
+      const mode = select.value;
+      if (!movedAny && EMPTY_MESSAGES[mode]) {
+        toolEmpty.innerHTML = EMPTY_MESSAGES[mode];
+        toolEmpty.classList.remove('hidden');
+      } else {
+        toolEmpty.classList.add('hidden');
+      }
+    }
+
+    function applyMode(mode, { pushHistory = true } = {}) {
+      if (!MODES[mode]) mode = DEFAULT_MODE;
+      teardownAdopted();
+      toolEmpty.classList.add('hidden');
+      select.value = mode;
+      frame.src = MODES[mode];
+      localStorage.setItem(STORAGE_KEY, mode);
+      if (pushHistory) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('mode', mode);
+        window.history.replaceState({ mode }, '', url);
+      }
+    }
+
+    frame.addEventListener('load', adoptIframeUI);
+    select.addEventListener('change', () => applyMode(select.value));
+
+    hideBtn.addEventListener('click', () => document.body.classList.add('overlay-hidden'));
+    showBtn.addEventListener('click', () => document.body.classList.remove('overlay-hidden'));
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'm' || e.key === 'M') {
+        document.body.classList.toggle('overlay-hidden');
+      }
+    });
+
+    applyMode(resolveInitialMode(), { pushHistory: false });
+  </script>
+</body>
+</html>

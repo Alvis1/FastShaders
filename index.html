@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' blob: https://alvis1.github.io; frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Cache-busting for the deployed SPA on GitHub Pages.
+      The hashed JS/CSS assets in /assets/ are content-hashed by Vite, so
+      they're safe to cache forever. But the HTML file points at those hashes
+      and changes every deploy — if the browser caches it, users on a stale
+      tab will keep loading old asset URLs that 404 after we redeploy.
+      Telling the browser to always revalidate the HTML solves this without
+      hurting first-paint performance: the HTML is tiny (~1 KB) and only
+      its 304 round-trip is added; the heavy assets keep their cache hits.
+    -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <!-- Substituted at build time by the fs-version-html plugin in vite.config.ts -->
+    <meta name="version" content="0.3.10" />
+    <title>FastShaders - TSL Visual Shader Editor</title>
+    <!-- Fonts are self-hosted (@fontsource imports in main.tsx) so the app works offline. -->
+    <!--
+      Stamp the persisted theme before first paint so a dark-mode session doesn't
+      flash light while the JS/CSS bundle loads. The store re-applies data-theme
+      on init and on every toggle; the inline background mirrors tokens.css
+      --bg-app so the pre-CSS frame matches too.
+    -->
+    <script>
+      try {
+        var dark = localStorage.getItem('fs:codeEditorTheme') === 'vs-dark';
+        var el = document.documentElement;
+        el.setAttribute('data-theme', dark ? 'dark' : 'light');
+        el.style.background = dark ? '#17181b' : '#F5F5F5';
+        // Stamp the persisted UI language too; the store re-applies it on init.
+        el.setAttribute('lang', localStorage.getItem('fs:lang') === 'lv' ? 'lv' : 'en');
+      } catch (e) { /* private mode / storage disabled — default light */ }
+    </script>
+    <script type="module" crossorigin src="/FastShaders/assets/index-Bp-huGMa.js"></script>
+    <link rel="modulepreload" crossorigin href="/FastShaders/assets/monaco-B6DzrRb5.js">
+    <link rel="stylesheet" crossorigin href="/FastShaders/assets/monaco-sx8ijsUO.css">
+    <link rel="stylesheet" crossorigin href="/FastShaders/assets/index-BftkAWCd.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
