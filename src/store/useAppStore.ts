@@ -1688,6 +1688,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
             data.cost = groupCostSum;
             return {
               ...n,
+              // The toggle anchors at the TOP-RIGHT corner: the pill appears
+              // where the frame's top-right was (React Flow positions are
+              // top-left, so x shifts by the width delta; y stays). The expand
+              // branch shifts back by the inverse delta, so a collapse/expand
+              // round-trip restores the exact position — and with it every
+              // hidden member's absolute spot. The delta is a width
+              // difference, so it's parent-invariant for nested groups.
+              position: { x: n.position.x + (currentWidth - COLLAPSED_W), y: n.position.y },
               width: COLLAPSED_W,
               height: collapsedH,
               // Keep `measured` in sync with the new size. React Flow's
@@ -1763,6 +1771,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
           delete data.cost;
           return {
             ...n,
+            // Top-right anchor, inverse of the collapse shift: the frame grows
+            // LEFTWARD from wherever the pill's top-right sits now (following
+            // any pill drags), and an untouched pill restores the pre-collapse
+            // position exactly. `currentWidth` here is the pill's width;
+            // legacy groups without expandedWidth get delta 0.
+            position: { x: n.position.x + (currentWidth - data.width), y: n.position.y },
             width: data.width,
             height: data.height,
             // See collapse branch: force `measured` to match so the unparent-
