@@ -129,11 +129,22 @@ describe('planDragConnect', () => {
     });
   });
 
-  it('prefers a free input over a nearer occupied one', () => {
+  it('targets the nearest input by alignment even when it is occupied (drop replaces its edge)', () => {
     const plan = planDragConnect(
       ep({
         draggedOutputs: [h('out', 0)],
         hoverInputs: [h('a', 0, true), h('b', 20, false)],
+      }),
+      [],
+    );
+    expect(plan?.targetHandle).toBe('a');
+  });
+
+  it('breaks an EXACT free/occupied vertical tie toward the free input', () => {
+    const plan = planDragConnect(
+      ep({
+        draggedOutputs: [h('out', 0)],
+        hoverInputs: [h('a', 0, true), h('b', 0, false)],
       }),
       [],
     );

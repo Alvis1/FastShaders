@@ -128,6 +128,16 @@
   border-radius: var(--border-radius-md);
 }
 
+/* Lift the node that OWNS the highlighted target socket above the other node,
+   so the ringed socket (.fs-connect-socket) and its name tooltip are never
+   hidden. In feed-hover that's the hovered node (the dragged node slides
+   UNDERNEATH); in feed-dragged it's the dragged node itself. !important
+   overrides React Flow's inline (select-elevated) node z-index; the class is
+   removed when the preview clears. */
+.node-editor .react-flow__node.fs-connect-front {
+  z-index: 10000 !important;
+}
+
 /* Drag-connect: the input socket vertical alignment picked. Box-shadow ring
    only — handles are positioned via transform, so transform is off-limits
    (see TypedHandle.css), and sockets never move or scale. */
@@ -135,25 +145,6 @@
   box-shadow:
     0 0 0 3px var(--border-focus),
     0 0 0 1px rgba(0, 0, 0, 0.15);
-}
-
-/* Drag-connect tooltip: names the socket the drop will plug into. Floats to
-   the LEFT of the chosen input socket (same side as the drag-reveal name
-   labels), in screen-space so it stays readable at any zoom. */
-.fs-connect-tooltip {
-  position: absolute;
-  transform: translate(-100%, -50%) translateX(-14px);
-  z-index: var(--z-menu);
-  pointer-events: none;
-  white-space: nowrap;
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  border: 1px solid var(--border-focus);
-  border-radius: var(--border-radius-sm);
-  padding: 2px 8px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  box-shadow: var(--shadow-sm);
 }
 
 /* Custom canvas background color picker, slotted into the React Flow Controls

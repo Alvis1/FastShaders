@@ -8,7 +8,6 @@
   box-shadow: var(--shadow-node);
   font-family: var(--font-sans);
   overflow: visible;
-  transition: box-shadow var(--transition-normal);
 }
 
 /* Cost badge positioned above the node, centered */
@@ -37,10 +36,13 @@
   text-shadow: 0 1px 2px var(--node-cost-text-shadow, rgba(255, 255, 255, 0.6)) !important;
 }
 
+/* Standard selection highlight: a single outline in the node's OWN category
+   color (--node-cat, set per node from CAT_HEX; falls back to the focus color).
+   No box-shadow ring and no transition — one instant, consistent style shared
+   by every node type (and the stacked-node frame below). */
 .node-base--selected {
-  box-shadow: var(--shadow-node-selected);
-  outline: 2px solid var(--border-focus);
-  outline-offset: -1px;
+  outline: 2px solid var(--node-cat, var(--border-focus));
+  outline-offset: 2px;
 }
 
 /* A stacked (multi-channel) node draws its selection outline on a separate
@@ -63,9 +65,16 @@
   /* bottom set inline: -(stackLayerCount * STACK_STEP_Y) */
   z-index: 1;
   border-radius: var(--border-radius-md);
-  outline: 2px solid var(--border-focus);
-  outline-offset: -1px;
+  outline: 2px solid var(--node-cat, var(--border-focus));
+  outline-offset: 2px;
   pointer-events: none;
+}
+
+/* The selection frame (z1) is painted over the card body, so on a stacked node
+   the sockets — handles default to z-index:auto (0) — must be lifted above it,
+   or the frame's outline draws a line across each socket dot. */
+.node-base--stacked .react-flow__handle {
+  z-index: 2;
 }
 
 /* ===== Multi-channel stack layers =====

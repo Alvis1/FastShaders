@@ -40,6 +40,14 @@
   opacity: 1;
 }
 
+/* Drag-connect: force the highlighted target socket's OWN name tooltip visible
+   while a node is dragged onto it. The pointer sits on the dragged node, not
+   this socket, so :hover never fires — the .fs-connect-socket class (added by
+   the drag-connect preview) stands in for it. */
+.typed-handle.fs-connect-socket[data-tooltip]::after {
+  opacity: 1;
+}
+
 /* Drag-reveal: while a wire is hunting near the node, every input socket's
    name-tooltip is forced visible and floats to the LEFT of the socket —
    outside the card, behind the dot (z-index) — so the socket and the wire

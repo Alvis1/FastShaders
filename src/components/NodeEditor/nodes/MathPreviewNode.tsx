@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useCallback } from 'react';
+import { memo, useEffect, useMemo, useRef, useCallback, type CSSProperties } from 'react';
 import { Position, useStore, type NodeProps } from '@xyflow/react';
 import { makeConnectionRevealSelector } from './connectionReveal';
 import type { MathPreviewFlowNode, NodeCategory } from '@/types';
@@ -130,7 +130,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   return (
     <div
       className={`node-base math-preview-node ${selected ? 'node-base--selected' : ''}`}
-      style={{ background: 'var(--node-bg)', border: `1.5px solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--node-bg)', border: `1.5px solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left', '--node-cat': catHex } as CSSProperties}
     >
       {/* Cost badge above node */}
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}

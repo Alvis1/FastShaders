@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useRef, type CSSProperties } from 'react';
 import { Position, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
@@ -92,7 +92,7 @@ export const ClockNode = memo(function ClockNode({
   return (
     <div
       className={`node-base clock-node ${selected ? 'node-base--selected' : ''}`}
-      style={{ background: 'var(--node-bg)', border: `1.5px solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--node-bg)', border: `1.5px solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left', '--node-cat': catHex } as CSSProperties}
     >
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 

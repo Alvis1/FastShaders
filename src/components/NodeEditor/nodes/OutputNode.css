@@ -8,13 +8,13 @@
   box-shadow: var(--shadow-node);
   font-family: var(--font-sans);
   overflow: visible;
-  transition: box-shadow var(--transition-normal);
 }
 
+/* Standard selection highlight (see NodeBase.css): one category-colored
+   outline, no shadow ring, no transition. */
 .output-node--selected {
-  box-shadow: var(--shadow-node-selected);
-  outline: 2px solid var(--border-focus);
-  outline-offset: -1px;
+  outline: 2px solid var(--cat-output);
+  outline-offset: 2px;
 }
 
 /* Main header */
