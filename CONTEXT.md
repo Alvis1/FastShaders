@@ -1011,7 +1011,7 @@ Selection groups are first-class React Flow nodes (`type: 'group'`) that own mem
 
 ### Collapse / expand
 
-`toggleGroupCollapsed()` flips `data.collapsed` and rewires the graph so the pill stays useful:
+`toggleGroupCollapsed()` flips `data.collapsed` and rewires the graph so the pill stays useful. The toggle anchors at the frame's **top-right corner**: collapsing shifts `position.x` by `expandedWidth − pillWidth` so the pill sits where the top-right was, and expanding shifts back by the inverse delta — the frame grows leftward from the pill's current top-right (following any pill drags), and an untouched round-trip restores the exact position (`groupCollapse.test.ts`).
 
 - **Members + internal edges** get `className: 'fs-collapsed-member' | 'fs-collapsed-edge'` (hidden via `display: none !important` in [NodeEditor.css](src/components/NodeEditor/NodeEditor.css)). We use a className instead of React Flow's `hidden: true` flag because the latter unmounts the React component, which would tear down preview / clock / math `requestAnimationFrame` loops. With `display: none` the components stay mounted, animations keep running, and restoring is just a class toggle.
 - **Boundary edges** are bucketed into input vs output and rewritten to point at synthetic handles on the group node:
