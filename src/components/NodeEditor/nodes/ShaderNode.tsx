@@ -334,12 +334,14 @@ export const ShaderNode = memo(function ShaderNode({
   const box = nodeBox(data.registryType);
   // The cost scale lives on an outer wrapper so the multi-channel stack layers
   // (siblings of the card, painted below it) scale together with the card.
-  const wrapStyle: CSSProperties = {
+  const wrapStyle = {
     position: 'relative',
     width: 'fit-content',
     transform: `scale(${costScale})`,
     transformOrigin: 'top left',
-  };
+    // Category color for the selection outline (card + stacked-node frame).
+    '--node-cat': catHex,
+  } as CSSProperties;
   const nodeStyle: CSSProperties = {
     background: 'var(--node-bg)',
     border: `1.5px solid ${catHex}`,
@@ -425,9 +427,12 @@ export const ShaderNode = memo(function ShaderNode({
    *  all but the deepest strip.) */
   const stackLayerCount = inChannels - 1;
   // While stacked, the card drops its own shadow so no shadow falls BETWEEN
-  // cards — the deepest layer casts the single group shadow instead. The
-  // selection ring (class shadow + outline) still wins when selected.
-  if (stackLayerCount > 0 && !selected) nodeStyle.boxShadow = 'none';
+  // cards — the deepest layer casts the single group shadow instead. This holds
+  // even when SELECTED: the whole-stack selection outline is drawn by
+  // .node-base__stack-frame, so the card must not ALSO paint the selected
+  // shadow's focus ring (--shadow-node-selected) — that reads as a second
+  // highlight around just the top card.
+  if (stackLayerCount > 0) nodeStyle.boxShadow = 'none';
   const stackLayers = stackLayerCount > 0
     ? [...Array(stackLayerCount).keys()].map((k) => (
         <div

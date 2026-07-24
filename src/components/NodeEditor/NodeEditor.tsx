@@ -74,7 +74,7 @@ import { makeImageNodeData, totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/uti
 import { usesExposedPorts, effectiveExposedPorts } from '@/utils/exposedPorts';
 import { encodeImageFile, isImageFile, isSvgFile } from '@/utils/imageImport';
 import { importShaderZip, importShaderText, isZipFile } from '@/engine/projectImport';
-import type { AppNode, AppEdge, NodeDefinition, ShaderNodeData, OutputNodeData } from '@/types';
+import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
 import { getNodeValues } from '@/types';
 import { nextPropertyName } from '@/utils/propertyConvert';
 import complexityData from '@/registry/complexity.json';
@@ -546,7 +546,7 @@ export function NodeEditor() {
   // Live in-progress stroke path, written imperatively by the draw-capture
   // handler (below) and rendered inside DrawingLayer's live opacity group.
   const livePathRef = useRef<SVGPathElement | null>(null);
-  const { screenToFlowPosition, flowToScreenPosition, getViewport, setViewport, getInternalNode } =
+  const { screenToFlowPosition, getViewport, setViewport, getInternalNode } =
     useReactFlow();
 
   // True while a two-finger touch navigation gesture (pan / pinch-zoom) is in
@@ -762,7 +762,6 @@ export function NodeEditor() {
   // highlight: classes and a floating label are cheaper than re-rendering the
   // graph 60×/s mid-drag. The ref holds the plan the drop will commit.
   const connectPreviewRef = useRef<DragConnectPlan | null>(null);
-  const connectTooltipRef = useRef<HTMLDivElement | null>(null);
 
   const clearConnectPreview = useCallback(() => {
     const plan = connectPreviewRef.current;
@@ -776,15 +775,18 @@ export function NodeEditor() {
         `.react-flow__node[data-id="${CSS.escape(plan.target)}"] .react-flow__handle.target[data-handleid="${CSS.escape(plan.targetHandle)}"]`,
       )
       ?.classList.remove('fs-connect-socket');
-    connectTooltipRef.current?.remove();
-    connectTooltipRef.current = null;
+    document
+      .querySelector(`.react-flow__node[data-id="${CSS.escape(plan.target)}"]`)
+      ?.classList.remove('fs-connect-front');
     connectPreviewRef.current = null;
   }, []);
 
-  /** Show (or move) the drag-connect preview for `plan`; tooltip floats left
-   *  of the chosen input socket and tracks it every drag frame. */
+  /** Show (or move) the drag-connect preview for `plan`: ring the hovered node
+   *  and the chosen input socket. The socket's OWN name tooltip is activated by
+   *  the `.fs-connect-socket` class (see TypedHandle.css) — no custom tooltip is
+   *  drawn. */
   const showConnectPreview = useCallback(
-    (plan: DragConnectPlan, tooltipText: string) => {
+    (plan: DragConnectPlan) => {
       const prev = connectPreviewRef.current;
       const same =
         prev &&
@@ -792,66 +794,30 @@ export function NodeEditor() {
         prev.sourceHandle === plan.sourceHandle &&
         prev.target === plan.target &&
         prev.targetHandle === plan.targetHandle;
-      if (!same) {
-        clearConnectPreview();
-        const hoverId = plan.mode === 'feed-hover' ? plan.target : plan.source;
-        document
-          .querySelector(`.react-flow__node[data-id="${CSS.escape(hoverId)}"]`)
-          ?.classList.add('fs-connect-target');
-        document
-          .querySelector(
-            `.react-flow__node[data-id="${CSS.escape(plan.target)}"] .react-flow__handle.target[data-handleid="${CSS.escape(plan.targetHandle)}"]`,
-          )
-          ?.classList.add('fs-connect-socket');
-        const tip = document.createElement('div');
-        tip.className = 'fs-connect-tooltip';
-        canvasRef.current?.appendChild(tip);
-        connectTooltipRef.current = tip;
+      if (same) {
         connectPreviewRef.current = plan;
-      } else {
-        connectPreviewRef.current = plan;
+        return;
       }
-      const tip = connectTooltipRef.current;
-      const rect = canvasRef.current?.getBoundingClientRect();
-      if (tip && rect) {
-        tip.textContent = tooltipText;
-        const screen = flowToScreenPosition({ x: plan.chosen.cx, y: plan.chosen.cy });
-        tip.style.left = `${screen.x - rect.left}px`;
-        tip.style.top = `${screen.y - rect.top}px`;
-      }
+      clearConnectPreview();
+      const hoverId = plan.mode === 'feed-hover' ? plan.target : plan.source;
+      document
+        .querySelector(`.react-flow__node[data-id="${CSS.escape(hoverId)}"]`)
+        ?.classList.add('fs-connect-target');
+      document
+        .querySelector(
+          `.react-flow__node[data-id="${CSS.escape(plan.target)}"] .react-flow__handle.target[data-handleid="${CSS.escape(plan.targetHandle)}"]`,
+        )
+        ?.classList.add('fs-connect-socket');
+      // Lift the node that OWNS the target socket above the other, so the ringed
+      // socket + its tooltip are never hidden: feed-hover raises the hovered
+      // node (dragged node slides underneath); feed-dragged raises the dragged
+      // node (its own input is the target).
+      document
+        .querySelector(`.react-flow__node[data-id="${CSS.escape(plan.target)}"]`)
+        ?.classList.add('fs-connect-front');
+      connectPreviewRef.current = plan;
     },
-    [clearConnectPreview, flowToScreenPosition],
-  );
-
-  /** Tooltip for a connect plan. `defFor` resolves a node id to its registry
-   *  def — the tile path maps the phantom id to the in-flight tile's def.
-   *  feed-hover reads "→ input"; feed-dragged names the static node too,
-   *  since the flow direction reverses; multi-output sources (Data-node
-   *  columns) name their chosen output. */
-  const buildConnectTooltip = useCallback(
-    (
-      plan: DragConnectPlan,
-      endpoints: DragConnectEndpoints,
-      defFor: (nodeId: string) => NodeDefinition | undefined,
-      hoverLabel: string,
-    ): string => {
-      const inLabel =
-        defFor(plan.target)?.inputs.find((i) => i.id === plan.targetHandle)?.label ??
-        plan.targetHandle;
-      const srcOutputs =
-        plan.mode === 'feed-hover' ? endpoints.draggedOutputs : endpoints.hoverOutputs;
-      const srcHandleLabel =
-        defFor(plan.source)?.outputs.find((o) => o.id === plan.sourceHandle)?.label ??
-        plan.sourceHandle;
-      const srcPart =
-        plan.mode === 'feed-hover'
-          ? srcOutputs.length > 1
-            ? `${srcHandleLabel} `
-            : ''
-          : `${hoverLabel}${srcOutputs.length > 1 ? ` ${srcHandleLabel}` : ''} `;
-      return `${srcPart}→ ${inLabel}`;
-    },
-    [],
+    [clearConnectPreview],
   );
 
   /**
@@ -908,20 +874,7 @@ export function NodeEditor() {
         clearConnectPreview();
         return true;
       }
-      const defFor = (id: string) => {
-        if (id === TILE_PHANTOM_ID) return def;
-        const n = store.nodes.find((nn) => nn.id === id);
-        return n ? NODE_REGISTRY.get(n.data.registryType) : undefined;
-      };
-      showConnectPreview(
-        plan,
-        buildConnectTooltip(
-          plan,
-          endpoints,
-          defFor,
-          (hoverNode.data as { label?: string }).label ?? 'out',
-        ),
-      );
+      showConnectPreview(plan);
       return true;
     },
     [
@@ -929,7 +882,6 @@ export function NodeEditor() {
       getInternalNode,
       clearConnectPreview,
       showConnectPreview,
-      buildConnectTooltip,
     ],
   );
 
@@ -1112,19 +1064,7 @@ export function NodeEditor() {
           const plan = endpoints ? planDragConnect(endpoints, logicalEdges) : null;
           if (plan && endpoints && hoverNode) {
             clearEdgeHighlight();
-            const defFor = (id: string) => {
-              const n = store.nodes.find((nn) => nn.id === id);
-              return n ? NODE_REGISTRY.get(n.data.registryType) : undefined;
-            };
-            showConnectPreview(
-              plan,
-              buildConnectTooltip(
-                plan,
-                endpoints,
-                defFor,
-                (hoverNode.data as { label?: string }).label ?? 'out',
-              ),
-            );
+            showConnectPreview(plan);
             return;
           }
         }
@@ -1153,7 +1093,6 @@ export function NodeEditor() {
     [
       clearConnectPreview,
       showConnectPreview,
-      buildConnectTooltip,
       clearEdgeHighlight,
       updateEdgeHighlight,
       getInternalNode,
@@ -1576,6 +1515,11 @@ export function NodeEditor() {
   // Drag-to-delete: track reconnect start + save history
   const onReconnectStart = useCallback(() => {
     reconnectSuccessful.current = false;
+    // Dragging an edge END off its socket is a disconnect gesture, but React
+    // Flow still runs the connection lifecycle for it (onConnectStart/End) — so
+    // flag it exactly like the edge-body drag-to-disconnect does. Otherwise
+    // releasing on empty canvas pops the AddNodeMenu on top of the disconnect.
+    setEdgeDisconnecting(true);
     useAppStore.getState().pushHistory();
   }, []);
 
@@ -1600,6 +1544,11 @@ export function NodeEditor() {
         removeEdge(edge.id);
       }
       reconnectSuccessful.current = true;
+      // Clear the disconnect flag AFTER onConnectEnd has run this tick (it reads
+      // the flag to suppress the AddNodeMenu, and the two callbacks' firing
+      // order isn't guaranteed), so the next genuine empty-canvas wire drop
+      // still opens the menu.
+      requestAnimationFrame(() => setEdgeDisconnecting(false));
     },
     [removeEdge]
   );

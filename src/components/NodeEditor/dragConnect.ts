@@ -13,9 +13,11 @@
  *
  * Vertical alignment picks the sockets: the (output, input) pair with the
  * nearest center Ys wins, so a multi-output source (Data node columns) picks
- * its column by alignment too. FREE inputs win over occupied ones — an
- * occupied input is only replaced when no free input exists (inputs are
- * single-connection, so landing on an occupied socket swaps its edge).
+ * its column by alignment too. Occupied inputs are eligible — aligning with a
+ * used socket re-wires it (inputs are single-connection, so the drop swaps its
+ * edge). A hair of bias toward free inputs only breaks EXACT ties, so a loose
+ * drop still fills an empty socket instead of overwriting a wired one sitting
+ * at the same height.
  *
  * This module is the pure decision logic (node-env testable). NodeEditor
  * adapts React Flow internals (measured boxes, mounted handle bounds) into
@@ -127,21 +129,28 @@ export function wouldCreateCycle(
   return false;
 }
 
+/** A hair of bias so an EXACT free/occupied vertical tie resolves to the FREE
+ *  input — a loose drop fills an empty socket rather than silently overwriting
+ *  a wired one at the same height. Smaller than any real socket spacing, so it
+ *  never overrides a deliberate alignment with an occupied socket. */
+const OCCUPIED_TIE_BIAS = 0.001;
+
 function tryMode(mode: DragConnectMode, ep: DragConnectEndpoints): DragConnectPlan | null {
   const outs = mode === 'feed-hover' ? ep.draggedOutputs : ep.hoverOutputs;
   const inputs = mode === 'feed-hover' ? ep.hoverInputs : ep.draggedInputs;
   if (outs.length === 0 || inputs.length === 0) return null;
-  const free = inputs.filter((h) => !h.occupied);
-  const pool = free.length > 0 ? free : inputs;
   // Best (output, input) PAIR by vertical alignment — a multi-output source
   // (Data node CSV columns) picks its column by alignment too, not always
-  // column 1. With a single output this degenerates to nearestByCy.
+  // column 1. With a single output this degenerates to nearestByCy. OCCUPIED
+  // inputs are eligible: aligning with a used socket re-wires it (the drop
+  // swaps its edge — applyConnection enforces single-input), with only a
+  // tie-break bias toward free sockets.
   let out: ConnectHandle | null = null;
   let chosen: ConnectHandle | null = null;
   let bestD = Infinity;
   for (const o of outs) {
-    for (const i of pool) {
-      const d = Math.abs(o.cy - i.cy);
+    for (const i of inputs) {
+      const d = Math.abs(o.cy - i.cy) + (i.occupied ? OCCUPIED_TIE_BIAS : 0);
       if (d < bestD) {
         bestD = d;
         out = o;
