@@ -6,6 +6,7 @@ import {
   getCostColor,
   getCostTextColor,
   getCostScale,
+  getGroupFrameColors,
 } from './colorUtils';
 
 describe('hexToRgb', () => {
@@ -99,5 +100,36 @@ describe('getCostScale', () => {
 
   it('clamps at the max scale beyond cost = 80', () => {
     expect(getCostScale(200)).toBeCloseTo(1.35, 6);
+  });
+});
+
+describe('getGroupFrameColors', () => {
+  it('returns opaque 6-digit hex (never an alpha tint that the canvas shows through)', () => {
+    const { background, borderColor } = getGroupFrameColors('#6366f1');
+    expect(background).toMatch(/^#[0-9a-f]{6}$/);
+    expect(borderColor).toMatch(/^#[0-9a-f]{6}$/);
+  });
+
+  it('mixes the fill lighter than the border, both tinted toward the group color', () => {
+    const { background, borderColor } = getGroupFrameColors('#ff0000');
+    // Red channel pinned at 255 by the mix; green/blue drop toward the color.
+    expect(hexToRgb(background)[1]).toBeGreaterThan(hexToRgb(borderColor)[1]);
+    expect(hexToRgb(background)[0]).toBe(255);
+  });
+
+  it('keeps the full-strength color for a selected border only', () => {
+    expect(getGroupFrameColors('#6366f1', true).borderColor).toBe('#6366f1');
+    expect(getGroupFrameColors('#6366f1', false).borderColor).not.toBe('#6366f1');
+    // The fill never goes full strength, selected or not.
+    expect(getGroupFrameColors('#6366f1', true).background).toBe(
+      getGroupFrameColors('#6366f1', false).background,
+    );
+  });
+
+  it('falls back to the default group color on malformed input', () => {
+    const good = getGroupFrameColors('#6366f1');
+    for (const bad of ['', 'red', '#fff', '#12345g', 'undefined1A']) {
+      expect(getGroupFrameColors(bad)).toEqual(good);
+    }
   });
 });

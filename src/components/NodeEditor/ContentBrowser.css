@@ -1,7 +1,10 @@
+/* The asset bar is CHROME, not canvas: it keeps the theme's panel color and is
+   deliberately independent of the user's canvas background pick (--canvas-bg),
+   so recoloring the canvas never tints the asset tiles behind. */
 .content-browser {
   position: relative;
   border-top: 1px solid var(--border-subtle);
-  background: var(--canvas-bg, var(--bg-panel));
+  background: var(--bg-panel);
   display: flex;
   flex-direction: column;
   /* visible, not hidden — the control cluster floats above the box */

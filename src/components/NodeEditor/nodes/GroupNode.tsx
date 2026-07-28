@@ -2,6 +2,7 @@ import { memo, useEffect, type MouseEvent } from 'react';
 import { NodeResizer, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { GroupFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
+import { getGroupFrameColors } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import './GroupNode.css';
 
@@ -61,9 +62,10 @@ export const GroupNode = memo(function GroupNode({
     <div
       className={`group-node${selected ? ' group-node--selected' : ''}${collapsed ? ' group-node--collapsed' : ''}`}
       style={{
-        // Tint the body with a translucent version of the group color, full color on the header.
-        background: `${color}1A`,
-        borderColor: selected ? color : `${color}66`,
+        // OPAQUE fill in the group color (full color on the header). Never an
+        // alpha tint: the canvas backdrop is user-pickable, so a translucent
+        // body would take its color from whatever is behind it.
+        ...getGroupFrameColors(color, !!selected),
         width: '100%',
         height: '100%',
       }}

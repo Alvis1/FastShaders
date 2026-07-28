@@ -83,6 +83,35 @@ export function getCostScale(cost: number): number {
   return 1 + Math.min(cost / 80, 1) * 0.35;
 }
 
+/** Default group color — used when a group carries no (or an invalid) color. */
+const GROUP_DEFAULT_COLOR = '#6366f1';
+/** How much group color goes into the body fill / the resting border. */
+const GROUP_FILL_MIX = 0.18;
+const GROUP_BORDER_MIX = 0.45;
+
+/**
+ * Opaque frame colors for a group (canvas frame + Saved Groups tile).
+ *
+ * Group frames are FILLED, never translucent: the canvas background is
+ * user-pickable, so an alpha tint would drag every group's color along with it
+ * — washing out to near-nothing on a dark canvas. Mixing into white instead
+ * keeps a group's color identical on any backdrop and in either theme, the
+ * same rule the node cards it holds already follow (`--node-bg`). A selected
+ * frame keeps the full-strength border.
+ */
+export function getGroupFrameColors(
+  hex: string,
+  selected = false,
+): { background: string; borderColor: string } {
+  const base = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : GROUP_DEFAULT_COLOR;
+  const [r, g, b] = hexToRgb(base);
+  const mix = (t: number) => rgbToHex(lerp(255, r, t), lerp(255, g, t), lerp(255, b, t));
+  return {
+    background: mix(GROUP_FILL_MIX),
+    borderColor: selected ? base : mix(GROUP_BORDER_MIX),
+  };
+}
+
 /**
  * Raw hex colors per category — the single source of truth. Also powers the
  * `--cat-*` CSS variables that OutputNode.css and friends reference; see the

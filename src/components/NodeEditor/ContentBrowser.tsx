@@ -311,9 +311,11 @@ export function ContentBrowser() {
             style={
               activeCategory === 'all'
                 ? {
-                    background: 'var(--canvas-bg, var(--bg-panel))',
+                    // Merges into the bar below, which is theme panel color —
+                    // NOT the user's canvas pick (see ContentBrowser.css).
+                    background: 'var(--bg-panel)',
                     borderColor: 'var(--border-subtle)',
-                    borderBottomColor: 'var(--canvas-bg, var(--bg-panel))',
+                    borderBottomColor: 'var(--bg-panel)',
                   }
                 : {}
             }

@@ -125,7 +125,13 @@
   pointer-events: none;
 }
 
-/* Group nodes must render below member nodes so children stay clickable */
+/* Group frames render BELOW member nodes (so children stay clickable) and below
+   the edge layer: the frame is an OPAQUE backdrop panel (see getGroupFrameColors),
+   so at the old z-index 0 it would have painted over — and completely hidden —
+   any wire merely crossing the frame. React Flow already elevates edges that
+   touch a member (getElevatedEdgeZIndex lifts them to the child's z); this makes
+   the unrelated pass-through wires behave the same. Still above the canvas grid:
+   negative z only lowers it inside the viewport's own stacking context. */
 .react-flow__node.react-flow__node-group {
-  z-index: 0 !important;
+  z-index: -1 !important;
 }
