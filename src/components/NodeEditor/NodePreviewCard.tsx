@@ -106,13 +106,13 @@ function ShaderCardContent({ def, catColor, costColor, costTextColor, costScale,
     border: `1.5px solid ${catColor}`,
   };
   if (box.width) {
-    // Latvian node names are longer than English. Floor the card at its designed
-    // width but, in Latvian, leave `width` unset so it GROWS (fit-content under
-    // the card wrapper) to keep a long name like "Vektoriālais reizinājums" on
-    // one line — at most two rows via the CSS clamp — instead of wrapping into a
-    // tall stack. English keeps the exact designer width (short labels fit).
+    // Node names can outgrow the designed width (narrow operator cards in any
+    // language, most names in Latvian). Floor the card at that width but leave
+    // `width` unset so it GROWS (fit-content under the card wrapper) to keep a
+    // long name like "Vektoriālais reizinājums" on one line — at most two rows
+    // via the CSS clamp — instead of wrapping into a tall stack of mid-word
+    // fragments. Only the CANVAS node keeps the exact designer width.
     nodeStyle.minWidth = box.width;
-    if (language !== 'lv') nodeStyle.width = box.width;
   }
   if (textScale !== 1) (nodeStyle as Record<string, string | number>)['--node-text-scale'] = textScale;
 
