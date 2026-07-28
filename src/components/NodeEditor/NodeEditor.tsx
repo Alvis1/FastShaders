@@ -27,6 +27,7 @@ import { ClockNode } from './nodes/ClockNode';
 import { GroupNode } from './nodes/GroupNode';
 import { NoteNode } from './nodes/NoteNode';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
+import { clearSocketTapTooltip } from './handles/TypedHandle';
 import { TypedEdge } from './edges/TypedEdge';
 import { cardinalControlPoint, radialControlPoint, distancePointToCubicBezier, distancePointToSpline, insertWaypointOrdered, splinePath } from './edges/bezierGeometry';
 import { DrawingLayer } from './DrawingLayer';
@@ -755,6 +756,9 @@ export function NodeEditor() {
   // (so click-only "drags" don't pollute the undo buffer with no-op snapshots).
   const onNodeDragStart = useCallback((_event: React.MouseEvent, node: AppNode) => {
     dragStartPosRef.current = { x: node.position.x, y: node.position.y };
+    // A drag-connect preview forces tooltips of its own; a leftover tap-shown
+    // label next to them would muddy which socket the drop will commit to.
+    clearSocketTapTooltip();
   }, []);
 
   // --- Drag-connect preview (drag a node ONTO a node to wire them) ---
@@ -794,11 +798,12 @@ export function NodeEditor() {
         prev.sourceHandle === plan.sourceHandle &&
         prev.target === plan.target &&
         prev.targetHandle === plan.targetHandle;
-      if (same) {
-        connectPreviewRef.current = plan;
-        return;
-      }
-      clearConnectPreview();
+      if (!same) clearConnectPreview();
+      // The classes are (re)applied even for an unchanged plan: classList.add
+      // is idempotent, and a React className rewrite on the handle mid-preview
+      // (any state-driven re-render — e.g. TypedHandle's tap-tooltip flipping
+      // under simultaneous pen+touch input) would otherwise wipe the ring for
+      // the rest of the hover while the drop still commits the plan.
       const hoverId = plan.mode === 'feed-hover' ? plan.target : plan.source;
       document
         .querySelector(`.react-flow__node[data-id="${CSS.escape(hoverId)}"]`)
@@ -1391,6 +1396,11 @@ export function NodeEditor() {
   const onConnectStart = useCallback(
     (_event: MouseEvent | TouchEvent, params: { nodeId: string | null; handleId: string | null; handleType: string | null }) => {
       connectSucceeded.current = false;
+      // NB: deliberately NO clearSocketTapTooltip() here — a bare touch tap on
+      // a socket ALSO starts a connection (every handle is isConnectableStart),
+      // so clearing on connect-start would dismiss the tooltip the tap itself
+      // just popped. Stale tap labels during wire drags are handled at the
+      // handle level instead: reveal turning on clears the tap (TypedHandle).
       // Only track source when dragging from an output (source) handle
       if (params.handleType === 'source' && params.nodeId && params.handleId) {
         pendingSourceRef.current = { nodeId: params.nodeId, handleId: params.handleId };
@@ -2315,6 +2325,10 @@ export function NodeEditor() {
       e.stopImmediatePropagation();
       active = true;
       twoFingerNavRef.current = true;
+      // The first pinch finger may have landed on a socket (its pointerdown
+      // fired before this touchstart could be intercepted) — dismiss the
+      // tooltip it popped now that the gesture is known to be navigation.
+      clearSocketTapTooltip();
       const c = centroid(e.touches);
       cx0 = c.x; cy0 = c.y;
       d0 = spread(e.touches) || 1;

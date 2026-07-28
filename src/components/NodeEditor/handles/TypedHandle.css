@@ -62,10 +62,12 @@
   z-index: -1;
 }
 
-/* On touch devices there's no reliable hover, so port labels never appear and
-   users can't tell what each socket does. Pin them on by default. */
-@media (pointer: coarse) {
-  .react-flow__node.selected .typed-handle[data-tooltip]::after {
-    opacity: 1;
-  }
+/* Touch: no reliable hover, and pinning every label while a node was selected
+   drowned the card in text — instead a direct tap on a socket shows that
+   socket's own tooltip for a beat. The class is added per-gesture by
+   pointerType in TypedHandle.tsx; a media query is deliberately NOT used here
+   (iPadOS desktop-mode Safari reports (pointer: fine), the same trap
+   NodeEditor's isCoarsePointer works around). */
+.typed-handle--tapped[data-tooltip]::after {
+  opacity: 1;
 }

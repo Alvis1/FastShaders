@@ -204,6 +204,13 @@ the output node's channels, and the Image node (`uv`, `tileX/tileY`,
   cards** (arithmetic, dot/cross/distance — generic a/b operands are
   noise), the **Output node** and **collapsed groups** (their rows/sockets
   already carry permanent labels).
+- **Touch tap tooltips**: touch/pen has no hover, so a **direct tap on a
+  socket** shows that socket's own tooltip for a beat
+  (`.typed-handle--tapped`, ~2.5 s; at most ONE live app-wide — a new tap,
+  a node drag, or two-finger nav dismisses it). Selecting a node does
+  **not** pin socket labels (the old coarse-pointer `.selected` pin is
+  gone). Gated per-gesture on `pointerType`, never a media query (iPadOS
+  desktop-mode Safari reports `pointer: fine`).
 - **Drag-to-reveal (noise + Image only)**: within the same radius, the
   node's hidden parameter sockets mount as **floating dots on the card's
   left edge** (`RevealSockets.tsx`, evenly spread 25–75 % of the card
