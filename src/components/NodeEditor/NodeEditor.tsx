@@ -1959,10 +1959,12 @@ export function NodeEditor() {
     (node: AppNode) => getCostColor((node.data as { cost?: number }).cost ?? 0, costColorLow, costColorHigh),
     [costColorLow, costColorHigh],
   );
+  // NB no `--canvas-bg` here: the canvas color is applied directly to the React
+  // Flow root. Publishing it as a var invited chrome (the asset bar) to tint
+  // itself with the user's canvas pick, which it must not do.
   const canvasCssVars = {
     '--node-cost-text': contrastColor,
     '--node-cost-text-shadow': contrastShadow,
-    '--canvas-bg': nodeEditorBgColor,
   } as React.CSSProperties;
 
   // Let middle/right-click pan through the selection overlay.

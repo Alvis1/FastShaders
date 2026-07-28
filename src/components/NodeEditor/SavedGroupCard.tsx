@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import type { SavedGroup } from '@/store/useAppStore';
+import { getGroupFrameColors } from '@/utils/colorUtils';
 import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
 
@@ -74,10 +75,8 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
       {tooltip}
       <div
         className="saved-group-card__frame"
-        style={{
-          background: `${group.color}1A`,
-          borderColor: `${group.color}66`,
-        }}
+        // Same opaque frame colors as the in-canvas group (see GroupNode).
+        style={getGroupFrameColors(group.color)}
       >
         <div
           className="saved-group-card__header"
