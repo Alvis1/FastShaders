@@ -19,8 +19,12 @@ Implemented in: `src/components/NodeEditor/nodes/ShaderNode.tsx`,
 4. **Cost "points" badge** stays centered *above* the node (`node-base__cost-badge`).
 5. **Sockets** are colored by **data type** (`getTypeColor`).
 6. Asset-browser cards (`NodePreviewCard`) mirror this same anatomy **including
-   all per-node designer overrides**: operator layout, exact width/height,
-   justify, text scale, glyph scale/nudge, and moved (detached) sockets — as
+   all per-node designer overrides**: operator layout, designer width/height
+   (width acts as a **floor** on cards: the card stretches horizontally to fit
+   a long name in any language — the header is clamped to **two lines** and
+   never breaks words into mid-word fragments — while the canvas node keeps
+   the exact designer width), justify, text scale, glyph scale/nudge, and
+   moved (detached) sockets — as
    **exact, fully inert static replicas**: same classes and widgets as the live
    node (real `DragNumberInput`, live handle geometry), default values, no port
    labels (the live no-label rule), and none of the enlarged card sizing (the
