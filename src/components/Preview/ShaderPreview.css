@@ -15,11 +15,18 @@
   flex-shrink: 0;
 }
 
+/* Reset is the red icon in the bottom cluster ("✕" per the UI sketch) — the
+   color carries the destructive-action signal that the old "Reset" text did. */
 .shader-preview__reset-btn {
-  padding: 3px 10px;
-  height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ctl-size);
+  height: var(--ctl-size);
+  padding: 0;
   font-size: 14px;
   font-weight: 600;
+  line-height: 1;
   color: #d32f2f;
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
@@ -58,8 +65,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 27px;
-  height: 27px;
+  width: var(--ctl-size);
+  height: var(--ctl-size);
   padding: 0;
   font-size: 12px;
   line-height: 1;
@@ -78,8 +85,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 27px;
-  height: 27px;
+  width: var(--ctl-size);
+  height: var(--ctl-size);
   padding: 0;
   font-size: 14px;
   line-height: 1;
@@ -108,8 +115,8 @@
 }
 
 .shader-preview__bg-color {
-  width: 27px;
-  height: 27px;
+  width: var(--ctl-size);
+  height: var(--ctl-size);
   padding: 2px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
@@ -153,7 +160,7 @@
   align-items: center;
   gap: 4px;
   padding: 0 6px;
-  height: 27px;
+  height: var(--ctl-size);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   background: var(--bg-panel);
@@ -173,7 +180,7 @@
   font-size: 12px;
   font-family: var(--font-mono, monospace);
   color: var(--text-secondary);
-  min-width: 27px;
+  min-width: var(--ctl-size);
   text-align: right;
   user-select: none;
 }
@@ -182,6 +189,48 @@
   flex: 1;
   position: relative;
   overflow: hidden;
+}
+
+/* Labeled control (Light / Model / Subd) in the top bar. */
+.shader-preview__ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.shader-preview__ctl-label {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  user-select: none;
+  white-space: nowrap;
+}
+
+/* Bottom-center playback/view cluster floating over the 3D view (kept inside
+   __body so it survives fullscreen). Frosted pill like the canvas bar. */
+.shader-preview__bottom-controls {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Above the iframe (z-auto) but UNDER the drop veil (z 3) — during a file
+     drag the veil covers the whole body, this pill included. */
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+:root[data-theme="dark"] .shader-preview__bottom-controls {
+  background: rgba(35, 37, 41, 0.85);
 }
 
 /* "Compiling shader…" pill shown between a fresh srcDoc and the first painted
@@ -335,6 +384,26 @@
 
 :root[data-theme="dark"] .shader-preview__props-btn--active {
   background: rgba(255, 255, 255, 0.06);
+}
+
+/* Bakes the tuned values into the graph. Sits above the rows it acts on, and
+   is full-width so it reads as applying to the whole list rather than to the
+   first row. */
+.shader-preview__uniforms-default-btn {
+  padding: 3px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.shader-preview__uniforms-default-btn:hover {
+  border-color: var(--border-focus);
+  color: var(--border-focus);
 }
 
 .shader-preview__uniform-row {

@@ -14,6 +14,7 @@ import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import './styles/tokens.css';
 import './styles/reset.css';
+import './styles/controls.css';
 import '@xyflow/react/dist/style.css';
 
 // Renderer-triage switches (e.g. the Safari zoom-blur hunt): ?fsdbg=a,b,...

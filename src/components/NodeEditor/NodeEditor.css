@@ -62,20 +62,6 @@
   box-shadow: none;
 }
 
-.node-editor .react-flow__controls {
-  box-shadow: var(--shadow-md);
-}
-
-.node-editor .react-flow__controls-button {
-  background: var(--bg-panel);
-  border-color: var(--border-subtle);
-  fill: var(--text-secondary);
-}
-
-.node-editor .react-flow__controls-button:hover {
-  background: var(--bg-surface-hover);
-}
-
 .node-editor .react-flow__minimap {
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
@@ -147,9 +133,9 @@
     0 0 0 1px rgba(0, 0, 0, 0.15);
 }
 
-/* Custom canvas background color picker, slotted into the React Flow Controls
-   right next to the +/- buttons. The native color input is hidden behind a
-   visible swatch that follows React Flow's button styling. */
+/* Custom canvas background color picker, slotted into the bottom canvas bar
+   next to the zoom buttons. The native color input is hidden behind a visible
+   swatch that follows the bar's button styling. */
 .node-editor__bg-color-btn {
   position: relative;
   display: flex;
@@ -190,22 +176,132 @@
   cursor: cell;
 }
 
-.fs-draw-toolbar {
+/* Bottom-center canvas bar: one pill holding undo/redo, the draw tools, and
+   the view controls (zoom/fit/canvas-bg). Replaces the old top-center draw
+   toolbar and the React Flow Controls stack.
+
+   Scoped under .node-editor: React Flow's own `.react-flow__panel { margin:
+   15px }` has the same 0,1,0 specificity as a bare `.fs-canvas-bar` and its
+   stylesheet is imported AFTER component CSS in main.tsx, so an unscoped
+   margin-bottom here silently loses the cascade. */
+.node-editor .fs-canvas-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 6px 8px;
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
   box-shadow: var(--shadow-md);
+  /* An abspos box with `left: 50%` (RF's .bottom.center panel) shrink-to-fits
+     into the HALF of the pane left of that inset — max-content opts out of
+     that clamp so the bar only wraps when the PANE is genuinely too narrow. */
+  width: max-content;
+  /* Fold to extra rows instead of clipping when the graph pane is narrow and
+     the draw cluster is expanded (% resolves against the RF pane, minus the
+     panel's 15px margins). */
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: calc(100% - 30px);
+  /* Clear the asset bar's resize grip, which hangs --ctl-size above the bar's
+     top edge — i.e. into the bottom of this pane. React Flow's own 15px panel
+     margin is not enough, and the bar wraps to extra rows on narrow panes, so
+     it can reach the grip's horizontal position. Overlap would be worse than
+     cosmetic: the grip sits at a higher z-index and would swallow clicks on
+     whichever button it covered. */
+  margin-bottom: calc(var(--ctl-size) + 8px);
 }
-.fs-draw-controls {
+.fs-canvas-bar__group {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding-left: 8px;
+  gap: 6px;
+}
+.fs-canvas-bar__group + .fs-canvas-bar__group {
+  padding-left: 10px;
   border-left: 1px solid var(--border-subtle);
+}
+.fs-canvas-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ctl-size);
+  height: var(--ctl-size);
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast),
+    background var(--transition-fast), opacity var(--transition-fast);
+}
+/* Undo/redo are the only DESTRUCTIVE-ish controls in the bar — everything else
+   just changes the view. Give them their own weight: thicker outline, bolder
+   glyph, and a filled panel so they read as a distinct pair rather than two
+   more view buttons. */
+.fs-canvas-bar__btn--history {
+  border-width: 2px;
+  border-color: var(--border-strong);
+  background: var(--bg-panel);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.fs-canvas-bar__btn--history:hover:not(:disabled) {
+  border-color: var(--border-focus);
+  background: var(--bg-surface-hover);
+  color: var(--border-focus);
+}
+
+.fs-canvas-bar__btn:hover:not(:disabled) {
+  border-color: var(--border-focus);
+  color: var(--border-focus);
+}
+.fs-canvas-bar__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.fs-canvas-bar__btn:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+/* Draw settings get their OWN floating box, stacked above the canvas bar
+   rather than expanding it. Growing the bar in place pushed every other
+   control sideways the moment draw mode opened — and on a narrow pane it
+   wrapped the bar to a second row, moving the ✏️ button out from under the
+   cursor that had just pressed it.
+
+   Absolute against .fs-canvas-bar: React Flow's .react-flow__panel is already
+   position:absolute, and __group is a plain flex row, so the bar itself is the
+   containing block. */
+.fs-draw-controls {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 6px 10px;
+  /* Matches the bar it floats over, so the two read as one control surface. */
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--shadow-md);
+  /* An abspos box with `left: 50%` shrink-to-fits into HALF its containing
+     block — for this pill that was ~160px of the ~320px bar, permanently
+     cramming the cluster into a 3–4 row stack. max-content opts out of the
+     clamp; the max-width then bounds it by the BAR below (its containing
+     block), which is itself capped to the pane — so the two boxes stay one
+     width family and nothing can cross the pane edge (React Flow clips at
+     overflow: hidden). */
+  width: max-content;
+  max-width: 100%;
 }
 .fs-draw-btn {
   display: inline-flex;

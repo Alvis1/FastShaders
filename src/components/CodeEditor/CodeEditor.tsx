@@ -5,13 +5,9 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { registerTSLLanguage } from './tslLanguage';
 import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
-import { embedProjectState, type FastShadersProject } from '@/engine/fastShadersProject';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import { getNodeValues } from '@/types';
-import type { MaterialSettings, OutputNodeData } from '@/types';
-import { toKebabCase } from '@/utils/nameUtils';
-import { collectImageFiles } from '@/utils/imageNode';
-import { buildExportBundle } from '@/utils/exportBundle';
+import type { OutputNodeData } from '@/types';
 import './CodeEditor.css';
 
 type CodeTab = 'tsl' | 'script';
@@ -38,23 +34,9 @@ export function CodeEditor() {
   const codeErrors = useAppStore((s) => s.codeErrors);
   const setCode = useAppStore((s) => s.setCode);
   const requestCodeSync = useAppStore((s) => s.requestCodeSync);
-  const shaderName = useAppStore((s) => s.shaderName);
-  const setShaderName = useAppStore((s) => s.setShaderName);
   const nodes = useAppStore((s) => s.nodes);
-  const edges = useAppStore((s) => s.edges);
-  const drawings = useAppStore((s) => s.drawings);
-  const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
-  const setSelectedHeadsetId = useAppStore((s) => s.setSelectedHeadsetId);
-  const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
-  const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const setCostColorLow = useAppStore((s) => s.setCostColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
-  const setCostColorHigh = useAppStore((s) => s.setCostColorHigh);
   const codeEditorTheme = useAppStore((s) => s.codeEditorTheme);
-  const setCodeEditorTheme = useAppStore((s) => s.setCodeEditorTheme);
   const editorRef = useRef<unknown>(null);
-  const isDark = codeEditorTheme === 'vs-dark';
 
   const outputNode = nodes.find((n) => n.data.registryType === 'output');
   const materialSettings = (outputNode?.data as OutputNodeData | undefined)?.materialSettings;
@@ -119,103 +101,6 @@ export function CodeEditor() {
   }, [code, activeTab, materialSettings, properties]);
 
   const isTSL = activeTab === 'tsl';
-
-  const fileBaseName = toKebabCase(shaderName || 'shader');
-
-  /**
-   * Build the FastShaders project snapshot embedded in the downloaded `.js`.
-   *
-   * Preview-tab settings (geometry, lighting, uniform tunings, camera, …)
-   * live in localStorage rather than the zustand store, so we read them
-   * directly here — they're treated as user preferences that follow the
-   * shader file when re-imported.
-   */
-  const buildProjectState = useCallback((): FastShadersProject => {
-    const ls = (key: string): string | null => {
-      try { return localStorage.getItem(key); } catch { return null; }
-    };
-    const parseJson = <T,>(raw: string | null): T | undefined => {
-      if (!raw) return undefined;
-      try { return JSON.parse(raw) as T; } catch { return undefined; }
-    };
-
-    return {
-      version: 1,
-      shaderName,
-      selectedHeadsetId,
-      graph: { nodes, edges },
-      ...(drawings.length ? { drawings } : {}),
-      preview: {
-        geometry: ls('fs:previewGeometry') ?? undefined,
-        lighting: ls('fs:previewLighting') ?? undefined,
-        subdivision: (() => {
-          const v = parseInt(ls('fs:previewSubdivision') ?? '', 10);
-          return Number.isNaN(v) ? undefined : v;
-        })(),
-        bgColor: ls('fs:previewBgColor') ?? undefined,
-        playing: ls('fs:previewPlaying') === 'true' ? true : undefined,
-        uniformValues: parseJson<Record<string, number>>(ls('fs:previewUniformValues')),
-        uniformBounds: parseJson<Record<string, unknown>>(ls('fs:previewUniformBounds')),
-        cameraPos: parseJson<{ x: number; y: number; z: number }>(ls('fs:previewCameraPos')),
-        rotation: parseJson<{ x: number; y: number; z: number }>(ls('fs:previewRotation')),
-      },
-      ui: {
-        nodeEditorBgColor,
-        codeEditorTheme,
-        costColorLow,
-        costColorHigh,
-      },
-    };
-  }, [
-    shaderName,
-    selectedHeadsetId,
-    nodes,
-    edges,
-    drawings,
-    nodeEditorBgColor,
-    codeEditorTheme,
-    costColorLow,
-    costColorHigh,
-  ]);
-
-  const handleDownloadShader = useCallback(() => {
-    // `scriptCode` is only memoized when the Script tab is active. From the
-    // TSL tab we have to regenerate the module on demand — same call, just
-    // not cached.
-    const script = activeTab === 'script'
-      ? scriptCode
-      : (() => {
-          try {
-            return tslToShaderModule(code, materialSettings, properties);
-          } catch (e) {
-            return `// Export error: ${e instanceof Error ? e.message : String(e)}`;
-          }
-        })();
-
-    const embedded = embedProjectState(script, buildProjectState());
-
-    // With embedded images and/or a custom preview mesh, the download becomes
-    // a zip: the (still fully self-contained) .js plus each image as a regular
-    // file for reuse/editing, plus the model under models/ so the shader+mesh
-    // pair drops straight into Podest or an A-Frame page. Assembly is pure —
-    // see exportBundle.ts.
-    const state = useAppStore.getState();
-    const bundle = buildExportBundle(
-      fileBaseName,
-      embedded,
-      collectImageFiles(state.nodes),
-      state.previewMesh,
-    );
-    const blob = new Blob([bundle.bytes], { type: bundle.mime });
-    const downloadName = bundle.fileName;
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = downloadName;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [activeTab, scriptCode, code, materialSettings, properties, buildProjectState, fileBaseName]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -334,7 +219,7 @@ export function CodeEditor() {
             className={`code-editor__tab ${activeTab === 'script' ? 'code-editor__tab--active' : ''}`}
             onClick={() => setActiveTab('script')}
           >
-            {t('Script', language)}
+            {t('Output', language)}
           </button>
         </div>
         <div className="code-editor__actions">
@@ -357,29 +242,14 @@ export function CodeEditor() {
               onClick={requestCodeSync}
               title={t('Compile this TSL into the node graph — your work is auto-saved separately', language)}
             >
-              {t('Apply to Graph', language)}
+              {t('Apply', language)}
             </button>
           )}
           {isTSL && (
-            <button className="code-editor__action-btn" onClick={handleLoadScript} title={t('Load a shaderloader .js file into the editor', language)}>
-              {t('Load', language)}
+            <button className="code-editor__action-btn" onClick={handleLoadScript} title={t('Import a shaderloader .js file into the editor', language)}>
+              {t('Import', language)}
             </button>
           )}
-          <button
-            className="code-editor__action-btn"
-            onClick={handleDownloadShader}
-            title={t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}
-          >
-            {t('Download Shader', language)}
-          </button>
-          <button
-            className="code-editor__theme-toggle"
-            onClick={() => setCodeEditorTheme(isDark ? 'vs' : 'vs-dark')}
-            title={isDark ? t('Switch to light mode', language) : t('Switch to dark mode', language)}
-            aria-label={t('Toggle dark mode', language)}
-          >
-            {isDark ? '\u263C' : '\u263E'}
-          </button>
         </div>
       </div>
       {isTSL && codeErrors.length > 0 && (() => {
@@ -398,7 +268,7 @@ export function CodeEditor() {
               </div>
             ))}
             {errors.length > 0 ? (
-              <div className="code-editor__error-hint">{t('Fix the errors above, then press Apply to Graph to update the node view.', language)}</div>
+              <div className="code-editor__error-hint">{t('Fix the errors above, then press Apply to update the node view.', language)}</div>
             ) : (
               <div className="code-editor__error-hint">{t('Unknown functions are preserved as-is in the graph.', language)}</div>
             )}
@@ -419,7 +289,7 @@ export function CodeEditor() {
           />
           {isTSL && code.trim() === '' && !isDraggingFile && (
             <div className="code-editor__empty-hint">
-              {t('// Drop a .js shader script here to import, or click Load above.', language)}
+              {t('// Drop a .js shader script here to import, or click Import above.', language)}
             </div>
           )}
         </div>

@@ -7,7 +7,8 @@ import { SavedGroupCard } from './SavedGroupCard';
 import { TextureCard } from './TextureCard';
 import { setHtml5TileDrag, endHtml5TileDrag } from './tileDrag';
 import { useAppStore } from '@/store/useAppStore';
-import { readPersisted, usePersistedState } from '@/hooks/usePersistedState';
+import { readPersisted } from '@/hooks/usePersistedState';
+import { beginDragChrome } from '@/utils/dragChrome';
 import { formatCategoryLabel, nodeSearchLV, t } from '@/i18n';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
@@ -85,7 +86,7 @@ function tabStyle(hex: string, active: boolean): React.CSSProperties {
 /** Tile-zoom bounds: 0.5× keeps headers legible, 2× keeps a tile per screen. */
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2;
-/** Zoom step per +/− click or classic mouse-wheel notch (multiplicative). */
+/** Zoom step per classic mouse-wheel notch (multiplicative). */
 const ZOOM_STEP = 1.15;
 /**
  * Wheel→zoom exponent per scrolled px, tuned so one classic mouse notch
@@ -99,44 +100,255 @@ const WHEEL_ZOOM_K = Math.log(ZOOM_STEP) / 100;
 const WHEEL_PX_CAP = 300;
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
-// Module-scope (stable identity) per the usePersistedState contract.
+/**
+ * The tile scale is pinned to the TALLEST tile: zoom is whatever makes that
+ * one tile exactly fill the strip. So the bar's height is the only tile-size
+ * control — drag it taller and every tile grows until the tallest touches both
+ * edges; drag it shorter and they shrink together — and no tile is ever cut
+ * off by the bar's own height. Before this the causality ran the other way
+ * (zoom set the tiles' layout height, which set the bar's content height), so
+ * the two could never both be authoritative.
+ *
+ * The tallest tile is MEASURED (it depends on per-node designer heights in
+ * customGlyphs, so it can't be derived from a constant); these are only the
+ * pre-measurement fallbacks.
+ */
+const TILE_BASE_FALLBACK_H = 200;
+const TABS_FALLBACK_H = 25;
+/** Default bar height as a multiple of the tallest tile — tiles start large. */
+const BAR_DEFAULT_SCALE = 1.35;
+/** Canvas kept visible above the bar — also what keeps the grip reachable. */
+const BAR_CANVAS_RESERVE = 120;
+/** Floor when the tabs row hasn't been measured yet (its own height). */
+const BAR_MIN_H = 28;
+/** Tile scale for a bar height, given the measured tabs row + tallest tile. */
+const zoomForHeight = (h: number, tabsH: number, tileH: number) =>
+  clampZoom((h - tabsH) / (tileH || TILE_BASE_FALLBACK_H));
+
+// Module-scope (stable identity) per the readPersisted/usePersistedState
+// contract. validateCollapsed + validateZoom now exist ONLY to migrate the two
+// legacy keys once, on first seed.
 const validateCollapsed = (raw: string | null): boolean => raw === '1';
-const serializeCollapsed = (v: boolean): string => (v ? '1' : '0');
 const validateZoom = (raw: string | null): number => {
   const v = parseFloat(raw ?? '');
   return Number.isFinite(v) ? clampZoom(v) : 1;
+};
+const validateBarHeight = (raw: string | null): number | null => {
+  const v = parseFloat(raw ?? '');
+  return Number.isFinite(v) && v > 0 ? v : null;
 };
 
 export function ContentBrowser() {
   const [activeCategory, setActiveCategory] = useState<BrowserCategory>('all');
   const [search, setSearch] = useState('');
-  // Asset-bar collapse, persisted so it survives reloads.
-  const [collapsed, setCollapsed] = usePersistedState('fs:assetBarCollapsed', validateCollapsed, { serialize: serializeCollapsed });
-  const toggleCollapsed = useCallback(() => {
-    setCollapsed((c) => !c);
-  }, [setCollapsed]);
-  // Tile zoom, persisted. Applied as a `zoom` style on the items strip, so it
-  // compounds with the tiles' own fixed 0.67 zoom. Only the read seed goes
-  // through the shared helper — the write side stays local because it is
-  // debounced + toFixed(3) (see the persist effect below), which the
-  // write-per-change hook deliberately doesn't model.
-  const [zoom, setZoom] = useState(() => readPersisted('fs:assetZoom', validateZoom));
-  // No rounding here — smooth pinch deltas are tiny factors that 2-decimal
-  // rounding would swallow entirely. Persistence is debounced below (pinches
-  // fire dozens of events per second; a setItem per event would jank).
-  const changeZoom = useCallback((factor: number) => {
-    setZoom((z) => clampZoom(z * factor));
-  }, []);
+  // Bar height, persisted — the single source of truth for how big the bar AND
+  // its tiles are. Only the read seed goes through the shared helper; the write
+  // side stays local because it is debounced (see the persist effect below),
+  // which the write-per-change hook deliberately doesn't model.
+  const [barHeight, setBarHeight] = useState<number>(() => {
+    const stored = readPersisted('fs:assetBarHeight', validateBarHeight);
+    if (stored != null) return stored;
+    // Migrate the two controls this replaced, so returning users keep the size
+    // they had: a collapsed bar becomes the minimum height, and a tile zoom
+    // becomes the height that reproduces it.
+    if (readPersisted('fs:assetBarCollapsed', validateCollapsed)) return BAR_MIN_H;
+    const zoom0 = readPersisted('fs:assetZoom', validateZoom);
+    return TABS_FALLBACK_H + TILE_BASE_FALLBACK_H * BAR_DEFAULT_SCALE * zoom0;
+  });
   useEffect(() => {
     const t = window.setTimeout(() => {
-      try { localStorage.setItem('fs:assetZoom', zoom.toFixed(3)); } catch { /* private mode */ }
+      try { localStorage.setItem('fs:assetBarHeight', String(Math.round(barHeight))); } catch { /* private mode */ }
     }, 300);
     return () => window.clearTimeout(t);
-  }, [zoom]);
+  }, [barHeight]);
+  // Measured layout constants the scale depends on (see zoomForHeight).
+  const [tabsH, setTabsH] = useState(TABS_FALLBACK_H);
+  const [tileH, setTileH] = useState(TILE_BASE_FALLBACK_H);
+  /** False until the first real tile measurement replaces the fallback. */
+  const measuredRef = useRef(false);
+  const zoom = zoomForHeight(barHeight, tabsH, tileH);
+  // Mirrors for the imperative drag path, which runs outside React's cycle.
+  const metricsRef = useRef({ tabsH, tileH, zoom });
+  metricsRef.current = { tabsH, tileH, zoom };
   const savedGroups = useAppStore((s) => s.savedGroups);
   const language = useAppStore((s) => s.language);
+  const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Publish the live bar height so the column splitter's grip can sit just
+   * above the bar (styles/controls.css reads --fs-asset-bar-h). Written here
+   * AND imperatively from the drag, so the grip tracks the bar in real time.
+   */
+  const publishBarHeight = useCallback((h: number) => {
+    document.documentElement.style.setProperty('--fs-asset-bar-h', `${Math.round(h)}px`);
+  }, []);
+  useEffect(() => {
+    publishBarHeight(barHeight);
+    return () => {
+      document.documentElement.style.removeProperty('--fs-asset-bar-h');
+    };
+  }, [barHeight, publishBarHeight]);
+
+  /**
+   * Measure the tabs row and the tallest tile. getBoundingClientRect reports
+   * VISUAL px (the strip's `zoom` is already folded in), so dividing by the
+   * zoom in force recovers the tile's natural 1× height — which makes the
+   * measurement independent of the zoom it feeds, and the loop convergent.
+   * The 1px threshold stops sub-pixel layout noise from oscillating it.
+   */
+  useEffect(() => {
+    const strip = scrollRef.current;
+    if (!strip) return;
+    const raf = requestAnimationFrame(() => {
+      // Mid-drag: the DOM zoom is paintHeight's imperative value while
+      // metricsRef.zoom is still the committed state, so dividing one by the
+      // other would bake a bogus (inflated) high-water tileH. The gesture
+      // owns the strip until pointerup; the commit render re-measures.
+      if (resizeRef.current) return;
+      const nextTabs = tabsRef.current?.offsetHeight;
+      if (nextTabs && Math.abs(nextTabs - metricsRef.current.tabsH) > 1) setTabsH(nextTabs);
+      const z = metricsRef.current.zoom || 1;
+      let tallest = 0;
+      for (const child of Array.from(strip.children) as HTMLElement[]) {
+        const h = child.getBoundingClientRect().height / z;
+        if (h > tallest) tallest = h;
+      }
+      if (tallest <= 0) return;
+      // High-water mark after the first real measurement: the base is the
+      // tallest tile in the WHOLE library, not in the current tab. Otherwise
+      // switching to a tab of short tiles (Textures, Saved Groups) would
+      // rescale every tile in the strip. The default tab is 'all', so the
+      // first measurement already sees the full set.
+      const current = metricsRef.current.tileH;
+      const next = measuredRef.current ? Math.max(current, tallest) : tallest;
+      measuredRef.current = true;
+      if (Math.abs(next - current) > 1) setTileH(next);
+    });
+    return () => cancelAnimationFrame(raf);
+  });
+
+  /** Live drag bounds, measured once per gesture. */
+  const resizeRef = useRef<{ startY: number; startH: number; min: number; max: number } | null>(null);
+  /** This gesture's dragChrome end call (idempotent; no-op before any drag). */
+  const endDragChrome = useRef<() => void>(() => {});
+
+  /**
+   * Paint a height imperatively mid-drag. State is committed once on pointerup:
+   * every card runs its own ResizeObserver, so a state write per pointermove
+   * would re-render ~70 tiles a frame.
+   */
+  const paintHeight = useCallback((h: number) => {
+    if (rootRef.current) rootRef.current.style.height = `${h}px`;
+    const { tabsH: tb, tileH: tl } = metricsRef.current;
+    // setProperty, not style.zoom — `zoom` is absent from CSSStyleDeclaration
+    // in some TS DOM lib versions. It must stay a real `zoom` (not a
+    // transform): tileGhostZoom parses this exact inline value, and only
+    // `zoom` scales layout so the strip's scroll extents stay correct.
+    scrollRef.current?.style.setProperty('zoom', String(zoomForHeight(h, tb, tl)));
+    publishBarHeight(h);
+  }, [publishBarHeight]);
+
+  /**
+   * Drag bounds, measured live. The ceiling is the SMALLER of "leave a slice of
+   * canvas" and "the height at which tiles hit ZOOM_MAX" — past the latter the
+   * bar would grow without the tiles growing, i.e. pure dead space.
+   */
+  const measureBounds = useCallback(() => {
+    // Floor at the tabs row: dragging fully down leaves tabs + grip, which is
+    // what the removed ▾ collapse used to produce.
+    const min = tabsRef.current?.offsetHeight || BAR_MIN_H;
+    const availableH = rootRef.current?.parentElement?.clientHeight ?? window.innerHeight;
+    const { tabsH: tb, tileH: tl } = metricsRef.current;
+    const max = Math.min(availableH - BAR_CANVAS_RESERVE, tb + tl * ZOOM_MAX);
+    return { min, max: Math.max(min, max) };
+  }, []);
+
+  const handleResizeDown = useCallback((e: React.PointerEvent) => {
+    const root = rootRef.current;
+    if (!root) return;
+    // Primary button only: a right-click press would otherwise start the drag
+    // chrome and then the native context menu swallows the pointerup, leaving
+    // the app-wide selection block and the resize cursor stranded on.
+    if (e.button !== 0) return;
+    // Stops the browser starting a text-selection drag from the press itself.
+    e.preventDefault();
+    const { min, max } = measureBounds();
+    resizeRef.current = {
+      startY: e.clientY,
+      startH: root.getBoundingClientRect().height,
+      min,
+      max,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    endDragChrome.current = beginDragChrome('row-resize');
+  }, [measureBounds]);
+
+  /**
+   * Re-clamp to the pane. The CSS max-height caps the RENDERED box, but the
+   * tile zoom is derived from `barHeight` — so after the window (or the outer
+   * splitter) shrinks, a too-tall stored height would keep scaling tiles for a
+   * box that no longer exists, and they'd be clipped. Pulling the state back
+   * into range keeps the two in agreement.
+   */
+  useEffect(() => {
+    const parent = rootRef.current?.parentElement;
+    if (!parent) return;
+    const ro = new ResizeObserver(() => {
+      if (resizeRef.current) return; // mid-drag: the gesture owns the height
+      const { min, max } = measureBounds();
+      setBarHeight((h) => (h > max ? Math.max(min, max) : h));
+    });
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, [measureBounds]);
+
+  /** Ctrl/Cmd+wheel (and macOS trackpad pinch) resizes the bar. */
+  const changeHeight = useCallback((factor: number) => {
+    const { min, max } = measureBounds();
+    setBarHeight((h) => Math.max(min, Math.min(max, h * factor)));
+  }, [measureBounds]);
+
+  const handleResizeMove = useCallback((e: React.PointerEvent) => {
+    const d = resizeRef.current;
+    if (!d) return;
+    // The bar grows upward, so a negative dy (dragging up) is a taller bar.
+    paintHeight(Math.max(d.min, Math.min(d.max, d.startH - (e.clientY - d.startY))));
+  }, [paintHeight]);
+
+  const handleResizeUp = useCallback((e: React.PointerEvent) => {
+    if (!resizeRef.current) return;
+    resizeRef.current = null;
+    // Restore document chrome FIRST: if releasePointerCapture throws (a pointer
+    // the browser already released), the cursor override and the app-wide
+    // selection block must not be stranded on.
+    endDragChrome.current();
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    if (rootRef.current) setBarHeight(rootRef.current.getBoundingClientRect().height);
+  }, []);
+
+  /**
+   * Keyboard resize. The −/+ buttons this grip replaced were focusable, so
+   * without this the asset bar's size (and therefore the tile scale) would be
+   * pointer-only.
+   */
+  const handleResizeKey = useCallback((e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 48 : 16;
+    let delta = 0;
+    if (e.key === 'ArrowUp') delta = step;
+    else if (e.key === 'ArrowDown') delta = -step;
+    else if (e.key === 'Home') delta = Number.POSITIVE_INFINITY;
+    else if (e.key === 'End') delta = Number.NEGATIVE_INFINITY;
+    else return;
+    e.preventDefault();
+    const { min, max } = measureBounds();
+    setBarHeight((h) => Math.max(min, Math.min(max, h + delta)));
+  }, [measureBounds]);
+
+  // Unmounting mid-drag would otherwise strand the cursor override and the
+  // app-wide selection block with nothing left to clear them.
+  useEffect(() => () => endDragChrome.current(), []);
   const tabsArrows = useScrollArrows(tabsRef);
   const itemsArrows = useScrollArrows(scrollRef);
 
@@ -200,7 +412,7 @@ export function ContentBrowser() {
 
   // Convert vertical scroll to horizontal scroll (native listener for non-passive).
   // On the items strip, Ctrl/Cmd+wheel (and macOS pinch, which arrives as a
-  // ctrlKey wheel) zooms the tiles instead of scrolling.
+  // ctrlKey wheel) resizes the bar — which is what scales the tiles.
   useEffect(() => {
     const els = [scrollRef.current, tabsRef.current];
     const handlers: (() => void)[] = [];
@@ -215,7 +427,7 @@ export function ContentBrowser() {
             // map to an exponential factor so pinch streams zoom smoothly.
             const px = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 100 : 1);
             const capped = Math.max(-WHEEL_PX_CAP, Math.min(WHEEL_PX_CAP, px));
-            changeZoom(Math.exp(-capped * WHEEL_ZOOM_K));
+            changeHeight(Math.exp(-capped * WHEEL_ZOOM_K));
           }
           return;
         }
@@ -228,7 +440,7 @@ export function ContentBrowser() {
       handlers.push(() => el.removeEventListener('wheel', onWheel));
     }
     return () => handlers.forEach((h) => h());
-  }, [changeZoom]);
+  }, [changeHeight]);
 
   const empty = (msg: string) => <div className="content-browser__empty">{msg}</div>;
 
@@ -251,50 +463,31 @@ export function ContentBrowser() {
 
   return (
     <div
-      className={`content-browser${collapsed ? ' content-browser--collapsed' : ''}`}
+      ref={rootRef}
+      className="content-browser"
+      style={{ height: barHeight }}
       // Catches every tile's dragend bubble — including cancelled drags (Esc,
       // released outside the canvas) — so the drag payload record and any live
       // canvas previews are always torn down.
       onDragEnd={endHtml5TileDrag}
     >
-      {/* Control cluster — floats OUTSIDE the box, above its top border. */}
-      <div className="content-browser__controls">
-        {!collapsed && (
-          <>
-            {/* aria-disabled (not disabled) at the bounds: a real disabled
-                attribute would drop keyboard focus mid-interaction; the click
-                just no-ops via the clamp. */}
-            <button
-              type="button"
-              className="content-browser__ctrl-btn"
-              onClick={() => changeZoom(1 / ZOOM_STEP)}
-              aria-disabled={zoom <= ZOOM_MIN}
-              title="Smaller tiles (Ctrl/Cmd + scroll)"
-              aria-label="Zoom asset tiles out"
-            >
-              −
-            </button>
-            <button
-              type="button"
-              className="content-browser__ctrl-btn"
-              onClick={() => changeZoom(ZOOM_STEP)}
-              aria-disabled={zoom >= ZOOM_MAX}
-              title="Larger tiles (Ctrl/Cmd + scroll)"
-              aria-label="Zoom asset tiles in"
-            >
-              +
-            </button>
-          </>
-        )}
-        <button
-          type="button"
-          className="content-browser__ctrl-btn"
-          onClick={toggleCollapsed}
-          title={collapsed ? 'Show asset bar' : 'Hide asset bar'}
-          aria-label={collapsed ? 'Show asset bar' : 'Hide asset bar'}
-        >
-          {collapsed ? '▴' : '▾'}
-        </button>
+      {/* Zero-height anchor pinned to the bar's top edge; the grip tab hangs
+          off it and is the ONLY drag target. Dragging is now the only
+          tile-size control (it replaced the −/+ zoom pair and the ▾ collapse). */}
+      <div className="content-browser__resizer">
+        <div
+          className="fs-grip fs-grip--h"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t('Resize asset bar', language)}
+          title={t('Drag to resize — tiles scale with the bar', language)}
+          tabIndex={0}
+          onPointerDown={handleResizeDown}
+          onPointerMove={handleResizeMove}
+          onPointerUp={handleResizeUp}
+          onPointerCancel={handleResizeUp}
+          onKeyDown={handleResizeKey}
+        />
       </div>
       <div className="content-browser__scroll-wrapper">
         {tabsArrows.canLeft && <ScrollArrow direction="left" onClick={() => tabsArrows.scrollBy(-1)} />}

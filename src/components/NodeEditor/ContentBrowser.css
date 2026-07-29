@@ -3,63 +3,49 @@
    so recoloring the canvas never tints the asset tiles behind. */
 .content-browser {
   position: relative;
-  border-top: 1px solid var(--border-subtle);
+  /* 2px in --edge-color to match the grip's outline exactly — the tab and this
+     border are meant to read as one continuous line. */
+  border-top: 2px solid var(--edge-color);
+  transition: border-color var(--transition-fast);
   background: var(--bg-panel);
   display: flex;
   flex-direction: column;
-  /* visible, not hidden — the control cluster floats above the box */
+  /* visible, not hidden — the resize grip floats above the box */
   overflow: visible;
-  /* overflow:visible gives the bar a content-based flex minimum, so without
-     these it could outgrow a short pane and push the floating cluster above
-     the clipped .app-layout__node-editor — leaving no way to collapse it.
-     Cap the bar so the cluster and a slice of canvas always stay reachable. */
+  /* The height is set inline from the drag state; these only bound it if the
+     pane is shorter than the stored height (e.g. after a window resize), so a
+     slice of canvas and the grip always stay reachable. flex-shrink is left on
+     for the same reason. */
   min-height: 0;
   max-height: calc(100% - 120px);
 }
 
-/* Control cluster (zoom −/+ and collapse toggle) — sits OUTSIDE the asset
-   box, floating over the canvas just above its top border. */
-.content-browser__controls {
+/* Zero-height anchor on the bar's top edge. It exists only to give the grip
+   tab something to position against — it is not itself a hit target
+   (pointer-events:none), so the canvas underneath stays fully interactive
+   right up to the bar's border. The grip hangs ABOVE it, which is why
+   .content-browser keeps overflow:visible. */
+.content-browser__resizer {
   position: absolute;
-  top: -24px;
-  right: 4px;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0;
   z-index: var(--z-controls);
-  display: flex;
-  gap: 4px;
+  pointer-events: none;
 }
 
-.content-browser__ctrl-btn {
-  width: 24px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--text-secondary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
-  cursor: pointer;
-  /* floats over the user-pickable canvas bg — needs its own separation */
-  box-shadow: var(--shadow-sm);
+.content-browser__resizer .fs-grip {
+  pointer-events: auto;
 }
 
-.content-browser__ctrl-btn:hover:not([aria-disabled='true']) {
-  color: var(--text-primary);
-}
-
-.content-browser__ctrl-btn[aria-disabled='true'] {
-  color: var(--text-muted);
-  cursor: default;
-}
-
-/* Collapsed: the tabs + cards are hidden below; only the border line remains
-   (the controls live outside the box, so nothing else is needed). */
-
-.content-browser--collapsed .content-browser__scroll-wrapper {
-  display: none;
+/* The bar's top edge lights up with its grip — same one-control rule the
+   splitter seams follow. :active covers the drag (the pointer is captured and
+   leaves the grip almost immediately). */
+.content-browser:has(.fs-grip:hover),
+.content-browser:has(.fs-grip:active),
+.content-browser:has(.fs-grip:focus-visible) {
+  border-top-color: var(--border-focus);
 }
 
 /* ===== Scroll wrapper with arrow buttons ===== */
@@ -197,7 +183,8 @@
   flex-wrap: nowrap;
   gap: 2px;
   align-items: flex-start;
-  min-height: 160px;
+  /* No min-height: the bar's height is authoritative now, and a floor here
+     would stop the strip from following it down. */
   scrollbar-width: none;
 }
 
@@ -304,14 +291,6 @@
    but when they appear they should be tappable. Saved-group delete buttons are
    hover-only, so pin them on. Category tabs need taller hit area. */
 @media (pointer: coarse) {
-  .content-browser__controls {
-    top: -34px;
-  }
-  .content-browser__ctrl-btn {
-    width: 34px;
-    height: 28px;
-    font-size: 16px;
-  }
   .content-browser__arrow {
     width: 40px;
     font-size: 26px;

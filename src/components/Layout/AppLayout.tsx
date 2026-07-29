@@ -34,6 +34,9 @@ export function AppLayout() {
               direction="vertical"
               ratio={rightSplitRatio}
               onRatioChange={setRightSplitRatio}
+              // Left end: keeps the 3D preview's grip clear of the asset bar's,
+              // which sits 20% in from the right on the pane next door.
+              gripPosition="start"
               left={
                 <div className="app-layout__code-panel">
                   <div className="app-layout__code">

@@ -15,6 +15,9 @@ import {
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
+import { applyUniformDefaults, planUniformDefaults } from '@/utils/uniformDefaults';
+import { graphToCode } from '@/engine/graphToCode';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import './ShaderPreview.css';
 
@@ -734,6 +737,31 @@ export function ShaderPreview() {
     iframeRef.current?.contentWindow?.postMessage({ type: 'fs:uniform', name, value }, '*');
   }, []);
 
+  /**
+   * "Set as default" — bake the tuned uniform values into the graph, so they
+   * become the shader's authored defaults (and thus the defaults in the
+   * generated code, the Output tab, and the exported module's `schema`).
+   *
+   * Deliberately NOT a per-slider write: uniformValues stays overlay-local so
+   * scrubbing doesn't tear the iframe down (see the note on the state above).
+   * This one click is where the user opts INTO that rebuild.
+   */
+  const handleSetDefaults = useCallback(() => {
+    const store = useAppStore.getState();
+    // Read nodes imperatively — subscribing to s.nodes here would re-render
+    // the whole panel on every drag pointermove (see connectedPropNamesKey).
+    //
+    // varNames comes from a FRESH graphToCode rather than store.nodeVarNames:
+    // that map is only refreshed on the graph→code path, so after a code-panel
+    // Apply (which ends in setNodes(..., 'code')) it is stale, and a stale
+    // name would write a tuned value into the wrong node.
+    const { varNames } = graphToCode(store.nodes, store.edges, NODE_REGISTRY);
+    const plan = planUniformDefaults(store.nodes, varNames, uniforms, uniformValuesRef.current);
+    if (plan.size === 0) return;
+    store.pushHistory(); // setNodes doesn't push on its own
+    store.setNodes(applyUniformDefaults(store.nodes, plan), 'graph');
+  }, [uniforms]);
+
   const handleBoundsChange = useCallback((name: string, key: 'min' | 'max', value: number) => {
     setUniformBounds((prev) => {
       const current = prev[name] ?? { min: 0, max: 1 };
@@ -1037,81 +1065,42 @@ export function ShaderPreview() {
       }}
     >
       <div className="shader-preview__controls">
-        <button
-          className="shader-preview__play-btn"
-          onClick={() => setPlaying((p) => !p)}
-          title={playing ? t('Pause rotation', language) : t('Play rotation', language)}
-          aria-label={playing ? t('Pause rotation', language) : t('Play rotation', language)}
-        >
-          {playing ? '\u23F8' : '\u25B6'}
-        </button>
-        <button
-          type="button"
-          className="shader-preview__fs-btn"
-          onClick={handleToggleFullscreen}
-          title={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
-          aria-label={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
-        >
-          {isFullscreen ? '\u2715' : '\u26F6'}
-        </button>
-        <button
-          type="button"
-          className="shader-preview__reset-btn"
-          onClick={handleReset}
-          title={t('Reset camera, lighting, subdivision, and uniform values to defaults', language)}
-        >
-          {t('Reset', language)}
-        </button>
-        {/* Hidden on desktop: the Tauri app has the LAN "VR" bench flow in
-            the toolbar, and window.open in its webview isn't this feature's
-            target. */}
-        {!__FS_DESKTOP__ && (
-          <button
-            type="button"
-            className="shader-preview__vr-btn"
-            onClick={handleOpenVR}
-            title={t('Open this shader in a new window with an Enter-VR button (WebXR requires a top-level page)', language)}
+        <label className="shader-preview__ctl">
+          <span className="shader-preview__ctl-label">{t('Light', language)}</span>
+          <select
+            className="shader-preview__geo-select"
+            value={lighting}
+            onChange={(e) => setLighting(e.target.value as LightingMode)}
+            title={t('Lighting mode', language)}
+            aria-label={t('Lighting mode', language)}
           >
-            VR
-          </button>
-        )}
-        <input
-          type="color"
-          className="shader-preview__bg-color"
-          value={bgColor}
-          onChange={(e) => setBgColor(e.target.value)}
-          title={t('Background color', language)}
-          aria-label={t('Preview background color', language)}
-        />
-        <select
-          className="shader-preview__geo-select"
-          value={lighting}
-          onChange={(e) => setLighting(e.target.value as LightingMode)}
-          title={t('Lighting mode', language)}
-          aria-label={t('Lighting mode', language)}
-        >
-          <option value="studio">{t('light: Studio', language)}</option>
-          <option value="moon">{t('light: Moon', language)}</option>
-          <option value="laboratory">{t('light: Laboratory', language)}</option>
-        </select>
-        <select
-          className="shader-preview__geo-select"
-          value={geometry}
-          onChange={(e) => setGeometry(e.target.value as GeometryType)}
-          title={t('Preview geometry — drag the model to orbit, scroll to zoom; drop a 3D model (.obj / .glb / .gltf) on the preview to shade your own mesh', language)}
-          aria-label={t('Preview geometry', language)}
-        >
-          <option value="sphere">{t('Sphere', language)}</option>
-          <option value="cube">{t('Cube', language)}</option>
-          <option value="plane">{t('Plane', language)}</option>
-          <option value="teapot">{t('Utah Teapot', language)}</option>
-          <option value="bunny">{t('Stanford Bunny', language)}</option>
-          {previewMesh && (
-            <option value="custom">{`${t('Model:', language)} ${truncateMiddle(previewMesh.name, 24)}`}</option>
-          )}
-        </select>
+            <option value="studio">{t('Studio', language)}</option>
+            <option value="moon">{t('Moon', language)}</option>
+            <option value="laboratory">{t('Laboratory', language)}</option>
+          </select>
+        </label>
+        <label className="shader-preview__ctl">
+          <span className="shader-preview__ctl-label">{t('Model', language)}</span>
+          <select
+            className="shader-preview__geo-select"
+            value={geometry}
+            onChange={(e) => setGeometry(e.target.value as GeometryType)}
+            title={t('Preview geometry — drag the model to orbit, scroll to zoom; drop a 3D model (.obj / .glb / .gltf) on the preview to shade your own mesh', language)}
+            aria-label={t('Preview geometry', language)}
+          >
+            <option value="sphere">{t('Sphere', language)}</option>
+            <option value="cube">{t('Cube', language)}</option>
+            <option value="plane">{t('Plane', language)}</option>
+            <option value="teapot">{t('Utah Teapot', language)}</option>
+            <option value="bunny">{t('Stanford Bunny', language)}</option>
+            {previewMesh && (
+              <option value="custom">{`${t('Model:', language)} ${truncateMiddle(previewMesh.name, 24)}`}</option>
+            )}
+          </select>
+        </label>
         {!isModelGeometry(geometry) && (
           <label className="shader-preview__subdivision" title={t('Mesh subdivision', language)}>
+            <span className="shader-preview__ctl-label">{t('Subd', language)}</span>
             <input
               type="range"
               min={SUBDIVISION_MIN}
@@ -1124,14 +1113,27 @@ export function ShaderPreview() {
             <span className="shader-preview__subdivision-value">{subdivision}</span>
           </label>
         )}
+        {/* Hidden on desktop: the Tauri app has the LAN "VR" bench flow in
+            the toolbar, and window.open in its webview isn't this feature's
+            target. */}
+        {!__FS_DESKTOP__ && (
+          <button
+            type="button"
+            className="shader-preview__vr-btn"
+            onClick={handleOpenVR}
+            title={t('Open this shader in a new window and enter immersive VR, with a frame-time / FPS readout in view (WebXR requires a top-level page)', language)}
+          >
+            VR
+          </button>
+        )}
         {uniforms.length > 0 && (
           <button
             type="button"
             className={`shader-preview__props-btn${showUniforms ? ' shader-preview__props-btn--active' : ''}`}
             onClick={() => setShowUniforms((v) => !v)}
-            title={showUniforms ? t('Hide properties', language) : t('Show properties', language)}
+            title={showUniforms ? t('Hide uniforms', language) : t('Show uniforms', language)}
           >
-            {t('Properties', language)}
+            {t('Uniforms', language)}
           </button>
         )}
       </div>
@@ -1186,8 +1188,61 @@ export function ShaderPreview() {
           allow="fullscreen *; xr-spatial-tracking *"
           allowFullScreen
         />
+        {/* Bottom-center playback/view cluster — floats over the 3D view (so
+            it stays available in fullscreen): fullscreen, play/pause,
+            background color, reset. */}
+        <div className="shader-preview__bottom-controls">
+          <button
+            type="button"
+            className="shader-preview__fs-btn"
+            onClick={handleToggleFullscreen}
+            title={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
+            aria-label={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
+          >
+            {/* Distinct exit glyph — never '✕', which would twin with the red
+                Reset ✕ two buttons over while fullscreen. */}
+            {isFullscreen ? '⤡' : '⛶'}
+          </button>
+          <button
+            className="shader-preview__play-btn"
+            onClick={() => setPlaying((p) => !p)}
+            title={playing ? t('Pause rotation', language) : t('Play rotation', language)}
+            aria-label={playing ? t('Pause rotation', language) : t('Play rotation', language)}
+          >
+            {playing ? '⏸' : '▶'}
+          </button>
+          <input
+            type="color"
+            className="shader-preview__bg-color"
+            value={bgColor}
+            onChange={(e) => setBgColor(e.target.value)}
+            title={t('Background color', language)}
+            aria-label={t('Preview background color', language)}
+          />
+          <button
+            type="button"
+            className="shader-preview__reset-btn"
+            onClick={handleReset}
+            title={t('Reset camera, lighting, subdivision, and uniform values to defaults', language)}
+            aria-label={t('Reset', language)}
+          >
+            {'✕'}
+          </button>
+        </div>
         {uniforms.length > 0 && showUniforms && (
           <div className="shader-preview__uniforms">
+            {/* '*' means the graph has no property nodes at all (hand-written
+                TSL), so there is nothing in the graph to write back to. */}
+            {connectedPropNamesKey !== '*' && (
+              <button
+                type="button"
+                className="shader-preview__uniforms-default-btn"
+                onClick={handleSetDefaults}
+                title={t('Bake the values below into the graph as the shader’s defaults. Recompiles the preview. Slider min/max stay a preview setting — the graph has no field for them.', language)}
+              >
+                {t('Set as default', language)}
+              </button>
+            )}
             {uniforms.map((u) => {
               const bounds = uniformBounds[u.name] ?? { min: 0, max: 1 };
               const raw = uniformValues[u.name] ?? u.defaultValue;

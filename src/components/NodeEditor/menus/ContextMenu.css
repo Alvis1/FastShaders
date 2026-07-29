@@ -30,6 +30,9 @@
   /* Never taller than the viewport — ContextMenu.tsx clamps x/y to keep the
      menu on-screen, and this keeps it from overflowing on short windows. */
   max-height: min(520px, calc(100vh - 16px));
+  /* …and never wider than it. Without this the box just grows off-screen; with
+     it, over-wide content overflows into the list's horizontal scroll below. */
+  max-width: calc(100vw - 16px);
   display: flex;
   flex-direction: column;
   /* Larger type inside menus: every submenu (and DragNumberInput) sizes its
@@ -106,8 +109,22 @@
    shrinks with the viewport instead of being pinned to a fixed height. */
 .context-menu__list {
   overflow-y: auto;
+  /* Blender-style: a menu that doesn't fit horizontally SCROLLS. Settings rows
+     are label + fixed-width field pairs, so without this the label is what
+     gives — squeezed to one word per line — while the field stays put. */
+  overflow-x: auto;
   flex: 1;
   min-height: 0;
+}
+
+/* Rows hold their natural width so the list genuinely overflows (and can be
+   scrolled) instead of compressing. Scoped OFF the add-node menu, whose fixed
+   400px width exists precisely so long descriptions wrap rather than run.
+   Note a row narrower than the widest one paints its hover background only to
+   the visible width — visible only while scrolled, and far better than the
+   squeeze it replaces. */
+.context-menu:not(.context-menu--add-node) .context-menu__list > * {
+  min-width: max-content;
 }
 
 .context-menu__category {
