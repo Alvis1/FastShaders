@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
-  Controls,
   MiniMap,
+  Panel,
   addEdge,
   reconnectEdge,
   useReactFlow,
+  useStore,
+  type ReactFlowState,
   Position,
   type OnConnect,
   type Connection,
@@ -16,6 +18,7 @@ import {
   BackgroundVariant,
   SelectionMode,
 } from '@xyflow/react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
 import { useLongPress } from '@/hooks/useLongPress';
 import { ShaderNode } from './nodes/ShaderNode';
@@ -77,6 +80,7 @@ import { encodeImageFile, isImageFile, isSvgFile } from '@/utils/imageImport';
 import { importShaderZip, importShaderText, isZipFile } from '@/engine/projectImport';
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
 import { getNodeValues } from '@/types';
+import { t } from '@/i18n';
 import { nextPropertyName } from '@/utils/propertyConvert';
 import complexityData from '@/registry/complexity.json';
 import './NodeEditor.css';
@@ -89,7 +93,6 @@ const DEFAULT_EDGE_OPTIONS = { type: 'typed', animated: true } as const;
 const FIT_VIEW_OPTIONS = { maxZoom: 1.5 } as const;
 const PRO_OPTIONS = { hideAttribution: true } as const;
 const DESKTOP_PAN_ON_DRAG = [1, 2];
-const CONTROLS_STYLE = { background: 'var(--bg-surface)', borderColor: 'var(--border-subtle)' } as const;
 const MINIMAP_STYLE = { backgroundColor: 'var(--bg-panel)' } as const;
 
 const nodeTypes = {
@@ -544,11 +547,22 @@ export function NodeEditor() {
   const isDarkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const drawToolActive = useAppStore((s) => s.drawToolActive);
   const drawEraser = useAppStore((s) => s.drawEraser);
+  const canUndo = useAppStore((s) => s.past.length > 0);
+  const canRedo = useAppStore((s) => s.future.length > 0);
+  const language = useAppStore((s) => s.language);
   // Live in-progress stroke path, written imperatively by the draw-capture
   // handler (below) and rendered inside DrawingLayer's live opacity group.
   const livePathRef = useRef<SVGPathElement | null>(null);
-  const { screenToFlowPosition, getViewport, setViewport, getInternalNode } =
+  const { screenToFlowPosition, getViewport, setViewport, getInternalNode, zoomIn, zoomOut, fitView } =
     useReactFlow();
+  // Disable the bar's zoom buttons at the zoom limits, mirroring the selector
+  // React Flow's own <Controls> used before this bar replaced it.
+  const { minZoomReached, maxZoomReached } = useStore(
+    useShallow((s: ReactFlowState) => ({
+      minZoomReached: s.transform[2] <= s.minZoom,
+      maxZoomReached: s.transform[2] >= s.maxZoom,
+    }))
+  );
 
   // True while a two-finger touch navigation gesture (pan / pinch-zoom) is in
   // progress — lets the draw handler pause its stroke so a second finger
@@ -2204,7 +2218,7 @@ export function NodeEditor() {
 
     const isChrome = (t: EventTarget | null) =>
       !!(t as HTMLElement | null)?.closest(
-        'input, textarea, select, button, .nodrag, [contenteditable="true"], .react-flow__minimap, .react-flow__controls, .react-flow__panel',
+        'input, textarea, select, button, .nodrag, [contenteditable="true"], .react-flow__minimap, .react-flow__panel',
       );
     const flow = (e: PointerEvent) => screenToFlowPosition({ x: e.clientX, y: e.clientY });
     const updateLive = () => livePathRef.current?.setAttribute('d', splinePath(strokePointPairs(pts)));
@@ -2487,25 +2501,6 @@ export function NodeEditor() {
               cards, above the canvas bg) and is clipped by the pane, so it
               tucks behind the code/preview frames. */}
           <PreviewLink />
-          <Controls
-            showInteractive={false}
-            style={CONTROLS_STYLE}
-          >
-            <label
-              className="react-flow__controls-button node-editor__bg-color-btn"
-              title="Canvas background color"
-            >
-              <span
-                className="node-editor__bg-color-swatch"
-                style={{ background: nodeEditorBgColor }}
-              />
-              <input
-                type="color"
-                value={nodeEditorBgColor}
-                onChange={(e) => setNodeEditorBgColor(e.target.value)}
-              />
-            </label>
-          </Controls>
           <MiniMap
             position="top-left"
             nodeColor={minimapNodeColor}
@@ -2513,7 +2508,81 @@ export function NodeEditor() {
             maskColor={minimapMask}
           />
           <DrawingLayer livePathRef={livePathRef} />
-          <DrawToolbar />
+          {/* Bottom-center canvas bar: undo/redo + draw tools + view controls
+              in one pill (replaces the old toolbar history group, the RF
+              Controls stack, and the top-center draw toolbar). */}
+          <Panel position="bottom-center" className="fs-canvas-bar nodrag nowheel">
+            <div className="fs-canvas-bar__group">
+              <button
+                type="button"
+                className="fs-canvas-bar__btn fs-canvas-bar__btn--history"
+                onClick={() => useAppStore.getState().undo()}
+                disabled={!canUndo}
+                title={t('Undo (Ctrl+Z / ⌘Z)', language)}
+                aria-label={t('Undo', language)}
+              >
+                ↶
+              </button>
+              <button
+                type="button"
+                className="fs-canvas-bar__btn fs-canvas-bar__btn--history"
+                onClick={() => useAppStore.getState().redo()}
+                disabled={!canRedo}
+                title={t('Redo (Ctrl+Shift+Z / ⇧⌘Z)', language)}
+                aria-label={t('Redo', language)}
+              >
+                ↷
+              </button>
+            </div>
+            <div className="fs-canvas-bar__group">
+              <DrawToolbar />
+            </div>
+            <div className="fs-canvas-bar__group">
+              <button
+                type="button"
+                className="fs-canvas-bar__btn"
+                onClick={() => zoomOut()}
+                disabled={minZoomReached}
+                title={t('Zoom out', language)}
+                aria-label={t('Zoom out', language)}
+              >
+                −
+              </button>
+              <button
+                type="button"
+                className="fs-canvas-bar__btn"
+                onClick={() => zoomIn()}
+                disabled={maxZoomReached}
+                title={t('Zoom in', language)}
+                aria-label={t('Zoom in', language)}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="fs-canvas-bar__btn"
+                onClick={() => fitView()}
+                title={t('Fit view', language)}
+                aria-label={t('Fit view', language)}
+              >
+                ⤢
+              </button>
+              <label
+                className="fs-canvas-bar__btn node-editor__bg-color-btn"
+                title={t('Canvas background color', language)}
+              >
+                <span
+                  className="node-editor__bg-color-swatch"
+                  style={{ background: nodeEditorBgColor }}
+                />
+                <input
+                  type="color"
+                  value={nodeEditorBgColor}
+                  onChange={(e) => setNodeEditorBgColor(e.target.value)}
+                />
+              </label>
+            </div>
+          </Panel>
         </ReactFlow>
 
         {contextMenu.open && <ContextMenu />}

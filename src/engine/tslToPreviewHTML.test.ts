@@ -94,6 +94,38 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
     expect(gpuIdx).toBeLessThan(bundleIdx);
   });
 
+  it('xr: emits the head-locked stats panel + the immersive entry gate', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'sphere', xr: true });
+    expect(html).toContain('fs-xr-stats');
+    expect(html).toContain('AFRAME.registerComponent("fs-xr-stats"');
+    // Head-locked ONLY via the camera OBJECT — a child entity world-locks in XR.
+    expect(html).toContain('getObject3D("camera")');
+    // Offline: canvas texture, never A-Frame text (which fetches a CDN font).
+    expect(html).toContain('CanvasTexture');
+    expect(html).not.toContain('<a-text');
+    // Auto-enter with a real in-document button as the activation fallback.
+    expect(html).toContain('id="vr-gate"');
+    expect(html).toContain('scene.enterVR()');
+  });
+
+  it('xr: the entry button falls back to fullscreen when immersive-vr is unsupported', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'sphere', xr: true });
+    // Capability-resolved, never a UA sniff.
+    expect(html).toContain('isSessionSupported("immersive-vr")');
+    expect(html).toContain('requestFullscreen');
+    expect(html).toContain('webkitRequestFullscreen');
+    // The label must state which of the two the click will do.
+    expect(html).toContain('"Enter VR"');
+    expect(html).toContain('"Fullscreen"');
+    expect(html).toContain('"Exit fullscreen"');
+  });
+
+  it('non-xr preview carries neither the stats panel nor the VR gate', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'sphere' });
+    expect(html).not.toContain('fs-xr-stats');
+    expect(html).not.toContain('vr-gate');
+  });
+
   it('xr sphere: keeps the primitive geometry attribute', () => {
     const html = tslToPreviewHTML(TSL, { geometry: 'sphere', xr: true });
     expect(html).toContain(esc('geometry="primitive: sphere'));

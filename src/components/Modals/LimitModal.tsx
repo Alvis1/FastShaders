@@ -73,7 +73,7 @@ function copyFor(n: LimitNotice, language: Language): NoticeCopy {
           t('Prefer more, smaller textures over a few large ones — drop the resolution and tile them via the UV node.', language),
           t('Delete Image nodes you no longer use (their pixels stay embedded until removed).', language),
           t('Reuse one Image node for several effects instead of importing the file again.', language),
-          t('Export the project (Download Shader) as a backup before going over the budget.', language),
+          t('Export the project (the "Export" button in the toolbar) as a backup before going over the budget.', language),
         ],
         canProceed: true,
         toggle: ignoreToggle,
@@ -116,7 +116,7 @@ function copyFor(n: LimitNotice, language: Language): NoticeCopy {
         message: t('Saving {detail} to browser storage failed — the project is too big for the ~5 MB localStorage quota. Changes will NOT survive a reload until it fits again.', language)
           .replace('{detail}', () => n.detail ?? t('your work', language)),
         suggestions: [
-          t('Click "Download Shader" in the code panel now — that file embeds the whole project and is your reliable backup.', language),
+          t('Click "Export" in the toolbar now — that file embeds the whole project and is your reliable backup.', language),
           t('Shrink or remove embedded images — they dominate the storage footprint; smaller resolutions tile just as well.', language),
           t('Delete saved groups you no longer need (they store their own copy of every embedded image).', language),
         ],

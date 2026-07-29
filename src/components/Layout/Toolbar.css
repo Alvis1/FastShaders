@@ -173,44 +173,6 @@
   gap: var(--space-2);
 }
 
-/* Undo / redo. Its own group rather than part of __center so it doesn't shift
-   the centred shader-name field. */
-.toolbar__history {
-  flex-shrink: 0;
-  display: flex;
-  gap: var(--space-1);
-}
-
-.toolbar__history-btn {
-  font-family: var(--font-sans);
-  font-size: var(--font-size-lg);
-  line-height: 1;
-  color: var(--text-primary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm);
-  padding: 5px 10px;
-  cursor: pointer;
-  transition: border-color var(--transition-fast), color var(--transition-fast),
-    background var(--transition-fast), opacity var(--transition-fast);
-}
-
-.toolbar__history-btn:hover:not(:disabled) {
-  border-color: var(--border-focus);
-  color: var(--border-focus);
-  background: var(--bg-panel);
-}
-
-.toolbar__history-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.toolbar__history-btn:focus-visible {
-  outline: 1px solid var(--border-focus);
-  outline-offset: 2px;
-}
-
 .toolbar__name-label {
   font-family: var(--font-sans);
   font-size: var(--font-size-lg);
@@ -254,6 +216,42 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* EXPORT — the one primary action in the toolbar; accent-filled so it reads
+   as the "take my shader" button next to the name field. */
+.toolbar__export {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--text-accent);
+  border: 1px solid var(--text-accent);
+  border-radius: var(--border-radius-sm);
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: filter var(--transition-fast);
+  align-self: center;
+}
+
+.toolbar__export:hover {
+  filter: brightness(1.1);
+}
+
+.toolbar__export:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* Dark/light glyph toggle — chip-sized like its neighbours, glyph enlarged.
+   Double-class selector: must out-rank both the later .toolbar__sc-link rule
+   and the button.toolbar__sc-link reset, or these declarations are dead. */
+.toolbar__sc-link.toolbar__theme-toggle {
+  font-size: 16px;
+  line-height: 1;
+  padding: 5px 10px;
 }
 
 /* "Local" desktop-download dropdown — same popover pattern as the contact

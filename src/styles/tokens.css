@@ -74,6 +74,20 @@
   --space-6: 24px;
   --space-8: 32px;
 
+  /* Panel seams and the resize grips that grow out of them. ONE value so a
+     grip's outline and the edge it attaches to always read as a single
+     continuous line — that shared color is what makes the tab look integrated
+     rather than parked on top. Aliased (not copied) so the dark-theme
+     redefinition of --border-strong below flows through automatically. */
+  --edge-color: var(--border-strong);
+
+  /* ===== CHROME CONTROLS =====
+     One size for every small square control OUTSIDE the graph: canvas-bar
+     buttons, preview buttons, and the shared .fs-grip resize handle
+     (styles/controls.css). Node/socket dimensions are separate and live
+     below — never size chrome from --handle-size. */
+  --ctl-size: 28px;
+
   /* ===== NODE DIMENSIONS ===== */
   --node-min-width: 180px;
   --node-padding: 14px;

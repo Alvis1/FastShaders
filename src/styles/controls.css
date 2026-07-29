@@ -1,0 +1,155 @@
+/* ===== SHARED CHROME CONTROLS =====
+   App-wide presentational primitives that more than one component needs. Kept
+   here rather than in a component's own CSS so the SAME rule serves every
+   consumer — the whole point of the grip is that a resize affordance looks
+   identical wherever it appears.
+
+   Loaded from main.tsx only: node-editor.html (GraphsPage) has neither a
+   splitter nor an asset bar. */
+
+/* ---------- Drag-in-flight document state ----------
+   Set on <html> by utils/dragChrome.ts for the length of a splitter / asset-bar
+   drag. The `* !important` reach is deliberate and load-bearing: a plain
+   `user-select: none` on <body> is INHERITED, so any pane declaring its own
+   value (Monaco, inputs, node cards) keeps selecting text as the pointer
+   sweeps across it — which shows up as stray selection boxes mid-drag. */
+:root.fs-dragging,
+:root.fs-dragging * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* ---------- Resize grip ----------
+   A tab growing OUT of the edge it resizes: outlined in the edge's own color,
+   flat where it meets the edge and rounded on the far side, so it reads as
+   part of the divider rather than a button parked on top of it.
+
+   It is the ONLY drag target — the divider bar itself is inert — so it owns
+   the cursor, the pointer handlers, and touch-action.
+
+   Positioned 20% along the divider measured from its FAR end (bottom for a
+   vertical bar, right for a horizontal one). Expressed as 80% from the start
+   so the centering translate stays the same in both axes.
+
+   NB "grip", not "handle": in this codebase `handle` means a React Flow port
+   disc (TypedHandle, --handle-size, .react-flow__handle). */
+.fs-grip {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  background: var(--bg-surface);
+  /* --edge-color is shared with every seam a grip attaches to, so the outline
+     and the edge are literally the same line. */
+  border: 2px solid var(--edge-color);
+  color: var(--text-secondary);
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+  /* the grip drags; nothing else does */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* :active keeps the highlight through a drag — the pointer is captured, so it
+   routinely travels well off the grip while the button is held. The edge the
+   grip is attached to lights up with it (the two are one control): see the
+   `:has(.fs-grip:hover)` rules in SplitPane.css and ContentBrowser.css. */
+.fs-grip:hover,
+.fs-grip:active,
+.fs-grip:focus-visible {
+  border-color: var(--border-focus);
+  color: var(--border-focus);
+}
+
+.fs-grip:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* The diamond, split down the middle into two triangles that read as arrows
+   pointing along the drag axis. ::before is the diamond outline, ::after the
+   splitter line.
+
+   A rotated square rather than a ◇ glyph: the app self-hosts a woff2 SUBSET of
+   Inter (see main.tsx), so a geometric-shapes codepoint is not guaranteed to
+   be in the font and would render as tofu offline. */
+.fs-grip::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-radius: 1px;
+  /* Centered explicitly: the static position of an abspos child of a flex
+     container is spec'd from align/justify, but relying on that is subtle —
+     and the rotate here would have to compose with it anyway. */
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.fs-grip::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: currentColor;
+}
+
+/* ---------- Vertical divider (a column splitter) ----------
+   Drag is horizontal, so the pill hangs off the divider's LEFT face and the
+   diamond is split by a VERTICAL line into ◀ ▶.
+
+   Anchored just ABOVE the asset bar rather than at a fixed percentage: the
+   lower stretch of this divider runs alongside the asset bar, and the grip
+   belongs on the canvas stretch. --fs-asset-bar-h is published on :root by
+   ContentBrowser (including imperatively mid-drag), so the grip rides the bar
+   as it is resized; the fallback keeps it sane if the bar isn't mounted. */
+.fs-grip--v {
+  bottom: calc(var(--fs-asset-bar-h, 0px) + var(--space-3));
+  right: 100%;
+  width: var(--ctl-size);
+  /* Taller than wide: a tab reads as belonging to a vertical edge. */
+  height: calc(var(--ctl-size) * 1.6);
+  cursor: col-resize;
+  /* Flat against the divider (right), rounded away from it (left). */
+  border-radius: var(--border-radius-md) 0 0 var(--border-radius-md);
+  /* The divider supplies the line on that side. */
+  border-right: none;
+}
+
+.fs-grip--v::after {
+  width: 2px;
+  height: 18px;
+}
+
+/* ---------- Horizontal divider (a row splitter / the asset bar's top edge) ----------
+   Drag is vertical, so the pill sits ABOVE the divider and the diamond is
+   split by a HORIZONTAL line into ▲ ▼.
+
+   Default is 20% from the RIGHT (the asset bar); .fs-grip--start moves it to
+   20% from the left for the code/preview seam, so the two horizontal grips
+   don't stack up on the same side of the screen. */
+.fs-grip--h {
+  left: 80%;
+  bottom: 100%;
+  transform: translateX(-50%);
+  height: var(--ctl-size);
+  width: calc(var(--ctl-size) * 1.6);
+  cursor: row-resize;
+  /* Flat against the divider (bottom), rounded away from it (top). */
+  border-radius: var(--border-radius-md) var(--border-radius-md) 0 0;
+  border-bottom: none;
+}
+
+.fs-grip--h::after {
+  height: 2px;
+  width: 18px;
+}
+
+/* Opt a horizontal grip to the LEFT end of its edge. */
+.fs-grip--h.fs-grip--start {
+  left: 20%;
+}

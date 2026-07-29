@@ -237,6 +237,119 @@ function getScriptUrls() {
  *
  * String literal so the iframe sees raw JS — no Vite transformation pass.
  */
+/**
+ * Frame-time / FPS readout for the immersive popup (xr only).
+ *
+ * Head-locked the ONLY way that survives an XR session: the panel is added to
+ * the THREE.PerspectiveCamera A-Frame installs via setObject3D('camera') —
+ * NOT to the camera entity's object3D. A child <a-entity> attaches to the
+ * camera's PARENT, which look-controls rotates in flat mode but which XR
+ * leaves alone, so it looks head-locked on a desktop and silently world-locks
+ * in the headset.
+ *
+ * Text is rasterized into a canvas + CanvasTexture rather than drawn with
+ * <a-text>: A-Frame's text component fetches its MSDF font from
+ * cdn.aframe.io, and this app must run with no network.
+ *
+ * Measurement rides A-Frame's tick, which is driven by
+ * renderer.setAnimationLoop — three swaps that for session.requestAnimationFrame
+ * when presenting, so it keeps ticking in XR (window.requestAnimationFrame
+ * does not). The number is the presented FRAME PERIOD, i.e. it includes vsync:
+ * on a headset locked to 72/90/120 Hz it reads the refresh rate until the
+ * shader actually misses frames.
+ */
+const XR_STATS_SCRIPT = `<script>
+  if (window.AFRAME && !AFRAME.components["fs-xr-stats"]) {
+    AFRAME.registerComponent("fs-xr-stats", {
+      init: function () {
+        var canvas = document.createElement("canvas");
+        canvas.width = 512;
+        canvas.height = 128;
+        this.ctx = canvas.getContext("2d");
+        this.tex = new THREE.CanvasTexture(canvas);
+        this.tex.minFilter = THREE.LinearFilter;
+        this.mesh = new THREE.Mesh(
+          new THREE.PlaneGeometry(1, 1),
+          new THREE.MeshBasicMaterial({ map: this.tex, transparent: true, depthTest: false, toneMapped: false })
+        );
+        // Draw last and ignore depth: entering VR zeroes the camera position,
+        // which puts the viewer inside the previewed mesh — without this the
+        // shaded surface would occlude the panel.
+        this.mesh.renderOrder = 999;
+        this.mesh.frustumCulled = false;
+        this.acc = 0;
+        this.frames = 0;
+        this.sinceDraw = 0;
+        this.last = 0;
+        this.ft = 0;
+        this.fps = 0;
+        this.draw();
+      },
+      attach: function () {
+        if (this.cam) return true;
+        var camEl = document.querySelector("[camera]");
+        var cam = camEl && camEl.getObject3D && camEl.getObject3D("camera");
+        if (!cam) return false;
+        cam.add(this.mesh);
+        this.cam = cam;
+        return true;
+      },
+      place: function () {
+        // three rewrites camera.fov from the live XR projection every frame,
+        // so this tracks the headset's real vertical FOV, never the authored
+        // fov: 20 (which XR overwrites).
+        var dist = 1;
+        var halfH = Math.tan((this.cam.fov * Math.PI / 180) / 2) * dist;
+        var h = halfH * 0.16;
+        this.mesh.scale.set(h * 4, h, 1);
+        // Centered, one quarter of the FULL view height above centre.
+        this.mesh.position.set(0, halfH * 0.5, -dist);
+      },
+      draw: function () {
+        var ctx = this.ctx;
+        var w = ctx.canvas.width;
+        var h = ctx.canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "600 54px monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(this.ft.toFixed(1) + " ms   " + Math.round(this.fps) + " fps", w / 2, h / 2);
+        this.tex.needsUpdate = true;
+      },
+      tick: function () {
+        if (!this.attach()) return;
+        var now = (window.performance && performance.now) ? performance.now() : Date.now();
+        if (this.last) {
+          var dt = now - this.last;
+          // Drop absurd gaps (tab hidden, session handover) so one stall
+          // doesn't poison the average.
+          if (dt > 0 && dt < 1000) {
+            this.acc += dt;
+            this.frames++;
+            this.sinceDraw += dt;
+          }
+        }
+        this.last = now;
+        this.place();
+        // Redraw at ~4Hz: re-rasterizing and re-uploading a texture every
+        // frame is itself a measurable GPU cost, and this app exists to
+        // measure GPU cost — the readout must not bias what it reports.
+        if (this.sinceDraw >= 250 && this.frames > 0) {
+          this.ft = this.acc / this.frames;
+          this.fps = 1000 / this.ft;
+          this.acc = 0;
+          this.frames = 0;
+          this.sinceDraw = 0;
+          this.draw();
+        }
+      }
+    });
+  }
+<${''}/script>`;
+
 const FIT_BOUNDS_SCRIPT = `<script>
   if (window.AFRAME && !AFRAME.components["fit-bounds"]) {
     // Merge vertices that share a quantized position. Discards old normals/UVs
@@ -1056,10 +1169,22 @@ export function tslToPreviewHTML(
   // and the first WebGPU paint shows the chosen color, not a white flash.
   lines.push(`    html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: ${bgColor}; }`);
   lines.push('    #error { position: absolute; top: 8px; left: 8px; right: 8px; color: #ff6b6b; font: 12px/1.4 monospace; white-space: pre-wrap; z-index: 10; pointer-events: none; }');
+  if (xr) {
+    // Bottom-center, not dead-center: it overlays a live canvas the user can
+    // still orbit, so it must not sit on the previewed object.
+    lines.push('    #vr-gate { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 11; padding: 14px 30px; font: 600 17px/1 system-ui, sans-serif; color: #fff; background: rgba(0,0,0,0.72); border: 1px solid rgba(255,255,255,0.35); border-radius: 10px; cursor: pointer; }');
+    lines.push('    #vr-gate[hidden] { display: none; }');
+  }
   lines.push('  </style>');
   lines.push('</head>');
   lines.push('<body>');
   lines.push('<div id="error"></div>');
+  if (xr) {
+    // Starts HIDDEN so it can't flash the wrong label before capability is
+    // known; the auto-entry script reveals it and sets the text to "Enter VR"
+    // or "Fullscreen" depending on what this device can actually do.
+    lines.push('<button id="vr-gate" type="button" hidden>Enter VR</button>');
+  }
   lines.push('');
 
   // Create shader blob URL before the scene is parsed
@@ -1074,6 +1199,13 @@ export function tslToPreviewHTML(
   // primitive geometries — the component is only attached to OBJ entities.
   lines.push(FIT_BOUNDS_SCRIPT);
   lines.push('');
+
+  // Register the in-headset stats panel. Attached via the <a-scene> attribute
+  // below, so it only exists on the XR popup.
+  if (xr) {
+    lines.push(XR_STATS_SCRIPT);
+    lines.push('');
+  }
 
   // Register the weld-verts component used by displaced primitive previews.
   // Only attached (via entityAttrs) when weldPrimitive; inert otherwise.
@@ -1095,7 +1227,9 @@ export function tslToPreviewHTML(
   const sceneLines: string[] = [];
   // vr-mode-ui only in xr mode: A-Frame then renders its own Enter-VR button,
   // which is the immersive entry point for the popup page.
-  sceneLines.push(`<a-scene vr-mode-ui="enabled: ${xr ? 'true' : 'false'}" loading-screen="enabled: false" background="color: ${bgColor}">`);
+  // fs-xr-stats draws the in-headset frame-time/FPS panel (xr only — the
+  // editor's sandboxed preview must not pay for it).
+  sceneLines.push(`<a-scene vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ''} loading-screen="enabled: false" background="color: ${bgColor}">`);
   sceneLines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
   // Parent holds the spin (so it tweens cleanly 0→360 on world Y/Z), child
   // holds the static tilt and the shader/geometry. The id stays on the child
@@ -1231,6 +1365,77 @@ export function tslToPreviewHTML(
     lines.push('      window.__fsWhenSceneBooted(function () { apply(kind, payload); });');
     lines.push('    });');
     lines.push('  })();');
+    lines.push(`<${''}/script>`);
+    lines.push('');
+  }
+
+  // Immersive entry. The VR button's promise is "press it and you're in VR",
+  // and this gets as close as the platform allows: requestSession needs
+  // transient user activation, and this document was produced by
+  // window.open + document.write, so whether the opening click's activation
+  // carries into it is browser-dependent (NOT verified on a headset here).
+  //
+  // So: attempt entry automatically, and keep a real in-document button as the
+  // fallback — a gesture originating inside this document is what Quest
+  // Browser reliably accepts (the same reason ShaderCarousel's bench-inout
+  // keeps its start gate inside the iframe rather than adopting it into the
+  // parent). The button stays visible until a session actually starts, so a
+  // silently-never-resolving enterVR() can't strand the user with no way in.
+  if (xr) {
+    lines.push('<script>');
+    lines.push('  __fsWhenSceneBooted(function () {');
+    lines.push('    var scene = document.querySelector("a-scene");');
+    lines.push('    var gate = document.getElementById("vr-gate");');
+    lines.push('    if (!scene || !gate) return;');
+    lines.push('    // One button, two meanings — whichever "as immersive as this');
+    lines.push('    // device gets" means here: a headset enters an immersive session,');
+    lines.push('    // a desktop goes fullscreen. Resolved once from real capability');
+    lines.push('    // rather than a UA sniff, and the label always says which it is.');
+    lines.push('    var supportsVR = false;');
+    lines.push('    function isFullscreen() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }');
+    lines.push('    function refresh() { gate.textContent = supportsVR ? "Enter VR" : (isFullscreen() ? "Exit fullscreen" : "Fullscreen"); }');
+    lines.push('    function enter() { try { return scene.enterVR(); } catch (e) { return null; } }');
+    lines.push('    function toggleFullscreen() {');
+    lines.push('      try {');
+    lines.push('        if (isFullscreen()) {');
+    lines.push('          var exit = document.exitFullscreen || document.webkitExitFullscreen;');
+    lines.push('          if (exit) exit.call(document);');
+    lines.push('        } else {');
+    lines.push('          var el = document.documentElement;');
+    lines.push('          var req = el.requestFullscreen || el.webkitRequestFullscreen;');
+    lines.push('          if (req) req.call(el);');
+    lines.push('        }');
+    lines.push('      } catch (e) { /* denied (no activation / policy) — label is unchanged */ }');
+    lines.push('    }');
+    lines.push('    scene.addEventListener("enter-vr", function () { gate.hidden = true; });');
+    lines.push('    scene.addEventListener("exit-vr", function () { gate.hidden = false; refresh(); });');
+    lines.push('    document.addEventListener("fullscreenchange", refresh);');
+    lines.push('    document.addEventListener("webkitfullscreenchange", refresh);');
+    lines.push('    gate.addEventListener("click", function () { if (supportsVR) enter(); else toggleFullscreen(); });');
+    lines.push('    // Only ever call enterVR when a REAL immersive-vr session is');
+    lines.push('    // available. With no headset A-Frame falls into its magic-window');
+    lines.push('    // fallback, which hides the entry affordances and leaves the page');
+    lines.push('    // in a pseudo-VR state the user cannot get out of — worse than');
+    lines.push('    // simply staying flat. Where that check fails the button stays,');
+    lines.push('    // as the fullscreen toggle.');
+    lines.push('    function autoEnter() {');
+    lines.push('      var xr = navigator.xr;');
+    lines.push('      gate.hidden = false;');
+    lines.push('      if (!xr || typeof xr.isSessionSupported !== "function") { refresh(); return; }');
+    lines.push('      xr.isSessionSupported("immersive-vr").then(function (ok) {');
+    lines.push('        supportsVR = !!ok;');
+    lines.push('        refresh();');
+    lines.push('        if (!ok) return;');
+    lines.push('        var p = enter();');
+    lines.push('        // Rejected = no transient activation carried into this');
+    lines.push('        // document; the button is showing, which is the way in.');
+    lines.push('        if (p && typeof p.catch === "function") p.catch(function () {});');
+    lines.push('      }).catch(function () { supportsVR = false; refresh(); });');
+    lines.push('    }');
+    lines.push('    refresh();');
+    lines.push('    if (scene.hasLoaded) autoEnter();');
+    lines.push('    else scene.addEventListener("loaded", autoEnter, { once: true });');
+    lines.push('  });');
     lines.push(`<${''}/script>`);
     lines.push('');
   }

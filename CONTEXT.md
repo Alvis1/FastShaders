@@ -24,7 +24,7 @@ src/
 ├── vite-env.d.ts                      # Type declarations (Vite env + __APP_VERSION__ + __FS_DESKTOP__ + window.__TAURI__)
 ├── components/
 │   ├── CodeEditor/
-│   │   ├── CodeEditor.tsx             # Monaco editor with TSL/Script folder tabs, Save, Load Script, Download Script
+│   │   ├── CodeEditor.tsx             # Monaco editor with TSL/Output folder tabs, Apply (code→graph), Import
 │   │   ├── CodeEditor.css
 │   │   ├── monacoSetup.ts             # Bundles Monaco locally: loader.config({ monaco }) + Vite ?worker workers (no CDN — offline/desktop requirement)
 │   │   └── tslLanguage.ts             # TSL language definition, completions, color picker
@@ -35,8 +35,8 @@ src/
 │   ├── Layout/
 │   │   ├── AppLayout.tsx              # Two nested SplitPanes (left: graph | right: code/preview)
 │   │   ├── AppLayout.css
-│   │   ├── SplitPane.tsx              # Draggable divider (pointer-captured, horizontal or vertical)
-│   │   ├── Toolbar.tsx                # Top bar: clickable brand → contact popover, version, shader name input, "Local" desktop-download dropdown (fixed GitHub-release asset names), desktop-only "VR" popover (LAN bench server address + secure-context how-to)
+│   │   ├── SplitPane.tsx              # Inert divider + a draggable .fs-grip tab (pointer-captured, horizontal or vertical)
+│   │   ├── Toolbar.tsx                # Top bar: clickable brand → contact popover, version, "Name:" input + EXPORT button (engine/exportShader), right cluster Local/SC/P/LV (fixed GitHub-release asset names on Local), desktop-only "VR" popover (LAN bench server address + secure-context how-to), app-wide sun/moon theme toggle
 │   │   ├── Toolbar.css
 │   │   ├── CostBar.tsx                # GPU complexity bar (totalCost vs headset budget)
 │   │   ├── CostBar.css
@@ -48,7 +48,7 @@ src/
 │   │   ├── dragConnect.ts             # Pure drag-node-onto-node connect decision logic (+ .test.ts)
 │   │   ├── overlapCascade.ts          # Post-snap make-room BFS — pushes overlapped nodes off the connected pair (+ .test.ts)
 │   │   ├── DrawingLayer.tsx           # Board-drawing ink layer — SVG via React Flow's ViewportPortal, strokes in flow coords (deliberately NOT a <canvas>)
-│   │   ├── DrawToolbar.tsx            # Drawing tool strip
+│   │   ├── DrawToolbar.tsx            # Draw-tool cluster (rendered inside NodeEditor's bottom-center canvas bar)
 │   │   ├── nodes/
 │   │   │   ├── ShaderNode.tsx         # Generic node for all TSL types (dynamic from registry, vec3/vec2 grouped display)
 │   │   │   ├── ShaderNode.css
@@ -125,7 +125,8 @@ src/
 │   ├── topologicalSort.ts             # Kahn's algorithm for execution order
 │   ├── evaluateTSLScript.ts           # isDirectAssignmentCode() — detects `model.material.*Node = …` style scripts
 │   ├── scriptToTSL.ts                # Reverse of tslToShaderModule — converts .js script back to Fn-wrapped TSL
-│   ├── projectImport.ts              # Shared import path (Load Script / code-panel drop / canvas drop): applyProjectToStore + importShaderText + importShaderZip
+│   ├── projectImport.ts              # Shared import path (Import button / code-panel drop / canvas drop): applyProjectToStore + importShaderText + importShaderZip
+│   ├── exportShader.ts               # Shared "Download Shader" path (toolbar EXPORT): tslToShaderModule + project embed + buildExportBundle, store read imperatively
 │   └── fastShadersProject.ts         # FASTSHADERS_PROJECT_V1 snapshot embed/extract (trailing block comment; proto-pollution-stripping JSON reviver)
 ├── hooks/
 │   ├── useSyncEngine.ts               # Bidirectional sync hook (watches graph/code changes)
@@ -155,12 +156,14 @@ src/
 │   ├── exposedPorts.ts                # Single home for the opt-in parameter-socket (`exposedPorts`) rules shared by render, settings menus, connect/sync/import auto-expose
 │   ├── drawings.ts                    # Board drawing-layer data model (DrawStroke) + pure helpers backing DrawingLayer — visual-only ink, quantized opacity isolation groups
 │   ├── propertyConvert.ts             # Constant ↔ uniform conversion pairs (float↔property_float, color↔property_color) for Node Settings "Convert to …"
+│   ├── uniformDefaults.ts             # "Set as default" plan/apply — bakes tuned Uniforms-overlay values back into property nodes (pure, + .test.ts)
 │   ├── graphTraversal.ts             # hasTimeUpstream() — BFS time-node detection with O(1) Map lookup
 │   ├── idGenerator.ts                 # generateId(), generateEdgeId()
 │   ├── mathPreview.ts                 # Sin/math waveform canvas renderer (scrolling curve + dot)
 │   ├── noisePreview.ts               # CPU noise (perlin2D, fbm2D, cellNoise2D, voronoi2D) — all 8 noise variants
 │   ├── nameUtils.ts                   # toKebabCase() for export filenames
 │   ├── edgeDisconnectFlag.ts          # Transient flag for edge disconnect suppression
+│   ├── dragChrome.ts                  # `.fs-dragging` on <html> + pinned cursor for grip drags — beginDragChrome returns the gesture's idempotent end call; refcounted across simultaneous drags
 │   ├── chainOperands.ts               # normalizeChainOperands() — compacts variadic arithmetic operand slots after a disconnect
 │   ├── nodeCost.ts                    # nodeCostPoints() — per-node GPU cost, scaling chainable arithmetic by operand count
 │   ├── csvParser.ts                   # Strict adversarial CSV parser (delimiter autodetect, finite-cell, caps) + transposeCsv()
@@ -173,6 +176,7 @@ src/
 │   └── zipReader.ts                   # ZIP reader (STORE + deflate via DecompressionStream, adversarial caps) for .zip import
 └── styles/
     ├── tokens.css                     # CSS custom properties (colors, spacing, shadows, fonts)
+    ├── controls.css                   # Shared chrome primitives: the one .fs-grip resize-tab visual + the .fs-dragging selection-suppression state (main.tsx only)
     └── reset.css
 public/
 ├── js/                              # VENDORED (do not hand-edit) — synced from a-frame-shaderloader/js/ by the fs-vendor-sync vite plugin; vendorSync.test.ts fails on drift
@@ -222,8 +226,8 @@ model.material.colorNode = mx_noise_vec3(positionGeometry.mul(3));
 
 The code editor has two tabs styled as folder tabs (active tab visually connects to the page below):
 
-- **TSL** — Editable TSL code with Save button, Load Script button, and error display (default)
-- **Script** — Read-only shaderloader-compatible ES module (`tslToShaderModule.ts`):
+- **TSL** — Editable TSL code with the Apply button (code→graph compile), Import button, and error display (default)
+- **Output** (internal id `script`) — Read-only shaderloader-compatible ES module (`tslToShaderModule.ts`):
   - Header comments with HTML setup, property attribute examples, and runtime update instructions
   - Converts `Fn(() => { ... })` wrapper to `export default function(params) { ... }` (when properties exist) or `export default function() { ... }` (no properties)
   - Standard bare import (`'three/tsl'`) — also usable directly with Three.js
@@ -232,17 +236,19 @@ The code editor has two tabs styled as folder tabs (active tab visually connects
   - Position channel wrapped with displacement logic: `positionLocal.add(normalLocal.mul(val))` (normal mode) or `positionLocal.add(val)` (offset mode from `materialSettings`)
   - **Property support**: Emits `export const schema` with property defaults; replaces `const NAME = uniform(VALUE)` with `const NAME = params.NAME`; removes `uniform` from imports when all uniform calls are replaced by params references
   - The shaderloader handles TDZ fixes and missing import injection at runtime
-  - Download Script button for `.js` export (for use with `<a-entity shader="src: myshader.js; propName: value">`)
+  - The `.js`/`.zip` export itself is the toolbar **EXPORT** button (next to the shader name) — shared path in [exportShader.ts](src/engine/exportShader.ts) (module generation + FASTSHADERS_PROJECT_V1 embed + `buildExportBundle`), read imperatively from the store, so it works identically from any tab; for use with `<a-entity shader="src: myshader.js; propName: value">`
 
-The Script tab reads `materialSettings` and `properties` (from `property_float` and `property_color` nodes) in `CodeEditor.tsx` and threads them to the generator.
+The Output tab reads `materialSettings` and `properties` (from `property_float` and `property_color` nodes) in `CodeEditor.tsx` and threads them to the generator.
 
 The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-initialization freezes.
 
-**Load Script**: On the TSL tab, a "Load Script" button opens a file picker for `.js` files. The selected file is read and converted back to TSL code via `scriptToTSL()` ([scriptToTSL.ts](src/engine/scriptToTSL.ts)), which reverses the `tslToShaderModule` transforms: `export default function(params)` → `Fn(() => {`, `params.NAME` → `uniform(default)` (defaults read from `export const schema`), `colorNode` → `color`, strips nested `Fn()` artifacts from unknown-node round-tripping, and re-adds `Fn`/`uniform` to the import line. The converted TSL is written into the editor and a code→graph sync is triggered.
+**Import**: On the TSL tab, an "Import" button opens a file picker for `.js` files. The selected file is read and converted back to TSL code via `scriptToTSL()` ([scriptToTSL.ts](src/engine/scriptToTSL.ts)), which reverses the `tslToShaderModule` transforms: `export default function(params)` → `Fn(() => {`, `params.NAME` → `uniform(default)` (defaults read from `export const schema`), `colorNode` → `color`, strips nested `Fn()` artifacts from unknown-node round-tripping, and re-adds `Fn`/`uniform` to the import line. The converted TSL is written into the editor and a code→graph sync is triggered.
 
-**No panel headers**: The "Node View" and "TSL Code View" panel labels have been removed. The code editor uses a tab bar with folder-style tabs at the top. The toolbar shows a "Script name:" label before the shader name input. The preview panel has a compact top bar with controls (play/pause, reset, bg color, lighting, geometry, subdivision).
+**No panel headers**: The "Node View" and "TSL Code View" panel labels have been removed. The code editor uses a tab bar with folder-style tabs at the top. The toolbar shows a "Name:" label before the shader name input, with the EXPORT button after it. The preview panel has a compact top bar (labeled Light / Model / Subd selects, VR, Uniforms toggle) and a bottom-center floating cluster over the 3D view (fullscreen ⛶, play/pause, bg-color swatch, red ✕ Reset).
 
-**SplitPane** ([SplitPane.tsx](src/components/Layout/SplitPane.tsx)): Uses `setPointerCapture()` on the divider so dragging never loses grip — even when the cursor flies over iframes or other elements that would swallow regular mouse events. Ratio clamped to `[0.05, 0.95]`. `touchAction: none` prevents browser scroll hijack on touch devices.
+**SplitPane** ([SplitPane.tsx](src/components/Layout/SplitPane.tsx)): The seam itself is **inert** — dragging happens only on the shared `.fs-grip` tab, so a stray press on the seam can't nudge the layout. Uses `setPointerCapture()` so dragging never loses grip, even when the cursor flies over iframes or other elements that would swallow regular mouse events. Ratio clamped to `[0.05, 0.95]`; Arrow keys (Shift = coarse) resize from the keyboard. `touchAction: none` prevents browser scroll hijack on touch. Because the grip hangs BESIDE the seam, `handlePointerDown` records the pointer's offset from the divider centre and `handlePointerMove` subtracts it — without that the first move would snap the divider to the cursor, jumping the panes by the grip's width. `gripPosition` ('start' | 'end') picks which end of the seam the grip sits 20% in from; AppLayout passes `start` for the code/preview seam so it doesn't stack with the asset bar's.
+
+**Shared resize grip** ([styles/controls.css](src/styles/controls.css)): ONE visual for every resize affordance — splitters and the asset bar. A tab growing out of the edge it resizes: outlined in the edge's own color, border removed on the touching side, flat corners there and `--border-radius-md` on the far side, sized from the `--ctl-size` token that also sizes the canvas-bar and preview buttons. Inside is a rotated-square diamond split by a center line into two arrows pointing along the drag axis (a rotated box, not a `◇` glyph — the app self-hosts a woff2 *subset* of Inter, so geometric-shapes codepoints would render as tofu offline). Positioned 20% along the edge from its far end; the column splitter's grip instead anchors to `calc(var(--fs-asset-bar-h) + var(--space-3))`, a variable ContentBrowser publishes on `:root` (from state AND imperatively mid-drag) so the grip rides above the asset bar as it resizes. `utils/dragChrome.ts` sets `.fs-dragging` on `<html>` for the length of any grip drag: a `user-select: none` on `<body>` is only *inherited*, so panes declaring their own value (Monaco, inputs, node cards) kept painting selection highlights mid-drag.
 
 ### Preview (ShaderPreview.tsx)
 
@@ -254,15 +260,15 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
   - **OBJ models** — `teapot` (Utah teapot, 15/35/0 tilt) and `bunny` (Stanford bunny, 0/25/0 tilt — silhouette reads better head-on). Backed by static files in `public/models/` (`teapot.obj`, `stanford-bunny.obj`), loaded via A-Frame's `obj-model` component. **Both source OBJs are pre-normalized** (2026-07): bounding-box center exactly at the origin, uniform-scaled so the longest axis is exactly `1.6` (teapot 1.6×0.78×0.99, bunny 1.6×1.59×1.24) — every consumer gets centered, same-size meshes without relying on runtime correction, and `positionGeometry`-driven shaders see comparable coordinate ranges (±0.8) on models and primitives alike (previously the raw teapot spanned ±3.2 and the bunny ±0.08, so the same noise shader looked ultra-dense on one and near-constant on the other). The custom `fit-bounds` component (registered inline in the iframe) still recomputes vertex normals when the source file lacks them, generates spherical UVs from each vertex's direction so TSL shaders that read `uv()` get meaningful values, and recenters/rescales the mesh so the longest axis equals `1.6` — that last step is now a no-op for the bundled models but stays as a safety net for arbitrary models (the viewer's drag-dropped `.glb`s).
   - `isObjGeometry(geometry)` in [tslToPreviewHTML.ts](src/engine/tslToPreviewHTML.ts) is the single source of truth for primitive vs OBJ branching.
 - **Subdivision slider**: Symmetrically applied to per-primitive segment fields (`segmentsWidth/Height` for sphere/plane, all three for cube). Range `[1, 256]`, default 64. Built into the geometry attribute by `buildGeoAttr()` in `tslToPreviewHTML.ts`. **Hidden when an OBJ model is selected** — the slider has no meaning for static meshes.
-- **Lighting modes** (dropdown, persisted):
-  - **light: Studio** (default) — three-point rig (pure white key + cool rim + neutral fill + low ambient).
-  - **light: Moon** — single cool directional from `-4 1.5 2` at intensity 4.0 (terminator ~65° off camera axis, ~2/3 of the visible hemisphere lit) + a faint dark-blue ambient floor.
-  - **light: Laboratory** — pure white ambient at intensity 2.5, no shadows.
+- **Lighting modes** ("Light" labeled dropdown, persisted):
+  - **Studio** (default) — three-point rig (pure white key + cool rim + neutral fill + low ambient).
+  - **Moon** — single cool directional from `-4 1.5 2` at intensity 4.0 (terminator ~65° off camera axis, ~2/3 of the visible hemisphere lit) + a faint dark-blue ambient floor.
+  - **Laboratory** — pure white ambient at intensity 2.5, no shadows.
 - **Material**: `materialSettings` from output node (displacement mode, transparent, side)
 - **Animation**: Play/pause toggle for mesh rotation. Y-axis turntable spin for sphere/cube/teapot/bunny; planes spin on Z (in-plane, like a record).
-- **Background**: User-picked color via `<input type="color">` in the header, persisted to `fs:previewBgColor`. Defaults to `#808080`.
+- **Background**: User-picked color via `<input type="color">` in the bottom-center cluster, persisted to `fs:previewBgColor`. Defaults to `#808080`.
 - **First-paint WebGPU gate** (important): the iframe's `srcDoc` is withheld until a `ResizeObserver` on `.shader-preview__body` reports non-zero `contentRect` dimensions. Without this gate, on first page load the iframe could boot before its flex container had laid out — A-Frame's WebGPU renderer then initialized against a 0×0 canvas, dawn rejected the framebuffer (`The texture size … is empty`), and the renderer stayed in a broken state that painted the mesh solid red. The symptom previously appeared to "go away" on any user-driven edge change because that triggered a `previewCode` rewrite → fresh iframe rebuild → boot after layout had settled. The gate makes the first boot deterministic.
-- **Reset button** (red, left side of header): clears the saved camera position and object rotation (both in-memory refs and localStorage), pauses the spin (`playing=false`), restores **studio** lighting, **subdivision 64**, and every property uniform back to its shader-defined default. Min/max bounds, geometry, and bg color are user preferences and intentionally **not** reset.
+- **Reset button** (red ✕, rightmost in the bottom-center cluster): clears the saved camera position and object rotation (both in-memory refs and localStorage), pauses the spin (`playing=false`), restores **studio** lighting, **subdivision 64**, and every property uniform back to its shader-defined default. Min/max bounds, geometry, and bg color are user preferences and intentionally **not** reset.
 
 #### Property uniform overlay
 
@@ -271,6 +277,7 @@ The TSL editor stays mounted (hidden) when switching tabs to avoid Monaco re-ini
 - Sliders are **overlay-local** state — they never write back to the graph, so dragging doesn't trigger a graph re-sync that would tear the iframe down. Per-uniform `{min, max}` is persisted under `fs:previewUniformBounds`.
 - When `previewCode` changes, slider values are **preserved** for names that still exist and **seeded from the code default** for new names; stale entries are dropped.
 - **`BoundInput` subcomponent** ([ShaderPreview.tsx](src/components/Preview/ShaderPreview.tsx)) wraps each min/max number field. It buffers the in-progress text in **local string state** (`draft`) and only commits to the parent's numeric state on a successful `parseFloat`, so partial inputs like `-`, `1.`, or `1e` survive controlled-input re-renders. Without this buffer, typing `-` parses to `NaN`, the controlled input snaps back to the previous numeric value, and you can never get past the first character — i.e. negatives were untypeable. An `editingRef` blocks external prop sync while the field is focused so resets/persistence don't clobber typing; on blur, an unparseable draft snaps back to the canonical value.
+- **"Set as default"** (button atop the overlay; hidden when the shader has no property nodes to write back to, i.e. `connectedPropNamesKey === '*'` for hand-written TSL): bakes the tuned slider values into the graph as the shader's authored defaults via [uniformDefaults.ts](src/utils/uniformDefaults.ts). `planUniformDefaults` maps overlay rows to `property_float`/`property_color` nodes by generated varName — taken from a **fresh `graphToCode` run**, because `store.nodeVarNames` is only refreshed on the graph→code path and is stale after a code-panel Apply (a stale name would write a value into the wrong node). Floats are rounded via `toPrecision(9)` (the slider step is `span/200`, which mints artifacts like `0.30500000000000005` that must not land in the generated TSL or `export const schema`; toPrecision — not toFixed — so a legitimately tiny 1e-7 uniform survives), colors accept 6-digit hex only (`hexLiteral()` silently degrades anything else to black). Unchanged/mismatched/absent values are skipped, so an untouched overlay yields an empty plan and no undo entry; a real plan is one `pushHistory()` + `setNodes(..., 'graph')` — this click is where the user opts INTO the preview rebuild that per-slider writes deliberately avoid. Slider min/max bounds stay a preview preference (the graph has no field for them).
 
 #### Iframe ↔ parent bridge
 
@@ -443,6 +450,9 @@ Generates HTML for the in-app preview iframe:
 8. **Iframe ↔ parent bridge**: emitted as the **`BRIDGE_SCRIPT_TEMPLATE`** module-level template literal with a `__SAVED_CAM__` placeholder replaced by a JSON literal at emit time. Polls for shaderloader readiness → posts `fs:preview-ready` with the uniform name list, listens for `fs:uniform`/`fs:reset-camera`. Camera polling (inside `whenOrbitReady`) posts `fs:camera` on change; rotation polling (standalone `setInterval`, not gated on orbit controls) posts `fs:rotation` with degrees from `spinEl.object3D.rotation`. Both poll at 200ms. Saved camera position is embedded as `window.__savedCameraPos` and applied **after** orbit-controls initializes (not via `initialPosition`, so `controls.reset()` still snaps to the original `0 0 8`).
 9. Uses A-Frame IIFE bundle with `a-frame-shaderloader` for rendering.
 10. Error display div for runtime errors.
+11. **XR popup extras** (`xr: true` only — the editor's sandboxed preview emits neither):
+    - **In-headset stats panel** (`XR_STATS_SCRIPT` → `fs-xr-stats` component on `<a-scene>`): a CanvasTexture quad parented to the THREE camera **object** via `getObject3D('camera')` — a child `<a-entity>` attaches to the camera's parent, which XR leaves alone, so it would silently world-lock in the headset. `renderOrder: 999` + `depthTest: false` because entering VR zeroes the camera position, putting the viewer inside the previewed mesh. Sized from the live `camera.fov` each frame (three rewrites it from the XR projection, so the authored `fov: 20` is irrelevant in-session). Measures the presented frame **period** (vsync included — reads 72/90/120 Hz until the shader actually misses frames) from A-Frame's tick (driven by `setAnimationLoop`, which three swaps for `session.requestAnimationFrame` in XR — `window.requestAnimationFrame` would stop). Redraws at ~4 Hz so re-rasterizing the readout doesn't bias the GPU cost it exists to report; text is canvas-rasterized because A-Frame's `<a-text>` fetches its MSDF font from cdn.aframe.io and the app must run offline.
+    - **Immersive entry gate** (`#vr-gate`): auto-enter via `scene.enterVR()` — but only after `navigator.xr.isSessionSupported('immersive-vr')` confirms real support, since with no headset A-Frame falls into its magic-window fallback and strands the user in a pseudo-VR state with no way out. The in-document button stays visible until a session actually starts: a `window.open` + `document.write` document may not inherit the opener click's transient activation (browser-dependent, not headset-verified), and an in-document gesture is what Quest Browser reliably accepts (same reason ShaderCarousel keeps its start gate inside the iframe). On non-XR devices the same button is a fullscreen toggle; the label ("Enter VR" / "Fullscreen" / "Exit fullscreen") is capability-resolved, never a UA sniff.
 
 Both `FIT_BOUNDS_SCRIPT` and `BRIDGE_SCRIPT_TEMPLATE` are kept as raw template literals (using `<\/script>` to escape the closing tag) rather than `lines.push(...)` chains — they're large blocks of static iframe-side JS with at most one substitution, and the template-literal form keeps the source readable as JS instead of as a string-concat ladder.
 
@@ -1064,7 +1074,7 @@ interface BoundarySocket {
 
 ## Theme Toggle (App-Wide Dark Mode)
 
-- **`codeEditorTheme: 'vs' | 'vs-dark'`** store field, persisted to `fs:codeEditorTheme`. The sun/moon button in the code editor tab bar (after Save / Load Script / Download Script) is the **one** dark-mode control for the whole app — not just Monaco.
+- **`codeEditorTheme: 'vs' | 'vs-dark'`** store field, persisted to `fs:codeEditorTheme` (the field keeps its historical name). The sun/moon button at the right end of the top toolbar is the **one** dark-mode control for the whole app — not just Monaco.
 - **`setCodeEditorTheme(theme)`** does two things: (1) applies the theme to both Monaco editors (TSL, Script), and (2) stamps `data-theme="dark"` (or `"light"`) on `<html>` via `applyThemeAttribute()`. An inline FOUC guard in `index.html` sets that attribute from `fs:codeEditorTheme` **before first paint**, so the chrome never flashes light while the bundle loads; the store re-applies it on every toggle.
 - **Chrome tokens flip, node visuals don't**: `data-theme="dark"` flips only the CHROME tokens redefined in the `:root[data-theme="dark"]` block of [tokens.css](src/styles/tokens.css) (backgrounds, text, borders, chrome shadows, `color-scheme`). **Graph nodes render identically in both themes** — node bodies read the theme-invariant `--node-bg` (not `--bg-panel`), and `--shadow-node*` / `--type-*` / `--cost-*` / `--cat-*` are deliberately **not** redefined in the dark block.
 - **Canvas background is remembered PER THEME**: the store keeps `nodeEditorBgColorLight` / `nodeEditorBgColorDark` (persisted to `fs:nodeEditorBgColor` / `fs:nodeEditorBgColorDark`; light default `#FAFAFA`, dark default `#1e1f22`), and `nodeEditorBgColor` is the effective active-theme value the toggle swaps in. The color swatch writes back to whichever per-theme slot is active.
@@ -1074,7 +1084,7 @@ interface BoundarySocket {
 
 ## Design System (tokens.css)
 
-- **Theme**: Light by default, with an app-wide **dark mode** toggled by the code-editor sun/moon button (see "Theme Toggle" below) — flat design, node shadows tuned **dark + sharp** so they read against any canvas background, not feathery. Only chrome tokens flip in the `:root[data-theme="dark"]` block; graph nodes stay theme-invariant.
+- **Theme**: Light by default, with an app-wide **dark mode** toggled by the toolbar sun/moon button (see "Theme Toggle" below) — flat design, node shadows tuned **dark + sharp** so they read against any canvas background, not feathery. Only chrome tokens flip in the `:root[data-theme="dark"]` block; graph nodes stay theme-invariant.
 - **Font**: Inter (sans), JetBrains Mono (mono)
 - **Spacing**: 4px base scale (--space-1 through --space-8)
 - **Shadows**: 4 levels (sm, md, lg, node). `--shadow-node` is a two-layer combo — tight contact shadow (`0 1px 2px rgba(0,0,0,0.55)`) + slightly diffused offset (`0 3px 6px rgba(0,0,0,0.4)`) — small blur radii keep edges crisp
@@ -1132,8 +1142,8 @@ Shared constant exported from `graphToCode.ts`, imported by `codeToGraph.ts` (fo
 - `fs:codeEditorTheme` — app-wide theme (`'vs' | 'vs-dark'`): themes Monaco AND stamps `data-theme` on `<html>`
 - `fs:savedGroups` — JSON array of `SavedGroup` snapshots (group + members + internal edges)
 - `fs:ignoreImageLimits` — user opted out of image size/pixel caps (set via the LimitModal checkbox)
-- `fs:assetBarCollapsed` — ContentBrowser (asset bar) collapse state
-- `fs:assetZoom` — ContentBrowser (asset bar) tile zoom level (Ctrl/Cmd+wheel over the strip or the floating +/− buttons)
+- `fs:assetBarHeight` — ContentBrowser (asset bar) height in px. The bar's ONLY size control: tile zoom is derived from it (`(height − tabsRow) / tallestTile`, clamped 0.5–2×), so the tallest tile exactly fills the strip and nothing is clipped by the bar's own height. Dragged by the grip on its top edge, resized with Ctrl/Cmd+wheel over the strip, or nudged with Arrow/Home/End while the grip has focus. The tallest tile is MEASURED (per-node designer heights in `customGlyphs` make it underivable) as a high-water mark, so switching to a tab of short tiles doesn't rescale the strip
+- `fs:assetBarCollapsed`, `fs:assetZoom` — LEGACY. Read once on first seed to migrate an old collapse/zoom into `fs:assetBarHeight`; never written. The floating −/+/▾ cluster they backed is gone
 - `fs:recentNodes` — recently-added node types, floated to the top of the AddNodeMenu browse view (`recentNodes.ts`)
 - `fs:lang` — UI language (`'en' | 'lv'`), see *Internationalization*
 - `fs:hideImageDownscaleWarning` — user opted out of the image downscale notice

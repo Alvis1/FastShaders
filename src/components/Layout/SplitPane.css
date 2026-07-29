@@ -1,26 +1,38 @@
+/* The seam itself is INERT — dragging happens only on the .fs-grip tab
+   (styles/controls.css), which is a child of this element and positions
+   against it. No cursor and no pointer handlers here: a press on the bare
+   seam must not move the layout. */
 .split-pane__divider {
-  background: var(--border-subtle);
+  background: var(--edge-color);
   flex-shrink: 0;
-  transition: background var(--transition-fast);
   touch-action: none;
+  transition: background var(--transition-fast);
+  position: relative;
+  /* Above the adjacent panes' content so the grip tab isn't clipped or
+     overpainted; well below popovers/menus (z 100+). */
+  z-index: 5;
+}
+
+/* The whole seam lights up with its grip — they are one control, and seeing
+   the full line highlight is what tells you WHICH edge you are about to move.
+   :active covers the drag itself (the pointer leaves the grip once captured). */
+.split-pane__divider:has(.fs-grip:hover),
+.split-pane__divider:has(.fs-grip:active),
+.split-pane__divider:has(.fs-grip:focus-visible) {
+  background: var(--border-focus);
 }
 
 .split-pane__divider--h {
   width: 4px;
-  cursor: col-resize;
 }
 
 .split-pane__divider--v {
   height: 4px;
-  cursor: row-resize;
 }
 
-/* Touch devices: thicken to a comfortable tap target and pin the contrast
-   color (no hover state) so users can see the divider before grabbing it. */
+/* Touch devices: thicken the seam so it stays visible as a boundary. The grip
+   is already a --ctl-size target, so no separate touch bump is needed. */
 @media (pointer: coarse) {
-  .split-pane__divider {
-    background: var(--border-default);
-  }
   .split-pane__divider--h {
     width: 12px;
   }

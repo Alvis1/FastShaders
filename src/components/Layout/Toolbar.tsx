@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { downloadShader } from '@/engine/exportShader';
 import { t } from '@/i18n';
 import './Toolbar.css';
 
@@ -79,10 +80,11 @@ function useDismiss(
 export function Toolbar() {
   const shaderName = useAppStore((s) => s.shaderName);
   const setShaderName = useAppStore((s) => s.setShaderName);
-  const canUndo = useAppStore((s) => s.past.length > 0);
-  const canRedo = useAppStore((s) => s.future.length > 0);
   const language = useAppStore((s) => s.language);
   const setLanguage = useAppStore((s) => s.setLanguage);
+  const codeEditorTheme = useAppStore((s) => s.codeEditorTheme);
+  const setCodeEditorTheme = useAppStore((s) => s.setCodeEditorTheme);
+  const isDark = codeEditorTheme === 'vs-dark';
 
   const [contactOpen, setContactOpen] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -254,33 +256,8 @@ export function Toolbar() {
           </div>
         )}
       </div>
-      {/* Undo / redo were keyboard-only with no UI at all — the sole recovery
-          path from a destructive action (dropping a project replaces the whole
-          graph) was a shortcut users had no way to discover. */}
-      <div className="toolbar__history">
-        <button
-          type="button"
-          className="toolbar__history-btn"
-          onClick={() => useAppStore.getState().undo()}
-          disabled={!canUndo}
-          title={t('Undo (Ctrl+Z / ⌘Z)', language)}
-          aria-label={t('Undo', language)}
-        >
-          ↶
-        </button>
-        <button
-          type="button"
-          className="toolbar__history-btn"
-          onClick={() => useAppStore.getState().redo()}
-          disabled={!canRedo}
-          title={t('Redo (Ctrl+Shift+Z / ⇧⌘Z)', language)}
-          aria-label={t('Redo', language)}
-        >
-          ↷
-        </button>
-      </div>
       <div className="toolbar__center">
-        <span className="toolbar__name-label">{t('Shader name:', language)}</span>
+        <span className="toolbar__name-label">{t('Name:', language)}</span>
         <input
           className="toolbar__name-input"
           type="text"
@@ -289,6 +266,14 @@ export function Toolbar() {
           placeholder={t('Shader name...', language)}
           spellCheck={false}
         />
+        <button
+          type="button"
+          className="toolbar__export"
+          onClick={downloadShader}
+          title={t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}
+        >
+          {t('Export', language)}
+        </button>
       </div>
       <div className="toolbar__right">
         {/* Inside the desktop app, offering a download of itself makes no
@@ -334,6 +319,32 @@ export function Toolbar() {
             )}
           </div>
         )}
+        {/* ShaderCarousel is WebGPU-only and excluded from the FS_DESKTOP
+            webview bundle — the link would 404 there. The desktop build
+            instead ships it as a Tauri resource and serves it over LAN for
+            headsets: the VR popover below. */}
+        {!__FS_DESKTOP__ && (
+          <a
+            className="toolbar__sc-link"
+            href={`${import.meta.env.BASE_URL}ShaderCarousel/`}
+            target="_blank"
+            rel="noreferrer noopener"
+            title="Open ShaderCarousel — viewer & benchmark suite"
+            aria-label="Open ShaderCarousel"
+          >
+            SC
+          </a>
+        )}
+        <a
+          className="toolbar__sc-link"
+          href={`${import.meta.env.BASE_URL}podest.html`}
+          target="_blank"
+          rel="noreferrer noopener"
+          title="Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
+          aria-label="Open Podest"
+        >
+          P
+        </a>
         {/* Language toggle (English ⇄ Latvian). Latvian is a display-only
             overlay — see src/i18n. Shows "LV" and pressed-highlights when
             Latvian is active. */}
@@ -351,32 +362,6 @@ export function Toolbar() {
         >
           LV
         </button>
-        <a
-          className="toolbar__sc-link"
-          href={`${import.meta.env.BASE_URL}podest.html`}
-          target="_blank"
-          rel="noreferrer noopener"
-          title="Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
-          aria-label="Open Podest"
-        >
-          P
-        </a>
-        {/* ShaderCarousel is WebGPU-only and excluded from the FS_DESKTOP
-            webview bundle — the link would 404 there. The desktop build
-            instead ships it as a Tauri resource and serves it over LAN for
-            headsets: the VR popover below. */}
-        {!__FS_DESKTOP__ && (
-          <a
-            className="toolbar__sc-link"
-            href={`${import.meta.env.BASE_URL}ShaderCarousel/`}
-            target="_blank"
-            rel="noreferrer noopener"
-            title="Open ShaderCarousel — viewer & benchmark suite"
-            aria-label="Open ShaderCarousel"
-          >
-            SC
-          </a>
-        )}
         {__FS_DESKTOP__ && (
           <div className="toolbar__local" ref={vrRef}>
             <button
@@ -474,6 +459,18 @@ export function Toolbar() {
             )}
           </div>
         )}
+        {/* App-wide dark/light toggle (moved here from the code panel's tab
+            bar) — still the ONE dark-mode control: themes Monaco AND stamps
+            data-theme on <html> via setCodeEditorTheme. */}
+        <button
+          type="button"
+          className="toolbar__sc-link toolbar__theme-toggle"
+          onClick={() => setCodeEditorTheme(isDark ? 'vs' : 'vs-dark')}
+          title={isDark ? t('Switch to light mode', language) : t('Switch to dark mode', language)}
+          aria-label={t('Toggle dark mode', language)}
+        >
+          {isDark ? '☼' : '☾'}
+        </button>
       </div>
     </div>
   );
