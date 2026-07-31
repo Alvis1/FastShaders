@@ -171,6 +171,11 @@
   pointer-events: none;
 }
 
+/* property_color's tile: same swatch, rectangular (mirrors .color-node--rect). */
+.node-preview-card__color-node--rect {
+  border-radius: var(--border-radius-md);
+}
+
 .node-preview-card__color-label {
   font-size: 15px;
   font-weight: 600;

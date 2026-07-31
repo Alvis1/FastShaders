@@ -112,9 +112,20 @@ describe('getGroupFrameColors', () => {
 
   it('mixes the fill lighter than the border, both tinted toward the group color', () => {
     const { background, borderColor } = getGroupFrameColors('#ff0000');
-    // Red channel pinned at 255 by the mix; green/blue drop toward the color.
+    // Green/blue drop toward the color, so the fill keeps more of the base.
     expect(hexToRgb(background)[1]).toBeGreaterThan(hexToRgb(borderColor)[1]);
-    expect(hexToRgb(background)[0]).toBe(255);
+    // Red is the group color's own channel and rides UP from the base toward
+    // 255, so the LESS-mixed fill stays the nearer of the two to the base.
+    expect(hexToRgb(background)[0]).toBeLessThan(hexToRgb(borderColor)[0]);
+  });
+
+  it('mixes from the node-card off-white, not pure white', () => {
+    // Pins NODE_WHITE against tokens.css's --node-bg: lerp(x, x, t) === x for
+    // every mix, so feeding the base color back in must return it unchanged.
+    // A group frame brighter than the cards it holds would invert the depth
+    // ordering it exists to establish.
+    expect(getGroupFrameColors('#f1f2f3').background).toBe('#f1f2f3');
+    expect(getGroupFrameColors('#ffffff').background).not.toBe('#ffffff');
   });
 
   it('keeps the full-strength color for a selected border only', () => {

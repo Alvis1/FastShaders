@@ -142,13 +142,16 @@ describe('property_color — CPU evaluation', () => {
 });
 
 describe('convertPropertyNode — constant ↔ uniform', () => {
-  it('color → property_color keeps id/position, carries hex, mints a name, flips flow type', () => {
+  it('color → property_color keeps id/position, carries hex, mints a name, STAYS a swatch', () => {
     const c = makeNode('c', 'color', { hex: '#123456' });
     c.type = 'color' as never;
     const converted = convertPropertyNode(c, 'property_color', [c]);
     expect(converted).toBeTruthy();
     expect(converted!.id).toBe('c');
-    expect(converted!.type).toBe('shader');
+    // Both render as ColorNode now (circle vs rounded rect), so converting no
+    // longer swaps the component out from under the user — it was 'shader'
+    // back when the uniform used the standard card.
+    expect(converted!.type).toBe('color');
     expect(converted!.data.registryType).toBe('property_color');
     expect(getNodeValues(converted!)).toMatchObject({ hex: '#123456', name: 'color1' });
   });

@@ -18,11 +18,13 @@
   overflow: hidden;
 }
 
+/* No border-left / border-top hairlines here: the SplitPane seams draw these
+   boundaries now, and an extra subtle line beside a seam shows up as a light
+   gray sliver between the corner grip's flat edge and the preview's bar. */
 .app-layout__right {
   display: flex;
   flex-direction: column;
   height: 100%;
-  border-left: 1px solid var(--border-subtle);
 }
 
 .app-layout__code-panel {
@@ -38,5 +40,4 @@
 
 .app-layout__preview {
   height: 100%;
-  border-top: 1px solid var(--border-subtle);
 }

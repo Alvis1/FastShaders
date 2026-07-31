@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { autoLayout, estimateNodeSize } from './layoutEngine';
 import { makeNode, makeEdge } from '@/test-utils';
+import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 import type { AppNode, AppEdge } from '@/types';
 
 /** Top edge of a node in the laid-out graph. */
@@ -135,8 +136,10 @@ describe('estimateNodeSize', () => {
   });
 
   it('sizes the fixed-footprint component types', () => {
+    // Square, and tied to the component's own constant — a hardcoded number
+    // here is what let auto-layout drift from the rendered swatch before.
     const color = estimateNodeSize(makeNode('c', 'color'));
-    expect(color).toEqual({ width: 28, height: 28 });
+    expect(color).toEqual({ width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE });
     const clock = estimateNodeSize(makeNode('t', 'time'));
     expect(clock.height).toBeGreaterThan(70);
     const sin = estimateNodeSize(makeNode('s', 'sin'));

@@ -12,7 +12,7 @@ const CONTACT = {
 };
 
 /**
- * Desktop-build downloads for the "Local" dropdown. The `/releases/latest/
+ * Desktop-build downloads for the "Download app" dropdown. The `/releases/latest/
  * download/` URLs are permanent GitHub redirects to the newest release, so
  * the app always offers the current build with no per-release code change —
  * but that only works because the release workflow uploads the assets under
@@ -276,6 +276,67 @@ export function Toolbar() {
         </button>
       </div>
       <div className="toolbar__right">
+        {/* Hard reload of the tab. Safe to offer without a confirm: the graph
+            autosaves to fs:graph (plus every UI pref to its own key), so a
+            reload restores the session rather than discarding it. The one
+            exception is the session-only preview mesh, which is deliberately
+            never persisted — hence the warning in the tooltip. */}
+        <button
+          type="button"
+          className="toolbar__sc-link toolbar__refresh"
+          onClick={() => window.location.reload()}
+          title={t('Reload the page (a dropped preview model is not kept)', language)}
+          aria-label={t('Reload the page', language)}
+        >
+          {/* Inline SVG, not a glyph: the app self-hosts a woff2 SUBSET of
+              Inter, so ↻/⟳ are not guaranteed to be in the font offline. */}
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
+          </svg>
+        </button>
+        <a
+          className="toolbar__sc-link"
+          href={`${import.meta.env.BASE_URL}podest.html`}
+          target="_blank"
+          rel="noreferrer noopener"
+          title="Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
+          aria-label="Open Podest"
+        >
+          P
+        </a>
+        {/* ShaderCarousel is WebGPU-only and excluded from the FS_DESKTOP
+            webview bundle — the link would 404 there. The desktop build
+            instead ships it as a Tauri resource and serves it over LAN for
+            headsets: the VR popover below. */}
+        {!__FS_DESKTOP__ && (
+          <a
+            className="toolbar__sc-link"
+            href={`${import.meta.env.BASE_URL}ShaderCarousel/`}
+            target="_blank"
+            rel="noreferrer noopener"
+            title="Open ShaderCarousel — viewer & benchmark suite"
+            aria-label="Open ShaderCarousel"
+          >
+            SC
+          </a>
+        )}
+        {/* Language toggle (English ⇄ Latvian). Latvian is a display-only
+            overlay — see src/i18n. Shows "LV" and pressed-highlights when
+            Latvian is active. */}
+        <button
+          type="button"
+          className={`toolbar__sc-link${language === 'lv' ? ' toolbar__sc-link--active' : ''}`}
+          onClick={() => setLanguage(language === 'lv' ? 'en' : 'lv')}
+          aria-pressed={language === 'lv'}
+          title={
+            language === 'lv'
+              ? 'Pārslēgt uz angļu valodu (Switch to English)'
+              : 'Pārslēgt uz latviešu valodu (Switch to Latvian)'
+          }
+          aria-label={t('Switch language', language)}
+        >
+          LV
+        </button>
         {/* Inside the desktop app, offering a download of itself makes no
             sense — __FS_DESKTOP__ builds hide the button. */}
         {!__FS_DESKTOP__ && (
@@ -288,7 +349,7 @@ export function Toolbar() {
               aria-expanded={localOpen}
               title={t('Download the offline desktop app (Windows / macOS)', language)}
             >
-              {t('Local', language)}
+              {t('Download app', language)}
             </button>
             {localOpen && (
               <div
@@ -319,49 +380,6 @@ export function Toolbar() {
             )}
           </div>
         )}
-        {/* ShaderCarousel is WebGPU-only and excluded from the FS_DESKTOP
-            webview bundle — the link would 404 there. The desktop build
-            instead ships it as a Tauri resource and serves it over LAN for
-            headsets: the VR popover below. */}
-        {!__FS_DESKTOP__ && (
-          <a
-            className="toolbar__sc-link"
-            href={`${import.meta.env.BASE_URL}ShaderCarousel/`}
-            target="_blank"
-            rel="noreferrer noopener"
-            title="Open ShaderCarousel — viewer & benchmark suite"
-            aria-label="Open ShaderCarousel"
-          >
-            SC
-          </a>
-        )}
-        <a
-          className="toolbar__sc-link"
-          href={`${import.meta.env.BASE_URL}podest.html`}
-          target="_blank"
-          rel="noreferrer noopener"
-          title="Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
-          aria-label="Open Podest"
-        >
-          P
-        </a>
-        {/* Language toggle (English ⇄ Latvian). Latvian is a display-only
-            overlay — see src/i18n. Shows "LV" and pressed-highlights when
-            Latvian is active. */}
-        <button
-          type="button"
-          className={`toolbar__sc-link${language === 'lv' ? ' toolbar__sc-link--active' : ''}`}
-          onClick={() => setLanguage(language === 'lv' ? 'en' : 'lv')}
-          aria-pressed={language === 'lv'}
-          title={
-            language === 'lv'
-              ? 'Pārslēgt uz angļu valodu (Switch to English)'
-              : 'Pārslēgt uz latviešu valodu (Switch to Latvian)'
-          }
-          aria-label={t('Switch language', language)}
-        >
-          LV
-        </button>
         {__FS_DESKTOP__ && (
           <div className="toolbar__local" ref={vrRef}>
             <button

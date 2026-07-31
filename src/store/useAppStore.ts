@@ -227,10 +227,10 @@ interface HistoryEntry {
 
 const MAX_HISTORY = 50;
 
-function loadRatio(key: string, fallback: number): number {
+function loadRatio(key: string, fallback: number, min = 0.25, max = 0.75): number {
   try {
     const v = parseFloat(localStorage.getItem(key) ?? '');
-    return isNaN(v) ? fallback : Math.max(0.25, Math.min(0.75, v));
+    return isNaN(v) ? fallback : Math.max(min, Math.min(max, v));
   } catch {
     return fallback;
   }
@@ -247,7 +247,11 @@ function loadString(key: string, fallback: string): string {
  * edges + cost-badge text auto-flip to light on it.
  */
 const DEFAULT_CANVAS_BG_LIGHT = '#FAFAFA';
-const DEFAULT_CANVAS_BG_DARK = '#1e1f22';
+// Grey, not near-black: matches the dark chrome ramp in tokens.css. The canvas
+// is what the (fixed off-white) nodes sit on, so this is the single biggest
+// lever on how harsh dark mode reads. Sits just under --bg-app so the graph
+// still reads as recessed behind the panels around it.
+const DEFAULT_CANVAS_BG_DARK = '#41454d';
 
 /**
  * Stamp `data-theme` on <html> so the chrome tokens in tokens.css flip. The one
@@ -705,7 +709,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
   hideImageDownscaleWarning: loadString('fs:hideImageDownscaleWarning', '0') === '1',
   splitRatio: loadRatio('fs:splitRatio', 0.6),
-  rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6),
+  // Wider floor than the column split: the code/preview seam may ride up until
+  // only the code editor's tab bar remains (SplitPane's CROSS_MIN_PANE_PX is
+  // the real bound during drags; this is the persistence-level safety net).
+  rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6, 0.01, 0.75),
   shaderName: loadString('fs:shaderName', 'My Shader'),
   selectedHeadsetId: loadString('fs:headsetId', 'quest3'),
   nodeVarNames: {},
@@ -1074,7 +1081,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setRightSplitRatio: (ratio) => {
-    const clamped = Math.max(0.25, Math.min(0.75, ratio));
+    // 0.01 floor, not 0.25: the seam may ride up to the code editor's tab bar.
+    // The pixel-accurate floor lives in SplitPane (CROSS_MIN_PANE_PX) — a ratio
+    // can't express "the tab bar's height" without knowing the pane in px.
+    const clamped = Math.max(0.01, Math.min(0.75, ratio));
     try { localStorage.setItem('fs:rightSplitRatio', String(clamped)); } catch { /* */ }
     set({ rightSplitRatio: clamped });
   },

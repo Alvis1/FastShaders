@@ -183,11 +183,11 @@
 /* Save = neutral filled button; keep it a dark-stable surface (its --text-secondary
    fill would otherwise flip to a light gray under white text). */
 :root[data-theme="dark"] .code-editor__save {
-  background: #4a4d52;
+  background: #676c75;
 }
 
 :root[data-theme="dark"] .code-editor__save:hover {
-  background: #5a5e65;
+  background: #797f89;
 }
 
 /* Action buttons stay accent-blue at rest; only the --text-primary hover breaks. */

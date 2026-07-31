@@ -88,6 +88,14 @@ const GROUP_DEFAULT_COLOR = '#6366f1';
 /** How much group color goes into the body fill / the resting border. */
 const GROUP_FILL_MIX = 0.18;
 const GROUP_BORDER_MIX = 0.45;
+/**
+ * The base the group tints mix FROM: `--node-bg` in tokens.css, duplicated here
+ * because the tests run under `node` with no CSSOM to read the variable from.
+ * MUST track that token — a group frame is the backdrop panel BEHIND its member
+ * cards, so mixing from a brighter base than the cards inverts the depth
+ * ordering and the frame reads as floating on top of its own contents.
+ */
+const NODE_WHITE: [number, number, number] = [0xf1, 0xf2, 0xf3];
 
 /**
  * Opaque frame colors for a group (canvas frame + Saved Groups tile).
@@ -105,7 +113,8 @@ export function getGroupFrameColors(
 ): { background: string; borderColor: string } {
   const base = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : GROUP_DEFAULT_COLOR;
   const [r, g, b] = hexToRgb(base);
-  const mix = (t: number) => rgbToHex(lerp(255, r, t), lerp(255, g, t), lerp(255, b, t));
+  const [wr, wg, wb] = NODE_WHITE;
+  const mix = (t: number) => rgbToHex(lerp(wr, r, t), lerp(wg, g, t), lerp(wb, b, t));
   return {
     background: mix(GROUP_FILL_MIX),
     borderColor: selected ? base : mix(GROUP_BORDER_MIX),
@@ -128,8 +137,9 @@ export const CAT_HEX: Record<NodeCategory | 'saved', string> = {
   logic: '#7E57C2',
   vector: '#E91E63',
   noise: '#795548',
-  color: '#FF5722',
+  dataviz: '#FF5722',
   texture: '#8D6E63',
+  presets: '#009688',
   unknown: '#9E9E9E',
   output: '#f44336',
   saved: '#6366f1',
@@ -144,8 +154,9 @@ export const CATEGORY_COLORS: Record<NodeCategory, string> = {
   logic: 'var(--cat-logic)',
   vector: 'var(--cat-vector)',
   noise: 'var(--cat-noise)',
-  color: 'var(--cat-color)',
+  dataviz: 'var(--cat-dataviz)',
   texture: 'var(--cat-texture)',
+  presets: 'var(--cat-presets)',
   unknown: 'var(--cat-unknown)',
   output: 'var(--cat-output)',
 };

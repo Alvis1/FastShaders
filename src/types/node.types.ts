@@ -17,8 +17,9 @@ export type NodeCategory =
   | 'logic'
   | 'vector'
   | 'noise'
-  | 'color'
+  | 'dataviz'
   | 'texture'
+  | 'presets'
   | 'unknown'
   | 'output';
 

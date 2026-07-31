@@ -81,7 +81,7 @@ import { importShaderZip, importShaderText, isZipFile } from '@/engine/projectIm
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
 import { getNodeValues } from '@/types';
 import { t } from '@/i18n';
-import { nextPropertyName } from '@/utils/propertyConvert';
+import { initialNodeValues } from '@/utils/newNodeValues';
 import complexityData from '@/registry/complexity.json';
 import './NodeEditor.css';
 
@@ -93,7 +93,6 @@ const DEFAULT_EDGE_OPTIONS = { type: 'typed', animated: true } as const;
 const FIT_VIEW_OPTIONS = { maxZoom: 1.5 } as const;
 const PRO_OPTIONS = { hideAttribution: true } as const;
 const DESKTOP_PAN_ON_DRAG = [1, 2];
-const MINIMAP_STYLE = { backgroundColor: 'var(--bg-panel)' } as const;
 
 const nodeTypes = {
   shader: ShaderNode,
@@ -1653,13 +1652,10 @@ export function NodeEditor() {
         addNode(newNode);
         newNodeId = newNode.id;
       } else {
-        let values = { ...def.defaultValues };
-        // Auto-name property nodes — same shared sequence as AddNodeMenu and
-        // the convert-to-uniform action, so tile drops can't mint duplicates.
-        if (def.type === 'property_float' || def.type === 'property_color') {
-          const prefix = def.type === 'property_color' ? 'color' : 'property';
-          values = { ...values, name: nextPropertyName(prefix, currentNodes) };
-        }
+        // Property auto-naming (one sequence shared with AddNodeMenu and the
+        // convert-to-uniform action, so tile drops can't mint duplicates) plus
+        // a random colour for colour nodes.
+        const values = initialNodeValues(def, currentNodes);
         const newNode = {
           id: generateId(),
           type: getFlowNodeType(def),
@@ -1963,16 +1959,9 @@ export function NodeEditor() {
   const contrastShadow = contrastColor === '#000000'
     ? 'rgba(255, 255, 255, 0.65)'
     : 'rgba(0, 0, 0, 0.65)';
-  // The dot-grid and minimap fog are React Flow PROPS (SVG fill / canvas paint),
-  // so tokens.css can't reach them — flip them here. Grid follows the CANVAS
-  // backdrop (subtle either way); the minimap fog follows the app THEME because
-  // the minimap panel itself is --bg-panel.
+  // The dot-grid color is a React Flow PROP (SVG fill), so tokens.css can't
+  // reach it — flip it here, following the CANVAS backdrop (subtle either way).
   const gridColor = contrastColor === '#000000' ? '#BBBBBB' : 'rgba(255, 255, 255, 0.12)';
-  const minimapMask = isDarkTheme ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.7)';
-  const minimapNodeColor = useCallback(
-    (node: AppNode) => getCostColor((node.data as { cost?: number }).cost ?? 0, costColorLow, costColorHigh),
-    [costColorLow, costColorHigh],
-  );
   // NB no `--canvas-bg` here: the canvas color is applied directly to the React
   // Flow root. Publishing it as a var invited chrome (the asset bar) to tint
   // itself with the user's canvas pick, which it must not do.
@@ -2218,7 +2207,7 @@ export function NodeEditor() {
 
     const isChrome = (t: EventTarget | null) =>
       !!(t as HTMLElement | null)?.closest(
-        'input, textarea, select, button, .nodrag, [contenteditable="true"], .react-flow__minimap, .react-flow__panel',
+        'input, textarea, select, button, .nodrag, [contenteditable="true"], .react-flow__panel',
       );
     const flow = (e: PointerEvent) => screenToFlowPosition({ x: e.clientX, y: e.clientY });
     const updateLive = () => livePathRef.current?.setAttribute('d', splinePath(strokePointPairs(pts)));
@@ -2501,18 +2490,17 @@ export function NodeEditor() {
               cards, above the canvas bg) and is clipped by the pane, so it
               tucks behind the code/preview frames. */}
           <PreviewLink />
-          <MiniMap
-            position="top-left"
-            nodeColor={minimapNodeColor}
-            style={MINIMAP_STYLE}
-            maskColor={minimapMask}
-          />
           <DrawingLayer livePathRef={livePathRef} />
-          {/* Bottom-center canvas bar: undo/redo + draw tools + view controls
+          {/* Bottom-LEFT canvas bar: undo/redo + draw tools + view controls
               in one pill (replaces the old toolbar history group, the RF
               Controls stack, and the top-center draw toolbar). */}
-          <Panel position="bottom-center" className="fs-canvas-bar nodrag nowheel">
-            <div className="fs-canvas-bar__group">
+          <Panel position="bottom-left" className="fs-canvas-bar nodrag nowheel">
+            {/* One bordered segment holding both, split by a hairline — and
+                solid-filled curved arrows rather than the ↶/↷ text glyphs,
+                which rendered thin and weightless next to the other controls.
+                Inline SVG, not an icon font: the app self-hosts a woff2 SUBSET
+                of Inter and must run offline. */}
+            <div className="fs-canvas-bar__group fs-canvas-bar__group--history">
               <button
                 type="button"
                 className="fs-canvas-bar__btn fs-canvas-bar__btn--history"
@@ -2521,7 +2509,9 @@ export function NodeEditor() {
                 title={t('Undo (Ctrl+Z / ⌘Z)', language)}
                 aria-label={t('Undo', language)}
               >
-                ↶
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z" />
+                </svg>
               </button>
               <button
                 type="button"
@@ -2531,7 +2521,9 @@ export function NodeEditor() {
                 title={t('Redo (Ctrl+Shift+Z / ⇧⌘Z)', language)}
                 aria-label={t('Redo', language)}
               >
-                ↷
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z" />
+                </svg>
               </button>
             </div>
             <div className="fs-canvas-bar__group">

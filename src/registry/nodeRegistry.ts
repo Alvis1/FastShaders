@@ -169,8 +169,10 @@ const definitions: NodeDefinition[] = [
   },
   {
     // The Colour node's uniform counterpart — what a Color converts INTO.
-    // Deliberately NOT `type: 'color'`, so getFlowNodeType leaves it on the
-    // standard square card (the swatch ColorNode has nowhere to put a name).
+    // The Colour node's uniform counterpart — what a Color converts INTO.
+    // Renders as a ColorNode too (rectangular variant), with its `name` drawn
+    // inside the swatch; the type stays distinct because codegen emits
+    // `uniform(color(...))` for it and a plain `color(...)` for the constant.
     type: 'property_color',
     label: 'Property (color)',
     category: 'input',
@@ -750,11 +752,13 @@ const definitions: NodeDefinition[] = [
     description: 'Worley/Voronoi cellular noise (first three distances)',
   },
 
-  // ===== COLOR =====
+  // ===== COLOR CONVERSIONS (category: type) =====
+  // Representation converters — they live in the Types category beside the
+  // `color` constructor (the old standalone `color` category was retired).
   {
     type: 'hsl',
     label: 'HSL to RGB',
-    category: 'color',
+    category: 'type',
     tslFunction: 'hsl',
     tslImportModule: '',
     inputs: [
@@ -768,7 +772,7 @@ const definitions: NodeDefinition[] = [
   {
     type: 'toHsl',
     label: 'RGB to HSL',
-    category: 'color',
+    category: 'type',
     tslFunction: 'toHsl',
     tslImportModule: '',
     inputs: [{ id: 'rgb', label: 'RGB', dataType: 'vec3' }],
@@ -786,7 +790,7 @@ const definitions: NodeDefinition[] = [
   {
     type: 'stripes',
     label: 'Data Stripes',
-    category: 'color',
+    category: 'dataviz',
     tslFunction: '',
     tslImportModule: '',
     inputs: [{ id: 'signal', label: 'Signal', dataType: 'float' }],
@@ -809,7 +813,7 @@ const definitions: NodeDefinition[] = [
   {
     type: 'dataviz',
     label: 'Data Viz',
-    category: 'color',
+    category: 'dataviz',
     tslFunction: '',
     tslImportModule: '',
     inputs: [{ id: 'signal', label: 'Signal', dataType: 'float' }],
@@ -1051,7 +1055,11 @@ export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clo
 export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   if (def.type === 'output') return 'output';
   if (def.type === 'time') return 'clock';
-  if (def.type === 'color') return 'color';
+  // Both swatch nodes render as ColorNode: the constant is a circle, the named
+  // uniform a rounded rectangle (ColorNode branches on registryType). The
+  // uniform's `name` goes INSIDE the swatch, the way the constant already
+  // shows its varName — which is what made the standard card unnecessary.
+  if (def.type === 'color' || def.type === 'property_color') return 'color';
   if (def.category === 'noise') return 'preview';
   if (def.type === 'sin' || def.type === 'cos') return 'mathPreview';
   return 'shader';

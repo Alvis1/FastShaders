@@ -12,10 +12,11 @@
   overflow: hidden;
 }
 
+/* Pinned to the canvas's left edge — the corner the minimap used to occupy. */
 .node-editor__cost-overlay {
   position: absolute;
   top: var(--space-3);
-  right: var(--space-4);
+  left: var(--space-4);
   z-index: var(--z-controls);
   width: 280px;
 }
@@ -33,7 +34,7 @@
    near-white fill would read as a bright blob — darken it to a translucent
    panel while keeping the blur/border. */
 :root[data-theme="dark"] .node-editor__cost-overlay .cost-bar {
-  background: rgba(35, 37, 41, 0.85);
+  background: rgba(78, 83, 91, 0.85);
 }
 
 /* Override React Flow default node styles */
@@ -60,12 +61,6 @@
   border: none;
   background: transparent;
   box-shadow: none;
-}
-
-.node-editor .react-flow__minimap {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-md);
-  box-shadow: var(--shadow-md);
 }
 
 .node-editor .react-flow__nodesselection-rect,
@@ -189,26 +184,25 @@
   align-items: center;
   gap: 10px;
   padding: 6px 8px;
-  background: var(--bg-panel);
+  background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
   box-shadow: var(--shadow-md);
-  /* An abspos box with `left: 50%` (RF's .bottom.center panel) shrink-to-fits
-     into the HALF of the pane left of that inset — max-content opts out of
-     that clamp so the bar only wraps when the PANE is genuinely too narrow. */
+  /* Kept from the bottom-CENTER era and still load-bearing: a wrapped row must
+     size to its content, not stretch to max-width. */
   width: max-content;
   /* Fold to extra rows instead of clipping when the graph pane is narrow and
      the draw cluster is expanded (% resolves against the RF pane, minus the
      panel's 15px margins). */
   flex-wrap: wrap;
-  justify-content: center;
+  justify-content: flex-start;
   max-width: calc(100% - 30px);
   /* Clear the asset bar's resize grip, which hangs --ctl-size above the bar's
      top edge — i.e. into the bottom of this pane. React Flow's own 15px panel
-     margin is not enough, and the bar wraps to extra rows on narrow panes, so
-     it can reach the grip's horizontal position. Overlap would be worse than
-     cosmetic: the grip sits at a higher z-index and would swallow clicks on
-     whichever button it covered. */
+     margin is not enough. The grip now sits at 90% (far right) and this bar at
+     the left, so they only meet on a very narrow pane — but overlap would be
+     worse than cosmetic there: the grip sits at a higher z-index and would
+     swallow clicks on whichever button it covered. */
   margin-bottom: calc(var(--ctl-size) + 8px);
 }
 .fs-canvas-bar__group {
@@ -237,21 +231,48 @@
   transition: border-color var(--transition-fast), color var(--transition-fast),
     background var(--transition-fast), opacity var(--transition-fast);
 }
-/* Undo/redo are the only DESTRUCTIVE-ish controls in the bar — everything else
-   just changes the view. Give them their own weight: thicker outline, bolder
-   glyph, and a filled panel so they read as a distinct pair rather than two
-   more view buttons. */
-.fs-canvas-bar__btn--history {
-  border-width: 2px;
-  border-color: var(--border-strong);
+/* Undo/redo are the only history controls in the bar — everything else just
+   changes the view. They read as ONE segmented control: a single outline
+   around the pair, split by a hairline, with solid-filled arrow icons. The
+   buttons themselves are frameless so the segment's own border is the only
+   line, and the two halves tuck into its rounded corners. */
+.fs-canvas-bar__group--history {
+  gap: 0;
+  border: 2px solid var(--border-strong);
+  border-radius: var(--border-radius-sm);
   background: var(--bg-panel);
-  font-size: 18px;
-  font-weight: 700;
+  overflow: hidden;
+}
+
+.fs-canvas-bar__btn--history {
+  border: none;
+  border-radius: 0;
+  background: none;
   color: var(--text-primary);
 }
 
+/* The hairline between the pair. */
+.fs-canvas-bar__btn--history + .fs-canvas-bar__btn--history {
+  border-left: 1px solid var(--border-default);
+}
+
+.fs-canvas-bar__btn--history svg {
+  width: 19px;
+  height: 19px;
+  display: block;
+  /* currentColor so the icon follows the button's hover/disabled states. */
+  fill: currentColor;
+}
+
 .fs-canvas-bar__btn--history:hover:not(:disabled) {
-  border-color: var(--border-focus);
+  background: var(--bg-surface-hover);
+  color: var(--border-focus);
+}
+
+/* The shared rule outlines on focus; inside a clipped segment that ring would
+   be cropped, so tint the fill instead. */
+.fs-canvas-bar__btn--history:focus-visible {
+  outline: none;
   background: var(--bg-surface-hover);
   color: var(--border-focus);
 }
@@ -280,8 +301,10 @@
 .fs-draw-controls {
   position: absolute;
   bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
+  /* Left-aligned with the bar (which is now pinned bottom-left), so the two
+     stack as one flush column instead of the pill straddling the bar's
+     centre and reaching back toward the pane edge. */
+  left: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -289,17 +312,16 @@
   gap: 10px;
   padding: 6px 10px;
   /* Matches the bar it floats over, so the two read as one control surface. */
-  background: var(--bg-panel);
+  background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
   box-shadow: var(--shadow-md);
-  /* An abspos box with `left: 50%` shrink-to-fits into HALF its containing
-     block — for this pill that was ~160px of the ~320px bar, permanently
-     cramming the cluster into a 3–4 row stack. max-content opts out of the
-     clamp; the max-width then bounds it by the BAR below (its containing
-     block), which is itself capped to the pane — so the two boxes stay one
-     width family and nothing can cross the pane edge (React Flow clips at
-     overflow: hidden). */
+  /* max-content is still required even now that `left: 50%` is gone: an
+     auto-width abspos box shrink-to-fits, and this one previously collapsed to
+     ~160px of the ~320px bar, cramming the cluster into a 3–4 row stack. The
+     max-width bounds it by the BAR below (its containing block), which is
+     itself capped to the pane — so the two boxes stay one width family and
+     nothing can cross the pane edge (React Flow clips at overflow: hidden). */
   width: max-content;
   max-width: 100%;
 }

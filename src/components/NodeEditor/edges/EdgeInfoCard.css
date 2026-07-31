@@ -54,8 +54,10 @@
 
 /* Dark theme: the #2a2a2a chip loses separation against the dark canvas
    backdrop (and its black --shadow-lg gives no lift), so raise it above the
-   backdrop and add a hairline edge. Light mode keeps the intentional dark chip. */
+   backdrop and add a hairline edge. Light mode keeps the intentional dark chip.
+   Must stay clear of the canvas default (#3a3e44) — the old #3a3a3e is now
+   within a few points of it, which is exactly the blend this rule prevents. */
 :root[data-theme="dark"] .edge-info-card {
-  background: #3a3a3e;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #5f6570;
+  border: 1px solid rgba(255, 255, 255, 0.14);
 }

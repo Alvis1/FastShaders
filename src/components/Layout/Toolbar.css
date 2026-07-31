@@ -254,7 +254,26 @@
   padding: 5px 10px;
 }
 
-/* "Local" desktop-download dropdown — same popover pattern as the contact
+/* Refresh: an inline SVG rather than a letter, so it needs the flex centring
+   and explicit sizing the text buttons get from their line box. Same
+   double-class specificity note as the theme toggle above. */
+.toolbar__sc-link.toolbar__refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 10px;
+}
+
+.toolbar__refresh svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  /* currentColor, so the icon inherits the button's hover/focus color shift
+     instead of needing its own rules. */
+  fill: currentColor;
+}
+
+/* "Download app" desktop-download dropdown — same popover pattern as the contact
    popover, but anchored to its own wrapper and opening right-aligned so it
    never overflows the viewport's right edge. */
 .toolbar__local {

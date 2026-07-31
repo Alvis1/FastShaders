@@ -35,8 +35,9 @@ const CATEGORIES = [
   'logic',
   'vector',
   'noise',
-  'color',
+  'dataviz',
   'texture',
+  'presets',
   'unknown',
   'output',
 ];

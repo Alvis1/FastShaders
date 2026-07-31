@@ -27,9 +27,9 @@
    It is the ONLY drag target — the divider bar itself is inert — so it owns
    the cursor, the pointer handlers, and touch-action.
 
-   Positioned 20% along the divider measured from its FAR end (bottom for a
-   vertical bar, right for a horizontal one). Expressed as 80% from the start
-   so the centering translate stays the same in both axes.
+   Where along the divider it sits is per-axis: the asset bar's grip takes a
+   fixed 20%-from-the-far-end, while the column splitter's tracks the row seam
+   it crosses — see each modifier below.
 
    NB "grip", not "handle": in this codebase `handle` means a React Flow port
    disc (TypedHandle, --handle-size, .react-flow__handle). */
@@ -40,9 +40,11 @@
   justify-content: center;
   box-sizing: border-box;
   background: var(--bg-surface);
-  /* --edge-color is shared with every seam a grip attaches to, so the outline
-     and the edge are literally the same line. */
-  border: 2px solid var(--edge-color);
+  /* Same color AND same thickness as the seam it grows from, so the outline
+     and the edge are literally one line. Each consumer sets --fs-grip-border
+     to its own edge's thickness (SplitPane's 4px seam, the asset bar's 2px
+     top border); the fallback covers any future host. */
+  border: var(--fs-grip-border, 2px) solid var(--edge-color);
   color: var(--text-secondary);
   transition: border-color var(--transition-fast), color var(--transition-fast);
   /* the grip drags; nothing else does */
@@ -67,9 +69,10 @@
   outline-offset: 2px;
 }
 
-/* The diamond, split down the middle into two triangles that read as arrows
-   pointing along the drag axis. ::before is the diamond outline, ::after the
-   splitter line.
+/* The diamond (::before). Split by a line (::after) into two triangles ONLY on
+   single-axis grips, where they read as arrows along the drag axis — the
+   two-axis corner grip keeps the plain diamond, since ▲▼ or ◀▶ would lie
+   about half its directions.
 
    A rotated square rather than a ◇ glyph: the app self-hosts a woff2 SUBSET of
    Inter (see main.tsx), so a geometric-shapes codepoint is not guaranteed to
@@ -89,27 +92,40 @@
   transform: translate(-50%, -50%) rotate(45deg);
 }
 
-.fs-grip::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: currentColor;
-}
-
-/* ---------- Vertical divider (a column splitter) ----------
-   Drag is horizontal, so the pill hangs off the divider's LEFT face and the
-   diamond is split by a VERTICAL line into ◀ ▶.
-
-   Anchored just ABOVE the asset bar rather than at a fixed percentage: the
-   lower stretch of this divider runs alongside the asset bar, and the grip
-   belongs on the canvas stretch. --fs-asset-bar-h is published on :root by
-   ContentBrowser (including imperatively mid-drag), so the grip rides the bar
-   as it is resized; the fallback keeps it sane if the bar isn't mounted. */
+/* ---------- Vertical divider (the column splitter) ----------
+   The pill hangs off the divider's LEFT face. In this app the column seam's
+   grip is the two-axis corner control (see --xy below): it anchors at the
+   height of the code/preview seam on the other side, aligned with the 3D
+   preview's top control bar, so the grip and that bar read as one row.
+   --fs-grip-offset is the row split's ratio, set inline on this divider by
+   SplitPane; the 50% fallback covers a splitter mounted without one. */
 .fs-grip--v {
-  bottom: calc(var(--fs-asset-bar-h, 0px) + var(--space-3));
-  right: 100%;
+  /* First arm: offset = the row seam's top edge; drop below it by the seam
+     plus half the preview control bar (a --ctl-size widget + 2×4px padding +
+     1px border), then centre — grip centre = bar centre.
+     Second arm: ceiling. The tab pokes ~24px into the LEFT pane, where the
+     asset bar lives — with the row seam low and the bar tall (reachable at
+     stock ratios on a laptop-height window) the grip would sit on top of the
+     bar's tiles and scroll arrow, stealing their clicks. Clamp its centre a
+     half-grip above the bar's top edge (--fs-asset-bar-h is published per
+     element by ContentBrowser via utils/assetBarHeight.ts); when clamped it
+     slides up the seam, detaching from the preview bar — still on the seam,
+     still draggable, never a dead zone. */
+  /* No empirical nudge: browser checks landed the derived centre exactly on
+     the rendered bar (it went -2px, then -1px, then none). Keep it that way —
+     the formula is right, so a future offset means a real geometry change. */
+  top: min(
+    calc(var(--fs-grip-offset, 50%) + var(--fs-seam, 4px) + (var(--ctl-size) + 9px) / 2),
+    calc(100% - var(--fs-asset-bar-h, 0px) - var(--ctl-size) * 0.8 - 4px)
+  );
+  transform: translateY(-50%);
+  /* Flush with the containing block's far edge. The containing block IS the
+     seam (the SplitPane divider), so this overlaps the seam by exactly its
+     thickness — at ANY thickness, including the 12px touch seam — and the
+     grip's opaque fill BREAKS the line where it attaches, instead of the seam
+     running straight across the tab's open mouth. The outline then reads as
+     one continuous path: seam → around the tab → seam. */
+  right: 0;
   width: var(--ctl-size);
   /* Taller than wide: a tab reads as belonging to a vertical edge. */
   height: calc(var(--ctl-size) * 1.6);
@@ -120,21 +136,23 @@
   border-right: none;
 }
 
-.fs-grip--v::after {
-  width: 2px;
-  height: 18px;
+/* Two-axis corner grip: drags the column seam AND the row seam it anchors to
+   (Shift in the gesture locks to one axis). Only the cursor differs — the
+   plain diamond already carries no directional claim. */
+.fs-grip--xy {
+  cursor: move;
 }
 
-/* ---------- Horizontal divider (a row splitter / the asset bar's top edge) ----------
-   Drag is vertical, so the pill sits ABOVE the divider and the diamond is
-   split by a HORIZONTAL line into ▲ ▼.
-
-   Default is 20% from the RIGHT (the asset bar); .fs-grip--start moves it to
-   20% from the left for the code/preview seam, so the two horizontal grips
-   don't stack up on the same side of the screen. */
+/* ---------- Horizontal edge (the asset bar's top border) ----------
+   Drag is vertical, so the pill sits ABOVE the edge and the diamond is
+   split by a HORIZONTAL line into ▲ ▼. Sits 10% in from the right, well
+   clear of the canvas bar now pinned to the pane's bottom-LEFT. */
 .fs-grip--h {
-  left: 80%;
-  bottom: 100%;
+  left: 90%;
+  /* Same containing-block contract as --v: the anchor spans the seam (the
+     asset bar's border-top — see .content-browser__resizer), so flush-bottom
+     overlaps it exactly. */
+  bottom: 0;
   transform: translateX(-50%);
   height: var(--ctl-size);
   width: calc(var(--ctl-size) * 1.6);
@@ -144,12 +162,14 @@
   border-bottom: none;
 }
 
+/* The ▲▼ splitter line — see the diamond note above for why only --h has one. */
 .fs-grip--h::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: currentColor;
   height: 2px;
   width: 18px;
-}
-
-/* Opt a horizontal grip to the LEFT end of its edge. */
-.fs-grip--h.fs-grip--start {
-  left: 20%;
 }

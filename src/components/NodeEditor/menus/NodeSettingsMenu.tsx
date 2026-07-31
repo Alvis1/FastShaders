@@ -15,7 +15,7 @@ import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/pr
  *  exposedPorts rules as the noise nodes (params hidden until exposed;
  *  ShaderNode filters imageNode inputs by exposedPorts). */
 const ALWAYS_EXPOSED_CATEGORIES: Set<NodeCategory> = new Set([
-  'input', 'math', 'type', 'arithmetic', 'interpolation', 'logic', 'vector', 'color',
+  'input', 'math', 'type', 'arithmetic', 'interpolation', 'logic', 'vector', 'dataviz', 'presets',
 ]);
 
 const checkLabelStyle = { ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px' } as const;

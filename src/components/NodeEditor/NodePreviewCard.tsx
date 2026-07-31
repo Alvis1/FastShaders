@@ -508,13 +508,21 @@ function ColorCardContent({ def, cost, costTextColor }: { def: NodeDefinition; c
   const [r, g, b] = hexToRgb01(hex);
   const labelColor = 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.45
     ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.85)';
+  // Mirrors the canvas node: the constant is a circle, the named uniform a
+  // rounded rectangle labelled with its default property name.
+  const isProperty = def.type === 'property_color';
 
   return (
-    <div className="node-preview-card__color-node" style={{ background: hex }}>
+    <div
+      className={`node-preview-card__color-node${isProperty ? ' node-preview-card__color-node--rect' : ''}`}
+      style={{ background: hex }}
+    >
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
-      <span className="node-preview-card__color-label" style={{ color: labelColor }}>Color</span>
+      <span className="node-preview-card__color-label" style={{ color: labelColor }}>
+        {isProperty ? String(def.defaultValues?.name ?? 'color1') : 'Color'}
+      </span>
       {def.outputs[0] && (
         <span
           className="node-preview-card__handle node-preview-card__handle--right-abs"
