@@ -12,7 +12,13 @@ import './ColorNode.css';
 // the node only re-renders when the socket visibly moves — not on every frame
 // of a downstream drag.
 const ANGLE_STEP = 5; // degrees
-const CIRCLE_RADIUS = 14; // .color-node is 28px; socket centers on the edge
+/**
+ * The swatch's diameter, in px. Applied inline rather than from ColorNode.css
+ * so this stays the SINGLE source: the socket math below rides the circle's
+ * perimeter and has to agree with the rendered size exactly.
+ */
+export const COLOR_NODE_SIZE = 56;
+const CIRCLE_RADIUS = COLOR_NODE_SIZE / 2; // socket centers on the edge
 
 /**
  * Average direction (degrees, screen-space, 0 = right) from this color node to
@@ -24,8 +30,8 @@ function selectOutputAngle(id: string) {
   return (s: ReactFlowState): number | null => {
     const self = s.nodeLookup.get(id);
     if (!self) return null;
-    const sx = self.internals.positionAbsolute.x + (self.measured.width ?? 28) / 2;
-    const sy = self.internals.positionAbsolute.y + (self.measured.height ?? 28) / 2;
+    const sx = self.internals.positionAbsolute.x + (self.measured.width ?? COLOR_NODE_SIZE) / 2;
+    const sy = self.internals.positionAbsolute.y + (self.measured.height ?? COLOR_NODE_SIZE) / 2;
 
     // Sum unit vectors toward each target input so multiple wires average out.
     let vx = 0;
@@ -72,6 +78,13 @@ export const ColorNode = memo(function ColorNode({
   const pickerRef = useRef<HTMLInputElement>(null);
   const nodeRef = useRef<HTMLDivElement>(null);
   const hex = String(data.values?.hex ?? '#ff0000');
+  // The named uniform shares this component but stays a rounded RECTANGLE, and
+  // labels itself with the property name the user typed rather than the
+  // generated varName.
+  const isProperty = data.registryType === 'property_color';
+  const label = isProperty
+    ? String(data.values?.name ?? 'color1')
+    : (varName ?? 'Color');
 
   // Direction the output socket should point (null = unconnected → right).
   const angle = useStore(useMemo(() => selectOutputAngle(id), [id]));
@@ -87,17 +100,24 @@ export const ColorNode = memo(function ColorNode({
   const { handlePosition, handleStyle } = useMemo(() => {
     const deg = angle ?? 0;
     const rad = (deg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    // The circle variant rides its own perimeter. The rectangle variant
+    // projects the same direction onto the SQUARE's edge (divide by the larger
+    // component), so the socket sits exactly on the border at every angle
+    // instead of cutting the corners on an inscribed circle.
+    const k = isProperty ? 1 / Math.max(Math.abs(cos), Math.abs(sin)) : 1;
     return {
       handlePosition: cardinal(deg),
       handleStyle: {
-        left: CIRCLE_RADIUS + CIRCLE_RADIUS * Math.cos(rad),
-        top: CIRCLE_RADIUS + CIRCLE_RADIUS * Math.sin(rad),
+        left: CIRCLE_RADIUS + CIRCLE_RADIUS * cos * k,
+        top: CIRCLE_RADIUS + CIRCLE_RADIUS * sin * k,
         right: 'auto',
         bottom: 'auto',
         transform: 'translate(-50%, -50%)',
       } as const,
     };
-  }, [angle]);
+  }, [angle, isProperty]);
 
   const handleChange = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
@@ -116,8 +136,8 @@ export const ColorNode = memo(function ColorNode({
   return (
     <div
       ref={nodeRef}
-      className={`color-node ${selected ? 'color-node--selected' : ''}`}
-      style={{ background: hex }}
+      className={`color-node${isProperty ? ' color-node--rect' : ''}${selected ? ' color-node--selected' : ''}`}
+      style={{ background: hex, width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE }}
       onDoubleClick={openPicker}
     >
       <span
@@ -128,7 +148,7 @@ export const ColorNode = memo(function ColorNode({
           return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.45
             ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.85)';
         })() }}
-      >{varName ?? 'Color'}</span>
+      >{label}</span>
       <input
         ref={pickerRef}
         type="color"

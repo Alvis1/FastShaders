@@ -4,6 +4,9 @@
    seam must not move the layout. */
 .split-pane__divider {
   background: var(--edge-color);
+  /* Inherited by the grip: its outline matches this seam's own 4px thickness
+     (see .fs-grip in styles/controls.css). */
+  --fs-grip-border: 4px;
   flex-shrink: 0;
   touch-action: none;
   transition: background var(--transition-fast);
@@ -22,21 +25,24 @@
   background: var(--border-focus);
 }
 
+/* The corner grip drags the row seam nested in the pane beside it too, so that
+   seam joins the highlight — both lines the gesture will move light up. The
+   selector walks the outer splitter's real structure: divider → following
+   sibling (the right pane) → the inner splitter's own divider. */
+.split-pane__divider--h:has(.fs-grip--xy:hover) ~ div .split-pane__divider--v,
+.split-pane__divider--h:has(.fs-grip--xy:active) ~ div .split-pane__divider--v,
+.split-pane__divider--h:has(.fs-grip--xy:focus-visible) ~ div .split-pane__divider--v {
+  background: var(--border-focus);
+}
+
+/* Both seams take their thickness from the same token (tokens.css), which also
+   bumps them on coarse pointers so a panel boundary stays visible on touch.
+   --fs-grip-border deliberately stays at 4px rather than tracking that bump: a
+   12px outline on a --ctl-size tab would swallow the diamond. */
 .split-pane__divider--h {
-  width: 4px;
+  width: var(--fs-seam);
 }
 
 .split-pane__divider--v {
-  height: 4px;
-}
-
-/* Touch devices: thicken the seam so it stays visible as a boundary. The grip
-   is already a --ctl-size target, so no separate touch bump is needed. */
-@media (pointer: coarse) {
-  .split-pane__divider--h {
-    width: 12px;
-  }
-  .split-pane__divider--v {
-    height: 12px;
-  }
+  height: var(--fs-seam);
 }

@@ -14,7 +14,7 @@ import { getNodeValues } from '@/types';
 import { generateId } from '@/utils/idGenerator';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import { getCostTextColor } from '@/utils/colorUtils';
-import { nextPropertyName } from '@/utils/propertyConvert';
+import { initialNodeValues } from '@/utils/newNodeValues';
 import { getRecentNodeTypes, noteNodeUsed } from './recentNodes';
 import complexityData from '@/registry/complexity.json';
 
@@ -134,13 +134,9 @@ export function AddNodeMenu() {
     } else {
       newNodeId = generateId();
 
-      // Auto-name property nodes: max existing suffix + 1 (shared with the
-      // convert-to-uniform path so both mint from one sequence).
-      let values = { ...def.defaultValues };
-      if (def.type === 'property_float' || def.type === 'property_color') {
-        const prefix = def.type === 'property_color' ? 'color' : 'property';
-        values = { ...values, name: nextPropertyName(prefix, nodes) };
-      }
+      // Property auto-naming + a random colour for colour nodes — shared with
+      // the palette-tile drop path so both surfaces add identical nodes.
+      const values = initialNodeValues(def, nodes);
 
       const newNode = {
         id: newNodeId,

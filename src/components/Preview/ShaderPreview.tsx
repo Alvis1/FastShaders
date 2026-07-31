@@ -1113,19 +1113,6 @@ export function ShaderPreview() {
             <span className="shader-preview__subdivision-value">{subdivision}</span>
           </label>
         )}
-        {/* Hidden on desktop: the Tauri app has the LAN "VR" bench flow in
-            the toolbar, and window.open in its webview isn't this feature's
-            target. */}
-        {!__FS_DESKTOP__ && (
-          <button
-            type="button"
-            className="shader-preview__vr-btn"
-            onClick={handleOpenVR}
-            title={t('Open this shader in a new window and enter immersive VR, with a frame-time / FPS readout in view (WebXR requires a top-level page)', language)}
-          >
-            VR
-          </button>
-        )}
         {uniforms.length > 0 && (
           <button
             type="button"
@@ -1188,21 +1175,12 @@ export function ShaderPreview() {
           allow="fullscreen *; xr-spatial-tracking *"
           allowFullScreen
         />
-        {/* Bottom-center playback/view cluster — floats over the 3D view (so
-            it stays available in fullscreen): fullscreen, play/pause,
-            background color, reset. */}
+        {/* Bottom-LEFT playback/view cluster — floats over the 3D view (so it
+            stays available in fullscreen): play/pause, background color, reset.
+            The two "escape this pane" actions live in their own box at the
+            bottom-right (below), so a mis-aimed click on the everyday controls
+            can't throw the app into fullscreen or open a VR window. */}
         <div className="shader-preview__bottom-controls">
-          <button
-            type="button"
-            className="shader-preview__fs-btn"
-            onClick={handleToggleFullscreen}
-            title={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
-            aria-label={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
-          >
-            {/* Distinct exit glyph — never '✕', which would twin with the red
-                Reset ✕ two buttons over while fullscreen. */}
-            {isFullscreen ? '⤡' : '⛶'}
-          </button>
           <button
             className="shader-preview__play-btn"
             onClick={() => setPlaying((p) => !p)}
@@ -1227,6 +1205,36 @@ export function ShaderPreview() {
             aria-label={t('Reset', language)}
           >
             {'✕'}
+          </button>
+        </div>
+        {/* Bottom-RIGHT display cluster: the two ways to hand the shader a
+            bigger screen. Fullscreen and VR are the same idea one step apart
+            (fill this display / fill your headset), and the XR page's own gate
+            button already collapses to Fullscreen where WebXR is absent. */}
+        <div className="shader-preview__display-controls">
+          {/* Hidden on desktop: the Tauri app has the LAN "VR" bench flow in
+              the toolbar, and window.open in its webview isn't this feature's
+              target. */}
+          {!__FS_DESKTOP__ && (
+            <button
+              type="button"
+              className="shader-preview__vr-btn"
+              onClick={handleOpenVR}
+              title={t('Open this shader in a new window and enter immersive VR, with a frame-time / FPS readout in view (WebXR requires a top-level page)', language)}
+            >
+              VR
+            </button>
+          )}
+          <button
+            type="button"
+            className="shader-preview__fs-btn"
+            onClick={handleToggleFullscreen}
+            title={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
+            aria-label={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
+          >
+            {/* Distinct exit glyph — never '✕', which would twin with the red
+                Reset ✕ in the cluster next door while fullscreen. */}
+            {isFullscreen ? '⤡' : '⛶'}
           </button>
         </div>
         {uniforms.length > 0 && showUniforms && (

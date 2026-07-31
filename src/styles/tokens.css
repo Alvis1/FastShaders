@@ -25,10 +25,23 @@
   --bg-input: #FFFFFF;
   --bg-overlay: rgba(0, 0, 0, 0.3);
 
+  /* Chrome that sits directly ON the graph canvas — the asset bar, the canvas
+     bar, the cost pill, the draw-settings pill. In light mode it IS the panel
+     ramp. In dark it splits off a step lighter, because the canvas there is a
+     mid grey rather than near-black: left on --bg-panel these surfaces landed
+     ~1.05:1 against the canvas and dissolved into it. `-sub` is the recessed
+     strip inside such a surface (the asset bar's tab row). */
+  --bg-raised: var(--bg-panel);
+  --bg-raised-sub: var(--bg-surface);
+
   /* Graph-node body fill. THEME-INVARIANT on purpose — nodes must look identical
      in light and dark mode (see the dark block below), so the node bodies read
-     this instead of --bg-panel, which darkens with the chrome. */
-  --node-bg: #FFFFFF;
+     this instead of --bg-panel, which darkens with the chrome.
+     Off-white rather than pure #FFF: at full white the cards glared against the
+     dark canvas and lost their own subtle internal separators against the light
+     one. A few percent down keeps them clearly the brightest thing on screen
+     without the hard edge. */
+  --node-bg: #F1F2F3;
 
   /* ===== BORDERS ===== */
   --border-subtle: #E0E0E0;
@@ -81,6 +94,12 @@
      redefinition of --border-strong below flows through automatically. */
   --edge-color: var(--border-strong);
 
+  /* Seam thickness, shared by BOTH splitter bars (SplitPane.css) and by the
+     column grip, which centres itself on the row seam it now tracks
+     (.fs-grip--v in controls.css). Those two live in different subtrees, so a
+     token is the only way they can agree on the number. */
+  --fs-seam: 4px;
+
   /* ===== CHROME CONTROLS =====
      One size for every small square control OUTSIDE the graph: canvas-bar
      buttons, preview buttons, and the shared .fs-grip resize handle
@@ -130,29 +149,46 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg-app: #17181b;
-  --bg-panel: #232529;
-  --bg-surface: #1e2023;
-  --bg-surface-hover: #2c2f34;
-  --bg-input: #17181a;
-  --bg-overlay: rgba(0, 0, 0, 0.55);
+  /* A mid-GREY ramp, deliberately not near-black. The graph nodes are a fixed
+     off-white (--node-bg) in both themes, so the old #17-#23 chrome put a card
+     at 16.5:1 against the canvas — every node read as a cut-out glaring off the
+     page. Lifting the chrome into the greys (and easing --node-bg down off pure
+     white) brings that to ~9.6:1: the nodes still clearly float above the
+     chrome, but the two now look like one interface. Ordering matches light
+     mode — app (recessed) < surface < panel (raised) — just inverted in
+     lightness, and text still clears 7:1 on panel / 5:1 for secondary. */
+  --bg-app: #33363b;
+  --bg-panel: #464a51;
+  --bg-surface: #3c4046;
+  --bg-surface-hover: #51565d;
+  --bg-input: #2e3136;
+  --bg-overlay: rgba(0, 0, 0, 0.5);
+
+  /* A step above the panel ramp — see the light-mode declaration. */
+  --bg-raised: #4e535b;
+  --bg-raised-sub: #454a52;
 
   /* Border ramp stays lowest→highest contrast (subtle < default < strong) so
-     panel dividers don't become the brightest lines on a dark screen. */
-  --border-subtle: #2f3237;
-  --border-default: #43464c;
-  --border-strong: #5a5e65;
+     panel dividers don't become the brightest lines on a dark screen. Each
+     step is lifted with the backgrounds — on the old near-black chrome these
+     read as borders, but against a #464a51 panel the previous #2f3237 subtle
+     border would be DARKER than its own panel and invert into a groove. */
+  --border-subtle: #545862;
+  --border-default: #696e77;
+  --border-strong: #868c96;
 
-  --text-primary: #e8e9ea;
-  --text-secondary: #b0b3b8;
-  --text-muted: #82858b;
+  --text-primary: #eceef0;
+  --text-secondary: #c0c5cc;
+  --text-muted: #9aa1aa;
 
-  /* Chrome elevation shadows deepened so panels/menus/popovers still separate
-     against the dark backdrop (a light-theme black shadow just fades into it).
-     Node shadows (--shadow-node*) are intentionally left untouched above. */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.55);
-  --shadow-lg: 0 4px 14px rgba(0, 0, 0, 0.6);
+  /* Chrome elevation shadows: still deepened relative to light mode so
+     panels/menus/popovers separate from the backdrop, but eased back a step
+     now that the backdrop is grey rather than near-black — full-strength black
+     against a #33363b app reads as a smudge instead of a lift. Node shadows
+     (--shadow-node*) are intentionally left untouched above. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.42);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.48);
+  --shadow-lg: 0 4px 14px rgba(0, 0, 0, 0.55);
 }
 
 /* ===== TOUCH / COARSE-POINTER OVERRIDES =====
@@ -167,5 +203,10 @@
        stays close to its designed size and node proportions read correctly.
        18px here rendered ~2x oversized on iPad. */
     --handle-size: 12px;
+
+    /* Thicker seams so a panel boundary stays visible on a touch screen. The
+       grips are already --ctl-size targets, so they need no matching bump —
+       but the column grip's centring nudge tracks this automatically. */
+    --fs-seam: 12px;
   }
 }

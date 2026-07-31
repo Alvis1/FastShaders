@@ -9,6 +9,7 @@ import { setHtml5TileDrag, endHtml5TileDrag } from './tileDrag';
 import { useAppStore } from '@/store/useAppStore';
 import { readPersisted } from '@/hooks/usePersistedState';
 import { beginDragChrome } from '@/utils/dragChrome';
+import { setAssetBarHeight } from '@/utils/assetBarHeight';
 import { formatCategoryLabel, nodeSearchLV, t } from '@/i18n';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
@@ -177,18 +178,19 @@ export function ContentBrowser() {
   const tabsRef = useRef<HTMLDivElement>(null);
 
   /**
-   * Publish the live bar height so the column splitter's grip can sit just
-   * above the bar (styles/controls.css reads --fs-asset-bar-h). Written here
-   * AND imperatively from the drag, so the grip tracks the bar in real time.
+   * Publish the live bar height so the corner grip's position clamp can keep
+   * the grip off the bar (the min() on .fs-grip--v in styles/controls.css).
+   * Written here AND imperatively from the drag, so the clamp tracks the bar
+   * in real time — which is why it goes through the consumer registry rather
+   * than a variable on :root (see utils/assetBarHeight.ts: a root-level
+   * inherited custom property invalidates the whole document, every frame of
+   * the gesture).
    */
   const publishBarHeight = useCallback((h: number) => {
-    document.documentElement.style.setProperty('--fs-asset-bar-h', `${Math.round(h)}px`);
+    setAssetBarHeight(h);
   }, []);
   useEffect(() => {
     publishBarHeight(barHeight);
-    return () => {
-      document.documentElement.style.removeProperty('--fs-asset-bar-h');
-    };
   }, [barHeight, publishBarHeight]);
 
   /**
@@ -229,8 +231,18 @@ export function ContentBrowser() {
     return () => cancelAnimationFrame(raf);
   });
 
-  /** Live drag bounds, measured once per gesture. */
-  const resizeRef = useRef<{ startY: number; startH: number; min: number; max: number } | null>(null);
+  /**
+   * Live gesture state: bounds measured once at pointerdown, plus the latest
+   * pending height and the rAF handle that coalesces paints to one per frame.
+   */
+  const resizeRef = useRef<{
+    startY: number;
+    startH: number;
+    min: number;
+    max: number;
+    pending: number;
+    raf: number;
+  } | null>(null);
   /** This gesture's dragChrome end call (idempotent; no-op before any drag). */
   const endDragChrome = useRef<() => void>(() => {});
 
@@ -241,14 +253,45 @@ export function ContentBrowser() {
    */
   const paintHeight = useCallback((h: number) => {
     if (rootRef.current) rootRef.current.style.height = `${h}px`;
-    const { tabsH: tb, tileH: tl } = metricsRef.current;
-    // setProperty, not style.zoom — `zoom` is absent from CSSStyleDeclaration
-    // in some TS DOM lib versions. It must stay a real `zoom` (not a
-    // transform): tileGhostZoom parses this exact inline value, and only
-    // `zoom` scales layout so the strip's scroll extents stay correct.
-    scrollRef.current?.style.setProperty('zoom', String(zoomForHeight(h, tb, tl)));
+    const { tabsH: tb, tileH: tl, zoom: committed } = metricsRef.current;
+    const strip = scrollRef.current;
+    if (strip) {
+      // TRANSFORM, not `zoom`, for the duration of the gesture.
+      //
+      // `zoom` is an INHERITED computed-style property: every Length in the
+      // subtree (font-size, padding, border-width) is stored pre-multiplied by
+      // it, so changing it dirties the computed style of every descendant and
+      // forces a full layout. Measured on the default tab, that is 1,709
+      // elements re-laid-out per pointermove frame — plus a font-shaping and
+      // vector-raster cache miss on all 68 tiles, since every frame lands on a
+      // new fractional scale. That is the frame-rate collapse.
+      //
+      // `transform` is neither inherited nor a layout property: with the layer
+      // promoted it is a compositor-only scale — zero style recalc, zero
+      // layout. React's inline style still carries the COMMITTED zoom, so
+      // dividing by it makes the on-screen result identical to what pointerup
+      // will bake in.
+      strip.style.transformOrigin = '0 0';
+      strip.style.willChange = 'transform';
+      strip.style.transform = `scale(${zoomForHeight(h, tb, tl) / (committed || 1)})`;
+    }
     publishBarHeight(h);
   }, [publishBarHeight]);
+
+  /**
+   * Hand the strip back to `zoom`. Transform is visual only — it never grows
+   * `scrollWidth`, so the horizontal scroll extents, `useScrollArrows`, and
+   * `tileGhostZoom` (which parses the literal inline `zoom` string) would all
+   * be wrong if it outlived the gesture. None of them are read mid-drag, which
+   * is exactly what makes the swap safe.
+   */
+  const clearDragTransform = useCallback(() => {
+    const strip = scrollRef.current;
+    if (!strip) return;
+    strip.style.transform = '';
+    strip.style.transformOrigin = '';
+    strip.style.willChange = '';
+  }, []);
 
   /**
    * Drag bounds, measured live. The ceiling is the SMALLER of "leave a slice of
@@ -275,12 +318,8 @@ export function ContentBrowser() {
     // Stops the browser starting a text-selection drag from the press itself.
     e.preventDefault();
     const { min, max } = measureBounds();
-    resizeRef.current = {
-      startY: e.clientY,
-      startH: root.getBoundingClientRect().height,
-      min,
-      max,
-    };
+    const startH = root.getBoundingClientRect().height;
+    resizeRef.current = { startY: e.clientY, startH, min, max, pending: startH, raf: 0 };
     e.currentTarget.setPointerCapture(e.pointerId);
     endDragChrome.current = beginDragChrome('row-resize');
   }, [measureBounds]);
@@ -314,19 +353,37 @@ export function ContentBrowser() {
     const d = resizeRef.current;
     if (!d) return;
     // The bar grows upward, so a negative dy (dragging up) is a taller bar.
-    paintHeight(Math.max(d.min, Math.min(d.max, d.startH - (e.clientY - d.startY))));
+    d.pending = Math.max(d.min, Math.min(d.max, d.startH - (e.clientY - d.startY)));
+    // Coalesce into ONE paint per frame: a 120Hz mouse (or a coalesced-event
+    // burst) fires pointermove faster than the display refreshes, and every
+    // extra call would be a wasted style/layout write nobody ever sees.
+    if (d.raf) return;
+    d.raf = requestAnimationFrame(() => {
+      const live = resizeRef.current;
+      if (!live) return;
+      live.raf = 0;
+      paintHeight(live.pending);
+    });
   }, [paintHeight]);
 
   const handleResizeUp = useCallback((e: React.PointerEvent) => {
-    if (!resizeRef.current) return;
+    const d = resizeRef.current;
+    if (!d) return;
+    if (d.raf) cancelAnimationFrame(d.raf);
     resizeRef.current = null;
     // Restore document chrome FIRST: if releasePointerCapture throws (a pointer
     // the browser already released), the cursor override and the app-wide
     // selection block must not be stranded on.
     endDragChrome.current();
     e.currentTarget.releasePointerCapture(e.pointerId);
-    if (rootRef.current) setBarHeight(rootRef.current.getBoundingClientRect().height);
-  }, []);
+    // Commit the gesture's final value, then drop the visual transform so the
+    // committed `zoom` (applied by the render this schedules) takes over. Read
+    // the height BEFORE clearing — the transform doesn't affect it, but the
+    // ordering keeps the two independent.
+    const finalH = rootRef.current?.getBoundingClientRect().height;
+    clearDragTransform();
+    if (finalH != null) setBarHeight(finalH);
+  }, [clearDragTransform]);
 
   /**
    * Keyboard resize. The −/+ buttons this grip replaced were focusable, so
@@ -456,9 +513,13 @@ export function ContentBrowser() {
       ? empty(`No textures match “${search.trim()}”.`)
       : filteredTextures.map((t) => <TextureCard key={t.id} texture={t} />);
   } else {
-    items = filteredDefs.map((item) => (
-      <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
-    ));
+    // A category can legitimately be empty (Presets ships without nodes yet) —
+    // show a message rather than a blank strip that reads as a rendering bug.
+    items = filteredDefs.length === 0
+      ? empty(q ? `No nodes match “${search.trim()}”.` : 'Nothing here yet.')
+      : filteredDefs.map((item) => (
+          <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
+        ));
   }
 
   return (

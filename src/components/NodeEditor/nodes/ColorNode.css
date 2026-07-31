@@ -1,6 +1,7 @@
+/* Size comes from COLOR_NODE_SIZE in ColorNode.tsx (applied inline) — the
+   output socket rides this circle's perimeter, so the size has exactly one
+   source of truth rather than a CSS value the socket math has to mirror. */
 .color-node {
-  width: 28px;
-  height: 28px;
   border-radius: 50%;
   border: 1.5px solid rgba(0, 0, 0, 0.12);
   cursor: grab;
@@ -10,6 +11,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* The named uniform (property_color): same borderless swatch, but a rounded
+   rectangle. Its socket projects onto the square's edge rather than an
+   inscribed circle — see ColorNode.tsx. */
+.color-node--rect {
+  border-radius: var(--border-radius-md);
 }
 
 .color-node:active {
@@ -22,7 +30,8 @@
 }
 
 .color-node__label {
-  font-size: 5px;
+  /* Scales with the swatch: 5px was sized for the old 28px circle. */
+  font-size: 10px;
   font-weight: 600;
   font-family: var(--font-sans);
   letter-spacing: 0.02em;

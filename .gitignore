@@ -13,3 +13,6 @@ dist-alvismisjuns
 # SFTP deploy credentials (VS Code sftp extension + scripts/deploy-alvismisjuns.sh)
 .vscode/sftp.json
 vite.config.d.ts
+
+# Local test assets dropped into the app (3D models etc.) — not part of the repo
+.claude/_AppTestRes/

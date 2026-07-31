@@ -83,8 +83,9 @@
     "logic": "Loģika",
     "vector": "Vektors",
     "noise": "Troksnis",
-    "color": "Krāsa",
+    "dataviz": "DatuViz",
     "texture": "Tekstūras",
+    "presets": "Sagataves",
     "unknown": "Nezināms",
     "output": "Izvade"
   }

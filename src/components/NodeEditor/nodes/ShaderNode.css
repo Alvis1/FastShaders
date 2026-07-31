@@ -22,7 +22,11 @@
   min-width: 0;
 }
 
-/* ===== Inline color picker ===== */
+/* ===== Inline color picker =====
+   Generic: a small swatch beside its row label. No node currently uses it —
+   `color` and `property_color` both render as the borderless ColorNode — but
+   the row machinery still supports a color setting, so this stays as the
+   styling any future one would pick up. */
 .shader-node__input-color {
   width: 14px;
   height: 13px;

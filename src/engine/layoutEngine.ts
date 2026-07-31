@@ -3,6 +3,7 @@ import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
 import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRegistry';
 import { nodeBox, hasNodeGlyph, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
+import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 
 // ── Node-size estimation ─────────────────────────────────────────────────────
 // autoLayout usually runs BEFORE React Flow measures a node (on import/paste/
@@ -55,7 +56,9 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
   // graphs but test stubs default to 'shader'); group/note have no def.
   const flowType = def ? getFlowNodeType(def) : ((node.type as string) ?? 'shader');
 
-  // Fixed-footprint component types (dimensions from their CSS/canvas consts).
+  // Fixed-footprint component types (dimensions from their CSS/canvas consts;
+  // the colour swatch imports its real constant so auto-layout can't drift
+  // from the rendered size).
   switch (flowType) {
     case 'preview': // noise nodes: 96×96 canvas + header (PreviewNode)
       return { width: 111 * scale, height: 127 * scale };
@@ -63,8 +66,8 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       return { width: 87 * scale, height: 121 * scale };
     case 'clock': // time: 56×56 canvas + header
       return { width: 71 * scale, height: 87 * scale };
-    case 'color': // borderless 28×28 swatch, no header, never cost-scaled
-      return { width: 28, height: 28 };
+    case 'color': // borderless square swatch, no header, never cost-scaled
+      return { width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE };
     case 'output': {
       // min-width 140 + header + one row per visible channel (colour + exposed).
       const exposed = (node.data as { exposedPorts?: string[] }).exposedPorts?.length ?? 0;

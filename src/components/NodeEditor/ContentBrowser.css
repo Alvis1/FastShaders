@@ -1,13 +1,15 @@
-/* The asset bar is CHROME, not canvas: it keeps the theme's panel color and is
+/* The asset bar is CHROME, not canvas: it keeps the theme's own color and is
    deliberately independent of the user's canvas background pick (--canvas-bg),
-   so recoloring the canvas never tints the asset tiles behind. */
+   so recoloring the canvas never tints the asset tiles behind. It reads
+   --bg-raised (a step above the panel ramp in dark mode) rather than
+   --bg-panel — see the token's note in tokens.css. */
 .content-browser {
   position: relative;
   /* 2px in --edge-color to match the grip's outline exactly — the tab and this
      border are meant to read as one continuous line. */
   border-top: 2px solid var(--edge-color);
   transition: border-color var(--transition-fast);
-  background: var(--bg-panel);
+  background: var(--bg-raised);
   display: flex;
   flex-direction: column;
   /* visible, not hidden — the resize grip floats above the box */
@@ -20,19 +22,25 @@
   max-height: calc(100% - 120px);
 }
 
-/* Zero-height anchor on the bar's top edge. It exists only to give the grip
-   tab something to position against — it is not itself a hit target
-   (pointer-events:none), so the canvas underneath stays fully interactive
-   right up to the bar's border. The grip hangs ABOVE it, which is why
-   .content-browser keeps overflow:visible. */
+/* Anchor for the grip tab, spanning EXACTLY the bar's 2px border-top (top: -2px
+   reaches from the padding box back over the border). The grip positions flush
+   against its containing block's far edge (see .fs-grip--h in
+   styles/controls.css), so the anchor's box must BE the seam — an anchor below
+   the border would push the grip's side edges visibly past the border line.
+   Not itself a hit target (pointer-events:none), so the canvas underneath stays
+   fully interactive right up to the bar's border. The grip hangs ABOVE it,
+   which is why .content-browser keeps overflow:visible. */
 .content-browser__resizer {
   position: absolute;
-  top: 0;
+  top: calc(-1 * var(--fs-grip-border));
   left: 0;
   right: 0;
-  height: 0;
+  height: var(--fs-grip-border);
   z-index: var(--z-controls);
   pointer-events: none;
+  /* Inherited by the grip: its outline matches this bar's own 2px border-top
+     (see .fs-grip in styles/controls.css). */
+  --fs-grip-border: 2px;
 }
 
 .content-browser__resizer .fs-grip {
@@ -77,18 +85,18 @@
   font-size: 20px;
   font-weight: 700;
   color: var(--text-secondary);
-  background: linear-gradient(to right, var(--bg-surface) 60%, transparent);
+  background: linear-gradient(to right, var(--bg-raised-sub) 60%, transparent);
   padding: 0;
 }
 
 .content-browser__arrow--left {
   left: 0;
-  background: linear-gradient(to right, var(--bg-surface) 60%, transparent);
+  background: linear-gradient(to right, var(--bg-raised-sub) 60%, transparent);
 }
 
 .content-browser__arrow--right {
   right: 0;
-  background: linear-gradient(to left, var(--bg-surface) 60%, transparent);
+  background: linear-gradient(to left, var(--bg-raised-sub) 60%, transparent);
 }
 
 .content-browser__arrow:hover {
@@ -103,7 +111,7 @@
   overflow-x: auto;
   flex: 1;
   border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-surface);
+  background: var(--bg-raised-sub);
   position: relative;
   scrollbar-width: none;
 }
@@ -123,7 +131,7 @@
   font-family: var(--font-sans);
   font-weight: 600;
   color: var(--text-primary);
-  background: var(--bg-panel);
+  background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   outline: none;
@@ -151,7 +159,7 @@
   border: 1px solid transparent;
   border-bottom: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm) var(--border-radius-sm) 0 0;
-  background: var(--bg-surface);
+  background: var(--bg-raised-sub);
   color: var(--text-secondary);
   position: relative;
   bottom: -1px;

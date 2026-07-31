@@ -44,11 +44,19 @@
   background: rgba(211, 47, 47, 0.12);
 }
 
+/* Lives in the bottom-right display cluster beside Fullscreen, so it takes
+   that row's --ctl-size height rather than the top bar's auto-height pill.
+   Width is text-driven (it is the one lettered control among glyphs). */
 .shader-preview__vr-btn {
-  padding: 3px 10px;
-  height: auto;
-  font-size: 14px;
-  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--ctl-size);
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
   color: var(--text-primary);
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
@@ -207,15 +215,19 @@
   white-space: nowrap;
 }
 
-/* Bottom-center playback/view cluster floating over the 3D view (kept inside
-   __body so it survives fullscreen). Frosted pill like the canvas bar. */
-.shader-preview__bottom-controls {
+/* The two clusters floating over the 3D view (kept inside __body so they
+   survive fullscreen): playback/view on the LEFT, display targets on the
+   RIGHT. Frosted pills like the canvas bar — one shared rule, since the only
+   thing that differs between them is which edge they hug.
+
+   Both stay on the same baseline (bottom: 10px) so they read as one row split
+   in two rather than two unrelated boxes. */
+.shader-preview__bottom-controls,
+.shader-preview__display-controls {
   position: absolute;
   bottom: 10px;
-  left: 50%;
-  transform: translateX(-50%);
   /* Above the iframe (z-auto) but UNDER the drop veil (z 3) — during a file
-     drag the veil covers the whole body, this pill included. */
+     drag the veil covers the whole body, these pills included. */
   z-index: 2;
   display: flex;
   align-items: center;
@@ -229,8 +241,19 @@
   -webkit-backdrop-filter: blur(8px);
 }
 
-:root[data-theme="dark"] .shader-preview__bottom-controls {
-  background: rgba(35, 37, 41, 0.85);
+.shader-preview__bottom-controls {
+  left: 10px;
+}
+
+.shader-preview__display-controls {
+  right: 10px;
+}
+
+/* Empty on desktop builds once VR is compiled out and fullscreen is the lone
+   child — but never actually empty, so no :empty guard is needed. */
+:root[data-theme="dark"] .shader-preview__bottom-controls,
+:root[data-theme="dark"] .shader-preview__display-controls {
+  background: rgba(70, 74, 81, 0.85);
 }
 
 /* "Compiling shader…" pill shown between a fresh srcDoc and the first painted
@@ -378,8 +401,8 @@
    unreadable). Give them a dark translucent panel; the active-state black wash
    also needs to become a light wash. */
 :root[data-theme="dark"] .shader-preview__uniforms {
-  background: rgba(28, 29, 32, 0.92);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+  background: rgba(60, 64, 70, 0.94);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
 }
 
 :root[data-theme="dark"] .shader-preview__props-btn--active {

@@ -14,8 +14,9 @@ export const CATEGORIES: CategoryInfo[] = [
   { id: 'logic', label: 'Logic' },
   { id: 'vector', label: 'Vector' },
   { id: 'noise', label: 'Noise' },
-  { id: 'color', label: 'Color' },
+  { id: 'dataviz', label: 'DataViz' },
   { id: 'texture', label: 'Textures' },
+  { id: 'presets', label: 'Presets' },
   { id: 'unknown', label: 'Unknown' },
   { id: 'output', label: 'Output' },
 ];

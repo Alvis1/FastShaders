@@ -67,6 +67,14 @@ export function PreviewLink() {
       const svg = svgRef.current;
       if (!svg) return;
 
+      // Freeze while a splitter / asset-bar grip drag is in flight. The three
+      // getBoundingClientRect calls below force a SYNCHRONOUS layout, and a
+      // resize gesture has already dirtied the document — so this tick would
+      // pay for a full layout on every frame of every drag. The wire is
+      // decorative; nobody notices it holding still for the gesture, and
+      // dragChrome already stamps this flag app-wide (styles/controls.css).
+      if (document.documentElement.classList.contains('fs-dragging')) return;
+
       const id = outputIdRef.current;
       if (!nodeEl || !nodeEl.isConnected || nodeElId !== id) {
         nodeEl = id

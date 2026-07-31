@@ -21,6 +21,11 @@ export function AppLayout() {
       <SplitPane
         ratio={splitRatio}
         onRatioChange={setSplitRatio}
+        // One corner control for the whole layout: this seam's grip anchors at
+        // the code/preview seam's height and drags BOTH splits (Shift locks to
+        // an axis) — which is why the inner splitter below renders no grip.
+        crossRatio={rightSplitRatio}
+        onCrossRatioChange={setRightSplitRatio}
         left={
           <div className="app-layout__left">
             <div className="app-layout__node-editor">
@@ -34,9 +39,9 @@ export function AppLayout() {
               direction="vertical"
               ratio={rightSplitRatio}
               onRatioChange={setRightSplitRatio}
-              // Left end: keeps the 3D preview's grip clear of the asset bar's,
-              // which sits 20% in from the right on the pane next door.
-              gripPosition="start"
+              // No grip of its own: this seam is dragged (vertically) by the
+              // corner grip on the column seam to the left.
+              grip={false}
               left={
                 <div className="app-layout__code-panel">
                   <div className="app-layout__code">

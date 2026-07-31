@@ -23,7 +23,7 @@ let activeDrags = 0;
  * chrome only clears when the LAST one ends, so the first finger lifting can't
  * restore text selection under the second mid-gesture.
  */
-export function beginDragChrome(cursor: 'col-resize' | 'row-resize'): () => void {
+export function beginDragChrome(cursor: 'col-resize' | 'row-resize' | 'move'): () => void {
   activeDrags++;
   document.body.style.cursor = cursor;
   document.documentElement.classList.add(DRAG_CLASS);
