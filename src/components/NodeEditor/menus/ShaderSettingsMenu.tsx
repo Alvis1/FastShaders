@@ -1,10 +1,8 @@
-import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
+import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
 import { t, portLabel } from '@/i18n';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { OUTPUT_DEFAULT_EXPOSED } from '../nodes/OutputNode';
-import { DragNumberInput } from '../inputs/DragNumberInput';
-import { getNodeValues } from '@/types';
-import type { MaterialSettings, OutputNodeData, ShaderNodeData } from '@/types';
+import type { MaterialSettings, OutputNodeData } from '@/types';
 import { removeEdgesForPort } from '@/utils/edgeUtils';
 import { toggleExposedPort } from '@/utils/exposedPorts';
 
@@ -17,9 +15,10 @@ export function ShaderSettingsMenu() {
   const language = useAppStore((s) => s.language);
   const totalCost = useAppStore((s) => s.totalCost);
   const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
+  const costProfiles = useAppStore((s) => s.costProfiles);
   const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
-  const headset = VR_HEADSETS.find((h) => h.id === selectedHeadsetId) ?? VR_HEADSETS[0];
+  const device = resolveDeviceBudget(selectedHeadsetId, costProfiles);
 
   const outputNode = nodes.find((n) => n.data.registryType === 'output');
   const outputData = outputNode?.data as OutputNodeData | undefined;
@@ -30,19 +29,12 @@ export function ShaderSettingsMenu() {
 
   const outputDef = NODE_REGISTRY.get('output');
 
-  // Collect every property_float (uniform) node so the user can tweak default
-  // values + rename uniforms from one place instead of hunting them down.
-  const uniformNodes = nodes.filter((n) => n.data.registryType === 'property_float');
-
-  const updateUniform = (nodeId: string, key: 'name' | 'value', value: string | number) => {
-    const node = nodes.find((n) => n.id === nodeId);
-    if (!node) return;
-    const current = getNodeValues(node);
-    const next = key === 'name'
-      ? { ...current, name: String(value) }
-      : { ...current, value: Number(value) };
-    updateNodeData(nodeId, { values: next } as Partial<ShaderNodeData>);
-  };
+  // NB no Uniforms list here. It duplicated a property's name/value editor
+  // that already lives on the node itself (Node Settings) and in the preview's
+  // Uniforms overlay — three places editing one value, and the only one that
+  // showed float properties BUT NOT colour ones. The overlay is the live
+  // surface (with "Set as default" to bake a tuning back into the graph); the
+  // node is the authoring surface.
 
   const updateSettings = (patch: Partial<MaterialSettings>) => {
     if (!outputNode) return;
@@ -68,7 +60,14 @@ export function ShaderSettingsMenu() {
       updateSettings({ transparent: true });
       setOpacityPort(true);
     } else {
-      updateSettings({ transparent: false });
+      // Clear depthWrite too. Its checkbox is rendered ONLY while transparent
+      // is on, so a `false` set here and then abandoned was unreachable — and
+      // it kept shipping (the emitter has no transparent guard), leaving an
+      // OPAQUE mesh drawing with depth writes off. On a teapot/bunny, a
+      // Double-sided material or a displaced sphere that self-occludes into
+      // holes which look exactly like an alpha cutout, with nothing wired to
+      // Opacity or Discard and no visible control to undo it.
+      updateSettings({ transparent: false, depthWrite: undefined });
       if (!settings.alphaTest) setOpacityPort(false);
     }
   };
@@ -129,7 +128,7 @@ export function ShaderSettingsMenu() {
       >
         <div>{t('Total Cost:', language)} <strong style={{ color: 'var(--text-primary)' }}>{totalCost}</strong> {t('pts', language)}</div>
         <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
-          {t('Budget:', language)} {headset.maxPoints} {t('pts max', language)} ({headset.label})
+          {t('Budget:', language)} {device.maxPoints} {t('pts max', language)} ({device.label})
         </div>
       </div>
 
@@ -215,7 +214,9 @@ export function ShaderSettingsMenu() {
           <input
             type="range"
             min={0.01}
-            max={1}
+            // Not 1: three discards on `alpha <= alphaTest`, so a threshold of
+            // exactly 1 erases an untouched (alpha = 1) surface entirely.
+            max={0.99}
             step={0.01}
             value={settings.alphaTest}
             onChange={(e) => updateSettings({ alphaTest: parseFloat(e.target.value) })}
@@ -250,52 +251,6 @@ export function ShaderSettingsMenu() {
           />
           {t('Depth Write', language)}
         </label>
-      )}
-
-      {/* Uniforms — every property_float node, editable by name + value
-          without leaving the shader settings menu. */}
-      {uniformNodes.length > 0 && (
-        <>
-          <div className="context-menu__divider" />
-          <div className="context-menu__category">{t('Uniforms', language)}</div>
-          {uniformNodes.map((n) => {
-            const v = getNodeValues(n);
-            const name = String(v.name ?? 'property');
-            const value = Number(v.value ?? 0);
-            return (
-              <div
-                key={n.id}
-                style={{
-                  padding: '4px var(--space-3)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-2)',
-                }}
-              >
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => updateUniform(n.id, 'name', e.target.value)}
-                  title={t('Uniform name', language)}
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    padding: '2px 6px',
-                    background: 'var(--bg-input)',
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--border-radius-sm)',
-                    fontSize: 'var(--font-size-xs)',
-                    color: 'var(--text-primary)',
-                  }}
-                />
-                <DragNumberInput
-                  value={value}
-                  onChange={(nv) => updateUniform(n.id, 'value', nv)}
-                />
-              </div>
-            );
-          })}
-        </>
       )}
 
       <div className="context-menu__divider" />

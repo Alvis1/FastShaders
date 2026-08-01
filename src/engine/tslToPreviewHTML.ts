@@ -350,7 +350,13 @@ const XR_STATS_SCRIPT = `<script>
   }
 <${''}/script>`;
 
-const FIT_BOUNDS_SCRIPT = `<script>
+/**
+ * Exported for `previewFitBounds.test.ts`, which evaluates this script against a
+ * real `three` import and a stubbed AFRAME to pin the normalization maths — the
+ * function body is otherwise untested (the HTML tests only assert the emitted
+ * attribute string, so a body rewrite would pass silently).
+ */
+export const FIT_BOUNDS_SCRIPT = `<script>
   if (window.AFRAME && !AFRAME.components["fit-bounds"]) {
     // Merge vertices that share a quantized position. Discards old normals/UVs
     // (they index into the old layout and we recompute both anyway) and
@@ -389,6 +395,35 @@ const FIT_BOUNDS_SCRIPT = `<script>
       return merged;
     }
 
+    // Reverse triangle winding. Used both by the inverted-winding heuristic and
+    // by the bake step when a node's transform is mirrored (negative
+    // determinant), which flips handedness and would otherwise leave the model
+    // inside-out. Non-indexed geometry gets an index built for the purpose.
+    function flipWinding(g) {
+      var idx = g.index;
+      if (!idx) {
+        var pos = g.attributes.position;
+        if (!pos) return;
+        var n = pos.count;
+        var Arr = n < 65535 ? Uint16Array : Uint32Array;
+        var arr = new Arr(n);
+        for (var i = 0; i < n; i++) arr[i] = i;
+        for (var t0 = 0; t0 + 2 < n; t0 += 3) {
+          var tmp = arr[t0 + 1];
+          arr[t0 + 1] = arr[t0 + 2];
+          arr[t0 + 2] = tmp;
+        }
+        g.setIndex(new THREE.BufferAttribute(arr, 1));
+        return;
+      }
+      for (var t = 0; t + 2 < idx.count; t += 3) {
+        var b = idx.getX(t + 1);
+        idx.setX(t + 1, idx.getX(t + 2));
+        idx.setX(t + 2, b);
+      }
+      idx.needsUpdate = true;
+    }
+
     // Spherical UVs from each vertex's direction relative to the local center
     // — shared by the regen path (always) and the preserve path (only when the
     // source mesh has no UVs at all).
@@ -415,67 +450,147 @@ const FIT_BOUNDS_SCRIPT = `<script>
       schema: { size: { type: "number", default: 1.6 }, regen: { type: "boolean", default: true } },
       init: function () { this.el.addEventListener("model-loaded", this.fit.bind(this)); },
       fit: function () {
-        var mesh = this.el.getObject3D("mesh");
-        if (!mesh) return;
+        var root = this.el.getObject3D("mesh");
+        if (!root) return;
         var regen = this.data.regen;
-        mesh.traverse(function (node) {
+        var target = this.data.size;
+        root.updateMatrixWorld(true);
+
+        // Collect the mesh nodes and their transforms BEFORE mutating anything
+        // — a glTF can share ONE BufferGeometry across several nodes carrying
+        // different transforms, so measuring and baking must both work off a
+        // snapshot rather than off geometry another node has already changed.
+        //
+        // \`m\` puts a node's geometry into the ENTITY's frame (the root's own
+        // matrix included), which is the frame the normalization has to land
+        // in: root.matrix * root.matrixWorld⁻¹ * node.matrixWorld.
+        var rootInv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+        var pre = new THREE.Matrix4().multiplyMatrices(root.matrix, rootInv);
+        var entries = [];
+        var skinned = false;
+        root.traverse(function (node) {
           if (!node.isMesh || !node.geometry) return;
-          if (!regen) {
-            var g0 = node.geometry;
-            if (!g0.attributes.uv && g0.attributes.position) {
-              g0.computeBoundingBox();
-              var c0 = new THREE.Vector3();
-              g0.boundingBox.getCenter(c0);
-              sphericalUVs(g0, c0);
-            }
-            return;
-          }
-          var g = mergeByPosition(node.geometry);
-          g.computeVertexNormals();
-          var pos = g.attributes.position;
-          g.computeBoundingBox();
-          var c = new THREE.Vector3();
-          g.boundingBox.getCenter(c);
-          // Detect inverted winding (e.g. the Stanford bunny OBJ uses CW
-          // triangles, so computeVertexNormals produces inward-facing normals
-          // and displacement pushes the surface *into* the mesh). Sample a
-          // sparse set of vertices: if most have a normal pointing toward the
-          // centroid, the winding is reversed — flip every triangle and
-          // recompute.
-          var nrm = g.attributes.normal;
-          var inward = 0, sampled = 0;
-          var step = Math.max(1, Math.floor(pos.count / 200));
-          for (var s = 0; s < pos.count; s += step) {
-            var dx = pos.getX(s) - c.x;
-            var dy = pos.getY(s) - c.y;
-            var dz = pos.getZ(s) - c.z;
-            var dot = dx * nrm.getX(s) + dy * nrm.getY(s) + dz * nrm.getZ(s);
-            if (dot < 0) inward++;
-            sampled++;
-          }
-          if (sampled > 0 && inward * 2 > sampled) {
-            var idx = g.index;
-            for (var t = 0; t + 2 < idx.count; t += 3) {
-              var b = idx.getX(t + 1);
-              idx.setX(t + 1, idx.getX(t + 2));
-              idx.setX(t + 2, b);
-            }
-            idx.needsUpdate = true;
-            g.computeVertexNormals();
-          }
-          sphericalUVs(g, c);
-          node.geometry = g;
+          // Baking would desync a skeleton's bind matrices and would miss an
+          // InstancedMesh's per-instance transforms — fall back for those.
+          if (node.isSkinnedMesh || node.isInstancedMesh) { skinned = true; return; }
+          entries.push({ node: node, m: new THREE.Matrix4().multiplyMatrices(pre, node.matrixWorld) });
         });
-        mesh.updateMatrixWorld(true);
-        var box = new THREE.Box3().setFromObject(mesh);
+
+        // A rigged or instanced model keeps the legacy Object3D normalization:
+        // baking would desync a skeleton's bind matrices and would miss an
+        // InstancedMesh's per-instance transforms. Its \`positionGeometry\` stays
+        // in authored units — position-driven shaders are mis-scaled on it, as
+        // they were on every dropped model before this — but nothing renders
+        // inconsistently.
+        if (skinned) {
+          var wbox = new THREE.Box3().setFromObject(root);
+          if (wbox.isEmpty()) return;
+          var wsize = new THREE.Vector3(), wcenter = new THREE.Vector3();
+          wbox.getSize(wsize);
+          wbox.getCenter(wcenter);
+          var ws = target / (Math.max(wsize.x, wsize.y, wsize.z) || 1);
+          root.position.sub(wcenter.multiplyScalar(ws));
+          root.scale.setScalar(ws);
+          return;
+        }
+        if (!entries.length) return;
+
+        // Measure the union AABB in the entity's own frame. The old code used
+        // \`Box3.setFromObject\`, which is WORLD-axis-aligned and therefore
+        // included #preview-entity's resting tilt and #spin-parent's live
+        // rotation — so a model was scaled by its ROTATED hull (the teapot came
+        // out ~19% undersized) and a dropped model's centring depended on
+        // whatever spin phase it happened to load at.
+        var box = new THREE.Box3();
+        for (var i = 0; i < entries.length; i++) {
+          var g0 = entries[i].node.geometry;
+          if (!g0.boundingBox) g0.computeBoundingBox();
+          if (g0.boundingBox) box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));
+        }
         if (box.isEmpty()) return;
-        var size = new THREE.Vector3();
-        var center = new THREE.Vector3();
-        box.getSize(size);
+        var ext = new THREE.Vector3(), center = new THREE.Vector3();
+        box.getSize(ext);
         box.getCenter(center);
-        var scale = this.data.size / (Math.max(size.x, size.y, size.z) || 1);
-        mesh.position.sub(center.multiplyScalar(scale));
-        mesh.scale.setScalar(scale);
+        var s = target / (Math.max(ext.x, ext.y, ext.z) || 1);
+
+        // N maps entity-frame coordinates to the normalized preview box, so
+        // baking N·m into the ATTRIBUTES is what makes \`positionGeometry\` read
+        // ±size/2 for a dropped model. Scaling the Object3D (what this used to
+        // do) is invisible to the shader: positionGeometry is three's raw
+        // position attribute, so every position-driven preset, built-in texture
+        // and noise-node default was reading the model's authored units.
+        var N = new THREE.Matrix4().makeScale(s, s, s)
+          .multiply(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z));
+
+        for (var e = 0; e < entries.length; e++) {
+          var node = entries[e].node;
+          var bake = new THREE.Matrix4().multiplyMatrices(N, entries[e].m);
+          // Clone rather than mutate: the same geometry may be reachable from
+          // more than one node (and from outside this subtree).
+          var g = node.geometry.clone();
+          g.applyMatrix4(bake);
+          // A mirrored ancestor transform reverses handedness — restore it so
+          // the winding heuristic below and back-face culling both stay honest.
+          if (bake.determinant() < 0) flipWinding(g);
+
+          if (regen) {
+            // Weld AFTER the bake so the 1e-4 quantization is a fixed fraction
+            // of the preview box rather than of the model's authored units (on
+            // a centimetre-scale scan it used to weld the mesh into a blob).
+            g = mergeByPosition(g);
+            g.computeVertexNormals();
+            var pos = g.attributes.position;
+            g.computeBoundingBox();
+            var c = new THREE.Vector3();
+            g.boundingBox.getCenter(c);
+            // Detect inverted winding (e.g. the Stanford bunny OBJ uses CW
+            // triangles, so computeVertexNormals produces inward-facing normals
+            // and displacement pushes the surface *into* the mesh). Sample a
+            // sparse set of vertices: if most have a normal pointing toward the
+            // centroid, the winding is reversed — flip every triangle and
+            // recompute.
+            var nrm = g.attributes.normal;
+            var inward = 0, sampled = 0;
+            var step = Math.max(1, Math.floor(pos.count / 200));
+            for (var sv = 0; sv < pos.count; sv += step) {
+              var dx = pos.getX(sv) - c.x;
+              var dy = pos.getY(sv) - c.y;
+              var dz = pos.getZ(sv) - c.z;
+              var dot = dx * nrm.getX(sv) + dy * nrm.getY(sv) + dz * nrm.getZ(sv);
+              if (dot < 0) inward++;
+              sampled++;
+            }
+            if (sampled > 0 && inward * 2 > sampled) {
+              flipWinding(g);
+              g.computeVertexNormals();
+            }
+            sphericalUVs(g, c);
+          } else {
+            // Preserve path (dropped GLB): keep authored normals/UVs, but a
+            // glTF primitive is allowed to ship without a NORMAL accessor and
+            // GLTFLoader does not synthesize one — an absent normal attribute
+            // reads as garbage in \`normalLocal\`/\`normalWorld\` and lights the
+            // whole model in any fresnel shader.
+            if (!g.attributes.normal && g.attributes.position) g.computeVertexNormals();
+            if (!g.attributes.uv && g.attributes.position) {
+              g.computeBoundingBox();
+              var c0 = new THREE.Vector3();
+              g.boundingBox.getCenter(c0);
+              sphericalUVs(g, c0);
+            }
+          }
+          node.geometry = g;
+        }
+
+        // The transforms now live in the vertex data, so every local matrix in
+        // the subtree (the root's included) must go to identity or they would
+        // be applied a second time.
+        root.traverse(function (node) {
+          node.position.set(0, 0, 0);
+          node.quaternion.set(0, 0, 0, 1);
+          node.scale.set(1, 1, 1);
+        });
+        root.updateMatrixWorld(true);
       }
     });
   }

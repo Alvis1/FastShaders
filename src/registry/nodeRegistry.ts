@@ -1,5 +1,5 @@
 import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
-import { nodeSearchLV } from '@/i18n';
+import { nodeSearchLV, nodeLabelLV } from '@/i18n';
 
 const definitions: NodeDefinition[] = [
   // ===== INPUT NODES =====
@@ -109,6 +109,28 @@ const definitions: NodeDefinition[] = [
     description: 'Surface normal in local (object) space — the direction the surface faces.',
   },
   {
+    // The world-space counterpart of normalLocal. Needed because the preview
+    // entity carries a resting tilt AND an animated spin, so an object-space
+    // normal dotted against a world-space direction (a view vector, world up)
+    // measures against a rotated frame: the result turns with the model. Every
+    // fresnel preset was wrong for exactly that reason.
+    //
+    // In the fragment stage this resolves through the material's SHADED normal
+    // (three's normalView → builder.context.setupNormal()), so it reflects any
+    // normal map wired into the Output node — desirable for a fresnel, but a
+    // coupling normalLocal does not have. For DISPLACEMENT stay on normalLocal,
+    // which matches object-space Position.
+    type: 'normalWorld',
+    label: 'Normal (world)',
+    category: 'input',
+    tslFunction: 'normalWorld',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Normal', dataType: 'vec3' }],
+    description:
+      'Surface normal in world space — where the face points after the model\'s own rotation is applied. Compare against world-space directions such as a view vector; the plain Normal node is object space and turns with the model.',
+  },
+  {
     type: 'tangentLocal',
     label: 'Tangent',
     category: 'input',
@@ -127,7 +149,16 @@ const definitions: NodeDefinition[] = [
     tslImportModule: 'three/tsl',
     inputs: [],
     outputs: [{ id: 'out', label: 'Time', dataType: 'float' }],
-    description: 'Elapsed time in seconds — wire it in to animate values. Also: clock, animation',
+    // `speed` is a MODIFIER, not a constructor argument: graphToCode has a
+    // dedicated `def.type === 'time'` branch (the generic defaultValues branch
+    // would emit the invalid `time(1)` — `time` is a uniform node object, not
+    // a callable), and codeToGraph collapses `time.mul(k)` back into it.
+    defaultValues: { speed: 1 },
+    // Keep UI-instruction wording out of the prose: `description` doubles as the
+    // search corpus, and "speed multiplier" made every `mul`/`multip` query
+    // surface this node. Search aliases belong in the `Also:` tail.
+    description:
+      'Elapsed time in seconds — wire it in to animate values; right-click to set its speed, or expose speed as an input socket. Also: clock, animation, speed',
   },
   {
     type: 'screenUV',
@@ -1032,17 +1063,54 @@ export function displayDescription(def: NodeDefinition): string | undefined {
   return text || undefined;
 }
 
+/** No-match sentinel for `nodeMatchRank` — anything below this ranks as a hit. */
+export const NO_MATCH = Number.POSITIVE_INFINITY;
+
+/**
+ * How well `def` matches a lowercased search query — LOWER IS BETTER,
+ * `NO_MATCH` for no match at all.
+ *
+ * A node's NAME must always outrank its prose. Without this, results came out
+ * in raw registry order, so a node that merely *mentions* the query in its
+ * description could sit above the node actually called that: searching
+ * "multip" put Time (whose description mentions a speed multiplier) above
+ * Multiply, and "color" put Property (color) above Color.
+ *
+ * The `Also:` tail of a description is a deliberate alias list (see
+ * `displayDescription`, which strips it from the UI), so it ranks above prose
+ * but below a real name.
+ */
+export function nodeMatchRank(def: NodeDefinition, q: string): number {
+  const names = [def.label.toLowerCase(), def.type.toLowerCase(), def.tslFunction.toLowerCase()];
+  // The Latvian label is a name too — a Latvian user typing it deserves the
+  // same rank an English user gets for the English label.
+  const lvLabel = nodeLabelLV(def.type).toLowerCase();
+  if (lvLabel) names.push(lvLabel);
+
+  if (names.some((n) => n === q)) return 0;
+  if (names.some((n) => n.startsWith(q))) return 1;
+  if (names.some((n) => n.includes(q))) return 2;
+
+  const [prose = '', aliases = ''] = (def.description?.toLowerCase() ?? '').split(/\s*also:/);
+  if (aliases.includes(q)) return 3;
+  if (prose.includes(q)) return 4;
+  // Latvian description last, mirroring the English prose tier.
+  if (nodeSearchLV(def.type).includes(q)) return 5;
+  return NO_MATCH;
+}
+
+/**
+ * Search + rank in one pass. Ties keep registry order (Array#sort is stable),
+ * so equally-good matches stay in their curated sequence.
+ */
 export function searchNodes(query: string): NodeDefinition[] {
-  const q = query.toLowerCase();
-  return allDefinitions.filter(d =>
-    d.label.toLowerCase().includes(q) ||
-    d.type.toLowerCase().includes(q) ||
-    d.tslFunction.toLowerCase().includes(q) ||
-    d.description?.toLowerCase().includes(q) ||
-    // Latvian label/description, so search works in Latvian too (empty when
-    // untranslated). Canonical English fields above are always matched.
-    nodeSearchLV(d.type).includes(q)
-  );
+  const q = query.trim().toLowerCase();
+  if (!q) return allDefinitions;
+  return allDefinitions
+    .map((d) => ({ d, rank: nodeMatchRank(d, q) }))
+    .filter((e) => e.rank !== NO_MATCH)
+    .sort((a, b) => a.rank - b.rank)
+    .map((e) => e.d);
 }
 
 export function getAllDefinitions(): NodeDefinition[] {

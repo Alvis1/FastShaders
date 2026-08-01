@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { linkPath, pointInRect, rectCenter, type RectLike } from './previewLinkGeometry';
+import { linkPath, rectCenter, type RectLike } from './previewLinkGeometry';
 
 const rect = (left: number, top: number, right: number, bottom: number): RectLike => ({
   left, top, right, bottom,
@@ -12,17 +12,24 @@ describe('previewLinkGeometry', () => {
     });
   });
 
-  describe('pointInRect', () => {
-    const r = rect(0, 0, 100, 100);
-    it('accepts an interior point', () => {
-      expect(pointInRect({ x: 50, y: 50 }, r)).toBe(true);
+  describe('off-pane start (the Output node panned out of view)', () => {
+    // The wire is deliberately NOT hidden when the Output node leaves the
+    // canvas pane (see PreviewLink); the pane clips it instead. So the curve
+    // must stay well-formed for start points far outside the visible box.
+    it('keeps a finite, correctly-anchored curve for a start far off-screen', () => {
+      const d = linkPath({ x: -4000, y: -2500 }, { x: 900, y: 400 });
+      expect(d.startsWith('M -4000 -2500')).toBe(true);
+      expect(d.endsWith('900 400')).toBe(true);
+      expect(d).not.toMatch(/NaN|Infinity/);
     });
-    it('rejects a point outside', () => {
-      expect(pointInRect({ x: 150, y: 50 }, r)).toBe(false);
-    });
-    it('accepts a just-outside point within the margin', () => {
-      expect(pointInRect({ x: 103, y: 50 }, r, 4)).toBe(true);
-      expect(pointInRect({ x: 105, y: 50 }, r, 4)).toBe(false);
+
+    it('still bows toward the preview when the node is off-screen to the RIGHT', () => {
+      // dx < 0: control handles must flip sign, or the curve doubles back.
+      const d = linkPath({ x: 3000, y: 200 }, { x: 900, y: 400 });
+      const nums = d.match(/-?\d+(\.\d+)?/g)!.map(Number);
+      const [sx, , c1x] = nums;
+      expect(c1x).toBeLessThan(sx);
+      expect(d).not.toMatch(/NaN|Infinity/);
     });
   });
 

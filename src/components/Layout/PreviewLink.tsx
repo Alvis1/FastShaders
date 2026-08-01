@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { linkPath, pointInRect, rectCenter } from './previewLinkGeometry';
+import { linkPath, rectCenter } from './previewLinkGeometry';
 import './PreviewLink.css';
 
 /**
@@ -24,8 +24,10 @@ import './PreviewLink.css';
  * are converted to the SVG's local space by subtracting its own bounding box —
  * which keeps the wire a constant on-screen thickness at any zoom.
  *
- * The link fades out when the Output node is panned/scrolled out of the canvas
- * viewport, and when there is no Output node or the preview hasn't laid out yet.
+ * The link hides ONLY when there is nothing meaningful to draw: no Output node,
+ * no preview element, a collapsed pane, or an Output node rendered `display:
+ * none` (a collapsed group member). It deliberately does NOT hide when the
+ * Output node is merely panned off screen — see the tick loop.
  */
 export function PreviewLink() {
   // Primitive selector → re-render only when the Output node's identity changes.
@@ -91,8 +93,8 @@ export function PreviewLink() {
       }
 
       // The SVG's own box is the React Flow pane (it's an absolute-positioned
-      // child filling `.react-flow`). It doubles as both the coordinate origin
-      // (client → local) and the viewport rect for the visibility clamp.
+      // child filling `.react-flow`) and serves as the coordinate origin for
+      // the client → local conversion below.
       // The three getBoundingClientRect calls per frame ARE the tracking
       // mechanism (pan/zoom/drag/resize all land there) — don't cache those.
       const svgRect = svg.getBoundingClientRect();
@@ -110,14 +112,15 @@ export function PreviewLink() {
       const startClient = rectCenter(nodeRect);
       const endClient = rectCenter(previewRect);
 
-      // Hide when the Output node's center is outside the canvas pane (it would
-      // otherwise be clipped mid-line at the edge). svgRect === the pane rect.
-      // Skip the path math entirely while hidden — a wire at opacity 0 doesn't
-      // need its `d` maintained.
-      if (!pointInRect(startClient, svgRect, 4)) {
-        setShown(svg, false);
-        return;
-      }
+      // Deliberately NO off-screen clamp. Panning the Output node out of view
+      // used to hide the wire, which read as the preview losing its connection
+      // exactly when the user had scrolled away to work elsewhere. The link is
+      // a statement about the GRAPH ("this node is what the viewer renders"),
+      // not about what happens to be on screen, so it stays drawn: the pane's
+      // own `overflow: hidden` trims it, and the wire simply enters from
+      // whichever edge the node sits behind. React Flow keeps off-screen nodes
+      // mounted (`onlyRenderVisibleElements` is left at its default false), so
+      // the off-pane rect above is real and the geometry stays correct.
       setShown(svg, true);
 
       // Convert client coordinates into the SVG's local space (its origin is the

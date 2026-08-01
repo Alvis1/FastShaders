@@ -182,6 +182,146 @@ describe('graphToCode — input passthrough', () => {
   });
 });
 
+describe('graphToCode — scalar widening on vec3 output channels', () => {
+  // three's NodeMaterial does `vec4(this.colorNode)`, and TSL splats a
+  // 1-channel node across ALL FOUR components — so a bare scalar wired to
+  // Color also became the ALPHA, making the surface flicker or vanish as if
+  // Opacity/Discard were connected when neither is.
+  const out = () => makeNode('out', 'output');
+
+  it('widens a scalar noise driving Color, so alpha is left alone', () => {
+    const { code } = graphToCode(
+      [makeNode('n', 'perlin'), out()],
+      [makeEdge('n', 'out', 'out', 'color')],
+    );
+    expect(code).toContain('return vec3(noise1);');
+  });
+
+  it('leaves a vec3 source byte-identical (no churn for existing shaders)', () => {
+    const { code } = graphToCode(
+      [makeNode('c', 'color', { hex: '#ff8800' }), out()],
+      [makeEdge('c', 'out', 'out', 'color')],
+    );
+    expect(code).toContain('return color1;');
+    expect(code).not.toContain('vec3(color1)');
+  });
+
+  it('widens only the vec3 channel — a scalar Opacity stays scalar', () => {
+    const { code } = graphToCode(
+      [makeNode('n', 'perlin'), makeNode('f', 'float', { value: 0.5 }), out()],
+      [makeEdge('n', 'out', 'out', 'color'), makeEdge('f', 'out', 'out', 'opacity')],
+    );
+    expect(code).toMatch(/color: vec3\(noise1\)/);
+    // Opacity IS a float channel — widening it would be a type error.
+    expect(code).toMatch(/opacity: float1/);
+  });
+
+  it('narrows a vec4 source too — its .w must not become the alpha', () => {
+    // `vec4(this.colorNode)` is an IDENTITY cast for a vec4, so the node's w
+    // went straight to diffuseColor.a — and a fresh Vec4 node's w is 0, i.e.
+    // fully transparent. Alpha may only come from the opacity channel.
+    const { code } = graphToCode(
+      [makeNode('v', 'vec4', { x: 1, y: 0, z: 0, w: 0 }), out()],
+      [makeEdge('v', 'out', 'out', 'color')],
+    );
+    expect(code).toContain('return vec3(vec41);');
+  });
+
+  it('reads the shape of the PORT the edge leaves, not the node', () => {
+    // Data Viz has out:vec3 + value:float. Node-level inference reports 3 for
+    // both, so an edge from `value` skipped the widen and put a bare float in
+    // colorNode — the same alpha splat by a second route.
+    const { code } = graphToCode(
+      [makeNode('d', 'dataviz'), out()],
+      [makeEdge('d', 'value', 'out', 'color')],
+    );
+    expect(code).toMatch(/return vec3\(_dataviz1_t\);/);
+  });
+
+  it('leaves Displacement alone — a scalar height must stay scalar', () => {
+    // position never reaches alpha, and normal-mode displacement scales the
+    // NORMAL by this scalar; widening it would break the Data Viz height flow.
+    const { code } = graphToCode(
+      [makeNode('d', 'dataviz'), out()],
+      [makeEdge('d', 'value', 'out', 'position')],
+    );
+    expect(code).toMatch(/position:\s*_dataviz1_t/);
+  });
+
+  it('emits the no-channel fallback without a trailing comment', () => {
+    // A `//` on a return line defeats parseBody's end-anchored regexes, so the
+    // line becomes a body statement that short-circuits the module's real
+    // return — silently dropping Discard and every material setting.
+    const { code } = graphToCode([makeNode('c', 'color', { hex: '#ff0000' })], []);
+    expect(code).toContain('return vec3(1, 0, 0);');
+    expect(code).not.toMatch(/return[^\n]*\/\//);
+  });
+
+  it('widens a scalar arithmetic chain, not just a declared float port', () => {
+    // `mul` declares dataType 'any', so this only works via real shape
+    // inference (getNodeOutputShape), not the registry port type.
+    const { code } = graphToCode(
+      [makeNode('n', 'perlin'), makeNode('m', 'mul', { b: 2 }), out()],
+      [makeEdge('n', 'out', 'm', 'a'), makeEdge('m', 'out', 'out', 'color')],
+    );
+    expect(code).toContain('return vec3(mul1);');
+  });
+});
+
+describe('graphToCode — time speed multiplier', () => {
+  const out = () => makeNode('out', 'output');
+  const wire = () => [makeEdge('t', 'out', 'out', 'opacity')];
+
+  it('emits the bare reference for an explicit speed of 1 (byte-identical to legacy)', () => {
+    const { code } = graphToCode([makeNode('t', 'time', { speed: 1 }), out()], wire());
+    expect(code).toContain('const time1 = time;');
+    // `time` is a uniform NODE OBJECT, not a callable — `time(1)` is a TypeError.
+    expect(code).not.toMatch(/\btime\s*\(/);
+  });
+
+  it('emits a method chain for speed !== 1 and adds no mul import', () => {
+    const { code, importStatements } = graphToCode(
+      [makeNode('t', 'time', { speed: 2.5 }), out()],
+      wire(),
+    );
+    expect(code).toContain('const time1 = time.mul(2.5);');
+    expect(code).not.toMatch(/\btime\s*\(/);
+    // Method chaining needs no `mul` import (same convention as the noise scale).
+    expect(importStatements.join('\n')).not.toMatch(/\bmul\b/);
+  });
+
+  it('supports negative and zero speeds', () => {
+    expect(graphToCode([makeNode('t', 'time', { speed: -1 }), out()], wire()).code)
+      .toContain('const time1 = time.mul(-1);');
+    expect(graphToCode([makeNode('t', 'time', { speed: 0 }), out()], wire()).code)
+      .toContain('const time1 = time.mul(0);');
+  });
+
+  it('a wired speed socket overrides the stored value', () => {
+    // `speed` is an opt-in input socket (same rule as the noise params): an
+    // edge wins over the number, and the emitted shape stays the method chain
+    // so codeToGraph collapses it back into one Time node.
+    const { code } = graphToCode(
+      [makeNode('s', 'property_float', { value: 4, name: 'tempo' }), makeNode('t', 'time', { speed: 2.5 }), out()],
+      [makeEdge('s', 'out', 't', 'speed'), ...wire()],
+    );
+    expect(code).toContain('const time1 = time.mul(tempo);');
+    expect(code).not.toContain('time.mul(2.5)');
+  });
+
+  it('falls back to the bare reference for adversarial speed values', () => {
+    // .fastshader files are untrusted: a hostile string must never be spliced
+    // into the emitted module, and a non-finite value must not reach num().
+    for (const bad of ['0)); fetch("https://evil"); //', 'abc', Infinity, NaN]) {
+      const { code } = graphToCode([makeNode('t', 'time', { speed: bad }), out()], wire());
+      expect(code).toContain('const time1 = time;');
+      expect(code).not.toContain('fetch');
+      expect(code).not.toContain('Infinity');
+      expect(code).not.toContain('NaN');
+    }
+  });
+});
+
 describe('graphToCode — binary-op defaults', () => {
   it('emits min with its identity (1) for an unwired operand, not 0', () => {
     // Regression: a legacy min node (no stored `b`) must fall back to the registry

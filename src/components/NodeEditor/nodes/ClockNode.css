@@ -16,6 +16,21 @@
   border-radius: 50%;
 }
 
+/* Speed multiplier chip — only rendered when speed !== 1. Sits over the
+   canvas's clipped-away bottom-right corner (the canvas is a circle), so it
+   overlaps nothing painted. Hardcoded colour: nodes must render identically in
+   both themes. */
+.clock-node__speed {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  color: #e74c3c;
+  pointer-events: none;
+}
+
 .clock-node > .react-flow__handle {
   transform: translateY(-50%) !important;
 }

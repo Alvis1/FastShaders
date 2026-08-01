@@ -5,6 +5,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import { useLongPress } from '@/hooks/useLongPress';
+import { useFitText } from '@/hooks/useFitText';
 import './ColorNode.css';
 
 // The output socket rides the circle's perimeter, pointing toward the node(s)
@@ -19,6 +20,12 @@ const ANGLE_STEP = 5; // degrees
  */
 export const COLOR_NODE_SIZE = 56;
 const CIRCLE_RADIUS = COLOR_NODE_SIZE / 2; // socket centers on the edge
+
+/** Label type sizes: the ideal, and the floor past which shrinking stops
+ *  helping (below ~5px the name is unreadable at 100% zoom anyway, and the
+ *  user can still read it in the settings menu). Mirrors ColorNode.css. */
+const LABEL_MAX_PX = 10;
+const LABEL_MIN_PX = 5;
 
 /**
  * Average direction (degrees, screen-space, 0 = right) from this color node to
@@ -86,6 +93,10 @@ export const ColorNode = memo(function ColorNode({
     ? String(data.values?.name ?? 'color1')
     : (varName ?? 'Color');
 
+  // The swatch is a fixed square, so a long property name wraps (CSS) and then
+  // scales down until it fits rather than spilling past the edge.
+  const labelRef = useFitText<HTMLSpanElement>(label, LABEL_MAX_PX, LABEL_MIN_PX);
+
   // Direction the output socket should point (null = unconnected → right).
   const angle = useStore(useMemo(() => selectOutputAngle(id), [id]));
 
@@ -141,6 +152,7 @@ export const ColorNode = memo(function ColorNode({
       onDoubleClick={openPicker}
     >
       <span
+        ref={labelRef}
         className="color-node__label"
         style={{ color: (() => {
           const [r, g, b] = hexToRgb01(hex);

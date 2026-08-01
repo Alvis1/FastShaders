@@ -36,27 +36,36 @@
   text-shadow: 0 1px 2px var(--node-cost-text-shadow, rgba(255, 255, 255, 0.6)) !important;
 }
 
-/* Standard selection highlight: a single outline in the node's OWN category
-   color (--node-cat, set per node from CAT_HEX; falls back to the focus color).
-   No box-shadow ring and no transition — one instant, consistent style shared
-   by every node type (and the stacked-node frame below). */
+/* Standard selection highlight: a SOLID band in the node's OWN category color
+   (--node-cat, set per node from CAT_HEX; falls back to the focus color). One
+   instant, consistent style shared by every node type (and the stacked-node
+   frame below).
+   Filled, not an outline: `outline` + `outline-offset` drew a thin ring with a
+   canvas-coloured gap inside it, which read as two competing borders. A
+   box-shadow spread paints the whole band with no gap. The node's own drop
+   shadow must be re-stated here — box-shadow REPLACES rather than adds, so
+   omitting it would flatten every selected node. */
 .node-base--selected {
-  outline: 2px solid var(--node-cat, var(--border-focus));
-  outline-offset: 2px;
+  box-shadow: 0 0 0 var(--node-selection-width) var(--node-cat, var(--border-focus)), var(--shadow-node);
 }
 
-/* A stacked (multi-channel) node draws its selection outline on a separate
-   frame that encloses the whole stack (see .node-base__stack-frame), so the
-   top card must NOT also outline itself — that would ring only the top card. */
+/* A stacked (multi-channel) node draws its selection band on a separate frame
+   that encloses the whole stack (see .node-base__stack-frame), so the top card
+   must NOT also band itself — that would highlight only the top card. It also
+   casts no shadow of its own while stacked (the deepest layer casts the single
+   group shadow), so `none` is right for both halves of the property.
+   ShaderNode sets the same `boxShadow: 'none'` inline, which already wins on
+   specificity; this rule keeps the invariant true if that inline ever goes. */
 .node-base--stacked.node-base--selected {
-  outline: none;
+  box-shadow: none;
 }
 
 /* Selection frame for a stacked node: a rounded rect spanning the union of the
    card and its downward-offset layers. Sized inline (`bottom` extends it below
    the card by the deepest layer's offset). Sits above the card so its top/side
    edges aren't painted over; transparent + pointer-events:none so it only ever
-   shows the outline and never blocks sockets. */
+   shows the band and never blocks sockets. Filled band (box-shadow spread)
+   rather than an offset outline, matching .node-base--selected. */
 .node-base__stack-frame {
   position: absolute;
   top: 0;
@@ -65,14 +74,13 @@
   /* bottom set inline: -(stackLayerCount * STACK_STEP_Y) */
   z-index: 1;
   border-radius: var(--border-radius-md);
-  outline: 2px solid var(--node-cat, var(--border-focus));
-  outline-offset: 2px;
+  box-shadow: 0 0 0 var(--node-selection-width) var(--node-cat, var(--border-focus));
   pointer-events: none;
 }
 
 /* The selection frame (z1) is painted over the card body, so on a stacked node
    the sockets — handles default to z-index:auto (0) — must be lifted above it,
-   or the frame's outline draws a line across each socket dot. */
+   or the frame's band draws across each socket dot. */
 .node-base--stacked .react-flow__handle {
   z-index: 2;
 }

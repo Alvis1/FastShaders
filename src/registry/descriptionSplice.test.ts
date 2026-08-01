@@ -29,11 +29,11 @@ describe('locateRegistryDescriptions', () => {
   const defs = getAllDefinitions();
 
   it('finds one slot per definition, keyed by node type', () => {
-    // 69 = getAllDefinitions().length. NODE_REGISTRY.size is 72 because the three
+    // 70 = getAllDefinitions().length. NODE_REGISTRY.size is 73 because the three
     // hidden defs (unknown/dataNode/imageNode) are separate consts outside the
     // `definitions` array, so they are correctly not located here.
-    expect(slots).toHaveLength(69);
-    expect(defs).toHaveLength(69);
+    expect(slots).toHaveLength(70);
+    expect(defs).toHaveLength(70);
     expect(new Set(slots.map(s => s.key))).toEqual(new Set(defs.map(d => d.type)));
   });
 
@@ -252,7 +252,7 @@ describe('escaped-apostrophe safety', () => {
     // ...and must decode back to exactly the value we asked for.
     const relocated = locateRegistryDescriptions(out);
     expect(relocated.find(s => s.key === 'tangentLocal')!.value).toBe(nasty);
-    expect(relocated).toHaveLength(69);
+    expect(relocated).toHaveLength(70);
 
     // Still a single-line edit.
     const changed = registrySource

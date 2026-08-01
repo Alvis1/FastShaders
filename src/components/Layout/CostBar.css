@@ -1,6 +1,59 @@
 .cost-bar {
   padding: var(--space-3);
   flex-shrink: 0;
+  border-radius: var(--border-radius-sm);
+  transition: box-shadow var(--transition-fast), background var(--transition-fast);
+}
+
+/* Drag a benchmark complexity patch over the bar → highlight the drop target. */
+.cost-bar--drop {
+  box-shadow: inset 0 0 0 2px var(--border-focus);
+  background: color-mix(in srgb, var(--border-focus) 8%, transparent);
+}
+
+.cost-bar__override {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.cost-bar__override-tag {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.cost-bar__override--warn .cost-bar__override-tag {
+  color: var(--cost-high);
+}
+
+.cost-bar__override-btn {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  padding: 1px var(--space-2);
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.cost-bar__override-btn:hover {
+  border-color: var(--border-default);
+}
+
+.cost-bar__device-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
 }
 
 .cost-bar__headset-select {
@@ -13,9 +66,33 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   padding: var(--space-1) var(--space-2);
-  margin-bottom: var(--space-2);
   cursor: pointer;
   transition: border-color var(--transition-fast);
+}
+
+/* In the device row the select flexes and the ✕ sits beside it. */
+.cost-bar__device-row .cost-bar__headset-select {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.cost-bar__device-remove {
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  padding: 0 var(--space-2);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.cost-bar__device-remove:hover {
+  border-color: var(--cost-high);
+  color: var(--cost-high);
 }
 
 .cost-bar__headset-select:hover {

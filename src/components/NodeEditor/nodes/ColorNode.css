@@ -24,19 +24,42 @@
   cursor: grabbing;
 }
 
+/* Same FILLED selection band as every other node shell (see NodeBase.css). The
+   swatch carries no category colour, so it falls back to the focus colour. */
 .color-node--selected {
-  box-shadow: var(--shadow-node-selected);
+  box-shadow: 0 0 0 var(--node-selection-width) var(--border-focus), var(--shadow-node);
   border-color: var(--border-focus);
 }
 
 .color-node__label {
-  /* Scales with the swatch: 5px was sized for the old 28px circle. */
+  /* Scales with the swatch: 5px was sized for the old 28px circle.
+     The swatch is a FIXED square (its socket rides that perimeter), so a long
+     property name has to fit inside rather than widen the node: it wraps here,
+     and useFitText shrinks the size further if the wrapped block is still too
+     tall. font-size is overwritten inline by that hook — this is the ideal. */
   font-size: 10px;
   font-weight: 600;
   font-family: var(--font-sans);
   letter-spacing: 0.02em;
   pointer-events: none;
   user-select: none;
+  /* `anywhere`, not `break-word`: property names are single camelCase runs with
+     no spaces to break at, so nothing would wrap without it. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: center;
+  line-height: 1.15;
+  /* Last resort: a name long enough to hit useFitText's 5px floor still can't
+     escape the swatch — it clips at the rim instead of spilling across the
+     canvas (the bug this whole block fixes). Clipping the LABEL, never the
+     node: `.color-node` must keep overflow visible or it would cut off the
+     output socket, which rides the perimeter. scrollHeight still reports the
+     full content height here, so the fit loop measures correctly. */
+  max-height: 100%;
+  overflow: hidden;
+  /* Keeps the text off the swatch's curved edge (and the circle variant's
+     tighter corners) instead of touching the rim. */
+  padding: 0 3px;
 }
 
 .color-node__picker {

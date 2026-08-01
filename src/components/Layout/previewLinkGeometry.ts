@@ -22,16 +22,6 @@ export function rectCenter(r: RectLike): Pt {
   return { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
 }
 
-/** Is a point inside a rect, expanded by `margin` on every side? */
-export function pointInRect(pt: Pt, r: RectLike, margin = 0): boolean {
-  return (
-    pt.x >= r.left - margin &&
-    pt.x <= r.right + margin &&
-    pt.y >= r.top - margin &&
-    pt.y <= r.bottom + margin
-  );
-}
-
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }

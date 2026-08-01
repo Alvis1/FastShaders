@@ -355,7 +355,15 @@ function parseBody(
   const channels: Record<string, string> = {};
 
   for (const rawLine of processedBody.split('\n')) {
-    const trimmed = rawLine.trim();
+    // Strip a trailing line comment before matching. Both patterns below are
+    // anchored to end-of-line, so a `return …; // note` slipped past BOTH and
+    // fell through to defLines — re-emitted verbatim as a body statement that
+    // then WINS over the return this function builds afterwards. The whole
+    // channel/__pixel/material-settings return became dead code: Discard never
+    // ran and Transparent / Alpha Clip / Side / Depth Write were all silently
+    // dropped. Only a `//` outside a string can end a statement line here, and
+    // the emitter never puts a URL-ish `//` in one.
+    const trimmed = rawLine.trim().replace(/\s*\/\/[^'"`]*$/, '').trim();
     if (!trimmed) continue;
 
     const objReturn = trimmed.match(/^return\s*\{(.+)\}\s*;?$/);
@@ -588,13 +596,27 @@ export function buildShaderModule(
   if (materialSettings?.side) {
     returnProps.push(`side: ${SIDE_VALUES[materialSettings.side] ?? 0}`);
   }
-  if (materialSettings?.alphaTest) {
-    returnProps.push(`alphaTest: ${materialSettings.alphaTest}`);
+  // Coerced and clamped, never interpolated raw: materialSettings arrives from
+  // an adversarial FASTSHADERS_PROJECT_V1 block (extractProjectState checks the
+  // node shape, not this field's type), so a string value would be spliced
+  // straight into the generated module's object literal. Capped BELOW 1
+  // because three's test is `diffuseColor.a.lessThanEqual(alphaTest).discard()`
+  // — at exactly 1.0 an untouched alpha of 1.0 discards every fragment and the
+  // whole object silently disappears.
+  const alphaTest = Number(materialSettings?.alphaTest);
+  if (Number.isFinite(alphaTest) && alphaTest > 0) {
+    returnProps.push(`alphaTest: ${Math.min(alphaTest, 0.99)}`);
   }
   // Emitted only when non-default (true is THREE's default), so existing
   // exports stay byte-identical. Applied by shaderloader 0.5's material-prop
   // pass; older CDN loaders ignore the extra key harmlessly.
-  if (materialSettings?.depthWrite === false) {
+  //
+  // Gated on `transparent` as well: depth-write-off is a transparency sorting
+  // control, and on an OPAQUE material it just makes the surface self-occlude
+  // into cutout-looking holes. Belt-and-braces with the settings menu, which
+  // now clears the flag when Transparent is switched off — this also disarms
+  // the flag on graphs that already stored it.
+  if (materialSettings?.depthWrite === false && materialSettings?.transparent) {
     returnProps.push('depthWrite: false');
   }
 

@@ -281,3 +281,50 @@ describe('#1 round-trip: an HSL export survives scriptToTSL', () => {
     expect(back).toContain('export default shader;');
   });
 });
+
+describe('buildShaderModule — material settings survive and are sanitized', () => {
+  const wrap = (body: string) =>
+    `import { Fn, vec3 } from 'three/tsl';\n\nconst shader = Fn(() => {\n${body}\n});\n\nexport default shader;\n`;
+
+  it('a trailing comment on the return no longer dead-codes the module return', () => {
+    // The regexes are end-anchored, so `// default red` used to make this line
+    // a body STATEMENT that returned first — silently discarding transparent /
+    // alphaTest / side / depthWrite and any Discard.
+    const mod = buildShaderModule(wrap('  return vec3(1, 0, 0); // default red'), {
+      materialSettings: { transparent: true, alphaTest: 0.4 },
+    });
+    expect(mod).toContain('colorNode:');
+    expect(mod).toContain('transparent: true');
+    expect(mod).toContain('alphaTest: 0.4');
+    // Exactly one return survives in the emitted function body.
+    expect(mod.match(/\breturn\b/g)!.length).toBe(1);
+  });
+
+  it('clamps alphaTest below 1 — at 1.0 three discards every fragment', () => {
+    const mod = buildShaderModule(wrap('  return vec3(1, 0, 0);'), {
+      materialSettings: { alphaTest: 1 },
+    });
+    expect(mod).toContain('alphaTest: 0.99');
+  });
+
+  it('never interpolates a non-numeric alphaTest from an untrusted project block', () => {
+    const mod = buildShaderModule(wrap('  return vec3(1, 0, 0);'), {
+      materialSettings: { alphaTest: '0.5 }; globalThis.pwned = 1; ({ x: 0' as unknown as number },
+    });
+    expect(mod).not.toContain('pwned');
+    expect(mod).not.toMatch(/alphaTest:\s*0\.5 \}/);
+  });
+
+  it('drops depthWrite:false on an OPAQUE material (it only sorts transparency)', () => {
+    // Latched by unchecking Transparent after unchecking Depth Write; on an
+    // opaque mesh it self-occludes into cutout-looking holes.
+    const opaque = buildShaderModule(wrap('  return vec3(1, 0, 0);'), {
+      materialSettings: { depthWrite: false },
+    });
+    expect(opaque).not.toContain('depthWrite');
+    const transparent = buildShaderModule(wrap('  return vec3(1, 0, 0);'), {
+      materialSettings: { depthWrite: false, transparent: true },
+    });
+    expect(transparent).toContain('depthWrite: false');
+  });
+});

@@ -482,3 +482,155 @@ describe('codeToGraph — module-local helpers', () => {
     expect(mulNode).toBeUndefined();
   });
 });
+
+describe('codeToGraph — time node speed', () => {
+  const wrap = (body: string, imports = 'Fn, time') =>
+    `import { ${imports} } from 'three/tsl';\nconst shader = Fn(() => {\n${body}\n});\nexport default shader;`;
+  const timeNodes = (r: ReturnType<typeof codeToGraph>) =>
+    r.nodes.filter((n) => n.data.registryType === 'time');
+  const mulNodes = (r: ReturnType<typeof codeToGraph>) =>
+    r.nodes.filter((n) => n.data.registryType === 'mul');
+
+  // --- guard: ensureBareInputNode must still admit the time def now that it
+  // carries defaultValues, or a bare `time` silently loses its node AND edge ---
+
+  it('auto-creates a Time node from a bare `time` argument', () => {
+    const result = codeToGraph(wrap('  const a = sin(time);\n  return a;', 'Fn, time, sin'));
+    expect(timeNodes(result)).toHaveLength(1);
+    const sinNode = result.nodes.find((n) => n.data.registryType === 'sin')!;
+    expect(
+      result.edges.some((e) => e.source === timeNodes(result)[0].id && e.target === sinNode.id),
+    ).toBe(true);
+    // createNode seeds values from defaultValues
+    expect(getNodeValues(timeNodes(result)[0]).speed).toBe(1);
+  });
+
+  it('auto-creates a Time node from a bare `time` inside a variadic call', () => {
+    const result = codeToGraph(
+      wrap(
+        '  const s = add(positionLocal, time, normalLocal);\n  return s;',
+        'Fn, time, add, positionLocal, normalLocal',
+      ),
+    );
+    expect(timeNodes(result)).toHaveLength(1);
+  });
+
+  // --- collapse: positive ---
+
+  it('collapses `time.mul(<literal>)` into one Time node carrying speed', () => {
+    const result = codeToGraph(wrap('  const a = time.mul(2.5);\n  return a;'));
+    expect(timeNodes(result)).toHaveLength(1);
+    expect(getNodeValues(timeNodes(result)[0]).speed).toBe(2.5);
+    expect(mulNodes(result)).toHaveLength(0);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('folds constant expressions and negative literals into speed', () => {
+    const a = codeToGraph(wrap('  const a = time.mul(1 / 6);\n  return a;'));
+    expect(getNodeValues(timeNodes(a)[0]).speed).toBe(1 / 6);
+    const b = codeToGraph(wrap('  const a = time.mul(-0.5);\n  return a;'));
+    expect(getNodeValues(timeNodes(b)[0]).speed).toBe(-0.5);
+  });
+
+  it('gives two collapse sites two independent Time nodes', () => {
+    // ensureBareInputNode caches under the bare name; the detector must NOT,
+    // or both sites would alias onto one node and share a single speed.
+    const result = codeToGraph(
+      wrap(
+        '  const a = time.mul(0.5);\n  const b = time.mul(3);\n  return add(a, b);',
+        'Fn, time, add',
+      ),
+    );
+    expect(timeNodes(result).map((n) => getNodeValues(n).speed).sort()).toEqual([0.5, 3]);
+  });
+
+  it('collapses only the inner call of `time.mul(a).mul(b)`', () => {
+    const result = codeToGraph(wrap('  const a = time.mul(0.5).mul(2);\n  return a;'));
+    expect(timeNodes(result)).toHaveLength(1);
+    expect(getNodeValues(timeNodes(result)[0]).speed).toBe(0.5);
+    expect(mulNodes(result)).toHaveLength(1);
+    expect(getNodeValues(mulNodes(result)[0]).b).toBe(2);
+  });
+
+  // --- collapse: negative. Each of these is a shape real users or fixtures
+  // write, and folding it would delete a Multiply node the author meant. ---
+
+  it('does NOT collapse the direct-call form mul(time, k)', () => {
+    const result = codeToGraph(wrap('  const a = mul(time, 0.5);\n  return a;', 'Fn, time, mul'));
+    expect(mulNodes(result)).toHaveLength(1);
+    expect(timeNodes(result)).toHaveLength(1);
+  });
+
+  it('does NOT collapse a variable receiver (the Tests/ corpus idiom)', () => {
+    const result = codeToGraph(
+      wrap(
+        '  const time1 = time;\n  const m1 = mul(time1, 5);\n  const m2 = mul(time1, -4.4);\n  return add(m1, m2);',
+        'Fn, time, mul, add',
+      ),
+    );
+    expect(timeNodes(result)).toHaveLength(1);
+    expect(mulNodes(result)).toHaveLength(2);
+  });
+
+  it('does NOT collapse `mul(t, speed)` — the idiom the fixtures actually write', () => {
+    // builtinTextures' Static Noise and every time-using preset alias
+    // `const t = time` and then call the FUNCTION form. That is a real
+    // Multiply and must stay one. (This is the shape the collapse guard was
+    // always protecting — the bare-`time` receiver below is a different one.)
+    const result = codeToGraph(
+      wrap(
+        '  const t = time;\n  const s = uniform(30);\n  const a = mul(t, s);\n  return a;',
+        'Fn, time, uniform, mul',
+      ),
+    );
+    expect(mulNodes(result)).toHaveLength(1);
+    expect(timeNodes(result)).toHaveLength(1);
+  });
+
+  // --- collapse: the WIRED `speed` socket ---
+
+  it('collapses a variable multiplier into a wired `speed` socket', () => {
+    // `speed` is an opt-in input socket, so `time.mul(<var>)` is exactly what
+    // graphToCode emits for a Time node whose speed is WIRED. It has to
+    // collapse back to one node + one edge, or every code→graph pass would
+    // grow another Multiply.
+    const result = codeToGraph(
+      wrap('  const s = uniform(30);\n  const a = time.mul(s);\n  return a;', 'Fn, time, uniform'),
+    );
+    expect(mulNodes(result)).toHaveLength(0);
+    expect(timeNodes(result)).toHaveLength(1);
+    const timeNode = timeNodes(result)[0];
+    const speedEdge = result.edges.find(
+      (e) => e.target === timeNode.id && e.targetHandle === 'speed',
+    );
+    expect(speedEdge).toBeDefined();
+    // An edge may never point at a hidden socket.
+    expect((timeNode.data as { exposedPorts?: string[] }).exposedPorts).toContain('speed');
+  });
+
+  it('does NOT collapse a multiplier that resolves to no node', () => {
+    // `k` is a plain JS number, not a graph node — there is nothing to wire, so
+    // this must stay a Multiply rather than silently dropping the operand.
+    const result = codeToGraph(
+      wrap('  const a = time.mul(k);\n  return a;', 'Fn, time'),
+    );
+    expect(mulNodes(result)).toHaveLength(1);
+  });
+
+  it('rejects a non-finite literal instead of storing Infinity as speed', () => {
+    // `1e999` parses to a NumericLiteral holding Infinity. Storing it would
+    // survive in memory but the fs:graph autosave (JSON.stringify) rewrites
+    // Infinity to null, which then coerces to a real 0 — silently freezing the
+    // shader on the next load. foldNumericConstant must refuse it up front.
+    const result = codeToGraph(wrap('  const a = time.mul(1e999);\n  return a;'));
+    for (const n of timeNodes(result)) {
+      expect(Number.isFinite(Number(getNodeValues(n).speed ?? 1))).toBe(true);
+    }
+    expect(JSON.stringify(result.nodes)).not.toContain('null');
+  });
+
+  it('does NOT collapse a multi-argument time.mul', () => {
+    const result = codeToGraph(wrap('  const a = time.mul(0.5, 2);\n  return a;'));
+    expect(mulNodes(result)).toHaveLength(1);
+  });
+});

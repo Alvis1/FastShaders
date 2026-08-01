@@ -1,6 +1,7 @@
 import { useAppStore } from '@/store/useAppStore';
 import { tslToShaderModule, type PropertyInfo } from './tslToShaderModule';
 import { embedProjectState, type FastShadersProject } from './fastShadersProject';
+import { inlineImageAssetsFromNodes } from './imageAssets';
 import { getNodeValues } from '@/types';
 import type { AppNode, OutputNodeData } from '@/types';
 import { toKebabCase } from '@/utils/nameUtils';
@@ -96,7 +97,13 @@ export function downloadShader(): void {
 
   let script: string;
   try {
-    script = tslToShaderModule(state.code, materialSettings, collectShaderProperties(state.nodes));
+    // The download must be self-contained, so image placeholders are expanded
+    // back to their real `data:` payloads before the module is built.
+    script = tslToShaderModule(
+      inlineImageAssetsFromNodes(state.code, state.nodes),
+      materialSettings,
+      collectShaderProperties(state.nodes),
+    );
   } catch (e) {
     script = `// Export error: ${e instanceof Error ? e.message : String(e)}`;
   }

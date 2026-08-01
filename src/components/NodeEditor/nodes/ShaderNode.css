@@ -162,9 +162,17 @@
 .shader-node__op-val--left { left: 6px; }
 .shader-node__op-val--right { right: 6px; }
 
-/* keep the value legible if it ever meets the glyph */
-.shader-node__op-val > * {
-  background: rgba(255, 255, 255, 0.82);
+/* A READ-ONLY value (the live number arriving on a connected input) is plain
+   text — no plate. An EDITABLE field keeps a fill so the two never look alike;
+   that fill lives on `.react-flow .drag-num` in DragNumberInput.css.
+   The plate used to sit on BOTH, which inverted the affordance: the number you
+   cannot touch looked like the input box and the one you can drag looked flat.
+
+   Legibility over the operator glyph — the reason the plate existed — is
+   preserved by the glyph itself being drawn well below the value's contrast
+   (see .shader-node__glyph), and the values are socket-aligned while the glyph
+   is centred, so they rarely meet at all. */
+.shader-node__op-val > .drag-num {
   border-radius: 3px;
 }
 

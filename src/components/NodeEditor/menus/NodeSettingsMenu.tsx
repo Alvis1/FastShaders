@@ -4,19 +4,9 @@ import { getNodeValues, getNodeExposedPorts } from '@/types';
 import type { NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
-import { toggleExposedPort } from '@/utils/exposedPorts';
+import { toggleExposedPort, usesExposedPorts } from '@/utils/exposedPorts';
 import { rowStyle, labelStyle, colorFieldStyle, nameFieldStyle, NodeActions } from './menuShared';
 import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/propertyConvert';
-
-/** Categories whose nodes always show all ports — no expose/hide checkboxes
- *  needed. Rows-layout ShaderNode ignores exposedPorts for these, so a
- *  checkbox would be a dead switch whose uncheck silently deletes edges.
- *  `texture` (the Image node) is NOT here: it follows the same opt-in
- *  exposedPorts rules as the noise nodes (params hidden until exposed;
- *  ShaderNode filters imageNode inputs by exposedPorts). */
-const ALWAYS_EXPOSED_CATEGORIES: Set<NodeCategory> = new Set([
-  'input', 'math', 'type', 'arithmetic', 'interpolation', 'logic', 'vector', 'dataviz', 'presets',
-]);
 
 const checkLabelStyle = { ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px' } as const;
 const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
@@ -36,7 +26,12 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   const def = NODE_REGISTRY.get(node.data.registryType);
 
   const exposedPorts: string[] = getNodeExposedPorts(node);
-  const showPortToggles = def ? !ALWAYS_EXPOSED_CATEGORIES.has(def.category as NodeCategory) : false;
+  // Only opt-in-socket nodes get expose/hide checkboxes. Everywhere else the
+  // ports are always rendered, so a checkbox would be a dead switch whose
+  // uncheck silently deletes edges. This used to be a second, hand-maintained
+  // category list here; it is the shared rule now, so adding a node to
+  // usesExposedPorts can't leave its checkboxes behind.
+  const showPortToggles = usesExposedPorts(def);
 
   const handleValueChange = (key: string, value: string | number) => {
     // For the property name field, keep as string (don't parse as number)

@@ -3,8 +3,8 @@
   border: 2px solid;
   border-radius: 8px;
   box-sizing: border-box;
-  pointer-events: all;
-  /* Round-trip the parent box: children should still receive their own pointer events */
+  /* The frame body deliberately does NOT capture pointer events — see the
+     pass-through block at the bottom of this file. */
   overflow: visible;
 }
 
@@ -134,4 +134,29 @@
    negative z only lowers it inside the viewport's own stacking context. */
 .react-flow__node.react-flow__node-group {
   z-index: -1 !important;
+}
+
+/* An EXPANDED group frame is a backdrop, not a surface: it captures no pointer
+   events at all, so the area inside it behaves exactly like bare canvas —
+   right-click opens the Add-node menu, drag rubber-band selects or pans, and a
+   click doesn't select the group. Only the parts that are genuinely the
+   group's own UI opt back in: the header (its drag handle, and the one place
+   its right-click menu lives) and the resize controls.
+   This works because React Flow already marks `.react-flow__viewport` and
+   `.react-flow__nodes` `pointer-events: none`, so a pass-through node leaves
+   `.react-flow__pane` itself as the event target — which is exactly what the
+   Pane's handler guard requires before it will fire onPaneContextMenu.
+   `!important` mirrors the z-index rule above: base.css's
+   `.react-flow__node.draggable` sets `pointer-events: all` at the SAME
+   specificity, so load order would otherwise decide the winner.
+   Collapsed pills are exempt — a pill acts as a node (sockets, drag, menu). */
+.react-flow__node.react-flow__node-group,
+.react-flow__node-group .group-node {
+  pointer-events: none !important;
+}
+
+.react-flow__node-group .group-node--collapsed,
+.react-flow__node-group .group-node__header,
+.react-flow__node-group .react-flow__resize-control {
+  pointer-events: auto !important;
 }

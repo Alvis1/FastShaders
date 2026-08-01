@@ -1,0 +1,172 @@
+/* FeedbackModal reuses the CsvImportModal backdrop/panel/button styles; only
+   the composer's own controls live here. Every colour is a token, so the whole
+   dialog follows the app-wide dark-mode toggle for free. */
+
+.feedback-modal__panel {
+  width: min(520px, 94vw);
+  /* A long report plus the details block can outgrow a short viewport (and a
+     laptop in landscape is the common case here) — scroll inside the panel
+     rather than letting the buttons fall off-screen. */
+  max-height: min(88vh, 760px);
+  overflow-y: auto;
+}
+
+/* --- Kind picker: a segmented control, not a radio list. Three mutually
+   exclusive options read faster as chips, and the whole chip is the hit
+   target — which matters on the iPad. -------------------------------------- */
+.feedback-modal__kinds {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.feedback-modal__kind {
+  flex: 1 1 auto;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  padding: 7px 10px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.feedback-modal__kind:hover {
+  border-color: var(--border-focus);
+  color: var(--text-primary);
+}
+
+.feedback-modal__kind--on,
+.feedback-modal__kind--on:hover {
+  background: var(--border-focus);
+  border-color: var(--border-focus);
+  color: #fff;
+}
+
+.feedback-modal__kind:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* --- Fields --------------------------------------------------------------- */
+
+.feedback-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.feedback-modal__label {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.feedback-modal__textarea {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  padding: 8px;
+  width: 100%;
+  /* Border + padding inside the declared width, or the textarea overhangs the
+     panel's padding box. */
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 90px;
+  line-height: 1.5;
+}
+
+.feedback-modal__textarea:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.feedback-modal__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+
+.feedback-modal__check input {
+  margin: 2px 0 0;
+  flex: none;
+}
+
+/* --- "Show exactly what is included" -------------------------------------- */
+
+.feedback-modal__details {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.feedback-modal__details summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.feedback-modal__env {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  /* The user agent is one unbreakable token; let it wrap instead of forcing a
+     horizontal scrollbar across the whole dialog. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Read-only escape hatch shown when the clipboard API is unavailable. */
+.feedback-modal__raw {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.feedback-modal__warn {
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: #b42318;
+}
+
+.feedback-modal__hint {
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* The primary action is an <a>, so it needs the button's box explicitly (an
+   anchor has no default padding/line box to inherit) and a disabled LOOK,
+   since `disabled` is not an anchor attribute. */
+.feedback-modal__send {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.feedback-modal__send--off {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== Dark theme touch-ups =====
+   Only the hardcoded warning red needs it; everything else is token-driven. */
+:root[data-theme="dark"] .feedback-modal__warn {
+  color: #ff7b72;
+}

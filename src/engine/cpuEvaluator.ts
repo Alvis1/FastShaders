@@ -216,7 +216,7 @@ export function getComponentCount(
 }
 
 /** Channel count for a concrete TSL data type (1=float/int, 2=vec2, 3=vec3/color, 4=vec4). */
-function shapeOfDataType(dt: TSLDataType): number {
+export function shapeOfDataType(dt: TSLDataType): number {
   if (dt === 'vec4') return 4;
   if (dt === 'vec3' || dt === 'color') return 3;
   if (dt === 'vec2') return 2;
@@ -439,9 +439,15 @@ function evaluate(
 
   switch (type) {
     // Inputs
-    case 'time':
-      result = [time];
+    case 'time': {
+      // `speed` is adversarial (untrusted .fastshader / tampered localStorage)
+      // and absent on every graph saved before the field existed: a missing
+      // key, a string, NaN and ±Infinity must all read as 1x. scalarInput
+      // prefers a wired `speed` edge over the stored value, matching codegen.
+      const s = scalarInput('speed', 1);
+      result = [time * (Number.isFinite(s) ? s : 1)];
       break;
+    }
     case 'float':
     case 'int':
     case 'property_float':

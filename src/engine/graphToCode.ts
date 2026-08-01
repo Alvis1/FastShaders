@@ -1,14 +1,17 @@
 import { parseExpression } from '@babel/parser';
 import type { Node } from '@babel/types';
-import type { AppNode, AppEdge, NodeDefinition, GeneratedCode } from '@/types';
+import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, TSLDataType } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { decodeDataNode } from '@/utils/dataNode';
-import { decodeImageNode } from '@/utils/imageNode';
+import { imageAssetFor } from './imageAssets';
+// Shape inference (1-4 channels) — the same authority the edge/preview layer
+// uses, so codegen and the UI agree on what counts as a scalar.
+import { getNodeOutputShape, shapeOfDataType } from './cpuEvaluator';
 import { minMax, normalize01, capToWidth, buildPhaseRamp, MAX_TEXTURE_WIDTH } from '@/utils/dataViz';
-import { float32ToBase64, float16ToBase64, bytesToBase64 } from '@/utils/binaryCodec';
+import { float32ToBase64, float16ToBase64 } from '@/utils/binaryCodec';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { getComponentCount } from './cpuEvaluator';
 import { topologicalSort } from './topologicalSort';
@@ -26,32 +29,6 @@ function f32Decode(b64: string): string {
 /** Inline expression that rebuilds a Uint16Array (half-float) from base64. */
 function f16Decode(b64: string): string {
   return `new Uint16Array(Uint8Array.from(atob("${b64}"), (c) => c.charCodeAt(0)).buffer)`;
-}
-
-/**
- * Bounded memo for the multi-MB image decode+re-encode. graph→code re-runs on
- * every node-identity change — including every drag frame — but an image's
- * emitted `data:` src never changes with node position, so without this the
- * whole payload is base64-decoded and re-encoded per frame. Keyed by the
- * immutable stored `imageB64`; value is the canonical `data:` src or null
- * (undecodable). Small LRU cap keeps memory bounded across many distinct images.
- */
-const IMAGE_SRC_CACHE_LIMIT = 24;
-const imageSrcCache = new Map<string, string | null>();
-function memoImageSrc(key: string, compute: () => string | null): string | null {
-  const hit = imageSrcCache.get(key);
-  if (hit !== undefined) {
-    imageSrcCache.delete(key);
-    imageSrcCache.set(key, hit); // refresh LRU recency
-    return hit;
-  }
-  const val = compute();
-  imageSrcCache.set(key, val);
-  if (imageSrcCache.size > IMAGE_SRC_CACHE_LIMIT) {
-    const oldest = imageSrcCache.keys().next().value;
-    if (oldest !== undefined) imageSrcCache.delete(oldest);
-  }
-  return val;
 }
 
 /**
@@ -516,28 +493,26 @@ export function graphToCode(
       // ready before first render; a garbage payload fails decode() and falls
       // back to a 1×1 black texture instead of rejecting the whole module).
       //
+      // What lands HERE is a short `fs-asset:` PLACEHOLDER, not the payload —
+      // `inlineImageAssets` (engine/imageAssets.ts) expands it at the surfaces
+      // that actually run or export the module (preview iframe, XR popup,
+      // Output tab, Download Shader). The editor's TSL tab shows this generated
+      // text verbatim, and a word-wrapped 600K-char data: URL buries the shader
+      // under thousands of rows. Nothing is lost: image nodes are already
+      // one-way through codeToGraph, so the payload here was never read back.
+      //
       // SECURITY: the stored payload is NEVER interpolated verbatim — the
-      // graph JSON is adversarial. decodeImageNode strict-validates it and
-      // the emitted literal is re-encoded from the decoded bytes
-      // (bytesToBase64 → canonical btoa alphabet) with the MIME taken from
-      // the regex whitelist capture, so no attacker-controlled character can
-      // reach this module's source text. Emitted as FLAT statements (never an
-      // async IIFE — codeToGraph's ReturnStatement visitor would mistake its
+      // graph JSON is adversarial. imageAssetFor strict-validates it via
+      // decodeImageNode and re-encodes the emitted `data:` literal from the
+      // decoded bytes (canonical btoa alphabet, MIME from the regex whitelist
+      // capture); the placeholder and its trailing comment are built from a
+      // character whitelist. So no attacker-controlled character reaches this
+      // module's source text on either path. Emitted as FLAT statements (never
+      // an async IIFE — codeToGraph's ReturnStatement visitor would mistake its
       // `return` for the shader output).
       const nv = getNodeValues(node);
-      // Decode + re-encode is the multi-MB cost; memoize it so a drag frame
-      // (which re-runs graph→code) doesn't re-encode an unchanged image. The key
-      // covers every input decodeImageNode validates — the payload plus the
-      // width/height fields (a bad dimension must still degrade to inert).
-      // srcAttr is the canonical `data:` URL, or null if validation failed.
-      const srcAttr = memoImageSrc(
-        `${Number(nv.width)}x${Number(nv.height)}|${String(nv.imageB64 ?? '')}`,
-        () => {
-          const d = decodeImageNode(nv);
-          return d ? `data:image/${d.mime};base64,${bytesToBase64(d.bytes)}` : null;
-        },
-      );
-      if (!srcAttr) {
+      const asset = imageAssetFor(node.id, nv);
+      if (!asset) {
         // Inert fallback — consumers still reference this var, so it must
         // exist (a missing declaration would be a runtime ReferenceError).
         addImport('three/tsl', 'vec3');
@@ -590,7 +565,7 @@ export function graphToCode(
         const okVar = `_${varName}_ok`;
         const texVar = `_${varName}_tex`;
         setupLines.push(`const ${imgVar} = new Image();`);
-        setupLines.push(`${imgVar}.src = "${srcAttr}";`);
+        setupLines.push(`${imgVar}.src = "${asset.placeholder}"; ${asset.comment}`);
         setupLines.push(`let ${okVar} = true;`);
         setupLines.push(`try { await ${imgVar}.decode(); } catch { ${okVar} = false; }`);
         setupLines.push(
@@ -781,8 +756,45 @@ export function graphToCode(
       const { ctor, args } = buildAppendConstructor(raw, channels);
       addImport('three/tsl', ctor);
       bodyLines.push(`  const ${varName} = ${ctor}(${args.join(', ')});`);
+    } else if (def.type === 'time') {
+      // Time node: elapsed seconds, optionally scaled by the `speed` multiplier
+      // edited in Node Settings. Handled BEFORE the generic
+      // `inputs.length === 0 && defaultValues` branch, which would emit
+      // `time(1)` — `time` is a uniform NODE OBJECT (three's nodes/utils/
+      // Timer.js), not a callable, so that would be a runtime TypeError.
+      //
+      // speed === 1 (and legacy nodes with no stored speed, and any value that
+      // does not coerce to a finite number) emits the historical bare reference
+      // BYTE-FOR-BYTE so no already-exported shader changes. Note Number('') and
+      // Number(null) are 0, not NaN — those land on a real `.mul(0)`, which is
+      // the same frozen-time result the UI can already produce, not an escape.
+      // The multiplied form is a METHOD
+      // CHAIN, not `mul(time, k)`: it needs no extra import (same convention as
+      // the noise `scale` param below), and the bare-`time` receiver is a shape
+      // nothing in src/ or Tests/ writes by hand, so codeToGraph can collapse it
+      // back without ever eating a user's real Multiply node.
+      //
+      // `values` is adversarial (.fastshader / localStorage): Number() kills the
+      // array-stringification vector and isFinite() kills NaN/±Infinity. Do NOT
+      // route this through resolveExposedParam — that helper is String()-only.
+      //
+      // `speed` is also an opt-in INPUT socket. A wired edge overrides the
+      // stored number (the exposedPorts rule) and emits the same method-chain
+      // shape with the upstream var in place of the literal, so the two forms
+      // stay one thing for codeToGraph to collapse.
+      const speedEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'speed');
+      const speedRef = speedEdge ? resolveEdgeRef(speedEdge, edges, varNames, sorted) : null;
+      const rawSpeed = Number(getNodeValues(node).speed);
+      const speed = Number.isFinite(rawSpeed) ? rawSpeed : 1;
+      bodyLines.push(
+        speedRef
+          ? `  const ${varName} = ${def.tslFunction}.mul(${speedRef});`
+          : speed === 1
+            ? `  const ${varName} = ${def.tslFunction};`
+            : `  const ${varName} = ${def.tslFunction}.mul(${num(speed)});`,
+      );
     } else if (def.inputs.length === 0 && def.category === 'input' && !def.defaultValues) {
-      // Input nodes: bare reference (positionGeometry, time, etc.)
+      // Input nodes: bare reference (positionGeometry, screenUV, etc.)
       bodyLines.push(`  const ${varName} = ${def.tslFunction};`);
     } else if (def.category === 'noise') {
       // Noise nodes: all params come from exposed ports / stored values.
@@ -857,6 +869,39 @@ export function graphToCode(
   // the boolean visualises as black/white instead of melting the renderer.
   const VEC3_CHANNELS = new Set(['color', 'emissive', 'normal', 'position']);
 
+  /**
+   * The channels whose value ends up in `diffuseColor`, and therefore in
+   * ALPHA. Only these get the shape normalisation below — `normal` and
+   * `position` never reach alpha, and widening `position` would actively break
+   * the Data Viz `value` → Displacement flow, where the scalar height is meant
+   * to stay scalar so normal-mode displacement can scale the normal by it.
+   * `emissive` is included because shaderloader 0.5 copies emissiveNode into
+   * colorNode when no colour is wired (line ~279).
+   */
+  const ALPHA_BEARING_CHANNELS = new Set(['color', 'emissive']);
+
+  /**
+   * Channel count of the specific OUTPUT PORT an edge leaves from.
+   *
+   * Node-level inference is not enough: a multi-output node reports the shape
+   * of `outputs[0]`, so Data Viz (out: vec3, value: float) claimed 3 channels
+   * even for an edge leaving its scalar `value` socket — and the widening
+   * below was skipped, putting a bare float in colorNode again by a second
+   * route. The declared port type wins; node-level inference is the fallback
+   * for `any`-typed ports (arithmetic chains).
+   */
+  const shapeOfEdgeSource = (edge: AppEdge): number => {
+    const srcNode = sorted.find((n) => n.id === edge.source);
+    const handle = edge.sourceHandle ?? 'out';
+    const dyn = (srcNode?.data as { dynamicOutputs?: { id: string; dataType: TSLDataType }[] })
+      ?.dynamicOutputs;
+    const srcDef = srcNode ? registry.get(srcNode.data.registryType) : undefined;
+    const port = dyn?.find((o) => o.id === handle) ?? srcDef?.outputs.find((o) => o.id === handle);
+    const declared = port ? shapeOfDataType(port.dataType) : 0;
+    if (declared > 0) return declared;
+    return getNodeOutputShape(edge.source, nodes, edges);
+  };
+
   if (outputNode) {
     for (const ch of OUTPUT_CHANNELS) {
       const edge = edges.find(
@@ -871,6 +916,29 @@ export function graphToCode(
             addImport('three/tsl', 'vec3');
             addImport('three/tsl', 'float');
             channels[ch] = `vec3(float(${ref}))`;
+          } else if (ALPHA_BEARING_CHANNELS.has(ch) && shapeOfEdgeSource(edge) !== 3) {
+            // Anything that ISN'T already 3 channels gets normalised to vec3
+            // here, rather than left for the renderer to reinterpret.
+            //
+            // three's NodeMaterial.setupDiffuseColor does
+            // `vec4(this.colorNode)`, and TSL splats a 1-channel node across
+            // ALL FOUR components — so a bare `mx_noise_float(...)` wired to
+            // Color silently became the ALPHA too (diffuseColor.a = noise),
+            // making the surface flicker/vanish as if Opacity or Discard were
+            // connected when neither is. `vec3(x)` fixes alpha at the
+            // material's own opacity while giving the intended grey ramp.
+            //
+            // The gate is `!== 3`, not `=== 1`, because the SAME leak runs the
+            // other way: `vec4(vec4)` is an identity cast, so a Vec4 node (or
+            // an Append grown to 4) wired to Color hands its `w` straight to
+            // alpha — and a fresh Vec4's w is 0, i.e. fully transparent.
+            // `vec3(vec4expr)` truncates to `.xyz` and alpha returns to 1.0
+            // via format's `vec4(vec3, 1.0)` path. Alpha must come ONLY from
+            // the opacity channel.
+            //
+            // Scoped to the alpha-bearing channels only (see the set above).
+            addImport('three/tsl', 'vec3');
+            channels[ch] = `vec3(${ref})`;
           } else if (ch === 'normal' && sourceNode?.data.registryType === 'imageNode') {
             // An image wired into Normal is a tangent-space normal MAP, not a raw
             // normal — its texels are packed unit vectors in [0,1]. Decode with
@@ -906,7 +974,10 @@ export function graphToCode(
   const channelEntries = Object.entries(channels);
 
   if (channelEntries.length === 0) {
-    returnLine = '  return vec3(1, 0, 0); // default red';
+    // No trailing comment: a `//` on a return line used to defeat parseBody's
+    // end-anchored regexes in tslCodeProcessor, which then treated this as a
+    // plain statement and let it short-circuit the real module return.
+    returnLine = '  return vec3(1, 0, 0);';
   } else if (channelEntries.length === 1 && channels.color) {
     returnLine = `  return ${channels.color};`;
   } else {

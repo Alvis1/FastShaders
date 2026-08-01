@@ -19,7 +19,7 @@ import {
   SelectionMode,
 } from '@xyflow/react';
 import { useShallow } from 'zustand/react/shallow';
-import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
+import { useAppStore, resolveDeviceTextureDim, resolveDeviceBudget } from '@/store/useAppStore';
 import { useLongPress } from '@/hooks/useLongPress';
 import { ShaderNode } from './nodes/ShaderNode';
 import { ColorNode } from './nodes/ColorNode';
@@ -46,6 +46,7 @@ import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
 import { BUILTIN_TEXTURE_DRAG_TYPE } from './TextureCard';
+import { BUILTIN_PRESET_DRAG_TYPE } from './PresetCard';
 import {
   TILE_DROP_EVENT,
   TILE_DRAG_MOVE_EVENT,
@@ -93,6 +94,16 @@ const DEFAULT_EDGE_OPTIONS = { type: 'typed', animated: true } as const;
 const FIT_VIEW_OPTIONS = { maxZoom: 1.5 } as const;
 const PRO_OPTIONS = { hideAttribution: true } as const;
 const DESKTOP_PAN_ON_DRAG = [1, 2];
+/**
+ * Modifiers that make a click ADD to the selection instead of replacing it.
+ * Shift is the one users reach for; Cmd/Ctrl (React Flow's platform default)
+ * stays in so existing habits keep working. An ARRAY means "any of these", not
+ * a combination — a '+' inside one entry would be the combination form.
+ * Module-scope so the array identity is stable: useKeyPress memoizes on it, so
+ * a fresh array per render would re-bind its key listeners every frame of a
+ * drag (the same reason the objects above are hoisted).
+ */
+const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'];
 
 const nodeTypes = {
   shader: ShaderNode,
@@ -1158,14 +1169,14 @@ export function NodeEditor() {
         return;
       }
 
-      // Notes are free-floating background annotations — never anti-overlap-
-      // nudged (which would fling them away from the nodes they're dropped over,
-      // making them seem to vanish), reparented, or inserted onto edges. React
-      // Flow has already committed the drag position, so just bail.
-      if (draggedNode.type === 'note') {
-        dragStartPosRef.current = null;
-        return;
-      }
+      // Notes are free-floating background annotations: never anti-overlap-
+      // nudged (which would fling them away from the nodes they were
+      // deliberately dropped over, making them seem to vanish) and never
+      // spliced onto an edge. They DO take part in group membership like any
+      // other node, though — a note dropped inside a frame joins it and then
+      // rides the group's drags, collapse and ungroup — so this falls through
+      // to the reparent step below instead of bailing out of the whole handler.
+      const isNote = draggedNode.type === 'note';
 
       // Skip work entirely if the node didn't actually move (click without
       // drag) — UNLESS a connect preview is showing: React Flow starts drags
@@ -1221,7 +1232,9 @@ export function NodeEditor() {
       const overNodeBody =
         connectPlan != null ||
         pickDropTargetNode(cx, cy, connectTargetBoxes(freshDragged.id, allNodes)) != null;
-      if (!overNodeBody && def && def.inputs.length > 0 && def.outputs.length > 0) {
+      // (`isNote` is redundant with `def` — a note has no registry entry — but
+      // stated explicitly so the rule survives one ever gaining one.)
+      if (!isNote && !overNodeBody && def && def.inputs.length > 0 && def.outputs.length > 0) {
         const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
         tryInsertOnEdge(freshDragged.id, def, cx, cy, getInternalNode, radius);
       }
@@ -1258,7 +1271,7 @@ export function NodeEditor() {
           makeRoomBoxes(allNodes, freshDragged.id, placedAbs, hoverId),
           GAP,
         );
-      } else {
+      } else if (!isNote) {
         // --- Anti-overlap: nudge the dropped node itself off whatever it
         // landed on (plain moves and drop-on-edge splices; single pass) ---
         for (const other of allNodes) {
@@ -1361,7 +1374,9 @@ export function NodeEditor() {
       const newParents = new Set<string>();
       let anyParentChanged = false;
       for (const dragged of draggedNodes) {
-        if (dragged.type === 'group' || dragged.type === 'note') continue;
+        // Group containers are moved, not attached. Notes DO attach, like any
+        // other member (they're only exempt from nudging and edge-splicing).
+        if (dragged.type === 'group') continue;
         const { node: updatedNode, targetGroupId, parentChanged } =
           reparentedNode(dragged, allNodes, dragged.position.x, dragged.position.y);
         // A selection-drag doesn't pick up a new parent if the dropped group
@@ -1633,6 +1648,10 @@ export function NodeEditor() {
         useAppStore.getState().instantiateBuiltinTexture(payload.id, position);
         return;
       }
+      if (payload.kind === 'preset') {
+        useAppStore.getState().instantiateBuiltinPreset(payload.id, position);
+        return;
+      }
 
       const def = NODE_REGISTRY.get(payload.nodeType);
       if (!def) return;
@@ -1770,8 +1789,8 @@ export function NodeEditor() {
       void (async () => {
         const store = useAppStore.getState();
         const ignore = store.ignoreImageLimits;
-        const headset = VR_HEADSETS.find((h) => h.id === store.selectedHeadsetId) ?? VR_HEADSETS[0];
-        const deviceCap = headset.maxTextureDim;
+        const deviceCap = resolveDeviceTextureDim(store.selectedHeadsetId, store.costProfiles);
+        const deviceLabel = resolveDeviceBudget(store.selectedHeadsetId, store.costProfiles).label;
         const res = await encodeImageFile(file, ignore, deviceCap);
         if (!res.ok) {
           if (res.reason === 'too-large' || res.reason === 'pixels') {
@@ -1823,7 +1842,7 @@ export function NodeEditor() {
             kind: 'image-device-downscaled',
             fileName: file.name,
             downscale: {
-              deviceLabel: headset.label,
+              deviceLabel,
               cap: deviceCap,
               sourceW: res.sourceWidth,
               sourceH: res.sourceHeight,
@@ -1856,6 +1875,15 @@ export function NodeEditor() {
         // palette interaction would inherit a plan it never previewed.
         clearConnectPreview();
         endHtml5TileDrag();
+
+        // A benchmark complexity .json isn't a graph file — the canvas doesn't
+        // import it (drops are restricted to the cost bar + code panel). Point
+        // the user at the right target instead of silently ignoring it.
+        if (files.length === 1 && /\.json$/i.test(files[0].name)) {
+          window.alert('Drop a benchmark complexity.json on the cost bar (top-left) or the code panel to reprice nodes.');
+          return;
+        }
+
         const csvs: File[] = [];
         const images: File[] = [];
         // A `.zip` export or a shader script (.js/.mjs/.tsl) is a *project* —
@@ -1938,6 +1966,11 @@ export function NodeEditor() {
       const textureId = event.dataTransfer.getData(BUILTIN_TEXTURE_DRAG_TYPE);
       if (textureId) {
         placeTilePayload({ kind: 'texture', id: textureId }, event.clientX, event.clientY);
+        return;
+      }
+      const presetId = event.dataTransfer.getData(BUILTIN_PRESET_DRAG_TYPE);
+      if (presetId) {
+        placeTilePayload({ kind: 'preset', id: presetId }, event.clientX, event.clientY);
         return;
       }
       const nodeType = event.dataTransfer.getData('application/reactflow-type');
@@ -2457,6 +2490,17 @@ export function NodeEditor() {
           nodesDraggable={!drawToolActive}
           elementsSelectable={!drawToolActive}
           selectionMode={SelectionMode.Partial}
+          // Shift+click adds to the selection (Cmd/Ctrl still do too).
+          multiSelectionKeyCode={MULTI_SELECT_KEYS}
+          // Shift MUST be released from its DEFAULT job (hold-to-marquee) for
+          // the line above to work at all: while selectionKeyCode is held, the
+          // Pane's onPointerDownCapture stopPropagation()s a pointerdown that
+          // landed on a NODE and opens a rubber band instead — so Shift+click
+          // would start a marquee rather than extend the selection.
+          // Nothing is lost: selectionOnDrag already gives a modifier-free
+          // marquee by left-dragging empty canvas, and `isSelecting` reads
+          // `selectionKeyPressed || userSelectionActive || selectionOnDrag`.
+          selectionKeyCode={null}
           // Desktop (mouse): pan with middle/right button, left is free for
           // select/move. Touch/pen (coarse): turn drag-to-pan OFF so ONE finger
           // drags nodes/edges; TWO fingers pan + pinch-zoom via the touch-nav

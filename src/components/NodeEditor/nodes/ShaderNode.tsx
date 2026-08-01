@@ -315,16 +315,15 @@ export const ShaderNode = memo(function ShaderNode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, edgeKey]);
 
-  // Variadic arithmetic is priced by operand count (base × operands−1); the
-  // stored data.cost is only its 2-operand base, so recompute live. Everything
-  // else uses its stored cost unchanged. Primitive selector — the O(E) scan
-  // runs per store notify but only chainable nodes pay it, and the number
-  // result bails re-renders.
-  const cost = useAppStore((s) =>
-    def.chainable
-      ? nodeCostPoints({ id, type: 'shader', position: { x: 0, y: 0 }, data } as ShaderFlowNode, s.edges)
-      : data.cost,
-  );
+  // Always price from the live (override-aware) table via nodeCostPoints, so a
+  // measured benchmark dropped on the CostBar reprices this badge too — reading
+  // `costVersion` re-runs the selector when the table changes. Non-chainable
+  // nodes short-circuit inside nodeCostPoints (no edge scan); only variadic
+  // arithmetic pays the O(E) operand count. The number result bails re-renders.
+  const cost = useAppStore((s) => {
+    void s.costVersion;
+    return nodeCostPoints({ id, type: 'shader', position: { x: 0, y: 0 }, data } as ShaderFlowNode, s.edges);
+  });
   const costColor = getCostColor(cost, costColorLow, costColorHigh);
   const headerTextColor = getContrastColor(costColor);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
@@ -428,10 +427,10 @@ export const ShaderNode = memo(function ShaderNode({
   const stackLayerCount = inChannels - 1;
   // While stacked, the card drops its own shadow so no shadow falls BETWEEN
   // cards — the deepest layer casts the single group shadow instead. This holds
-  // even when SELECTED: the whole-stack selection outline is drawn by
-  // .node-base__stack-frame, so the card must not ALSO paint the selected
-  // shadow's focus ring (--shadow-node-selected) — that reads as a second
-  // highlight around just the top card.
+  // even when SELECTED: the whole-stack selection band is drawn by
+  // .node-base__stack-frame, so the card must not ALSO paint the selection
+  // band (.node-base--selected is a box-shadow spread) — that would read as a
+  // second highlight around just the top card.
   if (stackLayerCount > 0) nodeStyle.boxShadow = 'none';
   const stackLayers = stackLayerCount > 0
     ? [...Array(stackLayerCount).keys()].map((k) => (
@@ -451,7 +450,7 @@ export const ShaderNode = memo(function ShaderNode({
   // Selection outline for a stacked node must enclose the WHOLE stack, not just
   // the top card. A single rounded-rect frame spans the union of the card and
   // its downward-offset layers (same width, extended down by the deepest
-  // layer's offset) and carries the focus outline; the top card's own outline
+  // layer's offset) and carries the selection band; the top card's own band
   // is suppressed while stacked (see `.node-base--stacked.node-base--selected`).
   // It renders ABOVE the card (z-index) so the card can't paint over the top/
   // side edges, and is pointer-events:none so it never blocks sockets.

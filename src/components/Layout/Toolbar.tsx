@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { downloadShader } from '@/engine/exportShader';
+import { FeedbackModal } from '@/components/Modals/FeedbackModal';
 import { t } from '@/i18n';
 import './Toolbar.css';
 
@@ -94,6 +95,11 @@ export function Toolbar() {
   const [localOpen, setLocalOpen] = useState(false);
   const localRef = useRef<HTMLDivElement>(null);
 
+  // Feedback composer. Local state rather than a store field: it is transient
+  // UI opened from exactly one place, and the modal portals itself to
+  // document.body so nothing here constrains where it paints.
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+
   // VR bench popover (desktop builds only — the button is behind
   // __FS_DESKTOP__, so this state is inert on the web).
   const [vrOpen, setVrOpen] = useState(false);
@@ -148,6 +154,9 @@ export function Toolbar() {
       .catch((e) => setVrError(errorText(e)))
       .finally(() => setVrBusy(false));
   }, []);
+
+  // Stable identity: the modal binds its Escape listener against this.
+  const closeFeedback = useCallback(() => setFeedbackOpen(false), []);
 
   const handleCopy = useCallback(async (key: string, value: string) => {
     try {
@@ -489,7 +498,24 @@ export function Toolbar() {
         >
           {isDark ? '☼' : '☾'}
         </button>
+        {/* Feedback — the one deliberately loud control in the chrome. Sits in
+            the far corner and is the only red thing in the toolbar, so a user
+            who hit a wall can find it without hunting. Composes a report and
+            hands it to the user's mail client; nothing is uploaded (see
+            utils/feedbackReport.ts for why a hosted form is not an option). */}
+        <button
+          type="button"
+          className="toolbar__sc-link toolbar__feedback"
+          onClick={() => setFeedbackOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={feedbackOpen}
+          title={t('Send feedback — report a problem or suggest an improvement', language)}
+          aria-label={t('Send feedback', language)}
+        >
+          !
+        </button>
       </div>
+      <FeedbackModal open={feedbackOpen} onClose={closeFeedback} />
     </div>
   );
 }

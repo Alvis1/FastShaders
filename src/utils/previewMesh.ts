@@ -99,6 +99,107 @@ export function createPreviewMesh(
 }
 
 /**
+ * Largest glTF JSON chunk we will hand to `JSON.parse`. The chunk is a
+ * structure table (accessors, nodes, materials), not the vertex payload, so a
+ * legitimate one is orders of magnitude under this; a file that isn't just
+ * declines to report a count.
+ */
+const GLTF_JSON_PARSE_LIMIT = 8 * 1024 * 1024;
+
+/**
+ * Vertex count of a loaded model, or null when it cannot be determined
+ * cheaply. Used ONLY for the feedback report's mesh line — nothing renders or
+ * decides anything from it, so "unknown" is always an acceptable answer.
+ *
+ * NOTE — this is a deliberate, narrow exception to the module's "bytes are
+ * never parsed on the trusted side" rule at the top of this file. That rule
+ * exists to keep THREE's loaders (and the external-URL fetches a hostile
+ * `.gltf` can request) inside the sandboxed iframe. This does none of that: it
+ * counts `v` lines, or reads integers out of a length-capped JSON header. It
+ * builds no geometry, resolves no URI, and touches no buffer data. Every path
+ * is bounded and every failure returns null rather than throwing.
+ *
+ * The number is the AUTHORED vertex count, which is what a modeller recognises.
+ * It is not what THREE ends up with — the OBJ loader emits non-indexed
+ * geometry and `fit-bounds` then welds duplicates — so don't use it to reason
+ * about GPU cost.
+ */
+export function countMeshVertices(mesh: PreviewMesh): number | null {
+  try {
+    if (mesh.kind === 'obj') return mesh.text ? countObjVertices(mesh.text) : null;
+    const json = mesh.kind === 'gltf' ? mesh.text : extractGlbJsonChunk(mesh.bytes);
+    if (!json || json.length > GLTF_JSON_PARSE_LIMIT) return null;
+    return countGltfVertices(json);
+  } catch {
+    // Malformed input is the expected case here, not an exceptional one.
+    return null;
+  }
+}
+
+/**
+ * Count OBJ `v` statements. A hand-rolled scan rather than a regex over what
+ * may be tens of megabytes: this walks each line's first two characters and
+ * skips the rest, so it stays linear with no backtracking to reason about.
+ */
+function countObjVertices(text: string): number {
+  let count = 0;
+  let atLineStart = true;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 10 /* \n */) {
+      atLineStart = true;
+      continue;
+    }
+    if (!atLineStart) continue;
+    // Only 'v' followed by whitespace — 'vt' (UVs) and 'vn' (normals) must not
+    // count, and neither must a leading space before the keyword.
+    if (c === 118 /* v */) {
+      const next = text.charCodeAt(i + 1);
+      if (next === 32 || next === 9) count++;
+    }
+    if (c !== 32 && c !== 9 && c !== 13) atLineStart = false;
+  }
+  return count;
+}
+
+/** Read the JSON chunk out of a GLB container; null if the layout is off. */
+function extractGlbJsonChunk(bytes: Uint8Array): string | null {
+  if (bytes.length < 20) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // Header: magic(4) version(4) length(4); then chunk: length(4) type(4) data.
+  const chunkLength = view.getUint32(12, true);
+  const chunkType = view.getUint32(16, true);
+  if (chunkType !== 0x4e4f534a /* 'JSON' */) return null;
+  if (chunkLength === 0 || chunkLength > GLTF_JSON_PARSE_LIMIT) return null;
+  if (20 + chunkLength > bytes.length) return null;
+  return new TextDecoder().decode(bytes.subarray(20, 20 + chunkLength));
+}
+
+/**
+ * Sum the POSITION accessor counts across every mesh primitive. Each primitive
+ * declares its own vertex array, so the total is the authored vertex count.
+ */
+function countGltfVertices(json: string): number | null {
+  const doc = JSON.parse(json) as {
+    meshes?: { primitives?: { attributes?: Record<string, number> }[] }[];
+    accessors?: { count?: number }[];
+  };
+  const accessors = doc.accessors;
+  if (!Array.isArray(doc.meshes) || !Array.isArray(accessors)) return null;
+  let total = 0;
+  for (const m of doc.meshes) {
+    if (!Array.isArray(m?.primitives)) continue;
+    for (const p of m.primitives) {
+      const idx = p?.attributes?.POSITION;
+      if (typeof idx !== 'number') continue;
+      const n = accessors[idx]?.count;
+      if (typeof n === 'number' && Number.isFinite(n) && n >= 0) total += n;
+    }
+  }
+  return total > 0 ? total : null;
+}
+
+/**
  * Sanitize a dropped file's name into something safe as a zip entry and UI
  * label: strip any directory part, allow only word chars/dot/dash, cap the
  * length, and guarantee the kind's extension survives.

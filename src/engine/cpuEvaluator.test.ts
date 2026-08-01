@@ -26,6 +26,22 @@ describe('evaluateNodeOutput — constants', () => {
     expect(evaluateNodeOutput('t', [t], [], 1.5)).toEqual([1.5]);
   });
 
+  it('scales time by the speed multiplier', () => {
+    expect(evaluateNodeOutput('t', [makeNode('t', 'time', { speed: 2 })], [], 1.5)).toEqual([3]);
+  });
+
+  it('supports a zero and a negative speed', () => {
+    expect(evaluateNodeOutput('t', [makeNode('t', 'time', { speed: 0 })], [], 1.5)).toEqual([0]);
+    expect(evaluateNodeOutput('t', [makeNode('t', 'time', { speed: -1 })], [], 1.5)).toEqual([-1.5]);
+  });
+
+  it('falls back to 1x for a missing or adversarial speed', () => {
+    // Legacy graphs have no speed key at all; .fastshader values are untrusted.
+    for (const bad of ['abc', Infinity, NaN]) {
+      expect(evaluateNodeOutput('t', [makeNode('t', 'time', { speed: bad })], [], 1.5)).toEqual([1.5]);
+    }
+  });
+
   it('emits screen-UV centre for screenUV', () => {
     const n = makeNode('n', 'screenUV');
     expect(evaluateNodeOutput('n', [n], [], 0)).toEqual([0.5, 0.5]);

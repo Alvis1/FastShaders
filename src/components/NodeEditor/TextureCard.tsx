@@ -3,46 +3,13 @@ import type { BuiltinTexture } from '@/registry/builtinTextures';
 import { perlin2D } from '@/utils/noisePreview';
 import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
+import { AssetCostBadge } from './AssetCostBadge';
+import { PREVIEW_SIZE, clamp01, lerp3, smoothstep, renderPixels } from './tilePreview';
 
 export const BUILTIN_TEXTURE_DRAG_TYPE = 'application/fastshaders-builtin-texture';
 
 interface TextureCardProps {
   texture: BuiltinTexture;
-}
-
-const PREVIEW_SIZE = 64;
-
-// ─── helpers ────────────────────────────────────────────────────────────────
-
-function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
-function lerp3(a: [number, number, number], b: [number, number, number], t: number): [number, number, number] {
-  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-}
-function smoothstep(e0: number, e1: number, x: number) {
-  const t = clamp01((x - e0) / (e1 - e0));
-  return t * t * (3 - 2 * t);
-}
-
-/** Run `shade` for every pixel of a PREVIEW_SIZE tile, x/y mapped to [-1, 1]. */
-function renderPixels(
-  ctx: CanvasRenderingContext2D,
-  shade: (x: number, y: number) => [number, number, number],
-) {
-  const w = PREVIEW_SIZE;
-  const img = ctx.createImageData(w, w);
-  for (let py = 0; py < w; py++) {
-    for (let px = 0; px < w; px++) {
-      const x = (px / w) * 2 - 1;
-      const y = (py / w) * 2 - 1;
-      const [r, g, b] = shade(x, y);
-      const i = (py * w + px) * 4;
-      img.data[i] = Math.round(r * 255);
-      img.data[i + 1] = Math.round(g * 255);
-      img.data[i + 2] = Math.round(b * 255);
-      img.data[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
 }
 
 // ─── preview renderers ──────────────────────────────────────────────────────
@@ -251,7 +218,7 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
       startTileDrag(
         event.nativeEvent,
         { kind: 'texture', id: texture.id },
-        `<div class="saved-group-card" style="zoom: ${tileGhostZoom(tile)}">${tile.innerHTML}</div>`,
+        `<div class="saved-group-card saved-group-card--preview" style="zoom: ${tileGhostZoom(tile)}">${tile.innerHTML}</div>`,
       );
     },
     [texture.id],
@@ -264,7 +231,7 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
 
   return (
     <div
-      className="saved-group-card"
+      className="saved-group-card saved-group-card--preview"
       draggable
       onDragStart={onDragStart}
       onPointerDown={onPointerDown}
@@ -272,6 +239,7 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
       {...tooltipHandlers}
     >
       {tooltip}
+      <AssetCostBadge cost={texture.totalCost} />
       <div
         className="saved-group-card__frame"
         style={{
@@ -285,15 +253,17 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
         >
           <span className="saved-group-card__title">{texture.name}</span>
         </div>
-        <div className="saved-group-card__body" style={{ alignItems: 'center', padding: '6px' }}>
+        <div className="saved-group-card__body">
           <canvas
             ref={canvasRef}
             width={PREVIEW_SIZE}
             height={PREVIEW_SIZE}
-            style={{ width: 56, height: 56, borderRadius: 4, imageRendering: 'auto' }}
+            // Fills the card's content width — the tile is meant to be the
+            // image, not a small swatch adrift in a large frame.
+            style={{ width: '100%', height: 'auto', aspectRatio: '1 / 1', display: 'block', borderRadius: 4, imageRendering: 'auto' }}
           />
           <span className="saved-group-card__count" style={{ marginTop: 2 }}>
-            {memberCount} nodes &middot; {texture.totalCost} pts
+            {memberCount} {memberCount === 1 ? 'node' : 'nodes'}
           </span>
         </div>
       </div>

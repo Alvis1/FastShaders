@@ -5,7 +5,9 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { registerTSLLanguage } from './tslLanguage';
 import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
+import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
+import { parseCostFile } from '@/utils/costOverride';
 import { getNodeValues } from '@/types';
 import type { OutputNodeData } from '@/types';
 import './CodeEditor.css';
@@ -90,15 +92,17 @@ export function CodeEditor() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [requestCodeSync]);
 
-  // Only compute export code when that tab is active; catch errors to avoid blank tabs
+  // Only compute export code when that tab is active; catch errors to avoid blank tabs.
+  // The Output tab shows the REAL module, so image placeholders are expanded back
+  // to their `data:` payloads here — the TSL tab above keeps the short references.
   const scriptCode = useMemo(() => {
     if (activeTab !== 'script') return '';
     try {
-      return tslToShaderModule(code, materialSettings, properties);
+      return tslToShaderModule(inlineImageAssetsFromNodes(code, nodes), materialSettings, properties);
     } catch (e) {
       return `// Export error: ${e instanceof Error ? e.message : String(e)}`;
     }
-  }, [code, activeTab, materialSettings, properties]);
+  }, [code, nodes, activeTab, materialSettings, properties]);
 
   const isTSL = activeTab === 'tsl';
 
@@ -111,6 +115,30 @@ export function CodeEditor() {
   // Project/script import logic is shared with the canvas drop —
   // see src/engine/projectImport.ts. This wrapper only adds the tab switch.
   const importScriptFile = useCallback((file: File) => {
+    // A benchmark complexity patch / suggestion .json reprices node costs (adds
+    // a measured device profile) — it is NOT a shader script, so handle it
+    // before the script/zip import path. Adversarial: parseCostFile validates.
+    if (/\.json$/i.test(file.name)) {
+      file.text()
+        .then((text) => {
+          const parsed = parseCostFile(text, file.name);
+          if (!parsed) {
+            window.alert(t('That JSON is not a recognizable complexity patch or bench suggestion.', language));
+            return;
+          }
+          if (
+            parsed.meta.valid === false &&
+            !window.confirm(
+              `${t('This benchmark run was flagged invalid:', language)}\n\n` +
+              `${parsed.meta.reasons.join('\n')}\n\n` +
+              t('Add it as a device profile anyway?', language),
+            )
+          ) return;
+          useAppStore.getState().importCostProfile(parsed);
+        })
+        .catch(() => window.alert(t('Could not read that file.', language)));
+      return;
+    }
     if (isZipFile(file)) {
       importShaderZip(file)
         .then((result) => {
@@ -137,7 +165,7 @@ export function CodeEditor() {
       }
     };
     reader.readAsText(file);
-  }, []);
+  }, [language]);
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -177,8 +205,8 @@ export function CodeEditor() {
     setIsDraggingFile(false);
     const file = e.dataTransfer.files[0];
     if (!file) return;
-    if (!/\.(js|mjs|tsl|zip)$/i.test(file.name)) {
-      window.alert(`"${file.name}" is not a shader script (.js / .mjs / .tsl) or FastShaders .zip.`);
+    if (!/\.(js|mjs|tsl|zip|json)$/i.test(file.name)) {
+      window.alert(`"${file.name}" is not a shader script (.js / .mjs / .tsl), a FastShaders .zip, or a benchmark complexity .json.`);
       return;
     }
     importScriptFile(file);
@@ -195,7 +223,7 @@ export function CodeEditor() {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".js,.mjs,.tsl,.zip"
+        accept=".js,.mjs,.tsl,.zip,.json"
         style={{ display: 'none' }}
         onChange={handleFileChange}
       />
@@ -203,7 +231,7 @@ export function CodeEditor() {
         <div className="code-editor__drop-overlay">
           <div className="code-editor__drop-msg">
             <div className="code-editor__drop-title">{t('Drop shader file', language)}</div>
-            <div className="code-editor__drop-sub">{t('.js / .mjs / .tsl or FastShaders .zip — replaces the current shader (graph + preview if embedded)', language)}</div>
+            <div className="code-editor__drop-sub">{t('.js / .mjs / .tsl or FastShaders .zip replaces the shader — or drop a benchmark complexity.json to reprice nodes', language)}</div>
           </div>
         </div>
       )}
@@ -289,7 +317,7 @@ export function CodeEditor() {
           />
           {isTSL && code.trim() === '' && !isDraggingFile && (
             <div className="code-editor__empty-hint">
-              {t('// Drop a .js shader script here to import, or click Import above.', language)}
+              {t('// Drop a .js / .zip shader or a benchmark complexity.json here, or click Import above.', language)}
             </div>
           )}
         </div>

@@ -262,6 +262,57 @@
   align-items: center;
   justify-content: center;
   padding: 5px 10px;
+  /* INVERTED against its sibling chips: dark plate, light glyph. Expressed via
+     the same two tokens the siblings use, just swapped — so the inversion
+     survives the theme toggle (both tokens flip in the dark block) instead of
+     turning into a light-on-light plate. */
+  background: var(--text-primary);
+  color: var(--bg-surface);
+  border-color: var(--text-primary);
+}
+
+/* The shared .toolbar__sc-link:hover would re-light the plate and darken the
+   glyph, un-inverting it. Keep the inversion and shift to the focus colour. */
+.toolbar__sc-link.toolbar__refresh:hover {
+  background: var(--border-focus);
+  border-color: var(--border-focus);
+  color: var(--bg-panel);
+}
+
+/* Feedback "!" — the only red element in the chrome, so it stays findable when
+   someone has hit a problem and is scanning for help. Same double-class
+   specificity note as the two rules above: it must out-rank both the later
+   .toolbar__sc-link rule and the button.toolbar__sc-link reset.
+
+   The red is a literal, not a token: no danger colour exists in tokens.css, and
+   this plate is filled white-on-red in BOTH themes (a red that reads as an
+   alert doesn't want to invert), so there is nothing for the dark block to
+   redefine — only the shade is nudged below for the darker surround. */
+.toolbar__sc-link.toolbar__feedback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  padding: 5px 10px;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+  background: #d92d20;
+  border-color: #d92d20;
+}
+
+/* The shared .toolbar__sc-link:hover would turn this into blue-on-white and
+   lose the alert reading entirely — deepen the red instead. */
+.toolbar__sc-link.toolbar__feedback:hover {
+  background: #b42318;
+  border-color: #b42318;
+  color: #fff;
+}
+
+.toolbar__sc-link.toolbar__feedback:focus-visible {
+  outline: 1px solid #d92d20;
+  outline-offset: 2px;
 }
 
 .toolbar__refresh svg {
@@ -493,6 +544,18 @@ button.toolbar__sc-link {
 
 :root[data-theme="dark"] .toolbar__vr-live {
   color: #3fb950;
+}
+
+/* Same hue, lifted slightly: #d92d20 is tuned against a light panel and reads
+   muddy on the dark chrome. Still white-on-red — the plate never inverts. */
+:root[data-theme="dark"] .toolbar__sc-link.toolbar__feedback {
+  background: #e5484d;
+  border-color: #e5484d;
+}
+
+:root[data-theme="dark"] .toolbar__sc-link.toolbar__feedback:hover {
+  background: #f2555a;
+  border-color: #f2555a;
 }
 
 :root[data-theme="dark"] .toolbar__vr-error {
