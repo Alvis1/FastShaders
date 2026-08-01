@@ -16,6 +16,47 @@
     • Archive (.zip) — unzipped in-browser (native DecompressionStream, no
       dependency); the first shader script + first model inside are loaded.
 
+  Presentation mode (pedestal / exhibition use):
+    • ⛶ bottom-right (⤡ to leave) hides ALL chrome — panel, drop hint and the
+      error banner go away, and the button itself fades out until the next
+      pointer movement (including movement inside the stage iframe, which
+      forwards an fs:activity heartbeat).
+    • The mode is REMEMBERED and outlives the Fullscreen API, which can only
+      be entered from a user gesture: after a reload the page comes back
+      presenting (chrome hidden, wake lock held) even though the window is no
+      longer fullscreen. `?present=1` pins it for a kiosk launcher. To leave a
+      remembered mode: press ⛶, then Esc.
+    • An optional title, centred at the top, survives into presentation mode:
+      it is the dropped file's name minus the extension with "_" read as a
+      space, and clicking it opens a small editor for the text and its colour.
+      Toggled from the panel; text/colour/toggle persist in localStorage.
+
+  UNATTENDED (pedestal) OPERATION — this page is expected to run for WEEKS with
+  nobody touching it, which needs more than "the page works":
+    • The stage iframe is DISPOSABLE. Everything it shows is re-derivable from
+      `state`, so applyStateToStage() replays it on every fs:ready and the
+      stage can be rebuilt at will.
+    • three's `time` is a float32 counting seconds since boot; its resolution
+      decays as it grows (7.8 ms/day, 62 ms/week, 250 ms/month). The stage
+      folds it back every ~4.5 h by an exact multiple of 2π, so sin/cos-driven
+      motion crosses the fold seamlessly and the quantum stays under ~1 ms.
+    • WebGPU device loss and WebGL context loss are terminal and LOOK like a
+      still artwork. Both are reported, plus a 5 s heartbeat carrying the
+      renderer's frame counter so a silent stall is caught too; the parent
+      rebuilds the stage (floored at 30 s apart; after 6 in a row it backs off
+      to one quiet retry every 10 min — never gives up for good, because a
+      transient driver fault must not end the exhibit).
+    • The last drop — shader, model, geometry AND the exhibitor's tuned
+      uniform values — is mirrored into IndexedDB and replayed at boot, so an
+      auto-update relaunch or power blip doesn't leave a grey sphere or the
+      wrong tuning.
+    • Presentation mode takes a screen wake lock, re-asked on every watchdog
+      tick (the platform can drop it, and a UA may refuse it until it can
+      grant it), and 90 s of idle returns the camera to the framing pinned
+      when presentation mode was entered.
+    • The error relay is rate-limited inside the sandbox and banners
+      self-dismiss — nothing red may camp on the artwork for a week.
+
   SECURITY MODEL — the same as the in-app preview: dropped/shared shader code is
   treated as ADVERSARIAL and executes ONLY inside a sandboxed iframe
   (sandbox="allow-scripts", NO allow-same-origin → opaque origin). The top-level
@@ -88,6 +129,13 @@
   .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
   .btn[hidden] { display: none; }
   .ctl-label { flex-shrink: 0; min-width: 72px; font-size: 12px; color: var(--text-dim); }
+  /* The panel's own Fullscreen button — the labelled twin of the floating ⛶.
+     Declared after `.btn:hover` so its hover colours win at equal specificity. */
+  .btn--fs { width: 100%; padding: 9px 8px; font-weight: 700; color: #fff; background: #2e9e57; border-color: #268049; }
+  .btn--fs:hover { color: #fff; background: #268049; border-color: #1f6a3c; }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text); cursor: pointer; user-select: none; }
+  .check input { accent-color: var(--accent); cursor: pointer; margin: 0; }
+  .hint-inline { font-size: 10px; line-height: 1.45; color: var(--text-dim); margin-top: 6px; }
   .color-input { width: 34px; height: 28px; flex-shrink: 0; padding: 0; border: 1px solid var(--panel-border); border-radius: 5px; background: #fff; cursor: pointer; }
   .speed-slider { flex: 1; min-width: 0; accent-color: var(--accent); cursor: pointer; margin: 0; }
 
@@ -104,13 +152,59 @@
   .u-bounds input { width: 52px; font: inherit; font-size: 10px; color: var(--text-dim); background: #fff; border: 1px solid var(--panel-border); border-radius: 4px; padding: 1px 3px; text-align: center; }
   .u-bounds span { flex: 1; text-align: center; }
 
+  /* ── Title overlay ──────────────────────────────────────────────── */
+  /* The bar spans the top but is click-through, so it can never swallow an
+     orbit drag; only the name itself and its editor take pointer events.
+     It sits BELOW the panel (z-index 19 < 20) so a long name slides under
+     the panel instead of over it — and in fullscreen, where the panel is
+     gone, the column is allowed to grow wider. */
+  #title-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 19; display: none; justify-content: center; padding: 20px 12px 0; pointer-events: none; }
+  #title-bar.show { display: flex; }
+  #title-col { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: min(58vw, 720px); }
+  :root.is-present #title-col { max-width: min(88vw, 1100px); }
+  #title-text {
+    pointer-events: auto; cursor: text; text-align: center; overflow-wrap: anywhere;
+    font-size: clamp(18px, 3.2vw, 44px); font-weight: 700; letter-spacing: -0.02em; line-height: 1.15;
+    padding: 4px 14px; border-radius: 8px; text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+    transition: background .12s;
+  }
+  #title-text:hover, #title-text:focus-visible { background: rgba(128, 128, 128, 0.22); outline: none; }
+  #title-text.is-placeholder { font-size: clamp(12px, 1.3vw, 16px); font-weight: 600; opacity: 0.45; text-shadow: none; }
+  /* Presentation mode — an unnamed title shows nothing at all. */
+  :root.is-present #title-text.is-placeholder { display: none; }
+  #title-editor { pointer-events: auto; display: none; align-items: center; gap: 6px; padding: 6px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 8px; box-shadow: var(--shadow); }
+  #title-editor.show { display: flex; }
+  #title-input { font: inherit; font-size: 13px; color: var(--text); background: #fff; border: 1px solid var(--panel-border); border-radius: 5px; padding: 5px 8px; width: min(46vw, 300px); }
+
+  /* ── Fullscreen ─────────────────────────────────────────────────── */
+  /* One button, two states: ⛶ enters, ⤡ leaves (never ✕ — that reads as
+     "close"). Fullscreen strips every piece of chrome; the button itself
+     fades out too and returns on pointer activity, which the stage iframe
+     forwards (fs:activity) since it covers the whole viewport. */
+  #fs-btn { position: fixed; right: 12px; bottom: 12px; z-index: 21; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 0; font-size: 15px; line-height: 1; color: #fff; background: rgba(20, 21, 25, 0.55); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 8px; cursor: pointer; opacity: 0.55; transition: opacity .2s, background .12s; }
+  #fs-btn:hover { opacity: 1; background: rgba(20, 21, 25, 0.85); }
+  /* `is-present` = presentation mode, which OUTLIVES the Fullscreen API: an
+     involuntary reload (browser auto-update, power blip) cannot re-enter
+     fullscreen without a user gesture, and a pedestal has nobody to give one.
+     So the chrome-hiding hangs off is-present (persisted, also settable with
+     ?present=1), while `is-fs` — true window fullscreen — only governs the
+     button's own auto-fade, since in windowed presentation the button is the
+     way back in. */
+  :root.is-present #panel, :root.is-present #hint { display: none; }
+  :root.is-fs #fs-btn { opacity: 0; pointer-events: none; }
+  :root.is-fs.is-active #fs-btn { opacity: 0.55; pointer-events: auto; }
+
   /* ── Drop overlay + error ───────────────────────────────────────── */
   #overlay { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(30, 40, 70, 0.55); backdrop-filter: blur(2px); color: #fff; font-size: 22px; font-weight: 700; pointer-events: none; }
   #overlay.show { display: flex; }
   /* max-height + overflow bound the banner — its text is sandbox-controlled
      (fs:error), so it must not be able to grow over the whole page. */
   #error { position: fixed; top: 12px; left: 12px; z-index: 30; max-width: 42vw; max-height: 40vh; overflow-y: auto; color: #fff; background: rgba(180, 40, 40, 0.92); font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; padding: 8px 12px; border-radius: 6px; display: none; }
-  #error.show { display: block; }
+  #error.show { display: block; cursor: pointer; }
+  /* Presentation mode: nothing is allowed over the artwork. The stage
+     watchdog restarts a broken stage on its own, and the banner is back the
+     moment presentation mode is left. */
+  :root.is-present #error { display: none; }
   #hint { position: fixed; bottom: 12px; left: 12px; z-index: 20; color: rgba(255,255,255,0.6); font-size: 11px; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
 </style>
 </head>
@@ -122,6 +216,18 @@
 <div id="error"></div>
 <div id="overlay">Drop shader · model · zip</div>
 <div id="hint">Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip anywhere — or click the panel drop area.</div>
+
+<div id="title-bar">
+  <div id="title-col">
+    <div id="title-text" role="button" tabindex="0" title="Click to edit the name and its color"></div>
+    <div id="title-editor">
+      <input id="title-input" type="text" maxlength="120" spellcheck="false" placeholder="Shader name" aria-label="Title text" />
+      <input id="title-color" class="color-input" type="color" title="Title color" aria-label="Title color" />
+    </div>
+  </div>
+</div>
+
+<button id="fs-btn" type="button" title="Fullscreen" aria-label="Fullscreen">⛶</button>
 
 <div id="panel">
   <div class="panel__head" id="panel-head">
@@ -164,9 +270,24 @@
     </div>
 
     <div class="section">
+      <div class="section__label">Unattended</div>
+      <label class="check"><input type="checkbox" id="restore-toggle" /> Reopen the last file after a reload</label>
+      <label class="check" style="margin-top:6px;"><input type="checkbox" id="viewreturn-toggle" /> Return the view after 90 s idle</label>
+      <div class="hint-inline">For pedestal use. Fullscreen also keeps the display awake, and the 3D stage restarts itself if it stalls or loses its GPU device.</div>
+    </div>
+
+    <div class="section">
+      <div class="section__label">Title</div>
+      <label class="check"><input type="checkbox" id="title-toggle" /> Show the name over the shader</label>
+      <div class="hint-inline">Taken from the dropped file name. Click the name itself to change its text and color — it stays visible in fullscreen.</div>
+    </div>
+
+    <div class="section">
       <div class="section__label">Properties</div>
       <div id="uniforms"><div class="empty">Load a shader to expose its properties.</div></div>
     </div>
+
+    <button class="btn btn--fs" id="fs-panel-btn" type="button" title="Show the shader full-screen with no controls">Fullscreen</button>
   </div>
 </div>
 
@@ -180,11 +301,21 @@
   var matToggle = document.getElementById("mat-toggle");
   var geoSelect = document.getElementById("geo-select");
   var overlay = document.getElementById("overlay");
+  var titleBar = document.getElementById("title-bar");
+  var titleTextEl = document.getElementById("title-text");
+  var titleEditor = document.getElementById("title-editor");
+  var titleInput = document.getElementById("title-input");
+  var titleColorEl = document.getElementById("title-color");
+  var titleToggle = document.getElementById("title-toggle");
+  var fsBtn = document.getElementById("fs-btn");
+  var fsPanelBtn = document.getElementById("fs-panel-btn");
+  var docEl = document.documentElement;
 
   // Per-geometry resting tilt, matching the in-app preview.
   var ROTATIONS = { sphere: "45 45 0", cube: "45 45 0", plane: "0 0 0", teapot: "15 35 0", bunny: "0 25 0", model: "0 0 0" };
 
   var DEFAULT_BG = "#303540", SPIN_BASE_DUR = 12000;  // dur at speed 1×
+  var DEFAULT_TITLE_COLOR = "#ffffff", TITLE_MAX = 120;
   var state = {
     shaderSource: null,    // text of the current shader module (null = none)
     shaderName: null,
@@ -198,6 +329,17 @@
     bgColor: isHex6(readStr("fs:viewerBg", DEFAULT_BG)) ? readStr("fs:viewerBg", DEFAULT_BG) : DEFAULT_BG,
     bounds: loadBounds(),  // { uniformName: {min,max} } persisted here (top origin)
     values: {},            // last slider value per uniform name
+    // Title overlay. titleText is "" until a shader is dropped or the user
+    // types one; only a USER-typed name is persisted (an auto-derived name
+    // must not outlive the shader it names — nothing reloads the shader).
+    titleShow: readStr("fs:viewerTitleShow", "1") !== "0",
+    titleText: readStr("fs:viewerTitleText", "").slice(0, TITLE_MAX),
+    titleColor: isHex6(readStr("fs:viewerTitleColor", DEFAULT_TITLE_COLOR))
+      ? readStr("fs:viewerTitleColor", DEFAULT_TITLE_COLOR) : DEFAULT_TITLE_COLOR,
+    // Unattended-run options, both on by default (see the Unattended panel).
+    autoRestore: readStr("fs:viewerAutoRestore", "1") !== "0",
+    presenting: readStr("fs:viewerPresenting", "0") === "1",
+    viewReturn: readStr("fs:viewerViewReturn", "1") !== "0",
   };
   // A slower/faster rotation is a longer/shorter animation duration.
   function spinDur() { return Math.round(SPIN_BASE_DUR / (state.spinSpeed || 1)); }
@@ -207,14 +349,25 @@
   // Only those may be cleared by the stage's fs:applied — trusted-page errors
   // (zip/file-read failures etc.) must never be clearable from the sandbox.
   // Length-capped: the text is sandbox-controlled on the fs:error path.
-  var errorFromStage = false, errorSticky = false;
+  // A pedestal must not carry a red banner over the artwork for the rest of
+  // the week because of one transient hiccup, so non-sticky errors time out
+  // (and any error can be clicked away). Sticky ones — the stage can never
+  // work — stay until something actually succeeds.
+  var errorFromStage = false, errorSticky = false, errorTimer = null;
+  var ERROR_DISMISS_MS = 20000;
   function showError(msg, fromStage, sticky) {
     errEl.textContent = String(msg).slice(0, 2000);
     errEl.classList.add("show");
     errorFromStage = !!fromStage;
     errorSticky = !!sticky;
+    if (errorTimer) { clearTimeout(errorTimer); errorTimer = null; }
+    if (!errorSticky) errorTimer = setTimeout(clearError, ERROR_DISMISS_MS);
   }
-  function clearError() { errEl.classList.remove("show"); errEl.textContent = ""; errorFromStage = false; errorSticky = false; }
+  function clearError() {
+    if (errorTimer) { clearTimeout(errorTimer); errorTimer = null; }
+    errEl.classList.remove("show"); errEl.textContent = ""; errorFromStage = false; errorSticky = false;
+  }
+  errEl.addEventListener("click", clearError);
 
   // Escape dynamic strings (esp. dropped file names from shared archives) before
   // they enter innerHTML/title on this trusted top document.
@@ -236,22 +389,37 @@
   function clampSpeed(s) { return Math.min(4, Math.max(0.1, isFinite(s) ? s : 1)); }
 
   // ── postMessage bridge to the sandboxed stage iframe ────────────────
+  // The stage is DISPOSABLE: everything it shows is re-derivable from `state`,
+  // so it can be torn down and rebuilt at any time (GPU device loss, a render
+  // stall, or the scheduled time-wrap restart) and applyStateToStage puts it
+  // back. That is what makes an unattended multi-week run survivable.
   var stageReady = false;
   var outQueue = [];
+  var MAX_QUEUED = 16;   // a stage that never boots must not pin model buffers
   var iframeDrag = false;  // is a file being dragged over the stage iframe?
   function post(msg) {
     if (stageReady && stage.contentWindow) stage.contentWindow.postMessage(msg, "*");
-    else outQueue.push(msg);
+    else { outQueue.push(msg); if (outQueue.length > MAX_QUEUED) outQueue.shift(); }
   }
   window.addEventListener("message", function (e) {
     // Accept only the stage iframe; it has an opaque origin so we can't check by
-    // origin — identity via contentWindow is the reliable guard.
+    // origin — identity via contentWindow is the reliable guard. After a
+    // restart this also drops late messages from the previous document, whose
+    // window is no longer stage.contentWindow.
     if (e.source !== stage.contentWindow) return;
     var m = e.data; if (!m) return;
     if (m.type === "fs:ready") {
       stageReady = true;
-      var q = outQueue; outQueue = [];
-      q.forEach(function (x) { stage.contentWindow.postMessage(x, "*"); });
+      outQueue = [];            // superseded by the full replay below
+      applyStateToStage();
+      noteStageAlive();
+    } else if (m.type === "fs:beat") {
+      // Liveness + time-wrap heartbeat (see the watchdog below).
+      onStageBeat(m);
+    } else if (m.type === "fs:stage-dead") {
+      // The renderer told us it is finished (WebGPU device lost / WebGL
+      // context lost). Nothing recovers in place — rebuild the stage.
+      restartStage("renderer lost (" + String(m.reason || "unknown").slice(0, 80) + ")");
     } else if (m.type === "fs:uniforms") {
       if (!state.showMaterials) onUniforms(m.uniforms || {});
     } else if (m.type === "fs:error") {
@@ -267,6 +435,13 @@
       // viewport and swallows drag events over that whole area) — mirror the
       // drop overlay. Repeated on:true beats also re-arm the safety timeout.
       iframeDrag = !!m.on; refreshOverlay();
+    } else if (m.type === "fs:activity") {
+      // Throttled pointer heartbeat from the stage, which covers the whole
+      // viewport — without it, moving the mouse over the 3D view in
+      // fullscreen would never bring the exit button back. A press there also
+      // dismisses an open title editor, exactly like a press on the chrome.
+      bumpActivity();
+      if (m.down) commitTitle();
     } else if (m.type === "fs:dropped") {
       // Files were dropped ONTO the stage iframe; it forwarded the File objects
       // here so a drop anywhere loads through the same path as a panel drop.
@@ -278,6 +453,222 @@
       if (dropped.length) handleFiles(dropped);
     }
   });
+
+  // ── Stage lifecycle: restore, watchdog, restart ─────────────────────
+  // Everything below exists for ONE reason: podest is meant to run unattended
+  // on a pedestal for weeks. Over that span the stage WILL be interrupted (a
+  // GPU driver reset, a compositor hiccup, a display sleep) and three's
+  // `time` uniform — a float32 accumulating seconds since boot — degrades on
+  // its own: 7.8 ms of quantization after a day, 62 ms after a week, a quarter
+  // of a second after a month, at which point every animation is a slideshow.
+  // A stage restart fixes both, and it is cheap because the parent owns all
+  // the state.
+  var STAGE_BEAT_MS = 5000;          // heartbeat interval inside the stage
+  var STAGE_STALL_MS = 30000;        // no progress for this long ⇒ restart
+  var STAGE_MIN_RESTART_MS = 30000;  // never thrash restarts
+  var STAGE_GIVE_UP = 6;             // consecutive failed restarts ⇒ back off…
+  var STAGE_RETRY_MS = 600000;       // …to one quiet retry every 10 min
+  var lastBeat = 0, lastFrameId = -1, lastProgress = 0;
+  var lastRestartAt = 0, restartStreak = 0, stageDeadlineTimer = null;
+
+  // Replays everything the parent owns onto a freshly booted stage. This is
+  // the whole state — which is why the pending queue is DISCARDED on ready
+  // rather than flushed: replaying it too would just re-apply (and recompile)
+  // the same shader twice. Uniform values ride along automatically: applying
+  // the shader triggers fs:uniforms, and onUniforms re-posts every stored one.
+  function applyStateToStage() {
+    post({ type: "fs:background", color: state.bgColor });
+    post({ type: "fs:spin", playing: state.spinning, dur: spinDur() });
+    if (state.geometry !== "sphere") setGeometry(state.geometry);
+    if (state.showMaterials) post({ type: "fs:detach-shader" });
+    else if (state.shaderSource) post({ type: "fs:shader", source: state.shaderSource });
+  }
+
+  function noteStageAlive() {
+    lastBeat = Date.now(); lastProgress = lastBeat; lastFrameId = -1;
+  }
+
+  // A restart only "counts" as successful once the stage has stayed up for a
+  // while, so a machine whose GPU is genuinely broken shows one sticky error
+  // instead of reloading the iframe forever.
+  function onStageBeat(m) {
+    var now = Date.now();
+    lastBeat = now;
+    var fid = typeof m.frameId === "number" ? m.frameId : -1;
+    if (fid !== lastFrameId) { lastFrameId = fid; lastProgress = now; }
+    if (restartStreak && now - lastRestartAt > 120000) restartStreak = 0;
+    // Fallback for the (unlikely) case where the stage cannot reach three's
+    // node frame to wrap `time` itself: restart on its behalf.
+    if (m.wrapNeeded) restartStage("time wrap");
+  }
+
+  function restartStage(reason) {
+    var now = Date.now();
+    if (now - lastRestartAt < STAGE_MIN_RESTART_MS) return;
+    // Back off hard after a run of failures, but never stop for good: a
+    // transient fault (a driver update mid-week, VRAM pressure) must not take
+    // the exhibit down until a human walks past. One quiet retry every 10 min.
+    if (restartStreak >= STAGE_GIVE_UP) {
+      showError("The 3D stage keeps failing to start (" + reason + "). Retrying every 10 minutes; reload to retry now.", false, true);
+      if (now - lastRestartAt < STAGE_RETRY_MS) return;
+    }
+    lastRestartAt = now; restartStreak++;
+    stageReady = false; outQueue = [];
+    lastBeat = now; lastProgress = now; lastFrameId = -1;
+    // A fresh srcdoc navigates the iframe: the old document (and every GPU
+    // resource, blob URL and listener it held) is torn down wholesale.
+    stage.setAttribute("srcdoc", buildStageDoc());
+  }
+
+  // Watchdog. Runs only while the document is VISIBLE — a hidden tab has no
+  // rAF, so a frozen frameId there is normal, not a fault.
+  function checkStage() {
+    // The platform can drop a screen wake lock on its own (a system dialog, a
+    // user switching away and back), and in an untouched run nothing else
+    // would ever ask for it again. requestWakeLock is idempotent, so riding
+    // the watchdog's existing 5 s tick costs nothing and closes that hole.
+    requestWakeLock();
+    if (document.visibilityState !== "visible") { lastBeat = lastProgress = Date.now(); return; }
+    var now = Date.now();
+    // Never became ready at all (a boot that died before the bridge ran).
+    if (!stageReady) { if (now - lastRestartAt > 45000) restartStage("stage never started"); return; }
+    if (now - lastBeat > STAGE_STALL_MS) { restartStage("stage stopped responding"); return; }
+    if (now - lastProgress > STAGE_STALL_MS) restartStage("rendering stalled");
+  }
+  stageDeadlineTimer = setInterval(checkStage, STAGE_BEAT_MS);
+
+  // ── Session persistence (IndexedDB) ─────────────────────────────────
+  // A pedestal outlives its browser: auto-update relaunches, power cuts, an OS
+  // reboot, a memory-pressure tab discard, or a visitor pressing F5. The
+  // loaded shader lives only in JS memory, so any of those leaves a grey
+  // sphere until somebody walks over and re-drops the file. Mirroring the last
+  // drop into IndexedDB and replaying it at boot is what makes the install
+  // unattended. localStorage is the wrong store here — shader modules carry
+  // base64 image payloads and models are raw binary, both far past its ~5 MB
+  // string budget. Every path is throw-safe: private mode, a blocked upgrade,
+  // a quota error or a hung open all degrade to today's session-only
+  // behaviour.
+  var DB_NAME = "fs-podest", DB_STORE = "session", DB_KEY = "last";
+  var MAX_SAVED_SHADER = 24 * 1024 * 1024;  // chars
+  var MAX_SAVED_MODEL = 64 * 1024 * 1024;   // bytes — matches the zip inflate cap
+  var dbHandle = null, dbWaiters = null, dbSettled = false, restoreDone = false, saveTimer = null;
+
+  function getDb(cb) {
+    if (dbSettled) { cb(dbHandle); return; }
+    if (dbWaiters) { dbWaiters.push(cb); return; }
+    dbWaiters = [cb];
+    function settle(db) {
+      if (dbSettled) return;
+      dbSettled = true; dbHandle = db;
+      var q = dbWaiters || []; dbWaiters = null;
+      q.forEach(function (f) { try { f(db); } catch (e) {} });
+    }
+    try {
+      if (!window.indexedDB) { settle(null); return; }
+      var req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = function () { try { req.result.createObjectStore(DB_STORE); } catch (e) {} };
+      req.onsuccess = function () { settle(req.result); };
+      req.onerror = function () { settle(null); };
+      req.onblocked = function () { settle(null); };
+      setTimeout(function () { settle(null); }, 5000);  // never hang a boot on a wedged open
+    } catch (e) { settle(null); }
+  }
+
+  function saveSession() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(writeSession, 400);
+  }
+  function writeSession() {
+    saveTimer = null;
+    if (!state.autoRestore) return;
+    var rec = {
+      shaderSource: (typeof state.shaderSource === "string" && state.shaderSource.length <= MAX_SAVED_SHADER) ? state.shaderSource : null,
+      shaderName: state.shaderName || null,
+      modelBytes: (state.modelBytes && state.modelBytes.byteLength <= MAX_SAVED_MODEL) ? state.modelBytes : null,
+      modelName: state.modelName || null,
+      modelKind: state.modelKind || null,
+      geometry: state.geometry,
+      showMaterials: !!state.showMaterials,
+      titleText: state.titleText || "",
+      // The exhibitor's tuning IS the artwork — losing it to a reload would
+      // silently show the wrong piece. Small plain JSON, unlike the payloads
+      // above; onUniforms picks these up as each slider's `current`.
+      values: state.values,
+    };
+    getDb(function (db) {
+      if (!db) return;
+      try {
+        var tx = db.transaction(DB_STORE, "readwrite");
+        var os = tx.objectStore(DB_STORE);
+        if (!rec.shaderSource && !rec.modelBytes) os.delete(DB_KEY); else os.put(rec, DB_KEY);
+        tx.onerror = function () {};   // quota / corruption ⇒ session-only, silently
+        tx.onabort = function () {};
+      } catch (e) {}
+    });
+  }
+  function clearSession() {
+    getDb(function (db) {
+      if (!db) return;
+      try { db.transaction(DB_STORE, "readwrite").objectStore(DB_STORE).delete(DB_KEY); } catch (e) {}
+    });
+  }
+
+  function restoreSession() {
+    if (!state.autoRestore) return;
+    getDb(function (db) {
+      if (!db) return;
+      try {
+        var rq = db.transaction(DB_STORE, "readonly").objectStore(DB_STORE).get(DB_KEY);
+        rq.onsuccess = function () { applyRestored(rq.result); };
+        rq.onerror = function () {};
+      } catch (e) {}
+    });
+  }
+  // Re-validated on the way back in: the record is ours, but it has sat in a
+  // shared-origin store across restarts, and the loaders it feeds treat their
+  // input as adversarial anyway.
+  function applyRestored(rec) {
+    // A file dropped while the async read was in flight always wins.
+    if (restoreDone || !rec || typeof rec !== "object") return;
+    if (state.shaderSource || state.modelBytes) return;
+    restoreDone = true;
+    var name = function (n) { return typeof n === "string" ? n.slice(0, 200) : ""; };
+    // Read BEFORE loadShaderText: replaying the session re-derives the title
+    // from the file name and clears this key, but resuming is not the same as
+    // dropping a new file — a name the user typed must survive the reload.
+    var customTitle = readStr("fs:viewerTitleText", "");
+    if (rec.modelBytes instanceof ArrayBuffer && rec.modelBytes.byteLength > 0 && rec.modelBytes.byteLength <= MAX_SAVED_MODEL) {
+      loadModelBuffer(rec.modelBytes, name(rec.modelName) || (rec.modelKind === "obj" ? "model.obj" : "model.glb"));
+    }
+    if (rec.values && typeof rec.values === "object") {
+      // Numbers and '#rrggbb' strings only — onUniforms type-checks again, but
+      // a stored value reaches postMessage, so keep junk out of it here.
+      Object.keys(rec.values).forEach(function (k) {
+        var v = rec.values[k];
+        if (typeof v === "number" ? isFinite(v) : isHex6(v)) state.values[k] = v;
+      });
+    }
+    if (typeof rec.shaderSource === "string" && rec.shaderSource && rec.shaderSource.length <= MAX_SAVED_SHADER) {
+      loadShaderText(rec.shaderSource, name(rec.shaderName) || "shader");
+      if (customTitle) {
+        state.titleText = customTitle.slice(0, TITLE_MAX);
+        writePref("fs:viewerTitleText", state.titleText);
+        renderTitle();
+      } else if (typeof rec.titleText === "string" && rec.titleText) {
+        state.titleText = rec.titleText.slice(0, TITLE_MAX);
+        renderTitle();
+      }
+    }
+    if (typeof rec.geometry === "string" && isKnownGeometry(rec.geometry) && rec.geometry !== state.geometry) {
+      geoSelect.value = rec.geometry;
+      setGeometry(rec.geometry);
+    }
+    if (rec.showMaterials && !matToggle.hidden && !state.showMaterials) matToggle.click();
+  }
+  function isKnownGeometry(k) {
+    return k === "sphere" || k === "cube" || k === "plane" || k === "teapot" || k === "bunny" ||
+      (k === "model" && !!state.modelBytes);
+  }
 
   // ── Geometry / model plumbing (all applied inside the iframe) ────────
   function isObjKey(k) { return k === "teapot" || k === "bunny"; }
@@ -321,11 +712,13 @@
     // fall back to the raw name rather than hiding the row.
     var displayName = name ? String(name).replace(/\.[^./\\]+$/, "") : "";
     state.shaderName = displayName || (name ? String(name) : "shader");
+    setTitleFromFile(name);
     state.showMaterials = false;
     matToggle.classList.remove("active");
     matToggle.textContent = "Show model materials";
     post({ type: "fs:shader", source: text });
     updateLoaded();
+    saveSession();
   }
 
   function loadModelBuffer(buf, name) {
@@ -347,6 +740,7 @@
     matToggle.hidden = false;
     setGeometry("model");
     updateLoaded();
+    saveSession();
   }
 
   // ── Uniform sliders ─────────────────────────────────────────────────
@@ -385,6 +779,7 @@
         cInput.value = cCur;
         cInput.addEventListener("input", function () {
           state.values[name] = cInput.value;
+          saveSession();
           post({ type: "fs:uniform", name: name, value: cInput.value });
         });
         post({ type: "fs:uniform", name: name, value: cCur });
@@ -418,6 +813,7 @@
       function setValue(v, fromSlider) {
         if (isNaN(v)) return;
         state.values[name] = v;
+        saveSession();   // debounced — a scrub writes once, not per frame
         post({ type: "fs:uniform", name: name, value: v });
         valInput.value = Number(v.toFixed(4));
         if (!fromSlider) slider.value = v;
@@ -443,6 +839,239 @@
       uniformsEl.appendChild(row);
     });
   }
+
+  // ── Title overlay ───────────────────────────────────────────────────
+  // A presentation label for pedestal use. The name is derived from the
+  // dropped file (extension dropped, "_" read as a space) and can be typed
+  // over; the typed one wins until the next shader is dropped. It is only
+  // ever written with textContent — the file name comes from a shared
+  // archive and the stored override comes from localStorage, so neither may
+  // reach innerHTML on this trusted top document.
+  function prettyName(name) {
+    var base = String(name).split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+    var pretty = base.replace(/_+/g, " ").replace(/\s+/g, " ").trim();
+    return (pretty || base).slice(0, TITLE_MAX);
+  }
+  function setTitleFromFile(name) {
+    // A drop that lands mid-edit discards the half-typed name rather than
+    // letting a later commit overwrite the file's own name.
+    closeTitleEditor();
+    state.titleText = name ? prettyName(name) : "";
+    writePref("fs:viewerTitleText", "");  // auto names don't outlive the shader
+    renderTitle();
+  }
+  function renderTitle() {
+    var empty = !state.titleText;
+    titleBar.classList.toggle("show", state.titleShow);
+    titleTextEl.textContent = empty ? "Click to name this shader" : state.titleText;
+    titleTextEl.classList.toggle("is-placeholder", empty);
+    titleTextEl.style.color = state.titleColor;
+    if (!state.titleShow) closeTitleEditor();
+  }
+
+  var titleBeforeEdit = "";
+  function titleEditorOpen() { return titleEditor.classList.contains("show"); }
+  function openTitleEditor() {
+    titleBeforeEdit = state.titleText;
+    titleInput.value = state.titleText;
+    titleColorEl.value = state.titleColor;
+    titleEditor.classList.add("show");
+    titleInput.focus();
+    titleInput.select();
+  }
+  function closeTitleEditor() { titleEditor.classList.remove("show"); }
+  // Committing normalizes whitespace (typing stays untouched, so a trailing
+  // space isn't eaten mid-word) and persists — an empty name means "no title",
+  // not "fall back to the file name".
+  function commitTitle() {
+    if (!titleEditorOpen()) return;
+    state.titleText = String(titleInput.value).replace(/\s+/g, " ").trim().slice(0, TITLE_MAX);
+    writePref("fs:viewerTitleText", state.titleText);
+    closeTitleEditor();
+    renderTitle();
+    saveSession();
+  }
+
+  titleTextEl.addEventListener("click", function () {
+    if (titleEditorOpen()) commitTitle(); else openTitleEditor();
+  });
+  titleTextEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTitleEditor(); }
+  });
+  titleInput.addEventListener("input", function () {
+    state.titleText = titleInput.value.slice(0, TITLE_MAX);
+    renderTitle();
+  });
+  titleInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); commitTitle(); }
+    else if (e.key === "Escape") { state.titleText = titleBeforeEdit; closeTitleEditor(); renderTitle(); }
+  });
+  titleColorEl.addEventListener("input", function () {
+    if (!isHex6(titleColorEl.value)) return;
+    state.titleColor = titleColorEl.value;
+    writePref("fs:viewerTitleColor", state.titleColor);
+    renderTitle();
+  });
+  // Anything outside the title column commits and closes. Capture phase so a
+  // click on a panel control still lands on that control. Presses inside the
+  // stage iframe never reach here — they arrive as a forwarded fs:activity.
+  window.addEventListener("pointerdown", function (e) {
+    if (titleEditorOpen() && !titleBar.contains(e.target)) commitTitle();
+  }, true);
+
+  titleToggle.checked = state.titleShow;
+  titleToggle.addEventListener("change", function () {
+    state.titleShow = titleToggle.checked;
+    writePref("fs:viewerTitleShow", state.titleShow ? "1" : "0");
+    renderTitle();
+  });
+
+  // ── Unattended-run options ──────────────────────────────────────────
+  var restoreToggle = document.getElementById("restore-toggle");
+  var viewReturnToggle = document.getElementById("viewreturn-toggle");
+  restoreToggle.checked = state.autoRestore;
+  restoreToggle.addEventListener("change", function () {
+    state.autoRestore = restoreToggle.checked;
+    writePref("fs:viewerAutoRestore", state.autoRestore ? "1" : "0");
+    if (state.autoRestore) saveSession(); else clearSession();
+  });
+  viewReturnToggle.checked = state.viewReturn;
+  viewReturnToggle.addEventListener("change", function () {
+    state.viewReturn = viewReturnToggle.checked;
+    writePref("fs:viewerViewReturn", state.viewReturn ? "1" : "0");
+    armViewReturn();
+  });
+
+  // ── Fullscreen ──────────────────────────────────────────────────────
+  // The whole top document goes fullscreen (not the sandboxed iframe), so the
+  // title overlay and the drop plumbing keep working; `is-fs` on <html> is
+  // what strips the chrome. Safari still needs the webkit-prefixed names.
+  function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+  // Presentation mode is deliberately WIDER than the Fullscreen API. Fullscreen
+  // can only be entered from a user gesture, and an unattended pedestal has
+  // nobody to give one after a browser auto-update or a power blip — it would
+  // come back windowed, with the panel over the artwork and, far worse, no
+  // screen wake lock, so the display blanks at the OS idle timeout and stays
+  // black for the rest of the week. So the mode is remembered: pressing ⛶ once
+  // at install survives every restart, and `?present=1` pins it for a kiosk
+  // launcher. Everything that must keep working while presenting — the wake
+  // lock, the idle view return, the chrome-hiding class — asks presenting(),
+  // never fsElement(); only the ⛶ button's own glyph and auto-fade read the
+  // real window state, because in windowed presentation that button is the way
+  // back into fullscreen.
+  var presentParam = /[?&]present=1/.test(location.search);
+  function presenting() { return !!fsElement() || presentParam || state.presenting; }
+  function syncPresentClass() { docEl.classList.toggle("is-present", presenting()); }
+  function toggleFullscreen() {
+    try {
+      if (fsElement()) {
+        var exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exit) { var pe = exit.call(document); if (pe && pe.catch) pe.catch(function () {}); }
+        return;
+      }
+      var req = docEl.requestFullscreen || docEl.webkitRequestFullscreen;
+      if (!req) { showError("Fullscreen is not available in this browser."); return; }
+      var pr = req.call(docEl);
+      if (pr && pr.catch) pr.catch(function (err) { showError("Could not enter fullscreen: " + (err && err.message ? err.message : err)); });
+    } catch (e) { showError("Could not toggle fullscreen: " + e.message); }
+  }
+  // In fullscreen the button itself is chrome: it fades out and comes back on
+  // any pointer activity. Re-arming is throttled so an orbit drag (a
+  // pointermove flood, forwarded from the stage) doesn't churn timers.
+  // Idle view return: a visitor spins the model and walks away, and without
+  // this the artwork stays wrongly framed until someone notices — the panel's
+  // "Reset view" is hidden in fullscreen, so there is nothing to press.
+  // Entering fullscreen pins the CURRENT framing as the one to come back to
+  // (fs:save-view), so the exhibitor's composition is what returns, not the
+  // boot camera.
+  var VIEW_RETURN_MS = 90000;
+  var viewTimer = null;
+  function armViewReturn() {
+    if (viewTimer) { clearTimeout(viewTimer); viewTimer = null; }
+    if (!state.viewReturn || !presenting()) return;
+    viewTimer = setTimeout(function () {
+      viewTimer = null;
+      post({ type: "fs:reset-camera" });
+    }, VIEW_RETURN_MS);
+  }
+
+  var idleTimer = null, lastBump = 0;
+  function bumpActivity() {
+    if (!presenting()) return;
+    armViewReturn();
+    var t = Date.now();
+    if (docEl.classList.contains("is-active") && t - lastBump < 400) return;
+    lastBump = t;
+    docEl.classList.add("is-active");
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(function () { idleTimer = null; docEl.classList.remove("is-active"); }, 2600);
+  }
+  // Screen wake lock — a pedestal display must not blank after 10 minutes.
+  // Tied to fullscreen: entering is a user gesture (which every implementation
+  // accepts) and it keeps a laptop that is merely *browsing* podest from having
+  // its screensaver suppressed. The platform drops the lock whenever the
+  // document is hidden, so it is re-acquired on visibilitychange. No API
+  // (Firefox < 126, Safari < 16.4) is a silent no-op.
+  var wakeLock = null;
+  function requestWakeLock() {
+    if (!navigator.wakeLock || wakeLock || document.visibilityState !== "visible") return;
+    if (!presenting()) return;
+    try {
+      navigator.wakeLock.request("screen").then(function (lock) {
+        // Leaving presentation mode mid-request must not strand the lock.
+        // NB presenting(), not fsElement() — with the windowed presentation
+        // mode above, gating on fullscreen would release every lock the
+        // instant its promise resolved and quietly undo the whole fix.
+        if (!presenting()) { try { lock.release(); } catch (e) {} return; }
+        wakeLock = lock;
+        lock.addEventListener("release", function () { if (wakeLock === lock) wakeLock = null; });
+      }, function () {});
+    } catch (e) {}
+  }
+  function releaseWakeLock() {
+    var lock = wakeLock; wakeLock = null;
+    if (!lock) return;
+    try { var p = lock.release(); if (p && p.catch) p.catch(function () {}); } catch (e) {}
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") requestWakeLock();
+  });
+
+  function onFullscreenChange() {
+    var on = !!fsElement();
+    docEl.classList.toggle("is-fs", on);
+    // Entering ⛶ arms presentation mode for good; leaving it disarms — which
+    // is also the only way back to the chrome after a reload came up
+    // presenting (press ⛶, then Esc).
+    state.presenting = on;
+    writePref("fs:viewerPresenting", on ? "1" : "0");
+    syncPresentClass();
+    fsBtn.textContent = on ? "⤡" : "⛶";
+    fsBtn.title = on ? "Exit fullscreen (Esc)" : "Fullscreen";
+    fsBtn.setAttribute("aria-label", fsBtn.title);
+    fsPanelBtn.textContent = on ? "Exit fullscreen" : "Fullscreen";
+    if (on) {
+      commitTitle();                    // no-ops when the editor is closed
+      post({ type: "fs:save-view" });   // this framing is what the idle return restores
+      bumpActivity();
+      requestWakeLock();
+    } else {
+      docEl.classList.remove("is-active");
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+      if (viewTimer) { clearTimeout(viewTimer); viewTimer = null; }
+      releaseWakeLock();
+    }
+  }
+  fsBtn.addEventListener("click", toggleFullscreen);
+  // The panel's labelled twin. It is only ever reachable while NOT presenting
+  // (presentation mode hides the panel), so it always reads "Fullscreen" —
+  // but it is kept in sync anyway rather than relying on that.
+  fsPanelBtn.addEventListener("click", toggleFullscreen);
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+  window.addEventListener("pointermove", bumpActivity, { passive: true });
+  window.addEventListener("pointerdown", bumpActivity, { passive: true });
+  window.addEventListener("keydown", bumpActivity);
 
   function showMaterialsMessage() {
     uniformsEl.innerHTML = '<div class="empty">Model materials shown — switch to the shader to tune properties.</div>';
@@ -580,10 +1209,11 @@
   document.getElementById("dropzone").addEventListener("click", function () { fileInput.click(); });
   fileInput.addEventListener("change", function () { if (fileInput.files.length) handleFiles(fileInput.files); fileInput.value = ""; });
 
-  geoSelect.addEventListener("change", function () { setGeometry(geoSelect.value); });
+  geoSelect.addEventListener("change", function () { setGeometry(geoSelect.value); saveSession(); });
 
   matToggle.addEventListener("click", function () {
     state.showMaterials = !state.showMaterials;
+    saveSession();
     if (state.showMaterials) {
       post({ type: "fs:detach-shader" });
       matToggle.classList.add("active");
@@ -674,10 +1304,24 @@
     // rejection); shader-error / shader-applied are its structured events
     // (they bubble to window). fs:applied clears the parent's stage-error
     // overlay. Messages are length-capped — shader code controls them.
-    L.push('<script>window.__fsPosted=false;window.fsPost=function(m,sticky){try{window.__fsPosted=true;parent.postMessage({type:"fs:error",message:String(m).slice(0,2000),sticky:!!sticky},"*");}catch(e){}};window.onerror=function(msg,url,line,col,err){if(/^Script error\\.?$/.test(String(msg||""))&&window.__fsPosted)return;fsPost((err&&err.stack)||msg||"Shader error");};window.onunhandledrejection=function(ev){var r=ev&&ev.reason;fsPost((r&&r.stack)||r||"Shader load failed");};(function(){var ce=console.error;console.error=function(){try{var p=[];for(var i=0;i<arguments.length;i++){var a=arguments[i];p.push(a instanceof Error?(a.message||String(a)):String(a));}fsPost(p.join(" "));}catch(e){}return ce.apply(console,arguments);};})();window.addEventListener("shader-error",function(ev){var d=ev&&ev.detail;fsPost("Shader error: "+((d&&d.message)||"failed to apply"));});window.addEventListener("shader-applied",function(){try{parent.postMessage({type:"fs:applied"},"*");}catch(e){}});<\/script>');
+    // fsPost is RATE-LIMITED: a shader (or a wedged WebGPU backend) that logs
+    // once per frame would otherwise drive 60+ structured-clone postMessages a
+    // second into the top document, forever. Identical repeats inside a minute
+    // and anything past 20 messages a minute are dropped; sticky messages
+    // (the stage can never work) always get through.
+    L.push('<script>window.__fsPosted=false;(function(){var last="",lastAt=0,burst=0,burstAt=0;window.fsPost=function(m,sticky){try{var s=String(m).slice(0,2000),t=Date.now();if(!sticky){if(s===last&&t-lastAt<60000)return;if(t-burstAt>60000){burstAt=t;burst=0;}if(++burst>20)return;}last=s;lastAt=t;window.__fsPosted=true;parent.postMessage({type:"fs:error",message:s,sticky:!!sticky},"*");}catch(e){}};})();window.onerror=function(msg,url,line,col,err){if(/^Script error\\.?$/.test(String(msg||""))&&window.__fsPosted)return;fsPost((err&&err.stack)||msg||"Shader error");};window.onunhandledrejection=function(ev){var r=ev&&ev.reason;fsPost((r&&r.stack)||r||"Shader load failed");};(function(){var ce=console.error;console.error=function(){try{var p=[];for(var i=0;i<arguments.length;i++){var a=arguments[i];p.push(a instanceof Error?(a.message||String(a)):String(a));}fsPost(p.join(" "));}catch(e){}return ce.apply(console,arguments);};})();window.addEventListener("shader-error",function(ev){var d=ev&&ev.detail;fsPost("Shader error: "+((d&&d.message)||"failed to apply"));});window.addEventListener("shader-applied",function(){try{parent.postMessage({type:"fs:applied"},"*");}catch(e){}});<\/script>');
     // Desktop viewer: neutralize WebXR before A-Frame loads (r184 WebGPU XR init
     // can throw when navigator.xr is present).
     L.push('<script>try{Object.defineProperty(navigator,"xr",{value:undefined,configurable:true});}catch(e){}<\/script>');
+    // NB (checked 2026-08-01, do not "fix" this): the vendored bundle's
+    // anime.js 3.0.0 page-visibility handler calls `activeInstance[i].pause()`
+    // — an identifier declared NOWHERE in the bundle. It looks like every
+    // visibilitychange→hidden must throw a ReferenceError, which on a pedestal
+    // (the screen sleeps daily) would paint the error banner over the artwork.
+    // It does not: A-Frame's animation component builds its anime instance
+    // with autoplay:false and ticks it by hand, so anime's active-instances
+    // array is always empty and the buggy loop body never runs. Verified in a
+    // browser — hiding the page throws nothing. No shim needed.
 
     // ── Drop-anywhere forwarding ────────────────────────────────────────
     // This iframe fills the viewport, so its own document captures drag/drop
@@ -699,6 +1343,14 @@
     L.push('  addEventListener("dragover",function(e){e.preventDefault();try{if(e.dataTransfer)e.dataTransfer.dropEffect="copy";}catch(_){}var t=Date.now();if(t-lastBeat>250){lastBeat=t;toParent({type:"fs:drag",on:true});}});');
     L.push('  addEventListener("dragleave",function(e){e.preventDefault();if(--depth<=0){depth=0;toParent({type:"fs:drag",on:false});}});');
     L.push('  addEventListener("drop",function(e){e.preventDefault();depth=0;var f=e.dataTransfer&&e.dataTransfer.files?Array.prototype.slice.call(e.dataTransfer.files):[];toParent({type:"fs:drag",on:false});toParent({type:"fs:dropped",files:f});});');
+    // Pointer heartbeat: this iframe covers the viewport, so the parent never
+    // sees a mouse move over the 3D view — and in fullscreen that is exactly
+    // where the user reaches for the (faded-out) exit button. Capture phase,
+    // throttled to 4/s, and it carries no data beyond "something moved".
+    L.push('  var lastAct=0;');
+    L.push('  function act(down){var t=Date.now();if(!down&&t-lastAct<400)return;lastAct=t;toParent({type:"fs:activity",down:!!down});}');
+    L.push('  addEventListener("pointermove",function(){act(false);},{capture:true,passive:true});');
+    L.push('  addEventListener("pointerdown",function(){act(true);},{capture:true,passive:true});');
     L.push('})();');
     L.push('<\/script>');
 
@@ -717,15 +1369,22 @@
     L.push('<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:' + bg + ';}</style>');
     L.push('</head><body>');
 
-    // fit-bounds: recenter + rescale loaded OBJ/GLTF meshes. regen:true rebuilds
-    // normals + spherical UVs for the built-in OBJ primitives; regen:false
-    // preserves a dropped GLB's own data and only synthesizes UVs when missing.
+    // fit-bounds: recenter + rescale loaded OBJ/GLTF meshes by BAKING the
+    // normalization into the geometry attributes (not the Object3D), so
+    // positionGeometry reads the same +-0.8 every position-driven shader is
+    // tuned for. Measured in the entity's own frame, so an ancestor rotation
+    // cannot shrink the model. Twin of FIT_BOUNDS_SCRIPT in
+    // src/engine/tslToPreviewHTML.ts -- keep the two in lockstep (no sync
+    // plugin covers this file). regen:true rebuilds normals + spherical UVs
+    // for OBJ; regen:false preserves a dropped GLB's own data and only
+    // synthesizes what is missing.
     L.push('<script>');
     L.push('(function(){');
     L.push('  if(!window.AFRAME||AFRAME.components["fit-bounds"])return;');
     L.push('  function mergeByPosition(geom){var pos=geom.attributes.position;if(!pos)return geom;var oldIndex=geom.index,precision=1e4,lookup=Object.create(null),newPositions=[],remap=new Uint32Array(pos.count),nextIndex=0;for(var i=0;i<pos.count;i++){var x=pos.getX(i),y=pos.getY(i),z=pos.getZ(i);var key=Math.round(x*precision)+"_"+Math.round(y*precision)+"_"+Math.round(z*precision);var idx=lookup[key];if(idx===undefined){idx=nextIndex++;lookup[key]=idx;newPositions.push(x,y,z);}remap[i]=idx;}var indexCount=oldIndex?oldIndex.count:pos.count;var Arr=nextIndex<65535?Uint16Array:Uint32Array;var newIndex=new Arr(indexCount);if(oldIndex){for(var j=0;j<indexCount;j++)newIndex[j]=remap[oldIndex.getX(j)];}else{for(var k=0;k<indexCount;k++)newIndex[k]=remap[k];}var merged=new THREE.BufferGeometry();merged.setAttribute("position",new THREE.BufferAttribute(new Float32Array(newPositions),3));merged.setIndex(new THREE.BufferAttribute(newIndex,1));return merged;}');
     L.push('  function sphericalUVs(g,c){var pos=g.attributes.position;var uvs=new Float32Array(pos.count*2);var v=new THREE.Vector3(),TWO_PI=Math.PI*2;for(var i=0;i<pos.count;i++){v.fromBufferAttribute(pos,i).sub(c);var len=v.length();if(len>0)v.multiplyScalar(1/len);uvs[i*2]=Math.atan2(v.z,v.x)/TWO_PI+0.5;uvs[i*2+1]=Math.asin(Math.max(-1,Math.min(1,v.y)))/Math.PI+0.5;}g.setAttribute("uv",new THREE.BufferAttribute(uvs,2));}');
-    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var mesh=this.el.getObject3D("mesh");if(!mesh)return;var regen=this.data.regen;mesh.traverse(function(node){if(!node.isMesh||!node.geometry)return;var g=node.geometry,c=new THREE.Vector3();if(regen){g=mergeByPosition(node.geometry);g.computeVertexNormals();g.computeBoundingBox();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var s=0;s<pos.count;s+=step){var dot=(pos.getX(s)-c.x)*nrm.getX(s)+(pos.getY(s)-c.y)*nrm.getY(s)+(pos.getZ(s)-c.z)*nrm.getZ(s);if(dot<0)inward++;sampled++;}if(sampled>0&&inward*2>sampled){var idx=g.index;for(var t=0;t+2<idx.count;t+=3){var b=idx.getX(t+1);idx.setX(t+1,idx.getX(t+2));idx.setX(t+2,b);}idx.needsUpdate=true;g.computeVertexNormals();}sphericalUVs(g,c);node.geometry=g;}else if(!g.attributes.uv){g.computeBoundingBox();g.boundingBox.getCenter(c);sphericalUVs(g,c);}});mesh.updateMatrixWorld(true);var box=new THREE.Box3().setFromObject(mesh);if(box.isEmpty())return;var size=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(size);box.getCenter(center);var scale=this.data.size/(Math.max(size.x,size.y,size.z)||1);mesh.position.sub(center.multiplyScalar(scale));mesh.scale.setScalar(scale);}});');
+    L.push('  function flipWinding(g){var idx=g.index;if(!idx){var pos=g.attributes.position;if(!pos)return;var n=pos.count,Arr=n<65535?Uint16Array:Uint32Array,arr=new Arr(n);for(var i=0;i<n;i++)arr[i]=i;for(var t0=0;t0+2<n;t0+=3){var tmp=arr[t0+1];arr[t0+1]=arr[t0+2];arr[t0+2]=tmp;}g.setIndex(new THREE.BufferAttribute(arr,1));return;}for(var t=0;t+2<idx.count;t+=3){var b=idx.getX(t+1);idx.setX(t+1,idx.getX(t+2));idx.setX(t+2,b);}idx.needsUpdate=true;}');
+    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var root=this.el.getObject3D("mesh");if(!root)return;var regen=this.data.regen,target=this.data.size;root.updateMatrixWorld(true);var rootInv=new THREE.Matrix4().copy(root.matrixWorld).invert();var pre=new THREE.Matrix4().multiplyMatrices(root.matrix,rootInv);var entries=[],skinned=false;root.traverse(function(node){if(!node.isMesh||!node.geometry)return;if(node.isSkinnedMesh||node.isInstancedMesh){skinned=true;return;}entries.push({node:node,m:new THREE.Matrix4().multiplyMatrices(pre,node.matrixWorld)});});if(skinned){var wbox=new THREE.Box3().setFromObject(root);if(wbox.isEmpty())return;var wsize=new THREE.Vector3(),wcenter=new THREE.Vector3();wbox.getSize(wsize);wbox.getCenter(wcenter);var ws=target/(Math.max(wsize.x,wsize.y,wsize.z)||1);root.position.sub(wcenter.multiplyScalar(ws));root.scale.setScalar(ws);return;}if(!entries.length)return;var box=new THREE.Box3();for(var i=0;i<entries.length;i++){var g0=entries[i].node.geometry;if(!g0.boundingBox)g0.computeBoundingBox();if(g0.boundingBox)box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));}if(box.isEmpty())return;var ext=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(ext);box.getCenter(center);var s=target/(Math.max(ext.x,ext.y,ext.z)||1);var N=new THREE.Matrix4().makeScale(s,s,s).multiply(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));for(var e=0;e<entries.length;e++){var node=entries[e].node;var bake=new THREE.Matrix4().multiplyMatrices(N,entries[e].m);var g=node.geometry.clone();g.applyMatrix4(bake);if(bake.determinant()<0)flipWinding(g);if(regen){g=mergeByPosition(g);g.computeVertexNormals();g.computeBoundingBox();var c=new THREE.Vector3();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var sv=0;sv<pos.count;sv+=step){var dot=(pos.getX(sv)-c.x)*nrm.getX(sv)+(pos.getY(sv)-c.y)*nrm.getY(sv)+(pos.getZ(sv)-c.z)*nrm.getZ(sv);if(dot<0)inward++;sampled++;}if(sampled>0&&inward*2>sampled){flipWinding(g);g.computeVertexNormals();}sphericalUVs(g,c);}else{if(!g.attributes.normal&&g.attributes.position)g.computeVertexNormals();if(!g.attributes.uv&&g.attributes.position){g.computeBoundingBox();var c0=new THREE.Vector3();g.boundingBox.getCenter(c0);sphericalUVs(g,c0);}}node.geometry=g;}root.traverse(function(node){node.position.set(0,0,0);node.quaternion.set(0,0,0,1);node.scale.set(1,1,1);});root.updateMatrixWorld(true);}});');
     L.push('})();');
     L.push('<\/script>');
 
@@ -784,13 +1443,72 @@
     // repaints live regardless of the component's runtime update behavior.
     L.push('  function setBackground(color){var s=document.querySelector("a-scene");if(s){s.setAttribute("background","color: "+color);try{var col=new THREE.Color(color);if(s.object3D)s.object3D.background=col;if(s.renderer&&s.renderer.setClearColor)s.renderer.setClearColor(col,1);}catch(e){}}try{document.body.style.background=color;}catch(e){}}');
     L.push('  function resetCamera(){var oc=camEl&&camEl.components&&camEl.components["orbit-controls"];if(oc&&oc.controls&&typeof oc.controls.reset==="function")oc.controls.reset();}');
-    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;}});');
+    // saveView pins the CURRENT framing as what reset() returns to, so the
+    // idle return in fullscreen restores the framing the exhibitor chose —
+    // not the boot camera.
+    L.push('  function saveView(){var oc=camEl&&camEl.components&&camEl.components["orbit-controls"];if(oc&&oc.controls&&typeof oc.controls.saveState==="function"){try{oc.controls.saveState();}catch(e){}}}');
+    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;case"fs:save-view":saveView();break;}});');
     // kickResize: a fresh WebGPU boot can record a stale/zero canvas size,
     // leaving the scene unpainted until renderer.setSize re-runs (the "blank
     // until the window is resized" bug) — re-run A-Frame's resize path a few
     // times while init settles; no-ops when the size is already right.
     L.push('  function kickResize(){try{var s=document.querySelector("a-scene");if(s&&typeof s.resize==="function")s.resize();else window.dispatchEvent(new Event("resize"));}catch(e){}}');
-    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");entity.addEventListener("model-error",function(){fsPost("Failed to load the 3D model: the file could not be parsed (corrupt, or a DRACO/meshopt-compressed glTF - not supported).");});toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);}');
+    // ── Long-run keepalive ──────────────────────────────────────────────
+    // Three things a pedestal needs and a browser tab does not normally get:
+    //  1. `time` is a float32 uniform holding seconds since boot. Its
+    //     resolution decays as it grows — 7.8 ms after a day, 62 ms after a
+    //     week, 250 ms after a month, by which point every animation is a
+    //     slideshow. So it is folded back down periodically, and the fold is
+    //     2π·2520 seconds. The 2520 is the point: it is LCM(1..10), so
+    //     `sin(k·time)` is continuous across the fold for every speed k = p/q
+    //     whose denominator divides 2520 — which is every speed anyone
+    //     actually types (0.05, 0.1, 0.125, 0.2, 0.25, 0.5, 0.7, 1.25, 1.5,
+    //     2, 3, 5, 10 …). Only an irrational or awkward speed (0.33, π), or
+    //     noise driven by time, still steps; no fold can be seamless for
+    //     every k, and zeroing would step ALL of them.
+    //     The ~4.4 h period also keeps the float32 quantum under 1 ms — a
+    //     shader's own `time.mul(50)` multiplies that step into visible
+    //     strobing long before the raw number looks alarming.
+    //  2. WebGPU device loss (driver reset, GPU process crash) and WebGL
+    //     context loss are TERMINAL — three never repaints, and a frozen
+    //     shader looks exactly like a still artwork. Both are reported so the
+    //     parent can rebuild this whole document. three's own onDeviceLost is
+    //     NOT enough: it returns early on reason==="destroyed" (a
+    //     browser-initiated reclaim), so the raw device.lost promise is hooked
+    //     as well.
+    //  3. A heartbeat carrying a render counter, so a silent stall (no throw,
+    //     no loss event) is still detectable upstairs. Best-effort by nature —
+    //     these counters prove the loop ran, not that pixels landed.
+    L.push('  var TWO_PI=Math.PI*2,TIME_WRAP=TWO_PI*2520,BEAT_MS=' + STAGE_BEAT_MS + ',beatTimer=null,rafCount=0,wrapBase=Date.now();');
+    L.push('  function stageRenderer(){try{var s=document.querySelector("a-scene");return (s&&s.renderer)||null;}catch(e){return null;}}');
+    L.push('  function nodeFrame(){try{var r=stageRenderer();return (r&&r._nodes&&r._nodes.nodeFrame)||null;}catch(e){return null;}}');
+    // info.render.calls is cumulative (reset() only clears the per-frame
+    // counters), so it advances once per render() — a closer proxy for "the
+    // renderer is working" than nodeFrame.frameId, which the animation loop
+    // bumps before it draws anything.
+    L.push('  function renderCount(){try{var r=stageRenderer(),c=r&&r.info&&r.info.render&&r.info.render.calls;if(typeof c==="number")return c;}catch(e){}var nf=nodeFrame();return (nf&&typeof nf.frameId==="number")?nf.frameId:rafCount;}');
+    L.push('  function watchRendererLoss(){var r=stageRenderer();if(!r||r.__fsLossWatched)return;r.__fsLossWatched=true;');
+    L.push('    function dead(why){toParent({type:"fs:stage-dead",reason:String(why||"device lost").slice(0,80)});}');
+    L.push('    try{var prev=r.onDeviceLost;r.onDeviceLost=function(info){try{if(typeof prev==="function")prev.call(r,info);}catch(e){}dead((info&&info.reason)||"device lost");};}catch(e){}');
+    L.push('    try{var dev=r.backend&&r.backend.device;if(dev&&dev.lost&&dev.lost.then)dev.lost.then(function(info){dead("device "+((info&&info.reason)||"lost"));},function(){});}catch(e){}');
+    L.push('    try{var c=r.domElement;if(c&&c.addEventListener)c.addEventListener("webglcontextlost",function(ev){try{ev.preventDefault();}catch(e){}dead("webgl context lost");},false);}catch(e){}}');
+    // Rebase the shader clock on return from hidden. NodeFrame derives
+    // deltaTime from performance.now() and rAF is suspended while the page is
+    // hidden, so the first frame back would otherwise dump the WHOLE gap — a
+    // night's sleep, hours of it — into `time` in one step.
+    L.push('  document.addEventListener("visibilitychange",function(){if(document.visibilityState!=="visible")return;var nf=nodeFrame();if(nf)nf.lastTime=performance.now();});');
+    L.push('  (function raf(){rafCount++;requestAnimationFrame(raf);})();');
+    // Modulo, not zero: it subtracts a whole number of TIME_WRAPs, so the fold
+    // stays 2π-aligned however far behind the beat has fallen. wrapNeeded is
+    // only the fallback for a build where the node frame is unreachable, and
+    // it rebases as it fires so it cannot latch on and burn the restart quota.
+    // Its clock is wall time, never a frame count — a 120 Hz panel would make
+    // a frames/60 estimate wrong by 2×.
+    L.push('  function beat(){watchRendererLoss();var nf=nodeFrame(),wrap=false;');
+    L.push('    if(nf&&typeof nf.time==="number"){if(nf.time>TIME_WRAP)nf.time=nf.time%TIME_WRAP;}');
+    L.push('    else if((Date.now()-wrapBase)/1000>TIME_WRAP){wrap=true;wrapBase=Date.now();}');
+    L.push('    toParent({type:"fs:beat",frameId:renderCount(),wrapNeeded:wrap});}');
+    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");entity.addEventListener("model-error",function(){fsPost("Failed to load the 3D model: the file could not be parsed (corrupt, or a DRACO/meshopt-compressed glTF - not supported).");});toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);if(!beatTimer){beat();beatTimer=setInterval(beat,BEAT_MS);}}');
     L.push('  if(!window.AFRAME){toParent({type:"fs:error",message:"A-Frame failed to initialize"});return;}');
     // The scene arrives via the pre-flight injector above — wire boot to it
     // (the helper also handles the already-booted case).
@@ -802,7 +1520,22 @@
     return L.join("\n");
   }
 
+  renderTitle();
+  // onFullscreenChange would CLEAR a remembered presentation mode (we boot
+  // windowed by definition), so seed the button from the real window state and
+  // apply the remembered mode separately.
+  fsBtn.textContent = fsElement() ? "⤡" : "⛶";
+  fsPanelBtn.textContent = fsElement() ? "Exit fullscreen" : "Fullscreen";
+  syncPresentClass();
+  // Ask at boot so a pedestal that came back up presenting keeps the display
+  // awake with nobody there to press anything. If the UA refuses (permission,
+  // or a build that wants transient activation), the watchdog's 5 s tick keeps
+  // asking, so it lands as soon as it can rather than never.
+  requestWakeLock();
+  armViewReturn();
+  lastRestartAt = Date.now();   // the watchdog's boot deadline starts here
   stage.setAttribute("srcdoc", buildStageDoc());
+  restoreSession();      // async; a drop that lands first always wins
 })();
 </script>
 </body>

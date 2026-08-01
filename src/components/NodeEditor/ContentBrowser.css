@@ -218,6 +218,24 @@
   zoom: 0.67;
 }
 
+/* Preview-bearing tiles (textures, presets) are narrower than a saved-group
+   tile: the card hugs its preview image, and a preview sized to the full 140px
+   made these the TALLEST tiles in the library, which drags the whole strip's
+   zoom down (every tile is scaled to fit the tallest one). At this width they
+   sit just under the node cards, so they no longer drive the scale. */
+.saved-group-card--preview {
+  width: 108px;
+}
+
+/* Reserve BOTH title lines on preview tiles, whether or not the name uses them.
+   Without this the 2-line clamp made tile height depend on name length, so the
+   strip ended up ragged along the bottom — previews and node counts at
+   different heights across neighbouring tiles. 2.4em = 2 x the 1.2 line-height
+   set on .saved-group-card__title. */
+.saved-group-card--preview .saved-group-card__title {
+  min-height: 2.4em;
+}
+
 .saved-group-card:active {
   cursor: grabbing;
 }
@@ -238,8 +256,11 @@
 .saved-group-card__header {
   display: flex;
   align-items: center;
-  height: 22px;
-  padding: 0 8px;
+  /* Grows to fit a wrapped title (max 2 lines) instead of ellipsing it on one:
+     preset names like "Stripes (Sine Threshold)" are too long for one line at
+     this width, and an ellipsis hid which variant a tile actually was. */
+  min-height: 22px;
+  padding: 2px 8px;
 }
 
 .saved-group-card__title {
@@ -247,14 +268,28 @@
   font-weight: 600;
   color: #ffffff;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
-  white-space: nowrap;
+  /* Wrap to at most 2 lines, then ellipsis. -webkit-line-clamp is the only
+     cross-browser way to cap LINES (not height) and is supported everywhere
+     this app runs, including the WKWebView desktop shell. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
 }
 
 .saved-group-card__body {
-  padding: var(--space-2) var(--space-2);
+  /* Tight around the preview: just enough inset to keep the image off the
+     frame's rounded corners. The image itself fills the remaining width. */
+  padding: var(--space-1);
   display: flex;
+  /* Column: the texture/preset tiles stack a preview canvas over their caption.
+     As a row the caption sat BESIDE the canvas and was pushed out of the frame
+     (the caption's own `marginTop` already assumed a column). Saved-group tiles
+     carry only the caption, so the direction is a no-op for them. */
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   min-height: 40px;

@@ -4,7 +4,7 @@ import { graphToCode } from '@/engine/graphToCode';
 import { codeToGraph } from '@/engine/codeToGraph';
 import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { nodeCostPoints } from '@/utils/nodeCost';
+import { computeReachableCost } from '@/utils/nodeCost';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import type { AppNode } from '@/types';
@@ -287,53 +287,17 @@ export function useSyncEngine() {
   // Recalculate complexity (use ref to avoid double-run when updating output node cost)
   const lastCostRef = useRef(-1);
   useEffect(() => {
-    const outputNode = nodes.find((n) => n.data.registryType === 'output');
-
-    let total = 0;
-    if (outputNode) {
-      // Reverse-BFS from the output over an incoming-edge adjacency map built
-      // once (O(E)); an index pointer instead of Array.shift() keeps the walk
-      // O(V+E) rather than O(V² + V·E). This effect re-runs on every drag
-      // frame (nodes identity changes), so the cheaper traversal matters.
-      const incoming = new Map<string, string[]>();
-      for (const e of edges) {
-        const list = incoming.get(e.target);
-        if (list) list.push(e.source);
-        else incoming.set(e.target, [e.source]);
-      }
-      const visited = new Set<string>();
-      const queue = [outputNode.id];
-      for (let head = 0; head < queue.length; head++) {
-        const id = queue[head];
-        if (visited.has(id)) continue;
-        visited.add(id);
-        const sources = incoming.get(id);
-        if (sources) {
-          for (const src of sources) {
-            if (!visited.has(src)) queue.push(src);
-          }
-        }
-      }
-      for (const node of nodes) {
-        if (visited.has(node.id) && node.id !== outputNode.id) {
-          // Collapsed groups cache the sum of their members' costs — use that
-          // instead of the (zero) registry cost so the total stays stable.
-          if (node.type === 'group' && node.data.collapsed && node.data.cost) {
-            total += node.data.cost;
-          } else {
-            // Variadic arithmetic scales with operand count; everything else is
-            // its flat registry cost (see nodeCostPoints).
-            total += nodeCostPoints(node, edges);
-          }
-        }
-      }
-    }
+    // Reachable-cost BFS lives in nodeCost.ts (shared with the store's device
+    // selection, so activating a measured cost profile reprices the total even
+    // though it doesn't change nodes/edges). Reads the override-aware ACTIVE table.
+    const total = computeReachableCost(nodes, edges);
 
     if (total === lastCostRef.current) return;
     lastCostRef.current = total;
 
     // Collapse the `setTotalCost` write and the output-node cost write into a
     // single setState so we don't re-enter this effect twice for one change.
+    const outputNode = nodes.find((n) => n.data.registryType === 'output');
     const needsOutputUpdate = !!(outputNode && outputNode.data.cost !== total);
     useAppStore.setState((state) => ({
       totalCost: total,

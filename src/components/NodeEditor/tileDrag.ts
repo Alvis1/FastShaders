@@ -20,7 +20,8 @@ import type { KeyboardEvent } from 'react';
 export type TilePayload =
   | { kind: 'node'; nodeType: string }
   | { kind: 'savedGroup'; id: string }
-  | { kind: 'texture'; id: string };
+  | { kind: 'texture'; id: string }
+  | { kind: 'preset'; id: string };
 
 export interface TileDropEventDetail {
   payload: TilePayload;

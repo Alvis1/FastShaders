@@ -20,15 +20,18 @@ import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { autoLayout } from '@/engine/layoutEngine';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
+import { getBuiltinPresets } from '@/registry/builtinPresets';
 import complexityData from '@/registry/complexity.json';
 import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges } from '@/utils/edgeUtils';
 import { normalizeChainOperands } from '@/utils/chainOperands';
-import { nodeCostPoints } from '@/utils/nodeCost';
+import { nodeCostPoints, setCostOverrides, computeReachableCost, sanitizeCostMap } from '@/utils/nodeCost';
+import { type ParsedCostFile, type CostProfile, profileFromParsed, sanitizeCostMeta } from '@/utils/costOverride';
 import { makeDataNodeData } from '@/utils/dataNode';
 import { makeImageNodeData, sanitizeImageNodes } from '@/utils/imageNode';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { sanitizeDrawings, MAX_STROKES, MAX_TOTAL_POINTS, type DrawStroke } from '@/utils/drawings';
 import type { PreviewMesh } from '@/utils/previewMesh';
+import { savePreviewMeshToCache } from '@/utils/previewMeshCache';
 import { encodeImageFile } from '@/utils/imageImport';
 import { transposeCsv, type ParsedCsv } from '@/utils/csvParser';
 
@@ -239,6 +242,40 @@ function loadRatio(key: string, fallback: number, min = 0.25, max = 0.75): numbe
 function loadString(key: string, fallback: string): string {
   try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
 }
+
+function loadCostProfiles(): CostProfile[] {
+  try {
+    const raw = localStorage.getItem('fs:costProfiles');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object' && typeof (p as Record<string, unknown>).id === 'string')
+      .map((p) => {
+        // Adversarial: a tampered fs:costProfiles must not inject unknown keys,
+        // junk budgets, or a non-array meta.reasons (which would crash the
+        // CostBar's reasons.join). sanitizeCostMap + sanitizeCostMeta + the
+        // Number guards are the full trust boundary for a persisted profile.
+        const costs = sanitizeCostMap((p as { costs?: unknown }).costs);
+        const maxPoints = Number((p as { maxPoints?: unknown }).maxPoints);
+        const maxTextureDim = Number((p as { maxTextureDim?: unknown }).maxTextureDim);
+        return {
+          id: String((p as { id: string }).id),
+          label: typeof (p as { label?: unknown }).label === 'string' ? String((p as { label: string }).label) : 'measured',
+          maxPoints: Number.isFinite(maxPoints) && maxPoints > 0 ? maxPoints : 200,
+          maxTextureDim: Number.isFinite(maxTextureDim) && maxTextureDim > 0 ? maxTextureDim : 2048,
+          costs,
+          meta: sanitizeCostMeta((p as { meta?: unknown }).meta),
+        } as CostProfile;
+      })
+      .filter((p) => Object.keys(p.costs).length > 0);
+  } catch { return []; }
+}
+const bootCostProfiles = loadCostProfiles();
+const bootSelectedId = loadString('fs:headsetId', 'quest3');
+// Apply the active profile's measured costs to the nodeCost module BEFORE React
+// mounts, so the first CostBar/badge render already reflects the selected device.
+setCostOverrides(bootCostProfiles.find((p) => p.id === bootSelectedId)?.costs ?? null);
 
 /**
  * Per-theme node-editor canvas defaults. The canvas backdrop is a user
@@ -457,6 +494,35 @@ export function deviceMaxTextureDim(headsetId: string): number {
   return (VR_HEADSETS.find((h) => h.id === headsetId) ?? VR_HEADSETS[0]).maxTextureDim;
 }
 
+/**
+ * Resolve the active device's label + points budget from a selection id that
+ * may be either a built-in headset id OR a measured cost-profile id. Shared by
+ * the CostBar and the Output-node settings so both show the same budget when a
+ * measured profile is selected. Unknown ids fall back to the first headset.
+ */
+export function resolveDeviceBudget(
+  id: string,
+  profiles: { id: string; label: string; maxPoints: number }[],
+): { label: string; maxPoints: number; isProfile: boolean } {
+  const p = profiles.find((x) => x.id === id);
+  if (p) return { label: p.label, maxPoints: p.maxPoints, isProfile: true };
+  const h = VR_HEADSETS.find((x) => x.id === id) ?? VR_HEADSETS[0];
+  return { label: h.label, maxPoints: h.maxPoints, isProfile: false };
+}
+
+/**
+ * Image-downscale texture cap for the active device — a measured profile carries
+ * the cap it inherited at import, otherwise the headset's `maxTextureDim`. Keeps
+ * the texture cap consistent with the selection when a cost profile is active
+ * (selecting a profile must not silently loosen a stricter headset's cap).
+ */
+export function resolveDeviceTextureDim(
+  id: string,
+  profiles: { id: string; maxTextureDim: number }[],
+): number {
+  return profiles.find((x) => x.id === id)?.maxTextureDim ?? deviceMaxTextureDim(id);
+}
+
 interface AppState {
   // Graph
   nodes: AppNode[];
@@ -508,6 +574,14 @@ interface AppState {
   // Cost color poles
   costColorLow: string;
   costColorHigh: string;
+
+  // Measured cost profiles (dropped benchmark tables). Listed in the
+  // performance-device dropdown alongside VR_HEADSETS; the active one (selected
+  // via selectedHeadsetId, which may hold a profile id) applies its costs over
+  // complexity.json AND its budget. `costVersion` bumps whenever the active
+  // table changes so cost readers (badges) re-render.
+  costProfiles: CostProfile[];
+  costVersion: number;
 
   // Node editor background color (canvas backdrop). `nodeEditorBgColor` is the
   // EFFECTIVE value for the active theme (what the canvas + edge-contrast read);
@@ -590,6 +664,8 @@ interface AppState {
 
   // Complexity actions
   setTotalCost: (cost: number) => void;
+  importCostProfile: (parsed: ParsedCostFile) => void;
+  deleteCostProfile: (id: string) => void;
 
   // Sync actions
   setSyncInProgress: (v: boolean) => void;
@@ -636,8 +712,14 @@ interface AppState {
 
   // Shader name + headset actions
   setShaderName: (name: string) => void;
-  /** Load/replace/clear the custom preview mesh (session-only, no history). */
-  setPreviewMesh: (mesh: PreviewMesh | null) => void;
+  /**
+   * Load/replace/clear the custom preview mesh — never history, autosave, or
+   * the project embed. The bytes ARE mirrored into an IndexedDB cache so the
+   * mesh survives a reload (utils/previewMeshCache.ts); pass
+   * `{ persist: false }` from the restore path itself, which would otherwise
+   * write the bytes it just read straight back.
+   */
+  setPreviewMesh: (mesh: PreviewMesh | null, opts?: { persist?: boolean }) => void;
   setSelectedHeadsetId: (id: string) => void;
 
   // Node variable name actions
@@ -688,6 +770,8 @@ interface AppState {
   instantiateSavedGroup: (savedId: string, position: { x: number; y: number }) => void;
   /** Drop a built-in texture group onto the canvas at `position` (flow coords). */
   instantiateBuiltinTexture: (textureId: string, position: { x: number; y: number }) => void;
+  /** Drop a built-in preset group onto the canvas at `position` (flow coords). */
+  instantiateBuiltinPreset: (presetId: string, position: { x: number; y: number }) => void;
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
@@ -714,10 +798,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // the real bound during drags; this is the persistence-level safety net).
   rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6, 0.01, 0.75),
   shaderName: loadString('fs:shaderName', 'My Shader'),
-  selectedHeadsetId: loadString('fs:headsetId', 'quest3'),
+  selectedHeadsetId: bootSelectedId,
   nodeVarNames: {},
   costColorLow: loadString('fs:costColorLow', '#8BC34A'),
   costColorHigh: loadString('fs:costColorHigh', '#FF5722'),
+  costProfiles: bootCostProfiles,
+  costVersion: 0,
   nodeEditorBgColorLight: loadString('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
   nodeEditorBgColorDark: loadString('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK),
   // Effective canvas backdrop = the active theme's slot.
@@ -913,6 +999,32 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setTotalCost: (cost) => set({ totalCost: cost }),
 
+  importCostProfile: (parsed) => {
+    // Budget for the new profile = the currently-active device's budget, so the
+    // bar's scale doesn't jump on import; the meaningful change is the repriced
+    // table. Re-importing the same run replaces its entry (stable id).
+    const { costProfiles, selectedHeadsetId } = get();
+    const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles);
+    const maxTextureDim = resolveDeviceTextureDim(selectedHeadsetId, costProfiles);
+    const profile = profileFromParsed(parsed, maxPoints, maxTextureDim);
+    const nextProfiles = [...costProfiles.filter((p) => p.id !== profile.id), profile];
+    try { localStorage.setItem('fs:costProfiles', JSON.stringify(nextProfiles)); } catch { /* quota */ }
+    // Persist selection + activate: set the list first so setSelectedHeadsetId
+    // can resolve the new profile, then select it (applies costs + recompute).
+    set({ costProfiles: nextProfiles });
+    get().setSelectedHeadsetId(profile.id);
+  },
+
+  deleteCostProfile: (id) => {
+    const { costProfiles, selectedHeadsetId } = get();
+    const nextProfiles = costProfiles.filter((p) => p.id !== id);
+    try { localStorage.setItem('fs:costProfiles', JSON.stringify(nextProfiles)); } catch { /* */ }
+    set({ costProfiles: nextProfiles });
+    // If the removed profile was active, fall back to the default headset — this
+    // clears the override (base costs) and recomputes via setSelectedHeadsetId.
+    if (selectedHeadsetId === id) get().setSelectedHeadsetId(VR_HEADSETS[0].id);
+  },
+
   setSyncInProgress: (v) => set({ syncInProgress: v }),
 
   coalescingHistory: false,
@@ -1055,7 +1167,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
     // Re-run the import with the soft limits off (hard ceilings still apply).
     // Still honour the device cap as the dimension floor (see encodeImageFile).
-    void encodeImageFile(file, true, deviceMaxTextureDim(get().selectedHeadsetId)).then((res) => {
+    void encodeImageFile(file, true, resolveDeviceTextureDim(get().selectedHeadsetId, get().costProfiles)).then((res) => {
       if (!res.ok) {
         window.alert(`Could not load "${file.name}" as an image.`);
         return;
@@ -1094,11 +1206,37 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ shaderName: name });
   },
 
-  setPreviewMesh: (mesh) => set({ previewMesh: mesh }),
+  setPreviewMesh: (mesh, opts) => {
+    set({ previewMesh: mesh });
+    // Fire-and-forget: the cache is a convenience, so a quota/private-mode
+    // failure must never make the drop itself fail. savePreviewMeshToCache
+    // resolves on every error path rather than rejecting.
+    if (opts?.persist !== false) void savePreviewMeshToCache(mesh);
+  },
 
   setSelectedHeadsetId: (id) => {
+    // Selecting a device may be a measured cost profile (its id) or a built-in
+    // headset — apply the matching cost table (profile costs, else base) and
+    // recompute the total + Output-node cost, bumping costVersion so badges
+    // repaint. Ignore an id that resolves to NEITHER (e.g. a foreign `cp:` id
+    // embedded in an imported project the user doesn't have) — persisting and
+    // applying it would silently clobber the user's real device selection with a
+    // dangling phantom. Keeping the current selection is the correct fallback.
+    const { costProfiles, nodes, edges } = get();
+    const isKnown = VR_HEADSETS.some((h) => h.id === id) || costProfiles.some((p) => p.id === id);
+    if (!isKnown) return;
     try { localStorage.setItem('fs:headsetId', id); } catch { /* */ }
-    set({ selectedHeadsetId: id });
+    setCostOverrides(costProfiles.find((p) => p.id === id)?.costs ?? null);
+    const total = computeReachableCost(nodes, edges);
+    const outputNode = nodes.find((n) => n.data.registryType === 'output');
+    set((state) => ({
+      selectedHeadsetId: id,
+      costVersion: state.costVersion + 1,
+      totalCost: total,
+      ...(outputNode && outputNode.data.cost !== total
+        ? { nodes: state.nodes.map((n) => (n.id === outputNode.id ? { ...n, data: { ...n.data, cost: total } } : n)) as AppNode[] }
+        : {}),
+    }));
   },
 
   setNodeVarNames: (names) => set({ nodeVarNames: names }),
@@ -1146,9 +1284,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   groupSelection: (nodeIds) => {
     if (nodeIds.length < 2) return null;
     const state = get();
-    // Only group nodes that exist and are not already groups/notes themselves.
+    // Only group nodes that exist and are not already groups themselves.
+    // Notes ARE groupable: a note is usually the label for the very cluster
+    // being grouped, so leaving it behind stranded the annotation outside the
+    // frame it describes. It has no shader semantics either way — graphToCode
+    // ignores it exactly like it ignores the group container.
     const members = state.nodes.filter(
-      (n) => nodeIds.includes(n.id) && n.type !== 'group' && n.type !== 'note',
+      (n) => nodeIds.includes(n.id) && n.type !== 'group',
     );
     if (members.length < 2) return null;
 
@@ -1172,6 +1314,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
     const PADDING = 24;
     const HEADER_H = 22;
+    /**
+     * Extra room above the topmost member, on top of PADDING.
+     *
+     * A member's cost badge is absolutely positioned at `top: -14px` and rides
+     * the card's cost-scale transform (up to 1.35x, so ~19px above the card).
+     * With only PADDING between the header and the card, a costly node's badge
+     * sat flush against the header bar — the number and the group title read as
+     * one collided row. This buys the badge its own clear band.
+     */
+    const BADGE_CLEARANCE = 14;
+    const TOP_PADDING = PADDING + BADGE_CLEARANCE;
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const m of members) {
@@ -1183,9 +1336,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
 
     const groupX = minX - PADDING;
-    const groupY = minY - PADDING - HEADER_H;
+    const groupY = minY - TOP_PADDING - HEADER_H;
     const groupW = (maxX - minX) + PADDING * 2;
-    const groupH = (maxY - minY) + PADDING * 2 + HEADER_H;
+    const groupH = (maxY - minY) + TOP_PADDING + PADDING + HEADER_H;
 
     const groupId = generateId();
     const groupNode: AppNode = {
@@ -1485,8 +1638,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     get().pushHistory();
     // Prepend so the note keeps a stable slot at the front of the array. Its
     // on-screen layer is driven by the note's CSS z-index (above the graph),
-    // not array order. Notes are never parents/children, so this can't break
-    // the group parent-before-child ordering invariant.
+    // not array order. A note CAN become a group child (dragged into a frame,
+    // or swept up by Ctrl+G), but never at birth — it is created parentless —
+    // and both paths that adopt one re-sort it after its parent, so the
+    // parent-before-child ordering invariant survives the prepend.
     set((state) => ({ nodes: [note, ...state.nodes], syncSource: 'graph', isUndoRedo: false }));
   },
 
@@ -1852,6 +2007,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const texture = getBuiltinTextures().find((t) => t.id === textureId);
     if (!texture || texture.nodes.length === 0) return;
     const { group, members, edges } = cloneGroupSnapshot(texture, position);
+    const state = get();
+    get().pushHistory();
+    set({
+      nodes: [group, ...state.nodes, ...members] as AppNode[],
+      edges: [...state.edges, ...edges] as AppEdge[],
+      syncSource: 'graph',
+      isUndoRedo: false,
+    });
+  },
+
+  instantiateBuiltinPreset: (presetId, position) => {
+    const preset = getBuiltinPresets().find((p) => p.id === presetId);
+    if (!preset || preset.nodes.length === 0) return;
+    const { group, members, edges } = cloneGroupSnapshot(preset, position);
     const state = get();
     get().pushHistory();
     set({

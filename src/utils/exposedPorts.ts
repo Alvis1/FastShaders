@@ -18,9 +18,22 @@ import { removeEdgesForPort } from '@/utils/edgeUtils';
 export const OUTPUT_DEFAULT_EXPOSED = ['color', 'roughness', 'position'];
 
 /** Nodes whose optional parameter sockets follow the opt-in exposedPorts
- *  rules (everything else always shows its registry ports). */
+ *  rules (everything else always shows its registry ports).
+ *
+ *  `time` is here for its `speed` multiplier: the Time node is otherwise a
+ *  plain zero-input source, and its speed must stay a hidden-by-default param
+ *  — the parser auto-creates a Time node for a bare `time` identifier ONLY
+ *  while the def declares no registry inputs (see ensureBareInputNode), so
+ *  `speed` lives in defaultValues and surfaces as a socket exactly the way the
+ *  noise nodes' `pos`/`scale` do. */
 export function usesExposedPorts(def: NodeDefinition | undefined): boolean {
-  return !!def && (def.category === 'noise' || def.type === 'output' || def.type === 'imageNode');
+  return (
+    !!def &&
+    (def.category === 'noise' ||
+      def.type === 'output' ||
+      def.type === 'imageNode' ||
+      def.type === 'time')
+  );
 }
 
 /** The node's effective exposed list, resolving the Output node's implicit

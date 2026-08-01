@@ -10,11 +10,10 @@
   overflow: visible;
 }
 
-/* Standard selection highlight (see NodeBase.css): one category-colored
-   outline, no shadow ring, no transition. */
+/* Standard selection highlight (see NodeBase.css): one FILLED category-colored
+   band, no transition. Re-states --shadow-node because box-shadow replaces. */
 .output-node--selected {
-  outline: 2px solid var(--cat-output);
-  outline-offset: 2px;
+  box-shadow: 0 0 0 var(--node-selection-width) var(--cat-output), var(--shadow-node);
 }
 
 /* Main header */

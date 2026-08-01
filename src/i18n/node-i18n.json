@@ -11,6 +11,7 @@
     "cameraNear": "Kameras tuvā plakne",
     "cameraFar": "Kameras tālā plakne",
     "normalLocal": "Normāle",
+    "normalWorld": "Normāle (pasaules)",
     "tangentLocal": "Pieskare",
     "time": "Laiks",
     "screenUV": "Ekrāna UV",

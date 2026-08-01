@@ -8,9 +8,9 @@
   overflow: hidden;
 }
 
+/* Same FILLED selection band as every other node shell (see NodeBase.css). */
 .note-node--selected {
-  outline: 2px solid var(--border-focus);
-  outline-offset: 1px;
+  box-shadow: 0 0 0 var(--node-selection-width) var(--border-focus), var(--shadow-node);
 }
 
 /* Colored header bar — the only drag handle (dragHandle on the node). */

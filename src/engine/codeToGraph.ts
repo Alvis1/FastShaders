@@ -62,11 +62,37 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // ReturnStatement / `output =` or by the no-output fallback below).
   let pendingDiscardArg: t.Node | undefined;
 
+  /**
+   * Undo the scalar→vec3 widening graphToCode applies to a vec3-typed output
+   * channel (`return vec3(noise1)`), so the round trip lands back on the plain
+   * Noise→Color edge instead of growing a Vec3 node whose y/z default to 0 —
+   * which would re-emit `vec3(noise1, 0, 0)` and turn a grey ramp red.
+   *
+   * Unambiguous: graphToCode emits a real Vec3 NODE with all three arguments
+   * (`vec3(a, 0, 0)`), never one, so a single-argument vec3 in a channel
+   * position is always the coercion. Restricted to an identifier/member
+   * argument — the exact shape codegen produces — so a hand-written literal
+   * splat like `vec3(0.5)` keeps whatever it did before.
+   */
+  const unwrapScalarWiden = (arg: t.Node): t.Node => {
+    if (
+      t.isCallExpression(arg) &&
+      t.isIdentifier(arg.callee) &&
+      arg.callee.name === 'vec3' &&
+      arg.arguments.length === 1 &&
+      (t.isIdentifier(arg.arguments[0]) || t.isMemberExpression(arg.arguments[0]))
+    ) {
+      return arg.arguments[0];
+    }
+    return arg;
+  };
+
   // Build the OutputNode and wire its channels from a return/output expression.
   // Shared between `return X` (FastShaders canonical form) and `output = X`
   // (three.js TSL editor compatible form).
-  const buildOutputFromExpr = (arg: t.Node): void => {
+  const buildOutputFromExpr = (rawArg: t.Node): void => {
     if (hasOutput) return;
+    const arg = unwrapScalarWiden(rawArg);
 
     const outputDef = NODE_REGISTRY.get('output');
     if (!outputDef) return;
@@ -77,9 +103,12 @@ export function codeToGraph(code: string): CodeToGraphResult {
 
     // Multi-channel: { color: x, position: y, ... }
     if (t.isObjectExpression(arg)) {
-      for (const prop of arg.properties) {
-        if (!t.isObjectProperty(prop) || !t.isIdentifier(prop.key)) continue;
-        const channel = prop.key.name;
+      for (const rawProp of arg.properties) {
+        if (!t.isObjectProperty(rawProp) || !t.isIdentifier(rawProp.key)) continue;
+        const channel = rawProp.key.name;
+        // Same widening undo as the single-value form above — a multi-channel
+        // return carries `{ color: vec3(noise1), opacity: … }`.
+        const prop = { ...rawProp, value: unwrapScalarWiden(rawProp.value) } as t.ObjectProperty;
         if (t.isIdentifier(prop.value)) {
           const sourceId = varToNodeId.get(prop.value.name)
             ?? ensureBareInputNode(prop.value.name, rawNodes, varToNodeId);
@@ -279,9 +308,19 @@ function ensureBareInputNode(
   const def = TSL_FUNCTION_TO_DEF.get(name);
   if (!def) return undefined;
   // Only auto-create zero-arg input nodes (time, positionGeometry, uv, etc.).
-  // Anything that takes parameters or has default values must be declared
-  // explicitly so we don't guess at the wrong shape.
-  if (def.inputs.length > 0 || def.defaultValues) return undefined;
+  // Anything that takes parameters, or whose defaultValues are CONSTRUCTOR
+  // arguments (float(0.5), uniform(...)), must be declared explicitly so we
+  // don't guess at the wrong shape.
+  //
+  // The Time node is the one exception: its `speed` default is a MODIFIER, not
+  // a constructor argument, and a bare `time` identifier unambiguously means
+  // speed 1. Without this exception, adding defaultValues to the time def
+  // SILENTLY drops the Time node (and its edge) from `sin(time)`,
+  // `mul(time, 1/6)`, `add(positionLocal, time, normalLocal)` — no error, no
+  // warning. createNode seeds values from defaultValues, so the node created
+  // here correctly starts at speed 1.
+  if (def.inputs.length > 0) return undefined;
+  if (def.defaultValues && def.type !== 'time') return undefined;
   if (def.category !== 'input') return undefined;
   const nodeId = generateId();
   nodes.push(createNode(nodeId, def, name));
@@ -406,6 +445,18 @@ function processCall(
   if (funcName === 'mul' && callExpr.arguments.length === 2) {
     const uvNode = tryParseUVTiling(callExpr, varName, nodes, edges, varToNodeId);
     if (uvNode) return;
+  }
+
+  // Detect the Time-speed pattern `time.mul(<numeric literal>)` — the exact
+  // shape graphToCode emits for a Time node with speed !== 1.
+  if (
+    funcName === 'mul' &&
+    objectVarName === 'time' &&
+    !varToNodeId.has('time') &&
+    callExpr.arguments.length === 1 &&
+    tryParseTimeSpeed(callExpr, varName, nodes, edges, varToNodeId, varToHandle)
+  ) {
+    return;
   }
 
   // Detect append pattern: vec2(ref, ref) where at least one arg is a variable reference
@@ -684,6 +735,68 @@ function tryParseUVTiling(
 }
 
 /**
+ * Detect `time.mul(<numeric literal>)` — the exact shape graphToCode emits for a
+ * Time node whose `speed` multiplier is not 1 — and collapse it back into a
+ * single Time node carrying `values.speed`. Returns true if it matched.
+ *
+ * `speed` is also an opt-in input socket, so the multiplier may instead be a
+ * VARIABLE (`time.mul(speed1)`). That collapses too: the Time node gets an edge
+ * into its `speed` port and the port is exposed, mirroring how processNoiseCall
+ * wires a non-literal `scale`. Only a variable already bound to a node counts —
+ * an unknown identifier falls through to a real Multiply, which is what it is.
+ *
+ * Deliberately narrow. The caller has already checked that the receiver is the
+ * BARE `time` identifier (not a variable like `t` or `time1`), that `time` is
+ * not shadowed by a user declaration, and that there is exactly one argument.
+ * Here we additionally require a compile-time numeric constant. Together those
+ * guards mean we never eat a user's real Multiply node:
+ *   - `mul(time, 0.5)`   — the human idiom; pinned by codeToGraph.test.ts
+ *   - `mul(time1, 5)`    — the Tests/ corpus writes this ~51 times, usually with
+ *                          TWO muls sharing one time1, which a single Time node
+ *                          could not represent
+ *   - `t.mul(2)`         — variable receiver, not the bare identifier
+ *   - `mul(t, speed)`    — non-literal multiplier; builtinTextures' Static Noise
+ *                          and the time-using builtinPresets rely on this
+ *   - `time.mul(0.5, 2)` — arity, matching tryParseUVTiling's discipline
+ * `time.mul(0.5).mul(2)` collapses only its INNER call, leaving a real Multiply
+ * outside — semantically correct, and a shape graphToCode never emits.
+ */
+function tryParseTimeSpeed(
+  callExpr: t.CallExpression,
+  varName: string,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  varToNodeId: Map<string, string>,
+  varToHandle: Map<string, string>,
+): boolean {
+  const arg = callExpr.arguments[0];
+  const speed = foldNumericConstant(arg);
+  // A variable multiplier only collapses when it resolves to a real node.
+  const wiredFrom =
+    speed === undefined && t.isIdentifier(arg) ? varToNodeId.get(arg.name) : undefined;
+  if (speed === undefined && !wiredFrom) return false;
+  const timeDef = NODE_REGISTRY.get('time');
+  if (!timeDef) return false;
+
+  const nodeId = generateId();
+  const node = createNode(nodeId, timeDef, varName);
+  if (wiredFrom && t.isIdentifier(arg)) {
+    addEdge(edges, wiredFrom, varToHandle.get(arg.name) ?? 'out', nodeId, 'speed');
+    // The socket must be visible — an edge may never point at a hidden port.
+    (node.data as { exposedPorts?: string[] }).exposedPorts = ['speed'];
+  } else {
+    // createNode already seeded values with timeDef.defaultValues; merge on top.
+    setNodeValues(node, { speed: speed as number });
+  }
+  nodes.push(node);
+  // Map only the DECLARED var name — never 'time'. ensureBareInputNode caches
+  // under the bare name, so writing it here would alias two collapse sites with
+  // different speeds onto one node.
+  varToNodeId.set(varName, nodeId);
+  return true;
+}
+
+/**
  * Parse noise function calls: mx_worley_noise_float(posOrMul)
  * The first arg may be `positionGeometry`, a variable ref, or `mul(pos, scale)`.
  */
@@ -811,7 +924,11 @@ function extractLiteral(node: t.Node): string | number | undefined {
  * caller can degrade with a warning instead of silently dropping the argument.
  */
 function foldNumericConstant(node: t.Node): number | undefined {
-  if (t.isNumericLiteral(node)) return node.value;
+  // A bare literal can itself be non-finite — `1e999` parses to Infinity. The
+  // computed branches below already screen for this; without the same guard
+  // here, an Infinity would be STORED in node values, and the fs:graph autosave
+  // (JSON.stringify) rewrites it to `null`, which later coerces to a real 0.
+  if (t.isNumericLiteral(node)) return Number.isFinite(node.value) ? node.value : undefined;
   if (t.isUnaryExpression(node) && (node.operator === '-' || node.operator === '+')) {
     const v = foldNumericConstant(node.argument);
     if (v === undefined) return undefined;

@@ -1,16 +1,18 @@
 import { useState, useMemo, useRef, useCallback, useEffect, type RefObject } from 'react';
 import { CATEGORIES } from '@/registry/nodeCategories';
-import { getAllDefinitions } from '@/registry/nodeRegistry';
+import { getAllDefinitions, nodeMatchRank, NO_MATCH } from '@/registry/nodeRegistry';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
+import { getBuiltinPresets } from '@/registry/builtinPresets';
 import { NodePreviewCard } from './NodePreviewCard';
 import { SavedGroupCard } from './SavedGroupCard';
 import { TextureCard } from './TextureCard';
+import { PresetCard } from './PresetCard';
 import { setHtml5TileDrag, endHtml5TileDrag } from './tileDrag';
 import { useAppStore } from '@/store/useAppStore';
-import { readPersisted } from '@/hooks/usePersistedState';
+import { readPersisted, usePersistedState } from '@/hooks/usePersistedState';
 import { beginDragChrome } from '@/utils/dragChrome';
 import { setAssetBarHeight } from '@/utils/assetBarHeight';
-import { formatCategoryLabel, nodeSearchLV, t } from '@/i18n';
+import { formatCategoryLabel, t } from '@/i18n';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
 import complexityData from '@/registry/complexity.json';
@@ -18,7 +20,15 @@ import './ContentBrowser.css';
 
 // Exclude 'output' (the graph has at most one, not draggable from the palette)
 // and 'unknown' (the registry hides unknown defs, so the tab would always be empty).
-const displayCategories = CATEGORIES.filter((c) => c.id !== 'output' && c.id !== 'unknown');
+// The ready-made-asset tabs (Presets, Textures, Noise, DataViz) lead; the
+// building-block categories follow in their canonical CATEGORIES order.
+const ASSET_TABS_FIRST: NodeCategory[] = ['presets', 'texture', 'noise', 'dataviz'];
+const displayCategories = [
+  ...ASSET_TABS_FIRST.map((id) => CATEGORIES.find((c) => c.id === id)!),
+  ...CATEGORIES.filter(
+    (c) => !ASSET_TABS_FIRST.includes(c.id) && c.id !== 'output' && c.id !== 'unknown',
+  ),
+];
 const costs = complexityData.costs as Record<string, number>;
 
 /** Track overflow state of a horizontally scrollable element and provide scroll actions. */
@@ -122,9 +132,21 @@ const BAR_DEFAULT_SCALE = 1.35;
 const BAR_CANVAS_RESERVE = 120;
 /** Floor when the tabs row hasn't been measured yet (its own height). */
 const BAR_MIN_H = 28;
+/**
+ * Vertical chrome that shares the strip with a tile but is NOT part of the
+ * measured tile box: the strip's own padding-top (--space-1) + padding-bottom
+ * (--space-2), plus the tile's top margin (--space-2). All three sit INSIDE the
+ * zoomed element, so they scale with the tile and belong in the denominator.
+ *
+ * Leaving them out made the TALLEST tile overflow the strip by exactly this
+ * much at every bar height — which is what cut the node-count caption off the
+ * preset and texture tiles once their taller previews made them the tallest.
+ */
+const STRIP_CHROME_V = 4 + 8 + 8;
+
 /** Tile scale for a bar height, given the measured tabs row + tallest tile. */
 const zoomForHeight = (h: number, tabsH: number, tileH: number) =>
-  clampZoom((h - tabsH) / (tileH || TILE_BASE_FALLBACK_H));
+  clampZoom((h - tabsH) / ((tileH || TILE_BASE_FALLBACK_H) + STRIP_CHROME_V));
 
 // Module-scope (stable identity) per the readPersisted/usePersistedState
 // contract. validateCollapsed + validateZoom now exist ONLY to migrate the two
@@ -134,13 +156,28 @@ const validateZoom = (raw: string | null): number => {
   const v = parseFloat(raw ?? '');
   return Number.isFinite(v) ? clampZoom(v) : 1;
 };
+/** Valid asset-tab ids: the real categories plus the two pseudo-tabs. An
+ *  unknown/removed id (a category renamed between releases, a hand-edited
+ *  value) falls back to 'all' rather than selecting a tab that renders empty. */
+const BROWSER_TABS = new Set<string>([
+  'all', 'saved', ...CATEGORIES.map((c) => c.id),
+]);
+const validateBrowserTab = (raw: string | null): BrowserCategory =>
+  raw && BROWSER_TABS.has(raw) ? (raw as BrowserCategory) : 'all';
+
 const validateBarHeight = (raw: string | null): number | null => {
   const v = parseFloat(raw ?? '');
   return Number.isFinite(v) && v > 0 ? v : null;
 };
 
 export function ContentBrowser() {
-  const [activeCategory, setActiveCategory] = useState<BrowserCategory>('all');
+  // Persisted: reopening the app on the tab you left is the expected behaviour
+  // for a palette you return to constantly (same treatment the bar's height,
+  // canvas colour and language already get).
+  const [activeCategory, setActiveCategory] = usePersistedState<BrowserCategory>(
+    'fs:assetTab',
+    validateBrowserTab,
+  );
   const [search, setSearch] = useState('');
   // Bar height, persisted — the single source of truth for how big the bar AND
   // its tiles are. Only the read seed goes through the shared helper; the write
@@ -304,7 +341,7 @@ export function ContentBrowser() {
     const min = tabsRef.current?.offsetHeight || BAR_MIN_H;
     const availableH = rootRef.current?.parentElement?.clientHeight ?? window.innerHeight;
     const { tabsH: tb, tileH: tl } = metricsRef.current;
-    const max = Math.min(availableH - BAR_CANVAS_RESERVE, tb + tl * ZOOM_MAX);
+    const max = Math.min(availableH - BAR_CANVAS_RESERVE, tb + (tl + STRIP_CHROME_V) * ZOOM_MAX);
     return { min, max: Math.max(min, max) };
   }, []);
 
@@ -415,48 +452,92 @@ export function ContentBrowser() {
 
   const q = search.trim().toLowerCase();
 
-  const matchesDef = useCallback(
-    (d: NodeDefinition) =>
-      d.label.toLowerCase().includes(q) ||
-      d.type.toLowerCase().includes(q) ||
-      (d.description ?? '').toLowerCase().includes(q) ||
-      // Latvian label/description too, so a Latvian user can search in Latvian.
-      nodeSearchLV(d.type).includes(q),
+  // One shared match+rank rule with the Add-node menu (nodeRegistry.searchNodes),
+  // so the same query orders the same way on both surfaces — a node's NAME
+  // always outranks a node that merely mentions the query in its description.
+  const rankDefs = useCallback(
+    (defs: NodeDefinition[]) =>
+      defs
+        .map((d) => ({ d, rank: nodeMatchRank(d, q) }))
+        .filter((e) => e.rank !== NO_MATCH)
+        .sort((a, b) => a.rank - b.rank)
+        .map((e) => e.d),
     [q],
   );
 
   const filteredDefs = useMemo<NodeDefinition[]>(() => {
-    // saved/texture render their own tiles; defs unused there.
+    // saved/texture/presets render their own tiles; defs unused there.
     let defs: NodeDefinition[];
-    if (activeCategory === 'noise') {
-      defs = allDefs
-        .filter((d) => d.category === 'noise')
-        .sort((a, b) => (costs[a.type] ?? 50) - (costs[b.type] ?? 50));
-    } else if (activeCategory === 'all' || activeCategory === 'saved' || activeCategory === 'texture') {
+    if (
+      activeCategory === 'all' || activeCategory === 'saved' ||
+      activeCategory === 'texture' || activeCategory === 'presets'
+    ) {
       defs = allDefs;
     } else {
       defs = allDefs.filter((d) => d.category === activeCategory);
     }
+    // Cheapest first, everywhere — the strip reads as a difficulty/budget ramp,
+    // and the GPU price is the one number every node tile already shows. (The
+    // Noise tab was the only tab sorted this way; the rest kept registry order,
+    // which is authoring order and means nothing to a reader.) Sorting a copy
+    // keeps `allDefs`' identity stable for the other branches.
+    defs = [...defs].sort((a, b) => (costs[a.type] ?? 50) - (costs[b.type] ?? 50));
     if (!q) return defs;
-    const scoped = defs.filter(matchesDef);
+    const scoped = rankDefs(defs);
     // Fallback: if the active category has no matches, broaden to all node defs
     // so the user isn't left staring at an empty panel while typing.
-    if (scoped.length === 0 && activeCategory !== 'all') return allDefs.filter(matchesDef);
+    if (scoped.length === 0 && activeCategory !== 'all') return rankDefs(allDefs);
     return scoped;
-  }, [allDefs, activeCategory, q, matchesDef]);
+  }, [allDefs, activeCategory, q, rankDefs]);
 
   const filteredSavedGroups = useMemo(() => {
     if (!q) return savedGroups;
     return savedGroups.filter((g) => g.name.toLowerCase().includes(q));
   }, [savedGroups, q]);
 
+  /**
+   * Ready-made assets read simplest-first, by MEMBER COUNT rather than by the
+   * cost the node tiles sort on: an asset is a graph you are going to open and
+   * read, so "how much is in it" is what predicts the effort, and points can
+   * rank a 3-node voronoi above a 20-node arithmetic chain. `nodes` includes the
+   * group container, so the +1 is constant and doesn't affect the order. Name
+   * breaks ties so equal-sized assets keep a stable, non-arbitrary order.
+   */
+  const bySize = <T extends { nodes: { type?: string }[]; name: string }>(a: T, b: T) => {
+    // Count only shader nodes — the frame and the explainer note are chrome.
+    const n = (x: T) => x.nodes.filter((k) => k.type !== 'group' && k.type !== 'note').length;
+    return n(a) - n(b) || a.name.localeCompare(b.name);
+  };
+
   const filteredTextures = useMemo(() => {
-    const all = getBuiltinTextures();
+    const all = [...getBuiltinTextures()].sort(bySize);
     if (!q) return all;
     return all.filter(
-      (t) => t.name.toLowerCase().includes(q) || t.id.toLowerCase().includes(q),
+      (t) =>
+        t.name.toLowerCase().includes(q) ||
+        t.id.toLowerCase().includes(q) ||
+        t.description.toLowerCase().includes(q),
     );
   }, [q]);
+
+  const filteredPresets = useMemo(() => {
+    // Lazily built: the first getBuiltinPresets() call parses 15 TSL snippets
+    // and lays them out (~40ms of synchronous work), so don't pay it at first
+    // render for a tab that may never open. A live search needs them too —
+    // matching presets surface in the generic strip (see `items` below).
+    if (activeCategory !== 'presets' && !q) return [];
+    // Sorted by size, NOT by the registry's tier order. Size is a close proxy
+    // for tier here (the tier-1 primitives are the small graphs) while also
+    // ordering within a tier, and it keeps the two asset tabs consistent.
+    const all = [...getBuiltinPresets()].sort(bySize);
+    if (!q) return all;
+    return all.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.id.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q),
+    );
+  }, [q, activeCategory]);
 
   const onDragStart = useCallback((event: React.DragEvent, def: NodeDefinition) => {
     event.dataTransfer.setData('application/reactflow-type', def.type);
@@ -512,14 +593,27 @@ export function ContentBrowser() {
     items = filteredTextures.length === 0
       ? empty(`No textures match “${search.trim()}”.`)
       : filteredTextures.map((t) => <TextureCard key={t.id} texture={t} />);
+  } else if (activeCategory === 'presets') {
+    items = filteredPresets.length === 0
+      ? empty(`No presets match “${search.trim()}”.`)
+      : filteredPresets.map((p) => <PresetCard key={p.id} preset={p} />);
   } else {
-    // A category can legitimately be empty (Presets ships without nodes yet) —
-    // show a message rather than a blank strip that reads as a rendering bug.
-    items = filteredDefs.length === 0
-      ? empty(q ? `No nodes match “${search.trim()}”.` : 'Nothing here yet.')
-      : filteredDefs.map((item) => (
-          <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
-        ));
+    const defCards = filteredDefs.map((item) => (
+      <NodePreviewCard key={item.type} def={item} onDragStart={onDragStart} />
+    ));
+    // A live search also surfaces matching ready-made assets after the node
+    // defs — someone typing "dissolve" on the All tab must find the Dissolve
+    // preset, which lives one tab away.
+    const assetCards = q
+      ? [
+          ...filteredPresets.map((p) => <PresetCard key={`preset-${p.id}`} preset={p} />),
+          ...filteredTextures.map((tx) => <TextureCard key={`texture-${tx.id}`} texture={tx} />),
+        ]
+      : [];
+    // Show a message rather than a blank strip that reads as a rendering bug.
+    items = defCards.length + assetCards.length === 0
+      ? empty(q ? `No matches for “${search.trim()}”.` : 'Nothing here yet.')
+      : [...defCards, ...assetCards];
   }
 
   return (

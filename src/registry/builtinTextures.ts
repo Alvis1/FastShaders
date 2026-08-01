@@ -6,22 +6,9 @@
  * dragged onto the canvas like a saved group.
  */
 
-import type { AppNode, AppEdge, GroupNodeData } from '@/types';
-import { codeToGraph } from '@/engine/codeToGraph';
-import { autoLayout, estimateNodeSize } from '@/engine/layoutEngine';
-import { generateId } from '@/utils/idGenerator';
-import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { buildCodeGroup, type CodeGroupAsset, type CodeGroupEntry } from '@/registry/codeGroupBuilder';
 
-export interface BuiltinTexture {
-  id: string;
-  name: string;
-  color: string;
-  code: string;
-  description: string;
-  totalCost: number;
-  nodes: AppNode[];
-  edges: AppEdge[];
-}
+export type BuiltinTexture = CodeGroupAsset;
 
 // ─── Texture TSL code definitions ───────────────────────────────────────────
 
@@ -469,16 +456,7 @@ const shader = Fn(() => {
 });
 export default shader;`;
 
-interface TextureEntry {
-  id: string;
-  name: string;
-  color: string;
-  code: string;
-  description: string;
-  titleSize?: number;
-}
-
-const TEXTURE_ENTRIES: TextureEntry[] = [
+const TEXTURE_ENTRIES: CodeGroupEntry[] = [
   { id: 'polka-dots', name: 'Polka Dots', color: '#3949AB', code: POLKA_DOTS_CODE,
     description: 'A repeating lattice of soft-edged dots — adjustable scale, size and blur.' },
   { id: 'grid', name: 'Grid', color: '#546E7A', code: GRID_CODE, titleSize: 2,
@@ -505,93 +483,6 @@ let _cachedTextures: BuiltinTexture[] | null = null;
 
 export function getBuiltinTextures(): BuiltinTexture[] {
   if (_cachedTextures) return _cachedTextures;
-
-  _cachedTextures = TEXTURE_ENTRIES.map((entry) => {
-    const { nodes: rawNodes, edges: rawEdges } = codeToGraph(entry.code);
-
-    // Filter out the output node — textures are sub-graphs, not full shaders
-    const nodes = rawNodes.filter((n) => n.data.registryType !== 'output');
-    const nodeIds = new Set(nodes.map((n) => n.id));
-    const edges = rawEdges.filter(
-      (e) => nodeIds.has(e.source) && nodeIds.has(e.target),
-    );
-
-    // Sum node costs
-    const totalCost = nodes.reduce((sum, n) => {
-      return sum + ((n.data as { cost?: number }).cost ?? 0);
-    }, 0);
-
-    // Auto-layout with tight spacing for compact groups
-    const laid = autoLayout(nodes, edges, 'LR', { nodesep: 10, ranksep: 30 });
-
-    // Auto-expose input ports that have incoming edges (mirrors useSyncEngine logic)
-    for (const n of laid) {
-      const def = NODE_REGISTRY.get(n.data.registryType);
-      if (!def) continue;
-      const usesExposedPorts = def.category === 'noise' || def.type === 'output' || def.type === 'uv';
-      if (!usesExposedPorts) continue;
-
-      const connectedPorts = new Set<string>();
-      for (const e of edges) {
-        if (e.target === n.id && e.targetHandle) {
-          connectedPorts.add(e.targetHandle);
-        }
-      }
-      if (connectedPorts.size > 0) {
-        (n.data as Record<string, unknown>).exposedPorts = Array.from(connectedPorts);
-      }
-    }
-
-    // Compute bounding box for the group container from each node's real
-    // estimated footprint (a flat placeholder here would clip the tall noise
-    // PreviewNodes at the frame's bottom edge).
-    const PAD = 20;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const n of laid) {
-      const s = estimateNodeSize(n);
-      minX = Math.min(minX, n.position.x);
-      minY = Math.min(minY, n.position.y);
-      maxX = Math.max(maxX, n.position.x + s.width);
-      maxY = Math.max(maxY, n.position.y + s.height);
-    }
-
-    // Create group container
-    const groupId = `builtin-texture-${entry.id}`;
-    const groupNode: AppNode = {
-      id: groupId,
-      type: 'group',
-      position: { x: 0, y: 0 },
-      data: {
-        registryType: 'group',
-        label: entry.name,
-        color: entry.color,
-        collapsed: false,
-        titleSize: entry.titleSize,
-      } as GroupNodeData,
-      style: {
-        width: maxX - minX + PAD * 2,
-        height: maxY - minY + PAD * 2,
-      },
-    } as AppNode;
-
-    // Reparent nodes into group, offset positions relative to group
-    for (const n of laid) {
-      n.parentId = groupId;
-      n.position.x -= minX - PAD;
-      n.position.y -= minY - PAD;
-    }
-
-    return {
-      id: entry.id,
-      name: entry.name,
-      color: entry.color,
-      code: entry.code,
-      description: entry.description,
-      totalCost,
-      nodes: [groupNode, ...laid],
-      edges,
-    };
-  });
-
+  _cachedTextures = TEXTURE_ENTRIES.map((entry) => buildCodeGroup(entry, 'builtin-texture-'));
   return _cachedTextures;
 }

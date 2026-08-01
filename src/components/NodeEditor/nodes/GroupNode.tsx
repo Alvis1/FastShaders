@@ -1,5 +1,5 @@
 import { memo, useEffect, type MouseEvent } from 'react';
-import { NodeResizer, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { NodeResizeControl, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { GroupFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { getGroupFrameColors } from '@/utils/colorUtils';
@@ -14,8 +14,14 @@ import './GroupNode.css';
  * Visual: a tinted rectangle with a colored header bar showing the group name
  * and a +/− toggle on the right that collapses the group into a compact pill
  * (children + their edges hide via React Flow's `hidden` flag) or restores it.
- * Interaction: click the header to select & drag; right-click anywhere on the
- * node opens the GroupSettingsMenu (rename + recolor + save + ungroup).
+ *
+ * Interaction: the HEADER is the whole interactive surface of an expanded
+ * frame — click it to select & drag, right-click it for the GroupSettingsMenu
+ * (rename + recolor + save + ungroup). The frame BODY is pass-through and
+ * behaves like bare canvas (right-click adds a node, drag rubber-bands/pans),
+ * so a frame never swallows the canvas gestures underneath it; see the
+ * pointer-events block in GroupNode.css. A COLLAPSED pill is fully
+ * interactive instead — it stands in for a node, sockets and all.
  */
 export const GroupNode = memo(function GroupNode({
   id,
@@ -70,13 +76,23 @@ export const GroupNode = memo(function GroupNode({
         height: '100%',
       }}
     >
-      {/* Resize handles only make sense when expanded — collapsed groups are a fixed pill. */}
-      {!collapsed && (
-        <NodeResizer
+      {/* Resized from the bottom-right corner only, with the same enlarged grab
+          box the sticky notes use — an expanded frame's edges sit right against
+          member nodes and the surrounding canvas, so edge/corner handles all the
+          way round turned every near-miss into an accidental resize. Groups now
+          match notes exactly: drag by the header, scale by the one corner.
+          Only rendered when expanded (a collapsed group is a fixed-size pill)
+          and when selected — the frame body is pointer-events:none, so the
+          header is what selects it. The control keeps React Flow's
+          `.react-flow__resize-control` class, which is what the pass-through
+          block below opts back into pointer events. */}
+      {!collapsed && selected && (
+        <NodeResizeControl
+          position="bottom-right"
           color={color}
-          isVisible={selected}
           minWidth={120}
           minHeight={80}
+          style={{ width: 15, height: 15, borderRadius: 3, border: '2px solid #fff' }}
         />
       )}
       <div

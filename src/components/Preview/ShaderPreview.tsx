@@ -14,9 +14,11 @@ import {
 } from '@/engine/tslToPreviewHTML';
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
-import { sanitizeIdentifier } from '@/utils/nameUtils';
+import { bootGeometryWasCustom, loadPreviewMeshFromCache } from '@/utils/previewMeshCache';
+import { connectedUniformNamesKey, ALL_UNIFORMS } from '@/utils/connectedUniforms';
 import { applyUniformDefaults, planUniformDefaults } from '@/utils/uniformDefaults';
 import { graphToCode } from '@/engine/graphToCode';
+import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import './ShaderPreview.css';
@@ -39,6 +41,21 @@ function isValidUniformValue(v: unknown): v is number | string {
 interface UniformBounds {
   min: number;
   max: number;
+}
+
+/**
+ * Fallback slider bounds when the user hasn't set any: fit the value.
+ * Preset/texture uniforms ship defaults far above 1 (frequency = 20, count = 8);
+ * a fixed 0..1 fallback pinned the thumb at max and CLAMPED the value into
+ * 0..1 on the first touch, snapping the dropped asset broken.
+ *
+ * NB call sites must FREEZE the result per uniform (see seededBoundsRef) —
+ * re-deriving it from the live value every render feeds the slider's max back
+ * into its own value and any drag compounds exponentially.
+ */
+function seedBounds(value: unknown): UniformBounds {
+  const v = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  return { min: Math.min(0, v * 2), max: Math.max(1, v * 2) };
 }
 
 /** Safari still exposes fullscreen only under the webkit-prefixed names. */
@@ -307,32 +324,15 @@ export function ShaderPreview() {
       { materialSettings?: PreviewOptions['materialSettings'] } | undefined)?.materialSettings,
   );
 
-  // Connected property-uniform names, folded to a primitive key ('*' = no
-  // property nodes exist → the overlay shows every detected uniform). Only a
-  // real membership change re-renders; the O(N+E) scan runs once per store
-  // notify for this single component. Names go through sanitizeIdentifier —
-  // the same mapping codegen applies, so the key tokens match the uniform
-  // names extractUniforms reads out of the GENERATED code (a raw name with
-  // spaces now still matches its sanitized uniform), sanitized names (\w+)
-  // can never collide with the space separator, and a property literally
-  // named '*' can't fake the no-properties sentinel.
-  const connectedPropNamesKey = useAppStore((s) => {
-    let hasProp = false;
-    const connectedIds = new Set<string>();
-    for (const e of s.edges) connectedIds.add(e.source);
-    const names: string[] = [];
-    for (const n of s.nodes) {
-      const t = n.data.registryType;
-      if (t !== 'property_float' && t !== 'property_color') continue;
-      hasProp = true;
-      if (connectedIds.has(n.id)) {
-        const name = getNodeValues(n).name;
-        if (name != null && name !== '') names.push(sanitizeIdentifier(String(name)));
-      }
-    }
-    if (!hasProp) return '*';
-    return names.sort().join(' ');
-  });
+  // Connected property-uniform names, folded to a primitive key so only a real
+  // membership change re-renders; the O(N+E) scan runs once per store notify
+  // for this single component. The rule itself — including the emitted-vs-
+  // stored name collision handling — lives in utils/connectedUniforms (pure,
+  // tested). `nodeVarNames` comes from the same graphToCode pass that produced
+  // `previewCode`, so the names it yields describe the same module.
+  const connectedPropNamesKey = useAppStore((s) =>
+    connectedUniformNamesKey(s.nodes, s.edges, s.nodeVarNames),
+  );
 
   // All preview prefs re-read on `fs:project-imported` — a project file
   // carries them, and the overlay + iframe srcDoc inputs must pick up the
@@ -342,6 +342,27 @@ export function ShaderPreview() {
   const [lighting, setLighting] = usePersistedState('fs:previewLighting', validateLighting, { reloadOnProjectImport: true });
   const [subdivision, setSubdivision] = usePersistedState('fs:previewSubdivision', validateSubdivision, { reloadOnProjectImport: true });
   const [bgColor, setBgColor] = usePersistedState('fs:previewBgColor', validateBgColor, { reloadOnProjectImport: true });
+
+  // Restore the previous session's dropped mesh from the IndexedDB cache. The
+  // read is async, so `validateGeometry` has already downgraded a stored
+  // 'custom' to 'sphere' by now (no mesh was loaded when it ran) — that's what
+  // bootGeometryWasCustom() remembers, sampled at module init before the
+  // downgrade was written back. Restoring the mesh then re-selects it.
+  //
+  // A zip import or a drop can land first (both are synchronous); either wins,
+  // and the cache read is discarded rather than overwriting live state.
+  useEffect(() => {
+    if (useAppStore.getState().previewMesh) return;
+    let cancelled = false;
+    void loadPreviewMeshFromCache().then((mesh) => {
+      if (cancelled || !mesh) return;
+      if (useAppStore.getState().previewMesh) return;
+      // persist:false — these bytes came straight OUT of the cache.
+      useAppStore.getState().setPreviewMesh(mesh, { persist: false });
+      if (bootGeometryWasCustom()) setGeometry('custom');
+    });
+    return () => { cancelled = true; };
+  }, [setGeometry]);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -570,7 +591,7 @@ export function ShaderPreview() {
   const uniforms = useMemo(() => {
     const all = extractUniforms(previewCode);
     // If no property nodes exist (e.g. direct-assignment mode), show all.
-    if (connectedPropNamesKey === '*') return all;
+    if (connectedPropNamesKey === ALL_UNIFORMS) return all;
     const connectedNames = new Set(connectedPropNamesKey.split(' ').filter(Boolean));
     return all.filter((u) => connectedNames.has(u.name));
   }, [previewCode, connectedPropNamesKey]);
@@ -611,6 +632,18 @@ export function ShaderPreview() {
   // Refs for the message handler so it doesn't need to re-bind on every change
   const uniformValuesRef = useRef(uniformValues);
   const uniformKindsRef = useRef<Map<string, 'float' | 'color'>>(new Map());
+  /**
+   * Fallback slider bounds, seeded per uniform from the FIRST value seen
+   * (authored default or persisted tuning) and then frozen for the component's
+   * lifetime. They must NOT be re-derived from the live value on each render:
+   * a range input whose max tracks 2× its own value re-renders the thumb at a
+   * fixed 50% of a range that moves with it, so every drag event reads the
+   * pointer against goalposts the previous event just shifted — the value
+   * compounds exponentially in BOTH drag directions and the displayed max
+   * climbs with it. Stored user bounds (uniformBounds) always win; these only
+   * fill the gap until a bound field is edited.
+   */
+  const seededBoundsRef = useRef<Record<string, UniformBounds>>({});
   useEffect(() => {
     uniformKindsRef.current = new Map(uniforms.map((u) => [u.name, u.kind]));
   }, [uniforms]);
@@ -764,7 +797,10 @@ export function ShaderPreview() {
 
   const handleBoundsChange = useCallback((name: string, key: 'min' | 'max', value: number) => {
     setUniformBounds((prev) => {
-      const current = prev[name] ?? { min: 0, max: 1 };
+      // Baseline for the not-yet-edited bound = the SAME frozen seed the
+      // slider row displays, so editing one bound never jumps the other.
+      const current =
+        prev[name] ?? seededBoundsRef.current[name] ?? seedBounds(uniformValuesRef.current[name]);
       return { ...prev, [name]: { ...current, [key]: value } };
     });
   }, []);
@@ -847,7 +883,16 @@ export function ShaderPreview() {
       initialCameraPosition: cameraPosRef.current,
       initialRotation: rotationRef.current,
     };
-    return tslToPreviewHTML(debouncedPreviewCode, options);
+    // Image payloads ride the generated code as short `fs-asset:` placeholders
+    // (see engine/imageAssets.ts) — expand them here, where the module actually
+    // runs. Nodes are read imperatively for the same reason as elsewhere in this
+    // file: subscribing to `s.nodes` would re-render on every drag frame. That's
+    // safe because the placeholder embeds a payload hash, so swapping an image
+    // always changes `previewCode` and re-runs this memo.
+    return tslToPreviewHTML(
+      inlineImageAssetsFromNodes(debouncedPreviewCode, useAppStore.getState().nodes),
+      options,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedPreviewCode, materialSettings, geometryRebuildKey]);
 
@@ -1011,7 +1056,7 @@ export function ShaderPreview() {
       vrModelUrlRef.current = URL.createObjectURL(blob);
       customModel = { kind: previewMesh.kind, id: previewMesh.id, url: vrModelUrlRef.current };
     }
-    const html = tslToPreviewHTML(previewCode, {
+    const html = tslToPreviewHTML(inlineImageAssetsFromNodes(previewCode, useAppStore.getState().nodes), {
       geometry,
       animate: playing,
       materialSettings,
@@ -1241,7 +1286,7 @@ export function ShaderPreview() {
           <div className="shader-preview__uniforms">
             {/* '*' means the graph has no property nodes at all (hand-written
                 TSL), so there is nothing in the graph to write back to. */}
-            {connectedPropNamesKey !== '*' && (
+            {connectedPropNamesKey !== ALL_UNIFORMS && (
               <button
                 type="button"
                 className="shader-preview__uniforms-default-btn"
@@ -1252,8 +1297,9 @@ export function ShaderPreview() {
               </button>
             )}
             {uniforms.map((u) => {
-              const bounds = uniformBounds[u.name] ?? { min: 0, max: 1 };
               const raw = uniformValues[u.name] ?? u.defaultValue;
+              const bounds =
+                uniformBounds[u.name] ?? (seededBoundsRef.current[u.name] ??= seedBounds(raw));
               // Colour uniform: a swatch picker row — bounds/slider are
               // meaningless for a colour, so the row is just name + picker.
               if (u.kind === 'color') {

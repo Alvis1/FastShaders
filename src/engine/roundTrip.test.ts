@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest';
 import { graphToCode } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
 import { makeNode, makeEdge } from '@/test-utils';
+import { getNodeValues } from '@/types';
 import type { AppNode, AppEdge } from '@/types';
 
 function roundTrip(nodes: AppNode[], edges: AppEdge[]): { code1: string; code2: string } {
@@ -46,6 +47,69 @@ describe('round-trip: graphToCode → codeToGraph → graphToCode is stable', ()
     const out = makeNode('out', 'output');
     const { code1, code2 } = roundTrip([v, out], [makeEdge('v', 'out', 'out', 'color')]);
     expect(code2).toBe(code1);
+  });
+
+  it('time with a speed multiplier', () => {
+    const t = makeNode('t', 'time', { speed: 2.5 });
+    const out = makeNode('out', 'output');
+    const { code1, code2 } = roundTrip([t, out], [makeEdge('t', 'out', 'out', 'opacity')]);
+    expect(code2).toBe(code1);
+    // Text stability alone is not enough here: the broken `time(1)` form is also
+    // text-stable and raises no blocking error, so pin the literal shape too.
+    expect(code1).toContain('const time1 = time.mul(2.5);');
+  });
+
+  it('a scalar driving Color (the vec3 widening)', () => {
+    // graphToCode widens the scalar to `vec3(noise1)` so it can't leak into
+    // alpha; codeToGraph has to unwrap that back to a plain Noise→Color edge.
+    // Without the unwrap the parse grows a Vec3 node whose y/z default to 0,
+    // and the re-emit turns a grey ramp red — text-unstable AND wrong.
+    const n = makeNode('n', 'perlin');
+    const out = makeNode('out', 'output');
+    const { code1, code2 } = roundTrip([n, out], [makeEdge('n', 'out', 'out', 'color')]);
+    expect(code2).toBe(code1);
+    expect(code1).toContain('return vec3(noise1);');
+    // The graph must come back unchanged — no Vec3 node conjured by the parse.
+    const parsed = codeToGraph(code1);
+    expect(parsed.nodes.filter((x) => x.data.registryType === 'vec3')).toHaveLength(0);
+  });
+
+  it('time with a WIRED speed socket', () => {
+    // The wired form emits the same method chain with a var in place of the
+    // literal. If the parser failed to collapse it, each pass would add another
+    // Multiply node — text-unstable, and the graph would grow without bound.
+    const s = makeNode('s', 'property_float', { value: 4, name: 'tempo' });
+    const t = makeNode('t', 'time', { speed: 2.5 });
+    const out = makeNode('out', 'output');
+    const { code1, code2 } = roundTrip(
+      [s, t, out],
+      [makeEdge('s', 'out', 't', 'speed'), makeEdge('t', 'out', 'out', 'opacity')],
+    );
+    expect(code2).toBe(code1);
+    // The edge wins over the stored 2.5.
+    expect(code1).toContain('const time1 = time.mul(tempo);');
+  });
+
+  it('time with speed 1 stays byte-identical to the legacy emission', () => {
+    const out = makeNode('out', 'output');
+    const e = [makeEdge('t', 'out', 'out', 'opacity')];
+    const withSpeed = graphToCode([makeNode('t', 'time', { speed: 1 }), out], e).code;
+    const legacy = graphToCode([makeNode('t', 'time'), out], e).code; // no speed key
+    expect(withSpeed).toBe(legacy);
+    expect(withSpeed).toContain('const time1 = time;');
+  });
+
+  it('restores values.speed across graph → code → graph', () => {
+    // useSyncEngine's node matching does NOT carry data.values across a resync,
+    // so a parser gap would silently reset every Time node to 1x on the next
+    // code-panel Apply.
+    const t = makeNode('t', 'time', { speed: 2.5 });
+    const out = makeNode('out', 'output');
+    const code = graphToCode([t, out], [makeEdge('t', 'out', 'out', 'opacity')]).code;
+    const parsed = codeToGraph(code);
+    const tn = parsed.nodes.find((n) => n.data.registryType === 'time')!;
+    expect(getNodeValues(tn).speed).toBe(2.5);
+    expect(parsed.nodes.find((n) => n.data.registryType === 'mul')).toBeUndefined();
   });
 
   it('multi-channel output (color + opacity + roughness)', () => {

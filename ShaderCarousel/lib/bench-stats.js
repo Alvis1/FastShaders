@@ -331,9 +331,44 @@ export function buildSuggestion(data, sourceName) {
 }
 
 /**
+ * Reduce a suggestion object into a `complexity.json`-shaped PATCH:
+ * `{ meta, costs: { <nodeKey>: <points> } }`. The node key is the suggestion
+ * id with its group prefix stripped (`noise_voronoi` → `voronoi`), matching
+ * the keys under `complexity.json`'s `costs`. Only measured nodes appear, so
+ * it's inherently partial and merges over the current table. This is the file
+ * you drag onto FastShaders' cost bar to reprice live. Pure.
+ */
+export function buildComplexityPatch(suggestion) {
+  const md = suggestion.metadata || {};
+  const costs = {};
+  for (const s of suggestion.suggestions || []) {
+    if (typeof s.suggestedPoints !== 'number' || !Number.isFinite(s.suggestedPoints)) continue;
+    costs[s.id.replace(/^(noise_|preset_|saved_)/, '')] = s.suggestedPoints;
+  }
+  return {
+    meta: {
+      schemaVersion: 2,
+      kind: 'complexity-patch',
+      source: md.source ?? null,
+      bench: md.bench ?? null,
+      device: md.device ?? null,
+      generatedAt: md.generatedAt ?? null,
+      valid: md.valid ?? null,
+      reasons: md.reasons ?? [],
+      timingMethod: md.timingMethod ?? null,
+      resolution: md.resolution ?? null,
+      refPixels: md.refPixels ?? null,
+      note: 'Partial complexity.json patch. Drag onto FastShaders (the cost bar) to reprice these nodes live; it merges over the current table. Trust the numbers only when valid:true.',
+    },
+    costs,
+  };
+}
+
+/**
  * Write the raw frame data + per-shader stats as JSON, a flat per-shader CSV
- * for quick spreadsheet inspection, AND a complexity.json-shaped suggestion
- * file that the FastShaders editor can diff against its current scoring.
+ * for quick spreadsheet inspection, a complexity.json-shaped suggestion file
+ * the FastShaders editor can diff against its current scoring, AND a
+ * drag-onto-the-editor complexity PATCH.
  * Commit these into ShaderCarousel/benchData/ — browser downloads
  * otherwise evaporate and the calibration loop never closes.
  *
@@ -384,5 +419,12 @@ export function exportResults(data, prefix) {
     `${prefix}-complexity-suggestion-${ts}.json`,
   );
 
-  return { fileCount: 3, timestamp: ts, valid: suggestion.metadata.valid, reasons: suggestion.metadata.reasons };
+  // 4) complexity PATCH — the same numbers reshaped as { meta, costs:{key:pts} }
+  // so it drops straight onto the FastShaders cost bar and reprices live.
+  triggerDownload(
+    new Blob([JSON.stringify(buildComplexityPatch(suggestion), null, 2)], { type: 'application/json' }),
+    `${prefix}-complexity-patch-${ts}.json`,
+  );
+
+  return { fileCount: 4, timestamp: ts, valid: suggestion.metadata.valid, reasons: suggestion.metadata.reasons };
 }

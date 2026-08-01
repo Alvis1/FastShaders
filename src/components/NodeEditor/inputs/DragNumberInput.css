@@ -14,6 +14,21 @@
   border-color: var(--border-default);
 }
 
+/* On a node card the widget carries the ONLY "you can edit this" signal in the
+   row, so it keeps a fill — but a recessed neutral tint rather than the opaque
+   white plate, which punched a bright box out of the node body. Read-only
+   values beside it are plain text (see .shader-node__op-val in ShaderNode.css),
+   so fill vs no-fill is what separates editable from derived.
+   Scoped to `.react-flow`: context menus render OUTSIDE that subtree and keep
+   their panel-style input fill. A hardcoded white is correct in both themes —
+   node bodies are theme-invariant (--node-bg), so this must NOT become a
+   chrome token that flips with the theme toggle. Opaque, not translucent: on
+   the operator layout the field can pass over the big +/x glyph, and a
+   see-through fill would let the glyph show through the digits. */
+.react-flow .drag-num {
+  background: #ffffff;
+}
+
 /* Arrow buttons */
 .drag-num__arrow {
   display: flex;

@@ -12,11 +12,15 @@
   overflow: hidden;
 }
 
-/* Pinned to the canvas's left edge — the corner the minimap used to occupy. */
+/* Pinned to the canvas's RIGHT edge, but stopped short of the column seam's
+   grip tab: that tab is --ctl-size wide and hangs off the divider into this
+   pane, so a plain `right: var(--space-4)` would put the pill underneath it
+   whenever the row seam rides high. Offsetting by the full tab width plus a
+   gap means the two can never intersect at any split ratio. */
 .node-editor__cost-overlay {
   position: absolute;
   top: var(--space-3);
-  left: var(--space-4);
+  right: calc(var(--ctl-size) + var(--space-2));
   z-index: var(--z-controls);
   width: 280px;
 }
@@ -35,6 +39,19 @@
    panel while keeping the blur/border. */
 :root[data-theme="dark"] .node-editor__cost-overlay .cost-bar {
   background: rgba(78, 83, 91, 0.85);
+}
+
+/* Softer dashes: React Flow's `.animated` edges get `stroke-dasharray: 5`
+   from its own stylesheet, which renders as hard-cornered rectangles. Round
+   caps take the corners off.
+
+   Excluded on purpose:
+   - `.react-flow__edge-interaction` — the invisible fat hit path.
+   - any path carrying an INLINE `stroke-dasharray` — that's TypedEdge's
+     multi-channel pattern (`4 0.5`), whose 0.5px gap is narrower than the cap
+     radius, so rounding it would close the gaps and read as a solid line. */
+.node-editor .react-flow__edge.animated path:not(.react-flow__edge-interaction):not([stroke-dasharray]) {
+  stroke-linecap: round;
 }
 
 /* Override React Flow default node styles */
