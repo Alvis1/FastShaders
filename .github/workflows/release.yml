@@ -21,9 +21,17 @@
 # (macOS needs Xcode tooling, the NSIS bundle needs Windows).
 name: Release
 
+# `workflow_dispatch` is the recovery path: a GitHub Actions incident can
+# throttle webhook delivery, so a pushed tag may never fire its run (happened
+# on v0.3.14, 2026-08-06). Re-run it by hand against the tag instead of
+# deleting and re-pushing the tag:
+#   gh workflow run release.yml --ref vX.Y.Z
+# (Dispatch uses the workflow file AT that ref, so only tags created after
+# this block landed can be dispatched.)
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
