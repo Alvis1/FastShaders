@@ -17,6 +17,7 @@
     "normalWorld": 7,
     "tangentLocal": 0,
     "time": 0,
+    "micNode": 0,
     "screenUV": 0,
     "property_float": 0,
     "property_color": 0,
@@ -84,6 +85,9 @@
     "dataNode": 2,
     "stripes": 18,
     "dataviz": 10,
+    "colormap": 4,
+    "dataRange": 7,
+    "isolines": 14,
     "imageNode": 2,
 
     "unknown": 0,

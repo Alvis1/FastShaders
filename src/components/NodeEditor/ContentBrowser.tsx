@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback, useEffect, type RefObject } from 'react';
+import { memo, useState, useMemo, useRef, useCallback, useEffect, type RefObject } from 'react';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { getAllDefinitions, nodeMatchRank, NO_MATCH } from '@/registry/nodeRegistry';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
@@ -170,7 +170,10 @@ const validateBarHeight = (raw: string | null): number | null => {
   return Number.isFinite(v) && v > 0 ? v : null;
 };
 
-export function ContentBrowser() {
+// memo(): NodeEditor re-renders on every drag/scrub frame (it subscribes to
+// s.nodes), and this ~70-tile strip takes no props — without memo the whole
+// palette re-rendered at pointer rate for changes it can't observe.
+export const ContentBrowser = memo(function ContentBrowser() {
   // Persisted: reopening the app on the tab you left is the expected behaviour
   // for a palette you return to constantly (same treatment the bar's height,
   // canvas colour and language already get).
@@ -208,6 +211,15 @@ export function ContentBrowser() {
   // Mirrors for the imperative drag path, which runs outside React's cycle.
   const metricsRef = useRef({ tabsH, tileH, zoom });
   metricsRef.current = { tabsH, tileH, zoom };
+  // The first layout runs on the fallback font; re-measure once the
+  // self-hosted woff2 subsets swap in (same document.fonts.ready re-fit
+  // useFitText does) — the measurement effect below keys on this.
+  const [fontsReady, setFontsReady] = useState(false);
+  useEffect(() => {
+    let live = true;
+    document.fonts?.ready?.then(() => { if (live) setFontsReady(true); });
+    return () => { live = false; };
+  }, []);
   const savedGroups = useAppStore((s) => s.savedGroups);
   const language = useAppStore((s) => s.language);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -266,7 +278,13 @@ export function ContentBrowser() {
       if (Math.abs(next - current) > 1) setTileH(next);
     });
     return () => cancelAnimationFrame(raf);
-  });
+    // Only when the strip's CONTENTS can have changed — tab, query, library,
+    // language, bar size, or this effect's own committed measurements (the
+    // 1px thresholds make the self-triggered re-run converge). The dep-less
+    // form re-swept getBoundingClientRect over every tile on each of
+    // NodeEditor's per-drag-frame re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCategory, search, savedGroups, language, barHeight, tabsH, tileH, fontsReady]);
 
   /**
    * Live gesture state: bounds measured once at pointerdown, plus the latest
@@ -709,4 +727,4 @@ export function ContentBrowser() {
       </div>
     </div>
   );
-}
+});

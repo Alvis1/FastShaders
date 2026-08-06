@@ -283,25 +283,20 @@ const ND_TEXTURES = path.resolve(__dirname, 'src/registry/builtinTextures.ts');
 const ND_CITATIONS = path.resolve(__dirname, 'src/registry/citations.json');
 
 /**
- * Keep `public/node-designer.html` in sync with the repo-root source.
- *
- * The Node Designer is authored at the repo root (`node-designer.html`), but
- * Vite only serves / ships files under `public/`, so the running tool is
- * `public/node-designer.html` (dev URL /FastShaders/node-designer.html and the
- * copy emitted to dist/). Without a sync step the two were byte-identical
- * untracked copies that would silently diverge on the next edit. Treat the
- * root file as the single source of truth and regenerate the public copy at
- * the start of every dev server and every build (runs in both via buildStart).
+ * NOTE on the retired sync plugins: node-designer.html used to be a standalone
+ * page copied into public/ by `fs-node-designer-sync` (with its Latvian labels
+ * fetched from a `fs-i18n-sync`-published public/node-i18n.json). The designer
+ * is now a REAL Vite entry (rollupOptions.input below) in the app's module
+ * graph — it imports the registry, i18n and the NodeVisual renderer directly,
+ * so both plugins and both public copies are gone. `designerEntry.test.ts`
+ * fails if either public copy reappears (a stale copy would shadow the entry).
  */
-const ND_ROOT = path.resolve(__dirname, 'node-designer.html');
-const ND_PUBLIC = path.resolve(__dirname, 'public/node-designer.html');
 
 /**
  * Copy `srcPath` → `dstPath` only when their bytes differ. Compare-before-write
  * skips no-op copies (no mtime churn) and writes in place (no unlink — cpSync's
  * unlink can EPERM on restricted mounts). The dest dir is created if missing so
- * a fresh/partial checkout doesn't ENOENT. Buffer comparison is binary-safe, so
- * the same helper serves both the HTML and the minified-JS vendored files.
+ * a fresh/partial checkout doesn't ENOENT. Buffer comparison is binary-safe.
  */
 const syncVendoredFile = (srcPath: string, dstPath: string): void => {
   const src = readFileSync(srcPath);
@@ -310,45 +305,6 @@ const syncVendoredFile = (srcPath: string, dstPath: string): void => {
   mkdirSync(path.dirname(dstPath), { recursive: true });
   writeFileSync(dstPath, src);
 };
-
-const nodeDesignerSyncPlugin = (): Plugin => ({
-  name: 'fs-node-designer-sync',
-  buildStart() {
-    try {
-      if (!existsSync(ND_ROOT)) return;
-      // Treat the root file as the single source of truth. Never let a sync
-      // hiccup kill dev/test startup.
-      syncVendoredFile(ND_ROOT, ND_PUBLIC);
-    } catch (e) {
-      console.warn('[fs-node-designer-sync] sync skipped:', (e as Error).message);
-    }
-  },
-});
-
-/**
- * Publish the canonical Latvian node/category labels to `public/node-i18n.json`.
- *
- * `src/i18n/node-i18n.json` is imported by the React app AND fetched (as
- * `/FastShaders/node-i18n.json`) by the standalone Node Designer
- * (node-designer.html) for its EN/LV switch. Rather than maintain two copies,
- * this plugin copies the source file into `public/` at dev/build start — the
- * same single-source + copy-on-diff pattern the node-designer HTML sync uses.
- * `src/i18n/i18nSync.test.ts` fails on drift.
- */
-const I18N_SRC = path.resolve(__dirname, 'src/i18n/node-i18n.json');
-const I18N_PUBLIC = path.resolve(__dirname, 'public/node-i18n.json');
-
-const i18nSyncPlugin = (): Plugin => ({
-  name: 'fs-i18n-sync',
-  buildStart() {
-    try {
-      if (!existsSync(I18N_SRC)) return;
-      syncVendoredFile(I18N_SRC, I18N_PUBLIC);
-    } catch (e) {
-      console.warn('[fs-i18n-sync] sync skipped:', (e as Error).message);
-    }
-  },
-});
 
 /**
  * Vendor the shared A-Frame preview scripts from a SINGLE source of truth.
@@ -633,8 +589,6 @@ export default defineConfig({
     ...(FS_DESKTOP ? [] : [cspHtmlPlugin()]),
     vendorSyncPlugin(),
     ...(FS_DESKTOP ? [shaderCarouselDesktopStagePlugin()] : [shaderCarouselCopyPlugin()]),
-    nodeDesignerSyncPlugin(),
-    i18nSyncPlugin(),
     nodeDesignerEndpointPlugin(),
   ],
   resolve: {
@@ -663,6 +617,17 @@ export default defineConfig({
   build: {
     target: 'esnext',
     rollupOptions: {
+      // Naming inputs REPLACES Vite's implicit index.html default, so `main`
+      // MUST stay listed — forgetting it would drop the whole app from dist
+      // with a green build (see node-editor.html's head comment; that page
+      // stays a deliberate NON-entry: it is a localhost tool whose saves need
+      // the dev-only /__nd endpoints). The Node Designer, by contrast, ships:
+      // its deployed copy is read-only-with-download, same as before, but now
+      // renders the REAL NodeVisual replica.
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        designer: path.resolve(__dirname, 'node-designer.html'),
+      },
       output: {
         // Monaco is rarely-changing vendor code — its own chunk keeps the app
         // chunk small and lets browsers cache Monaco across deploys. Function
@@ -672,6 +637,12 @@ export default defineConfig({
         // (all language clients + tokenizers) back into the bundle.
         manualChunks(id) {
           if (id.includes('node_modules/monaco-editor/') && !id.endsWith('.css')) return 'monaco';
+          // Vite's preload helper backs every dynamic import() in the entry.
+          // Left unassigned, Rollup hoists it INTO the monaco chunk, so
+          // index.html modulepreloads 3.7MB to reach a 20-line function —
+          // resurrecting the eager Monaco load the lazy CodeEditor split
+          // exists to remove. Pin it to its own tiny shared chunk instead.
+          if (id.includes('vite/preload-helper')) return 'preload';
         },
       },
     },
@@ -679,5 +650,12 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    // Per-file worker isolation only re-imports the heavy engine graph
+    // (store → builtin textures/presets → codeToGraph → Babel, ~350ms/file ×
+    // 67 files) — these are pure-logic node-env suites with no global
+    // mocking, and every store-mutating suite resets its state in
+    // beforeEach. Disabling isolation halves the suite's wall clock. Keep
+    // new store tests self-resetting or this must be revisited.
+    isolate: false,
   },
 });

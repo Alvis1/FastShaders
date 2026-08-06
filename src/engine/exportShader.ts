@@ -6,7 +6,7 @@ import { getNodeValues } from '@/types';
 import type { AppNode, OutputNodeData } from '@/types';
 import { toKebabCase } from '@/utils/nameUtils';
 import { collectImageFiles } from '@/utils/imageNode';
-import { buildExportBundle } from '@/utils/exportBundle';
+import { buildExportBundle, type ExportBundle } from '@/utils/exportBundle';
 
 /**
  * Shared "Download Shader" path. Lives outside any component so the toolbar
@@ -83,21 +83,20 @@ export function buildProjectState(): FastShadersProject {
 }
 
 /**
- * Generate the shaderloader module for the current graph, embed the project
- * snapshot, and trigger the browser download. With embedded images and/or a
- * custom preview mesh the download becomes a zip: the (still fully
- * self-contained) .js plus each image as a regular file for reuse/editing,
- * plus the model under models/ so the shader+mesh pair drops straight into
- * Podest or an A-Frame page. Assembly is pure — see exportBundle.ts.
+ * Build the complete export bundle for the current graph: the shaderloader
+ * module with the project snapshot embedded, plus images/model as a zip when
+ * present. Shared by every export surface — the toolbar EXPORT download and
+ * the desktop Work-folder save — so all of them produce byte-identical
+ * bundles. Assembly is pure — see exportBundle.ts.
  */
-export function downloadShader(): void {
+export function buildShaderBundle(): ExportBundle {
   const state = useAppStore.getState();
   const outputNode = state.nodes.find((n) => n.data.registryType === 'output');
   const materialSettings = (outputNode?.data as OutputNodeData | undefined)?.materialSettings;
 
   let script: string;
   try {
-    // The download must be self-contained, so image placeholders are expanded
+    // The export must be self-contained, so image placeholders are expanded
     // back to their real `data:` payloads before the module is built.
     script = tslToShaderModule(
       inlineImageAssetsFromNodes(state.code, state.nodes),
@@ -109,12 +108,21 @@ export function downloadShader(): void {
   }
 
   const embedded = embedProjectState(script, buildProjectState());
-  const bundle = buildExportBundle(
+  return buildExportBundle(
     toKebabCase(state.shaderName || 'shader'),
     embedded,
     collectImageFiles(state.nodes),
-    state.previewMesh,
+    // The EXPORT button's right-click setting can exclude the loaded mesh.
+    state.exportIncludeMesh ? state.previewMesh : null,
   );
+}
+
+/**
+ * Build the bundle and trigger the browser download (the toolbar EXPORT
+ * button + the NEW-shader modal's save-first path).
+ */
+export function downloadShader(): void {
+  const bundle = buildShaderBundle();
   const blob = new Blob([bundle.bytes], { type: bundle.mime });
 
   const url = URL.createObjectURL(blob);

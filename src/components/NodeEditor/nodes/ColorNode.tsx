@@ -6,6 +6,7 @@ import { hexToRgb01 } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import { useLongPress } from '@/hooks/useLongPress';
 import { useFitText } from '@/hooks/useFitText';
+import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import './ColorNode.css';
 
 // The output socket rides the circle's perimeter, pointing toward the node(s)
@@ -130,12 +131,26 @@ export const ColorNode = memo(function ColorNode({
     };
   }, [angle, isProperty]);
 
+  // A native picker fires an input event per frame while its swatch is
+  // dragged; each updateNodeData would otherwise pushHistory a full-graph
+  // structuredClone. Bracket the burst so it lands as one undo entry.
+  const { bracket, closeBracket } = useHistoryBracket();
   const handleChange = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
+      bracket();
       updateNodeData(id, { values: { ...data.values, hex: e.target.value } } as Partial<ColorFlowNode['data']>);
     },
-    [id, data.values, updateNodeData],
+    [id, data.values, updateNodeData, bracket],
   );
+
+  // The native `change` event fires when the picker dialog commits/closes —
+  // close the bracket right there instead of waiting out the idle timer.
+  useEffect(() => {
+    const el = pickerRef.current;
+    if (!el) return;
+    el.addEventListener('change', closeBracket);
+    return () => el.removeEventListener('change', closeBracket);
+  }, [closeBracket]);
 
   const openPicker = useCallback(() => {
     pickerRef.current?.click();
@@ -167,6 +182,7 @@ export const ColorNode = memo(function ColorNode({
         className="color-node__picker"
         value={hex}
         onChange={handleChange}
+        onBlur={closeBracket}
       />
       <TypedHandle
         type="source"

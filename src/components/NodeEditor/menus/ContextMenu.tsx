@@ -9,6 +9,8 @@ import { GroupSettingsMenu } from './GroupSettingsMenu';
 import { NoteSettingsMenu } from './NoteSettingsMenu';
 import { StripesSettingsMenu } from './StripesSettingsMenu';
 import { DataVizSettingsMenu } from './DataVizSettingsMenu';
+import { ColormapSettingsMenu } from './ColormapSettingsMenu';
+import { DataRangeSettingsMenu } from './DataRangeSettingsMenu';
 import './ContextMenu.css';
 
 /** Gap kept between the menu and the viewport edge when clamping. */
@@ -65,6 +67,8 @@ export function ContextMenu() {
         {type === 'note' && nodeId && <NoteSettingsMenu nodeId={nodeId} />}
         {type === 'stripes' && nodeId && <StripesSettingsMenu nodeId={nodeId} />}
         {type === 'dataviz' && nodeId && <DataVizSettingsMenu nodeId={nodeId} />}
+        {type === 'colormap' && nodeId && <ColormapSettingsMenu nodeId={nodeId} />}
+        {type === 'dataRange' && nodeId && <DataRangeSettingsMenu nodeId={nodeId} />}
       </div>
     </>
   );

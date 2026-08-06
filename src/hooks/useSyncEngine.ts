@@ -7,6 +7,7 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { computeReachableCost } from '@/utils/nodeCost';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
+import { sameGraphSemantics } from '@/utils/graphSemantics';
 import type { AppNode } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
 
@@ -56,8 +57,19 @@ export function useSyncEngine() {
   useEffect(() => {
     if (syncSource !== 'graph' || syncInProgress) return;
     if (nodes === prevNodesRef.current && edges === prevEdgesRef.current) return;
+    // Position/selection-only updates (every drag pointermove mints a new
+    // array identity) can't change generated code — skip the whole pass, not
+    // just the store writes. Never skip while isUndoRedo is set: this effect
+    // doubles as the undo path's reconciliation point and must reach the
+    // flag-clearing `finally` below (undo/redo structuredClones the arrays,
+    // so its `data` refs are always fresh and the predicate is false anyway —
+    // this guard covers the empty-graph corner where the scan is vacuous).
+    const inert =
+      !useAppStore.getState().isUndoRedo &&
+      sameGraphSemantics(prevNodesRef.current, nodes, prevEdgesRef.current, edges);
     prevNodesRef.current = nodes;
     prevEdgesRef.current = edges;
+    if (inert) return;
 
     setSyncInProgress(true);
     try {
@@ -286,7 +298,15 @@ export function useSyncEngine() {
 
   // Recalculate complexity (use ref to avoid double-run when updating output node cost)
   const lastCostRef = useRef(-1);
+  const prevCostGraphRef = useRef<{ nodes: AppNode[]; edges: typeof edges } | null>(null);
   useEffect(() => {
+    // Same inert-frame skip as the graph→code effect above: cost reads node
+    // data + reachability only, so a position/selection-only identity change
+    // would re-run the BFS for an answer that cannot differ.
+    const prev = prevCostGraphRef.current;
+    prevCostGraphRef.current = { nodes, edges };
+    if (prev && sameGraphSemantics(prev.nodes, nodes, prev.edges, edges)) return;
+
     // Reachable-cost BFS lives in nodeCost.ts (shared with the store's device
     // selection, so activating a measured cost profile reprices the total even
     // though it doesn't change nodes/edges). Reads the override-aware ACTIVE table.

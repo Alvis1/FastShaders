@@ -76,6 +76,23 @@ export interface DecodedImageNode {
   height: number;
 }
 
+/** Extra provenance written only when the drop-time power-of-two snap
+ *  actually changed the image (see `imageCodec.ts`). Absent on every node
+ *  that was stored 1:1 — including every node authored before the snap
+ *  existed — so both shapes have to be tolerated everywhere. */
+export interface ImageOriginInfo {
+  /** Key of the pre-snap payload in `imageOriginCache` (device-local). */
+  originId?: string;
+  /** Dimensions BEFORE the snap, so the card can show the shape the user
+   *  actually dropped rather than the snapped one. */
+  srcWidth?: number;
+  srcHeight?: number;
+}
+
+/** `originId` is used as an IndexedDB key and comes back from imported
+ *  project JSON — keep it to the hex digest shape it is generated in. */
+export const ORIGIN_ID_RE = /^[0-9a-f]{8,64}$/;
+
 /** Construct the `ShaderNodeData` for an Image node. `fileName` is
  *  display-only (shown under the node header) and never reaches generated
  *  code. `colorSpace` 'color' = sRGB texture; 'data' = linear non-mipmapped
@@ -86,6 +103,7 @@ export function makeImageNodeData(
   height: number,
   cost: number,
   fileName = '',
+  origin?: ImageOriginInfo,
 ): ShaderNodeData {
   return {
     registryType: 'imageNode',
@@ -97,6 +115,10 @@ export function makeImageNodeData(
       height,
       fileName,
       colorSpace: 'color',
+      ...(origin?.originId ? { originId: origin.originId } : {}),
+      ...(origin?.srcWidth && origin?.srcHeight
+        ? { srcWidth: origin.srcWidth, srcHeight: origin.srcHeight }
+        : {}),
     },
   };
 }
@@ -141,6 +163,28 @@ export function decodeImageNode(
   return { mime: m[1] as ImageMime, bytes, width, height };
 }
 
+/**
+ * The name to SHOW for an image node: the dropped file's stem with the
+ * extension of what is actually stored.
+ *
+ * Drop-time re-encoding means the stored bytes routinely aren't the format the
+ * file name claims — a `.png` can be sitting there as WebP or JPEG. Showing
+ * the raw name made the card assert something false, and left the real format
+ * discoverable only by opening the settings menu. The extension comes from the
+ * validated payload, exactly like the zip export's file names do; an unusable
+ * payload falls back to the stored name rather than inventing one.
+ */
+export function displayImageFileName(fileName: unknown, dataUrl: unknown): string {
+  const name = typeof fileName === 'string' ? fileName : '';
+  const url = validImageDataUrl(dataUrl);
+  if (!url) return name;
+  const m = /^data:image\/(png|jpeg|webp);base64,/.exec(url);
+  if (!m) return name;
+  const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
+  const stem = name.replace(/\.[^./\\]*$/, '');
+  return `${stem || 'image'}.${ext}`;
+}
+
 export interface ImageFileEntry {
   /** Archive-safe file name (sanitized stem + extension from the REAL mime). */
   name: string;
@@ -183,6 +227,70 @@ export function collectImageFiles(nodes: AppNode[]): ImageFileEntry[] {
 
 /** Sum of stored image-payload chars across every Image node instance
  *  (duplicates each carry their own copy — that's what history/storage pay). */
+/**
+ * Build the Image node for a finished encode — the ONE construction path,
+ * shared by the canvas drop and the store's "Add anyway" overrides, so an
+ * override can't produce a node the drop path wouldn't have.
+ *
+ * `origin` carries the stash id + pre-snap dimensions; passing them together
+ * with the payload is what keeps "the node was snapped" and "the node can be
+ * reverted" from ever drifting apart.
+ */
+export function makeImageNodeFromEncode(
+  encoded: { dataUrl: string; width: number; height: number },
+  cost: number,
+  fileName: string,
+  origin?: ImageOriginInfo,
+): ShaderNodeData {
+  return makeImageNodeData(encoded.dataUrl, encoded.width, encoded.height, cost, fileName, origin);
+}
+
+/** What `encodeImageFile` hands back, structurally — declared here so this
+ *  module stays free of the DOM-only import. */
+export interface EncodedImagePair {
+  dataUrl: string;
+  width: number;
+  height: number;
+  potApplied: boolean;
+  original?: { dataUrl: string; width: number; height: number };
+}
+
+export interface ResolvedImageDrop {
+  payload: { dataUrl: string; width: number; height: number };
+  origin?: ImageOriginInfo;
+}
+
+/**
+ * Decide what a finished encode actually becomes on the canvas, and enforce
+ * the rule the whole power-of-two design rests on: **a destructive snap only
+ * ships with its escape hatch.**
+ *
+ * The snap happens inside `encodeImageFile`, before any stash is attempted,
+ * so the stash can still be refused afterwards — the pre-snap payload is
+ * bounded by the ENCODE budget, which the ignore-limits override raises to
+ * the hard ceiling, while the cache only accepts the normal per-image cap.
+ * When that happens the snapped payload is discarded and the un-snapped one
+ * is placed instead: an irreversible resample is worse than no resample, and
+ * a node must never advertise (via srcWidth/srcHeight) a snap it can't undo.
+ *
+ * `stash` is injected so this stays pure and node-testable.
+ */
+export function resolveImageDrop(
+  res: EncodedImagePair,
+  fileName: string,
+  stash: (payload: { dataUrl: string; width: number; height: number; fileName: string }) => string | null,
+): ResolvedImageDrop {
+  if (!res.potApplied || !res.original) return { payload: res };
+
+  const originId = stash({ ...res.original, fileName });
+  if (!originId) return { payload: res.original };
+
+  return {
+    payload: res,
+    origin: { originId, srcWidth: res.original.width, srcHeight: res.original.height },
+  };
+}
+
 export function totalImageChars(nodes: AppNode[]): number {
   let total = 0;
   for (const n of nodes) {
@@ -214,27 +322,63 @@ export function sanitizeImageNodes(
 ): ImageSanitizeResult {
   let strippedCount = 0;
   let runningTotal = 0;
+  let changed = false;
   const out = nodes.map((n) => {
     if (n.data.registryType !== 'imageNode') return n;
     const values = getNodeValues(n);
-    const url = values.imageB64;
-    if (typeof url !== 'string' || url.length === 0) return n;
 
-    let bad = validImageDataUrl(url) === null;
-    if (!bad && enforceSoft) {
-      bad =
-        url.length > MAX_IMAGE_ENCODED_CHARS ||
-        runningTotal + url.length > MAX_TOTAL_IMAGE_CHARS;
+    // Provenance keys ride imported JSON like everything else. `originId`
+    // becomes an IndexedDB key and the src dims feed a CSS aspect-ratio, so
+    // both are whitelisted here rather than at every read site; a malformed
+    // one is dropped (the node keeps working, it just can't be reverted).
+    const base = sanitizeOriginKeys(values) ?? values;
+    if (base !== values) changed = true;
+
+    const url = base.imageB64;
+    let bad = typeof url !== 'string' || url.length === 0 ? false : validImageDataUrl(url) === null;
+    if (typeof url === 'string' && url.length > 0) {
+      if (!bad && enforceSoft) {
+        bad =
+          url.length > MAX_IMAGE_ENCODED_CHARS ||
+          runningTotal + url.length > MAX_TOTAL_IMAGE_CHARS;
+      }
+      if (!bad) runningTotal += url.length;
     }
+
     if (!bad) {
-      runningTotal += url.length;
-      return n;
+      return base === values ? n : ({ ...n, data: { ...n.data, values: base } } as AppNode);
     }
     strippedCount++;
+    changed = true;
     return {
       ...n,
-      data: { ...n.data, values: { ...values, imageB64: '' } },
+      data: { ...n.data, values: { ...base, imageB64: '' } },
     } as AppNode;
   });
-  return { nodes: strippedCount > 0 ? out : nodes, strippedCount };
+  return { nodes: changed ? out : nodes, strippedCount };
+}
+
+/** Drop `originId` / `srcWidth` / `srcHeight` when they don't hold their
+ *  expected shape. Returns a NEW values object only when something changed,
+ *  so an untouched graph keeps its identity (the store compares by
+ *  reference to decide whether to re-sync). */
+function sanitizeOriginKeys(
+  values: Record<string, string | number>,
+): Record<string, string | number> | null {
+  const drop: string[] = [];
+  if ('originId' in values) {
+    const id = values.originId;
+    if (typeof id !== 'string' || !ORIGIN_ID_RE.test(id)) drop.push('originId');
+  }
+  const dimOk = (v: unknown) => Number.isInteger(Number(v)) && Number(v) > 0 && Number(v) <= MAX_IMAGE_DIM_FIELD;
+  if ('srcWidth' in values && !dimOk(values.srcWidth)) drop.push('srcWidth');
+  if ('srcHeight' in values && !dimOk(values.srcHeight)) drop.push('srcHeight');
+  // Half a pair is meaningless to the consumer (a CSS aspect-ratio needs both).
+  if (('srcWidth' in values) !== ('srcHeight' in values)) {
+    drop.push('srcWidth', 'srcHeight');
+  }
+  if (drop.length === 0) return null;
+  const out = { ...values };
+  for (const k of drop) delete out[k];
+  return out;
 }

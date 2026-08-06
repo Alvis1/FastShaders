@@ -21,6 +21,23 @@ export function hexToRgb01(hex: string): [number, number, number] {
 }
 
 /**
+ * sRGB-encoded channel (0-1) → linear-light. The IEC 61966-2-1 transfer
+ * function — the same conversion `THREE.Color` applies when it reads a hex
+ * (ColorManagement has been on by default since r152), which is why `color(0x…)`
+ * and a bare `vec3(r/255, …)` are NOT the same colour in a shader.
+ *
+ * Anything that bakes picked colours into GPU data (the colormap LUT) must run
+ * them through here first. Interpolating sRGB-encoded values as if they were
+ * linear is exactly the error that destroys the perceptual uniformity a
+ * scientific colormap exists to provide.
+ */
+export function srgbToLinear01(c: number): number {
+  if (!Number.isFinite(c)) return 0;
+  const v = c < 0 ? 0 : c > 1 ? 1 : c;
+  return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+}
+
+/**
  * Pick a foreground color (black or white) that contrasts with `bgHex`.
  * Uses perceived luminance (Rec. 601). Defaults to black for light backgrounds,
  * white for dark — same heuristic the cost badge and 1-channel edge color use

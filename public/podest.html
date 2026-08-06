@@ -206,6 +206,36 @@
      moment presentation mode is left. */
   :root.is-present #error { display: none; }
   #hint { position: fixed; bottom: 12px; left: 12px; z-index: 20; color: rgba(255,255,255,0.6); font-size: 11px; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+  /* ── Microphone arm light ───────────────────────────────────────────
+     Shown ONLY when the loaded shader declares mic uniforms. Same visual
+     language as the Mic node's light in the editor (green idle, amber while
+     the prompt is open, blinking red while capturing) so the two read as one
+     control in two places.
+
+     Deliberately NOT in the `:root.is-present` hide rule above: everything
+     else is hidden in presentation mode because nothing may sit over the
+     artwork, but a blinking red light IS the privacy indicator — the browser's
+     own indicator is per-tab and a pedestal display has no visible tab strip.
+     An indicator that disappears exactly when the machine is left unattended
+     would be the worst possible behaviour. */
+  #mic-btn { position: fixed; left: 12px; bottom: 12px; z-index: 21; display: none;
+             width: 34px; height: 34px; padding: 0; border: 2px solid rgba(0,0,0,0.45);
+             border-radius: 50%; background: #35c759; cursor: pointer; }
+  #mic-btn.show { display: block; }
+  #mic-btn.is-starting { background: #f0a500; cursor: progress; }
+  #mic-btn.is-live { background: #e03131; animation: mic-blink 1s steps(1, end) infinite; }
+  #mic-btn.is-failed { background: #e08a1e; }
+  #mic-btn:disabled { background: #b9bec4; cursor: not-allowed; }
+  @keyframes mic-blink {
+    0%, 49%   { background: #e03131; box-shadow: 0 0 10px 3px rgba(224,49,49,0.7); }
+    50%, 100% { background: #7a1c1c; box-shadow: none; }
+  }
+  /* Keep the red + glow (the signal) and drop only the flashing. */
+  @media (prefers-reduced-motion: reduce) {
+    #mic-btn.is-live { animation: none; box-shadow: 0 0 10px 3px rgba(224,49,49,0.7); }
+  }
+  /* The hint shares the bottom-left corner — step it aside when the light is up. */
+  body.has-mic #hint { left: 58px; }
 </style>
 </head>
 <body>
@@ -228,6 +258,8 @@
 </div>
 
 <button id="fs-btn" type="button" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+
+<button id="mic-btn" type="button" title="Start microphone" aria-label="Start microphone"></button>
 
 <div id="panel">
   <div class="panel__head" id="panel-head">
@@ -355,6 +387,144 @@
   // work — stay until something actually succeeds.
   var errorFromStage = false, errorSticky = false, errorTimer = null;
   var ERROR_DISMISS_MS = 20000;
+
+  /* ── Microphone input ──────────────────────────────────────────────────
+     Capture lives in THIS document, never in the stage: the stage iframe is
+     sandbox="allow-scripts" with no allow-same-origin, so it runs in an opaque
+     origin where getUserMedia is denied below the Permissions-Policy layer.
+     Values cross as ordinary fs:uniform messages — the same in-place
+     _propertyUniforms write the sliders use, which is per-frame safe — so a
+     parent-held capture also survives every stage restart podest performs
+     (device loss, stall watchdog, the ~4.4h time fold).
+
+     A shader's mic channels are emitted by FastShaders as `uniform(0)`, i.e.
+     ordinary number properties. They are split out of the reported uniform map
+     BEFORE onUniforms sees them, which in one move keeps them out of the slider
+     list, out of state.values, and therefore out of the IndexedDB tuning
+     record — otherwise every boot would replay a frozen room-noise level and
+     pin the shader at it.
+
+     CONSENT: the button is the only path in, and a DROP NEVER ARMS while a drop
+     ALWAYS DISARMS. Auto-arming because a loaded file happens to declare mic
+     uniforms would let a shared .js decide that the microphone opens — and
+     because permission is keyed to ORIGIN (podest shares the editor's), a grant
+     given once in the editor already covers this page, and getUserMedia needs
+     no transient activation. So an auto-arm would open the mic silently at
+     every boot, for weeks, on a machine nobody is watching. That is the line
+     this must not cross. */
+  var MIC_RE = /^mic\d*_(level|bass|mid|treble)$/;
+  var micNames = [];
+  var micStream = null, micCtx = null, micAnalyser = null, micBins = null;
+  var micStatus = "off";           // off | starting | live | failed
+  var micRaf = 0;
+  var micBtn = document.getElementById("mic-btn");
+
+  function micPaint() {
+    micBtn.className =
+      (micNames.length ? "show" : "") +
+      (micStatus === "live" ? " is-live" : "") +
+      (micStatus === "starting" ? " is-starting" : "") +
+      (micStatus === "failed" ? " is-failed" : "");
+    micBtn.disabled = !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia;
+    micBtn.title = micBtn.disabled
+      ? "Microphone unavailable \u2014 needs a secure connection (https)"
+      : micStatus === "live" ? "Microphone is live \u2014 click to stop"
+      : micStatus === "starting" ? "Waiting for microphone permission\u2026"
+      : micStatus === "failed" ? "Could not start the microphone \u2014 click to retry"
+      : "Start microphone (nothing is recorded)";
+    document.body.classList.toggle("has-mic", micNames.length > 0);
+  }
+
+  /* Mirrors src/utils/micAnalysis.ts. Both band edges FLOOR so the bands
+     partition the spectrum — flooring the low edge and ceiling the high one
+     double-counts the crossover bin and makes a 200 Hz tone light up bass and
+     mid equally. Raw 0..1: `gain` is already baked into the shader by codegen
+     (it emits a .mul()), so applying it here too would scale twice. */
+  function micBand(lo, hi, rate, n) {
+    if (!(rate > 0) || n <= 0) return [0, Math.max(1, n)];
+    var per = rate / (2 * n);
+    var a = Math.min(Math.max(0, Math.floor(lo / per)), n - 1);
+    var b = Math.min(Math.max(a + 1, Math.floor(hi / per)), n);
+    return [a, b];
+  }
+  function micMean(arr, a, b) {
+    var sum = 0;
+    for (var i = a; i < b; i++) sum += arr[i];
+    return b > a ? sum / (b - a) / 255 : 0;
+  }
+  function micTick() {
+    micRaf = requestAnimationFrame(micTick);
+    if (!micAnalyser) return;
+    if (micBins.length !== micAnalyser.frequencyBinCount) micBins = new Uint8Array(micAnalyser.frequencyBinCount);
+    micAnalyser.getByteFrequencyData(micBins);
+    var n = micBins.length, rate = micCtx.sampleRate;
+    var lo = micBand(0, 200, rate, n), md = micBand(200, 2000, rate, n), hi = micBand(2000, rate / 2, rate, n);
+    var v = {
+      level: micMean(micBins, 0, n),
+      bass: micMean(micBins, lo[0], lo[1]),
+      mid: micMean(micBins, md[0], md[1]),
+      treble: micMean(micBins, hi[0], hi[1]),
+    };
+    // Skip while the stage is rebuilding: post() would only churn its 16-slot
+    // queue with values that are stale by the time the stage boots.
+    if (!stageReady) return;
+    for (var i = 0; i < micNames.length; i++) {
+      var ch = MIC_RE.exec(micNames[i]);
+      if (ch) post({ type: "fs:uniform", name: micNames[i], value: v[ch[1]] });
+    }
+  }
+  function micStop(zero) {
+    if (micRaf) { cancelAnimationFrame(micRaf); micRaf = 0; }
+    if (micStream) { micStream.getTracks().forEach(function (t) { t.stop(); }); micStream = null; }
+    if (micCtx) { try { micCtx.close(); } catch (e) { /* already closed */ } micCtx = null; }
+    micAnalyser = null;
+    if (micStatus !== "failed") micStatus = "off";
+    // Leave the shader at a defined rest state instead of frozen mid-sound.
+    if (zero !== false && stageReady) {
+      for (var i = 0; i < micNames.length; i++) post({ type: "fs:uniform", name: micNames[i], value: 0 });
+    }
+    micPaint();
+  }
+  function micStart() {
+    if (micStream || micStatus === "starting") return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { micStatus = "failed"; micPaint(); return; }
+    micStatus = "starting"; micPaint();
+    navigator.mediaDevices.getUserMedia({
+      // The speech-tuned processing fights a visualiser: AGC in particular
+      // re-normalizes level, so a sustained loud sound fades to mid-scale.
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      video: false,
+    }).then(function (stream) {
+      // The user disarmed (or dropped a new shader) while the prompt was open.
+      if (micStatus !== "starting") { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+      micStream = stream;
+      var AC = window.AudioContext || window.webkitAudioContext;
+      micCtx = new AC();
+      if (micCtx.state === "suspended") micCtx.resume().catch(function () {});
+      micAnalyser = micCtx.createAnalyser();
+      micAnalyser.fftSize = 1024;
+      micAnalyser.smoothingTimeConstant = 0.8;
+      micCtx.createMediaStreamSource(stream).connect(micAnalyser);  // never to destination — that feeds back
+      micBins = new Uint8Array(micAnalyser.frequencyBinCount);
+      micStatus = "live"; micPaint();
+      if (!micRaf) micRaf = requestAnimationFrame(micTick);
+    }).catch(function () {
+      micStatus = "failed"; micPaint();
+    });
+  }
+  micBtn.addEventListener("click", function () {
+    if (micStatus === "live" || micStatus === "starting") micStop();
+    else { micStatus = "off"; micStart(); }
+  });
+  /** A new shader (or a detach) always disarms — see the CONSENT note above. */
+  function micReset(names) {
+    micStop(false);
+    micNames = names || [];
+    micStatus = "off";
+    micPaint();
+  }
+  micPaint();
+
   function showError(msg, fromStage, sticky) {
     errEl.textContent = String(msg).slice(0, 2000);
     errEl.classList.add("show");
@@ -421,7 +591,18 @@
       // context lost). Nothing recovers in place — rebuild the stage.
       restartStage("renderer lost (" + String(m.reason || "unknown").slice(0, 80) + ")");
     } else if (m.type === "fs:uniforms") {
-      if (!state.showMaterials) onUniforms(m.uniforms || {});
+      // Split the mic channels off FIRST. Letting them reach onUniforms would
+      // give them slider rows, a state.values entry, and therefore a place in
+      // the IndexedDB tuning record — which replays a frozen room-noise level
+      // at every boot. The value/bounds seeding happens before the row is
+      // appended, so filtering inside onUniforms would be too late.
+      var uAll = m.uniforms || {}, uRest = {}, mics = [];
+      for (var uk in uAll) {
+        if (!Object.prototype.hasOwnProperty.call(uAll, uk)) continue;
+        if (MIC_RE.test(uk)) mics.push(uk); else uRest[uk] = uAll[uk];
+      }
+      micReset(mics);
+      if (!state.showMaterials) onUniforms(uRest);
     } else if (m.type === "fs:error") {
       showError(m.message || "Shader stage error", true, !!m.sticky);
     } else if (m.type === "fs:applied") {
@@ -705,6 +886,11 @@
 
   // ── Shader / model loading ──────────────────────────────────────────
   function loadShaderText(text, name) {
+    // A drop never arms and always disarms. Doing it HERE too (not only in
+    // the fs:uniforms branch) covers a shader that fails to apply and so
+    // never reports uniforms at all — otherwise the mic would stay live,
+    // driving names from the shader that is no longer loaded.
+    micReset([]);
     clearError();
     state.shaderSource = text;
     // Display name only — drop the .js/.mjs/.tsl extension from the panel.

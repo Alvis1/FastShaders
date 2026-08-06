@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import type { ShaderFlowNode } from '@/types';
+import { getNodeValues } from '@/types';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { generateId } from '@/utils/idGenerator';
+import { resetNodeValues, isAtDefaultValues, hasResettableValues } from '@/utils/resetNodeValues';
 
 /**
  * Shared building blocks for the per-node right-click settings menus
@@ -85,14 +89,16 @@ export function NumberRow({ label, value, onCommit, step = 0.05, min, max }: Num
 }
 
 /**
- * Duplicate/Delete footer shared by every per-node settings menu, so the
- * specialized menus (Stripes/Data Viz) keep the same mouse-only actions the
- * generic NodeSettingsMenu offers — not just the keyboard shortcuts.
+ * Reset/Duplicate/Delete footer shared by every per-node settings menu, so the
+ * specialized menus (Stripes/Data Viz/Colormap/Data Range) keep the same
+ * mouse-only actions the generic NodeSettingsMenu offers — not just the
+ * keyboard shortcuts.
  */
 export function NodeActions({ nodeId }: { nodeId: string }) {
   const nodes = useAppStore((s) => s.nodes);
   const addNode = useAppStore((s) => s.addNode);
   const removeNode = useAppStore((s) => s.removeNode);
+  const updateNodeData = useAppStore((s) => s.updateNodeData);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const language = useAppStore((s) => s.language);
 
@@ -113,9 +119,40 @@ export function NodeActions({ nodeId }: { nodeId: string }) {
     closeContextMenu();
   };
 
+  const node = nodes.find((n) => n.id === nodeId) as ShaderFlowNode | undefined;
+  const def = node ? NODE_REGISTRY.get(node.data.registryType) : undefined;
+  const values = node ? getNodeValues(node) : {};
+  const showReset = hasResettableValues(def, values);
+  const atDefaults = !def || isAtDefaultValues(def, values);
+
+  const handleReset = () => {
+    if (!node || !def) return;
+    // One updateNodeData → one pushHistory → one undo entry for the whole
+    // reset, however many settings it touched.
+    updateNodeData(nodeId, { values: resetNodeValues(def, values) });
+    closeContextMenu();
+  };
+
   return (
     <>
       <div className="context-menu__divider" />
+      {showReset && (
+        <button
+          className="context-menu__item"
+          onClick={handleReset}
+          // Disabled rather than hidden when nothing has changed: the row
+          // disappearing the moment a node is already at its defaults would
+          // read as the action being missing.
+          disabled={atDefaults}
+          title={
+            atDefaults
+              ? t('Already at the default values', language)
+              : t('Restore this node’s settings to their defaults', language)
+          }
+        >
+          {t('Reset Values', language)}
+        </button>
+      )}
       <button className="context-menu__item" onClick={handleDuplicate}>
         {t('Duplicate Node', language)}
       </button>

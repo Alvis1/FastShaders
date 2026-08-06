@@ -20,6 +20,7 @@ import {
 } from '@xyflow/react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, resolveDeviceTextureDim, resolveDeviceBudget } from '@/store/useAppStore';
+import type { ContextMenuType } from '@/store/useAppStore';
 import { useLongPress } from '@/hooks/useLongPress';
 import { ShaderNode } from './nodes/ShaderNode';
 import { ColorNode } from './nodes/ColorNode';
@@ -27,6 +28,7 @@ import { PreviewNode } from './nodes/PreviewNode';
 import { MathPreviewNode } from './nodes/MathPreviewNode';
 import { OutputNode } from './nodes/OutputNode';
 import { ClockNode } from './nodes/ClockNode';
+import { MicNode } from './nodes/MicNode';
 import { GroupNode } from './nodes/GroupNode';
 import { NoteNode } from './nodes/NoteNode';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
@@ -44,6 +46,10 @@ import {
 } from '@/utils/drawings';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
+import { NewShaderModal } from '@/components/Modals/NewShaderModal';
+import { ImageImportModal, type ImageImportChoice } from '@/components/Modals/ImageImportModal';
+import { ImageConvertInfoModal } from '@/components/Modals/ImageConvertInfoModal';
+import { downloadShader } from '@/engine/exportShader';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
 import { BUILTIN_TEXTURE_DRAG_TYPE } from './TextureCard';
 import { BUILTIN_PRESET_DRAG_TYPE } from './PresetCard';
@@ -75,9 +81,10 @@ import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnec
 import { bridgeEdgesAcrossDeletedNodes, makeTypedEdge, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
-import { makeImageNodeData, totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/utils/imageNode';
+import { makeImageNodeFromEncode, resolveImageDrop, totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/utils/imageNode';
+import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { usesExposedPorts, effectiveExposedPorts } from '@/utils/exposedPorts';
-import { encodeImageFile, isImageFile, isSvgFile } from '@/utils/imageImport';
+import { encodeImageFile, isImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
 import { importShaderZip, importShaderText, isZipFile } from '@/engine/projectImport';
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
 import { getNodeValues } from '@/types';
@@ -94,6 +101,19 @@ const DEFAULT_EDGE_OPTIONS = { type: 'typed', animated: true } as const;
 const FIT_VIEW_OPTIONS = { maxZoom: 1.5 } as const;
 const PRO_OPTIONS = { hideAttribution: true } as const;
 const DESKTOP_PAN_ON_DRAG = [1, 2];
+
+/**
+ * Nodes whose right-click opens a SPECIALIZED settings menu instead of the
+ * generic one. Everything absent takes `'node'`. See `ContextMenuType` in the
+ * store for why the dataviz family each need their own.
+ */
+const NODE_MENU_TYPES: Record<string, ContextMenuType> = {
+  output: 'shader',
+  stripes: 'stripes',
+  dataviz: 'dataviz',
+  colormap: 'colormap',
+  dataRange: 'dataRange',
+};
 /**
  * Modifiers that make a click ADD to the selection instead of replacing it.
  * Shift is the one users reach for; Cmd/Ctrl (React Flow's platform default)
@@ -111,6 +131,7 @@ const nodeTypes = {
   preview: PreviewNode,
   mathPreview: MathPreviewNode,
   clock: ClockNode,
+  mic: MicNode,
   output: OutputNode,
   group: GroupNode,
   note: NoteNode,
@@ -560,6 +581,25 @@ export function NodeEditor() {
   const canUndo = useAppStore((s) => s.past.length > 0);
   const canRedo = useAppStore((s) => s.future.length > 0);
   const language = useAppStore((s) => s.language);
+  // NEW button → save-first confirmation. Local state like the toolbar's
+  // feedback dialog: nothing outside this component opens it.
+  const [newShaderOpen, setNewShaderOpen] = useState(false);
+  // In-flight image imports, one ghost per file at its drop point (see
+  // placeImageFile). Screen coords: these are chrome, not graph content, so
+  // they deliberately do NOT pan/zoom with the canvas during the import.
+  const [importGhosts, setImportGhosts] = useState<
+    { id: string; x: number; y: number; name: string }[]
+  >([]);
+  // Drop-time "convert or keep?" prompt. The pending promise resolver lives in
+  // a ref so the async drop loop can await a decision the user makes in React.
+  const [convertAsk, setConvertAsk] = useState<{ count: number; fileName: string } | null>(null);
+  const convertResolver = useRef<((choice: ImageImportChoice) => void) | null>(null);
+  // One-liner shown when a requested optimization didn't happen. Structured
+  // rather than a pre-rendered string so it re-renders in the active language.
+  const [importNote, setImportNote] = useState<
+    { id: string; reason: 'no-webp' | 'preference'; storedAs: string } | null
+  >(null);
+  const [convertInfoOpen, setConvertInfoOpen] = useState(false);
   // Live in-progress stroke path, written imperatively by the draw-capture
   // handler (below) and rendered inside DrawingLayer's live opacity group.
   const livePathRef = useRef<SVGPathElement | null>(null);
@@ -1497,13 +1537,7 @@ export function NodeEditor() {
           ? 'group'
           : node.type === 'note'
             ? 'note'
-            : node.data.registryType === 'output'
-              ? 'shader'
-              : node.data.registryType === 'stripes'
-                ? 'stripes'
-                : node.data.registryType === 'dataviz'
-                  ? 'dataviz'
-                  : 'node';
+            : NODE_MENU_TYPES[node.data.registryType] ?? 'node';
       openContextMenu(event.clientX, event.clientY, menuType, node.id);
     },
     [openContextMenu]
@@ -1777,21 +1811,57 @@ export function NodeEditor() {
   // Re-encode a dropped image on the host and place an Image node at the drop
   // point. The canvas round-trip strips metadata and bounds the payload; limit
   // hits surface the LimitModal (with an override) instead of failing silently.
+  /**
+   * Decode + re-encode one dropped image and place its node.
+   *
+   * `ghostId` is the in-flight indicator already on screen for this file (the
+   * multi-drop path raises all of them up front); it is removed here whatever
+   * happens. Awaitable so a multi-file drop can queue the encodes.
+   */
+  /**
+   * The drop's convert-or-keep decision, asked ONCE per drop (not per file).
+   * A remembered answer skips the dialog entirely.
+   */
+  const askConvertMode = useCallback(
+    async (count: number, fileName: string): Promise<ImageImportChoice> => {
+      const pref = useAppStore.getState().imageConvertMode;
+      if (pref === 'always') return 'convert';
+      if (pref === 'never') return 'keep';
+      const choice = await new Promise<ImageImportChoice>((resolve) => {
+        convertResolver.current = resolve;
+        setConvertAsk({ count, fileName });
+      });
+      return choice;
+    },
+    [],
+  );
+
+  const resolveConvertAsk = useCallback((choice: ImageImportChoice, remember: boolean) => {
+    if (remember) {
+      useAppStore.getState().setImageConvertMode(choice === 'convert' ? 'always' : 'never');
+    }
+    setConvertAsk(null);
+    const resolver = convertResolver.current;
+    convertResolver.current = null;
+    resolver?.(choice);
+  }, []);
+
   const placeImageFile = useCallback(
-    (file: File, clientX: number, clientY: number) => {
+    async (file: File, clientX: number, clientY: number, ghostId: string, mode: ImageConvertMode) => {
       const position = screenToFlowPosition({ x: clientX, y: clientY });
       if (isSvgFile(file)) {
+        setImportGhosts((g) => g.filter((x) => x.id !== ghostId));
         window.alert(
           `Could not load "${file.name}":\nSVG images can't be imported — export it as PNG or WebP first.`,
         );
         return;
       }
-      void (async () => {
+      try {
         const store = useAppStore.getState();
         const ignore = store.ignoreImageLimits;
         const deviceCap = resolveDeviceTextureDim(store.selectedHeadsetId, store.costProfiles);
         const deviceLabel = resolveDeviceBudget(store.selectedHeadsetId, store.costProfiles).label;
-        const res = await encodeImageFile(file, ignore, deviceCap);
+        const res = await encodeImageFile(file, ignore, deviceCap, mode);
         if (!res.ok) {
           if (res.reason === 'too-large' || res.reason === 'pixels') {
             store.enqueueLimitNotice({
@@ -1801,24 +1871,38 @@ export function NodeEditor() {
               detail: res.width && res.height ? `${res.width}×${res.height}` : undefined,
               file,
               position,
+              convert: mode === 'convert',
             });
           } else {
             window.alert(`Could not load "${file.name}" as an image.`);
           }
           return;
         }
+
+        // Stash the pre-snap payload BEFORE anything can bail out: the record
+        // is content-keyed, so writing it for a drop the user later cancels
+        // costs one LRU slot and nothing else — whereas deferring it past the
+        // total-cap notice would leave every "Add anyway" image permanently
+        // un-revertible (the notice carries no blob). If the stash is refused,
+        // resolveImageDrop discards the snap instead of shipping it.
+        const { payload, origin } = resolveImageDrop(res, file.name, (p) =>
+          stashImageOrigin(p, Date.now()),
+        );
+
         // Per-image budget met — now check the whole-project image budget
         // (every payload is multiplied through auto-save + undo history).
-        if (!ignore && totalImageChars(useAppStore.getState().nodes) + res.dataUrl.length > MAX_TOTAL_IMAGE_CHARS) {
+        if (!ignore && totalImageChars(useAppStore.getState().nodes) + payload.dataUrl.length > MAX_TOTAL_IMAGE_CHARS) {
           store.enqueueLimitNotice({
             id: generateId(),
             kind: 'image-total-cap',
             fileName: file.name,
             file,
             position,
+            convert: mode === 'convert',
             // Carry the finished encode so "Add anyway" places exactly this
-            // payload instead of re-encoding at the relaxed dimension cap.
-            encoded: { dataUrl: res.dataUrl, width: res.width, height: res.height },
+            // payload instead of re-encoding at the relaxed dimension cap —
+            // provenance included, or the override would drop the revert.
+            encoded: { ...payload, origin },
           });
           return;
         }
@@ -1827,11 +1911,38 @@ export function NodeEditor() {
           id: generateId(),
           type: 'shader',
           position,
-          data: makeImageNodeData(res.dataUrl, res.width, res.height, cost, file.name),
+          data: makeImageNodeFromEncode(payload, cost, file.name, origin),
         } as AppNode);
+        // The user asked to optimize and it didn't happen — a WebP request on
+        // WebKit comes back as PNG, so a dropped .png can land as .jpg and
+        // look like nothing occurred. Reported as ONE line (with the detail
+        // behind its "?"), not a modal: it is information about the browser,
+        // not a decision the user has to make, and it must not stand between
+        // a drag and the canvas.
+        const storedAs =
+          res.mime === 'image/jpeg' ? 'JPEG' : res.mime === 'image/png' ? 'PNG' : res.mime === 'image/webp' ? 'WebP' : res.mime;
+        if (!store.hideImageConvertNotice) {
+          if (mode === 'convert' && !res.webpAvailable) {
+            setImportNote({ id: generateId(), reason: 'no-webp', storedAs });
+          } else if (mode === 'keep' && store.imageConvertMode === 'never') {
+            // A REMEMBERED "no" is invisible by construction — no dialog, no
+            // change, nothing to see. Without this line the feature simply
+            // looks broken, and the preference that caused it has no other
+            // way of announcing itself.
+            setImportNote({ id: generateId(), reason: 'preference', storedAs });
+          }
+        }
         // Device-aware downscale notice (informational; the node is already
         // placed). Only when the source exceeded the target headset's texture
         // cap, the user hasn't opted out of size limits, and hasn't hidden it.
+        //
+        // Deliberately NOT re-gated on "the dimensions changed at all": the
+        // power-of-two snap touches an axis on most images, and this is a
+        // BLOCKING modal — it would fire on nearly every drop. The snap is
+        // reported non-modally instead, in the node's settings menu. For the
+        // same reason the reported final size is the PRE-snap one: this
+        // dialog is about the device cap, and "downscaled to 2048×1024" would
+        // be a lie about an axis the snap rounded up.
         if (
           !ignore &&
           !store.hideImageDownscaleWarning &&
@@ -1846,12 +1957,14 @@ export function NodeEditor() {
               cap: deviceCap,
               sourceW: res.sourceWidth,
               sourceH: res.sourceHeight,
-              finalW: res.width,
-              finalH: res.height,
+              finalW: res.original?.width ?? payload.width,
+              finalH: res.original?.height ?? payload.height,
             },
           });
         }
-      })();
+      } finally {
+        setImportGhosts((g) => g.filter((x) => x.id !== ghostId));
+      }
     },
     [screenToFlowPosition, addNode],
   );
@@ -1946,9 +2059,38 @@ export function NodeEditor() {
           const off = STEP * slot++;
           placeCsvFile(csv, event.clientX + off, event.clientY + off);
         }
-        for (const img of images) {
-          const off = STEP * slot++;
-          placeImageFile(img, event.clientX + off, event.clientY + off);
+        // Images are imported ONE AT A TIME. Each import is a decode plus one
+        // or two canvas encodes; firing N concurrently piles N encoders onto
+        // the same main thread, so a five-image drop compounded into one long
+        // freeze instead of a visible cascade.
+        //
+        // The in-flight ghosts go up for ALL of them immediately, before the
+        // first encode blocks — an image import takes a few hundred ms and
+        // the node only appears at the end, so without this the canvas looks
+        // like the drop did nothing. It is the honest indicator, too: the
+        // encoders are single opaque calls with no callback and no cancel, so
+        // real progress cannot be computed.
+        const queued = images.map((img, i) => ({
+          img,
+          ghostId: generateId(),
+          x: event.clientX + STEP * (slot + i),
+          y: event.clientY + STEP * (slot + i),
+        }));
+        slot += images.length;
+        if (queued.length > 0) {
+          void (async () => {
+            // Ask BEFORE the ghosts go up: the ghosts mean "working on it",
+            // and nothing is being worked on while a dialog waits. Both
+            // answers import the image — only the conversion differs.
+            const choice = await askConvertMode(queued.length, queued[0].img.name);
+            setImportGhosts((g) => [
+              ...g,
+              ...queued.map((q) => ({ id: q.ghostId, x: q.x, y: q.y, name: q.img.name })),
+            ]);
+            for (const q of queued) {
+              await placeImageFile(q.img, q.x, q.y, q.ghostId, choice);
+            }
+          })();
         }
         // A real file drop never doubles as a tile drag — swallow it even when
         // nothing matched instead of falling through to the getData branches.
@@ -1981,7 +2123,7 @@ export function NodeEditor() {
       }
       placeTilePayload({ kind: 'node', nodeType }, event.clientX, event.clientY);
     },
-    [clearEdgeHighlight, clearConnectPreview, placeTilePayload, placeCsvFile, placeImageFile],
+    [clearEdgeHighlight, clearConnectPreview, placeTilePayload, placeCsvFile, placeImageFile, askConvertMode],
   );
 
 
@@ -2412,6 +2554,38 @@ export function NodeEditor() {
     };
   }, [isCoarsePointer, getViewport, setViewport, screenToFlowPosition]);
 
+  // The import one-liner clears itself. Keyed on the note's id so a second
+  // drop restarts the clock instead of inheriting the first one's timer, and
+  // the guard means a note dismissed by hand can't be cleared twice.
+  useEffect(() => {
+    if (!importNote) return;
+    const id = importNote.id;
+    const timer = window.setTimeout(() => {
+      setImportNote((n) => (n?.id === id ? null : n));
+    }, 12000);
+    return () => window.clearTimeout(timer);
+  }, [importNote]);
+
+  // NEW: optionally export the current shader, then reset the graph to a bare
+  // Output node (one undo entry) and frame it. The export runs FIRST — it
+  // reads the store imperatively at call time, so it must see the old graph.
+  const startNewShader = useCallback(
+    (save: boolean) => {
+      setNewShaderOpen(false);
+      if (save) downloadShader();
+      useAppStore.getState().newGraph();
+      // The viewport is unchanged by the reset, so the lone Output node at the
+      // origin can land off-screen. Two frames, like the tile-drop snap: the
+      // first lets React commit the node, the second lets React Flow measure
+      // it — fitView frames the MEASURED box, and an unmeasured node would be
+      // fitted as a zero-size point at maxZoom.
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => fitView(FIT_VIEW_OPTIONS)),
+      );
+    },
+    [fitView],
+  );
+
   return (
     <div className="node-editor" style={canvasCssVars}>
       <div
@@ -2442,6 +2616,17 @@ export function NodeEditor() {
         <div className="node-editor__cost-overlay">
           <CostBar />
         </div>
+        {/* Top-RIGHT chrome, immediately left of the cost pill: start a fresh
+            shader. Kept well away from the bottom-left working bar — it throws
+            the whole document away (undoably, and after a save offer). */}
+        <button
+          type="button"
+          className="node-editor__new-btn"
+          onClick={() => setNewShaderOpen(true)}
+          title={t('Start a new shader — offers to export the current one first; can be undone with Ctrl+Z / ⌘Z', language)}
+        >
+          {t('New', language)}
+        </button>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -2621,7 +2806,62 @@ export function NodeEditor() {
           </Panel>
         </ReactFlow>
 
+        {/* In-flight image imports. Fixed-positioned at the drop point and
+            pointer-events:none, so they never intercept a drag; the pulse is
+            a compositor-only transform/opacity animation, which keeps running
+            while the encoder blocks the main thread. */}
+        {importGhosts.map((g) => (
+          <div
+            key={g.id}
+            className="node-editor__import-ghost"
+            style={{ left: g.x, top: g.y }}
+            aria-hidden="true"
+          >
+            <span className="node-editor__import-ghost-dot" />
+            {t('Importing image…', language)}
+          </div>
+        ))}
+
+        {/* Import one-liner: what happened, a "?" for why, and a dismiss.
+            Top-centre — the only free edge of the canvas (NEW is top-left,
+            the cost pill top-right, the tool bar bottom-left). */}
+        {importNote && (
+          <div className="node-editor__import-note" role="status">
+            <span>
+              {(importNote.reason === 'preference'
+                ? t('Not optimized (set to “Never”) — stored as {fmt}', language)
+                : t('Not optimized — stored as {fmt}', language)
+              ).replace('{fmt}', () => importNote.storedAs)}
+            </span>
+            <button
+              type="button"
+              className="node-editor__import-note-btn"
+              onClick={() => setConvertInfoOpen(true)}
+              title={t('Why?', language)}
+              aria-label={t('Why?', language)}
+            >
+              ?
+            </button>
+            <button
+              type="button"
+              className="node-editor__import-note-btn"
+              onClick={() => setImportNote(null)}
+              title={t('Dismiss', language)}
+              aria-label={t('Dismiss', language)}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+        <ImageConvertInfoModal open={convertInfoOpen} onClose={() => setConvertInfoOpen(false)} />
+
         {contextMenu.open && <ContextMenu />}
+        <ImageImportModal request={convertAsk} onResolve={resolveConvertAsk} />
+        <NewShaderModal
+          open={newShaderOpen}
+          onCancel={() => setNewShaderOpen(false)}
+          onConfirm={startNewShader}
+        />
       </div>
       <ContentBrowser />
     </div>

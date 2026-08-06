@@ -20,6 +20,12 @@ serde = { version = "1", features = ["derive"] }
 tiny_http = "0.12"
 local-ip-address = "0.6"
 percent-encoding = "2"
+# Work folder (see src/work_folder.rs): native folder picker (Rust-side only —
+# no webview dialog permissions), shader-name extraction from the project
+# block, base64 payloads over IPC.
+tauri-plugin-dialog = "2"
+serde_json = "1"
+base64 = "0.22"
 
 [profile.release]
 # Small-binary settings: the shell is a thin webview host, favor size.

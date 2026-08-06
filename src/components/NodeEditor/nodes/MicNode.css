@@ -1,0 +1,60 @@
+@import './NodeBase.css';
+
+/* The Mic node places every element itself — see MicNode.tsx. Nothing here is
+   in flow except the header, so mounting or unmounting a socket cannot move
+   anything. Colours are literals: graph nodes must render identically in light
+   and dark. */
+.mic-node {
+  position: relative;
+  width: 150px;
+}
+
+.mic-node__body {
+  position: relative;
+}
+
+/* Handles are positioned by an inline `top` (px from the body's top edge) and
+   sit ON the card border, like ClockNode's. translateY only — never a hover
+   transform, which would move the socket under the cursor. */
+.mic-node__body > .react-flow__handle {
+  transform: translateY(-50%) !important;
+}
+
+.mic-node__body > .react-flow__handle-left {
+  left: calc(var(--handle-size) / -2) !important;
+}
+
+.mic-node__body > .react-flow__handle-right {
+  right: calc(var(--handle-size) / -2) !important;
+}
+
+/* Value chip for a parameter, anchored to the same `top` as its socket so the
+   two always read as one row even though neither is in flow. */
+.mic-node__val {
+  position: absolute;
+  left: 8px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+}
+
+/* A wired param is driven by its edge, so the stored number is dead — say so
+   rather than showing an editable box the shader ignores. */
+.mic-node__wired {
+  font-size: 9px;
+  line-height: 1;
+  color: #2d6cdf;
+  font-family: var(--font-mono);
+}
+
+/* The arm light, centred in the body. Sizing/colour/blink live in
+   ShaderNode.css so the canvas node and the palette tile share one definition;
+   only the placement is here. */
+.mic-node .shader-node__mic-btn {
+  position: absolute;
+  left: 50%;
+  top: 104px;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  z-index: 1;
+}

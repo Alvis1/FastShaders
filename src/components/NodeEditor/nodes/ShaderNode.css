@@ -132,6 +132,21 @@
   pointer-events: none;
 }
 
+/* Colormap node: the ramp the node is set to, drawn on the card. A colormap
+   picked by NAME is unrecognizable on a canvas — the strip is what tells you at
+   a glance that this branch is viridis and that one is cool-warm. Fixed width so
+   .node-base (width: fit-content) can't be stretched by it, and inert like the
+   image thumbnail so sockets and the stack shadow stay the only depth cues. */
+.shader-node__colormap-strip {
+  display: block;
+  width: 96px;
+  height: 12px;
+  margin: 4px 6px 2px;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
 /* ===== Operator layout (2-input glyph node: glyph BETWEEN the two inputs) ===== */
 .shader-node__op {
   position: relative;
@@ -174,5 +189,81 @@
    is centred, so they rarely meet at all. */
 .shader-node__op-val > .drag-num {
   border-radius: 3px;
+}
+
+
+/* ── Mic node arm/disarm light ────────────────────────────────────────────
+   A round indicator ON the node: GREEN when a microphone is available and
+   idle, blinking RED while capturing, grey when it cannot run. It sits where
+   the capability is, so a glance at the graph says WHICH node is listening —
+   the browser's own indicator is per-tab and cannot.
+
+   Every colour is a LITERAL, not a token: graph nodes must render identically
+   in light and dark (see the theme convention), and --node-* tokens are
+   deliberately not redefined in the dark block. */
+.shader-node__mic-btn {
+  display: block;
+  width: 54px;
+  height: 54px;
+  margin: 8px auto 6px;
+  padding: 0;
+  border: 2px solid rgba(0, 0, 0, 0.35);
+  border-radius: 50%;
+  background: #35c759;
+  cursor: pointer;
+  /* Not a socket — the socket-static rule does not apply here — but keep the
+     transition off colour so the live blink is the only motion on the card. */
+  transition: none;
+}
+
+.shader-node__mic-btn:hover:not(:disabled) {
+  border-color: rgba(0, 0, 0, 0.6);
+}
+
+/* Waiting on the permission prompt: amber, steady. Deliberately NOT blinking —
+   blinking must mean "the microphone is open", and during the prompt it is
+   not yet. */
+.shader-node__mic-btn.is-starting {
+  background: #f0a500;
+  cursor: progress;
+}
+
+/* Live. The blink is the whole point: a static red dot reads as decoration,
+   and an open microphone should be impossible to miss on a busy graph. */
+.shader-node__mic-btn.is-live {
+  background: #e03131;
+  border-color: rgba(0, 0, 0, 0.55);
+  animation: fs-mic-blink 1s steps(1, end) infinite;
+}
+
+@keyframes fs-mic-blink {
+  0%, 49% {
+    background: #e03131;
+    box-shadow: 0 0 10px 3px rgba(224, 49, 49, 0.7);
+  }
+  50%, 100% {
+    background: #7a1c1c;
+    box-shadow: none;
+  }
+}
+
+/* Respect a reduced-motion preference: keep the red + glow (the SIGNAL that
+   the mic is open) and drop only the flashing. Removing the indicator itself
+   would trade an accessibility win for a privacy loss. */
+@media (prefers-reduced-motion: reduce) {
+  .shader-node__mic-btn.is-live {
+    animation: none;
+    box-shadow: 0 0 10px 3px rgba(224, 49, 49, 0.7);
+  }
+}
+
+.shader-node__mic-btn.is-failed {
+  background: #e08a1e;
+}
+
+.shader-node__mic-btn:disabled {
+  background: #b9bec4;
+  border-color: rgba(0, 0, 0, 0.25);
+  cursor: not-allowed;
 }
 

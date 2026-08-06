@@ -11,35 +11,33 @@
  * compose exactly what runs:
  *   - edcore.main.js — editor core + every editor feature, ZERO languages
  *   - editor.api.js  — the typed API namespace; same module instances
- *     edcore.main re-exports, so mutating `languages` below is visible
+ *     edcore.main re-exports, so language registrations are visible
  *     everywhere (including tslLanguage.ts via the loader)
- *   - the TypeScript language client + the javascript/typescript tokenizers
- *     (javascript's Monarch grammar is defined in terms of typescript's)
+ *   - the javascript/typescript Monarch tokenizers (javascript's grammar is
+ *     defined in terms of typescript's) for syntax highlighting
+ *
+ * Deliberately NO TypeScript language service: its ts.worker was the single
+ * largest dist asset (7MB) and it spun up on every boot only to type-check
+ * against an all-`any` TSL declaration file — worthless diagnostics at a
+ * 7MB/boot price. Completions come from tslLanguage.ts's registry-fed
+ * provider plus Monaco's built-in word-based suggestions; real syntax errors
+ * surface through the Apply path's Babel parse.
  */
 import 'monaco-editor/esm/vs/editor/edcore.main.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
-import * as tsContribution from 'monaco-editor/esm/vs/language/typescript/monaco.contribution.js';
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js';
 import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import { loader, type Monaco } from '@monaco-editor/react';
 
-// editor.main.js normally installs the `monaco.languages.typescript` namespace
-// (javascriptDefaults & co) on the API object; with the cherry-picked build we
-// attach it ourselves — tslLanguage.ts reads
-// `monaco.languages.typescript.javascriptDefaults` at editor mount.
-Object.assign(monaco.languages, { typescript: tsContribution });
-
 self.MonacoEnvironment = {
-  getWorker(_workerId: string, label: string) {
-    if (label === 'typescript' || label === 'javascript') return new tsWorker();
+  getWorker() {
     return new editorWorker();
   },
 };
 
 // The cast is deliberate: editor.api's own .d.ts doesn't know about the
-// language namespaces attached above (their types live in editor.main.d.ts,
+// basic-language registrations above (their types live in editor.main.d.ts,
 // which is what `Monaco` aliases). The runtime object carries everything the
-// app touches; the css/html/json namespaces it lacks are never used.
+// app touches; the language-service namespaces it lacks are never used.
 loader.config({ monaco: monaco as unknown as Monaco });

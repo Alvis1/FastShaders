@@ -16,6 +16,7 @@ import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { perlin2D, fbm2D, cellNoise2D, voronoi2D } from '@/utils/noisePreview';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { sameGraphSemantics } from '@/utils/graphSemantics';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
 const NOISE_UV_SCALE = 4;
@@ -112,6 +113,17 @@ function timeBucket<V>(buckets: Map<number, Map<string, V>>, time: number): Map<
 
 const ctxByNodes = new WeakMap<AppNode[], WeakMap<AppEdge[], EvalCtx>>();
 
+/**
+ * Every drag pointermove replaces the store's arrays, which would discard the
+ * ctx (indexes + all eval/range/shape caches) 60×/s and force selectors to
+ * re-evaluate the whole graph per frame. Before building anew, re-register the
+ * previous ctx when the graphs are semantically equal — evaluation reads node
+ * `data` and edge endpoints only, never canvas position or selection, so the
+ * caches stay exactly valid (the stale node objects the indexes hold share
+ * their `data` references with the new array by construction of the check).
+ */
+let lastCtx: { nodes: AppNode[]; edges: AppEdge[]; ctx: EvalCtx } | null = null;
+
 function getCtx(nodes: AppNode[], edges: AppEdge[]): EvalCtx {
   let byEdges = ctxByNodes.get(nodes);
   if (!byEdges) {
@@ -119,6 +131,14 @@ function getCtx(nodes: AppNode[], edges: AppEdge[]): EvalCtx {
     ctxByNodes.set(nodes, byEdges);
   }
   let ctx = byEdges.get(edges);
+  if (
+    !ctx &&
+    lastCtx &&
+    sameGraphSemantics(lastCtx.nodes, nodes, lastCtx.edges, edges)
+  ) {
+    ctx = lastCtx.ctx;
+    byEdges.set(edges, ctx);
+  }
   if (!ctx) {
     const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
     ctx = {
@@ -139,6 +159,7 @@ function getCtx(nodes: AppNode[], edges: AppEdge[]): EvalCtx {
     // groups → unwrap returns the input array and this is a no-op.)
     if (unwrapped !== edges) byEdges.set(unwrapped, ctx);
   }
+  lastCtx = { nodes, edges, ctx };
   return ctx;
 }
 
@@ -448,6 +469,16 @@ function evaluate(
       result = [time * (Number.isFinite(s) ? s : 1)];
       break;
     }
+    case 'micNode':
+      // Constant silence, never live — and 0 rather than a mid-scale value on
+      // purpose. This evaluator drives the node-card thumbnails and also runs
+      // inside node-editor.html, which has no preview iframe and no capture at
+      // all; 0.5 would make a card disagree with the 3D preview (which really
+      // is 0 until the user arms the mic) and with a downloaded shader. A card
+      // that reads black because the mic is silent is honest; one that reads
+      // grey because the evaluator guessed is a bug report waiting to happen.
+      result = [0];
+      break;
     case 'float':
     case 'int':
     case 'property_float':

@@ -4,11 +4,16 @@ Authoritative spec for how FastShaders **nodes** look and how the **Node Designe
 (`node-designer.html`) behaves. **Read this before changing node visuals, the
 glyph system, `ShaderNode`, `NodePreviewCard`, or the designer tool.**
 
-Implemented in: `src/components/NodeEditor/nodes/ShaderNode.tsx`,
-`.../nodes/NodeBase.css` (header/body/border/cost-badge + `.node-base__stack`),
+Implemented in: `src/components/NodeEditor/nodes/ShaderNode.tsx` (the LIVE node),
+`.../nodes/NodeVisual.tsx` (THE static replica — one component behind every
+preview surface: asset cards via `NodePreviewCard.tsx`, the node-editor.html
+overview, and the Node Designer's stage), `.../nodes/NodeBase.css`
+(header/body/border/cost-badge + `.node-base__stack`),
 `.../nodes/glyphs/NodeGlyph.tsx`, `.../glyphs/customGlyphs.ts`,
-`.../handles/TypedHandle.{tsx,css}`, `NodePreviewCard.tsx`, and `node-designer.html`
-(root + `public/` copy). See `CONTEXT.md → Node Visual Anatomy` for the prose version.
+`.../handles/TypedHandle.{tsx,css}`, and `node-designer.html` + `src/nodeDesigner/`
+(a Vite entry — no `public/` copy exists). ShaderNode and NodeVisual mirror each
+other — **change them together**. See `CONTEXT.md → Node Visual Anatomy` for the
+prose version.
 
 ## Node anatomy (live nodes + asset cards)
 
@@ -106,6 +111,15 @@ Implemented in: `src/components/NodeEditor/nodes/ShaderNode.tsx`,
     **grows the rendered glyph ONLY** — it never changes socket/value spacing. In the
     operator layout the body keeps its 52px base height and grows **just enough to
     contain a larger glyph** (`max(52, glyphPx + 10)`).
+11a. **Movable node ART**: a node whose visualization is a real element rather
+    than an SVG glyph (today: the **Colormap ramp strip**) applies the SAME
+    stored fields — `dx`/`dy` nudge + `scale` — to that element via
+    `nodeArtStyle` (NodeGlyph.tsx) as a **purely visual CSS transform**: the
+    art's layout slot, the sockets and the rows never move (the glyph-nudge
+    convention). Units are **CSS px** here, not glyph-space units; the two
+    meanings can't collide because art nodes are glyph-less by design
+    (`glyphCoverage.test.ts` pins the exemption). In the designer, dragging
+    the ramp nudges it exactly like dragging a glyph.
 
 ## Layout
 
@@ -268,15 +282,26 @@ the output node's channels, and the Image node (`uv`, `tileX/tileY`,
     reference. Aligned axes write exact coordinates; alignment beats the grid.
 20. **Glyph scale** number (glyph-only; spacing fixed), **glyph nudge dx/dy** (also
     editable by **dragging the glyph on the canvas**; a plain click still opens the
-    editor), **Width / Height** controls, **movable sockets** (drag a socket ↕ along
+    editor — and on ART nodes like Colormap, **dragging the ramp nudges it** the
+    same way, in CSS px; clicking art does nothing), **Width / Height** controls,
+    **movable sockets** (drag a socket ↕ along
     the border — 4px-snapped ruler appears while dragging; plain click still cycles
     its state; "Reset positions" restores defaults), and a draggable corner handle
     on the node — **drag → width, ↕ → height** (resizing the node never scales the
     glyph). Corner radius / border have **no controls** — they're fixed app-wide.
 21. **Input justify** setting (left / center / right).
-22. **Preview matches the live node**: operator layout for 2-input, centered numbers,
-    output socket has no text, `DragNumberInput`-style boxes (◂ ▸, scrub, type),
-    10px sockets, 14px header, cost-based node scale, exact shadows/paddings.
+22. **The preview IS the live renderer.** The designer stage mounts the app's
+    own `NodeVisual` (via `src/nodeDesigner/bridge.tsx`) with the draft design
+    and the preview states — same components (`NodeGlyph`, real
+    `DragNumberInput`), same CSS files, same fonts, same override helpers as
+    the editor and the asset cards. Never reintroduce a hand-written DOM/CSS
+    mimic of the node into `node-designer.html`: that copy is what drifted
+    for its whole lifetime (missing dataviz nodes, the blank colormap,
+    imprecise spacing/typography). Designer-only affordances (gesture
+    cursors, hover hints, the corner resize handle, the snap ruler, edge
+    stubs) stay in the page's own CSS/JS, layered onto the replica by
+    delegation — the designer edits the model and re-renders, never the
+    React-owned DOM. `designerEntry.test.ts` guards the wiring.
 23. **Save** writes the per-node design `{ svg?, justify?, scale?, dx?, dy?, width?,
     height?, text?, sockets? }` into `src/components/NodeEditor/nodes/glyphs/customGlyphs.ts`.
     Persistence picks the best available path, in order: **(1) the vite dev-server
@@ -308,7 +333,9 @@ the output node's channels, and the Image node (`uv`, `tileX/tileY`,
 
 - `npx tsc --noEmit`
 - `npm test` (vitest, expect all green)
-- `npm run build` (bundle phase; the post-build `ShaderCarousel` copy may `EPERM` in a
-  sandbox — that's environmental, not a code failure)
-- For the tool: extract `<script>` and `node --check` it; round-trip the
-  `customGlyphs.ts` save format (`fileContent`/`parseGlyphs`).
+- `npm run build` (bundle phase — this now also compiles the designer entry
+  and its whole module graph, so a broken `src/nodeDesigner/*` fails the
+  build; the post-build `ShaderCarousel` copy may `EPERM` in a sandbox —
+  that's environmental, not a code failure)
+- For the tool: round-trip the `customGlyphs.ts` save format
+  (`fileContent`/`parseGlyphs` in `src/nodeDesigner/designerApp.ts`).

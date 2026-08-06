@@ -8,11 +8,12 @@ import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
-import { NodeGlyph, hasNodeGlyph, nodeJustify, nodeScale, nodeBox, nodeSockets, nodeTextScale } from './glyphs/NodeGlyph';
+import { NodeGlyph, hasNodeGlyph, nodeJustify, nodeScale, nodeBox, nodeSockets, nodeTextScale, nodeArtStyle } from './glyphs/NodeGlyph';
 import { evaluateNodeOutput, evaluateNodeRange, getNodeOutputShape, getTargetEdges } from '@/engine/cpuEvaluator';
 import { makeConnectionRevealSelector } from './connectionReveal';
 import { RevealSockets } from './RevealSockets';
-import { validImageDataUrl } from '@/utils/imageNode';
+import { displayImageFileName, validImageDataUrl } from '@/utils/imageNode';
+import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import './ShaderNode.css';
 
 function fmtNum(n: number): string {
@@ -394,7 +395,13 @@ export const ShaderNode = memo(function ShaderNode({
   // PreviewNode's exposedKey. The reveal flag is part of the key: floating
   // RevealSockets mount mid-drag and must enter React Flow's bounds map to
   // be snappable.
-  const exposedKey = effDef.inputs.map((inp) => inp.id).join('|') + (revealHidden ? '|R' : '');
+  // The exposed set is part of the key: micNode keeps all its inputs in
+  // effDef, so without this React Flow would never re-measure when a socket
+  // is ticked on or off and the new handle would report a stale position.
+  const exposedKey =
+    effDef.inputs.map((inp) => inp.id).join('|') +
+    '#' + [...exposedInputs].sort().join(',') +
+    (revealHidden ? '|R' : '');
   useEffect(() => {
     updateNodeInternals(id);
   }, [id, opSocketCount, exposedKey, updateNodeInternals]);
@@ -630,10 +637,16 @@ export const ShaderNode = memo(function ShaderNode({
         </span>
       </div>
 
-      {/* Data/Image node: source filename under the header (wraps if long). */}
+      {/* Data/Image node: source filename under the header (wraps if long).
+          For an Image node the EXTENSION is the stored payload's, not the
+          dropped file's — a re-encode routinely leaves a `.png` name on WebP
+          or JPEG bytes, and the card must not assert a format the node
+          doesn't hold. The title keeps the name as dropped. */}
       {(data.registryType === 'dataNode' || data.registryType === 'imageNode') && data.values?.fileName && (
         <div className="shader-node__file-name" title={String(data.values.fileName)}>
-          {String(data.values.fileName)}
+          {data.registryType === 'imageNode'
+            ? displayImageFileName(data.values.fileName, data.values.imageB64)
+            : String(data.values.fileName)}
         </div>
       )}
 
@@ -641,7 +654,43 @@ export const ShaderNode = memo(function ShaderNode({
           imageThumbUrl memo). Sized by CSS, no shadow/hover of its own, so it
           never fights the socket-static or stack-shadow rules. */}
       {imageThumbUrl && (
-        <img className="shader-node__image-thumb" src={imageThumbUrl} alt="" draggable={false} />
+        <img
+          className="shader-node__image-thumb"
+          src={imageThumbUrl}
+          alt=""
+          draggable={false}
+          // Drop-time power-of-two snapping changes the stored pixel aspect
+          // (1920×1080 → 2048×1024). That is invisible on the mesh — uv()
+          // maps any texture across [0,1] — so the CARD must not be the one
+          // place that shows a stretched picture. When the pre-snap
+          // dimensions are recorded, the thumbnail is drawn at THEM.
+          style={
+            Number(data.values.srcWidth) > 0 && Number(data.values.srcHeight) > 0
+              ? { aspectRatio: `${Number(data.values.srcWidth)} / ${Number(data.values.srcHeight)}`, objectFit: 'fill' }
+              : undefined
+          }
+        />
+      )}
+
+      {/* Colormap node: the ramp it is currently set to. Reads the same
+          gradient helper the settings menu and the picker use, so the card,
+          the preview and the baked LUT can never show three different maps.
+          The ramp is this node's ART, so the designer's dx/dy/scale apply to
+          it (nodeArtStyle) — a purely visual transform that never moves
+          sockets or rows. */}
+      {data.registryType === 'colormap' && (
+        <div
+          className="shader-node__colormap-strip"
+          title={getColormap(data.values?.map).label}
+          style={{
+            background: colormapGradientCss(
+              getColormap(data.values?.map),
+              Number(data.values?.reverse ?? 0) >= 0.5,
+              Math.floor(Number(data.values?.levels ?? 0)),
+            ),
+            ...nodeArtStyle(data.registryType),
+          }}
+        />
       )}
 
       {/* Below-header region: glyph + rows. Wrapping both lets a designer-moved

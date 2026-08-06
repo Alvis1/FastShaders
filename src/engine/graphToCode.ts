@@ -1,16 +1,35 @@
 import { parseExpression } from '@babel/parser';
 import type { Node } from '@babel/types';
-import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, TSLDataType } from '@/types';
+import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData, TSLDataType } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
-import { decodeDataNode } from '@/utils/dataNode';
+import { decodeDataNode, columnForHandle } from '@/utils/dataNode';
+import { readMicSettings } from '@/utils/micNode';
+import { MIC_CHANNELS, micUniformName, micChannelForHandle } from '@/utils/micAnalysis';
+import type { MicChannel } from '@/utils/micAnalysis';
 import { imageAssetFor } from './imageAssets';
 // Shape inference (1-4 channels) — the same authority the edge/preview layer
 // uses, so codegen and the UI agree on what counts as a scalar.
 import { getNodeOutputShape, shapeOfDataType } from './cpuEvaluator';
-import { minMax, normalize01, capToWidth, buildPhaseRamp, MAX_TEXTURE_WIDTH } from '@/utils/dataViz';
+import {
+  minMax,
+  normalize01,
+  capToWidth,
+  buildPhaseRamp,
+  columnStats,
+  planNormalize,
+  isNormalizeMode,
+  MAX_TEXTURE_WIDTH,
+} from '@/utils/dataViz';
+import {
+  getColormap,
+  buildColormapLut,
+  LUT_SIZE,
+  LUT_COORD_SCALE,
+  LUT_COORD_OFFSET,
+} from '@/utils/colormaps';
 import { float32ToBase64, float16ToBase64 } from '@/utils/binaryCodec';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { getComponentCount } from './cpuEvaluator';
@@ -43,11 +62,8 @@ function traceSignalColumn(
 ): { capped: Float32Array; cnorm: Float32Array } | null {
   if (!signalEdge) return null;
   const src = sorted.find((n) => n.id === signalEdge.source);
-  const m = /^col(\d+)$/.exec(signalEdge.sourceHandle ?? '');
-  if (!src || src.data.registryType !== 'dataNode' || !m) return null;
-  const col = decodeDataNode(getNodeValues(src))?.columns[Number(m[1])];
-  if (!col || col.length <= 1) return null;
-  const capped = capToWidth(col, MAX_TEXTURE_WIDTH);
+  const capped = columnForHandle(src?.data as ShaderNodeData | undefined, signalEdge.sourceHandle);
+  if (!capped) return null;
   return { capped, cnorm: normalize01(capped, minMax(capped)) };
 }
 
@@ -61,6 +77,62 @@ function bakeHalfFloatTexture(setupLines: string[], name: string, data: Float32A
   setupLines.push(`${name}.minFilter = globalThis.THREE.LinearFilter;`);
   setupLines.push(`${name}.magFilter = globalThis.THREE.LinearFilter;`);
   setupLines.push(`${name}.needsUpdate = true;`);
+}
+
+/**
+ * Variable base names for nodes whose `tslFunction` is empty because
+ * graphToCode emits them by hand. Without an entry a node falls through to the
+ * empty-string fallback and every instance collides on the same name.
+ */
+const CUSTOM_EMISSION_BASENAMES: Record<string, string> = {
+  stripes: 'stripes',
+  dataviz: 'dataviz',
+  imageNode: 'image',
+  colormap: 'colormap',
+  dataRange: 'norm',
+  isolines: 'isolines',
+};
+
+/** Emit the setup lines for a 256-texel RGBA colormap LUT. Values are baked in
+ *  LINEAR light (see buildColormapLut) and the texture carries no colour-space
+ *  tag, so the fetch needs no conversion. ClampToEdge is what makes an
+ *  out-of-range `t` saturate at the ramp ends instead of wrapping around to the
+ *  opposite colour. */
+function bakeColormapTexture(setupLines: string[], name: string, lut: Float32Array): void {
+  setupLines.push(
+    `const ${name} = new globalThis.THREE.DataTexture(${f16Decode(float16ToBase64(lut))}, ${LUT_SIZE}, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.HalfFloatType);`,
+  );
+  setupLines.push(`${name}.minFilter = globalThis.THREE.LinearFilter;`);
+  setupLines.push(`${name}.magFilter = globalThis.THREE.LinearFilter;`);
+  setupLines.push(`${name}.wrapS = globalThis.THREE.ClampToEdgeWrapping;`);
+  setupLines.push(`${name}.wrapT = globalThis.THREE.ClampToEdgeWrapping;`);
+  setupLines.push(`${name}.needsUpdate = true;`);
+}
+
+/**
+ * Resolve a numeric node parameter: the upstream variable when a wire is
+ * attached, otherwise the stored number rendered through `num()`.
+ *
+ * Deliberately NOT `resolveExposedParam`, which interpolates the stored value
+ * with a bare `String()`. Every value here can arrive from a `.fastshader`
+ * file, and these are emitted into a module that the XR popup executes at the
+ * app's real origin — so the unwired branch must be a number or nothing.
+ */
+function numericParam(
+  node: AppNode,
+  key: string,
+  fallback: number,
+  edges: AppEdge[],
+  varNames: Map<string, string>,
+  sorted: AppNode[],
+): string {
+  const edge = edges.find((e) => e.target === node.id && e.targetHandle === key);
+  if (edge) {
+    const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+    if (ref) return ref;
+  }
+  const raw = Number(getNodeValues(node)[key]);
+  return num(Number.isFinite(raw) ? raw : fallback);
 }
 
 /** Sampling coordinate in [0, 1]: uv.x (linear) or normalized radius from a
@@ -321,14 +393,33 @@ export function graphToCode(
       continue;
     }
 
-    // Stripes / Data Viz / Image nodes have no tslFunction (custom emission),
-    // so give them explicit bases instead of the empty-string fallback below.
-    if (def.type === 'stripes' || def.type === 'dataviz' || def.type === 'imageNode') {
-      const baseName =
-        def.type === 'stripes' ? 'stripes'
-          : def.type === 'dataviz' ? 'dataviz'
-            : 'image';
-      varNames.set(node.id, claimName(baseName));
+    // Mic nodes have the same aliasing problem as data nodes: the node emits
+    // `<var>_<channel>` identifiers, not `<var>`, so claiming only the base
+    // leaves `mic1_bass` free for a user property to take — and the emitted
+    // `const mic1_bass = uniform(0);` then collides with the property's own
+    // `const mic1_bass = uniform(...)`. Duplicate declaration = SyntaxError =
+    // the whole module fails to load, not just this node.
+    if (def.type === 'micNode') {
+      const refChannels = new Set<MicChannel>();
+      for (const e of edges) {
+        if (e.source === node.id) refChannels.add(micChannelForHandle(e.sourceHandle));
+      }
+      varNames.set(node.id, claimName('mic', {
+        // Both the uniform AND its gained twin (`_mic1_bass`) share the Fn-body
+        // namespace, so both must be reserved or a user property could take one.
+        aliases: (name) =>
+          [...refChannels].flatMap((ch) => {
+            const u = micUniformName(name, ch);
+            return [u, `_${u}`];
+          }),
+      }));
+      continue;
+    }
+
+    // Nodes with no tslFunction (custom emission) need an explicit base name
+    // instead of the empty-string fallback below.
+    if (CUSTOM_EMISSION_BASENAMES[def.type]) {
+      varNames.set(node.id, claimName(CUSTOM_EMISSION_BASENAMES[def.type]));
       continue;
     }
 
@@ -379,6 +470,45 @@ export function graphToCode(
       addImport('three/tsl', name);
     }
   }
+
+  /**
+   * Channel count of the specific OUTPUT PORT an edge leaves from.
+   *
+   * Node-level inference is not enough: a multi-output node reports the shape
+   * of `outputs[0]`, so Data Viz (out: vec3, value: float) claimed 3 channels
+   * even for an edge leaving its scalar `value` socket — and the Output-channel
+   * widening was skipped, putting a bare float in colorNode again by a second
+   * route. The declared port type wins; node-level inference is the fallback
+   * for `any`-typed ports (arithmetic chains).
+   *
+   * Defined HERE, above the emission loop, because the dataviz-family branches
+   * need it too: nothing validates connection types, so a vec3 can land on a
+   * scalar `value` input and would otherwise reach `vec2(<vec3>, 0.5)`, which is
+   * a compile error rather than a wrong picture.
+   */
+  const shapeOfEdgeSource = (edge: AppEdge): number => {
+    const srcNode = sorted.find((n) => n.id === edge.source);
+    const handle = edge.sourceHandle ?? 'out';
+    const dyn = (srcNode?.data as { dynamicOutputs?: { id: string; dataType: TSLDataType }[] })
+      ?.dynamicOutputs;
+    const srcDef = srcNode ? registry.get(srcNode.data.registryType) : undefined;
+    const port = dyn?.find((o) => o.id === handle) ?? srcDef?.outputs.find((o) => o.id === handle);
+    const declared = port ? shapeOfDataType(port.dataType) : 0;
+    if (declared > 0) return declared;
+    return getNodeOutputShape(edge.source, nodes, edges);
+  };
+
+  /**
+   * The scalar an edge carries: the plain reference when the source is
+   * 1-channel, its `.x` otherwise. Used by the dataviz-family nodes, whose
+   * inputs are all scalars.
+   */
+  const scalarRefOf = (edge: AppEdge | undefined): string | null => {
+    if (!edge) return null;
+    const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+    if (!ref) return null;
+    return shapeOfEdgeSource(edge) === 1 ? ref : `${ref}.x`;
+  };
 
   // Build body lines
   const bodyLines: string[] = [];
@@ -598,8 +728,13 @@ export function graphToCode(
       const nv = getNodeValues(node);
       const bf = Number(nv.baseFrequency ?? 80);
       const dens = Number(nv.density ?? 1.5);
-      const lo = hexToRgb01(String(nv.lowColor ?? '#1b2a4a'));
-      const hi = hexToRgb01(String(nv.highColor ?? '#ffd24d'));
+      // Ramp endpoints go out as `color(0x…)`, NOT `vec3(r/255, …)`.
+      // THREE.Color converts a hex from sRGB into the renderer's linear working
+      // space (ColorManagement, on by default since r152); a bare vec3 of
+      // hex/255 does not, so the same swatch rendered lighter here than on a
+      // Color node, and the two endpoints were interpolated in the wrong space.
+      const lo = hexLiteral(nv.lowColor ?? '#1b2a4a');
+      const hi = hexLiteral(nv.highColor ?? '#ffd24d');
       // Radial ("target"/tree-ring) mode: index the data by distance from a
       // choosable center instead of uv.x, so the bands become concentric rings.
       const radial = Number(nv.radial ?? 0) >= 0.5;
@@ -610,7 +745,7 @@ export function graphToCode(
       // heatmap (no stripes, colour alone shows the data); ~0.75 = bold stripes.
       const lineStrength = Math.min(Math.max(Number(nv.lineStrength ?? 0.75), 0), 1);
       addImport('three/tsl', 'float');
-      addImport('three/tsl', 'vec3');
+      addImport('three/tsl', 'color');
       addImport('three/tsl', 'uv');
       addImport('three/tsl', 'dFdx');
       addImport('three/tsl', 'dFdy');
@@ -669,9 +804,7 @@ export function graphToCode(
       bodyLines.push(`  const ${lnS} = ${ln}.mix(float(0.5), ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`);
       bodyLines.push(`  const ${br} = float(1.0).sub(${lnS}.mul(${num(lineStrength)}));`);
       bodyLines.push(`  const ${t} = ${colorT};`);
-      bodyLines.push(
-        `  const ${col} = vec3(${num(lo[0])}, ${num(lo[1])}, ${num(lo[2])}).mix(vec3(${num(hi[0])}, ${num(hi[1])}, ${num(hi[2])}), ${t});`,
-      );
+      bodyLines.push(`  const ${col} = color(${lo}).mix(color(${hi}), ${t});`);
       bodyLines.push(`  const ${varName} = ${col}.mul(${br});`);
     } else if (def.type === 'dataviz') {
       // Data Viz: a single Data column distributed along one axis (or radially)
@@ -689,13 +822,15 @@ export function graphToCode(
       // (lower midpoint → brighter midtones). Kept strictly inside (0,1) so the
       // log is finite.
       const midpoint = Math.min(Math.max(Number(nv.midpoint ?? 0.5), 1e-3), 1 - 1e-3);
-      const lo = hexToRgb01(String(nv.lowColor ?? '#1b2a4a'));
-      const hi = hexToRgb01(String(nv.highColor ?? '#ffd24d'));
+      // sRGB → linear via `color(0x…)`; see the matching note in the Stripes
+      // branch above.
+      const lo = hexLiteral(nv.lowColor ?? '#1b2a4a');
+      const hi = hexLiteral(nv.highColor ?? '#ffd24d');
       const radial = Number(nv.radial ?? 0) >= 0.5;
       const cx = Number(nv.center_x ?? 0.5);
       const cy = Number(nv.center_y ?? 0.5);
       const radius = Math.max(Number(nv.radius ?? 0.5), 1e-4);
-      addImport('three/tsl', 'vec3');
+      addImport('three/tsl', 'color');
       addImport('three/tsl', 'uv');
       if (radial) addImport('three/tsl', 'vec2');
 
@@ -744,8 +879,138 @@ export function graphToCode(
 
       const t = `_${varName}_t`;
       bodyLines.push(`  const ${t} = ${expr};`);
+      bodyLines.push(`  const ${varName} = color(${lo}).mix(color(${hi}), ${t});`);
+    } else if (def.type === 'colormap') {
+      // Colormap: scalar → colour through a 256-texel LUT baked at code-gen.
+      //
+      // A LUT rather than a polynomial fit: the fetch is one texture read
+      // (cheaper than a 6th-order polynomial per channel), it reproduces the
+      // published table exactly instead of to ±2/255, and the same machinery
+      // will serve user-authored ramps. The table is baked in LINEAR light and
+      // the texture carries no colour-space tag, so no conversion happens on
+      // sample — see buildColormapLut.
+      const nv = getNodeValues(node);
+      const cmap = getColormap(nv.map);
+      const reverse = Number(nv.reverse ?? 0) >= 0.5;
+      const levels = Math.floor(Number(nv.levels ?? 0));
+      const lutVar = `_${varName}_lut`;
+      // `reverse` is baked into the table, so it costs nothing per fragment and
+      // the emitted TSL is identical either way.
+      bakeColormapTexture(setupLines, lutVar, buildColormapLut(cmap, reverse));
+      addImport('three/tsl', 'texture');
+      addImport('three/tsl', 'vec2');
+
+      const valueEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'value');
+      let tExpr = scalarRefOf(valueEdge);
+      if (!tExpr) {
+        // Unwired: ramp across uv.x, so a freshly dropped Colormap node shows
+        // the map it is set to instead of a flat colour.
+        addImport('three/tsl', 'uv');
+        tExpr = 'uv().x';
+      }
+
+      if (levels >= 2) {
+        // Discrete levels: quantize to band CENTRES, matching what the settings
+        // preview draws. The clamp keeps t = 1 exactly inside the top band —
+        // without it floor(t·N) reaches N and the very last value reads a
+        // different colour from the rest of its band.
+        const qVar = `_${varName}_q`;
+        bodyLines.push(
+          `  const ${qVar} = ${tExpr}.clamp(0.0, 0.999999).mul(${num(levels)}).floor().add(0.5).div(${num(levels)});`,
+        );
+        tExpr = qVar;
+      }
+
+      // Half-texel inset so t = 0 and t = 1 land on the ramp's true endpoints.
+      const uExpr = `${tExpr}.mul(${num(LUT_COORD_SCALE)}).add(${num(LUT_COORD_OFFSET)})`;
+      bodyLines.push(`  const ${varName} = texture(${lutVar}, vec2(${uExpr}, 0.5)).rgb;`);
+    } else if (def.type === 'dataRange') {
+      // Data Range: raw data units → 0-1. The DOMAIN is decided on the CPU
+      // (planNormalize), where the whole column is visible; the shader only ever
+      // evaluates the resulting affine / log / symlog expression.
+      const nv = getNodeValues(node);
+      const mode = isNormalizeMode(nv.mode) ? nv.mode : 'minmax';
+      const valueEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'value');
+      const traced = traceSignalColumn(valueEdge, sorted);
+      const stats = traced ? columnStats(traced.capped) : null;
+      const manual = {
+        lo: Number(nv.domainMin ?? 0),
+        hi: Number(nv.domainMax ?? 1),
+      };
+      const plan = planNormalize(mode, stats, manual);
+      const doClamp = Number(nv.clamp ?? 1) >= 0.5;
+
+      let src = scalarRefOf(valueEdge);
+      if (!src) {
+        addImport('three/tsl', 'uv');
+        src = 'uv().x';
+      }
+
+      let expr: string;
+      if (plan.kind === 'affine') {
+        // Multiply by the reciprocal rather than divide: `div` is 4× the cost of
+        // `mul` in the complexity table for an identical result here, since the
+        // span is a compile-time constant.
+        const inv = 1 / (plan.hi - plan.lo);
+        expr = `${src}.sub(${num(plan.lo)}).mul(${num(inv)})`;
+      } else if (plan.kind === 'log') {
+        const l0 = Math.log2(plan.lo);
+        const inv = 1 / (Math.log2(plan.hi) - l0);
+        expr = `${src}.max(${num(plan.lo)}).log2().sub(${num(l0)}).mul(${num(inv)})`;
+      } else {
+        // symlog: linear within ±thresh, logarithmic beyond, 0 → exactly 0.5.
+        const invT = 1 / plan.thresh;
+        const invY = 1 / Math.log2(1 + plan.m / plan.thresh);
+        expr =
+          `${src}.sign().mul(${src}.abs().mul(${num(invT)}).add(1.0).log2().mul(${num(invY)}))` +
+          `.mul(0.5).add(0.5)`;
+      }
+      if (doClamp) expr = `${expr}.clamp(0.0, 1.0)`;
+      bodyLines.push(`  const ${varName} = ${expr};`);
+    } else if (def.type === 'isolines') {
+      // Isolines: antialiased contours wherever the value crosses a multiple of
+      // 1/levels. Same construction as Data Stripes — the derivative is taken of
+      // the CONTINUOUS phase, never of fract(phase), and dense contours fade to
+      // their average coverage instead of aliasing into moiré.
+      addImport('three/tsl', 'float');
+      addImport('three/tsl', 'dFdx');
+      addImport('three/tsl', 'dFdy');
+
+      const levelsExpr = numericParam(node, 'levels', 10, edges, varNames, sorted);
+      const widthExpr = numericParam(node, 'width', 1.5, edges, varNames, sorted);
+      const offsetExpr = numericParam(node, 'offset', 0, edges, varNames, sorted);
+
+      const valueEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'value');
+      let src = scalarRefOf(valueEdge);
+      if (!src) {
+        addImport('three/tsl', 'uv');
+        src = 'uv().x';
+      }
+
+      const p = `_${varName}_p`;
+      const fw = `_${varName}_fw`;
+      const hw = `_${varName}_hw`;
+      const d = `_${varName}_d`;
+      const ln = `_${varName}_ln`;
+      const avg = `_${varName}_avg`;
+
+      bodyLines.push(`  const ${p} = ${src}.sub(${offsetExpr}).mul(${levelsExpr});`);
+      // Phase change per pixel. Floored away from zero: on a perfectly flat
+      // region the derivatives are 0 and the smoothstep edges would collapse
+      // onto each other, which is a divide-by-zero inside the hardware step.
       bodyLines.push(
-        `  const ${varName} = vec3(${num(lo[0])}, ${num(lo[1])}, ${num(lo[2])}).mix(vec3(${num(hi[0])}, ${num(hi[1])}, ${num(hi[2])}), ${t});`,
+        `  const ${fw} = dFdx(${p}).abs().add(dFdy(${p}).abs()).max(0.00001);`,
+      );
+      bodyLines.push(`  const ${hw} = ${fw}.mul(${widthExpr}).mul(0.5);`);
+      // Distance to the nearest contour, in phase units: 0 on the line, 0.5
+      // midway between two.
+      bodyLines.push(`  const ${d} = float(0.5).sub(${p}.fract().sub(0.5).abs());`);
+      bodyLines.push(`  const ${ln} = ${d}.smoothstep(float(0.0), ${hw}).oneMinus();`);
+      // Average coverage of one period — what the region SHOULD read as once the
+      // contours are packed tighter than a pixel.
+      bodyLines.push(`  const ${avg} = ${fw}.mul(${widthExpr}).clamp(0.0, 1.0);`);
+      bodyLines.push(
+        `  const ${varName} = ${ln}.mix(${avg}, ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`,
       );
     } else if (def.type === 'append') {
       // Append node: concatenate operands into a vector. The constructor follows
@@ -793,6 +1058,55 @@ export function graphToCode(
             ? `  const ${varName} = ${def.tslFunction};`
             : `  const ${varName} = ${def.tslFunction}.mul(${num(speed)});`,
       );
+    } else if (def.type === 'micNode') {
+      // Mic node: four live 0–1 values emitted as ORDINARY NUMERIC UNIFORMS.
+      //
+      // This shape is the whole design. `const mic1_bass = uniform(0);` means
+      // the entire transport is the fs:uniform postMessage channel that already
+      // exists — nothing new crosses the preview sandbox boundary except
+      // numbers — and buildShaderModule's `uniformLineRe` pass rewrites the
+      // line to `params.mic1_bass` and records a `{type:'number'}` schema entry
+      // with no changes to PropertyInfo or collectShaderProperties. So the
+      // DOWNLOADED module has four real properties an embedding page can drive.
+      // Emitting anything cleverer (a data texture, a custom node type) would
+      // trade that away for nothing the preview can use.
+      //
+      // Handled BEFORE the generic `inputs.length === 0 && defaultValues`
+      // branch, which would emit `(0.8)` — micNode's tslFunction is empty
+      // because it is hand-emitted, and its defaultValues are the analyser
+      // settings, not a constructor argument. Same trap the Time node avoids.
+      //
+      // Only CONSUMED channels are emitted (the Data node's `usedCols` rule):
+      // an unwired channel would otherwise ship a dead slider in the exported
+      // schema and in podest's auto-generated uniform list.
+      //
+      // The default is 0, not a mid-scale value: an unarmed mic, a downloaded
+      // file, and podest must all render the same defined "silence" state
+      // rather than a value that looks like signal.
+      const wanted = new Set(
+        edges
+          .filter((e) => e.source === node.id)
+          .map((e) => micChannelForHandle(e.sourceHandle)),
+      );
+      if (wanted.size > 0) {
+        // The generic import collection keys off `def.tslFunction`, which is
+        // empty here, so `uniform` must be requested explicitly.
+        addImport('three/tsl', 'uniform');
+        // Gain is a SEPARATE statement, never `uniform(0).mul(g)`: the
+        // uniform line has to stay a bare literal for buildShaderModule's
+        // `uniformLineRe` to rewrite it into `params.<name>` and record a
+        // schema entry. Fold the multiply into it and the property vanishes
+        // from the export AND the shaderloader stops binding it, which breaks
+        // the live preview too. Method chain — no extra import, same
+        // convention as the noise `scale` and the Time node's `speed`.
+        const gainExpr = micGainExpr(node, edges, varNames, sorted);
+        for (const ch of MIC_CHANNELS) {
+          if (!wanted.has(ch)) continue;
+          const u = micUniformName(varName, ch);
+          bodyLines.push(`  const ${u} = uniform(0);`);
+          if (gainExpr) bodyLines.push(`  const _${u} = ${u}.mul(${gainExpr});`);
+        }
+      }
     } else if (def.inputs.length === 0 && def.category === 'input' && !def.defaultValues) {
       // Input nodes: bare reference (positionGeometry, screenUV, etc.)
       bodyLines.push(`  const ${varName} = ${def.tslFunction};`);
@@ -879,28 +1193,6 @@ export function graphToCode(
    * colorNode when no colour is wired (line ~279).
    */
   const ALPHA_BEARING_CHANNELS = new Set(['color', 'emissive']);
-
-  /**
-   * Channel count of the specific OUTPUT PORT an edge leaves from.
-   *
-   * Node-level inference is not enough: a multi-output node reports the shape
-   * of `outputs[0]`, so Data Viz (out: vec3, value: float) claimed 3 channels
-   * even for an edge leaving its scalar `value` socket — and the widening
-   * below was skipped, putting a bare float in colorNode again by a second
-   * route. The declared port type wins; node-level inference is the fallback
-   * for `any`-typed ports (arithmetic chains).
-   */
-  const shapeOfEdgeSource = (edge: AppEdge): number => {
-    const srcNode = sorted.find((n) => n.id === edge.source);
-    const handle = edge.sourceHandle ?? 'out';
-    const dyn = (srcNode?.data as { dynamicOutputs?: { id: string; dataType: TSLDataType }[] })
-      ?.dynamicOutputs;
-    const srcDef = srcNode ? registry.get(srcNode.data.registryType) : undefined;
-    const port = dyn?.find((o) => o.id === handle) ?? srcDef?.outputs.find((o) => o.id === handle);
-    const declared = port ? shapeOfDataType(port.dataType) : 0;
-    if (declared > 0) return declared;
-    return getNodeOutputShape(edge.source, nodes, edges);
-  };
 
   if (outputNode) {
     for (const ch of OUTPUT_CHANNELS) {
@@ -1120,6 +1412,41 @@ function appendOperandChannels(
   });
 }
 
+/**
+ * The multiplier a Mic node applies to every channel, or null for "none".
+ *
+ * `gain` is an exposed parameter socket, so a wired edge overrides the stored
+ * number (the exposedPorts rule). It is applied in the SHADER rather than in
+ * the analyser precisely so that a wire can drive it — an AnalyserNode lives on
+ * the CPU and no shader value can reach it (which is also why `smoothing` is
+ * deliberately NOT exposable; see isExposableKey).
+ *
+ * Returns null when the gain is exactly 1 and unwired, so the emission stays
+ * BYTE-IDENTICAL to the ungained form and no already-exported shader changes.
+ *
+ * The stored value goes through `readMicSettings` for its clamp — `values` is
+ * adversarial (`.fastshader` / localStorage) — and never through
+ * `resolveExposedParam`, which is `String()`-only.
+ */
+function micGainExpr(
+  node: AppNode,
+  edges: AppEdge[],
+  varNames: Map<string, string>,
+  sorted: AppNode[],
+): string | null {
+  const edge = edges.find(
+    // A self-loop would recurse straight back into resolveEdgeRef. The editor
+    // never offers a cycle, but a hand-edited project file can contain one.
+    (e) => e.target === node.id && e.targetHandle === 'gain' && e.source !== node.id,
+  );
+  if (edge) {
+    const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+    if (ref) return ref;
+  }
+  const { gain } = readMicSettings(getNodeValues(node));
+  return gain === 1 ? null : num(gain);
+}
+
 /** Resolve a source edge reference, looking through split nodes to inline swizzle. */
 function resolveEdgeRef(
   edge: AppEdge,
@@ -1139,6 +1466,20 @@ function resolveEdgeRef(
   ) {
     const base = varNames.get(sourceNode.id);
     return base ? `${base}_${edge.sourceHandle}` : null;
+  }
+
+  // Mic node: each channel is emitted as its own `<var>_<channel>` uniform
+  // (the node has no single value), so address the channel by its handle id.
+  // `micChannelForHandle` is the SAME normalization the emitter used, so a
+  // hand-edited handle in a `.fastshader` resolves to a variable that exists.
+  if (sourceNode.data.registryType === 'micNode') {
+    const base = varNames.get(sourceNode.id);
+    if (!base) return null;
+    const u = micUniformName(base, micChannelForHandle(edge.sourceHandle));
+    // With gain applied, downstream reads the SCALED variable, not the raw
+    // uniform — the uniform line itself must stay a bare `uniform(0)` so
+    // buildShaderModule's uniformLineRe still turns it into a schema property.
+    return micGainExpr(sourceNode, edges, varNames, sorted) ? `_${u}` : u;
   }
 
   // Data Viz: the `value` handle exposes the tone-mapped scalar (`_<var>_t`,

@@ -22,6 +22,7 @@
 
 import { buildShaderModule } from './tslCodeProcessor';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
+import { micUniformNamesIn } from '@/utils/micAnalysis';
 import type { MaterialSettings } from '@/types';
 
 export interface PropertyInfo {
@@ -78,6 +79,30 @@ function buildHeader(props: PropertyInfo[], tslCode = ''): string[] {
     header.push('//');
     header.push('// This shader embeds image texture(s) as data: URLs. If the host page sets a');
     header.push('// Content-Security-Policy, its img-src directive must allow data:.');
+  }
+  // Microphone properties are ordinary numbers here and nothing drives them, so
+  // an undriven download renders as permanent silence. Saying so — and saying
+  // exactly how to fix it — is the difference between a documented boundary and
+  // a recipient debugging a shader that looks broken with no error anywhere.
+  const micNames = micUniformNamesIn(tslCode);
+  if (micNames.length > 0) {
+    header.push('//');
+    header.push('// MICROPHONE INPUT — this file does NOT capture audio.');
+    header.push(`// It exposes ${micNames.join(', ')} as ordinary number properties, all starting`);
+    header.push('// at 0 (silence). FastShaders drives them only inside its own editor preview;');
+    header.push('// here, the embedding page has to drive them. Roughly:');
+    header.push('//   const ac = new AudioContext();');
+    header.push('//   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });');
+    header.push('//   const an = ac.createAnalyser(); an.fftSize = 1024;');
+    header.push('//   ac.createMediaStreamSource(stream).connect(an);');
+    header.push('//   const bins = new Uint8Array(an.frequencyBinCount);');
+    header.push('//   (function tick() {');
+    header.push('//     requestAnimationFrame(tick);');
+    header.push('//     an.getByteFrequencyData(bins);');
+    header.push('//     let s = 0; for (const v of bins) s += v;');
+    header.push(`//     el.setAttribute('shader', { ${micNames[0]}: s / bins.length / 255 });`);
+    header.push('//   })();');
+    header.push('// getUserMedia needs a secure context (https or localhost) and a user gesture.');
   }
   return header;
 }

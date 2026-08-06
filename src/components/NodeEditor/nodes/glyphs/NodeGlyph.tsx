@@ -1,5 +1,14 @@
-import { memo, type ReactNode } from 'react';
+import { memo, type CSSProperties, type ReactNode } from 'react';
 import { CUSTOM_GLYPHS } from './customGlyphs';
+
+/**
+ * One node's designer overrides — the value type of CUSTOM_GLYPHS, named so a
+ * DRAFT design (the Node Designer's unsaved working state) can flow through the
+ * same helpers the app uses for the saved table. Every helper below takes an
+ * optional `design`; when present it REPLACES the saved entry outright (the
+ * designer's draft is always a complete design, not a patch).
+ */
+export type GlyphDesign = (typeof CUSTOM_GLYPHS)[string];
 
 /**
  * Light-theme node glyphs ported from the v14 design mockup
@@ -58,21 +67,32 @@ const NODE_GLYPH_TYPES = new Set<string>([
   'positionWorld', 'positionLocal', 'uv', 'cameraNear', 'cameraFar',
 ]);
 
-export function hasNodeGlyph(type: string): boolean {
+/** True when the app ships BUILT-IN art for this type (ignores saved custom
+ *  svg). The Node Designer's "Built-in" restore uses this to know whether
+ *  there is anything to restore. */
+export function hasBuiltinGlyph(type: string): boolean {
+  return NODE_GLYPH_TYPES.has(type);
+}
+
+export function hasNodeGlyph(type: string, design?: GlyphDesign): boolean {
+  // A draft design decides by its own svg alone: the designer previews exactly
+  // what the draft holds (a cleared draft shows an empty node), while the app
+  // falls back to built-in art.
+  if (design) return !!design.svg;
   return NODE_GLYPH_TYPES.has(type) || !!CUSTOM_GLYPHS[type]?.svg;
 }
 
 /** Input-value alignment for a node (designer override; default 'center'). */
-export function nodeJustify(type: string): 'left' | 'center' | 'right' {
-  const j = CUSTOM_GLYPHS[type]?.justify;
+export function nodeJustify(type: string, design?: GlyphDesign): 'left' | 'center' | 'right' {
+  const j = (design ?? CUSTOM_GLYPHS[type])?.justify;
   return j === 'left' || j === 'right' ? j : 'center';
 }
 
 /** Per-node glyph scale (designer override; default 1). Scales the glyph art
  *  ONLY — socket/value spacing is fixed; the operator-layout body grows just
  *  enough to contain a larger glyph. */
-export function nodeScale(type: string): number {
-  const s = CUSTOM_GLYPHS[type]?.scale;
+export function nodeScale(type: string, design?: GlyphDesign): number {
+  const s = (design ?? CUSTOM_GLYPHS[type])?.scale;
   return typeof s === 'number' && s > 0 ? s : 1;
 }
 
@@ -82,8 +102,8 @@ export function nodeScale(type: string): number {
  *  54px floor applies only in auto mode). The node frame style (corner
  *  radius, border thickness) is fixed app-wide; border color stays the
  *  category color. */
-export function nodeBox(type: string): { width?: number; height?: number } {
-  const d = CUSTOM_GLYPHS[type];
+export function nodeBox(type: string, design?: GlyphDesign): { width?: number; height?: number } {
+  const d = design ?? CUSTOM_GLYPHS[type];
   const w = typeof d?.width === 'number' && d.width > 0 ? Math.max(24, d.width) : undefined;
   // Body height (px, ≥28): EXACT in both layouts — shorter than content
   // shrinks the node and the content simply overflows (dx/dy places art).
@@ -98,17 +118,40 @@ export function nodeBox(type: string): { width?: number; height?: number } {
  *  labels — via the `--node-text-scale` CSS variable. Purely typographic:
  *  layout metrics (header height, socket math) stay fixed, so oversized
  *  header text may clip. */
-export function nodeTextScale(type: string): number {
-  const t = CUSTOM_GLYPHS[type]?.text;
+export function nodeTextScale(type: string, design?: GlyphDesign): number {
+  const t = (design ?? CUSTOM_GLYPHS[type])?.text;
   return typeof t === 'number' && t > 0 ? Math.max(0.4, Math.min(2.5, t)) : 1;
 }
 
 /** Per-socket vertical offsets for the operator layout (designer override).
  *  Px relative to the body center; keys are input port ids plus 'out'.
  *  Missing keys fall back to the defaults (a −12.5, b +12.5, out 0). */
-export function nodeSockets(type: string): Record<string, number> {
-  const s = CUSTOM_GLYPHS[type]?.sockets;
+export function nodeSockets(type: string, design?: GlyphDesign): Record<string, number> {
+  const s = (design ?? CUSTOM_GLYPHS[type])?.sockets;
   return s && typeof s === 'object' ? s : {};
+}
+
+/**
+ * Per-node ART transform, for nodes whose visualization is a real DOM element
+ * rather than an SVG glyph — today the Colormap node's ramp strip. The SAME
+ * stored design fields the glyph uses (`dx`/`dy` nudge + `scale`) drive it, so
+ * the designer's existing Nudge/Scale controls and drag-to-nudge gesture apply
+ * unchanged. Purely visual, per the glyph-nudge convention: a CSS transform
+ * moves/grows the art while its layout slot — and therefore every socket and
+ * row — stays put (overflow stays visible, exactly like an over-tall glyph).
+ *
+ * Units: CSS px, NOT glyph-space units — the element lives in page space, not
+ * the `0 0 56 56` canvas. The two meanings can't collide on one node: art
+ * nodes have no glyph (glyphCoverage.test.ts pins colormap's exemption), so
+ * dx/dy always mean exactly one thing per node.
+ */
+export function nodeArtStyle(type: string, design?: GlyphDesign): CSSProperties | undefined {
+  const d = design ?? CUSTOM_GLYPHS[type];
+  const dx = typeof d?.dx === 'number' ? d.dx : 0;
+  const dy = typeof d?.dy === 'number' ? d.dy : 0;
+  const s = typeof d?.scale === 'number' && d.scale > 0 ? d.scale : 1;
+  if (dx === 0 && dy === 0 && s === 1) return undefined;
+  return { transform: `translate(${dx}px, ${dy}px) scale(${s})` };
 }
 
 /** Renaissance one-point-perspective ground plane (place inside translate(28 28)). */
@@ -167,7 +210,10 @@ function Knob({ value, accent, ticks }: { value: number; accent: string; ticks?:
   );
 }
 
-function renderArt(type: string, value: number): ReactNode {
+/** Built-in art for a node type, or null. Exported so the Node Designer can
+ *  serialize the REAL art (via renderToStaticMarkup) instead of keeping the
+ *  hand-copied string table that used to drift from this file. */
+export function renderArt(type: string, value: number): ReactNode {
   if (MATH_PLOTS[type]) return <MathPlot spec={MATH_PLOTS[type]} />;
 
   if (OPERATORS[type]) {
@@ -339,20 +385,26 @@ export const NodeGlyph = memo(function NodeGlyph({
   type,
   value = 0,
   size = 50,
+  design: designProp,
 }: {
   type: string;
   value?: number;
   size?: number;
+  /** Draft design override (Node Designer). Replaces the saved entry outright:
+   *  its `svg` is the ONLY art considered (a cleared draft renders nothing). */
+  design?: GlyphDesign;
 }) {
   // A custom glyph (authored in node-designer.html, stored in customGlyphs.ts)
   // wins over the built-in art. It's developer-authored build-time source, so
   // rendering its inner SVG via dangerouslySetInnerHTML is safe here. An optional
   // per-node `scale` is applied about the tile centre (28,28).
-  const design = CUSTOM_GLYPHS[type];
+  const design = designProp ?? CUSTOM_GLYPHS[type];
   const scale = design?.scale ?? 1;
   const art: ReactNode = design?.svg
     ? <g dangerouslySetInnerHTML={{ __html: design.svg }} />
-    : renderArt(type, value);
+    : designProp
+      ? null
+      : renderArt(type, value);
   if (!art) return null;
   // Scale grows the rendered size (so the glyph gets bigger and the node grows),
   // rather than transforming art inside a fixed box (which would just clip).
