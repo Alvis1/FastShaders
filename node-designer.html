@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' blob: https://alvis1.github.io; frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'" />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>FastShaders · Node Designer</title>
+<!--
+  VITE ENTRY (rollupOptions.input in vite.config.ts) — the designer lives in
+  the app's module graph. The stage preview is rendered by the REAL app
+  renderer (src/components/NodeEditor/nodes/NodeVisual.tsx via
+  src/nodeDesigner/bridge.tsx), so what you design here is byte-for-byte what
+  the editor, the asset cards and the node-editor overview draw. The app logic
+  is src/nodeDesigner/designerApp.ts (ported from the old inline script).
+
+  This file therefore holds ONLY the designer's own chrome: topbar, stage
+  shell, inspector, glyph modal — plus the few designer-only affordances
+  layered onto the replica (gesture cursors, hover hints, the resize handle,
+  the socket snap ruler, edge stubs). Node visuals come from the app's own
+  CSS imported through the entry — never restyle .node-base/.shader-node here.
+
+  There is NO public/node-designer.html copy anymore (and no sync plugin):
+  dev serves this root file, build emits it as an entry.
+-->
+<style>
+  :root{--bg:#f3f4f6;--panel:#fff;--line:#e2e4ea;--line2:#cfd2da;--ink:#1f2430;--dim:#5b6170;--mut:#8a909e;--accent:#3366CC;--mono:'JetBrains Mono','SF Mono',ui-monospace,monospace;--sans:'Inter',-apple-system,system-ui,sans-serif}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px}
+  .app{display:flex;flex-direction:column;height:100vh}
+  .topbar{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .topbar h1{font-size:15px;font-weight:600;margin:0}
+  .topbar .sub{font-size:11px;color:var(--mut)}
+  .topbar .spacer{flex:1}
+  select,input[type=text],input[type=number],input[type=search],textarea{font-family:var(--sans);font-size:12px;color:var(--ink);background:#fff;border:1px solid var(--line2);border-radius:6px;padding:5px 7px;outline:none}
+  select:focus,input:focus,textarea:focus{border-color:var(--accent)}
+  textarea{font-family:var(--mono);font-size:11.5px;line-height:1.5;resize:vertical;width:100%}
+  button{font-family:var(--sans);font-size:12px;font-weight:500;cursor:pointer;background:#fff;border:1px solid var(--line2);border-radius:6px;padding:6px 11px;color:var(--ink)}
+  button:hover{background:#f6f7f9}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover{filter:brightness(1.05)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.mini{padding:3px 8px;font-size:11px}
+  kbd{font:10px var(--mono);background:#f1f2f5;border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--dim)}
+  .dirty-pill{font-size:11px;color:#B45309;background:#FEF3C7;border:1px solid #FDE68A;border-radius:10px;padding:2px 8px;display:none}
+  .dirty-pill.show{display:inline-block}
+  /* local-only notice — hidden automatically once the dev-server endpoint responds */
+  .devnote{background:#FEF3C7;border-bottom:1px solid #FDE68A;color:#92400E;font-size:11.5px;padding:6px 14px;line-height:1.5}
+  .devnote code{font-family:var(--mono);font-size:10.5px;background:rgba(255,255,255,.6);border-radius:3px;padding:0 3px}
+  /* ?node=<type> asked for something the designer can't design — shown instead of a silent fallback */
+  .notice{display:none;position:relative;padding-right:32px}
+  .notice.show{display:block}
+  .notice button{position:absolute;top:4px;right:8px;border:none;background:transparent;color:#92400E;font-size:14px;line-height:1;padding:2px 6px}
+  .notice button:hover{background:rgba(255,255,255,.6)}
+
+  .main{flex:1;display:flex;min-height:0}
+  /* ============================= stage ============================= */
+  .stage{flex:1;position:relative;overflow:hidden}
+  .stage-hint{position:absolute;top:10px;left:12px;font-size:10.5px;color:var(--mut);z-index:4;line-height:1.6;pointer-events:none}
+  .stage-tools{position:absolute;top:10px;right:12px;z-index:4;display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:8px;padding:4px 8px;font-size:11px;color:var(--dim)}
+  .stage-tools input[type=color]{width:24px;height:18px;padding:0;border:1px solid var(--line2);border-radius:4px;background:none;cursor:pointer}
+  .zoombar{position:absolute;bottom:12px;right:12px;z-index:4;display:flex;align-items:center;gap:2px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:8px;padding:3px}
+  .zoombar button{border:none;background:transparent;padding:3px 8px;font-size:13px}
+  .zoombar .zval{font:11px var(--mono);min-width:46px;text-align:center}
+  .viewport{position:absolute;inset:0;cursor:grab;touch-action:none}
+  .viewport.panning{cursor:grabbing}
+  .panzoom{position:absolute;left:50%;top:50%;width:0;height:0}
+  .nodeWrap{position:relative;width:max-content;transform:translate(-50%,-50%)}
+  .stubs{position:absolute;left:-90px;top:-90px;pointer-events:none;overflow:visible}
+
+  /* ====== designer-only affordances ON the real replica (NodeVisual) ======
+     The node itself is styled by the app's own CSS (NodeBase/ShaderNode/
+     TypedHandle/DragNumberInput, imported via src/nodeDesigner/main.ts).
+     Everything below is stage chrome the app deliberately doesn't have. */
+  #ndNode{position:relative}
+  /* cost badge auto-contrast vs the pickable stage bg — the SAME CSS-var
+     mechanism NodeBase.css applies inside .react-flow; the vars are set on
+     #nodeWrap from the bg picker (designerApp.applyBg) */
+  #nodeWrap .node-base__cost-badge{color:var(--node-cost-text,#000000) !important;text-shadow:0 1px 2px var(--node-cost-text-shadow,rgba(255,255,255,.6)) !important}
+  /* canvas parity: on the editor canvas editable number boxes are opaque
+     white (`.react-flow .drag-num`) — mirror that here so the preview matches
+     the node ON THE CANVAS, not the translucent card variant */
+  #nodeWrap .drag-num{background:#fff}
+  /* the page's bare `input[type=number]` chrome rule above has specificity
+     (0,1,1) and beats `.drag-num__edit` (0,1,0) — without this mirror,
+     click-to-edit on a stage value box rendered a padded, bordered,
+     sans-serif chrome input instead of the widget's own edit field */
+  #nodeWrap .drag-num__edit{font-family:var(--font-mono);background:rgba(255,255,255,.9);border:none;border-radius:0;padding:0 2px}
+  /* gesture affordances (the replica marks targets with data attributes) */
+  #nodeWrap .shader-node__glyph{position:relative;cursor:pointer}
+  #nodeWrap .shader-node__op-glyph{cursor:pointer}
+  #nodeWrap [data-nd-art]{position:relative;cursor:move}
+  #nodeWrap .shader-node__glyph:hover::after,#nodeWrap .shader-node__op-glyph:hover::after{content:'edit · drag';position:absolute;top:1px;right:3px;font-size:7px;color:var(--accent);background:rgba(255,255,255,.85);border-radius:3px;padding:0 3px;pointer-events:none}
+  #nodeWrap [data-nd-art]:hover::after{content:'drag = move art';position:absolute;top:-11px;right:0;font-size:7px;color:var(--accent);background:rgba(255,255,255,.85);border-radius:3px;padding:0 3px;pointer-events:none;white-space:nowrap}
+  /* React Flow's stylesheet ships `.react-flow__handle{pointer-events:none}`
+     (only its own connection classes re-enable them, and those never apply
+     outside a flow pane) — without this override every socket gesture on the
+     stage is dead: the pointerdown falls through the handle entirely. */
+  #nodeWrap .typed-handle[data-port]{pointer-events:all}
+  #nodeWrap .typed-handle[data-io='in']{cursor:ns-resize}
+  #nodeWrap .typed-handle[data-io='out']{cursor:pointer}
+  /* corner resize handle — positioned against the card by layoutOverlays() */
+  .nres{position:absolute;width:13px;height:13px;border-radius:3px;background:#fff;border:1.5px solid var(--accent);cursor:nwse-resize;z-index:5}
+  /* snap ruler shown along the border while dragging a socket (rendered by
+     NodeVisual inside the body/region; bg aligned by layoutOverlays) */
+  .nd-snapcol{position:absolute;top:0;bottom:0;width:3px;background:repeating-linear-gradient(to bottom,rgba(51,102,204,.6) 0 1px,transparent 1px 4px);pointer-events:none;z-index:2}
+  .nd-snapcol--l{left:-1.5px}
+  .nd-snapcol--r{right:-1.5px}
+
+  /* ============================= inspector ============================= */
+  .insp{width:340px;flex-shrink:0;background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:4px 0 60px}
+  .sec{border-bottom:1px solid var(--line);padding:12px 16px}
+  .sec h2{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 10px;display:flex;align-items:center;gap:8px}
+  .kv{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .kv .k{width:78px;color:var(--dim);font-size:11.5px;flex-shrink:0}
+  .kv .v{font-size:12px}
+  .kv input[type=number]{width:72px}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;background:#f6f7f9;border:1px solid var(--line);border-radius:6px;padding:3px 9px}
+  .chip .dot{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.12)}
+  .lock{font-size:10px;color:var(--mut);border:1px solid var(--line2);border-radius:5px;padding:1px 5px}
+  .unit{font-size:10px;color:var(--mut)}
+  .glyph-card{position:relative;border:1px dashed var(--line2);border-radius:8px;padding:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:#fafbfc;min-height:74px}
+  .glyph-card:hover{border-color:var(--accent);background:#f3f7ff}
+  .glyph-card .nudge-tag{position:absolute;bottom:3px;right:5px;font:9px var(--mono);color:var(--mut)}
+  .hintline{font-size:10.5px;color:var(--mut);margin:8px 0 0;line-height:1.45}
+  .btnrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+  /* preview-state rows */
+  .pstate{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .pstate .dot{width:10px;height:10px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.15);flex-shrink:0}
+  .pstate label{width:52px;color:var(--dim);font-size:11.5px;overflow:hidden;text-overflow:ellipsis}
+  .pstate select.mode{width:104px;padding:3px 4px;font-size:11px}
+  .pstate select.ch{width:44px;padding:3px 2px;font-size:11px}
+  .pstate input.pv{width:56px;padding:3px 5px;font-size:11px;font-family:var(--mono)}
+
+  /* ============================= modal ============================= */
+  .overlay{position:fixed;inset:0;background:rgba(15,18,26,.45);display:none;align-items:center;justify-content:center;z-index:50}
+  .overlay.show{display:flex}
+  .modal{background:#fff;border-radius:12px;width:800px;max-width:96vw;max-height:92vh;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+  .modal .mhd{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .modal .mhd h3{margin:0;font-size:14px;font-weight:600}
+  .modal .mbody{padding:16px 18px}
+  .modal .grid{display:grid;grid-template-columns:312px 1fr;gap:14px}
+  .glyph-preview{position:relative;border:1px solid var(--line);border-radius:8px;background:repeating-conic-gradient(#f2f3f5 0% 25%,#fff 0% 50%) 0 0/14px 14px;display:flex;align-items:center;justify-content:center;height:312px}
+  .glyph-preview svg{width:280px;height:280px;display:block;overflow:visible}
+  .glyph-preview .gridlay{position:absolute;inset:0;margin:auto;width:280px;height:280px;pointer-events:none}
+  /* handle/guide sizes are in 56-space units — tuned for the 280px (5px/unit) canvas */
+  #mPtsLay circle{pointer-events:all;cursor:move}
+  #mPtsLay .pt-anchor{fill:#3366CC;stroke:#fff;stroke-width:.45}
+  #mPtsLay .pt-ctrl{fill:#fff;stroke:#F57C00;stroke-width:.55}
+  #mPtsLay .pt-guide{stroke:#E91E63;stroke-width:.3;stroke-dasharray:1.4 1}
+  .gridopt{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--dim);margin-top:6px}
+  .drop{margin-top:8px;border:1.5px dashed var(--line2);border-radius:8px;padding:10px;text-align:center;color:var(--mut);font-size:11.5px}
+  .drop.over{border-color:var(--accent);background:#f3f7ff;color:var(--accent)}
+  .merr{display:none;font-size:11px;color:#B91C1C;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:5px 8px;margin-top:8px}
+  .merr.show{display:block}
+  .mactions{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
+  .mactions .spacer{flex:1}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1f2430;color:#fff;padding:9px 16px;border-radius:8px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:60;max-width:80vw;text-align:center}
+  .toast.show{opacity:1}
+</style>
+  <script type="module" crossorigin src="/FastShaders/assets/designer-B1tS6KeM.js"></script>
+  <link rel="modulepreload" crossorigin href="/FastShaders/assets/style-CTPFaRJs.js">
+  <link rel="stylesheet" crossorigin href="/FastShaders/assets/style-DjIFa17V.css">
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <h1>Node Designer</h1>
+    <span class="sub">FastShaders</span>
+    <button class="mini" id="langBtn" title="Switch node names to Latvian (Pārslēgt uz latviešu)">LV</button>
+    <input type="search" id="search" placeholder="search nodes…  ( / )" style="width:150px" />
+    <select id="nodeSel" style="min-width:200px" title="● unsaved changes · ◆ has saved design"></select>
+    <button class="mini" id="prevBtn" title="Previous node (Alt+↑)">↑</button>
+    <button class="mini" id="nextBtn" title="Next node (Alt+↓)">↓</button>
+    <div class="spacer"></div>
+    <span class="dirty-pill" id="dirtyPill"></span>
+    <span class="sub" id="fsStatus" style="cursor:pointer" title="Click to link the FastShaders folder (Chromium browsers)">folder not linked</span>
+    <button id="saveBtn" title="Save this node (writes customGlyphs.ts)">Save</button>
+    <button id="saveAllBtn" class="primary" title="Save all changed nodes (⌘/Ctrl+S)">Save all</button>
+  </div>
+  <div class="devnote" id="devNote">⚠ <b>Local tool</b> — run <code>npm run dev</code> and open <code>http://localhost:5173/FastShaders/node-designer.html</code>. Saving writes <code>customGlyphs.ts</code> through the dev server and <b>works locally only</b> (the <code>/__nd</code> endpoint exists in dev only; elsewhere Save falls back to a download).</div>
+  <div class="devnote notice" id="ndNotice">⚠ <b>Nothing to design for <code id="ndNoticeType"></code></b> — the designer covers <b>ShaderNode-rendered nodes only</b>; glyphs don't apply to live-canvas nodes (the noise family, <code>sin</code>/<code>cos</code>, <code>color</code>, <code>time</code>, <code>output</code>), and unknown types don't exist in the registry. Showing <code id="ndNoticeFallback"></code> instead.<button id="ndNoticeX" title="Dismiss">×</button></div>
+
+  <div class="main">
+    <div class="stage" id="stage">
+      <div class="stage-hint">click glyph = edit svg · drag glyph or ramp = nudge (dx/dy) · click sockets = cycle connection · <b>drag sockets ↕ = move (4px snap)</b> · drag corner ↘ = width / height (glyph never scales with the node)<br>drag canvas = pan · <b>⌘/Ctrl + wheel</b> = zoom · <kbd>/</kbd> search · <kbd>Alt ↑↓</kbd> switch node · <kbd>⌘S</kbd> save all</div>
+      <div class="stage-tools">bg <input type="color" id="bgInput" title="Canvas background (cost badge & 1-channel edges auto-contrast, like the app)"><button class="mini" id="bgReset" title="App default #FAFAFA">⟲</button></div>
+      <div class="viewport" id="viewport">
+        <div class="panzoom" id="panzoom">
+          <div class="nodeWrap" id="nodeWrap">
+            <!-- React mounts the REAL node replica here (bridge.renderNodePreview) -->
+            <div id="ndNode"></div>
+            <!-- vanilla overlay: corner resize handle, positioned after each render -->
+            <div class="nres" id="ndResize" style="display:none" title="Drag: → width · ↕ height (glyph stays its own scale)"></div>
+          </div>
+        </div>
+      </div>
+      <div class="zoombar">
+        <button id="zOut" title="Zoom out">−</button>
+        <button class="zval" id="zVal" title="Reset zoom & position">100%</button>
+        <button id="zIn" title="Zoom in">+</button>
+      </div>
+    </div>
+
+    <div class="insp">
+      <div class="sec">
+        <h2>Node <span class="lock" id="dirtyFlag" style="display:none;color:#B45309;border-color:#FDE68A;background:#FEF3C7">unsaved</span></h2>
+        <div class="kv"><span class="k">Type</span><span class="v" id="iType">—</span></div>
+        <div class="kv"><span class="k">Category</span><span class="v"><span class="chip" id="iCat"><span class="dot"></span><span></span></span> <span class="lock">locked</span></span></div>
+        <div class="kv"><span class="k">Cost</span><span class="v"><span class="chip" id="iCost"><span class="dot"></span><span></span></span> <span class="lock">locked</span></span></div>
+        <div class="btnrow">
+          <button class="mini" id="copyBtn" title="Copy this node's design — everything except the glyph art">Copy design</button>
+          <button class="mini" id="pasteBtn" title="Paste the copied design onto this node (its glyph stays)" disabled>Paste</button>
+          <button class="mini" id="resetBtn" title="Reset this node to built-in defaults">Reset node</button>
+        </div>
+      </div>
+
+      <div class="sec">
+        <h2>Preview states</h2>
+        <div id="stateList"></div>
+      </div>
+
+      <div class="sec">
+        <h2>Visualization (glyph)</h2>
+        <div class="glyph-card" id="glyphCard" title="Click to edit the SVG · drag the glyph on the canvas to nudge"></div>
+        <div class="kv" style="margin-top:10px"><span class="k">Glyph scale</span><input type="number" id="gScale" min="0.2" max="3" step="0.05" title="Scales the glyph only — never the socket/value spacing. On art nodes (Colormap) it scales the ramp visually."></div>
+        <div class="kv"><span class="k">Nudge X / Y</span><input type="number" id="gDx" min="-28" max="28" step="0.5" title="dx — glyph-space units (art nodes: CSS px)"> <input type="number" id="gDy" min="-28" max="28" step="0.5" title="dy — glyph-space units (art nodes: CSS px)"> <button class="mini" id="nudge0" title="Reset nudge">0,0</button></div>
+      </div>
+
+      <div class="sec">
+        <h2>Text</h2>
+        <div class="kv"><span class="k">Justify</span><select id="just"><option value="center">center</option><option value="left">left</option><option value="right">right</option></select></div>
+        <div class="kv"><span class="k">Text size</span><input type="number" id="nT" min="0.4" max="2.5" step="0.05" title="Scales header/value/edge-label text; header wraps and auto-grows"> <span class="unit">× · 1 = default</span></div>
+      </div>
+
+      <div class="sec">
+        <h2>Node box &amp; sockets</h2>
+        <div class="kv"><span class="k">Width</span><input type="number" id="nW" min="0" max="400" step="2"> <span class="unit">px · 0 = auto · min 24</span></div>
+        <div class="kv"><span class="k">Height</span><input type="number" id="nH" min="0" max="1200" step="2"> <span class="unit">px · 0 = auto · min 28</span></div>
+        <div class="kv"><span class="k">Sockets</span><button class="mini" id="sockReset" title="Restore default socket positions (row anchoring / classic operator spots)">Reset positions</button> <span class="unit" id="sockInfo"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Glyph editor modal -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="mhd"><h3>Edit glyph</h3><span class="sub" id="mType"></span></div>
+    <div class="mbody">
+      <div class="grid">
+        <div>
+          <div class="glyph-preview" id="mPrevBox"><div id="mPreview"></div><svg class="gridlay" id="mGridLay" viewBox="0 0 56 56" style="display:none"><rect x="0.25" y="0.25" width="55.5" height="55.5" fill="none" stroke="#3366CC" stroke-width=".5" opacity=".55"/><line x1="28" y1="0" x2="28" y2="56" stroke="#3366CC" stroke-width=".4" opacity=".55"/><line x1="0" y1="28" x2="56" y2="28" stroke="#3366CC" stroke-width=".4" opacity=".55"/><line x1="14" y1="0" x2="14" y2="56" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="42" y1="0" x2="42" y2="56" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="0" y1="14" x2="56" y2="14" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="0" y1="42" x2="56" y2="42" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/></svg><svg class="gridlay" id="mPtsLay" viewBox="0 0 56 56"></svg></div>
+          <label class="gridopt"><input type="checkbox" id="mGrid"> 56-grid &amp; center guides</label>
+          <label class="gridopt"><input type="checkbox" id="mMove"> drag points (●&nbsp;anchor · ○&nbsp;control/size · 0.5 snap · aligns to other points' rows/columns · <b>⇧&nbsp;= angle lock</b> 0/30/45/60/90°…)</label>
+          <div class="drop" id="drop">Drop an <b>.svg</b> file here to replace</div>
+        </div>
+        <div>
+          <label class="sub" style="color:var(--dim)">Inner SVG (0 0 56 56)</label>
+          <textarea id="mSvg" rows="21" spellcheck="false"></textarea>
+          <div class="merr" id="mErr"></div>
+        </div>
+      </div>
+    </div>
+    <div class="mactions">
+      <select id="mLoad" title="Load another node's glyph art into the editor (Apply to keep it)" style="max-width:185px;font-size:11px;padding:4px 5px">
+        <option value="">load art from…</option>
+      </select>
+      <button class="mini" id="mUpload">Upload .svg…</button>
+      <input type="file" id="mFile" accept=".svg,image/svg+xml" style="display:none">
+      <button class="mini" id="mCopy">Copy SVG</button>
+      <button class="mini" id="mBuiltin" title="Restore the built-in FastShaders art">Built-in</button>
+      <button class="mini" id="mClear">Clear</button>
+      <span class="spacer"></span>
+      <button id="mClose">Cancel</button>
+      <button class="primary" id="mApply">Apply</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+</body>
+</html>
