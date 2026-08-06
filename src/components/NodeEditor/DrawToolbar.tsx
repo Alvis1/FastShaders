@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { OPACITY_STEP } from '@/utils/drawings';
 import { t } from '@/i18n';
@@ -15,7 +16,9 @@ import { t } from '@/i18n';
  * the number of `<g opacity>` isolation groups (the render cost driver) and
  * makes "same opacity" exact for the constant-overlap semantic.
  */
-export function DrawToolbar() {
+// memo(): rendered by NodeEditor, which re-renders every drag frame; all
+// inputs come from this component's own store selectors.
+export const DrawToolbar = memo(function DrawToolbar() {
   const active = useAppStore((s) => s.drawToolActive);
   const eraser = useAppStore((s) => s.drawEraser);
   const color = useAppStore((s) => s.drawColor);
@@ -98,4 +101,4 @@ export function DrawToolbar() {
       )}
     </>
   );
-}
+});

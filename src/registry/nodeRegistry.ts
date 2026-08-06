@@ -1,5 +1,6 @@
 import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
 import { nodeSearchLV, nodeLabelLV } from '@/i18n';
+import { MIC_DEFAULT_VALUES } from '@/utils/micNode';
 
 const definitions: NodeDefinition[] = [
   // ===== INPUT NODES =====
@@ -159,6 +160,47 @@ const definitions: NodeDefinition[] = [
     // surface this node. Search aliases belong in the `Also:` tail.
     description:
       'Elapsed time in seconds — wire it in to animate values; right-click to set its speed, or expose speed as an input socket. Also: clock, animation, speed',
+  },
+  {
+    type: 'micNode',
+    label: 'Microphone',
+    category: 'input',
+    // Emitted BY HAND (four `uniform(0)` lines, one per channel), so the
+    // tslFunction is empty. Like `dataNode` — and UNLIKE the dataviz family —
+    // it claims its variable base through a dedicated branch with ALIASES
+    // rather than a CUSTOM_EMISSION_BASENAMES entry, because it emits
+    // `<var>_<channel>` identifiers rather than a single `<var>`; see the
+    // alias claim in graphToCode. An empty tslFunction also self-excludes it
+    // from TSL_FUNCTION_TO_DEF, which is what keeps it one-way through
+    // codeToGraph.
+    tslFunction: '',
+    tslImportModule: '',
+    // Declared as REAL inputs, not just defaultValues keys: ShaderNode builds
+    // sockets from `def.inputs`, so a param that lives only in defaultValues
+    // can be ticked "expose as input socket" and still render nothing. That is
+    // the imageNode pattern (uv/tileX/…); the noise nodes and Time get away
+    // with defaultValues-only because they render through PreviewNode/ClockNode,
+    // which have their own socket handling. Both keep a defaultValues entry too,
+    // so an UNexposed param still shows its inline number widget.
+    inputs: [
+      { id: 'smoothing', label: 'Smoothing', dataType: 'float' },
+      { id: 'gain', label: 'Gain', dataType: 'float' },
+    ],
+    outputs: [
+      { id: 'level', label: 'Level', dataType: 'float' },
+      { id: 'bass', label: 'Bass', dataType: 'float' },
+      { id: 'mid', label: 'Mid', dataType: 'float' },
+      { id: 'treble', label: 'Treble', dataType: 'float' },
+    ],
+    // Analyser settings. Both follow the opt-in exposedPorts rules (hidden
+    // until ticked, auto-exposed when an edge lands, wired edge overrides the
+    // stored number). They resolve very differently though: `gain` is applied
+    // SHADER-side by codegen, while `smoothing` configures an AnalyserNode on
+    // the CPU and so is resolved by evaluating its upstream chain on the CPU —
+    // see the mic convention in CLAUDE.md.
+    defaultValues: MIC_DEFAULT_VALUES,
+    description:
+      'Live microphone loudness and three frequency bands, 0–1 each. The values only move while capture is armed in the preview; a downloaded shader holds them at 0 unless the embedding page drives them. Also: audio, sound, music, reactive, spectrum, fft',
   },
   {
     type: 'screenUV',
@@ -862,6 +904,65 @@ const definitions: NodeDefinition[] = [
     description:
       'Map a Data node column to a colour ramp along one axis (or radially), with scale, offset, cutoffs, midpoint and contrast. Colour output for the surface; Value output (scalar height) for displacement. Wire a Data output into Signal; tone controls are in the right-click menu.',
   },
+  // Colormap: scalar → colour through a scientific lookup table (viridis and
+  // friends). The map choice, reverse flag and discrete-level count live in
+  // `values` + the ColormapSettingsMenu, NOT in defaultValues — a non-hex string
+  // there is read as a tslRef PORT by both the generic settings menu and the
+  // card's row builder. tslFunction is empty: graphToCode bakes a 256-texel LUT
+  // and emits the fetch, like the other dataviz nodes (and, like them, this node
+  // is one-way through codeToGraph).
+  {
+    type: 'colormap',
+    label: 'Colormap',
+    category: 'dataviz',
+    tslFunction: '',
+    tslImportModule: '',
+    inputs: [{ id: 'value', label: 'Value', dataType: 'float' }],
+    outputs: [{ id: 'out', label: 'Color', dataType: 'vec3' }],
+    description:
+      'Colour a 0–1 value through a perceptually uniform scientific colormap (viridis, cividis, batlow, cool-warm, isoluminant…). Pick the map, reverse or step it in the right-click menu. Also: colourmap colour map palette ramp lut heatmap viridis magma inferno plasma turbo.',
+  },
+  // Data Range: raw data units → 0–1, honestly. Wired straight from a Data
+  // column it reads that column's statistics at code-gen (min/max, percentiles,
+  // mean/σ) and bakes them as literals; anywhere else it falls back to the
+  // manual domain. Emitted specially (a mode-dependent ALU chain), so no
+  // tslFunction.
+  //
+  // NOT called `normalize` — the vector category already owns that type (unit
+  // vector), and NODE_REGISTRY is keyed by type, so the duplicate silently
+  // replaced it.
+  {
+    type: 'dataRange',
+    label: 'Data Range',
+    category: 'dataviz',
+    tslFunction: '',
+    tslImportModule: '',
+    inputs: [{ id: 'value', label: 'Value', dataType: 'float' }],
+    outputs: [{ id: 'out', label: '0…1', dataType: 'float' }],
+    description:
+      'Map raw data values into 0–1 so a colormap means something: min/max, robust percentile, zero-centred (for diverging maps), log, symlog or z-score. Reads the wired Data column\'s own statistics. Also: normalize normalise rescale remap domain scaling percentile logarithmic zscore.',
+  },
+  // Isolines: antialiased contour lines at regular value intervals. Same
+  // continuous-phase + derivative-AA construction as Data Stripes (never take a
+  // derivative of fract()), including the sub-pixel fade so dense contours grey
+  // out instead of shimmering. Parameters ARE numeric defaultValues, so they get
+  // inline widgets, the generic settings menu and opt-in exposed sockets.
+  {
+    type: 'isolines',
+    label: 'Isolines',
+    category: 'dataviz',
+    tslFunction: '',
+    tslImportModule: '',
+    inputs: [{ id: 'value', label: 'Value', dataType: 'float' }],
+    outputs: [{ id: 'out', label: 'Lines', dataType: 'float' }],
+    defaultValues: {
+      levels: 10,
+      width: 1.5,
+      offset: 0,
+    },
+    description:
+      'Draw antialiased contour lines wherever a value crosses a regular interval — the way a reader gets exact numbers off a curved 3D surface. Outputs a 0–1 line mask to mix over a colour. Also: isoline contour contours iso level lines topographic.',
+  },
 
   // ===== OUTPUT =====
   {
@@ -1118,11 +1219,14 @@ export function getAllDefinitions(): NodeDefinition[] {
 }
 
 /** Map a registry definition to its React Flow node type string. */
-export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'output';
+export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'mic' | 'output';
 
 export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   if (def.type === 'output') return 'output';
   if (def.type === 'time') return 'clock';
+  // Places every socket itself (see MicNode.tsx) — ShaderNode's row layout
+  // cannot express its arrangement.
+  if (def.type === 'micNode') return 'mic';
   // Both swatch nodes render as ColorNode: the constant is a circle, the named
   // uniform a rounded rectangle (ColorNode branches on registryType). The
   // uniform's `name` goes INSIDE the swatch, the way the constant already

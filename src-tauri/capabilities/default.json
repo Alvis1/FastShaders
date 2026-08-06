@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core permissions for the main FastShaders window. The app is a self-contained web frontend — no fs/shell/dialog plugin permissions are granted; file import stays on the HTML5 drag-drop + <input type=file> paths (dragDropEnabled is false in tauri.conf.json so DOM drop events receive the files).",
+  "description": "Core permissions for the main FastShaders window. The app is a self-contained web frontend — no fs/shell/dialog plugin permissions are granted TO THE WEBVIEW; file import stays on the HTML5 drag-drop + <input type=file> paths (dragDropEnabled is false in tauri.conf.json so DOM drop events receive the files). The dialog plugin registered in main.rs is reached only from the Rust side (work_folder_pick), which never crosses this ACL — the work-folder commands themselves are app commands covered by core:default, and their IPC surface accepts bare validated file names, never paths.",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

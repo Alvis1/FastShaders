@@ -7,6 +7,10 @@ import { DragNumberInput } from '../inputs/DragNumberInput';
 import { toggleExposedPort, usesExposedPorts } from '@/utils/exposedPorts';
 import { rowStyle, labelStyle, colorFieldStyle, nameFieldStyle, NodeActions } from './menuShared';
 import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/propertyConvert';
+import { useHistoryBracket } from '@/hooks/useHistoryBracket';
+import { ImageNodeSettings } from './ImageNodeSettings';
+import { MicNodeSettings } from './MicNodeSettings';
+import { DataNodeStats } from './DataColumnStats';
 
 const checkLabelStyle = { ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px' } as const;
 const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
@@ -19,6 +23,11 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const language = useAppStore((s) => s.language);
+  // Color swatches fire an input event per frame while their picker is
+  // dragged, and the property-name field fires one per keystroke — each would
+  // otherwise pushHistory a full-graph structuredClone. Bracket them so a
+  // burst lands as one undo entry (DragNumberInput brackets its own drags).
+  const { bracket, closeBracket } = useHistoryBracket();
 
   const node = nodes.find((n) => n.id === nodeId);
   if (!node) return null;
@@ -112,14 +121,16 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
                 <input
                   type="text"
                   value={String(currentValue)}
-                  onChange={(e) => handleValueChange(key, e.target.value)}
+                  onChange={(e) => { bracket(); handleValueChange(key, e.target.value); }}
+                  onBlur={closeBracket}
                   style={nameFieldStyle}
                 />
               ) : isColor ? (
                 <input
                   type="color"
                   value={String(currentValue)}
-                  onChange={(e) => handleValueChange(key, e.target.value)}
+                  onChange={(e) => { bracket(); handleValueChange(key, e.target.value); }}
+                  onBlur={closeBracket}
                   style={colorFieldStyle}
                 />
               ) : isPort ? null : (
@@ -132,84 +143,23 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
           );
         })}
 
-      {/* Image node: image-specific toggles. Tile/offset values + their
+      {/* Image node: image-specific toggles, provenance, and the revert for
+          the drop-time power-of-two snap. Tile/offset values + their
           expose-as-socket checkboxes render through the GENERIC sections above
-          (same rules as the noise nodes' params); only the toggles without a
-          registry default live here. Values are read Number-coerced by the
-          graphToCode emission branch. */}
-      {node.data.registryType === 'imageNode' && (() => {
-        const vals = getNodeValues(node);
-        const flagOf = (key: string, dflt: boolean) =>
-          vals[key] === undefined ? dflt : Number(vals[key]) >= 0.5;
-        const setVal = (key: string, value: string | number) =>
-          updateNodeData(nodeId, { values: { ...getNodeValues(node), [key]: value } });
+          (same rules as the noise nodes' params); only what has no registry
+          default lives in that component. Its own component because it needs
+          hooks — see ImageNodeSettings. */}
+      {node.data.registryType === 'imageNode' && <ImageNodeSettings nodeId={nodeId} />}
 
-        const checkboxRow = (label: string, key: string, dflt: boolean, title: string) => (
-          <div style={rowStyle}>
-            <label style={checkLabelStyle}>
-              <input
-                type="checkbox"
-                checked={flagOf(key, dflt)}
-                onChange={() => setVal(key, flagOf(key, dflt) ? 0 : 1)}
-                title={title}
-                style={checkStyle}
-              />
-              {label}
-            </label>
-          </div>
-        );
+      {/* Mic node: which input device to capture from. Session-only — it never
+          reaches node.data.values, so it has no undo entry and never ships in a
+          shared project. See MicNodeSettings. */}
+      {node.data.registryType === 'micNode' && <MicNodeSettings />}
 
-        // Read-only source info: format, encoded (post-downscale) resolution,
-        // and payload size (base64 chars → ~3/4 bytes). Reflects what's actually
-        // stored/emitted, so it also shows the effect of the device downscale.
-        const url = typeof vals.imageB64 === 'string' ? vals.imageB64 : '';
-        const mimeMatch = /^data:image\/(png|jpeg|webp);base64,/.exec(url);
-        const format = mimeMatch ? (mimeMatch[1] === 'jpeg' ? 'JPEG' : mimeMatch[1].toUpperCase()) : '—';
-        const w = Number(vals.width) || 0;
-        const h = Number(vals.height) || 0;
-        const resolution = w && h ? `${w} × ${h}` : '—';
-        const bytes = mimeMatch ? Math.round((url.length - url.indexOf(',') - 1) * 0.75) : 0;
-        const size =
-          bytes <= 0 ? '—'
-            : bytes < 1024 ? `${bytes} B`
-              : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB`
-                : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-        const infoRow = (label: string, value: string) => (
-          <div style={rowStyle}>
-            <span style={labelStyle}>{label}</span>
-            <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
-              {value}
-            </span>
-          </div>
-        );
-        return (
-          <>
-            <div className="context-menu__divider" />
-            <div className="context-menu__category">{t('Image', language)}</div>
-            {infoRow(t('Format', language), format)}
-            {infoRow(t('Resolution', language), resolution)}
-            {infoRow(t('Size', language), size)}
-            {checkboxRow(t('Repeat (tile the image)', language), 'repeat', true,
-              t('On: the image wraps/tiles. Off: edge pixels clamp beyond 0–1 UV.', language))}
-            {checkboxRow(t('Flip X', language), 'flipX', false, t('Mirror the image left–right', language))}
-            {checkboxRow(t('Flip Y', language), 'flipY', false, t('Mirror the image top–bottom', language))}
-            {/* colorSpace keeps its string contract ('color' | 'data') — the
-                emission branch and makeImageNodeData both read it that way. */}
-            <div style={rowStyle}>
-              <label style={checkLabelStyle}>
-                <input
-                  type="checkbox"
-                  checked={vals.colorSpace === 'data'}
-                  onChange={() => setVal('colorSpace', vals.colorSpace === 'data' ? 'color' : 'data')}
-                  title={t('Sample as linear data (normal/height maps) instead of sRGB color', language)}
-                  style={checkStyle}
-                />
-                {t('Data map (linear, no mipmaps)', language)}
-              </label>
-            </div>
-          </>
-        );
-      })()}
+      {/* Data node: what is actually IN each column. Every downstream tone and
+          domain control is expressed in normalized units, so without the real
+          ranges here the user is tuning against numbers they cannot see. */}
+      {node.data.registryType === 'dataNode' && <DataNodeStats nodeId={nodeId} />}
 
       {/* Constant ↔ uniform conversion: Float/Color become a named Property
           (uniform) node in place — same id, position and outgoing edges — and

@@ -70,10 +70,14 @@
     "toHsl": "Uz HSL",
     "stripes": "Svītras",
     "dataviz": "Datu vizualizācija",
+    "colormap": "Krāsu karte",
+    "dataRange": "Datu diapazons",
+    "isolines": "Izolīnijas",
     "output": "Izvade",
     "unknown": "Nezināms",
     "dataNode": "Dati",
-    "imageNode": "Attēls"
+    "imageNode": "Attēls",
+    "micNode": "Mikrofons"
   },
   "categories": {
     "input": "Ievade",

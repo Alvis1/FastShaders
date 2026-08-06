@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { useDismiss } from '@/hooks/useDismiss';
+import { useLongPress } from '@/hooks/useLongPress';
 import { downloadShader } from '@/engine/exportShader';
 import { FeedbackModal } from '@/components/Modals/FeedbackModal';
+import { WorkFolder } from './WorkFolder';
 import { t } from '@/i18n';
 import './Toolbar.css';
 
@@ -47,37 +50,6 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/**
- * While open, close on a click outside every exempt ref or on Escape.
- * The handlers read the live `refs` array through a render-updated ref, so
- * callers may pass a fresh array literal each render without stale capture.
- */
-function useDismiss(
-  open: boolean,
-  setOpen: (open: boolean) => void,
-  refs: RefObject<HTMLElement | null>[]
-) {
-  const refsRef = useRef(refs);
-  refsRef.current = refs;
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (refsRef.current.some((r) => r.current?.contains(t))) return;
-      setOpen(false);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
-}
-
 export function Toolbar() {
   const shaderName = useAppStore((s) => s.shaderName);
   const setShaderName = useAppStore((s) => s.setShaderName);
@@ -85,6 +57,9 @@ export function Toolbar() {
   const setLanguage = useAppStore((s) => s.setLanguage);
   const codeEditorTheme = useAppStore((s) => s.codeEditorTheme);
   const setCodeEditorTheme = useAppStore((s) => s.setCodeEditorTheme);
+  const previewMesh = useAppStore((s) => s.previewMesh);
+  const exportIncludeMesh = useAppStore((s) => s.exportIncludeMesh);
+  const setExportIncludeMesh = useAppStore((s) => s.setExportIncludeMesh);
   const isDark = codeEditorTheme === 'vs-dark';
 
   const [contactOpen, setContactOpen] = useState(false);
@@ -94,6 +69,15 @@ export function Toolbar() {
 
   const [localOpen, setLocalOpen] = useState(false);
   const localRef = useRef<HTMLDivElement>(null);
+
+  // EXPORT settings popover, opened by right-click on the EXPORT button.
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
+  const exportBtnRef = useRef<HTMLButtonElement>(null);
+  // Touch/pen can't right-click, so a long-press opens the same popover. The
+  // finger lift then still fires the button's click — which is the DOWNLOAD —
+  // so the long-press latches a flag that swallows exactly that one click.
+  const suppressExportClickRef = useRef(false);
 
   // Feedback composer. Local state rather than a store field: it is transient
   // UI opened from exactly one place, and the modal portals itself to
@@ -121,6 +105,22 @@ export function Toolbar() {
   // Close the Local (desktop download) dropdown on outside click or Escape.
   // One wrapper ref covers both the trigger and the popover.
   useDismiss(localOpen, setLocalOpen, [localRef]);
+
+  // Close the export-settings popover on outside click or Escape.
+  useDismiss(exportOpen, setExportOpen, [exportRef]);
+
+  useLongPress(exportBtnRef, () => {
+    suppressExportClickRef.current = true;
+    // If the finger lifts outside the button, no click ever consumes the
+    // latch — clear it at the next pointerdown so a later real tap isn't
+    // swallowed (that pointerdown precedes its own click).
+    document.addEventListener(
+      'pointerdown',
+      () => { suppressExportClickRef.current = false; },
+      { once: true, capture: true },
+    );
+    setExportOpen(true);
+  });
 
   // Close the VR bench popover on outside click or Escape (the server keeps
   // running — closing the panel must not interrupt a bench on the headset).
@@ -275,14 +275,68 @@ export function Toolbar() {
           placeholder={t('Shader name...', language)}
           spellCheck={false}
         />
-        <button
-          type="button"
-          className="toolbar__export"
-          onClick={downloadShader}
-          title={t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}
-        >
-          {t('Export', language)}
-        </button>
+        <div className="toolbar__export-wrap" ref={exportRef}>
+          {/* No aria-haspopup here: the button's ACTIVATION is the download —
+              announcing a popup that Enter/Space never opens would send a
+              screen-reader user into an unexpected file download. */}
+          <button
+            ref={exportBtnRef}
+            type="button"
+            className="toolbar__export"
+            onClick={() => {
+              if (suppressExportClickRef.current) {
+                suppressExportClickRef.current = false;
+                return;
+              }
+              downloadShader();
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setExportOpen((o) => !o);
+            }}
+            title={`${t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}. ${
+              previewMesh && !exportIncludeMesh
+                ? t('The 3D model is currently excluded from the export — right-click to change.', language)
+                : t('Right-click for export settings.', language)
+            }`}
+          >
+            {t('Export', language)}
+          </button>
+          {exportOpen && (
+            <div
+              className="toolbar__local-popover toolbar__export-popover"
+              role="dialog"
+              aria-label={t('Export settings', language)}
+            >
+              <div className="toolbar__local-header">
+                <span className="toolbar__contact-label">{t('Export settings', language)}</span>
+              </div>
+              <label
+                className={`toolbar__export-check${previewMesh ? '' : ' toolbar__export-check--off'}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={exportIncludeMesh}
+                  disabled={!previewMesh}
+                  onChange={(e) => setExportIncludeMesh(e.target.checked)}
+                />
+                <span>
+                  {t('Include the preview 3D model', language)}
+                  {previewMesh ? ` (${previewMesh.name})` : ''}
+                </span>
+              </label>
+              <div className="toolbar__local-note">
+                {previewMesh
+                  ? t('The model ships inside the export .zip under models/ — untick to export the shader alone.', language)
+                  : t('No custom 3D model is loaded — drop a .obj/.glb/.gltf onto the 3D preview first.', language)}
+              </div>
+            </div>
+          )}
+        </div>
+        {/* Desktop-only: the native-folder Save/load control. The web build
+            can't offer it — see work_folder.rs for why the webview FS APIs
+            don't cover this. */}
+        {__FS_DESKTOP__ && <WorkFolder />}
       </div>
       <div className="toolbar__right">
         {/* Hard reload of the tab. Safe to offer without a confirm: the graph

@@ -1,12 +1,12 @@
 import { memo, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
-import type { PreviewFlowNode, NodeCategory, AppNode, TSLDataType } from '@/types';
+import type { PreviewFlowNode, NodeCategory, AppNode, AppEdge, TSLDataType } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
-import { evaluateNodeScalar } from '@/engine/cpuEvaluator';
+import { evaluateNodeScalar, getTargetEdges } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
 import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
 import './PreviewNode.css';
@@ -57,8 +57,6 @@ export const PreviewNode = memo(function PreviewNode({
   if (!def) return null;
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const nodes = useAppStore((s) => s.nodes);
-  const edges = useAppStore((s) => s.edges);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
@@ -101,13 +99,39 @@ export const PreviewNode = memo(function PreviewNode({
     updateNodeInternals(id);
   }, [id, exposedKey, updateNodeInternals]);
 
-  // getTimeInputs walks the graph per incoming edge (BFS), so memoize it on the
-  // graph identity instead of recomputing on every render. The JSON.stringify
-  // key then stabilizes the *reference* when the resolved set is unchanged, so
-  // effects keyed on `timeInputs` don't re-fire just because nodes/edges got a
-  // new array identity (intentional idiom — see CLAUDE.md).
-  const timeInputsRaw = useMemo(() => getTimeInputs(id, nodes, edges), [id, nodes, edges]);
+  // ── Upstream-derived render inputs, without a whole-array subscription ──
+  // Subscribing to s.nodes/s.edges re-rendered every noise card 60×/s during
+  // any drag (each pointermove mints new array identities, bypassing memo()),
+  // and the static-thumbnail effect below re-shaded ~27k noise samples per
+  // card per frame. Instead — same idiom as ShaderNode's edgeKey — fold
+  // everything this card's thumbnail depends on (per-input upstream scalar at
+  // t=0 and time-ness) into ONE primitive string: position-only notifies
+  // produce an identical string and Object.is bails before any re-render. The
+  // evaluator's shared per-graph ctx makes the per-notify evals cache-cheap.
+  const inputsKey = useAppStore((s) => {
+    let key = '';
+    for (const e of getTargetEdges(s.nodes, s.edges, id)) {
+      if (!e.targetHandle) continue;
+      const v = evaluateNodeScalar(e.source, s.nodes, s.edges, 0);
+      const timeFed = hasTimeUpstream(e.source, s.nodes, s.edges);
+      key += `${e.source}\u0000${e.targetHandle}\u0000${v ?? 'n'}\u0000${timeFed ? 1 : 0}\u0001`;
+    }
+    return key;
+  });
+
+  // getTimeInputs walks the graph per incoming edge (BFS), so rebuild it from
+  // getState() only when the folded key actually changes. The JSON.stringify
+  // second stage then stabilizes the *reference* by CONTENT: inputsKey also
+  // changes on upstream VALUE edits, and handing the rAF effect a fresh (but
+  // equal) object each time would tear the animation loop down and reset its
+  // clock to t=0 on every scrub frame.
+  const timeInputsRaw = useMemo(() => {
+    const { nodes, edges } = useAppStore.getState();
+    return getTimeInputs(id, nodes, edges);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, inputsKey]);
   const timeInputsKey = JSON.stringify(timeInputsRaw);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const timeInputs = useMemo(() => timeInputsRaw, [timeInputsKey]);
   const hasAnyTime = Object.values(timeInputs).some(Boolean);
 
@@ -117,21 +141,21 @@ export const PreviewNode = memo(function PreviewNode({
   const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);
 
-  // Snapshot nodes/edges for use inside rAF (avoid stale closures)
-  const nodesRef = useRef(nodes);
-  const edgesRef = useRef(edges);
-  nodesRef.current = nodes;
-  edgesRef.current = edges;
-
-  /** Resolve each scalar input: connected edge → evaluate upstream, else → data.values fallback. */
+  /**
+   * Resolve each scalar input: connected edge → evaluate upstream, else →
+   * data.values fallback. Iterates the same UNWRAPPED edge view `inputsKey`
+   * folds (getTargetEdges translates collapsed-group boundary edges to their
+   * real child producers) — key and render must consume the SAME graph, or a
+   * thumbnail rendered while a feeder's group is collapsed sticks on defaults
+   * after expand (the key wouldn't change, so nothing re-fires the effect).
+   */
   const resolveValues = (
     currentNodes: AppNode[],
-    currentEdges: typeof edges,
+    currentEdges: AppEdge[],
     time: number,
   ): Record<string, string | number> => {
     const resolved: Record<string, string | number> = { ...data.values };
-    for (const edge of currentEdges) {
-      if (edge.target !== id) continue;
+    for (const edge of getTargetEdges(currentNodes, currentEdges, id)) {
       const handle = edge.targetHandle;
       if (!handle) continue;
       const val = evaluateNodeScalar(edge.source, currentNodes, currentEdges, time);
@@ -140,9 +164,10 @@ export const PreviewNode = memo(function PreviewNode({
     return resolved;
   };
 
-  // Static (non-time-driven) noise preview: one-shot render. It legitimately
-  // depends on nodes/edges so the thumbnail refreshes when an upstream value
-  // changes, but it's a plain putImageData — no rAF loop to tear down.
+  // Static (non-time-driven) noise preview: one-shot render. Keyed on the
+  // folded inputsKey (not nodes/edges identity) so the thumbnail refreshes
+  // when an upstream value changes but NOT on every drag frame; the arrays are
+  // read imperatively at render time. Plain putImageData — no rAF loop.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !NOISE_TYPES.has(data.registryType) || hasAnyTime) return;
@@ -151,17 +176,19 @@ export const PreviewNode = memo(function PreviewNode({
     // 1× and stretch the bitmap — every node goes blurry.
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
+    const { nodes, edges } = useAppStore.getState();
     const resolved = resolveValues(nodes, edges, 0);
     const imageData = renderNoisePreview(data.registryType as NoiseType, PREVIEW_SIZE, resolved, 0, {});
     ctx.putImageData(imageData, 0, 0);
-  }, [data.registryType, data.values, nodes, edges, hasAnyTime]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.registryType, data.values, inputsKey, hasAnyTime]);
 
   // Animated (time-driven) noise preview: the rAF loop reads fresh graph state
-  // via nodesRef/edgesRef, so its deps deliberately EXCLUDE nodes/edges —
-  // otherwise the loop would tear down and re-subscribe on every unrelated drag
-  // frame (each of which gives nodes/edges a new array identity). The remaining
-  // deps (registryType, the stabilized timeInputs, this node's own values) are
-  // all stable across unrelated drags.
+  // straight from the store each frame (this component no longer subscribes to
+  // nodes/edges at all), so its deps stay stable across unrelated drags and
+  // the loop never tears down mid-animation. The remaining deps (registryType,
+  // the stabilized timeInputs, this node's own values) change only on real
+  // edits to this node's upstream.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !NOISE_TYPES.has(data.registryType) || !hasAnyTime) return;
@@ -175,7 +202,8 @@ export const PreviewNode = memo(function PreviewNode({
       if (startTime === null) startTime = timestamp;
       const t = (timestamp - startTime) / 1000;
 
-      const resolved = resolveValues(nodesRef.current, edgesRef.current, t);
+      const { nodes, edges } = useAppStore.getState();
+      const resolved = resolveValues(nodes, edges, t);
       const imageData = renderNoisePreview(
         data.registryType as NoiseType,
         PREVIEW_SIZE,

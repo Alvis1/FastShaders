@@ -1,8 +1,29 @@
+import { lazy, Suspense } from 'react';
 import { SplitPane } from './SplitPane';
 import { Toolbar } from './Toolbar';
 import { NodeEditor } from '@/components/NodeEditor/NodeEditor';
-import { CodeEditor } from '@/components/CodeEditor/CodeEditor';
 import { ShaderPreview } from '@/components/Preview/ShaderPreview';
+
+// Monaco (a ~3.7MB chunk + its CSS) rides CodeEditor's import graph; loading
+// it lazily moves all of it off the first-paint critical path — the canvas
+// and preview render immediately and the editor pane fills in right after.
+// Still a self-hosted hashed asset, so the offline/desktop constraint holds.
+// The catch matters: a failed lazy fetch (connection drop, or a redeploy
+// swapping the hashed assets mid-session) would otherwise reject through
+// React.lazy with no boundary and unmount the whole live app — degrade to a
+// broken code pane instead.
+function CodeEditorLoadError() {
+  return (
+    <div style={{ padding: 'var(--space-3)', color: 'var(--text-secondary)' }}>
+      Code editor failed to load — reload the app to retry.
+    </div>
+  );
+}
+const CodeEditor = lazy(() =>
+  import('@/components/CodeEditor/CodeEditor')
+    .then((m) => ({ default: m.CodeEditor }))
+    .catch(() => ({ default: CodeEditorLoadError })),
+);
 import { CsvImportModal } from '@/components/Modals/CsvImportModal';
 import { LimitModal } from '@/components/Modals/LimitModal';
 import { TooltipLayer } from '@/components/Tooltip/TooltipLayer';
@@ -45,7 +66,9 @@ export function AppLayout() {
               left={
                 <div className="app-layout__code-panel">
                   <div className="app-layout__code">
-                    <CodeEditor />
+                    <Suspense fallback={null}>
+                      <CodeEditor />
+                    </Suspense>
                   </div>
                 </div>
               }

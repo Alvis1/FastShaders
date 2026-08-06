@@ -509,3 +509,96 @@
   width: 100%;
   margin: 0;
 }
+
+/* ── Live microphone input ────────────────────────────────────────────────
+   Rendered at the START of the bottom-left cluster, and only while the shader
+   actually reads a mic uniform. Leading rather than trailing on purpose: the
+   destructive red Reset ✕ ends that cluster, and a toggle that appears and
+   disappears must not land next to it, where a mis-aimed click is a lost
+   session. Appearing shifts play/bg/reset right once, which only happens when
+   the user deliberately wires a Mic node. */
+.shader-preview__mic {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shader-preview__mic-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--ctl-size);
+  padding: 0 8px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.shader-preview__mic-btn:hover {
+  border-color: var(--border-focus);
+}
+
+/* Live: a red ring, matching the universal "this is recording" convention.
+   The browser's own indicator says the ORIGIN is capturing; this one says
+   which surface is consuming it. */
+.shader-preview__mic-btn.is-live {
+  border-color: #d32f2f;
+  background: rgba(211, 47, 47, 0.08);
+}
+
+.shader-preview__mic-btn.is-starting {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.shader-preview__mic-btn.is-failed {
+  border-color: #e08a1e;
+  color: #b26a00;
+}
+
+/* Meter track. Fixed width so the pill doesn't resize as the level moves —
+   a control that changes width 60×/s is unclickable. */
+.shader-preview__mic-meter {
+  display: block;
+  width: 34px;
+  height: 6px;
+  overflow: hidden;
+  background: var(--border-subtle);
+  border-radius: 3px;
+}
+
+/* The rAF pump writes `transform: scaleX(n)` here directly. transform-only so
+   the compositor owns it: a per-frame `width` change would relayout the whole
+   pill row instead. */
+.shader-preview__mic-meter-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #d32f2f;
+  border-radius: 3px;
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+/* Failure text sits OUTSIDE the button: a title tooltip on a control the user
+   already clicked and moved away from is not a message. */
+.shader-preview__mic-error {
+  max-width: 190px;
+  font-size: 11px;
+  line-height: 1.25;
+  color: #b26a00;
+  font-family: var(--font-sans);
+}
+
+:root[data-theme="dark"] .shader-preview__mic-btn.is-failed {
+  color: #f0b357;
+}
+
+:root[data-theme="dark"] .shader-preview__mic-error {
+  color: #f0b357;
+}

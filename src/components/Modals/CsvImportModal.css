@@ -34,6 +34,25 @@
   line-height: 1.5;
 }
 
+/* Label + control on one line inside a modal panel (the import-optimization
+   preference). */
+.csv-import-modal__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+.csv-import-modal__row select {
+  padding: 3px 6px;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+}
+
 .csv-import-modal__buttons {
   display: flex;
   justify-content: flex-end;
@@ -60,6 +79,23 @@
   border-color: var(--border-focus);
   color: var(--border-focus);
   font-weight: 600;
+}
+
+/* Affirmative answer on a plain yes/no question — a filled green plate rather
+   than the outlined primary, so the answer is picked at a glance.
+   Theme-invariant literals (pale plate + near-black text read the same in
+   both themes), and the SAME green as the canvas NEW button so the app has
+   one green rather than two. */
+.csv-import-modal__button--yes {
+  font-weight: 700;
+  color: #1a1a1a;
+  background: #cdeab0;
+  border-color: #8fbf5e;
+  min-width: 72px;
+}
+.csv-import-modal__button--yes:hover:not(:disabled) {
+  background: #bce197;
+  border-color: #6fa63e;
 }
 
 .csv-import-modal__button:disabled {

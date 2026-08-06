@@ -1,10 +1,12 @@
-import { useCallback, useState, type ChangeEvent, type DragEvent } from 'react';
+import { memo, useCallback, useState, type ChangeEvent, type DragEvent } from 'react';
 import { useAppStore, VR_HEADSETS, resolveDeviceBudget } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { parseCostFile, buildMergedComplexity } from '@/utils/costOverride';
 import './CostBar.css';
 
-export function CostBar() {
+// memo(): rendered by NodeEditor, which re-renders every drag frame; this
+// panel reads everything it shows from its own store selectors.
+export const CostBar = memo(function CostBar() {
   const totalCost = useAppStore((s) => s.totalCost);
   const language = useAppStore((s) => s.language);
   const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
@@ -198,4 +200,4 @@ export function CostBar() {
       )}
     </div>
   );
-}
+});

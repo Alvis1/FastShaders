@@ -53,7 +53,10 @@ describe('graphToCode: Data → Data Viz → Output', () => {
   it('samples the value at uv.x by default and mixes the two colours', () => {
     expect(gen.code).toContain('const _dataviz1_coord = uv().x;');
     expect(gen.code).toContain('texture(_dataviz1_value, vec2(_dataviz1_coord, 0.5))');
-    expect(gen.code).toMatch(/vec3\(0, 0, 0\)\.mix\(vec3\(1, 1, 1\), _dataviz1_t\)/);
+    // color(0x…) rather than vec3(r/255, …): THREE.Color decodes the hex from
+    // sRGB into linear working space, so the ramp endpoints render as the
+    // swatch the user picked and the two ends interpolate in the right space.
+    expect(gen.code).toMatch(/color\(0x000000\)\.mix\(color\(0xffffff\), _dataviz1_t\)/);
     expect(gen.code).toContain('return dataviz1;');
     expect(gen.code).not.toMatch(/\bdataviz\s*\(/); // custom emission, not a call
   });

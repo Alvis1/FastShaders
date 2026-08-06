@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useAppStore, loadGraph, setGraphPersistence } from './useAppStore';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { useAppStore, loadGraph, setGraphPersistence, cancelPendingGraphSave } from './useAppStore';
 import type { DrawStroke } from '@/utils/drawings';
 import { MAX_STROKES } from '@/utils/drawings';
 
@@ -8,7 +8,17 @@ function stroke(over: Partial<DrawStroke> = {}): DrawStroke {
 }
 
 describe('store drawings slice', () => {
+  // isolate: false shares this worker's globals with later files — leave no
+  // fake clock, stubbed storage, or armed save timer behind.
+  afterAll(() => {
+    cancelPendingGraphSave();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    useAppStore.setState({ drawings: [], nodes: [], edges: [], past: [], future: [] });
+  });
+
   beforeEach(() => {
+    cancelPendingGraphSave();
     vi.useFakeTimers();
     const mem: Record<string, string> = {};
     vi.stubGlobal('localStorage', {

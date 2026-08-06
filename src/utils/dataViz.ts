@@ -74,6 +74,169 @@ export function capToWidth(values: ArrayLike<number>, maxWidth = MAX_TEXTURE_WID
   return out;
 }
 
+/** Summary statistics of a data column, computed once at code-gen. */
+export interface ColumnStats extends MinMax {
+  count: number;
+  mean: number;
+  /** Population standard deviation (÷N, not ÷N−1 — this is the whole column,
+   *  not a sample drawn from something larger). */
+  sd: number;
+  /** 2nd and 98th percentile — the robust domain, so a single outlier can't
+   *  squash the whole ramp into two texels. */
+  p2: number;
+  p98: number;
+}
+
+/** Nearest-rank percentile of an already-sorted ascending array. */
+function percentileSorted(sorted: ArrayLike<number>, p: number): number {
+  const n = sorted.length;
+  if (n === 0) return 0;
+  const i = Math.min(n - 1, Math.max(0, Math.round(p * (n - 1))));
+  return sorted[i];
+}
+
+/** Compute the statistics the Normalize node's automatic modes need. Non-finite
+ *  cells are skipped (csvParser already rejects them, but a column can also
+ *  arrive from a tampered project payload). */
+export function columnStats(values: ArrayLike<number>): ColumnStats {
+  const finite: number[] = [];
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (Number.isFinite(v)) {
+      finite.push(v);
+      sum += v;
+    }
+  }
+  const n = finite.length;
+  if (n === 0) return { min: 0, max: 1, count: 0, mean: 0, sd: 0, p2: 0, p98: 1 };
+
+  const mean = sum / n;
+  let sq = 0;
+  for (let i = 0; i < n; i++) sq += (finite[i] - mean) ** 2;
+  const sorted = finite.slice().sort((a, b) => a - b);
+
+  return {
+    min: sorted[0],
+    max: sorted[n - 1],
+    count: n,
+    mean,
+    sd: Math.sqrt(sq / n),
+    p2: percentileSorted(sorted, 0.02),
+    p98: percentileSorted(sorted, 0.98),
+  };
+}
+
+/** Normalization strategies offered by the Normalize node. */
+export type NormalizeMode =
+  | 'minmax'
+  | 'robust'
+  | 'symmetric'
+  | 'zscore'
+  | 'manual'
+  | 'log'
+  | 'symlog';
+
+export const NORMALIZE_MODES: NormalizeMode[] = [
+  'minmax',
+  'robust',
+  'symmetric',
+  'zscore',
+  'manual',
+  'log',
+  'symlog',
+];
+
+export function isNormalizeMode(v: unknown): v is NormalizeMode {
+  return (NORMALIZE_MODES as string[]).includes(String(v));
+}
+
+/**
+ * What the shader has to compute, decided on the CPU.
+ *
+ * `affine` covers five of the seven modes — they differ only in which domain
+ * they pick, which is precisely the point: choosing the domain is a judgement
+ * about the data, and it belongs on the CPU where the whole column is visible,
+ * not in a per-fragment expression.
+ */
+export type NormalizePlan =
+  | { kind: 'affine'; lo: number; hi: number }
+  /** t = (log2(max(v, floor)) − log2(lo)) / (log2(hi) − log2(lo)) */
+  | { kind: 'log'; lo: number; hi: number }
+  /** t = 0.5 + 0.5·sign(v)·log2(1 + |v|/thresh) / log2(1 + m/thresh) */
+  | { kind: 'symlog'; thresh: number; m: number };
+
+/** Number of standard deviations spanned by the `zscore` domain. ±3σ covers
+ *  99.7% of a normal distribution — beyond that the ramp is mostly empty. */
+export const ZSCORE_SIGMAS = 3;
+
+/**
+ * Turn a mode + statistics + the user's manual domain into the concrete plan.
+ * Pure and total: every degenerate case (flat column, non-positive data under
+ * `log`, an inverted or zero-width manual domain) resolves to something that
+ * still renders rather than dividing by zero or taking log of a negative.
+ */
+export function planNormalize(
+  mode: NormalizeMode,
+  stats: ColumnStats | null,
+  manual: { lo: number; hi: number },
+): NormalizePlan {
+  const s = stats;
+  const affine = (lo: number, hi: number): NormalizePlan => {
+    // A zero-width (or inverted) domain would emit a division by zero and paint
+    // the surface with Infinity. Widen it symmetrically instead — a flat column
+    // then reads as a flat mid-ramp colour, which is the truth about it.
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi - lo <= 0) {
+      const c = Number.isFinite(lo) ? lo : 0;
+      return { kind: 'affine', lo: c - 0.5, hi: c + 0.5 };
+    }
+    return { kind: 'affine', lo, hi };
+  };
+
+  switch (mode) {
+    case 'manual':
+      return affine(manual.lo, manual.hi);
+    case 'robust':
+      return s ? affine(s.p2, s.p98) : affine(manual.lo, manual.hi);
+    case 'symmetric': {
+      // Zero maps to exactly 0.5 — the whole reason a diverging colormap is
+      // readable. Derived from the data's largest magnitude, not from min/max,
+      // or the neutral colour would drift off zero.
+      if (!s) {
+        const m = Math.max(Math.abs(manual.lo), Math.abs(manual.hi));
+        return affine(-m, m);
+      }
+      const m = Math.max(Math.abs(s.min), Math.abs(s.max));
+      return affine(-m, m);
+    }
+    case 'zscore': {
+      if (!s || s.sd <= 0) return affine(manual.lo, manual.hi);
+      return affine(s.mean - ZSCORE_SIGMAS * s.sd, s.mean + ZSCORE_SIGMAS * s.sd);
+    }
+    case 'log': {
+      const rawLo = s ? s.min : manual.lo;
+      const rawHi = s ? s.max : manual.hi;
+      // log needs a positive domain. Rather than refuse, floor the low end at a
+      // small positive fraction of the high end — the same thing a plotting
+      // library does when asked for a log axis over data touching zero.
+      const hi = rawHi > 0 ? rawHi : 1;
+      const lo = rawLo > 0 ? rawLo : hi * 1e-3;
+      if (!(hi > lo)) return { kind: 'log', lo: hi * 1e-3, hi };
+      return { kind: 'log', lo, hi };
+    }
+    case 'symlog': {
+      const m = s ? Math.max(Math.abs(s.min), Math.abs(s.max)) : Math.max(Math.abs(manual.lo), Math.abs(manual.hi));
+      const mag = Number.isFinite(m) && m > 0 ? m : 1;
+      // Linear region: everything within 1/1000 of the largest magnitude. Below
+      // that, log would spend most of the ramp resolving numerical noise.
+      return { kind: 'symlog', thresh: mag * 1e-3, m: mag };
+    }
+    case 'minmax':
+    default:
+      return s ? affine(s.min, s.max) : affine(manual.lo, manual.hi);
+  }
+}
+
 export interface PhaseRamp {
   /** Cumulative phase normalized to [0, 1], one entry per sample. Monotonic. */
   phase01: Float32Array;

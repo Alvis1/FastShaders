@@ -1,7 +1,15 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useAppStore } from '@/store/useAppStore';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
 import { makeNode } from '@/test-utils';
 import type { AppNode } from '@/types';
+
+// isolate: false shares this worker's globals with later files — restore the
+// real requestAnimationFrame and leave no armed autosave timer behind.
+afterAll(() => {
+  cancelPendingGraphSave();
+  vi.unstubAllGlobals();
+  useAppStore.setState({ nodes: [], edges: [], past: [], future: [] });
+});
 
 /**
  * Notes are group members like any other node.

@@ -27,8 +27,10 @@ import { normalizeChainOperands } from '@/utils/chainOperands';
 import { nodeCostPoints, setCostOverrides, computeReachableCost, sanitizeCostMap } from '@/utils/nodeCost';
 import { type ParsedCostFile, type CostProfile, profileFromParsed, sanitizeCostMeta } from '@/utils/costOverride';
 import { makeDataNodeData } from '@/utils/dataNode';
-import { makeImageNodeData, sanitizeImageNodes } from '@/utils/imageNode';
+import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, type ImageOriginInfo } from '@/utils/imageNode';
+import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
+import { selectionOnlyGraphChange } from '@/utils/graphSemantics';
 import { sanitizeDrawings, MAX_STROKES, MAX_TOTAL_POINTS, type DrawStroke } from '@/utils/drawings';
 import type { PreviewMesh } from '@/utils/previewMesh';
 import { savePreviewMeshToCache } from '@/utils/previewMeshCache';
@@ -182,6 +184,7 @@ export interface LimitNotice {
     | 'image-too-large'      // still over the per-image budget after downscale retries
     | 'image-too-many-pixels'// source dimensions exceed the decode guard
     | 'image-total-cap'      // adding it would cross the all-images budget
+    | 'image-revert-cap'     // restoring an image's original would cross it
     | 'image-device-downscaled' // resized to fit the target device's texture cap (informational)
     | 'images-stripped'      // an imported project had payloads over the limits
     | 'storage-quota';       // a localStorage write actually failed
@@ -192,8 +195,12 @@ export interface LimitNotice {
   position?: { x: number; y: number };
   /** For `image-total-cap`: the drop already encoded within the per-image
    *  budget — "Add anyway" places THIS payload instead of re-encoding at the
-   *  relaxed dimension cap (which would silently produce a heavier image). */
-  encoded?: { dataUrl: string; width: number; height: number };
+   *  relaxed dimension cap (which would silently produce a heavier image).
+   *  `origin` rides along so the override keeps the drop's revert stash. */
+  encoded?: { dataUrl: string; width: number; height: number; origin?: ImageOriginInfo };
+  /** The drop's convert-or-keep choice, carried so an "Add anyway" re-encode
+   *  doesn't silently convert an image the user asked to keep as-is. */
+  convert?: boolean;
   /** For `image-device-downscaled`: informational context only — the node is
    *  already placed; this notice just tells the user what was resized and why. */
   downscale?: {
@@ -206,11 +213,30 @@ export interface LimitNotice {
   };
 }
 
+/**
+ * Which settings menu the right-click opens. Most nodes take the generic
+ * `'node'` menu; the dataviz family each have their own because their controls
+ * are neither plain numbers nor exposable ports (a colormap picker, a mode list
+ * with explanations). `NODE_MENU_TYPES` in NodeEditor maps registryType → the
+ * matching entry here — keep the two in step.
+ */
+export type ContextMenuType =
+  | 'canvas'
+  | 'node'
+  | 'shader'
+  | 'edge'
+  | 'group'
+  | 'note'
+  | 'stripes'
+  | 'dataviz'
+  | 'colormap'
+  | 'dataRange';
+
 interface ContextMenuState {
   open: boolean;
   x: number;
   y: number;
-  type: 'canvas' | 'node' | 'shader' | 'edge' | 'group' | 'note' | 'stripes' | 'dataviz';
+  type: ContextMenuType;
   nodeId?: string;
   edgeId?: string;
   /** Source pin info when menu was opened by dragging from an output handle. */
@@ -348,10 +374,20 @@ export function setGraphPersistence(enabled: boolean): void {
 
 function saveGraph(nodes: AppNode[], edges: AppEdge[], drawings: DrawStroke[]) {
   if (!graphPersistence) return;
+  // Node env (tests) has no localStorage at all — that's not a quota
+  // condition, so bail before the try/catch would surface a bogus notice.
+  if (typeof localStorage === 'undefined') return;
   try {
+    // Strip ephemeral per-element UI state: selection/drag/resize flags are
+    // meaningless across a reload (and the autosave subscriber deliberately
+    // skips selection-only updates, so persisting them would go stale anyway).
+    const bareNodes = nodes.map(({ selected, dragging, resizing, ...n }) => n);
+    const bareEdges = edges.map(({ selected, ...e }) => e);
     // Board drawings share the graph slot — visual siblings of nodes/edges,
     // loaded/saved together. Omitted when empty to keep old files unchanged.
-    const payload = drawings.length ? { nodes, edges, drawings } : { nodes, edges };
+    const payload = drawings.length
+      ? { nodes: bareNodes, edges: bareEdges, drawings }
+      : { nodes: bareNodes, edges: bareEdges };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     graphQuotaWarned = false;
   } catch {
@@ -379,6 +415,13 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[]; drawings: Dra
       // so the graph still loads. Edges that referenced them are also pruned
       // below. Nodes saved with the (now-removed) `texturePreview` flow type
       // or any `tslTex_*` registry type fall into this bucket.
+      // Migrate: micNode moved off ShaderNode onto its own MicNode component
+      // (flow type 'mic'). Graphs saved before that carry type 'shader' and
+      // would keep rendering through the old row layout, which no longer has
+      // any micNode handling at all — so re-derive it.
+      for (const node of data.nodes as { type?: string; data?: { registryType?: string } }[]) {
+        if (node?.data?.registryType === 'micNode') node.type = 'mic';
+      }
       const droppedNodeIds = new Set<string>();
       data.nodes = data.nodes.filter((node: { id: string; type?: string; data?: { registryType?: string } }) => {
         if (
@@ -561,6 +604,16 @@ interface AppState {
    *  (persisted; set via that notice's "Don't show again" checkbox). Distinct
    *  from `ignoreImageLimits` — this hides a warning, it doesn't lift a cap. */
   hideImageDownscaleWarning: boolean;
+  /** Drop-time image conversion (WebP + power-of-two): ask each time, or a
+   *  remembered answer. Persisted to `fs:imageConvert`. Conversion is lossy in
+   *  ways the app can't judge for the user (a normal map wants "keep", a photo
+   *  wants "convert") and it cannot tell which it has at drop time — hence a
+   *  choice rather than a default. */
+  imageConvertMode: 'ask' | 'always' | 'never';
+  /** Suppress the "not optimized" one-liner shown when a requested conversion
+   *  fell back (persisted; set from that line's "?" panel). It reports a
+   *  browser capability, so once understood it has nothing left to say. */
+  hideImageConvertNotice: boolean;
   splitRatio: number;
   rightSplitRatio: number;
 
@@ -607,6 +660,10 @@ interface AppState {
   // from history snapshots, graph autosave, and the project embed (the bytes
   // can be tens of MB; the zip export carries the model as a file instead).
   previewMesh: PreviewMesh | null;
+  // Whether Export bundles the loaded preview mesh into the zip (the EXPORT
+  // button's right-click setting). SESSION-ONLY like the mesh it governs — a
+  // persisted "off" would silently strip models from exports weeks later.
+  exportIncludeMesh: boolean;
 
   // Board drawings (freehand ink annotations) — VISUAL-ONLY, like notes /
   // waypoints. Separate slice so graphToCode / cpuEvaluator / the sync engine
@@ -639,6 +696,12 @@ interface AppState {
     opts?: { history?: boolean },
   ) => void;
   updateNodeData: (nodeId: string, data: Partial<AppNode['data']>) => void;
+  /**
+   * Start a fresh shader: the graph becomes a single Output node and edges +
+   * board ink are dropped. One undo entry restores the whole previous document
+   * (nodes, edges and drawings are exactly what a history snapshot holds).
+   */
+  newGraph: () => void;
 
   // Drawing actions
   /** Commit one finished stroke (one undo entry). Caps drop the oldest ink. */
@@ -680,17 +743,27 @@ interface AppState {
    */
   coalescingHistory: boolean;
   /**
+   * How many live `beginInteraction` calls the open bracket carries. The
+   * bracket is a single global flag, but gestures can overlap (a settings
+   * menu's idle-timed text bracket + a DragNumberInput scrub): nesting-aware
+   * begin/end means a deferred close from one gesture can never terminate a
+   * bracket another gesture is still riding — which would flood history with
+   * per-frame full-graph snapshots for the rest of the scrub.
+   */
+  interactionDepth: number;
+  /**
    * Bracket a continuous gesture (e.g. scrubbing a DragNumberInput) so it lands
    * as ONE undo entry. Snapshots the pre-gesture state once, then suppresses
    * further pushes — which also stops the per-frame `structuredClone` of the
-   * entire graph — until `endInteraction`. Safe to call when already bracketing.
+   * entire graph — until `endInteraction`. Safe to call when already bracketing
+   * (increments the nesting depth instead of re-snapshotting).
    */
   beginInteraction: () => void;
-  /** End the gesture opened by `beginInteraction`. Idempotent. */
+  /** End one `beginInteraction`. Closes the bracket only at depth 0. Idempotent. */
   endInteraction: () => void;
 
   // UI actions
-  openContextMenu: (x: number, y: number, type: 'canvas' | 'node' | 'shader' | 'edge' | 'group' | 'note' | 'stripes' | 'dataviz', nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string) => void;
+  openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string) => void;
   closeContextMenu: () => void;
   /** Add a CSV import awaiting a decision to the queue. */
   enqueueCsvImport: (item: PendingCsvImport) => void;
@@ -707,6 +780,8 @@ interface AppState {
   resolveLimitNotice: (action: 'dismiss' | 'proceed', ignoreFuture: boolean | null) => void;
   setIgnoreImageLimits: (v: boolean) => void;
   setHideImageDownscaleWarning: (v: boolean) => void;
+  setImageConvertMode: (v: 'ask' | 'always' | 'never') => void;
+  setHideImageConvertNotice: (v: boolean) => void;
   setSplitRatio: (ratio: number) => void;
   setRightSplitRatio: (ratio: number) => void;
 
@@ -720,6 +795,7 @@ interface AppState {
    * write the bytes it just read straight back.
    */
   setPreviewMesh: (mesh: PreviewMesh | null, opts?: { persist?: boolean }) => void;
+  setExportIncludeMesh: (include: boolean) => void;
   setSelectedHeadsetId: (id: string) => void;
 
   // Node variable name actions
@@ -792,6 +868,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
   pendingLimitNotices: [],
   ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
   hideImageDownscaleWarning: loadString('fs:hideImageDownscaleWarning', '0') === '1',
+  imageConvertMode: (() => {
+    const v = loadString('fs:imageConvert', 'ask');
+    return v === 'always' || v === 'never' ? v : 'ask';
+  })(),
+  hideImageConvertNotice: loadString('fs:hideImageConvertNotice', '0') === '1',
   splitRatio: loadRatio('fs:splitRatio', 0.6),
   // Wider floor than the column split: the code/preview seam may ride up until
   // only the code editor's tab bar remains (SplitPane's CROSS_MIN_PANE_PX is
@@ -815,6 +896,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   language: (loadString('fs:lang', 'en') === 'lv' ? 'lv' : 'en'),
   savedGroups: loadSavedGroups(),
   previewMesh: null,
+  exportIncludeMesh: true,
 
   // Drawings are hydrated from fs:graph by App.tsx (loadGraph) alongside the
   // graph; tool prefs are their own persisted keys.
@@ -927,6 +1009,34 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }));
   },
 
+  newGraph: () =>
+    set((state) => ({
+      // Snapshots inline rather than delegating to pushHistory for the same
+      // reason beginInteraction does: pushHistory honours `isUndoRedo`, and a
+      // not-yet-cleared flag (set by an undo whose sync reconciliation hasn't
+      // run yet) would silently swallow THIS entry — leaving the user's whole
+      // document unrecoverable behind an unundoable clear. A NEW click is
+      // unambiguously a fresh user mutation. Snapshot + clear in ONE `set` so
+      // no subscriber can observe a cleared graph with un-snapshotted history.
+      past: [...state.past, snapshot(state.nodes, state.edges, state.drawings)].slice(-MAX_HISTORY),
+      future: [],
+      // A shader needs somewhere to end up, so the blank document is the one
+      // node that can't be added back from the palette twice (AddNodeMenu and
+      // the tile drop both refuse a second Output).
+      nodes: [
+        {
+          id: generateId(),
+          type: 'output',
+          position: { x: 0, y: 0 },
+          data: { registryType: 'output', label: 'Output', cost: 0 },
+        } as AppNode,
+      ],
+      edges: [],
+      drawings: [],
+      syncSource: 'graph',
+      isUndoRedo: false,
+    })),
+
   // ── Drawing actions ──────────────────────────────────────────────────────
   // Drawings are visual-only: these NEVER touch syncSource, so the graph→code
   // effect (which watches nodes/edges) doesn't re-run. History + autosave pick
@@ -1028,10 +1138,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setSyncInProgress: (v) => set({ syncInProgress: v }),
 
   coalescingHistory: false,
+  interactionDepth: 0,
 
   beginInteraction: () =>
     set((state) => {
-      if (state.coalescingHistory) return {};
+      if (state.coalescingHistory) {
+        // Nested gesture riding the open bracket — count it so a deferred
+        // close from the outer gesture can't cut this one short.
+        return { interactionDepth: state.interactionDepth + 1 };
+      }
       // Snapshots inline rather than delegating to pushHistory because — unlike
       // pushHistory — this deliberately does NOT honour `isUndoRedo`. That flag
       // guards the sync engine's own reconciliation right after an undo; a
@@ -1042,13 +1157,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
         past: [...state.past, snapshot(state.nodes, state.edges, state.drawings)].slice(-MAX_HISTORY),
         future: [],
         coalescingHistory: true,
+        interactionDepth: 1,
         isUndoRedo: false,
       };
     }),
 
   endInteraction: () => {
-    if (!get().coalescingHistory) return;
-    set({ coalescingHistory: false });
+    const state = get();
+    if (!state.coalescingHistory) return;
+    if (state.interactionDepth > 1) {
+      set({ interactionDepth: state.interactionDepth - 1 });
+      return;
+    }
+    set({ coalescingHistory: false, interactionDepth: 0 });
   },
 
   pushHistory: () =>
@@ -1152,27 +1273,46 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (action !== 'proceed' || !head.file || !head.position) return;
     const { file, position, encoded } = head;
     const cost = (complexityData.costs as Record<string, number>).imageNode ?? 2;
-    const place = (dataUrl: string, width: number, height: number) =>
+    // Same construction path as the canvas drop (makeImageNodeFromEncode), so
+    // an "Add anyway" image is indistinguishable from a normal one — provenance
+    // included. Dropping it here is what would leave every override-placed
+    // image permanently un-revertible.
+    const place = (
+      enc: { dataUrl: string; width: number; height: number },
+      origin?: ImageOriginInfo,
+    ) =>
       get().addNode({
         id: generateId(),
         type: 'shader',
         position,
-        data: makeImageNodeData(dataUrl, width, height, cost, file.name),
+        data: makeImageNodeFromEncode(enc, cost, file.name, origin),
       } as AppNode);
 
     if (encoded) {
       // Already encoded within the per-image budget (only the total cap hit).
-      place(encoded.dataUrl, encoded.width, encoded.height);
+      // The stash was written before the notice was raised, so its id is
+      // carried here rather than re-derived.
+      place(encoded, encoded.origin);
       return;
     }
     // Re-run the import with the soft limits off (hard ceilings still apply).
     // Still honour the device cap as the dimension floor (see encodeImageFile).
-    void encodeImageFile(file, true, resolveDeviceTextureDim(get().selectedHeadsetId, get().costProfiles)).then((res) => {
+    void encodeImageFile(
+      file,
+      true,
+      resolveDeviceTextureDim(get().selectedHeadsetId, get().costProfiles),
+      head.convert === false ? 'keep' : 'convert',
+    ).then((res) => {
       if (!res.ok) {
         window.alert(`Could not load "${file.name}" as an image.`);
         return;
       }
-      place(res.dataUrl, res.width, res.height);
+      // Same rule as the drop path: a power-of-two snap that can't be stashed
+      // is discarded rather than shipped irreversibly (resolveImageDrop).
+      const { payload, origin } = resolveImageDrop(res, file.name, (p) =>
+        stashImageOrigin(p, Date.now()),
+      );
+      place(payload, origin);
     });
   },
 
@@ -1184,6 +1324,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setHideImageDownscaleWarning: (v) => {
     try { localStorage.setItem('fs:hideImageDownscaleWarning', v ? '1' : '0'); } catch { /* */ }
     set({ hideImageDownscaleWarning: v });
+  },
+
+  setImageConvertMode: (v) => {
+    try { localStorage.setItem('fs:imageConvert', v); } catch { /* */ }
+    set({ imageConvertMode: v });
+  },
+
+  setHideImageConvertNotice: (v) => {
+    try { localStorage.setItem('fs:hideImageConvertNotice', v ? '1' : '0'); } catch { /* */ }
+    set({ hideImageConvertNotice: v });
   },
 
   setSplitRatio: (ratio) => {
@@ -1213,6 +1363,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // resolves on every error path rather than rejecting.
     if (opts?.persist !== false) void savePreviewMeshToCache(mesh);
   },
+
+  setExportIncludeMesh: (include) => set({ exportIncludeMesh: include }),
 
   setSelectedHeadsetId: (id) => {
     // Selecting a device may be a measured cost profile (its id) or a built-in
@@ -2049,9 +2201,31 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
 // Auto-save graph to localStorage on changes
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Test hook: with `isolate: false` the vitest worker shares this module, so a
+ * store-mutating suite's pending 300ms save could fire mid-way through the
+ * NEXT file. Suites that arm it call this in cleanup. No production callers.
+ */
+export function cancelPendingGraphSave(): void {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+}
 useAppStore.subscribe(
   (state, prev) => {
     if (state.nodes !== prev.nodes || state.edges !== prev.edges || state.drawings !== prev.drawings) {
+      // A bare selection click / Escape replaces the arrays without changing
+      // anything the payload stores — don't arm a full-graph JSON.stringify
+      // (multi-MB once images are embedded) for it. Positions, values,
+      // waypoints and topology all fail this predicate and still save.
+      if (
+        state.drawings === prev.drawings &&
+        selectionOnlyGraphChange(prev.nodes, state.nodes, prev.edges, state.edges)
+      ) {
+        return;
+      }
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(() => saveGraph(state.nodes, state.edges, state.drawings), 300);
     }

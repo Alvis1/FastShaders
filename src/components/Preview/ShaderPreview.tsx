@@ -16,6 +16,11 @@ import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from 
 import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
 import { bootGeometryWasCustom, loadPreviewMeshFromCache } from '@/utils/previewMeshCache';
 import { connectedUniformNamesKey, ALL_UNIFORMS } from '@/utils/connectedUniforms';
+import { evaluateNodeOutput } from '@/engine/cpuEvaluator';
+import { isMicUniformName } from '@/utils/micAnalysis';
+import { readMicSettings } from '@/utils/micNode';
+import { useMicPump } from './useMicPump';
+import { MicControl } from './MicControl';
 import { applyUniformDefaults, planUniformDefaults } from '@/utils/uniformDefaults';
 import { graphToCode } from '@/engine/graphToCode';
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
@@ -588,13 +593,100 @@ export function ShaderPreview() {
   // BOTH property kinds must be scanned: with only property_float here, the
   // presence of one float property made the connected-names set float-only and
   // silently filtered every colour picker out of the overlay.
+  /**
+   * The Mic node's analyser settings, selected as a VALUE-stable string, plus
+   * (via the empty string) whether the graph contains a Mic node at all.
+   *
+   * Not the values object: `getNodeValues` falls back to a fresh `{}` when a
+   * node has no stored values, so an object-returning selector would mint a new
+   * identity on every `s.nodes` change — i.e. re-render this ~1000-line panel
+   * on every drag pointermove, the exact trap connectedPropNamesKey documents.
+   * A joined string compares by value, so Object.is bails until a setting
+   * really changes.
+   *
+   * Absent keys are joined as the literal `NaN`, NOT `''`: readMicSettings
+   * coerces with Number(), and `Number('') === 0` — an empty sentinel would
+   * silently turn a missing `smoothing` into 0 (no smoothing at all) instead of
+   * the 0.8 default. `Number('NaN')` is NaN, which the clamp maps to the
+   * default as intended.
+   *
+   * KNOWN LIMITATION: one analyser serves the whole graph, so a second Mic
+   * node's settings are ignored. `find` makes that deterministic (first in node
+   * order) rather than arbitrary. Two Mic nodes is a strange thing to want —
+   * they would hear the same room — but the node description says so.
+   */
+  const micSettingsKey = useAppStore((s) => {
+    const n = s.nodes.find((x) => x.data.registryType === 'micNode');
+    if (!n) return '';
+    const v = getNodeValues(n);
+    // `smoothing` is an exposed socket, but unlike `gain` it cannot be resolved
+    // in the shader: it sets the AnalyserNode's smoothingTimeConstant, which
+    // lives on the CPU in the audio thread. So a wired edge is resolved by
+    // EVALUATING its upstream chain on the CPU — the same evaluator that drives
+    // the node-card previews. That means it follows constants, sliders and
+    // arithmetic, and reads 0 for GPU-only sources (uv, position) which have no
+    // CPU value; the alternative was a socket that silently did nothing.
+    // Guarded on the edge existing, so a graph that doesn't wire it pays one
+    // array scan rather than a graph walk on every store notify.
+    let smoothing: string | number | undefined = v.smoothing;
+    const se = s.edges.find(
+      (x) => x.target === n.id && x.targetHandle === 'smoothing' && x.source !== n.id,
+    );
+    if (se) {
+      const out = evaluateNodeOutput(se.source, s.nodes, s.edges, 0);
+      if (out && out.length > 0 && Number.isFinite(out[0])) smoothing = out[0];
+    }
+    return `${smoothing ?? NaN}|${v.gain ?? NaN}`;
+  });
+  const hasMicNode = micSettingsKey !== '';
+  const micSettings = useMemo(() => {
+    const [smoothing, gain] = micSettingsKey.split('|');
+    return readMicSettings({ smoothing, gain });
+  }, [micSettingsKey]);
+
+  const allUniforms = useMemo(() => extractUniforms(previewCode), [previewCode]);
+
+  /**
+   * The mic uniforms the CURRENT shader actually reads — the pump's targets.
+   *
+   * Gated on the graph really containing a Mic node, because an emitted
+   * `const mic1_bass = uniform(0);` and a user property that happens to be
+   * NAMED `mic1_bass` are textually identical — nothing in the code can tell
+   * them apart. Without the gate, such a property would vanish from the
+   * Uniforms overlay in a graph with no microphone in it at all. (With a Mic
+   * node present the collision cannot arise: graphToCode claims each
+   * `<var>_<channel>` as a claimName alias, so a property is renamed instead.)
+   */
+  const micUniformNames = useMemo(
+    () => (hasMicNode ? allUniforms.filter((u) => isMicUniformName(u.name)).map((u) => u.name) : []),
+    [allUniforms, hasMicNode],
+  );
+
+  // Property uniforms detected from the generated code, filtered to only those
+  // whose property node has at least one outgoing edge (i.e. is connected).
+  // BOTH property kinds must be scanned: with only property_float here, the
+  // presence of one float property made the connected-names set float-only and
+  // silently filtered every colour picker out of the overlay.
   const uniforms = useMemo(() => {
-    const all = extractUniforms(previewCode);
+    // Mic uniforms are split off BEFORE anything else looks at this list, and
+    // that one move is what keeps every other uniform surface correct:
+    //   - the overlay doesn't render four sliders the pump overwrites 60×/s;
+    //   - handleReset can't push them, and therefore can't write mic-derived
+    //     values into the `usePersistedState` uniformValues (i.e. to DISK),
+    //     which would contradict "nothing is recorded";
+    //   - "Set as default" can't try to bake a live value into a graph node
+    //     that has no `value` to bake it into.
+    // It also covers the ALL_UNIFORMS branch below, where a graph with no
+    // property nodes would otherwise fall through to "show everything".
+    const micNames = new Set(micUniformNames);
+    const all = allUniforms.filter((u) => !micNames.has(u.name));
     // If no property nodes exist (e.g. direct-assignment mode), show all.
     if (connectedPropNamesKey === ALL_UNIFORMS) return all;
     const connectedNames = new Set(connectedPropNamesKey.split(' ').filter(Boolean));
     return all.filter((u) => connectedNames.has(u.name));
-  }, [previewCode, connectedPropNamesKey]);
+  }, [allUniforms, micUniformNames, connectedPropNamesKey]);
+
+  const mic = useMicPump({ iframeRef, micUniformNames, settings: micSettings });
 
   // Per-uniform min/max — persisted across reloads, keyed by uniform name
   const [showUniforms, setShowUniforms] = useState(true);
@@ -712,6 +804,14 @@ export function ShaderPreview() {
           // unchanged (the iframe ignores unknown names).
           const kind = uniformKindsRef.current.get(name);
           if (kind && typeof value !== (kind === 'color' ? 'string' : 'number')) continue;
+          // The rAF pump is the only thing that may write a mic uniform.
+          // uniformValues should never contain one (they are filtered out of
+          // `uniforms` before anything can store them), but this map is
+          // `usePersistedState` with reloadOnProjectImport — an imported
+          // project writes it — so an attacker-supplied fs:previewUniformValues
+          // could otherwise pin a mic uniform at a fixed value after every
+          // rebuild. Defence in depth, one line.
+          if (isMicUniformName(name)) continue;
           win.postMessage({ type: 'fs:uniform', name, value }, '*');
         }
       } else if (data.type === 'fs:camera') {
@@ -1226,6 +1326,19 @@ export function ShaderPreview() {
             bottom-right (below), so a mis-aimed click on the everyday controls
             can't throw the app into fullscreen or open a VR window. */}
         <div className="shader-preview__bottom-controls">
+          {/* Only while the shader actually reads a mic uniform — the control
+              must never advertise capture for a graph that doesn't listen.
+              Leading position keeps it away from the destructive Reset ✕ that
+              ends this cluster. */}
+          {micUniformNames.length > 0 && (
+            <MicControl
+              status={mic.status}
+              onArm={mic.arm}
+              onDisarm={mic.disarm}
+              meterRef={mic.meterRef}
+              language={language}
+            />
+          )}
           <button
             className="shader-preview__play-btn"
             onClick={() => setPlaying((p) => !p)}

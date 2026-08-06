@@ -1,5 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { getRecentNodeTypes, noteNodeUsed, RECENT_MAX } from './recentNodes';
+
+// isolate: false shares this worker's globals with later files — don't leave
+// the stubbed (or deliberately undefined) localStorage behind.
+afterAll(() => {
+  vi.unstubAllGlobals();
+});
 
 /**
  * MRU list behind the add-node menu's "Recent" section: newest-first, deduped,

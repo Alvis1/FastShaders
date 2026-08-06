@@ -66,6 +66,8 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       return { width: 87 * scale, height: 121 * scale };
     case 'clock': // time: 56×56 canvas + header
       return { width: 71 * scale, height: 87 * scale };
+    case 'mic': // microphone: 150 wide + 172 body + header (MicNode)
+      return { width: 150 * scale, height: 190 * scale };
     case 'color': // borderless square swatch, no header, never cost-scaled
       return { width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE };
     case 'output': {

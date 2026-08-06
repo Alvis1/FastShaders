@@ -7,11 +7,12 @@
  * lookup here FALLS BACK to English when a Latvian string is missing, so the app
  * is never half-broken — untranslated keys simply render in English.
  *
- * SINGLE SOURCE OF TRUTH for node + category labels is `node-i18n.json`, which
- * the `fs-i18n-sync` vite plugin copies to `public/node-i18n.json` so the
- * standalone Node Designer (node-designer.html) fetches the very same data — no
- * duplicate label table. Descriptions / socket labels / UI chrome live in
- * `lv.json` (React-only; the designer doesn't need them).
+ * SINGLE SOURCE OF TRUTH for node + category labels is `node-i18n.json`. Every
+ * consumer imports THIS module — including the Node Designer, which is a Vite
+ * entry whose bridge (src/nodeDesigner/bridge.tsx) wraps formatNodeLabel /
+ * formatCategoryLabel. (The old standalone designer fetched a
+ * `public/node-i18n.json` copy published by a vite sync plugin; both are
+ * gone.) Descriptions / socket labels / UI chrome live in `lv.json`.
  *
  * Node HEADERS on the canvas are deliberately NOT translated: they show the
  * generated TSL variable name (`mul1`, `perlin1`) so the graph mirrors the code.

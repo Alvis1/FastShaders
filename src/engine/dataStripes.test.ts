@@ -54,7 +54,11 @@ describe('graphToCode: Data → Stripes → Output', () => {
 
   it('imports the TSL symbols the stripe shader needs', () => {
     const importLine = gen.code.split('\n').find((l) => l.includes("from 'three/tsl'")) ?? '';
-    for (const sym of ['texture', 'uv', 'vec2', 'vec3', 'float', 'dFdx', 'dFdy']) {
+    // `color`, not `vec3`: the ramp endpoints are emitted as color(0x…) so the
+    // hex is converted from sRGB into the renderer's linear working space, the
+    // same way a Color node's swatch is. See the ramp-endpoint note in
+    // graphToCode's stripes branch.
+    for (const sym of ['texture', 'uv', 'vec2', 'color', 'float', 'dFdx', 'dFdy']) {
       expect(importLine).toContain(sym);
     }
   });

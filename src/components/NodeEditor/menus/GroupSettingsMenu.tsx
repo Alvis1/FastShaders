@@ -2,6 +2,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import type { GroupFlowNode } from '@/types';
 import { rowStyle, labelStyle, colorFieldStyle, wideFieldStyle } from './menuShared';
+import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 
 interface GroupSettingsMenuProps {
   nodeId: string;
@@ -15,6 +16,9 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
   const deleteGroup = useAppStore((s) => s.deleteGroup);
   const saveGroupToLibrary = useAppStore((s) => s.saveGroupToLibrary);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
+  // updateGroupData pushes history per call — bracket the per-keystroke /
+  // per-picker-frame bursts into one undo entry (see useHistoryBracket).
+  const { bracket, closeBracket } = useHistoryBracket();
 
   const node = nodes.find((n) => n.id === nodeId) as GroupFlowNode | undefined;
   if (!node || node.type !== 'group') return null;
@@ -30,7 +34,8 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
         <input
           type="text"
           value={label}
-          onChange={(e) => updateGroupData(nodeId, { label: e.target.value })}
+          onChange={(e) => { bracket(); updateGroupData(nodeId, { label: e.target.value }); }}
+          onBlur={closeBracket}
           autoFocus
           style={wideFieldStyle}
         />
@@ -41,7 +46,8 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
         <input
           type="color"
           value={color}
-          onChange={(e) => updateGroupData(nodeId, { color: e.target.value })}
+          onChange={(e) => { bracket(); updateGroupData(nodeId, { color: e.target.value }); }}
+          onBlur={closeBracket}
           style={colorFieldStyle}
         />
       </div>

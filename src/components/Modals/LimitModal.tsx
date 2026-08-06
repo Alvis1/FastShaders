@@ -78,6 +78,23 @@ function copyFor(n: LimitNotice, language: Language): NoticeCopy {
         canProceed: true,
         toggle: ignoreToggle,
       };
+    case 'image-revert-cap':
+      // Deliberately NOT 'image-total-cap' with canProceed. That notice's
+      // "Add anyway" places a NEW node from a File; a revert has neither, so
+      // the override would silently do nothing. Here the checkbox IS the
+      // override: tick it, then click Revert again.
+      return {
+        title: t('Not enough image budget to revert', language),
+        message: t('Restoring {name} to its pre-conversion version would push the combined size of all embedded images past {limit}. The original is usually larger than the converted copy, which is the point of the conversion.', language)
+          .replace('{name}', () => name)
+          .replace('{limit}', () => kb(MAX_TOTAL_IMAGE_CHARS)),
+        suggestions: [
+          t('Delete or shrink other Image nodes, then revert again.', language),
+          t('Or tick the box below and click “Revert to original” again to go over the budget anyway.', language),
+        ],
+        canProceed: false,
+        toggle: ignoreToggle,
+      };
     case 'image-device-downscaled': {
       const d = n.downscale;
       const dim = (w?: number, h?: number) => (w && h ? `${w}×${h}` : '');

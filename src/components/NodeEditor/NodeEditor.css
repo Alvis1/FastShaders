@@ -23,6 +23,49 @@
   right: calc(var(--ctl-size) + var(--space-2));
   z-index: var(--z-controls);
   width: 280px;
+  /* Yields to the NEW button on a narrow pane. Both are pinned to the same
+     line at opposite edges, and at a fixed 280px the pill would slide under
+     the button (and swallow its clicks — same z-index, later in the DOM)
+     once the graph column drops below ~400px, which a three-column split
+     reaches easily. The pill compresses instead. */
+  max-width: calc(100% - 110px);
+}
+
+/* NEW (start a fresh shader) — top-LEFT of the canvas, the corner opposite the
+   cost pill and diagonally away from the bottom-left working bar. Deliberately
+   not a React Flow <Panel>: this absolute layer already owns the canvas chrome
+   corners, and a panel would bring React Flow's own margin rule with it. */
+.node-editor__new-btn {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: var(--z-controls);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  /* Light green, and THEME-INVARIANT (literals, not chrome tokens): it is a
+     solid pale plate with near-black text, which reads the same over the light
+     canvas and the dark one — the same reasoning that keeps --node-bg out of
+     the dark block. Following --bg-raised instead would turn it grey in dark
+     mode and lose the colour the button is identified by. */
+  color: #1a1a1a;
+  background: #cdeab0;
+  border: 1px solid #8fbf5e;
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-sm);
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.node-editor__new-btn:hover {
+  background: #bce197;
+  border-color: #6fa63e;
+}
+.node-editor__new-btn:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
 }
 
 .node-editor__cost-overlay .cost-bar {
@@ -222,6 +265,95 @@
      swallow clicks on whichever button it covered. */
   margin-bottom: calc(var(--ctl-size) + 8px);
 }
+/* Import one-liner (top-centre). Deliberately NOT a modal: a conversion that
+   fell back is information about the browser, not a decision — it must not
+   stand between a drag and the canvas. The detail lives behind its "?". */
+.node-editor__import-note {
+  position: absolute;
+  top: var(--space-3);
+  /* Centred WITHOUT `left: 50%` + translate: the NEW button and the cost pill
+     own the two top corners, and a translated centre box overlaps them on a
+     narrow pane. Insets + margin:auto centre it in whatever space is left. */
+  left: 90px;
+  right: calc(var(--ctl-size) + var(--space-2) + 290px);
+  margin: 0 auto;
+  width: max-content;
+  max-width: 100%;
+  z-index: var(--z-controls);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px 5px 12px;
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-md);
+}
+.node-editor__import-note-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+.node-editor__import-note-btn:hover {
+  border-color: var(--border-focus);
+  color: var(--border-focus);
+}
+.node-editor__import-note-btn:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* In-flight image import marker, one per dropped file at its drop point.
+   Fixed rather than absolute: the coordinates are the drop's CLIENT
+   coordinates, and pinning it to the viewport keeps it exactly under the
+   cursor that dropped the file regardless of the canvas transform. */
+.node-editor__import-ghost {
+  position: fixed;
+  z-index: var(--z-controls);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-md);
+  /* Never a drop target itself — a drag crossing it must reach the canvas. */
+  pointer-events: none;
+  /* Centred on the drop point rather than hanging off it. */
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+}
+.node-editor__import-ghost-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-focus);
+  /* transform/opacity ONLY: both are compositor-driven, so the pulse keeps
+     animating while the main thread sits inside canvas.toBlob. Anything
+     touching layout or paint would freeze exactly when it is needed. */
+  animation: fs-import-pulse 900ms ease-in-out infinite;
+}
+@keyframes fs-import-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.7); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
 .fs-canvas-bar__group {
   display: flex;
   align-items: center;

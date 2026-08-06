@@ -245,6 +245,126 @@
   outline-offset: 2px;
 }
 
+/* Right-click settings popover for EXPORT — same popover pattern as the
+   Local dropdown (it reuses .toolbar__local-popover, so the dark-theme
+   shadow block already covers it), anchored to its own wrapper. */
+.toolbar__export-wrap {
+  position: relative;
+  display: flex;
+  /* The wrap replaces the button as .toolbar__center's flex child, so it
+     takes over the button's opt-out from the row's baseline alignment. */
+  align-self: center;
+}
+
+/* Double-class: the base .toolbar__local-popover rule sits LATER in this
+   file at equal specificity, so a single-class override here would be dead
+   (the same trap the .toolbar__sc-link comments document). */
+.toolbar__local-popover.toolbar__export-popover {
+  min-width: 264px;
+}
+
+/* The shared note caps at 220px, tuned for the 236px popovers — widen it to
+   fill this one (264px − 2×12px padding). */
+.toolbar__export-popover .toolbar__local-note {
+  max-width: 240px;
+}
+
+.toolbar__export-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.toolbar__export-check input {
+  margin: 2px 0 0;
+  accent-color: var(--text-accent);
+}
+
+/* No mesh loaded: the checkbox is disabled, so the row reads as inert. */
+.toolbar__export-check--off {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+/* Work-folder control (desktop builds) — a split button beside EXPORT:
+   Save + a caret opening the folder's shader list. The wrapper is the
+   popover anchor, like .toolbar__local. */
+.toolbar__workfolder {
+  position: relative;
+  display: flex;
+  align-self: center;
+}
+
+button.toolbar__sc-link.toolbar__wf-save {
+  text-transform: uppercase;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* Save feedback flashes the button green in place — a text swap ("✓") would
+   shift the caret sideways for 1.6s. */
+button.toolbar__sc-link.toolbar__wf-save.toolbar__wf-save--saved {
+  color: #067647;
+  border-color: #067647;
+}
+
+button.toolbar__sc-link.toolbar__wf-caret {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 0;
+  padding: 6px 8px;
+}
+
+.toolbar__wf-caret svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+  fill: currentColor;
+}
+
+/* Double-class for the same later-base-rule reason as the export popover. */
+.toolbar__local-popover.toolbar__wf-popover {
+  min-width: 300px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+/* Shader rows are <button>s reusing the .toolbar__local-row card look —
+   reset the button font/box so they match the anchor rows. */
+button.toolbar__local-row.toolbar__wf-row {
+  font-family: var(--font-sans);
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.toolbar__wf-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar__wf-forget {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  align-self: flex-start;
+  text-decoration: underline;
+}
+
+.toolbar__wf-forget:hover {
+  color: #b42318;
+}
+
 /* Dark/light glyph toggle — chip-sized like its neighbours, glyph enlarged.
    Double-class selector: must out-rank both the later .toolbar__sc-link rule
    and the button.toolbar__sc-link reset, or these declarations are dead. */
@@ -559,5 +679,16 @@ button.toolbar__sc-link {
 }
 
 :root[data-theme="dark"] .toolbar__vr-error {
+  color: #ff7b72;
+}
+
+/* The work-folder status colors are tuned for a light surface too — the
+   saved-flash green is near-invisible on the dark chrome without this. */
+:root[data-theme="dark"] button.toolbar__sc-link.toolbar__wf-save.toolbar__wf-save--saved {
+  color: #3fb950;
+  border-color: #3fb950;
+}
+
+:root[data-theme="dark"] .toolbar__wf-forget:hover {
   color: #ff7b72;
 }

@@ -61,6 +61,29 @@ export function makeDataNodeData(parsed: ParsedCsv, cost: number, fileName = '')
   };
 }
 
+/**
+ * The Data column an edge leaves from, capped to the texture budget — i.e.
+ * exactly the samples that get baked into the shader, so statistics computed
+ * from it describe what is actually rendered rather than the pre-cap CSV.
+ *
+ * Returns null unless the source really is a Data node emitting a `colN`
+ * handle: the trace is deliberately one hop, so an intervening node means "no
+ * statistics available" rather than a guess. Shared by graphToCode (which needs
+ * the values) and the settings menus (which show the numbers), so the two can
+ * never disagree about which samples are in play.
+ */
+export function columnForHandle(
+  data: ShaderNodeData | undefined,
+  sourceHandle: string | null | undefined,
+): Float32Array | null {
+  if (!data || data.registryType !== 'dataNode') return null;
+  const m = /^col(\d+)$/.exec(sourceHandle ?? '');
+  if (!m) return null;
+  const col = decodeDataNode(data.values)?.columns[Number(m[1])];
+  if (!col || col.length <= 1) return null;
+  return capToWidth(col, MAX_TEXTURE_WIDTH);
+}
+
 /** Decode a Data node's stored columns. Returns null if the payload is missing
  *  or malformed (graphToCode then emits an inert fallback). */
 export function decodeDataNode(values: Record<string, string | number>): DecodedDataNode | null {

@@ -32,7 +32,8 @@ export function usesExposedPorts(def: NodeDefinition | undefined): boolean {
     (def.category === 'noise' ||
       def.type === 'output' ||
       def.type === 'imageNode' ||
-      def.type === 'time')
+      def.type === 'time' ||
+      def.type === 'micNode')
   );
 }
 
