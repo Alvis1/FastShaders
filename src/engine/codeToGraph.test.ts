@@ -634,3 +634,269 @@ describe('codeToGraph — time node speed', () => {
     expect(mulNodes(result)).toHaveLength(1);
   });
 });
+
+describe('codeToGraph — Discard statements the graph cannot represent', () => {
+  const wrap = (body: string) => `import { Fn, vec3, greaterThan, Discard, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+${body}
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+`;
+
+  it('keeps the last of several discards, and says so', () => {
+    // The Output node has ONE Discard input, so N conditions cannot survive.
+    // Losing one silently was worse than the limitation: the graph→code sync
+    // then wrote the loss back into the user's own source on the next edit.
+    const result = codeToGraph(wrap(`  const a = greaterThan(positionGeometry.y, 0.0);
+  const b = greaterThan(positionGeometry.x, 0.0);
+  Discard(a);
+  Discard(b);`));
+    expect(result.errors.some((e) => /only the last is kept/i.test(e.message))).toBe(true);
+    expect(result.errors.every((e) => e.severity === 'warning')).toBe(true);
+    const discardEdges = result.edges.filter((e) => e.targetHandle === 'discard');
+    expect(discardEdges).toHaveLength(1);
+  });
+
+  it('warns that an unconditional Discard() has no graph equivalent', () => {
+    const result = codeToGraph(wrap('  Discard();'));
+    expect(result.errors.some((e) => /Unconditional Discard/i.test(e.message))).toBe(true);
+    expect(result.edges.filter((e) => e.targetHandle === 'discard')).toHaveLength(0);
+  });
+
+  it('a single discard stays silent', () => {
+    const result = codeToGraph(wrap(`  const a = greaterThan(positionGeometry.y, 0.0);
+  Discard(a);`));
+    expect(result.errors).toHaveLength(0);
+    expect(result.edges.filter((e) => e.targetHandle === 'discard')).toHaveLength(1);
+  });
+});
+
+describe('codeToGraph — the noise 0-1 remap collapse', () => {
+  const wrap = (body: string, imports: string) =>
+    `import { Fn, vec3, ${imports} } from 'three/tsl';
+
+const shader = Fn(() => {
+${body}
+
+  return vec3(n1);
+});
+
+export default shader;
+`;
+  const types = (r: { nodes: { data: { registryType: string } }[] }) =>
+    r.nodes.map((n) => n.data.registryType).sort();
+
+  it('collapses the exact emitted shape into one flagged node', () => {
+    const r = codeToGraph(wrap(
+      '  const n1 = mx_noise_float(positionGeometry).mul(0.5).add(0.5);',
+      'mx_noise_float, positionGeometry',
+    ));
+    expect(types(r)).toEqual(['output', 'perlin']);
+    const noise = r.nodes.find((n) => n.data.registryType === 'perlin')!;
+    expect(getNodeValues(noise).signed).toBe(0);
+  });
+
+  it('folds a constant-expression half', () => {
+    const r = codeToGraph(wrap(
+      '  const n1 = mx_noise_float(positionGeometry).mul(1 / 2).add(1 / 2);',
+      'mx_noise_float, positionGeometry',
+    ));
+    expect(types(r)).toEqual(['output', 'perlin']);
+  });
+
+  // Each reject is a real shape that must keep its nodes. The collapse is
+  // semantics-preserving where it fires, so the cost of firing too eagerly is
+  // eating nodes the user built on purpose.
+  it.each([
+    ['a different offset', '  const n1 = mx_noise_float(positionGeometry).mul(0.5).add(0.4);', 'mx_noise_float, positionGeometry'],
+    ['the operations swapped', '  const n1 = mx_noise_float(positionGeometry).add(0.5).mul(0.5);', 'mx_noise_float, positionGeometry'],
+    ['a noise type that was already [0,1]', '  const n1 = mx_cell_noise_float(positionGeometry).mul(0.5).add(0.5);', 'mx_cell_noise_float, positionGeometry'],
+    ['a non-noise receiver', '  const n1 = sin(positionGeometry.x).mul(0.5).add(0.5);', 'sin, positionGeometry'],
+    ['extra noise arguments', '  const n1 = mx_noise_float(positionGeometry, 2).mul(0.5).add(0.5);', 'mx_noise_float, positionGeometry'],
+  ])('refuses to collapse %s', (_label, body, imports) => {
+    const r = codeToGraph(wrap(body, imports));
+    // The Multiply and Add survive as real nodes.
+    expect(r.nodes.some((n) => n.data.registryType === 'mul')).toBe(true);
+    expect(r.nodes.some((n) => n.data.registryType === 'add')).toBe(true);
+  });
+
+  it('refuses a variable receiver — one flag cannot mean "raw here, remapped there"', () => {
+    const r = codeToGraph(`import { Fn, vec3, mx_noise_float, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  const raw = mx_noise_float(positionGeometry);
+  const n1 = raw.mul(0.5).add(0.5);
+
+  return vec3(n1);
+});
+
+export default shader;
+`);
+    expect(r.nodes.some((n) => n.data.registryType === 'mul')).toBe(true);
+    const noise = r.nodes.find((n) => n.data.registryType === 'perlin')!;
+    expect(getNodeValues(noise).signed).toBeUndefined();
+  });
+});
+
+describe('codeToGraph — three-deep method chains do not self-loop', () => {
+  // Regression guard. `__chain${nodes.length}` was read BEFORE the recursion
+  // pushed anything, so both levels of a three-deep chain minted the same
+  // synthetic name; the middle node overwrote the inner node's mapping and
+  // ended up wired to ITSELF. topologicalSort silently drops the cycle, so the
+  // whole shader re-emitted as `return vec3(1, 0, 0)` — solid red — with
+  // `errors: []`. General, not noise-specific.
+  it.each([
+    ['noise chain', 'mx_noise_float(positionGeometry).mul(0.5).add(0.4)', 'mx_noise_float, positionGeometry'],
+    ['math chain', 'sin(positionGeometry.x).mul(2).add(1)', 'sin, positionGeometry'],
+    ['distance chain', 'positionWorld.sub(cameraPosition).length().mul(2)', 'positionWorld, cameraPosition'],
+  ])('%s produces no self-edge', (_label, expr, imports) => {
+    const r = codeToGraph(`import { Fn, vec3, ${imports} } from 'three/tsl';
+
+const shader = Fn(() => {
+  const n1 = ${expr};
+
+  return vec3(n1);
+});
+
+export default shader;
+`);
+    expect(r.edges.filter((e) => e.source === e.target)).toHaveLength(0);
+  });
+});
+
+describe('codeToGraph — Output node stored channel values', () => {
+  it('collapses inline float()/color() in channel position into output values, not nodes', () => {
+    const result = codeToGraph(`
+      import { Fn, color, float, vec3 } from 'three/tsl';
+      const shader = Fn(() => {
+        const color1 = color(0xff0000);
+        return { color: color1, roughness: float(0.35), metalness: float(0.9), emissive: color(0x112233) };
+      });
+      export default shader;
+    `);
+    expect(result.errors).toEqual([]);
+    const out = result.nodes.find((n) => n.data.registryType === 'output')!;
+    expect((out.data as { values?: Record<string, unknown> }).values).toEqual({
+      roughness: 0.35,
+      metalness: 0.9,
+      emissive: '#112233',
+    });
+    // No Float/extra Color nodes materialized for the stored values
+    expect(result.nodes.filter((n) => n.data.registryType === 'float')).toHaveLength(0);
+    expect(result.nodes.filter((n) => n.data.registryType === 'color')).toHaveLength(1);
+    // Only the wired color channel has an edge
+    const outEdges = result.edges.filter((e) => e.target === out.id);
+    expect(outEdges.map((e) => e.targetHandle)).toEqual(['color']);
+    // Valued channels are exposed (emission is exposure-gated)
+    const exposed = (out.data as { exposedPorts?: string[] }).exposedPorts ?? [];
+    expect(exposed).toEqual(expect.arrayContaining(['metalness', 'emissive', 'roughness']));
+  });
+
+  it('collapses a bare color-only return into the stored color value', () => {
+    const result = codeToGraph(`
+      import { Fn, color } from 'three/tsl';
+      const shader = Fn(() => {
+        return color(0x112233);
+      });
+      export default shader;
+    `);
+    expect(result.errors).toEqual([]);
+    const out = result.nodes.find((n) => n.data.registryType === 'output')!;
+    expect((out.data as { values?: Record<string, unknown> }).values).toEqual({ color: '#112233' });
+    expect(result.nodes.filter((n) => n.data.registryType === 'color')).toHaveLength(0);
+    expect(result.edges).toEqual([]);
+  });
+
+  it('keeps identifier channel refs as real nodes (narrowness)', () => {
+    const result = codeToGraph(`
+      import { Fn, color, float } from 'three/tsl';
+      const shader = Fn(() => {
+        const color1 = color(0xff0000);
+        const float1 = float(0.5);
+        return { color: color1, opacity: float1 };
+      });
+      export default shader;
+    `);
+    const out = result.nodes.find((n) => n.data.registryType === 'output')!;
+    // createNode seeds every parsed node with values: {} — the emission treats
+    // empty and absent identically (no keys, nothing emits).
+    expect((out.data as { values?: Record<string, unknown> }).values ?? {}).toEqual({});
+    expect(result.nodes.filter((n) => n.data.registryType === 'float')).toHaveLength(1);
+    expect(result.edges.filter((e) => e.target === out.id)).toHaveLength(2);
+  });
+
+  it('leaves a MISMATCHED wrapper to the historical parse (narrowness)', () => {
+    // normal is a COLOR-valued channel — a float() there is not the widget's
+    // emission shape, so it keeps the historical parse (a Float node).
+    const result = codeToGraph(`
+      import { Fn, color, float } from 'three/tsl';
+      const shader = Fn(() => {
+        const color1 = color(0xff0000);
+        return { color: color1, normal: float(1) };
+      });
+      export default shader;
+    `);
+    const out = result.nodes.find((n) => n.data.registryType === 'output')!;
+    expect((out.data as { values?: Record<string, unknown> }).values ?? {}).toEqual({});
+    expect(result.nodes.filter((n) => n.data.registryType === 'float')).toHaveLength(1);
+  });
+
+  it('collapses a Discard(float(lit)) statement into the discard stored value', () => {
+    const result = codeToGraph(`
+      import { Fn, color, float, Discard } from 'three/tsl';
+      const shader = Fn(() => {
+        const color1 = color(0xff0000);
+        Discard(float(0.5));
+        return color1;
+      });
+      export default shader;
+    `);
+    expect(result.errors).toEqual([]);
+    const out = result.nodes.find((n) => n.data.registryType === 'output')!;
+    expect((out.data as { values?: Record<string, unknown> }).values).toMatchObject({ discard: 0.5 });
+    expect(result.nodes.filter((n) => n.data.registryType === 'float')).toHaveLength(0);
+    const exposed = (out.data as { exposedPorts?: string[] }).exposedPorts ?? [];
+    expect(exposed).toContain('discard');
+  });
+
+  it('collapses inline color() on the normal and env channels', () => {
+    const result = codeToGraph(`
+      import { Fn, color } from 'three/tsl';
+      const shader = Fn(() => {
+        const color1 = color(0xff0000);
+        return { color: color1, normal: color(0x112233), env: color(0x445566) };
+      });
+      export default shader;
+    `);
+    expect(result.errors).toEqual([]);
+    const out = result.nodes.find((n) => n.data.registryType === 'output')!;
+    expect((out.data as { values?: Record<string, unknown> }).values).toEqual({
+      normal: '#112233',
+      env: '#445566',
+    });
+    expect(result.nodes.filter((n) => n.data.registryType === 'color')).toHaveLength(1);
+  });
+});
+
+describe('codeToGraph — the normal widget wrapper', () => {
+  it('collapses normalMap(color(lit)) into the stored normal value', () => {
+    const result = codeToGraph(`
+      import { Fn, color, normalMap } from 'three/tsl';
+      const shader = Fn(() => {
+        const color1 = color(0xff0000);
+        return { color: color1, normal: normalMap(color(0x112233)) };
+      });
+      export default shader;
+    `);
+    expect(result.errors).toEqual([]);
+    const out = result.nodes.find((n) => n.data.registryType === 'output')!;
+    expect((out.data as { values?: Record<string, unknown> }).values).toEqual({
+      normal: '#112233',
+    });
+    expect(result.nodes.filter((n) => n.data.registryType === 'color')).toHaveLength(1);
+  });
+});

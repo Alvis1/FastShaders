@@ -51,8 +51,13 @@ function applyProjectToStore(project: FastShadersProject): void {
   if (typeof p.subdivision === 'number') writeLs('fs:previewSubdivision', String(p.subdivision));
   if (p.bgColor) writeLs('fs:previewBgColor', p.bgColor);
   if (typeof p.playing === 'boolean') writeLs('fs:previewPlaying', String(p.playing));
-  if (p.uniformValues) writeLs('fs:previewUniformValues', JSON.stringify(p.uniformValues));
-  if (p.uniformBounds) writeLs('fs:previewUniformBounds', JSON.stringify(p.uniformBounds));
+  // Clearing when the block is ABSENT is the point: with no else-branch, a
+  // shader that ships no tuning silently inherited the PREVIOUS shader's for
+  // every same-named property — and `property1` / `color1` are the
+  // auto-generated names, so a collision is the norm, not the exception. An
+  // import replaces the graph; it must replace the tuning that belongs to it.
+  writeLs('fs:previewUniformValues', JSON.stringify(p.uniformValues ?? {}));
+  writeLs('fs:previewUniformBounds', JSON.stringify(p.uniformBounds ?? {}));
   if (p.cameraPos) writeLs('fs:previewCameraPos', JSON.stringify(p.cameraPos));
   if (p.rotation) writeLs('fs:previewRotation', JSON.stringify(p.rotation));
 
@@ -89,6 +94,20 @@ function applyProjectToStore(project: FastShadersProject): void {
   });
 
   window.dispatchEvent(new CustomEvent('fs:project-imported'));
+  announceGraphImport();
+}
+
+/**
+ * Tell the canvas an import just REPLACED the graph, so it can frame the
+ * result (NodeEditor listens; see its import-fit effect). Deliberately not
+ * `fs:project-imported`: that one also fires for a model-only zip, where the
+ * graph never changed and re-framing would throw away the user's viewport.
+ *
+ * typeof guard: this module is also exercised by node-env unit tests.
+ */
+function announceGraphImport(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('fs:graph-imported'));
 }
 
 /**
@@ -116,6 +135,11 @@ export function importShaderText(
   const store = useAppStore.getState();
   store.setCode(scriptToTSL(text), 'code');
   store.requestCodeSync();
+  // A bare script's graph doesn't exist yet — useSyncEngine's code→graph pass
+  // builds it a commit or two from now. The canvas arms the fit on this event
+  // and fires it on the graph it actually renders next, so announcing early is
+  // correct here.
+  announceGraphImport();
   return 'script';
 }
 

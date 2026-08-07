@@ -745,7 +745,7 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
     defaultValues: { pos: 'positionGeometry', scale: 1.0 },
-    description: 'MaterialX Perlin-style noise (scalar, range ~[-1, 1])',
+    description: 'MaterialX Perlin-style noise (scalar). New nodes output 0…1; Node Settings switches to the raw signed range.',
   },
   {
     type: 'perlinVec3',
@@ -756,7 +756,7 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'vec3' }],
     defaultValues: { pos: 'positionGeometry', scale: 1.0 },
-    description: 'MaterialX Perlin-style noise (3-channel, range ~[-1, 1] per channel)',
+    description: 'MaterialX Perlin-style noise (3-channel). New nodes output 0…1 per channel; Node Settings switches to the raw signed range.',
   },
   {
     type: 'fbm',
@@ -767,7 +767,7 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'float' }],
     defaultValues: { pos: 'positionGeometry', scale: 1.0 },
-    description: 'Fractal Brownian motion (multi-octave Perlin)',
+    description: 'Fractal Brownian motion (multi-octave Perlin). New nodes output approximately 0…1; Node Settings switches to the raw signed range.',
   },
   {
     type: 'fbmVec3',
@@ -778,7 +778,7 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Value', dataType: 'vec3' }],
     defaultValues: { pos: 'positionGeometry', scale: 1.0 },
-    description: 'Fractal Brownian motion (3-channel)',
+    description: 'Fractal Brownian motion (3-channel). New nodes output approximately 0…1 per channel; Node Settings switches to the raw signed range.',
   },
   {
     type: 'cellNoise',
@@ -971,18 +971,25 @@ const definitions: NodeDefinition[] = [
     category: 'output',
     tslFunction: 'output',
     tslImportModule: '',
+    // Socket order IS the on-node arrangement (the Output node renders
+    // def.inputs in order, sectioned by PIXEL_PORTS/VERTEX_PORTS), and the
+    // ShaderSettingsMenu toggle list follows the same sequence — keep all
+    // three aligned. `position` (Displacement) sits last because it renders
+    // in its own Vertex Shader section.
     inputs: [
       { id: 'color', label: 'Color', dataType: 'color' },
       { id: 'emissive', label: 'Emissive', dataType: 'color' },
-      { id: 'normal', label: 'Normal', dataType: 'vec3' },
-      { id: 'position', label: 'Displacement', dataType: 'vec3' },
-      { id: 'opacity', label: 'Opacity', dataType: 'float' },
       { id: 'roughness', label: 'Roughness', dataType: 'float' },
+      { id: 'metalness', label: 'Metalness', dataType: 'float' },
+      { id: 'opacity', label: 'Opacity', dataType: 'float' },
       { id: 'discard', label: 'Discard', dataType: 'float' },
+      { id: 'normal', label: 'Normal', dataType: 'vec3' },
+      { id: 'env', label: 'Environment', dataType: 'color' },
+      { id: 'position', label: 'Displacement', dataType: 'vec3' },
     ],
     outputs: [],
     description:
-      'The material output — color, emissive, normal, displacement, opacity, roughness and discard channels.',
+      'The material output — color, emissive, roughness, metalness, opacity, discard, normal, environment and displacement channels. Wire an Image node into Environment to light the material with an equirectangular environment map (image-based lighting: reflections follow Roughness/Metalness).',
   },
 ];
 

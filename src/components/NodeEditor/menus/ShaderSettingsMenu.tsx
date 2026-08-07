@@ -6,9 +6,11 @@ import type { MaterialSettings, OutputNodeData } from '@/types';
 import { removeEdgesForPort } from '@/utils/edgeUtils';
 import { toggleExposedPort } from '@/utils/exposedPorts';
 
-/** Ports that can be toggled on/off in the output node settings.
- *  Opacity is excluded — it's auto-managed by transparent/alphaTest. */
-const OPTIONAL_OUTPUT_PORTS = ['roughness', 'emissive', 'normal', 'discard'];
+/** Ports that can be toggled on/off in the output node settings, listed in
+ *  the SAME order as the node's socket arrangement (the registry def's
+ *  inputs). Color is excluded (always exposed) and Opacity is excluded —
+ *  it's auto-managed by transparent/alphaTest. */
+const OPTIONAL_OUTPUT_PORTS = ['emissive', 'roughness', 'metalness', 'discard', 'normal', 'env'];
 
 export function ShaderSettingsMenu() {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
@@ -42,17 +44,32 @@ export function ShaderSettingsMenu() {
     updateNodeData(outputNode.id, { materialSettings: merged } as Partial<OutputNodeData>);
   };
 
+  /** Hiding a channel clears its stored widget value too — the documented
+   *  rule for edges (a hidden socket must not keep live wires) extended to
+   *  values: emission is exposure-gated, so a kept value would either emit
+   *  invisibly or silently vanish from the code, depending on the gate. */
+  const valuesWithout = (portId: string): Record<string, string | number> | undefined => {
+    const values = outputData?.values;
+    if (!values || !(portId in values)) return undefined;
+    const { [portId]: _dropped, ...rest } = values;
+    return rest;
+  };
+
   /** Show or hide the opacity port based on transparent/alphaTest state. */
   const setOpacityPort = (show: boolean) => {
     if (!outputNode) return;
     const current = new Set(exposedPorts);
+    const patch: Partial<OutputNodeData> = {};
     if (show) {
       current.add('opacity');
     } else {
       current.delete('opacity');
       removeEdgesForPort(outputNode.id, 'opacity');
+      const rest = valuesWithout('opacity');
+      if (rest) patch.values = rest;
     }
-    updateNodeData(outputNode.id, { exposedPorts: Array.from(current) } as Partial<OutputNodeData>);
+    patch.exposedPorts = Array.from(current);
+    updateNodeData(outputNode.id, patch);
   };
 
   const handleTransparentChange = (checked: boolean) => {
@@ -84,9 +101,13 @@ export function ShaderSettingsMenu() {
 
   const handleTogglePort = (portId: string) => {
     if (!outputNode) return;
-    updateNodeData(outputNode.id, {
-      exposedPorts: toggleExposedPort(outputNode.id, exposedPorts, portId),
-    } as Partial<OutputNodeData>);
+    const next = toggleExposedPort(outputNode.id, exposedPorts, portId);
+    const patch: Partial<OutputNodeData> = { exposedPorts: next };
+    if (!next.includes(portId)) {
+      const rest = valuesWithout(portId);
+      if (rest) patch.values = rest;
+    }
+    updateNodeData(outputNode.id, patch);
   };
 
   const checkboxStyle: React.CSSProperties = {

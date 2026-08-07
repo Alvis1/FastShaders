@@ -4,10 +4,12 @@
   position: relative;
 }
 
+/* Also the sockets' containing block — see the handle rules below. */
 .clock-node__canvas-wrap {
   padding: 3px 5px;
   display: flex;
   justify-content: center;
+  position: relative;
 }
 
 .clock-node__canvas {
@@ -16,25 +18,81 @@
   border-radius: 50%;
 }
 
-/* Speed multiplier chip — only rendered when speed !== 1. Sits over the
-   canvas's clipped-away bottom-right corner (the canvas is a circle), so it
-   overlaps nothing painted. Hardcoded colour: nodes must render identically in
-   both themes. */
-.clock-node__speed {
-  position: absolute;
-  right: 3px;
-  bottom: 1px;
-  font-size: 8px;
-  font-weight: 700;
-  line-height: 1;
-  color: #e74c3c;
-  pointer-events: none;
-}
-
-.clock-node > .react-flow__handle {
+/* Each socket sits on the node's edge, vertically centred on THE THING IT
+   BELONGS TO — the output on the clock face, the `speed` input on the speed
+   row that it feeds. Both get there by living inside that element's own
+   wrapper rather than being positioned against the whole node: `top: 50%` of
+   the node put them exactly half a header-height above the face's centre, and
+   moved them again whenever a long varName wrapped the title onto a second
+   line. Anchoring to the wrapper is immune to anything above or below it. */
+.clock-node__canvas-wrap > .react-flow__handle {
+  top: 50% !important;
   transform: translateY(-50%) !important;
 }
 
-.clock-node > .react-flow__handle-right {
+/* The speed socket centres on the value BOX, not on the row — the row also
+   holds the `×` line above it, so a plain 50% would float the socket in the
+   gap between the two. Anchored from the row's BOTTOM so only the two numbers
+   directly below it matter: the row's own bottom padding, plus half the
+   compact widget's height (both restated from the rules in this file, and both
+   scaling with --node-text-scale exactly as the widget does). */
+.clock-node__speed-row > .react-flow__handle {
+  top: auto !important;
+  bottom: calc(4px + 6px * var(--node-text-scale, 1)) !important;
+  transform: translateY(50%) !important;
+}
+
+/* Both edges take the SAME inset. The `-left` rule was simply MISSING, so the
+   speed socket fell back to React Flow's own left offset while the shared
+   transform override above stripped RF's `translateX(-50%)` along with it —
+   leaving the input socket floating ~6px INSIDE the card while the output sat
+   on the edge. Whenever one side is overridden here, so must the other be. */
+.clock-node__canvas-wrap > .react-flow__handle-left,
+.clock-node__speed-row > .react-flow__handle-left {
+  left: calc(var(--handle-size) / -2) !important;
+}
+
+.clock-node__canvas-wrap > .react-flow__handle-right,
+.clock-node__speed-row > .react-flow__handle-right {
   right: calc(var(--handle-size) / -2) !important;
+}
+
+/* Speed multiplier — an EDITABLE value, always present, exactly like every
+   other node's numbers. It used to be a read-only red `×N` chip tucked into
+   the bottom-right corner that rendered ONLY when speed !== 1, so at the
+   default the node carried no sign it had a multiplier at all — which reads as
+   the control having gone missing rather than as "it is at 1".
+   Stacked (`×` on its own line above the box) rather than side by side: the
+   node is narrow, and an inline symbol ate width the value box needs. Also the
+   containing block for the speed socket. */
+.clock-node__speed-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 0 5px 4px;
+}
+
+.clock-node__speed-x {
+  font: 700 calc(8px * var(--node-text-scale, 1)) var(--font-mono);
+  color: rgba(0, 0, 0, 0.55);
+  line-height: 1;
+}
+
+/* A centred box rather than a full-width one — it holds a single small number,
+   and stretching it edge to edge made the node read as a text field with a
+   clock above it. */
+.clock-node__speed-row .drag-num--compact,
+.clock-node__speed-wired {
+  width: 70%;
+  justify-content: center;
+}
+
+/* A wired speed is driven by its edge, so the stored number is dead — show the
+   value ARRIVING, plain text with no plate (the same read-only-vs-editable
+   grammar as the Mic node and .shader-node__op-val). */
+.clock-node__speed-wired {
+  display: flex;
+  align-items: center;
 }

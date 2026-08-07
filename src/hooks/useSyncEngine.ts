@@ -144,10 +144,58 @@ export function useSyncEngine() {
               id: match.id,
               position: { ...match.position },
             };
-            // Preserve exposedPorts from old node (not reconstructed by codeToGraph)
-            const oldExposed = (match.data as Record<string, unknown>).exposedPorts;
+            // Preserve exposedPorts from the old node — mostly not
+            // reconstructed by codeToGraph. For the OUTPUT node, union in the
+            // channels that carry STORED VALUES in the new parse (an inline
+            // `metalness: float(0.9)` typed in the code panel must stay
+            // visible — its emission is exposure-gated, so hiding it would
+            // silently drop the very line the user just typed on the next
+            // graph→code pass). ONLY the valued channels, never the parse's
+            // whole seeded list: that list includes the implicit defaults,
+            // and unioning those resurrected a default channel the user had
+            // explicitly hidden in Shader Settings.
+            // Carry the old OUTPUT node's stored channel values for channels
+            // that are WIRED in the new parse. A wired channel's stored value
+            // cannot appear in the code text (the edge ref wins at emission),
+            // so the parse can never legitimately clear it — without this,
+            // any code-panel Apply wiped the value the widget deliberately
+            // retains under a wire, and a later disconnect landed on UNSET
+            // instead of the user's number/color. Unwired channels stay
+            // code-authoritative: literal present → value, absent → cleared.
+            if (merged.data.registryType === 'output') {
+              const oldValues = (match.data as { values?: Record<string, string | number> })
+                .values;
+              if (oldValues) {
+                const carried = {
+                  ...((merged.data as { values?: Record<string, string | number> }).values ?? {}),
+                };
+                let changed = false;
+                for (const [ch, v] of Object.entries(oldValues)) {
+                  const wired = result.edges.some(
+                    (e) => e.target === newNode.id && e.targetHandle === ch,
+                  );
+                  if (carried[ch] === undefined && wired) {
+                    carried[ch] = v;
+                    changed = true;
+                  }
+                }
+                if (changed) {
+                  (merged.data as Record<string, unknown>).values = carried;
+                }
+              }
+            }
+            const oldExposed = (match.data as { exposedPorts?: string[] }).exposedPorts;
             if (oldExposed) {
-              (merged.data as Record<string, unknown>).exposedPorts = oldExposed;
+              let next: string[] = oldExposed;
+              if (merged.data.registryType === 'output') {
+                const valued = Object.keys(
+                  (merged.data as { values?: Record<string, unknown> }).values ?? {},
+                );
+                if (valued.length > 0) {
+                  next = Array.from(new Set([...oldExposed, ...valued]));
+                }
+              }
+              (merged.data as Record<string, unknown>).exposedPorts = next;
             }
             // Preserve materialSettings on output nodes
             const oldMatSettings = (match.data as Record<string, unknown>).materialSettings;

@@ -5,24 +5,18 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
+import { DragNumberInput } from '../inputs/DragNumberInput';
 import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
+import { CLOCK_SIZE, drawClockFace } from '@/utils/clockFace';
+import { portLabel } from '@/i18n';
+// One rule for "what is arriving on this input", shared with ShaderNode/MicNode
+// (whose stylesheet also owns .shader-node__edge-val).
+import { edgeValueLabel } from './ShaderNode';
 import './ClockNode.css';
 
-const CLOCK_SIZE = 56;
-
-/**
- * Label for the speed chip. A fixed 2-decimal rounding would print "×0" for a
- * slow-motion 0.001 — claiming time is frozen while the shader still animates —
- * so small magnitudes keep enough significant digits to stay truthful, and only
- * a genuine 0 reads as "×0". Trailing zeros are dropped (1.5 not 1.50).
- */
-function formatSpeed(speed: number): string {
-  if (speed === 0) return '0';
-  const decimals = Math.abs(speed) < 0.01 ? 4 : 2;
-  const rounded = Number(speed.toFixed(decimals));
-  // Still rounds away below 1e-4 — fall back to exponent form rather than lie.
-  return rounded === 0 ? speed.toExponential(0) : String(rounded);
-}
+// (`formatSpeed` lived here to render the read-only `×N` chip without printing
+// "×0" for a slow-motion 0.001. The speed is an editable DragNumberInput now,
+// which shows the stored number itself, so there is nothing left to round.)
 
 export const ClockNode = memo(function ClockNode({
   id,
@@ -34,6 +28,8 @@ export const ClockNode = memo(function ClockNode({
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
+  const language = useAppStore((s) => s.language);
+  const updateNodeData = useAppStore((s) => s.updateNodeData);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
@@ -62,15 +58,25 @@ export const ClockNode = memo(function ClockNode({
   useEffect(() => {
     updateNodeInternals(id);
   }, [id, showSpeedPort, updateNodeInternals]);
-  // A wired speed overrides the stored number (the codegen rule), so the chip
-  // would be lying about a value the shader no longer uses.
-  const speedWired = useStore(
-    useMemo(
-      () => (s: { edges: { target: string; targetHandle?: string | null }[] }) =>
-        s.edges.some((e) => e.target === id && e.targetHandle === 'speed'),
-      [id],
-    ),
-  );
+  // A wired speed overrides the stored number (the codegen rule), so the row
+  // must stop offering to edit it and show the value ARRIVING instead — the
+  // same label ShaderNode and MicNode put on a connected input. Cheap string
+  // key first so a position-only graph notify bails on Object.is; the map is
+  // rebuilt from getState() only when that key actually changes.
+  const speedEdgeKey = useAppStore((s) => {
+    const e = s.edges.find((ed) => ed.target === id && ed.targetHandle === 'speed');
+    if (!e) return '';
+    const l = edgeValueLabel(e.source, s.nodes, s.edges);
+    return `${e.source} ${l.text} ${l.live ? 1 : 0}`;
+  });
+  const wiredSpeed = useMemo(() => {
+    if (!speedEdgeKey) return null;
+    const { nodes, edges } = useAppStore.getState();
+    const e = edges.find((ed) => ed.target === id && ed.targetHandle === 'speed');
+    return e ? edgeValueLabel(e.source, nodes, edges) : null;
+    // speedEdgeKey is the change signal; the graph is read imperatively above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, speedEdgeKey]);
   // Ride a ref so a live speed edit is picked up WITHOUT restarting the rAF
   // loop (a restart would reset the phase and jump the hand).
   const speedRef = useRef(speed);
@@ -89,10 +95,6 @@ export const ClockNode = memo(function ClockNode({
     // layer makes Safari rasterize the zoomed viewport at 1× (all-node blur).
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
-    const size = CLOCK_SIZE;
-    const cx = size / 2;
-    const cy = size / 2;
-    const r = size / 2 - 4;
 
     let rafId: number;
     let last: number | null = null;
@@ -103,47 +105,9 @@ export const ClockNode = memo(function ClockNode({
       const dt = Math.min(Math.max((ts - last) / 1000, 0), 0.1);
       last = ts;
       phaseRef.current = (phaseRef.current + dt * speedRef.current) % 60;
-      const now = phaseRef.current;
-      ctx.clearRect(0, 0, size, size);
-
-      // Clock face
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = '#fff';
-      ctx.fill();
-      ctx.strokeStyle = '#ccc';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Hour marks
-      for (let i = 0; i < 12; i++) {
-        const angle = (i / 12) * Math.PI * 2 - Math.PI / 2;
-        const inner = r - 4;
-        const outer = r - 1;
-        ctx.beginPath();
-        ctx.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner);
-        ctx.lineTo(cx + Math.cos(angle) * outer, cy + Math.sin(angle) * outer);
-        ctx.strokeStyle = '#999';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-
-      // Seconds hand
-      const secAngle = (now % 60) / 60 * Math.PI * 2 - Math.PI / 2;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(cx + Math.cos(secAngle) * (r - 6), cy + Math.sin(secAngle) * (r - 6));
-      ctx.strokeStyle = '#e74c3c';
-      ctx.lineWidth = 1.5;
-      ctx.lineCap = 'round';
-      ctx.stroke();
-
-      // Center dot
-      ctx.beginPath();
-      ctx.arc(cx, cy, 2, 0, Math.PI * 2);
-      ctx.fillStyle = '#e74c3c';
-      ctx.fill();
-
+      // The face itself lives in utils/clockFace so the asset tile draws the
+      // identical picture — see that module's header.
+      drawClockFace(ctx, phaseRef.current);
       rafId = requestAnimationFrame(draw);
     };
 
@@ -161,9 +125,11 @@ export const ClockNode = memo(function ClockNode({
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 
       <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>{varName ?? data.label}</span>
+        <span className="node-base__title" title={varName ?? data.label} style={{ color: headerTextColor }}>{varName ?? data.label}</span>
       </div>
 
+      {/* The sockets live INSIDE this wrapper so they centre on the clock face
+          rather than on the whole node — see ClockNode.css. */}
       <div className="clock-node__canvas-wrap">
         <canvas
           ref={canvasRef}
@@ -171,34 +137,51 @@ export const ClockNode = memo(function ClockNode({
           height={CLOCK_SIZE}
           className="clock-node__canvas"
         />
+
+        {def.outputs[0] && (
+          <TypedHandle
+            type="source"
+            position={Position.Right}
+            id={def.outputs[0].id}
+            dataType={def.outputs[0].dataType}
+            label={def.outputs[0].label}
+          />
+        )}
       </div>
 
-      {speed !== 1 && !speedWired && (
-        <span className="clock-node__speed">×{formatSpeed(speed)}</span>
-      )}
+      {/* Speed multiplier, always visible and editable — the node's only
+          setting should not be invisible at its default value. The `speed`
+          SOCKET lives here rather than beside the clock face: it feeds this
+          value, so it belongs on this row. */}
+      <div className="clock-node__speed-row" title={portLabel('Speed', language)}>
+        <span className="clock-node__speed-x">×</span>
+        {wiredSpeed ? (
+          <span
+            className="clock-node__speed-wired shader-node__edge-val"
+            style={wiredSpeed.live ? { color: '#2D6CDF' } : undefined}
+          >
+            {wiredSpeed.text}
+          </span>
+        ) : (
+          <DragNumberInput
+            compact
+            value={speed}
+            onChange={(v) => updateNodeData(id, { values: { ...data.values, speed: String(v) } })}
+          />
+        )}
 
-      {showSpeedPort && (
-        <TypedHandle
-          type="target"
-          position={Position.Left}
-          id="speed"
-          dataType="float"
-          label="speed"
-          reveal={revealHidden}
-          style={{ top: '50%', ...(speedExposed ? null : { opacity: REVEAL_TEMP_OPACITY }) }}
-        />
-      )}
-
-      {def.outputs[0] && (
-        <TypedHandle
-          type="source"
-          position={Position.Right}
-          id={def.outputs[0].id}
-          dataType={def.outputs[0].dataType}
-          label={def.outputs[0].label}
-          style={{ top: '50%' }}
-        />
-      )}
+        {showSpeedPort && (
+          <TypedHandle
+            type="target"
+            position={Position.Left}
+            id="speed"
+            dataType="float"
+            label="speed"
+            reveal={revealHidden}
+            style={speedExposed ? undefined : { opacity: REVEAL_TEMP_OPACITY }}
+          />
+        )}
+      </div>
     </div>
   );
 });

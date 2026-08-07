@@ -75,10 +75,10 @@
      mechanism NodeBase.css applies inside .react-flow; the vars are set on
      #nodeWrap from the bg picker (designerApp.applyBg) */
   #nodeWrap .node-base__cost-badge{color:var(--node-cost-text,#000000) !important;text-shadow:0 1px 2px var(--node-cost-text-shadow,rgba(255,255,255,.6)) !important}
-  /* canvas parity: on the editor canvas editable number boxes are opaque
-     white (`.react-flow .drag-num`) — mirror that here so the preview matches
-     the node ON THE CANVAS, not the translucent card variant */
-  #nodeWrap .drag-num{background:#fff}
+  /* (the opaque-white number box used to be mirrored here from a
+     `.react-flow .drag-num` rule; it now lives on `.drag-num--compact` itself
+     in DragNumberInput.css, so every surface that draws a node gets it and
+     this mirror would just be a second source of truth) */
   /* the page's bare `input[type=number]` chrome rule above has specificity
      (0,1,1) and beats `.drag-num__edit` (0,1,0) — without this mirror,
      click-to-edit on a stage value box rendered a padded, bordered,

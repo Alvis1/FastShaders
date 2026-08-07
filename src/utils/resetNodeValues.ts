@@ -35,6 +35,14 @@ const PRESERVED_KEYS: Record<string, readonly string[]> = {
   imageNode: ['imageB64', 'fileName', 'originId', 'srcWidth', 'srcHeight'],
   // The verbatim TSL this node exists to round-trip.
   unknown: ['functionName', 'rawExpression'],
+  // The noise range mode. Unlike a settings number, dropping this key does not
+  // restore a neutral default — it changes what the node OUTPUTS, because an
+  // absent key means the legacy signed ~[-1,1] range. Reset restores pos/scale;
+  // it must not silently turn a 0-1 node back into a signed one.
+  perlin: ['signed'],
+  perlinVec3: ['signed'],
+  fbm: ['signed'],
+  fbmVec3: ['signed'],
 };
 
 /**

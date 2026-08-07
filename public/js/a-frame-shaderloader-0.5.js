@@ -259,6 +259,9 @@ AFRAME.registerComponent("shader", {
         "roughnessNode",
         "metalnessNode",
         "emissiveNode",
+        // Environment map (IBL): a texture-valued envNode is auto-wrapped in
+        // pmremTexture() by three's EnvironmentNode (radiance + irradiance).
+        "envNode",
       ];
       const isObjectAPI =
         shaderResult &&

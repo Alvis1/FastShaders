@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { tslToShaderModule } from './tslToShaderModule';
+import { graphToCode } from './graphToCode';
+import { makeNode, makeEdge } from '@/test-utils';
 import { buildShaderModule } from './tslCodeProcessor';
 import { scriptToTSL } from './scriptToTSL';
 
@@ -195,5 +197,47 @@ describe('scriptToTSL pass-through: raw editor-style TSL is returned unchanged',
     const back = scriptToTSL(exported);
     expect(back).toContain('const shader = Fn(() => {');
     expect(back).not.toContain('export default function');
+  });
+});
+
+describe('tslToShaderModule — environment + metalness node props', () => {
+  it('maps metalness → metalnessNode and env → envNode', () => {
+    const src = `import { Fn, color, float, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const color1 = color(0x112233);
+  const float1 = float(0.8);
+
+  return { color: color1, metalness: float1, env: vec3(0.5, 0.5, 0.5) };
+});
+
+export default shader;
+`;
+    const out = tslToShaderModule(src);
+    expect(out).toContain('metalnessNode: float1');
+    expect(out).toContain('envNode: vec3(0.5, 0.5, 0.5)');
+  });
+
+  it('carries a graphToCode image→env graph end-to-end (envNode: texture(tex))', () => {
+    const img = makeNode('img', 'imageNode', {
+      imageB64: `data:image/webp;base64,${btoa('abc')}`,
+      width: 2,
+      height: 2,
+      fileName: 'forest.webp',
+      colorSpace: 'color',
+    });
+    const c = makeNode('c', 'color', { hex: '#112233' });
+    const outNode = makeNode('out', 'output');
+    const edges = [
+      makeEdge('c', 'out', 'out', 'color'),
+      makeEdge('img', 'out', 'out', 'env'),
+    ];
+    const { code } = graphToCode([img, c, outNode], edges);
+    const module = tslToShaderModule(code);
+    // The env channel survives module conversion as a material envNode
+    // referencing the module-scope texture (shaderloader 0.5 assigns it;
+    // three's EnvironmentNode PMREMs it for IBL).
+    expect(module).toContain('envNode: texture(_image1_tex)');
+    expect(module).toContain('const _image1_tex =');
   });
 });

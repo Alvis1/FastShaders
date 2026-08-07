@@ -44,7 +44,7 @@ const STACK_STEP_Y = 3;
  * - nothing derivable (camera/world-space chains) → `…`
  * Returns the text plus whether it's a live value (vs. an inferred range).
  */
-function edgeValueLabel(
+export function edgeValueLabel(
   sourceId: string,
   nodes: Parameters<typeof evaluateNodeOutput>[1],
   edges: Parameters<typeof evaluateNodeOutput>[2],
@@ -60,7 +60,14 @@ function edgeValueLabel(
     const ra = Math.round(lo), rb = Math.round(hi);
     return ra === rb ? String(ra) : `${ra}…${rb}`;
   };
-  const out = evaluateNodeOutput(sourceId, nodes, edges, 0);
+  // A noise node's "live" value is one arbitrary probe point — cpuEvaluator
+  // samples a fixed UV, and an unwired node lands on an integer lattice where
+  // Perlin is exactly 0, which on a card reads as a dead wire. The interval is
+  // both the honest answer for a noise field and the only on-canvas tell of the
+  // node's range mode (`-1…1` vs `0…1`).
+  const srcType = nodes.find((n) => n.id === sourceId)?.data?.registryType as string | undefined;
+  const preferRange = NODE_REGISTRY.get(srcType ?? '')?.category === 'noise';
+  const out = preferRange ? null : evaluateNodeOutput(sourceId, nodes, edges, 0);
   if (out && out.length >= 1 && out.every((v) => Number.isFinite(v))) {
     return { text: rangeText(Math.min(...out), Math.max(...out)), live: true };
   }
@@ -232,6 +239,14 @@ export const ShaderNode = memo(function ShaderNode({
 
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
+  // The header string, computed once for BOTH layouts: a property node labels
+  // itself with the name the user typed, everything else with the generated
+  // var name. Also the `title` — the header clamps at two lines (NodeBase.css),
+  // so a long name must stay readable on hover.
+  const headerText =
+    (data.registryType === 'property_float' || data.registryType === 'property_color') && data.values?.name
+      ? String(data.values.name)
+      : varName ?? data.label;
   const language = useAppStore((s) => s.language);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
@@ -411,8 +426,15 @@ export const ShaderNode = memo(function ShaderNode({
   // width as the 2-op node — growth is vertical only, never wider.
   const chainListMode = growsOperands(def) && opSocketCount > 2;
   if (box.width) {
+    // The authored width is the PREFERRED width, and `min-content` is the
+    // floor: the node keeps its designed width whenever the content fits, and
+    // widens only when something genuinely cannot — in practice a long
+    // generated varName in the header, which no longer breaks mid-word (see
+    // .node-base__title). Previously this pinned `minWidth` to the authored
+    // width too, so an over-long title had nowhere to go but a third, fourth
+    // and fifth row.
     nodeStyle.width = box.width;
-    nodeStyle.minWidth = box.width;
+    nodeStyle.minWidth = 'min-content';
   }
 
   // Multi-channel stacked-cards effect: the node stacks only when multi-channel
@@ -532,10 +554,8 @@ export const ShaderNode = memo(function ShaderNode({
         {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>}
 
         <div className="node-base__header" style={headerStyle}>
-          <span className="node-base__title" style={{ color: headerTextColor }}>
-            {(data.registryType === 'property_float' || data.registryType === 'property_color') && data.values?.name
-              ? String(data.values.name)
-              : varName ?? data.label}
+          <span className="node-base__title" title={headerText} style={{ color: headerTextColor }}>
+            {headerText}
           </span>
         </div>
 
@@ -630,10 +650,8 @@ export const ShaderNode = memo(function ShaderNode({
 
       {/* Header — colored by performance impact (cost) */}
       <div className="node-base__header" style={headerStyle}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>
-          {(data.registryType === 'property_float' || data.registryType === 'property_color') && data.values?.name
-            ? String(data.values.name)
-            : varName ?? data.label}
+        <span className="node-base__title" title={headerText} style={{ color: headerTextColor }}>
+          {headerText}
         </span>
       </div>
 
@@ -698,7 +716,11 @@ export const ShaderNode = memo(function ShaderNode({
           center-relative convention as the operator layout). A designer height
           is EXACT here too — shorter than content shrinks the node and the
           glyph/rows simply overflow (overflow stays visible; dx/dy places art). */}
-      <div style={{ position: 'relative', ...(box.height ? { height: box.height } : null) }}>
+      {/* Carries the class NodeVisual's mirror of this div already had — the
+          Node Designer queries `.shader-node__region` to place its gesture
+          overlays, and a hook that exists on only one half of a pair the spec
+          says to change together is how the two drift. No CSS targets it. */}
+      <div className="shader-node__region" style={{ position: 'relative', ...(box.height ? { height: box.height } : null) }}>
       {/* Glyph icon for the node, above the port rows. Values are never drawn on
           top of it — they live in the rows below, aligned with their sockets. */}
       {hasNodeGlyph(data.registryType) && (

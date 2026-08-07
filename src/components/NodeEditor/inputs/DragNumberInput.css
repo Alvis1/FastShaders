@@ -14,21 +14,6 @@
   border-color: var(--border-default);
 }
 
-/* On a node card the widget carries the ONLY "you can edit this" signal in the
-   row, so it keeps a fill — but a recessed neutral tint rather than the opaque
-   white plate, which punched a bright box out of the node body. Read-only
-   values beside it are plain text (see .shader-node__op-val in ShaderNode.css),
-   so fill vs no-fill is what separates editable from derived.
-   Scoped to `.react-flow`: context menus render OUTSIDE that subtree and keep
-   their panel-style input fill. A hardcoded white is correct in both themes —
-   node bodies are theme-invariant (--node-bg), so this must NOT become a
-   chrome token that flips with the theme toggle. Opaque, not translucent: on
-   the operator layout the field can pass over the big +/x glyph, and a
-   see-through fill would let the glyph show through the digits. */
-.react-flow .drag-num {
-  background: #ffffff;
-}
-
 /* Arrow buttons */
 .drag-num__arrow {
   display: flex;
@@ -100,12 +85,29 @@
 /* Compact variant for inline node use. Sizes multiply by the per-node
    designer text scale (--node-text-scale, default 1) so node value boxes
    follow the node's "Text size" setting; outside nodes the var is unset
-   and everything keeps its classic size. */
+   and everything keeps its classic size.
+   `--compact` IS the on-node variant — nothing outside a node card uses it —
+   so the on-node LOOK belongs here, on the variant itself, and not on an
+   ancestor. It used to be split: a translucent tint here plus an opaque white
+   plate under `.react-flow`, which meant the identical widget rendered crisp
+   on the canvas and washed-out on every surface that draws a node WITHOUT
+   React Flow — the asset tiles and the overview table (the Node Designer only
+   escaped because node-designer.html hand-mirrored the canvas rule). Same bug
+   shape as the `.mic-node`-scoped arm light: a node's own styling must never
+   depend on which page is drawing it.
+   On a node card the widget carries the ONLY "you can edit this" signal in the
+   row — read-only values beside it are plain text (see .shader-node__op-val in
+   ShaderNode.css), so fill vs no-fill is what separates editable from derived.
+   A hardcoded white is correct in both themes: node bodies are theme-invariant
+   (--node-bg), so this must NOT become a chrome token that flips with the
+   theme toggle. Opaque, not translucent: on the operator layout the field can
+   pass over the big +/x glyph, and a see-through fill would let the glyph show
+   through the digits. */
 .drag-num--compact {
   width: auto;
   height: calc(12px * var(--node-text-scale, 1));
   border-color: rgba(0, 0, 0, 0.15);
-  background: rgba(255, 255, 255, 0.6);
+  background: #ffffff;
 }
 
 .drag-num--compact:hover {

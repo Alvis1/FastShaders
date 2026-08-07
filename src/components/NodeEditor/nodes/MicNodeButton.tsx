@@ -9,6 +9,7 @@ import {
   disarmMic,
 } from '@/utils/micSession';
 import { readMicSettings } from '@/utils/micNode';
+import { micStatusMessage } from '@/utils/micStatusMessage';
 
 /**
  * The arm/disarm control ON the Mic node card.
@@ -55,28 +56,12 @@ export function MicNodeButton({ nodeId, values }: {
     if (!wired && !live && !starting) {
       return t('Connect one of this node’s outputs first, then turn the microphone on.', language);
     }
-    switch (status) {
-      case 'on':
-        return t('Microphone is live — click to stop', language);
-      case 'starting':
-        return t('Waiting for microphone permission…', language);
-      case 'denied':
-        return t('Microphone blocked. Allow it for this site in your browser’s address bar, then click again.', language);
-      case 'insecure-context':
-        return t('Microphone needs a secure connection (https). It is unavailable over plain HTTP, including the LAN bench server.', language);
-      case 'unsupported':
-        return t('This browser cannot capture audio.', language);
-      case 'no-device':
-        return t('No microphone found.', language);
-      case 'in-use':
-        return t('The microphone is being used by another application.', language);
-      case 'timeout':
-        return t('The microphone request timed out. Click to try again.', language);
-      case 'failed':
-        return t('Could not start the microphone. Click to try again.', language);
-      default:
-        return t('Turn the microphone on. Nothing is recorded, and the downloaded shader does not capture audio.', language);
-    }
+    // Status wording is shared with the preview's MicControl
+    // (micStatusMessage); only the idle line is this surface's own.
+    return (
+      micStatusMessage(status, language) ??
+      t('Turn the microphone on. Nothing is recorded, and the downloaded shader does not capture audio.', language)
+    );
   };
 
   return (

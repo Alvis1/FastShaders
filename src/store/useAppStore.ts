@@ -23,6 +23,7 @@ import { getBuiltinTextures } from '@/registry/builtinTextures';
 import { getBuiltinPresets } from '@/registry/builtinPresets';
 import complexityData from '@/registry/complexity.json';
 import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges } from '@/utils/edgeUtils';
+import { authoredUniformChange } from '@/utils/uniformOverride';
 import { normalizeChainOperands } from '@/utils/chainOperands';
 import { nodeCostPoints, setCostOverrides, computeReachableCost, sanitizeCostMap } from '@/utils/nodeCost';
 import { type ParsedCostFile, type CostProfile, profileFromParsed, sanitizeCostMeta } from '@/utils/costOverride';
@@ -263,6 +264,35 @@ function loadRatio(key: string, fallback: number, min = 0.25, max = 0.75): numbe
   } catch {
     return fallback;
   }
+}
+
+/**
+ * The preview/code seam, as the TOP pane's (= the 3D preview's) share.
+ *
+ * The panes swapped — the preview used to sit BELOW the code editor, and
+ * `fs:rightSplitRatio` stored the CODE editor's share. Reading the legacy key
+ * and inverting it keeps each user's proportions across the change instead of
+ * snapping everyone back to the default (or, worse, silently reading a
+ * code-height as a preview-height). Read ONCE into the new key and never
+ * written again — the same one-way migration the asset bar's legacy
+ * collapse/zoom keys get.
+ */
+const RIGHT_SPLIT_KEY = 'fs:previewSplitRatio';
+const RIGHT_SPLIT_LEGACY_KEY = 'fs:rightSplitRatio';
+/** Preview floor / code-editor collapse ceiling; mirrors SplitPane's clampCross
+ *  (which is the pixel-accurate bound during a drag). */
+export const RIGHT_SPLIT_MIN = 0.25;
+export const RIGHT_SPLIT_MAX = 0.99;
+
+function loadRightSplitRatio(): number {
+  const v = loadRatio(RIGHT_SPLIT_KEY, NaN, RIGHT_SPLIT_MIN, RIGHT_SPLIT_MAX);
+  if (!Number.isNaN(v)) return v;
+  // No new key yet: invert the legacy code-share if there is one. Its own
+  // bounds (0.01–0.75) are applied BEFORE the flip, so a collapsed code pane
+  // inverts to a near-full preview and then re-clamps.
+  const legacy = loadRatio(RIGHT_SPLIT_LEGACY_KEY, NaN, 0.01, 0.75);
+  if (Number.isNaN(legacy)) return 0.4;
+  return Math.max(RIGHT_SPLIT_MIN, Math.min(RIGHT_SPLIT_MAX, 1 - legacy));
 }
 
 function loadString(key: string, fallback: string): string {
@@ -874,10 +904,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   })(),
   hideImageConvertNotice: loadString('fs:hideImageConvertNotice', '0') === '1',
   splitRatio: loadRatio('fs:splitRatio', 0.6),
-  // Wider floor than the column split: the code/preview seam may ride up until
-  // only the code editor's tab bar remains (SplitPane's CROSS_MIN_PANE_PX is
-  // the real bound during drags; this is the persistence-level safety net).
-  rightSplitRatio: loadRatio('fs:rightSplitRatio', 0.6, 0.01, 0.75),
+  rightSplitRatio: loadRightSplitRatio(),
   shaderName: loadString('fs:shaderName', 'My Shader'),
   selectedHeadsetId: bootSelectedId,
   nodeVarNames: {},
@@ -1000,6 +1027,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   updateNodeData: (nodeId, data) => {
     get().pushHistory();
+    // `values` gates the lookup: most callers patch label/exposedPorts/settings,
+    // and a value edit is a per-pointermove event on a scrub.
+    const before = 'values' in data ? get().nodes.find((n) => n.id === nodeId) : undefined;
     set((state) => ({
       nodes: state.nodes.map((n) =>
         n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n
@@ -1007,6 +1037,29 @@ export const useAppStore = create<AppState>()((set, get) => ({
       syncSource: 'graph',
       isUndoRedo: false,
     }));
+    // Editing a named property's NUMBER is the one act that outranks a value
+    // the user tuned in the preview's Uniforms overlay — the preview persists
+    // tuning by name and re-pushes it after every rebuild, so without this the
+    // node said one thing and the shader ran another, forever, and on a binary
+    // channel like Discard that reads as the app being broken.
+    //
+    // This is the authoring CHOKEPOINT: every caller is a node widget or a
+    // settings menu. Import, undo/redo, the code→graph sync and "Set as
+    // default" all go through setNodes and correctly stay silent. Announcing
+    // the node id (rather than letting the preview infer intent from "the
+    // literal for this NAME moved") is what makes the rule immune to a
+    // nodes-array reorder flipping which of two same-named properties owns the
+    // bare identifier — which would otherwise destroy tuning after a group drag.
+    if (before && typeof window !== 'undefined') {
+      const change = authoredUniformChange(
+        before,
+        get().nodes.find((n) => n.id === nodeId),
+        get().nodeVarNames,
+      );
+      if (change) {
+        window.dispatchEvent(new CustomEvent('fs:uniform-authored', { detail: change }));
+      }
+    }
   },
 
   newGraph: () =>
@@ -1343,11 +1396,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setRightSplitRatio: (ratio) => {
-    // 0.01 floor, not 0.25: the seam may ride up to the code editor's tab bar.
-    // The pixel-accurate floor lives in SplitPane (CROSS_MIN_PANE_PX) — a ratio
-    // can't express "the tab bar's height" without knowing the pane in px.
-    const clamped = Math.max(0.01, Math.min(0.75, ratio));
-    try { localStorage.setItem('fs:rightSplitRatio', String(clamped)); } catch { /* */ }
+    // The 0.99 ceiling, not 0.75: the seam may ride DOWN to the code editor's
+    // tab bar. The pixel-accurate ceiling lives in SplitPane (CROSS_MIN_PANE_PX)
+    // — a ratio can't express "the tab bar's height" without knowing the pane
+    // in px, so this stays the persistence-level safety net.
+    const clamped = Math.max(RIGHT_SPLIT_MIN, Math.min(RIGHT_SPLIT_MAX, ratio));
+    try { localStorage.setItem(RIGHT_SPLIT_KEY, String(clamped)); } catch { /* */ }
     set({ rightSplitRatio: clamped });
   },
 

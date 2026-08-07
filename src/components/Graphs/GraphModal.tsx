@@ -17,6 +17,7 @@ import { PreviewNode } from '@/components/NodeEditor/nodes/PreviewNode';
 import { MathPreviewNode } from '@/components/NodeEditor/nodes/MathPreviewNode';
 import { OutputNode } from '@/components/NodeEditor/nodes/OutputNode';
 import { ClockNode } from '@/components/NodeEditor/nodes/ClockNode';
+import { MicNode } from '@/components/NodeEditor/nodes/MicNode';
 import { GroupNode } from '@/components/NodeEditor/nodes/GroupNode';
 import { NoteNode } from '@/components/NodeEditor/nodes/NoteNode';
 import { TypedEdge } from '@/components/NodeEditor/edges/TypedEdge';
@@ -24,13 +25,21 @@ import type { AppNode, AppEdge } from '@/types';
 import './GraphModal.css';
 
 // Mirrors the registration in NodeEditor.tsx — same components, same keys, so
-// the modal renders nodes exactly as the real editor does.
+// the modal renders nodes exactly as the real editor does. An unregistered
+// type falls back to React Flow's DEFAULT node (bare white box, top/bottom
+// handles) — which is exactly how the Mic node rendered here before `mic` was
+// added. Registering the REAL MicNode is safe for the mic convention's
+// "armMic has exactly two click paths" rule: the node's arm light is one of
+// those two paths, and it gates itself on the node being wired — every graph
+// this modal shows is either a single edge-less node or a built-in
+// texture/preset (none contain a mic), so the light renders disabled.
 const nodeTypes = {
   shader: ShaderNode,
   color: ColorNode,
   preview: PreviewNode,
   mathPreview: MathPreviewNode,
   clock: ClockNode,
+  mic: MicNode,
   output: OutputNode,
   group: GroupNode,
   note: NoteNode,

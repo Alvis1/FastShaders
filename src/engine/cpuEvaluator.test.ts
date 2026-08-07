@@ -399,9 +399,28 @@ describe('evaluateNodeRange', () => {
     expect(evaluateNodeRange('n', [n], [], 0)).toEqual({ min: [0, 0], max: [1, 1] });
   });
 
-  it('reports [0, 1] for scalar MaterialX noise', () => {
+  // The range follows the node's own flag rather than the category. This block
+  // used to assert [0, 1] for every noise node — which is exactly why the signed
+  // GPU output came as a surprise: the editor's own edge cards reported 0…1 for
+  // a shader emitting -1…1.
+  it('reports the SIGNED range for a legacy Perlin (no flag stored)', () => {
     const n = makeNode('n', 'perlin');
+    expect(evaluateNodeRange('n', [n], [], 0)).toEqual({ min: [-1], max: [1] });
+  });
+
+  it('reports [0, 1] once the node carries the 0-1 flag', () => {
+    const n = makeNode('n', 'perlin', { signed: 0 });
     expect(evaluateNodeRange('n', [n], [], 0)).toEqual({ min: [0], max: [1] });
+  });
+
+  it('keeps cellNoise and voronoi at [0, 1] in both cases — they were never signed', () => {
+    for (const type of ['cellNoise', 'voronoi']) {
+      expect(evaluateNodeRange('n', [makeNode('n', type)], [], 0), type)
+        .toEqual({ min: [0], max: [1] });
+      // Even with a tampered flag: the def type gates the whole feature.
+      expect(evaluateNodeRange('n', [makeNode('n', type, { signed: 0 })], [], 0), type)
+        .toEqual({ min: [0], max: [1] });
+    }
   });
 
   it('reports unit-vector ranges for normals, tangents, and view directions', () => {

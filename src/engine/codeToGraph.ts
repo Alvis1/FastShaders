@@ -5,9 +5,16 @@ import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType } from '
 import { setNodeValues } from '@/types';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
 import { generateId } from '@/utils/idGenerator';
+import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import complexityData from '@/registry/complexity.json';
 import { VALID_SWIZZLE } from './graphToCode';
+import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
+
+/** Output channels whose widget stores a NUMBER / a HEX color — the parse
+ *  twin of graphToCode's stored-value emission (keep the two in sync). */
+const OUTPUT_FLOAT_VALUE_CHANNELS = new Set(['roughness', 'metalness', 'opacity', 'position', 'discard']);
+const OUTPUT_COLOR_VALUE_CHANNELS = new Set(['color', 'emissive', 'normal', 'env']);
 
 // Handle babel traverse CJS/ESM interop
 const traverse = (
@@ -87,6 +94,72 @@ export function codeToGraph(code: string): CodeToGraphResult {
     return arg;
   };
 
+  /**
+   * Collapse an INLINE literal wrapper in an output-channel position back into
+   * the Output node's STORED channel value — the reverse of graphToCode's
+   * widget-value emission. Without this, every code-panel Apply would
+   * materialize a Float/Color node for a value the user set on the Output
+   * node's own widget, and the widget would read as broken.
+   *
+   * Deliberately narrow (the noise-remap-collapse philosophy): exactly the
+   * shapes codegen emits — `float(<numeric constant>)` on the three float
+   * channels, `color(<numeric literal>)` on the two color channels, inline in
+   * the channel position. An IDENTIFIER (`opacity: float1`) stays a real node
+   * + edge, so every existing graph parses unchanged.
+   */
+  const matchStoredChannelValue = (channel: string, expr: t.Node): string | number | null => {
+    if (!t.isCallExpression(expr) || !t.isIdentifier(expr.callee) || expr.arguments.length !== 1) {
+      return null;
+    }
+    const arg = expr.arguments[0];
+    if (expr.callee.name === 'float' && OUTPUT_FLOAT_VALUE_CHANNELS.has(channel)) {
+      const n = foldNumericConstant(arg as t.Node);
+      return n === undefined ? null : n;
+    }
+    if (
+      expr.callee.name === 'color' &&
+      OUTPUT_COLOR_VALUE_CHANNELS.has(channel) &&
+      t.isNumericLiteral(arg)
+    ) {
+      return toHex6(arg.value);
+    }
+    // The normal widget's emitted form: `normalMap(color(0x…))` — a decoded
+    // constant normal-map texel. Narrow: the inner call must be a literal
+    // color(); `normalMap(<identifier>)` (the image→normal wrap) keeps its
+    // historical parse.
+    if (
+      expr.callee.name === 'normalMap' &&
+      channel === 'normal' &&
+      t.isCallExpression(arg) &&
+      t.isIdentifier(arg.callee) &&
+      arg.callee.name === 'color' &&
+      arg.arguments.length === 1 &&
+      t.isNumericLiteral(arg.arguments[0])
+    ) {
+      return toHex6(arg.arguments[0].value);
+    }
+    return null;
+  };
+
+  /** Attach collected stored channel values to the just-created output node,
+   *  and expose those channels: graphToCode's emission is exposure-gated and
+   *  the on-node widget is the only honest signal the value exists, so a
+   *  valued channel must be visible. (Wired channels are exposed separately
+   *  by autoExposeConnectedParamPorts.) */
+  const applyStoredOutputValues = (
+    outputId: string,
+    values: Record<string, string | number>,
+  ): void => {
+    const keys = Object.keys(values);
+    if (keys.length === 0) return;
+    const node = rawNodes.find((n) => n.id === outputId);
+    if (!node) return;
+    (node.data as Record<string, unknown>).values = values;
+    (node.data as Record<string, unknown>).exposedPorts = Array.from(
+      new Set([...OUTPUT_DEFAULT_EXPOSED, ...keys]),
+    );
+  };
+
   // Build the OutputNode and wire its channels from a return/output expression.
   // Shared between `return X` (FastShaders canonical form) and `output = X`
   // (three.js TSL editor compatible form).
@@ -103,12 +176,20 @@ export function codeToGraph(code: string): CodeToGraphResult {
 
     // Multi-channel: { color: x, position: y, ... }
     if (t.isObjectExpression(arg)) {
+      const storedValues: Record<string, string | number> = {};
       for (const rawProp of arg.properties) {
         if (!t.isObjectProperty(rawProp) || !t.isIdentifier(rawProp.key)) continue;
         const channel = rawProp.key.name;
         // Same widening undo as the single-value form above — a multi-channel
         // return carries `{ color: vec3(noise1), opacity: … }`.
         const prop = { ...rawProp, value: unwrapScalarWiden(rawProp.value) } as t.ObjectProperty;
+        // Stored widget values first: an inline `float(0.35)` / `color(0x…)`
+        // in channel position is the Output node's own value, not a node.
+        const stored = matchStoredChannelValue(channel, prop.value);
+        if (stored !== null) {
+          storedValues[channel] = stored;
+          continue;
+        }
         if (t.isIdentifier(prop.value)) {
           const sourceId = varToNodeId.get(prop.value.name)
             ?? ensureBareInputNode(prop.value.name, rawNodes, varToNodeId);
@@ -129,10 +210,18 @@ export function codeToGraph(code: string): CodeToGraphResult {
           }
         }
       }
+      applyStoredOutputValues(outputId, storedValues);
       return;
     }
 
-    // Single-value: wire to output.color
+    // Single-value: an inline `color(0x…)` is the color widget's stored value
+    // (graphToCode's color-only bare-return form); anything else wires to
+    // output.color as before.
+    const storedColor = matchStoredChannelValue('color', arg);
+    if (storedColor !== null) {
+      applyStoredOutputValues(outputId, { color: storedColor });
+      return;
+    }
     const returnRef = resolveReturnSource(arg, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
     if (returnRef) {
       addEdge(rawEdges, returnRef.nodeId, returnRef.handle, outputId, 'color');
@@ -231,7 +320,24 @@ export function codeToGraph(code: string): CodeToGraphResult {
         const expr = path.node.expression;
         if (!t.isCallExpression(expr)) return;
         if (!t.isIdentifier(expr.callee) || expr.callee.name !== 'Discard') return;
-        if (expr.arguments.length === 0) return;
+        // The graph has ONE discard socket, so an unconditional `Discard()` and
+        // a second condition cannot be represented. Both used to disappear in
+        // silence — with the graph→code sync then writing the loss back into the
+        // user's source on the next edit. Say so instead.
+        if (expr.arguments.length === 0) {
+          warnings.push({
+            message: 'Unconditional Discard() has no graph equivalent — it was dropped.',
+            severity: 'warning',
+          });
+          return;
+        }
+        if (pendingDiscardArg) {
+          warnings.push({
+            message:
+              'Multiple Discard() statements — the Output node has one Discard input, so only the last is kept.',
+            severity: 'warning',
+          });
+        }
         pendingDiscardArg = expr.arguments[0];
       },
     });
@@ -252,11 +358,30 @@ export function codeToGraph(code: string): CodeToGraphResult {
   if (pendingDiscardArg) {
     const outputNode = rawNodes.find((n) => n.data.registryType === 'output');
     if (outputNode) {
-      const ref = resolveReturnSource(
-        pendingDiscardArg, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings,
-      );
-      if (ref) {
-        addEdge(rawEdges, ref.nodeId, ref.handle, outputNode.id, 'discard', 'float');
+      // `Discard(float(<lit>))` is the discard widget's stored value (the
+      // emitted form of a non-zero dial) — collapse it back into data.values
+      // instead of materializing a Float node. Runs AFTER the return parse,
+      // so merge with any values applyStoredOutputValues already attached.
+      const storedDiscard = matchStoredChannelValue('discard', pendingDiscardArg);
+      if (storedDiscard !== null) {
+        const data = outputNode.data as Record<string, unknown>;
+        data.values = {
+          ...((data.values as Record<string, string | number>) ?? {}),
+          discard: storedDiscard,
+        };
+        data.exposedPorts = Array.from(
+          new Set([
+            ...((data.exposedPorts as string[]) ?? OUTPUT_DEFAULT_EXPOSED),
+            'discard',
+          ]),
+        );
+      } else {
+        const ref = resolveReturnSource(
+          pendingDiscardArg, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings,
+        );
+        if (ref) {
+          addEdge(rawEdges, ref.nodeId, ref.handle, outputNode.id, 'discard', 'float');
+        }
       }
     }
   }
@@ -420,13 +545,51 @@ function processCall(
       // Unresolvable receiver — fall through to the unknown-node path below.
     }
 
+    // Collapse the 0–1 remap back into ONE noise node. Like the toVar/toConst
+    // block above, this MUST run before the nested-chain recursion below, which
+    // would otherwise build the Multiply and Add first and leave the noise node
+    // orphaned behind them.
+    //
+    // MANDATORY, not tidiness: useSyncEngine's mergeMatch carries only id,
+    // position, exposedPorts and materialSettings across a code→graph resync —
+    // `data.values` comes wholly from this parse — so without the collapse every
+    // code-panel Apply would silently reset the node to signed AND grow a junk
+    // Multiply/Add pair.
+    {
+      const noiseCall = matchNoiseUnsignedRemap(callExpr);
+      if (noiseCall) {
+        // Delegate rather than build the node here, so the whole existing noise
+        // path is reused — def lookup, cost, label, varToNodeId, and above all
+        // processNoiseCall, which owns the `pos`/`scale` argument parsing (a
+        // hand-rolled `arguments[0]` grab would store the mul-call node and
+        // silently lose `scale`).
+        processCall(
+          noiseCall, varName,
+          nodes, edges, varToNodeId, varToHandle, splitNodesMap, code, errors,
+        );
+        const id = varToNodeId.get(varName);
+        const created = id ? nodes.find((n) => n.id === id) : undefined;
+        if (created) setNodeValues(created, { signed: 0 });
+        return;
+      }
+    }
+
     if (t.isIdentifier(callExpr.callee.object)) {
       objectVarName = callExpr.callee.object.name;
     } else if (t.isCallExpression(callExpr.callee.object)) {
       // Nested chain like `positionWorld.sub(cameraPosition).length()`. Recurse
       // on the inner call under a synthetic variable, then use that as the
       // chain receiver so the outer call can wire to it normally.
-      const innerVar = `__chain${nodes.length}`;
+      // Unique per recursion level, NOT `nodes.length` — that was read BEFORE
+      // the recursion pushed anything, so both levels of a three-deep chain
+      // (`mx_noise_float(p).mul(0.5).add(0.5)`) minted the same synthetic name.
+      // The middle node then overwrote the inner node's mapping before its own
+      // receiver was wired, giving the middle node a SELF-EDGE: a cycle that
+      // topologicalSort silently excludes, re-emitting the whole shader as
+      // `return vec3(1, 0, 0)` — solid red — with `errors: []` to show for it.
+      // General, not noise-specific: `sin(x).mul(2).add(1)` and
+      // `positionWorld.sub(cameraPosition).length().mul(2)` did the same.
+      const innerVar = `__chain${generateId()}`;
       processCall(
         callExpr.callee.object, innerVar,
         nodes, edges, varToNodeId, varToHandle, splitNodesMap, code, errors,
@@ -732,6 +895,52 @@ function tryParseUVTiling(
   nodes.push(node);
   varToNodeId.set(varName, nodeId);
   return true;
+}
+
+/**
+ * Match the exact 0–1 remap graphToCode emits for an unsigned noise node:
+ * `<noiseFn>(<oneArg>).mul(0.5).add(0.5)`, returning the inner noise call.
+ *
+ * Deliberately narrow — each requirement rejects a real shape:
+ *  - a bare Identifier callee on the noise call keeps the collapse off the one
+ *    OTHER `.mul(0.5).add(0.5)` this codebase emits: dataRange's symlog tail,
+ *    whose receiver is `<src>.sign().mul(...)`, a MemberExpression-callee call
+ *    that dataVizNodes.test.ts asserts verbatim;
+ *  - exactly ONE argument, because `mx_noise_float(p, 2)` would otherwise
+ *    collapse into a clean-looking node with the amplitude silently DROPPED
+ *    (processNoiseCall reads only args[0]) — a loud failure turned into a
+ *    wrong render;
+ *  - an inline CallExpression receiver, never a variable: `n.mul(0.5).add(0.5)`
+ *    already parses into three real nodes, and a variable can have several
+ *    consumers, so one flag could not represent "raw here, remapped there" —
+ *    the same reasoning that keeps tryParseTimeSpeed off `mul(time1, 5)`;
+ *  - the def must carry the range flag, since cellNoise/voronoi* are [0,1].
+ *
+ * The direct-call idiom `add(mul(base, 0.5), 0.5)` — what people actually write
+ * by hand — cannot reach here at all: it takes the Identifier-callee path.
+ *
+ * Collapsing is SEMANTICS-PRESERVING (a hand-written chain in this exact shape
+ * means precisely what the flag means), so unlike the Time-speed case it cannot
+ * change what anyone's shader renders — only how many nodes it is drawn with.
+ */
+function matchNoiseUnsignedRemap(callExpr: t.CallExpression): t.CallExpression | undefined {
+  const half = (call: t.CallExpression, method: string): t.CallExpression | undefined => {
+    if (!t.isMemberExpression(call.callee) || !t.isIdentifier(call.callee.property)) return undefined;
+    if (call.callee.property.name !== method) return undefined;
+    if (call.arguments.length !== 1) return undefined;
+    // Exact 0.5 — binary-exact, so no epsilon; `1 / 2` folds to it and collapses.
+    if (foldNumericConstant(call.arguments[0] as t.Node) !== 0.5) return undefined;
+    const recv = call.callee.object;
+    return t.isCallExpression(recv) ? recv : undefined;
+  };
+
+  const mulCall = half(callExpr, 'add');
+  if (!mulCall) return undefined;
+  const noiseCall = half(mulCall, 'mul');
+  if (!noiseCall) return undefined;
+  if (!t.isIdentifier(noiseCall.callee) || noiseCall.arguments.length !== 1) return undefined;
+  const def = TSL_FUNCTION_TO_DEF.get(noiseCall.callee.name);
+  return def && hasNoiseRangeFlag(def.type) ? noiseCall : undefined;
 }
 
 /**

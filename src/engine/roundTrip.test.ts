@@ -226,3 +226,173 @@ describe('round-trip: node topology is preserved', () => {
     expect(parsed.edges.length).toBe(edges.length);
   });
 });
+
+describe('round-trip: Discard', () => {
+  // Each graph wires Colour as well: with NO channel wired graphToCode emits the
+  // `return vec3(1, 0, 0)` fallback, which re-imports as a real Vec3 node — a
+  // pre-existing quirk of the fallback that has nothing to do with Discard.
+  const colour = () => makeNode('c', 'color', { hex: '#ff8800' });
+  const colourEdge = () => makeEdge('c', 'out', 'out', 'color');
+
+  it('a scalar condition survives unchanged', () => {
+    const { code1, code2 } = roundTrip(
+      [colour(), makeNode('f', 'float', { value: 0.5 }), makeNode('out', 'output')],
+      [colourEdge(), makeEdge('f', 'out', 'out', 'discard')],
+    );
+    expect(code1).toContain('Discard(float1);');
+    expect(code2).toBe(code1);
+  });
+
+  it('a vec3 condition coerced to .x re-imports as a Split feeding Discard', () => {
+    // graphToCode narrows a non-logic vec3 source to `.x` (an `all(vecN)`
+    // condition does not compile); the parser must read that back the same way
+    // it reads `.x` in any other channel position, or the round trip drifts.
+    const { code1, code2 } = roundTrip(
+      [colour(), makeNode('n', 'perlinVec3'), makeNode('out', 'output')],
+      [colourEdge(), makeEdge('n', 'out', 'out', 'discard')],
+    );
+    expect(code1).toMatch(/Discard\(\w+\.x\);/);
+    expect(code2).toBe(code1);
+  });
+
+  it('a logic condition survives unchanged', () => {
+    const { code1, code2 } = roundTrip(
+      [
+        colour(),
+        makeNode('p', 'positionLocal'),
+        makeNode('f', 'float', { value: 0 }),
+        makeNode('g', 'greaterThan'),
+        makeNode('out', 'output'),
+      ],
+      [
+        colourEdge(),
+        makeEdge('p', 'out', 'g', 'a'),
+        makeEdge('f', 'out', 'g', 'b'),
+        makeEdge('g', 'out', 'out', 'discard'),
+      ],
+    );
+    expect(code1).toContain('Discard(greaterThan1);');
+    expect(code2).toBe(code1);
+  });
+});
+
+describe('round-trip: noise range flag', () => {
+  const rt = (type: string, values: Record<string, unknown>) => {
+    const { code1, code2 } = roundTrip(
+      [makeNode('n', type, values as never), makeNode('out', 'output')],
+      [makeEdge('n', 'out', 'out', 'color')],
+    );
+    return { code1, code2 };
+  };
+
+  it('the 0-1 remap survives graph → code → graph', () => {
+    const { code1, code2 } = rt('perlin', { pos: 'positionGeometry', scale: 1, signed: 0 });
+    expect(code1).toContain('const noise1 = mx_noise_float(positionGeometry).mul(0.5).add(0.5);');
+    expect(code2).toBe(code1);
+  });
+
+  it('scale survives the collapse — it delegates to processNoiseCall', () => {
+    const { code1, code2 } = rt('perlin', { pos: 'positionGeometry', scale: 4, signed: 0 });
+    expect(code1).toContain('mx_noise_float(positionGeometry.mul(4)).mul(0.5).add(0.5)');
+    expect(code2).toBe(code1);
+  });
+
+  it('a legacy node and an explicitly signed one both emit the bare call', () => {
+    for (const values of [{ pos: 'positionGeometry', scale: 1 }, { pos: 'positionGeometry', scale: 1, signed: 1 }]) {
+      const { code1, code2 } = rt('perlin', values);
+      expect(code1).toContain('const noise1 = mx_noise_float(positionGeometry);');
+      expect(code2).toBe(code1);
+    }
+  });
+
+  it('re-imports as ONE node carrying the flag, not noise + Multiply + Add', () => {
+    // The guard against useSyncEngine's mergeMatch gap: it carries no
+    // data.values across a resync, so without the collapse every code-panel
+    // Apply would reset the node to signed AND grow a junk pair.
+    const code = graphToCode(
+      [makeNode('n', 'perlin', { pos: 'positionGeometry', scale: 1, signed: 0 } as never), makeNode('out', 'output')],
+      [makeEdge('n', 'out', 'out', 'color')],
+    ).code;
+    const parsed = codeToGraph(code);
+    expect(parsed.nodes.map((n) => n.data.registryType).sort()).toEqual(['output', 'perlin']);
+    const noise = parsed.nodes.find((n) => n.data.registryType === 'perlin')!;
+    expect(getNodeValues(noise).signed).toBe(0);
+  });
+
+  it('a tampered flag on an already-[0,1] type stays a bare call', () => {
+    const { code1, code2 } = rt('voronoi', { pos: 'positionGeometry', scale: 1, signed: 0 });
+    expect(code1).toContain('const worley_noise1 = mx_worley_noise_float(positionGeometry);');
+    expect(code2).toBe(code1);
+  });
+
+  it('vec3 noise takes the un-widened return path', () => {
+    const { code1, code2 } = rt('perlinVec3', { pos: 'positionGeometry', scale: 1, signed: 0 });
+    expect(code1).toContain('.mul(0.5).add(0.5)');
+    expect(code2).toBe(code1);
+  });
+});
+
+describe('round-trip: Output node stored channel values', () => {
+  it('mixed wired + stored channels re-emit byte-identically', () => {
+    const c = makeNode('c', 'color', { hex: '#ff8800' });
+    const out = makeNode('out', 'output', { roughness: 0.35, metalness: 0.9, emissive: '#112233' });
+    (out.data as { exposedPorts?: string[] }).exposedPorts = [
+      'color', 'emissive', 'roughness', 'metalness', 'position',
+    ];
+    const { code1, code2 } = roundTrip([c, out], [makeEdge('c', 'out', 'out', 'color')]);
+    expect(code2).toBe(code1);
+    // Pin the shapes: stored values as inline wrappers, no extra nodes on re-parse.
+    expect(code1).toContain('roughness: float(0.35)');
+    expect(code1).toContain('metalness: float(0.9)');
+    expect(code1).toContain('emissive: color(0x112233)');
+  });
+
+  it('a stored color alone (bare return form) is stable', () => {
+    const out = makeNode('out', 'output', { color: '#3a86ff' });
+    const { code1, code2 } = roundTrip([out], []);
+    expect(code2).toBe(code1);
+    expect(code1).toContain('return color(0x3a86ff);');
+  });
+});
+
+describe('round-trip: explicitly hidden channels stay hidden', () => {
+  it('a hidden default channel is not resurrected by the parse-seeded exposure', () => {
+    // Roughness explicitly hidden (removed from exposedPorts) while color
+    // carries a stored value. The parse seeds exposedPorts from the implicit
+    // defaults ∪ valued — the RESYNC merge must union only the VALUED
+    // channels into the old list, or the Apply un-hides roughness.
+    const out = makeNode('out', 'output', { color: '#ff0000' });
+    (out.data as { exposedPorts?: string[] }).exposedPorts = ['color', 'position'];
+    const gen = graphToCode([out], []);
+    const parsed = codeToGraph(gen.code);
+    expect(parsed.errors).toEqual([]);
+    const parsedOut = parsed.nodes.find((n) => n.data.registryType === 'output')!;
+    // The mergeMatch rule (useSyncEngine): old ∪ valued-only.
+    const oldExposed = ['color', 'position'];
+    const valued = Object.keys((parsedOut.data as { values?: Record<string, unknown> }).values ?? {});
+    const next = Array.from(new Set([...oldExposed, ...valued]));
+    expect(next).not.toContain('roughness');
+    expect(next).toContain('color');
+  });
+});
+
+describe('round-trip: the wider stored-value channel set', () => {
+  it('normal/env colors + displacement + discard values are stable', () => {
+    const out = makeNode('out', 'output', {
+      color: '#3a86ff',
+      normal: '#112233',
+      env: '#445566',
+      position: 0.2,
+      discard: 0.5,
+    });
+    (out.data as { exposedPorts?: string[] }).exposedPorts = [
+      'color', 'discard', 'normal', 'env', 'position',
+    ];
+    const { code1, code2 } = roundTrip([out], []);
+    expect(code2).toBe(code1);
+    expect(code1).toContain('normal: normalMap(color(0x112233))');
+    expect(code1).toContain('env: color(0x445566)');
+    expect(code1).toContain('position: float(0.2)');
+    expect(code1).toContain('Discard(float(0.5));');
+  });
+});

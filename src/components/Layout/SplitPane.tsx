@@ -8,16 +8,31 @@ import './SplitPane.css';
 const clampRatio = (r: number) => Math.max(0.05, Math.min(0.95, r));
 
 /**
- * Floor for the cross axis (the code/preview split), in PANE px rather than a
- * ratio: the seam may ride up until only the code editor's TSL/Output tab bar
- * remains, and a ratio floor would leave a screen-height-dependent stub of
- * Monaco visible instead of stopping AT the bar. ~26px measured bar plus a
- * small margin. The store's own clamp is looser (0.01) — this is the bound
- * that actually stops the drag.
+ * Bounds for the cross axis (the preview/code split — the 3D preview is the TOP
+ * pane, `ratio` is its share).
+ *
+ * The BOTTOM pane's floor is in PANE px rather than a ratio: the seam may ride
+ * DOWN until only the code editor's TSL/Output tab bar remains, and a ratio
+ * floor would leave a screen-height-dependent stub of Monaco visible instead of
+ * stopping AT the bar. ~30px measured bar (25px of content plus the 4px
+ * padding-top that clears the seam — see CodeEditor.css) and a small margin.
+ *
+ * The TOP pane takes a plain ratio floor instead — the 3D view has no collapsed
+ * state worth stopping at, so it simply never drops below a quarter of the
+ * column (the share it was guaranteed back when it was the bottom pane).
+ *
+ * The store's clamp mirrors both as a persistence safety net; these are the
+ * bounds that actually stop the drag.
  */
-const CROSS_MIN_PANE_PX = 30;
+const CROSS_MIN_PANE_PX = 34;
+const CROSS_MIN_TOP_RATIO = 0.25;
 const clampCross = (r: number, spanPx: number) =>
-  Math.max(spanPx > 0 ? CROSS_MIN_PANE_PX / spanPx : 0.05, Math.min(0.95, r));
+  Math.max(
+    CROSS_MIN_TOP_RATIO,
+    // A span short enough to make this cap fall BELOW the floor resolves to the
+    // floor (Math.max wins) rather than inverting the bounds.
+    Math.min(spanPx > 0 ? 1 - CROSS_MIN_PANE_PX / spanPx : 0.95, r),
+  );
 
 /**
  * Touch axis lock for the two-axis grip. A touchscreen has no Shift key and a

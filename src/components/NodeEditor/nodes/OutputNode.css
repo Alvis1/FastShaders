@@ -54,11 +54,16 @@
   padding: 0;
 }
 
+/* min-height 18 (was 16, pre-widget): a compact DragNumberInput / color
+ * swatch is ~13-14px tall, and every row keeps ONE height whether or not it
+ * carries a widget — otherwise wiring a channel would shift the handle
+ * centers of every row below it. layoutEngine's output estimate already
+ * assumes an 18px pitch. */
 .output-node__row {
   position: relative;
   display: flex;
   align-items: center;
-  min-height: 16px;
+  min-height: 18px;
   padding: 0 8px;
   gap: 2px;
 }
@@ -77,6 +82,43 @@
   color: rgba(0, 0, 0, 0.6);
   white-space: nowrap;
   padding-left: 4px;
+}
+
+/* The row's value cell — the stored-value widget (editable) or the incoming
+ * wired value (plain text). Sits immediately BESIDE the socket, before the
+ * label — the ShaderNode row anatomy. NB margin, never padding — this class
+ * also lands on the swatch BUTTON, where padding would inset the color
+ * fill.
+ *
+ * ONE FIXED WIDTH for every value cell (number box, color swatch, wired
+ * value): the compact DragNumberInput is otherwise content-sized, so "1" and
+ * "0.35" render different widths and the channel labels zig-zag; a shared
+ * cell width keeps the label column perfectly vertical. Scoped to this node —
+ * other nodes keep their content-sized boxes. */
+.output-node__val {
+  margin-left: 2px;
+  width: 20px;
+  flex-shrink: 0;
+}
+
+/* At the 20px cell there is no room for the compact box's step arrows —
+ * drag-to-scrub and click-to-edit remain (the arrows were the redundant
+ * third affordance). Scoped to this node's value cells only. */
+.output-node__val .drag-num__arrow {
+  display: none;
+}
+
+/* Card mirror wraps the widget in an inert span carrying the cell class —
+ * the inner box must fill the cell or the card's label column drifts. */
+.output-node__val .drag-num {
+  width: 100%;
+}
+
+/* Wired value: center the plain-text number inside the same cell. */
+.output-node__row .shader-node__edge-val.output-node__val {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Divider between sections */

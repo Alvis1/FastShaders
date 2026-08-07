@@ -328,3 +328,152 @@ describe('buildShaderModule — material settings survive and are sanitized', ()
     expect(transparent).toContain('depthWrite: false');
   });
 });
+
+describe('#10: `cond.discard()` (TSL method chaining) is routed through __pixel', () => {
+  // `addMethodChaining('discard', Discard)` makes this the idiomatic spelling.
+  // It used to survive verbatim into the module, landing at plain-function
+  // scope where `.toStack()` has no active stack and is a silent no-op —
+  // measured against three r184's GLSLNodeBuilder, the verbatim form emitted
+  // ZERO `discard` instructions while the wrapped form emitted one.
+  const code = `import { Fn, vec3, greaterThan, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  const cond = greaterThan(positionGeometry.y, 0.0);
+  cond.discard();
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+`;
+
+  it('lifts the receiver into the wrapper as the condition', () => {
+    const out = buildShaderModule(code);
+    expect(out).toContain('const __pixel = Fn(([__c0, __color]) => {');
+    expect(out).toContain('Discard(__c0);');
+    expect(out).toContain('colorNode: __pixel(cond, vec3(1, 0, 0))');
+    expect(out).not.toContain('cond.discard()');
+  });
+
+  it('imports Discard even though the source never named it', () => {
+    // The shaderloader's auto-import would recover this at runtime, but a bare
+    // `import()` of the downloaded `.js` would not.
+    expect(buildShaderModule(code)).toMatch(/import \{[^}]*\bDiscard\b[^}]*\} from 'three\/tsl';/);
+  });
+
+  it('handles a chain whose receiver is itself a call', () => {
+    const out = buildShaderModule(`import { Fn, vec3, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  positionGeometry.y.greaterThan(0.0).discard();
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+`);
+    expect(out).toContain('__pixel(positionGeometry.y.greaterThan(0.0), vec3(1, 0, 0))');
+  });
+});
+
+describe('#11: extractDiscards scans CODE only — comments and strings are inert', () => {
+  const wrapBody = (body: string) => `import { Fn, vec3, greaterThan, Discard, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  const cond = greaterThan(positionGeometry.y, 0.0);
+${body}
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+`;
+
+  it('leaves a commented-out discard commented out', () => {
+    // Scanning raw text ate the comment's body AND injected a live cutout.
+    const out = buildShaderModule(wrapBody('  /* Discard(cond); */'));
+    expect(out).not.toContain('__pixel');
+    expect(out).toContain('/* Discard(cond); */');
+  });
+
+  it('does not lift a discard out of a string literal', () => {
+    // `const s = 'Discard(1)';` became `const s = '';` plus a real
+    // UNCONDITIONAL cull — the mesh vanished because of a string.
+    const out = buildShaderModule(`import { Fn, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const s = 'Discard(1)';
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+`);
+    expect(out).not.toContain('__pixel');
+    expect(out).toContain("const s = 'Discard(1)';");
+  });
+
+  it('still lifts a real discard that carries a comment with an apostrophe', () => {
+    const out = buildShaderModule(wrapBody("  Discard(cond); // don't keep these"));
+    expect(out).toContain('__pixel(cond, vec3(1, 0, 0))');
+  });
+});
+
+describe('#12: degenerate discard spellings no longer emit invalid JS', () => {
+  it('bare Discard() becomes an unconditional cull, not `__pixel(, …)`', () => {
+    // three's own parameterless form. The empty condition used to be passed
+    // through as an empty call argument — a SyntaxError that killed the module.
+    const out = buildShaderModule(`import { Fn, vec3, Discard } from 'three/tsl';
+
+const shader = Fn(() => {
+  Discard();
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+`);
+    expect(out).toContain('const __pixel = Fn(([__color]) => {');
+    expect(out).toContain('Discard();');
+    expect(out).toContain('colorNode: __pixel(vec3(1, 0, 0))');
+    expect(out).not.toContain('__pixel(,');
+  });
+
+  it('an assigned Discard is left verbatim, not sliced into a dangling `const k =`', () => {
+    const out = buildShaderModule(`import { Fn, vec3, Discard, greaterThan, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  const cond = greaterThan(positionGeometry.y, 0.0);
+  const k = Discard(cond);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+`);
+    expect(out).toContain('const k = Discard(cond);');
+    expect(out).not.toMatch(/const k =\s*$/m);
+  });
+});
+
+describe('#13: a discard on an emissive-only shader keeps the emissive colour', () => {
+  it('passes emissive through the wrapper instead of falling back to white', () => {
+    // shaderloader 0.5 copies emissiveNode→colorNode only when colorNode is
+    // undefined, and the wrapper always defines colorNode — so the white
+    // fallback washed the surface out the moment a discard was added.
+    const out = buildShaderModule(`import { Fn, vec3, greaterThan, Discard, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  const cond = greaterThan(positionGeometry.y, 0.0);
+  Discard(cond);
+
+  return { emissive: vec3(0, 1, 0) };
+});
+
+export default shader;
+`);
+    expect(out).toContain('colorNode: __pixel(cond, vec3(0, 1, 0))');
+    expect(out).toContain('emissiveNode: vec3(0, 1, 0)');
+    expect(out).not.toContain('vec3(1, 1, 1)');
+  });
+});

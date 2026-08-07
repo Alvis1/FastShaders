@@ -4,6 +4,7 @@ import { getCostScale } from '@/utils/colorUtils';
 import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRegistry';
 import { nodeBox, hasNodeGlyph, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
+import { MIC_W, MIC_HEADER_H, MIC_BODY_H } from '@/components/NodeEditor/nodes/micGeometry';
 
 // ── Node-size estimation ─────────────────────────────────────────────────────
 // autoLayout usually runs BEFORE React Flow measures a node (on import/paste/
@@ -64,10 +65,10 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       return { width: 111 * scale, height: 127 * scale };
     case 'mathPreview': // sin/cos: 72×72 canvas + header + port row
       return { width: 87 * scale, height: 121 * scale };
-    case 'clock': // time: 56×56 canvas + header
-      return { width: 71 * scale, height: 87 * scale };
-    case 'mic': // microphone: 150 wide + 172 body + header (MicNode)
-      return { width: 150 * scale, height: 190 * scale };
+    case 'clock': // time: 56×56 canvas + header + the speed row (ClockNode)
+      return { width: 71 * scale, height: 112 * scale };
+    case 'mic': // microphone: fixed footprint from micGeometry (MicNode)
+      return { width: MIC_W * scale, height: (MIC_HEADER_H + MIC_BODY_H) * scale };
     case 'color': // borderless square swatch, no header, never cost-scaled
       return { width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE };
     case 'output': {

@@ -1,6 +1,7 @@
 import type { AppNode, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
 import { nextPropertyName } from '@/utils/propertyConvert';
+import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 
 /**
  * Initial `values` for a node the USER is adding right now.
@@ -49,6 +50,15 @@ export function initialNodeValues(
   rand: () => number = Math.random,
 ): Record<string, unknown> {
   const values: Record<string, unknown> = { ...def.defaultValues };
+  // MaterialX Perlin/fBm are signed ~[-1,1], which surprises people: round()
+  // gives -1/0/+1 and Output.discard culls BOTH tails. New nodes therefore
+  // default to the 0-1 remap. This is the ONLY writer of the flag on a fresh
+  // node, and that is the whole scope rule — this function is deliberately NOT
+  // used by code→graph, project import, or the built-in textures/presets, so
+  // every existing graph and every shipped asset stays signed and emits
+  // byte-identically. Stored as 0/1, not a boolean: `values` is typed
+  // Record<string, string | number>.
+  if (hasNoiseRangeFlag(def.type)) values.signed = 0;
   // Auto-name property nodes — one shared sequence with the convert-to-uniform
   // action, so no surface can mint a duplicate identifier.
   if (def.type === 'property_float' || def.type === 'property_color') {

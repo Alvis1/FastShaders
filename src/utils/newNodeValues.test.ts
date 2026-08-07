@@ -106,9 +106,29 @@ describe('initialNodeValues', () => {
     expect(NEW_COLOR_PALETTE).toContain(hex);
   });
 
-  it('leaves non-color defs on their registry defaults', () => {
+  it('leaves non-color, non-noise defs on their registry defaults', () => {
     expect(initialNodeValues(def('float'), [])).toEqual(def('float').defaultValues);
-    expect(initialNodeValues(def('perlin'), [])).toEqual(def('perlin').defaultValues);
+  });
+
+  // The scope rule for the noise range flag: a USER-added Perlin/fBm defaults to
+  // the 0-1 remap, and this is the ONLY place that stamps it — code→graph,
+  // project import and the built-in textures/presets never call this, which is
+  // what keeps every existing graph and shipped asset on the legacy signed range.
+  it('stamps the 0-1 range flag on a newly added signed-noise node', () => {
+    for (const type of ['perlin', 'perlinVec3', 'fbm', 'fbmVec3']) {
+      const values = initialNodeValues(def(type), []);
+      expect(values.signed, type).toBe(0);
+      // A number, never a boolean: `values` is Record<string, string | number>
+      // and the emitter's read is an exact identity test.
+      expect(typeof values.signed, type).toBe('number');
+    }
+  });
+
+  it('never stamps the flag on noise that is already [0, 1]', () => {
+    // A remap here would halve a range that was already correct.
+    for (const type of ['cellNoise', 'voronoi', 'voronoiVec2', 'voronoiVec3']) {
+      expect(initialNodeValues(def(type), []), type).not.toHaveProperty('signed');
+    }
   });
 
   it('does not mutate the registry default values', () => {

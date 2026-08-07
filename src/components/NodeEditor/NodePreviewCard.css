@@ -54,12 +54,17 @@
   padding: 1px 8px;
 }
 
-/* Fake handle dots (inline in rows) */
+/* Fake handle dots (inline in rows).
+   Sizes come from the SAME tokens the real socket uses (TypedHandle.css), not
+   hardcoded pixels: tokens.css bumps --handle-size to 12px under
+   (pointer: coarse), so a hardcoded 10px left the hand-built cards showing
+   smaller sockets than the NodeVisual/mic cards beside them in one asset strip
+   on iPad — and the -5px offsets, which are half the dot, went wrong with it. */
 .node-preview-card__handle {
-  width: 10px;
-  height: 10px;
+  width: var(--handle-size);
+  height: var(--handle-size);
   border-radius: 50%;
-  border: 2px solid white;
+  border: var(--handle-border) solid white;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
   flex-shrink: 0;
 }
@@ -67,14 +72,21 @@
 /* Absolutely positioned fake handles (for canvas-based variants) */
 .node-preview-card__handle--right-abs {
   position: absolute;
-  right: -5px;
+  right: calc(var(--handle-size) / -2);
   top: 50%;
   transform: translateY(-50%);
 }
 
 .node-preview-card__handle--left-abs {
   position: absolute;
-  left: -5px;
+  left: calc(var(--handle-size) / -2);
+}
+
+/* Wrapper that renders a REAL widget (DragNumberInput) on a card while
+ * keeping it inert — a palette tile must not be another place to edit. */
+.node-preview-card__inert {
+  pointer-events: none;
+  display: inline-flex;
 }
 
 /* --- Canvas-based preview variants --- */
@@ -109,78 +121,34 @@
   border-radius: 50%;
 }
 
-/* --- Slider preview variant --- */
-
-.node-preview-card__slider-wrap {
-  padding: 6px 10px 4px;
-}
-
-.node-preview-card__slider-track {
-  position: relative;
-  height: 6px;
-  background: rgba(0, 0, 0, 0.1);
-  border-radius: 3px;
-}
-
-.node-preview-card__slider-fill {
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  background: var(--border-focus, #6382ff);
-  border-radius: 3px;
-}
-
-.node-preview-card__slider-thumb {
-  position: absolute;
-  top: 50%;
-  width: 10px;
-  height: 10px;
-  background: white;
-  border: 2px solid var(--border-focus, #6382ff);
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-}
-
-.node-preview-card__slider-labels {
-  display: flex;
-  justify-content: space-between;
-  font-size: 8px;
-  font-family: var(--font-mono);
-  color: rgba(0, 0, 0, 0.45);
-  margin-top: 2px;
-}
-
-.node-preview-card__slider-val {
-  font-weight: 600;
-  color: rgba(0, 0, 0, 0.65);
-}
-
-/* --- Color circle variant --- */
-
-.node-preview-card__color-node {
-  width: 84px;
-  height: 84px;
-  border-radius: 50%;
-  border: 2px solid rgba(0, 0, 0, 0.12);
-  box-shadow: var(--shadow-node);
-  position: relative;
+/* Math tile's bottom port row — mirrors .math-preview-node__port-row +
+   __left (MathPreviewNode.css): socket and the X value box side by side. */
+.node-preview-card__math-port-row {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 2px;
+  padding: 0 5px;
+  min-height: 16px;
+  position: relative;
+}
+
+/* (The slider tile's hand-built track/fill/thumb/labels lived here. The tile
+   now renders the same `<input type="range">` the canvas does — see the note
+   where SliderCardContent used to be in NodePreviewCard.tsx.) */
+
+/* --- Color swatch variant ---
+   The tile renders the REAL `.color-node` at the REAL COLOR_NODE_SIZE (see
+   ColorCardContent); this wrapper only counter-scales it against the strip's
+   `zoom: 0.67` so it reads at its true canvas size. Nothing here may restate a
+   swatch dimension — that is what the retired `.node-preview-card__color-node`
+   block did, with its own 84px/2px/15px twins of ColorNode's 56px/1.5px/10px. */
+.node-preview-card__color-scale {
+  transform-origin: top left;
   pointer-events: none;
 }
 
-/* property_color's tile: same swatch, rectangular (mirrors .color-node--rect). */
-.node-preview-card__color-node--rect {
-  border-radius: var(--border-radius-md);
-}
-
-.node-preview-card__color-label {
-  font-size: 15px;
-  font-weight: 600;
-  font-family: var(--font-sans);
-  letter-spacing: 0.02em;
-  pointer-events: none;
-  user-select: none;
+/* The swatch grabs a cursor on the canvas; a tile is inert (the CARD owns the
+   drag), so neutralize it rather than inheriting a misleading grab hand. */
+.node-preview-card__color-scale .color-node {
+  cursor: inherit;
 }

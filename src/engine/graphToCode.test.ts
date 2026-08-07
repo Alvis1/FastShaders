@@ -534,3 +534,303 @@ describe('graphToCode — output shape', () => {
     expect(code).toMatch(/\}\);\s+export default shader;/);
   });
 });
+
+describe('graphToCode — Discard condition shape', () => {
+  // The condition compiles to `bool(<ref>)`, and three widens a non-1-channel
+  // FLOAT to `all( <vecN> )` — declared only over bvecN (GLSL ES 3.00) /
+  // vecN<bool> (WGSL). Measured in a real WebGL2 context:
+  // "ERROR: 'all' : no matching overloaded function found", i.e. the fragment
+  // program fails to link and the mesh vanishes at every value, silently.
+  const out = () => makeNode('out', 'output');
+
+  it('leaves a scalar source byte-identical (no churn for existing shaders)', () => {
+    const { code } = graphToCode(
+      [makeNode('f', 'float', { value: 0 }), out()],
+      [makeEdge('f', 'out', 'out', 'discard')],
+    );
+    expect(code).toContain('Discard(float1);');
+  });
+
+  it('takes .x from a vec3 source instead of emitting an uncompilable all()', () => {
+    const { code } = graphToCode(
+      [makeNode('c', 'color', { hex: '#ff8800' }), out()],
+      [makeEdge('c', 'out', 'out', 'discard')],
+    );
+    expect(code).toContain('Discard(color1.x);');
+  });
+
+  it('coerces a vec3-shaped noise source too', () => {
+    const { code } = graphToCode(
+      [makeNode('n', 'perlinVec3'), out()],
+      [makeEdge('n', 'out', 'out', 'discard')],
+    );
+    expect(code).toMatch(/Discard\(\w+\.x\);/);
+  });
+
+  // A logic node's vector output really IS a bvecN: `all( greaterThan(a, b) )`
+  // is valid AND means "every channel passed". Narrowing it to .x would
+  // silently change the test.
+  it('never coerces a logic source, whatever its shape', () => {
+    const { code } = graphToCode(
+      [
+        makeNode('a', 'color', { hex: '#ff0000' }),
+        makeNode('b', 'color', { hex: '#808080' }),
+        makeNode('g', 'greaterThan'),
+        out(),
+      ],
+      [
+        makeEdge('a', 'out', 'g', 'a'),
+        makeEdge('b', 'out', 'g', 'b'),
+        makeEdge('g', 'out', 'out', 'discard'),
+      ],
+    );
+    expect(code).toContain('Discard(greaterThan1);');
+    expect(code).not.toContain('greaterThan1.x');
+  });
+});
+
+describe('graphToCode — noise range flag', () => {
+  const NOISE_TYPES = [
+    'perlin', 'perlinVec3', 'fbm', 'fbmVec3',
+    'cellNoise', 'voronoi', 'voronoiVec2', 'voronoiVec3',
+  ] as const;
+  const emit = (type: string, values: Record<string, unknown>) =>
+    graphToCode(
+      [makeNode('n', type, values as never), makeNode('out', 'output')],
+      [makeEdge('n', 'out', 'out', 'color')],
+    ).code;
+
+  // THE test for the hard constraint. Every graph saved before this flag
+  // existed, every noise member of the built-in textures and presets, and every
+  // re-imported .js must emit the byte-identical line it emitted before.
+  it('emits byte-identically for an absent or junk flag, on every noise type', () => {
+    const junk = [
+      undefined, null, '', ' ', 'false', 'true', true, 1, '1',
+      [], [0], {}, NaN, Infinity, 0.4, '0.0',
+    ];
+    for (const type of NOISE_TYPES) {
+      const baseline = emit(type, { pos: 'positionGeometry', scale: 1 });
+      expect(baseline, type).not.toContain('.mul(0.5).add(0.5)');
+      for (const v of junk) {
+        expect(emit(type, { pos: 'positionGeometry', scale: 1, signed: v }), `${type} / ${String(v)}`)
+          .toBe(baseline);
+      }
+    }
+  });
+
+  it('appends the 0-1 remap only for the four signed types', () => {
+    for (const type of NOISE_TYPES) {
+      const code = emit(type, { pos: 'positionGeometry', scale: 1, signed: 0 });
+      const expected = ['perlin', 'perlinVec3', 'fbm', 'fbmVec3'].includes(type);
+      expect(code.includes('.mul(0.5).add(0.5)'), type).toBe(expected);
+    }
+  });
+
+  it('wraps the FINISHED call, so scale keeps rescaling the coordinate', () => {
+    // Appending to posExpr instead would scale the input, not the output.
+    expect(emit('perlin', { pos: 'positionGeometry', scale: 4, signed: 0 }))
+      .toContain('const noise1 = mx_noise_float(positionGeometry.mul(4)).mul(0.5).add(0.5);');
+  });
+
+  it('needs no new import — the remap is a method chain', () => {
+    const code = emit('perlin', { pos: 'positionGeometry', scale: 1, signed: 0 });
+    const imports = code.split('\n')[0];
+    expect(imports).not.toContain(' mul');
+    expect(imports).not.toContain(' add');
+  });
+});
+
+describe('graphToCode — environment + metalness channels', () => {
+  const IMG = {
+    imageB64: `data:image/webp;base64,${btoa('abc')}`,
+    width: 2,
+    height: 2,
+    fileName: 'forest.webp',
+    colorSpace: 'color',
+  };
+
+  it('emits the image TEXTURE for env — never the sampled vec3', () => {
+    const img = makeNode('img', 'imageNode', IMG);
+    const color = makeNode('c', 'color', { hex: '#112233' });
+    const out = makeNode('out', 'output');
+    const edges = [
+      makeEdge('c', 'out', 'out', 'color'),
+      makeEdge('img', 'out', 'out', 'env'),
+    ];
+    const { code } = graphToCode([img, color, out], edges);
+    // The module-scope texture var, not the Fn-body `texture(tex, uv).rgb` sample.
+    expect(code).toContain('env: texture(_image1_tex)');
+    expect(code).not.toContain('env: image1');
+    // The referenced var really is declared (an undeclared ref would be a
+    // ReferenceError that kills the whole module at import time).
+    expect(code).toContain('const _image1_tex =');
+  });
+
+  it('falls back to the plain (inert vec3) ref when the image payload is invalid', () => {
+    const img = makeNode('img', 'imageNode', { ...IMG, imageB64: '' });
+    const out = makeNode('out', 'output');
+    const color = makeNode('c', 'color', { hex: '#112233' });
+    const edges = [
+      makeEdge('c', 'out', 'out', 'color'),
+      makeEdge('img', 'out', 'out', 'env'),
+    ];
+    const { code } = graphToCode([img, color, out], edges);
+    // No texture var exists on the fallback path — referencing it would crash.
+    expect(code).not.toContain('_image1_tex');
+    expect(code).toContain('const image1 = vec3(0, 0, 0);');
+    expect(code).toContain('env: image1');
+  });
+
+  it('passes a vec3-shaped non-image source through raw (constant ambient env)', () => {
+    const c = makeNode('c', 'color', { hex: '#334455' });
+    const c2 = makeNode('c2', 'color', { hex: '#112233' });
+    const out = makeNode('out', 'output');
+    const edges = [
+      makeEdge('c2', 'out', 'out', 'color'),
+      makeEdge('c', 'out', 'out', 'env'),
+    ];
+    const { code } = graphToCode([c, c2, out], edges);
+    expect(code).toContain('env: color1');
+  });
+
+  it('widens a scalar env source to vec3', () => {
+    const f = makeNode('f', 'float', { value: 0.5 });
+    const c = makeNode('c', 'color', { hex: '#112233' });
+    const out = makeNode('out', 'output');
+    const edges = [
+      makeEdge('c', 'out', 'out', 'color'),
+      makeEdge('f', 'out', 'out', 'env'),
+    ];
+    const { code } = graphToCode([f, c, out], edges);
+    expect(code).toContain('env: vec3(float1)');
+  });
+
+  it('emits metalness through the generic channel path', () => {
+    const f = makeNode('f', 'float', { value: 0.9 });
+    const c = makeNode('c', 'color', { hex: '#112233' });
+    const out = makeNode('out', 'output');
+    const edges = [
+      makeEdge('c', 'out', 'out', 'color'),
+      makeEdge('f', 'out', 'out', 'metalness'),
+    ];
+    const { code } = graphToCode([f, c, out], edges);
+    expect(code).toContain('metalness: float1');
+  });
+});
+
+describe('graphToCode — Output node stored channel values', () => {
+  it('emits float()/color() wrappers for stored values on exposed channels', () => {
+    const c = makeNode('c', 'color', { hex: '#ff0000' });
+    const out = makeNode('out', 'output', { roughness: 0.35, emissive: '#112233' });
+    (out.data as { exposedPorts?: string[] }).exposedPorts = [
+      'color', 'emissive', 'roughness', 'position',
+    ];
+    const edges = [makeEdge('c', 'out', 'out', 'color')];
+    const { code } = graphToCode([c, out], edges);
+    expect(code).toContain('roughness: float(0.35)');
+    expect(code).toContain('emissive: color(0x112233)');
+    expect(code).toMatch(/import \{[^}]*\bfloat\b[^}]*\} from 'three\/tsl';/);
+  });
+
+  it('emits a bare color() return for a stored color with nothing else', () => {
+    const out = makeNode('out', 'output', { color: '#112233' });
+    const { code } = graphToCode([out], []);
+    expect(code).toContain('return color(0x112233);');
+  });
+
+  it('a wired edge always beats the stored value', () => {
+    const f = makeNode('f', 'float', { value: 0.5 });
+    const c = makeNode('c', 'color', { hex: '#ff0000' });
+    const out = makeNode('out', 'output', { roughness: 0.9 });
+    const edges = [
+      makeEdge('c', 'out', 'out', 'color'),
+      makeEdge('f', 'out', 'out', 'roughness'),
+    ];
+    const { code } = graphToCode([f, c, out], edges);
+    expect(code).toContain('roughness: float1');
+    expect(code).not.toContain('float(0.9)');
+  });
+
+  it('suppresses values on hidden channels — what the node shows is what emits', () => {
+    const c = makeNode('c', 'color', { hex: '#ff0000' });
+    // metalness valued but NOT exposed (implicit defaults lack it)
+    const out = makeNode('out', 'output', { metalness: 0.9 });
+    const edges = [makeEdge('c', 'out', 'out', 'color')];
+    const { code } = graphToCode([c, out], edges);
+    expect(code).not.toContain('metalness');
+  });
+
+  it('skips garbage values instead of emitting them', () => {
+    const c = makeNode('c', 'color', { hex: '#ff0000' });
+    const out = makeNode('out', 'output', {
+      roughness: 'abc',
+      emissive: 'javascript:alert(1)',
+    });
+    (out.data as { exposedPorts?: string[] }).exposedPorts = [
+      'color', 'emissive', 'roughness', 'position',
+    ];
+    const edges = [makeEdge('c', 'out', 'out', 'color')];
+    const { code } = graphToCode([c, out], edges);
+    expect(code).not.toContain('roughness');
+    expect(code).not.toContain('emissive');
+    expect(code).toContain('return color1;');
+  });
+
+  it('absent values keep the historical emission byte-identical', () => {
+    const c = makeNode('c', 'color', { hex: '#00ff00' });
+    const f = makeNode('f', 'float', { value: 0.5 });
+    const out = makeNode('out', 'output');
+    const edges = [
+      makeEdge('c', 'out', 'out', 'color'),
+      makeEdge('f', 'out', 'out', 'opacity'),
+    ];
+    const { code } = graphToCode([c, f, out], edges);
+    expect(code).toMatch(/return \{ color: color1, opacity: float1 \};/);
+  });
+});
+
+describe('graphToCode — the wider stored-value channel set', () => {
+  const exposeAll = (out: ReturnType<typeof makeNode>) => {
+    (out.data as { exposedPorts?: string[] }).exposedPorts = [
+      'color', 'emissive', 'roughness', 'metalness', 'opacity', 'discard', 'normal', 'env', 'position',
+    ];
+    return out;
+  };
+
+  it('emits a DECODED normal-map texel for stored normal, plain color() for env', () => {
+    const c = makeNode('c', 'color', { hex: '#ff0000' });
+    const out = exposeAll(makeNode('out', 'output', { normal: '#112233', env: '#445566' }));
+    const { code } = graphToCode([c, out], [makeEdge('c', 'out', 'out', 'color')]);
+    // normalMap() does the [0,1]->[-1,1] remap + TBN transform — a raw
+    // color() fed to normalNode would be an unnormalized sheared vector.
+    expect(code).toContain('normal: normalMap(color(0x112233))');
+    expect(code).toContain('env: color(0x445566)');
+  });
+
+  it('the DEFAULT normal color #8080ff emits nothing (identity override)', () => {
+    const c = makeNode('c', 'color', { hex: '#ff0000' });
+    const out = exposeAll(makeNode('out', 'output', { normal: '#8080ff' }));
+    const { code } = graphToCode([c, out], [makeEdge('c', 'out', 'out', 'color')]);
+    expect(code).not.toContain('normal');
+  });
+
+  it('emits float() for a stored displacement, skipping zero (a no-op)', () => {
+    const c = makeNode('c', 'color', { hex: '#ff0000' });
+    const out = exposeAll(makeNode('out', 'output', { position: 0.2 }));
+    const { code } = graphToCode([c, out], [makeEdge('c', 'out', 'out', 'color')]);
+    expect(code).toContain('position: float(0.2)');
+    const zero = exposeAll(makeNode('out2', 'output', { position: 0 }));
+    const { code: code0 } = graphToCode([c, zero], [makeEdge('c', 'out2', 'out', 'color')]);
+    expect(code0).not.toContain('position:');
+  });
+
+  it('emits Discard(float(v)) for a non-zero stored discard, nothing for zero', () => {
+    const c = makeNode('c', 'color', { hex: '#ff0000' });
+    const out = exposeAll(makeNode('out', 'output', { discard: 0.5 }));
+    const { code } = graphToCode([c, out], [makeEdge('c', 'out', 'out', 'color')]);
+    expect(code).toContain('Discard(float(0.5));');
+    const zero = exposeAll(makeNode('out2', 'output', { discard: 0 }));
+    const { code: code0 } = graphToCode([c, zero], [makeEdge('c', 'out2', 'out', 'color')]);
+    expect(code0).not.toContain('Discard');
+  });
+});

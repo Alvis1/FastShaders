@@ -121,10 +121,25 @@
   /* Title WRAPS on narrow (designer-width) nodes and the header grows to fit —
      sockets are unaffected because handles anchor to the body, not the node
      top. Auto-width nodes still size to a single line (fit-content uses the
-     max-content width). */
+     max-content width).
+     CAPPED AT TWO LINES, and the node WIDENS rather than stacking a third.
+     Two things make that work together. `overflow-wrap: normal` refuses to
+     split a word, so the title's min-content contribution is the whole word —
+     which the node's `min-width: min-content` (set alongside the authored
+     width, see ShaderNode/NodeVisual) then turns into extra width. A generated
+     varName is a single unbreakable run (`cameraPosition1`), so with
+     break-word it used to shatter into "camera/Position/1" and grow a header
+     taller than the node's own body, while the SAME node's asset tile — which
+     already refused to break words — showed it on one line. Same clamp the
+     cards use; the full name is on the element's `title` either way. */
   white-space: normal;
-  overflow-wrap: break-word;
+  overflow-wrap: normal;
   line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   flex: 1;
   min-width: 0;
 }

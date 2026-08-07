@@ -217,7 +217,8 @@ describe('planDragConnect', () => {
   it('phantom tile handles (all at the cursor Y) pick the first free input deterministically', () => {
     // Palette-tile planning synthesizes the not-yet-created node's ports all
     // at the cursor position — exact ties must resolve to the first (top)
-    // free port, mirroring tryInsertOnEdge's first-port convention.
+    // free port, which for a fresh node is what a drop-on-edge splice of the
+    // same tile picks too (edgeSplice.ts).
     const plan = planDragConnect(
       ep({
         draggedCenterX: 200,

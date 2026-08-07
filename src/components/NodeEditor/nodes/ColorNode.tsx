@@ -24,9 +24,10 @@ const CIRCLE_RADIUS = COLOR_NODE_SIZE / 2; // socket centers on the edge
 
 /** Label type sizes: the ideal, and the floor past which shrinking stops
  *  helping (below ~5px the name is unreadable at 100% zoom anyway, and the
- *  user can still read it in the settings menu). Mirrors ColorNode.css. */
-const LABEL_MAX_PX = 10;
-const LABEL_MIN_PX = 5;
+ *  user can still read it in the settings menu). Mirrors ColorNode.css.
+ *  Exported so the asset/overview swatch fits its label by the same rule. */
+export const LABEL_MAX_PX = 10;
+export const LABEL_MIN_PX = 5;
 
 /**
  * Average direction (degrees, screen-space, 0 = right) from this color node to

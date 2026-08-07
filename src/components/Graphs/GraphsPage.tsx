@@ -32,6 +32,7 @@ import { TextureCard } from '@/components/NodeEditor/TextureCard';
 import { GraphModal } from './GraphModal';
 import { DesignerModal } from './DesignerModal';
 import './GraphsPage.css';
+import { initialNodeValues } from '@/utils/newNodeValues';
 
 /** NodePreviewCard requires a drag handler; dragging goes nowhere on this page. */
 const noopDragStart = () => {};
@@ -90,7 +91,10 @@ function singleNodeGraph(def: NodeDefinition): AppNode[] {
         registryType: def.type,
         label: def.label,
         cost: costs[def.type] ?? 0,
-        values: { ...def.defaultValues },
+        // initialNodeValues, not the bare registry defaults — otherwise this
+        // preview shows the LEGACY mode while the palette tile beside it drops
+        // a node in the new one (noise range flag).
+        values: initialNodeValues(def, []) as Record<string, string | number>,
       },
     } as AppNode,
   ];

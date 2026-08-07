@@ -10,6 +10,7 @@ import { evaluateNodeScalar, getTargetEdges } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
 import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
 import './PreviewNode.css';
+import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 
 const PREVIEW_SIZE = 96;
 /** Registry types this preview node can render — all MaterialX noise variants. */
@@ -86,7 +87,12 @@ export const PreviewNode = memo(function PreviewNode({
     const ordered = registryOrder.filter((k) => wanted.has(k));
     // Anything exposed that the registry doesn't declare (legacy or
     // hand-edited .fastshader) keeps its stored order, appended after.
-    for (const k of wanted) if (!ordered.includes(k)) ordered.push(k);
+    // `signed` is a compile-time emission switch, not a value — there is
+    // nothing a wire could drive. It is not in defaultValues so it can never
+    // arrive here through the UI, but this loop adopts any hand-edited
+    // exposedPorts entry verbatim, and a dead socket that silently eats its
+    // wire on the next Apply is worse than no socket.
+    for (const k of wanted) if (!ordered.includes(k) && k !== 'signed') ordered.push(k);
     return ordered;
   }, [revealHidden, exposedList.join('|'), def]);
 
@@ -229,7 +235,7 @@ export const PreviewNode = memo(function PreviewNode({
 
       {/* Header */}
       <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>{varName ?? data.label}</span>
+        <span className="node-base__title" title={varName ?? data.label} style={{ color: headerTextColor }}>{varName ?? data.label}</span>
       </div>
 
       {/* Preview canvas */}
@@ -241,6 +247,16 @@ export const PreviewNode = memo(function PreviewNode({
           className="preview-node__canvas"
         />
       </div>
+      {/* Marks the SURPRISING state, not the new default: a signed node is the
+          one the user did not choose — it arrives from a preset or a file saved
+          before the flag existed — so a fresh canvas stays quiet, and a missing
+          or garbage flag (which falls back to signed) shows the chip rather
+          than hiding it. Absolutely positioned like ClockNode's ×speed chip so
+          it cannot disturb the measured box that handle placement and
+          drag-connect hit boxes depend on. */}
+      {hasNoiseRangeFlag(data.registryType) && !isUnsignedNoise(data.registryType, data.values) && (
+        <span className="preview-node__range">±1</span>
+      )}
 
       {/* Input handles — static + exposed dynamic ports on left side (plus,
           while a wire is nearby, every hidden param — dimmed — so the drag

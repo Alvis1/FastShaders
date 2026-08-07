@@ -95,28 +95,46 @@
 /* ---------- Vertical divider (the column splitter) ----------
    The pill hangs off the divider's LEFT face. In this app the column seam's
    grip is the two-axis corner control (see --xy below): it anchors at the
-   height of the code/preview seam on the other side, aligned with the 3D
-   preview's top control bar, so the grip and that bar read as one row.
-   --fs-grip-offset is the row split's ratio, set inline on this divider by
-   SplitPane; the 50% fallback covers a splitter mounted without one. */
+   height of the ROW seam on the other side, with its own top border landing
+   exactly ON that seam — so the horizontal line runs unbroken across the
+   column seam and continues as the tab's top edge. --fs-grip-offset is the row
+   split's ratio, set inline on this divider by SplitPane; the 50% fallback
+   covers a splitter mounted without one. */
 .fs-grip--v {
-  /* First arm: offset = the row seam's top edge; drop below it by the seam
-     plus half the preview control bar (a --ctl-size widget + 2×4px padding +
-     1px border), then centre — grip centre = bar centre.
+  --fs-grip-h: calc(var(--ctl-size) * 1.6);
+  /* First arm: offset IS the row seam's top edge. Centring the grip half a
+     height below it lands the tab's own top border ON that seam, so the
+     horizontal line crosses the column seam unbroken — the seam to the right,
+     the tab's top edge to the left. The ±half-thickness pair CENTRES the
+     border in the seam rather than top-aligning it, which matters only on
+     coarse pointers, where --fs-seam bumps to 12px while --fs-grip-border
+     deliberately stays at 4px (see SplitPane.css); at the 4px default the two
+     terms cancel exactly.
+
+     This is deliberately anchored to the SEAM, not to whatever chrome bar sits
+     under it. The formula used to read "seam + half the pane's top bar", which
+     worked only because the preview's control bar (--ctl-size + 9 = 37px)
+     happens to equal --fs-grip-h - 2×--fs-seam (36.8px) — so it was landing on
+     the seam by arithmetic accident, and honestly re-deriving it for the 26px
+     tab bar when the panes swapped moved the tab 5.4px up and put a visible
+     step in the line. Expressed against the seam it cannot drift again,
+     whatever ends up below it.
+
      Second arm: ceiling. The tab pokes ~24px into the LEFT pane, where the
      asset bar lives — with the row seam low and the bar tall (reachable at
      stock ratios on a laptop-height window) the grip would sit on top of the
      bar's tiles and scroll arrow, stealing their clicks. Clamp its centre a
      half-grip above the bar's top edge (--fs-asset-bar-h is published per
      element by ContentBrowser via utils/assetBarHeight.ts); when clamped it
-     slides up the seam, detaching from the preview bar — still on the seam,
-     still draggable, never a dead zone. */
-  /* No empirical nudge: browser checks landed the derived centre exactly on
-     the rendered bar (it went -2px, then -1px, then none). Keep it that way —
-     the formula is right, so a future offset means a real geometry change. */
+     slides up the seam, detaching from the line — still on the seam, still
+     draggable, never a dead zone. */
   top: min(
-    calc(var(--fs-grip-offset, 50%) + var(--fs-seam, 4px) + (var(--ctl-size) + 9px) / 2),
-    calc(100% - var(--fs-asset-bar-h, 0px) - var(--ctl-size) * 0.8 - 4px)
+    calc(
+      var(--fs-grip-offset, 50%)
+      + var(--fs-seam, 4px) / 2 - var(--fs-grip-border, 4px) / 2
+      + var(--fs-grip-h) / 2
+    ),
+    calc(100% - var(--fs-asset-bar-h, 0px) - var(--fs-grip-h) / 2 - 4px)
   );
   transform: translateY(-50%);
   /* Flush with the containing block's far edge. The containing block IS the
@@ -127,8 +145,10 @@
      one continuous path: seam → around the tab → seam. */
   right: 0;
   width: var(--ctl-size);
-  /* Taller than wide: a tab reads as belonging to a vertical edge. */
-  height: calc(var(--ctl-size) * 1.6);
+  /* Taller than wide: a tab reads as belonging to a vertical edge. Read from
+     the variable both `top` arms use, so the seam-landing and the asset-bar
+     ceiling can't drift from the actual box. */
+  height: var(--fs-grip-h);
   cursor: col-resize;
   /* Flat against the divider (right), rounded away from it (left). */
   border-radius: var(--border-radius-md) 0 0 var(--border-radius-md);

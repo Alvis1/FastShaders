@@ -13,6 +13,11 @@ const CHANNEL_TO_PROP: Record<string, string> = {
   position: 'positionNode',
   opacity: 'opacityNode',
   roughness: 'roughnessNode',
+  metalness: 'metalnessNode',
+  // envNode: three's MeshPhysicalNodeMaterial wraps a texture-valued env in
+  // pmremTexture() (EnvironmentNode) — image-based lighting, not a channel
+  // sampled per fragment. Needs shaderloader 0.5's nodeProps to list it.
+  env: 'envNode',
 };
 
 interface TSLImports {
@@ -299,48 +304,137 @@ function fixTDZ(body: string, tslNames: string[]): TDZResult {
 }
 
 /**
- * Pull `Discard(cond);` statements out of a body, returning the extracted
- * conditions and the remaining text. Uses paren-balancing (not an end-anchored
- * regex) so a discard with nested parens, a trailing `// comment`, or one split
- * across lines is handled rather than silently dropped. A genuinely unbalanced
- * `Discard(` is left in place (loud syntax error) instead of vanishing.
+ * Pull discard statements out of a body, returning the extracted conditions and
+ * the remaining text. Uses paren-balancing (not an end-anchored regex) so a
+ * discard with nested parens, a trailing `// comment`, or one split across lines
+ * is handled rather than silently dropped. A genuinely unbalanced `Discard(` is
+ * left in place (loud syntax error) instead of vanishing.
+ *
+ * BOTH TSL spellings are lifted, because both reach here:
+ *
+ *   Discard(cond);   — what graphToCode emits
+ *   cond.discard();  — the method-chaining form (`addMethodChaining('discard',
+ *                      Discard)` in three's Discard.js), i.e. the idiomatic
+ *                      spelling someone writes by hand in the code panel
+ *
+ * The chained form used to be skipped by the `.`-prefix guard below (which
+ * exists for a member call like `foo.Discard(`) and so survived verbatim into
+ * the module — landing at plain-function scope where `.toStack()` has no active
+ * stack and is a silent no-op. Measured against three r184's GLSLNodeBuilder:
+ * the verbatim form emitted ZERO `discard` instructions, the wrapped form one.
+ * It reached the preview AND the downloaded `.js`, and `codeToGraph` drops the
+ * line with no diagnostic, so the next graph edit erased the user's cutout.
+ *
+ * An extracted condition of `''` is three's parameterless `Discard()` — an
+ * UNCONDITIONAL cull, which the caller must emit without an Fn parameter.
+ *
+ * The scan runs over `maskNonCode(bodyText)` and slices out of `bodyText`, so a
+ * discard inside a comment or a string literal is not code and is left alone.
+ * Scanning the raw text meant `/* Discard(a); *\/` had its body eaten AND a live
+ * cutout injected, and `const s = 'Discard(1)';` became `const s = '';` plus a
+ * real unconditional discard — the mesh vanished because of a string literal.
+ *
+ * Only STATEMENT-level discards are lifted. `const k = Discard(n);` used to be
+ * sliced at the call, leaving a dangling `const k = ` — a SyntaxError that took
+ * the whole module down. It is now left verbatim (inert, like any other
+ * expression-position discard) rather than mangled.
  */
 function extractDiscards(bodyText: string): { conds: string[]; rest: string } {
-  const conds: string[] = [];
-  let rest = '';
-  let lastCopied = 0;
-  const re = /\bDiscard\s*\(/g;
+  // Comments and string literals blanked to spaces, indices preserved, so every
+  // offset below indexes both strings identically.
+  const masked = maskNonCode(bodyText);
+
+  /** True when only whitespace separates `idx` from the start of its statement. */
+  const atStatementStart = (idx: number): boolean => {
+    for (let i = idx - 1; i >= 0; i--) {
+      const ch = masked[i];
+      if (/\s/.test(ch)) continue;
+      return ch === ';' || ch === '{' || ch === '}';
+    }
+    return true;
+  };
+
+  /**
+   * From the `)` of a discard call, the end of the span to delete: past a
+   * trailing `;`, and past the rest of the line when nothing but whitespace or
+   * a comment follows (a real trailing statement is kept).
+   */
+  const spanEnd = (afterCall: number): number => {
+    let k = afterCall;
+    while (k < masked.length && /[ \t]/.test(masked[k])) k++;
+    if (masked[k] === ';') k++;
+    const tailStart = k;
+    while (k < masked.length && masked[k] !== '\n') k++;
+    // Comments are already blank in `masked`, so this is a pure whitespace test.
+    if (masked.slice(tailStart, k).trim() === '') {
+      return masked[k] === '\n' ? k + 1 : k;
+    }
+    return tailStart;
+  };
+
+  const hits: { start: number; end: number; cond: string }[] = [];
+
+  // --- `Discard(cond);` ---------------------------------------------------
+  const callRe = /\bDiscard\s*\(/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(bodyText)) !== null) {
+  while ((m = callRe.exec(masked)) !== null) {
     // Don't treat a member call like `foo.Discard(` as the TSL Discard.
-    if (m.index > 0 && bodyText[m.index - 1] === '.') continue;
+    if (m.index > 0 && masked[m.index - 1] === '.') continue;
+    if (!atStatementStart(m.index)) continue;
     const argStart = m.index + m[0].length; // just past the `(`
     let depth = 1;
     let j = argStart;
-    for (; j < bodyText.length && depth > 0; j++) {
-      const ch = bodyText[j];
+    for (; j < masked.length && depth > 0; j++) {
+      const ch = masked[j];
       if (ch === '(') depth++;
       else if (ch === ')') depth--;
     }
     if (depth !== 0) break; // unbalanced — leave the remainder untouched
     const argEnd = j - 1; // index of the matching `)`
-    conds.push(bodyText.slice(argStart, argEnd).trim());
+    hits.push({
+      start: m.index,
+      end: spanEnd(argEnd + 1),
+      cond: bodyText.slice(argStart, argEnd).trim(),
+    });
+    callRe.lastIndex = argEnd + 1;
+  }
 
-    rest += bodyText.slice(lastCopied, m.index);
-    let k = argEnd + 1;
-    while (k < bodyText.length && /[ \t]/.test(bodyText[k])) k++;
-    if (bodyText[k] === ';') k++;
-    // Swallow the remainder of the line only if it's whitespace / a line comment;
-    // keep any real trailing statement.
-    let tailStart = k;
-    while (k < bodyText.length && bodyText[k] !== '\n') k++;
-    if (/^\s*(\/\/.*)?$/.test(bodyText.slice(tailStart, k))) {
-      if (bodyText[k] === '\n') k++;
-    } else {
-      k = tailStart;
+  // --- `cond.discard();` --------------------------------------------------
+  const chainRe = /\.discard\s*\(\s*\)/g;
+  while ((m = chainRe.exec(masked)) !== null) {
+    const dot = m.index;
+    let i = dot - 1;
+    while (i >= 0 && /\s/.test(masked[i])) i--;
+    // Walk back over the receiver: an identifier/property chain, with balanced
+    // call and index brackets. Anything else ends it.
+    let depth = 0;
+    for (; i >= 0; i--) {
+      const ch = masked[i];
+      if (ch === ')' || ch === ']') { depth++; continue; }
+      if (ch === '(' || ch === '[') {
+        if (depth === 0) break;
+        depth--;
+        continue;
+      }
+      if (depth > 0) continue;
+      if (!/[A-Za-z0-9_$.]/.test(ch)) break;
     }
-    lastCopied = k;
-    re.lastIndex = k;
+    const start = i + 1;
+    const cond = bodyText.slice(start, dot).trim();
+    if (!cond || depth !== 0 || !atStatementStart(start)) continue;
+    hits.push({ start, end: spanEnd(m.index + m[0].length), cond });
+  }
+
+  hits.sort((a, b) => a.start - b.start);
+
+  const conds: string[] = [];
+  let rest = '';
+  let lastCopied = 0;
+  for (const hit of hits) {
+    if (hit.start < lastCopied) continue; // overlapping — keep the first
+    conds.push(hit.cond);
+    rest += bodyText.slice(lastCopied, hit.start);
+    lastCopied = hit.end;
   }
   rest += bodyText.slice(lastCopied);
   return { conds, rest };
@@ -558,13 +652,32 @@ export function buildShaderModule(
   const nonDiscardLines = nonDiscardText.split('\n').filter((l) => l.trim());
   const hasDiscard = discardConds.length > 0;
   if (hasDiscard && !tslNames.includes('Fn')) tslNames.push('Fn');
+  // The wrapper below CALLS `Discard`, so the module must import it even when
+  // the source didn't — a `.discard()` chain names it nowhere. Existing exports
+  // are unaffected: their source already imports it, so this never pushes.
+  // (The shaderloader's auto-import recovers a missing name at runtime, but a
+  // bare `import()` of the downloaded `.js` does not.)
+  if (hasDiscard && !tslNames.includes('Discard')) tslNames.push('Discard');
 
-  // Default color carrying a discard when no color channel is wired: white is
-  // the MeshStandard base color, so the cutout applies without changing the
-  // look of the surviving fragments.
-  const discardColor = channels.color ?? 'vec3(1, 1, 1)';
-  if (hasDiscard && !channels.color && !tslNames.includes('vec3')) tslNames.push('vec3');
-  const pixelCallArgs = hasDiscard ? [...discardConds, discardColor] : [];
+  // Colour carried through the discard wrapper when no colour channel is wired.
+  // Emissive first: shaderloader 0.5 copies emissiveNode→colorNode only when
+  // colorNode is undefined (a-frame-shaderloader-0.5.js:283), and the wrapper
+  // always defines colorNode — so falling straight to white made adding a
+  // discard wash an emissive-only shader out to lit white. Passing the emissive
+  // ref reproduces exactly what the loader would have done. White remains the
+  // last resort: it is the MeshStandard base colour, so the cutout applies
+  // without changing the look of the surviving fragments.
+  const discardColor = channels.color ?? channels.emissive ?? 'vec3(1, 1, 1)';
+  if (hasDiscard && !channels.color && !channels.emissive && !tslNames.includes('vec3')) {
+    tslNames.push('vec3');
+  }
+  // An empty condition is three's parameterless `Discard()` — an unconditional
+  // cull. It takes NO Fn parameter and NO call argument: passing one through
+  // emitted `__pixel(, …)`, a SyntaxError that killed the whole module.
+  const condParams = discardConds.map((c, i) => (c ? `__c${i}` : null));
+  const pixelCallArgs = hasDiscard
+    ? [...discardConds.filter((c) => c !== ''), discardColor]
+    : [];
 
   // --- Build the return object (node property names per channel) ----------
   const returnProps: string[] = [];
@@ -623,9 +736,10 @@ export function buildShaderModule(
   // --- The __pixel Fn: conditions + color as explicit params (see rule 2) -
   const pixelFnLines: string[] = [];
   if (hasDiscard) {
-    const fnParams = [...discardConds.map((_, i) => `__c${i}`), '__color'];
+    const fnParams = [...condParams.filter((p): p is string => p !== null), '__color'];
     pixelFnLines.push(`  const __pixel = Fn(([${fnParams.join(', ')}]) => {`);
-    discardConds.forEach((_, i) => pixelFnLines.push(`    Discard(__c${i});`));
+    // `Discard()` for an unconditional cull; `Discard(__cN)` for a conditional one.
+    condParams.forEach((p) => pixelFnLines.push(`    Discard(${p ?? ''});`));
     pixelFnLines.push('    return __color;');
     pixelFnLines.push('  });');
   }
