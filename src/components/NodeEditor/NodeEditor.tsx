@@ -72,6 +72,7 @@ import {
   type NodeBox,
 } from './dragConnect';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
+import { pickSpliceInputPort } from './edgeSplice';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { getCostColor, getCostScale, getContrastColor } from '@/utils/colorUtils';
@@ -86,7 +87,7 @@ import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { usesExposedPorts, effectiveExposedPorts } from '@/utils/exposedPorts';
 import { encodeImageFile, isImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
 import { importShaderZip, importShaderText, isZipFile } from '@/engine/projectImport';
-import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
+import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
 import { t } from '@/i18n';
 import { initialNodeValues } from '@/utils/newNodeValues';
@@ -101,6 +102,15 @@ const DEFAULT_EDGE_OPTIONS = { type: 'typed', animated: true } as const;
 const FIT_VIEW_OPTIONS = { maxZoom: 1.5 } as const;
 const PRO_OPTIONS = { hideAttribution: true } as const;
 const DESKTOP_PAN_ON_DRAG = [1, 2];
+
+/**
+ * How long an armed import-fit waits for the imported graph to render before
+ * giving up. Generous enough for the code→graph pass a bare script needs, short
+ * enough that an import which never produces a graph (parse errors, an
+ * identical re-import) can't leave a fit primed to hijack a later unrelated
+ * edit. See the import-fit effect.
+ */
+const IMPORT_FIT_TIMEOUT_MS = 3000;
 
 /**
  * Nodes whose right-click opens a SPECIALIZED settings menu instead of the
@@ -531,7 +541,7 @@ function reparentedNode(
  */
 function tryInsertOnEdge(
   nodeId: string,
-  def: { inputs: { id: string }[]; outputs: { id: string }[] },
+  def: NodeDefinition,
   cx: number, cy: number,
   getInternalNode: GetInternalNode,
   radius: number,
@@ -542,21 +552,38 @@ function tryInsertOnEdge(
   const edge = store.edges.find((e) => e.id === edgeId);
   if (!edge) return false;
 
-  const inputPort = def.inputs[0];
+  // Land on the node's first FREE input, not always its first (edgeSplice.ts):
+  // dragging an already-wired node onto a new edge keeps what it has. Variadic
+  // folds grow a fresh socket for this; a node with every socket taken falls
+  // back to the first port, whose stale edge the filter below then replaces.
+  const node = store.nodes.find((n) => n.id === nodeId);
+  const connected = store.edges.flatMap((e) =>
+    e.target === nodeId && e.targetHandle ? [e.targetHandle] : [],
+  );
+  const inputPortId = pickSpliceInputPort(
+    def,
+    connected,
+    node ? Object.keys(getNodeValues(node)) : [],
+  );
+  if (!inputPortId) return false;
   const outputPort = def.outputs[0];
 
-  const newEdge1 = makeTypedEdge(edge.source, edge.sourceHandle, nodeId, inputPort.id);
+  const newEdge1 = makeTypedEdge(edge.source, edge.sourceHandle, nodeId, inputPortId);
   const newEdge2 = makeTypedEdge(nodeId, outputPort.id, edge.target, edge.targetHandle);
 
   store.setEdges(
     store.edges
       .filter((e) => e.id !== edge.id)
-      // Inputs are single-connection. If the inserted node's first input was
-      // already wired (e.g. re-dragging an already-connected node onto another
-      // edge), drop that stale edge so the port doesn't end up double-fed.
-      .filter((e) => !(e.target === nodeId && e.targetHandle === inputPort.id))
+      // Inputs are single-connection. Only reachable once EVERY socket is taken
+      // (pickSpliceInputPort's fallback) — drop that port's stale edge so it
+      // can't end up double-fed.
+      .filter((e) => !(e.target === nodeId && e.targetHandle === inputPortId))
       .concat(newEdge1, newEdge2) as AppEdge[],
   );
+  // The chosen port may be a hidden param socket (Image/Mic): make the exposure
+  // permanent, or the fresh edge points at a handle that never mounts. Same
+  // rule — and the same helper — as a wire dropped on a drag-revealed socket.
+  exposeConnectedTarget(nodeId, inputPortId);
   return true;
 }
 
@@ -894,10 +921,11 @@ export function NodeEditor() {
    * touch tileDrag move stream). The node doesn't exist yet, so it plans as a
    * PHANTOM: def-derived handle ids all sitting at the cursor — vertical tile
    * movement therefore picks the hover node's socket by cursor alignment,
-   * while the tile side always offers its first free port (mirroring
-   * tryInsertOnEdge's first-port convention). Returns whether the cursor is
-   * over a node body at all, so the caller can suppress the drop-on-edge
-   * preview (never-both rule, same as node drags).
+   * while the tile side always offers its first port (which for a
+   * not-yet-created node IS its first free one, matching what a drop-on-edge
+   * splice of the same tile would pick — see edgeSplice.ts). Returns whether
+   * the cursor is over a node body at all, so the caller can suppress the
+   * drop-on-edge preview (never-both rule, same as node drags).
    */
   const previewTileConnect = useCallback(
     (payload: TilePayload, clientX: number, clientY: number): boolean => {
@@ -2565,6 +2593,51 @@ export function NodeEditor() {
     }, 12000);
     return () => window.clearTimeout(timer);
   }, [importNote]);
+
+  // Frame the graph an import just dropped in. An import replaces the nodes but
+  // NOT the viewport, so a shader dropped onto a panned/zoomed canvas lands
+  // off-screen and reads as a failed import — the same problem the New button
+  // solves for its lone Output node.
+  //
+  // The fit can't run on the event itself. A project block writes its nodes in
+  // the same tick the event fires (React hasn't rendered them yet), and a bare
+  // script has no graph at all until useSyncEngine's code→graph pass finishes a
+  // commit or two later. So the event ARMS a fit and the effect below fires it
+  // on the next graph the editor actually renders, with the double-rAF
+  // measurement guard startNewShader uses: fitView frames the MEASURED box, and
+  // unmeasured nodes fit as zero-size points at maxZoom.
+  const importFitArmedRef = useRef(false);
+  const importFitTimerRef = useRef(0);
+  const importFitRafRef = useRef(0);
+  useEffect(() => {
+    const arm = () => {
+      importFitArmedRef.current = true;
+      window.clearTimeout(importFitTimerRef.current);
+      importFitTimerRef.current = window.setTimeout(() => {
+        importFitArmedRef.current = false;
+      }, IMPORT_FIT_TIMEOUT_MS);
+    };
+    window.addEventListener('fs:graph-imported', arm);
+    return () => {
+      window.removeEventListener('fs:graph-imported', arm);
+      window.clearTimeout(importFitTimerRef.current);
+      cancelAnimationFrame(importFitRafRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!importFitArmedRef.current) return;
+    importFitArmedRef.current = false;
+    window.clearTimeout(importFitTimerRef.current);
+    // The pending frames are held in a ref and torn down only on unmount, NOT
+    // by this effect's cleanup: the cost pass writes the Output node's new
+    // total straight back into `nodes`, so an imported graph re-renders once
+    // more inside the two-frame window — a cleanup-owned rAF would be
+    // cancelled by exactly the change that proves the import landed.
+    importFitRafRef.current = requestAnimationFrame(() => {
+      importFitRafRef.current = requestAnimationFrame(() => fitView(FIT_VIEW_OPTIONS));
+    });
+  }, [nodes, fitView]);
 
   // NEW: optionally export the current shader, then reset the graph to a bare
   // Output node (one undo entry) and frame it. The export runs FIRST — it

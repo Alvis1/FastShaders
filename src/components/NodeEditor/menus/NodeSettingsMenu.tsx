@@ -10,7 +10,9 @@ import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/pr
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { ImageNodeSettings } from './ImageNodeSettings';
 import { MicNodeSettings } from './MicNodeSettings';
+import { NoiseNodeSettings } from './NoiseNodeSettings';
 import { DataNodeStats } from './DataColumnStats';
+import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 
 const checkLabelStyle = { ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px' } as const;
 const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
@@ -155,6 +157,11 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
           reaches node.data.values, so it has no undo entry and never ships in a
           shared project. See MicNodeSettings. */}
       {node.data.registryType === 'micNode' && <MicNodeSettings />}
+
+      {/* The noise RANGE mode. Its own component (and its own values key rather
+          than a defaultValues entry) because on a noise node defaultValues is
+          the socket list — see NoiseNodeSettings. */}
+      {hasNoiseRangeFlag(node.data.registryType) && <NoiseNodeSettings nodeId={nodeId} />}
 
       {/* Data node: what is actually IN each column. Every downstream tone and
           domain control is expressed in normalized units, so without the real

@@ -4,7 +4,9 @@ import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData, T
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
+import { isUnsignedNoise } from '@/utils/noiseRange';
 import { decodeDataNode, columnForHandle } from '@/utils/dataNode';
 import { readMicSettings } from '@/utils/micNode';
 import { MIC_CHANNELS, micUniformName, micChannelForHandle } from '@/utils/micAnalysis';
@@ -1130,7 +1132,24 @@ export function graphToCode(
         posExpr = `${posExpr}.mul(${scaleExpr})`;
       }
 
-      bodyLines.push(`  const ${varName} = ${def.tslFunction}(${posExpr});`);
+      // The 0–1 remap wraps the FINISHED call, not posExpr — the scale `.mul()`
+      // above rides INSIDE the call parens, so appending there would rescale the
+      // coordinate instead of the output. Method chain, so no new import (same
+      // convention as the scale param and Time's speed). `.mul(0.5).add(0.5)`
+      // broadcasts per channel on the vec3 variants.
+      //
+      // Gated on the def TYPE as well as the stored value: `values` is
+      // adversarial, and a tampered `.fastshader` putting `signed: 0` on a
+      // voronoi node would otherwise emit a remap that codeToGraph is required
+      // to REFUSE to collapse — the round trip would then grow junk nodes on
+      // every Apply. Symmetric gates make the round trip correct by
+      // construction. An absent/garbage flag falls through to the historical
+      // bare call, byte for byte.
+      let noiseExpr = `${def.tslFunction}(${posExpr})`;
+      if (isUnsignedNoise(def.type, nv)) {
+        noiseExpr = `${noiseExpr}.mul(0.5).add(0.5)`;
+      }
+      bodyLines.push(`  const ${varName} = ${noiseExpr};`);
     } else if (def.type === 'property_color') {
       // Colour uniform. The generic branch below would emit `uniform(0xff0000)`
       // — a FLOAT uniform holding 16711680 — so wrap the literal in color() to
@@ -1168,7 +1187,11 @@ export function graphToCode(
 
   // Handle output node — resolve all connected channels
   const outputNode = sorted.find((n) => n.data.registryType === 'output');
-  const OUTPUT_CHANNELS = ['color', 'emissive', 'normal', 'position', 'opacity', 'roughness'] as const;
+  // `metalness` is appended (not slotted in visual order) so the emitted
+  // return-object key order for existing graphs stays byte-identical; `env`
+  // is deliberately NOT here — it needs the source's TEXTURE, not a sampled
+  // ref, and is resolved after this loop.
+  const OUTPUT_CHANNELS = ['color', 'emissive', 'normal', 'position', 'opacity', 'roughness', 'metalness'] as const;
   const channels: Record<string, string> = {};
   // Discard is a side-effect statement, not a return channel — emitted as
   // `Discard(cond);` between definitions and the return so the wired condition
@@ -1190,15 +1213,71 @@ export function graphToCode(
    * the Data Viz `value` → Displacement flow, where the scalar height is meant
    * to stay scalar so normal-mode displacement can scale the normal by it.
    * `emissive` is included because shaderloader 0.5 copies emissiveNode into
-   * colorNode when no colour is wired (line ~279).
+   * colorNode when no colour is wired (line ~283).
    */
   const ALPHA_BEARING_CHANNELS = new Set(['color', 'emissive']);
 
   if (outputNode) {
+    // Stored per-channel values (the Output node's on-node widgets). Read
+    // DIRECTLY from data — getNodeValues() deliberately returns {} for output
+    // nodes. Three rules keep this safe and byte-stable:
+    //  * an ABSENT key emits nothing, so every pre-widget graph (and every
+    //    built-in preset/texture) emits byte-identically;
+    //  * a wired edge always wins — the widget's number is dead the moment an
+    //    edge lands (same contract as ShaderNode's exposed params);
+    //  * emission is gated on the channel being EXPOSED, so what the node
+    //    shows is exactly what emits — a tampered .fastshader carrying a
+    //    value on a hidden channel cannot make the shader differ from the
+    //    canvas (ShaderSettingsMenu clears the value when hiding a channel).
+    // Values are adversarial (.fastshader / localStorage): numbers go through
+    // Number()+num(), colors through the hexLiteral whitelist — nothing is
+    // interpolated verbatim.
+    const outValues = ((outputNode.data as { values?: Record<string, unknown> }).values ?? {});
+    const outExposed = new Set(effectiveExposedPorts(outputNode));
+    const FLOAT_VALUE_CHANNELS = new Set(['roughness', 'metalness', 'opacity', 'position']);
+    const COLOR_VALUE_CHANNELS = new Set(['color', 'emissive', 'normal', 'env']);
+    const storedChannelExpr = (ch: string): string | null => {
+      if (!outExposed.has(ch)) return null;
+      const v = outValues[ch];
+      if (v === undefined || v === null || v === '') return null;
+      if (FLOAT_VALUE_CHANNELS.has(ch)) {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return null;
+        // Zero displacement is a literal no-op — skip so the widget default
+        // (0) and an absent key emit identically (no dead positionLocal.add
+        // chain in every export).
+        if (ch === 'position' && n === 0) return null;
+        addImport('three/tsl', 'float');
+        return `float(${num(n)})`;
+      }
+      if (COLOR_VALUE_CHANNELS.has(ch) && typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) {
+        if (ch === 'normal') {
+          // The DEFAULT normal color #8080ff is the flat tangent-space
+          // "no perturbation" texel — an identity override, so it emits
+          // NOTHING (absent and default read identically, like a zero
+          // discard). Any other stored normal color is a normal-map TEXEL
+          // and must be DECODED — normalMap() does the [0,1]→[-1,1] remap +
+          // TBN transform; a raw color(0x…) fed to normalNode would be an
+          // unnormalized, un-remapped vector that shears the shading.
+          if (v.toLowerCase() === '#8080ff') return null;
+          addImport('three/tsl', 'normalMap');
+          addImport('three/tsl', 'color');
+          return `normalMap(color(${hexLiteral(v)}))`;
+        }
+        addImport('three/tsl', 'color');
+        return `color(${hexLiteral(v)})`;
+      }
+      return null;
+    };
+
     for (const ch of OUTPUT_CHANNELS) {
       const edge = edges.find(
         (e) => e.target === outputNode.id && e.targetHandle === ch
       );
+      if (!edge) {
+        const stored = storedChannelExpr(ch);
+        if (stored) channels[ch] = stored;
+      }
       if (edge) {
         const ref = resolveEdgeRef(edge, edges, varNames, sorted);
         if (ref) {
@@ -1249,11 +1328,97 @@ export function graphToCode(
       }
     }
 
+    // Environment channel — the one channel whose value is the TEXTURE, not a
+    // sampled vec3. The loader assigns it to material.envNode, and three's
+    // EnvironmentNode wraps a texture-valued env in pmremTexture() (prefiltered
+    // radiance + irradiance IBL, blurred by the roughness channel, reflectivity
+    // from metalness). Handing it the image's `texture(tex, uv).rgb` sample
+    // instead would bake one fixed texel as a flat ambient — so an image source
+    // is special-cased to reference its module-scope texture var. Guarded on
+    // imageAssetFor (memoized, same call the image branch made): the
+    // invalid-payload fallback path emits NO texture var, and referencing it
+    // would be a ReferenceError that kills the whole module. Any other source
+    // is a legitimate envNode too — three uses the node directly, so e.g. a
+    // Color node acts as a uniform ambient environment; non-3-channel shapes
+    // are widened to vec3 like the alpha-bearing channels so the lighting
+    // model's radiance stays well-typed on both backends.
+    const envEdge = edges.find(
+      (e) => e.target === outputNode.id && e.targetHandle === 'env'
+    );
+    if (!envEdge) {
+      // Stored env color: a constant ambient environment (EnvironmentNode
+      // consumes any node — a color is uniform radiance+irradiance).
+      const stored = storedChannelExpr('env');
+      if (stored) channels.env = stored;
+    }
+    if (envEdge) {
+      const envSrc = sorted.find((n) => n.id === envEdge.source);
+      const envVar = envSrc ? varNames.get(envSrc.id) : undefined;
+      if (
+        envSrc?.data.registryType === 'imageNode' &&
+        envVar &&
+        imageAssetFor(envSrc.id, getNodeValues(envSrc))
+      ) {
+        addImport('three/tsl', 'texture');
+        channels.env = `texture(_${envVar}_tex)`;
+      } else {
+        const ref = resolveEdgeRef(envEdge, edges, varNames, sorted);
+        if (ref) {
+          if (shapeOfEdgeSource(envEdge) !== 3) {
+            addImport('three/tsl', 'vec3');
+            channels.env = `vec3(${ref})`;
+          } else {
+            channels.env = ref;
+          }
+        }
+      }
+    }
+
     const discardEdge = edges.find(
       (e) => e.target === outputNode.id && e.targetHandle === 'discard'
     );
+    if (!discardEdge) {
+      // Stored discard value. Discard is a TRUTHINESS test, so a non-zero
+      // stored value is an UNCONDITIONAL cull (the whole mesh vanishes —
+      // deliberate, the widget is a dial the user turned). Zero is skipped:
+      // bool(0) never culls, so absent and 0 emit identically and the code
+      // never grows a dead __pixel wrapper.
+      if (outExposed.has('discard')) {
+        const dv = Number(outValues.discard);
+        if (
+          outValues.discard !== undefined &&
+          outValues.discard !== null &&
+          Number.isFinite(dv) &&
+          dv !== 0
+        ) {
+          addImport('three/tsl', 'Discard');
+          addImport('three/tsl', 'float');
+          discardLine = `  Discard(float(${num(dv)}));`;
+        }
+      }
+    }
     if (discardEdge) {
-      const ref = resolveEdgeRef(discardEdge, edges, varNames, sorted);
+      // The condition is compiled as `bool(<ref>)`, and three's NodeBuilder
+      // widens a non-1-channel FLOAT to `all( <vecN> )` — which is declared only
+      // over bvecN in GLSL ES 3.00 / vecN<bool> in WGSL. Measured against a real
+      // WebGL2 context: `ERROR: 'all' : no matching overloaded function found`,
+      // i.e. the whole fragment program fails to link and the mesh vanishes at
+      // EVERY value, with nothing surfaced to the user. Nothing here validates
+      // connection types, so a Colour / Vec3 / vec3-noise / Image source lands
+      // on this port routinely.
+      //
+      // LOGIC nodes are exempt: their vector output really IS a bvecN, and
+      // `all( greaterThan(vec3, vec3) )` is both valid and the correct reading
+      // ("every channel passed"). Coercing it to `.x` would silently narrow the
+      // test to the x channel.
+      //
+      // Scalar sources are untouched (`scalarRefOf` returns the plain ref at
+      // shape 1), so every existing export stays byte-identical.
+      const discardSrc = sorted.find((n) => n.id === discardEdge.source);
+      const discardDef = discardSrc ? registry.get(discardSrc.data.registryType) : undefined;
+      const ref = discardDef?.category === 'logic'
+        ? resolveEdgeRef(discardEdge, edges, varNames, sorted)
+        : scalarRefOf(discardEdge);
       if (ref) {
         addImport('three/tsl', 'Discard');
         discardLine = `  Discard(${ref});`;

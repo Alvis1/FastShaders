@@ -142,10 +142,12 @@ export function NodeVisual({
   };
   if (box.width) {
     if (exactWidth) {
-      // Live-node semantics (designer): the designer width is EXACT — it can
-      // make the node narrower than its content (the header wraps and grows).
+      // Live-node semantics (designer stage): the authored width is the
+      // PREFERRED width and `min-content` the floor — identical to ShaderNode,
+      // so the stage shows what the canvas will do. The node keeps its designed
+      // width while the content fits and widens only when it cannot.
       nodeStyle.width = box.width;
-      nodeStyle.minWidth = box.width;
+      nodeStyle.minWidth = 'min-content';
     } else {
       // Card semantics: floor only, so the card GROWS (fit-content) to keep a
       // long name like "Vektoriālais reizinājums" on one line — at most two
@@ -217,17 +219,25 @@ export function NodeVisual({
 
   const cardClass = `node-base${stackLayerCount > 0 ? ' node-base--stacked' : ''}${cardClassName ? ` ${cardClassName}` : ''}`;
 
+  // Header string, computed once so the visible text and its `title` can never
+  // disagree (the header clamps at two lines — see NodeBase.css).
+  const titleText =
+    headerText ??
+    (def.type === 'property_float'
+      ? String(dv.name ?? def.label)
+      : formatNodeLabel(def.label, def.type, language, false));
+
   const header = (
     <>
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
       <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>
-          {headerText ??
-            (def.type === 'property_float'
-              ? String(dv.name ?? def.label)
-              : formatNodeLabel(def.label, def.type, language, false))}
+        {/* `title` mirrors ShaderNode's: the header clamps at two lines
+            (NodeBase.css), so a name long enough to be ellipsized stays
+            readable on hover. */}
+        <span className="node-base__title" title={titleText} style={{ color: headerTextColor }}>
+          {titleText}
         </span>
       </div>
     </>
@@ -290,15 +300,9 @@ export function NodeVisual({
   return (
     <div className={`${wrapClassName}`.trim()} style={wrapStyle}>
       {stackLayers}
-      <div
-        className={
-          cardClass +
-          // Mirror the live node's layout modifier so the palette tile stays
-          // an exact replica (the mic light is inert here — see below).
-          (def.type === 'micNode' ? ' node-base--mic' : '')
-        }
-        style={nodeStyle}
-      >
+      {/* (micNode never reaches NodeVisual — its flow type is 'mic', and every
+          mic surface renders through MicNode/MicCardContent instead.) */}
+      <div className={cardClass} style={nodeStyle}>
         {header}
         {/* Colormap: the node's ART is its real ramp — same gradient helper as
             the canvas node, the settings menu and the picker, so no surface
@@ -309,7 +313,14 @@ export function NodeVisual({
             className="shader-node__colormap-strip"
             data-nd-art={interactive ? '' : undefined}
             style={{
-              background: colormapGradientCss(getColormap(values?.map ?? dv.map)),
+              // reverse/levels included, exactly as ShaderNode passes them —
+              // one gradient helper is only "one picture" if every caller
+              // hands it the same arguments.
+              background: colormapGradientCss(
+                getColormap(values?.map ?? dv.map),
+                Number(values?.reverse ?? dv.reverse ?? 0) >= 0.5,
+                Math.floor(Number(values?.levels ?? dv.levels ?? 0)),
+              ),
               ...nodeArtStyle(def.type, design),
               ...interactiveStyle,
             }}

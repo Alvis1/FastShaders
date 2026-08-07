@@ -197,6 +197,31 @@
   flex: 1;
   position: relative;
   overflow: hidden;
+  /* Frames the 3D view's FAR edge, mirroring the border-bottom that
+     .shader-preview__controls puts on its near edge — so the viewport is
+     bounded identically top and bottom.
+
+     Load-bearing since the preview became the TOP pane: the seam sits directly
+     below this, and BOTH are grey by default — --edge-color is #999 and the
+     scene background is #808080, 25 levels apart — so without the hairline the
+     seam merged into the render and the 3D view looked like it spilled over
+     the editor. One px of the OPPOSITE lightness fixes it for every scene
+     colour, not just the default: the user can pick any bg (including exactly
+     #999999), and a light line beside a dark one means at most one of the two
+     can vanish into it. Holds in dark theme, where the pair inverts
+     (--border-subtle #545862 under --edge-color #868c96).
+
+     It has to stay a HAIRLINE rather than a wider chrome buffer: the seam is
+     meant to read as the 3D view's own bottom edge, so the breathing room
+     belongs on the far side of it (see .code-editor__tabbar's padding-top). */
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* No far edge to frame when the pane IS the screen — there is no seam below it
+   to separate from, so the line would just sit along the bottom of the render. */
+.shader-preview:fullscreen .shader-preview__body,
+.shader-preview:-webkit-full-screen .shader-preview__body {
+  border-bottom: none;
 }
 
 /* Labeled control (Light / Model / Subd) in the top bar. */
@@ -456,6 +481,54 @@
   font-size: 9px;
   color: var(--text-secondary);
   flex-shrink: 0;
+}
+
+/* "The graph says something else" — the chip carries the GRAPH's number while
+   the row's own value carries the PREVIEW's, so each surface shows the one the
+   other is hiding.
+   `--text-primary`, not a literal #000: the uniform panel flips to
+   rgba(60,64,70,.94) in the dark theme (see the block above), where black type
+   and a black border would be all but invisible. The token is #1A1A1A in light
+   and #eceef0 in dark, so the control reads as black where the user sees black
+   and stays legible where they don't. It is also what makes these controls a
+   full step DARKER than the rows around them, which are --text-secondary. */
+.shader-preview__uniform-override {
+  flex: 0 0 auto;
+  padding: 0 3px;
+  font-family: var(--font-mono, monospace);
+  font-size: 9px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--text-primary);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* Inverts on hover — the text colour becomes the panel's own, so the pair
+   stays legible in both themes without a second rule. */
+.shader-preview__uniform-override:hover {
+  background: var(--text-primary);
+  color: var(--bg-panel);
+}
+.shader-preview__uniform-value--override {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.shader-preview__uniforms-default-btn--active {
+  color: var(--text-primary);
+  border-color: var(--text-primary);
+}
+.shader-preview__props-btn--override { border-color: var(--text-primary); }
+.shader-preview__props-btn--override::after {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  vertical-align: middle;
 }
 
 .shader-preview__uniform-controls {

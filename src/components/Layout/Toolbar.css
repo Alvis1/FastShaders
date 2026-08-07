@@ -312,6 +312,20 @@ button.toolbar__sc-link.toolbar__wf-save.toolbar__wf-save--saved {
   border-color: #067647;
 }
 
+/* Web build: the control is shown greyed out purely so the desktop capability
+   is discoverable (see Toolbar.tsx). It carries aria-disabled rather than the
+   `disabled` attribute — which is what keeps its tooltip working — so the
+   inert look and the suppressed hover both have to be spelled out here.
+   Double-class to out-rank the later .toolbar__sc-link base + hover rules. */
+button.toolbar__sc-link.toolbar__wf-link--unavailable,
+button.toolbar__sc-link.toolbar__wf-link--unavailable:hover {
+  opacity: 0.5;
+  cursor: default;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+}
+
 button.toolbar__sc-link.toolbar__wf-caret {
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;

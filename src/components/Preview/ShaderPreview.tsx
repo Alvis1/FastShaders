@@ -26,43 +26,19 @@ import { graphToCode } from '@/engine/graphToCode';
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
+import { displayImageFileName } from '@/utils/imageNode';
+import {
+  extractUniforms, isOverridden, overriddenUniforms,
+  clearUniformValue, clearUniformValues, seedBounds, fallbackBounds,
+  sanitizeUniformValues, sanitizeUniformBounds,
+  type UniformInfo, type UniformBounds,
+} from '@/utils/uniformOverride';
 import './ShaderPreview.css';
 
-interface UniformInfo {
-  name: string;
-  kind: 'float' | 'color';
-  /** float → number; color → '#rrggbb' hex string. */
-  defaultValue: number | string;
-}
-
-/** A persistable uniform value: finite number (float) or '#rrggbb' (colour). */
-function isValidUniformValue(v: unknown): v is number | string {
-  return (
-    (typeof v === 'number' && Number.isFinite(v)) ||
-    (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v))
-  );
-}
-
-interface UniformBounds {
-  min: number;
-  max: number;
-}
-
-/**
- * Fallback slider bounds when the user hasn't set any: fit the value.
- * Preset/texture uniforms ship defaults far above 1 (frequency = 20, count = 8);
- * a fixed 0..1 fallback pinned the thumb at max and CLAMPED the value into
- * 0..1 on the first touch, snapping the dropped asset broken.
- *
- * NB call sites must FREEZE the result per uniform (see seededBoundsRef) —
- * re-deriving it from the live value every render feeds the slider's max back
- * into its own value and any drag compounds exponentially.
- */
-function seedBounds(value: unknown): UniformBounds {
-  const v = typeof value === 'number' && Number.isFinite(value) ? value : 0;
-  return { min: Math.min(0, v * 2), max: Math.max(1, v * 2) };
-}
-
+// The uniform-value rules live in a pure module so they are node-testable:
+// this file has no test coverage (the vitest env is `node`, no jsdom), and the
+// precedence between a tuned preview value and the graph's authored number is
+// exactly the kind of thing that must not be decided in an untested .tsx.
 /** Safari still exposes fullscreen only under the webkit-prefixed names. */
 type FsElement = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
 type FsDocument = Document & {
@@ -136,7 +112,10 @@ function truncateMiddle(s: string, max: number): string {
 }
 
 function validateLighting(v: string | null): LightingMode {
-  if (v === 'studio' || v === 'moon' || v === 'laboratory') return v;
+  // 'env' is only honoured while an env map is actually wired — the
+  // effLighting derivation in the component falls back to studio otherwise,
+  // so a persisted 'env' can't boot into a lightless void.
+  if (v === 'studio' || v === 'moon' || v === 'laboratory' || v === 'env') return v;
   return 'studio';
 }
 
@@ -234,26 +213,16 @@ function validatePlaying(v: string | null): boolean {
   return v === 'true';
 }
 
+// Both maps are adversarial: projectImport writes them straight out of an
+// imported project block. The bounds map was a bare CAST while its sibling had
+// a per-entry whitelist — `{min:'abc'}` makes the slider's step NaN and
+// `{min:5,max:0}` leaves a control that cannot move.
 function validateUniformBounds(raw: string | null): Record<string, UniformBounds> {
-  if (raw) {
-    const parsed = JSON.parse(raw, safeJsonReviver);
-    if (parsed && typeof parsed === 'object') return parsed as Record<string, UniformBounds>;
-  }
-  return {};
+  return raw ? sanitizeUniformBounds(JSON.parse(raw, safeJsonReviver)) : {};
 }
 
 function validateUniformValues(raw: string | null): Record<string, number | string> {
-  if (raw) {
-    const parsed = JSON.parse(raw, safeJsonReviver);
-    if (parsed && typeof parsed === 'object') {
-      const result: Record<string, number | string> = {};
-      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-        if (isValidUniformValue(v)) result[k] = v;
-      }
-      return result;
-    }
-  }
-  return {};
+  return raw ? sanitizeUniformValues(JSON.parse(raw, safeJsonReviver)) : {};
 }
 
 /**
@@ -279,38 +248,6 @@ function fetchObjText(geometry: 'teapot' | 'bunny'): Promise<string> {
   return p;
 }
 
-/**
- * Extract scalar property uniforms from generated TSL code by matching
- * `const NAME = uniform(VALUE)` — the same pattern the shaderloader auto-detects.
- * This guarantees the names we render in the overlay match the keys the
- * shaderloader uses for `_propertyUniforms`, regardless of any mangling
- * graphToCode does to the original property name.
- */
-function extractUniforms(code: string): UniformInfo[] {
-  const result: UniformInfo[] = [];
-  const seen = new Set<string>();
-  // Colour pass FIRST: the numeric regex's `[^)]+` stops at the first ')', so
-  // it also matches `uniform(color(0xff0000)` with a garbage capture — colour
-  // names must be claimed before the numeric pass sees them. Same ordering rule
-  // as the shaderloader's autoDetectSchema.
-  const colorRegex = /\bconst\s+(\w+)\s*=\s*uniform\(\s*color\(\s*0x([0-9a-fA-F]{6})\s*\)\s*\)/g;
-  let m: RegExpExecArray | null;
-  while ((m = colorRegex.exec(code)) !== null) {
-    const name = m[1];
-    if (seen.has(name)) continue;
-    seen.add(name);
-    result.push({ name, kind: 'color', defaultValue: `#${m[2].toLowerCase()}` });
-  }
-  const regex = /\bconst\s+(\w+)\s*=\s*uniform\(\s*([^)]+)\s*\)/g;
-  while ((m = regex.exec(code)) !== null) {
-    const name = m[1];
-    if (seen.has(name)) continue;
-    seen.add(name);
-    const val = parseFloat(m[2]);
-    result.push({ name, kind: 'float', defaultValue: isNaN(val) ? 0 : val });
-  }
-  return result;
-}
 
 export function ShaderPreview() {
   const previewCode = useAppStore((s) => s.previewCode);
@@ -345,6 +282,34 @@ export function ShaderPreview() {
   const [geometry, setGeometry] = usePersistedState('fs:previewGeometry', validateGeometry, { reloadOnProjectImport: true });
   const [playing, setPlaying] = usePersistedState('fs:previewPlaying', validatePlaying, { reloadOnProjectImport: true });
   const [lighting, setLighting] = usePersistedState('fs:previewLighting', validateLighting, { reloadOnProjectImport: true });
+
+  // The env-lighting entry in the Light dropdown exists only while an
+  // environment map is wired to the Output node's `env` socket. The selector
+  // returns a cheap STRING (the image's honest display name, '' when unwired,
+  // 'Environment' for a non-image env source such as a constant colour) so a
+  // position-only graph notify bails on Object.is instead of re-rendering the
+  // whole preview — the MicNode/edgeValueLabel subscription pattern.
+  const envMapName = useAppStore((s) => {
+    const out = s.nodes.find((n) => n.data.registryType === 'output');
+    const edge = out
+      ? s.edges.find((e) => e.target === out.id && e.targetHandle === 'env')
+      : undefined;
+    if (!edge) return '';
+    const src = s.nodes.find((n) => n.id === edge.source);
+    if (!src) return '';
+    if (src.data.registryType !== 'imageNode') return 'Environment';
+    const v = getNodeValues(src);
+    return displayImageFileName(v.fileName, v.imageB64) || 'Environment';
+  });
+
+  // 'env' with no map attached would bake the EMPTY light rig — a black
+  // void. Render/post/bake from the effective mode, and normalize the stored
+  // pref once the map is gone so the dropdown never points at a missing
+  // option.
+  const effLighting: LightingMode = lighting === 'env' && !envMapName ? 'studio' : lighting;
+  useEffect(() => {
+    if (lighting === 'env' && !envMapName) setLighting('studio');
+  }, [lighting, envMapName, setLighting]);
   const [subdivision, setSubdivision] = usePersistedState('fs:previewSubdivision', validateSubdivision, { reloadOnProjectImport: true });
   const [bgColor, setBgColor] = usePersistedState('fs:previewBgColor', validateBgColor, { reloadOnProjectImport: true });
 
@@ -662,12 +627,14 @@ export function ShaderPreview() {
     [allUniforms, hasMicNode],
   );
 
-  // Property uniforms detected from the generated code, filtered to only those
-  // whose property node has at least one outgoing edge (i.e. is connected).
-  // BOTH property kinds must be scanned: with only property_float here, the
-  // presence of one float property made the connected-names set float-only and
-  // silently filtered every colour picker out of the overlay.
-  const uniforms = useMemo(() => {
+  /**
+   * Every uniform the shader has, minus the mic's. Connection-agnostic ON
+   * PURPOSE — this is the list the override bookkeeping works from. A value
+   * edited while its property is DISCONNECTED has no overlay row, so a
+   * connection-filtered list would never notice it and a stale stored value
+   * would re-apply the instant the wire landed: the same trap, one wire away.
+   */
+  const nonMicUniforms = useMemo(() => {
     // Mic uniforms are split off BEFORE anything else looks at this list, and
     // that one move is what keeps every other uniform surface correct:
     //   - the overlay doesn't render four sliders the pump overwrites 60×/s;
@@ -679,12 +646,19 @@ export function ShaderPreview() {
     // It also covers the ALL_UNIFORMS branch below, where a graph with no
     // property nodes would otherwise fall through to "show everything".
     const micNames = new Set(micUniformNames);
-    const all = allUniforms.filter((u) => !micNames.has(u.name));
+    return allUniforms.filter((u) => !micNames.has(u.name));
+  }, [allUniforms, micUniformNames]);
+
+  // The overlay ROWS: only properties whose node has at least one outgoing edge
+  // (i.e. is connected). BOTH property kinds must be scanned: with only
+  // property_float here, the presence of one float property made the connected-
+  // names set float-only and silently filtered every colour picker out.
+  const uniforms = useMemo(() => {
     // If no property nodes exist (e.g. direct-assignment mode), show all.
-    if (connectedPropNamesKey === ALL_UNIFORMS) return all;
+    if (connectedPropNamesKey === ALL_UNIFORMS) return nonMicUniforms;
     const connectedNames = new Set(connectedPropNamesKey.split(' ').filter(Boolean));
-    return all.filter((u) => connectedNames.has(u.name));
-  }, [allUniforms, micUniformNames, connectedPropNamesKey]);
+    return nonMicUniforms.filter((u) => connectedNames.has(u.name));
+  }, [nonMicUniforms, connectedPropNamesKey]);
 
   const mic = useMicPump({ iframeRef, micUniformNames, settings: micSettings });
 
@@ -692,53 +666,72 @@ export function ShaderPreview() {
   const [showUniforms, setShowUniforms] = useState(true);
   const [uniformBounds, setUniformBounds] = usePersistedState('fs:previewUniformBounds', validateUniformBounds, { serialize: JSON.stringify, reloadOnProjectImport: true });
 
-  // Live slider values — overlay-local (don't write back to the graph, so
-  // tweaking a slider doesn't trigger a graph re-sync and tear the iframe
-  // down) but persisted to localStorage so refresh + node-graph mutations
-  // (rename/delete/re-add of a property node) preserve user tuning, the
-  // same way uniformBounds and camera/rotation already do.
+  /**
+   * Live slider values — overlay-local (don't write back to the graph, so
+   * tweaking a slider doesn't trigger a graph re-sync and tear the iframe
+   * down) but persisted so a refresh, an unrelated rebuild, or a delete + undo
+   * of a property node preserves user tuning.
+   *
+   * NOTHING IS SEEDED any more. This map used to be filled from the authored
+   * default the first time a uniform was SEEN, which armed the whole trap for
+   * a user who had never opened this overlay: from then on the entry existed,
+   * so the fs:preview-ready re-push below decided the value, and editing the
+   * number on the node had no visible effect. An entry now exists only because
+   * the user tuned a slider or imported a file — so "no entry" means "the graph
+   * decides", and absence is already handled everywhere (the row falls back to
+   * u.defaultValue, the re-push only iterates stored names, and
+   * planUniformDefaults skips an undefined value).
+   *
+   * Still deliberately NOT pruned: a name that leaves the shader keeps its
+   * value, so delete + undo — and re-adding a property with the same name and
+   * the same number — restores the user's tuning.
+   */
   const [uniformValues, setUniformValues] = usePersistedState('fs:previewUniformValues', validateUniformValues, { serialize: JSON.stringify, reloadOnProjectImport: true });
-  // When the set of uniform names changes, seed any newly-appearing entries
-  // from their code-side default. Existing entries (including ones that
-  // disappeared earlier and have just come back via undo/rename/re-add) keep
-  // their stored value — we deliberately do NOT prune names that aren't in
-  // the current shader, mirroring uniformBounds' "remember everything"
-  // behaviour. The iframe's fs:uniform handler ignores unknown names, so
-  // carrying extras is harmless.
-  const uniformsKey = uniforms.map((u) => `${u.name}=${u.defaultValue}`).join('|');
-  useEffect(() => {
-    setUniformValues((prev) => {
-      let changed = false;
-      const next: Record<string, number | string> = { ...prev };
-      for (const u of uniforms) {
-        if (!(u.name in prev)) {
-          next[u.name] = u.defaultValue;
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uniformsKey]);
+
+  /**
+   * Uniforms the preview is running at something OTHER than the graph's number
+   * — DERIVED (`stored ≠ authored`), never remembered. A persisted baseline
+   * would need a second key and a migration, and it would still be wrong:
+   * "the literal for this NAME moved" is not "the user edited this number",
+   * since which of two same-named properties owns the bare identifier follows
+   * the nodes ARRAY order and a group drag can fake it.
+   */
+  const overrides = useMemo(
+    () => overriddenUniforms(nonMicUniforms, uniformValues),
+    [nonMicUniforms, uniformValues],
+  );
+  const overrideCount = Object.keys(overrides).length;
 
   // Refs for the message handler so it doesn't need to re-bind on every change
   const uniformValuesRef = useRef(uniformValues);
-  const uniformKindsRef = useRef<Map<string, 'float' | 'color'>>(new Map());
   /**
-   * Fallback slider bounds, seeded per uniform from the FIRST value seen
-   * (authored default or persisted tuning) and then frozen for the component's
-   * lifetime. They must NOT be re-derived from the live value on each render:
-   * a range input whose max tracks 2× its own value re-renders the thumb at a
-   * fixed 50% of a range that moves with it, so every drag event reads the
-   * pointer against goalposts the previous event just shifted — the value
-   * compounds exponentially in BOTH drag directions and the displayed max
-   * climbs with it. Stored user bounds (uniformBounds) always win; these only
-   * fill the gap until a bound field is edited.
+   * Every uniform the shader has (mic excluded), by name — the message
+   * handler's and the revert button's view of the world.
+   *
+   * Built from nonMicUniforms, not from the connection-filtered `uniforms`:
+   * the old kinds map covered only connected rows, so the fs:preview-ready
+   * guard below short-circuited for every other name and could post a stored
+   * '#rrggbb' at a float uniform. It is also what gives a DISCONNECTED
+   * property's revert a default value to revert to.
+   */
+  const uniformInfoRef = useRef<Map<string, UniformInfo>>(new Map());
+  /**
+   * Fallback slider bounds, seeded per uniform from the value the row displays
+   * and kept only while they still CONTAIN it (see fallbackBounds). They must
+   * NOT be re-derived from the live value on each render: a range input whose
+   * max tracks 2× its own value re-renders the thumb at a fixed 50% of a range
+   * that moves with it, so every drag event reads the pointer against
+   * goalposts the previous event just shifted — the value compounds
+   * exponentially in BOTH drag directions and the displayed max climbs with
+   * it. Containment is the safe middle: a value the slider emitted is inside
+   * its own range by construction, so a drag can never re-seed; only a revert,
+   * a Reset or a node edit can. Stored user bounds (uniformBounds) always win;
+   * these only fill the gap until a bound field is edited.
    */
   const seededBoundsRef = useRef<Record<string, UniformBounds>>({});
   useEffect(() => {
-    uniformKindsRef.current = new Map(uniforms.map((u) => [u.name, u.kind]));
-  }, [uniforms]);
+    uniformInfoRef.current = new Map(nonMicUniforms.map((u) => [u.name, u]));
+  }, [nonMicUniforms]);
   useEffect(() => { uniformValuesRef.current = uniformValues; }, [uniformValues]);
 
   // Single message handler for all iframe → parent traffic:
@@ -800,10 +793,18 @@ export function ShaderPreview() {
           // re-added under the same name). A '#hex' string parseFloats to NaN
           // on a float uniform and a number is garbage to a THREE.Color —
           // push only kind-consistent values and let the schema default stand
-          // otherwise. Names not in the current shader still pass through
-          // unchanged (the iframe ignores unknown names).
-          const kind = uniformKindsRef.current.get(name);
-          if (kind && typeof value !== (kind === 'color' ? 'string' : 'number')) continue;
+          // otherwise.
+          //
+          // Names this shader doesn't have at all are now skipped outright.
+          // The guard used to be `if (kind && …)` over a map built from the
+          // CONNECTED rows only, and `kind` was undefined for exactly those
+          // names — so the type check short-circuited and a leftover '#rrggbb'
+          // could be posted at whatever float uniform later claimed the name.
+          // Dropping them is behaviour-identical for the iframe, which already
+          // ignores a name it has no uniform for.
+          const info = uniformInfoRef.current.get(name);
+          if (!info) continue;
+          if (typeof value !== (info.kind === 'color' ? 'string' : 'number')) continue;
           // The rAF pump is the only thing that may write a mic uniform.
           // uniformValues should never contain one (they are filtered out of
           // `uniforms` before anything can store them), but this map is
@@ -852,23 +853,84 @@ export function ShaderPreview() {
     setSubdivision(SUBDIVISION_DEFAULT);
     setPlaying(false);
 
-    // Property uniforms back to their shader defaults. Update local state so
-    // the overlay reflects the change, AND push to the iframe immediately
-    // (the rebuild path's fs:preview-ready handler is a safety net for the
-    // case where lighting/subdivision did trigger a rebuild).
-    const defaults: Record<string, number | string> = {};
-    for (const u of uniforms) {
-      defaults[u.name] = u.defaultValue;
+    // Property uniforms back to their shader defaults: push them to the iframe
+    // immediately (the rebuild path's fs:preview-ready handler is a safety net
+    // for the case where lighting/subdivision did trigger a rebuild), then
+    // FORGET the tuning rather than storing the defaults as if the user had
+    // chosen them — writing them back re-armed the "stored value wins over the
+    // node's number" trap for every uniform in the shader, which is the exact
+    // opposite of what a button labelled Reset promises. Deleting also stops
+    // this being the one place that PRUNES a map documented as never pruned:
+    // the old whole-map replace wiped remembered values for every uniform
+    // belonging to some other shader.
+    const names = nonMicUniforms.map((u) => u.name);
+    for (const u of nonMicUniforms) {
       win?.postMessage({ type: 'fs:uniform', name: u.name, value: u.defaultValue }, '*');
     }
-    setUniformValues(defaults);
-  }, [uniforms]);
+    setUniformValues((prev) => clearUniformValues(prev, names));
+  }, [nonMicUniforms]);
 
   // Slider drag / colour pick → live uniform update via postMessage
   const handleUniformChange = useCallback((name: string, value: number | string) => {
     setUniformValues((prev) => ({ ...prev, [name]: value }));
     iframeRef.current?.contentWindow?.postMessage({ type: 'fs:uniform', name, value }, '*');
   }, []);
+
+  /**
+   * Adopt the graph's number for one uniform — the escape hatch from a tuning
+   * that has outlived its usefulness, reachable from the overlay row's chip.
+   */
+  const revertUniform = useCallback((name: string) => {
+    const info = uniformInfoRef.current.get(name);
+    if (!info || info.unparsed) return;
+    setUniformValues((prev) => clearUniformValue(prev, name));
+    delete seededBoundsRef.current[name];
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: 'fs:uniform', name, value: info.defaultValue }, '*');
+  }, []);
+
+  /**
+   * An edit to a property node's NUMBER is the one act that outranks a value
+   * tuned in this overlay. Without it the preview persisted tuning by name and
+   * re-pushed it after every rebuild, so the node said one thing and the shader
+   * ran another, forever — and on a binary channel like Discard that reads as
+   * the app being broken.
+   *
+   * It arrives as an event rather than a store subscription so the panel
+   * doesn't re-render on every pointermove (the same reason
+   * connectedPropNamesKey and the imperative getState() reads exist), and the
+   * store dispatches it from `updateNodeData`, the authoring chokepoint —
+   * import, undo/redo, the code→graph sync and "Set as default" all go through
+   * setNodes and correctly stay silent.
+   *
+   * Bounded by uniformInfoRef: it can only ever touch a name the CURRENT
+   * shader has, which excludes mic uniforms structurally while still working
+   * for a user property that happens to be called `mic1_bass` in a graph with
+   * no microphone in it. The hot fs:uniform post is what makes a node scrub
+   * drive the preview at pointer rate instead of waiting out the 200ms rebuild
+   * debounce.
+   */
+  useEffect(() => {
+    const onAuthored = (e: Event) => {
+      const d = (e as CustomEvent).detail as { name?: unknown; value?: unknown } | null;
+      if (!d || typeof d.name !== 'string') return;
+      const info = uniformInfoRef.current.get(d.name);
+      if (!info) return;
+      if (typeof d.value !== (info.kind === 'color' ? 'string' : 'number')) return;
+      const name = d.name;
+      // Idempotent: only the first frame of a scrub has anything to delete, so
+      // frames 2..N get the same object back, React bails out of the setState
+      // and localStorage is never rewritten per pointermove.
+      setUniformValues((prev) => clearUniformValue(prev, name));
+      // Drop the frozen fallback bounds too — the row is about to display a
+      // number that may sit far outside a range seeded from the old one.
+      delete seededBoundsRef.current[name];
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: 'fs:uniform', name, value: d.value as number | string }, '*');
+    };
+    window.addEventListener('fs:uniform-authored', onAuthored);
+    return () => window.removeEventListener('fs:uniform-authored', onAuthored);
+  }, [setUniformValues]);
 
   /**
    * "Set as default" — bake the tuned uniform values into the graph, so they
@@ -890,6 +952,16 @@ export function ShaderPreview() {
     // name would write a tuned value into the wrong node.
     const { varNames } = graphToCode(store.nodes, store.edges, NODE_REGISTRY);
     const plan = planUniformDefaults(store.nodes, varNames, uniforms, uniformValuesRef.current);
+    // No clearing of uniformValues here on purpose: the bake moves the authored
+    // default, so the now-redundant stored value stops being an override BY
+    // DERIVATION and the chip goes out on its own. Clearing in the handler
+    // would be wrong three ways — it would sit BELOW this early return, so a
+    // re-bake of an already-baked value (planUniformDefaults skips anything
+    // already equal to 9 significant digits) would strand a chip next to a
+    // dead button; it would paint an intermediate render at a third value,
+    // since the graph→code pass is a passive effect and previewCode can't
+    // update in the same commit; and it would make undo of "Set as default"
+    // lose the tuning it just baked.
     if (plan.size === 0) return;
     store.pushHistory(); // setNodes doesn't push on its own
     store.setNodes(applyUniformDefaults(store.nodes, plan), 'graph');
@@ -899,8 +971,15 @@ export function ShaderPreview() {
     setUniformBounds((prev) => {
       // Baseline for the not-yet-edited bound = the SAME frozen seed the
       // slider row displays, so editing one bound never jumps the other.
+      //
+      // The third-order fallback must use the DISPLAYED value: with nothing
+      // seeded into uniformValues any more, `uniformValuesRef.current[name]` is
+      // undefined for every untuned uniform and seedBounds(undefined) collapses
+      // to 0..1 — the fixed fallback that snapped dropped presets broken.
       const current =
-        prev[name] ?? seededBoundsRef.current[name] ?? seedBounds(uniformValuesRef.current[name]);
+        prev[name]
+        ?? seededBoundsRef.current[name]
+        ?? seedBounds(uniformValuesRef.current[name] ?? uniformInfoRef.current.get(name)?.defaultValue);
       return { ...prev, [name]: { ...current, [key]: value } };
     });
   }, []);
@@ -972,7 +1051,7 @@ export function ShaderPreview() {
       animate: playing,
       materialSettings,
       bgColor,
-      lighting,
+      lighting: effLighting,
       subdivision: effectiveSubdivision,
       customModel: geometry === 'custom' && previewMesh
         ? { kind: previewMesh.kind, id: previewMesh.id }
@@ -1023,10 +1102,10 @@ export function ShaderPreview() {
 
   useEffect(() => {
     iframeRef.current?.contentWindow?.postMessage(
-      { type: 'fs:lighting', lights: LIGHT_PRESETS[lighting] ?? LIGHT_PRESETS.studio },
+      { type: 'fs:lighting', lights: LIGHT_PRESETS[effLighting] ?? LIGHT_PRESETS.studio },
       '*',
     );
-  }, [lighting]);
+  }, [effLighting]);
 
   useEffect(() => {
     // from/to are computed in the parent so the iframe doesn't need to
@@ -1124,12 +1203,13 @@ export function ShaderPreview() {
     );
   }, [geometry, previewMesh]);
 
-  // Immersive VR entry. Permissions-Policy can never delegate
-  // xr-spatial-tracking to the sandboxed preview iframe's OPAQUE origin —
-  // immersive WebXR must start from a top-level page. An about:blank popup
-  // inherits this window's REAL origin, so the local bundle URLs load, the
-  // OBJ models fetch same-origin (plain obj-model url() — no message feed),
-  // and WebXR is permitted.
+  // Immersive VR entry. Immersive WebXR can never start from the sandboxed
+  // preview iframe — see the corrected rationale on PreviewOptions.xr in
+  // tslToPreviewHTML.ts (it is NOT the Permissions-Policy layer; that one
+  // `allow="xr-spatial-tracking *"` would pass) — so it starts from a
+  // top-level page. An about:blank popup inherits this window's REAL origin,
+  // so the local bundle URLs load, the OBJ models fetch same-origin (plain
+  // obj-model url() — no message feed), and WebXR is permitted.
   // SECURITY: the popup runs the APP-GENERATED shader module — the same
   // safety-gated emission as the preview/export pipeline — at top level in
   // the app's real origin. That is acceptable for generated code; never
@@ -1161,7 +1241,7 @@ export function ShaderPreview() {
       animate: playing,
       materialSettings,
       bgColor,
-      lighting,
+      lighting: effLighting,
       subdivision: effectiveSubdivision,
       customModel,
       initialCameraPosition: cameraPosRef.current,
@@ -1171,7 +1251,7 @@ export function ShaderPreview() {
     });
     w.document.write(html);
     w.document.close();
-  }, [previewCode, geometry, previewMesh, playing, materialSettings, bgColor, lighting, effectiveSubdivision, shaderName]);
+  }, [previewCode, geometry, previewMesh, playing, materialSettings, bgColor, effLighting, effectiveSubdivision, shaderName]);
 
   return (
     <div
@@ -1214,7 +1294,7 @@ export function ShaderPreview() {
           <span className="shader-preview__ctl-label">{t('Light', language)}</span>
           <select
             className="shader-preview__geo-select"
-            value={lighting}
+            value={effLighting}
             onChange={(e) => setLighting(e.target.value as LightingMode)}
             title={t('Lighting mode', language)}
             aria-label={t('Lighting mode', language)}
@@ -1222,6 +1302,16 @@ export function ShaderPreview() {
             <option value="studio">{t('Studio', language)}</option>
             <option value="moon">{t('Moon', language)}</option>
             <option value="laboratory">{t('Laboratory', language)}</option>
+            {envMapName !== '' && (
+              // Named after the attached environment image (extension
+              // stripped) — selecting it turns the analytic lights off so the
+              // map alone lights the model (material.envNode IBL).
+              <option value="env">
+                {envMapName === 'Environment'
+                  ? t('Environment', language)
+                  : truncateMiddle(envMapName.replace(/\.[^.]*$/, ''), 18)}
+              </option>
+            )}
           </select>
         </label>
         <label className="shader-preview__ctl">
@@ -1261,7 +1351,9 @@ export function ShaderPreview() {
         {uniforms.length > 0 && (
           <button
             type="button"
-            className={`shader-preview__props-btn${showUniforms ? ' shader-preview__props-btn--active' : ''}`}
+            // The dot must survive a collapse: the overlay is collapsible, and
+            // with it shut an override would have no affordance anywhere.
+            className={`shader-preview__props-btn${showUniforms ? ' shader-preview__props-btn--active' : ''}${overrideCount ? ' shader-preview__props-btn--override' : ''}`}
             onClick={() => setShowUniforms((v) => !v)}
             title={showUniforms ? t('Hide uniforms', language) : t('Show uniforms', language)}
           >
@@ -1402,25 +1494,47 @@ export function ShaderPreview() {
             {connectedPropNamesKey !== ALL_UNIFORMS && (
               <button
                 type="button"
-                className="shader-preview__uniforms-default-btn"
+                // Highlighted while anything is overridden: this is the one
+                // path that makes a tuned value durable and agreed-on across
+                // the node card, the Output tab and the exported .js.
+                className={`shader-preview__uniforms-default-btn${overrideCount ? ' shader-preview__uniforms-default-btn--active' : ''}`}
                 onClick={handleSetDefaults}
                 title={t('Bake the values below into the graph as the shader’s defaults. Recompiles the preview. Slider min/max stay a preview setting — the graph has no field for them.', language)}
               >
-                {t('Set as default', language)}
+                {t('Set as default', language)}{overrideCount ? ` (${overrideCount})` : ''}
               </button>
             )}
             {uniforms.map((u) => {
               const raw = uniformValues[u.name] ?? u.defaultValue;
-              const bounds =
-                uniformBounds[u.name] ?? (seededBoundsRef.current[u.name] ??= seedBounds(raw));
+              // The chip carries the GRAPH's number while the row's own value
+              // carries the PREVIEW's, so each shows the one the other hides.
+              // Without it a tuned value simply won, silently, and the number
+              // on the property node looked broken.
+              const over = isOverridden(u, uniformValues[u.name]);
+              const chip = over ? (
+                <button
+                  type="button"
+                  className="shader-preview__uniform-override"
+                  onClick={() => revertUniform(u.name)}
+                  title={t('The preview is running a value you tuned here, not the graph’s. Click to use the graph value.', language)}
+                >
+                  {t('graph', language)}{' '}
+                  {u.kind === 'color' ? String(u.defaultValue) : Number(u.defaultValue).toFixed(3)} ↺
+                </button>
+              ) : null;
               // Colour uniform: a swatch picker row — bounds/slider are
               // meaningless for a colour, so the row is just name + picker.
+              // Branching BEFORE any bounds computation matters: every colour
+              // row used to install a junk {0,1} seed entry, and the property
+              // name field commits per keystroke, so renaming one walked a
+              // fresh entry in for every prefix.
               if (u.kind === 'color') {
                 const hex = typeof raw === 'string' ? raw : String(u.defaultValue);
                 return (
                   <div key={u.name} className="shader-preview__uniform-row">
                     <div className="shader-preview__uniform-header">
                       <span className="shader-preview__uniform-name" title={u.name}>{u.name}</span>
+                      {chip}
                       <span className="shader-preview__uniform-value">{hex}</span>
                     </div>
                     <div className="shader-preview__uniform-controls">
@@ -1435,13 +1549,24 @@ export function ShaderPreview() {
                 );
               }
               const value = typeof raw === 'number' ? raw : Number(u.defaultValue) || 0;
+              // Frozen fallback bounds are kept only while they still CONTAIN
+              // the displayed value: the ↺ revert, Reset and a node edit all
+              // move that value without touching the authored default, and a
+              // stale seed would print the true number against a track that
+              // cannot reach it — the first touch would then clamp the number
+              // away and store the clamp.
+              const bounds =
+                uniformBounds[u.name]
+                ?? (seededBoundsRef.current[u.name] =
+                      fallbackBounds(seededBoundsRef.current[u.name], value));
               const span = bounds.max - bounds.min;
               const step = span > 0 ? span / 200 : 0.01;
               return (
                 <div key={u.name} className="shader-preview__uniform-row">
                   <div className="shader-preview__uniform-header">
                     <span className="shader-preview__uniform-name" title={u.name}>{u.name}</span>
-                    <span className="shader-preview__uniform-value">{value.toFixed(3)}</span>
+                    {chip}
+                    <span className={`shader-preview__uniform-value${over ? ' shader-preview__uniform-value--override' : ''}`}>{value.toFixed(3)}</span>
                   </div>
                   <div className="shader-preview__uniform-controls">
                     <BoundInput

@@ -1,21 +1,41 @@
 @import './NodeBase.css';
 
-/* The Mic node places every element itself — see MicNode.tsx. Nothing here is
-   in flow except the header, so mounting or unmounting a socket cannot move
-   anything. Colours are literals: graph nodes must render identically in light
-   and dark. */
-.mic-node {
-  position: relative;
-  width: 150px;
-}
+/* The Mic node places every element itself — see MicNode.tsx, geometry in
+   micGeometry.ts. Nothing here is in flow except the header, so mounting or
+   unmounting a socket cannot move anything. Colours are literals: graph nodes
+   must render identically in light and dark.
+
+   EVERY rule below is scoped to .mic-node__body, NOT .mic-node: the asset tile
+   (MicCardContent) renders the same body inside CardShell's frame and has no
+   .mic-node ancestor — the arm light used to be scoped to .mic-node, so on the
+   tile it silently fell back to ShaderNode.css's in-flow margins and sat on
+   top of the value chips. */
 
 .mic-node__body {
   position: relative;
 }
 
+/* Sockets — and therefore their name tooltips — sit ABOVE everything else on
+   the card. This has to be stated explicitly because of how stacking contexts
+   trap the tooltip: React Flow positions every handle with a `transform`, and
+   a transform CREATES a stacking context, so the tooltip's own `z-index: 10`
+   (TypedHandle.css) is sealed INSIDE the handle and can only compete with its
+   siblings at the handle's level — which is `auto`. The record button's
+   wrapper is likewise a transform-made stacking context, at `z-index: 1`, so
+   it out-painted every tooltip that reached over it: the lower output sockets
+   showed nothing at all on hover.
+   Descendant, not child: the param handles are nested one level deeper (inside
+   the per-input wrapper in MicNode.tsx), and their tooltips can likewise be
+   covered by the value chip above them. 2 clears the button's 1. */
+.mic-node__body .react-flow__handle {
+  z-index: 2;
+}
+
 /* Handles are positioned by an inline `top` (px from the body's top edge) and
    sit ON the card border, like ClockNode's. translateY only — never a hover
-   transform, which would move the socket under the cursor. */
+   transform, which would move the socket under the cursor.
+   Child combinator: this pair governs the OUTPUT handles only (the params are
+   nested deeper and keep React Flow's own centring). */
 .mic-node__body > .react-flow__handle {
   transform: translateY(-50%) !important;
 }
@@ -28,33 +48,53 @@
   right: calc(var(--handle-size) / -2) !important;
 }
 
-/* Value chip for a parameter, anchored to the same `top` as its socket so the
-   two always read as one row even though neither is in flow. */
+/* Parameter chip row: a full-width rectangle (the design sketch's stacked
+   boxes), anchored to the same `top` as its socket so the two always read as
+   one row even though neither is in flow. The row's HEIGHT comes inline from
+   micGeometry's MIC_CHIP_H (like the tops) — children just fill it, so the
+   chip height has exactly one source. */
 .mic-node__val {
   position: absolute;
   left: 8px;
+  right: 8px;
   transform: translateY(-50%);
   display: flex;
-  align-items: center;
+  align-items: stretch;
 }
 
-/* A wired param is driven by its edge, so the stored number is dead — say so
-   rather than showing an editable box the shader ignores. */
+/* Stretch the number widget to fill the row. Value font stays the shared
+   7.7px node-number size (see DragNumberInput.css's edge-val note). */
+.mic-node__val .drag-num--compact {
+  flex: 1;
+  height: 100%;
+}
+
+/* A wired param is driven by its edge, so the stored number is dead — the row
+   shows the VALUE ARRIVING instead (MicNode.tsx). Read-only, so no plate and
+   no border: on a node, a fill means "you can edit this" and plain text means
+   "this is derived" (see .shader-node__op-val in ShaderNode.css). Font/colour
+   come from .shader-node__edge-val, which this element also carries, so every
+   derived number on any node reads at one size; only the row box is here. */
 .mic-node__wired {
-  font-size: 9px;
-  line-height: 1;
-  color: #2d6cdf;
-  font-family: var(--font-mono);
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-/* The arm light, centred in the body. Sizing/colour/blink live in
-   ShaderNode.css so the canvas node and the palette tile share one definition;
-   only the placement is here. */
-.mic-node .shader-node__mic-btn {
+/* The arm light, centred below the chips. The wrapper carries the placement
+   (inline `top` from micGeometry's MIC_BTN_TOP); sizing/colour/blink live in
+   ShaderNode.css so the canvas node and the palette tile share one
+   definition.
+   z-index 1 lifts it over the value chips; the sockets sit above it at 2 so
+   their tooltips stay readable where they reach over the circle. */
+.mic-node__btn-wrap {
   position: absolute;
   left: 50%;
-  top: 104px;
   transform: translate(-50%, -50%);
-  margin: 0;
   z-index: 1;
+}
+
+.mic-node__btn-wrap .shader-node__mic-btn {
+  margin: 0;
 }

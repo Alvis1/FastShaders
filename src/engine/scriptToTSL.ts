@@ -30,6 +30,8 @@ const NODE_PROP_TO_CHANNEL: Record<string, string> = {
   positionNode: 'position',
   opacityNode: 'opacity',
   roughnessNode: 'roughness',
+  metalnessNode: 'metalness',
+  envNode: 'env',
 };
 
 /** Material settings keys injected by tslToShaderModule that should be stripped */
@@ -735,7 +737,26 @@ function inlinePixelFn(scriptCode: string): string {
   const condArgs = args.slice(0, -1);
   const colorArg = args[args.length - 1];
 
-  const discardText = condArgs.map((c) => `${indent}Discard(${c});`).join('\n');
+  // Walk the wrapper BODY rather than just the conditions, because three's
+  // parameterless `Discard()` — an unconditional cull — carries neither an Fn
+  // param nor a call argument, and correlating args-to-params alone would drop
+  // it silently. Body order is the order the discards were written in.
+  const bodyText = scriptCode.slice(bodyStart, braceEnd);
+  const discardLines: string[] = [];
+  let condIdx = 0;
+  const bodyDiscardRe = /\bDiscard\s*\(\s*([^)]*?)\s*\)/g;
+  let bd: RegExpExecArray | null;
+  while ((bd = bodyDiscardRe.exec(bodyText)) !== null) {
+    if (bd[1] === '') discardLines.push(`${indent}Discard();`);
+    else if (condIdx < condArgs.length) {
+      discardLines.push(`${indent}Discard(${condArgs[condIdx++]});`);
+    }
+  }
+  // Every condition must have found its statement, or this isn't a wrapper we
+  // emitted — bail rather than silently losing a cutout.
+  if (condIdx !== condArgs.length) return scriptCode;
+
+  const discardText = discardLines.join('\n');
 
   // Apply both edits from the later offset first so the earlier one stays valid.
   let out = scriptCode.slice(0, callStart) + colorArg + scriptCode.slice(callEnd);

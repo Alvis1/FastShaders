@@ -137,7 +137,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
 
       {/* Header */}
       <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>{varName ?? data.label}</span>
+        <span className="node-base__title" title={varName ?? data.label} style={{ color: headerTextColor }}>{varName ?? data.label}</span>
       </div>
 
       {/* Waveform canvas */}

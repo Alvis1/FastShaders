@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { parse } from '@babel/parser';
 import { scriptToTSL } from './scriptToTSL';
 import { codeToGraph } from './codeToGraph';
+import { buildShaderModule } from './tslCodeProcessor';
 import { getNodeValues } from '@/types';
 
 /**
@@ -539,5 +540,68 @@ export default function (params) {
     expect(properties).toEqual(expect.arrayContaining(['scale', 'speed']));
     expect(tsl).toContain('const shader = Fn(() => {');
     expect(tsl).toContain('export default shader;');
+  });
+});
+
+describe('scriptToTSL — the discard wrapper survives a download → Load Script trip', () => {
+  const moduleFor = (body: string) =>
+    buildShaderModule(`import { Fn, vec3, greaterThan, Discard, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+${body}
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+`);
+
+  it('restores a conditional discard', () => {
+    const tsl = scriptToTSL(moduleFor(`  const cond = greaterThan(positionGeometry.y, 0.0);
+  Discard(cond);`));
+    expectParses(tsl);
+    expect(tsl).toContain('Discard(cond);');
+    expect(tsl).not.toContain('__pixel');
+  });
+
+  it('restores an UNCONDITIONAL discard, which carries no param and no call arg', () => {
+    // Correlating call args to Fn params alone cannot see this one — there is
+    // nothing to correlate — so it used to vanish on re-import.
+    const tsl = scriptToTSL(moduleFor('  Discard();'));
+    expectParses(tsl);
+    expect(tsl).toMatch(/Discard\(\s*\);/);
+    expect(tsl).not.toContain('__pixel');
+  });
+
+  it('restores a mixed pair in the order they were written', () => {
+    const tsl = scriptToTSL(moduleFor(`  const cond = greaterThan(positionGeometry.y, 0.0);
+  Discard(cond);
+  Discard();`));
+    expectParses(tsl);
+    expect(tsl.indexOf('Discard(cond);')).toBeLessThan(tsl.indexOf('Discard();'));
+    expect(tsl).not.toContain('__pixel');
+  });
+});
+
+describe('scriptToTSL: metalness + env channels survive Load Script', () => {
+  it('maps metalnessNode and envNode back to editor channels', () => {
+    // Exactly what FastShaders' own export emits for the Metalness widget and
+    // an Environment image — a module lacking these mappings imported with
+    // zero errors but silently rendered fully diffuse with no env.
+    const { tsl, fatal } = toGraph(`// TSL Shader Module — for use with a-frame-shaderloader
+import { color, float, texture } from "three/tsl";
+
+export default function () {
+  const color1 = color(0xffffff);
+  return {
+    colorNode: color1,
+    roughnessNode: float(0.15),
+    metalnessNode: float(0.9),
+  };
+}
+`);
+    expect(fatal).toEqual([]);
+    expect(tsl).toContain('metalness: float(0.9)');
+    expect(tsl).toContain('roughness: float(0.15)');
   });
 });

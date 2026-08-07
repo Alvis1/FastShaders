@@ -16,6 +16,35 @@
     • Archive (.zip) — unzipped in-browser (native DecompressionStream, no
       dependency); the first shader script + first model inside are loaded.
 
+  Work folder + cycle (exhibition playlist):
+    • The kiosk-sized "Work folder…" button under the header scans a picked
+      folder (File System Access API where present, else a webkitdirectory
+      input) for shader exports (.js/.mjs/.tsl and .zip bundles) and lists
+      them in a dropdown; Cycle shows each in turn — Shuffle randomizes the
+      order, the seconds field sets each shader's stay (both persisted).
+      Folder access cannot survive a reload (re-granting needs a fresh user
+      gesture), so the folder must be re-picked after one; the last SHOWN
+      shader still auto-restores via the session record. Garbage control:
+      the NEXT entry is picked at arm time and prefetched (hydrates +
+      cache-warms the file), and every 40th swap restarts the disposable
+      stage — each swap's dynamic import stays in the module registry
+      forever (measured ~50 KB/swap, unbounded), so the restart IS the
+      garbage collector.
+
+  Immersive VR (headsets):
+    • When immersive-vr support is CONFIRMED (isSessionSupported — never a
+      UA sniff) the panel's green button reads "Enter VR" and opens a
+      top-level popup at this page's real origin: WebXR cannot start inside
+      the sandboxed stage (see the Immersive VR section in the script). The
+      popup bakes the current state (shader, model, geometry, spin,
+      background, tuned uniform values), forces the WebGL2/GLSL backend
+      (three r184's WebGPU backend cannot do XR), auto-enters the session
+      and keeps an in-document "Enter VR" gate as the gesture fallback.
+      Running a DROPPED file outside the sandbox is a trust decision, so a
+      confirm names it before the popup gets the shader. The floating ⛶
+      keeps its fullscreen meaning — it is the presentation-mode escape
+      hatch ("press ⛶, then Esc").
+
   Presentation mode (pedestal / exhibition use):
     • ⛶ bottom-right (⤡ to leave) hides ALL chrome — panel, drop hint and the
       error banner go away, and the button itself fades out until the next
@@ -68,7 +97,10 @@
   Self-contained: the iframe loads the SAME vendored A-Frame 1.8.0 + Three.js
   r184 WebGPU bundle and shaderloader 0.5 the app uses (absolute URLs off this
   page's origin), so it deploys anywhere the app does (e.g. alvismisjuns.podest.lv).
-  Reached from the editor's "P" toolbar button.
+  Reached from the editor's "P" toolbar button. The panel's "Get FastShaders"
+  section links the desktop builds by their FIXED release asset names (same
+  list as the Toolbar's "Download app" dropdown — keep both in sync with
+  .github/workflows/release.yml); it hides itself inside the desktop shell.
 
   Dev:      http://localhost:5173/FastShaders/podest.html
   Deployed: <origin>/FastShaders/podest.html
@@ -101,7 +133,8 @@
     padding: 10px 12px; border-bottom: 1px solid var(--panel-border);
     cursor: pointer; user-select: none;
   }
-  .panel__title { font-weight: 700; letter-spacing: -0.01em; }
+  /* 2× title — the panel head doubles as the page's only branding. */
+  .panel__title { font-weight: 700; letter-spacing: -0.02em; font-size: 26px; line-height: 1.1; }
   .panel__collapse { background: none; border: none; font-size: 15px; color: var(--text-dim); cursor: pointer; line-height: 1; padding: 0 2px; }
   .panel__body { overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 
@@ -133,9 +166,21 @@
      Declared after `.btn:hover` so its hover colours win at equal specificity. */
   .btn--fs { width: 100%; padding: 9px 8px; font-weight: 700; color: #fff; background: #2e9e57; border-color: #268049; }
   .btn--fs:hover { color: #fff; background: #268049; border-color: #1f6a3c; }
+  /* Desktop-app download links: plain anchors dressed as buttons (GitHub
+     serves release assets with Content-Disposition: attachment, so a plain
+     navigation downloads — no JS needed). */
+  .dl-links { display: flex; flex-direction: column; gap: 6px; }
+  a.btn { display: block; text-decoration: none; text-align: center; }
   .check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text); cursor: pointer; user-select: none; }
   .check input { accent-color: var(--accent); cursor: pointer; margin: 0; }
-  .hint-inline { font-size: 10px; line-height: 1.45; color: var(--text-dim); margin-top: 6px; }
+  /* Compact panel: explanations live in `title` tooltips on the controls and
+     section labels, never as inline hint text. */
+  /* Work folder — the panel's primary action, kiosk-sized at roughly 2× a
+     normal control. */
+  .btn--work { width: 100%; padding: 12px 8px; font-size: 15px; font-weight: 700; }
+  #work-select { width: 100%; }
+  .cycle-dur { width: 56px; font: inherit; font-size: 12px; color: var(--text); background: #fff; border: 1px solid var(--panel-border); border-radius: 5px; padding: 5px 6px; text-align: right; }
+  .ctl-unit { font-size: 11px; color: var(--text-dim); }
   .color-input { width: 34px; height: 28px; flex-shrink: 0; padding: 0; border: 1px solid var(--panel-border); border-radius: 5px; background: #fff; cursor: pointer; }
   .speed-slider { flex: 1; min-width: 0; accent-color: var(--accent); cursor: pointer; margin: 0; }
 
@@ -267,6 +312,18 @@
     <button class="panel__collapse" id="panel-collapse" title="Collapse">▾</button>
   </div>
   <div class="panel__body">
+    <button class="btn btn--work" id="work-btn" type="button" title="Pick a folder of exported shaders — every .js and .zip inside appears in the list below, ready to show or cycle through">Work folder…</button>
+    <input type="file" id="work-input" webkitdirectory multiple hidden />
+    <div class="section" id="work-section" hidden>
+      <select id="work-select" title="Shaders found in the folder — pick one to show it"></select>
+      <div class="controls-row" style="margin-top:6px;">
+        <button class="btn" id="cycle-toggle" title="Show each shader from the folder in turn">Cycle</button>
+        <label class="check" title="Cycle in random order"><input type="checkbox" id="cycle-shuffle" /> Shuffle</label>
+        <input type="number" id="cycle-dur" class="cycle-dur" min="5" max="3600" step="1" title="Seconds each shader stays up while cycling" />
+        <span class="ctl-unit">s</span>
+      </div>
+    </div>
+
     <div class="dropzone" id="dropzone">
       <strong>Drop a file</strong>
       shader (.js / .tsl) · model (.glb / .gltf / .obj) · archive (.zip)
@@ -302,16 +359,14 @@
     </div>
 
     <div class="section">
-      <div class="section__label">Unattended</div>
-      <label class="check"><input type="checkbox" id="restore-toggle" /> Reopen the last file after a reload</label>
-      <label class="check" style="margin-top:6px;"><input type="checkbox" id="viewreturn-toggle" /> Return the view after 90 s idle</label>
-      <div class="hint-inline">For pedestal use. Fullscreen also keeps the display awake, and the 3D stage restarts itself if it stalls or loses its GPU device.</div>
+      <div class="section__label" title="For pedestal use. Fullscreen also keeps the display awake, and the 3D stage restarts itself if it stalls or loses its GPU device.">Unattended</div>
+      <label class="check" title="The last drop — with its tuned properties — is remembered and reopened after a reload, auto-update, or power blip."><input type="checkbox" id="restore-toggle" /> Reopen the last file after a reload</label>
+      <label class="check" style="margin-top:6px;" title="90 s after the last input, the camera returns to the framing saved when fullscreen was entered."><input type="checkbox" id="viewreturn-toggle" /> Return the view after 90 s idle</label>
     </div>
 
     <div class="section">
       <div class="section__label">Title</div>
-      <label class="check"><input type="checkbox" id="title-toggle" /> Show the name over the shader</label>
-      <div class="hint-inline">Taken from the dropped file name. Click the name itself to change its text and color — it stays visible in fullscreen.</div>
+      <label class="check" title="Taken from the dropped file name. Click the name itself to change its text and color — it stays visible in fullscreen."><input type="checkbox" id="title-toggle" /> Show the name over the shader</label>
     </div>
 
     <div class="section">
@@ -320,6 +375,19 @@
     </div>
 
     <button class="btn btn--fs" id="fs-panel-btn" type="button" title="Show the shader full-screen with no controls">Fullscreen</button>
+
+    <!-- Fixed /releases/latest/download/ asset names — the SAME list as
+         DESKTOP_DOWNLOADS in src/components/Layout/Toolbar.tsx; both must
+         match the upload names in .github/workflows/release.yml. Hidden by
+         script when this page runs inside the desktop shell itself. -->
+    <div class="section" id="dl-section">
+      <div class="section__label" title="The desktop version of the editor these shaders are made in — runs fully offline.">Get FastShaders</div>
+      <div class="dl-links">
+        <a class="btn" href="https://github.com/Alvis1/FastShaders/releases/latest/download/FastShaders-Windows-Setup.exe">Windows — installer (.exe)</a>
+        <a class="btn" href="https://github.com/Alvis1/FastShaders/releases/latest/download/FastShaders-Windows-Portable.zip">Windows — portable (.zip)</a>
+        <a class="btn" href="https://github.com/Alvis1/FastShaders/releases/latest/download/FastShaders-macOS.dmg">macOS — disk image (.dmg)</a>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -821,14 +889,6 @@
     if (rec.modelBytes instanceof ArrayBuffer && rec.modelBytes.byteLength > 0 && rec.modelBytes.byteLength <= MAX_SAVED_MODEL) {
       loadModelBuffer(rec.modelBytes, name(rec.modelName) || (rec.modelKind === "obj" ? "model.obj" : "model.glb"));
     }
-    if (rec.values && typeof rec.values === "object") {
-      // Numbers and '#rrggbb' strings only — onUniforms type-checks again, but
-      // a stored value reaches postMessage, so keep junk out of it here.
-      Object.keys(rec.values).forEach(function (k) {
-        var v = rec.values[k];
-        if (typeof v === "number" ? isFinite(v) : isHex6(v)) state.values[k] = v;
-      });
-    }
     if (typeof rec.shaderSource === "string" && rec.shaderSource && rec.shaderSource.length <= MAX_SAVED_SHADER) {
       loadShaderText(rec.shaderSource, name(rec.shaderName) || "shader");
       if (customTitle) {
@@ -839,6 +899,18 @@
         state.titleText = rec.titleText.slice(0, TITLE_MAX);
         renderTitle();
       }
+    }
+    // AFTER loadShaderText — which clears state.values on a source change,
+    // and would wipe these seeds if they landed first. Safe ordering: the
+    // stage reports fs:uniforms via a postMessage round-trip, so values set
+    // synchronously here are always in place before onUniforms reads them.
+    if (rec.values && typeof rec.values === "object") {
+      // Numbers and '#rrggbb' strings only — onUniforms type-checks again, but
+      // a stored value reaches postMessage, so keep junk out of it here.
+      Object.keys(rec.values).forEach(function (k) {
+        var v = rec.values[k];
+        if (typeof v === "number" ? isFinite(v) : isHex6(v)) state.values[k] = v;
+      });
     }
     if (typeof rec.geometry === "string" && isKnownGeometry(rec.geometry) && rec.geometry !== state.geometry) {
       geoSelect.value = rec.geometry;
@@ -886,6 +958,17 @@
 
   // ── Shader / model loading ──────────────────────────────────────────
   function loadShaderText(text, name) {
+    // A DIFFERENT shader must not inherit tuning stored under colliding
+    // auto-generated names: every FastShaders export calls its uniforms
+    // property1/color1/…, so in a folder of independent exports the
+    // collision is the NORM, and a stored value silently replaces the new
+    // artwork's authored default — podest's copy of the editor's
+    // uniform-precedence trap, made systematic by the Cycle feature. A
+    // re-load of the SAME source keeps the exhibitor's tuning, and stage
+    // restarts never pass through here at all (applyStateToStage reposts
+    // fs:shader directly). applyRestored seeds the session record's values
+    // AFTER this call for the same reason.
+    if (typeof text === "string" && text !== state.shaderSource) state.values = {};
     // A drop never arms and always disarms. Doing it HERE too (not only in
     // the fs:uniforms branch) covers a shader that fails to apply and so
     // never reports uniforms at all — otherwise the mic would stay live,
@@ -1235,7 +1318,9 @@
     fsBtn.textContent = on ? "⤡" : "⛶";
     fsBtn.title = on ? "Exit fullscreen (Esc)" : "Fullscreen";
     fsBtn.setAttribute("aria-label", fsBtn.title);
-    fsPanelBtn.textContent = on ? "Exit fullscreen" : "Fullscreen";
+    // On a headset the panel button is the VR entry — its label must not be
+    // clobbered back to Fullscreen by a fullscreen transition.
+    if (!vrSupported) fsPanelBtn.textContent = on ? "Exit fullscreen" : "Fullscreen";
     if (on) {
       commitTitle();                    // no-ops when the editor is closed
       post({ type: "fs:save-view" });   // this framing is what the idle return restores
@@ -1251,8 +1336,10 @@
   fsBtn.addEventListener("click", toggleFullscreen);
   // The panel's labelled twin. It is only ever reachable while NOT presenting
   // (presentation mode hides the panel), so it always reads "Fullscreen" —
-  // but it is kept in sync anyway rather than relying on that.
-  fsPanelBtn.addEventListener("click", toggleFullscreen);
+  // but it is kept in sync anyway rather than relying on that. On a
+  // confirmed headset it is the VR entry instead (see the Immersive VR
+  // section below; openVR is hoisted, vrSupported is read at click time).
+  fsPanelBtn.addEventListener("click", function () { if (vrSupported) openVR(); else toggleFullscreen(); });
   document.addEventListener("fullscreenchange", onFullscreenChange);
   document.addEventListener("webkitfullscreenchange", onFullscreenChange);
   window.addEventListener("pointermove", bumpActivity, { passive: true });
@@ -1277,7 +1364,16 @@
   function isModelName(n) { var e = extOf(n); return e === "glb" || e === "gltf" || e === "obj"; }
   function junkName(n) { var base = n.split("/").pop(); return n.indexOf("__MACOSX") !== -1 || base.charAt(0) === "."; }
 
+  // Monotonic guard for the ASYNC work-folder loads (a multi-second zip
+  // inflate, a cloud-hydrated getFile): a load that resolves late must not
+  // clobber a newer pick or a fresh drop — the same race the mic arm/disarm
+  // token closes. Every direct user load bumps it (handleFiles), every
+  // work-entry load carries its own value and bails when superseded. Plain
+  // drops themselves stay unguarded, as before.
+  var loadSeq = 0;
+
   function handleFiles(files) {
+    loadSeq++;   // a drop/pick supersedes any still-inflight folder load
     var list = Array.prototype.slice.call(files);
     var zip = list.find(function (f) { return extOf(f.name) === "zip"; });
     if (zip) { handleZip(zip); return; }
@@ -1288,9 +1384,12 @@
     if (!shader && !model) showError("Unrecognized file. Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip.");
   }
 
-  function handleZip(file) {
+  // seq (optional) is a work-folder load's generation — stale inflates bail
+  // instead of committing over a newer pick. Drops pass no seq (immediate).
+  function handleZip(file, seq) {
     clearError();
     file.arrayBuffer().then(unzip).then(function (entries) {
+      if (seq !== undefined && seq !== loadSeq) return;
       var usable = entries.filter(function (e) { return !junkName(e.name); });
       var shader = usable.find(function (e) { return isShaderName(e.name); });
       var model = usable.find(function (e) { return isModelName(e.name); });
@@ -1452,6 +1551,436 @@
     document.getElementById("panel-collapse").textContent = collapsed ? "▸" : "▾";
   });
 
+  // ── Work folder: browse a folder of exports, cycle through them ─────
+  // A pedestal usually shows a COLLECTION. The button scans a user-picked
+  // folder for shader exports (.js/.mjs/.tsl and .zip bundles — NOT .txt,
+  // which the drop path accepts but a folder scan would misread as notes)
+  // and lists them in a dropdown; Cycle shows each in turn on a timer,
+  // optionally shuffled. Entries load through the exact same handleFiles
+  // path as a drop, so zips, models inside zips, mic disarm and session
+  // persistence all behave identically.
+  //
+  // Picking: File System Access API where it exists (Chromium), else a
+  // webkitdirectory <input>. Handles are kept only in memory — persisting
+  // them to IndexedDB would still need a permission re-grant gesture at
+  // every boot — so after a reload the folder must be re-picked; the last
+  // SHOWN shader still auto-restores via the session record. The scan is
+  // bounded (depth ≤ 3, ≤ 512 files) and skips junk (dotfiles, __MACOSX).
+  var workList = [];   // [{ name, file: File|null, handle: FileSystemFileHandle|null }]
+  var workBtn = document.getElementById("work-btn");
+  var workInput = document.getElementById("work-input");
+  var workSection = document.getElementById("work-section");
+  var workSelect = document.getElementById("work-select");
+  var cycleToggle = document.getElementById("cycle-toggle");
+  var cycleShuffle = document.getElementById("cycle-shuffle");
+  var cycleDur = document.getElementById("cycle-dur");
+  function clampDur(s) { return Math.min(3600, Math.max(5, isFinite(s) ? Math.round(s) : 30)); }
+  var cycle = {
+    on: false, timer: null, idx: -1,
+    // nextIdx is chosen at ARM time (not tick time) so the upcoming entry
+    // can be prefetched; swaps counts advances toward the hygiene restart.
+    nextIdx: -1, swaps: 0,
+    dur: clampDur(readNum("fs:viewerCycleDur", 30)),
+    shuffle: readStr("fs:viewerCycleShuffle", "0") === "1",
+  };
+  // Every shader swap costs one dynamic import, and imported ES modules can
+  // NEVER be unloaded from a living document — the module registry keeps
+  // each one (plus any textures its closure pins). Measured 2026-08-07 on
+  // the Tests/1stTest corpus: ~50 KB of stage heap per swap with materials
+  // correctly disposed — slow, but unbounded, and ~100× worse for exports
+  // carrying base64 images. The stage is DISPOSABLE by contract
+  // (applyStateToStage replays everything), so a periodic restart while
+  // cycling is the garbage collector: every 40 swaps ≈ 20 min at the
+  // default 30 s stay, and ≥200 s apart even at the 5 s minimum — clear of
+  // restartStage's 30 s floor and outside the 120 s failure-streak window,
+  // so hygiene never eats into the watchdog's restart budget.
+  var CYCLE_RESTART_EVERY = 40;
+  // Prefetch handle for cycle.nextIdx: getFile() hydrates a cloud-synced
+  // file ahead of time and the byte read warms the OS cache, so the tick's
+  // own read is a cache hit. Indices die with the list (setWorkList clears).
+  var workPrefetch = null;   // { idx, fileP: Promise<File> }
+  function isWorkName(n) { return (isShaderName(n) && extOf(n) !== "txt") || extOf(n) === "zip"; }
+
+  function rebuildWorkSelect() {
+    workSelect.innerHTML = "";
+    workList.forEach(function (w, i) {
+      var opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = w.name;   // textContent — names come from user disks/archives
+      workSelect.appendChild(opt);
+    });
+    workSection.hidden = workList.length === 0;
+    cycleToggle.disabled = workList.length < 2;
+    if (workList.length < 2) setCycle(false);
+  }
+
+  function setWorkList(entries) {
+    entries.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    workList = entries;
+    cycle.idx = -1;
+    cycle.nextIdx = -1;
+    workPrefetch = null;   // old indices are meaningless against a new list
+    rebuildWorkSelect();
+    if (workList.length) loadWorkEntry(0);   // immediate feedback: show the first find
+    else showError("No shaders (.js / .zip) found in that folder.");
+  }
+
+  function loadWorkEntry(i) {
+    var w = workList[i];
+    if (!w) return;
+    cycle.idx = i;
+    workSelect.value = String(i);
+    // Deliberately NOT via handleFiles: this path carries the loadSeq
+    // generation through both async stages (getFile, zip inflate) so a slow
+    // entry resolving late cannot clobber a newer pick or drop.
+    var seq = ++loadSeq;
+    var pre = workPrefetch && workPrefetch.idx === i ? workPrefetch.fileP : null;
+    (pre || (w.file ? Promise.resolve(w.file) : w.handle.getFile())).then(function (f) {
+      if (seq !== loadSeq) return;
+      if (extOf(f.name) === "zip") { handleZip(f, seq); return; }
+      f.text().then(function (t) { if (seq === loadSeq) loadShaderText(t, f.name); })
+        .catch(function (e) { showError("Could not read file: " + e.message); });
+    }).catch(function (e) { showError("Could not read " + w.name + ": " + (e && e.message ? e.message : e)); });
+  }
+
+  function pickNext() {
+    if (workList.length < 2) return -1;
+    if (cycle.shuffle) { var n; do { n = Math.floor(Math.random() * workList.length); } while (n === cycle.idx); return n; }
+    return (cycle.idx + 1) % workList.length;
+  }
+  function prefetchWorkEntry(i) {
+    var w = workList[i];
+    if (!w) { workPrefetch = null; return; }
+    var fileP = w.file ? Promise.resolve(w.file) : w.handle.getFile();
+    workPrefetch = { idx: i, fileP: fileP };
+    // Pull the bytes now so the tick's re-read is an OS cache hit; the value
+    // itself is discarded and a failure just falls back to the tick's own
+    // read (which surfaces the error through the normal path).
+    fileP.then(function (f) { return extOf(f.name) === "zip" ? f.arrayBuffer() : f.text(); }).catch(function () {});
+  }
+  // Choosing the next entry at ARM time is what makes prefetch possible —
+  // a shuffle picked at tick time would leave nothing to read ahead.
+  function armPrefetch() {
+    cycle.nextIdx = cycle.on ? pickNext() : -1;
+    if (cycle.nextIdx >= 0) prefetchWorkEntry(cycle.nextIdx);
+    else workPrefetch = null;
+  }
+  function advanceWork() {
+    if (workList.length < 2) return;
+    var n = cycle.nextIdx >= 0 && cycle.nextIdx < workList.length && cycle.nextIdx !== cycle.idx
+      ? cycle.nextIdx : pickNext();
+    if (n < 0) return;
+    // The hygiene restart (see CYCLE_RESTART_EVERY) goes FIRST so the fresh
+    // stage compiles the incoming shader once: the entry's async read lands
+    // during the boot and applyStateToStage replays the updated state.
+    if (++cycle.swaps % CYCLE_RESTART_EVERY === 0) restartStage("cycle hygiene");
+    loadWorkEntry(n);
+    armPrefetch();
+  }
+  function cycleTick() {
+    // A hidden tab's timers are throttled anyway — don't churn shader loads
+    // nobody can see. (While the VR popup presents, this tab is hidden; the
+    // cycle resumes when the visitor comes back.)
+    if (document.visibilityState !== "visible") return;
+    advanceWork();
+  }
+  function setCycle(on) {
+    on = !!on && workList.length > 1;
+    cycle.on = on;
+    if (cycle.timer) { clearInterval(cycle.timer); cycle.timer = null; }
+    if (on) cycle.timer = setInterval(cycleTick, cycle.dur * 1000);
+    cycleToggle.classList.toggle("active", on);
+    armPrefetch();
+  }
+
+  var WORK_MAX = 512;   // shared bound for BOTH pick paths
+  async function scanDirectory(dir) {
+    var out = [];
+    async function walk(d, depth) {
+      if (out.length >= WORK_MAX || depth > 3) return;
+      for await (var entry of d.values()) {
+        if (out.length >= WORK_MAX) return;
+        if (entry.name.charAt(0) === "." || entry.name === "__MACOSX") continue;
+        if (entry.kind === "directory") await walk(entry, depth + 1);
+        else if (entry.kind === "file" && isWorkName(entry.name)) out.push({ name: entry.name, file: null, handle: entry });
+      }
+    }
+    await walk(dir, 0);
+    return out;
+  }
+
+  workBtn.addEventListener("click", function () {
+    if (window.showDirectoryPicker) {
+      window.showDirectoryPicker({ id: "fs-podest-work" }).then(scanDirectory).then(setWorkList).catch(function (e) {
+        if (e && e.name === "AbortError") return;   // user cancelled the picker
+        showError("Could not open the folder: " + (e && e.message ? e.message : e));
+      });
+    } else {
+      workInput.click();
+    }
+  });
+  workInput.addEventListener("change", function () {
+    var files = Array.prototype.slice.call(workInput.files || []);
+    workInput.value = "";
+    // Mirror the FSA scan's bounds — webkitdirectory hands over EVERY file
+    // in the tree, so a picked home directory would otherwise stall the tab
+    // building thousands of options: per-segment dot-dir + __MACOSX pruning,
+    // the same depth limit (root + 3 levels + file = 5 path segments), and
+    // the shared WORK_MAX cap.
+    var entries = [];
+    for (var fi = 0; fi < files.length && entries.length < WORK_MAX; fi++) {
+      var f = files[fi];
+      if (!isWorkName(f.name)) continue;
+      var segs = String(f.webkitRelativePath || f.name).split("/");
+      if (segs.length > 5) continue;
+      if (segs.some(function (seg) { return seg.charAt(0) === "." || seg === "__MACOSX"; })) continue;
+      entries.push({ name: f.name, file: f, handle: null });
+    }
+    setWorkList(entries);
+  });
+  workSelect.addEventListener("change", function () {
+    var i = parseInt(workSelect.value, 10);
+    if (isNaN(i)) return;
+    loadWorkEntry(i);
+    if (cycle.on) setCycle(true);   // restart the timer — a manual pick gets its full stay
+  });
+  cycleToggle.addEventListener("click", function () { setCycle(!cycle.on); });
+  cycleShuffle.checked = cycle.shuffle;
+  cycleShuffle.addEventListener("change", function () {
+    cycle.shuffle = cycleShuffle.checked;
+    writePref("fs:viewerCycleShuffle", cycle.shuffle ? "1" : "0");
+    armPrefetch();   // the pre-picked next entry was chosen under the old mode
+  });
+  cycleDur.value = cycle.dur;
+  cycleDur.addEventListener("change", function () {
+    cycle.dur = clampDur(parseFloat(cycleDur.value));
+    cycleDur.value = cycle.dur;
+    writePref("fs:viewerCycleDur", String(cycle.dur));
+    if (cycle.on) setCycle(true);   // re-arm with the new period
+  });
+
+  // ── Immersive VR (headset) ──────────────────────────────────────────
+  // WebXR can never start from the sandboxed stage — NOT because of the
+  // Permissions-Policy layer (an `allow="xr-spatial-tracking *"` would pass
+  // even for the opaque origin): Chromium's permission layer auto-denies
+  // permission requests from opaque origins before any grant logic runs
+  // (the getUserMedia mechanism), Quest Browser empirically fails — and can
+  // crash — running WebXR in allow-scripts-only sandboxed iframes, and a
+  // click on this page's chrome can never confer transient activation on
+  // the opaque-origin child anyway. So "Enter VR" opens a TOP-LEVEL popup
+  // that inherits this page's real origin — the editor's XR-popup pattern
+  // (tslToPreviewHTML xr mode) — and runs the shader THERE.
+  //
+  // SECURITY TRADE-OFF, made explicit: the editor popup runs app-GENERATED
+  // code; this one runs a DROPPED file outside the sandbox, at this page's
+  // origin, where it can reach localStorage/IndexedDB (on the main
+  // deployment that includes the editor's saved graphs). That is why entry
+  // is gated on a window.confirm naming the trust decision, and why the
+  // popup installs the same loader URL-modifier guard as the stage
+  // (origin-widened: blob:/data:/same-origin, so the vendored js/ and
+  // models/ still load) — a hostile model/module can't use THREE's loaders
+  // to phone home. The sandboxed stage stays the only place shaders run
+  // outside of VR.
+  //
+  // The popup is deliberately dumb: everything is BAKED at open time
+  // (shader source, model blob URL, geometry, spin, background, tuned
+  // uniform values) and no bridge runs afterwards — while the headset shows
+  // the session this tab is backgrounded and its rAF/timers are throttled.
+  // That is also why the mic never crosses (the editor's XR popup is deaf
+  // for the same reason; mic uniforms stay at their emitted 0 in VR). None
+  // of the pedestal long-run guards ride along: a VR view is a visitor
+  // moment, not a week-long exhibit.
+  var vrSupported = false;
+  // Parent-minted model blob for the popup — revoked only when replaced
+  // (leak-until-next-mint, bounded at one URL): an open popup may still be
+  // reading the old one. Same rule as the editor's vrModelUrlRef.
+  var vrModelUrl = null;
+
+  // JSON that is safe to inline inside a script tag of a document.write'd
+  // page: a closing script tag inside shader source would otherwise end the
+  // element mid-string. (Spelled out, not quoted, here — the HTML parser
+  // terminates the element on that byte sequence even inside a JS comment,
+  // which is exactly the trap this helper closes.)
+  function jsonForScript(v) { return JSON.stringify(v).replace(/</g, "\\u003c"); }
+
+  function buildXrDoc() {
+    var dir = new URL(".", window.location.href).href;
+    var iife = dir + "js/a-frame-180-a-01.min.js";
+    var loader = dir + "js/a-frame-shaderloader-0.5.js";
+    var orbit = dir + "js/aframe-orbit-controls.min.js";
+    var bg = isHex6(state.bgColor) ? state.bgColor : DEFAULT_BG;
+    // Same pure-Y turntable as the stage; the per-geometry tilt stays on
+    // preview-entity.
+    var spinAttr = state.spinning
+      ? ' animation="property: rotation; from: 0 0 0; to: 0 360 0; loop: true; dur: ' + spinDur() + '; easing: linear"'
+      : '';
+    var kind = state.geometry;
+    // The artwork floats at eye height: A-Frame's immersive reference space
+    // is local-floor, so the stage's 0 0 0 would put the mesh at the
+    // visitor's feet. (The editor's XR popup still centres at the origin —
+    // reconcile the two on the first real device test.)
+    var EYE = "0 1.4 0";
+    var entityAttrs;
+    if (kind === "model" && state.modelBytes) {
+      try { if (vrModelUrl) URL.revokeObjectURL(vrModelUrl); } catch (e) {}
+      var mk = state.modelKind === "obj" ? "obj" : "gltf";
+      // Blob URLs are origin-scoped and the popup shares this origin, so a
+      // parent-minted URL loads there directly (the editor popup's model path).
+      vrModelUrl = URL.createObjectURL(new Blob([state.modelBytes], { type: mk === "obj" ? "text/plain" : "model/gltf-binary" }));
+      entityAttrs = 'fit-bounds="size: 1.6; regen: ' + (mk === "obj" ? "true" : "false") + '" ' +
+        (mk === "obj" ? 'obj-model="obj: url(' + vrModelUrl + ')"' : 'gltf-model="url(' + vrModelUrl + ')"');
+    } else if (isObjKey(kind)) {
+      var objUrl = new URL("models/" + (kind === "bunny" ? "stanford-bunny.obj" : "teapot.obj"), window.location.href).href;
+      entityAttrs = 'fit-bounds="size: 1.6; regen: true" obj-model="obj: url(' + objUrl + ')"';
+    } else {
+      // Models keep their own (or the shader's) material — mirroring the
+      // stage, only primitives get the grey base coat.
+      entityAttrs = 'geometry="' + primAttr(kind) + '" material="color: #808080"';
+    }
+    var L = [];
+    L.push('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" />');
+    L.push('<title>' + esc(state.titleText || state.shaderName || "Podest VR") + '</title>');
+    // WebGL2 up front: three r184 picks its WebGPU backend on the mere
+    // presence of navigator.gpu, that backend hard-throws in
+    // XRManager.setSession (r173–r184), and Quest Browser has no
+    // WebXR+WebGPU at all. TSL compiles identically via GLSLNodeBuilder.
+    // navigator.xr stays VISIBLE — it is the whole point here.
+    L.push('<script>try{Object.defineProperty(Navigator.prototype,"gpu",{get:function(){return undefined;},configurable:true});}catch(e){}try{Object.defineProperty(navigator,"gpu",{value:undefined,configurable:true});}catch(e){}<\/script>');
+    // Local error surface (no parent bridge — the opener is throttled while
+    // the headset presents): the shaderloader swallows module load/build
+    // failures into console.error, so mirror it; shader-error is its
+    // structured event. Last message wins; length-capped (shader-controlled).
+    L.push('<script>(function(){var q=null;window.__fsErr=function(m){try{var el=document.getElementById("err");if(!el){q=m;return;}el.textContent=String(m).slice(0,2000);el.style.display="block";}catch(e){}};addEventListener("DOMContentLoaded",function(){if(q!==null)__fsErr(q);});window.onerror=function(msg,u,l,c,err){__fsErr((err&&err.stack)||msg||"Error");};window.onunhandledrejection=function(ev){var r=ev&&ev.reason;__fsErr((r&&r.stack)||r||"Shader load failed");};var ce=console.error;console.error=function(){try{var p=[];for(var i=0;i<arguments.length;i++)p.push(String(arguments[i]));__fsErr(p.join(" "));}catch(e){}return ce.apply(console,arguments);};addEventListener("shader-error",function(ev){var d=ev&&ev.detail;__fsErr("Shader error: "+((d&&d.message)||"failed to apply"));});})();<\/script>');
+    L.push('<script src="' + iife + '" onerror="__fsErr(\'Failed to load the A-Frame bundle\')"><\/script>');
+    L.push('<script src="' + loader + '" onerror="__fsErr(\'Failed to load the shaderloader\')"><\/script>');
+    L.push('<script src="' + orbit + '" onerror="__fsErr(\'Failed to load orbit controls\')"><\/script>');
+    // Loader-level exfiltration guard, origin-widened (the popup is
+    // real-origin, so its own vendored js/ and models/ load by real URL;
+    // about:blank's location can't resolve anything, so the baked origin is
+    // the reference). Everything else a hostile .gltf/.js hands THREE's
+    // loaders is neutralized to an inert data: URL.
+    L.push('<script>(function(){var origin=' + jsonForScript(window.location.origin) + ';try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{if(new URL(s).origin===origin)return s;}catch(e){}try{console.warn("[PodestVR] blocked non-origin resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}})();<\/script>');
+    L.push('<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:' + bg + ';font-family:system-ui,sans-serif;}' +
+      '#err{position:fixed;top:12px;left:12px;z-index:30;max-width:60vw;max-height:40vh;overflow:auto;display:none;color:#fff;background:rgba(180,40,40,0.92);font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;padding:8px 12px;border-radius:6px;}' +
+      '#vr-gate{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:20;padding:14px 30px;font:600 17px/1 system-ui,sans-serif;color:#fff;background:rgba(0,0,0,0.72);border:1px solid rgba(255,255,255,0.35);border-radius:10px;cursor:pointer;}' +
+      '#vr-gate[hidden]{display:none;}</style>');
+    L.push('</head><body>');
+    // The element every __fsErr path resolves to — without it the popup's
+    // whole error surface is dead code and a failed shader is pure silence
+    // on the one device (a headset) with no reachable devtools console.
+    L.push('<div id="err"></div>');
+    pushFitBounds(L);
+    L.push('<a-scene vr-mode-ui="enabled: true" loading-screen="enabled: false" background="color: ' + bg + '">');
+    L.push('  <a-entity camera="fov: 24; active: true" look-controls="enabled: false" orbit-controls="target: ' + EYE + '; minDistance: 2; maxDistance: 80; initialPosition: 0 1.4 7; rotateSpeed: 0.5"></a-entity>');
+    L.push('  <a-entity id="spin-parent" position="' + EYE + '"' + spinAttr + '>');
+    L.push('    <a-entity id="preview-entity" ' + entityAttrs + ' position="0 0 0" rotation="' + (ROTATIONS[kind] || "0 0 0") + '"></a-entity>');
+    L.push('  </a-entity>');
+    L.push('  <a-light type="directional" color="#ffffff" position="-3 4 2" intensity="2.5"></a-light>');
+    L.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
+    L.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
+    L.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
+    L.push('</a-scene>');
+    L.push('<button id="vr-gate" type="button" hidden>Enter VR</button>');
+    // Shader + tuned values, all baked. The shader blob is minted in the
+    // popup (its own origin), so nothing here outlives that document.
+    L.push('<script>');
+    L.push('(function(){');
+    L.push('  var SRC=' + (state.shaderSource && !state.showMaterials ? jsonForScript(state.shaderSource) : "null") + ';');
+    L.push('  var VALUES=' + jsonForScript(state.values || {}) + ';');
+    L.push('  var MIC_RE=/^mic\\d*_(level|bass|mid|treble)$/;');
+    L.push('  var entity=null;');
+    // Poll like the stage's reportUniforms does: _propertyUniforms appears
+    // only after the loader finishes its dynamic import.
+    L.push('  function applyValues(){var tries=0;(function poll(){var comp=entity&&entity.components&&entity.components.shader;var u=comp&&comp._propertyUniforms;if(u){for(var k in VALUES){if(!Object.prototype.hasOwnProperty.call(VALUES,k)||MIC_RE.test(k)||!u[k])continue;var v=VALUES[k];if(u[k].value&&u[k].value.isColor){if(typeof v==="string")try{u[k].value.set(v);}catch(e){}}else if(typeof v==="number"&&isFinite(v)){u[k].value=v;}}return;}if(tries++<120)setTimeout(poll,50);})();}');
+    L.push('  window.addEventListener("shader-applied",applyValues);');
+    L.push('  function boot(){entity=document.getElementById("preview-entity");entity.addEventListener("model-error",function(){__fsErr("Failed to load the 3D model (corrupt, or a DRACO/meshopt-compressed glTF - not supported).");});if(SRC){var u=URL.createObjectURL(new Blob([SRC],{type:"text/javascript"}));entity.setAttribute("shader","src: "+u);}}');
+    // Auto-enter once REAL support is confirmed, but keep an in-document
+    // button until a session actually starts: a document.write'd popup may
+    // not inherit the opening click's transient activation, and an
+    // in-document gesture is what Quest Browser reliably accepts (the
+    // editor XR popup's exact recipe). A rejected enterVR() is swallowed —
+    // the visible gate is the way in.
+    L.push('  function wireVR(){var scene=document.querySelector("a-scene"),gate=document.getElementById("vr-gate");function enter(){try{var p=scene.enterVR();if(p&&p.catch)p.catch(function(){});}catch(e){}}scene.addEventListener("enter-vr",function(){gate.hidden=true;});scene.addEventListener("exit-vr",function(){gate.hidden=false;});gate.addEventListener("click",enter);gate.hidden=false;try{var xr=navigator.xr;if(xr&&typeof xr.isSessionSupported==="function")xr.isSessionSupported("immersive-vr").then(function(ok){if(ok)enter();},function(){});}catch(e){}}');
+    L.push('  var scene=document.querySelector("a-scene");');
+    L.push('  function onLoaded(){boot();wireVR();}');
+    L.push('  if(!window.AFRAME||!scene){__fsErr("A-Frame failed to initialize");return;}');
+    L.push('  if(scene.hasLoaded)onLoaded();else scene.addEventListener("loaded",onLoaded);');
+    L.push('})();');
+    L.push('<\/script>');
+    L.push('</body></html>');
+    return L.join("\n");
+  }
+
+  function openVR() {
+    // Open FIRST, synchronously in the click: a popup opened after the
+    // confirm's modal pause risks the blocker, and a blank window closed on
+    // decline is the cheaper failure.
+    var w = window.open("", "_blank");
+    if (!w) { showError("The browser blocked the VR window. Allow popups for this site and try again."); return; }
+    // Sever the popup's live handle on this document BEFORE any untrusted
+    // bytes reach it: the popup is same-origin, so the shader could
+    // otherwise script and navigate the RUNNING pedestal page through
+    // window.opener (kill the watchdogs, forge drops). Origin-wide storage
+    // access is the documented residual this cannot remove; our own `w`
+    // handle keeps working for the document.write below.
+    try { w.opener = null; } catch (e) {}
+    // The confirm gates exactly what the popup will RUN outside the
+    // sandbox: a baked shader (skipped in show-model-materials mode, where
+    // buildXrDoc bakes none) or a dropped model (parsed by the loaders at
+    // this page's real origin). Built-in geometry with no shader is all
+    // trusted code — no prompt.
+    var runsShader = !!(state.shaderSource && !state.showMaterials);
+    var showsDroppedModel = state.geometry === "model" && !!state.modelBytes;
+    if ((runsShader || showsDroppedModel) && !window.confirm("Enter VR shows the loaded " + (runsShader ? "shader" : "model") + " OUTSIDE Podest's protective sandbox (WebXR cannot start inside it). Only continue if you trust where this file came from.")) {
+      try { w.close(); } catch (e) {}
+      return;
+    }
+    w.document.write(buildXrDoc());
+    w.document.close();
+  }
+
+  // Capability-resolved, never a UA sniff (the editor gate's rule): only a
+  // confirmed immersive-vr device swaps the panel button to "Enter VR". The
+  // floating ⛶ deliberately KEEPS its fullscreen meaning — it is the
+  // presentation-mode escape hatch ("press ⛶, then Esc"), and repurposing
+  // it would strand a headset that ever entered presentation mode. Desktop
+  // shells and flat browsers have no navigator.xr (or answer false), so the
+  // button self-hides into its Fullscreen role with no UA check.
+  (function () {
+    try {
+      var xr = navigator.xr;
+      if (!xr || typeof xr.isSessionSupported !== "function") return;
+      xr.isSessionSupported("immersive-vr").then(function (ok) {
+        if (!ok) return;
+        vrSupported = true;
+        fsPanelBtn.textContent = "Enter VR";
+        fsPanelBtn.title = "Show the shader in your headset (immersive VR)";
+      }, function () {});
+    } catch (e) {}
+  })();
+
+  // fit-bounds pushes, shared by the sandboxed STAGE doc and the top-level
+  // VR doc: recenter + rescale loaded OBJ/GLTF meshes by BAKING the
+  // normalization into the geometry attributes (not the Object3D), so
+  // positionGeometry reads the same +-0.8 every position-driven shader is
+  // tuned for. Measured in the entity's own frame, so an ancestor rotation
+  // cannot shrink the model. Twin of FIT_BOUNDS_SCRIPT in
+  // src/engine/tslToPreviewHTML.ts -- keep the two in lockstep (no sync
+  // plugin covers this file; previewFitBounds.test.ts runs both twins
+  // through the same assertions). regen:true rebuilds normals + spherical
+  // UVs for OBJ; regen:false preserves a dropped GLB's own data and only
+  // synthesizes what is missing.
+  function pushFitBounds(L) {
+    L.push('<script>');
+    L.push('(function(){');
+    L.push('  if(!window.AFRAME||AFRAME.components["fit-bounds"])return;');
+    L.push('  function mergeByPosition(geom){var pos=geom.attributes.position;if(!pos)return geom;var oldIndex=geom.index,precision=1e4,lookup=Object.create(null),newPositions=[],remap=new Uint32Array(pos.count),nextIndex=0;for(var i=0;i<pos.count;i++){var x=pos.getX(i),y=pos.getY(i),z=pos.getZ(i);var key=Math.round(x*precision)+"_"+Math.round(y*precision)+"_"+Math.round(z*precision);var idx=lookup[key];if(idx===undefined){idx=nextIndex++;lookup[key]=idx;newPositions.push(x,y,z);}remap[i]=idx;}var indexCount=oldIndex?oldIndex.count:pos.count;var Arr=nextIndex<65535?Uint16Array:Uint32Array;var newIndex=new Arr(indexCount);if(oldIndex){for(var j=0;j<indexCount;j++)newIndex[j]=remap[oldIndex.getX(j)];}else{for(var k=0;k<indexCount;k++)newIndex[k]=remap[k];}var merged=new THREE.BufferGeometry();merged.setAttribute("position",new THREE.BufferAttribute(new Float32Array(newPositions),3));merged.setIndex(new THREE.BufferAttribute(newIndex,1));return merged;}');
+    L.push('  function sphericalUVs(g,c){var pos=g.attributes.position;var uvs=new Float32Array(pos.count*2);var v=new THREE.Vector3(),TWO_PI=Math.PI*2;for(var i=0;i<pos.count;i++){v.fromBufferAttribute(pos,i).sub(c);var len=v.length();if(len>0)v.multiplyScalar(1/len);uvs[i*2]=Math.atan2(v.z,v.x)/TWO_PI+0.5;uvs[i*2+1]=Math.asin(Math.max(-1,Math.min(1,v.y)))/Math.PI+0.5;}g.setAttribute("uv",new THREE.BufferAttribute(uvs,2));}');
+    L.push('  function flipWinding(g){var idx=g.index;if(!idx){var pos=g.attributes.position;if(!pos)return;var n=pos.count,Arr=n<65535?Uint16Array:Uint32Array,arr=new Arr(n);for(var i=0;i<n;i++)arr[i]=i;for(var t0=0;t0+2<n;t0+=3){var tmp=arr[t0+1];arr[t0+1]=arr[t0+2];arr[t0+2]=tmp;}g.setIndex(new THREE.BufferAttribute(arr,1));return;}for(var t=0;t+2<idx.count;t+=3){var b=idx.getX(t+1);idx.setX(t+1,idx.getX(t+2));idx.setX(t+2,b);}idx.needsUpdate=true;}');
+    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var root=this.el.getObject3D("mesh");if(!root)return;var regen=this.data.regen,target=this.data.size;root.updateMatrixWorld(true);var rootInv=new THREE.Matrix4().copy(root.matrixWorld).invert();var pre=new THREE.Matrix4().multiplyMatrices(root.matrix,rootInv);var entries=[],skinned=false;root.traverse(function(node){if(!node.isMesh||!node.geometry)return;if(node.isSkinnedMesh||node.isInstancedMesh){skinned=true;return;}entries.push({node:node,m:new THREE.Matrix4().multiplyMatrices(pre,node.matrixWorld)});});if(skinned){var wbox=new THREE.Box3().setFromObject(root);if(wbox.isEmpty())return;var wsize=new THREE.Vector3(),wcenter=new THREE.Vector3();wbox.getSize(wsize);wbox.getCenter(wcenter);var ws=target/(Math.max(wsize.x,wsize.y,wsize.z)||1);root.position.sub(wcenter.multiplyScalar(ws));root.scale.setScalar(ws);return;}if(!entries.length)return;var box=new THREE.Box3();for(var i=0;i<entries.length;i++){var g0=entries[i].node.geometry;if(!g0.boundingBox)g0.computeBoundingBox();if(g0.boundingBox)box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));}if(box.isEmpty())return;var ext=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(ext);box.getCenter(center);var s=target/(Math.max(ext.x,ext.y,ext.z)||1);var N=new THREE.Matrix4().makeScale(s,s,s).multiply(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));for(var e=0;e<entries.length;e++){var node=entries[e].node;var bake=new THREE.Matrix4().multiplyMatrices(N,entries[e].m);var g=node.geometry.clone();g.applyMatrix4(bake);if(bake.determinant()<0)flipWinding(g);if(regen){g=mergeByPosition(g);g.computeVertexNormals();g.computeBoundingBox();var c=new THREE.Vector3();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var sv=0;sv<pos.count;sv+=step){var dot=(pos.getX(sv)-c.x)*nrm.getX(sv)+(pos.getY(sv)-c.y)*nrm.getY(sv)+(pos.getZ(sv)-c.z)*nrm.getZ(sv);if(dot<0)inward++;sampled++;}if(sampled>0&&inward*2>sampled){flipWinding(g);g.computeVertexNormals();}sphericalUVs(g,c);}else{if(!g.attributes.normal&&g.attributes.position)g.computeVertexNormals();if(!g.attributes.uv&&g.attributes.position){g.computeBoundingBox();var c0=new THREE.Vector3();g.boundingBox.getCenter(c0);sphericalUVs(g,c0);}}node.geometry=g;}root.traverse(function(node){node.position.set(0,0,0);node.quaternion.set(0,0,0,1);node.scale.set(1,1,1);});root.updateMatrixWorld(true);}});');
+    L.push('})();');
+    L.push('<\/script>');
+  }
   // ── Build the sandboxed stage iframe ────────────────────────────────
   // The A-Frame scene, shaderloader, and ALL shader/model execution live here.
   // Absolute URLs (off this page's origin) let the opaque-origin iframe load the
@@ -1555,24 +2084,8 @@
     L.push('<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:' + bg + ';}</style>');
     L.push('</head><body>');
 
-    // fit-bounds: recenter + rescale loaded OBJ/GLTF meshes by BAKING the
-    // normalization into the geometry attributes (not the Object3D), so
-    // positionGeometry reads the same +-0.8 every position-driven shader is
-    // tuned for. Measured in the entity's own frame, so an ancestor rotation
-    // cannot shrink the model. Twin of FIT_BOUNDS_SCRIPT in
-    // src/engine/tslToPreviewHTML.ts -- keep the two in lockstep (no sync
-    // plugin covers this file). regen:true rebuilds normals + spherical UVs
-    // for OBJ; regen:false preserves a dropped GLB's own data and only
-    // synthesizes what is missing.
-    L.push('<script>');
-    L.push('(function(){');
-    L.push('  if(!window.AFRAME||AFRAME.components["fit-bounds"])return;');
-    L.push('  function mergeByPosition(geom){var pos=geom.attributes.position;if(!pos)return geom;var oldIndex=geom.index,precision=1e4,lookup=Object.create(null),newPositions=[],remap=new Uint32Array(pos.count),nextIndex=0;for(var i=0;i<pos.count;i++){var x=pos.getX(i),y=pos.getY(i),z=pos.getZ(i);var key=Math.round(x*precision)+"_"+Math.round(y*precision)+"_"+Math.round(z*precision);var idx=lookup[key];if(idx===undefined){idx=nextIndex++;lookup[key]=idx;newPositions.push(x,y,z);}remap[i]=idx;}var indexCount=oldIndex?oldIndex.count:pos.count;var Arr=nextIndex<65535?Uint16Array:Uint32Array;var newIndex=new Arr(indexCount);if(oldIndex){for(var j=0;j<indexCount;j++)newIndex[j]=remap[oldIndex.getX(j)];}else{for(var k=0;k<indexCount;k++)newIndex[k]=remap[k];}var merged=new THREE.BufferGeometry();merged.setAttribute("position",new THREE.BufferAttribute(new Float32Array(newPositions),3));merged.setIndex(new THREE.BufferAttribute(newIndex,1));return merged;}');
-    L.push('  function sphericalUVs(g,c){var pos=g.attributes.position;var uvs=new Float32Array(pos.count*2);var v=new THREE.Vector3(),TWO_PI=Math.PI*2;for(var i=0;i<pos.count;i++){v.fromBufferAttribute(pos,i).sub(c);var len=v.length();if(len>0)v.multiplyScalar(1/len);uvs[i*2]=Math.atan2(v.z,v.x)/TWO_PI+0.5;uvs[i*2+1]=Math.asin(Math.max(-1,Math.min(1,v.y)))/Math.PI+0.5;}g.setAttribute("uv",new THREE.BufferAttribute(uvs,2));}');
-    L.push('  function flipWinding(g){var idx=g.index;if(!idx){var pos=g.attributes.position;if(!pos)return;var n=pos.count,Arr=n<65535?Uint16Array:Uint32Array,arr=new Arr(n);for(var i=0;i<n;i++)arr[i]=i;for(var t0=0;t0+2<n;t0+=3){var tmp=arr[t0+1];arr[t0+1]=arr[t0+2];arr[t0+2]=tmp;}g.setIndex(new THREE.BufferAttribute(arr,1));return;}for(var t=0;t+2<idx.count;t+=3){var b=idx.getX(t+1);idx.setX(t+1,idx.getX(t+2));idx.setX(t+2,b);}idx.needsUpdate=true;}');
-    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var root=this.el.getObject3D("mesh");if(!root)return;var regen=this.data.regen,target=this.data.size;root.updateMatrixWorld(true);var rootInv=new THREE.Matrix4().copy(root.matrixWorld).invert();var pre=new THREE.Matrix4().multiplyMatrices(root.matrix,rootInv);var entries=[],skinned=false;root.traverse(function(node){if(!node.isMesh||!node.geometry)return;if(node.isSkinnedMesh||node.isInstancedMesh){skinned=true;return;}entries.push({node:node,m:new THREE.Matrix4().multiplyMatrices(pre,node.matrixWorld)});});if(skinned){var wbox=new THREE.Box3().setFromObject(root);if(wbox.isEmpty())return;var wsize=new THREE.Vector3(),wcenter=new THREE.Vector3();wbox.getSize(wsize);wbox.getCenter(wcenter);var ws=target/(Math.max(wsize.x,wsize.y,wsize.z)||1);root.position.sub(wcenter.multiplyScalar(ws));root.scale.setScalar(ws);return;}if(!entries.length)return;var box=new THREE.Box3();for(var i=0;i<entries.length;i++){var g0=entries[i].node.geometry;if(!g0.boundingBox)g0.computeBoundingBox();if(g0.boundingBox)box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));}if(box.isEmpty())return;var ext=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(ext);box.getCenter(center);var s=target/(Math.max(ext.x,ext.y,ext.z)||1);var N=new THREE.Matrix4().makeScale(s,s,s).multiply(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));for(var e=0;e<entries.length;e++){var node=entries[e].node;var bake=new THREE.Matrix4().multiplyMatrices(N,entries[e].m);var g=node.geometry.clone();g.applyMatrix4(bake);if(bake.determinant()<0)flipWinding(g);if(regen){g=mergeByPosition(g);g.computeVertexNormals();g.computeBoundingBox();var c=new THREE.Vector3();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var sv=0;sv<pos.count;sv+=step){var dot=(pos.getX(sv)-c.x)*nrm.getX(sv)+(pos.getY(sv)-c.y)*nrm.getY(sv)+(pos.getZ(sv)-c.z)*nrm.getZ(sv);if(dot<0)inward++;sampled++;}if(sampled>0&&inward*2>sampled){flipWinding(g);g.computeVertexNormals();}sphericalUVs(g,c);}else{if(!g.attributes.normal&&g.attributes.position)g.computeVertexNormals();if(!g.attributes.uv&&g.attributes.position){g.computeBoundingBox();var c0=new THREE.Vector3();g.boundingBox.getCenter(c0);sphericalUVs(g,c0);}}node.geometry=g;}root.traverse(function(node){node.position.set(0,0,0);node.quaternion.set(0,0,0,1);node.scale.set(1,1,1);});root.updateMatrixWorld(true);}});');
-    L.push('})();');
-    L.push('<\/script>');
+    // fit-bounds: shared with the VR popup document — see pushFitBounds above.
+    pushFitBounds(L);
 
     // The <a-scene> is injected AFTER a WebGPU pre-flight (same rationale as
     // the editor preview, see tslToPreviewHTML.ts): three r184 picks its
@@ -1704,6 +2217,15 @@
 
     L.push('</body></html>');
     return L.join("\n");
+  }
+
+  // The desktop bundle ships this page too, and a "download the desktop app"
+  // pitch inside the desktop app is noise (and dead offline). Tauri serves
+  // tauri://localhost on macOS/Linux and http://tauri.localhost on Windows,
+  // and withGlobalTauri stamps __TAURI__ on every app webview — cover all
+  // three. Visible by default so a guard miss shows the links (the web case).
+  if (location.protocol === "tauri:" || location.hostname === "tauri.localhost" || window.__TAURI__) {
+    document.getElementById("dl-section").hidden = true;
   }
 
   renderTitle();

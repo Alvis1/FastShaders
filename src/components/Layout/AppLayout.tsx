@@ -58,23 +58,26 @@ export function AppLayout() {
           <div className="app-layout__right">
             <SplitPane
               direction="vertical"
+              // `rightSplitRatio` is the TOP pane's share, i.e. the PREVIEW's —
+              // the 3D view sits above the code editor (see the store field for
+              // the one-time migration off the old code-on-top meaning).
               ratio={rightSplitRatio}
               onRatioChange={setRightSplitRatio}
               // No grip of its own: this seam is dragged (vertically) by the
               // corner grip on the column seam to the left.
               grip={false}
               left={
+                <div className="app-layout__preview">
+                  <ShaderPreview />
+                </div>
+              }
+              right={
                 <div className="app-layout__code-panel">
                   <div className="app-layout__code">
                     <Suspense fallback={null}>
                       <CodeEditor />
                     </Suspense>
                   </div>
-                </div>
-              }
-              right={
-                <div className="app-layout__preview">
-                  <ShaderPreview />
                 </div>
               }
             />

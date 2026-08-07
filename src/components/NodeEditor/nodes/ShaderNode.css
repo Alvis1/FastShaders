@@ -179,7 +179,9 @@
 
 /* A READ-ONLY value (the live number arriving on a connected input) is plain
    text — no plate. An EDITABLE field keeps a fill so the two never look alike;
-   that fill lives on `.react-flow .drag-num` in DragNumberInput.css.
+   that fill lives on `.drag-num--compact` in DragNumberInput.css (it used to
+   be scoped `.react-flow .drag-num`, which made the same widget render
+   washed-out on every surface that draws a node without React Flow).
    The plate used to sit on BOTH, which inverted the affordance: the number you
    cannot touch looked like the input box and the one you can drag looked flat.
 
@@ -203,8 +205,8 @@
    deliberately not redefined in the dark block. */
 .shader-node__mic-btn {
   display: block;
-  width: 54px;
-  height: 54px;
+  width: 64px;
+  height: 64px;
   margin: 8px auto 6px;
   padding: 0;
   border: 2px solid rgba(0, 0, 0, 0.35);
@@ -261,7 +263,15 @@
   background: #e08a1e;
 }
 
-.shader-node__mic-btn:disabled {
+/* `--inert` is the PREVIEW surfaces' stand-in for `:disabled`. The asset tile
+   and the overview table render the light as a plain <div> on purpose (a
+   palette tile must never become a third click path into armMic), and a <div>
+   can never match `:disabled` — so the tile was showing the ENABLED green
+   while a freshly dropped, unwired Mic node on the canvas is grey. Same state,
+   opposite colour, on adjacent surfaces. Grey is the honest one: an unwired
+   mic cannot be armed. */
+.shader-node__mic-btn:disabled,
+.shader-node__mic-btn--inert {
   background: #b9bec4;
   border-color: rgba(0, 0, 0, 0.25);
   cursor: not-allowed;

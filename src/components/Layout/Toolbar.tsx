@@ -21,7 +21,8 @@ const CONTACT = {
  * the app always offers the current build with no per-release code change —
  * but that only works because the release workflow uploads the assets under
  * these FIXED names (see .github/workflows/release.yml); keep the two lists
- * in sync. Plain anchors: GitHub serves release assets with
+ * in sync — public/podest.html's "Get FastShaders" section hardcodes the
+ * same three names. Plain anchors: GitHub serves release assets with
  * Content-Disposition: attachment, and CSP doesn't gate navigation.
  */
 const RELEASE_DOWNLOAD_BASE = 'https://github.com/Alvis1/FastShaders/releases/latest/download';
@@ -337,6 +338,29 @@ export function Toolbar() {
             can't offer it — see work_folder.rs for why the webview FS APIs
             don't cover this. */}
         {__FS_DESKTOP__ && <WorkFolder />}
+        {/* …but the web build still SHOWS it, inert, so the capability is
+            discoverable instead of invisible — otherwise nothing on the site
+            hints that the desktop app can keep a folder of shaders.
+
+            Inlined here rather than as a branch inside WorkFolder.tsx on
+            purpose: `__FS_DESKTOP__ && <WorkFolder />` is what keeps that whole
+            module (and its Tauri bridge calls) out of the web bundle, and
+            importing it for the disabled case would undo the tree-shake.
+
+            aria-disabled, NOT the `disabled` attribute: a genuinely disabled
+            control doesn't reliably surface its native `title` (WebKit skips
+            the tooltip entirely), and here the tooltip is the whole point of
+            rendering the button at all. No onClick, so it stays inert. */}
+        {!__FS_DESKTOP__ && (
+          <button
+            type="button"
+            className="toolbar__sc-link toolbar__wf-link toolbar__wf-link--unavailable"
+            aria-disabled="true"
+            title={t('Only in the desktop app: keep your shaders in a folder on your computer — Save writes the current one there, and the list reopens any of them.', language)}
+          >
+            {t('Work folder', language)}
+          </button>
+        )}
       </div>
       <div className="toolbar__right">
         {/* Hard reload of the tab. Safe to offer without a confirm: the graph

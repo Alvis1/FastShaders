@@ -157,3 +157,21 @@ describe('hasResettableValues', () => {
     expect(hasResettableValues(undefined, { value: 1 })).toBe(false);
   });
 });
+
+describe('resetNodeValues — the noise range flag is payload, not a setting', () => {
+  // Dropping this key does not restore a neutral default: an ABSENT key means
+  // the legacy signed range, so a reset would silently turn a 0-1 node back
+  // into a -1…1 one and change the picture.
+  it('preserves signed:0 across a reset', () => {
+    const out = resetNodeValues(def('perlin'), { pos: 'positionGeometry', scale: 4, signed: 0 });
+    expect(out.signed).toBe(0);
+    // …while still resetting the actual settings.
+    expect(out.scale).toBe(1);
+  });
+
+  it('does not report a legacy noise node as dirty', () => {
+    // A false dirty flag here would light the destructive Reset row on every
+    // noise member of every built-in preset and texture.
+    expect(isAtDefaultValues(def('perlin'), { pos: 'positionGeometry', scale: 1 })).toBe(true);
+  });
+});

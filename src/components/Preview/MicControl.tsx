@@ -1,6 +1,7 @@
 import type { RefObject } from 'react';
 import { t } from '@/i18n';
 import type { Language } from '@/i18n';
+import { micStatusMessage } from '@/utils/micStatusMessage';
 import type { MicStatus } from './useMicPump';
 
 /**
@@ -29,33 +30,11 @@ export function MicControl(props: {
   const starting = status === 'starting';
   const failed = status !== 'off' && !live && !starting;
 
-  // Failure messages name the cause AND what to do about it. `getUserMedia`
-  // rejections are otherwise a bare DOMException the user never sees, and a
-  // mic button that silently does nothing is indistinguishable from a bug.
-  const message = (): string => {
-    switch (status) {
-      case 'on':
-        return t('Microphone is live — click to stop', language);
-      case 'starting':
-        return t('Waiting for microphone permission…', language);
-      case 'denied':
-        return t('Microphone blocked. Allow it for this site in your browser’s address bar, then click again.', language);
-      case 'insecure-context':
-        return t('Microphone needs a secure connection (https). It is unavailable over plain HTTP, including the LAN bench server.', language);
-      case 'unsupported':
-        return t('This browser cannot capture audio.', language);
-      case 'no-device':
-        return t('No microphone found.', language);
-      case 'in-use':
-        return t('The microphone is being used by another application.', language);
-      case 'timeout':
-        return t('The microphone request timed out. Click to try again.', language);
-      case 'failed':
-        return t('Could not start the microphone. Click to try again.', language);
-      default:
-        return t('Use a live microphone to drive this shader. Nothing is recorded, and the downloaded shader does not capture audio.', language);
-    }
-  };
+  // Status wording is shared with the node's arm light (micStatusMessage);
+  // only the idle line is this surface's own.
+  const message = (): string =>
+    micStatusMessage(status, language) ??
+    t('Use a live microphone to drive this shader. Nothing is recorded, and the downloaded shader does not capture audio.', language);
 
   const label = live
     ? t('Stop microphone', language)

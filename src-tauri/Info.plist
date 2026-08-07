@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the bundled app's Info.plist by tauri-bundler, which picks this
+  file up automatically because it sits next to tauri.conf.json.
+
+  NSMicrophoneUsageDescription is REQUIRED, not cosmetic: macOS TCC refuses a
+  microphone request outright — no prompt, no grant, just a NotAllowedError —
+  when the requesting process's Info.plist has no purpose string. Without this
+  key the Mic node works in every browser build and is permanently dead in the
+  desktop one, and the failure surfaces as "microphone blocked, allow it in
+  your browser's address bar", which the desktop shell doesn't have.
+
+  Note: `tauri dev` runs the bare binary with no .app bundle and therefore no
+  Info.plist at all, so the microphone can only be tested from `tauri build`.
+
+  If hardened-runtime signing is ever enabled (see .github/workflows/release.yml
+  — the mac build is deliberately ad-hoc signed today), this key stops being
+  sufficient on its own and bundle.macOS.entitlements must additionally grant
+  com.apple.security.device.audio-input.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>FastShaders uses the microphone to drive shader uniforms in real time. Audio is analysed in the app and is never recorded, saved or transmitted.</string>
+  </dict>
+</plist>

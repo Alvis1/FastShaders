@@ -12,7 +12,11 @@ import { buildShaderModule } from './tslCodeProcessor';
 import type { MaterialSettings } from '@/types';
 import type { PreviewMeshKind } from '@/utils/previewMesh';
 
-export type LightingMode = 'studio' | 'moon' | 'laboratory';
+// 'env' = environment-map lighting: NO analytic lights — the material's own
+// envNode (an image wired to the Output node's Environment socket) is the
+// light source (IBL). The option is offered in the Light dropdown only while
+// an env map is attached; ShaderPreview falls back to 'studio' otherwise.
+export type LightingMode = 'studio' | 'moon' | 'laboratory' | 'env';
 
 export type GeometryType = 'sphere' | 'cube' | 'plane' | 'teapot' | 'bunny' | 'custom';
 
@@ -59,10 +63,23 @@ export interface PreviewOptions {
   /**
    * Build a top-level (non-sandboxed) immersive-VR page instead of the
    * sandboxed editor preview. Immersive WebXR can NEVER run inside the
-   * preview iframe: Permissions-Policy cannot delegate xr-spatial-tracking
-   * to an opaque origin, so entry must happen from a top-level document
-   * (ShaderPreview opens an about:blank popup that inherits the app's real
-   * origin). In xr mode the page:
+   * preview iframe — but NOT at the Permissions-Policy layer (researched
+   * 2026-08-07: the spec matches a `*` allowlist BEFORE the opaque-origin
+   * rejection, and Chromium's parser sets matches_opaque_src for it, so
+   * `allow="xr-spatial-tracking *"` would delegate fine). Three blockers
+   * sit below that layer: (1) Chromium's permission layer auto-denies any
+   * permission request from an opaque origin before grant logic runs
+   * (permission_context_base.cc — the same mechanism that blocks
+   * getUserMedia there), and immersive-vr needs the VR permission;
+   * (2) Meta Quest Browser empirically fails — and can crash — running
+   * WebXR in allow-scripts-only sandboxed iframes (its forum bug tracker
+   * says allow-same-origin is required, which this app must never grant);
+   * (3) a parent click never confers transient activation on an
+   * opaque-origin child (HTML activation propagates to same-origin
+   * descendants only), so requestSession's gesture requirement could not be
+   * met from the app's chrome anyway. Hence entry happens from a top-level
+   * document (ShaderPreview opens an about:blank popup that inherits the
+   * app's real origin). In xr mode the page:
    *   - hides `navigator.gpu` up front so three r184 auto-falls back to its
    *     WebGL2 backend — the WebGPU backend hard-throws in
    *     XRManager.setSession (r173–r184) and Quest Browser has no
@@ -202,6 +219,10 @@ export const LIGHT_PRESETS: Record<LightingMode, LightSpec[]> = {
     // Pure flat ambient — every surface lit identically, no shadows.
     { type: 'ambient', color: '#ffffff', intensity: 2.5 },
   ],
+  // Environment-map mode: an EMPTY rig on purpose. material.envNode supplies
+  // radiance + irradiance (three's EnvironmentNode/pmremTexture), so any
+  // analytic light on top would double-light the surface and drown the map.
+  env: [],
 };
 
 // Resolve full absolute URLs for the IIFE bundle and shaderloader at runtime.

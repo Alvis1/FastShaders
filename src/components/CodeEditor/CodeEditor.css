@@ -47,7 +47,15 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  padding: 0 var(--space-2);
+  /* The top padding is breathing room under the preview/code seam, which lands
+     directly on this bar. Without it the Apply/Import buttons and the tab tops
+     touch the divider line. It sits HERE, not as a gap above the seam, because
+     the seam reads as the 3D viewport's own bottom edge — content butting the
+     line from below is the side that can afford to give way. Matches the 4px
+     .code-editor__actions already puts under the buttons, so they sit evenly
+     in the bar. SplitPane's CROSS_MIN_PANE_PX (the collapsed-code floor) is
+     measured against the resulting bar height — move them together. */
+  padding: 4px var(--space-2) 0;
   background: var(--bg-surface);
   flex-shrink: 0;
   border-bottom: 1px solid var(--border-subtle);

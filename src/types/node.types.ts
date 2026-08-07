@@ -108,6 +108,13 @@ export interface OutputNodeData {
   cost: number;
   materialSettings?: MaterialSettings;
   exposedPorts?: string[];
+  /** Stored per-channel values for UNWIRED channels (the on-node widgets):
+   *  hex strings for `color`/`emissive`, numbers for
+   *  `roughness`/`metalness`/`opacity`. Absent key = channel emits nothing
+   *  (the historical behavior — keeps every pre-widget graph byte-identical).
+   *  NB `getNodeValues()` deliberately still returns `{}` for output nodes;
+   *  readers access this field directly. */
+  values?: Record<string, string | number>;
   [key: string]: unknown;
 }
 

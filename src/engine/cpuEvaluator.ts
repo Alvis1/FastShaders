@@ -16,6 +16,7 @@ import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { perlin2D, fbm2D, cellNoise2D, voronoi2D } from '@/utils/noisePreview';
 import { hexToRgb01 } from '@/utils/colorUtils';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
@@ -703,8 +704,16 @@ function evaluate(
       const px = finiteOr(posInput?.[0], 0.5) * NOISE_UV_SCALE * scale;
       const py = finiteOr(posInput?.[1], 0.5) * NOISE_UV_SCALE * scale;
       let v: number;
-      if (type === 'perlin' || type === 'perlinVec3') v = (perlin2D(px, py) + 1) * 0.5;
-      else if (type === 'fbm' || type === 'fbmVec3') v = (fbm2D(px, py) + 1) * 0.5;
+      // The remap follows the node's own range flag, so the CPU value agrees
+      // with the emitted shader instead of asserting 0-1 for both modes.
+      const unsignedNoise = isUnsignedNoise(type, getNodeValues(node));
+      if (type === 'perlin' || type === 'perlinVec3') {
+        v = perlin2D(px, py);
+        if (unsignedNoise) v = (v + 1) * 0.5;
+      } else if (type === 'fbm' || type === 'fbmVec3') {
+        v = fbm2D(px, py);
+        if (unsignedNoise) v = (v + 1) * 0.5;
+      }
       else if (type === 'cellNoise') v = cellNoise2D(px, py);
       else v = voronoi2D(px, py);
       // Match the channel count of the registered output port for downstream
@@ -934,14 +943,19 @@ function computeRange(
     return result;
   }
 
-  // MaterialX noise: scalar variants are bounded in [0, 1] (after the perlin
-  // remap to display range). vec2/vec3 variants share the same per-channel
-  // bound, just with more channels. The visualization layer just needs the
-  // overall extent — exact analytical ranges per noise function aren't worth
-  // the complexity.
+  // MaterialX noise. NOT a property of the category any more: perlin/fBm carry
+  // a per-node range flag, and cellNoise/voronoi were always [0, 1]. This block
+  // used to assert [0, 1] for everything — which is exactly why the signed GPU
+  // output came as a surprise, since the editor's own edge cards had been
+  // reporting 0…1 for a shader emitting -1…1. vec2/vec3 variants share the same
+  // per-channel bound, just with more channels; exact analytical ranges per
+  // noise function still aren't worth the complexity.
   if (def.category === 'noise') {
     const n = shapeOfDataType(def.outputs[0].dataType);
-    result = { min: Array(n).fill(0), max: Array(n).fill(1) };
+    const signedNoise = hasNoiseRangeFlag(type) && !isUnsignedNoise(type, getNodeValues(node));
+    result = signedNoise
+      ? { min: Array(n).fill(-1), max: Array(n).fill(1) }
+      : { min: Array(n).fill(0), max: Array(n).fill(1) };
     cache.set(nodeId, result);
     return result;
   }
