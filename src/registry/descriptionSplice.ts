@@ -11,8 +11,8 @@ const traverse = (
 ) as typeof _traverse;
 
 /**
- * A single `description` string literal located in a registry source file,
- * addressed by BYTE RANGE rather than by AST node.
+ * A single `description` or `label` string literal located in a registry source
+ * file, addressed by BYTE RANGE rather than by AST node.
  *
  * `start`/`end` span the literal INCLUDING its quotes, so a splice replaces the
  * quoting too — that is what lets us swap a single-quoted source literal for a
@@ -73,29 +73,46 @@ function toSlot(
 }
 
 /**
- * Collect the description slots for every definition in nodeRegistry.ts's
+ * Which tuple element holds each spliceable field, for the unary-math
+ * `[type, label, description]` tuples (see locateRegistryField).
+ */
+const TUPLE_INDEX = { label: 1, description: 2 } as const;
+
+export type RegistryField = keyof typeof TUPLE_INDEX;
+
+/**
+ * Collect the slots for one field of every definition in nodeRegistry.ts's
  * `definitions` array.
  *
  * WHY THERE ARE TWO FORMS:
  *
- * Most definitions are plain object literals with a `description: '…'` property
- * ('property' form). But the nine unary-math nodes (sin/cos/abs/…) are not written
- * out longhand — they share an identical shape, so the registry spreads them in from
- * a `.map()` over a `[type, label, description]` tuple array:
+ * Most definitions are plain object literals with `label: '…'` / `description: '…'`
+ * properties ('property' form). But the nine unary-math nodes (sin/cos/abs/…) are not
+ * written out longhand — they share an identical shape, so the registry spreads them in
+ * from a `.map()` over a `[type, label, description]` tuple array:
  *
  *   ...([['sin', 'Sine', 'Sine wave … Also: oscillate'], …]).map(([fn, label, description]) => ({
- *     type: fn, label, …, description,           // <- shorthand, no `description:` token
+ *     type: fn, label, …, description,           // <- shorthand, no `label:`/`description:` token
  *   }))
  *
- * For those nine there is NO `description:` key anywhere near the text — the string
- * lives at tuple element [2] and reaches the object through shorthand property
- * punning, and the node's type is tuple element [0]. A locator that only looked for
- * `description:` properties would silently miss them (and a grep-based one would too),
- * so the tuple array is matched structurally as a second, equal-status form.
+ * For those nine there is NO `label:`/`description:` key anywhere near the text — the
+ * strings live at tuple elements [1] and [2] and reach the object through shorthand
+ * property punning, and the node's type is tuple element [0]. A locator that only looked
+ * for keyed properties would silently miss them (and a grep-based one would too), so the
+ * tuple array is matched structurally as a second, equal-status form.
+ *
+ * WHY A DIRECT-PROPERTY READ IS ENOUGH FOR `label`:
+ *
+ * `getStringProp` walks only the definition object's OWN properties, so the per-socket
+ * `label`s nested inside `inputs: [{ id: 'a', label: 'A', … }]` are never candidates —
+ * a node label and a socket label can never be confused, which matters because socket
+ * labels outnumber node labels 2:1 in this file and are keyed by English text in
+ * lv.json (renaming one there would silently drop its translation).
  */
-export function locateRegistryDescriptions(source: string): DescriptionSlot[] {
+function locateRegistryField(source: string, field: RegistryField): DescriptionSlot[] {
   const ast = parseSource(source);
   const slots: DescriptionSlot[] = [];
+  const tupleIndex = TUPLE_INDEX[field];
 
   let found = false;
   traverse(ast, {
@@ -105,20 +122,22 @@ export function locateRegistryDescriptions(source: string): DescriptionSlot[] {
       found = true;
 
       for (const element of path.node.init.elements) {
-        // Longhand definition: { type: 'x', …, description: '…' }
+        // Longhand definition: { type: 'x', …, label: '…', description: '…' }
         if (t.isObjectExpression(element)) {
           const typeLit = getStringProp(element, 'type');
-          const descLit = getStringProp(element, 'description');
-          if (typeLit && descLit) slots.push(toSlot(typeLit.value, descLit, 'property'));
+          const valueLit = getStringProp(element, field);
+          if (typeLit && valueLit) slots.push(toSlot(typeLit.value, valueLit, 'property'));
           continue;
         }
 
-        // Spread of the unary-math `.map()` over [type, label, description] tuples.
+        // Spread of the unary-math `.map()` over [type, label, description]
+        // tuples (with an optional trailing defaultValues object).
         if (t.isSpreadElement(element)) {
           for (const tuple of collectTupleArrays(element.argument)) {
-            const [typeEl, , descEl] = tuple.elements;
-            if (t.isStringLiteral(typeEl) && t.isStringLiteral(descEl)) {
-              slots.push(toSlot(typeEl.value, descEl, 'tuple'));
+            const typeEl = tuple.elements[0];
+            const valueEl = tuple.elements[tupleIndex];
+            if (t.isStringLiteral(typeEl) && t.isStringLiteral(valueEl)) {
+              slots.push(toSlot(typeEl.value, valueEl, 'tuple'));
             }
           }
         }
@@ -129,6 +148,24 @@ export function locateRegistryDescriptions(source: string): DescriptionSlot[] {
 
   if (!found) throw new Error('descriptionSplice: could not find the `definitions` array');
   return slots;
+}
+
+/** Description slots for every definition in nodeRegistry.ts's `definitions` array. */
+export function locateRegistryDescriptions(source: string): DescriptionSlot[] {
+  return locateRegistryField(source, 'description');
+}
+
+/**
+ * Label slots for every definition in nodeRegistry.ts's `definitions` array.
+ *
+ * The node DISPLAY label only — `type` is deliberately not spliceable here and must
+ * never become so: it is the registry key, the `registryType` stored in every saved
+ * graph, and what codeToGraph matches on, so renaming it would orphan every existing
+ * `.fastshader`. The label reaches no persisted or generated artefact (see
+ * nodeLabelRename.test.ts), which is exactly what makes IT safe to edit.
+ */
+export function locateRegistryLabels(source: string): DescriptionSlot[] {
+  return locateRegistryField(source, 'label');
 }
 
 /**
@@ -161,12 +198,23 @@ function collectTupleArrays(argument: t.Node): t.ArrayExpression[] {
   return found;
 }
 
+/**
+ * A unary-math entry: `[type, label, description]`, optionally followed by a
+ * defaultValues object literal (`['log2', 'Log2', '…', { x: 1 }]`) for a unary
+ * whose domain excludes 0.
+ *
+ * The first three elements must still be string literals — that is what keeps
+ * this from matching arbitrary arrays elsewhere in the file — but the arity is
+ * no longer pinned at exactly 3. It was, and adding the 4th element silently
+ * dropped log2 from every slot list: the Node Designer could no longer rename
+ * it or edit its description, and nothing said so except two count assertions.
+ */
 function isStringTuple(node: t.Node | null | undefined): node is t.ArrayExpression {
-  return (
-    t.isArrayExpression(node) &&
-    node.elements.length === 3 &&
-    node.elements.every(el => t.isStringLiteral(el))
-  );
+  if (!t.isArrayExpression(node)) return false;
+  const { elements } = node;
+  if (elements.length < 3 || elements.length > 4) return false;
+  if (!elements.slice(0, 3).every(el => t.isStringLiteral(el))) return false;
+  return elements.length === 3 || t.isObjectExpression(elements[3]);
 }
 
 /** Collect the description slots for every entry in builtinTextures.ts's TEXTURE_ENTRIES. */
@@ -207,14 +255,15 @@ export function spliceDescriptions(
   source: string,
   slots: DescriptionSlot[],
   patch: Record<string, string>,
+  kind = 'description',
 ): string {
   const byKey = new Map(slots.map(slot => [slot.key, slot]));
 
   for (const [key, value] of Object.entries(patch)) {
     if (!byKey.has(key)) {
-      throw new Error(`descriptionSplice: no description slot for key "${key}"`);
+      throw new Error(`descriptionSplice: no ${kind} slot for key "${key}"`);
     }
-    assertSingleLine(key, value);
+    assertSingleLine(key, value, kind);
   }
 
   // Right-to-left: each splice shifts every offset after it, so applying in
@@ -258,19 +307,98 @@ function serializeLiteral(value: string, quote: '"' | "'"): string {
 }
 
 /**
- * Descriptions are single-line string literals. A newline would still splice into
- * syntactically valid TypeScript (JSON.stringify escapes it to \n), but it would
- * break the one-description-per-line shape the file is maintained in, so reject it
+ * Descriptions and labels are single-line string literals. A newline would still
+ * splice into syntactically valid TypeScript (JSON.stringify escapes it to \n), but it
+ * would break the one-entry-per-line shape the file is maintained in, so reject it
  * at the boundary instead of letting it through.
  */
-function assertSingleLine(key: string, value: string): void {
+function assertSingleLine(key: string, value: string, kind = 'description'): void {
   // eslint-disable-next-line no-control-regex
-  const control = /[\u0000-\u001F\u007F]/.exec(value);
+  // U+2028/U+2029 are JS LineTerminators, but ES2019 made them legal INSIDE string
+  // literals — so they are not a syntax error, `serializeLiteral` passes them through
+  // untouched, the file still parses, and `split('\n').length` is unchanged, while every
+  // editor and `git diff` renders the definition broken across two lines mid-literal.
+  // That is precisely the one-entry-per-line invariant this guard protects, so they
+  // belong in the class even though the \n / \r range does not reach them.
+  const control = /[\u0000-\u001F\u007F\u2028\u2029]/.exec(value);
   if (control) {
     const code = control[0].charCodeAt(0).toString(16).padStart(4, '0');
     throw new Error(
-      `descriptionSplice: description for "${key}" contains control character U+${code.toUpperCase()}`,
+      `descriptionSplice: ${kind} for "${key}" contains control character U+${code.toUpperCase()}`,
     );
+  }
+}
+
+/**
+ * A node label is a UI string, but it is edited by hand in the Node Designer and lands
+ * in EXECUTABLE source, so it gets a real boundary rather than a trim().
+ *
+ * `MAX_NODE_LABEL_LENGTH` is a legibility cap, not a safety one: the label is the header
+ * of a node whose width the designer authors in pixels, and it is the row text in the
+ * Add-node menu (a 280px box) and on every asset tile. NodeBase.css clamps the header at
+ * two lines, so a runaway label does not break layout — it just becomes an ellipsis
+ * everywhere and stops being a name.
+ */
+export const MAX_NODE_LABEL_LENGTH = 40;
+
+/**
+ * Validate a COMPLETE key→label map — the state the registry would be in AFTER the
+ * patch, not the patch alone.
+ *
+ * Uniqueness has to be judged against the whole map: `nodeMatchRank` tiers an exact name
+ * hit above everything else, so two nodes sharing a label make that tier ambiguous and
+ * the Add-node menu grows two identical-looking rows with no way to tell them apart.
+ * Comparison is case-insensitive because the ranker lowercases before matching, so
+ * "Multiply"/"multiply" would collide there while looking distinct here.
+ *
+ * Empty labels are rejected outright (a node whose name renders as "" is
+ * indistinguishable from a broken registry entry), and so is surrounding whitespace —
+ * it survives the splice into the source literal, is invisible in every UI, and would
+ * make " Multiply" and "Multiply" read as the same name while passing the collision
+ * check above.
+ *
+ * Throws on the FIRST problem: the caller surfaces the message verbatim, and a partial
+ * "some labels applied" write is worse than none.
+ */
+/**
+ * Zero-width and invisible characters, which `trim()` cannot see.
+ *
+ * Its WhiteSpace set covers the classic spaces plus U+00A0 and U+FEFF but NOT U+200B
+ * ZWSP, U+200C/D, U+2060 or U+180E — so "\u200bMultiply" passes both the empty check
+ * and the collision fold and produces a second, visually identical "Multiply" row in the
+ * Add-node menu. That is the exact harm the whitespace rule exists to stop, wearing a
+ * character that copy-paste from a web page supplies routinely; a label made ONLY of
+ * them is the empty case in the same disguise.
+ */
+const ZERO_WIDTH = /[\u200B-\u200D\u2060\u180E\uFEFF]/;
+
+export function assertValidNodeLabels(labels: Record<string, string>, kind = 'label'): void {
+  const seen = new Map<string, string>();
+  for (const [key, value] of Object.entries(labels)) {
+    if (typeof value !== 'string') throw new Error(`${kind} for "${key}" must be a string`);
+    assertSingleLine(key, value, kind);
+    if (!value.trim()) throw new Error(`${kind} for "${key}" must not be empty`);
+    if (value.trim() !== value) {
+      throw new Error(`${kind} for "${key}" has leading or trailing whitespace`);
+    }
+    const zw = ZERO_WIDTH.exec(value);
+    if (zw) {
+      const code = zw[0].charCodeAt(0).toString(16).padStart(4, '0').toUpperCase();
+      throw new Error(`${kind} for "${key}" contains an invisible character U+${code}`);
+    }
+    if (value.length > MAX_NODE_LABEL_LENGTH) {
+      throw new Error(
+        `${kind} for "${key}" is ${value.length} characters (max ${MAX_NODE_LABEL_LENGTH})`,
+      );
+    }
+    const fold = value.toLowerCase();
+    const owner = seen.get(fold);
+    // Name BOTH sides. Callers hand in the whole post-patch map, which iterates in
+    // registry order rather than "patched key last", so `owner` is whichever node comes
+    // first in the FILE — for a rename of an early node that is the node being renamed,
+    // and "X is already used by X" reads as nonsense. The pair is unambiguous either way.
+    if (owner) throw new Error(`${kind} "${value}" for "${key}" collides with "${owner}"`);
+    seen.set(fold, key);
   }
 }
 

@@ -23,27 +23,47 @@
 }
 
 /* ===== Inline color picker =====
-   Generic: a small swatch beside its row label. No node currently uses it —
-   `color` and `property_color` both render as the borderless ColorNode — but
-   the row machinery still supports a color setting, so this stays as the
-   styling any future one would pick up. */
-.shader-node__input-color {
-  width: 14px;
-  height: 13px;
+   A small swatch beside its row label (the Stripes / Data Viz ramp ends).
+   `color` and `property_color` are NOT here — both render as the borderless
+   ColorNode.
+
+   The element is the app-wide `PaletteColorPicker`'s trigger `<button>` (and,
+   on the inert card/overview replica, a `<span>` carrying the same classes),
+   so this only has to restate the ON-NODE size over `.palette-swatch`'s own
+   26x12 default. Written under `.shader-node__left` — two classes, so it wins
+   on SPECIFICITY rather than on whichever stylesheet the bundler happens to
+   emit last. The fill arrives as an inline `background`, so nothing here may
+   set one.
+
+   The `::-webkit-color-swatch` / `-wrapper` rules that used to sit here are
+   gone with the native input: a `<button>` has no shadow parts for them to
+   reach. */
+.shader-node__left .shader-node__input-color {
+  /* A ramp END, not a checkbox — wide enough to actually judge the colour and
+     to read as one half of a gradient. 44px is bounded by Data Stripes' own
+     authored designer width (61) minus the row's 8px padding, so the node keeps
+     the width it was designed at instead of silently overriding it via
+     `min-width: min-content`.
+
+     The HEIGHT tracks --node-text-scale exactly like the compact
+     DragNumberInput stacked directly above it in these nodes
+     (`.drag-num--compact`, 12px × scale) so a Data Stripes node's four setting
+     widgets line up; 12px is also the Colormap ramp strip's height, the
+     in-family precedent for "a colour bar on a dataviz node". Staying at 12
+     keeps the row on its 14px min-height floor, so neither node grows AND Data
+     Viz's `value` output socket — which shares the low-colour row — does not
+     move. The WIDTH deliberately does not scale: it is not a text metric, and
+     44 × 1.3 would blow the width budget above. */
+  width: 44px;
+  height: calc(12px * var(--node-text-scale, 1));
   padding: 0;
   border: 1px solid rgba(0, 0, 0, 0.15);
   border-radius: var(--border-radius-sm);
   cursor: pointer;
-  background: none;
-}
-
-.shader-node__input-color::-webkit-color-swatch-wrapper {
-  padding: 1px;
-}
-
-.shader-node__input-color::-webkit-color-swatch {
-  border: none;
-  border-radius: 2px;
+  /* A `<span>` is inline by default; `.shader-node__left` is a flex container
+     so it blockifies anyway, but stating it keeps the inert replica honest if
+     the row is ever laid out differently. */
+  display: inline-block;
 }
 
 /* ===== Slider range input ===== */

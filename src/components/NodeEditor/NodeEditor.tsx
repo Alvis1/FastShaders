@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
-  MiniMap,
   Panel,
   addEdge,
   reconnectEdge,
@@ -46,6 +45,7 @@ import {
 } from '@/utils/drawings';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
+import { ColorPickerPopover } from '@/components/inputs/PaletteColorPicker';
 import { NewShaderModal } from '@/components/Modals/NewShaderModal';
 import { ImageImportModal, type ImageImportChoice } from '@/components/Modals/ImageImportModal';
 import { ImageConvertInfoModal } from '@/components/Modals/ImageConvertInfoModal';
@@ -75,7 +75,7 @@ import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './ove
 import { pickSpliceInputPort } from './edgeSplice';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
-import { getCostColor, getCostScale, getContrastColor } from '@/utils/colorUtils';
+import { getCostScale, getContrastColor } from '@/utils/colorUtils';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
@@ -598,11 +598,16 @@ export function NodeEditor() {
   const openContextMenu = useAppStore((s) => s.openContextMenu);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const contextMenu = useAppStore((s) => s.contextMenu);
-  const costColorLow = useAppStore((s) => s.costColorLow);
-  const costColorHigh = useAppStore((s) => s.costColorHigh);
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
-  const isDarkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
+  // Canvas-background picker. `ColorPickerPopover` rather than the trigger-
+  // bearing `PaletteColorPicker`: this control is a `.fs-canvas-bar__btn` in a
+  // row of bar buttons (−, +, ⤢) with a small swatch inside it, and a
+  // full-bleed 26x12 colour chip in its place would break the bar's rhythm —
+  // so the bar button stays the trigger AND the anchor.
+  const bgBtnRef = useRef<HTMLButtonElement>(null);
+  const [bgPickerOpen, setBgPickerOpen] = useState(false);
+  const closeBgPicker = useCallback(() => setBgPickerOpen(false), []);
   const drawToolActive = useAppStore((s) => s.drawToolActive);
   const drawEraser = useAppStore((s) => s.drawEraser);
   const canUndo = useAppStore((s) => s.past.length > 0);
@@ -2861,20 +2866,31 @@ export function NodeEditor() {
               >
                 ⤢
               </button>
-              <label
+              <button
+                ref={bgBtnRef}
+                type="button"
                 className="fs-canvas-bar__btn node-editor__bg-color-btn"
                 title={t('Canvas background color', language)}
+                aria-label={t('Canvas background color', language)}
+                onClick={() => setBgPickerOpen((o) => !o)}
               >
                 <span
                   className="node-editor__bg-color-swatch"
                   style={{ background: nodeEditorBgColor }}
                 />
-                <input
-                  type="color"
-                  value={nodeEditorBgColor}
-                  onChange={(e) => setNodeEditorBgColor(e.target.value)}
-                />
-              </label>
+              </button>
+              {/* `history="none"`: the canvas backdrop is a PREFERENCE —
+                  `setNodeEditorBgColor` writes localStorage (per theme) and the
+                  store, never pushHistory — so bracketing would push an undo
+                  entry that restores nothing and clear the redo stack. */}
+              <ColorPickerPopover
+                anchor={bgBtnRef.current}
+                open={bgPickerOpen}
+                onClose={closeBgPicker}
+                value={nodeEditorBgColor}
+                onPick={setNodeEditorBgColor}
+                history="none"
+              />
             </div>
           </Panel>
         </ReactFlow>

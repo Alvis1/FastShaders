@@ -1,11 +1,12 @@
 import { useAppStore } from '@/store/useAppStore';
 import { t, formatNodeLabel, portLabel } from '@/i18n';
 import { getNodeValues, getNodeExposedPorts } from '@/types';
-import type { NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { toggleExposedPort, usesExposedPorts } from '@/utils/exposedPorts';
-import { rowStyle, labelStyle, colorFieldStyle, nameFieldStyle, NodeActions } from './menuShared';
+import { asOneHistoryEntry } from '@/utils/historyGesture';
+import { rowStyle, labelStyle, nameFieldStyle, NodeActions } from './menuShared';
+import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/propertyConvert';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { ImageNodeSettings } from './ImageNodeSettings';
@@ -62,7 +63,14 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   };
 
   const handleTogglePort = (key: string) => {
-    updateNodeData(nodeId, { exposedPorts: toggleExposedPort(nodeId, exposedPorts, key) });
+    // `toggleExposedPort` deletes the hidden port's edges (its own pushHistory)
+    // and is evaluated BEFORE `updateNodeData` (argument order), which pushes
+    // again — two entries per click, the first of which lands on "socket still
+    // exposed, wire already gone", a state the user never authored. One
+    // bracket around the whole statement makes it one undoable act.
+    asOneHistoryEntry(() => {
+      updateNodeData(nodeId, { exposedPorts: toggleExposedPort(nodeId, exposedPorts, key) });
+    });
   };
 
   return (
@@ -128,12 +136,15 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
                   style={nameFieldStyle}
                 />
               ) : isColor ? (
-                <input
-                  type="color"
+                // `history="bracket"`: handleValueChange -> updateNodeData ->
+                // an unconditional pushHistory, so this is a real graph edit
+                // and the picker owns the coalescing bracket the row used to
+                // open by hand for the native input's per-frame stream.
+                <PaletteColorPicker
+                  className="context-menu__color"
+                  history="bracket"
                   value={String(currentValue)}
-                  onChange={(e) => { bracket(); handleValueChange(key, e.target.value); }}
-                  onBlur={closeBracket}
-                  style={colorFieldStyle}
+                  onPick={(hex) => handleValueChange(key, hex)}
                 />
               ) : isPort ? null : (
                 <DragNumberInput

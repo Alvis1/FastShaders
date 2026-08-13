@@ -2,6 +2,10 @@ import { memo, useCallback, useState, type ChangeEvent, type DragEvent } from 'r
 import { useAppStore, VR_HEADSETS, resolveDeviceBudget } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { parseCostFile, buildMergedComplexity } from '@/utils/costOverride';
+// Before './CostBar.css' so the bundler emits PaletteColorPicker.css first —
+// the pole-picker rule below is written with two classes anyway, so this is
+// belt-and-braces rather than the mechanism.
+import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import './CostBar.css';
 
 // memo(): rendered by NodeEditor, which re-renders every drag frame; this
@@ -150,12 +154,17 @@ export const CostBar = memo(function CostBar() {
         </span>
         <span className="cost-bar__label-end">{maxBudget}</span>
       </div>
+      {/* Both gradient poles take `history="none"`: `setCostColorLow`/`High`
+          write `fs:costColorLow`/`High` and the store, with no pushHistory —
+          the gradient is a display PREFERENCE over the whole app (it recolors
+          every cost badge), not a property of the graph. Bracketing would push
+          an undo entry that restores nothing and clear the redo stack. */}
       <div className="cost-bar__track-row">
-        <input
-          type="color"
+        <PaletteColorPicker
           className="cost-bar__pole-picker"
+          history="none"
           value={costColorLow}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => setCostColorLow(e.target.value)}
+          onPick={setCostColorLow}
           title={t('Low impact color', language)}
         />
         <div
@@ -169,11 +178,11 @@ export const CostBar = memo(function CostBar() {
             style={{ left: `${percentage * 100}%` }}
           />
         </div>
-        <input
-          type="color"
+        <PaletteColorPicker
           className="cost-bar__pole-picker"
+          history="none"
           value={costColorHigh}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => setCostColorHigh(e.target.value)}
+          onPick={setCostColorHigh}
           title={t('High impact color', language)}
         />
       </div>

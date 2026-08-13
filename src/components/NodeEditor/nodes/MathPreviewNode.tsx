@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useCallback, type CSSProperties } from 'react';
+import { memo, useEffect, useRef, useCallback, useMemo, type CSSProperties } from 'react';
 import { Position, useStore, type NodeProps } from '@xyflow/react';
 import { makeConnectionRevealSelector } from './connectionReveal';
 import type { MathPreviewFlowNode, NodeCategory } from '@/types';
@@ -8,11 +8,10 @@ import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
-import { renderMathPreview } from '@/utils/mathPreview';
-import { evaluateNodeScalar } from '@/engine/cpuEvaluator';
+import { WaveformSvg, applyWaveFrame, type WaveformDynamicRefs } from './WaveformSvg';
+import { appTime } from '@/utils/appClock';
+import { evaluateEdgeSource, getTargetEdges, getUnwrappedEdges } from '@/engine/cpuEvaluator';
 import './MathPreviewNode.css';
-
-const CANVAS_SIZE = 72;
 
 /** Map registryType to its math function. */
 const MATH_FUNCTIONS: Record<string, (x: number) => number> = {
@@ -26,11 +25,26 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   selected,
 }: NodeProps<MathPreviewFlowNode>) {
   const def = NODE_REGISTRY.get(data.registryType);
+  // Rules-of-Hooks note: this return sits ABOVE the hooks below. Safe because
+  // `def` cannot flip defined<->undefined on a MOUNTED instance: React Flow keys
+  // node components by node.id, every registryType the app writes is in
+  // NODE_REGISTRY (`unknown` included), and nothing mutates registryType in place
+  // to or from an unregistered value. A tampered .fastshader with an unknown
+  // registryType renders null for the whole life of that node. Moving the return
+  // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
+  // dereference `def`) — see CLEAN-3.
   if (!def) return null;
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const nodes = useAppStore((s) => s.nodes);
-  const edges = useAppStore((s) => s.edges);
+  const curveRef = useRef<SVGPathElement>(null);
+  const dropRef = useRef<SVGLineElement>(null);
+  const dotRef = useRef<SVGCircleElement>(null);
+  const pillRef = useRef<SVGRectElement>(null);
+  const textRef = useRef<SVGTextElement>(null);
+  const dynamicRefs = useMemo<WaveformDynamicRefs>(
+    () => ({ curve: curveRef, drop: dropRef, dot: dotRef, pill: pillRef, text: textRef }),
+    [],
+  );
+  const lastLabelRef = useRef<string | null>(null);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
@@ -49,74 +63,94 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);
 
-  // Check if the X input has an edge connected.
-  // Pull `xSource` (a string) instead of the edge object so the effect deps below
-  // are stable across re-renders that don't actually change this node's input.
-  const xEdge = edges.find((e) => e.target === id && e.targetHandle === 'x');
-  const xSource = xEdge?.source ?? null;
-  const hasConnection = xSource !== null;
-  const hasTime = xSource !== null && hasTimeUpstream(xSource, nodes, edges);
+  // ── Upstream-derived render inputs, without a whole-array subscription ──
+  // Subscribing to s.nodes/s.edges re-rendered every sin/cos card on every
+  // store notify (a drag pointermove mints new array identities, so the memo()
+  // above is bypassed), each render paying an O(E) edges.find plus an UNCACHED
+  // hasTimeUpstream BFS — it rebuilds a node map AND an adjacency map from
+  // scratch per call (graphTraversal.ts:9-19). Same idiom as PreviewNode's
+  // inputsKey (PreviewNode.tsx:117-126) and ShaderNode's edgeKey
+  // (ShaderNode.tsx:291-300): fold everything the waveform depends on into ONE
+  // primitive string, so a position-only notify produces an identical string
+  // and Object.is bails before any re-render.
+  //
+  // The key needs exactly two facts, each protecting a different thing:
+  //   * the X feeder's node id — decides hasConnection (socket vs the inline
+  //     number widget) AND is the rAF loop's evaluation target;
+  //   * whether Time is upstream of it — picks the animated branch.
+  // The upstream VALUE is deliberately NOT folded in: the static branch
+  // renders phase 0 with no readout for a connected input and therefore never
+  // reads it, and the animated branch re-reads the graph every frame. If the
+  // static branch is ever changed to show the arriving value, this key MUST
+  // grow an `evaluateNodeScalar(source, ..., 0)` component.
+  //
+  // BOTH lookups run on the UNWRAPPED view, and that pairing is load-bearing.
+  // getTargetEdges reports the real producer inside a collapsed frame (a raw
+  // scan reports the GROUP id, which has no registry def — the waveform froze
+  // at phase 0 whenever its Time feeder was collapsed). But hasTimeUpstream
+  // walks the graph ITSELF, so handing it raw edges after that would drop every
+  // wire crossing the frame's boundary: Time → Multiply(inside a collapsed
+  // group) → sin reads as time-less and goes static. One view, both calls.
+  // The flag is a single leading char so the key needs no separator (a raw NUL
+  // would make grep treat this file as binary — see MicNode/OutputNode).
+  const xKey = useAppStore((s) => {
+    const e = getTargetEdges(s.nodes, s.edges, id).find((x) => x.targetHandle === 'x');
+    if (!e) return '';
+    const timeFed = hasTimeUpstream(e.source, s.nodes, getUnwrappedEdges(s.nodes, s.edges));
+    // The SOCKET rides the key too — re-wiring from one output of a source to
+    // another leaves source/target/targetHandle identical, so a source-only
+    // key would keep the waveform on the old channel.
+    return `${timeFed ? '1' : '0'}${e.source}|${e.sourceHandle ?? ''}`;
+  });
+  const hasConnection = xKey !== '';
+  const [xSource, xHandle] = hasConnection
+    ? (() => { const r = xKey.slice(1); const i = r.lastIndexOf('|'); return [r.slice(0, i), r.slice(i + 1) || null]; })()
+    : [null, null];
+  const hasTime = xKey.charCodeAt(0) === 49; // '1' — ''.charCodeAt(0) is NaN
 
-  const accentColor = '#6C63FF';
   const inputX = Number(data.values?.x ?? 0);
 
-  // Snapshot nodes/edges for use inside rAF (avoid stale closures)
-  const nodesRef = useRef(nodes);
-  const edgesRef = useRef(edges);
-  nodesRef.current = nodes;
-  edgesRef.current = edges;
-
-  // Render waveform
+  // Animated branch: the WaveformSvg's initial render is declarative (it also
+  // fully covers the static branches), and this loop only OVERWRITES the
+  // dynamic attributes via applyWaveFrame — two transform writes + a label
+  // update per frame, instead of the old full 72×72 canvas repaint.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    // willReadFrequently keeps the canvas CPU-backed: an accelerated canvas
-    // layer makes Safari rasterize the zoomed viewport at 1× and stretch the
-    // bitmap — every node goes blurry (WebKit overlap compositing).
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return;
+    if (!hasTime) return;
+    let rafId: number;
 
-    if (hasTime) {
-      // Animated: use CPU evaluator to get the actual input value
-      let rafId: number;
-      let startTime: number | null = null;
+    const draw = (timestamp: number) => {
+      // Shared app clock — every animated surface (this card, the noise
+      // previews, the edge info chip) evaluates the same t per frame, so
+      // their displayed values agree; per-loop epochs made a sin card show
+      // sin(48.3) while the freshly-hovered edge chip showed sin(0.15).
+      const t = appTime(timestamp);
 
-      const draw = (timestamp: number) => {
-        if (startTime === null) startTime = timestamp;
-        const t = (timestamp - startTime) / 1000;
-
-        // Evaluate the actual input flowing into this node's X port
-        // by walking the upstream graph with the current time
-        const evaluated = xSource ? evaluateNodeScalar(xSource, nodesRef.current, edgesRef.current, t) : null;
-        const inputVal = evaluated ?? t;
-
-        renderMathPreview(ctx, {
-          func,
-          width: CANVAS_SIZE,
-          height: CANVAS_SIZE,
-          phase: inputVal,
-          accentColor,
-          inputValue: inputVal,
-          funcLabel: data.registryType,
-        });
-        rafId = requestAnimationFrame(draw);
-      };
-
+      // Evaluate the actual input flowing into this node's X port by walking
+      // the upstream graph with the current time. The graph is read FRESH
+      // from the store each frame (PreviewNode does the same): this component
+      // no longer subscribes to nodes/edges, so a mirror ref would never be
+      // refreshed and the waveform WOULD freeze on upstream edits.
+      const { nodes, edges } = useAppStore.getState();
+      const evaluated = xSource
+        ? evaluateEdgeSource({ source: xSource, sourceHandle: xHandle }, nodes, edges, t)?.[0] ?? null
+        : null;
+      applyWaveFrame(dynamicRefs, func, data.registryType, evaluated ?? t, lastLabelRef);
       rafId = requestAnimationFrame(draw);
-      return () => cancelAnimationFrame(rafId);
-    } else {
-      // Static: show value at current input X — curve shifts, dot stays centered
-      renderMathPreview(ctx, {
-        func,
-        width: CANVAS_SIZE,
-        height: CANVAS_SIZE,
-        phase: hasConnection ? 0 : inputX,
-        accentColor,
-        inputValue: hasConnection ? null : inputX,
-        funcLabel: data.registryType,
-      });
-    }
-  }, [data.registryType, data.values, hasTime, hasConnection, func, accentColor, inputX, xSource]);
+    };
+
+    rafId = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(rafId);
+  }, [data.registryType, hasTime, func, xSource, xHandle, dynamicRefs]);
+
+  // Static branches: snap the dynamic attributes to the declared state. A
+  // previous animated life leaves imperative writes React's vdom diff cannot
+  // see (its old and new vdom agree, so it never re-patches the attributes
+  // the rAF loop moved) — without this, unwiring Time froze the curve at the
+  // last animated phase instead of returning to phase 0.
+  useEffect(() => {
+    if (hasTime) return;
+    applyWaveFrame(dynamicRefs, func, data.registryType, hasConnection ? 0 : inputX, lastLabelRef);
+  }, [hasTime, hasConnection, inputX, func, data.registryType, dynamicRefs]);
 
   const handleXChange = useCallback(
     (v: number) => {
@@ -140,13 +174,18 @@ export const MathPreviewNode = memo(function MathPreviewNode({
         <span className="node-base__title" title={varName ?? data.label} style={{ color: headerTextColor }}>{varName ?? data.label}</span>
       </div>
 
-      {/* Waveform canvas */}
+      {/* Waveform plot (SVG — crisp under viewport zoom, unlike the old
+          fixed-72px canvas bitmap; also one fewer canvas inside the React
+          Flow viewport, which is the surface WebKit's compositing bug bites).
+          Declarative render covers the static branches; the rAF effect above
+          overwrites via dynamicRefs when Time is upstream. */}
       <div className="math-preview-node__canvas-wrap">
-        <canvas
-          ref={canvasRef}
-          width={CANVAS_SIZE}
-          height={CANVAS_SIZE}
-          className="math-preview-node__canvas"
+        <WaveformSvg
+          func={func}
+          funcLabel={data.registryType}
+          phase={hasConnection ? 0 : inputX}
+          showReadout={hasTime || !hasConnection}
+          dynamicRefs={dynamicRefs}
         />
       </div>
 

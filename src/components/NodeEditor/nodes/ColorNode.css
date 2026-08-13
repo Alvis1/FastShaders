@@ -62,14 +62,10 @@
   padding: 0 3px;
 }
 
-.color-node__picker {
-  position: absolute;
-  width: 0;
-  height: 0;
-  overflow: hidden;
-  opacity: 0;
-  pointer-events: none;
-}
+/* `.color-node__picker` — the invisible zero-size `<input type="color">` this
+   node used to click open — is gone: the node now renders `ColorPickerPopover`
+   directly (anchored to itself, opened by the same double-click / long-press),
+   so there is no hidden input left to hide. */
 
 /* The output socket is positioned entirely from ColorNode.tsx (inline left/top
    /transform), so it can ride the circle's perimeter toward whatever it feeds.

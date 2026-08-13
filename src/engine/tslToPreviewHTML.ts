@@ -1124,7 +1124,6 @@ export function tslToPreviewHTML(
     requestedGeometry === 'custom' && !customModel ? 'sphere' : requestedGeometry;
 
   const shaderModule = convertToShaderModule(tslCode, materialSettings);
-  const isObj = isObjGeometry(geometry);
   const isModel = isModelGeometry(geometry);
   const isCustom = geometry === 'custom';
   // The dropped mesh's feed key: ties every model message to the document

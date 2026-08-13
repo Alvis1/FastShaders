@@ -2,6 +2,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import type { NoteFlowNode } from '@/types';
 import { rowStyle, labelStyle, colorFieldStyle, wideFieldStyle } from './menuShared';
+import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 
 interface NoteSettingsMenuProps {
   nodeId: string;
@@ -34,23 +35,32 @@ export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
         />
       </div>
 
+      {/* BOTH note pickers take `history="none"`, and that is a deliberate
+          reading of the writer rather than a default: `updateNoteData` is the
+          one node writer in the store with NO `pushHistory` ("notes are
+          low-stakes annotations and inline typing would otherwise flood the
+          50-entry history buffer on every keystroke"). Bracketing here would
+          therefore snapshot the graph for a change history does not own — an
+          undo entry that restores nothing — and, because `beginInteraction`
+          also clears `future`, it would wipe the user's redo stack every time
+          a note was recoloured. */}
       <div style={rowStyle}>
         <label style={labelStyle}>{t('header color', language)}</label>
-        <input
-          type="color"
+        <PaletteColorPicker
+          className="context-menu__color"
+          history="none"
           value={headerColor ?? '#ffd24a'}
-          onChange={(e) => updateNoteData(nodeId, { headerColor: e.target.value })}
-          style={colorFieldStyle}
+          onPick={(hex) => updateNoteData(nodeId, { headerColor: hex })}
         />
       </div>
 
       <div style={rowStyle}>
         <label style={labelStyle}>{t('body color', language)}</label>
-        <input
-          type="color"
+        <PaletteColorPicker
+          className="context-menu__color"
+          history="none"
           value={color ?? '#fff7cc'}
-          onChange={(e) => updateNoteData(nodeId, { color: e.target.value })}
-          style={colorFieldStyle}
+          onPick={(hex) => updateNoteData(nodeId, { color: hex })}
         />
       </div>
 

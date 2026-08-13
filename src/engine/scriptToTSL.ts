@@ -17,27 +17,112 @@ import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
 import { maskNonCode, splitTopLevelArgs, stripComments } from './tslCodeProcessor';
+import type { MaterialSettings } from '@/types';
 
 // Handle babel traverse CJS/ESM interop
 const traverse = (typeof (_traverse as unknown as { default?: unknown }).default === 'function'
   ? (_traverse as unknown as { default: typeof _traverse }).default
   : _traverse) as typeof _traverse;
 
-const NODE_PROP_TO_CHANNEL: Record<string, string> = {
-  colorNode: 'color',
-  emissiveNode: 'emissive',
-  normalNode: 'normal',
-  positionNode: 'position',
-  opacityNode: 'opacity',
-  roughnessNode: 'roughness',
-  metalnessNode: 'metalness',
-  envNode: 'env',
-};
+// Map, not Record: `key` at the lookup site is a property name parsed out of
+// an adversarial module, and a Record resolves 'constructor'/'toString' to
+// inherited Functions that would be stringified into the rebuilt TSL.
+const NODE_PROP_TO_CHANNEL = new Map<string, string>([
+  ['colorNode', 'color'],
+  ['emissiveNode', 'emissive'],
+  ['normalNode', 'normal'],
+  ['positionNode', 'position'],
+  ['opacityNode', 'opacity'],
+  ['roughnessNode', 'roughness'],
+  ['metalnessNode', 'metalness'],
+  ['envNode', 'env'],
+]);
 
 /** Material settings keys injected by tslToShaderModule that should be stripped */
 const MATERIAL_KEYS = new Set(['transparent', 'side', 'alphaTest', 'depthWrite']);
 
+/**
+ * Reverse of buildShaderModule's SIDE_VALUES (tslCodeProcessor.ts).
+ * Quoted spellings are accepted too — hand-authored shaderloader modules write
+ * them; a value this can't map (`THREE.DoubleSide`) is DROPPED, never guessed.
+ */
+const SIDE_NAMES = new Map<string, 'front' | 'back' | 'double'>([
+  ['0', 'front'], ['1', 'back'], ['2', 'double'],
+  ["'front'", 'front'], ["'back'", 'back'], ["'double'", 'double'],
+  ['"front"', 'front'], ['"back"', 'back'], ['"double"', 'double'],
+]);
+
+/**
+ * Turn the RAW source text of the stripped material keys into a validated
+ * MaterialSettings. Imported modules are adversarial input, so every value is
+ * coerced rather than trusted, and anything unrecognised is dropped instead of
+ * carried: an inert setting is always better than a spliced one, because these
+ * values are re-emitted into a generated module (buildShaderModule) that the
+ * XR popup executes at the app's REAL origin.
+ *
+ * The rules mirror the emitter's own, so an import → export round trip is
+ * byte-stable: alphaTest capped BELOW 1 (three discards on `alpha <= alphaTest`,
+ * so exactly 1.0 erases the mesh), and depthWrite:false kept only under
+ * transparency (on an opaque material it self-occludes into cutout-looking
+ * holes — the exact trap ShaderSettingsMenu's handleTransparentChange closes).
+ * Returns undefined for an empty result: absent IS the historical no-settings
+ * state, and it is what CLEARS a previous graph's settings on import.
+ *
+ * ALWAYS returns a FRESH object (or undefined) — never a mutation of an
+ * existing one. ShaderPreview, CodeEditor and useSyncEngine's mergeMatch all
+ * subscribe to `materialSettings` BY REFERENCE and bail on Object.is, so an
+ * in-place update would leave the preview and the Output tab showing the old
+ * settings with no error.
+ */
+function sanitizeMaterialSettings(
+  raw: Record<string, string>,
+  displacementOffset = false,
+): MaterialSettings | undefined {
+  const out: MaterialSettings = {};
+  if (displacementOffset) out.displacementMode = 'offset';
+  if (raw.transparent?.trim() === 'true') out.transparent = true;
+  // A Map lookup, never a Record index: raw.side is parsed source text, and a
+  // Record would resolve 'constructor' through the prototype chain to a
+  // Function — which structuredClone can't clone, so the next pushHistory
+  // would throw out of a React effect and blank the whole editor.
+  const side = SIDE_NAMES.get(raw.side?.trim() ?? '');
+  if (side) out.side = side;
+  const alphaTest = Number(raw.alphaTest);
+  if (Number.isFinite(alphaTest) && alphaTest > 0) out.alphaTest = Math.min(alphaTest, 0.99);
+  if (out.transparent && raw.depthWrite?.trim() === 'false') out.depthWrite = false;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * String-only entry point, kept for every caller that doesn't need the
+ * module's material settings (the test suites, and any future consumer that
+ * only wants editor TSL).
+ */
 export function scriptToTSL(scriptCode: string): string {
+  return scriptToTSLWithSettings(scriptCode).code;
+}
+
+/**
+ * Same conversion, plus the `transparent`/`side`/`alphaTest`/`depthWrite` keys
+ * the module carries in its return object. Those keys are NOT representable in
+ * editor TSL (graphToCode never emits them — they ride tslToShaderModule), so
+ * they were simply deleted here while useSyncEngine's mergeMatch re-applied the
+ * PREVIOUS graph's onto the imported one: wrong in both directions. The import
+ * path (projectImport.importShaderText) stamps what this returns onto the
+ * Output node before the code→graph pass runs.
+ *
+ * Coverage limit (pre-existing, unchanged by this function): a SINGLE-LINE
+ * `return { … }; // comment` never reaches the strip site — the objReturn
+ * regex rejects the trailing comment and the line passes through verbatim,
+ * keys and all. Do not assume every module is covered.
+ */
+export function scriptToTSLWithSettings(
+  scriptCode: string,
+): { code: string; materialSettings?: MaterialSettings } {
+  /** Raw source text of each stripped material key, filled at the strip site below. */
+  const rawMaterial: Record<string, string> = {};
+  /** True when positionNode was the RAW-offset form, not the along-normal one. */
+  let displacementOffset = false;
   // Already editor-shaped TSL — a top-level `Fn(...)` wrapper with no
   // shaderloader `export default function` module wrapper. The conversion
   // loop below only recognises the module shape and treats everything else
@@ -51,7 +136,7 @@ export function scriptToTSL(scriptCode: string): string {
     !/^\s*export\s+default\s+function\s*\(/m.test(scriptCode) &&
     /\bFn\s*\(/.test(scriptCode)
   ) {
-    return scriptCode;
+    return { code: scriptCode };
   }
 
   // Pre-pass: collapse multi-line `import { ... } from '...'` statements onto a
@@ -271,16 +356,23 @@ export function scriptToTSL(scriptCode: string): string {
             key = trimmedEntry.slice(0, colonIdx).trim();
             val = trimmedEntry.slice(colonIdx + 1).trim();
           }
-          // Strip material settings keys
-          if (MATERIAL_KEYS.has(key)) return null;
+          // Strip material settings keys — but REMEMBER them (see
+          // scriptToTSLWithSettings). Collected here rather than in a second
+          // pass so the extractor can never disagree with the stripper about
+          // which entries are material settings.
+          if (MATERIAL_KEYS.has(key)) { rawMaterial[key] = val; return null; }
           // Reverse positionNode: positionLocal.add(normalLocal.mul(x)) → position: x
+          // BOTH forms collapse to the same `position: x`, so which one it was
+          // is only recoverable HERE — and buildShaderModule re-emits with
+          // `displacementMode ?? 'normal'`, which silently converted every
+          // offset-mode module to normal-mode on import.
           if (key === 'positionNode') {
             const normalDisp = val.match(/^positionLocal\.add\(normalLocal\.mul\((.+)\)\)$/);
             if (normalDisp) return `position: ${normalDisp[1]}`;
             const offsetDisp = val.match(/^positionLocal\.add\((.+)\)$/);
-            if (offsetDisp) return `position: ${offsetDisp[1]}`;
+            if (offsetDisp) { displacementOffset = true; return `position: ${offsetDisp[1]}`; }
           }
-          const channel = NODE_PROP_TO_CHANNEL[key];
+          const channel = NODE_PROP_TO_CHANNEL.get(key);
           return channel ? `${channel}: ${val}` : `${key}: ${val}`;
         }).filter(Boolean);
         outLines.push(`${indent}return { ${entries.join(', ')} };`);
@@ -299,7 +391,10 @@ export function scriptToTSL(scriptCode: string): string {
     outLines.pop();
   }
 
-  return outLines.join('\n') + '\n';
+  return {
+    code: outLines.join('\n') + '\n',
+    materialSettings: sanitizeMaterialSettings(rawMaterial, displacementOffset),
+  };
 }
 
 /**

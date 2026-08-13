@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { OPACITY_STEP } from '@/utils/drawings';
 import { t } from '@/i18n';
+import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 
 /**
  * Draw-mode control cluster, rendered inside NodeEditor's bottom-center
@@ -47,10 +48,19 @@ export const DrawToolbar = memo(function DrawToolbar() {
 
       {active && (
         <div className="fs-draw-controls" role="group" aria-label={t('Draw settings', language)}>
-          <label className="fs-draw-swatch" title={t('Stroke color', language)}>
-            <span style={{ background: color }} />
-            <input type="color" value={color} onChange={(e) => setColor(e.target.value)} />
-          </label>
+          {/* `history="none"`: the ink colour is a draw-tool PREFERENCE —
+              `setDrawColor` validates the hex, writes `fs:drawColor` and sets
+              the store, with no pushHistory anywhere — so bracketing would push
+              an undo entry that restores nothing and wipe the redo stack on
+              every pick. (Committed STROKES do ride history; the pen colour
+              they are drawn with does not.) */}
+          <PaletteColorPicker
+            className="fs-draw-swatch"
+            history="none"
+            value={color}
+            onPick={setColor}
+            title={t('Stroke color', language)}
+          />
 
           <label className="fs-draw-field" title={t('Opacity', language)}>
             <span>α</span>

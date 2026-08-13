@@ -85,14 +85,6 @@ export function sanitizeCostMeta(m: unknown): CostOverrideMeta {
 
 const PREFIX = /^(noise_|preset_|saved_)/;
 
-function emptyMeta(overrides: { source?: string | null } = {}): CostOverrideMeta {
-  return {
-    source: overrides.source ?? null,
-    device: null, bench: null, date: null, timingMethod: null,
-    valid: null, reasons: [], count: 0,
-  };
-}
-
 /**
  * Parse a dropped JSON file into a sanitized cost override, accepting BOTH
  * shapes the bench can emit:

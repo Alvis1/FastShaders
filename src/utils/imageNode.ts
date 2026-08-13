@@ -23,8 +23,8 @@
  * canvas encode lives in `imageImport.ts`.
  */
 
-import type { AppNode, AppEdge, ShaderNodeData } from '@/types';
-import { getNodeValues, getNodeExposedPorts } from '@/types';
+import type { AppNode, ShaderNodeData } from '@/types';
+import { getNodeValues } from '@/types';
 import { base64ToBytes } from './binaryCodec';
 
 /** Soft per-image cap on the encoded data-URL length. Undo history keeps up to

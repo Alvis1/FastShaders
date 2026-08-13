@@ -10,7 +10,7 @@
     "composite": true,
     "emitDeclarationOnly": true,
     "strict": true,
-    "noUnusedLocals": false,
+    "noUnusedLocals": true,
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "allowSyntheticDefaultImports": true

@@ -72,7 +72,12 @@ prose version.
   consistency rule). The multi-channel edge rendering (`TypedEdge`) plus the body
   stack carry the channel-count signal.
 - The per-edge channel count mirrors `TypedEdge`: `max(live eval length, static
-  shape inference)`, clamped 1–4. Stack layers never affect layout or hit-targets
+  shape inference)`, clamped 1–4 — both measured **for the socket the edge
+  LEAVES**, not for the source node as a whole (`cpuEvaluator`'s
+  `evaluateEdgeSource` / `getEdgeOutputShape`). A multi-output node contributes
+  only its own socket's width: an RGB-to-HSL node's `out` is 3 channels while
+  its `h`/`s`/`l` are 1 each, so a Lightness wire draws a single line and stacks
+  its target by 1, not by 3. Stack layers never affect layout or hit-targets
   (`pointer-events: none`).
 - The designer previews the body stack via the connected inputs' channel selectors.
 
@@ -174,6 +179,33 @@ prose version.
   value widget (number box / edge label) moves with it; the vacated row keeps its
   spacing. No override = classic row anchoring; rows overrides persist even at 0
   (0 means region center, not the row spot); "Reset positions" restores rows.
+  A stored offset is therefore **authored against the height the node had at the
+  time**, and the renderer always reads it as plain px.
+- **The corner drag rescales sockets; the W/H number fields do not.** Dragging the
+  designer's corner handle rewrites every authorable socket offset in proportion
+  to the height change (`src/nodeDesigner/socketScale.ts`, pure + tested), so the
+  ports travel with the frame instead of staying knotted around the body center
+  while the node grows around them. A row-anchored socket detaches at its
+  **measured** current spot, so it never jumps on the first frame; "Reset
+  positions" restores row anchoring. The rewrite is derived from the
+  pointerdown snapshot every frame (never from the previous frame) and keeps a
+  session-only *unsnapped* shadow, so repeated resizes cannot random-walk off the
+  4px grid; a **width-only** drag leaves sockets untouched. Snapping is
+  sign-symmetric (`symSnap`) — `Math.round` is asymmetric on `.5`, which would
+  turn the twelve shipped symmetric `±n` operator pairs lopsided on their first
+  resize. The **W/H number fields are the escape hatch**: they change the frame
+  and nothing else. This lives entirely in the designer — `ShaderNode`,
+  `NodeVisual` and the `customGlyphs.ts` format are untouched, so every saved
+  design renders byte-identically until an author deliberately grabs its corner.
+  Because the ratio is preserved (plus a loose half-body clamp), a corner-drag
+  shrink can no longer push an authored socket outside the border; a
+  *row-anchored* socket in a node shrunk below its natural content still can.
+  Not authorable, and therefore not scaled: **non-first outputs** (`split`'s
+  y/z/w, `toHsl`'s h/s/l, `dataviz`'s `value`) — a known gap, not a bug.
+  `chainListMode` (a variadic fold with 3+ wired operands) is a separate
+  semantic again: it discards the sockets map entirely, treats the designer
+  height as a FLOOR and spreads sockets evenly. It is unreachable from the
+  designer stage.
 
 `ShaderNode` reads these via `nodeBox(type)` / `nodeSockets(type)`. **Socket size is
 deliberately NOT customizable** (see Sockets — consistency rule); socket *position*
@@ -260,6 +292,21 @@ the output node's channels, and the Image node (`uv`, `tileX/tileY`,
     a node shows its **category color and cost — read-only / locked** (from the
     registry; when the folder is linked, costs auto-refresh from
     `src/registry/complexity.json` so the tool can't drift).
+18b. **Name / Name (LV)** — the node's DISPLAY label is editable; its **`type` is
+    not**, and the Type row carries a `locked` chip explaining why (`type` is the
+    registry key and the `registryType` stored in every saved `.fastshader`).
+    Renaming edits registry SOURCE, not `customGlyphs.ts`: English is spliced into
+    `nodeRegistry.ts`'s `label` by byte range (`locateRegistryLabels`), Latvian
+    rewrites `node-i18n.json`'s `nodes` map, both through `POST /__nd/labels` or the
+    identical splice run against a linked folder. There is **no download tier for a
+    rename** — a built page has no registry source text to splice — so the fields
+    disable themselves and say so. Empty, untrimmed, over-40-char and duplicate
+    (case-insensitive) names are refused inline; a name that appears in another
+    node's description warns, because search ranks a real name above prose and
+    `nodeSearch.test.ts` enforces it. The stage header updates as you type, so glyph
+    width and text scale are authored against the real string. A rename is **not**
+    retroactive to `data.label` in already-saved graphs — see CLAUDE.md's renaming
+    bullet for exactly where that snapshot still shows.
 19. **Glyph editor**: clicking the glyph opens a box with the SVG — editable in a
     textarea and **replaceable by drag-and-dropping an `.svg` file** (auto-fitted to
     the `0 0 56 56` canvas) or via an Upload button. Modal live-previews the art with

@@ -177,7 +177,7 @@ describe('base64CharsForBytes', () => {
 
 describe('isLosslessWebpBytes / sourcePrefersLossless', () => {
   const riff = (fourcc: string, extra: number[] = []) => {
-    const head = 'RIFF    WEBP' + fourcc;
+    const head = 'RIFF\u0000\u0000\u0000\u0000WEBP' + fourcc;
     const bytes = new Uint8Array(head.length + extra.length);
     for (let i = 0; i < head.length; i++) bytes[i] = head.charCodeAt(i);
     bytes.set(extra, head.length);

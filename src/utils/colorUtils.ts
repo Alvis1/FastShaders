@@ -1,5 +1,28 @@
 import type { TSLDataType, NodeCategory } from '@/types';
 
+/**
+ * One canonical `#rrggbb`, or null if the input is not exactly that.
+ *
+ * THE colour whitelist for this app, kept in one place on purpose. It is a
+ * security control, not a formatting nicety: these strings are written into
+ * `style.background` (so anything else is CSS injection), persisted to `fs:*`
+ * keys and shared `.fastshader` files, and colours ultimately reach generated
+ * shader code through `hexLiteral`, which applies this same
+ * `/^#[0-9a-f]{6}$/` rule. `safeJsonReviver` is the precedent — a control that
+ * used to live in three files and had to be corrected in three files.
+ *
+ * Lower-cased so `#FF0000` and `#ff0000` are one colour rather than two
+ * entries in a recents list or a palette. Deliberately does NOT expand `#abc`
+ * shorthand and does NOT accept 8-digit alpha — the same refusal
+ * `utils/drawings.ts` documents, since an alpha channel would slip past the
+ * opacity isolation the renderer relies on.
+ */
+export function normalizeHex(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(s) ? s : null;
+}
+
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }

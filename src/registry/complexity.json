@@ -1,6 +1,6 @@
 {
   "meta": {
-    "description": "Performance cost map for TSL functions. Higher = more GPU cycles. Baseline: add = 1. SFU ops (sin/cos/sqrt/rcp) = 4 (quarter-rate on mobile GPUs). Budgets assume 3-5 shaders in scene. Noise family (voronoi/fbm) recalibrated 2026-07-23 from measured Adreno 740 (Quest 3) GPU-timestamp benchmarks (Static + MicroPlane agree); voronoi was ~4x underpriced. See ShaderCarousel/benchData/ (run data + METHODS.md).",
+    "description": "Performance cost map for TSL functions. Higher = more GPU cycles. Baseline: add = 1. SFU ops (sin/cos/sqrt/rcp) = 4 (quarter-rate on mobile GPUs). Budgets assume 3-5 shaders in scene. Noise family (voronoi/fbm) recalibrated 2026-07-23 from measured Adreno 740 (Quest 3) GPU-timestamp benchmarks (Static + MicroPlane agree); voronoi was ~4x underpriced. See ShaderCarousel/benchData/ (run data + METHODS.md). `unknown` is a deliberate non-zero GUESS (no measurement is possible for a function the registry does not model): shaderloader 0.5 auto-imports any name that exists in THREE.TSL, so an unrecognised call RUNS, and codeToGraph wires none of its argument edges, so its upstream subtree also drops out of the reachable-cost BFS - 0 made the most expensive thing in such a graph read as free.",
     "maxBudget": 350
   },
   "costs": {
@@ -71,10 +71,10 @@
     "append": 1,
 
     "perlin": 35,
-    "perlinVec3": 75,
+    "perlinVec3": 68,
     "fbm": 105,
     "fbmVec3": 190,
-    "cellNoise": 12,
+    "cellNoise": 7,
     "voronoi": 230,
     "voronoiVec2": 235,
     "voronoiVec3": 245,
@@ -90,7 +90,7 @@
     "isolines": 14,
     "imageNode": 2,
 
-    "unknown": 0,
+    "unknown": 25,
     "output": 0
   }
 }

@@ -1,0 +1,196 @@
+/* PaletteColorPicker — the trigger swatch + the app's fixed-position colour
+ * popover (ColorPickerPopover).
+ *
+ * The SWATCH renders inside a node card, so like every on-node widget it uses
+ * hardcoded literals, never chrome tokens (nodes render identically in both
+ * themes). Sized against the compact DragNumberInput so a color row and a
+ * number row read at one height.
+ *
+ * The POPOVER is screen-space chrome (a portal, zoom-independent), so it DOES
+ * use the chrome tokens and follows the app theme like a context menu.
+ */
+
+.palette-swatch {
+  width: 26px;
+  height: 12px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* No stored value yet: hollow with a diagonal slash — reads as "unset",
+ * distinct from any real color (incl. white). */
+.palette-swatch--unset {
+  background:
+    linear-gradient(
+      to top right,
+      transparent calc(50% - 1px),
+      rgba(0, 0, 0, 0.35) calc(50% - 0.5px),
+      rgba(0, 0, 0, 0.35) calc(50% + 0.5px),
+      transparent calc(50% + 1px)
+    ),
+    #ffffff;
+}
+
+/* WIDTH IS DERIVED, not chosen. Everything is border-box (reset.css), so one
+ * swatch is exactly 20px and a row of the canonical SIX is
+ * 6x20 + 5x4 = 140px. The popover adds 6px padding and a 1px border per side
+ * (14px) and then reserves ~15px more for a classic (non-overlay) scrollbar,
+ * which `overflow-y: auto` can take out of the content box at any moment:
+ * 140 + 14 + 15 = 169px. Under-reserving is not cosmetic — the six columns
+ * would reflow to 5+1 the instant the popover grew tall enough to scroll,
+ * i.e. exactly when a user palette made it interesting.
+ *
+ * SIX, not five, because the shipped palettes hold 12 colours: 12 = 2 x 6, so
+ * each one fills exactly two full rows instead of the ragged 5 + 5 + 2 a
+ * five-column grid would draw four times over. `SWATCHES_PER_ROW` in
+ * utils/recentColors.ts is the same decision (CSS cannot read a TS const) and
+ * keeps the recents grid aligned with the palettes above it.
+ *
+ * The height is BOUNDED and scrolls: 16 shader palettes of up to 64 colours
+ * each is a legal store state and would otherwise be a several-thousand-pixel
+ * popover. `placePopover` measures whatever this produces — no layout constant
+ * is duplicated in the TS. */
+.palette-pop {
+  position: fixed;
+  z-index: var(--z-tooltip, 1000);
+  width: 169px;
+  max-height: min(60vh, 380px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-panel, #ffffff);
+  border: 1px solid var(--border-default, #cccccc);
+  border-radius: var(--border-radius-md, 6px);
+  box-shadow: var(--shadow-lg, 0 4px 12px rgba(0, 0, 0, 0.25));
+}
+
+/* Reset entry: clears the stored value back to the site's default (the small
+ * swatch previews it, slashed to read as "revert/none"). */
+.palette-pop__clear {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 4px;
+  border: none;
+  background: none;
+  font-size: var(--font-size-xs, 10px);
+  color: var(--text-secondary, #555555);
+  cursor: pointer;
+  text-align: left;
+}
+
+.palette-pop__clear:hover {
+  color: var(--text-primary, #1a1a1a);
+}
+
+.palette-pop__clear-swatch {
+  width: 20px;
+  height: 16px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 3px;
+  background:
+    linear-gradient(
+      to top right,
+      transparent calc(50% - 1px),
+      rgba(0, 0, 0, 0.45) calc(50% - 0.5px),
+      rgba(0, 0, 0, 0.45) calc(50% + 0.5px),
+      transparent calc(50% + 1px)
+    ),
+    #ffffff;
+  background-blend-mode: normal;
+  flex-shrink: 0;
+}
+
+.palette-pop__section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Palette names earn their line once a shader owns palettes: two unnamed
+ * 5-swatch rows are indistinguishable from each other. Clipped rather than
+ * wrapped — the name is a label, not content (the full text is in `title`). */
+.palette-pop__label {
+  font-size: var(--font-size-xs, 10px);
+  line-height: 1.2;
+  color: var(--text-secondary, #555555);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-pop__label--recent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.palette-pop__forget {
+  padding: 0 2px;
+  border: none;
+  background: none;
+  font-size: var(--font-size-xs, 10px);
+  line-height: 1;
+  color: var(--text-secondary, #555555);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.palette-pop__forget:hover {
+  color: var(--text-primary, #1a1a1a);
+}
+
+/* A GRID, not a wrapping flex row: the column count is then fixed at six
+ * regardless of the content width, so a 64-colour user palette wraps into tidy
+ * rows of six and a scrollbar appearing mid-scroll cannot reflow it. The old
+ * `display: flex` with no `flex-wrap` is what let a 6-colour palette spill
+ * straight through the popover's border — invisible for as long as every
+ * built-in palette happened to be exactly five colours. */
+.palette-pop__row {
+  display: grid;
+  grid-template-columns: repeat(6, 20px);
+  gap: 4px;
+  justify-content: start;
+}
+
+.palette-pop__swatch {
+  width: 20px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.palette-pop__swatch--current {
+  outline: 2px solid var(--border-focus, #2d6cdf);
+  outline-offset: 1px;
+}
+
+.palette-pop__custom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: var(--font-size-xs, 10px);
+  color: var(--text-secondary, #555555);
+  cursor: pointer;
+}
+
+.palette-pop__custom input[type='color'] {
+  width: 44px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-default, #cccccc);
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+}

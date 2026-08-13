@@ -742,6 +742,61 @@ export default shader;
   });
 });
 
+describe('codeToGraph — noise arguments the graph cannot store', () => {
+  const wrap = (body: string, imports: string) =>
+    `import { Fn, vec3, ${imports} } from 'three/tsl';\n\nconst shader = Fn(() => {\n${body}\n\n  return vec3(n1);\n});\n\nexport default shader;\n`;
+  const IMPORTS = 'mx_fractal_noise_float, mx_worley_noise_float, mx_noise_float, positionGeometry';
+
+  // three/tsl's wrappers take more than a position — mx_noise_*(pos, amplitude,
+  // pivot), mx_fractal_noise_*(pos, octaves, lacunarity, diminish, amplitude),
+  // mx_worley_noise_*(pos, jitter) — but the Noise node stores only pos (+ an
+  // optional scale). Those arguments are dropped on the next Apply; that must
+  // not be silent (an 8-octave fBm used to come back as three octaves).
+  it('warns — non-blocking — when a noise call carries extra arguments', () => {
+    const r = codeToGraph(wrap('  const n1 = mx_fractal_noise_float(positionGeometry, 8);', IMPORTS));
+    expect(r.nodes.some((n) => n.data.registryType === 'fbm')).toBe(true);
+    // severity 'warning' is what keeps the Apply going — useSyncEngine.ts:102
+    // blocks on `errors.some(e => e.severity !== 'warning')`.
+    expect(r.errors.filter((e) => e.severity !== 'warning')).toEqual([]);
+    const warnings = r.errors.filter((e) => e.severity === 'warning');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain('mx_fractal_noise_float');
+    expect(warnings[0].message).toContain('1 extra argument');
+    expect(warnings[0].line).toBe(4);
+  });
+
+  it('counts every dropped argument', () => {
+    const r = codeToGraph(wrap('  const n1 = mx_fractal_noise_float(positionGeometry, 8, 2, 0.5);', IMPORTS));
+    const warnings = r.errors.filter((e) => e.severity === 'warning');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain('3 extra arguments');
+  });
+
+  // Where the multi-arg guard meets matchNoiseUnsignedRemap: the remap must
+  // still refuse (args !== 1) so the Multiply and Add survive as real nodes,
+  // AND the nested-chain recursion must report the dropped argument exactly
+  // once, not once per chain level.
+  it('warns once, and still refuses to collapse, on a multi-arg remap chain', () => {
+    const r = codeToGraph(wrap(
+      '  const n1 = mx_noise_float(positionGeometry, 2).mul(0.5).add(0.5);',
+      IMPORTS,
+    ));
+    expect(r.nodes.some((n) => n.data.registryType === 'mul')).toBe(true);
+    expect(r.nodes.some((n) => n.data.registryType === 'add')).toBe(true);
+    expect(r.errors.filter((e) => e.severity === 'warning')).toHaveLength(1);
+  });
+
+  // The shapes graphToCode emits must stay silent, or every graph round-trip
+  // would grow a spurious warning.
+  it.each([
+    ['scaled fbm', '  const n1 = mx_fractal_noise_float(positionGeometry.mul(4));'],
+    ['bare worley', '  const n1 = mx_worley_noise_float(positionGeometry);'],
+    ['the unsigned 0-1 remap', '  const n1 = mx_noise_float(positionGeometry.mul(4)).mul(0.5).add(0.5);'],
+  ])('stays silent for %s', (_label, body) => {
+    expect(codeToGraph(wrap(body, IMPORTS)).errors).toEqual([]);
+  });
+});
+
 describe('codeToGraph — three-deep method chains do not self-loop', () => {
   // Regression guard. `__chain${nodes.length}` was read BEFORE the recursion
   // pushed anything, so both levels of a three-deep chain minted the same

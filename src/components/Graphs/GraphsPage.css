@@ -259,7 +259,22 @@
   vertical-align: top;
 }
 
+/* A row switched off in the editor. Dimmed, not hidden: this page is where it
+   gets switched back on, so it must stay readable — and the checkbox column is
+   deliberately excluded from the fade so the control you need is the one thing
+   at full contrast. `is-dirty`'s amber wash still wins as the row background,
+   which is correct: an unsaved toggle is the more urgent of the two states. */
+.gp__table tbody tr.is-off td:not(.gp__c-on) {
+  opacity: 0.45;
+}
+
+.gp__table tbody tr.is-off .gp__name {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
 /* Column widths */
+.gp__c-on { width: 92px; }
 .gp__c-kind { width: 58px; }
 .gp__c-name { width: 150px; }
 .gp__c-cat { width: 96px; }
@@ -270,6 +285,52 @@
 .gp__c-tsl { width: 150px; }
 
 /* ── Cells ───────────────────────────────────────────────────────────────── */
+
+.gp__onlabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.gp__onlabel.is-locked {
+  cursor: help;
+  opacity: 0.6;
+}
+
+.gp__onbox {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--cat-output, #22C55E);
+  cursor: pointer;
+}
+
+.gp__onword {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.gp__onwarn {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--font-size-xs);
+  line-height: 1.3;
+  color: #B45309;
+  cursor: help;
+}
+
+:root[data-theme='dark'] .gp__onwarn {
+  color: #FBBF24;
+}
+
+.gp__hiddenbtn.is-on {
+  background: var(--text-secondary);
+  color: var(--bg-panel);
+  border-color: var(--text-secondary);
+}
 
 .gp__kind {
   display: inline-block;
@@ -349,6 +410,14 @@
   width: 100%;
   padding: var(--space-1);
   white-space: normal;
+  /* This element is a <div role="button">, not a <button> (nested interactive
+     content — see GraphsPage.tsx). The UA stylesheet's `text-align: center`
+     for <button> is therefore gone; restate it or the .gp__graphcount footer
+     shifts left AND — because text-align INHERITS — the text inside the
+     NodePreviewCard/NodeVisual replica shifts too, breaking the
+     one-node-one-look convention on this page. .gp__codebtn is still a real
+     <button> and must NOT get this. */
+  text-align: center;
 }
 
 .gp__graphbtn:hover,

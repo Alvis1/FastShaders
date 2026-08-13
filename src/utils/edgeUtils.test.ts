@@ -8,6 +8,8 @@ import {
   restoreCollapsedEdges,
 } from './edgeUtils';
 import { graphToCode } from '@/engine/graphToCode';
+import { getTargetEdges, getUnwrappedEdges, evaluateNodeScalar } from '@/engine/cpuEvaluator';
+import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { useAppStore, setGraphPersistence, cancelPendingGraphSave } from '@/store/useAppStore';
 import type { AppNode, AppEdge, BoundarySocket } from '@/types';
 
@@ -140,6 +142,71 @@ describe('unwrapCollapsedGroupEdges', () => {
       [makeEdge('g1', 's-out', 'out1', 'color')],
     );
     expect(collapsed.code).toBe(logical.code);
+  });
+
+  // ── The card-layer contract MathPreviewNode's folded key depends on ──────
+  // A node card that resolves its feeder through `getTargetEdges` (the
+  // UNWRAPPED view) must ALSO walk the unwrapped edges in any follow-up graph
+  // traversal. Mixing the two views is worse than using either one
+  // consistently, and it is invisible to a component-free test suite — hence
+  // these two pins.
+  it('a node card must walk the UNWRAPPED edges after resolving a feeder through a collapsed group', () => {
+    // Time (outside) -> Multiply (INSIDE a collapsed group) -> sin (outside).
+    const g1 = makeGroup('g1', {
+      collapsed: true,
+      collapsedInputs: [{ socketId: 's-in', originalNodeId: 'mul1', originalHandleId: 'a' }],
+      collapsedOutputs: [{ socketId: 's-out', originalNodeId: 'mul1', originalHandleId: 'out' }],
+    });
+    const mul1 = { ...makeNode('mul1', 'mul', { a: 0, b: 2 }), parentId: 'g1' } as AppNode;
+    const time1 = makeNode('time1', 'time');
+    const sin1 = makeNode('sin1', 'sin', { x: 0 });
+    const nodes = [g1, time1, mul1, sin1];
+    const edges = [makeEdge('time1', 'out', 'g1', 's-in'), makeEdge('g1', 's-out', 'sin1', 'x')];
+
+    const e = getTargetEdges(nodes, edges, 'sin1').find((x) => x.targetHandle === 'x')!;
+    expect(e.source).toBe('mul1');
+    // THE TRAP: the raw array lost time1 -> mul1 (unwrap retargeted it at the
+    // group, then dropped it), so a raw walk reports 'no time' and the card
+    // would render its STATIC branch on a genuinely animated input.
+    expect(hasTimeUpstream(e.source, nodes, edges)).toBe(false);
+    expect(hasTimeUpstream(e.source, nodes, getUnwrappedEdges(nodes, edges))).toBe(true);
+    // The evaluator already unwraps internally, so the rAF value is correct.
+    expect(evaluateNodeScalar(e.source, nodes, edges, 1.5)).toBe(3);
+  });
+
+  it('resolves a collapsed feeder to the real producer (raw find reports the group id)', () => {
+    const g1 = makeGroup('g1', {
+      collapsed: true,
+      collapsedOutputs: [{ socketId: 's-out', originalNodeId: 'time1', originalHandleId: 'out' }],
+    });
+    const time1 = { ...makeNode('time1', 'time'), parentId: 'g1' } as AppNode;
+    const sin1 = makeNode('sin1', 'sin', { x: 0 });
+    const nodes = [g1, time1, sin1];
+    const edges = [makeEdge('g1', 's-out', 'sin1', 'x')];
+
+    const raw = edges.find((x) => x.target === 'sin1' && x.targetHandle === 'x')!;
+    expect(raw.source).toBe('g1');
+    expect(evaluateNodeScalar(raw.source, nodes, edges, 1.5)).toBeNull();
+
+    const un = getTargetEdges(nodes, edges, 'sin1').find((x) => x.targetHandle === 'x')!;
+    expect(un.source).toBe('time1');
+    expect(evaluateNodeScalar(un.source, nodes, edges, 1.5)).toBe(1.5);
+  });
+
+  it('with no collapsed group the unwrapped view IS the store array (the ordinary case is untouched)', () => {
+    // Why the card's key can pair getTargetEdges with getUnwrappedEdges at no
+    // behavioural cost in the overwhelmingly common graph: unwrap short-circuits
+    // on `anyCollapsed`, returning the very same array `hasTimeUpstream` was
+    // handed before this change.
+    const time1 = makeNode('time1', 'time');
+    const sin1 = makeNode('sin1', 'sin', { x: 0 });
+    const nodes = [time1, sin1];
+    const edges = [makeEdge('time1', 'out', 'sin1', 'x')];
+
+    expect(unwrapCollapsedGroupEdges(nodes, edges)).toBe(edges);
+    expect(getUnwrappedEdges(nodes, edges)).toBe(edges);
+    expect(getTargetEdges(nodes, edges, 'sin1').find((x) => x.targetHandle === 'x')!.source).toBe('time1');
+    expect(hasTimeUpstream('time1', nodes, getUnwrappedEdges(nodes, edges))).toBe(true);
   });
 });
 

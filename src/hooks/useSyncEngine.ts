@@ -10,6 +10,7 @@ import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
 import type { AppNode } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
+import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 
 
 export function useSyncEngine() {
@@ -358,7 +359,9 @@ export function useSyncEngine() {
     // Reachable-cost BFS lives in nodeCost.ts (shared with the store's device
     // selection, so activating a measured cost profile reprices the total even
     // though it doesn't change nodes/edges). Reads the override-aware ACTIVE table.
-    const total = computeReachableCost(nodes, edges);
+    // Same entry-point unwrap graphToCode and cpuEvaluator do: collapse state
+    // must not change the compiled output, and it must not change the budget.
+    const total = computeReachableCost(nodes, unwrapCollapsedGroupEdges(nodes, edges));
 
     if (total === lastCostRef.current) return;
     lastCostRef.current = total;

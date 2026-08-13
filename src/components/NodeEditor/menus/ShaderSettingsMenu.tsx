@@ -5,6 +5,8 @@ import { OUTPUT_DEFAULT_EXPOSED } from '../nodes/OutputNode';
 import type { MaterialSettings, OutputNodeData } from '@/types';
 import { removeEdgesForPort } from '@/utils/edgeUtils';
 import { toggleExposedPort } from '@/utils/exposedPorts';
+import { asOneHistoryEntry } from '@/utils/historyGesture';
+import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 
 /** Ports that can be toggled on/off in the output node settings, listed in
  *  the SAME order as the node's socket arrangement (the registry def's
@@ -20,6 +22,11 @@ export function ShaderSettingsMenu() {
   const costProfiles = useAppStore((s) => s.costProfiles);
   const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
+  // The Alpha Clip threshold is a range input: React's onChange on a range is
+  // the native `input` event, so it fires per pointermove FRAME and each frame
+  // reaches updateNodeData -> an unconditional pushHistory. Bracket the drag
+  // so it lands as one undo entry (ColorNode.tsx:135-154 pattern).
+  const { bracket, closeBracket } = useHistoryBracket();
   const device = resolveDeviceBudget(selectedHeadsetId, costProfiles);
 
   const outputNode = nodes.find((n) => n.data.registryType === 'output');
@@ -72,7 +79,11 @@ export function ShaderSettingsMenu() {
     updateNodeData(outputNode.id, patch);
   };
 
-  const handleTransparentChange = (checked: boolean) => {
+  // updateSettings + setOpacityPort are two updateNodeData calls, and hiding a
+  // WIRED opacity adds removeEdgesForPort's own push — three history entries
+  // for one checkbox, where the first Cmd+Z leaves transparent already false
+  // and the wire already deleted (nothing visibly undone). One bracket.
+  const handleTransparentChange = (checked: boolean) => asOneHistoryEntry(() => {
     if (checked) {
       updateSettings({ transparent: true });
       setOpacityPort(true);
@@ -87,9 +98,9 @@ export function ShaderSettingsMenu() {
       updateSettings({ transparent: false, depthWrite: undefined });
       if (!settings.alphaTest) setOpacityPort(false);
     }
-  };
+  });
 
-  const handleAlphaClipChange = (checked: boolean) => {
+  const handleAlphaClipChange = (checked: boolean) => asOneHistoryEntry(() => {
     if (checked) {
       updateSettings({ alphaTest: 0.5 });
       setOpacityPort(true);
@@ -97,17 +108,25 @@ export function ShaderSettingsMenu() {
       updateSettings({ alphaTest: 0 });
       if (!settings.transparent) setOpacityPort(false);
     }
-  };
+  });
 
   const handleTogglePort = (portId: string) => {
+    // The guard stays OUTSIDE the bracket: beginInteraction pushes a snapshot
+    // AND clears `future`, so wrapping an early-returning body would cost an
+    // undo entry and destroy the redo stack for a click that did nothing.
     if (!outputNode) return;
-    const next = toggleExposedPort(outputNode.id, exposedPorts, portId);
-    const patch: Partial<OutputNodeData> = { exposedPorts: next };
-    if (!next.includes(portId)) {
-      const rest = valuesWithout(portId);
-      if (rest) patch.values = rest;
-    }
-    updateNodeData(outputNode.id, patch);
+    // toggleExposedPort's edge drop pushes history and is evaluated BEFORE the
+    // updateNodeData below, which pushes again. Bracketed, hiding a wired
+    // channel is one undoable act.
+    asOneHistoryEntry(() => {
+      const next = toggleExposedPort(outputNode.id, exposedPorts, portId);
+      const patch: Partial<OutputNodeData> = { exposedPorts: next };
+      if (!next.includes(portId)) {
+        const rest = valuesWithout(portId);
+        if (rest) patch.values = rest;
+      }
+      updateNodeData(outputNode.id, patch);
+    });
   };
 
   const checkboxStyle: React.CSSProperties = {
@@ -162,7 +181,11 @@ export function ShaderSettingsMenu() {
             const port = outputDef.inputs.find((p) => p.id === portId);
             if (!port) return null;
             return (
-              <label key={portId} style={labelStyle}>
+              <label
+                key={portId}
+                style={labelStyle}
+                title={port.description ? t(port.description, language) : undefined}
+              >
                 <input
                   type="checkbox"
                   checked={exposedSet.has(portId)}
@@ -240,7 +263,11 @@ export function ShaderSettingsMenu() {
             max={0.99}
             step={0.01}
             value={settings.alphaTest}
-            onChange={(e) => updateSettings({ alphaTest: parseFloat(e.target.value) })}
+            onChange={(e) => { bracket(); updateSettings({ alphaTest: parseFloat(e.target.value) }); }}
+            onPointerUp={closeBracket}
+            onPointerCancel={closeBracket}
+            onKeyUp={closeBracket}
+            onBlur={closeBracket}
             style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--border-focus)' }}
           />
           <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', minWidth: 28, textAlign: 'right' }}>

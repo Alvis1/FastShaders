@@ -3,14 +3,14 @@ import { useReactFlow } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 import {
   searchNodes,
-  getAllDefinitions,
+  getEditorDefinitions,
   NODE_REGISTRY,
   getFlowNodeType,
+  displayDescription,
 } from '@/registry/nodeRegistry';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { formatNodeLabel, formatCategoryLabel, nodeDescription, t } from '@/i18n';
 import type { NodeDefinition, AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
-import { getNodeValues } from '@/types';
 import { generateId } from '@/utils/idGenerator';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import { getCostTextColor } from '@/utils/colorUtils';
@@ -40,6 +40,9 @@ export function AddNodeMenu() {
   // the previous add is already persisted). Stable for this menu's lifetime.
   const [recentTypes] = useState(getRecentNodeTypes);
   const listRef = useRef<HTMLDivElement>(null);
+  /** Did this focus move come from the keyboard (or a list swap)? Only those
+   *  may scroll the list — see the scroll effect below. */
+  const scrollOnFocusRef = useRef(false);
   const contextMenu = useAppStore((s) => s.contextMenu);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const addNode = useAppStore((s) => s.addNode);
@@ -72,9 +75,12 @@ export function AddNodeMenu() {
   const sourceNodeId = contextMenu.sourceNodeId;
   const sourceHandleId = contextMenu.sourceHandleId;
 
+  // getEditorDefinitions (and searchNodes, which filters the same way): a node
+  // switched off in node-editor.html is not offerable here either — browse or
+  // search. See registry/editorVisibility.ts.
   const results = useMemo(() => {
     if (query.trim()) return searchNodes(query);
-    return getAllDefinitions().filter((d) => d.type !== 'output');
+    return getEditorDefinitions().filter((d) => d.type !== 'output');
   }, [query]);
 
   // Group by category when not searching
@@ -94,7 +100,7 @@ export function AddNodeMenu() {
   // its own add row and is a singleton) and stale/hidden types are dropped.
   const recentDefs = useMemo(() => {
     if (query.trim() || recentTypes.length === 0) return [];
-    const addable = new Set(getAllDefinitions().map((d) => d.type));
+    const addable = new Set(getEditorDefinitions().map((d) => d.type));
     const defs: NodeDefinition[] = [];
     for (const type of recentTypes) {
       if (type === 'output' || !addable.has(type)) continue;
@@ -227,13 +233,26 @@ export function AddNodeMenu() {
   // Reset focus to the first item whenever the visible list changes (typing in
   // the search box, selection toggling, output-node presence flipping, etc.).
   useEffect(() => {
+    scrollOnFocusRef.current = true;   // a new list: bring row 0 back into view
     setFocusedIndex(0);
   }, [actionItems.length, query]);
 
   // Scroll the focused item into view as the user arrows past the visible
   // bounds. `block: 'nearest'` keeps the menu from jumping when the item is
   // already visible.
+  //
+  // ONLY for keyboard moves and list swaps. Hover sets `focusedIndex` too, and
+  // scrolling then is both pointless — the row is under the cursor, so it is on
+  // screen — and actively harmful: a row clipped by the list's bottom edge got
+  // nudged into view, the resulting `scroll` event is one of TooltipLayer's
+  // dismiss triggers, and it fired inside the 1s dwell of the tooltip that the
+  // very same hover had just armed. The pointer is then at rest, so no further
+  // `mouseover` ever re-arms it: those rows could never show their description,
+  // which since the description moved into the tooltip is the only place it
+  // exists. (Measured: hovering the clipped row moved scrollTop 47 → 66 and the
+  // tooltip never appeared.)
   useEffect(() => {
+    if (!scrollOnFocusRef.current) return;
     const el = listRef.current?.querySelector<HTMLElement>(
       '[data-add-node-focused="true"]',
     );
@@ -241,6 +260,11 @@ export function AddNodeMenu() {
   }, [focusedIndex, actionItems.length]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Every key below that MOVES the focus wants the list to follow it — the
+    // point of arrowing is to reach rows that are off screen.
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+      scrollOnFocusRef.current = true;
+    }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (actionItems.length === 0) return;
@@ -261,6 +285,12 @@ export function AddNodeMenu() {
       e.preventDefault();
       const item = actionItems[focusedIndex] ?? actionItems[0];
       item.run();
+    } else if (e.key === 'Escape') {
+      // The search box autofocuses, so Escape lands HERE, not on the document
+      // listener in ContextMenu (which skips INPUT targets so a DragNumberInput
+      // edit can still cancel without closing its menu).
+      e.preventDefault();
+      closeContextMenu();
     }
   };
 
@@ -280,47 +310,61 @@ export function AddNodeMenu() {
   const focusedAttr = (key: string) =>
     itemIndexByKey.get(key) === focusedIndex ? 'true' : undefined;
 
-  // One row renderer for both the grouped and flat-search lists. Surfacing
-  // def.description here puts the explanation at the moment of choosing —
-  // previously it only existed as a palette-tile hover tooltip, so users picked
-  // between ~68 node types by bare name.
+  /** Hover-focus: the same focus move, minus the scroll (see the effect). */
+  const hoverFocus = (key: string) => {
+    scrollOnFocusRef.current = false;
+    setFocusedIndex(itemIndexByKey.get(key) ?? 0);
+  };
+
+  // One row renderer for both the grouped and flat-search lists.
+  //
+  // The description rides the row's `title`, NOT a second line inside it: the
+  // app-wide TooltipLayer (mounted in AppLayout) delegates from `document`,
+  // borrows the title and draws the styled, viewport-clamped tooltip — the
+  // same explanation, in the same place, as the palette tiles'. Rendering it
+  // in the row turned a list you SCAN into a wall of prose: every one of ~74
+  // nodes carried a paragraph, and the widest of them (Data Viz, 274 chars) is
+  // what forced `.context-menu--add-node`'s fixed width in the first place.
+  //
+  // Keyboard note: ArrowUp/Down move `focusedIndex`, not DOM focus (the search
+  // box keeps it), so arrowing a row does not raise its tooltip — hovering it
+  // does. That is the trade the inline line was paying for.
   const renderDefRow = (def: NodeDefinition, keyOverride?: string) => {
     // The Recent section reuses this row but under a `recent:`-prefixed key so
     // it's a distinct focus stop from the same def down in its category.
     const key = keyOverride ?? def.type;
     const cost = COSTS[def.type] ?? 0;
+    // displayDescription strips the `Also: …` alias tail — that tail is search
+    // fodder for nodeMatchRank, never UI text, and the inline line printed it.
+    const desc = def.description
+      ? nodeDescription(displayDescription(def), def.type, language)
+      : undefined;
     return (
       <button
         key={key}
-        className={`${itemClass(key)} context-menu__item--stacked`}
+        className={itemClass(key)}
+        title={desc}
         data-add-node-focused={focusedAttr(key)}
         onClick={() => handleAddNode(def)}
-        onMouseEnter={() => setFocusedIndex(itemIndexByKey.get(key) ?? 0)}
+        onMouseEnter={() => hoverFocus(key)}
       >
-        <span className="context-menu__item-head">
-          <span>
-            {formatNodeLabel(def.label, def.type, language)}
-            {/* GPU cost, same badge colour ramp (and the same `> 0` hide rule)
-                the node itself uses, so the number the user picks by is the
-                number they'll see on the canvas. */}
-            {cost > 0 && (
-              <span
-                className="context-menu__item-cost"
-                style={{ color: getCostTextColor(cost, costColorLow, costColorHigh) }}
-              >
-                {cost}
-              </span>
-            )}
-          </span>
-          <span className="context-menu__item-category">
-            {formatCategoryLabel(def.category, def.category, language)}
-          </span>
+        <span>
+          {formatNodeLabel(def.label, def.type, language)}
+          {/* GPU cost, same badge colour ramp (and the same `> 0` hide rule)
+              the node itself uses, so the number the user picks by is the
+              number they'll see on the canvas. */}
+          {cost > 0 && (
+            <span
+              className="context-menu__item-cost"
+              style={{ color: getCostTextColor(cost, costColorLow, costColorHigh) }}
+            >
+              {cost}
+            </span>
+          )}
         </span>
-        {def.description && (
-          <span className="context-menu__item-desc">
-            {nodeDescription(def.description, def.type, language)}
-          </span>
-        )}
+        <span className="context-menu__item-category">
+          {formatCategoryLabel(def.category, def.category, language)}
+        </span>
       </button>
     );
   };
@@ -345,7 +389,7 @@ export function AddNodeMenu() {
                 className={itemClass('__organize__')}
                 data-add-node-focused={focusedAttr('__organize__')}
                 onClick={handleOrganizeSelection}
-                onMouseEnter={() => setFocusedIndex(itemIndexByKey.get('__organize__') ?? 0)}
+                onMouseEnter={() => hoverFocus('__organize__')}
               >
                 <span>{t('Organize', language)}</span>
                 <span className="context-menu__item-category">
@@ -358,7 +402,7 @@ export function AddNodeMenu() {
                 className={itemClass('__group__')}
                 data-add-node-focused={focusedAttr('__group__')}
                 onClick={handleGroupSelection}
-                onMouseEnter={() => setFocusedIndex(itemIndexByKey.get('__group__') ?? 0)}
+                onMouseEnter={() => hoverFocus('__group__')}
               >
                 <span>{t('Group Selection', language)}</span>
                 <span className="context-menu__item-category">
@@ -380,7 +424,7 @@ export function AddNodeMenu() {
               className={itemClass('__output__')}
               data-add-node-focused={focusedAttr('__output__')}
               onClick={() => handleAddNode(NODE_REGISTRY.get('output')!)}
-              onMouseEnter={() => setFocusedIndex(itemIndexByKey.get('__output__') ?? 0)}
+              onMouseEnter={() => hoverFocus('__output__')}
             >
               <span>{formatNodeLabel('Output', 'output', language)}</span>
               <span className="context-menu__item-category">output</span>
@@ -396,7 +440,7 @@ export function AddNodeMenu() {
               className={itemClass('__note__')}
               data-add-node-focused={focusedAttr('__note__')}
               onClick={handleAddNote}
-              onMouseEnter={() => setFocusedIndex(itemIndexByKey.get('__note__') ?? 0)}
+              onMouseEnter={() => hoverFocus('__note__')}
             >
               <span>{t('Add Note', language)}</span>
               <span className="context-menu__item-category">note</span>

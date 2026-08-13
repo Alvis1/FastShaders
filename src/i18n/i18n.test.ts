@@ -9,6 +9,7 @@ import {
   nodeSearchLV,
   t,
 } from './index';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 
 /**
  * Runtime behaviour of the i18n helpers against the REAL translation data
@@ -27,10 +28,16 @@ describe('i18n helpers', () => {
   });
 
   it('Latvian node labels are bilingual "Latviešu (English)"', () => {
-    expect(nodeLabelLV('mul')).toBe('Reizināt');
-    expect(formatNodeLabel('Multiply', 'mul', 'lv')).toBe('Reizināt (Multiply)');
+    // Read the Latvian word from the table rather than pinning the literal: `mul` is
+    // designable, so the Node Designer's Name (LV) field can legitimately rewrite this
+    // entry in node-i18n.json, and a hardcoded 'Reizināt' would turn a correct rename
+    // into a red suite — which gates the release workflow. The FORM is what this test
+    // is about ("LV (EN)" vs bare LV), and the form survives any rename.
+    const lv = nodeLabelLV('mul');
+    expect(lv).toBeTruthy();
+    expect(formatNodeLabel('Multiply', 'mul', 'lv')).toBe(`${lv} (Multiply)`);
     // bilingual=false → Latvian word alone (for tight palette tiles)
-    expect(formatNodeLabel('Multiply', 'mul', 'lv', false)).toBe('Reizināt');
+    expect(formatNodeLabel('Multiply', 'mul', 'lv', false)).toBe(lv);
   });
 
   it('falls back to English when a node has no Latvian entry', () => {
@@ -66,5 +73,12 @@ describe('i18n helpers', () => {
   it('Latvian search haystack lets a Latvian term match a node', () => {
     expect(nodeSearchLV('mul')).toContain('reizināt');
     expect(nodeSearchLV('dot')).toContain('skalārais');
+  });
+
+  it('the Discard truthiness hint is translated', () => {
+    const en = NODE_REGISTRY.get('output')!.inputs.find((p) => p.id === 'discard')!.description!;
+    expect(t(en, 'en')).toBe(en);
+    expect(t(en, 'lv')).not.toBe(en); // fails if the lv.json key drifts by one char
+    expect(t(en, 'lv')).toContain('Lielāks par');
   });
 });

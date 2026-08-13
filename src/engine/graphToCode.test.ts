@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { graphToCode } from './graphToCode';
+import { evaluateNodeOutput } from './cpuEvaluator';
 import { makeNode, makeEdge } from '@/test-utils';
 
 describe('graphToCode — empty graph', () => {
@@ -121,6 +122,90 @@ describe('graphToCode — variable naming', () => {
     expect(varNames.get('p')).toBe('data1_col0');
     expect(varNames.get('d')).toBe('data2');
     expect(code).toContain('const data2_col0');
+  });
+
+  it('an alias-rejected index stays claimable by a later data node', () => {
+    // `p` takes `data1_col0`, so data node `a` (which uses col0) fails its
+    // alias check on `data1` and shifts to `data2`. Node `b` only uses col1,
+    // whose `data1_col1` alias is free — so `b` MUST still get `data1`.
+    // A name cursor that advanced past every rejected index would give it
+    // `data3` and rename the emitted variable.
+    const p = makeNode('p', 'property_float', { name: 'data1_col0', value: 0.5 });
+    const a = makeNode('a', 'dataNode', {});
+    const b = makeNode('b', 'dataNode', {});
+    const m = makeNode('m', 'mul', {});
+    const out = makeNode('out', 'output');
+    const { varNames, code } = graphToCode([p, a, b, m, out], [
+      makeEdge('p', 'out', 'out', 'opacity'),
+      makeEdge('a', 'col0', 'm', 'a'),
+      makeEdge('b', 'col1', 'm', 'b'),
+      makeEdge('m', 'out', 'out', 'color'),
+    ]);
+    expect(varNames.get('p')).toBe('data1_col0');
+    expect(varNames.get('a')).toBe('data2');
+    expect(varNames.get('b')).toBe('data1');
+    expect(code).toContain('const data2_col0');
+    expect(code).toContain('const data1_col1');
+  });
+
+  it('keeps walking the suffix chain for a fourth same-named property', () => {
+    const p1 = makeNode('p1', 'property_float', { name: 'speed', value: 1 });
+    const p2 = makeNode('p2', 'property_float', { name: 'speed2', value: 2 });
+    const p3 = makeNode('p3', 'property_float', { name: 'speed', value: 3 });
+    const p4 = makeNode('p4', 'property_float', { name: 'speed', value: 4 });
+    const out = makeNode('out', 'output');
+    const { varNames } = graphToCode([p1, p2, p3, p4, out],
+      [makeEdge('p1', 'out', 'out', 'opacity')]);
+    expect(varNames.get('p3')).toBe('speed3');
+    expect(varNames.get('p4')).toBe('speed4');
+  });
+
+  it('a bareFirst collision never consumes the plain <base>1 slot', () => {
+    // Two properties named `mul` walk the bare chain (mul, mul2); the mul NODE
+    // must still get `mul1`. A single name cursor floored at 2 by the property
+    // probe would hand it `mul3` — a byte-breaking rename of an emitted var.
+    const p1 = makeNode('p1', 'property_float', { name: 'mul', value: 1 });
+    const p2 = makeNode('p2', 'property_float', { name: 'mul', value: 2 });
+    const m = makeNode('m', 'mul', {});
+    const out = makeNode('out', 'output');
+    const { varNames } = graphToCode([p1, p2, m, out], [
+      makeEdge('p1', 'out', 'out', 'opacity'),
+      makeEdge('m', 'out', 'out', 'color'),
+    ]);
+    expect(varNames.get('p1')).toBe('mul');
+    expect(varNames.get('p2')).toBe('mul2');
+    expect(varNames.get('m')).toBe('mul1');
+  });
+});
+
+describe('graphToCode — edge lookup first-match', () => {
+  it('uses the FIRST edge when two land on the same target handle', () => {
+    // Single-input-per-port is enforced by the editor, but a hand-edited
+    // .fastshader can carry both. The array order decides, and an index must
+    // not change which one wins.
+    const f1 = makeNode('f1', 'float', { value: 1 });
+    const f2 = makeNode('f2', 'float', { value: 2 });
+    const m = makeNode('m', 'mul', {});
+    const out = makeNode('out', 'output');
+    const e1 = { ...makeEdge('f1', 'out', 'm', 'a'), id: 'e1' };
+    const e2 = { ...makeEdge('f2', 'out', 'm', 'a'), id: 'e2' };
+    const { code } = graphToCode([f1, f2, m, out],
+      [e1, e2, makeEdge('m', 'out', 'out', 'color')]);
+    expect(code).toContain('mul(float1');
+    expect(code).not.toContain('mul(float2');
+  });
+
+  it('ignores a node the topological sort dropped for a cycle', () => {
+    const x = makeNode('x', 'mul', {});
+    const y = makeNode('y', 'mul', {});
+    const out = makeNode('out', 'output');
+    // nodeById must index `sorted`, not `nodes` — x and y are cycle-excluded.
+    const { code } = graphToCode([x, y, out], [
+      makeEdge('x', 'out', 'y', 'a'),
+      makeEdge('y', 'out', 'x', 'a'),
+      makeEdge('y', 'out', 'out', 'color'),
+    ]);
+    expect(code).toContain('return vec3(1, 0, 0);');
   });
 });
 
@@ -347,6 +432,103 @@ describe('graphToCode — binary-op defaults', () => {
     ]);
     expect(code).toContain('min(float1, 0)');
   });
+
+  it('emits clamp with the 0–1 identity bounds, not the signal-eating clamp(x, 0, 0)', () => {
+    // Regression: clamp carried NO defaultValues, so BOTH unwired bounds fell
+    // through resolveArguments' bare '0' placeholder and a freshly dropped
+    // Clamp emitted `clamp(x, 0, 0)` — output constant 0, the whole signal
+    // gone — while the CPU evaluator previewed max = 1, so the node's own
+    // label disagreed with the render.
+    const a = makeNode('a', 'float', { value: 0.7 });
+    const cl = makeNode('cl', 'clamp'); // min + max unwired and unset
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([a, cl, out], [
+      makeEdge('a', 'out', 'cl', 'x'),
+      makeEdge('cl', 'out', 'out', 'color'),
+    ]);
+    expect(code).toContain('clamp(float1, 0, 1)');
+    expect(code).not.toContain('clamp(float1, 0, 0)');
+  });
+
+  it('matches the CPU evaluator for an unwired clamp (node label vs render)', () => {
+    // The two sides must agree: cpuEvaluator's `case 'clamp'` uses the same
+    // 0 / 1 fallbacks this registry entry now declares.
+    const a = makeNode('a', 'float', { value: 0.7 });
+    const cl = makeNode('cl', 'clamp');
+    const edges = [makeEdge('a', 'out', 'cl', 'x')];
+    expect(evaluateNodeOutput('cl', [a, cl], edges, 0)).toEqual([0.7]);
+  });
+
+  it('emits remap as the IDENTITY when nothing is set, not a divide-by-zero', () => {
+    // Regression: remap carried no defaultValues, so all four bounds fell to
+    // codegen's bare '0' and emitted `remap(x, 0, 0, 0, 0)` — (x-0)/(0-0) is a
+    // division by zero, i.e. NaN out of a freshly dropped node, while
+    // cpuEvaluator previewed the 0…1 → 0…1 identity.
+    const a = makeNode('a', 'float', { value: 0.7 });
+    const rm = makeNode('rm', 'remap');
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([a, rm, out], [
+      makeEdge('a', 'out', 'rm', 'x'),
+      makeEdge('rm', 'out', 'out', 'color'),
+    ]);
+    expect(code).toContain('remap(float1, 0, 1, 0, 1)');
+    expect(code).not.toContain('remap(float1, 0, 0, 0, 0)');
+  });
+
+  it('matches the CPU evaluator for an unwired remap', () => {
+    const a = makeNode('a', 'float', { value: 0.7 });
+    const rm = makeNode('rm', 'remap');
+    const edges = [makeEdge('a', 'out', 'rm', 'x')];
+    // Identity: 0.7 mapped from 0…1 onto 0…1 is 0.7.
+    expect(evaluateNodeOutput('rm', [a, rm], edges, 0)).toEqual([0.7]);
+  });
+
+  it('still honours explicit remap bounds', () => {
+    const a = makeNode('a', 'float', { value: 0.5 });
+    const rm = makeNode('rm', 'remap', { inLow: 0, inHigh: 1, outLow: 10, outHigh: 20 });
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([a, rm, out], [
+      makeEdge('a', 'out', 'rm', 'x'),
+      makeEdge('rm', 'out', 'out', 'color'),
+    ]);
+    expect(code).toContain('remap(float1, 0, 1, 10, 20)');
+  });
+
+  it('still honours explicit clamp bounds', () => {
+    const a = makeNode('a', 'float', { value: 5 });
+    const cl = makeNode('cl', 'clamp', { min: 1, max: 3 });
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([a, cl, out], [
+      makeEdge('a', 'out', 'cl', 'x'),
+      makeEdge('cl', 'out', 'out', 'color'),
+    ]);
+    expect(code).toContain('clamp(float1, 1, 3)');
+  });
+});
+
+describe('graphToCode — exposed-param resolution consults the registry', () => {
+  it('a uv node with EMPTY values emits a bare uv(), not uv(1) with a 1-radian spin', () => {
+    // resolveExposedParam never consulted def.defaultValues, so every missing
+    // key fell to a hardcoded 1 — a legacy or hand-edited node emitted a full
+    // 57-degree rotation nobody asked for, while cpuEvaluator assumed 0.
+    const uv = makeNode('uv', 'uv');
+    uv.data.values = {};
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([uv, out], [makeEdge('uv', 'out', 'out', 'color')]);
+    expect(code).not.toContain('rotateUV');
+    expect(code).not.toMatch(/uv\(1\)/);
+  });
+
+  it('still resolves the noise identifier and scale defaults', () => {
+    // `pos` holds an IDENTIFIER, not a number — it must stay intercepted by its
+    // own branch, and `scale` must still land on 1.
+    const n = makeNode('n', 'perlin');
+    n.data.values = {};
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([n, out], [makeEdge('n', 'out', 'out', 'color')]);
+    expect(code).toContain('positionGeometry');
+    expect(code).not.toContain('positionGeometry.mul(');
+  });
 });
 
 describe('graphToCode — noise nodes', () => {
@@ -418,6 +600,127 @@ describe('graphToCode — unknown nodes', () => {
     expect(code).not.toContain('window');
     expect(code).not.toContain('eval');
     expect(code).not.toContain('document');
+  });
+});
+
+describe('graphToCode — stored values never reach the module as code', () => {
+  const out = () => makeNode('out', 'output');
+  const PAYLOAD = '0); globalThis.__pwned = 1; float(0';
+
+  /** Every emitted `const` line must be exactly one statement. */
+  const oneStatementPerLine = (code: string) => {
+    for (const line of code.split('\n')) {
+      if (!line.startsWith('  const ')) continue;
+      expect(line.split(';'), line).toHaveLength(2);
+    }
+  };
+
+  // Site 1 — the generic type-constructor branch.
+  it.each(['float', 'int', 'slider', 'property_float'])(
+    'neutralizes a poisoned stored value on the %s constructor',
+    (type) => {
+      const n = makeNode('n', type, { value: PAYLOAD, name: 'p' });
+      const { code } = graphToCode([n, out()], [makeEdge('n', 'out', 'out', 'color')]);
+      expect(code).not.toContain('__pwned');
+      oneStatementPerLine(code);
+    },
+  );
+
+  it('routes a colour through hexLiteral even when it does not start with #', () => {
+    // The old guard was `startsWith('#')`, so a `0x…` payload bypassed it.
+    const c = makeNode('c', 'color', { hex: '0xff0000); globalThis.__pwned = 1; color(0' });
+    const { code } = graphToCode([c, out()], [makeEdge('c', 'out', 'out', 'color')]);
+    expect(code).toContain('const color1 = color(0x000000);');
+    expect(code).not.toContain('__pwned');
+  });
+
+  // Site 2 — resolveArguments (unwired operand carrying a stored value).
+  it('falls back to the registry default for a poisoned unwired operand', () => {
+    const a = makeNode('a', 'float', { value: 0.5 });
+    const m = makeNode('m', 'min', { b: '1); globalThis.__pwned = 1; float(1' });
+    const { code } = graphToCode(
+      [a, m, out()],
+      [makeEdge('a', 'out', 'm', 'a'), makeEdge('m', 'out', 'out', 'color')],
+    );
+    expect(code).toContain('const min1 = min(float1, 1);'); // min's registry default b = 1
+    expect(code).not.toContain('__pwned');
+  });
+
+  it('falls back to the chain identity when a poisoned operand has no registry default', () => {
+    const a = makeNode('a', 'float', { value: 0.5 });
+    const m = makeNode('m', 'mul', { b: '1); globalThis.__pwned = 1; float(1' });
+    const { code } = graphToCode(
+      [a, m, out()],
+      [makeEdge('a', 'out', 'm', 'a'), makeEdge('m', 'out', 'out', 'color')],
+    );
+    expect(code).toContain('const mul1 = mul(float1, 1);'); // mul's chainIdentity = 1
+    expect(code).not.toContain('__pwned');
+  });
+
+  it('neutralizes a poisoned vec3 component', () => {
+    const v = makeNode('v', 'vec3', { x: '1, 1, 1); globalThis.__pwned = 1; vec3(0', y: 0, z: 0 });
+    const { code } = graphToCode([v, out()], [makeEdge('v', 'out', 'out', 'color')]);
+    expect(code).toContain('const vec31 = vec3(0, 0, 0);');
+    expect(code).not.toContain('__pwned');
+  });
+
+  // Site 3 — resolveExposedParam (noise pos/scale, uv channel/tiling/rotation).
+  it('neutralizes a poisoned noise scale', () => {
+    const n = makeNode('n', 'perlin', { pos: 'positionGeometry', scale: '2); globalThis.__pwned = 1; float(1' });
+    const { code } = graphToCode([n, out()], [makeEdge('n', 'out', 'out', 'color')]);
+    expect(code).toContain('const noise1 = mx_noise_float(positionGeometry);');
+    expect(code).not.toContain('__pwned');
+  });
+
+  it('neutralizes a poisoned noise pos but KEEPS a legitimate identifier', () => {
+    const bad = makeNode('n', 'perlin', { pos: 'positionGeometry); globalThis.__pwned = 1; float(1', scale: 1 });
+    const badCode = graphToCode([bad, out()], [makeEdge('n', 'out', 'out', 'color')]).code;
+    expect(badCode).toContain('const noise1 = mx_noise_float(positionGeometry);');
+    expect(badCode).not.toContain('__pwned');
+    oneStatementPerLine(badCode);
+    // codeToGraph stores the unresolved variable NAME of a pasted noise call —
+    // an identifier must survive verbatim or those graphs change on every save.
+    const ok = makeNode('n', 'perlin', { pos: 'myUnresolvedVar', scale: 1 });
+    expect(graphToCode([ok, out()], [makeEdge('n', 'out', 'out', 'color')]).code)
+      .toContain('const noise1 = mx_noise_float(myUnresolvedVar);');
+  });
+
+  it.each(['channel', 'tilingU', 'tilingV', 'rotation'])(
+    'neutralizes a poisoned uv %s',
+    (key) => {
+      const u = makeNode('u', 'uv', {
+        channel: 0, tilingU: 1, tilingV: 1, rotation: 0,
+        [key]: '1); globalThis.__pwned = 1; uv(0',
+      });
+      const { code } = graphToCode([u, out()], [makeEdge('u', 'out', 'out', 'color')]);
+      expect(code).not.toContain('__pwned');
+      oneStatementPerLine(code);
+    },
+  );
+
+  // Byte-stability: the values a real graph carries must be untouched.
+  it('is byte-identical for legitimate numeric values', () => {
+    const legit = [
+      [makeNode('f', 'float', { value: 2.5 }), 'const float1 = float(2.5);'],
+      [makeNode('f', 'float', { value: 0 }), 'const float1 = float(0);'],
+      [makeNode('f', 'int', { value: 3 }), 'const int1 = int(3);'],
+      [makeNode('f', 'slider', { value: 0.5, min: 0, max: 1 }), 'const float1 = float(0.5);'],
+      [makeNode('f', 'color', { hex: '#abcdef' }), 'const color1 = color(0xabcdef);'],
+    ] as const;
+    for (const [node, expected] of legit) {
+      expect(graphToCode([node, out()], [makeEdge('f', 'out', 'out', 'color')]).code, expected)
+        .toContain(expected);
+    }
+    // A numeric STRING prints exactly as the number it denotes.
+    expect(graphToCode(
+      [makeNode('f', 'float', { value: '2.5' }), out()],
+      [makeEdge('f', 'out', 'out', 'color')],
+    ).code).toContain('const float1 = float(2.5);');
+    // uv tiling keeps its exact literals.
+    expect(graphToCode(
+      [makeNode('u', 'uv', { channel: 0, tilingU: 4, tilingV: 2, rotation: 0 }), out()],
+      [makeEdge('u', 'out', 'out', 'color')],
+    ).code).toContain('mul(uv(), vec2(4, 2))');
   });
 });
 

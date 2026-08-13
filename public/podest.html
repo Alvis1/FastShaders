@@ -4,6 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Podest</title>
+<!-- Inline data: favicon — kills the automatic /favicon.ico 404. Podest runs
+     unattended for weeks and rate-limits its own error relay, so a permanent
+     spurious console error would make a genuine one harder to spot. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
 <!--
   Podest — standalone full-screen TSL shader viewer.
 
@@ -97,10 +101,7 @@
   Self-contained: the iframe loads the SAME vendored A-Frame 1.8.0 + Three.js
   r184 WebGPU bundle and shaderloader 0.5 the app uses (absolute URLs off this
   page's origin), so it deploys anywhere the app does (e.g. alvismisjuns.podest.lv).
-  Reached from the editor's "P" toolbar button. The panel's "Get FastShaders"
-  section links the desktop builds by their FIXED release asset names (same
-  list as the Toolbar's "Download app" dropdown — keep both in sync with
-  .github/workflows/release.yml); it hides itself inside the desktop shell.
+  Reached from the editor's "P" toolbar button.
 
   Dev:      http://localhost:5173/FastShaders/podest.html
   Deployed: <origin>/FastShaders/podest.html
@@ -166,11 +167,6 @@
      Declared after `.btn:hover` so its hover colours win at equal specificity. */
   .btn--fs { width: 100%; padding: 9px 8px; font-weight: 700; color: #fff; background: #2e9e57; border-color: #268049; }
   .btn--fs:hover { color: #fff; background: #268049; border-color: #1f6a3c; }
-  /* Desktop-app download links: plain anchors dressed as buttons (GitHub
-     serves release assets with Content-Disposition: attachment, so a plain
-     navigation downloads — no JS needed). */
-  .dl-links { display: flex; flex-direction: column; gap: 6px; }
-  a.btn { display: block; text-decoration: none; text-align: center; }
   .check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text); cursor: pointer; user-select: none; }
   .check input { accent-color: var(--accent); cursor: pointer; margin: 0; }
   /* Compact panel: explanations live in `title` tooltips on the controls and
@@ -183,6 +179,11 @@
   .ctl-unit { font-size: 11px; color: var(--text-dim); }
   .color-input { width: 34px; height: 28px; flex-shrink: 0; padding: 0; border: 1px solid var(--panel-border); border-radius: 5px; background: #fff; cursor: pointer; }
   .speed-slider { flex: 1; min-width: 0; accent-color: var(--accent); cursor: pointer; margin: 0; }
+  /* The spin speed pair only exists while spin is on. Explicit rules rather
+     than leaning on [hidden]: that lives in the UA origin, so ANY author
+     `display` later added to these selectors would silently outrank it. */
+  #spin-speed[hidden], #spin-speed-val[hidden] { display: none; }
+  #spin-speed-val { flex-shrink: 0; min-width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
 
   /* ── Uniform sliders ────────────────────────────────────────────── */
   #uniforms { display: flex; flex-direction: column; gap: 12px; }
@@ -251,6 +252,18 @@
      moment presentation mode is left. */
   :root.is-present #error { display: none; }
   #hint { position: fixed; bottom: 12px; left: 12px; z-index: 20; color: rgba(255,255,255,0.6); font-size: 11px; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+  /* ── FPS / frame-time readout ───────────────────────────────────────
+     Opt-in from the panel, drawn over the top-left corner. Deliberately NOT
+     in the `:root.is-present` hide rule: the number is only worth anything at
+     the resolution the exhibit actually runs at, which IS presentation mode —
+     and it is off by default, so it can only be there because someone asked
+     for it. It sits UNDER the error banner (z-index 29 < 30), which shares
+     this corner and outranks a diagnostic when both want it. */
+  #stats { position: fixed; top: 12px; left: 12px; z-index: 29; display: none;
+           color: #fff; background: rgba(20, 21, 25, 0.55); border: 1px solid rgba(255, 255, 255, 0.18);
+           border-radius: 6px; padding: 4px 8px; font: 12px/1.35 ui-monospace, Menlo, monospace;
+           font-variant-numeric: tabular-nums; white-space: pre; pointer-events: none; }
+  #stats.show { display: block; }
   /* ── Microphone arm light ───────────────────────────────────────────
      Shown ONLY when the loaded shader declares mic uniforms. Same visual
      language as the Mic node's light in the editor (green idle, amber while
@@ -289,6 +302,7 @@
      OPAQUE origin — Safari then blocks fullscreen by permissions policy. -->
 <iframe id="stage" sandbox="allow-scripts" allow="fullscreen *; xr-spatial-tracking *" allowfullscreen title="Shader stage"></iframe>
 <div id="error"></div>
+<div id="stats"></div>
 <div id="overlay">Drop shader · model · zip</div>
 <div id="hint">Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip anywhere — or click the panel drop area.</div>
 
@@ -342,7 +356,15 @@
           <option value="teapot">Teapot</option>
           <option value="bunny">Bunny</option>
         </select>
-        <button class="btn active" id="spin-toggle" title="Toggle auto-rotate">Spin</button>
+      </div>
+      <!-- Spin sits UNDER the scene picker and owns its own row: the speed
+           slider appears to its RIGHT only while spin is on. A speed control
+           beside a stopped turntable does nothing, and in a 288px panel it
+           cost a whole labelled row to say so. -->
+      <div class="controls-row" style="margin-top:6px;">
+        <button class="btn" id="spin-toggle" title="Toggle auto-rotate">Spin</button>
+        <input type="range" id="spin-speed" class="speed-slider" min="0.1" max="4" step="0.05" title="Auto-rotate speed" hidden />
+        <span class="ctl-unit" id="spin-speed-val" hidden></span>
       </div>
       <div class="controls-row" style="margin-top:6px;">
         <button class="btn" id="mat-toggle" hidden title="Switch between the shader and the model's own materials">Show model materials</button>
@@ -352,10 +374,7 @@
         <label class="ctl-label" for="bg-color">Background</label>
         <input type="color" id="bg-color" class="color-input" title="Scene background color" />
       </div>
-      <div class="controls-row" style="margin-top:6px;">
-        <label class="ctl-label" for="spin-speed">Spin speed</label>
-        <input type="range" id="spin-speed" class="speed-slider" min="0.1" max="4" step="0.05" title="Auto-rotate speed (use the Spin button to stop)" />
-      </div>
+      <label class="check" style="margin-top:6px;" title="Frames per second and the time between presented frames, over the top-left corner. The period includes vsync, so it reads the display's refresh rate until the shader actually misses frames."><input type="checkbox" id="stats-toggle" /> Show FPS and frame time</label>
     </div>
 
     <div class="section">
@@ -375,19 +394,6 @@
     </div>
 
     <button class="btn btn--fs" id="fs-panel-btn" type="button" title="Show the shader full-screen with no controls">Fullscreen</button>
-
-    <!-- Fixed /releases/latest/download/ asset names — the SAME list as
-         DESKTOP_DOWNLOADS in src/components/Layout/Toolbar.tsx; both must
-         match the upload names in .github/workflows/release.yml. Hidden by
-         script when this page runs inside the desktop shell itself. -->
-    <div class="section" id="dl-section">
-      <div class="section__label" title="The desktop version of the editor these shaders are made in — runs fully offline.">Get FastShaders</div>
-      <div class="dl-links">
-        <a class="btn" href="https://github.com/Alvis1/FastShaders/releases/latest/download/FastShaders-Windows-Setup.exe">Windows — installer (.exe)</a>
-        <a class="btn" href="https://github.com/Alvis1/FastShaders/releases/latest/download/FastShaders-Windows-Portable.zip">Windows — portable (.zip)</a>
-        <a class="btn" href="https://github.com/Alvis1/FastShaders/releases/latest/download/FastShaders-macOS.dmg">macOS — disk image (.dmg)</a>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -409,6 +415,7 @@
   var titleToggle = document.getElementById("title-toggle");
   var fsBtn = document.getElementById("fs-btn");
   var fsPanelBtn = document.getElementById("fs-panel-btn");
+  var statsEl = document.getElementById("stats");
   var docEl = document.documentElement;
 
   // Per-geometry resting tilt, matching the in-app preview.
@@ -436,6 +443,9 @@
     titleText: readStr("fs:viewerTitleText", "").slice(0, TITLE_MAX),
     titleColor: isHex6(readStr("fs:viewerTitleColor", DEFAULT_TITLE_COLOR))
       ? readStr("fs:viewerTitleColor", DEFAULT_TITLE_COLOR) : DEFAULT_TITLE_COLOR,
+    // FPS / frame-time readout — off by default; the stage only measures and
+    // reports while this is on (see applyStats).
+    showStats: readStr("fs:viewerStats", "0") === "1",
     // Unattended-run options, both on by default (see the Unattended panel).
     autoRestore: readStr("fs:viewerAutoRestore", "1") !== "0",
     presenting: readStr("fs:viewerPresenting", "0") === "1",
@@ -654,6 +664,11 @@
     } else if (m.type === "fs:beat") {
       // Liveness + time-wrap heartbeat (see the watchdog below).
       onStageBeat(m);
+    } else if (m.type === "fs:stats") {
+      // Frame-rate report from the stage's rAF loop (~4×/s while enabled).
+      // Sandbox-controlled numbers: coerce and bound them before they reach
+      // the DOM, and write textContent only.
+      if (state.showStats) paintStats(m.fps, m.ms);
     } else if (m.type === "fs:stage-dead") {
       // The renderer told us it is finished (WebGPU device lost / WebGL
       // context lost). Nothing recovers in place — rebuild the stage.
@@ -728,6 +743,7 @@
   function applyStateToStage() {
     post({ type: "fs:background", color: state.bgColor });
     post({ type: "fs:spin", playing: state.spinning, dur: spinDur() });
+    post({ type: "fs:stats-on", on: state.showStats });
     if (state.geometry !== "sphere") setGeometry(state.geometry);
     if (state.showMaterials) post({ type: "fs:detach-shader" });
     else if (state.shaderSource) post({ type: "fs:shader", source: state.shaderSource });
@@ -1511,24 +1527,60 @@
     }
   });
 
+  // Spin + its speed. The slider is REVEALED by the button rather than living
+  // in a row of its own: it only means anything while the turntable is
+  // running, and the stored speed is what spin resumes at.
   var spinToggle = document.getElementById("spin-toggle");
-  spinToggle.classList.toggle("active", state.spinning);
+  var spinSpeedEl = document.getElementById("spin-speed");
+  var spinSpeedVal = document.getElementById("spin-speed-val");
+  spinSpeedEl.value = state.spinSpeed;
+  function paintSpin() {
+    spinToggle.classList.toggle("active", state.spinning);
+    spinSpeedEl.hidden = !state.spinning;
+    spinSpeedVal.hidden = !state.spinning;
+    // Step is 0.05, so two decimals is exact; trailing zeros are noise.
+    spinSpeedVal.textContent = (Math.round(state.spinSpeed * 100) / 100) + "×";
+  }
   spinToggle.addEventListener("click", function () {
     state.spinning = !state.spinning;
-    spinToggle.classList.toggle("active", state.spinning);
     writePref("fs:viewerSpin", state.spinning ? "1" : "0");
+    paintSpin();
     post({ type: "fs:spin", playing: state.spinning, dur: spinDur() });
   });
-
-  // Rotation speed — a longer/shorter spin animation. Only re-issues the
-  // animation while spinning; the stored speed is applied when spin resumes.
-  var spinSpeedEl = document.getElementById("spin-speed");
-  spinSpeedEl.value = state.spinSpeed;
   spinSpeedEl.addEventListener("input", function () {
     var s = clampSpeed(parseFloat(spinSpeedEl.value));
     state.spinSpeed = s;
     writePref("fs:viewerSpinSpeed", String(s));
+    paintSpin();
     if (state.spinning) post({ type: "fs:spin", playing: true, dur: spinDur() });
+  });
+  paintSpin();
+
+  // ── FPS / frame-time readout ────────────────────────────────────────
+  // The stage owns the render loop, so it does the measuring and posts
+  // fs:stats ~4×/s; the parent only draws. Enabling is a MESSAGE (replayed by
+  // applyStateToStage, so it survives every stage restart) rather than an
+  // always-on feed — an unattended run must not carry four postMessages a
+  // second for weeks of a readout nobody switched on.
+  var statsToggle = document.getElementById("stats-toggle");
+  function paintStats(fps, ms) {
+    var f = typeof fps === "number" && isFinite(fps) ? Math.min(9999, Math.max(0, fps)) : 0;
+    var t = typeof ms === "number" && isFinite(ms) ? Math.min(9999, Math.max(0, ms)) : 0;
+    statsEl.textContent = Math.round(f) + " FPS · " + t.toFixed(1) + " ms";
+  }
+  function applyStats() {
+    statsEl.classList.toggle("show", state.showStats);
+    // Blank it on the way out so re-enabling can't flash the old number
+    // before the first report arrives (~250 ms).
+    if (!state.showStats) statsEl.textContent = "";
+    else if (!statsEl.textContent) statsEl.textContent = "— FPS · — ms";
+    post({ type: "fs:stats-on", on: state.showStats });
+  }
+  statsToggle.checked = state.showStats;
+  statsToggle.addEventListener("change", function () {
+    state.showStats = statsToggle.checked;
+    writePref("fs:viewerStats", state.showStats ? "1" : "0");
+    applyStats();
   });
 
   // Background color — an <input type=color> only ever yields #rrggbb, but
@@ -2146,7 +2198,7 @@
     // idle return in fullscreen restores the framing the exhibitor chose —
     // not the boot camera.
     L.push('  function saveView(){var oc=camEl&&camEl.components&&camEl.components["orbit-controls"];if(oc&&oc.controls&&typeof oc.controls.saveState==="function"){try{oc.controls.saveState();}catch(e){}}}');
-    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;case"fs:save-view":saveView();break;}});');
+    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:stats-on":setStats(m.on);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;case"fs:save-view":saveView();break;}});');
     // kickResize: a fresh WebGPU boot can record a stale/zero canvas size,
     // leaving the scene unpainted until renderer.setSize re-runs (the "blank
     // until the window is resized" bug) — re-run A-Frame's resize path a few
@@ -2196,7 +2248,19 @@
     // hidden, so the first frame back would otherwise dump the WHOLE gap — a
     // night's sleep, hours of it — into `time` in one step.
     L.push('  document.addEventListener("visibilitychange",function(){if(document.visibilityState!=="visible")return;var nf=nodeFrame();if(nf)nf.lastTime=performance.now();});');
-    L.push('  (function raf(){rafCount++;requestAnimationFrame(raf);})();');
+    // FPS / frame time. Measured HERE because this document owns the render
+    // loop, and measured off rAF deltas, which is the PRESENTED frame period —
+    // it includes vsync, so it reads the panel's refresh rate until the shader
+    // genuinely misses frames (the same number, and the same caveat, as the XR
+    // stats panel in the editor). Reported ~4×/s: fast enough to react, slow
+    // enough that the readout does not bias the cost it measures. Deltas over
+    // 2 s are dropped rather than averaged in — that is a hidden tab coming
+    // back, not a slow frame. Silent unless the parent asks, so a pedestal run
+    // with the readout off carries no traffic at all.
+    L.push('  var statsOn=false,statsN=0,statsSum=0,statsLast=0,STATS_MS=250;');
+    L.push('  function setStats(on){statsOn=!!on;statsN=0;statsSum=0;statsLast=0;}');
+    L.push('  function statsFrame(t){if(!statsOn){statsLast=0;return;}if(statsLast>0){var d=t-statsLast;if(d>0&&d<2000){statsN++;statsSum+=d;if(statsSum>=STATS_MS){toParent({type:"fs:stats",fps:statsN*1000/statsSum,ms:statsSum/statsN});statsN=0;statsSum=0;}}}statsLast=t;}');
+    L.push('  (function raf(t){rafCount++;statsFrame(t||0);requestAnimationFrame(raf);})(0);');
     // Modulo, not zero: it subtracts a whole number of TIME_WRAPs, so the fold
     // stays 2π-aligned however far behind the beat has fallen. wrapNeeded is
     // only the fallback for a build where the node frame is unreachable, and
@@ -2219,16 +2283,8 @@
     return L.join("\n");
   }
 
-  // The desktop bundle ships this page too, and a "download the desktop app"
-  // pitch inside the desktop app is noise (and dead offline). Tauri serves
-  // tauri://localhost on macOS/Linux and http://tauri.localhost on Windows,
-  // and withGlobalTauri stamps __TAURI__ on every app webview — cover all
-  // three. Visible by default so a guard miss shows the links (the web case).
-  if (location.protocol === "tauri:" || location.hostname === "tauri.localhost" || window.__TAURI__) {
-    document.getElementById("dl-section").hidden = true;
-  }
-
   renderTitle();
+  applyStats();
   // onFullscreenChange would CLEAR a remembered presentation mode (we boot
   // windowed by definition), so seed the button from the real window state and
   // apply the remembered mode separately.

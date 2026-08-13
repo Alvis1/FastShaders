@@ -6,6 +6,7 @@ import { formatNodeLabel } from '@/i18n';
 import { useAppStore } from '@/store/useAppStore';
 import { buildRows } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
+import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import {
   NodeGlyph,
   hasNodeGlyph,
@@ -368,11 +369,41 @@ export function NodeVisual({
                     {row.settingKey && row.settingType === 'number' && !isConnected && !(def.type === 'slider' && row.settingKey === 'value') && (
                       <DragNumberInput compact value={num(row.settingKey)} onChange={(v) => change(row.settingKey!, v)} />
                     )}
+                    {/* Colour row. The REAL picker only under `interactive`
+                        (the Node Designer's stage); everywhere else — asset
+                        tiles, the node-editor overview — an inert `<span>`
+                        carrying the SAME `.palette-swatch` classes, which is
+                        the OutputCardContent precedent for a card that must
+                        show a real widget without being one.
+
+                        Not "always the picker, made inert by the card's
+                        pointer-events: none wrapper": that wrapper stops the
+                        pointer but not the keyboard, so every colour row on
+                        every palette tile would become a tab stop that opens a
+                        real popover from a static replica. Not "keep the old
+                        read-only colour input" either — `readOnly` is not
+                        honoured there, and the two elements paint their fill
+                        differently (UA swatch vs `background`), which is
+                        exactly the drift the one-node-one-look rule forbids.
+
+                        `history="none"`: the designer's `onValueChange` writes
+                        its own session-only preview model, never the graph, so
+                        bracketing here would push a dead undo entry and wipe
+                        the redo stack on every pick. */}
                     {row.settingKey && row.settingType === 'color' && (
-                      <input type="color" className="shader-node__input-color nodrag"
-                        value={String(values?.[row.settingKey] ?? dv[row.settingKey] ?? '#ff0000')}
-                        onChange={interactive ? (e) => change(row.settingKey!, e.target.value) : noop}
-                        readOnly={!interactive} />
+                      interactive ? (
+                        <PaletteColorPicker
+                          className="shader-node__input-color"
+                          history="none"
+                          value={String(values?.[row.settingKey] ?? dv[row.settingKey] ?? '#ff0000')}
+                          onPick={(hex) => change(row.settingKey!, hex)}
+                        />
+                      ) : (
+                        <span
+                          className="palette-swatch shader-node__input-color"
+                          style={{ background: String(values?.[row.settingKey] ?? dv[row.settingKey] ?? '#ff0000') }}
+                        />
+                      )
                     )}
                     {row.settingType === 'vec3' && row.vecBaseKey && (
                       <span className="shader-node__vec-group">

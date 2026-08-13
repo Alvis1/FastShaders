@@ -4,12 +4,12 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 
 **[Live Demo](https://Alvis1.github.io/FastShaders/)**
 **[Live Demo2](https://alvismisjuns.lv/fastshaders/)**
-**[Desktop app downloads](https://github.com/Alvis1/FastShaders/releases/latest)** (Windows / macOS — or use the **Local** button in the editor)
+**[Desktop app downloads](https://github.com/Alvis1/FastShaders/releases/latest)** (Windows / macOS — or use the **Download app** button in the editor)
 
 ## Features
 
 - **Bi-directional sync** — edit either the graph or the TSL code; changes round-trip in both directions
-- **Node graph editor** — 69 built-in TSL node types across 10 categories, added via the searchable palette (drag, or click/Enter to place), the right-click canvas menu, **Shift+A** quick-add (fully keyboard-driven), or by dropping a wire on empty canvas
+- **Node graph editor** — 74 built-in TSL node types across 10 categories, added via the searchable palette (drag, or click/Enter to place), the right-click canvas menu, **Shift+A** quick-add (fully keyboard-driven), or by dropping a wire on empty canvas
 - **Drag-aware sockets** — dragging a wire near a node labels its input sockets with their names; noise and Image nodes also reveal their hidden parameter sockets so you can wire a parameter without opening its settings first
 - **Wire editing** — drop a node onto a wire to splice it into that connection, and double-click a wire to add draggable routing points it curves through
 - **Drag-to-connect** — drag a node (or a palette tile) onto another node to wire them: a preview ring and tooltip show exactly which sockets will connect, and the drop snaps the node into place next to its new peer
@@ -19,21 +19,25 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 - **Custom preview meshes** — drop a `.obj` / `.glb` / `.gltf` onto the 3D preview to run your shader on your own model; “Download Shader” then becomes a `.zip` that bundles the model next to the `.js`, ready for Podest or a plain A-Frame page (and re-importing that zip restores the mesh)
 - **MaterialX noise** — 8 built-in noise variants (Perlin, fBm, cell, Worley/Voronoi) backed by `three/tsl`'s MaterialX functions
 - **Built-in textures** — 8 procedural texture presets (polka dots, grid, tiger fur, static noise, crumpled fabric, gas giant, marble, wood) draggable from the palette
-- **CSV data import** — drop a `.csv` onto the canvas to create a Data node, then drive shaders from real data with the **Data Stripes** and **Data Viz** nodes (columns baked into GPU textures)
+- **Preset library** — 15 ready-made shader graphs in three tiers (gradient/stripes/checker primitives → color-ramp/noise-mask/toon-ramp composites → dissolve/hologram/force-field/stylized-water effect recipes), each dropped in as an editable, annotated group
+- **CSV data import & scientific visualization** — drop a `.csv` onto the canvas to create a Data node, then drive shaders from real data with the **Data Stripes**, **Data Viz**, **Data Range** (CPU-side domain normalization: robust percentiles, log/symlog, ±3σ) and **Isolines** nodes (columns baked into GPU textures), colored through 14 perceptually-uniform **scientific colormaps** (viridis, magma, batlow, cool-warm, CET isoluminant maps, turbo…)
+- **Live microphone input** — a Mic node exposes level/bass/mid/treble as shader uniforms (armed only by an explicit click, nothing recorded or persisted); exported shaders keep them as ordinary tunable properties
+- **Environment maps & PBR channels** — wire an image into the Output node's Environment socket for real image-based lighting (PMREM), alongside Roughness / Metalness / Opacity / Discard / Normal / Displacement channels
+- **Color palettes** — per-shader palettes plus curated built-ins in a universal picker, with globally-recent colors
 - **Image textures** — drop an image to create an Image node (re-encoded and validated on import) with UV tiling / offset / flip controls
 - **Project save & restore** — "Download Shader" embeds the whole project inside the exported `.js`; drop that `.js` (or a `.zip` when images or a custom preview mesh are included) back in — on the canvas, the code panel, or via Load Script — to restore the graph, preview settings, and UI prefs
-- **Standalone viewer** — a separate full-screen player (opened from the toolbar) that runs any exported shader `.js`/`.zip` or a `.glb`/`.gltf`/`.obj` model, sandboxed, with auto uniform sliders
+- **Standalone viewer (Podest)** — a separate full-screen player (opened from the toolbar) that runs any exported shader `.js`/`.zip` or a `.glb`/`.gltf`/`.obj` model, sandboxed, with auto uniform sliders — plus a presentation mode hardened for week-long unattended exhibition (wake lock, crash watchdog, state restore) and a confirm-gated **Enter VR** path on WebXR headsets
 - **Groups** — Ctrl/Cmd+G to wrap selected nodes in a recolorable, collapsible container; save groups to a per-browser library and drag them onto any graph
 - **Notes & ink** — sticky-note annotations and freehand drawing on the canvas; both are visual-only (never affect the compiled shader) and are saved with the project
 - **Property uniforms** — `property_float` and `property_color` nodes become live-tunable sliders / color pickers in the preview overlay and component attributes in the A-Frame export
 - **Copy / paste / duplicate** — Cmd/Ctrl+C, Cmd/Ctrl+V, Cmd/Ctrl+D across nodes (internal edges preserved)
-- **Undo / redo** — Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (50-step history), plus Undo/Redo buttons in the toolbar
+- **Undo / redo** — Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (50-step history), plus Undo/Redo buttons in the canvas bar
 - **VR cost budget** — per-headset cost meter (Quest 2/3/3s, Steam Frame, Pico 4, Apple Vision Pro) with a color-gradient bar that fills as the graph's GPU cost approaches the selected headset's budget (advisory, not a hard limit)
-- **Offline desktop app** — a lightweight Tauri build for Windows and macOS, downloadable from the **Local** button in the editor's toolbar; the whole editor (Monaco and fonts included) is bundled, so it runs with no internet at all
+- **Offline desktop app** — a lightweight Tauri build for Windows and macOS, downloadable from the **Download app** button in the editor's toolbar; the whole editor (Monaco and fonts included) is bundled, so it runs with no internet at all
 
 ## Desktop app
 
-The **Local** button (top right in the editor) offers three downloads, rebuilt automatically with every release:
+The **Download app** button (top right in the editor) offers three downloads, rebuilt automatically with every release:
 
 | Platform | File | Notes |
 | --- | --- | --- |
@@ -71,7 +75,7 @@ Those two scripts are all you need: `a-frame-180-a-01.min.js` bundles **A-Frame 
 
 ## License
 
-MIT
+MIT. Bundled third-party components (three.js, A-Frame, Monaco, fonts, scientific colormap data…) are credited in [public/THIRD-PARTY-NOTICES.txt](public/THIRD-PARTY-NOTICES.txt), which ships with every build.
 
 ## Contact
 

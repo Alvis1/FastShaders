@@ -56,7 +56,13 @@ describe('graphToCode: Data → Data Viz → Output', () => {
     // color(0x…) rather than vec3(r/255, …): THREE.Color decodes the hex from
     // sRGB into linear working space, so the ramp endpoints render as the
     // swatch the user picked and the two ends interpolate in the right space.
-    expect(gen.code).toMatch(/color\(0x000000\)\.mix\(color\(0xffffff\), _dataviz1_t\)/);
+    // FUNCTION form, not `a.mix(b, t)`: TSL registers `.mix` as
+    // `mixElement = (t, e1, e2) => mix(e1, e2, t)` (three's MathNode.js), so the
+    // RECEIVER is the blend factor. The chained spelling therefore computed
+    // `mix(highColor, t, lowColor)` — the low colour used as a per-channel
+    // factor and the scalar `t` as an endpoint, which left the ramp within ~2%
+    // of the high colour across its whole range (the low swatch did nothing).
+    expect(gen.code).toMatch(/mix\(color\(0x000000\), color\(0xffffff\), _dataviz1_t\)/);
     expect(gen.code).toContain('return dataviz1;');
     expect(gen.code).not.toMatch(/\bdataviz\s*\(/); // custom emission, not a call
   });

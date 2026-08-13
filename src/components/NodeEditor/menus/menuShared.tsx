@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { t } from '@/i18n';
 import type { ShaderFlowNode } from '@/types';
 import { getNodeValues } from '@/types';
@@ -66,6 +67,18 @@ interface NumberRowProps {
  */
 export function NumberRow({ label, value, onCommit, step = 0.05, min, max }: NumberRowProps) {
   const [editText, setEditText] = useState<string | null>(null);
+  // Every parseable keystroke commits, and every commit reaches
+  // updateNodeData -> an unconditional pushHistory -> a full-graph
+  // structuredClone + a graph->code pass. Typing "0.125" was five undo
+  // entries. Bracket the burst so a typed edit is ONE entry; the bracket
+  // lives HERE rather than at the four call sites (Stripes / Data Viz /
+  // Colormap / Data Range) for the same reason this module exists.
+  // Two consequences worth knowing: a spinner-arrow click also opens the
+  // 600 ms window (one click, one change event), and a sibling control
+  // touched inside that window folds into the same entry — e.g. changing
+  // Data Range's mode select right after typing a bound, which also
+  // unmounts this row (the hook's unmount effect closes the bracket).
+  const { bracket, closeBracket } = useHistoryBracket();
   return (
     <div style={rowStyle}>
       <label style={labelStyle}>{label}</label>
@@ -79,9 +92,11 @@ export function NumberRow({ label, value, onCommit, step = 0.05, min, max }: Num
           const raw = e.target.value;
           setEditText(raw);
           const n = Number(raw);
-          if (raw !== '' && Number.isFinite(n)) onCommit(n);
+          // bracket() before onCommit: beginInteraction must snapshot the
+          // pre-edit state, not the first typed value.
+          if (raw !== '' && Number.isFinite(n)) { bracket(); onCommit(n); }
         }}
-        onBlur={() => setEditText(null)}
+        onBlur={() => { setEditText(null); closeBracket(); }}
         style={fieldStyle}
       />
     </div>

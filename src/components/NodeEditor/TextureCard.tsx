@@ -71,37 +71,46 @@ function renderStaticNoisePreview(ctx: CanvasRenderingContext2D) {
   });
 }
 
-/** Compute domain-warped height at (x, y) — shared by the 3 finite-difference samples. */
-function fabricHeight(x: number, y: number, eScale: number, pinch: number): number {
+/** Per-iteration seed offsets that decorrelate the two axes' noise samples.
+ *  Module scope, not a literal in the loop: `fabricWarp` runs once per pixel,
+ *  and an inline array literal would allocate on every one. */
+const FABRIC_WARP_SEEDS = [0, 100, 300, 700] as const;
+
+/**
+ * Domain-warped noise at (x, y), mirroring CRUMPLED_FABRIC_CODE's four
+ * `pos_n = pos_{n-1} + noise(pos_{n-1}) * pinch` steps (builtinTextures.ts).
+ * 2D stand-in for the texture's 3D mx_noise_float, same as every other tile.
+ */
+function fabricWarp(x: number, y: number, eScale: number, pinch: number): number {
   let wx = x * eScale, wy = y * eScale;
-  // warp iteration 1
-  wx += perlin2D(wx, wy) * pinch;
-  wy += perlin2D(wx + 100, wy + 100) * pinch;
-  // warp iteration 2
-  wx += perlin2D(wx, wy) * pinch;
-  wy += perlin2D(wx + 300, wy + 300) * pinch;
+  // Four warp iterations, decorrelated per axis by a per-iteration seed offset
+  // (stands in for the texture's axis-permuted 3D samples).
+  for (const s of FABRIC_WARP_SEEDS) {
+    wx += perlin2D(wx + s, wy + s) * pinch;
+    wy += perlin2D(wx + s + 50, wy + s + 50) * pinch;
+  }
   return perlin2D(wx, wy);
 }
 
 function renderCrumpledFabricPreview(ctx: CanvasRenderingContext2D) {
-  const eScale = Math.exp(1.5); // scale=2 → exp(1.5)
+  const eScale = Math.exp(1.5); // scale=2 → exp(scale − 0.5)
   const pinch = 0.5;
-  const EPS = 0.01;
-  const bump = 20;
+  // The texture's three blend colors, sRGB/255 (this file's convention):
+  // mainColor 0xB0F0FF, subColor 0x4040F0, bgColor 0x003000.
+  const main: [number, number, number] = [0.690, 0.941, 1.0];
+  const sub: [number, number, number] = [0.251, 0.251, 0.941];
+  const bg: [number, number, number] = [0, 0.188, 0];
 
   renderPixels(ctx, (x, y) => {
-    // finite-difference normal from warped height field
-    const h0 = fabricHeight(x, y, eScale, pinch);
-    const h1 = fabricHeight(x + EPS, y, eScale, pinch);
-    const h2 = fabricHeight(x, y + EPS, eScale, pinch);
-    const sx = (h0 - h1) * bump;
-    const sy = (h0 - h2) * bump;
-    const len = Math.sqrt(sx * sx + sy * sy + 1);
-    // encode tangent-space normal as color
+    const k = clamp01((fabricWarp(x, y, eScale, pinch) + 1) / 2);
+    // main·(1−|2k−1|) + sub·k² + bg·(1−k)² — the texture's exact weights.
+    const w1 = 1 - Math.abs(k * 2 - 1);
+    const w2 = k * k;
+    const w3 = (1 - k) * (1 - k);
     return [
-      clamp01(sx / len * 0.5 + 0.5),
-      clamp01(sy / len * 0.5 + 0.5),
-      clamp01(1 / len * 0.5 + 0.5),
+      clamp01(main[0] * w1 + sub[0] * w2 + bg[0] * w3),
+      clamp01(main[1] * w1 + sub[1] * w2 + bg[1] * w3),
+      clamp01(main[2] * w1 + sub[2] * w2 + bg[2] * w3),
     ];
   });
 }

@@ -9,24 +9,25 @@ import {
   buildGeoAttr,
   getModelUrl,
   isModelGeometry,
-  isObjGeometry,
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
 import { bootGeometryWasCustom, loadPreviewMeshFromCache } from '@/utils/previewMeshCache';
 import { connectedUniformNamesKey, ALL_UNIFORMS } from '@/utils/connectedUniforms';
-import { evaluateNodeOutput } from '@/engine/cpuEvaluator';
+import { evaluateEdgeSource, getTargetEdges } from '@/engine/cpuEvaluator';
 import { isMicUniformName } from '@/utils/micAnalysis';
 import { readMicSettings } from '@/utils/micNode';
 import { useMicPump } from './useMicPump';
 import { MicControl } from './MicControl';
 import { applyUniformDefaults, planUniformDefaults } from '@/utils/uniformDefaults';
+import { safeJsonReviver } from '@/utils/safeJson';
 import { graphToCode } from '@/engine/graphToCode';
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import { displayImageFileName } from '@/utils/imageNode';
+import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import {
   extractUniforms, isOverridden, overriddenUniforms,
   clearUniformValue, clearUniformValues, seedBounds, fallbackBounds,
@@ -170,17 +171,6 @@ function validateSubdivision(raw: string | null): number {
   return SUBDIVISION_DEFAULT;
 }
 
-/**
- * Drop dangerous structural keys when parsing localStorage. Same rationale
- * as the reviver in useAppStore — defense in depth against a tampered
- * `fs:previewCameraPos` / `fs:previewRotation` / `fs:previewUniformBounds`
- * smuggling `__proto__` etc. into the parsed object.
- */
-function safeJsonReviver(key: string, value: unknown): unknown {
-  if (key === '__proto__' || key === 'constructor' || key === 'prototype') return undefined;
-  return value;
-}
-
 function loadVec3(key: string, reject?: (p: CameraPosition) => boolean): CameraPosition | null {
   try {
     const raw = localStorage.getItem(key);
@@ -291,8 +281,13 @@ export function ShaderPreview() {
   // whole preview — the MicNode/edgeValueLabel subscription pattern.
   const envMapName = useAppStore((s) => {
     const out = s.nodes.find((n) => n.data.registryType === 'output');
+    // getTargetEdges, NOT raw s.edges: a feeder inside a COLLAPSED group is
+    // reached through a rewritten boundary edge whose source is the group id,
+    // so a raw scan finds an edge whose `source` node has no registry def and
+    // reports the generic 'Environment' (or nothing) instead of the image's
+    // name. Same fix as OutputNode's edge-value labels.
     const edge = out
-      ? s.edges.find((e) => e.target === out.id && e.targetHandle === 'env')
+      ? getTargetEdges(s.nodes, s.edges, out.id).find((e) => e.targetHandle === 'env')
       : undefined;
     if (!edge) return '';
     const src = s.nodes.find((n) => n.id === edge.source);
@@ -592,13 +587,22 @@ export function ShaderPreview() {
     // arithmetic, and reads 0 for GPU-only sources (uv, position) which have no
     // CPU value; the alternative was a socket that silently did nothing.
     // Guarded on the edge existing, so a graph that doesn't wire it pays one
-    // array scan rather than a graph walk on every store notify.
+    // lookup rather than a graph walk on every store notify.
+    //
+    // getTargetEdges, NOT raw s.edges: with the smoothing feeder inside a
+    // COLLAPSED group the raw scan sees a boundary edge whose source is the
+    // GROUP id, and evaluateNodeOutput on a group node returns nothing — the
+    // wire silently stops setting smoothingTimeConstant the moment its frame is
+    // collapsed. getTargetEdges reports the real producer. The `source !== n.id`
+    // self-edge guard stays (a mic feeding its own smoothing would recurse).
     let smoothing: string | number | undefined = v.smoothing;
-    const se = s.edges.find(
-      (x) => x.target === n.id && x.targetHandle === 'smoothing' && x.source !== n.id,
+    const se = getTargetEdges(s.nodes, s.edges, n.id).find(
+      (x) => x.targetHandle === 'smoothing' && x.source !== n.id,
     );
     if (se) {
-      const out = evaluateNodeOutput(se.source, s.nodes, s.edges, 0);
+      // Per-SOCKET: a wire from an HSL node's Lightness must set
+      // smoothingTimeConstant from L, not from channel 0's Hue.
+      const out = evaluateEdgeSource(se, s.nodes, s.edges, 0);
       if (out && out.length > 0 && Number.isFinite(out[0])) smoothing = out[0];
     }
     return `${smoothing ?? NaN}|${v.gain ?? NaN}`;
@@ -1439,13 +1443,17 @@ export function ShaderPreview() {
           >
             {playing ? '⏸' : '▶'}
           </button>
-          <input
-            type="color"
+          {/* `history="none"`: the scene backdrop is a PREVIEW PREFERENCE
+              (`usePersistedState('fs:previewBgColor')`) — it never touches the
+              graph, so bracketing would push an undo entry that restores
+              nothing and wipe the redo stack on every pick. The popover follows
+              this pane into fullscreen on its own (`pickPortalHost`). */}
+          <PaletteColorPicker
             className="shader-preview__bg-color"
+            history="none"
             value={bgColor}
-            onChange={(e) => setBgColor(e.target.value)}
+            onPick={setBgColor}
             title={t('Background color', language)}
-            aria-label={t('Preview background color', language)}
           />
           <button
             type="button"
@@ -1511,17 +1519,34 @@ export function ShaderPreview() {
               // Without it a tuned value simply won, silently, and the number
               // on the property node looked broken.
               const over = isOverridden(u, uniformValues[u.name]);
-              const chip = over ? (
+              // The GRAPH's number rides the revert button's tooltip while the
+              // row's own value carries the PREVIEW's, so each still surfaces
+              // the one the other hides — the reason the old inline chip
+              // printed it. It moved into the title when the affordance became
+              // an icon button parked at the end of the controls row.
+              const graphText =
+                u.kind === 'color' ? String(u.defaultValue) : Number(u.defaultValue).toFixed(3);
+              // Rendered on EVERY row, not just overridden ones: a control that
+              // appears and disappears reflows the whole row (the slider track
+              // would resize under the pointer mid-drag) and gives the user no
+              // stable target to aim at. Disabled is the resting state; the red
+              // fill is what says "this row is not showing the graph".
+              const revertBtn = (
                 <button
                   type="button"
-                  className="shader-preview__uniform-override"
+                  className={`shader-preview__uniform-revert${over ? ' shader-preview__uniform-revert--active' : ''}`}
                   onClick={() => revertUniform(u.name)}
-                  title={t('The preview is running a value you tuned here, not the graph’s. Click to use the graph value.', language)}
+                  disabled={!over || u.unparsed}
+                  aria-label={t('Reset to graph value', language)}
+                  title={
+                    over
+                      ? `${t('Preview is running your tuned value, not the graph’s', language)} (${t('graph', language)} ${graphText}). ${t('Click to use the graph value.', language)}`
+                      : `${t('Matches the graph value', language)} (${graphText})`
+                  }
                 >
-                  {t('graph', language)}{' '}
-                  {u.kind === 'color' ? String(u.defaultValue) : Number(u.defaultValue).toFixed(3)} ↺
+                  ↺
                 </button>
-              ) : null;
+              );
               // Colour uniform: a swatch picker row — bounds/slider are
               // meaningless for a colour, so the row is just name + picker.
               // Branching BEFORE any bounds computation matters: every colour
@@ -1534,16 +1559,34 @@ export function ShaderPreview() {
                   <div key={u.name} className="shader-preview__uniform-row">
                     <div className="shader-preview__uniform-header">
                       <span className="shader-preview__uniform-name" title={u.name}>{u.name}</span>
-                      {chip}
-                      <span className="shader-preview__uniform-value">{hex}</span>
+                      <span className={`shader-preview__uniform-value${over ? ' shader-preview__uniform-value--override' : ''}`}>{hex}</span>
                     </div>
                     <div className="shader-preview__uniform-controls">
-                      <input
-                        type="color"
+                      {/* `history="none"`: a live uniform is NOT graph state.
+                          `handleUniformChange` sets overlay-local state and
+                          posts `fs:uniform` into the iframe; the value persists
+                          BY NAME in `fs:previewUniformValues`, and "Set as
+                          default" is the separate, explicit write-back that
+                          bakes it into the property nodes. Bracketing here
+                          would push an undo entry that restores nothing and
+                          clear the redo stack on every drag of a colour.
+
+                          Exactly ONE grid child, like the input it replaces:
+                          the popover is a portal, so it is not a child of this
+                          row at all. The controls row is
+                          `32px 1fr 32px auto` and this button keeps
+                          `grid-column: 1 / -2`, leaving the last track for the
+                          revert button — a fifth child here would wrap. */}
+                      <PaletteColorPicker
                         className="shader-preview__uniform-color"
+                        history="none"
                         value={hex}
-                        onChange={(e) => handleUniformChange(u.name, e.target.value)}
+                        onPick={(next) => handleUniformChange(u.name, next)}
                       />
+                      {/* A colour row has no min/max, so "right of the max"
+                          resolves to the end of the controls row — the same
+                          screen position the float rows put it in. */}
+                      {revertBtn}
                     </div>
                   </div>
                 );
@@ -1565,7 +1608,6 @@ export function ShaderPreview() {
                 <div key={u.name} className="shader-preview__uniform-row">
                   <div className="shader-preview__uniform-header">
                     <span className="shader-preview__uniform-name" title={u.name}>{u.name}</span>
-                    {chip}
                     <span className={`shader-preview__uniform-value${over ? ' shader-preview__uniform-value--override' : ''}`}>{value.toFixed(3)}</span>
                   </div>
                   <div className="shader-preview__uniform-controls">
@@ -1590,6 +1632,7 @@ export function ShaderPreview() {
                       onCommit={(n) => handleBoundsChange(u.name, 'max', n)}
                       title={t('Max', language)}
                     />
+                    {revertBtn}
                   </div>
                 </div>
               );

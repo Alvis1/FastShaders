@@ -22,17 +22,26 @@ import { autoLayout } from '@/engine/layoutEngine';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
 import { getBuiltinPresets } from '@/registry/builtinPresets';
 import complexityData from '@/registry/complexity.json';
-import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges } from '@/utils/edgeUtils';
+import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { safeJsonReviver } from '@/utils/safeJson';
 import { authoredUniformChange } from '@/utils/uniformOverride';
 import { normalizeChainOperands } from '@/utils/chainOperands';
 import { nodeCostPoints, setCostOverrides, computeReachableCost, sanitizeCostMap } from '@/utils/nodeCost';
 import { type ParsedCostFile, type CostProfile, profileFromParsed, sanitizeCostMeta } from '@/utils/costOverride';
-import { makeDataNodeData } from '@/utils/dataNode';
+import { makeDataNodeData, sanitizeDataNodes } from '@/utils/dataNode';
 import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, type ImageOriginInfo } from '@/utils/imageNode';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { selectionOnlyGraphChange } from '@/utils/graphSemantics';
 import { sanitizeDrawings, MAX_STROKES, MAX_TOTAL_POINTS, type DrawStroke } from '@/utils/drawings';
+import {
+  sanitizePalettes,
+  sanitizePaletteName,
+  mintPaletteId,
+  MAX_PALETTES_PER_SHADER,
+  type Palette,
+} from '@/utils/palettes';
+import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
 import type { PreviewMesh } from '@/utils/previewMesh';
 import { savePreviewMeshToCache } from '@/utils/previewMeshCache';
 import { encodeImageFile } from '@/utils/imageImport';
@@ -53,23 +62,9 @@ export interface SavedGroup {
 
 const SAVED_GROUPS_KEY = 'fs:savedGroups';
 
-/**
- * JSON.parse reviver that drops dangerous structural keys.
- *
- * Without this a payload like `{"__proto__":{"polluted":1}}` ends up as a
- * literal own key on the parsed object — harmless in isolation under modern
- * V8, but the result then flows through `structuredClone`, spreads, and
- * `getNodeValues(node).<dynamic-key>` lookups across the engine. Stripping
- * `__proto__` / `constructor` / `prototype` at parse time means a tampered
- * localStorage value or a shared `.fastshader` file can't smuggle these
- * keys into the running app at all.
- */
-function safeJsonReviver(key: string, value: unknown): unknown {
-  if (key === '__proto__' || key === 'constructor' || key === 'prototype') return undefined;
-  return value;
-}
-
-function loadSavedGroups(): SavedGroup[] {
+// Exported for savedGroupsSanitize.test.ts — module init calls it against the
+// real localStorage, the test re-runs it against a stubbed one.
+export function loadSavedGroups(): SavedGroup[] {
   try {
     const raw = localStorage.getItem(SAVED_GROUPS_KEY);
     if (!raw) return [];
@@ -80,10 +75,22 @@ function loadSavedGroups(): SavedGroup[] {
         (g): g is SavedGroup =>
           g && typeof g.id === 'string' && Array.isArray(g.nodes) && Array.isArray(g.edges),
       )
-      // Bound image payloads from a (possibly tampered) localStorage value —
-      // instantiating a group clones these nodes straight into the graph.
-      // Hard violations only, same rule as loadGraph.
-      .map((g) => ({ ...g, nodes: sanitizeImageNodes(g.nodes, false).nodes }));
+      // This is the THIRD untrusted restore path (same localStorage trust
+      // level as fs:graph), and instantiating a group clones these
+      // nodes/edges straight into the live graph — so it gets the same
+      // repairs loadGraph and applyProjectToStore run: image/data payload
+      // bounds, edge-`data` sanitizing (TypedEdge dereferences `waypoints`
+      // during RENDER, no error boundary), and exposedPorts normalization
+      // (ShaderNode does `new Set(data.exposedPorts)` during render, and
+      // `new Set(5)` throws).
+      .map((g) => {
+        autoExposeConnectedParamPorts(g.nodes, g.edges);
+        return {
+          ...g,
+          nodes: sanitizeDataNodes(sanitizeImageNodes(g.nodes, false).nodes).nodes,
+          edges: sanitizeEdgeExtras(g.edges),
+        };
+      });
   } catch {
     return [];
   }
@@ -253,6 +260,12 @@ interface HistoryEntry {
   // array, so the old reference is a safe, pointer-sized snapshot — this keeps
   // 40k-point ink out of the 50-entry deep-clone buffer.
   drawings: DrawStroke[];
+  // Shader-scoped colour palettes ride history on exactly the same terms as
+  // `drawings`: BY REFERENCE, because every palette action REPLACES the array
+  // rather than mutating it, so the old reference is already an immutable
+  // snapshot. structuredCloning them would put 16×64 hex strings into all 50
+  // history entries for nothing.
+  shaderPalettes: Palette[];
 }
 
 const MAX_HISTORY = 50;
@@ -369,12 +382,51 @@ function applyLangAttribute(lang: 'en' | 'lv'): void {
   document.documentElement.setAttribute('lang', lang);
 }
 
-function snapshot(nodes: AppNode[], edges: AppEdge[], drawings: DrawStroke[]): HistoryEntry {
+function snapshot(
+  nodes: AppNode[],
+  edges: AppEdge[],
+  drawings: DrawStroke[],
+  shaderPalettes: Palette[],
+): HistoryEntry {
   return {
     nodes: structuredClone(nodes),
     edges: structuredClone(edges),
     drawings, // by reference — see HistoryEntry
+    shaderPalettes, // by reference — see HistoryEntry
   };
+}
+
+/** The current state's history snapshot. One call site per `set` that records
+ *  history, so a new by-reference slice can never be added to `HistoryEntry`
+ *  and forgotten at one of them. */
+function snapshotOf(state: {
+  nodes: AppNode[];
+  edges: AppEdge[];
+  drawings: DrawStroke[];
+  shaderPalettes: Palette[];
+}): HistoryEntry {
+  return snapshot(state.nodes, state.edges, state.drawings, state.shaderPalettes);
+}
+
+/**
+ * Clean one incoming palette and give it an id unique among the ones this
+ * shader already holds. `sanitizePalettes` mints a fresh id here (nothing is
+ * passed in, so a caller can never smuggle one) and de-dupes within its own
+ * batch — but not against the LIVE list, which a project import can have seeded
+ * from a crafted file whose ids happen to match the local mint format.
+ */
+function makePalette(
+  input: { name?: string; colors: readonly string[]; names?: readonly string[] },
+  existing: Palette[],
+): Palette | null {
+  const [clean] = sanitizePalettes([
+    { name: input.name, colors: input.colors, names: input.names },
+  ]);
+  if (!clean) return null;
+  const taken = new Set(existing.map((p) => p.id));
+  let id = clean.id;
+  while (taken.has(id)) id = mintPaletteId();
+  return { ...clean, id };
 }
 
 const STORAGE_KEY = 'fs:graph';
@@ -402,7 +454,12 @@ export function setGraphPersistence(enabled: boolean): void {
   graphPersistence = enabled;
 }
 
-function saveGraph(nodes: AppNode[], edges: AppEdge[], drawings: DrawStroke[]) {
+function saveGraph(
+  nodes: AppNode[],
+  edges: AppEdge[],
+  drawings: DrawStroke[],
+  palettes: Palette[],
+) {
   if (!graphPersistence) return;
   // Node env (tests) has no localStorage at all — that's not a quota
   // condition, so bail before the try/catch would surface a bogus notice.
@@ -414,10 +471,15 @@ function saveGraph(nodes: AppNode[], edges: AppEdge[], drawings: DrawStroke[]) {
     const bareNodes = nodes.map(({ selected, dragging, resizing, ...n }) => n);
     const bareEdges = edges.map(({ selected, ...e }) => e);
     // Board drawings share the graph slot — visual siblings of nodes/edges,
-    // loaded/saved together. Omitted when empty to keep old files unchanged.
-    const payload = drawings.length
-      ? { nodes: bareNodes, edges: bareEdges, drawings }
-      : { nodes: bareNodes, edges: bareEdges };
+    // loaded/saved together. Palettes ride the same slot for the same reason:
+    // they belong to the SHADER, not to the browser profile. Both are omitted
+    // when empty so a shader that has neither writes the payload it always did.
+    const payload = {
+      nodes: bareNodes,
+      edges: bareEdges,
+      ...(drawings.length ? { drawings } : {}),
+      ...(palettes.length ? { palettes } : {}),
+    };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     graphQuotaWarned = false;
   } catch {
@@ -435,7 +497,12 @@ function saveGraph(nodes: AppNode[], edges: AppEdge[], drawings: DrawStroke[]) {
   }
 }
 
-export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[]; drawings: DrawStroke[] } | null {
+export function loadGraph(): {
+  nodes: AppNode[];
+  edges: AppEdge[];
+  drawings: DrawStroke[];
+  palettes: Palette[];
+} | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
@@ -533,8 +600,24 @@ export function loadGraph(): { nodes: AppNode[]; edges: AppEdge[]; drawings: Dra
       // on the next auto-save.
       data.nodes = sanitizeImageNodes(data.nodes, false).nodes;
 
+      // Data-node CSV blobs are adversarial for the same reason. The cap is the
+      // construction bound, so no payload this app wrote can be affected.
+      data.nodes = sanitizeDataNodes(data.nodes).nodes;
+
+      // Edge `data` is adversarial too, and it is the one graph payload nothing
+      // validated — TypedEdge maps `waypoints` and dereferences `w.x` during
+      // RENDER, with no error boundary anywhere in the app, so `waypoints:
+      // [null]` from a tampered value blanks the whole editor on every boot.
+      data.edges = sanitizeEdgeExtras(data.edges);
+
       // Board drawings are adversarial too (tampered localStorage) — bound them.
       data.drawings = sanitizeDrawings(data.drawings);
+
+      // Palettes likewise: `fs:graph` is user-writable, palette names are
+      // RENDERED and palette ids are used as React keys / object lookups, so
+      // this value gets the same trust boundary an imported file gets. An
+      // absent key sanitizes to [] — which is exactly the pre-palette payload.
+      data.palettes = sanitizePalettes(data.palettes);
 
       return data;
     }
@@ -554,7 +637,15 @@ export interface VRHeadset {
 
 export const VR_HEADSETS: VRHeadset[] = [
   { id: 'quest3', label: 'Meta Quest 3', maxPoints: 200, maxTextureDim: 2048 },
-  { id: 'quest3s', label: 'Meta Quest 3s', maxPoints: 110, maxTextureDim: 2048 },
+  // Quest 3S is the SAME Snapdragon XR2 Gen 2 / Adreno 740 as Quest 3, with
+  // Quest 2's panels: 1832x1920 per eye vs Quest 3's 2064x2208. A point is
+  // per-pixel work at the Quest 3 reference resolution (ShaderCarousel/
+  // benchData refPixels = 2064*2208 = 4557312), so the budget scales inversely
+  // with pixels: 200 * (2064*2208)/(1832*1920) = 200 * 1.2956 = 259 -> 260.
+  // Yes, it is HIGHER than Quest 3's: same GPU, fewer pixels to fill.
+  // The old 110 came from GPU_COST_ANALYSIS.md's Adreno 660 / 1.3 TFLOPS row,
+  // which is the wrong chip: 200 * (1.3/3.0) * 1.2956 = 112.
+  { id: 'quest3s', label: 'Meta Quest 3S', maxPoints: 260, maxTextureDim: 2048 },
   { id: 'quest2', label: 'Meta Quest 2', maxPoints: 90, maxTextureDim: 1024 },
   { id: 'steamframe', label: 'Steam Frame', maxPoints: 220, maxTextureDim: 2048 },
   { id: 'pico4', label: 'Pico 4', maxPoints: 80, maxTextureDim: 1024 },
@@ -707,6 +798,22 @@ interface AppState {
   drawToolActive: boolean;
   drawEraser: boolean;
 
+  /**
+   * The shader's own colour palettes — SHADER-SCOPED, exactly like `drawings`:
+   * they ride the `fs:graph` autosave, undo history and the
+   * FASTSHADERS_PROJECT_V1 project block, so opening a shader gives you the
+   * palettes it was authored with. There is deliberately NO cross-shader
+   * library; moving a palette between shaders is an explicit file export/import
+   * (which is also what makes it shareable with someone who does not have this
+   * browser profile). `BUILTIN_PALETTES` stay read-only in code and are never
+   * copied in here — the UI shows them below the shader's own.
+   *
+   * Invisible to graphToCode / cpuEvaluator / the sync engine: a palette is
+   * authoring metadata, so it can never change a single byte of emitted shader
+   * code.
+   */
+  shaderPalettes: Palette[];
+
   // Graph actions
   setNodes: (nodes: AppNode[], source?: SyncSource) => void;
   setEdges: (edges: AppEdge[], source?: SyncSource) => void;
@@ -748,6 +855,39 @@ interface AppState {
   /** Enter/leave draw mode. Leaving also clears the eraser sub-mode. */
   setDrawToolActive: (active: boolean) => void;
   setDrawEraser: (eraser: boolean) => void;
+
+  // Palette actions
+  //
+  // ALL FOUR CRUD ACTIONS SNAPSHOT INLINE (see `newGraph`, which documents the
+  // same trap) instead of calling `pushHistory`. `pushHistory` hard-bails while
+  // `coalescingHistory` is set, and the colour picker brackets every pick with
+  // `useHistoryBracket`, which holds that bracket open for a 600 ms IDLE window
+  // AFTER the pick lands. A palette edit made inside that window — "pick a
+  // colour, then hit Add palette", the single most likely real sequence — would
+  // therefore be silently NOT recorded: the edit becomes unrecoverable and the
+  // next Cmd+Z jumps back past the colour pick. Closing the bracket first is
+  // not the fix either; that would split the pick's own single undo entry.
+  /** Append one palette (sanitized; id minted locally). Returns the new id, or
+   *  null when it had no usable colour or the per-shader cap is full. */
+  addPalette: (input: { name?: string; colors: readonly string[]; names?: readonly string[] }) => string | null;
+  /** Rename and/or recolour one palette. No-op (and NO history entry) when the
+   *  id is unknown or the patch changes nothing. */
+  updatePalette: (
+    id: string,
+    patch: { name?: string; colors?: readonly string[]; names?: readonly string[] },
+  ) => void;
+  /** Remove one palette. No-op when the id is unknown. */
+  deletePalette: (id: string) => void;
+  /** Move one palette to `toIndex` (clamped). Order is user-meaningful, so this
+   *  is a real edit with its own undo entry. */
+  reorderPalette: (id: string, toIndex: number) => void;
+  /** Replace the palette list wholesale WITHOUT history (load / import / undo
+   *  internals). Mirrors `setDrawings` — including its contract: the CALLER
+   *  owns sanitization, because every ingestion path already has a boundary
+   *  (`loadGraph`, `applyProjectToStore`, the file parser) and re-sanitizing
+   *  here would mint a new array identity on every call, which the autosave
+   *  subscriber uses to decide whether anything changed. */
+  setShaderPalettes: (palettes: Palette[]) => void;
 
   // Code actions
   setCode: (code: string, source?: SyncSource) => void;
@@ -934,6 +1074,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   drawToolActive: false,
   drawEraser: false,
 
+  // Palettes are hydrated from fs:graph by App.tsx (loadGraph) alongside the
+  // graph and the ink, and replaced wholesale by a project import.
+  shaderPalettes: [],
+
   setNodes: (nodes, source = 'graph') =>
     set({ nodes, syncSource: source, isUndoRedo: false }),
 
@@ -1071,7 +1215,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // document unrecoverable behind an unundoable clear. A NEW click is
       // unambiguously a fresh user mutation. Snapshot + clear in ONE `set` so
       // no subscriber can observe a cleared graph with un-snapshotted history.
-      past: [...state.past, snapshot(state.nodes, state.edges, state.drawings)].slice(-MAX_HISTORY),
+      past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
       future: [],
       // A shader needs somewhere to end up, so the blank document is the one
       // node that can't be added back from the palette twice (AddNodeMenu and
@@ -1086,6 +1230,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
       ],
       edges: [],
       drawings: [],
+      // A new shader starts with no palettes of its own, exactly as a fresh
+      // boot does — they belong to the document being cleared, and the one
+      // undo entry above puts them back with it. The BUILTIN_PALETTES the UI
+      // shows underneath are code, not user data, so they are unaffected.
+      shaderPalettes: [],
       syncSource: 'graph',
       isUndoRedo: false,
     })),
@@ -1143,6 +1292,110 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
   setDrawToolActive: (active) => set(active ? { drawToolActive: true } : { drawToolActive: false, drawEraser: false }),
   setDrawEraser: (eraser) => set({ drawEraser: eraser }),
+
+  // ── Palette actions ──────────────────────────────────────────────────────
+  // Visual-only, like drawings: these NEVER touch syncSource, so the graph→code
+  // effect doesn't re-run and no emitted byte can move. History + autosave pick
+  // them up via `shaderPalettes` identity.
+  //
+  // Every one of them snapshots INLINE (`past` written in the same `set` as the
+  // mutation) rather than delegating to `pushHistory` — see the interface
+  // declaration above for the 600 ms colour-picker bracket that would otherwise
+  // swallow the entry.
+  addPalette: (input) => {
+    const existing = get().shaderPalettes;
+    if (existing.length >= MAX_PALETTES_PER_SHADER) return null;
+    const created = makePalette(input, existing);
+    if (!created) return null;
+    set((state) => ({
+      past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
+      future: [],
+      shaderPalettes: [...state.shaderPalettes, created],
+      isUndoRedo: false,
+    }));
+    return created.id;
+  },
+
+  updatePalette: (id, patch) =>
+    set((state) => {
+      const idx = state.shaderPalettes.findIndex((p) => p.id === id);
+      if (idx < 0) return {};
+      const current = state.shaderPalettes[idx];
+      const name =
+        patch.name === undefined ? current.name : sanitizePaletteName(patch.name, current.name);
+      // Colours go through the same whitelist an imported file gets — the
+      // picker is not the only caller (a paste box hands over raw strings).
+      // `colors` and `names` are patched TOGETHER through the one sanitizer
+      // call, because that call is what keeps them positionally aligned: it
+      // rebuilds both from the same loop, so a colour it rejects drops its
+      // label with it. Patching them in two calls would let a rejected colour
+      // shift every later name onto the wrong swatch.
+      const patchedColors = patch.colors === undefined ? current.colors : patch.colors;
+      const patchedNames = patch.names === undefined ? current.names : patch.names;
+      const cleaned =
+        patch.colors === undefined && patch.names === undefined
+          ? { colors: current.colors, names: current.names }
+          : sanitizePalettes([{ colors: patchedColors, names: patchedNames }])[0];
+      // A recolour that leaves nothing valid is REFUSED rather than turned into
+      // an empty row the user cannot tell from a rendering bug — the same call
+      // sanitizePalettes itself makes when it drops a colourless palette.
+      if (!cleaned) return {};
+      const { colors, names } = cleaned;
+      const sameNames =
+        (names?.length ?? 0) === (current.names?.length ?? 0) &&
+        (names ?? []).every((n, i) => n === (current.names ?? [])[i]);
+      const unchanged =
+        name === current.name &&
+        colors.length === current.colors.length &&
+        colors.every((c, i) => c === current.colors[i]) &&
+        sameNames;
+      // No change means no undo entry: a rename dialog that re-commits the same
+      // text must not bury the user's real edits under no-op steps.
+      if (unchanged) return {};
+      const next = [...state.shaderPalettes];
+      // `names` is spread conditionally so an unlabelled palette keeps NO key
+      // at all — the autosave payload and project block then stay byte-identical
+      // to what a build without per-colour names wrote.
+      next[idx] = names ? { id: current.id, name, colors, names } : { id: current.id, name, colors };
+      return {
+        past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
+        future: [],
+        shaderPalettes: next,
+        isUndoRedo: false,
+      };
+    }),
+
+  deletePalette: (id) =>
+    set((state) => {
+      if (!state.shaderPalettes.some((p) => p.id === id)) return {};
+      return {
+        past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
+        future: [],
+        shaderPalettes: state.shaderPalettes.filter((p) => p.id !== id),
+        isUndoRedo: false,
+      };
+    }),
+
+  reorderPalette: (id, toIndex) =>
+    set((state) => {
+      const from = state.shaderPalettes.findIndex((p) => p.id === id);
+      if (from < 0 || !Number.isFinite(toIndex)) return {};
+      // Clamped rather than rejected: a drag past either end of the list means
+      // "first" / "last", which is what the user did.
+      const to = Math.max(0, Math.min(state.shaderPalettes.length - 1, Math.trunc(toIndex)));
+      if (to === from) return {};
+      const next = [...state.shaderPalettes];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return {
+        past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
+        future: [],
+        shaderPalettes: next,
+        isUndoRedo: false,
+      };
+    }),
+
+  setShaderPalettes: (palettes) => set({ shaderPalettes: palettes }),
 
   setCode: (code, source = 'code') => {
     // Skip no-op: prevents Monaco onChange from flipping syncSource after programmatic updates
@@ -1207,7 +1460,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // not-yet-cleared flag suppress THIS snapshot while coalescing is switched
       // on would swallow the entire gesture's history and leave it unundoable.
       return {
-        past: [...state.past, snapshot(state.nodes, state.edges, state.drawings)].slice(-MAX_HISTORY),
+        past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
         future: [],
         coalescingHistory: true,
         interactionDepth: 1,
@@ -1233,7 +1486,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // graph (megabytes once images are embedded) AND bury undo under dozens
       // of sub-pixel entries.
       if (state.coalescingHistory) return {};
-      const entry = snapshot(state.nodes, state.edges, state.drawings);
+      const entry = snapshotOf(state);
       return {
         past: [...state.past, entry].slice(-MAX_HISTORY),
         future: [],
@@ -1244,11 +1497,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set((state) => {
       const prev = state.past[state.past.length - 1];
       if (!prev) return {};
-      const current = snapshot(state.nodes, state.edges, state.drawings);
+      const current = snapshotOf(state);
       return {
         nodes: structuredClone(prev.nodes),
         edges: structuredClone(prev.edges),
         drawings: prev.drawings, // by reference — immutable strokes
+        shaderPalettes: prev.shaderPalettes, // by reference — replaced, never mutated
         past: state.past.slice(0, -1),
         future: [...state.future, current].slice(-MAX_HISTORY),
         syncSource: 'graph',
@@ -1260,11 +1514,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set((state) => {
       const next = state.future[state.future.length - 1];
       if (!next) return {};
-      const current = snapshot(state.nodes, state.edges, state.drawings);
+      const current = snapshotOf(state);
       return {
         nodes: structuredClone(next.nodes),
         edges: structuredClone(next.edges),
         drawings: next.drawings, // by reference — immutable strokes
+        shaderPalettes: next.shaderPalettes, // by reference — replaced, never mutated
         future: state.future.slice(0, -1),
         past: [...state.past, current].slice(-MAX_HISTORY),
         syncSource: 'graph',
@@ -1433,7 +1688,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!isKnown) return;
     try { localStorage.setItem('fs:headsetId', id); } catch { /* */ }
     setCostOverrides(costProfiles.find((p) => p.id === id)?.costs ?? null);
-    const total = computeReachableCost(nodes, edges);
+    const total = computeReachableCost(nodes, unwrapCollapsedGroupEdges(nodes, edges));
     const outputNode = nodes.find((n) => n.data.registryType === 'output');
     set((state) => ({
       selectedHeadsetId: id,
@@ -1923,9 +2178,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return data.label || undefined;
     };
 
-    /** Sum of GPU costs of every member node, displayed above the group as a
-     *  badge. Uses nodeCostPoints so variadic arithmetic members are counted at
-     *  their operand-scaled cost, matching the live total. */
+    /** Sum of GPU costs of every member node, displayed above the collapsed
+     *  pill as an informational badge and refreshed at every collapse. It is
+     *  DELIBERATELY not the budget: `computeReachableCost` walks the members
+     *  themselves (via `unwrapCollapsedGroupEdges`), so this number may include
+     *  members the Output never reaches. Uses nodeCostPoints so variadic
+     *  arithmetic members are priced at their operand-scaled cost. */
     let groupCostSum = 0;
     for (const m of state.nodes) {
       if (!memberIds.has(m.id)) continue;
@@ -2269,19 +2527,28 @@ export function cancelPendingGraphSave(): void {
 }
 useAppStore.subscribe(
   (state, prev) => {
-    if (state.nodes !== prev.nodes || state.edges !== prev.edges || state.drawings !== prev.drawings) {
+    if (
+      state.nodes !== prev.nodes ||
+      state.edges !== prev.edges ||
+      state.drawings !== prev.drawings ||
+      state.shaderPalettes !== prev.shaderPalettes
+    ) {
       // A bare selection click / Escape replaces the arrays without changing
       // anything the payload stores — don't arm a full-graph JSON.stringify
       // (multi-MB once images are embedded) for it. Positions, values,
       // waypoints and topology all fail this predicate and still save.
       if (
         state.drawings === prev.drawings &&
+        state.shaderPalettes === prev.shaderPalettes &&
         selectionOnlyGraphChange(prev.nodes, state.nodes, prev.edges, state.edges)
       ) {
         return;
       }
       if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => saveGraph(state.nodes, state.edges, state.drawings), 300);
+      saveTimer = setTimeout(
+        () => saveGraph(state.nodes, state.edges, state.drawings, state.shaderPalettes),
+        300,
+      );
     }
   },
 );

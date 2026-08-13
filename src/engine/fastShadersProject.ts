@@ -1,5 +1,7 @@
 import type { AppNode, AppEdge } from '@/types';
 import type { DrawStroke } from '@/utils/drawings';
+import type { Palette } from '@/utils/palettes';
+import { safeJsonReviver } from '@/utils/safeJson';
 
 /**
  * Snapshot of FastShaders editor state embedded into a downloaded `.js` shader
@@ -15,6 +17,19 @@ export interface FastShadersProject {
   graph: { nodes: AppNode[]; edges: AppEdge[] };
   /** Board drawings (freehand ink) — visual-only, sanitized on import. */
   drawings?: DrawStroke[];
+  /**
+   * The shader's own colour palettes — visual-only, sanitized on import.
+   *
+   * Deliberately NO version bump: the parser below reads fields BY NAME and
+   * ignores everything it doesn't know, so the field is safe in both
+   * directions. An old file opened by a new build has no key and restores `[]`;
+   * a new file opened by an OLD build parses fine, keeps its graph, and simply
+   * never sees the palettes. Bumping `version` would instead make every older
+   * build REJECT the whole block (`project.version !== 1` returns null) and
+   * silently degrade a full project to a bare script import — losing node
+   * positions, groups and prefs to gain nothing.
+   */
+  palettes?: Palette[];
   preview: {
     geometry?: string;
     lighting?: string;
@@ -36,17 +51,6 @@ export interface FastShadersProject {
 
 const BEGIN_MARKER = '/* FASTSHADERS_PROJECT_V1';
 const END_MARKER = 'END_FASTSHADERS_PROJECT */';
-
-/**
- * Drop dangerous structural keys when parsing the embedded JSON. Same rationale
- * as the reviver in useAppStore — a tampered `.js` file shared between users
- * should not be able to smuggle `__proto__` / `constructor` / `prototype` into
- * any of the objects we then spread, structuredClone, or look up dynamically.
- */
-function safeJsonReviver(key: string, value: unknown): unknown {
-  if (key === '__proto__' || key === 'constructor' || key === 'prototype') return undefined;
-  return value;
-}
 
 // Append a FastShaders project snapshot as a trailing block comment.
 //

@@ -9,11 +9,12 @@ import { useAppStore } from '@/store/useAppStore';
 import { NodeVisual } from './nodes/NodeVisual';
 import { DragNumberInput } from './inputs/DragNumberInput';
 import { nodeTextScale } from './nodes/glyphs/NodeGlyph';
-import { renderMathPreview } from '@/utils/mathPreview';
+import { WaveformSvg } from './nodes/WaveformSvg';
+import { effectiveRampDef } from '@/utils/exposedPorts';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
 import complexityData from '@/registry/complexity.json';
 import { MIC_BODY_W, MIC_BODY_H, MIC_PARAM_TOPS, MIC_CHIP_H, MIC_BTN_TOP, MIC_OUT_TOPS } from './nodes/micGeometry';
-import { CLOCK_SIZE, drawClockFace } from '@/utils/clockFace';
+import { ClockFaceSvg } from './nodes/ClockFaceSvg';
 import { useFitText } from '@/hooks/useFitText';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import {
@@ -27,6 +28,7 @@ import {
   VERTEX_PORTS as OUTPUT_VERTEX_PORTS,
   OUTPUT_FLOAT_VALUE_PORTS,
   OUTPUT_COLOR_VALUE_PORTS,
+  OUTPUT_EMPTY_COLOR,
 } from './nodes/OutputNode';
 import './nodes/ClockNode.css';
 import './nodes/MicNode.css';
@@ -123,14 +125,23 @@ function ShaderCardContent(props: ContentProps) {
   // wrapper has pointer-events: none; width acts as a FLOOR (exactWidth off)
   // so a long name in any language stretches the card instead of wrapping
   // into mid-word fragments.
+  // A tile shows the node as it will land on the canvas: opt-in parameter
+  // sockets (Data Stripes / Data Viz's ramp colours) are hidden on a fresh
+  // drop, so the replica must hide them too or the tile advertises a socket
+  // the dropped node does not have.
   return (
     <NodeVisual
       {...props}
+      def={effectiveRampDef(props.def, EMPTY_EXPOSED)}
       wrapClassName="node-preview-card__node"
       cardClassName="node-preview-card__node--exact"
     />
   );
 }
+
+/** A freshly dropped node has nothing exposed. Module-scope so the filter's
+ *  identity-stable fast path holds across renders. */
+const EMPTY_EXPOSED: string[] = [];
 
 /* ============================================================
  * CardShell — shared card frame (badge, header, output handle)
@@ -140,11 +151,46 @@ function canvasCtx(canvas: HTMLCanvasElement | null) {
   return canvas?.getContext('2d') ?? null;
 }
 
-function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, headerTextColor, hideOutput, children }: ContentProps & { children: React.ReactNode; hideOutput?: boolean }) {
+/**
+ * A card's socket dot — the SAME element NodeVisual's StaticHandle renders:
+ * React Flow's own handle classes plus `.typed-handle`, and NOTHING else.
+ *
+ * That class set is what makes the node's own stylesheet position it. Every
+ * fixed-geometry node (`.clock-node`, `.mic-node`, `.preview-node`,
+ * `.math-preview-node`, `.output-node`) places its live sockets with rules
+ * like `.clock-node__canvas-wrap > .react-flow__handle`, so a card dot that
+ * sits in the SAME wrapper element lands in the same place by construction.
+ * The card's retired `--right-abs`/`--left-abs` twins hardcoded `top: 50%` of
+ * the whole card instead, which is how the Time tile's socket ended up half a
+ * header-height below the node's (which centres on the clock FACE).
+ */
+function CardSocket({ side, dataType, style }: {
+  side: 'left' | 'right';
+  dataType: Parameters<typeof getTypeColor>[0];
+  style?: React.CSSProperties;
+}) {
+  return (
+    <span
+      className={`react-flow__handle react-flow__handle-${side} typed-handle`}
+      style={{ background: getTypeColor(dataType), ...style }}
+      aria-hidden="true"
+    />
+  );
+}
+
+/**
+ * `nodeClassName` carries the LIVE node's own class (`clock-node`,
+ * `preview-node`, …) onto the card frame. Not decoration: those stylesheets
+ * are where the node's geometry lives — socket insets, wrapper padding, the
+ * face size — so a card that omits the class silently falls back to whatever
+ * the card layer happens to say, which is exactly the drift this dispatch
+ * keeps producing.
+ */
+function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, headerTextColor, hideOutput, nodeClassName, children }: ContentProps & { children: React.ReactNode; hideOutput?: boolean; nodeClassName?: string }) {
   const language = useAppStore((s) => s.language);
   return (
     <div
-      className="node-base node-preview-card__node"
+      className={`node-base node-preview-card__node${nodeClassName ? ` ${nodeClassName}` : ''}`}
       style={{ background: 'var(--node-bg)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {cost > 0 && (
@@ -158,50 +204,36 @@ function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, h
       {children}
 
       {/* hideOutput: for content that places its own per-port handles (the mic
-          replica) — this generic centre dot would render as a fifth, phantom
+          replica) or puts the socket in a wrapper of its own (the clock's
+          face) — this generic centre dot would render as an extra, phantom
           output on top of them. */}
       {def.outputs[0] && !hideOutput && (
-        <span
-          className="node-preview-card__handle node-preview-card__handle--right-abs"
-          style={{ background: getTypeColor(def.outputs[0].dataType) }}
-        />
+        <CardSocket side="right" dataType={def.outputs[0].dataType} />
       )}
     </div>
   );
 }
 
 /* ============================================================
- * MathCardContent — waveform canvas (static)
+ * MathCardContent — waveform plot (static)
  * ============================================================ */
 
 function MathCardContent(props: ContentProps) {
   const { def } = props;
-  const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  useEffect(() => {
-    const ctx = canvasCtx(canvasRef.current);
-    if (!ctx) return;
-
-    const func = def.type === 'cos' ? Math.cos : Math.sin;
-    renderMathPreview(ctx, {
-      func,
-      width: 72,
-      height: 72,
-      phase: 0,
-      accentColor: '#6C63FF',
-      inputValue: 0,
-      funcLabel: def.type,
-    });
-  }, [def.type]);
-
+  // MathPreviewNode's own classes and its own stylesheet — plot size, row
+  // padding and both socket insets all come from MathPreviewNode.css, so the
+  // tile cannot hold a stale twin of any of them. The plot itself is the
+  // node's OWN renderer (WaveformSvg) at phase 0 — the tile used to repaint
+  // a private canvas copy of the same picture.
   return (
-    <CardShell {...props}>
-      <div className="node-preview-card__canvas-wrap">
-        <canvas
-          ref={canvasRef}
-          width={72}
-          height={72}
-          className="node-preview-card__canvas--math"
+    <CardShell {...props} nodeClassName="math-preview-node">
+      <div className="math-preview-node__canvas-wrap">
+        <WaveformSvg
+          func={def.type === 'cos' ? Math.cos : Math.sin}
+          funcLabel={def.type}
+          phase={0}
+          showReadout
         />
       </div>
 
@@ -210,14 +242,11 @@ function MathCardContent(props: ContentProps) {
           unconnected — which is always true on a palette tile). The tile used
           to draw only a floating dot, so it was both missing the widget and
           shorter than the node by the row's height. */}
-      <div className="node-preview-card__math-port-row">
-        {def.inputs[0] && (
-          <span
-            className="node-preview-card__handle node-preview-card__handle--left-abs"
-            style={{ background: getTypeColor(def.inputs[0].dataType) }}
-          />
-        )}
-        <DragNumberInput compact value={0} onChange={() => {}} />
+      <div className="math-preview-node__port-row">
+        <div className="math-preview-node__left">
+          {def.inputs[0] && <CardSocket side="left" dataType={def.inputs[0].dataType} />}
+          <DragNumberInput compact value={0} onChange={() => {}} />
+        </div>
       </div>
     </CardShell>
   );
@@ -245,14 +274,16 @@ function NoiseCardContent(props: ContentProps) {
     ctx.putImageData(imageData, 0, 0);
   }, [def.type, def.defaultValues]);
 
+  // PreviewNode's own classes — the 96px pixelated canvas and its wrapper
+  // padding are defined once, in PreviewNode.css.
   return (
-    <CardShell {...props}>
-      <div className="node-preview-card__canvas-wrap">
+    <CardShell {...props} nodeClassName="preview-node">
+      <div className="preview-node__canvas-wrap">
         <canvas
           ref={canvasRef}
           width={96}
           height={96}
-          className="node-preview-card__canvas--noise"
+          className="preview-node__canvas"
         />
       </div>
     </CardShell>
@@ -264,27 +295,21 @@ function NoiseCardContent(props: ContentProps) {
  * ============================================================ */
 
 function ClockCardContent(props: ContentProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const ctx = canvasCtx(canvasRef.current);
-    if (!ctx) return;
-    // Phase 0 — the same hand position a Time node shows the instant it lands
-    // on the canvas (ClockNode integrates from phaseRef = 0). This used to seed
-    // from Date.now(), so the tile pointed somewhere arbitrary and no two
-    // surfaces agreed. The face itself is drawn by the shared routine.
-    drawClockFace(ctx, 0);
-  }, []);
-
+  // Phase 0 — the same hand position a Time node shows the instant it lands
+  // on the canvas (ClockNode integrates from phaseRef = 0). This used to seed
+  // from Date.now(), so the tile pointed somewhere arbitrary and no two
+  // surfaces agreed. The face is the node's OWN renderer (ClockFaceSvg).
+  //
+  // hideOutput + the socket INSIDE the canvas wrap: ClockNode centres its
+  // output on the clock FACE, not on the node (ClockNode.css explains why), so
+  // the generic centre dot sat half a header-height too low on the tile.
   return (
-    <CardShell {...props}>
-      <div className="node-preview-card__canvas-wrap">
-        <canvas
-          ref={canvasRef}
-          width={CLOCK_SIZE}
-          height={CLOCK_SIZE}
-          className="node-preview-card__canvas--clock"
-        />
+    <CardShell {...props} nodeClassName="clock-node" hideOutput>
+      <div className="clock-node__canvas-wrap">
+        <ClockFaceSvg phase={0} />
+        {props.def.outputs[0] && (
+          <CardSocket side="right" dataType={props.def.outputs[0].dataType} />
+        )}
       </div>
       {/* The canvas node's speed row — always present there, so the tile shows
           it too or the two stop being the same node. Same stacked `×` over a
@@ -313,7 +338,7 @@ function MicCardContent(props: ContentProps) {
   // construction (the old hand-copied twin of these values is the drift class
   // that let the tile and the node disagree).
   return (
-    <CardShell {...props} hideOutput>
+    <CardShell {...props} nodeClassName="mic-node" hideOutput>
       <div className="mic-node__body" style={{ width: MIC_BODY_W, height: MIC_BODY_H }}>
         {def.inputs.map((inp, i) => (
           <div key={inp.id} className="mic-node__val" style={{ top: MIC_PARAM_TOPS[i] ?? 0, height: MIC_CHIP_H }}>
@@ -336,11 +361,7 @@ function MicCardContent(props: ContentProps) {
           <div className="shader-node__mic-btn shader-node__mic-btn--inert" aria-hidden="true" />
         </div>
         {def.outputs.map((out, i) => (
-          <span
-            key={out.id}
-            className="react-flow__handle react-flow__handle-right typed-handle"
-            style={{ background: getTypeColor(out.dataType), top: MIC_OUT_TOPS[i] ?? 0 }}
-          />
+          <CardSocket key={out.id} side="right" dataType={out.dataType} style={{ top: MIC_OUT_TOPS[i] ?? 0 }} />
         ))}
       </div>
     </CardShell>
@@ -381,11 +402,13 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
   // inert-arm-light precedent).
   const valueCell = (portId: string) => {
     if (portId in OUTPUT_COLOR_VALUE_PORTS) {
+      // A tile depicts a FRESH Output node — nothing wired, nothing stored —
+      // which is exactly graphToCode's red-fallback state, so Color shows the
+      // red the dropped node will actually render (see OUTPUT_EMPTY_COLOR).
+      const bg =
+        portId === 'color' ? OUTPUT_EMPTY_COLOR : OUTPUT_COLOR_VALUE_PORTS[portId];
       return (
-        <span
-          className="palette-swatch output-node__val"
-          style={{ background: OUTPUT_COLOR_VALUE_PORTS[portId] }}
-        />
+        <span className="palette-swatch output-node__val" style={{ background: bg }} />
       );
     }
     if (portId in OUTPUT_FLOAT_VALUE_PORTS) {
@@ -400,10 +423,10 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
   const rows = (ports: typeof def.inputs) =>
     ports.map((port) => (
       <div key={port.id} className="output-node__row">
-        <span
-          className="node-preview-card__handle node-preview-card__handle--left-abs"
-          style={{ background: getTypeColor(port.dataType), top: '50%', transform: 'translateY(-50%)' }}
-        />
+        {/* Real handle classes inside the real row: `.output-node__row
+            .react-flow__handle-left` in OutputNode.css owns the inset and the
+            vertical centring, so the tile can't restate either. */}
+        <CardSocket side="left" dataType={port.dataType} />
         {valueCell(port.id)}
         <span className="output-node__port-label">{port.label}</span>
       </div>
@@ -474,10 +497,22 @@ function ColorCardContent({ def, cost, costTextColor }: { def: NodeDefinition; c
         <span ref={labelRef} className="color-node__label" style={{ color: labelColor }}>
           {label}
         </span>
+        {/* The swatch's socket RIDES ITS PERIMETER (ColorNode.tsx), so it is
+            placed by that node's own formula at the unconnected angle 0 — the
+            card's generic right-edge dot landed ~2px off it in both axes,
+            since the perimeter point is measured from the swatch's content
+            box, not its border box. */}
         {def.outputs[0] && (
-          <span
-            className="node-preview-card__handle node-preview-card__handle--right-abs"
-            style={{ background: getTypeColor(def.outputs[0].dataType) }}
+          <CardSocket
+            side="right"
+            dataType={def.outputs[0].dataType}
+            style={{
+              left: COLOR_NODE_SIZE,
+              top: COLOR_NODE_SIZE / 2,
+              right: 'auto',
+              bottom: 'auto',
+              transform: 'translate(-50%, -50%)',
+            }}
           />
         )}
       </div>

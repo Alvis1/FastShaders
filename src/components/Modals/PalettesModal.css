@@ -1,0 +1,423 @@
+/* PalettesModal reuses the CsvImportModal backdrop / panel / button styles; only
+   the palette list's own controls live here. Every colour is a token, so the
+   whole dialog follows the app-wide dark-mode toggle for free — the ONE
+   exception is the delete red, which has no token (same situation the toolbar's
+   feedback button documents) and is nudged in the dark block below. */
+
+.palettes-modal__panel {
+  /* Wider than the confirmation dialogs: every palette is ONE line carrying a
+     name, its whole swatch strip and its controls. 620px is what lets a
+     12-colour built-in sit beside a name like "Dielectrics & Surfaces" and a
+     Duplicate button without the strip having to scroll — see the width
+     arithmetic on `__strip` below. */
+  width: min(620px, 94vw);
+  /* The list grows with the shader (up to 16 palettes, each expandable to 64
+     colours) — scroll inside the panel rather than pushing Close off-screen. */
+  max-height: min(88vh, 820px);
+  overflow-y: auto;
+  /* Tighter than the default panel rhythm: this dialog is a list of one-line
+     rows, and the confirmation dialogs' paragraph spacing made four palettes
+     look like four sections. */
+  gap: var(--space-2);
+}
+
+/* --- Toolbar: the three verbs ------------------------------------------- */
+
+.palettes-modal__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* --- Sections ------------------------------------------------------------- */
+
+.palettes-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.palettes-modal__section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.palettes-modal__section-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.palettes-modal__count {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.palettes-modal__hint {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.palettes-modal__empty {
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* --- One palette ---------------------------------------------------------- */
+
+.palettes-modal__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* The four shipped palettes read as one block of rows, not four cards. */
+.palettes-modal__list--builtin {
+  gap: 2px;
+}
+
+/* The row is still a COLUMN, because an expanded palette stacks its editor
+   under the line. The line itself is the flex row. */
+.palettes-modal__row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px var(--space-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+}
+
+/* ONE PALETTE = ONE LINE: name, the whole swatch strip, its controls. */
+.palettes-modal__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* Without this a long palette name pushes the strip and the buttons out of
+     the panel instead of ellipsing — flex items refuse to shrink below their
+     content's min-content width by default. */
+  min-width: 0;
+}
+
+/* The built-in rows are the same object in a read-only state, so they keep the
+   same frame and only lose the editable affordances. */
+.palettes-modal__row--builtin {
+  background: var(--bg-panel);
+}
+
+.palettes-modal__row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* The name column is the one that ABSORBS a narrow viewport: it shrinks (and
+   ellipses) so the swatch strip and the controls keep their size, which is what
+   drops the one-line floor from a ~600px viewport to roughly 460px. */
+.palettes-modal__name {
+  flex: 1 1 130px;
+  min-width: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid transparent;
+  border-radius: var(--border-radius-sm);
+  padding: 4px 6px;
+  text-overflow: ellipsis;
+}
+
+/* The name field looks like a label until it is touched — a row of always-boxed
+   inputs reads as a form, and renaming is the rarest thing done here. */
+.palettes-modal__name:hover {
+  border-color: var(--border-subtle);
+}
+
+.palettes-modal__name:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+/* Same column as the editable name above, so the two lists line up. Clipped
+   rather than wrapped — a wrapping name is what would make this row two lines
+   tall, and the full text is in `title`. */
+.palettes-modal__builtin-name {
+  flex: 1 1 130px;
+  min-width: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 4px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Swatch strip --------------------------------------------------------- */
+
+/* ONE ROW, NEVER WRAPPED. The row budget (measured against the tokens, all
+   border-box): 620 panel − 32 padding − 2 border − 6 scrollbar = 580 content;
+   − 16 row padding − 2 row border = 562 for the line. A 130px name, a ~62px
+   Duplicate button and two 8px gaps leave ~354px, and 12 chips at 22px with
+   3px gaps is 12x22 + 11x3 = 297px. It fits with slack — which is exactly why
+   the per-row "{n} colours" caption had to go: at ~68px it pushed the same 12
+   chips over budget.
+   A user palette may hold 64 colours, so the strip SCROLLS rather than wraps;
+   every row then stays one line tall no matter what it holds. */
+.palettes-modal__strip {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  /* A horizontal scrollbar inside a 22px row would eat the chips; on the
+     platforms that reserve space for one, hide it and let the drag/wheel do
+     the scrolling. */
+  scrollbar-width: none;
+}
+
+.palettes-modal__strip::-webkit-scrollbar {
+  display: none;
+}
+
+.palettes-modal__chip {
+  /* `flex: none` IS LOAD-BEARING. Inside a nowrap flex row the default
+     `flex-shrink: 1` lets chips squash to slivers when the row runs out of
+     room — a failure with no visual signal that anything overflowed, so it
+     reads as "the swatches render wrong" rather than "this row is too narrow".
+     Fixed-size chips overflow into the scroll instead, which is honest. */
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  /* A neutral hairline, or a white/near-white swatch disappears into the row. */
+  border: 1px solid var(--border-default);
+}
+
+/* --- Row actions ---------------------------------------------------------- */
+
+/* `flex: none` + nowrap: the controls are the fixed end of the line, so a
+   narrow panel shrinks the NAME, never the buttons. */
+.palettes-modal__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+/* Pushes everything after it to the right edge, so destructive/export controls
+   never sit under the pointer's path to Edit. */
+.palettes-modal__spacer {
+  flex: 1 1 auto;
+}
+
+.palettes-modal__btn {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.palettes-modal__btn:hover:not(:disabled) {
+  border-color: var(--border-focus);
+  color: var(--border-focus);
+}
+
+.palettes-modal__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.palettes-modal__btn:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* Square icon buttons (the move chevrons and the remove ×) — sized off the
+   glyph box rather than a text line so both sit on the same baseline. */
+.palettes-modal__btn--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+}
+
+.palettes-modal__btn--icon svg {
+  width: 9px;
+  height: 9px;
+  display: block;
+  fill: currentColor;
+}
+
+.palettes-modal__btn--danger:hover:not(:disabled) {
+  color: #b42318;
+  border-color: #b42318;
+}
+
+/* --- Expanded colour editor ----------------------------------------------- */
+
+.palettes-modal__editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--border-subtle);
+  /* 64 colours is a legal palette; keep the dialog's own scroll for the list
+     of palettes and give a long colour list its own. */
+  max-height: 320px;
+  overflow-y: auto;
+  align-items: flex-start;
+}
+
+.palettes-modal__color-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.palettes-modal__color {
+  flex: none;
+  width: 34px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.palettes-modal__hex {
+  flex: none;
+  width: 62px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+/* The per-colour label. Takes the slack in the editor row, because it is the
+   only field there whose useful length is unbounded. */
+.palettes-modal__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid transparent;
+  border-radius: var(--border-radius-sm);
+  padding: 3px 6px;
+}
+
+.palettes-modal__label:hover {
+  border-color: var(--border-subtle);
+}
+
+.palettes-modal__label:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.palettes-modal__editor-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding-top: var(--space-1);
+}
+
+/* --- Import --------------------------------------------------------------- */
+
+/* The real file input is hidden behind a styled button (file inputs cannot be
+   styled consistently, and the button keeps keyboard activation). */
+.palettes-modal__file {
+  display: none;
+}
+
+/* The paste route, as ONE line. It replaces a hint + a three-row textarea + a
+   separate button; it stays a real field rather than a document-level paste
+   listener because a tablet has no Ctrl+V (see the component). */
+.palettes-modal__paste {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.palettes-modal__paste-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  padding: 5px 8px;
+}
+
+.palettes-modal__paste-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.palettes-modal__report {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  /* Parser notes are plain sentences, but a file name could be long. */
+  overflow-wrap: anywhere;
+}
+
+.palettes-modal__report--warn {
+  color: #b42318;
+  border-color: #b42318;
+}
+
+/* ===== Dark theme touch-ups =====
+   Only the hardcoded reds need it; everything else is token-driven. */
+:root[data-theme="dark"] .palettes-modal__report--warn,
+:root[data-theme="dark"] .palettes-modal__btn--danger:hover:not(:disabled) {
+  color: #ff7b72;
+  border-color: #ff7b72;
+}

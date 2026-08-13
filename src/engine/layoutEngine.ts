@@ -63,7 +63,7 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
   switch (flowType) {
     case 'preview': // noise nodes: 96×96 canvas + header (PreviewNode)
       return { width: 111 * scale, height: 127 * scale };
-    case 'mathPreview': // sin/cos: 72×72 canvas + header + port row
+    case 'mathPreview': // sin/cos: 72×72 waveform plot + header + port row
       return { width: 87 * scale, height: 121 * scale };
     case 'clock': // time: 56×56 canvas + header + the speed row (ClockNode)
       return { width: 71 * scale, height: 112 * scale };

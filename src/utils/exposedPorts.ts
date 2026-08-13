@@ -33,16 +33,91 @@ export function usesExposedPorts(def: NodeDefinition | undefined): boolean {
       def.type === 'output' ||
       def.type === 'imageNode' ||
       def.type === 'time' ||
-      def.type === 'micNode')
+      def.type === 'micNode' ||
+      RAMP_COLOR_NODES.has(def.type))
   );
 }
 
+/** Nodes whose two ramp ends (`lowColor`/`highColor`) are opt-in colour
+ *  sockets: hidden until ticked in the settings menu, wired edge overrides the
+ *  stored swatch. Both nodes draw the same two swatches and share one emitter
+ *  branch shape, so they must move together — wiring one and not the other is a
+ *  difference no user could infer. */
+export const RAMP_COLOR_NODES = new Set(['stripes', 'dataviz']);
+
+/** The ramp ports themselves — the ONLY inputs those nodes hide. `signal` is
+ *  always visible (it is how the node is used at all), so this list is what
+ *  keeps the exposure filter from swallowing it. */
+export const RAMP_COLOR_PORTS = new Set(['lowColor', 'highColor']);
+
+/**
+ * A ramp node's def with its unexposed colour ports removed — the ONE filter
+ * behind both the live ShaderNode and every preview surface (asset tile,
+ * node-editor overview, Node Designer stage), so a tile cannot advertise a
+ * socket the freshly dropped node does not have.
+ *
+ * `defaultValues` is deliberately KEPT (unlike the imageNode filter): those
+ * entries are what draw the inline swatches, which is the whole point of the
+ * node. Returns the def UNCHANGED when nothing is filtered, so the common case
+ * costs no new object identity for the memos downstream.
+ */
+export function effectiveRampDef<T extends NodeDefinition>(def: T, exposed: Iterable<string>): T {
+  if (!RAMP_COLOR_NODES.has(def.type)) return def;
+  const on = exposed instanceof Set ? exposed : new Set(exposed);
+  const inputs = def.inputs.filter((inp) => !RAMP_COLOR_PORTS.has(inp.id) || on.has(inp.id));
+  return inputs.length === def.inputs.length ? def : { ...def, inputs };
+}
+
 /** The node's effective exposed list, resolving the Output node's implicit
- *  defaults. An EXPLICIT empty array stays empty (user hid everything). */
+ *  defaults. An EXPLICIT empty array stays empty (user hid everything).
+ *
+ *  Total by construction: `exposedPorts` arrives from tampered `fs:graph` /
+ *  shared `.fastshader` JSON, and every caller either spreads the result or
+ *  calls `.includes`/`new Set` on it — a bare `return raw` handed a number
+ *  straight through and threw at graphToCode's `new Set(...)` and
+ *  autoExposeConnectedParamPorts. `normalizeExposedPorts` repairs the stored
+ *  value at ingestion; this is the reader-side floor under it. */
 export function effectiveExposedPorts(node: AppNode): string[] {
-  const raw = (node.data as { exposedPorts?: string[] }).exposedPorts;
-  if (raw !== undefined) return raw;
+  const raw = (node.data as { exposedPorts?: unknown }).exposedPorts;
+  if (Array.isArray(raw)) return raw.filter((s): s is string => typeof s === 'string');
   return node.data.registryType === 'output' ? OUTPUT_DEFAULT_EXPOSED : [];
+}
+
+/** Upper bound on stored exposed ports. The widest def in the registry is the
+ *  Output node's 9 channels, so no app-produced graph comes near this; the cap
+ *  exists because PreviewNode's socket loop is O(N^2) over this list and
+ *  `exposedList.join('|')` is a per-render memo key. */
+export const MAX_EXPOSED_PORTS = 64;
+
+/**
+ * Coerce every node's stored `exposedPorts` to `string[] | undefined`, in place.
+ *
+ * This is the ingestion guard for the field, not a nicety: only three of the
+ * thirteen readers go through `effectiveExposedPorts`. OutputNode, ShaderNode,
+ * MicNode, PreviewNode and ClockNode read `data.exposedPorts` RAW and do
+ * `new Set(v)` / `v.includes(...)` on it during RENDER — and the app has no
+ * React error boundary, so a tampered `exposedPorts: 5` from a shared
+ * `.fastshader` takes the whole tree down to a blank page, is then written to
+ * `fs:graph` by the 300 ms autosave, and blanks the app again on every reload.
+ *
+ * A non-array is DELETED rather than replaced with `[]`: an explicit empty list
+ * means "the user hid every channel" (see effectiveExposedPorts above), so `[]`
+ * on an Output node would render a channel-less node and emit nothing, while
+ * deleting restores the implicit OUTPUT_DEFAULT_EXPOSED.
+ */
+export function normalizeExposedPorts(nodes: AppNode[]): void {
+  for (const node of nodes) {
+    const data = node?.data as ShaderNodeData | undefined;
+    if (!data || data.exposedPorts === undefined) continue;
+    const raw: unknown = data.exposedPorts;
+    if (!Array.isArray(raw)) {
+      delete data.exposedPorts;
+      continue;
+    }
+    const clean = raw.filter((s): s is string => typeof s === 'string');
+    if (clean.length > MAX_EXPOSED_PORTS) clean.length = MAX_EXPOSED_PORTS;
+    if (clean.length !== raw.length) data.exposedPorts = clean;
+  }
 }
 
 /**
@@ -51,8 +126,18 @@ export function effectiveExposedPorts(node: AppNode): string[] {
  * feed freshly-parsed or about-to-be-set node arrays). Nodes whose connected
  * ports are already covered are left untouched — an Output node keeps its
  * implicit-undefined defaults.
+ *
+ * ALSO NORMALIZES the stored field (`normalizeExposedPorts`) before reading it:
+ * this function is already the shared hook at every ingestion boundary, so it
+ * is where an adversarial `exposedPorts` is repaired. Anyone adding a fourth
+ * ingestion path must call it (or this) — the field is NOT typed by parsing.
  */
 export function autoExposeConnectedParamPorts(nodes: AppNode[], edges: AppEdge[]): void {
+  // Repair adversarial values BEFORE anything reads them. This function is
+  // already the shared hook at every ingestion boundary (loadGraph,
+  // applyProjectToStore, useSyncEngine), so normalising here reaches all of
+  // them without adding a call site.
+  normalizeExposedPorts(nodes);
   for (const node of nodes) {
     const def = NODE_REGISTRY.get(node.data.registryType);
     if (!usesExposedPorts(def)) continue;

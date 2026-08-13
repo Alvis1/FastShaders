@@ -61,8 +61,18 @@ function buildHeader(props: PropertyInfo[], tslCode = ''): string[] {
       seen.add(key);
       return true;
     });
+    // `defaultValue` comes straight out of node `values` (adversarial:
+    // .fastshader / fs:graph / pasted TSL). The colour branch of
+    // collectShaderProperties is a RAW `String(values.hex)`, so a stored hex
+    // carrying a NEWLINE ends this `//` comment and injects a real top-level
+    // statement into the downloaded module. Same whitelist as graphToCode's
+    // hexLiteral; a legit `#rrggbb` / finite number prints byte-identically.
+    const safeDefault = (p: PropertyInfo): string =>
+      typeof p.defaultValue === 'string'
+        ? (/^#[0-9a-fA-F]{6}$/.test(p.defaultValue) ? p.defaultValue : '#000000')
+        : String(Number.isFinite(Number(p.defaultValue)) ? Number(p.defaultValue) : 0);
     const propExample = uniqueProps
-      .map((p) => `${sanitizeIdentifier(p.name)}: ${p.defaultValue}`)
+      .map((p) => `${sanitizeIdentifier(p.name)}: ${safeDefault(p)}`)
       .join('; ');
     header.push(`//   <a-entity shader="src: shader.js; ${propExample}"></a-entity>`);
     header.push('//');

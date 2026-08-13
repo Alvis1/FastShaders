@@ -4,6 +4,7 @@ import { getCost, setCostOverrides } from '@/utils/nodeCost';
 import { parseCostFile } from '@/utils/costOverride';
 import complexityData from '@/registry/complexity.json';
 import { makeNode, makeEdge } from '@/test-utils';
+import type { AppNode } from '@/types';
 
 const BASE = (complexityData as { costs: Record<string, number> }).costs;
 
@@ -106,5 +107,65 @@ describe('cost profiles (store lifecycle)', () => {
     useAppStore.getState().setSelectedHeadsetId('cp:foreign|from-an-imported-project');
     expect(useAppStore.getState().selectedHeadsetId).toBe('visionpro'); // selection kept
     expect(localStorage.getItem('fs:headsetId')).toBeNull();            // not persisted
+  });
+
+  it('Quest 3S shares Quest 3s chip, so its budget scales by the pixel ratio', () => {
+    const q3 = VR_HEADSETS.find((h) => h.id === 'quest3')!;
+    const q3s = VR_HEADSETS.find((h) => h.id === 'quest3s')!;
+    // Same Snapdragon XR2 Gen 2 / Adreno 740; a point is per-pixel work at the
+    // Quest 3 reference resolution, so the budget scales inversely with pixels.
+    // Quest 3S panels are 1832x1920 per eye; Quest 3's are 2064x2208.
+    const pixelRatio = (2064 * 2208) / (1832 * 1920);   // 1.29560
+    expect(q3s.maxPoints).toBeGreaterThan(q3.maxPoints);
+    expect(q3s.maxPoints).toBeCloseTo(q3.maxPoints * pixelRatio, -1);
+  });
+
+  /** A collapsed group whose boundary output 'o0' stands in for `<memberId>`/'out'. */
+  const collapsedGroup = (cost?: number, memberId = 'v'): AppNode => ({
+    id: 'g1',
+    type: 'group',
+    position: { x: 0, y: 0 },
+    data: {
+      collapsed: true,
+      ...(cost === undefined ? {} : { cost }),
+      collapsedInputs: [],
+      collapsedOutputs: [{ socketId: 'o0', originalNodeId: memberId, originalHandleId: 'out' }],
+    },
+  } as unknown as AppNode);
+
+  it('a collapsed group is priced by its MEMBERS, not by its cached snapshot', () => {
+    useAppStore.setState({
+      nodes: [makeNode('out', 'output'), collapsedGroup(9999),
+              { ...makeNode('v', 'voronoi'), parentId: 'g1' } as AppNode],
+      edges: [makeEdge('g1', 'o0', 'out', 'color')],
+      costProfiles: [], selectedHeadsetId: 'quest3', totalCost: 0,
+    });
+    useAppStore.getState().setSelectedHeadsetId('quest3');   // recomputes the budget
+    expect(useAppStore.getState().totalCost).toBe(BASE.voronoi);   // 9999 today
+  });
+
+  it('a group collapsed before data.cost existed still contributes its members', () => {
+    useAppStore.setState({
+      nodes: [makeNode('out', 'output'), collapsedGroup(undefined),
+              { ...makeNode('v', 'voronoi'), parentId: 'g1' } as AppNode],
+      edges: [makeEdge('g1', 'o0', 'out', 'color')],
+      costProfiles: [], selectedHeadsetId: 'quest3', totalCost: 0,
+    });
+    useAppStore.getState().setSelectedHeadsetId('quest3');
+    expect(useAppStore.getState().totalCost).toBe(BASE.voronoi);   // 0 today
+  });
+
+  it('does not bill a collapsed member the Output never reaches', () => {
+    // `p` sits inside the group with no outgoing edge — dead weight the old
+    // snapshot summed anyway (it had no reachability filter).
+    useAppStore.setState({
+      nodes: [makeNode('out', 'output'), collapsedGroup(BASE.voronoi + BASE.perlin),
+              { ...makeNode('v', 'voronoi'), parentId: 'g1' } as AppNode,
+              { ...makeNode('p', 'perlin'), parentId: 'g1' } as AppNode],
+      edges: [makeEdge('g1', 'o0', 'out', 'color')],
+      costProfiles: [], selectedHeadsetId: 'quest3', totalCost: 0,
+    });
+    useAppStore.getState().setSelectedHeadsetId('quest3');
+    expect(useAppStore.getState().totalCost).toBe(BASE.voronoi);   // voronoi+perlin today
   });
 });

@@ -8,8 +8,8 @@
 > This file is **research/analysis** that *proposed* revised costs and VR budgets. The shipped `src/registry/complexity.json` and `HEADSET_PRESETS` (`src/store/useAppStore.ts`) adopted **some** proposals and **rejected others**, so not every "New"/"Revised" number below is live:
 > - **Adopted** (match `complexity.json`): `pow` 12, `sin`/`cos` 4, `sqrt` 4, `exp` 5, `div` 4, `hsl`/`toHsl` 15, `normalize`/`length` 7, `distance` 8, `dot` 3, `cross` 6, `abs` 0, constructors 0.
 > - **NOT adopted** (shipped value differs): `mod` is **2** (not 6), `smoothstep` is **7** (not 10), `remap` is **5** (not 7).
-> - **Noise**: the app ships **8** MaterialX noise nodes — `cellNoise` 12, `perlin` 35, `perlinVec3` 75, `fbm` 95, `fbmVec3` 200, `voronoi` 55, `voronoiVec2` 60, `voronoiVec3` 65. There is **no `fractal` node** (the FBM node is `fbm` = 95, not 140).
-> - **Headset budgets**: shipped `maxPoints` are **Pico 4 80, Quest 2 90, Quest 3S 110, Quest 3 200, Steam Frame 220, Vision Pro 350** (`complexity.json` global cap `maxBudget = 350`). The "New maxPoints" column further down (70/75/95/165/160/285) was **not** adopted.
+> - **Noise**: the app ships **8** MaterialX noise nodes, all repriced 2026-07-23 from the measured Quest 3 run in `ShaderCarousel/benchData/quest3-20260723/` — `cellNoise` 7, `perlin` 35, `perlinVec3` 68, `fbm` 105, `fbmVec3` 190, `voronoi` 230, `voronoiVec2` 235, `voronoiVec3` 245. There is **no `fractal` node**. The estimates further down this file predate that run; the measured numbers win.
+> - **Headset budgets**: shipped `maxPoints` are **Pico 4 80, Quest 2 90, Quest 3S 260, Quest 3 200, Steam Frame 220, Vision Pro 350** (`complexity.json` global cap `maxBudget = 350`). The "New maxPoints" column further down (70/75/95/165/160/285) was **not** adopted. Quest 3S is above Quest 3 on purpose: same XR2 Gen 2 / Adreno 740, 1832x1920 per eye instead of 2064x2208, so 200 x 1.2956 = 260.
 > - **`tsl-textures` was removed** from the app (see the tsl-textures section banner below); those Tier 1–5 costs are historical research only.
 
 ---
@@ -27,9 +27,8 @@ This 4:1 ratio is consistent across all major mobile GPU architectures used in V
 
 | Architecture | Device           | Main ALU             | SFU Ratio                   |
 | ------------ | ---------------- | -------------------- | --------------------------- |
-| Adreno 650   | Quest 2          | Full-rate FMA        | 1:4 (quarter-rate)[^36][^6] |
-| Adreno 660   | Quest 3S, Pico 4 | Full-rate FMA        | 1:4 (quarter-rate)[^5][^6]  |
-| Adreno 740   | Quest 3          | Full-rate FMA        | 1:4 (quarter-rate)[^7][^8]  |
+| Adreno 650   | Quest 2, Pico 4   | Full-rate FMA        | 1:4 (quarter-rate)[^36][^6] |
+| Adreno 740   | Quest 3, Quest 3S | Full-rate FMA        | 1:4 (quarter-rate)[^7][^8]  |
 | Adreno 750   | Steam Frame      | Full-rate FMA        | 1:4 (quarter-rate)[^33]     |
 | Apple M5 GPU | Vision Pro (M5)  | 10-core next-gen     | SFU ~1:4 effective[^29][^3] |
 | Mali Valhall | Reference        | 16-wide FMA + 16 CVT | 4-wide SFU (1:4)[^2]        |
@@ -120,7 +119,7 @@ Component-wise operations (`add`, `mul`, `mix`, etc.) applied to vectors execute
 
 ### Noise (55–140 pts)
 
-> Note: the shipped registry has **8** noise nodes, not 2, and the FBM node is `fbm` (cost **95** in `complexity.json`) — there is no `fractal` node. Shipped noise costs: cellNoise 12, perlin 35, perlinVec3 75, fbm 95, fbmVec3 200, voronoi 55, voronoiVec2 60, voronoiVec3 65.
+> Note: the shipped registry has **8** noise nodes, not 2, and the FBM node is `fbm` (cost **105** in `complexity.json`) — there is no `fractal` node. Shipped noise costs (measured, `benchData/quest3-20260723`): cellNoise 7, perlin 35, perlinVec3 68, fbm 105, fbmVec3 190, voronoi 230, voronoiVec2 235, voronoiVec3 245.
 
 | Node                               | Old | New     | Rationale                                                                                                     |
 | ---------------------------------- | --- | ------- | ------------------------------------------------------------------------------------------------------------- |
@@ -217,8 +216,8 @@ Costs based on internal composition: noise calls, loop iterations, trigonometric
 | Device              | GPU                | Process | FP32 TFLOPS | Resolution (total)    | Target Hz | Memory BW |
 | ------------------- | ------------------ | ------- | ----------- | --------------------- | --------- | --------- |
 | **Quest 2**         | Adreno 650         | 7nm     | ~1.1        | 7.03M (1832x1920 x2)  | 72/90/120 | ~44 GB/s  |
-| **Pico 4**          | Adreno 660         | 5nm     | ~1.3        | 9.33M (2160x2160 x2)  | 72/90     | ~44 GB/s  |
-| **Quest 3S**        | Adreno 660         | 5nm     | ~1.3        | 7.03M (1832x1920 x2)  | 90/120    | ~44 GB/s  |
+| **Pico 4**          | Adreno 650         | 7nm     | ~1.1        | 9.33M (2160x2160 x2)  | 72/90     | ~44 GB/s  |
+| **Quest 3S**        | Adreno 740         | 4nm     | ~3.0        | 7.03M (1832x1920 x2)  | 90/120    | ~44 GB/s  |
 | **Quest 3**         | Adreno 740         | 4nm     | ~3.0        | 9.11M (2064x2208 x2)  | 72/90/120 | ~50 GB/s  |
 | **Steam Frame**     | Adreno 750         | 4nm     | ~2.8        | 9.33M (2160x2160 x2)  | 72–120    | ~51 GB/s  |
 | **Vision Pro (M5)** | Apple M5 (10-core) | 3nm     | ~5.7        | ~25.8M (+10% over M2) | 90/96/120 | 153 GB/s  |
@@ -237,8 +236,8 @@ FLOPs/pixel = (TFLOPS x utilization x (1 - system_overhead) x (1 - api_overhead)
 | Device              | Pixels/frame | FPS | Overdraw | Util. | System OH | API OH[^c] | Eff. FLOPs/px |
 | ------------------- | ------------ | --- | -------- | ----- | --------- | ---------- | ------------- |
 | **Quest 2**         | 7.03M        | 90  | 3x       | 50%   | 15%       | 25%        | ~185          |
-| **Pico 4**          | 9.33M        | 90  | 3x       | 50%   | 15%       | 25%        | ~165          |
-| **Quest 3S**        | 7.03M        | 90  | 3x       | 50%   | 15%       | 25%        | ~218          |
+| **Pico 4**          | 9.33M        | 90  | 3x       | 50%   | 15%       | 25%        | ~139          |
+| **Quest 3S**        | 7.03M        | 90  | 3x       | 50%   | 15%       | 25%        | ~504          |
 | **Quest 3**         | 9.11M        | 90  | 3x       | 50%   | 15%       | 25%        | ~389          |
 | **Steam Frame**     | 9.33M        | 90  | 3x       | 50%   | 10%       | 25%        | ~375          |
 | **Vision Pro (M5)** | ~25.8M       | 96  | 1.5x[^a] | 60%   | 30%[^b]   | 20%        | ~516          |
@@ -269,7 +268,7 @@ Despite having 1.9x the TFLOPS (5.7 vs 3.0), Vision Pro renders **~2.83x more pi
 
 Dividing effective FLOPs/px by ~4 (average of 3–5 shaders weighted by screen coverage). Since TFLOPS specs count FMA as 2 FLOPs but we cost FMA as 1 point, the FLOPs-to-points conversion is approximately 1:1 for add-heavy code and 2:1 for FMA-heavy code. We use a **1.5:1** ratio as a middle ground for mixed shader code, giving `maxPoints ≈ FLOPs/px / 4 / 1.5`:
 
-> **Shipped `maxPoints` (not the "New maxPoints" column below):** Pico 4 80, Quest 2 90, Quest 3S 110, Quest 3 200, Steam Frame 220, Vision Pro 350. The proposed values in the table were not adopted as written.
+> **Shipped `maxPoints` (not the "New maxPoints" column below):** Pico 4 80, Quest 2 90, Quest 3S 260, Quest 3 200, Steam Frame 220, Vision Pro 350. The proposed values in the table were not adopted as written.
 
 | Device              | Old maxPoints | **New maxPoints** | Change | Practical meaning                                                          |
 | ------------------- | ------------- | ----------------- | ------ | -------------------------------------------------------------------------- |
@@ -334,7 +333,7 @@ The additive cost model is a practical simplification. These known limitations a
 
 [^4]: [ARM Mali Valhall Architecture Notes](https://github.com/azhirnov/cpu-gpu-arch/blob/main/gpu/ARM-Mali-Valhall.md) — Detailed pipeline width documentation
 
-[^5]: [Adreno 660 GPU Specs — NotebookCheck](https://www.notebookcheck.net/Qualcomm-Adreno-660-GPU-Benchmarks-and-Specs.513908.0.html) — Adreno 660 specifications (Quest 3S / Pico 4)
+[^5]: [Adreno 660 GPU Specs — NotebookCheck](https://www.notebookcheck.net/Qualcomm-Adreno-660-GPU-Benchmarks-and-Specs.513908.0.html) — Adreno 660 specifications. No longer cited: this file previously mis-assigned the Adreno 660 to Quest 3S (Snapdragon XR2 Gen 2 / Adreno 740) and Pico 4 (XR2 Gen 1 / Adreno 650).
 
 [^6]: [Inside Qualcomm's Adreno 530 — Chips and Cheese](https://chipsandcheese.com/p/inside-qualcomms-adreno-530-a-small-mobile-igpu) — Adreno architecture deep dive
 

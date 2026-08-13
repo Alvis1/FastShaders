@@ -64,6 +64,14 @@ export function lvName(type: string): string {
   return formatNodeLabel(en, type, 'lv', false);
 }
 
+/**
+ * RAW Latvian name — '' when the node is untranslated, where `lvName` would hand
+ * back the English one. The Name (LV) field has to tell those apart: a fallback
+ * would show "Multiply" in the Latvian box and saving it would write English into
+ * node-i18n.json as if someone had translated it.
+ */
+export { nodeLabelLV } from '@/i18n';
+
 export function catLabel(cat: string, lang: Language): string {
   return formatCategoryLabel(cat, cat, lang, true);
 }

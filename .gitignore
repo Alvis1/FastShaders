@@ -16,3 +16,9 @@ vite.config.d.ts
 
 # Local test assets dropped into the app (3D models etc.) — not part of the repo
 .claude/_AppTestRes/
+
+# Machine-local editor config (ShaderCarousel Live Server holds a local TLS key passphrase)
+ShaderCarousel/.vscode/
+# Env files must never be trackable
+.env
+.env.*

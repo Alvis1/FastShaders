@@ -1,35 +1,50 @@
-import { memo, useCallback, useEffect, useMemo, type ChangeEvent, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useMemo, type CSSProperties } from 'react';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
 import { NODE_REGISTRY, effectiveInputs, growsOperands } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
+import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { portLabel } from '@/i18n';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
+// Imported BEFORE './ShaderNode.css' so the bundler emits PaletteColorPicker.css
+// first: `.shader-node__input-color` and `.palette-swatch` have equal
+// specificity, and the on-node size must win. (The size override below is also
+// written under `.shader-node__left` so it does not depend on that ordering.)
+import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NodeGlyph, hasNodeGlyph, nodeJustify, nodeScale, nodeBox, nodeSockets, nodeTextScale, nodeArtStyle } from './glyphs/NodeGlyph';
-import { evaluateNodeOutput, evaluateNodeRange, getNodeOutputShape, getTargetEdges } from '@/engine/cpuEvaluator';
+import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getEdgeOutputShape, getTargetEdges, getUnwrappedEdges } from '@/engine/cpuEvaluator';
+import { hasTimeUpstream } from '@/utils/graphTraversal';
+import { edgeRangeText } from '@/utils/edgeValueText';
+import { LiveEdgeValue } from './LiveEdgeValue';
 import { makeConnectionRevealSelector } from './connectionReveal';
 import { RevealSockets } from './RevealSockets';
+import { RAMP_COLOR_NODES, effectiveRampDef } from '@/utils/exposedPorts';
 import { displayImageFileName, validImageDataUrl } from '@/utils/imageNode';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import './ShaderNode.css';
 
-function fmtNum(n: number): string {
-  return Number.isFinite(n) ? String(+n.toFixed(2)) : '0';
-}
+// (fmtNum/rangeText moved to utils/edgeValueText.ts — shared with the
+// animated LiveEdgeValue span so both paths format identically.)
 
-/** Channel count flowing out of a node (1–4) — same formula TypedEdge uses:
- *  the larger of live evaluation length and static shape inference. */
+/** Channel count flowing out of one output SOCKET (1–4) — same formula
+ *  TypedEdge uses: the larger of live evaluation length and static shape
+ *  inference, both measured for the socket the edge leaves. Per-socket, not
+ *  per-node: a node with an `out` port reports that port's width for every
+ *  handle otherwise, so an RGB-to-HSL Lightness wire would draw a 3-line
+ *  ribbon. */
 function channelCount(
   nodeId: string,
+  sourceHandle: string | null | undefined,
   nodes: Parameters<typeof evaluateNodeOutput>[1],
   edges: Parameters<typeof evaluateNodeOutput>[2],
 ): number {
-  const out = evaluateNodeOutput(nodeId, nodes, edges, 0);
+  const edge = { source: nodeId, sourceHandle };
+  const out = evaluateEdgeSource(edge, nodes, edges, 0);
   const evalLen = out?.length ?? 0;
-  const shapeLen = getNodeOutputShape(nodeId, nodes, edges);
+  const shapeLen = getEdgeOutputShape(edge, nodes, edges);
   return Math.min(Math.max(evalLen, shapeLen, 1), 4);
 }
 
@@ -42,45 +57,58 @@ const STACK_STEP_Y = 3;
  * - many channels → `min…max` range
  * - unevaluable upstream (texture etc.) → inferred `min…max` range
  * - nothing derivable (camera/world-space chains) → `…`
- * Returns the text plus whether it's a live value (vs. an inferred range).
+ * Returns the text, whether it's a live value (vs. an inferred range), and
+ * whether the label should ANIMATE (render it through LiveEdgeValue, which
+ * re-evaluates on the shared app clock): a time-driven chain's probe at t=0
+ * is a frozen arbitrary sample — sin(0) = 0 read as a dead wire.
+ * (Formatting rules live in utils/edgeValueText — single values keep
+ * decimals, true ranges round to whole numbers; precise figures are the
+ * EdgeInfoCard's job.)
  */
 export function edgeValueLabel(
   sourceId: string,
   nodes: Parameters<typeof evaluateNodeOutput>[1],
   edges: Parameters<typeof evaluateNodeOutput>[2],
-): { text: string; live: boolean } {
-  // Single values keep decimals ("3.69"); true RANGES round to whole numbers
-  // only ("-0.8…0.8" → "-1…1") to keep node labels compact. Endpoints are
-  // compared after formatting so "3.687…3.694" collapses to a single "3.69";
-  // a range whose rounded ends meet collapses to that integer. Precise values
-  // remain visible in the EdgeInfoCard (select the edge).
-  const rangeText = (lo: number, hi: number) => {
-    const a = fmtNum(lo), b = fmtNum(hi);
-    if (a === b) return a;
-    const ra = Math.round(lo), rb = Math.round(hi);
-    return ra === rb ? String(ra) : `${ra}…${rb}`;
-  };
+  /** The socket the edge LEAVES. A multi-output node (RGB to HSL's h/s/l,
+   *  Split's x/y/z/w) evaluates to its whole vector, so without this the
+   *  label prints channel 0 for every socket — a Saturation wire would show
+   *  Hue in live blue. */
+  sourceHandle?: string | null,
+): { text: string; live: boolean; animated: boolean } {
   // A noise node's "live" value is one arbitrary probe point — cpuEvaluator
   // samples a fixed UV, and an unwired node lands on an integer lattice where
   // Perlin is exactly 0, which on a card reads as a dead wire. The interval is
   // both the honest answer for a noise field and the only on-canvas tell of the
-  // node's range mode (`-1…1` vs `0…1`).
+  // node's range mode (`-1…1` vs `0…1`). The same rule keeps noise OUT of the
+  // animated path: a ticking probe point would still be one arbitrary sample
+  // of a field. It is decided on the SOURCE NODE's category, BEFORE any
+  // per-socket projection — the interval is the honest answer for every one
+  // of a noise node's sockets.
   const srcType = nodes.find((n) => n.id === sourceId)?.data?.registryType as string | undefined;
   const preferRange = NODE_REGISTRY.get(srcType ?? '')?.category === 'noise';
-  const out = preferRange ? null : evaluateNodeOutput(sourceId, nodes, edges, 0);
+  // Time-driven (on the UNWRAPPED graph, so a Time feeder inside a collapsed
+  // frame still counts — the MathPreviewNode xKey pairing) → the label ticks.
+  const animated =
+    !preferRange && hasTimeUpstream(sourceId, nodes, getUnwrappedEdges(nodes, edges));
+  const edge = { source: sourceId, sourceHandle };
+  const out = preferRange ? null : evaluateEdgeSource(edge, nodes, edges, 0);
   if (out && out.length >= 1 && out.every((v) => Number.isFinite(v))) {
-    return { text: rangeText(Math.min(...out), Math.max(...out)), live: true };
+    return { text: edgeRangeText(Math.min(...out), Math.max(...out)), live: true, animated };
   }
-  const r = evaluateNodeRange(sourceId, nodes, edges, 0);
+  // The range is PROJECTED, never re-derived — the signed-noise convention
+  // depends on the interval the evaluator produced.
+  const r = evaluateEdgeRange(edge, nodes, edges, 0);
   if (r && r.min.length) {
     const lo = Math.min(...r.min), hi = Math.max(...r.max);
     if (Number.isFinite(lo) && Number.isFinite(hi)) {
-      return { text: rangeText(lo, hi), live: false };
+      return { text: edgeRangeText(lo, hi), live: false, animated };
     }
   }
   // Connected, but neither eval nor range inference knows the value — show an
-  // ellipsis so the socket still reads as carrying *something*.
-  return { text: '…', live: false };
+  // ellipsis so the socket still reads as carrying *something*. Still animated
+  // when time-driven: the rAF path evaluates at REAL times, where a chain like
+  // `time` itself (no finite static range) produces a perfectly good number.
+  return { text: '…', live: false, animated };
 }
 
 export interface PortRow {
@@ -235,6 +263,14 @@ export const ShaderNode = memo(function ShaderNode({
   selected,
 }: NodeProps<ShaderFlowNode>) {
   const def = NODE_REGISTRY.get(data.registryType);
+  // Rules-of-Hooks note: this return sits ABOVE the hooks below. Safe because
+  // `def` cannot flip defined<->undefined on a MOUNTED instance: React Flow keys
+  // node components by node.id, every registryType the app writes is in
+  // NODE_REGISTRY (`unknown` included), and nothing mutates registryType in place
+  // to or from an unregistered value. A tampered .fastshader with an unknown
+  // registryType renders null for the whole life of that node. Moving the return
+  // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
+  // dereference `def`) — see CLEAN-3.
   if (!def) return null;
 
   const updateNodeData = useAppStore((s) => s.updateNodeData);
@@ -292,9 +328,16 @@ export const ShaderNode = memo(function ShaderNode({
     let key = '';
     for (const e of getTargetEdges(s.nodes, s.edges, id)) {
       const th = typeof e.targetHandle === 'string' ? e.targetHandle : '';
-      const label = th ? edgeValueLabel(e.source, s.nodes, s.edges) : null;
-      const ch = channelCount(e.source, s.nodes, s.edges);
-      key += `${e.source}\u0000${th}\u0000${label ? label.text : ''}\u0000${label?.live ? 1 : 0}\u0000${ch}\u0001`;
+      const sh = typeof e.sourceHandle === 'string' ? e.sourceHandle : '';
+      const label = th ? edgeValueLabel(e.source, s.nodes, s.edges, e.sourceHandle) : null;
+      const ch = channelCount(e.source, e.sourceHandle, s.nodes, s.edges);
+      // `animated` rides the key too: wiring Time into an EXISTING upstream
+      // chain can leave text/live unchanged (sin(0) is 0 either way), and a
+      // stale flag would keep the label frozen after it became time-driven.
+      // `sh` likewise: re-wiring from one socket of a source to ANOTHER (HSL's
+      // h → s) leaves source, target and targetHandle identical, so without it
+      // Object.is bails and the card keeps showing the old channel forever.
+      key += `${e.source}\u0000${sh}\u0000${th}\u0000${label ? label.text : ''}\u0000${label?.live ? 1 : 0}${label?.animated ? 1 : 0}\u0000${ch}\u0001`;
     }
     return key;
   });
@@ -303,20 +346,27 @@ export const ShaderNode = memo(function ShaderNode({
     const targetEdges = getTargetEdges(allNodes, allEdges, id);
     const connectedInputs = new Set<string | null | undefined>();
     const connectedHandleList: string[] = [];
-    const labelByHandle = new Map<string, { text: string; live: boolean }>();
+    const labelByHandle = new Map<string, { text: string; live: boolean; animated: boolean; sourceId: string; sourceHandle: string | null }>();
     const inputChannels = new Map<string, number>();
     const bySource = new Map<string, number>();
     let widest = 1;
     for (const e of targetEdges) {
       connectedInputs.add(e.targetHandle);
-      let c = bySource.get(e.source);
+      // Keyed by source AND socket: two edges from the same node's different
+      // sockets carry different widths (HSL's vec3 `out` vs its float `h`).
+      const srcKey = `${e.source}|${e.sourceHandle ?? ''}`;
+      let c = bySource.get(srcKey);
       if (c === undefined) {
-        c = channelCount(e.source, allNodes, allEdges);
-        bySource.set(e.source, c);
+        c = channelCount(e.source, e.sourceHandle, allNodes, allEdges);
+        bySource.set(srcKey, c);
       }
       if (typeof e.targetHandle === 'string') {
         connectedHandleList.push(e.targetHandle);
-        labelByHandle.set(e.targetHandle, edgeValueLabel(e.source, allNodes, allEdges));
+        labelByHandle.set(e.targetHandle, {
+          ...edgeValueLabel(e.source, allNodes, allEdges, e.sourceHandle),
+          sourceId: e.source,
+          sourceHandle: e.sourceHandle ?? null,
+        });
         inputChannels.set(e.targetHandle, c);
       }
       widest = Math.max(widest, c);
@@ -380,6 +430,12 @@ export const ShaderNode = memo(function ShaderNode({
     [data.exposedPorts],
   );
   const effDef = useMemo(() => {
+    // Data Stripes / Data Viz: the two RAMP ports are opt-in, everything else
+    // (notably `signal`) is always on. Shared with every preview surface so a
+    // palette tile cannot show a socket the dropped node lacks. Deliberately
+    // NOT the imageNode treatment below — blanking defaultValues would delete
+    // the inline swatches and filtering ALL inputs would drop `signal`.
+    if (RAMP_COLOR_NODES.has(data.registryType)) return effectiveRampDef(def, exposedInputs);
     if (data.registryType !== 'imageNode') return def;
     // The tile/offset params are context-menu-only for the image node — they
     // never render as inline widgets. Leaving them in defaultValues makes
@@ -494,6 +550,19 @@ export const ShaderNode = memo(function ShaderNode({
     `node-base${selected ? ' node-base--selected' : ''}` +
     `${stackLayerCount > 0 ? ' node-base--stacked' : ''}`;
 
+  // The Slider's range input and the inline colour swatches (stripes/dataviz
+  // lowColor/highColor) fire a change per pointermove FRAME, and every one
+  // reaches updateNodeData -> an unconditional pushHistory -> a full-graph
+  // structuredClone. Unbracketed, a one-second scrub pushes ~60 entries and
+  // evicts the whole 50-entry undo stack (MAX_HISTORY), so Cmd+Z afterwards
+  // steps through sub-pixel slider values instead of undoing real work.
+  // Bracket the burst so it lands as ONE undo entry — the same fix
+  // ColorNode.tsx:135-154 applies to the native colour picker. Deliberately
+  // NOT inside handleChange: that writer also backs the DragNumberInput rows,
+  // which already bracket their own drags, and a second bracket there would
+  // open a 600 ms coalescing window on a single arrow-button click.
+  const { bracket, closeBracket } = useHistoryBracket();
+
   const handleChange = useCallback(
     (key: string, raw: string) => {
       const num = parseFloat(raw);
@@ -590,7 +659,7 @@ export const ShaderNode = memo(function ShaderNode({
             const info = graphInfo.labelByHandle.get(inp.id) ?? null;
             return info ? (
               <div key={`r-${inp.id}`} className={cls} style={valStyle}>
-                <span className="shader-node__edge-val" style={info.live ? { color: '#2D6CDF' } : undefined}>{info.text}</span>
+                <LiveEdgeValue className="shader-node__edge-val" {...info} />
               </div>
             ) : null;
           })}
@@ -786,9 +855,7 @@ export const ShaderNode = memo(function ShaderNode({
                 {row.input && inputConnected && (() => {
                   const info = graphInfo.labelByHandle.get(row.input!.id) ?? null;
                   return info ? (
-                    <span className="shader-node__edge-val" style={info.live ? { color: '#2D6CDF' } : undefined}>
-                      {info.text}
-                    </span>
+                    <LiveEdgeValue className="shader-node__edge-val" {...info} />
                   ) : null;
                 })()}
                 {/* Slider range input */}
@@ -800,7 +867,23 @@ export const ShaderNode = memo(function ShaderNode({
                     max={Number(data.values.max ?? def.defaultValues?.max ?? 1)}
                     step={0.01}
                     value={Number(data.values.value ?? def.defaultValues?.value ?? 0.5)}
-                    onChange={(e) => handleChange('value', e.target.value)}
+                    // bracket() FIRST: beginInteraction snapshots the state
+                    // BEFORE the first mutation, so undo lands on the
+                    // pre-scrub value (same order as DragNumberInput's own
+                    // open-before-onChange and ColorNode's picker).
+                    onChange={(e) => { bracket(); handleChange('value', e.target.value); }}
+                    // Prompt closes. The hook's 600 ms idle timer is the
+                    // GUARANTEE the bracket cannot be left open; these end the
+                    // entry sooner. Not onPointerDown — a click on the track is
+                    // a real change. NB while a bracket is open an unpaired
+                    // close from a sibling DragNumberInput click-to-edit
+                    // (min/max sit right beside this slider) would steal its
+                    // depth and the flood would return until the idle timer
+                    // re-arms — DragNumberInput now owns its own close.
+                    onPointerUp={closeBracket}
+                    onPointerCancel={closeBracket}
+                    onKeyUp={closeBracket}
+                    onBlur={closeBracket}
                     title={String(Number(data.values.value ?? 0.5).toFixed(2))}
                   />
                 )}
@@ -815,13 +898,17 @@ export const ShaderNode = memo(function ShaderNode({
                   />
                 )}
                 {row.settingKey && row.settingType === 'color' && (
-                  <input
-                    type="color"
-                    className="shader-node__input-color nodrag"
+                  // The app-wide picker (palettes + recents + a native custom
+                  // escape hatch). `history="bracket"`: this hex reaches the
+                  // graph through handleChange -> updateNodeData, which
+                  // pushHistory's unconditionally, and the picker owns the
+                  // coalescing bracket for the per-frame stream its custom
+                  // input still produces (this row used to bracket by hand).
+                  <PaletteColorPicker
+                    className="shader-node__input-color"
+                    history="bracket"
                     value={String(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? '#ff0000')}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      handleChange(row.settingKey!, e.target.value)
-                    }
+                    onPick={(hex) => handleChange(row.settingKey!, hex)}
                   />
                 )}
                 {row.settingType === 'vec3' && row.vecBaseKey && (
@@ -898,9 +985,7 @@ export const ShaderNode = memo(function ShaderNode({
             <div className={`shader-node__op-val shader-node__op-val--${rowsJustify}`} style={{ top }}>
               {connected ? (
                 info && (
-                  <span className="shader-node__edge-val" style={info.live ? { color: '#2D6CDF' } : undefined}>
-                    {info.text}
-                  </span>
+                  <LiveEdgeValue className="shader-node__edge-val" {...info} />
                 )
               ) : (
                 <DragNumberInput

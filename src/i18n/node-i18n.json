@@ -3,7 +3,7 @@
   "nodes": {
     "positionGeometry": "Pozīcija",
     "positionLocal": "Lokālā pozīcija",
-    "positionWorld": "Pasaules pozīcija",
+    "positionWorld": "Pozīcija (Vidē)",
     "positionView": "Skata pozīcija",
     "positionWorldDirection": "Pasaules virziens",
     "positionViewDirection": "Skata virziens",

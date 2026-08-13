@@ -10,7 +10,7 @@
  * — otherwise downstream arithmetic would fabricate fake scalars and the visualization layer
  * would think a vec3 chain was actually a float.
  */
-import type { AppNode, AppEdge, TSLDataType } from '@/types';
+import type { AppNode, AppEdge, TSLDataType, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { perlin2D, fbm2D, cellNoise2D, voronoi2D } from '@/utils/noisePreview';
@@ -202,6 +202,23 @@ export function getTargetEdges(nodes: AppNode[], edges: AppEdge[], nodeId: strin
   return getCtx(nodes, edges).edgeIndex.get(nodeId) ?? [];
 }
 
+/**
+ * The full UNWRAPPED edge array the evaluator itself walks — collapsed-group
+ * boundary edges resolved to their real child endpoints — through the same
+ * shared ctx, so it is O(1) per call once the ctx exists for this graph
+ * version. Treat the result as READ-ONLY: it is the ctx's own array.
+ *
+ * Render-layer helpers that do their own graph walk (`hasTimeUpstream`) must be
+ * handed THIS array, never the raw store one. `getTargetEdges` already reports
+ * the REAL producer inside a collapsed frame, so continuing the walk through
+ * raw edges drops every wire that crosses the frame's boundary: a Time node
+ * feeding INTO a collapsed group becomes invisible and the card silently falls
+ * back to its static branch.
+ */
+export function getUnwrappedEdges(nodes: AppNode[], edges: AppEdge[]): AppEdge[] {
+  return getCtx(nodes, edges).edges;
+}
+
 /** Evaluate the output of a specific node, given the current time. */
 export function evaluateNodeOutput(
   nodeId: string,
@@ -332,6 +349,129 @@ function computeShape(
   return maxShape;
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * Per-SOURCE-HANDLE projection.
+ *
+ * `evaluate` is keyed by node id and returns the node's WHOLE vector; the
+ * socket an edge leaves from is applied here, at the consumer. That split is
+ * deliberate and load-bearing: `evaluate`/`computeRange` write a null sentinel
+ * under the node id BEFORE recursing (their cycle guards), so keying the cache
+ * by node+handle would give a cycle re-entering the same node through a
+ * different socket its own sentinel — it would slip past the guard and recurse
+ * until the stack blows, which a hand-edited `.fastshader` can reach
+ * (topologicalSort only warns about cycles).
+ *
+ * Handle-blindness was harmless until now because no node returned different
+ * numbers per socket — split/dataNode/dataviz evaluate to null and a mic
+ * channel is a uniform 0 — so a wrong socket degraded to an honest "…". The
+ * RGB-to-HSL node is the first whose evaluator returns three genuinely
+ * different values, so without this projection its Saturation socket would
+ * print Hue in live blue: a manufactured lie, the exact defect class the
+ * time-driven labels were just fixed for.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Which channel of the source node's vector this output handle carries, or
+ *  null for "the whole vector" (`out`, an unknown handle, a tampered id). */
+export function handleSlice(
+  node: AppNode | undefined,
+  handle: string | null | undefined,
+): number | null {
+  if (!node || !handle || handle === 'out') return null;
+  const type = node.data.registryType;
+  if (type === 'toHsl') {
+    return TOHSL_HANDLE_INDEX.get(handle) ?? null;
+  }
+  if (type === 'split') {
+    return SPLIT_HANDLE_INDEX.get(handle) ?? null;
+  }
+  return null;
+}
+
+/** h/s/l → 0/1/2. MUST agree with graphToCode's TOHSL_HANDLE_TO_COMPONENT
+ *  (h→x, s→y, l→z) or the CPU preview and the shader disagree — pinned by a
+ *  parity test, because swapping S and L here is invisible by inspection. */
+const TOHSL_HANDLE_INDEX = new Map<string, number>([['h', 0], ['s', 1], ['l', 2]]);
+const SPLIT_HANDLE_INDEX = new Map<string, number>([['x', 0], ['y', 1], ['z', 2], ['w', 3]]);
+
+/** Project one channel out of an evaluated vector. A slice past the end
+ *  yields null (unknown) rather than a fabricated 0. */
+function sliceEval(res: EvalResult, i: number | null): EvalResult {
+  if (res === null || i === null) return res;
+  return i < res.length ? [res[i]] : null;
+}
+
+/** Project one channel out of an inferred range. Never re-derives the range —
+ *  the signed-noise convention depends on the interval it was given. */
+function sliceRange(r: RangeResult | null, i: number | null): RangeResult | null {
+  if (r === null || i === null) return r;
+  if (i >= r.min.length || i >= r.max.length) return null;
+  return { min: [r.min[i]], max: [r.max[i]] };
+}
+
+/** The value arriving along `edge` — the source node evaluated, then projected
+ *  onto the socket the edge actually leaves from. */
+export function evaluateEdgeSource(
+  edge: Pick<AppEdge, 'source' | 'sourceHandle'>,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  time: number,
+): EvalResult {
+  const res = evaluateNodeOutput(edge.source, nodes, edges, time);
+  const node = getCtx(nodes, edges).nodeIndex.get(edge.source);
+  return sliceEval(res, handleSlice(node, edge.sourceHandle));
+}
+
+/** Inferred range for the value arriving along `edge` (same projection). */
+export function evaluateEdgeRange(
+  edge: Pick<AppEdge, 'source' | 'sourceHandle'>,
+  nodes: AppNode[],
+  edges: AppEdge[],
+  time: number,
+): RangeResult | null {
+  const r = evaluateNodeRange(edge.source, nodes, edges, time);
+  const node = getCtx(nodes, edges).nodeIndex.get(edge.source);
+  return sliceRange(r, handleSlice(node, edge.sourceHandle));
+}
+
+/**
+ * Channel count carried by `edge` — the DECLARED port type of the socket it
+ * leaves, falling back to whole-node inference. Necessary even though h/s/l are
+ * declared `float`: `computeShape` resolves `outputs.find(id === 'out') ??
+ * outputs[0]`, so every socket of a node that HAS an `out` port reports the
+ * vec3 width (the live Data Viz `value` bug verbatim).
+ */
+export function getEdgeOutputShape(
+  edge: Pick<AppEdge, 'source' | 'sourceHandle'>,
+  nodes: AppNode[],
+  edges: AppEdge[],
+): number {
+  const node = getCtx(nodes, edges).nodeIndex.get(edge.source);
+  if (node && edge.sourceHandle) {
+    const shape = portShapeForHandle(node, edge.sourceHandle);
+    if (shape > 0) return shape;
+  }
+  return getNodeOutputShape(edge.source, nodes, edges);
+}
+
+/**
+ * Declared channel width of one OUTPUT PORT — per-instance `dynamicOutputs`
+ * (the Data node's CSV columns) first, then the registry port. 0 = unresolved,
+ * so callers can fall back to whole-node inference. Shared with graphToCode's
+ * `shapeOfEdgeSource` so codegen and the visual layer cannot drift.
+ */
+export function portShapeForHandle(
+  node: AppNode,
+  handle: string,
+  registry: Map<string, NodeDefinition> = NODE_REGISTRY,
+): number {
+  const dyn = (node.data as { dynamicOutputs?: { id: string; dataType: string }[] }).dynamicOutputs;
+  const dynPort = dyn?.find((o) => o.id === handle);
+  if (dynPort) return shapeOfDataType(dynPort.dataType as TSLDataType);
+  const def = registry.get(node.data.registryType);
+  const port = def?.outputs.find((o) => o.id === handle);
+  return port ? shapeOfDataType(port.dataType) : 0;
+}
+
 /** Get the first channel as a scalar (for backward compat). */
 export function evaluateNodeScalar(
   nodeId: string,
@@ -393,7 +533,12 @@ function evaluate(
   const scalarInput = (portId: string, fallback: number): number => {
     const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
-      const upstream = evaluate(edge.source, nodes, edges, time, cache, idx, nidx);
+      // Projected onto the socket the edge LEAVES (see handleSlice): a wire
+      // from toHsl's Saturation must contribute S, not channel 0's Hue.
+      const upstream = sliceEval(
+        evaluate(edge.source, nodes, edges, time, cache, idx, nidx),
+        handleSlice(nidx.get(edge.source), edge.sourceHandle),
+      );
       if (upstream !== null && upstream.length > 0) return upstream[0];
     }
     const v = values[portId];
@@ -406,7 +551,10 @@ function evaluate(
   const channelInput = (portId: string, fallback: number): EvalResult => {
     const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
-      return evaluate(edge.source, nodes, edges, time, cache, idx, nidx);
+      return sliceEval(
+        evaluate(edge.source, nodes, edges, time, cache, idx, nidx),
+        handleSlice(nidx.get(edge.source), edge.sourceHandle),
+      );
     }
     const v = values[portId];
     return [v !== undefined ? Number(v) : fallback];
@@ -575,7 +723,11 @@ function evaluate(
     }
     case 'smoothstep': {
       const e0 = scalarInput('edge0', 0), e1 = scalarInput('edge1', 1);
-      const x = channelInput('x', 0.5);
+      // 0, not 0.5: the registry now declares edge0/edge1 but deliberately NOT
+      // `x`, so codegen emits the bare '0' for an unwired signal port. Seeding
+      // 0.5 here made the card disagree with the shader on exactly the node
+      // whose whole job is a threshold.
+      const x = channelInput('x', 0);
       result = x ? x.map((v) => {
         const t = Math.max(0, Math.min(1, (v - e0) / (e1 - e0 || 1)));
         return t * t * (3 - 2 * t);
@@ -598,7 +750,13 @@ function evaluate(
       const cond = scalarInput('condition', 0);
       const a = channelInput('a', 0);
       const b = channelInput('b', 0);
-      result = cond >= 0.5 ? a : b;
+      // TRUTHINESS, not a 0.5 threshold — three builds the condition as
+      // `bool(cond)` (ConditionalNode), so 0.2 takes the TRUE branch on the
+      // GPU. The old `>= 0.5` made the card show the OPPOSITE branch for any
+      // condition in (0, 0.5), and since the editor now remaps noise to 0…1 a
+      // source lands in that window constantly. Second instance of the trap
+      // already documented for the Output node's Discard channel.
+      result = cond !== 0 ? a : b;
       break;
     }
 
@@ -883,7 +1041,11 @@ function computeRange(
   const portRange = (portId: string, fallback: number): RangeResult => {
     const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
-      const r = computeRange(edge.source, nodes, edges, time, cache, nodeIndex, edgeIndex);
+      const src = nodeIndex ? nodeIndex.get(edge.source) : nodes.find((n) => n.id === edge.source);
+      const r = sliceRange(
+        computeRange(edge.source, nodes, edges, time, cache, nodeIndex, edgeIndex),
+        handleSlice(src, edge.sourceHandle),
+      );
       if (r) return r;
       // Upstream is unknown — assume normalized [0, 1] (typical shader range)
       return { min: [0], max: [1] };

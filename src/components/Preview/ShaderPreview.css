@@ -122,28 +122,30 @@
   background: var(--bg-panel);
 }
 
-.shader-preview__bg-color {
+/* The backdrop swatch is the app-wide picker's trigger `<button>` now, so the
+   `::-webkit-color-swatch` / `-wrapper` rules that shaped the native input's
+   shadow parts are gone — a `<button>` has none.
+
+   TWO classes: `.palette-swatch` (26x12) would otherwise tie on specificity
+   and the size would fall to stylesheet order.
+
+   The colour arrives as an INLINE `background` shorthand, which resets every
+   background-* longhand — so `background-clip: content-box` cannot be used to
+   keep the old 2px panel inset. An inset box-shadow paints the same ring
+   independently of the background, which is what keeps this reading as a
+   swatch inside a control rather than a solid colour tile. */
+.shader-preview__bottom-controls .shader-preview__bg-color {
   width: var(--ctl-size);
   height: var(--ctl-size);
-  padding: 2px;
+  padding: 0;
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
-  background: var(--bg-panel);
+  box-shadow: inset 0 0 0 2px var(--bg-panel);
   cursor: pointer;
-  -webkit-appearance: none;
-  appearance: none;
+  flex-shrink: 0;
 }
 
-.shader-preview__bg-color::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-
-.shader-preview__bg-color::-webkit-color-swatch {
-  border: none;
-  border-radius: 2px;
-}
-
-.shader-preview__bg-color:hover {
+.shader-preview__bottom-controls .shader-preview__bg-color:hover {
   border-color: var(--border-focus);
 }
 
@@ -492,25 +494,51 @@
    and #eceef0 in dark, so the control reads as black where the user sees black
    and stays legible where they don't. It is also what makes these controls a
    full step DARKER than the rows around them, which are --text-secondary. */
-.shader-preview__uniform-override {
-  flex: 0 0 auto;
-  padding: 0 3px;
-  font-family: var(--font-mono, monospace);
-  font-size: 9px;
-  line-height: 1.4;
-  color: var(--text-primary);
-  background: transparent;
-  border: 1px solid var(--text-primary);
+/* Reset-to-graph button, parked at the END of the controls row (right of the
+   Max input; on a colour row, right of the swatch — the same screen position).
+
+   Rendered on EVERY row and merely DISABLED at rest, never unmounted: a
+   control that appears only when a value is overridden would reflow the row
+   the instant you tuned it, resizing the slider track under the pointer
+   mid-drag. So the resting state is a quiet, inert glyph and the RED FILL is
+   the whole signal — "this row is not showing the graph's number".
+
+   The red is a literal, not a token: this button sits in the uniforms panel,
+   which flips to a dark surface in dark mode, and the alert colour must read
+   identically on both. White glyph on red is the pair that survives that. */
+.shader-preview__uniform-revert {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
   border-radius: var(--border-radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
   cursor: pointer;
-  white-space: nowrap;
 }
-/* Inverts on hover — the text colour becomes the panel's own, so the pair
-   stays legible in both themes without a second rule. */
-.shader-preview__uniform-override:hover {
-  background: var(--text-primary);
-  color: var(--bg-panel);
+/* Inert resting state — present for layout, not an invitation. `opacity` is
+   deliberate rather than `visibility: hidden`, so the column keeps its width
+   and the Max input never shifts when a row flips to overridden. */
+.shader-preview__uniform-revert:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
+.shader-preview__uniform-revert--active {
+  background: #d62828;
+  border-color: #d62828;
+  color: #ffffff;
+  font-weight: 700;
+}
+.shader-preview__uniform-revert--active:hover {
+  background: #b21e1e;
+  border-color: #b21e1e;
+}
+
 .shader-preview__uniform-value--override {
   color: var(--text-primary);
   font-weight: 600;
@@ -531,25 +559,38 @@
   vertical-align: middle;
 }
 
+/* min | slider | max | revert.
+   The 4th track is what keeps the revert button IN the row: this is a grid,
+   not a flex line, so an unplaced 4th child wraps to an implicit second row at
+   column 1 (measured: 165px left of Max, 19px below it, and every row 18px
+   taller). A child's own `flex` properties are inert here. */
 .shader-preview__uniform-controls {
   display: grid;
-  grid-template-columns: 32px 1fr 32px;
+  grid-template-columns: 32px 1fr 32px auto;
   align-items: center;
   gap: 2px;
 }
 
 /* Colour-uniform picker: fills the controls row where a float shows
-   bound + slider + bound. The controls row is a 32px/1fr/32px grid, so a
-   single child must span all three tracks or it sits in the first 32px.
-   Kept short so rows stay the same height. */
-.shader-preview__uniform-color {
-  grid-column: 1 / -1;
+   bound + slider + bound. The controls row is a 32px/1fr/32px/auto grid, so a
+   single child must span the first three tracks or it sits in the first 32px.
+   Kept short so rows stay the same height.
+
+   This is `PaletteColorPicker`'s trigger `<button>`; its popover is a PORTAL,
+   so the picker still contributes exactly ONE grid child and the revert button
+   stays in the last track. TWO classes so `.palette-swatch`'s own 26x12 can't
+   win on stylesheet order, and no `background` here — the fill arrives inline
+   (the swatch was `--bg-input` only because a native input paints its own). */
+.shader-preview__uniform-controls .shader-preview__uniform-color {
+  /* 1 / -2, NOT 1 / -1: a colour row has no min/max, so the swatch spans the
+     first three tracks and leaves the revert track free. Spanning to -1 would
+     eat it and wrap the button exactly as the float rows did. */
+  grid-column: 1 / -2;
   width: 100%;
   height: 18px;
   padding: 0;
   border: 1px solid var(--border-subtle);
   border-radius: 2px;
-  background: var(--bg-input, #fff);
   cursor: pointer;
 }
 

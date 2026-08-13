@@ -15,6 +15,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getAllDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
+import { getBuiltinPresets } from '@/registry/builtinPresets';
+import { isNodeHiddenFromEditor, isTextureHiddenFromEditor } from '@/registry/editorVisibility';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { splitAliases, joinAliases } from '@/registry/descriptionSplice';
@@ -75,6 +77,13 @@ interface Edits {
   aliases: string;
   ref: string;
   url: string;
+  /**
+   * Checked = the editor offers this node/texture as something to add. Unchecked
+   * hides it from the content browser, the Add-node menu, search and recents —
+   * the "this one isn't finished yet" switch. It never removes the definition,
+   * so graphs that already contain it keep working (registry/editorVisibility.ts).
+   */
+  enabled: boolean;
 }
 
 const rowId = (r: { kind: Kind; key: string }) => `${r.kind}:${r.key}`;
@@ -147,7 +156,36 @@ function seedEdits(rows: Row[]): Record<string, Edits> {
       aliases: r.aliases,
       ref: cit?.ref ?? '',
       url: cit?.url ?? '',
+      enabled: r.kind === 'node' ? !isNodeHiddenFromEditor(r.key) : !isTextureHiddenFromEditor(r.key),
     };
+  }
+  return out;
+}
+
+/**
+ * How many built-in textures + presets contain each node type.
+ *
+ * Hiding a node does NOT remove it from the ready-made assets that were authored
+ * with it — dropping such a preset still places the hidden node on the canvas —
+ * so the row says so instead of letting the checkbox imply a completeness it
+ * can't deliver. (Removing it from the assets too would silently rewrite shipped
+ * artwork; that is an authoring decision, not a side effect of a checkbox.)
+ *
+ * Both getters are lazily-parsed-then-cached. `buildRows` already pays the
+ * texture parse; the presets parse (~40 ms of Babel + dagre) is added here at
+ * page load rather than on first toggle, so the warning is never a beat late on
+ * a localhost tool where 40 ms is invisible.
+ */
+function buildBuiltinUsage(): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const asset of [...getBuiltinTextures(), ...getBuiltinPresets()]) {
+    // Per ASSET, not per node: a preset using three Multiplies counts once.
+    const types = new Set<string>();
+    for (const n of asset.nodes) {
+      const t = (n.data as { registryType?: unknown } | undefined)?.registryType;
+      if (typeof t === 'string') types.add(t);
+    }
+    for (const t of types) out.set(t, (out.get(t) ?? 0) + 1);
   }
   return out;
 }
@@ -196,6 +234,12 @@ function AutoTextarea({
 
 type SortKey = 'name' | 'category';
 
+const ENABLE_TITLE =
+  'Offer this in the editor. Unchecking hides it from the content browser, the Add-node menu, ' +
+  'search and the recents list — use it to keep an unfinished node out of the shipped palette. ' +
+  'The definition itself stays registered, so existing graphs, saved files and code→graph parsing ' +
+  'are unaffected, and the Node Designer can still open it.';
+
 // ─── Page ───────────────────────────────────────────────────────────────────
 
 export function GraphsPage() {
@@ -203,8 +247,12 @@ export function GraphsPage() {
   const baseline = useMemo(() => seedEdits(rows), [rows]);
   const [edits, setEdits] = useState<Record<string, Edits>>(() => seedEdits(rows));
 
+  const builtinUsage = useMemo(buildBuiltinUsage, []);
+
   const [query, setQuery] = useState('');
   const [activeCats, setActiveCats] = useState<Set<NodeCategory>>(new Set());
+  /** Narrow the table to the rows currently switched off in the editor. */
+  const [hiddenOnly, setHiddenOnly] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('category');
   const [sortAsc, setSortAsc] = useState(true);
   const [modal, setModal] = useState<Row | null>(null);
@@ -241,7 +289,13 @@ export function GraphsPage() {
       const a = baseline[id];
       const b = edits[id];
       if (!a || !b) continue;
-      if (a.description !== b.description || a.aliases !== b.aliases || a.ref !== b.ref || a.url !== b.url) {
+      if (
+        a.description !== b.description ||
+        a.aliases !== b.aliases ||
+        a.ref !== b.ref ||
+        a.url !== b.url ||
+        a.enabled !== b.enabled
+      ) {
         out.add(id);
       }
     }
@@ -259,17 +313,23 @@ export function GraphsPage() {
   }, [dirtyIds]);
 
   const patch = useCallback(
-    (id: string, field: keyof Edits, value: string) => {
+    (id: string, field: 'description' | 'aliases' | 'ref' | 'url', value: string) => {
       setEdits((prev) => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
     },
     []
   );
+
+  /** Separate from `patch` so the string fields keep their string-only typing. */
+  const patchEnabled = useCallback((id: string, value: boolean) => {
+    setEdits((prev) => ({ ...prev, [id]: { ...prev[id], enabled: value } }));
+  }, []);
 
   // ── Filter + sort ─────────────────────────────────────────────────────────
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     let out = rows.filter((r) => {
       if (activeCats.size > 0 && !activeCats.has(r.category)) return false;
+      if (hiddenOnly && edits[rowId(r)].enabled) return false;
       if (!q) return true;
       const e = edits[rowId(r)];
       return (
@@ -286,7 +346,7 @@ export function GraphsPage() {
       return cat !== 0 ? dir * cat : a.name.localeCompare(b.name);
     });
     return out;
-  }, [rows, query, activeCats, sortKey, sortAsc, edits]);
+  }, [rows, query, activeCats, hiddenOnly, sortKey, sortAsc, edits]);
 
   const toggleCat = (cat: NodeCategory) => {
     setActiveCats((prev) => {
@@ -344,15 +404,33 @@ export function GraphsPage() {
       target[r.key] = e.url.trim() ? { ref, url: e.url.trim() } : { ref };
     }
 
+    // Visibility: the endpoint rewrites the whole file, so send the COMPLETE
+    // hidden lists. Unlike citations these are built from the rows ALONE, never
+    // seeded from the current file: the rows are exactly the key space the
+    // endpoint accepts (all 74 registry defs + all 8 textures), so seeding could
+    // only carry a key left behind by a since-renamed node — which the endpoint
+    // would reject as unknown, blocking every later save. Rebuilding drops it.
+    const hiddenNodes: string[] = [];
+    const hiddenTextures: string[] = [];
+    for (const r of rows) {
+      if (edits[rowId(r)].enabled) continue;
+      (r.kind === 'node' ? hiddenNodes : hiddenTextures).push(r.key);
+    }
+
     const descCount = Object.keys(registry).length + Object.keys(textures).length;
     const citDirty = [...dirtyIds].some((id) => {
       const a = baseline[id];
       const b = edits[id];
       return a.ref !== b.ref || a.url !== b.url;
     });
+    const visDirty = [...dirtyIds].some((id) => baseline[id].enabled !== edits[id].enabled);
 
+    // Declared OUTSIDE the try: the three writes are sequential and independent,
+    // so a failure on the second leaves the first already on disk. Reporting a
+    // bare "Save failed" there would tell the user nothing was written when
+    // something was — and the next thing they do is retry or edit further.
+    const done: string[] = [];
     try {
-      const done: string[] = [];
       if (descCount > 0) {
         const res = await fetch('/__nd/descriptions', {
           method: 'POST',
@@ -375,16 +453,33 @@ export function GraphsPage() {
           `citations.json rewritten (${Object.keys(citNodes).length} node, ${Object.keys(citTextures).length} texture)`
         );
       }
+      if (visDirty) {
+        const res = await fetch('/__nd/visibility', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodes: hiddenNodes, textures: hiddenTextures }),
+        });
+        if (!res.ok) throw new Error(`visibility → ${res.status} ${await res.text()}`);
+        done.push(
+          `editorVisibility.json rewritten (${hiddenNodes.length} node, ${hiddenTextures.length} texture hidden)`
+        );
+      }
       setSaveMsg(done.length ? `Saved: ${done.join(' · ')}. HMR will reload the app's tooltips.` : 'Nothing to write.');
       // Baseline is a useMemo over `rows` and can't be reassigned; a reload picks
       // up the on-disk truth. Tell the user the write landed instead of faking
       // a clean state we can't verify.
     } catch (err) {
-      setSaveMsg(`Save failed — ${(err as Error).message}`);
+      const landed = done.length ? ` (already written: ${done.join(' · ')})` : '';
+      setSaveMsg(`Save failed — ${(err as Error).message}${landed}`);
     } finally {
       setSaving(false);
     }
   }, [devAvailable, dirtyIds, saving, rows, edits, baseline]);
+
+  const hiddenCount = useMemo(
+    () => rows.reduce((n, r) => (edits[rowId(r)].enabled ? n : n + 1), 0),
+    [rows, edits]
+  );
 
   const catsInUse = useMemo(() => {
     const present = new Set(rows.map((r) => r.category));
@@ -429,9 +524,10 @@ export function GraphsPage() {
         <div className="gp__devnote">
           ⚠ <b>Local tool</b> — run <code>npm run dev</code> and open{' '}
           <code>http://localhost:5173/FastShaders/node-editor.html</code>. Saving writes{' '}
-          <code>nodeRegistry.ts</code>, <code>builtinTextures.ts</code> and <code>citations.json</code> through the dev
-          server and <b>works locally only</b> (the <code>/__nd</code> endpoint exists in dev only). This copy is
-          read-only.
+          <code>nodeRegistry.ts</code>, <code>builtinTextures.ts</code>, <code>citations.json</code> and{' '}
+          <code>editorVisibility.json</code> through the dev server and <b>works locally only</b> (the{' '}
+          <code>/__nd</code> endpoint exists in dev only). This copy is read-only — the <b>In editor</b> checkboxes
+          still show what the current build hides, they just can&rsquo;t be changed here.
         </div>
       )}
 
@@ -455,6 +551,13 @@ export function GraphsPage() {
             clear
           </button>
         )}
+        <button
+          className={`gp__catbtn gp__hiddenbtn${hiddenOnly ? ' is-on' : ''}`}
+          onClick={() => setHiddenOnly((v) => !v)}
+          title="Show only the rows switched off in the editor"
+        >
+          {hiddenCount} hidden
+        </button>
         <span className="gp__count">
           {visible.length} / {rows.length}
         </span>
@@ -464,6 +567,12 @@ export function GraphsPage() {
         <table className="gp__table">
           <thead>
             <tr>
+              {/* The column is narrow, so the hint is a fragment and the whole
+                  rule lives on hover — of the header AND of every checkbox. */}
+              <th className="gp__c-on" title={ENABLE_TITLE}>
+                In editor
+                <span className="gp__hint">unchecked hides the tile</span>
+              </th>
               <th className="gp__c-kind">Kind</th>
               <th className="gp__c-name gp__sortable" onClick={() => toggleSort('name')}>
                 Name {sortKey === 'name' ? (sortAsc ? '▲' : '▼') : ''}
@@ -493,8 +602,44 @@ export function GraphsPage() {
               const e = edits[id];
               const dirty = dirtyIds.has(id);
               const childCount = r.nodes.filter((n) => n.type !== 'group').length;
+              const usage = r.kind === 'node' ? (builtinUsage.get(r.key) ?? 0) : 0;
+              // Output has no tile and no menu row of its own to remove — the
+              // palette already excludes it and the Add-node menu reaches it
+              // through a hardcoded row — so a checkbox here would look like a
+              // control and do nothing. Locked, with the reason on hover.
+              const locked = r.kind === 'node' && r.key === 'output';
               return (
-                <tr key={id} className={dirty ? 'is-dirty' : undefined}>
+                <tr key={id} className={`${dirty ? 'is-dirty' : ''}${e.enabled ? '' : ' is-off'}`.trim() || undefined}>
+                  <td className="gp__c-on">
+                    <label
+                      className={`gp__onlabel${locked ? ' is-locked' : ''}`}
+                      title={
+                        locked
+                          ? 'Always available — every shader needs an Output node, and it is added from its own row in the Add-node menu rather than from the palette, so there is nothing here to hide.'
+                          : ENABLE_TITLE
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        className="gp__onbox"
+                        checked={e.enabled}
+                        disabled={locked}
+                        onChange={(ev) => patchEnabled(id, ev.target.checked)}
+                      />
+                      <span className="gp__onword">{locked ? 'always' : e.enabled ? 'shown' : 'hidden'}</span>
+                    </label>
+                    {/* Hiding a node doesn't rewrite the ready-made assets that
+                        were authored with it — say so rather than letting the
+                        checkbox imply it did. */}
+                    {!e.enabled && usage > 0 && (
+                      <span
+                        className="gp__onwarn"
+                        title={`Dropping one of those assets still places this node on the canvas — hiding only removes its own tile. Rework or hide the ${usage === 1 ? 'asset' : 'assets'} too if it must be unreachable.`}
+                      >
+                        ⚠ in {usage} built-in{usage === 1 ? '' : 's'}
+                      </span>
+                    )}
+                  </td>
                   <td className="gp__c-kind">
                     <span className={`gp__kind gp__kind--${r.kind}`}>{r.kind}</span>
                   </td>
@@ -510,9 +655,26 @@ export function GraphsPage() {
                         accent frame say which BEFORE the click, and the title
                         says why. Designable → the embedded Node Designer;
                         everything else → the read-only graph viewer. */}
-                    <button
+                    {/* A div, not a <button>: NodePreviewCard → NodeVisual renders
+                        real DragNumberInputs, whose step arrows are <button>s —
+                        <button> inside <button> is invalid HTML and React warns
+                        (validateDOMNesting). role+tabIndex+keydown keeps the row
+                        keyboard-activatable; .gp__preview already drops pointer
+                        events on the widgets (GraphsPage.css). Same shape as
+                        tileActivationProps in NodeEditor/tileDrag.ts, which is
+                        already how every content-browser tile stays clickable
+                        while containing real DragNumberInputs. */}
+                    <div
+                      role="button"
+                      tabIndex={0}
                       className={`gp__graphbtn${r.designable ? ' is-designable' : ''}`}
                       onClick={() => (r.designable ? setDesignerRow(r) : setModal(r))}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        e.preventDefault();
+                        if (r.designable) setDesignerRow(r);
+                        else setModal(r);
+                      }}
                       title={
                         r.designable
                           ? `Design the glyph for “${r.name}” — opens the Node Designer here`
@@ -521,7 +683,13 @@ export function GraphsPage() {
                             : `View graph — “${r.name}” has no glyph to design (live-canvas node, drawn by its own component)`
                       }
                     >
-                      <span className="gp__preview">
+                      {/* `inert` also removes the replica's DragNumberInput
+                          arrows / range / color inputs from the TAB ORDER —
+                          pointer-events:none (GraphsPage.css) never did, so a
+                          role="button" row otherwise contains focusable
+                          spinbuttons. Cast because @types/react 18.3.28 has no
+                          `inert` prop. */}
+                      <span className="gp__preview" {...({ inert: '' } as Record<string, string>)}>
                         {r.def ? (
                           <NodePreviewCard def={r.def} onDragStart={noopDragStart} />
                         ) : r.texture ? (
@@ -539,7 +707,7 @@ export function GraphsPage() {
                           </>
                         )}
                       </span>
-                    </button>
+                    </div>
                   </td>
                   <td className="gp__c-desc">
                     <AutoTextarea

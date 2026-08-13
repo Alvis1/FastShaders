@@ -4,6 +4,7 @@ import { useDismiss } from '@/hooks/useDismiss';
 import { useLongPress } from '@/hooks/useLongPress';
 import { downloadShader } from '@/engine/exportShader';
 import { FeedbackModal } from '@/components/Modals/FeedbackModal';
+import { PalettesModal } from '@/components/Modals/PalettesModal';
 import { WorkFolder } from './WorkFolder';
 import { t } from '@/i18n';
 import './Toolbar.css';
@@ -20,10 +21,9 @@ const CONTACT = {
  * download/` URLs are permanent GitHub redirects to the newest release, so
  * the app always offers the current build with no per-release code change —
  * but that only works because the release workflow uploads the assets under
- * these FIXED names (see .github/workflows/release.yml); keep the two lists
- * in sync — public/podest.html's "Get FastShaders" section hardcodes the
- * same three names. Plain anchors: GitHub serves release assets with
- * Content-Disposition: attachment, and CSP doesn't gate navigation.
+ * these FIXED names (see .github/workflows/release.yml); keep this list in
+ * sync with the workflow's upload names. Plain anchors: GitHub serves release
+ * assets with Content-Disposition: attachment, and CSP doesn't gate navigation.
  */
 const RELEASE_DOWNLOAD_BASE = 'https://github.com/Alvis1/FastShaders/releases/latest/download';
 const DESKTOP_DOWNLOADS = [
@@ -84,6 +84,12 @@ export function Toolbar() {
   // UI opened from exactly one place, and the modal portals itself to
   // document.body so nothing here constrains where it paints.
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+
+  // Palette manager — same precedent as the feedback composer above, and for
+  // the same two reasons. The store-queue pattern (CsvImportModal,
+  // LimitModal) exists because those dialogs are raised by non-UI code and can
+  // stack; this one has a single button and no queue.
+  const [palettesOpen, setPalettesOpen] = useState(false);
 
   // VR bench popover (desktop builds only — the button is behind
   // __FS_DESKTOP__, so this state is inert on the web).
@@ -158,6 +164,7 @@ export function Toolbar() {
 
   // Stable identity: the modal binds its Escape listener against this.
   const closeFeedback = useCallback(() => setFeedbackOpen(false), []);
+  const closePalettes = useCallback(() => setPalettesOpen(false), []);
 
   const handleCopy = useCallback(async (key: string, value: string) => {
     try {
@@ -361,6 +368,26 @@ export function Toolbar() {
             {t('Work folder', language)}
           </button>
         )}
+        {/* Palettes sit in the CENTRE cluster, beside the name and Export,
+            because a palette is part of the shader — it saves with it, rides
+            the project block and travels inside the exported file. The right
+            cluster is app chrome (reload, theme, language, downloads), which
+            is a different kind of thing.
+
+            The dialog exists at all because the colour-picker popover cannot
+            host management: it only renders on an Output channel that is both
+            exposed and unwired, so on a finished shader it is frequently not
+            on screen. */}
+        <button
+          type="button"
+          className="toolbar__sc-link"
+          onClick={() => setPalettesOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={palettesOpen}
+          title={t('Colour palettes for this shader — duplicate a built-in one, save the colours you are using, import or export them', language)}
+        >
+          {t('Palettes', language)}
+        </button>
       </div>
       <div className="toolbar__right">
         {/* Hard reload of the tab. Safe to offer without a confirm: the graph
@@ -594,6 +621,7 @@ export function Toolbar() {
         </button>
       </div>
       <FeedbackModal open={feedbackOpen} onClose={closeFeedback} />
+      <PalettesModal open={palettesOpen} onClose={closePalettes} />
     </div>
   );
 }

@@ -1,0 +1,771 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`built-in textures and presets emit byte-identical code > presets 1`] = `
+{
+  "checker": "import { Fn, add, color, floor, mix, mod, mul, uniform, uv, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const count = uniform(8);
+  const checkColorA = uniform(color(0xfafafa));
+  const checkColorB = uniform(color(0x212121));
+  const uv1 = uv();
+  const mul1 = mul(uv1.x, count);
+  const mul2 = mul(uv1.y, count);
+  const floor1 = floor(mul1);
+  const floor2 = floor(mul2);
+  const add1 = add(floor1, floor2);
+  const mod1 = mod(add1, 2);
+  const mix1 = mix(checkColorA, checkColorB, mod1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "color-ramp": "import { Fn, add, clamp, color, cos, mul, uniform, uv, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const baseColor = uniform(color(0x7f7f7f));
+  const ampColor = uniform(color(0x7f7f7f));
+  const uv1 = uv();
+  const vec31 = vec3(0, 0.33, 0.67);
+  const add1 = add(vec31, uv1.x);
+  const mul1 = mul(add1, 6.2832);
+  const cos1 = cos(mul1);
+  const mul2 = mul(ampColor, cos1);
+  const add2 = add(baseColor, mul2);
+  const clamp1 = clamp(add2, 0, 1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "dissolve": "import { Fn, add, color, mul, mx_noise_float, oneMinus, positionGeometry, smoothstep, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const dissolveAmount = uniform(0.45);
+  const edgeWidth = uniform(0.08);
+  const dissolveScale = uniform(4);
+  const edgeColor = uniform(color(0xff6d00));
+  const bodyColor = uniform(color(0x37474f));
+  const positionGeometry1 = positionGeometry;
+  const add1 = add(dissolveAmount, edgeWidth);
+  const mul1 = mul(positionGeometry1, dissolveScale);
+  const noise1 = mx_noise_float(mul1);
+  const mul2 = mul(noise1, 0.5);
+  const add2 = add(mul2, 0.5);
+  const smoothstep1 = smoothstep(dissolveAmount, add1, add2);
+  const oneMinus1 = oneMinus(smoothstep1);
+  const mul3 = mul(bodyColor, smoothstep1);
+  const mul4 = mul(smoothstep1, oneMinus1);
+  const mul5 = mul(mul4, 4);
+  const mul6 = mul(edgeColor, mul5);
+  const add3 = add(mul3, mul6);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "edge-glow": "import { Fn, add, cameraPosition, clamp, color, dot, mul, normalWorld, normalize, oneMinus, positionWorld, pow, sub, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const glowPower = uniform(3);
+  const intensity = uniform(2);
+  const glowColor = uniform(color(0x00e5ff));
+  const coreColor = uniform(color(0x0d1b2a));
+  const cameraPosition1 = cameraPosition;
+  const positionWorld1 = positionWorld;
+  const normalWorld1 = normalWorld;
+  const sub1 = sub(cameraPosition1, positionWorld1);
+  const normalize1 = normalize(sub1);
+  const dot1 = dot(normalWorld1, normalize1);
+  const clamp1 = clamp(dot1, 0, 1);
+  const oneMinus1 = oneMinus(clamp1);
+  const pow1 = pow(oneMinus1, glowPower);
+  const mul1 = mul(pow1, intensity);
+  const mul2 = mul(glowColor, mul1);
+  const add1 = add(coreColor, mul2);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "force-field": "import { Fn, abs, add, cameraPosition, clamp, color, dot, min, mul, normalWorld, normalize, oneMinus, positionWorld, pow, remap, round, sin, smoothstep, sub, time, uniform, uv, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const fieldColor = uniform(color(0x7c4dff));
+  const tiling = uniform(12);
+  const fieldPulse = uniform(3);
+  const positionWorld1 = positionWorld;
+  const normalWorld1 = normalWorld;
+  const cameraPosition1 = cameraPosition;
+  const uv1 = uv();
+  const time1 = time;
+  const sub1 = sub(cameraPosition1, positionWorld1);
+  const mul1 = mul(time1, fieldPulse);
+  const normalize1 = normalize(sub1);
+  const mul2 = mul(uv1.x, tiling);
+  const mul3 = mul(uv1.y, tiling);
+  const sin1 = sin(mul1);
+  const dot1 = dot(normalWorld1, normalize1);
+  const round1 = round(mul2);
+  const round2 = round(mul3);
+  const remap1 = remap(sin1, -1, 1, 0.5, 1);
+  const clamp1 = clamp(dot1, 0, 1);
+  const sub2 = sub(mul2, round1);
+  const sub3 = sub(mul3, round2);
+  const oneMinus1 = oneMinus(clamp1);
+  const abs1 = abs(sub2);
+  const abs2 = abs(sub3);
+  const pow1 = pow(oneMinus1, 2);
+  const min1 = min(abs1, abs2);
+  const smoothstep1 = smoothstep(0.03, 0.08, min1);
+  const oneMinus2 = oneMinus(smoothstep1);
+  const mul4 = mul(oneMinus2, 0.5);
+  const add1 = add(pow1, mul4);
+  const mul5 = mul(add1, remap1);
+  const mul6 = mul(fieldColor, mul5);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "gradient": "import { Fn, color, mix, uniform, uv, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const bottomColor = uniform(color(0x1a237e));
+  const topColor = uniform(color(0xff8a65));
+  const uv1 = uv();
+  const mix1 = mix(bottomColor, topColor, uv1.y);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "hologram": "import { Fn, add, cameraPosition, clamp, color, dot, mul, normalWorld, normalize, oneMinus, positionGeometry, positionWorld, pow, sin, sub, time, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const holoColor = uniform(color(0x18ffff));
+  const scanDensity = uniform(40);
+  const scanSpeed = uniform(5);
+  const rimPower = uniform(2);
+  const positionGeometry1 = positionGeometry;
+  const time1 = time;
+  const normalWorld1 = normalWorld;
+  const cameraPosition1 = cameraPosition;
+  const positionWorld1 = positionWorld;
+  const mul1 = mul(time1, scanSpeed);
+  const sub1 = sub(cameraPosition1, positionWorld1);
+  const mul2 = mul(positionGeometry1.y, scanDensity);
+  const normalize1 = normalize(sub1);
+  const add1 = add(mul2, mul1);
+  const dot1 = dot(normalWorld1, normalize1);
+  const sin1 = sin(add1);
+  const clamp1 = clamp(dot1, 0, 1);
+  const mul3 = mul(sin1, 0.5);
+  const oneMinus1 = oneMinus(clamp1);
+  const add2 = add(mul3, 0.5);
+  const pow1 = pow(oneMinus1, rimPower);
+  const mul4 = mul(add2, 0.4);
+  const add3 = add(pow1, mul4);
+  const add4 = add(add3, 0.15);
+  const mul5 = mul(holoColor, add4);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "noise-mask": "import { Fn, add, color, mix, mul, mx_noise_float, positionGeometry, smoothstep, sub, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const maskScale = uniform(3);
+  const threshold = uniform(0.5);
+  const maskSoftness = uniform(0.2);
+  const maskColorA = uniform(color(0x1b5e20));
+  const maskColorB = uniform(color(0xfff9c4));
+  const positionGeometry1 = positionGeometry;
+  const sub1 = sub(threshold, maskSoftness);
+  const add1 = add(threshold, maskSoftness);
+  const mul1 = mul(positionGeometry1, maskScale);
+  const noise1 = mx_noise_float(mul1);
+  const mul2 = mul(noise1, 0.5);
+  const add2 = add(mul2, 0.5);
+  const smoothstep1 = smoothstep(sub1, add1, add2);
+  const mix1 = mix(maskColorA, maskColorB, smoothstep1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "pulse": "import { Fn, add, color, mix, mul, sin, time, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const pulseSpeed = uniform(2);
+  const restColor = uniform(color(0x311b92));
+  const pulseColor = uniform(color(0xffea00));
+  const time1 = time;
+  const mul1 = mul(time1, pulseSpeed);
+  const sin1 = sin(mul1);
+  const mul2 = mul(sin1, 0.5);
+  const add1 = add(mul2, 0.5);
+  const mix1 = mix(restColor, pulseColor, add1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "stripes": "import { Fn, color, cos, max, mix, mul, sin, smoothstep, sub, uniform, uv, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const frequency = uniform(20);
+  const angle = uniform(30);
+  const stripeSoftness = uniform(0.4);
+  const stripeColorA = uniform(color(0x263238));
+  const stripeColorB = uniform(color(0xeceff1));
+  const uv1 = uv();
+  const mul1 = mul(angle, 0.01745329);
+  const max1 = max(stripeSoftness, 0.001);
+  const cos1 = cos(mul1);
+  const sin1 = sin(mul1);
+  const mul2 = mul(max1, -1);
+  const mul3 = mul(uv1.x, cos1);
+  const mul4 = mul(uv1.y, sin1);
+  const sub1 = sub(mul3, mul4);
+  const mul5 = mul(sub1, frequency);
+  const sin2 = sin(mul5);
+  const smoothstep1 = smoothstep(mul2, max1, sin2);
+  const mix1 = mix(stripeColorA, stripeColorB, smoothstep1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "stylized-water": "import { Fn, add, cameraPosition, color, dot, max, min, mix, mul, normalWorld, normalize, positionGeometry, positionWorld, sin, sub, time, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const flowSpeed = uniform(0.35);
+  const waterScale = uniform(4);
+  const deepColor = uniform(color(0x01579b));
+  const shallowColor = uniform(color(0x4dd0e1));
+  const causticStrength = uniform(0.9);
+  const positionGeometry1 = positionGeometry;
+  const time1 = time;
+  const vec31 = vec3(1.7, 0.47, 0.75);
+  const vec32 = vec3(2.41, 3.29, 2.87);
+  const cameraPosition1 = cameraPosition;
+  const positionWorld1 = positionWorld;
+  const normalWorld1 = normalWorld;
+  const vec33 = vec3(0.75, 0.95, 1);
+  const mul1 = mul(positionGeometry1, waterScale);
+  const mul2 = mul(time1, flowSpeed);
+  const sub1 = sub(cameraPosition1, positionWorld1);
+  const sin1 = sin(mul1);
+  const mul3 = mul(vec31, mul2);
+  const normalize1 = normalize(sub1);
+  const dot1 = dot(normalWorld1, normalize1);
+  const vec34 = vec3(sin1.y, sin1.z, sin1.x);
+  const max1 = max(dot1, 0);
+  const add1 = add(mul1, mul3, vec34);
+  const mul4 = mul(max1, 0.55);
+  const mul5 = mul(add1, vec32);
+  const mix1 = mix(deepColor, shallowColor, mul4);
+  const sin2 = sin(mul5);
+  const max2 = max(sin2.x, sin2.y);
+  const min1 = min(sin2.x, sin2.y);
+  const max3 = max(max2, sin2.z);
+  const min2 = min(max2, sin2.z);
+  const max4 = max(min1, min2);
+  const sub2 = sub(max3, max4);
+  const mul6 = mul(sub2, -4.4);
+  const add2 = add(mul6, 1.5);
+  const max5 = max(add2, 0);
+  const mul7 = mul(max5, max5);
+  const mul8 = mul(mul7, causticStrength);
+  const mul9 = mul(vec33, mul8);
+  const add3 = add(mix1, mul9);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "toon-ramp": "import { Fn, clamp, color, div, dot, floor, max, mix, mul, normalLocal, normalize, remap, sub, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const toonSteps = uniform(3);
+  const shadowColor = uniform(color(0x4a148c));
+  const litColor = uniform(color(0xffe082));
+  const normalLocal1 = normalLocal;
+  const vec31 = vec3(0.5, 0.8, 0.4);
+  const sub1 = sub(toonSteps, 1);
+  const normalize1 = normalize(normalLocal1);
+  const normalize2 = normalize(vec31);
+  const max1 = max(sub1, 1);
+  const dot1 = dot(normalize1, normalize2);
+  const remap1 = remap(dot1, -1, 1, 0, 1);
+  const mul1 = mul(remap1, toonSteps);
+  const floor1 = floor(mul1);
+  const div1 = div(floor1, max1);
+  const clamp1 = clamp(div1, 0, 1);
+  const mix1 = mix(shadowColor, litColor, clamp1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "top-cover": "import { Fn, add, color, mix, normalWorld, oneMinus, smoothstep, sub, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const coverage = uniform(0.6);
+  const coverSoftness = uniform(0.2);
+  const groundColor = uniform(color(0x5d4037));
+  const coverColor = uniform(color(0xfafafa));
+  const normalWorld1 = normalWorld;
+  const oneMinus1 = oneMinus(coverage);
+  const sub1 = sub(oneMinus1, coverSoftness);
+  const add1 = add(oneMinus1, coverSoftness);
+  const smoothstep1 = smoothstep(sub1, add1, normalWorld1.y);
+  const mix1 = mix(groundColor, coverColor, smoothstep1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "uv-scroll": "import { Fn, add, color, fract, mix, mul, time, uniform, uv, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const scrollSpeed = uniform(0.3);
+  const scrollColorA = uniform(color(0x004d40));
+  const scrollColorB = uniform(color(0xa7ffeb));
+  const uv1 = uv();
+  const time1 = time;
+  const mul1 = mul(time1, scrollSpeed);
+  const add1 = add(uv1.x, mul1);
+  const fract1 = fract(add1);
+  const mix1 = mix(scrollColorA, scrollColorB, fract1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "vertex-wave": "import { Fn, mul, positionGeometry, sin, sub, time, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const waveFrequency = uniform(8);
+  const waveSpeed = uniform(2);
+  const waveAmplitude = uniform(0.08);
+  const positionGeometry1 = positionGeometry;
+  const time1 = time;
+  const mul1 = mul(time1, waveSpeed);
+  const mul2 = mul(positionGeometry1.y, waveFrequency);
+  const sub1 = sub(mul2, mul1);
+  const sin1 = sin(sub1);
+  const mul3 = mul(sin1, waveAmplitude);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+}
+`;
+
+exports[`built-in textures and presets emit byte-identical code > textures 1`] = `
+{
+  "crumpled-fabric": "import { Fn, abs, add, clamp, color, div, exp, mul, mx_noise_float, oneMinus, positionGeometry, pow, sub, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const scale = uniform(2);
+  const pinch = uniform(0.5);
+  const color1 = color(0xb0f0ff);
+  const color2 = color(0x4040f0);
+  const color3 = color(0x003000);
+  const positionGeometry1 = positionGeometry;
+  const sub1 = sub(scale, 0.5);
+  const exp1 = exp(sub1);
+  const mul1 = mul(positionGeometry1, exp1);
+  const noise1 = mx_noise_float(mul1);
+  const vec31 = vec3(mul1.y, mul1.z, mul1.x);
+  const vec32 = vec3(mul1.z, mul1.x, mul1.y);
+  const noise2 = mx_noise_float(vec31);
+  const noise3 = mx_noise_float(vec32);
+  const vec33 = vec3(noise1, noise2, noise3);
+  const mul2 = mul(vec33, pinch);
+  const add1 = add(mul1, mul2);
+  const noise4 = mx_noise_float(add1);
+  const vec34 = vec3(add1.y, add1.z, add1.x);
+  const vec35 = vec3(add1.z, add1.x, add1.y);
+  const noise5 = mx_noise_float(vec34);
+  const noise6 = mx_noise_float(vec35);
+  const vec36 = vec3(noise4, noise5, noise6);
+  const mul3 = mul(vec36, pinch);
+  const add2 = add(add1, mul3);
+  const noise7 = mx_noise_float(add2);
+  const vec37 = vec3(add2.y, add2.z, add2.x);
+  const vec38 = vec3(add2.z, add2.x, add2.y);
+  const noise8 = mx_noise_float(vec37);
+  const noise9 = mx_noise_float(vec38);
+  const vec39 = vec3(noise7, noise8, noise9);
+  const mul4 = mul(vec39, pinch);
+  const add3 = add(add2, mul4);
+  const noise10 = mx_noise_float(add3);
+  const vec310 = vec3(add3.y, add3.z, add3.x);
+  const vec311 = vec3(add3.z, add3.x, add3.y);
+  const noise11 = mx_noise_float(vec310);
+  const noise12 = mx_noise_float(vec311);
+  const vec312 = vec3(noise10, noise11, noise12);
+  const mul5 = mul(vec312, pinch);
+  const add4 = add(add3, mul5);
+  const noise13 = mx_noise_float(add4);
+  const add5 = add(noise13, 1);
+  const div1 = div(add5, 2);
+  const clamp1 = clamp(div1, 0, 1);
+  const mul6 = mul(clamp1, 2);
+  const pow1 = pow(clamp1, 2);
+  const oneMinus1 = oneMinus(clamp1);
+  const sub2 = sub(mul6, 1);
+  const mul7 = mul(color2, pow1);
+  const pow2 = pow(oneMinus1, 2);
+  const abs1 = abs(sub2);
+  const mul8 = mul(color3, pow2);
+  const oneMinus2 = oneMinus(abs1);
+  const mul9 = mul(color1, oneMinus2);
+  const add6 = add(mul9, mul7);
+  const add7 = add(add6, mul8);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "gas-giant": "import { Fn, abs, add, color, div, exp, mix, mul, mx_noise_float, oneMinus, positionGeometry, pow, smoothstep, sub, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const scale = uniform(2);
+  const turbulence = uniform(0.3);
+  const blur = uniform(0.6);
+  const positionGeometry1 = positionGeometry;
+  const color1 = color(0xfff8f0);
+  const color2 = color(0xf0e8b0);
+  const color3 = color(0xafa0d0);
+  const div1 = div(scale, 2);
+  const pow1 = pow(blur, 0.2);
+  const add1 = add(div1, 1);
+  const oneMinus1 = oneMinus(pow1);
+  const mul1 = mul(positionGeometry1.y, 0.5);
+  const vec31 = vec3(0, positionGeometry1.y, 0);
+  const mul2 = mul(positionGeometry1.y, 2);
+  const mul3 = mul(positionGeometry1.y, 0.75);
+  const exp1 = exp(add1);
+  const vec32 = vec3(0, mul1, 0);
+  const noise1 = mx_noise_float(vec31);
+  const vec33 = vec3(1, mul2, 1);
+  const vec34 = vec3(0, mul3, 0);
+  const mul4 = mul(positionGeometry1, exp1);
+  const noise2 = mx_noise_float(vec32);
+  const mul5 = mul(noise1, 0.5);
+  const noise3 = mx_noise_float(vec33);
+  const noise4 = mx_noise_float(vec34);
+  const noise5 = mx_noise_float(mul4);
+  const add2 = add(mul4, 100);
+  const add3 = add(mul4, 200);
+  const add4 = add(noise2, mul5);
+  const mul6 = mul(noise3, 0.25);
+  const add5 = add(noise4, 1);
+  const noise6 = mx_noise_float(add2);
+  const noise7 = mx_noise_float(add3);
+  const add6 = add(add4, mul6);
+  const mix1 = mix(color2, color1, add5);
+  const vec35 = vec3(noise5, noise6, noise7);
+  const mul7 = mul(add6, turbulence);
+  const abs1 = abs(mul7);
+  const mul8 = mul(abs1, 5);
+  const mul9 = mul(vec35, mul8);
+  const mul10 = mul(mul8, 0.3);
+  const add7 = add(mul4, mul9);
+  const mix2 = mix(mix1, color3, mul10);
+  const mul11 = mul(add7, 15);
+  const mul12 = mul(add7.y, add1);
+  const noise8 = mx_noise_float(mul11);
+  const vec36 = vec3(0, mul12, 0);
+  const mul13 = mul(noise8, oneMinus1);
+  const noise9 = mx_noise_float(vec36);
+  const add8 = add(noise9, mul13);
+  const sub1 = sub(add8, 0.5);
+  const smoothstep1 = smoothstep(-1, 1, sub1);
+  const oneMinus2 = oneMinus(smoothstep1);
+  const mul14 = mul(mix2, oneMinus2);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "grid": "import { Fn, abs, add, color, min, mix, mul, positionGeometry, round, smoothstep, sub, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const scale = uniform(1);
+  const count = uniform(8);
+  const thickness = uniform(0.05);
+  const positionGeometry1 = positionGeometry;
+  const color1 = color(0x1a1a1a);
+  const color2 = color(0xf2f2f2);
+  const add1 = add(thickness, 0.01);
+  const mul1 = mul(positionGeometry1, scale);
+  const mul2 = mul(mul1.x, count);
+  const mul3 = mul(mul1.y, count);
+  const mul4 = mul(mul1.z, count);
+  const round1 = round(mul2);
+  const round2 = round(mul3);
+  const round3 = round(mul4);
+  const sub1 = sub(mul2, round1);
+  const sub2 = sub(mul3, round2);
+  const sub3 = sub(mul4, round3);
+  const abs1 = abs(sub1);
+  const abs2 = abs(sub2);
+  const abs3 = abs(sub3);
+  const min1 = min(abs1, abs2);
+  const min2 = min(min1, abs3);
+  const smoothstep1 = smoothstep(thickness, add1, min2);
+  const mix1 = mix(color1, color2, smoothstep1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "marble": "import { Fn, abs, add, color, mix, mul, mx_noise_float, oneMinus, positionGeometry, pow, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const scale = uniform(3);
+  const sharpness = uniform(0.2);
+  const detail = uniform(0.3);
+  const positionGeometry1 = positionGeometry;
+  const color1 = color(0x4545d3);
+  const color2 = color(0xf0f8ff);
+  const mul1 = mul(positionGeometry1, scale);
+  const noise1 = mx_noise_float(mul1);
+  const mul2 = mul(mul1, 2);
+  const mul3 = mul(mul1, 6);
+  const mul4 = mul(mul1, 50);
+  const noise2 = mx_noise_float(mul2);
+  const noise3 = mx_noise_float(mul3);
+  const noise4 = mx_noise_float(mul4);
+  const mul5 = mul(noise2, 0.5);
+  const mul6 = mul(noise3, 0.1);
+  const abs1 = abs(noise4);
+  const add1 = add(noise1, mul5);
+  const pow1 = pow(abs1, 3);
+  const add2 = add(add1, mul6);
+  const mul7 = mul(pow1, detail);
+  const abs2 = abs(add2);
+  const pow2 = pow(abs2, sharpness);
+  const oneMinus1 = oneMinus(pow2);
+  const add3 = add(oneMinus1, mul7);
+  const mix1 = mix(color2, color1, add3);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "polka-dots": "import { Fn, add, color, exp, fract, mix, mul, positionGeometry, smoothstep, sqrt, sub, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const scale = uniform(3);
+  const size = uniform(0.5);
+  const blur = uniform(0.25);
+  const positionGeometry1 = positionGeometry;
+  const color1 = color(0x262680);
+  const color2 = color(0xfff7eb);
+  const mul1 = mul(size, 5);
+  const mul2 = mul(blur, blur);
+  const mul3 = mul(positionGeometry1, scale);
+  const sub1 = sub(mul1, 5);
+  const mul4 = mul(mul2, mul2);
+  const exp1 = exp(sub1);
+  const fract1 = fract(mul3.x);
+  const fract2 = fract(mul3.y);
+  const fract3 = fract(mul3.z);
+  const sub2 = sub(exp1, mul4);
+  const add1 = add(exp1, mul4);
+  const sub3 = sub(fract1, 0.5);
+  const sub4 = sub(fract2, 0.5);
+  const sub5 = sub(fract3, 0.5);
+  const mul5 = mul(sub3, sub3);
+  const mul6 = mul(sub4, sub4);
+  const mul7 = mul(sub5, sub5);
+  const add2 = add(mul5, mul6);
+  const add3 = add(add2, mul7);
+  const sqrt1 = sqrt(add3);
+  const smoothstep1 = smoothstep(sub2, add1, sqrt1);
+  const mix1 = mix(color1, color2, smoothstep1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "static-noise": "import { Fn, add, mul, mx_noise_float, round, screenUV, sin, time, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const scale = uniform(80);
+  const speed = uniform(30);
+  const screenUV1 = screenUV;
+  const time1 = time;
+  const mul1 = mul(time1, speed);
+  const mul2 = mul(screenUV1.x, scale);
+  const mul3 = mul(screenUV1.y, scale);
+  const round1 = round(mul1);
+  const sin1 = sin(round1);
+  const mul4 = mul(sin1, 1000);
+  const vec31 = vec3(mul2, mul3, mul4);
+  const noise1 = mx_noise_float(vec31);
+  const mul5 = mul(noise1, 0.5);
+  const add1 = add(mul5, 0.5);
+  const vec32 = vec3(add1, add1, add1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "tiger-fur": "import { Fn, add, color, div, exp, mix, mul, mx_noise_float, oneMinus, positionGeometry, smoothstep, sub, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const scale = uniform(2);
+  const lengths = uniform(4);
+  const blur = uniform(0.3);
+  const strength = uniform(0.3);
+  const positionGeometry1 = positionGeometry;
+  const color1 = color(0xffab00);
+  const color2 = color(0xffffed);
+  const div1 = div(scale, 2);
+  const add1 = add(lengths, 5);
+  const mul1 = mul(blur, -1);
+  const sub1 = sub(strength, 0.5);
+  const add2 = add(div1, 1);
+  const div2 = div(1, add1);
+  const smoothstep1 = smoothstep(-1, 0.5, positionGeometry1.y);
+  const exp1 = exp(add2);
+  const mix1 = mix(color2, color1, smoothstep1);
+  const mul2 = mul(positionGeometry1.x, exp1);
+  const mul3 = mul(positionGeometry1.y, exp1);
+  const mul4 = mul(positionGeometry1.z, exp1);
+  const mul5 = mul(mul2, add2);
+  const mul6 = mul(mul3, div2);
+  const mul7 = mul(mul4, div2);
+  const vec31 = vec3(mul5, mul6, mul7);
+  const noise1 = mx_noise_float(vec31);
+  const add3 = add(noise1, sub1);
+  const smoothstep2 = smoothstep(mul1, blur, add3);
+  const oneMinus1 = oneMinus(smoothstep2);
+  const mul8 = mul(mix1, oneMinus1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+  "wood": "import { Fn, add, color, cos, div, exp, max, mix, mul, mx_noise_float, positionGeometry, sin, sub, uniform, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const scale = uniform(2.5);
+  const rings = uniform(4.5);
+  const lengths = uniform(1);
+  const angle = uniform(0);
+  const fibers = uniform(0.3);
+  const fibersDensity = uniform(10);
+  const positionGeometry1 = positionGeometry;
+  const color1 = color(0xcc6600);
+  const color2 = color(0x661a00);
+  const sub1 = sub(scale, 3);
+  const sub2 = sub(scale, 2);
+  const max1 = max(lengths, 0.01);
+  const mul1 = mul(angle, 0.01745329);
+  const exp1 = exp(sub1);
+  const exp2 = exp(sub2);
+  const div1 = div(1, max1);
+  const cos1 = cos(mul1);
+  const sin1 = sin(mul1);
+  const mul2 = mul(exp1, 4);
+  const mul3 = mul(exp2, fibersDensity);
+  const mul4 = mul(positionGeometry1.z, exp2);
+  const mul5 = mul(exp2, 1.8);
+  const mul6 = mul(exp2, 3.24);
+  const mul7 = mul(exp2, 5.832);
+  const mul8 = mul(exp1, div1);
+  const mul9 = mul(positionGeometry1.x, cos1);
+  const mul10 = mul(positionGeometry1.y, cos1);
+  const mul11 = mul(positionGeometry1.y, sin1);
+  const mul12 = mul(positionGeometry1.x, sin1);
+  const mul13 = mul(mul3, 1.8);
+  const mul14 = mul(mul3, 3.24);
+  const mul15 = mul(mul3, 5.832);
+  const mul16 = mul(positionGeometry1.z, mul5);
+  const mul17 = mul(positionGeometry1.z, mul6);
+  const mul18 = mul(positionGeometry1.z, mul7);
+  const mul19 = mul(positionGeometry1.z, mul8);
+  const sub3 = sub(mul9, mul11);
+  const add1 = add(mul12, mul10);
+  const mul20 = mul(sub3, mul8);
+  const mul21 = mul(sub3, exp2);
+  const mul22 = mul(sub3, mul5);
+  const mul23 = mul(sub3, mul6);
+  const mul24 = mul(sub3, mul7);
+  const mul25 = mul(add1, mul2);
+  const mul26 = mul(add1, mul3);
+  const mul27 = mul(add1, mul13);
+  const mul28 = mul(add1, mul14);
+  const mul29 = mul(add1, mul15);
+  const vec31 = vec3(mul20, mul25, mul19);
+  const vec32 = vec3(mul21, mul26, mul4);
+  const vec33 = vec3(mul22, mul27, mul16);
+  const vec34 = vec3(mul23, mul28, mul17);
+  const vec35 = vec3(mul24, mul29, mul18);
+  const noise1 = mx_noise_float(vec31);
+  const noise2 = mx_noise_float(vec32);
+  const noise3 = mx_noise_float(vec33);
+  const noise4 = mx_noise_float(vec34);
+  const noise5 = mx_noise_float(vec35);
+  const add2 = add(noise1, 1);
+  const mul30 = mul(2, noise2);
+  const mul31 = mul(1.2, noise3);
+  const mul32 = mul(0.72, noise4);
+  const mul33 = mul(0.432, noise5);
+  const mul34 = mul(add2, 10);
+  const add3 = add(mul30, mul31);
+  const mul35 = mul(mul34, rings);
+  const add4 = add(add3, mul32);
+  const cos2 = cos(mul35);
+  const add5 = add(add4, mul33);
+  const add6 = add(mul35, cos2);
+  const mul36 = mul(add5, 11.49);
+  const cos3 = cos(add6);
+  const sin2 = sin(mul36);
+  const add7 = add(cos3, 1);
+  const add8 = add(sin2, 1);
+  const div2 = div(add7, 2);
+  const div3 = div(add8, 2);
+  const mix1 = mix(div2, div3, fibers);
+  const mix2 = mix(color1, color2, mix1);
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+",
+}
+`;

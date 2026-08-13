@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, type ChangeEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps, type ReactFlowState } from '@xyflow/react';
 import type { ColorFlowNode } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
@@ -6,7 +6,7 @@ import { hexToRgb01 } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import { useLongPress } from '@/hooks/useLongPress';
 import { useFitText } from '@/hooks/useFitText';
-import { useHistoryBracket } from '@/hooks/useHistoryBracket';
+import { ColorPickerPopover } from '@/components/inputs/PaletteColorPicker';
 import './ColorNode.css';
 
 // The output socket rides the circle's perimeter, pointing toward the node(s)
@@ -84,7 +84,6 @@ export const ColorNode = memo(function ColorNode({
 }: NodeProps<ColorFlowNode>) {
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
-  const pickerRef = useRef<HTMLInputElement>(null);
   const nodeRef = useRef<HTMLDivElement>(null);
   const hex = String(data.values?.hex ?? '#ff0000');
   // The named uniform shares this component but stays a rounded RECTANGLE, and
@@ -132,40 +131,41 @@ export const ColorNode = memo(function ColorNode({
     };
   }, [angle, isProperty]);
 
-  // A native picker fires an input event per frame while its swatch is
-  // dragged; each updateNodeData would otherwise pushHistory a full-graph
-  // structuredClone. Bracket the burst so it lands as one undo entry.
-  const { bracket, closeBracket } = useHistoryBracket();
-  const handleChange = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      bracket();
-      updateNodeData(id, { values: { ...data.values, hex: e.target.value } } as Partial<ColorFlowNode['data']>);
+  // THE NODE IS THE SWATCH, so it renders `ColorPickerPopover` (anchor + open +
+  // onClose) rather than `PaletteColorPicker`: a 56px circle whose perimeter
+  // carries the output socket has nowhere to put the 26x12 trigger button, and
+  // one drawn there would collide with the handle. The node element itself is
+  // the anchor and the existing double-click / long-press gestures are the
+  // opener — exactly the arrangement the popover was split out for.
+  //
+  // A colour node always HAS a colour, so no `onClear` — there is no "unset"
+  // state to return to (unlike an Output channel, whose default is a no-op).
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Toggle, not open: the popover ignores pointerdowns inside its anchor (the
+  // whole node here), so without this a second double-click could not shut it.
+  const togglePicker = useCallback(() => setPickerOpen((o) => !o), []);
+  const closePicker = useCallback(() => setPickerOpen(false), []);
+
+  // `history="bracket"`: the hex lands on `values` through `updateNodeData`,
+  // which pushHistory's unconditionally — the picker owns the coalescing
+  // bracket now (this component used to hold its own useHistoryBracket for the
+  // native input's per-frame event stream).
+  const handlePick = useCallback(
+    (next: string) => {
+      updateNodeData(id, { values: { ...data.values, hex: next } } as Partial<ColorFlowNode['data']>);
     },
-    [id, data.values, updateNodeData, bracket],
+    [id, data.values, updateNodeData],
   );
 
-  // The native `change` event fires when the picker dialog commits/closes —
-  // close the bracket right there instead of waiting out the idle timer.
-  useEffect(() => {
-    const el = pickerRef.current;
-    if (!el) return;
-    el.addEventListener('change', closeBracket);
-    return () => el.removeEventListener('change', closeBracket);
-  }, [closeBracket]);
-
-  const openPicker = useCallback(() => {
-    pickerRef.current?.click();
-  }, []);
-
   // Touch/pen long-press opens the color picker (double-click is unreliable on touch).
-  useLongPress(nodeRef, openPicker);
+  useLongPress(nodeRef, togglePicker);
 
   return (
     <div
       ref={nodeRef}
       className={`color-node${isProperty ? ' color-node--rect' : ''}${selected ? ' color-node--selected' : ''}`}
       style={{ background: hex, width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE }}
-      onDoubleClick={openPicker}
+      onDoubleClick={togglePicker}
     >
       <span
         ref={labelRef}
@@ -177,13 +177,16 @@ export const ColorNode = memo(function ColorNode({
             ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.85)';
         })() }}
       >{label}</span>
-      <input
-        ref={pickerRef}
-        type="color"
-        className="color-node__picker"
+      {/* Portals to the body (or the fullscreen element), so nesting it here
+          costs the node nothing — it never becomes a child of the swatch and
+          never scales with the canvas zoom. */}
+      <ColorPickerPopover
+        anchor={nodeRef.current}
+        open={pickerOpen}
+        onClose={closePicker}
         value={hex}
-        onChange={handleChange}
-        onBlur={closeBracket}
+        onPick={handlePick}
+        history="bracket"
       />
       <TypedHandle
         type="source"

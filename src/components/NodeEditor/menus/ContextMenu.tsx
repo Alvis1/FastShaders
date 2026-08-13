@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { AddNodeMenu } from './AddNodeMenu';
 import { ConnectionStub } from './ConnectionStub';
@@ -20,6 +20,7 @@ export function ContextMenu() {
   const { open, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId } = useAppStore(
     (s) => s.contextMenu,
   );
+  const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
 
@@ -37,6 +38,40 @@ export function ContextMenu() {
       top: Math.max(EDGE_MARGIN, Math.min(y, window.innerHeight - height - EDGE_MARGIN)),
     });
   }, [open, x, y, type, nodeId, edgeId]);
+
+  // Escape closes the menu — every OTHER overlay in the app already does this
+  // (the modals, GraphModal, DesignerModal, PaletteColorPicker, and the toolbar
+  // popovers via useDismiss); the context-menu family was the only one without
+  // it. Lives on the DISPATCHER so all menu types get it at once. Mirrors
+  // useDismiss's keydown half only, NOT its capture-phase outside-click closer,
+  // which would race the existing closeContextMenu path from NodeEditor's pane
+  // handlers.
+  //
+  // The editable-target skip is load-bearing, not tidiness: DragNumberInput
+  // (inputs/DragNumberInput.tsx) cancels an in-progress number edit on Escape,
+  // and every settings menu is full of them — without the skip, cancelling a
+  // mistyped number would also close the menu. AddNodeMenu's search box is
+  // likewise an INPUT and is handled by its own onKeyDown.
+  //
+  // SELECT is in the skip list for the same reason as INPUT: Escape already
+  // means "dismiss this dropdown" there, and five of the menus this dispatcher
+  // renders contain one — MicNodeSettings, GroupSettingsMenu,
+  // ShaderSettingsMenu, NoteSettingsMenu, ImageNodeSettings. Chromium usually
+  // swallows the keydown while a select popup is open; WebKit (Safari and the
+  // Tauri WKWebView build) does not reliably, and there a dismissed dropdown
+  // would take the whole settings menu with it.
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+      closeContextMenu();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open, closeContextMenu]);
 
   if (!open) return null;
 
