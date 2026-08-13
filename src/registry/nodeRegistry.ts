@@ -1,6 +1,7 @@
 import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
 import { nodeSearchLV, nodeLabelLV } from '@/i18n';
 import { MIC_DEFAULT_VALUES } from '@/utils/micNode';
+import { HIDDEN_NODE_TYPES } from './editorVisibility';
 
 const definitions: NodeDefinition[] = [
   // ===== INPUT NODES =====
@@ -47,16 +48,19 @@ const definitions: NodeDefinition[] = [
   },
   {
     type: 'positionWorldDirection',
-    label: 'View Dir (world)',
+    label: 'Outward Dir (world)',
     category: 'input',
     tslFunction: 'positionWorldDirection',
     tslImportModule: 'three/tsl',
     inputs: [],
     outputs: [{ id: 'out', label: 'Direction', dataType: 'vec3' }],
-    // NB: despite the "View Dir" label, three's positionWorldDirection is the
-    // LOCAL POSITION rotated into world space — no camera term involved.
+    // NB: three's positionWorldDirection is the LOCAL POSITION rotated into
+    // world space — no camera term involved. It was labelled "View Dir (world)"
+    // and sat beside the GENUINE view vector below, so the pair read as one
+    // concept in two spaces; the Latvian label ("Pasaules virziens") never
+    // agreed with the English one. Old queries survive via the Also: tail.
     description:
-      'The local position rotated into world space as a unit direction — points from the object origin out through the surface (sky/equirect-style lookups).',
+      'The local position rotated into world space as a unit direction — points from the object origin out through the surface (sky/equirect-style lookups). Also: view dir, world direction, outward, equirect',
   },
   {
     type: 'positionViewDirection',
@@ -360,7 +364,7 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'Result', dataType: 'any' }],
     chainable: true,
     chainIdentity: 0,
-    description: 'Add inputs together, per channel — connecting more inputs grows extra sockets. Also: plus, sum',
+    description: 'Sum inputs. Also: plus, sum',
   },
   {
     type: 'sub',
@@ -375,7 +379,7 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'Result', dataType: 'any' }],
     chainable: true,
     chainIdentity: 0,
-    description: 'Subtract B from A, per channel. Also: minus, difference',
+    description: 'Subtract B from A. Also: minus, difference',
   },
   {
     type: 'mul',
@@ -391,7 +395,7 @@ const definitions: NodeDefinition[] = [
     chainable: true,
     chainIdentity: 1,
     description:
-      'Multiply inputs together, per channel — the usual way to scale or mask a value. Also: times, product, scale',
+      'Multiply inputs. Also: times, product, scale',
   },
   {
     type: 'div',
@@ -406,7 +410,7 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'Result', dataType: 'any' }],
     chainable: true,
     chainIdentity: 1,
-    description: 'Divide A by B, per channel. Also: quotient, ratio',
+    description: 'Divide A by B. Also: quotient, ratio',
   },
 
   // ===== MATH (unary) =====
@@ -416,11 +420,18 @@ const definitions: NodeDefinition[] = [
     ['abs', 'Abs', 'Absolute value — flips negative values positive.'],
     ['sqrt', 'Sqrt', 'Square root of the input.'],
     ['exp', 'Exp', 'Natural exponential e^x — a rapid growth curve.'],
-    ['log2', 'Log2', 'Base-2 logarithm of the input.'],
+    // log2(0) is -Infinity, and a HARD compile error under WGSL/Tint — so an
+    // unwired Log2 killed the whole shader on the WebGPU path. cpuEvaluator has
+    // always used 1 here (log2(1) = 0); the registry simply never matched it.
+    ['log2', 'Log2', 'Base-2 logarithm of the input.', { x: 1 }],
     ['floor', 'Floor', 'Round down to the nearest whole number — makes staircase steps.'],
     ['round', 'Round', 'Round to the nearest whole number.'],
     ['fract', 'Fract', 'Fractional part of the input — a repeating 0–1 ramp, the basis of tiling. Also: repeat'],
-  ] as [string, string, string][]).map(([fn, label, description]) => ({
+    // The optional 4th element is defaultValues. It exists so a unary whose
+    // domain excludes 0 can declare its identity WITHOUT being lifted out into
+    // its own def — registry ORDER is the documented tie-break for add-menu
+    // result ranking, so moving one would reorder search results.
+  ] as [string, string, string, Record<string, number>?][]).map(([fn, label, description, defaultValues]) => ({
     type: fn,
     label,
     category: 'math' as NodeCategory,
@@ -428,6 +439,7 @@ const definitions: NodeDefinition[] = [
     tslImportModule: 'three/tsl',
     inputs: [{ id: 'x', label: 'X', dataType: 'any' as const }],
     outputs: [{ id: 'out', label: 'Result', dataType: 'any' as const }],
+    ...(defaultValues ? { defaultValues } : {}),
     description,
   })),
   {
@@ -488,6 +500,14 @@ const definitions: NodeDefinition[] = [
       { id: 'max', label: 'Max', dataType: 'any' },
     ],
     outputs: [{ id: 'out', label: 'Result', dataType: 'any' }],
+    // An unwired bound must be the IDENTITY, not 0 — the same rule min/max/pow/
+    // mod already carry. Without these, codegen's unwired-port fallback emitted
+    // `clamp(x, 0, 0)`: the output is CONSTANT 0, so a freshly dropped Clamp
+    // silently destroyed the signal, while the CPU evaluator previewed max = 1
+    // (cpuEvaluator's `case 'clamp'`) — node and shader disagreed. 0…1 is also
+    // the saturate range the description promises. `x` needs no entry: its
+    // unwired fallback is already 0 on both sides.
+    defaultValues: { min: 0, max: 1 },
     description: 'Limit a value to the Min–Max range. Also: constrain, saturate',
   },
   {
@@ -507,7 +527,7 @@ const definitions: NodeDefinition[] = [
     // operands need it — codegen falls back to this for any unwired port, so an
     // 'a'-only default would emit min(0, b) and disagree with the CPU preview.
     defaultValues: { a: 1, b: 1 },
-    description: 'The smaller of A and B, per channel. Also: minimum',
+    description: 'Compares two values and returns the smaller one. Also: minimum, less',
   },
   {
     type: 'max',
@@ -523,7 +543,7 @@ const definitions: NodeDefinition[] = [
     // 0 is already sensible for max — max(a, 0) is a ReLU that passes non-negative
     // values through; made explicit so the default shows/seeds like min's.
     defaultValues: { b: 0 },
-    description: 'The larger of A and B, per channel. Also: maximum',
+    description: 'Compares two values and returns the larger one. Also: maximum, larger',
   },
 
   // ===== INTERPOLATION =====
@@ -539,6 +559,18 @@ const definitions: NodeDefinition[] = [
       { id: 't', label: 'Factor', dataType: 'float' },
     ],
     outputs: [{ id: 'out', label: 'Result', dataType: 'any' }],
+    // Unwired this emitted `mix(0, 0, 0)` — a constant 0 — while the node's own
+    // card reported 0.5. Worse, with only B wired it emitted `mix(0, B, 0)`,
+    // which DISCARDS the wired signal. Unlike min/pow/mod there is no single
+    // identity here (t=0 is A's, t=1 is B's), so one operand has to lose: 0/1
+    // at t=0.5 is the assignment under which every socket does something when
+    // wired alone (t alone → mix(0,1,t) = t, the canonical factor→value idiom).
+    // It also matches cpuEvaluator's own fallbacks exactly, so card and shader
+    // agree by construction. Consequence to accept: an A-only Mix now renders
+    // (A+1)/2 rather than A — but that is not a regression from a correct
+    // state, because the card was ALREADY reporting (A+1)/2 while the shader
+    // rendered A.
+    defaultValues: { a: 0, b: 1, t: 0.5 },
     description: 'Blend from A to B by Factor (0 gives A, 1 gives B). Also: lerp, blend, interpolate',
   },
   {
@@ -553,6 +585,15 @@ const definitions: NodeDefinition[] = [
       { id: 'x', label: 'X', dataType: 'float' },
     ],
     outputs: [{ id: 'out', label: 'Result', dataType: 'float' }],
+    // `smoothstep(0, 0, x)` — what the unwired edges used to emit — is a HARD
+    // compile error under WGSL/Tint ("low equal to high"), so the whole module
+    // failed to build on the WebGPU preview path; GLSL merely leaves it
+    // undefined, which measured as a hard binary step, i.e. the antialiased
+    // ramp this node exists for is destroyed either way. 0→1 is the canonical
+    // soft threshold and is what cpuEvaluator already assumes for the edges.
+    // `x` deliberately gets NO entry (clamp's rule): the signal port is the one
+    // you always wire, and its unwired fallback is 0 on both sides.
+    defaultValues: { edge0: 0, edge1: 1 },
     description: 'Smooth 0→1 transition as X moves from Edge 0 to Edge 1 — a soft, anti-aliased threshold.',
   },
   {
@@ -569,6 +610,16 @@ const definitions: NodeDefinition[] = [
       { id: 'outHigh', label: 'Out High', dataType: 'float' },
     ],
     outputs: [{ id: 'out', label: 'Result', dataType: 'float' }],
+    // Unwired ports must describe a USABLE range, not fall through codegen's
+    // bare '0' placeholder — that emitted `remap(x, 0, 0, 0, 0)`, whose
+    // `(x - inLow) / (inHigh - inLow)` divides by zero, so a freshly dropped
+    // Remap output NaN rather than merely being wrong. 0…1 → 0…1 makes it the
+    // IDENTITY when nothing is set (the rule min/max/pow/mod/clamp follow), and
+    // matches cpuEvaluator's own fallbacks exactly, so the node's on-card value
+    // agrees with what renders. Every existing graph passes its bounds
+    // explicitly (the Tests/ corpus and both presets do), so their emission is
+    // unchanged.
+    defaultValues: { x: 0, inLow: 0, inHigh: 1, outLow: 0, outHigh: 1 },
     description: 'Rescale a value from the In Low–In High range to Out Low–Out High. Also: map range',
   },
   {
@@ -840,6 +891,13 @@ const definitions: NodeDefinition[] = [
       { id: 'l', label: 'Lightness', dataType: 'float' },
     ],
     outputs: [{ id: 'out', label: 'Color', dataType: 'vec3' }],
+    // The worst annihilator in the registry: unwired it emitted `hsl(0, 0, 0)`
+    // = BLACK while its own card showed pure RED (the evaluator's [1, 0, 0]).
+    // Saturation 0 and Lightness 0 each force black independently, so wiring a
+    // ramp into Hue — literally what this node's description promises — still
+    // rendered black at every hue. These are the evaluator's own numbers, so
+    // card and shader now agree by construction.
+    defaultValues: { h: 0, s: 1, l: 0.5 },
     description: 'Build an RGB color from Hue, Saturation and Lightness — easy rainbow ramps via Hue.',
   },
   {
@@ -849,7 +907,33 @@ const definitions: NodeDefinition[] = [
     tslFunction: 'toHsl',
     tslImportModule: '',
     inputs: [{ id: 'rgb', label: 'RGB', dataType: 'vec3' }],
-    outputs: [{ id: 'out', label: 'HSL', dataType: 'vec3' }],
+    // The three components are addressable individually — the usual reason to
+    // reach for this node is one of them (hue-shift, desaturate, read
+    // lightness). They are SWIZZLES of one emitted call, never three calls:
+    // `resolveEdgeRef` maps h/s/l → `.x/.y/.z` of the node's own var and
+    // `resolveMemberExpr` maps them back, so the cost stays one conversion
+    // (three separate calls measured ~2.5× the GLSL — three inlines the Fn).
+    //
+    // `out` STAYS outputs[0] and is deliberately not replaced. It is the
+    // defensive default the whole codebase assumes (`?? 'out'`,
+    // `outputs.find(id === 'out') ?? outputs[0]`, the designer's socket key,
+    // drop-on-edge splice), and there is no migration path for a removed
+    // handle: `applyProjectToStore` runs none of loadGraph's migrations, and
+    // codeToGraph re-creates `'out'` on every Apply — so a shared `.js` would
+    // keep a dead handle forever. React Flow renders such an edge as NOTHING
+    // while keeping it in the store, i.e. it fails silently.
+    //
+    // float (not `any`) is load-bearing: it makes the Output-channel
+    // scalar→vec3 widening fire, so h → Color emits `vec3(toHsl1.x)` instead
+    // of splatting hue into alpha. The English labels are exact — `portLabel`
+    // keys Latvian off them and lv.json already carries all three from the
+    // sibling `hsl` node's inputs.
+    outputs: [
+      { id: 'out', label: 'HSL', dataType: 'vec3' },
+      { id: 'h', label: 'Hue', dataType: 'float' },
+      { id: 's', label: 'Saturation', dataType: 'float' },
+      { id: 'l', label: 'Lightness', dataType: 'float' },
+    ],
     description: 'Convert an RGB color into Hue/Saturation/Lightness components.',
   },
 
@@ -866,7 +950,17 @@ const definitions: NodeDefinition[] = [
     category: 'dataviz',
     tslFunction: '',
     tslImportModule: '',
-    inputs: [{ id: 'signal', label: 'Signal', dataType: 'float' }],
+    // The two ramp ends are REAL inputs, not just defaultValues keys, so they
+    // can be wired: ShaderNode builds sockets from `def.inputs`, so a param
+    // living only in defaultValues can be ticked "expose as input socket" and
+    // still render nothing (the documented micNode/imageNode trap). They KEEP
+    // their defaultValues entries too, so an unexposed node still shows its
+    // inline swatch and emits byte-identically.
+    inputs: [
+      { id: 'signal', label: 'Signal', dataType: 'float' },
+      { id: 'lowColor', label: 'Low Color', dataType: 'color' },
+      { id: 'highColor', label: 'High Color', dataType: 'color' },
+    ],
     outputs: [{ id: 'out', label: 'Color', dataType: 'vec3' }],
     defaultValues: {
       baseFrequency: 80,
@@ -889,7 +983,13 @@ const definitions: NodeDefinition[] = [
     category: 'dataviz',
     tslFunction: '',
     tslImportModule: '',
-    inputs: [{ id: 'signal', label: 'Signal', dataType: 'float' }],
+    // Ramp ends are wireable, exactly as on Data Stripes — same two swatches,
+    // same emission — see that node's comment for why they must be real inputs.
+    inputs: [
+      { id: 'signal', label: 'Signal', dataType: 'float' },
+      { id: 'lowColor', label: 'Low Color', dataType: 'color' },
+      { id: 'highColor', label: 'High Color', dataType: 'color' },
+    ],
     // Two outputs: the colour ramp (vec3) and the raw tone-mapped scalar
     // (float, 0–1). Wire Value → the Output node's Displacement so height is
     // driven by the DATA, independent of the colour choice.
@@ -920,7 +1020,7 @@ const definitions: NodeDefinition[] = [
     inputs: [{ id: 'value', label: 'Value', dataType: 'float' }],
     outputs: [{ id: 'out', label: 'Color', dataType: 'vec3' }],
     description:
-      'Colour a 0–1 value through a perceptually uniform scientific colormap (viridis, cividis, batlow, cool-warm, isoluminant…). Pick the map, reverse or step it in the right-click menu. Also: colourmap colour map palette ramp lut heatmap viridis magma inferno plasma turbo.',
+      'Colour a 0–1 value through a perceptually uniform scientific colormap (viridis, cividis, batlow, cool-warm, isoluminant…). Also: colourmap colour map palette ramp lut heatmap viridis magma inferno plasma turbo.',
   },
   // Data Range: raw data units → 0–1, honestly. Wired straight from a Data
   // column it reads that column's statistics at code-gen (min/max, percentiles,
@@ -961,7 +1061,7 @@ const definitions: NodeDefinition[] = [
       offset: 0,
     },
     description:
-      'Draw antialiased contour lines wherever a value crosses a regular interval — the way a reader gets exact numbers off a curved 3D surface. Outputs a 0–1 line mask to mix over a colour. Also: isoline contour contours iso level lines topographic.',
+      'Draw antialiased contour lines wherever a value crosses a regular interval — the way a reader gets exact numbers off a curved 3D surface. Also: isoline contour contours iso level lines topographic.',
   },
 
   // ===== OUTPUT =====
@@ -982,7 +1082,13 @@ const definitions: NodeDefinition[] = [
       { id: 'roughness', label: 'Roughness', dataType: 'float' },
       { id: 'metalness', label: 'Metalness', dataType: 'float' },
       { id: 'opacity', label: 'Opacity', dataType: 'float' },
-      { id: 'discard', label: 'Discard', dataType: 'float' },
+      {
+        id: 'discard',
+        label: 'Discard',
+        dataType: 'float',
+        description:
+          'Culls the pixel wherever this is non-zero — a truthiness test, not a 0/1 switch, so 0.2 discards too. Feed it a Greater Than / Less Than node for a clean threshold.',
+      },
       { id: 'normal', label: 'Normal', dataType: 'vec3' },
       { id: 'env', label: 'Environment', dataType: 'color' },
       { id: 'position', label: 'Displacement', dataType: 'vec3' },
@@ -1210,19 +1316,67 @@ export function nodeMatchRank(def: NodeDefinition, q: string): number {
 /**
  * Search + rank in one pass. Ties keep registry order (Array#sort is stable),
  * so equally-good matches stay in their curated sequence.
+ *
+ * Searches the EDITOR set, so a node hidden by `editorVisibility.json` cannot be
+ * typed back into existence from the Add-node menu's search box.
  */
 export function searchNodes(query: string): NodeDefinition[] {
+  const defs = getEditorDefinitions();
   const q = query.trim().toLowerCase();
-  if (!q) return allDefinitions;
-  return allDefinitions
+  if (!q) return defs;
+  return defs
     .map((d) => ({ d, rank: nodeMatchRank(d, q) }))
     .filter((e) => e.rank !== NO_MATCH)
     .sort((a, b) => a.rank - b.rank)
     .map((e) => e.d);
 }
 
+/**
+ * EVERY definition the app knows — including ones hidden from the editor.
+ *
+ * This is the documentation/tooling view: node-editor.html (which is where a
+ * hidden node is switched back on), the Node Designer's designable set, and the
+ * drift tests all need the complete list. Anything that offers the user a node
+ * to ADD must call {@link getEditorDefinitions} instead.
+ */
 export function getAllDefinitions(): NodeDefinition[] {
   return allDefinitions;
+}
+
+/**
+ * `getAllDefinitions()` minus whatever `editorVisibility.json` hides. Computed
+ * ONCE, not per call: the hidden set is fixed at module init (it comes from a
+ * source file), and every consumer memoizes on this array's identity, so a
+ * fresh `filter()` per call would quietly make those `useMemo`s recompute — and
+ * would give the accessor two different identities within one render.
+ * `allDefinitions` itself is reused when nothing is hidden.
+ */
+const editorDefinitions: NodeDefinition[] =
+  HIDDEN_NODE_TYPES.size === 0
+    ? allDefinitions
+    : allDefinitions.filter((d) => !HIDDEN_NODE_TYPES.has(d.type));
+
+/**
+ * The definitions the editor offers as things to add (see `editorVisibility.ts`
+ * for why hiding is an add-surface filter and never a registry one).
+ */
+export function getEditorDefinitions(): NodeDefinition[] {
+  return editorDefinitions;
+}
+
+/**
+ * True when `category` had addable nodes and every one of them is now hidden —
+ * i.e. a content-browser tab for it would open to "Nothing here yet.".
+ *
+ * The "had any" half is what keeps this off the ASSET tabs: Presets and Textures
+ * render built-in graphs rather than registry defs, so "no visible defs" is
+ * their normal state, not an emptied one. `output` is excluded because the
+ * palette never offers it in the first place.
+ */
+export function categoryEmptiedByHiding(category: NodeCategory): boolean {
+  if (HIDDEN_NODE_TYPES.size === 0) return false;
+  const addable = (d: NodeDefinition) => d.category === category && d.type !== 'output';
+  return allDefinitions.some(addable) && !editorDefinitions.some(addable);
 }
 
 /** Map a registry definition to its React Flow node type string. */

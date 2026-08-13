@@ -61,7 +61,7 @@ jobs:
             --verify-tag \
             --title "FastShaders $GITHUB_REF_NAME" \
             --notes "$(cat <<'EOF'
-          Offline desktop builds — also downloadable from the **Local** button in the [web editor](https://alvis1.github.io/FastShaders/).
+          Offline desktop builds — also downloadable from the **Download app** button in the [web editor](https://alvis1.github.io/FastShaders/).
 
           | Platform | File | Notes |
           | --- | --- | --- |

@@ -24,6 +24,7 @@
  * retyping it wholesale would churn every line for no behavioural gain.
  */
 import * as ND from './bridge';
+import { scaleSocketOffsets, scaleSocketOffsetsRaw } from './socketScale';
 
 /* ---------------- registry data (live imports — see bridge.ts) ---------------- */
 const NODES = ND.designerNodes();
@@ -40,8 +41,68 @@ NODES.forEach((n) => { NODE_BY_TYPE[n.type] = n; });
 
 /* --- i18n (EN/LV), display-only — the app's own tables via the bridge. --- */
 let ND_LANG = (lsGet('nd:lang', 'en') === 'lv') ? 'lv' : 'en';
-function ndBaseLabel(type) { return ND.baseLabel(type, ND_LANG); }
-function ndNodeLabel(type) { return ND.displayLabel(type, ND_LANG); }
+
+/* ---------------- display names (renaming) ----------------
+   A node's NAME is registry source — `label` in nodeRegistry.ts (English) and
+   node-i18n.json's `nodes` map (Latvian) — so unlike every other field in this
+   inspector it does NOT live in customGlyphs.ts and cannot ride the glyph file's
+   save. It gets its own patch endpoint and its own dirty bookkeeping.
+
+   Renaming is safe precisely because `label` is display-only: `type` is the
+   registry key, the `registryType` stored in every saved .fastshader, and what
+   codeToGraph matches on — none of which the label touches. That separation is
+   pinned by nodeLabelRename.test.ts, and `type` is deliberately NOT editable here.
+
+   Names resolve in three layers, nearest first, because the BUNDLE cannot see a
+   save (nodeRegistry.ts HMR reloads the page; a deployed build never changes):
+     labelEdits[type]  — this session's unsaved rename
+     savedLabels[type] — the on-disk file as /__nd/labels last reported it
+     NODE_BY_TYPE      — what this build was compiled with */
+let savedLabels = Object.create(null);      // type -> EN label (on-disk truth)
+let savedLvLabels = Object.create(null);    // type -> LV label (on-disk truth)
+let labelEdits = Object.create(null);       // type -> { en?, lv? }, only when DIFFERENT
+let labelApi = false;                       // /__nd/labels reachable
+/* Same null-prototype reasoning as NODE_BY_TYPE: this is rehydrated from
+   localStorage and every read below is an `in` check. */
+try { Object.assign(labelEdits, JSON.parse(lsGet('nd:labelEdits', '{}')) || {}); } catch (e) { labelEdits = Object.create(null); }
+/* Drop edits for types this build has no node for. Nothing else can clear such a key:
+   it is not in the dropdown so it cannot be selected and typed back, yet dirtyTypes()
+   would include it, saveAll() would put it in the patch, and BOTH writers reject an
+   unknown type — so one stale key from a retired node type (this repo has retired
+   several) would abort every future Save All with no way out. */
+Object.keys(labelEdits).forEach((t) => { if (!NODE_BY_TYPE[t]) delete labelEdits[t]; });
+
+/** On-disk English name (no session edit) — falls back to the compiled registry. */
+function savedEn(type) {
+  if (type in savedLabels) return savedLabels[type];
+  const n = NODE_BY_TYPE[type];
+  return n ? n.label : type;
+}
+/** On-disk Latvian name, '' when untranslated (NOT the English fallback). */
+function savedLv(type) {
+  if (type in savedLvLabels) return savedLvLabels[type];
+  return ND.nodeLabelLV(type);
+}
+function labelEn(type) {
+  const e = labelEdits[type];
+  return (e && typeof e.en === 'string') ? e.en : savedEn(type);
+}
+function labelLv(type) {
+  const e = labelEdits[type];
+  return (e && typeof e.lv === 'string') ? e.lv : savedLv(type);
+}
+/* These two mirror i18n's formatNodeLabel(en, type, lang, bilingual) exactly —
+   they cannot CALL it, because it reads the compiled node-i18n.json and would
+   ignore an unsaved rename. Keep the two output forms in step with i18n/index.ts. */
+function ndBaseLabel(type) {
+  const lv = labelLv(type);
+  return (ND_LANG === 'lv' && lv) ? lv : labelEn(type);
+}
+function ndNodeLabel(type) {
+  const en = labelEn(type);
+  const lv = labelLv(type);
+  return (ND_LANG === 'lv' && lv) ? lv + ' (' + en + ')' : en;
+}
 function ndCatLabel(cat) { return ND.catLabel(cat, ND_LANG); }
 function updateLangBtn() {
   const b = el('langBtn'); if (!b) return;
@@ -74,6 +135,37 @@ function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
 /* normalize pasted/dropped svg to inner content in 0..56 space */
+/**
+ * Serialize a parsed <svg>'s children WITHOUT namespace declarations.
+ *
+ * `svg.innerHTML` on a document parsed as image/svg+xml runs the XML serializer,
+ * which re-declares the SVG namespace on every top-level child it emits — pasting a
+ * plain `<svg>…<text>…` comes back as `<text xmlns="http://www.w3.org/2000/svg">`.
+ * The string is injected INSIDE a live <svg> (NodeGlyph, via dangerouslySetInnerHTML)
+ * where that namespace is already in scope, so the declaration is pure noise — but
+ * glyphCoverage.test.ts fails any glyph containing `http(s):`, because art must never
+ * reference an external URL. Without this, the designer's own "paste an SVG" path
+ * saves a glyph that turns the suite red — which is exactly how the `oneMinus` entry
+ * in customGlyphs.ts got there.
+ *
+ * Re-hosting the children in an <svg> owned by THIS document and reading innerHTML
+ * there gets the HTML fragment serializer, which emits no namespace declarations at
+ * all. A regex over the XML output was the obvious alternative and is WRONG: it also
+ * eats the literal text `xmlns="…"` out of a <text> node's CONTENT — measured in
+ * Chrome, a glyph reading `use xmlns="trap" here` came back as `use here`. Also
+ * measured: this path preserves SVG's case-sensitive attributes (gradientUnits,
+ * textLength, lengthAdjust) and xlink:href, and normalizes `<circle/>` to
+ * `<circle></circle>`, which glyphCoverage's tag-balance count accepts.
+ *
+ * A genuine external reference (`xlink:href="http://…"`) still survives and still
+ * trips that test, which is the point of it.
+ */
+function innerSvgOf(svg) {
+  const host = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const kids = Array.prototype.slice.call(svg.childNodes);
+  for (let i = 0; i < kids.length; i++) host.appendChild(document.importNode(kids[i], true));
+  return host.innerHTML;
+}
 function normalizeSvg(text) {
   text = (text || '').trim(); if (!text) return '';
   if (!/<svg[\s>]/i.test(text)) return text; // already inner content
@@ -82,7 +174,7 @@ function normalizeSvg(text) {
     let vb = svg.getAttribute('viewBox'); let mx = 0, my = 0, w = 56, h = 56;
     if (vb) { const p = vb.split(/[ ,]+/).map(Number); mx = p[0]; my = p[1]; w = p[2]; h = p[3]; }
     else { w = parseFloat(svg.getAttribute('width')) || 56; h = parseFloat(svg.getAttribute('height')) || 56; }
-    const inner = svg.innerHTML;
+    const inner = innerSvgOf(svg);
     if (Math.abs(mx) < .01 && Math.abs(my) < .01 && Math.abs(w - 56) < .01 && Math.abs(h - 56) < .01) return inner;
     const sx = (56 / w).toFixed(4), sy = (56 / h).toFixed(4);
     return '<g transform="scale(' + sx + ' ' + sy + ') translate(' + (-mx) + ' ' + (-my) + ')">' + inner + '</g>';
@@ -390,7 +482,12 @@ function previewFor(type) {
 
 /* Inspector nudge bound: glyph-space ±28 for glyph nodes, ±400 CSS px for art
    nodes (an art element can need to travel across a 400px-wide node). */
-function inputNudgeLim() { return ND.ART_NODE_TYPES.has(state.type) ? 400 : 28; }
+// One bound for glyphs AND art. Glyphs used to be clamped to ±28 (half the 56
+// canvas), which stopped a drag dead after ~25 screen px — "the art won't move
+// freely" — and the shipped uv design sits exactly AT dy 28, i.e. the wall was
+// already being hit. dx/dy are decorative-only offsets rendered with
+// overflow:visible, so a generous shared bound is safe.
+function inputNudgeLim() { return 400; }
 function syncLayoutInputs() {
   const set = (id, v) => { const e = el(id); if (e) e.value = v; };
   set('gScale', state.scale); set('just', state.justify); set('nW', state.width); set('nH', state.height); set('nT', state.text); set('gDx', state.dx); set('gDy', state.dy);
@@ -446,26 +543,136 @@ function isDirty(type) {
   if (!(type in sessionEdits)) return false;
   return JSON.stringify(sessionEdits[type]) !== JSON.stringify(savedGlyphs[type] || {});
 }
-function dirtyTypes() { return Object.keys(sessionEdits).filter(isDirty); }
+/* A node counts as dirty when its DESIGN or its NAME differs from disk — the two
+   ride different files and different save calls, but one pill and one Save. */
+/* Gated on canRename(): in the download tier a pending rename cannot be written
+   at all, so counting it as dirty would park an "N unsaved" pill that no Save can
+   ever clear — and would block the glyph save behind it. The edit stays in
+   localStorage and becomes dirty again the moment a writable tier is available. */
+function labelDirty(type) { return !!type && canRename() && (type in labelEdits); }
+function anyDirty(type) { return isDirty(type) || labelDirty(type); }
+function dirtyTypes() {
+  const out = Object.keys(sessionEdits).filter(isDirty);
+  const seen = new Set(out);
+  // labelDirty, not a bare `in` check: it carries the canRename() gate, and without it
+  // the count disagreed with anyDirty() — the pill read "1 unsaved" and enabled Save All
+  // in a tier that cannot write names, while the dropdown showed no ● and no Save could
+  // ever clear it.
+  Object.keys(labelEdits).forEach((t) => { if (!seen.has(t) && labelDirty(t)) { seen.add(t); out.push(t); } });
+  return out;
+}
 function stash() {
   sessionEdits[state.type] = currentDesign();
   if (!isDirty(state.type)) delete sessionEdits[state.type]; // identical to saved → drop
   lsSet('nd:edits', JSON.stringify(sessionEdits));
   refreshDirtyUI();
 }
+/* Name counterpart of stash(): keep only the halves that actually DIFFER from
+   disk, so an edit typed back to the original clears the dirty flag instead of
+   leaving a phantom rename that would be POSTed as a no-op. */
+function stashLabel(type, en, lv) {
+  const e = {};
+  if (en !== savedEn(type)) e.en = en;
+  if (lv !== savedLv(type)) e.lv = lv;
+  if (Object.keys(e).length) labelEdits[type] = e; else delete labelEdits[type];
+  lsSet('nd:labelEdits', JSON.stringify(labelEdits));
+  refreshDirtyUI();
+}
 function refreshDirtyUI() {
   const n = dirtyTypes().length;
   const pill = el('dirtyPill'); pill.textContent = n + ' unsaved'; pill.classList.toggle('show', n > 0);
   el('saveAllBtn').disabled = n === 0;
-  el('dirtyFlag').style.display = isDirty(state.type) ? '' : 'none';
+  el('dirtyFlag').style.display = anyDirty(state.type) ? '' : 'none';
   rebuildDropdown();
 }
+
+/* ---------------- name validation ----------------
+   Blocking problems mirror assertValidNodeLabels (the same rules the endpoint and
+   the folder-write path enforce) so the field says NO before a save can fail. */
+function nameProblem(type, en) {
+  const v = String(en == null ? '' : en);
+  if (!v.trim()) return 'Name must not be empty.';
+  if (v.trim() !== v) return 'Name has leading or trailing space.';
+  if (/[\u200B-\u200D\u2060\u180E\uFEFF]/.test(v)) return 'Name contains an invisible character.';
+  const fold = v.toLowerCase();
+  /* Check against EVERY labelled definition, not just the designable ones.
+     NODES is designerNodes() — the 59 ShaderNode-rendered types — but the writers
+     validate against all 74 label slots, so a collision with one of the 15 excluded
+     labels ("Time", "Color", "Sine", "Output", "Perlin Noise", "Microphone"…) passed
+     this field and then 400'd at save time, aborting the whole save including any
+     glyph work in the same batch. savedLabels is the endpoint's full 74-slot map;
+     fall back to NODES only before it has loaded. */
+  const all = allLabelledTypes();
+  for (let i = 0; i < all.length; i++) {
+    const other = all[i];
+    if (other === type) continue;
+    // Case-insensitive: nodeMatchRank lowercases before matching, so "Multiply"
+    // and "multiply" collide in search while looking distinct here.
+    if (labelEn(other).toLowerCase() === fold) return 'Already the name of "' + other + '".';
+  }
+  return '';
+}
+/* Non-blocking. nodeSearch.test.ts asserts that no node can be outranked by
+   another node's PROSE mentioning its name; renaming onto a word that appears in
+   someone else's description is exactly what trips it, and the failure lands in a
+   test file far from here. Say so at the point of the edit instead. */
+/** Every labelled registry type, not just the designable ones (see nameProblem). */
+function allLabelledTypes() {
+  return Object.keys(savedLabels).length ? Object.keys(savedLabels) : NODES.map((n) => n.type);
+}
+function nameWarning(type, en) {
+  const fold = String(en == null ? '' : en).trim().toLowerCase();
+  if (!fold) return '';
+  /* nodeMatchRank's top tier is FOUR names per node - label, type, tslFunction and the
+     Latvian label - so a new label equal to another node's type or TSL function ties at
+     rank 0 and registry order alone decides who wins the query. Renaming Multiply to
+     "Sin" really does put Multiply above the Sine node for "sin".
+     A WARNING rather than a refusal, because such ties are legitimate and already exist:
+     Slider's tslFunction IS `float`, so it ties with the Float node today, and
+     nodeSearch.test.ts documents that as correct ("Slider really is a float node").
+     Scanned over ALL labelled types: `sin`, `time`, `color`, `output` and the noise
+     family render through their own components and are absent from NODES, yet those
+     short identifiers are exactly what a shortened display name lands on. */
+  const all = allLabelledTypes();
+  for (let i = 0; i < all.length; i++) {
+    const other = all[i];
+    if (other === type) continue;
+    const def = ND.definitionOf(other);
+    if (!def) continue;
+    if (other.toLowerCase() === fold) {
+      return 'Ties with the "' + other + '" node type in search - registry order decides which wins.';
+    }
+    if (def.tslFunction && String(def.tslFunction).toLowerCase() === fold) {
+      return 'Ties with "' + other + '" TSL function `' + def.tslFunction + '` in search.';
+    }
+    const lv = labelLv(other);
+    if (lv && lv.toLowerCase() === fold) {
+      return 'Ties with the Latvian name of "' + other + '" in search.';
+    }
+  }
+  if (fold.length < 4) return '';
+  for (let i = 0; i < all.length; i++) {
+    const other = all[i];
+    if (other === type) continue;
+    const def = ND.definitionOf(other);
+    const desc = (def && def.description) || '';
+    if (desc.toLowerCase().indexOf(fold) >= 0) {
+      return '"' + other + '" mentions this word in its description - search may rank it above this node (nodeSearch.test.ts covers that).';
+    }
+  }
+  return '';
+}
+/** Can names be written at all from here? Registry SOURCE needs the dev endpoint
+ *  or a linked repo folder; the download tier has no source text to splice. */
+function canRename() { return labelApi || !!dirHandle; }
 
 /* ---------------- selection / dropdown / search ---------------- */
 let filterText = '';
 function visibleNodes() {
   const q = filterText.trim().toLowerCase();
-  return q ? NODES.filter((n) => n.type.toLowerCase().includes(q) || n.label.toLowerCase().includes(q) || ND.lvName(n.type).toLowerCase().includes(q)) : NODES;
+  // labelEn/labelLv, not n.label — a node renamed this session must be findable
+  // by its NEW name, and its old one must stop matching.
+  return q ? NODES.filter((n) => n.type.toLowerCase().includes(q) || labelEn(n.type).toLowerCase().includes(q) || labelLv(n.type).toLowerCase().includes(q)) : NODES;
 }
 function rebuildDropdown() {
   const sel = el('nodeSel'); const cur = state.type; sel.innerHTML = '';
@@ -474,7 +681,7 @@ function rebuildDropdown() {
     const og = document.createElement('optgroup'); og.label = ndCatLabel(cat);
     groups[cat].forEach((n) => {
       const o = document.createElement('option'); o.value = n.type;
-      const mark = isDirty(n.type) ? '● ' : (savedGlyphs[n.type] ? '◆ ' : '');
+      const mark = anyDirty(n.type) ? '● ' : (savedGlyphs[n.type] ? '◆ ' : '');
       o.textContent = mark + ndBaseLabel(n.type) + ' (' + n.type + ')'; og.appendChild(o);
     });
     sel.appendChild(og);
@@ -487,7 +694,7 @@ function stepNode(dir) {
   selectNode(list[i]);
 }
 function selectNode(type) {
-  const n = NODE_BY_TYPE[type]; if (!n) return; state.type = type; lsSet('nd:lastNode', type);
+  const n = NODE_BY_TYPE[type]; if (!n) return; state.type = type; sockRaw = {}; lsSet('nd:lastNode', type);
   const d = (type in sessionEdits) ? sessionEdits[type] : (savedGlyphs[type] || null);
   applyDesignTo(state, type, d);
   previewFor(type);
@@ -498,10 +705,47 @@ function selectNode(type) {
 /* ---------------- inspector rendering ---------------- */
 function renderInfo() {
   const n = NODE_BY_TYPE[state.type]; const cat = ND.categoryHex(n.cat); const cost = COSTS[state.type] ?? 0;
-  el('iType').textContent = n.type + '  ·  ' + ndBaseLabel(n.type);
+  el('iType').textContent = n.type;
   const ic = el('iCat'); ic.querySelector('.dot').style.background = cat; ic.querySelector('span:last-child').textContent = ndCatLabel(n.cat);
   const io = el('iCost'); io.querySelector('.dot').style.background = costColor(cost); io.querySelector('span:last-child').textContent = cost + ' pts';
   el('pasteBtn').disabled = !copyBuf;
+  syncNameInputs();
+}
+/* Push the model into the Name fields. Guarded on document.activeElement so a
+   re-render triggered BY typing (the live preview re-renders on every keystroke)
+   cannot rewrite the box under the caret and jump it to the end. */
+let nameInputsType = null;   // which node the Name boxes currently show
+function syncNameInputs() {
+  const en = el('nName'); const lv = el('nNameLv');
+  if (!en || !lv) return;
+  const ok = canRename();
+  /* The activeElement guard exists so a re-render triggered BY typing cannot rewrite the
+     box under the caret. It must NOT suppress a SELECTION change: Alt+↑/↓ steps nodes
+     with no typing-guard, so it fires from inside the focused Name field, and the box
+     then kept the previous node's text while state.type, the stage and the LV box all
+     moved on — the next keystroke stashed that text onto the NEW node and Save spliced
+     it into the wrong label slot. When the node changes, both boxes are authoritative. */
+  const switched = nameInputsType !== state.type;
+  nameInputsType = state.type;
+  if (switched || document.activeElement !== en) en.value = labelEn(state.type);
+  if (switched || document.activeElement !== lv) lv.value = labelLv(state.type);
+  en.disabled = !ok; lv.disabled = !ok;
+  if (!ok) {
+    en.title = lv.title = 'Renaming edits registry SOURCE (nodeRegistry.ts / node-i18n.json), so it needs the dev server (npm run dev) or a linked repo folder — a downloaded file cannot carry it.';
+  } else {
+    en.title = 'The node’s English display name (nodeRegistry.ts `label`). Display only — it never reaches generated code, a saved .fastshader, or any lookup.';
+    lv.title = 'The Latvian display name (src/i18n/node-i18n.json). Empty = untranslated, which falls back to the English name.';
+  }
+  renderNameHint();
+}
+function renderNameHint() {
+  const box = el('nameHint'); if (!box) return;
+  const bad = canRename() ? nameProblem(state.type, labelEn(state.type)) : '';
+  const warn = bad ? '' : (canRename() ? nameWarning(state.type, labelEn(state.type)) : '');
+  const msg = bad || warn;
+  box.textContent = msg;
+  box.classList.toggle('bad', !!bad);
+  box.style.display = msg ? '' : 'none';
 }
 function renderStates() {
   const n = NODE_BY_TYPE[state.type]; const p = previewFor(state.type); const box = el('stateList'); box.innerHTML = '';
@@ -649,8 +893,7 @@ function onGlyphDown(e, target, isArt) {
   /* pxPerUnit converts SCREEN px → design units. Glyph: the rendered svg's
      rect already folds in zoom + cost scale (screen px per 56-space unit).
      Art (the colormap ramp): units ARE element-local CSS px, so divide by
-     zoom × cost scale explicitly. Both share the ±28 clamp — plenty for a
-     strip, and one bound keeps the shared dx/dy schema simple. */
+     zoom × cost scale explicitly. Both share the ±400 clamp (nudgeLim). */
   let pxPerUnit;
   if (isArt) {
     pxPerUnit = (ui.zoom || 1) * costScaleOf(COSTS[state.type] ?? 0);
@@ -664,10 +907,9 @@ function onGlyphDown(e, target, isArt) {
   window.addEventListener('pointerup', endGlyphMove);
   window.addEventListener('pointercancel', cancelGlyphMove);
 }
-/* Art nudges are element-local CSS px on a strip inside a node that can be
-   400px wide, so the glyph-space ±28 bound would strand it — bound art by the
-   max node width instead. */
-function nudgeLim() { return glyphDrag && glyphDrag.isArt ? 400 : 28; }
+/* One generous bound for both (matches inputNudgeLim): the old glyph-space
+   ±28 clamp stopped a drag after ~25 screen px at default scale. */
+function nudgeLim() { return 400; }
 function onGlyphMove(e) {
   if (!glyphDrag) return;
   const mx = e.clientX - glyphDrag.x, my = e.clientY - glyphDrag.y;
@@ -707,6 +949,49 @@ function endGlyphMove() {
    row and anchors it to the below-header region's center. Rows overrides
    persist even at 0 (0 = region center ≠ the row default); "Reset positions"
    restores row anchoring. */
+/* A socket's CURRENT visual offset from the region centre, in state units.
+   Shared by the socket drag (so grabbing one never jumps) and the corner
+   resize (so a row-anchored socket detaches exactly where it already sits).
+   Divides by z * cs — the cost scale is inside the card's own wrapper. */
+function measuredSockOff(sockEl, regionEl) {
+  if (!sockEl || !regionEl) return null;
+  const cs = costScaleOf(COSTS[state.type] ?? 0), z = ui.zoom || 1;
+  const sb = sockEl.getBoundingClientRect(), rb = regionEl.getBoundingClientRect();
+  return ((sb.top + sb.height / 2) - (rb.top + rb.height / 2)) / (z * cs);
+}
+
+/* Every socket the designer is allowed to author, with its EFFECTIVE offset
+   right now: the stored value, else the operator default, else — for a
+   row-anchored socket — where it is actually drawn. Keys mirror onSockDown:
+   input ids plus 'out' for the FIRST output only. */
+function effectiveSockOffsets() {
+  const n = NODE_BY_TYPE[state.type];
+  if (!n) return {};
+  const rows = !layoutIsOp();
+  const regionEl = rows ? el('nodeWrap').querySelector('.shader-node__region') : null;
+  const out = {};
+  const keys = n.in.map((x) => x[0]);
+  if (n.out[0]) keys.push('out');
+  for (const key of keys) {
+    if (state.sockets[key] != null) { out[key] = state.sockets[key]; continue; }
+    if (rows) {
+      const sel = key === 'out'
+        ? ".typed-handle[data-port][data-io='out']"
+        : ".typed-handle[data-port='" + key + "']";
+      const m = measuredSockOff(el('nodeWrap').querySelector(sel), regionEl);
+      if (m != null) { out[key] = m; continue; }
+    }
+    out[key] = defOffFor(key);
+  }
+  return out;
+}
+
+/* Session-only EXACT (unsnapped) offsets, so repeated corner drags don't
+   random-walk off the 4px grid: snapping every pointerup would turn
+   20 → 16 → 20 → 24 across a grow/shrink/grow. Never saved, never part of a
+   design — rebased whenever a socket is authored by another path. */
+let sockRaw = {};
+
 let sockDrag = null;
 function onSockDown(e, sock) {
   if (e.button !== 0) return;
@@ -722,8 +1007,8 @@ function onSockDown(e, sock) {
   let off0;
   if (state.sockets[key] != null) off0 = state.sockets[key];
   else if (rows && regionEl) {
-    const sb = sock.getBoundingClientRect(), rb = regionEl.getBoundingClientRect();
-    off0 = ((sb.top + sb.height / 2) - (rb.top + rb.height / 2)) / (z * cs); // current visual spot → no jump on grab
+    off0 = measuredSockOff(sock, regionEl); // current visual spot → no jump on grab
+    if (off0 == null) off0 = defOffFor(key);
   } else off0 = defOffFor(key);
   const limH = rows ? (regionEl ? regionEl.getBoundingClientRect().height / (z * cs) : 52) : opBodyH();
   sockDrag = { key, y0: e.clientY, off0, limH, rows, moved: false };
@@ -761,7 +1046,7 @@ function endSockMove() {
   window.removeEventListener('pointerup', endSockMove);
   window.removeEventListener('pointercancel', cancelSockMove);
   if (!d) return;
-  if (d.moved) { stash(); renderNode(); }
+  if (d.moved) { sockRaw[d.key] = state.sockets[d.key]; stash(); renderNode(); }
   else {
     renderNode(); // unmount the snap ruler
     if (d.key === 'out') toggleOut();
@@ -776,26 +1061,56 @@ function startScale(e) {
   e.preventDefault(); e.stopPropagation();
   const card = el('nodeWrap').querySelector('.node-base');
   const header = card ? card.querySelector('.node-base__header') : null;
+  const h0 = state.height > 0 ? state.height
+    : (card ? Math.max(28, card.offsetHeight - (header ? header.offsetHeight : 14) - 3) : 52); // minus actual (wrappable) header + borders
+  // Seed the socket rescale from what is on screen RIGHT NOW: the stored
+  // value, the operator default, or — for a row-anchored socket — its measured
+  // spot, so it detaches without jumping. `s0raw` prefers the session's exact
+  // (unsnapped) shadow so a second drag continues from the true number rather
+  // than from the grid it was last rounded to. `sock0` is the undo snapshot.
+  const eff = effectiveSockOffsets();
+  const s0raw = {};
+  for (const k of Object.keys(eff)) s0raw[k] = sockRaw[k] != null ? sockRaw[k] : eff[k];
   scaleDrag = {
     x0: e.clientX, y0: e.clientY,
-    h0: state.height > 0 ? state.height
-      : (card ? Math.max(28, card.offsetHeight - (header ? header.offsetHeight : 14) - 3) : 52), // minus actual (wrappable) header + borders
+    h0,
     w0: state.width || (card ? card.offsetWidth : 96),
+    s0: eff,
+    s0raw,
+    sock0: { ...state.sockets },
   };
   e.currentTarget.setPointerCapture(e.pointerId);
   window.addEventListener('pointermove', onScale); window.addEventListener('pointerup', endScale);
   window.addEventListener('pointercancel', cancelScale);
 }
 function cancelScale() {
-  scaleDrag = null;
+  // A cancelled gesture must UNDO, not merely stop: this handler used to leave
+  // height/width wherever the pointer died, which was survivable — but it now
+  // also leaves a fully rewritten socket map, so one stray pointercancel (an
+  // iPad second finger) would silently re-author the node with no way back.
+  const d = scaleDrag; scaleDrag = null;
   window.removeEventListener('pointermove', onScale);
   window.removeEventListener('pointerup', endScale);
   window.removeEventListener('pointercancel', cancelScale);
+  if (d) {
+    state.height = d.h0; state.width = d.w0; state.sockets = d.sock0;
+    syncLayoutInputs(); renderNode();
+  }
 }
 function onScale(e) {
   if (!scaleDrag) return; const z = ui.zoom || 1;
   let h = Math.round(scaleDrag.h0 + (e.clientY - scaleDrag.y0) / z); h = Math.max(28, Math.min(1200, h)); state.height = h;
   let w = Math.round(scaleDrag.w0 + (e.clientX - scaleDrag.x0) / z); w = Math.max(24, Math.min(400, w)); state.width = w;
+  // Sockets travel WITH the frame: without this the ports stay a fixed px from
+  // the body centre, so a growing node opens dead space around a knot of
+  // sockets that never spreads (and a row-anchored one does not move at all).
+  // Gated on a real height change, so a width-only drag leaves them untouched;
+  // always derived from the pointerdown snapshot, so the gesture cannot drift.
+  if (h !== scaleDrag.h0) {
+    const k = h / scaleDrag.h0;
+    state.sockets = { ...state.sockets, ...scaleSocketOffsets(scaleDrag.s0, scaleDrag.h0, h) };
+    sockRaw = { ...sockRaw, ...scaleSocketOffsetsRaw(scaleDrag.s0raw, k) };
+  }
   syncLayoutInputs(); renderNode();
 }
 function endScale() { if (scaleDrag) { scaleDrag = null; stash(); } window.removeEventListener('pointermove', onScale); window.removeEventListener('pointerup', endScale); window.removeEventListener('pointercancel', cancelScale); }
@@ -930,7 +1245,7 @@ drop.addEventListener('drop', (ev) => { const f = ev.dataTransfer.files[0]; if (
 
 /* ---------------- File System Access: save to FastShaders ---------------- */
 const GLYPH_REL = ['src', 'components', 'NodeEditor', 'nodes', 'glyphs', 'customGlyphs.ts'];
-const FILE_HEADER = '/**\n * Per-node design overrides authored with node-designer.html (repo root).\n * { svg?: inner SVG (0 0 56 56), justify?: left|center|right, scale?: glyph-only scale,\n *   dx?/dy?: glyph nudge, width?: exact node width (>=24; header text wraps + header auto-grows),\n *   height?: EXACT body height (>=28, both layouts; shorter than content shrinks\n *   the node, content overflows; independent of glyph scale), text?: text-size\n *   multiplier (0.4-2.5, default 1; header/value/edge-label fonts), sockets?:\n *   per-socket offsets from body center (4px snap; keys = input ids + "out") }\n * Node frame style (corner radius, border) is fixed app-wide.\n * Rewritten wholesale by the designer on save.\n */\n';
+const FILE_HEADER = '/**\n * Per-node design overrides authored with node-designer.html (repo root).\n * { svg?: inner SVG (0 0 56 56), justify?: left|center|right, scale?: glyph-only scale,\n *   dx?/dy?: glyph nudge, width?: exact node width (>=24; header text wraps + header auto-grows),\n *   height?: EXACT body height (>=28, both layouts; shorter than content shrinks\n *   the node, content overflows; independent of glyph scale), text?: text-size\n *   multiplier (0.4-2.5, default 1; header/value/edge-label fonts), sockets?:\n *   per-socket offsets from body center (4px snap; keys = input ids + "out";\n *   the CORNER DRAG rescales them with the height, the W/H number\n *   fields do not — renderer semantics unchanged, so no saved design moves) }\n * Node frame style (corner radius, border) is fixed app-wide.\n * Rewritten wholesale by the designer on save.\n */\n';
 
 /* tiny IndexedDB k/v so the folder link survives reloads */
 function idb() { return new Promise((res, rej) => { const r = indexedDB.open('fastshaders-node-designer', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
@@ -938,9 +1253,27 @@ async function idbSet(k, v) { try { const d = await idb(); return new Promise((r
 async function idbGet(k) { try { const d = await idb(); return new Promise((res, rej) => { const t = d.transaction('kv', 'readonly'); const q = t.objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); } catch (e) { return undefined; } }
 
 async function adoptFolder(h) {
-  dirHandle = h; await loadSaved();
+  dirHandle = h; await loadSaved(); await loadSavedLabelsFromFolder();
   el('fsStatus').textContent = 'linked: ' + h.name;
   selectNode(state.type || 'mul');
+}
+
+/* Folder-tier counterpart of loadSavedLabels(). Worth the one-off babel import at
+   link time: this page is a BUILT copy, so its compiled labels are frozen at build
+   and the linked checkout may have been renamed since — showing the compiled name
+   would invite overwriting a newer one with an older one. */
+async function loadSavedLabelsFromFolder() {
+  try {
+    const splice = await import('@/registry/descriptionSplice');
+    const regSrc = await (await (await getRelFile(REGISTRY_REL, false)).getFile()).text();
+    const next = Object.create(null);
+    splice.locateRegistryLabels(regSrc).forEach((s) => { next[s.key] = s.value; });
+    const lvSrc = await (await (await getRelFile(I18N_REL, false)).getFile()).text();
+    const data = JSON.parse(lvSrc);
+    savedLabels = next;
+    savedLvLabels = Object.assign(Object.create(null), (data && data.nodes) || {});
+    return true;
+  } catch (e) { return false; }
 }
 async function linkFolder() {
   if (!window.showDirectoryPicker) { toast('This browser has no folder access — Save downloads customGlyphs.ts instead.'); return false; }
@@ -990,7 +1323,25 @@ async function probeDevApi() {
     st.textContent = 'saving via dev server'; st.style.color = '#2E7D32';
     st.title = 'customGlyphs.ts is read & written through the vite dev server (/__nd) — no folder link or Chromium needed.';
     st.onclick = () => toast('Already saving through the dev server — no folder link needed.');
+    await loadSavedLabels();
     selectNode(state.type || 'mul');
+    return true;
+  } catch (e) { return false; }
+}
+
+/* On-disk display names. Read alongside the glyphs so the Name fields show the
+   FILE's text rather than what this bundle was compiled with — the two diverge as
+   soon as anything is renamed, and a stale box would silently re-save the old
+   name over a newer one. A failure here is not fatal: canRename() stays false and
+   the fields explain themselves. */
+async function loadSavedLabels() {
+  try {
+    const r = await fetch(DEV_API + '/labels');
+    if (!r.ok) return false;
+    const j = await r.json();
+    savedLabels = Object.assign(Object.create(null), j.registry || {});
+    savedLvLabels = Object.assign(Object.create(null), j.lv || {});
+    labelApi = true;
     return true;
   } catch (e) { return false; }
 }
@@ -1001,12 +1352,149 @@ async function writeGlyphFile() {
 }
 function mergeInto(types) {
   types.forEach((t) => {
+    // ONLY design-dirty types may touch savedGlyphs.
+    //
+    // A type can be in `types` because only its NAME changed; falling through would
+    // take the `else delete savedGlyphs[t]` branch and DESTROY that node's saved glyph
+    // design as a side effect of renaming it. The guard must NOT exempt state.type:
+    // doSaveDesigns deliberately re-reads the file immediately before calling this
+    // (because the file can have moved on), so for the selected node `currentDesign()`
+    // is a diff of in-memory state that was applied from an OLDER savedGlyphs — if a
+    // design for it was authored elsewhere meanwhile, currentDesign() is {} and the
+    // delete branch would wipe the design we just read in.
+    //
+    // `t in sessionEdits` is exactly "this node's design differs from disk", because
+    // both save() and saveAll() call stash() first — which writes currentDesign() into
+    // sessionEdits and drops it again when it matches what was saved.
+    if (!(t in sessionEdits)) return;
     const d = (t === state.type) ? currentDesign() : sessionEdits[t];
     if (d && Object.keys(d).length) savedGlyphs[t] = d; else delete savedGlyphs[t];
   });
 }
+
+/* ---------------- name saving (registry source) ----------------
+   Names live in nodeRegistry.ts + node-i18n.json, NOT customGlyphs.ts, so they
+   travel their own path: a key→text PATCH that is spliced into the hand-formatted
+   registry by byte range (descriptionSplice.ts) rather than a regenerated file.
+   Tier 1 posts the patch to /__nd/labels and the dev server splices; tier 2 does
+   the identical splice in the browser against the linked folder. There is no tier
+   3: a download cannot carry a rename, because the designer holds nodeRegistry.ts
+   only as a compiled module — the source text, comments and section banners it
+   would have to splice are not in the bundle. */
+const REGISTRY_REL = ['src', 'registry', 'nodeRegistry.ts'];
+const I18N_REL = ['src', 'i18n', 'node-i18n.json'];
+
+/** Collect the pending {en, lv} patches for `types`. */
+function labelPatchFor(types) {
+  /* Null-prototype, like every other keyed map on this page: labelEdits is rehydrated
+     from localStorage and JSON.parse makes "__proto__" an OWN property, so it can reach
+     here as a key. On a PLAIN object `registry['__proto__'] = 'x'` hits Object.prototype's
+     setter and is silently discarded — the entry vanishes from the patch while still
+     counting as dirty, so Save reports success and the edit never clears. */
+  const registry = Object.create(null), lv = Object.create(null);
+  types.forEach((t) => {
+    const e = labelEdits[t]; if (!e) return;
+    if (typeof e.en === 'string') registry[t] = e.en;
+    if (typeof e.lv === 'string') lv[t] = e.lv;
+  });
+  return { registry: registry, lv: lv, empty: !Object.keys(registry).length && !Object.keys(lv).length };
+}
+
+/** Splice both files through the LINKED FOLDER (File System Access API). */
+async function writeLabelsToFolder(patch) {
+  // Dynamic import: descriptionSplice pulls in @babel/parser, and nothing else on
+  // this page needs it — deferring keeps that weight out of the designer's initial
+  // load for everyone who never renames through a folder link.
+  const splice = await import('@/registry/descriptionSplice');
+
+  // Compute BOTH outputs before writing EITHER. The two files must not be able to
+  // disagree: an English rename that landed followed by a rejected Latvian one
+  // would leave the registry renamed and node-i18n.json still pointing the old way.
+  let regFile = null, regOut = null, regSrc = null;
+  if (Object.keys(patch.registry).length) {
+    regFile = await getRelFile(REGISTRY_REL, false);
+    regSrc = await (await regFile.getFile()).text();
+    const slots = splice.locateRegistryLabels(regSrc);
+    const next = Object.create(null);   // see labelPatchFor: keys can be "__proto__"
+    slots.forEach((s) => { next[s.key] = s.value; });
+    Object.keys(patch.registry).forEach((k) => {
+      if (!(k in next)) throw new Error('unknown node type: ' + k);
+      next[k] = patch.registry[k];
+    });
+    splice.assertValidNodeLabels(next);
+    regOut = splice.spliceDescriptions(regSrc, slots, patch.registry, 'label');
+  }
+
+  let lvFile = null, lvOut = null, lvSrc = null;
+  if (Object.keys(patch.lv).length) {
+    lvFile = await getRelFile(I18N_REL, false);
+    lvSrc = await (await lvFile.getFile()).text();
+    const data = JSON.parse(lvSrc);
+    Object.keys(patch.lv).forEach((k) => {
+      if (String(patch.lv[k]).trim()) data.nodes[k] = patch.lv[k];
+      else delete data.nodes[k]; // '' means untranslated, not a stored empty name
+    });
+    splice.assertValidNodeLabels(data.nodes, 'lv label');
+    lvOut = JSON.stringify(data, null, 2) + '\n';
+  }
+
+  if (regOut != null && regOut !== regSrc) { const w = await regFile.createWritable(); await w.write(regOut); await w.close(); }
+  if (lvOut != null && lvOut !== lvSrc) { const w = await lvFile.createWritable(); await w.write(lvOut); await w.close(); }
+}
+
+/** Persist pending renames for `types`. Returns '' on success, else the reason. */
+async function saveLabels(types) {
+  if (!canRename()) return '';   // see labelDirty: not writable here, and not blocking
+  const patch = labelPatchFor(types);
+  if (patch.empty) return '';
+
+  // Block on the same rules the writers enforce, so a rejected save is reported
+  // by the field rather than as a 400 after the glyph half already landed.
+  const names = Object.keys(patch.registry);
+  for (let i = 0; i < names.length; i++) {
+    const p = nameProblem(names[i], patch.registry[names[i]]);
+    if (p) return names[i] + ': ' + p;
+  }
+
+  try {
+    if (labelApi) {
+      const r = await fetch(DEV_API + '/labels', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+      });
+      if (!r.ok) {
+        let why = 'HTTP ' + r.status;
+        try { const j = await r.json(); if (j && j.error) why = j.error; } catch (e) {}
+        throw new Error(why);
+      }
+    } else {
+      await writeLabelsToFolder(patch);
+    }
+  } catch (e) { return e.message; }
+
+  // Adopt what we just wrote as the new on-disk truth: the compiled registry in
+  // this bundle still holds the OLD name (a dev-server save reloads the page via
+  // HMR, but not before this runs), so without this the field would snap back.
+  Object.keys(patch.registry).forEach((t) => { savedLabels[t] = patch.registry[t]; });
+  Object.keys(patch.lv).forEach((t) => { savedLvLabels[t] = patch.lv[t]; });
+  types.forEach((t) => delete labelEdits[t]);
+  lsSet('nd:labelEdits', JSON.stringify(labelEdits));
+  return '';
+}
+/* Names first, and a failed rename ABORTS the whole save.
+   The two halves land in different files, so a partial save is possible in
+   principle — but the failure mode that matters is a rejected rename (duplicate
+   name, empty, stale slot) passing unnoticed because the glyph half toasted
+   "Saved". Stopping here leaves everything dirty, which is the honest state. */
 async function doSave(types, label) {
   if (!types.length) { toast('Nothing to save.'); return; }
+  const pending = labelPatchFor(types);
+  const renamed = canRename() ? Object.keys(pending.registry).length + Object.keys(pending.lv).length : 0;
+  const why = await saveLabels(types);
+  if (why) { toast('Rename failed — nothing saved: ' + why); renderNameHint(); return; }
+  await doSaveDesigns(types, label + (renamed ? ' (+' + renamed + ' name' + (renamed > 1 ? 's' : '') + ')' : ''));
+  syncNameInputs();
+}
+async function doSaveDesigns(types, label) {
   if (devApi) {
     try {
       try { const r0 = await fetch(DEV_API + '/glyphs'); if (r0.ok) { savedGlyphs = parseGlyphs((await r0.json()).content || ''); Object.values(savedGlyphs).forEach(sanitizeDesign); } } catch (e) {}
@@ -1099,7 +1587,18 @@ el('just').onchange = (e) => { state.justify = e.target.value; stash(); renderNo
 el('nW').oninput = (e) => { const v = parseInt(e.target.value) || 0; state.width = v <= 0 ? 0 : Math.max(24, Math.min(400, v)); stash(); renderNode(); };
 el('nH').oninput = (e) => { const v = parseInt(e.target.value) || 0; state.height = v <= 0 ? 0 : Math.max(28, Math.min(1200, v)); stash(); renderNode(); };
 el('nT').oninput = (e) => { state.text = Math.max(0.4, Math.min(2.5, parseFloat(e.target.value) || 1)); stash(); renderNode(); };
-el('sockReset').onclick = () => { state.sockets = {}; syncLayoutInputs(); stash(); renderNode(); toast('Socket positions reset to defaults.'); };
+el('sockReset').onclick = () => { state.sockets = {}; sockRaw = {}; syncLayoutInputs(); stash(); renderNode(); toast('Socket positions reset to defaults.'); };
+/* Renaming. `input` (not `change`) so the stage header updates as you type — the
+   header is what the designer sizes glyph width and text scale against, so seeing
+   the real string live is the point. */
+function onNameInput() {
+  if (!state.type || !canRename()) return;
+  stashLabel(state.type, el('nName').value, el('nNameLv').value);
+  renderNameHint();
+  renderNode();
+}
+el('nName').addEventListener('input', onNameInput);
+el('nNameLv').addEventListener('input', onNameInput);
 el('fsStatus').onclick = linkFolder;
 el('saveBtn').onclick = async () => { if (!devApi && !dirHandle && window.showDirectoryPicker) await linkFolder(); await save(); };
 el('saveAllBtn').onclick = async () => { if (!devApi && !dirHandle && window.showDirectoryPicker) await linkFolder(); await saveAll(); };

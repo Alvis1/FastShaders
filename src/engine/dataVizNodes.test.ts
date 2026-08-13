@@ -128,14 +128,14 @@ describe('graphToCode: Data Range', () => {
     expectValidModule(gen.code);
     // col0 spans 0…4 → subtract 0, scale by 1/4. Multiply-by-reciprocal, not
     // divide: same result, a quarter of the cost in the complexity table.
-    expect(gen.code).toContain('const norm1 = data1_col0.sub(0).mul(0.25).clamp(0.0, 1.0);');
+    expect(gen.code).toContain('const dataRange1 = data1_col0.sub(0).mul(0.25).clamp(0.0, 1.0);');
   });
 
   it('symmetric mode puts zero at exactly 0.5 of the ramp', () => {
     // col1 spans -2…4, so the domain must be ±4 — NOT the -2…4 extent, or the
     // neutral colour of a diverging map would sit at 0.33 instead of on zero.
     const gen = build({ mode: 'symmetric' }, 'col1');
-    expect(gen.code).toContain('const norm1 = data1_col1.sub(-4).mul(0.125).clamp(0.0, 1.0);');
+    expect(gen.code).toContain('const dataRange1 = data1_col1.sub(-4).mul(0.125).clamp(0.0, 1.0);');
   });
 
   it('log mode emits a log2 chain floored at the domain minimum', () => {
@@ -154,7 +154,7 @@ describe('graphToCode: Data Range', () => {
 
   it('uses the manual domain when the mode is manual', () => {
     const gen = build({ mode: 'manual', domainMin: 1, domainMax: 3 });
-    expect(gen.code).toContain('const norm1 = data1_col0.sub(1).mul(0.5).clamp(0.0, 1.0);');
+    expect(gen.code).toContain('const dataRange1 = data1_col0.sub(1).mul(0.5).clamp(0.0, 1.0);');
   });
 
   it('falls back to the manual domain when no Data column is traceable', () => {
@@ -162,7 +162,7 @@ describe('graphToCode: Data Range', () => {
     const norm = makeNode('n1', 'dataRange', { mode: 'minmax', domainMin: 0, domainMax: 2 });
     const output = makeNode('out', 'output', {});
     const gen = graphToCode([norm, output], [makeEdge('n1', 'out', 'out', 'opacity')]);
-    expect(gen.code).toContain('const norm1 = uv().x.sub(0).mul(0.5).clamp(0.0, 1.0);');
+    expect(gen.code).toContain('const dataRange1 = uv().x.sub(0).mul(0.5).clamp(0.0, 1.0);');
   });
 
   it('an unknown mode degrades to minmax rather than emitting it', () => {
@@ -173,7 +173,7 @@ describe('graphToCode: Data Range', () => {
 
   it('drops the clamp when the user turns it off', () => {
     expect(build({ mode: 'minmax', clamp: 0 }).code).toContain(
-      'const norm1 = data1_col0.sub(0).mul(0.25);',
+      'const dataRange1 = data1_col0.sub(0).mul(0.25);',
     );
   });
 
@@ -225,7 +225,10 @@ describe('graphToCode: Isolines', () => {
     // below a pixel — the same guard Data Stripes uses.
     const gen = build();
     expect(gen.code).toContain('const _isolines1_avg =');
-    expect(gen.code).toMatch(/_isolines1_ln\.mix\(_isolines1_avg, _isolines1_fw\.mul\(2\.0\)/);
+    // Function form — the chained `.mix` puts the RECEIVER in the factor slot
+    // (three's mixElement), so this faded toward `fw` using the line mask as
+    // the blend amount instead of the other way round.
+    expect(gen.code).toMatch(/mix\(_isolines1_ln, _isolines1_avg, _isolines1_fw\.mul\(2\.0\)/);
   });
 
   it('bakes its numeric parameters and coerces non-finite ones', () => {
@@ -273,15 +276,15 @@ describe('graphToCode: Data → Data Range → Colormap → Output', () => {
 
   it('emits a valid module that threads the column through both nodes', () => {
     expectValidModule(gen.code);
-    expect(gen.code).toContain('const norm1 = data1_col0.sub(0).mul(0.25).clamp(0.0, 1.0);');
-    expect(gen.code).toContain('texture(_colormap1_lut, vec2(norm1.mul(');
+    expect(gen.code).toContain('const dataRange1 = data1_col0.sub(0).mul(0.25).clamp(0.0, 1.0);');
+    expect(gen.code).toContain('texture(_colormap1_lut, vec2(dataRange1.mul(');
     expect(gen.code).toContain('return colormap1;');
   });
 
   it('declares each node before it is used', () => {
     const at = (s: string) => gen.code.indexOf(s);
-    expect(at('const data1_col0')).toBeLessThan(at('const norm1'));
-    expect(at('const norm1')).toBeLessThan(at('const colormap1'));
+    expect(at('const data1_col0')).toBeLessThan(at('const dataRange1'));
+    expect(at('const dataRange1')).toBeLessThan(at('const colormap1'));
   });
 });
 

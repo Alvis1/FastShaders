@@ -2,11 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { COUNT_CARD_COLORS, COUNT_LABELS } from '@/utils/colorUtils';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
-import { evaluateNodeRange, getNodeOutputShape, type RangeResult } from '@/engine/cpuEvaluator';
+import { appTime } from '@/utils/appClock';
+import { evaluateEdgeRange, getEdgeOutputShape, type RangeResult } from '@/engine/cpuEvaluator';
 import './EdgeInfoCard.css';
 
 interface EdgeInfoCardProps {
   sourceId: string;
+  /** Socket the edge leaves — a multi-output source (HSL h/s/l) must report
+   *  the channel THIS wire carries, not the node's whole vector. */
+  sourceHandle?: string | null;
   targetId: string;
   labelX: number;
   labelY: number;
@@ -14,6 +18,7 @@ interface EdgeInfoCardProps {
 
 export function EdgeInfoCard({
   sourceId,
+  sourceHandle,
   targetId,
   labelX,
   labelY,
@@ -35,8 +40,8 @@ export function EdgeInfoCard({
   // Static (non-time-driven) range: recompute once whenever the graph changes.
   useEffect(() => {
     if (isTimeDriven) return;
-    setRange(evaluateNodeRange(sourceId, nodes, edges, 0));
-  }, [sourceId, nodes, edges, isTimeDriven]);
+    setRange(evaluateEdgeRange({ source: sourceId, sourceHandle }, nodes, edges, 0));
+  }, [sourceId, sourceHandle, nodes, edges, isTimeDriven]);
 
   // Animated (time-driven) range: the rAF loop reads fresh graph state via
   // nodesRef/edgesRef, so its deps EXCLUDE nodes/edges — listing them would
@@ -45,19 +50,22 @@ export function EdgeInfoCard({
   useEffect(() => {
     if (!isTimeDriven) return;
     let rafId: number;
-    let startTime: number | null = null;
 
     const tick = (timestamp: number) => {
-      if (startTime === null) startTime = timestamp;
-      const t = (timestamp - startTime) / 1000;
-      const next = evaluateNodeRange(sourceId, nodesRef.current, edgesRef.current, t);
+      // Shared app clock — NOT an epoch minted at mount: this card mounts on
+      // hover, so a private clock restarted at ~0 every time the user pointed
+      // at the edge, and the chip showed sin(0.15) beside a sin card whose
+      // own loop (same private-epoch pattern) was at sin(48.3). All animated
+      // surfaces now evaluate the same t per frame and agree.
+      const t = appTime(timestamp);
+      const next = evaluateEdgeRange({ source: sourceId, sourceHandle }, nodesRef.current, edgesRef.current, t);
       setRange(next);
       rafId = requestAnimationFrame(tick);
     };
 
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, [sourceId, isTimeDriven]);
+  }, [sourceId, sourceHandle, isTimeDriven]);
 
   if (!sourceNode || !targetNode) return null;
 
@@ -66,7 +74,7 @@ export function EdgeInfoCard({
   // couldn't handle (e.g. positionGeometry, length, distance — chains where neither
   // eval nor range propagation works).
   const rangeLen = range?.min.length ?? 0;
-  const shapeLen = getNodeOutputShape(sourceId, nodes, edges);
+  const shapeLen = getEdgeOutputShape({ source: sourceId, sourceHandle }, nodes, edges);
   const count = Math.min(Math.max(rangeLen, shapeLen, 1), 4);
   const labels = COUNT_LABELS[count] ?? [''];
   const colors = COUNT_CARD_COLORS[count] ?? [];

@@ -27,7 +27,14 @@ const DELIBERATELY_GLYPHLESS = new Set([
   // identifies them better than any icon could.
   'property_float', 'slider',
   // 3+ input nodes whose rows fill the body — the port names are the identity.
-  'mix', 'smoothstep', 'remap', 'select',
+  // (smoothstep and select LEFT this list 2026-08-10 when they gained custom
+  // art — the S-curve and the flowchart-switch; mix/remap follow when theirs
+  // lands.)
+  'mix', 'remap',
+  // The colour-conversion pair is glyphless ON PURPOSE (owner decision
+  // 2026-08-13, superseding the art both briefly carried): hsl's h/s/l input
+  // rows and toHsl's h/s/l output sockets ARE the identity, like mix/split.
+  'hsl', 'toHsl',
   // Structural vector plumbing: the socket set (x/y/z/w) is the whole meaning.
   'split', 'append',
   // Draws its actual colour ramp instead of an icon, which is strictly more
@@ -57,6 +64,22 @@ describe('glyph coverage', () => {
     const types = new Set(shaderRendered.map((d) => d.type));
     const stale = [...DELIBERATELY_GLYPHLESS].filter((t) => !types.has(t) || hasNodeGlyph(t));
     expect(stale).toEqual([]);
+  });
+
+  it('the set of designer-authored SVGs changes only deliberately', () => {
+    // The designer rewrites customGlyphs.ts WHOLESALE on save, and a stale
+    // nd:edits stash from a concurrent/older tab can silently drop another
+    // node's authored art (that is how hsl/toHsl lost theirs in 2026-08).
+    // For a node with built-in fallback art the loss is INVISIBLE on screen
+    // and to the coverage assertion above — so pin the set: removing or
+    // adding art must show up as a snapshot diff someone approves
+    // (`vitest -u` after a deliberate designer save), never as a quiet
+    // casualty of an unrelated save.
+    const withArt = Object.entries(CUSTOM_GLYPHS)
+      .filter(([, entry]) => !!entry.svg)
+      .map(([type]) => type)
+      .sort();
+    expect(withArt).toMatchSnapshot();
   });
 
   it('custom glyph SVGs are well-formed and use the centred glyph space', () => {

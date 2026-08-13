@@ -287,11 +287,6 @@ export function probeEncodeCaps(): Promise<EncodeCaps> {
   return capsPromise;
 }
 
-/** Test seam: force the probed capabilities (also resets the memo). */
-export function __setEncodeCapsForTest(caps: EncodeCaps | null): void {
-  capsPromise = caps ? Promise.resolve(caps) : null;
-}
-
 /**
  * Try each candidate at the CURRENT dimensions and return the first payload
  * that fits `budget`, walking the quality ladder on the last lossy candidate

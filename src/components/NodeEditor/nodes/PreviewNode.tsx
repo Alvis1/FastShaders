@@ -6,7 +6,8 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
-import { evaluateNodeScalar, getTargetEdges } from '@/engine/cpuEvaluator';
+import { appTime } from '@/utils/appClock';
+import { evaluateEdgeSource, getTargetEdges } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
 import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
 import './PreviewNode.css';
@@ -55,6 +56,14 @@ export const PreviewNode = memo(function PreviewNode({
   selected,
 }: NodeProps<PreviewFlowNode>) {
   const def = NODE_REGISTRY.get(data.registryType);
+  // Rules-of-Hooks note: this return sits ABOVE the hooks below. Safe because
+  // `def` cannot flip defined<->undefined on a MOUNTED instance: React Flow keys
+  // node components by node.id, every registryType the app writes is in
+  // NODE_REGISTRY (`unknown` included), and nothing mutates registryType in place
+  // to or from an unregistered value. A tampered .fastshader with an unknown
+  // registryType renders null for the whole life of that node. Moving the return
+  // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
+  // dereference `def`) — see CLEAN-3.
   if (!def) return null;
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -118,9 +127,9 @@ export const PreviewNode = memo(function PreviewNode({
     let key = '';
     for (const e of getTargetEdges(s.nodes, s.edges, id)) {
       if (!e.targetHandle) continue;
-      const v = evaluateNodeScalar(e.source, s.nodes, s.edges, 0);
+      const v = evaluateEdgeSource(e, s.nodes, s.edges, 0)?.[0] ?? null;
       const timeFed = hasTimeUpstream(e.source, s.nodes, s.edges);
-      key += `${e.source}\u0000${e.targetHandle}\u0000${v ?? 'n'}\u0000${timeFed ? 1 : 0}\u0001`;
+      key += `${e.source}\u0000${e.sourceHandle ?? ''}\u0000${e.targetHandle}\u0000${v ?? 'n'}\u0000${timeFed ? 1 : 0}\u0001`;
     }
     return key;
   });
@@ -164,7 +173,9 @@ export const PreviewNode = memo(function PreviewNode({
     for (const edge of getTargetEdges(currentNodes, currentEdges, id)) {
       const handle = edge.targetHandle;
       if (!handle) continue;
-      const val = evaluateNodeScalar(edge.source, currentNodes, currentEdges, time);
+      // Per-SOCKET: an HSL Lightness wire into `scale` must sample the
+      // noise at L, not at channel 0's Hue.
+      const val = evaluateEdgeSource(edge, currentNodes, currentEdges, time)?.[0] ?? null;
       if (val !== null) resolved[handle] = val;
     }
     return resolved;
@@ -202,11 +213,13 @@ export const PreviewNode = memo(function PreviewNode({
     if (!ctx) return;
 
     let rafId: number;
-    let startTime: number | null = null;
 
     const draw = (timestamp: number) => {
-      if (startTime === null) startTime = timestamp;
-      const t = (timestamp - startTime) / 1000;
+      // Shared app clock (utils/appClock) — a private per-loop epoch made
+      // every animated surface disagree with every other; one epoch also
+      // lets cpuEvaluator's per-time cache buckets be shared across
+      // surfaces within a frame.
+      const t = appTime(timestamp);
 
       const { nodes, edges } = useAppStore.getState();
       const resolved = resolveValues(nodes, edges, t);

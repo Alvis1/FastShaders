@@ -6,19 +6,22 @@
 import type { MaterialSettings } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 
-const CHANNEL_TO_PROP: Record<string, string> = {
-  color: 'colorNode',
-  emissive: 'emissiveNode',
-  normal: 'normalNode',
-  position: 'positionNode',
-  opacity: 'opacityNode',
-  roughness: 'roughnessNode',
-  metalness: 'metalnessNode',
+// Map, not Record: channel keys come from parseShaderBody's return-object
+// scan of pasted/imported code, and a Record would resolve 'constructor' to
+// an inherited Function that lands as a property NAME in the emitted module.
+const CHANNEL_TO_PROP = new Map<string, string>([
+  ['color', 'colorNode'],
+  ['emissive', 'emissiveNode'],
+  ['normal', 'normalNode'],
+  ['position', 'positionNode'],
+  ['opacity', 'opacityNode'],
+  ['roughness', 'roughnessNode'],
+  ['metalness', 'metalnessNode'],
   // envNode: three's MeshPhysicalNodeMaterial wraps a texture-valued env in
   // pmremTexture() (EnvironmentNode) — image-based lighting, not a channel
   // sampled per fragment. Needs shaderloader 0.5's nodeProps to list it.
-  env: 'envNode',
-};
+  ['env', 'envNode'],
+]);
 
 interface TSLImports {
   tslNames: string[];
@@ -490,11 +493,11 @@ function parseBody(
 }
 
 /** THREE.FrontSide=0, THREE.BackSide=1, THREE.DoubleSide=2 */
-const SIDE_VALUES: Record<string, number> = {
-  front: 0,
-  back: 1,
-  double: 2,
-};
+const SIDE_VALUES = new Map<string, number>([
+  ['front', 0],
+  ['back', 1],
+  ['double', 2],
+]);
 
 interface ShaderModuleProperty {
   name: string;
@@ -683,7 +686,7 @@ export function buildShaderModule(
   const returnProps: string[] = [];
   let colorEmitted = false;
   for (const [ch, ref] of Object.entries(channels)) {
-    const prop = CHANNEL_TO_PROP[ch];
+    const prop = CHANNEL_TO_PROP.get(ch);
     if (!prop) continue;
     if (ch === 'position') {
       const displacement = displacementMode === 'normal'
@@ -702,12 +705,12 @@ export function buildShaderModule(
   // graph wired a discard but no color (e.g. discard + position), still emit the
   // color channel so the cutout isn't silently dropped with a dead __pixel.
   if (hasDiscard && !colorEmitted) {
-    returnProps.unshift(`${CHANNEL_TO_PROP.color}: __pixel(${pixelCallArgs.join(', ')})`);
+    returnProps.unshift(`${CHANNEL_TO_PROP.get('color')}: __pixel(${pixelCallArgs.join(', ')})`);
   }
 
   if (materialSettings?.transparent) returnProps.push('transparent: true');
   if (materialSettings?.side) {
-    returnProps.push(`side: ${SIDE_VALUES[materialSettings.side] ?? 0}`);
+    returnProps.push(`side: ${SIDE_VALUES.get(materialSettings.side) ?? 0}`);
   }
   // Coerced and clamped, never interpolated raw: materialSettings arrives from
   // an adversarial FASTSHADERS_PROJECT_V1 block (extractProjectState checks the
@@ -753,7 +756,7 @@ export function buildShaderModule(
       // loader builds a Color-valued uniform instead of parseFloat-ing it to 0.
       schemaLines.push(
         typeof def === 'string'
-          ? `  ${name}: { type: 'color', default: '${def}' },`
+          ? `  ${name}: { type: 'color', default: '${/^#[0-9a-fA-F]{6}$/.test(def) ? def : '#000000'}' },`
           : `  ${name}: { type: 'number', default: ${def} },`,
       );
     }

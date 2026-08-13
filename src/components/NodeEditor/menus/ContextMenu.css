@@ -43,17 +43,22 @@
   --font-size-md: 16px;
 }
 
-/* The add-node menu is the one menu whose rows carry a full sentence of
-   description. With only a min-width, the fixed-position box shrink-to-fits to
-   its widest row laid out on ONE line — and the longest description in the
-   registry (Data Viz, 274 chars) prefers ~1600px, so the menu just took every
-   pixel between the click point and the viewport edge (measured: 1212px of menu
-   on a 1512px window). `--item-desc`'s `white-space: normal` never got to wrap
-   anything because the box always grew instead. An explicit width is what turns
-   the wrapping on. Scoped to a modifier because the settings menus share
-   `.context-menu` and need room for their slider + number rows. */
+/* An explicit width, still, even though the rows are one line again: with only
+   a min-width the fixed-position box shrink-to-fits to its widest row, so the
+   menu's width would wander with whatever node names the current search
+   happens to return. 280px fits `Camera Position` + its category tag without
+   wrapping and keeps the box off the canvas.
+
+   It used to be 400px because each row also carried a full sentence of
+   description — the widest in the registry (Data Viz, 274 chars) prefers
+   ~1600px on one line, so before the width was pinned the menu simply took
+   every pixel between the click point and the viewport edge (measured: 1212px
+   of menu on a 1512px window). Descriptions live in the row's `title` now, and
+   the tooltip does its own wrapping at `.fs-tooltip`'s 260px. Scoped to a
+   modifier because the settings menus share `.context-menu` and need room for
+   their slider + number rows. */
 .context-menu--add-node {
-  width: 400px;
+  width: 280px;
 }
 
 /* Long words (node labels, em-dashed clauses) must break rather than push the
@@ -64,7 +69,7 @@
 
 /* Flex items default to `min-width: auto`, which floors the label at its
    longest word and would shove the category tag out of the row. */
-.context-menu--add-node .context-menu__item-head > span:first-child {
+.context-menu--add-node .context-menu__item > span:first-child {
   min-width: 0;
 }
 
@@ -88,6 +93,26 @@
 .context-menu input[type='checkbox'] {
   width: 14px !important;
   height: 14px !important;
+}
+
+/* Colour rows in the settings menus (Group frame colour, Note header/body,
+   any node setting whose default is a hex) render the app-wide picker — a
+   trigger `<button>`, not an `<input type="color">`. It has to fill the same
+   80px field slot the text inputs and small `<select>`s use (menuShared's
+   `colorFieldStyle`), and `PaletteColorPicker` takes a className rather than a
+   style, so the size lives here.
+
+   TWO classes on purpose: `.palette-swatch` (26x12) and a bare
+   `.context-menu__color` would tie on specificity, leaving the result to
+   whichever stylesheet the bundler emits last. The fill arrives as an inline
+   `background`, so nothing here may set one. */
+.context-menu .context-menu__color {
+  width: 80px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
 }
 
 .context-menu__search {
@@ -196,20 +221,18 @@
   color: var(--text-muted);
 }
 
-/* Node rows in AddNodeMenu carry a description line, so they stack instead of
-   using the single-row label/value layout every other menu item wants. Scoped
-   to a modifier because `.context-menu__item` is shared by all submenus. */
+/* Rows that carry a hint line under the label stack instead of using the
+   single-row label/value layout every other menu item wants. Scoped to a
+   modifier because `.context-menu__item` is shared by all submenus.
+   Sole user: DataRangeSettingsMenu's mode rows, where the hint is the whole
+   point of the choice (a domain decision the user cannot see the effect of).
+   AddNodeMenu's node rows used to stack too — their description is a `title`
+   tooltip now, so they are back to the shared one-line layout and the
+   `__item-head` wrapper that split the two lines is gone. */
 .context-menu__item--stacked {
   flex-direction: column;
   align-items: stretch;
   gap: 2px;
-}
-
-.context-menu__item-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
 }
 
 .context-menu__item-desc {

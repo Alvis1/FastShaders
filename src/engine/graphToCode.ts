@@ -1,6 +1,6 @@
 import { parseExpression } from '@babel/parser';
 import type { Node } from '@babel/types';
-import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData, TSLDataType } from '@/types';
+import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -14,7 +14,7 @@ import type { MicChannel } from '@/utils/micAnalysis';
 import { imageAssetFor } from './imageAssets';
 // Shape inference (1-4 channels) — the same authority the edge/preview layer
 // uses, so codegen and the UI agree on what counts as a scalar.
-import { getNodeOutputShape, shapeOfDataType } from './cpuEvaluator';
+import { getNodeOutputShape, portShapeForHandle } from './cpuEvaluator';
 import {
   minMax,
   normalize01,
@@ -33,7 +33,6 @@ import {
   LUT_COORD_OFFSET,
 } from '@/utils/colormaps';
 import { float32ToBase64, float16ToBase64 } from '@/utils/binaryCodec';
-import { hexToRgb01 } from '@/utils/colorUtils';
 import { getComponentCount } from './cpuEvaluator';
 import { topologicalSort } from './topologicalSort';
 
@@ -60,10 +59,10 @@ function f16Decode(b64: string): string {
  */
 function traceSignalColumn(
   signalEdge: AppEdge | undefined,
-  sorted: AppNode[],
+  gidx: GraphIndex,
 ): { capped: Float32Array; cnorm: Float32Array } | null {
   if (!signalEdge) return null;
-  const src = sorted.find((n) => n.id === signalEdge.source);
+  const src = gidx.nodeById.get(signalEdge.source);
   const capped = columnForHandle(src?.data as ShaderNodeData | undefined, signalEdge.sourceHandle);
   if (!capped) return null;
   return { capped, cnorm: normalize01(capped, minMax(capped)) };
@@ -91,7 +90,7 @@ const CUSTOM_EMISSION_BASENAMES: Record<string, string> = {
   dataviz: 'dataviz',
   imageNode: 'image',
   colormap: 'colormap',
-  dataRange: 'norm',
+  dataRange: 'dataRange',
   isolines: 'isolines',
 };
 
@@ -124,13 +123,12 @@ function numericParam(
   node: AppNode,
   key: string,
   fallback: number,
-  edges: AppEdge[],
   varNames: Map<string, string>,
-  sorted: AppNode[],
+  gidx: GraphIndex,
 ): string {
-  const edge = edges.find((e) => e.target === node.id && e.targetHandle === key);
+  const edge = inEdge(gidx, node.id, key);
   if (edge) {
-    const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+    const ref = resolveEdgeRef(edge, varNames, gidx);
     if (ref) return ref;
   }
   const raw = Number(getNodeValues(node)[key]);
@@ -147,6 +145,41 @@ function radialCoordExpr(radial: boolean, cx: number, cy: number, radius: number
 
 /** Valid swizzle component handles for split node output. */
 export const VALID_SWIZZLE = new Set(['x', 'y', 'z', 'w']);
+
+/**
+ * The RGB-to-HSL node's per-component output handles ⇄ the vector components
+ * they read. ONE emitted `const toHsl1 = toHsl(rgb);` serves all three sockets
+ * (`resolveEdgeRef` swizzles it); `codeToGraph.resolveMemberExpr` uses the
+ * inverse to map `toHsl1.x` straight back to the `h` handle instead of minting
+ * a Split node — without which every Apply would splice a Split between the
+ * node and its consumers and the graph would grow without bound.
+ *
+ * **These two maps must change together** — swapping one direction silently
+ * exchanges Saturation and Lightness across a round trip (pinned by test).
+ * `out` is absent on purpose: it means the whole vec3 and falls through to the
+ * bare variable name, which is what keeps every pre-existing graph
+ * byte-identical.
+ *
+ * Maps, not object literals: both are indexed by adversarial strings (an
+ * edge's sourceHandle out of a .fastshader; a member-expression property out
+ * of pasted code), and a bare Record resolves 'constructor'/'toString' through
+ * the prototype chain to a truthy Function — which would ride into the emitted
+ * module (a SyntaxError) or an edge handle. Same reason VALID_SWIZZLE is a Set.
+ */
+export const TOHSL_HANDLE_TO_COMPONENT = new Map<string, string>([['h', 'x'], ['s', 'y'], ['l', 'z']]);
+export const TOHSL_COMPONENT_TO_HANDLE = new Map<string, string>([['x', 'h'], ['y', 's'], ['z', 'l']]);
+
+/**
+ * A bare JS identifier — the only NON-NUMERIC shape allowed to reach the
+ * emitted module out of stored `values` (the noise `pos` key; see
+ * resolveExposedParam). Deliberately shape-based rather than a membership
+ * whitelist: codeToGraph stores whatever variable name a pasted shader used for
+ * a noise position (`extractedValues.pos = posArg.name`), so a membership test
+ * would silently rewrite those graphs. The SHAPE is what makes it safe — it can
+ * hold no `(`, `)`, `;` or quote, so the worst it can produce is the bare
+ * reference the old `String()` already produced (a ReferenceError at load).
+ */
+const TSL_IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
  * `#rrggbb` → the `0xrrggbb` literal the colour constructors take.
@@ -298,6 +331,54 @@ function isSafeUnknownExpression(expr: string): boolean {
   return verdict;
 }
 
+interface GraphIndex {
+  nodeById: Map<string, AppNode>;
+  incoming: Map<string, AppEdge[]>;
+  outgoing: Map<string, AppEdge[]>;
+}
+
+/**
+ * Lookup indexes for ONE codegen pass.
+ *
+ * Every list preserves ARRAY ORDER and every key is first-wins, so each
+ * `.find()` these replace returns the identical element it returned before —
+ * that is the whole byte-safety argument. `nodeById` indexes `sorted`, NOT
+ * `nodes`: a cycle-excluded node is absent from `sorted` and today's
+ * `sorted.find` reports it as missing; indexing `nodes` would resurrect it.
+ *
+ * Unlike cpuEvaluator's EvalCtx this needs no WeakMap keying or
+ * sameGraphSemantics revalidation — graphToCode is a single pass, `sorted` is
+ * const and `edges` is reassigned only once at the top, before this is built,
+ * so there is nothing that can invalidate it.
+ */
+function buildGraphIndex(sorted: AppNode[], edges: AppEdge[]): GraphIndex {
+  const nodeById = new Map<string, AppNode>();
+  for (const n of sorted) if (!nodeById.has(n.id)) nodeById.set(n.id, n);
+  const incoming = new Map<string, AppEdge[]>();
+  const outgoing = new Map<string, AppEdge[]>();
+  for (const e of edges) {
+    const i = incoming.get(e.target);
+    if (i) i.push(e); else incoming.set(e.target, [e]);
+    const o = outgoing.get(e.source);
+    if (o) o.push(e); else outgoing.set(e.source, [e]);
+  }
+  return { nodeById, incoming, outgoing };
+}
+
+/** Edges arriving at `id`, in array order. The returned array is the index's
+ *  own list — read it, never mutate it. */
+function inEdges(gidx: GraphIndex, id: string): AppEdge[] {
+  return gidx.incoming.get(id) ?? [];
+}
+/** Edges leaving `id`, in array order. Read-only, as above. */
+function outEdges(gidx: GraphIndex, id: string): AppEdge[] {
+  return gidx.outgoing.get(id) ?? [];
+}
+/** Indexed twin of `edges.find(e => e.target === id && e.targetHandle === handle)`. */
+function inEdge(gidx: GraphIndex, id: string, handle: string): AppEdge | undefined {
+  return inEdges(gidx, id).find((e) => e.targetHandle === handle);
+}
+
 export function graphToCode(
   nodes: AppNode[],
   edges: AppEdge[],
@@ -314,9 +395,42 @@ export function graphToCode(
 
   const sorted = topologicalSort(nodes, edges);
 
+  const gidx = buildGraphIndex(sorted, edges);
+
   // Assign unique variable names
   const varNames = new Map<string, string>();
   const usedNames = new Set<string>();
+
+  // Smallest index whose `<base><i>` is not already in usedNames, memoized per
+  // base. usedNames only ever GROWS, so the cursor is monotone: every index
+  // below it is permanently taken and can never become claimable again, which
+  // makes skipping it exactly equivalent to re-probing it. That turns the O(k)
+  // rescan per claim — O(N^2) over N same-base nodes — into amortized O(1).
+  //
+  // TWO cursors, not one, and the split is LOAD-BEARING. The bareFirst sequence
+  // is `base, base2, base3, ...`; index 1 is never a candidate there, so that
+  // cursor floors at 2. Sharing one cursor and passing the floor in would let a
+  // bareFirst probe park it at 2, and the next PLAIN claim for the same base
+  // would then skip a free `base1`: two properties named `mul` plus a `mul`
+  // node emits `mul3` where today it emits `mul1` — a byte-breaking rename.
+  //
+  // A cursor advances ONLY over names actually in usedNames — never past one
+  // that was merely REJECTED by `aliases`/`extraFree`. A `data1` candidate
+  // rejected because a property already took `data1_col0` is still claimable by
+  // the NEXT data node, whose columns differ; a plain monotone counter would
+  // skip it and rename the node.
+  const nameCursor = new Map<string, number>();
+  const bareCursor = new Map<string, number>();
+  const firstFreeIdx = (
+    cursors: Map<string, number>,
+    base: string,
+    from: number,
+  ): number => {
+    let i = Math.max(from, cursors.get(base) ?? from);
+    while (usedNames.has(`${base}${i}`)) i++;
+    cursors.set(base, i);
+    return i;
+  };
 
   /**
    * Claim the first free variable name for `base`: `base1`, `base2`, … —
@@ -337,9 +451,19 @@ export function graphToCode(
   ): string => {
     const free = (c: string) => !usedNames.has(c) && (opts.extraFree?.(c) ?? true);
     const claimable = (c: string) => free(c) && (opts.aliases?.(c) ?? []).every(free);
-    let idx = 1;
-    let name = opts.bareFirst ? base : `${base}${idx}`;
-    while (!claimable(name)) name = `${base}${++idx}`;
+    let name: string;
+    if (opts.bareFirst) {
+      name = base;
+      if (!claimable(name)) {
+        let i = firstFreeIdx(bareCursor, base, 2);
+        name = `${base}${i}`;
+        while (!claimable(name)) name = `${base}${++i}`;
+      }
+    } else {
+      let i = firstFreeIdx(nameCursor, base, 1);
+      name = `${base}${i}`;
+      while (!claimable(name)) name = `${base}${++i}`;
+    }
     usedNames.add(name);
     for (const alias of opts.aliases?.(name) ?? []) usedNames.add(alias);
     return name;
@@ -385,8 +509,7 @@ export function graphToCode(
     // with the emitted `const data1_col1` → duplicate declaration → SyntaxError.
     if (def.type === 'dataNode') {
       const refCols = new Set<string>();
-      for (const e of edges) {
-        if (e.source !== node.id) continue;
+      for (const e of outEdges(gidx, node.id)) {
         if (/^col\d+$/.test(e.sourceHandle ?? '')) refCols.add(e.sourceHandle as string);
       }
       varNames.set(node.id, claimName('data', {
@@ -403,8 +526,8 @@ export function graphToCode(
     // the whole module fails to load, not just this node.
     if (def.type === 'micNode') {
       const refChannels = new Set<MicChannel>();
-      for (const e of edges) {
-        if (e.source === node.id) refChannels.add(micChannelForHandle(e.sourceHandle));
+      for (const e of outEdges(gidx, node.id)) {
+        refChannels.add(micChannelForHandle(e.sourceHandle));
       }
       varNames.set(node.id, claimName('mic', {
         // Both the uniform AND its gained twin (`_mic1_bass`) share the Fn-body
@@ -489,13 +612,11 @@ export function graphToCode(
    * a compile error rather than a wrong picture.
    */
   const shapeOfEdgeSource = (edge: AppEdge): number => {
-    const srcNode = sorted.find((n) => n.id === edge.source);
-    const handle = edge.sourceHandle ?? 'out';
-    const dyn = (srcNode?.data as { dynamicOutputs?: { id: string; dataType: TSLDataType }[] })
-      ?.dynamicOutputs;
-    const srcDef = srcNode ? registry.get(srcNode.data.registryType) : undefined;
-    const port = dyn?.find((o) => o.id === handle) ?? srcDef?.outputs.find((o) => o.id === handle);
-    const declared = port ? shapeOfDataType(port.dataType) : 0;
+    const srcNode = gidx.nodeById.get(edge.source);
+    // ONE per-handle port lookup, shared with the visual layer
+    // (cpuEvaluator.getEdgeOutputShape) so codegen and the on-card channel
+    // counts cannot drift. `registry` is injectable here, hence the argument.
+    const declared = srcNode ? portShapeForHandle(srcNode, edge.sourceHandle ?? 'out', registry) : 0;
     if (declared > 0) return declared;
     return getNodeOutputShape(edge.source, nodes, edges);
   };
@@ -507,9 +628,39 @@ export function graphToCode(
    */
   const scalarRefOf = (edge: AppEdge | undefined): string | null => {
     if (!edge) return null;
-    const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+    const ref = resolveEdgeRef(edge, varNames, gidx);
     if (!ref) return null;
     return shapeOfEdgeSource(edge) === 1 ? ref : `${ref}.x`;
+  };
+
+  /**
+   * The COLOUR an edge carries, or the stored hex when nothing is wired — the
+   * ramp endpoints of Data Stripes / Data Viz.
+   *
+   * The deliberate inverse of `scalarRefOf`: that one NARROWS with `.x` because
+   * the dataviz family's other inputs are scalars, which is exactly wrong for a
+   * colour — it would throw away two channels of every colour wired in. A
+   * 1-channel source is WIDENED with `vec3()` instead, the same rule the Output
+   * node's colour channels use. That widen is load-bearing, not cosmetic:
+   * three's `MathNode.getInputType` picks the LONGEST operand and pads or
+   * truncates silently, so a mix of two scalars compiles to a scalar with no
+   * error while `shapeOfEdgeSource` still reports 3 from the registry port —
+   * and the Output node then splats it into alpha.
+   *
+   * `resolveExposedParam` is NOT usable here: its unwired fallback is
+   * `Number(raw)`, and `Number('#1b2a4a')` is NaN. The unwired branch returns
+   * exactly the `color(0x…)` string this emitter has always produced, so a node
+   * with nothing wired stays byte-identical.
+   */
+  const colorRefOf = (edge: AppEdge | undefined, storedHex: unknown, fallbackHex: string): string => {
+    if (edge) {
+      const ref = resolveEdgeRef(edge, varNames, gidx);
+      if (ref) {
+        addImport('three/tsl', 'vec3');
+        return shapeOfEdgeSource(edge) === 1 ? `vec3(${ref})` : ref;
+      }
+    }
+    return `color(${hexLiteral(storedHex ?? fallbackHex)})`;
   };
 
   // Build body lines
@@ -537,7 +688,7 @@ export function graphToCode(
       continue;
     }
 
-    const args = resolveArguments(node, edges, varNames, def, sorted);
+    const args = resolveArguments(node, varNames, def, gidx);
 
     if (def.type === 'uv') {
       // UV node: channel selector + tiling + rotation
@@ -545,13 +696,13 @@ export function graphToCode(
       addImport('three/tsl', 'uv');
 
       // Resolve channel (UV map index)
-      const channelExpr = resolveExposedParam(node, 'channel', edges, varNames, nv, sorted);
+      const channelExpr = resolveExposedParam(node, 'channel', varNames, nv, gidx);
       const baseExpr = channelExpr === '0' ? 'uv()' : `uv(${channelExpr})`;
 
       // Resolve tiling and rotation (may be connected via input ports)
-      const tilingU = resolveExposedParam(node, 'tilingU', edges, varNames, nv, sorted);
-      const tilingV = resolveExposedParam(node, 'tilingV', edges, varNames, nv, sorted);
-      const rotationExpr = resolveExposedParam(node, 'rotation', edges, varNames, nv, sorted);
+      const tilingU = resolveExposedParam(node, 'tilingU', varNames, nv, gidx);
+      const tilingV = resolveExposedParam(node, 'tilingV', varNames, nv, gidx);
+      const rotationExpr = resolveExposedParam(node, 'rotation', varNames, nv, gidx);
       const hasTiling = tilingU !== '1' || tilingV !== '1';
       const hasRotation = rotationExpr !== '0';
 
@@ -583,8 +734,7 @@ export function graphToCode(
       const nv = getNodeValues(node);
       const decoded = decodeDataNode(nv);
       const usedCols = new Set<number>();
-      for (const e of edges) {
-        if (e.source !== node.id) continue;
+      for (const e of outEdges(gidx, node.id)) {
         const m = /^col(\d+)$/.exec(e.sourceHandle ?? '');
         if (m) usedCols.add(Number(m[1]));
       }
@@ -651,8 +801,8 @@ export function graphToCode(
         bodyLines.push(`  const ${varName} = vec3(0, 0, 0);`);
       } else {
         addImport('three/tsl', 'texture');
-        const uvEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'uv');
-        const uvRef = uvEdge ? resolveEdgeRef(uvEdge, edges, varNames, sorted) : null;
+        const uvEdge = inEdge(gidx, node.id, 'uv');
+        const uvRef = uvEdge ? resolveEdgeRef(uvEdge, varNames, gidx) : null;
         if (!uvRef) addImport('three/tsl', 'uv');
         // UV-space transform settings (NodeSettingsMenu). All Number-coerced —
         // never interpolate stored strings. The raw sample renders mirrored
@@ -671,9 +821,9 @@ export function graphToCode(
         // generated identifiers, literals go through num(): nothing
         // attacker-controlled reaches the emitted text.
         const paramExpr = (key: string, dflt: number): string => {
-          const pEdge = edges.find((e) => e.target === node.id && e.targetHandle === key);
+          const pEdge = inEdge(gidx, node.id, key);
           if (pEdge) {
-            const ref = resolveEdgeRef(pEdge, edges, varNames, sorted);
+            const ref = resolveEdgeRef(pEdge, varNames, gidx);
             if (ref) return ref;
           }
           return num(numVal(key, dflt));
@@ -735,8 +885,11 @@ export function graphToCode(
       // space (ColorManagement, on by default since r152); a bare vec3 of
       // hex/255 does not, so the same swatch rendered lighter here than on a
       // Color node, and the two endpoints were interpolated in the wrong space.
-      const lo = hexLiteral(nv.lowColor ?? '#1b2a4a');
-      const hi = hexLiteral(nv.highColor ?? '#ffd24d');
+      // A wired ramp colour wins over the stored swatch (the exposedPorts
+      // rule); unwired emits the identical `color(0x…)` as before, so a node
+      // with nothing wired is byte-stable.
+      const lo = colorRefOf(inEdge(gidx, node.id, 'lowColor'), nv.lowColor, '#1b2a4a');
+      const hi = colorRefOf(inEdge(gidx, node.id, 'highColor'), nv.highColor, '#ffd24d');
       // Radial ("target"/tree-ring) mode: index the data by distance from a
       // choosable center instead of uv.x, so the bands become concentric rings.
       const radial = Number(nv.radial ?? 0) >= 0.5;
@@ -749,12 +902,13 @@ export function graphToCode(
       addImport('three/tsl', 'float');
       addImport('three/tsl', 'color');
       addImport('three/tsl', 'uv');
+      addImport('three/tsl', 'mix');
       addImport('three/tsl', 'dFdx');
       addImport('three/tsl', 'dFdy');
       if (radial) addImport('three/tsl', 'vec2');
 
-      const signalEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'signal');
-      const signalRef = signalEdge ? resolveEdgeRef(signalEdge, edges, varNames, sorted) : null;
+      const signalEdge = inEdge(gidx, node.id, 'signal');
+      const signalRef = signalEdge ? resolveEdgeRef(signalEdge, varNames, gidx) : null;
 
       // Trace the signal to a Data column → bake a cumulative-phase ramp (stripe
       // density) AND a normalized-value ramp (color). Both are sampled at the
@@ -762,7 +916,7 @@ export function graphToCode(
       let phaseTexVar: string | null = null;
       let valueTexVar: string | null = null;
       let totalCycles = bf;
-      const traced = traceSignalColumn(signalEdge, sorted);
+      const traced = traceSignalColumn(signalEdge, gidx);
       if (traced) {
         const ramp = buildPhaseRamp(traced.cnorm, bf, dens);
         totalCycles = ramp.totalCycles;
@@ -803,10 +957,10 @@ export function graphToCode(
       bodyLines.push(`  const ${fw} = dFdx(${p}).abs().add(dFdy(${p}).abs());`);
       bodyLines.push(`  const ${ln} = ${tri}.smoothstep(float(0.5).sub(${fw}), float(0.5).add(${fw}));`);
       // Fade dense (sub-pixel) regions to the average band so they don't shimmer.
-      bodyLines.push(`  const ${lnS} = ${ln}.mix(float(0.5), ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`);
+      bodyLines.push(`  const ${lnS} = mix(${ln}, float(0.5), ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`);
       bodyLines.push(`  const ${br} = float(1.0).sub(${lnS}.mul(${num(lineStrength)}));`);
       bodyLines.push(`  const ${t} = ${colorT};`);
-      bodyLines.push(`  const ${col} = color(${lo}).mix(color(${hi}), ${t});`);
+      bodyLines.push(`  const ${col} = mix(${lo}, ${hi}, ${t});`);
       bodyLines.push(`  const ${varName} = ${col}.mul(${br});`);
     } else if (def.type === 'dataviz') {
       // Data Viz: a single Data column distributed along one axis (or radially)
@@ -826,21 +980,25 @@ export function graphToCode(
       const midpoint = Math.min(Math.max(Number(nv.midpoint ?? 0.5), 1e-3), 1 - 1e-3);
       // sRGB → linear via `color(0x…)`; see the matching note in the Stripes
       // branch above.
-      const lo = hexLiteral(nv.lowColor ?? '#1b2a4a');
-      const hi = hexLiteral(nv.highColor ?? '#ffd24d');
+      // A wired ramp colour wins over the stored swatch (the exposedPorts
+      // rule); unwired emits the identical `color(0x…)` as before, so a node
+      // with nothing wired is byte-stable.
+      const lo = colorRefOf(inEdge(gidx, node.id, 'lowColor'), nv.lowColor, '#1b2a4a');
+      const hi = colorRefOf(inEdge(gidx, node.id, 'highColor'), nv.highColor, '#ffd24d');
       const radial = Number(nv.radial ?? 0) >= 0.5;
       const cx = Number(nv.center_x ?? 0.5);
       const cy = Number(nv.center_y ?? 0.5);
       const radius = Math.max(Number(nv.radius ?? 0.5), 1e-4);
       addImport('three/tsl', 'color');
       addImport('three/tsl', 'uv');
+      addImport('three/tsl', 'mix');
       if (radial) addImport('three/tsl', 'vec2');
 
       // Trace the signal to a Data column → bake a normalized-value ramp (color).
-      const signalEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'signal');
-      const signalRef = signalEdge ? resolveEdgeRef(signalEdge, edges, varNames, sorted) : null;
+      const signalEdge = inEdge(gidx, node.id, 'signal');
+      const signalRef = signalEdge ? resolveEdgeRef(signalEdge, varNames, gidx) : null;
       let valueTexVar: string | null = null;
-      const traced = traceSignalColumn(signalEdge, sorted);
+      const traced = traceSignalColumn(signalEdge, gidx);
       if (traced) {
         addImport('three/tsl', 'texture');
         addImport('three/tsl', 'vec2');
@@ -881,7 +1039,7 @@ export function graphToCode(
 
       const t = `_${varName}_t`;
       bodyLines.push(`  const ${t} = ${expr};`);
-      bodyLines.push(`  const ${varName} = color(${lo}).mix(color(${hi}), ${t});`);
+      bodyLines.push(`  const ${varName} = mix(${lo}, ${hi}, ${t});`);
     } else if (def.type === 'colormap') {
       // Colormap: scalar → colour through a 256-texel LUT baked at code-gen.
       //
@@ -902,7 +1060,7 @@ export function graphToCode(
       addImport('three/tsl', 'texture');
       addImport('three/tsl', 'vec2');
 
-      const valueEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'value');
+      const valueEdge = inEdge(gidx, node.id, 'value');
       let tExpr = scalarRefOf(valueEdge);
       if (!tExpr) {
         // Unwired: ramp across uv.x, so a freshly dropped Colormap node shows
@@ -932,8 +1090,8 @@ export function graphToCode(
       // evaluates the resulting affine / log / symlog expression.
       const nv = getNodeValues(node);
       const mode = isNormalizeMode(nv.mode) ? nv.mode : 'minmax';
-      const valueEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'value');
-      const traced = traceSignalColumn(valueEdge, sorted);
+      const valueEdge = inEdge(gidx, node.id, 'value');
+      const traced = traceSignalColumn(valueEdge, gidx);
       const stats = traced ? columnStats(traced.capped) : null;
       const manual = {
         lo: Number(nv.domainMin ?? 0),
@@ -977,12 +1135,13 @@ export function graphToCode(
       addImport('three/tsl', 'float');
       addImport('three/tsl', 'dFdx');
       addImport('three/tsl', 'dFdy');
+      addImport('three/tsl', 'mix');
 
-      const levelsExpr = numericParam(node, 'levels', 10, edges, varNames, sorted);
-      const widthExpr = numericParam(node, 'width', 1.5, edges, varNames, sorted);
-      const offsetExpr = numericParam(node, 'offset', 0, edges, varNames, sorted);
+      const levelsExpr = numericParam(node, 'levels', 10, varNames, gidx);
+      const widthExpr = numericParam(node, 'width', 1.5, varNames, gidx);
+      const offsetExpr = numericParam(node, 'offset', 0, varNames, gidx);
 
-      const valueEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'value');
+      const valueEdge = inEdge(gidx, node.id, 'value');
       let src = scalarRefOf(valueEdge);
       if (!src) {
         addImport('three/tsl', 'uv');
@@ -1012,14 +1171,14 @@ export function graphToCode(
       // contours are packed tighter than a pixel.
       bodyLines.push(`  const ${avg} = ${fw}.mul(${widthExpr}).clamp(0.0, 1.0);`);
       bodyLines.push(
-        `  const ${varName} = ${ln}.mix(${avg}, ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`,
+        `  const ${varName} = mix(${ln}, ${avg}, ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`,
       );
     } else if (def.type === 'append') {
       // Append node: concatenate operands into a vector. The constructor follows
       // the TOTAL component count (a vec2 + float must become vec3, not vec2),
       // and both it and the argument list are capped at vec4.
-      const raw = resolveArguments(node, edges, varNames, def, sorted);
-      const channels = appendOperandChannels(node, edges, sorted, def);
+      const raw = resolveArguments(node, varNames, def, gidx);
+      const channels = appendOperandChannels(node, edges, sorted, def, gidx);
       const { ctor, args } = buildAppendConstructor(raw, channels);
       addImport('three/tsl', ctor);
       bodyLines.push(`  const ${varName} = ${ctor}(${args.join(', ')});`);
@@ -1049,8 +1208,8 @@ export function graphToCode(
       // stored number (the exposedPorts rule) and emits the same method-chain
       // shape with the upstream var in place of the literal, so the two forms
       // stay one thing for codeToGraph to collapse.
-      const speedEdge = edges.find((e) => e.target === node.id && e.targetHandle === 'speed');
-      const speedRef = speedEdge ? resolveEdgeRef(speedEdge, edges, varNames, sorted) : null;
+      const speedEdge = inEdge(gidx, node.id, 'speed');
+      const speedRef = speedEdge ? resolveEdgeRef(speedEdge, varNames, gidx) : null;
       const rawSpeed = Number(getNodeValues(node).speed);
       const speed = Number.isFinite(rawSpeed) ? rawSpeed : 1;
       bodyLines.push(
@@ -1086,9 +1245,7 @@ export function graphToCode(
       // file, and podest must all render the same defined "silence" state
       // rather than a value that looks like signal.
       const wanted = new Set(
-        edges
-          .filter((e) => e.source === node.id)
-          .map((e) => micChannelForHandle(e.sourceHandle)),
+        outEdges(gidx, node.id).map((e) => micChannelForHandle(e.sourceHandle)),
       );
       if (wanted.size > 0) {
         // The generic import collection keys off `def.tslFunction`, which is
@@ -1101,7 +1258,7 @@ export function graphToCode(
         // from the export AND the shaderloader stops binding it, which breaks
         // the live preview too. Method chain — no extra import, same
         // convention as the noise `scale` and the Time node's `speed`.
-        const gainExpr = micGainExpr(node, edges, varNames, sorted);
+        const gainExpr = micGainExpr(node, varNames, gidx);
         for (const ch of MIC_CHANNELS) {
           if (!wanted.has(ch)) continue;
           const u = micUniformName(varName, ch);
@@ -1120,14 +1277,14 @@ export function graphToCode(
       const nv = getNodeValues(node);
 
       // Resolve position: from exposed port edge, or default positionGeometry
-      let posExpr = resolveExposedParam(node, 'pos', edges, varNames, nv, sorted);
+      let posExpr = resolveExposedParam(node, 'pos', varNames, nv, gidx);
       if (/^\d+(\.\d+)?$/.test(posExpr) || posExpr === 'positionGeometry') {
         posExpr = 'positionGeometry';
         addImport('three/tsl', 'positionGeometry');
       }
 
       // Apply scale via method chain so the result keeps the position's vector type
-      const scaleExpr = resolveExposedParam(node, 'scale', edges, varNames, nv, sorted);
+      const scaleExpr = resolveExposedParam(node, 'scale', varNames, nv, gidx);
       if (scaleExpr !== '1') {
         posExpr = `${posExpr}.mul(${scaleExpr})`;
       }
@@ -1159,13 +1316,26 @@ export function graphToCode(
       addImport('three/tsl', 'color');
       bodyLines.push(`  const ${varName} = uniform(color(${hexLiteral(nv.hex)}));`);
     } else if (def.inputs.length === 0 && def.defaultValues) {
-      // Type constructors with default values
+      // Type constructors with default values.
+      //
+      // `values` is ADVERSARIAL (.fastshader / fs:graph / pasted TSL — a string
+      // literal argument round-trips straight into this slot via codeToGraph's
+      // extractLiteral), and this module is executed by the XR popup at the
+      // app's REAL origin, so the emitted argument must be a literal WE
+      // construct, never an interpolated stored string.
+      //
+      // Which literal is decided by the REGISTRY DEFAULT's type, not by the
+      // stored value's: the old `startsWith('#')` test only caught hex-SHAPED
+      // strings, so a stored `"0xff0000); evil(); color(0"` skipped hexLiteral
+      // entirely and was spliced in verbatim.
       const nodeValues = getNodeValues(node);
       const defaultKey = Object.keys(def.defaultValues)[0];
-      const val = nodeValues?.[defaultKey] ?? Object.values(def.defaultValues)[0];
-      const formatted = typeof val === 'string' && val.startsWith('#')
+      const dflt = Object.values(def.defaultValues)[0];
+      const val = nodeValues?.[defaultKey] ?? dflt;
+      const n = Number(val);
+      const formatted = typeof dflt === 'string' && dflt.startsWith('#')
         ? hexLiteral(val)
-        : val;
+        : num(Number.isFinite(n) ? n : Number(dflt));
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${formatted});`);
     } else if (def.type === 'hsl' || def.type === 'toHsl') {
       // HSL↔RGB: neither `hsl` nor `toHsl` exist in three/tsl, so we emit
@@ -1271,17 +1441,15 @@ export function graphToCode(
     };
 
     for (const ch of OUTPUT_CHANNELS) {
-      const edge = edges.find(
-        (e) => e.target === outputNode.id && e.targetHandle === ch
-      );
+      const edge = inEdge(gidx, outputNode.id, ch);
       if (!edge) {
         const stored = storedChannelExpr(ch);
         if (stored) channels[ch] = stored;
       }
       if (edge) {
-        const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+        const ref = resolveEdgeRef(edge, varNames, gidx);
         if (ref) {
-          const sourceNode = sorted.find((n) => n.id === edge.source);
+          const sourceNode = gidx.nodeById.get(edge.source);
           const sourceDef = sourceNode ? registry.get(sourceNode.data.registryType) : undefined;
           if (sourceDef?.category === 'logic' && VEC3_CHANNELS.has(ch)) {
             addImport('three/tsl', 'vec3');
@@ -1342,9 +1510,7 @@ export function graphToCode(
     // Color node acts as a uniform ambient environment; non-3-channel shapes
     // are widened to vec3 like the alpha-bearing channels so the lighting
     // model's radiance stays well-typed on both backends.
-    const envEdge = edges.find(
-      (e) => e.target === outputNode.id && e.targetHandle === 'env'
-    );
+    const envEdge = inEdge(gidx, outputNode.id, 'env');
     if (!envEdge) {
       // Stored env color: a constant ambient environment (EnvironmentNode
       // consumes any node — a color is uniform radiance+irradiance).
@@ -1352,7 +1518,7 @@ export function graphToCode(
       if (stored) channels.env = stored;
     }
     if (envEdge) {
-      const envSrc = sorted.find((n) => n.id === envEdge.source);
+      const envSrc = gidx.nodeById.get(envEdge.source);
       const envVar = envSrc ? varNames.get(envSrc.id) : undefined;
       if (
         envSrc?.data.registryType === 'imageNode' &&
@@ -1362,7 +1528,7 @@ export function graphToCode(
         addImport('three/tsl', 'texture');
         channels.env = `texture(_${envVar}_tex)`;
       } else {
-        const ref = resolveEdgeRef(envEdge, edges, varNames, sorted);
+        const ref = resolveEdgeRef(envEdge, varNames, gidx);
         if (ref) {
           if (shapeOfEdgeSource(envEdge) !== 3) {
             addImport('three/tsl', 'vec3');
@@ -1374,9 +1540,7 @@ export function graphToCode(
       }
     }
 
-    const discardEdge = edges.find(
-      (e) => e.target === outputNode.id && e.targetHandle === 'discard'
-    );
+    const discardEdge = inEdge(gidx, outputNode.id, 'discard');
     if (!discardEdge) {
       // Stored discard value. Discard is a TRUTHINESS test, so a non-zero
       // stored value is an UNCONDITIONAL cull (the whole mesh vanishes —
@@ -1414,10 +1578,10 @@ export function graphToCode(
       //
       // Scalar sources are untouched (`scalarRefOf` returns the plain ref at
       // shape 1), so every existing export stays byte-identical.
-      const discardSrc = sorted.find((n) => n.id === discardEdge.source);
+      const discardSrc = gidx.nodeById.get(discardEdge.source);
       const discardDef = discardSrc ? registry.get(discardSrc.data.registryType) : undefined;
       const ref = discardDef?.category === 'logic'
-        ? resolveEdgeRef(discardEdge, edges, varNames, sorted)
+        ? resolveEdgeRef(discardEdge, varNames, gidx)
         : scalarRefOf(discardEdge);
       if (ref) {
         addImport('three/tsl', 'Discard');
@@ -1566,13 +1730,14 @@ function appendOperandChannels(
   edges: AppEdge[],
   nodes: AppNode[],
   def: NodeDefinition,
+  gidx: GraphIndex,
 ): number[] {
-  const connected = edges
-    .filter((e) => e.target === node.id && typeof e.targetHandle === 'string')
+  const connected = inEdges(gidx, node.id)
+    .filter((e) => typeof e.targetHandle === 'string')
     .map((e) => e.targetHandle as string);
   const inputs = effectiveInputs(def, connected, false, Object.keys(getNodeValues(node)));
   return inputs.map((input) => {
-    const edge = edges.find((e) => e.target === node.id && e.targetHandle === input.id);
+    const edge = inEdge(gidx, node.id, input.id);
     return edge ? getComponentCount(edge.source, nodes, edges) : 1;
   });
 }
@@ -1595,17 +1760,16 @@ function appendOperandChannels(
  */
 function micGainExpr(
   node: AppNode,
-  edges: AppEdge[],
   varNames: Map<string, string>,
-  sorted: AppNode[],
+  gidx: GraphIndex,
 ): string | null {
-  const edge = edges.find(
+  const edge = inEdges(gidx, node.id).find(
     // A self-loop would recurse straight back into resolveEdgeRef. The editor
     // never offers a cycle, but a hand-edited project file can contain one.
-    (e) => e.target === node.id && e.targetHandle === 'gain' && e.source !== node.id,
+    (e) => e.targetHandle === 'gain' && e.source !== node.id,
   );
   if (edge) {
-    const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+    const ref = resolveEdgeRef(edge, varNames, gidx);
     if (ref) return ref;
   }
   const { gain } = readMicSettings(getNodeValues(node));
@@ -1615,11 +1779,10 @@ function micGainExpr(
 /** Resolve a source edge reference, looking through split nodes to inline swizzle. */
 function resolveEdgeRef(
   edge: AppEdge,
-  edges: AppEdge[],
   varNames: Map<string, string>,
-  sorted: AppNode[]
+  gidx: GraphIndex
 ): string | null {
-  const sourceNode = sorted.find(n => n.id === edge.source);
+  const sourceNode = gidx.nodeById.get(edge.source);
   if (!sourceNode) return varNames.get(edge.source) ?? null;
 
   // Data node: each column output is emitted as its own variable `<var>_colN`
@@ -1644,7 +1807,7 @@ function resolveEdgeRef(
     // With gain applied, downstream reads the SCALED variable, not the raw
     // uniform — the uniform line itself must stay a bare `uniform(0)` so
     // buildShaderModule's uniformLineRe still turns it into a schema property.
-    return micGainExpr(sourceNode, edges, varNames, sorted) ? `_${u}` : u;
+    return micGainExpr(sourceNode, varNames, gidx) ? `_${u}` : u;
   }
 
   // Data Viz: the `value` handle exposes the tone-mapped scalar (`_<var>_t`,
@@ -1655,9 +1818,23 @@ function resolveEdgeRef(
     return base ? `_${base}_t` : null;
   }
 
+  // RGB to HSL: h/s/l read components of this node's OWN emitted variable —
+  // one `const toHsl1 = toHsl(rgb);` serves all three sockets, so the node
+  // costs one conversion however many are wired (three separate calls measure
+  // ~2.5× the GLSL: three INLINES the helper Fn each time and does not CSE
+  // it). Deliberately its own branch and NOT folded into the split one below:
+  // split inlines its UPSTREAM variable, this swizzles its own. `out`, null
+  // and any tampered handle fall through to the bare variable name, which is
+  // what keeps every pre-existing graph byte-identical.
+  if (sourceNode.data.registryType === 'toHsl' && edge.sourceHandle) {
+    const comp = TOHSL_HANDLE_TO_COMPONENT.get(edge.sourceHandle);
+    const base = varNames.get(sourceNode.id);
+    if (comp && base) return `${base}.${comp}`;
+  }
+
   // If source is a split node, inline as inputVar.component
   if (sourceNode.data.registryType === 'split' && edge.sourceHandle && edge.sourceHandle !== 'out' && VALID_SWIZZLE.has(edge.sourceHandle)) {
-    const splitInputEdge = edges.find(e => e.target === sourceNode.id && e.targetHandle === 'v');
+    const splitInputEdge = inEdge(gidx, sourceNode.id, 'v');
     if (splitInputEdge && varNames.has(splitInputEdge.source)) {
       return `${varNames.get(splitInputEdge.source)}.${edge.sourceHandle}`;
     }
@@ -1668,26 +1845,23 @@ function resolveEdgeRef(
 
 function resolveArguments(
   node: AppNode,
-  edges: AppEdge[],
   varNames: Map<string, string>,
   def: NodeDefinition,
-  sorted: AppNode[]
+  gidx: GraphIndex
 ): string[] {
   // Chainable arithmetic emits a variadic call over its wired operands (plus any
   // interior gaps filled with the identity) — `includeTrailingEmpty=false` drops
   // the dangling grow socket so we never emit e.g. `add(a, b, 0)`. Stored values
   // on extension operands (imported `add(x, 2, 3)`) are honored via valuedHandles.
   const nodeVals = getNodeValues(node);
-  const connected = edges
-    .filter((e) => e.target === node.id && typeof e.targetHandle === 'string')
+  const connected = inEdges(gidx, node.id)
+    .filter((e) => typeof e.targetHandle === 'string')
     .map((e) => e.targetHandle as string);
   const inputs = effectiveInputs(def, connected, false, Object.keys(nodeVals));
   return inputs.map((input) => {
-    const edge = edges.find(
-      (e) => e.target === node.id && e.targetHandle === input.id
-    );
+    const edge = inEdge(gidx, node.id, input.id);
     if (edge) {
-      const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+      const ref = resolveEdgeRef(edge, varNames, gidx);
       if (ref) return ref;
     }
     // No connection: use node's stored value, then the registry default for this
@@ -1695,11 +1869,19 @@ function resolveArguments(
     // defaultValues keeps a legacy node (created before the default existed, so
     // it has no stored value) in sync with the evaluator/UI — e.g. min's unwired
     // `b` emits `min(a, 1)`, not `min(a, 0)`; an unwired mul operand emits `1`.
-    const val = nodeVals[input.id];
-    if (val !== undefined) return String(val);
-    const dflt = def.defaultValues?.[input.id];
-    if (dflt !== undefined) return String(dflt);
-    if (def.chainable && def.chainIdentity !== undefined) return String(def.chainIdentity);
+    //
+    // Every step renders through num(): `values` is adversarial (see
+    // numericParam), and the old String() spliced a stored
+    // `"1); evil(); float(1"` verbatim into the emitted module. A stored value
+    // that is not a finite number falls through to the registry default —
+    // exactly what a legacy node with no stored value already does — so every
+    // legit graph emits byte-identically. `Number(undefined)` is NaN, so the
+    // old `!== undefined` guards are subsumed by the isFinite tests.
+    const stored = Number(nodeVals[input.id]);
+    if (Number.isFinite(stored)) return num(stored);
+    const dflt = Number(def.defaultValues?.[input.id]);
+    if (Number.isFinite(dflt)) return num(dflt);
+    if (def.chainable && def.chainIdentity !== undefined) return num(Number(def.chainIdentity));
     return '0';
   });
 }
@@ -1708,19 +1890,42 @@ function resolveArguments(
 function resolveExposedParam(
   node: AppNode,
   key: string,
-  edges: AppEdge[],
   varNames: Map<string, string>,
   nodeValues: Record<string, string | number>,
-  sorted: AppNode[],
+  gidx: GraphIndex,
 ): string {
   // Check if there's an edge connected to this exposed port
-  const edge = edges.find(
-    (e) => e.target === node.id && e.targetHandle === key
-  );
+  const edge = inEdge(gidx, node.id, key);
   if (edge) {
-    const ref = resolveEdgeRef(edge, edges, varNames, sorted);
+    const ref = resolveEdgeRef(edge, varNames, gidx);
     if (ref) return ref;
   }
-  return String(nodeValues?.[key] ?? 1);
+  // The REGISTRY default before the hardcoded 1. This path never consulted the
+  // def at all, so a node whose `values` are missing the key fell to 1 for
+  // everything: a uv node with empty values emitted `uv(1)` plus a full
+  // 1-radian (57°) rotation chain, while cpuEvaluator assumed channel 0 and
+  // rotation 0. Not reachable from today's creation paths — newNodeValues and
+  // codeToGraph both seed `values` from defaultValues — so this is hardening
+  // for legacy graphs and hand-edited `.fastshader` input, and it matters more
+  // now that more defs declare defaults. Byte-identical for every complete
+  // node: noise `scale` is 1 either way, `pos` is intercepted below, and uv's
+  // four keys are always seeded by both creation paths.
+  const registryDefault = NODE_REGISTRY.get(node.data.registryType)?.defaultValues?.[key];
+  const raw = nodeValues?.[key] ?? registryDefault ?? 1;
+  // `pos` is the ONE identifier-bearing key that reaches here: codeToGraph
+  // stores the unresolved variable NAME of a noise call's position argument
+  // (codeToGraph.ts `extractedValues.pos = posArg.name`), so it is legitimately
+  // `positionGeometry` — or any other identifier a pasted shader used. The
+  // noise branch then normalizes a non-identifier back to positionGeometry and
+  // adds the import, byte-identically to the old numeric fallback.
+  if (key === 'pos') {
+    const s = String(raw);
+    return TSL_IDENTIFIER_RE.test(s) ? s : 'positionGeometry';
+  }
+  // Every other key here (noise `scale`, uv `channel`/`tilingU`/`tilingV`/
+  // `rotation`) is numeric. Garbage degrades to the SAME `1` an absent key
+  // already degrades to, so this function keeps a single documented fallback.
+  const n = Number(raw);
+  return num(Number.isFinite(n) ? n : 1);
 }
 

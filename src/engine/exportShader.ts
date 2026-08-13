@@ -59,6 +59,10 @@ export function buildProjectState(): FastShadersProject {
     selectedHeadsetId: state.selectedHeadsetId,
     graph: { nodes: state.nodes, edges: state.edges },
     ...(state.drawings.length ? { drawings: state.drawings } : {}),
+    // Conditional for the same reason drawings is: a shader with no palettes
+    // must embed the byte-identical block it embedded before palettes existed,
+    // so re-exporting an untouched old shader produces an unchanged file.
+    ...(state.shaderPalettes.length ? { palettes: state.shaderPalettes } : {}),
     preview: {
       geometry: ls('fs:previewGeometry') ?? undefined,
       lighting: ls('fs:previewLighting') ?? undefined,

@@ -7,16 +7,32 @@ import './TooltipLayer.css';
  *
  * Mounted once. Instead of wrapping every button, it delegates from `document`
  * and reads the element's existing `title` attribute — so every button/control
- * that already had a native tooltip gets a consistent, 1s-delayed custom one for
- * free. While a tooltip is pending/shown the native `title` is stashed away and
- * removed from the DOM (that is the only way to suppress the browser's own
- * tooltip); it is restored the moment the pointer leaves.
+ * that already had a native tooltip gets a consistent, briefly-delayed custom
+ * one for free. While a tooltip is pending/shown the native `title` is stashed
+ * away and removed from the DOM (that is the only way to suppress the browser's
+ * own tooltip); it is restored the moment the pointer leaves.
  *
  * `<iframe>` titles are semantic (accessible name), never a hover hint, so they
  * are excluded.
  */
 
-const DELAY_MS = 1000;
+/**
+ * Hover dwell before a tooltip appears.
+ *
+ * Short on purpose. `title` is not decoration in this app — it is where the
+ * explanation LIVES for surfaces that deliberately carry no inline prose (the
+ * Palettes dialog, the one-line AddNodeMenu rows, every swatch's colour name).
+ * A long dwell there does not read as "restrained", it reads as the tooltip
+ * being broken, because the user is hovering deliberately to find out what
+ * something is rather than resting the pointer by accident.
+ *
+ * Faster is also SAFER against the dismiss-race this layer has already been
+ * bitten by: a `scroll` fired by the same hover that armed the timer used to
+ * land inside the dwell and cancel a tooltip that then never re-armed, since a
+ * pointer at rest fires no further `mouseover`. The narrower this window, the
+ * less there is to land in.
+ */
+const DELAY_MS = 200;
 const GAP = 8;
 const EDGE = 8;
 

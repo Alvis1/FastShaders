@@ -6,6 +6,17 @@ export interface PortDefinition {
   id: string;
   label: string;
   dataType: TSLDataType;
+  /**
+   * Optional one-line hint for a socket whose BEHAVIOUR is surprising, surfaced
+   * as a `title` on the surfaces that draw the port (ShaderSettingsMenu's
+   * Output Ports list; OutputNode's canvas row). Keyed through `t()` like every
+   * other UI string, so it can be translated in lv.json's `ui` map.
+   *
+   * Deliberately NOT NodeDefinition.description: that field is part of the
+   * ranked search corpus (`nodeMatchRank`), and nodeSearch.test.ts sweeps it
+   * for cross-node name collisions — prose naming other nodes belongs here.
+   */
+  description?: string;
 }
 
 export type NodeCategory =

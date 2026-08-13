@@ -12,7 +12,7 @@ import type { AppEdge } from '@/types';
 import { useAppStore } from '@/store/useAppStore';
 import { COUNT_EDGE_COLORS, getContrastColor } from '@/utils/colorUtils';
 import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
-import { evaluateNodeOutput, getNodeOutputShape, getUnwrappedEdge } from '@/engine/cpuEvaluator';
+import { evaluateEdgeSource, getEdgeOutputShape, getUnwrappedEdge } from '@/engine/cpuEvaluator';
 import { bezierControlOffset, radialControlPoint, splinePath } from './bezierGeometry';
 import { EdgeInfoCard } from './EdgeInfoCard';
 
@@ -234,16 +234,27 @@ export function TypedEdge({
   const logicalTarget = useAppStore(
     (s) => getUnwrappedEdge(s.nodes, s.edges, id)?.target ?? target,
   );
+  // The socket the wire really leaves (see the count selector) — the info card
+  // must measure the same channel the ribbon draws.
+  const logicalSourceHandle = useAppStore(
+    (s) => getUnwrappedEdge(s.nodes, s.edges, id)?.sourceHandle ?? sourceHandleId ?? null,
+  );
 
   // Taking max means each path catches the gaps of the other.
   // Computed IN the selector: the shared evaluator ctx makes both calls cache
   // hits per graph version, and the primitive result means a store notify
   // whose count is unchanged (every drag pointermove) bails before re-render.
   const count = useAppStore((s) => {
-    const src = getUnwrappedEdge(s.nodes, s.edges, id)?.source ?? source;
-    const evaluated = evaluateNodeOutput(src, s.nodes, s.edges, 0);
+    // Both the source AND its handle come off the UNWRAPPED edge, never React
+    // Flow's `sourceHandleId` prop: unwrapCollapsedGroupEdges rewrites the
+    // handle too, and a collapsed group's synthetic socket id matches no
+    // registry port — the projection would silently fall back to the whole
+    // vector and draw a plausible-looking, wrong-width ribbon.
+    const un = getUnwrappedEdge(s.nodes, s.edges, id);
+    const e = { source: un?.source ?? source, sourceHandle: un?.sourceHandle ?? sourceHandleId };
+    const evaluated = evaluateEdgeSource(e, s.nodes, s.edges, 0);
     const evalLen = evaluated?.length ?? 0;
-    const shapeLen = getNodeOutputShape(src, s.nodes, s.edges);
+    const shapeLen = getEdgeOutputShape(e, s.nodes, s.edges);
     return Math.min(Math.max(evalLen, shapeLen, 1), 4);
   });
   // 1-channel edges flip black ↔ white so they remain visible against the
@@ -402,6 +413,7 @@ export function TypedEdge({
         <EdgeLabelRenderer>
           <EdgeInfoCard
             sourceId={logicalSource}
+            sourceHandle={logicalSourceHandle}
             targetId={logicalTarget}
             labelX={labelX}
             labelY={labelY}

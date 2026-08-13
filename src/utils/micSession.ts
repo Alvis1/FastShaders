@@ -72,10 +72,6 @@ export function getMicStatus(): MicStatus {
   return status;
 }
 
-export function isMicCapturing(): boolean {
-  return capture !== null;
-}
-
 /**
  * Can this build reach a microphone at all?
  *

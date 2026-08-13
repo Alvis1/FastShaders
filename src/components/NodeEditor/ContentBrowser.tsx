@@ -1,7 +1,13 @@
 import { memo, useState, useMemo, useRef, useCallback, useEffect, type RefObject } from 'react';
 import { CATEGORIES } from '@/registry/nodeCategories';
-import { getAllDefinitions, nodeMatchRank, NO_MATCH } from '@/registry/nodeRegistry';
-import { getBuiltinTextures } from '@/registry/builtinTextures';
+import {
+  getEditorDefinitions,
+  categoryEmptiedByHiding,
+  nodeMatchRank,
+  NO_MATCH,
+} from '@/registry/nodeRegistry';
+import { isTextureHiddenFromEditor } from '@/registry/editorVisibility';
+import { getBuiltinTextures, getBuiltinTextureIds } from '@/registry/builtinTextures';
 import { getBuiltinPresets } from '@/registry/builtinPresets';
 import { NodePreviewCard } from './NodePreviewCard';
 import { SavedGroupCard } from './SavedGroupCard';
@@ -23,12 +29,19 @@ import './ContentBrowser.css';
 // The ready-made-asset tabs (Presets, Textures, Noise, DataViz) lead; the
 // building-block categories follow in their canonical CATEGORIES order.
 const ASSET_TABS_FIRST: NodeCategory[] = ['presets', 'texture', 'noise', 'dataviz'];
+// …and a tab whose every entry has been switched off in node-editor.html goes
+// with them: hiding the last unfinished node of a category would otherwise leave
+// a tab that opens to "Nothing here yet.", which is exactly the unfinished look
+// the checkbox exists to remove. Textures are counted by ID (getBuiltinTextureIds
+// — the cheap accessor), never by building them: this runs at module scope and
+// the ~84 ms texture parse is deliberately deferred to first use.
+const allTexturesHidden = getBuiltinTextureIds().every(isTextureHiddenFromEditor);
 const displayCategories = [
   ...ASSET_TABS_FIRST.map((id) => CATEGORIES.find((c) => c.id === id)!),
   ...CATEGORIES.filter(
     (c) => !ASSET_TABS_FIRST.includes(c.id) && c.id !== 'output' && c.id !== 'unknown',
   ),
-];
+].filter((c) => (c.id === 'texture' ? !allTexturesHidden : !categoryEmptiedByHiding(c.id)));
 const costs = complexityData.costs as Record<string, number>;
 
 /** Track overflow state of a horizontally scrollable element and provide scroll actions. */
@@ -156,11 +169,14 @@ const validateZoom = (raw: string | null): number => {
   const v = parseFloat(raw ?? '');
   return Number.isFinite(v) ? clampZoom(v) : 1;
 };
-/** Valid asset-tab ids: the real categories plus the two pseudo-tabs. An
- *  unknown/removed id (a category renamed between releases, a hand-edited
- *  value) falls back to 'all' rather than selecting a tab that renders empty. */
+/** Valid asset-tab ids: the tabs actually RENDERED plus the two pseudo-tabs. An
+ *  unknown/removed id (a category renamed between releases, one whose nodes are
+ *  all hidden now, a hand-edited value) falls back to 'all' rather than
+ *  selecting a tab that renders empty — which is why this reads
+ *  `displayCategories` and not the raw CATEGORIES table: the two lists
+ *  disagreeing is exactly how a returning user boots into a blank strip. */
 const BROWSER_TABS = new Set<string>([
-  'all', 'saved', ...CATEGORIES.map((c) => c.id),
+  'all', 'saved', ...displayCategories.map((c) => c.id),
 ]);
 const validateBrowserTab = (raw: string | null): BrowserCategory =>
   raw && BROWSER_TABS.has(raw) ? (raw as BrowserCategory) : 'all';
@@ -464,8 +480,11 @@ export const ContentBrowser = memo(function ContentBrowser() {
   const tabsArrows = useScrollArrows(tabsRef);
   const itemsArrows = useScrollArrows(scrollRef);
 
+  // getEditorDefinitions, not getAllDefinitions: nodes switched off in
+  // node-editor.html ("In editor") must not have a tile here. See
+  // registry/editorVisibility.ts.
   const allDefs = useMemo(() => {
-    return getAllDefinitions().filter((d) => d.type !== 'output');
+    return getEditorDefinitions().filter((d) => d.type !== 'output');
   }, []);
 
   const q = search.trim().toLowerCase();
@@ -528,7 +547,15 @@ export const ContentBrowser = memo(function ContentBrowser() {
   };
 
   const filteredTextures = useMemo(() => {
-    const all = [...getBuiltinTextures()].sort(bySize);
+    // Lazily built, same rule as the presets memo below: the first
+    // getBuiltinTextures() call parses 8 TSL snippets through codeToGraph and
+    // lays them out (tens of ms of synchronous Babel + dagre work — measured at
+    // 84 ms when it runs first; whichever of the two getters runs first eats the
+    // module warm-up), so don't pay it at first render for a tab that may never
+    // open. A live search needs them too — matching textures surface in the
+    // generic strip (see `items` below).
+    if (activeCategory !== 'texture' && !q) return [];
+    const all = getBuiltinTextures().filter((t) => !isTextureHiddenFromEditor(t.id)).sort(bySize);
     if (!q) return all;
     return all.filter(
       (t) =>
@@ -536,7 +563,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
         t.id.toLowerCase().includes(q) ||
         t.description.toLowerCase().includes(q),
     );
-  }, [q]);
+  }, [q, activeCategory]);
 
   const filteredPresets = useMemo(() => {
     // Lazily built: the first getBuiltinPresets() call parses 15 TSL snippets

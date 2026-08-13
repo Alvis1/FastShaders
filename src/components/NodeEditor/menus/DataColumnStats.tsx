@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import type { AppNode, ShaderNodeData } from '@/types';
+import { getTargetEdges } from '@/engine/cpuEvaluator';
 import { columnForHandle } from '@/utils/dataNode';
 import { columnStats, type ColumnStats } from '@/utils/dataViz';
 import { rowStyle, labelStyle } from './menuShared';
@@ -121,7 +122,14 @@ export function useUpstreamColumnStats(
   const edges = useAppStore((s) => s.edges);
 
   return useMemo(() => {
-    const edge = edges.find((e) => e.target === nodeId && e.targetHandle === inputHandle);
+    // getTargetEdges, NOT a raw scan: graphToCode unwraps at its own entry and
+    // then traces the column off the UNWRAPPED edge, so a raw scan would see a
+    // collapsed group's boundary edge (source = the GROUP id, which carries no
+    // Data payload), report "no statistics" and fall back to the manual domain
+    // while codegen still bakes the real min/max — the exact disagreement the
+    // dataRange rule exists to prevent ("the numbers on screen are the numbers
+    // baked in").
+    const edge = getTargetEdges(nodes, edges, nodeId).find((e) => e.targetHandle === inputHandle);
     if (!edge) return { stats: null, name: undefined };
     const src = nodes.find((n) => n.id === edge.source) as AppNode | undefined;
     const data = src?.data as ShaderNodeData | undefined;

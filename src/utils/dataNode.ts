@@ -9,10 +9,27 @@
  * … Each output samples its column's DataTexture at uv.x (see graphToCode).
  */
 
-import type { PortDefinition, ShaderNodeData } from '@/types';
-import type { ParsedCsv } from './csvParser';
+import type { AppNode, PortDefinition, ShaderNodeData } from '@/types';
+import { getNodeValues } from '@/types';
+import { MAX_COLUMNS, type ParsedCsv } from './csvParser';
 import { float32ToBase64, base64ToFloat32 } from './binaryCodec';
 import { capToWidth, MAX_TEXTURE_WIDTH } from './dataViz';
+
+/**
+ * Largest `dataB64` a legitimately-constructed Data node can hold — a CAP
+ * DERIVED FROM THE CONSTRUCTION PATH, not a policy number, so it moves
+ * automatically if either input bound does.
+ *
+ * `parseCsv` refuses more than MAX_COLUMNS (16) columns and `makeDataNodeData`
+ * runs every column through `capToWidth(col, MAX_TEXTURE_WIDTH)` (8192) BEFORE
+ * storing, so the packed Float32 blob is at most 16 × 8192 × 4 = 524,288 bytes
+ * → 4·ceil(524288/3) = 699,052 base64 chars. A longer payload can only come
+ * from a tampered file, and it buys nothing on screen: graphToCode re-caps to
+ * MAX_TEXTURE_WIDTH before baking. What it does buy is ~51 `structuredClone`
+ * history copies, a `JSON.stringify` in every 300 ms autosave, a re-embed in
+ * every export, and an `atob` on every graphToCode pass.
+ */
+export const MAX_DATA_ENCODED_CHARS = 4 * Math.ceil((MAX_COLUMNS * MAX_TEXTURE_WIDTH * 4) / 3);
 
 export interface DecodedDataNode {
   columnNames: string[];
@@ -93,6 +110,25 @@ export function decodeDataNode(values: Record<string, string | number>): Decoded
   if (!Number.isInteger(rowCount) || rowCount <= 0) return null;
   if (!Number.isInteger(columnCount) || columnCount <= 0) return null;
   if (!dataB64) return null;
+  // Three O(1) ceilings BEFORE the decode — same first-check discipline as
+  // `decodeImageNode`. `atob` + the byte loop are linear in the payload, and
+  // this runs on EVERY graphToCode pass (the decode happens before it even
+  // checks whether a column is wired), so an unbounded string out of a
+  // tampered file is re-decoded on every graph edit.
+  //
+  // The COLUMN ceiling is not redundant with the length one: a blob of exactly
+  // the legal size declared as `rowCount: 1, columnCount: 131072` passes both
+  // the length cap and the `flat.length >= rowCount * columnCount` check below,
+  // then allocates 131k Float32Array views plus 131k synthesized names per pass
+  // (measured 13.5 ms vs 0.1 ms for the legitimate 16x8192 shape).
+  //
+  // None of the three can reject anything this app wrote: `parseCsv` /
+  // `transposeCsv` cap real files at MAX_COLUMNS and `makeDataNodeData` stores
+  // `capToWidth(col, MAX_TEXTURE_WIDTH)`, so the construction worst case is
+  // exactly MAX_DATA_ENCODED_CHARS at MAX_COLUMNS x MAX_TEXTURE_WIDTH.
+  if (dataB64.length > MAX_DATA_ENCODED_CHARS) return null;
+  if (columnCount > MAX_COLUMNS) return null;
+  if (rowCount > MAX_TEXTURE_WIDTH) return null;
 
   let flat: Float32Array;
   try {
@@ -119,4 +155,49 @@ export function decodeDataNode(values: Record<string, string | number>): Decoded
   }
 
   return { columnNames, rowCount, columns };
+}
+
+export interface DataSanitizeResult {
+  nodes: AppNode[];
+  /** How many Data payloads were emptied (node kept, columns dropped). */
+  strippedCount: number;
+}
+
+/**
+ * Bound Data-node payloads on graphs entering the store from outside the CSV
+ * drop path (project import, the localStorage graph, the saved-group library)
+ * — the data-side twin of `sanitizeImageNodes`.
+ *
+ * `dataB64` was the last unbounded attacker-controlled string on a node.
+ * Unlike `imageB64` nothing capped it on any load path, yet it rides ~51
+ * `structuredClone` history copies, is `JSON.stringify`'d into every 300 ms
+ * autosave, re-embeds into every export, and is `atob`-decoded on every
+ * `graphToCode` pass. A hand-edited 60 MB payload OOMs the tab within a few
+ * dozen edits.
+ *
+ * There is deliberately NO soft/hard split (the shape `sanitizeImageNodes`
+ * has): images need one because the user can opt out of the soft caps via
+ * `ignoreImageLimits`, and there is no data equivalent — `makeDataNodeData`
+ * caps unconditionally, so `MAX_DATA_ENCODED_CHARS` is a construction bound
+ * rather than a policy limit and nothing above it can be legitimate.
+ *
+ * Stripping empties `dataB64` and KEEPS the node: `dynamicOutputs` still
+ * renders every socket, and graphToCode degrades each consumed column to the
+ * inert `float(0.0)` an undecodable payload already gets. The array identity
+ * is preserved when nothing changed, so an untouched graph doesn't look like
+ * a mutation to the store's reference comparisons.
+ */
+export function sanitizeDataNodes(nodes: AppNode[]): DataSanitizeResult {
+  let strippedCount = 0;
+  let changed = false;
+  const out = nodes.map((n) => {
+    if (n.data.registryType !== 'dataNode') return n;
+    const values = getNodeValues(n);
+    const b64 = values.dataB64;
+    if (typeof b64 !== 'string' || b64.length <= MAX_DATA_ENCODED_CHARS) return n;
+    strippedCount++;
+    changed = true;
+    return { ...n, data: { ...n.data, values: { ...values, dataB64: '' } } } as AppNode;
+  });
+  return { nodes: changed ? out : nodes, strippedCount };
 }

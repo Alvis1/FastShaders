@@ -58,51 +58,84 @@ describe('registry drift — chainIdentity vs cpuEvaluator operand fallback', ()
   }
 });
 
-// ─── (b) per-port fallbacks that DELIBERATELY differ from registry defaults ─
+// ─── (b) the registry default and the evaluator fallback AGREE ─────────────
 //
-// Audit of the evaluate() switch (2026-07-11): where the registry declares
-// defaultValues, the evaluator fallbacks MATCH them (pow base/exp:1, mod y:1,
-// min a/b:1, max b:0, uv tiling:1, noise scale:1). The ports below have NO
-// registry defaultValues entry, and the evaluator deliberately falls back to a
-// non-zero value — so a naive unification to `def.defaultValues?.[port] ?? 0`
-// would silently change every result pinned here.
+// This section used to assert the OPPOSITE — it catalogued "deliberate
+// divergences" where a port had no registry entry and the evaluator quietly
+// used a non-zero number instead. That framing hid a whole bug class: codegen
+// cannot see the evaluator's fallback, so it emitted the bare `0` while the
+// node's own card showed the evaluator's number. `clamp(x, 0, 0)` rendered a
+// constant 0, `remap(x, 0, 0, 0, 0)` divided by zero, `hsl(0, 0, 0)` was black
+// beside a card showing red, `smoothstep(0, 0, x)` is a hard WGSL compile
+// error, and `log2(0)` is -Infinity — every one of them a port this section
+// was pinning as working-as-intended.
+//
+// The evaluator's numbers were right; the registry simply never declared them.
+// Each case now asserts BOTH sides in one test: what the registry DECLARES and
+// what the evaluator COMPUTES. That turns the old prose comment into an
+// enforced invariant, so the next drift fails loudly instead of silently.
 
-describe('registry drift — deliberate per-port fallback divergences', () => {
-  it('log2 falls back to x = 1 → log2(1) = 0 (a 0 fallback would give ≈ -33)', () => {
+describe('registry defaults and evaluator fallbacks agree', () => {
+  const declares = (type: string, port: string, value: number) => {
+    expect(NODE_REGISTRY.get(type)?.defaultValues?.[port], `${type}.${port}`).toBe(value);
+  };
+
+  it('log2 declares x = 1 -> log2(1) = 0 (a 0 fallback is -Infinity, and WGSL rejects it)', () => {
+    declares('log2', 'x', 1);
     expect(evalBare('log2')).toEqual([0]);
   });
 
-  it('mix falls back to b = 1 (t = 1 inline isolates the b port)', () => {
+  it('mix declares a = 0, b = 1, t = 0.5', () => {
+    declares('mix', 'a', 0);
+    declares('mix', 'b', 1);
+    declares('mix', 't', 0.5);
     expect(evalBare('mix', { t: 1 })).toEqual([1]);
-  });
-
-  it('mix falls back to t = 0.5 (a = 0, b = 1 inline isolate the t port)', () => {
     expect(evalBare('mix', { a: 0, b: 1 })).toEqual([0.5]);
+    expect(evalBare('mix')).toEqual([0.5]);
   });
 
-  it('smoothstep falls back to x = 0.5 → midpoint 0.5 (a 0 fallback would give 0)', () => {
-    expect(evalBare('smoothstep')).toEqual([0.5]);
+  it('smoothstep declares edge0 = 0, edge1 = 1 and leaves x at 0 on BOTH sides', () => {
+    declares('smoothstep', 'edge0', 0);
+    declares('smoothstep', 'edge1', 1);
+    // `x` deliberately has no registry entry (clamp's rule: the signal port is
+    // the one you always wire), so the evaluator must fall back to 0 as well —
+    // the bare value codegen emits for an undeclared port.
+    expect(NODE_REGISTRY.get('smoothstep')?.defaultValues?.x).toBeUndefined();
+    expect(evalBare('smoothstep')).toEqual([0]);
+    expect(evalBare('smoothstep', { edge0: -1 })).toEqual([0.5]);
   });
 
-  it('smoothstep falls back to edge1 = 1 (edge0 = -1 inline isolates edge1)', () => {
-    // t = (0.5 - (-1)) / (1 - (-1)) = 0.75 → 0.75² · (3 - 1.5) = 0.84375
-    expect(evalBare('smoothstep', { edge0: -1 })).toEqual([0.84375]);
-  });
-
-  it('clamp falls back to max = 1 (x = 2 clamps down to 1, not to 0)', () => {
+  it('clamp declares min = 0, max = 1 (x = 2 clamps down to 1, not to 0)', () => {
+    declares('clamp', 'min', 0);
+    declares('clamp', 'max', 1);
     expect(evalBare('clamp', { x: 2 })).toEqual([1]);
   });
 
-  it('remap falls back to inHigh = 1 and outHigh = 1 (0.6 maps to itself)', () => {
+  it('remap declares the 0..1 -> 0..1 identity (0.6 maps to itself)', () => {
+    declares('remap', 'inLow', 0);
+    declares('remap', 'inHigh', 1);
+    declares('remap', 'outLow', 0);
+    declares('remap', 'outHigh', 1);
     expect(evalBare('remap', { x: 0.6 })).toEqual([0.6]);
   });
 
-  it('hsl falls back to s = 1, l = 0.5 (bare node is pure red, not mid-grey)', () => {
+  it('hsl declares s = 1, l = 0.5 (a bare node is pure red, not black)', () => {
+    declares('hsl', 's', 1);
+    declares('hsl', 'l', 0.5);
     const res = evalBare('hsl');
     expect(res).not.toBeNull();
     expect(res![0]).toBeCloseTo(1, 12);
     expect(res![1]).toBeCloseTo(0, 12);
     expect(res![2]).toBeCloseTo(0, 12);
+  });
+
+  it('the already-correct ones stay correct', () => {
+    declares('pow', 'base', 1);
+    declares('pow', 'exp', 1);
+    declares('mod', 'y', 1);
+    declares('min', 'a', 1);
+    declares('min', 'b', 1);
+    declares('max', 'b', 0);
   });
 });
 

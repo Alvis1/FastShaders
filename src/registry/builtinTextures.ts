@@ -481,6 +481,17 @@ const TEXTURE_ENTRIES: CodeGroupEntry[] = [
  */
 let _cachedTextures: BuiltinTexture[] | null = null;
 
+/**
+ * The texture ids, WITHOUT building them. `getBuiltinTextures()` parses 8 TSL
+ * snippets through codeToGraph and lays them out (~84 ms), which the content
+ * browser defers until the Textures tab is opened — so anything that only needs
+ * to know which ids exist (the visibility filter deciding whether that tab
+ * should render at all) must ask here instead.
+ */
+export function getBuiltinTextureIds(): string[] {
+  return TEXTURE_ENTRIES.map((e) => e.id);
+}
+
 export function getBuiltinTextures(): BuiltinTexture[] {
   if (_cachedTextures) return _cachedTextures;
   _cachedTextures = TEXTURE_ENTRIES.map((entry) => buildCodeGroup(entry, 'builtin-texture-'));

@@ -4,20 +4,24 @@
  *
  * Accepts a shader script — `.js`/`.mjs`/`.tsl`, with or without an embedded
  * FASTSHADERS_PROJECT_V1 block; raw editor-style TSL passes through
- * scriptToTSL unchanged — or a FastShaders `.zip` export (the shader `.js` +
+ * scriptToTSLWithSettings unchanged — or a FastShaders `.zip` export (the shader `.js` +
  * its images; the images ride inside the .js as data: URLs, so importing the
  * .js restores everything — the loose files exist for reuse/editing).
  */
 
 import { useAppStore } from '@/store/useAppStore';
 import { sanitizeImageNodes } from '@/utils/imageNode';
+import { sanitizeDataNodes } from '@/utils/dataNode';
 import { sanitizeDrawings } from '@/utils/drawings';
+import { sanitizePalettes } from '@/utils/palettes';
+import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { generateId } from '@/utils/idGenerator';
 import { readZip, type ZipReadEntry } from '@/utils/zipReader';
 import { createPreviewMesh, detectMeshKind, type PreviewMesh } from '@/utils/previewMesh';
 import { extractProjectState, type FastShadersProject } from './fastShadersProject';
-import { scriptToTSL } from './scriptToTSL';
+import { scriptToTSLWithSettings } from './scriptToTSL';
+import type { AppNode } from '@/types';
 
 /**
  * Apply a FastShaders project snapshot to the store. Graph state is restored
@@ -80,20 +84,50 @@ function applyProjectToStore(project: FastShadersProject): void {
     });
   }
 
+  // Data-node CSV blobs are adversarial too, and this is the path that matters:
+  // a shared `.js`/`.zip` has no localStorage quota standing in front of it.
+  // The cap is the construction bound, so a file this app wrote is untouched.
+  const dataSanitized = sanitizeDataNodes(sanitized.nodes);
+
   // Board drawings are adversarial too — bound them before they enter the store.
   const drawings = sanitizeDrawings(project.drawings);
+
+  // Palettes likewise — names are RENDERED and ids become React keys / object
+  // lookups, so a shared `.js` gets the same trust boundary a dropped palette
+  // file gets.
+  //
+  // The ABSENT case is the point, and it mirrors the uniform-values reasoning
+  // above: an absent block sanitizes to [], which REPLACES the current shader's
+  // palettes rather than leaving them. Without that, opening someone else's
+  // shader would silently adopt the palettes of whatever was open before — and
+  // the very next export would ship them inside their file as if they belonged
+  // to it.
+  const palettes = sanitizePalettes(project.palettes);
+
+  // Edge `data` likewise: `buildProjectState` embeds `state.edges` verbatim and
+  // the block's element gate stops at source/target, so routing waypoints
+  // arrive unchecked — and TypedEdge maps them during render with no error
+  // boundary to catch it.
+  const edges = sanitizeEdgeExtras(project.graph.edges);
 
   // Restore graph last — switching syncSource to 'graph' will trigger
   // graphToCode in useSyncEngine, regenerating the editor code to match.
   useAppStore.setState({
-    nodes: sanitized.nodes,
-    edges: project.graph.edges,
+    nodes: dataSanitized.nodes,
+    edges,
     drawings,
+    shaderPalettes: palettes,
     syncSource: 'graph',
     isUndoRedo: false,
   });
 
-  window.dispatchEvent(new CustomEvent('fs:project-imported'));
+  // typeof guard: this module is also exercised by node-env unit tests — the
+  // same guard announceGraphImport and showMesh already carry. Without it
+  // applyProjectToStore throws `ReferenceError: window is not defined` and the
+  // whole project branch is untestable.
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('fs:project-imported'));
+  }
   announceGraphImport();
 }
 
@@ -133,7 +167,64 @@ export function importShaderText(
     return 'project';
   }
   const store = useAppStore.getState();
-  store.setCode(scriptToTSL(text), 'code');
+  // A bare script carries its OWN material settings (transparency / side /
+  // alpha clip) in its return object. scriptToTSL strips them out of the TSL —
+  // graphToCode can't emit them — and useSyncEngine's mergeMatch then copied
+  // the PREVIOUS graph's onto the matched Output node, so the import was wrong
+  // in both directions: the file's settings vanished and a stale transparency
+  // rode onto a shader that never asked for it.
+  //
+  // Stamp the file's settings — or, when it ships none, `undefined`, which is
+  // what CLEARS the stale ones — onto the CURRENT Output node BEFORE the
+  // code→graph pass. mergeMatch carries the OLD node's settings onto the new
+  // one, so whatever sits on the node when that pass runs is what the imported
+  // graph gets; no new mechanism, just correct input to the existing one.
+  //
+  // The value is a FRESH object (or undefined) and the node/data are rebuilt by
+  // spread, never mutated: ShaderPreview, CodeEditor and mergeMatch all
+  // subscribe to `materialSettings` BY REFERENCE and bail on Object.is, so an
+  // in-place update would leave the preview and the Output tab on the old
+  // settings with no error.
+  //
+  // A raw setState, not updateNodeData: that would push a history entry (the
+  // pass pushes its own) and set syncSource:'graph'. `syncSource: 'code'` is
+  // LOAD-BEARING — the nodes array changes here, and with syncSource still
+  // 'graph' the graph→code effect (declared before the code→graph one, so it
+  // runs first) would see a non-inert change (sameGraphSemantics compares
+  // `data` by reference) and overwrite the freshly-imported `code` with a
+  // regeneration of the OLD graph.
+  //
+  // NOT recoverable from the module text and therefore RESET to its default
+  // by this stamp: `mergeVertices` (preview-only, never emitted; absent ===
+  // true). `displacementMode` IS recovered — but only because
+  // scriptToTSLWithSettings distinguishes the two positionNode forms; without
+  // that, importing an offset-displacement module would silently switch it to
+  // normal mode. A raw editor-TSL file (the pass-through branch) carries no
+  // settings at all, so importing one likewise clears them: editor TSL cannot
+  // express them, and "the file is silent" is read as "the file says none".
+  const converted = scriptToTSLWithSettings(text);
+  useAppStore.setState((s) => ({
+    nodes: s.nodes.map((n) =>
+      n.data.registryType === 'output'
+        ? { ...n, data: { ...n.data, materialSettings: converted.materialSettings } }
+        : n,
+    ) as AppNode[],
+    // A bare script carries no palettes, so the previous shader's must go —
+    // the same rule the preview mesh and materialSettings already follow on
+    // this branch, and the one `applyProjectToStore` applies to a project
+    // block that ships none. Without it the old palettes ride onto an
+    // unrelated shader and are re-exported with it as if authored there.
+    shaderPalettes: [],
+    syncSource: 'code',
+    // Mirrors setNodes — every nodes-writing path clears this. Load-bearing
+    // HERE because of the line above: with syncSource !== 'graph' the
+    // graph→code effect early-returns BEFORE the `finally` that clears the
+    // flag — and pushHistory hard-bails while it is set, so doCodeSync's
+    // snapshot would silently become a no-op and the import would be
+    // unrecoverable by undo.
+    isUndoRedo: false,
+  }));
+  store.setCode(converted.code, 'code');
   store.requestCodeSync();
   // A bare script's graph doesn't exist yet — useSyncEngine's code→graph pass
   // builds it a commit or two from now. The canvas arms the fit on this event

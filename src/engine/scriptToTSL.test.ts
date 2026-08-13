@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parse } from '@babel/parser';
-import { scriptToTSL } from './scriptToTSL';
+import { scriptToTSL, scriptToTSLWithSettings } from './scriptToTSL';
 import { codeToGraph } from './codeToGraph';
 import { buildShaderModule } from './tslCodeProcessor';
 import { getNodeValues } from '@/types';
@@ -603,5 +603,105 @@ export default function () {
     expect(fatal).toEqual([]);
     expect(tsl).toContain('metalness: float(0.9)');
     expect(tsl).toContain('roughness: float(0.15)');
+  });
+});
+
+describe("scriptToTSLWithSettings: a module's own material settings survive", () => {
+  const mod = (props: string) => `import { color, positionLocal, normalLocal, mul } from "three/tsl";
+
+export default function (params) {
+  const d = mul(positionLocal, 2);
+  return {
+    colorNode: color(0xffffff),
+    positionNode: positionLocal.add(normalLocal.mul(d)),
+${props}  };
+}
+`;
+
+  it('extracts transparent / side / alphaTest / depthWrite and still strips them', () => {
+    const r = scriptToTSLWithSettings(mod(
+      '    transparent: true,\n    side: 2, // double-sided\n    alphaTest: 0.5,\n    depthWrite: false,\n'));
+    expect(r.materialSettings).toEqual({
+      transparent: true, side: 'double', alphaTest: 0.5, depthWrite: false,
+    });
+    expect(r.code).not.toContain('alphaTest');
+    expect(r.code).not.toContain('side:');
+    expect(r.code).toContain('position: d');
+  });
+
+  it('clamps alphaTest below 1, drops 0, drops a non-numeric payload', () => {
+    expect(scriptToTSLWithSettings(mod('    alphaTest: 1,\n')).materialSettings)
+      .toEqual({ alphaTest: 0.99 });
+    expect(scriptToTSLWithSettings(mod('    alphaTest: 3,\n')).materialSettings)
+      .toEqual({ alphaTest: 0.99 });
+    expect(scriptToTSLWithSettings(mod('    alphaTest: 0,\n')).materialSettings).toBeUndefined();
+    expect(scriptToTSLWithSettings(
+      mod("    alphaTest: 0.5 }; globalThis.pwned = 1; ({ x: 0,\n")).materialSettings)
+      .toBeUndefined();
+  });
+
+  it('drops depthWrite:false on an opaque module (it self-occludes into holes)', () => {
+    expect(scriptToTSLWithSettings(mod('    depthWrite: false,\n')).materialSettings)
+      .toBeUndefined();
+  });
+
+  it('maps every side spelling it knows and drops the ones it does not', () => {
+    expect(scriptToTSLWithSettings(mod('    side: 1,\n')).materialSettings).toEqual({ side: 'back' });
+    expect(scriptToTSLWithSettings(mod("    side: 'double',\n")).materialSettings).toEqual({ side: 'double' });
+    expect(scriptToTSLWithSettings(mod('    side: THREE.DoubleSide,\n')).materialSettings).toBeUndefined();
+  });
+
+  it('drops prototype-chain side values instead of carrying an inherited Function', () => {
+    // A Record lookup resolved side:'constructor' to Object.prototype's
+    // constructor — a Function that survived into materialSettings, and the
+    // next pushHistory's structuredClone threw DataCloneError out of a React
+    // effect, blanking the editor. The settings must stay structured-cloneable
+    // for EVERY input.
+    for (const evil of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+      const settings = scriptToTSLWithSettings(mod(`    side: ${evil},\n`)).materialSettings;
+      expect(settings, evil).toBeUndefined();
+      expect(() => structuredClone(settings)).not.toThrow();
+    }
+  });
+
+  it('returns undefined settings and code byte-identical to scriptToTSL', () => {
+    const src = mod('');
+    const r = scriptToTSLWithSettings(src);
+    expect(r.materialSettings).toBeUndefined();
+    expect(r.code).toBe(scriptToTSL(src));
+  });
+
+  it('handles the single-line return form the Tests/ corpus uses', () => {
+    const src = 'import { color } from "three/tsl";\n\n'
+      + 'export default function (params) {\n'
+      + '  return { colorNode: color(0xffffff), transparent: true, alphaTest: 0.25 };\n}\n';
+    expect(scriptToTSLWithSettings(src).materialSettings)
+      .toEqual({ transparent: true, alphaTest: 0.25 });
+  });
+
+  it('leaves raw editor TSL alone', () => {
+    const raw = 'import { Fn, color } from "three/tsl";\n'
+      + 'const shader = Fn(() => { return { color: color(0xffffff) }; });\n'
+      + 'export default shader;\n';
+    const r = scriptToTSLWithSettings(raw);
+    expect(r.code).toBe(raw);
+    expect(r.materialSettings).toBeUndefined();
+  });
+
+  it('recovers offset displacement mode (normal mode stays the default)', () => {
+    const offset = 'import { color, positionLocal, mul } from "three/tsl";\n\n'
+      + 'export default function (params) {\n  const d = mul(positionLocal, 2);\n'
+      + '  return { colorNode: color(0xffffff), positionNode: positionLocal.add(d) };\n}\n';
+    expect(scriptToTSLWithSettings(offset).materialSettings).toEqual({ displacementMode: 'offset' });
+    const normal = offset.replace('positionLocal.add(d)', 'positionLocal.add(normalLocal.mul(d))');
+    expect(scriptToTSLWithSettings(normal).materialSettings).toBeUndefined();
+  });
+
+  it('returns a FRESH settings object every call (reference selectors bail on Object.is)', () => {
+    const src = mod('    transparent: true,\n');
+    const a = scriptToTSLWithSettings(src).materialSettings;
+    const b = scriptToTSLWithSettings(src).materialSettings;
+    expect(a).toEqual(b);
+    expect(a).not.toBe(b);
   });
 });

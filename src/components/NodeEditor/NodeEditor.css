@@ -191,6 +191,9 @@
 /* Custom canvas background color picker, slotted into the bottom canvas bar
    next to the zoom buttons. The native color input is hidden behind a visible
    swatch that follows the bar's button styling. */
+/* A real `<button>` now (it opens `ColorPickerPopover` and is its anchor); the
+   invisible full-bleed `<input type="color">` that used to sit inside the old
+   `<label>` is gone, and so is its rule. */
 .node-editor__bg-color-btn {
   position: relative;
   display: flex;
@@ -205,18 +208,6 @@
   border: 1px solid var(--border-default);
   border-radius: 3px;
   pointer-events: none;
-}
-
-.node-editor__bg-color-btn input[type='color'] {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
-  border: none;
-  padding: 0;
-  background: transparent;
 }
 
 /* ── Board drawing ─────────────────────────────────────────────────────────
@@ -497,24 +488,19 @@
 .fs-draw-btn--sm { padding: 4px 8px; }
 .fs-draw-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.fs-draw-swatch {
+/* The ink swatch is the app-wide picker's trigger `<button>`, filled by an
+   inline `background` — so the `> span` fill and the invisible full-bleed
+   `<input type="color">` that used to sit under it are both gone with it.
+   TWO classes: `.palette-swatch` (26x12) would otherwise tie on specificity
+   and the winner would be whichever stylesheet the bundler emits last. */
+.fs-draw-controls .fs-draw-swatch {
   position: relative;
   width: 22px;
   height: 22px;
+  padding: 0;
   border-radius: var(--border-radius-sm);
   border: 1px solid var(--border-default);
   overflow: hidden;
-  cursor: pointer;
-}
-.fs-draw-swatch > span { display: block; width: 100%; height: 100%; }
-.fs-draw-swatch > input[type="color"] {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  border: none;
-  padding: 0;
   cursor: pointer;
 }
 

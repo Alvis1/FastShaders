@@ -29,12 +29,30 @@ export function DragNumberInput({
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState('');
   const [dragging, setDragging] = useState(false);
+  // Compact edit mode locks itself to the display span's footprint — see
+  // startEdit.
+  const [editWidth, setEditWidth] = useState<number | null>(null);
 
-  const dragRef = useRef({ startX: 0, startValue: 0, moved: false, isDown: false });
+  // `bracketed` is this widget's OWN record that it called `beginInteraction`
+  // and has not balanced it yet — the same ownership token useHistoryBracket
+  // keeps in `openedRef`. The store's bracket is a global nesting counter with
+  // no notion of who owns a depth, so an unpaired end closes whatever bracket
+  // another gesture is riding.
+  const dragRef = useRef({ startX: 0, startValue: 0, moved: false, isDown: false, bracketed: false });
   const inputRef = useRef<HTMLInputElement>(null);
+  const valueRef = useRef<HTMLSpanElement>(null);
 
   // Enter edit mode
   const startEdit = useCallback(() => {
+    // The compact variant is width:auto (sizes to its value text), and a
+    // number <input>'s INTRINSIC width is far wider than that text — so
+    // swapping the span for the input grew the whole widget and, with it,
+    // the node frame (the Time node visibly expanded the moment its speed
+    // box was clicked). Lock the input to the span's measured footprint:
+    // offsetWidth, not getBoundingClientRect — layout px, immune to the
+    // viewport zoom transform. The frame stays put while typing; overlong
+    // text scrolls inside the input.
+    setEditWidth(valueRef.current?.offsetWidth ?? null);
     setEditText(String(roundTo(value, 4)));
     setEditing(true);
   }, [value]);
@@ -49,6 +67,18 @@ export function DragNumberInput({
   // Cancel edit
   const cancelEdit = useCallback(() => {
     setEditing(false);
+  }, []);
+
+  // Balance exactly the one `beginInteraction` this widget opened, once. An
+  // unpaired end would close another gesture's bracket (a settings-menu
+  // rename's idle bracket, a second finger's scrub) — and useHistoryBracket
+  // never re-opens after that, so the rest of that gesture pushes a full-graph
+  // structuredClone per frame and evicts undo. Must stay the ONLY place in
+  // this file that ends an interaction (pinned by dragNumberBracket.test.ts).
+  const endBracket = useCallback(() => {
+    if (!dragRef.current.bracketed) return;
+    dragRef.current.bracketed = false;
+    useAppStore.getState().endInteraction();
   }, []);
 
   const handleEditKey = useCallback(
@@ -73,7 +103,13 @@ export function DragNumberInput({
       if (editing) return;
       e.preventDefault();
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
-      dragRef.current = { startX: e.clientX, startValue: value, moved: false, isDown: true };
+      dragRef.current = {
+        startX: e.clientX,
+        startValue: value,
+        moved: false,
+        isDown: true,
+        bracketed: false,
+      };
     },
     [value, editing],
   );
@@ -90,6 +126,7 @@ export function DragNumberInput({
         // deep-cloned on every frame. Deliberately not done on pointerdown: a
         // press that turns out to be a click-to-edit would push a no-op entry.
         useAppStore.getState().beginInteraction();
+        dragRef.current.bracketed = true;
       }
       dragRef.current.moved = true;
       setDragging(true);
@@ -107,14 +144,14 @@ export function DragNumberInput({
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
       dragRef.current.isDown = false;
       setDragging(false);
-      useAppStore.getState().endInteraction();
+      endBracket();
 
       // If no significant movement, treat as click → edit mode
       if (!dragRef.current.moved) {
         startEdit();
       }
     },
-    [startEdit],
+    [startEdit, endBracket],
   );
 
   // A cancelled gesture (pointer stolen, touch interrupted) never fires
@@ -125,16 +162,11 @@ export function DragNumberInput({
     dragRef.current.isDown = false;
     dragRef.current.moved = false;
     setDragging(false);
-    useAppStore.getState().endInteraction();
-  }, []);
+    endBracket();
+  }, [endBracket]);
 
   // Same guarantee if this unmounts mid-drag (e.g. the node is deleted).
-  useEffect(
-    () => () => {
-      if (dragRef.current.isDown) useAppStore.getState().endInteraction();
-    },
-    [],
-  );
+  useEffect(() => endBracket, [endBracket]);
 
   // Arrow button handlers
   const increment = useCallback(() => {
@@ -159,6 +191,9 @@ export function DragNumberInput({
           ref={inputRef}
           className="drag-num__edit"
           type="number"
+          // Compact only: the chrome variant's 90px frame already fixes the
+          // footprint (its input flexes inside it).
+          style={compact && editWidth != null ? { width: editWidth } : undefined}
           value={editText}
           onChange={(e) => setEditText(e.target.value)}
           onKeyDown={handleEditKey}
@@ -167,6 +202,7 @@ export function DragNumberInput({
         />
       ) : (
         <span
+          ref={valueRef}
           className={`drag-num__value ${dragging ? 'drag-num__value--dragging' : ''}`}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}

@@ -119,6 +119,18 @@ export default function App() {
     useAppStore.getState().setNodes(nodes, 'graph');
     useAppStore.getState().setEdges(edges, 'graph');
     if (saved?.drawings?.length) useAppStore.getState().setDrawings(saved.drawings);
+    // Palettes ride the same fs:graph payload and are already sanitized by
+    // loadGraph — the same contract setDrawings has.
+    if (saved?.palettes?.length) useAppStore.getState().setShaderPalettes(saved.palettes);
+
+    // Frame the boot graph. React Flow's `fitView` init prop already ran by
+    // now — child effects run before this parent effect, so it fitted an
+    // EMPTY canvas and the seeded graph landed at the raw default viewport,
+    // with half the demo chain (Output node included) outside the pane on a
+    // first visit. The import-fit arm in NodeEditor solves exactly this
+    // "nodes replaced, viewport not" case, and its listener is attached by
+    // the same effect-ordering guarantee.
+    window.dispatchEvent(new CustomEvent('fs:graph-imported'));
   }, []);
 
   return (

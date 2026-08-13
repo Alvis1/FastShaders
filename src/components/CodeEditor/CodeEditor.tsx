@@ -6,6 +6,7 @@ import { t } from '@/i18n';
 import { registerTSLLanguage } from './tslLanguage';
 import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
+import { collectShaderProperties } from '@/engine/exportShader';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import { parseCostFile } from '@/utils/costOverride';
 import { getNodeValues } from '@/types';
@@ -36,34 +37,64 @@ export function CodeEditor() {
   const codeErrors = useAppStore((s) => s.codeErrors);
   const setCode = useAppStore((s) => s.setCode);
   const requestCodeSync = useAppStore((s) => s.requestCodeSync);
-  const nodes = useAppStore((s) => s.nodes);
   const codeEditorTheme = useAppStore((s) => s.codeEditorTheme);
   const editorRef = useRef<unknown>(null);
 
-  const outputNode = nodes.find((n) => n.data.registryType === 'output');
-  const materialSettings = (outputNode?.data as OutputNodeData | undefined)?.materialSettings;
+  // ── Node-derived inputs, without a whole-array subscription ──────────────
+  // `s.nodes` gets a NEW identity on every drag pointermove, so subscribing to
+  // it re-rendered this whole panel (both Monaco element trees) at pointer rate
+  // AND re-fired the scriptCode memo below — which, with the Output tab open
+  // and an embedded image, is ~6 ms of string work per frame per 600K payload
+  // (~18 ms at three images: more than a whole 60 Hz frame, for a read-only
+  // display tab). Same two conversions the 3D preview already uses.
+  //
+  // Material settings: a narrow reference selector. A position/selection-only
+  // notify replaces the node OBJECT but keeps its `.data` — and therefore its
+  // materialSettings — reference, so Object.is bails. (ShaderPreview.tsx:264-267
+  // holds the identical dependency on that fact.)
+  const materialSettings = useAppStore(
+    (s) =>
+      (s.nodes.find((n) => n.data.registryType === 'output')?.data as
+        | OutputNodeData
+        | undefined)?.materialSettings,
+  );
   const [activeTab, setActiveTab] = useState<CodeTab>('tsl');
 
-  // Extract property definitions from property_float / property_color nodes
-  const properties: PropertyInfo[] = useMemo(() =>
-    nodes
-      .filter((n) => n.data.registryType === 'property_float' || n.data.registryType === 'property_color')
-      .map((n) => {
-        const values = getNodeValues(n);
-        if (n.data.registryType === 'property_color') {
-          return {
-            name: String(values.name ?? 'color1'),
-            type: 'color' as const,
-            defaultValue: String(values.hex ?? '#ff0000'),
-          };
-        }
-        return {
-          name: String(values.name ?? 'property1'),
-          type: 'float' as const,
-          defaultValue: Number(values.value ?? 1.0),
-        };
-      }),
-    [nodes]
+  // Declared property list — the cheap-key two-step (ShaderNode.tsx:291-332):
+  // fold every property node's type/name/default into ONE primitive string, in
+  // nodes order (the order buildShaderModule's duplicate-name disambiguation
+  // and buildHeader's dedupe both walk), then rebuild the array from
+  // getState() only when that string changes.
+  //
+  // This list CANNOT be folded into `code`: renaming the second of two
+  // same-named properties from `x` to `x2` leaves the emitted TSL BYTE-
+  // IDENTICAL (claimName already emitted `x`/`x2`) while adding an `x2` row to
+  // the module's <a-entity> usage header. Pinned by tslToShaderModule.test.ts.
+  const propertiesKey = useAppStore((s) => {
+    let key = '';
+    for (const n of s.nodes) {
+      const rt = n.data.registryType;
+      if (rt !== 'property_float' && rt !== 'property_color') continue;
+      const v = getNodeValues(n);
+      // JSON.stringify makes each name/hex span SELF-DELIMITING (it escapes any
+      // embedded quote), so the concatenation is unambiguous while staying
+      // PRINTABLE. ShaderNode.tsx:297 folds its key with raw \u0000/\u0001
+      // separators; that is deliberately NOT copied here, because a raw NUL byte
+      // in a source file makes grep/ripgrep classify it as binary and silently
+      // skip the file (MicNode.tsx/OutputNode.tsx trip exactly that today).
+      key += rt === 'property_color'
+        ? `c${JSON.stringify(String(v.name ?? 'color1'))}${JSON.stringify(String(v.hex ?? '#ff0000'))};`
+        : `f${JSON.stringify(String(v.name ?? 'property1'))}${Number(v.value ?? 1.0)};`;
+    }
+    return key;
+  });
+  // The SAME implementation the Download-Shader bundle uses, so the Output tab
+  // cannot drift from the file the user actually gets (exportShader.ts:18-36 —
+  // this was a byte-for-byte hand copy of it).
+  const properties: PropertyInfo[] = useMemo(
+    () => collectShaderProperties(useAppStore.getState().nodes),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [propertiesKey],
   );
 
   const handleMount: OnMount = useCallback((editor, monaco) => {
@@ -95,14 +126,29 @@ export function CodeEditor() {
   // Only compute export code when that tab is active; catch errors to avoid blank tabs.
   // The Output tab shows the REAL module, so image placeholders are expanded back
   // to their `data:` payloads here — the TSL tab above keeps the short references.
+  //
+  // Nodes are read IMPERATIVELY, for the same reason and with the same proof as
+  // ShaderPreview.tsx:1065-1076: the module depends on nodes only through image
+  // payloads, and the `fs-asset:<node>-<hash>` placeholder embeds an FNV-1a hash
+  // of the stored payload (imageAssets.ts:47-61, emitted at graphToCode.ts:700),
+  // so swapping an image always changes `code` and re-runs this memo. Dimensions
+  // and file name ride the same emitted line; an undecodable payload emits no
+  // placeholder at all. Everything the module reads that `code` does NOT carry —
+  // materialSettings (graphToCode never emits it) and the declared property list
+  // (a duplicate-name rename changes the header with identical TSL) — is a real
+  // dep below.
   const scriptCode = useMemo(() => {
     if (activeTab !== 'script') return '';
     try {
-      return tslToShaderModule(inlineImageAssetsFromNodes(code, nodes), materialSettings, properties);
+      return tslToShaderModule(
+        inlineImageAssetsFromNodes(code, useAppStore.getState().nodes),
+        materialSettings,
+        properties,
+      );
     } catch (e) {
       return `// Export error: ${e instanceof Error ? e.message : String(e)}`;
     }
-  }, [code, nodes, activeTab, materialSettings, properties]);
+  }, [code, activeTab, materialSettings, properties]);
 
   const isTSL = activeTab === 'tsl';
 

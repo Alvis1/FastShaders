@@ -125,7 +125,6 @@ describe('history coalescing (begin/endInteraction)', () => {
   });
 
   it('a fresh scrub clears the redo stack', () => {
-    const s = useAppStore.getState();
     scrubFrame('n1', 1);
     useAppStore.getState().undo();
     expect(useAppStore.getState().future).toHaveLength(1);
@@ -135,5 +134,26 @@ describe('history coalescing (begin/endInteraction)', () => {
     useAppStore.getState().endInteraction();
 
     expect(useAppStore.getState().future).toHaveLength(0);
+  });
+
+  it('MAX_HISTORY: an unbracketed 60-frame burst evicts every real entry (contract only — the widget itself is pinned by historyBracketing.test.ts)', () => {
+    const s = useAppStore.getState();
+    for (let i = 0; i < 5; i++) s.pushHistory();          // five real edits
+    for (let i = 1; i <= 60; i++) scrubFrame('n1', i);     // ONE unbracketed 1s scrub
+    const { past } = useAppStore.getState();
+    expect(past).toHaveLength(50);                         // MAX_HISTORY
+    // Every pre-scrub entry is gone; the oldest survivor is already mid-scrub.
+    // 5 pushes + 60 frames = 65 entries, `.slice(-50)` drops the first 15, and
+    // frame k snapshots the value BEFORE frame k — so old index 15 holds 10.
+    expect((past[0].nodes[0].data as { values?: { value?: number } }).values?.value).toBe(10);
+  });
+
+  it('the same 60 frames cost ONE entry when bracketed', () => {
+    const s = useAppStore.getState();
+    for (let i = 0; i < 5; i++) s.pushHistory();
+    s.beginInteraction();
+    for (let i = 1; i <= 60; i++) scrubFrame('n1', i);
+    s.endInteraction();
+    expect(useAppStore.getState().past).toHaveLength(6);
   });
 });

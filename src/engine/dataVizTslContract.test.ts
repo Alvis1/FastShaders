@@ -29,6 +29,7 @@ const T = TSL as unknown as {
   float: (v: number) => Chain;
   uv: () => Chain;
   color: (v: number) => Chain;
+  mix: (a: Chain, b: Chain, t: Chain) => Chain;
   dFdx: (n: Chain) => Chain;
   dFdy: (n: Chain) => Chain;
 };
@@ -80,6 +81,31 @@ describe('TSL chains used by the dataviz emitters exist in the shipped three', (
   it('builds the color(0x…) ramp mix the Stripes / Data Viz branches emit', () => {
     // The colour-space fix: `color()` is what converts the picked hex from sRGB
     // into the renderer's linear working space.
-    expect(T.color(0x1b2a4a).mix(T.color(0xffd24d), T.uv().x)).toBeTruthy();
+    expect(T.mix(T.color(0x1b2a4a), T.color(0xffd24d), T.uv().x)).toBeTruthy();
+  });
+
+  it('mix() puts the two ENDPOINTS first and the factor last — the chained form does NOT', () => {
+    // The defect this pins, verified against the shipped three by structure.
+    // TSL registers the method as `mixElement = (t, e1, e2) => mix(e1, e2, t)`
+    // (MathNode.js), so the RECEIVER of `.mix()` lands in the FACTOR slot.
+    // Written as a chain the ramp built mix(highColour, t, lowColour): the low
+    // colour used as a per-channel blend factor and the scalar `t` as an
+    // endpoint, which held the output within ~2% of the high colour for every
+    // t — the low swatch did nothing.
+    //
+    // Method chaining wraps its result in a VarNode, hence the unwrap.
+    const unwrap = (n: Chain): Chain => (n && n.isVarNode ? n.node : n);
+    const hex = (n: Chain): string | undefined => unwrap(n)?.value?.getHexString?.();
+    const lo = T.color(0x1b2a4a), hi = T.color(0xffd24d), t = T.uv().x;
+
+    const fn = unwrap(T.mix(lo, hi, t));
+    expect(fn.method).toBe('mix');
+    expect(hex(fn.aNode)).toBe('1b2a4a');   // endpoint A = low
+    expect(hex(fn.bNode)).toBe('ffd24d');   // endpoint B = high
+    expect(hex(fn.cNode)).toBeUndefined();  // factor = the scalar, not a colour
+
+    const chained = unwrap(lo.mix(hi, t));
+    expect(hex(chained.aNode)).toBe('ffd24d');
+    expect(hex(chained.cNode)).toBe('1b2a4a'); // the low colour AS THE FACTOR
   });
 });

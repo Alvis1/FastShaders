@@ -7,11 +7,16 @@ import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
-import { CLOCK_SIZE, drawClockFace } from '@/utils/clockFace';
+import { ClockFaceSvg, applyClockFrame } from './ClockFaceSvg';
+import { LiveEdgeValue } from './LiveEdgeValue';
 import { portLabel } from '@/i18n';
 // One rule for "what is arriving on this input", shared with ShaderNode/MicNode
 // (whose stylesheet also owns .shader-node__edge-val).
 import { edgeValueLabel } from './ShaderNode';
+// getTargetEdges, NOT raw s.edges — same reason as MicNode/OutputNode: the
+// unwrapped edge names the REAL producer, so a feeder inside a collapsed group
+// still shows its number instead of a grey ellipsis.
+import { getTargetEdges } from '@/engine/cpuEvaluator';
 import './ClockNode.css';
 
 // (`formatSpeed` lived here to render the read-only `×N` chip without printing
@@ -24,9 +29,17 @@ export const ClockNode = memo(function ClockNode({
   selected,
 }: NodeProps<ShaderFlowNode>) {
   const def = NODE_REGISTRY.get(data.registryType);
+  // Rules-of-Hooks note: this return sits ABOVE the hooks below. Safe because
+  // `def` cannot flip defined<->undefined on a MOUNTED instance: React Flow keys
+  // node components by node.id, every registryType the app writes is in
+  // NODE_REGISTRY (`unknown` included), and nothing mutates registryType in place
+  // to or from an unregistered value. A tampered .fastshader with an unknown
+  // registryType renders null for the whole life of that node. Moving the return
+  // below the hooks is NOT a mechanical edit here (ShaderNode/PreviewNode hooks
+  // dereference `def`) — see CLEAN-3.
   if (!def) return null;
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const handRef = useRef<SVGGElement>(null);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const language = useAppStore((s) => s.language);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
@@ -64,16 +77,16 @@ export const ClockNode = memo(function ClockNode({
   // key first so a position-only graph notify bails on Object.is; the map is
   // rebuilt from getState() only when that key actually changes.
   const speedEdgeKey = useAppStore((s) => {
-    const e = s.edges.find((ed) => ed.target === id && ed.targetHandle === 'speed');
+    const e = getTargetEdges(s.nodes, s.edges, id).find((ed) => ed.targetHandle === 'speed');
     if (!e) return '';
-    const l = edgeValueLabel(e.source, s.nodes, s.edges);
-    return `${e.source} ${l.text} ${l.live ? 1 : 0}`;
+    const l = edgeValueLabel(e.source, s.nodes, s.edges, e.sourceHandle);
+    return `${e.source} ${e.sourceHandle ?? ''} ${l.text} ${l.live ? 1 : 0}${l.animated ? 1 : 0}`;
   });
   const wiredSpeed = useMemo(() => {
     if (!speedEdgeKey) return null;
     const { nodes, edges } = useAppStore.getState();
-    const e = edges.find((ed) => ed.target === id && ed.targetHandle === 'speed');
-    return e ? edgeValueLabel(e.source, nodes, edges) : null;
+    const e = getTargetEdges(nodes, edges, id).find((ed) => ed.targetHandle === 'speed');
+    return e ? { ...edgeValueLabel(e.source, nodes, edges, e.sourceHandle), sourceId: e.source, sourceHandle: e.sourceHandle ?? null } : null;
     // speedEdgeKey is the change signal; the graph is read imperatively above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, speedEdgeKey]);
@@ -89,14 +102,12 @@ export const ClockNode = memo(function ClockNode({
   const phaseRef = useRef(0);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    // willReadFrequently keeps the canvas CPU-backed: an accelerated canvas
-    // layer makes Safari rasterize the zoomed viewport at 1× (all-node blur).
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return;
-
     let rafId: number;
+    // `last` is a dt tracker for the integrator, NOT a clock epoch — this
+    // hand deliberately does NOT read the shared appClock: it shows the RATE
+    // time flows at, and integrating dt × speed is what keeps it continuous
+    // while the user scrubs speed (a wall-clock × speed lands on an unrelated
+    // % 60 residue every pointermove frame — the hand would teleport).
     let last: number | null = null;
     const draw = (ts: number) => {
       if (last === null) last = ts;
@@ -105,9 +116,10 @@ export const ClockNode = memo(function ClockNode({
       const dt = Math.min(Math.max((ts - last) / 1000, 0), 0.1);
       last = ts;
       phaseRef.current = (phaseRef.current + dt * speedRef.current) % 60;
-      // The face itself lives in utils/clockFace so the asset tile draws the
-      // identical picture — see that module's header.
-      drawClockFace(ctx, phaseRef.current);
+      // One rotate-transform write per frame — the face itself is the shared
+      // ClockFaceSvg (geometry in utils/clockFace), so the asset tile shows
+      // the identical picture.
+      applyClockFrame(handRef, phaseRef.current);
       rafId = requestAnimationFrame(draw);
     };
 
@@ -131,12 +143,7 @@ export const ClockNode = memo(function ClockNode({
       {/* The sockets live INSIDE this wrapper so they centre on the clock face
           rather than on the whole node — see ClockNode.css. */}
       <div className="clock-node__canvas-wrap">
-        <canvas
-          ref={canvasRef}
-          width={CLOCK_SIZE}
-          height={CLOCK_SIZE}
-          className="clock-node__canvas"
-        />
+        <ClockFaceSvg phase={0} handRef={handRef} />
 
         {def.outputs[0] && (
           <TypedHandle
@@ -156,12 +163,7 @@ export const ClockNode = memo(function ClockNode({
       <div className="clock-node__speed-row" title={portLabel('Speed', language)}>
         <span className="clock-node__speed-x">×</span>
         {wiredSpeed ? (
-          <span
-            className="clock-node__speed-wired shader-node__edge-val"
-            style={wiredSpeed.live ? { color: '#2D6CDF' } : undefined}
-          >
-            {wiredSpeed.text}
-          </span>
+          <LiveEdgeValue className="clock-node__speed-wired shader-node__edge-val" {...wiredSpeed} />
         ) : (
           <DragNumberInput
             compact

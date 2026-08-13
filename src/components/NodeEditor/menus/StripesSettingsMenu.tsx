@@ -3,6 +3,7 @@ import { t } from '@/i18n';
 import type { ShaderFlowNode } from '@/types';
 import { getNodeValues } from '@/types';
 import { rowStyle, labelStyle, NumberRow, NodeActions } from './menuShared';
+import { RampColorPorts } from './RampColorPorts';
 
 interface StripesSettingsMenuProps {
   nodeId: string;
@@ -58,6 +59,8 @@ export function StripesSettingsMenu({ nodeId }: StripesSettingsMenuProps) {
           {numRow('radius', t('radius', language), 0.5, 0.05)}
         </>
       )}
+
+      <RampColorPorts nodeId={nodeId} />
 
       <NodeActions nodeId={nodeId} />
     </div>

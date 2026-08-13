@@ -8,7 +8,7 @@ import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
 import complexityData from '@/registry/complexity.json';
-import { VALID_SWIZZLE } from './graphToCode';
+import { VALID_SWIZZLE, TOHSL_COMPONENT_TO_HANDLE } from './graphToCode';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 
 /** Output channels whose widget stores a NUMBER / a HEX color — the parse
@@ -720,7 +720,29 @@ function processCall(
   // graphToCode emits: mx_worley_noise_float(posOrMul)
   // where posOrMul is either `positionGeometry`, a var ref, or `mul(pos, scale)`
   if (def.category === 'noise') {
-    processNoiseCall(callExpr, node, def, edges, varToNodeId, varToHandle);
+    // The Noise node models ONE argument (pos, optionally `pos.mul(scale)`),
+    // but three/tsl's wrappers take more: mx_noise_*(pos, amplitude, pivot),
+    // mx_fractal_noise_*(pos, octaves, lacunarity, diminish, amplitude),
+    // mx_worley_noise_*(pos, jitter). processNoiseCall reads only args[0], so
+    // a hand-written `mx_fractal_noise_float(p, 8)` used to come back out of
+    // the next Apply as the 3-octave default with `errors: []` — a silent
+    // rewrite of someone's shader. Warn instead; the node IS the right node,
+    // it just cannot carry the extra parameters, so this stays NON-BLOCKING
+    // (severity 'warning') and the Apply proceeds — useSyncEngine.ts:102
+    // blocks on `errors.some(e => e.severity !== 'warning')`. graphToCode
+    // never emits a multi-argument noise call and matchNoiseUnsignedRemap
+    // refuses one, so this can only fire on hand-written / imported code,
+    // never on a graph round-trip. Same reasoning as the guard at
+    // matchNoiseUnsignedRemap.
+    if (callExpr.arguments.length > 1) {
+      const extra = callExpr.arguments.length - 1;
+      errors.push({
+        message: `${funcName}: ${extra} extra argument${extra > 1 ? 's' : ''} dropped — the Noise node stores only the position (and an optional scale multiplier).`,
+        line: callExpr.loc?.start.line,
+        severity: 'warning',
+      });
+    }
+    processNoiseCall(callExpr, node, edges, varToNodeId, varToHandle);
     return;
   }
 
@@ -1012,7 +1034,6 @@ function tryParseTimeSpeed(
 function processNoiseCall(
   callExpr: t.CallExpression,
   node: AppNode,
-  def: NodeDefinition,
   edges: AppEdge[],
   varToNodeId: Map<string, string>,
   varToHandle: Map<string, string>
@@ -1104,6 +1125,20 @@ function resolveMemberExpr(
 
   const sourceId = varToNodeId.get(varName) ?? ensureBareInputNode(varName, nodes, varToNodeId);
   if (!sourceId) return null;
+
+  // The RGB-to-HSL node addresses its own components through REAL output
+  // sockets, so `toHsl1.x` is that node's `h` handle — not a swizzle needing a
+  // Split. Without this the round trip is unstable in the worst way: the code
+  // and the picture stay correct while EVERY Apply splices a fresh Split
+  // between toHsl and its consumers, so the graph grows without bound and a
+  // byte-equality check still passes (a Split re-emits the same swizzle text).
+  // `.w` has no HSL counterpart and falls through to the Split path below,
+  // as does every other source type.
+  const srcNode = nodes.find((n) => n.id === sourceId);
+  if (srcNode?.data.registryType === 'toHsl') {
+    const handle = TOHSL_COMPONENT_TO_HANDLE.get(component);
+    if (handle) return { nodeId: sourceId, handle };
+  }
 
   // Reuse existing split node for this source variable
   let splitId = splitNodesMap.get(varName);

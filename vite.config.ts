@@ -27,12 +27,15 @@ interface DescriptionSlot {
 }
 interface SpliceModule {
   locateRegistryDescriptions: (source: string) => DescriptionSlot[];
+  locateRegistryLabels: (source: string) => DescriptionSlot[];
   locateTextureDescriptions: (source: string) => DescriptionSlot[];
   spliceDescriptions: (
     source: string,
     slots: DescriptionSlot[],
     patch: Record<string, string>,
+    kind?: string,
   ) => string;
+  assertValidNodeLabels: (labels: Record<string, string>, kind?: string) => void;
 }
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, './package.json'), 'utf-8'));
@@ -259,6 +262,10 @@ const shaderCarouselDesktopStagePlugin = (): Plugin => ({
  *   POST /__nd/descriptions { registry, textures }   — splice descriptions in place
  *   GET  /__nd/citations    → { nodes, textures } — parsed citations.json
  *   POST /__nd/citations    { nodes, textures }   — rewrite citations.json
+ *   GET  /__nd/visibility   → { nodes, textures } — parsed editorVisibility.json
+ *                             (the lists of node types / texture ids HIDDEN from
+ *                             the editor's add surfaces)
+ *   POST /__nd/visibility   { nodes, textures }   — rewrite editorVisibility.json
  *
  * Both tools probe these routes to decide whether saving is possible at all,
  * so a 404 here is a supported state, not an error: the deployed copies render
@@ -281,6 +288,8 @@ const ND_COSTS = path.resolve(__dirname, 'src/registry/complexity.json');
 const ND_REGISTRY = path.resolve(__dirname, 'src/registry/nodeRegistry.ts');
 const ND_TEXTURES = path.resolve(__dirname, 'src/registry/builtinTextures.ts');
 const ND_CITATIONS = path.resolve(__dirname, 'src/registry/citations.json');
+const ND_VISIBILITY = path.resolve(__dirname, 'src/registry/editorVisibility.json');
+const ND_I18N = path.resolve(__dirname, 'src/i18n/node-i18n.json');
 
 /**
  * NOTE on the retired sync plugins: node-designer.html used to be a standalone
@@ -439,6 +448,129 @@ function ndWriteDescriptions(
   return Object.keys(clean).length;
 }
 
+/**
+ * Splice a node DISPLAY-LABEL patch into nodeRegistry.ts.
+ *
+ * Deliberately NOT `ndWriteDescriptions` with a different locator, for two reasons.
+ *
+ * 1. Uniqueness is a whole-file property. `assertValidNodeLabels` is handed the map the
+ *    registry would hold AFTER the patch (current labels overlaid with the patch), not
+ *    the patch alone — otherwise renaming one node onto another node's existing name
+ *    would pass every per-key check and land two identical labels, which makes
+ *    `nodeMatchRank`'s exact-name tier ambiguous and grows two indistinguishable rows in
+ *    the Add-node menu.
+ *
+ * 2. Label slots and description slots are BOTH keyed by node type, and
+ *    `spliceDescriptions` indexes `slots` into a `Map` by key — so merging the two lists
+ *    would silently collapse each pair to whichever came last and a label patch could
+ *    rewrite a description's byte range. They must stay separate lists, spliced in
+ *    separate calls, which is what this function and its sibling do.
+ */
+interface NdFilePlan { file: string; source: string; out: string; count: number }
+
+function ndPlanLabels(splice: SpliceModule, patch: Record<string, unknown>): NdFilePlan {
+  const source = readFileSync(ND_REGISTRY, 'utf-8');
+  const slots = splice.locateRegistryLabels(source);
+  const valid = new Set(slots.map((s) => s.key));
+  const clean: Record<string, string> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (!valid.has(key)) throw new Error(`unknown node type: ${key}`);
+    if (typeof value !== 'string') throw new Error(`non-string label for ${key}`);
+    clean[key] = value;
+  }
+  const next: Record<string, string> = Object.fromEntries(slots.map((s) => [s.key, s.value]));
+  Object.assign(next, clean);
+  splice.assertValidNodeLabels(next);
+
+  return {
+    file: ND_REGISTRY,
+    source,
+    out: splice.spliceDescriptions(source, slots, clean, 'label'),
+    count: Object.keys(clean).length,
+  };
+}
+
+/**
+ * Apply a Latvian-label patch to node-i18n.json's `nodes` map.
+ *
+ * A whole-file rewrite is right here where it is wrong for nodeRegistry.ts: this is
+ * generated-shaped JSON with no comments or hand-formatting to preserve, the same
+ * treatment citations.json already gets. Key ORDER is preserved by mutating the parsed
+ * object in place (JSON.stringify keeps insertion order for string keys), so an edit
+ * shows up as one changed line rather than a reordered file.
+ *
+ * An empty/whitespace value DELETES the entry rather than storing "" — `formatNodeLabel`
+ * falls back to English on a missing key but would happily render an empty Latvian name
+ * as "" or " (Multiply)".
+ */
+function ndPlanLvLabels(splice: SpliceModule, patch: Record<string, unknown>): NdFilePlan {
+  const source = readFileSync(ND_I18N, 'utf-8');
+  const data = JSON.parse(source) as { nodes: Record<string, string> };
+  const valid = new Set(
+    splice.locateRegistryLabels(readFileSync(ND_REGISTRY, 'utf-8')).map((s) => s.key),
+  );
+
+  let touched = 0;
+  for (const [key, value] of Object.entries(patch)) {
+    if (!valid.has(key)) throw new Error(`unknown node type: ${key}`);
+    if (typeof value !== 'string') throw new Error(`non-string lv label for ${key}`);
+    if (value.trim()) data.nodes[key] = value;
+    else delete data.nodes[key];
+    touched++;
+  }
+  // Validate the RESULTING map for the same reason the English one is: the Latvian label
+  // is also in `nodeMatchRank`'s name tiers, so a duplicate is ambiguous there too.
+  //
+  // Scoped to the PATCHABLE types, not the whole file. node-i18n.json also carries the
+  // three hidden defs (`unknown`, `dataNode`, `imageNode`), which are excluded from
+  // `allDefinitions` and so never reach nodeMatchRank, the Add-node menu or the content
+  // browser — a collision with one of them cannot be observed anywhere. Validating them
+  // rejected real renames for invisible reasons (measured: `{"lv":{"float":"Attēls"}}`
+  // 400s because imageNode's Latvian name is "Attēls"), and because the same `valid` gate
+  // refuses to PATCH those keys, the user had no way to resolve it through the tool.
+  const scoped: Record<string, string> = {};
+  for (const [key, value] of Object.entries(data.nodes)) if (valid.has(key)) scoped[key] = value;
+  splice.assertValidNodeLabels(scoped, 'lv label');
+
+  return { file: ND_I18N, source, out: JSON.stringify(data, null, 2) + '\n', count: touched };
+}
+
+/**
+ * Commit planned file writes, skipping no-ops.
+ *
+ * Compare-before-write matters here: an all-no-op patch must not touch mtime, or it kicks
+ * HMR for nothing — and HMR on nodeRegistry.ts reloads the whole app.
+ */
+function ndCommit(plans: NdFilePlan[]): void {
+  for (const p of plans) if (p.out !== p.source) writeFileSync(p.file, p.out, 'utf-8');
+}
+
+/**
+ * Validate one half of an `editorVisibility.json` payload: an array of keys that
+ * must all exist in the registry / texture source being hidden from.
+ *
+ * Deduped and SORTED, so toggling one node produces a one-line diff instead of
+ * reordering whatever the page happened to send. Unknown keys are rejected for
+ * the same reason citations rejects them — a typo would otherwise sit in source
+ * forever, hiding nothing, with nothing to notice it (`editorVisibility.test.ts`
+ * is the second gate: it fails on a stale key after a node is renamed).
+ */
+function ndValidateVisibility(list: unknown, valid: Set<string>, label: string): string[] {
+  if (!Array.isArray(list)) throw new Error(`${label} must be an array`);
+  const out = new Set<string>();
+  for (const key of list) {
+    if (typeof key !== 'string' || !key.trim()) throw new Error(`${label} entries must be non-empty strings`);
+    if (!valid.has(key)) throw new Error(`unknown ${label} key: ${key}`);
+    // `output` is a valid registry key but hiding it is a no-op the UI would
+    // still render as a change: the palette already excludes it and the
+    // Add-node menu reaches it through a hardcoded row. Refusing here keeps
+    // the file honest even if a client stops disabling that checkbox.
+    if (label === 'nodes' && key === 'output') throw new Error('the output node cannot be hidden');
+    out.add(key);
+  }
+  return [...out].sort();
+}
+
 /** Reject anything that isn't a plain `{ ref, url? }` citation record. */
 function ndValidateCitations(group: unknown, valid: Set<string>, label: string): Record<string, unknown> {
   if (group === null || typeof group !== 'object' || Array.isArray(group)) {
@@ -510,9 +642,47 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
               splice.locateTextureDescriptions(readFileSync(ND_TEXTURES, 'utf-8')).map((s) => [s.key, s.value]),
             );
             send(200, { registry, textures });
-          }, fail);
+          }).catch(fail);
+        } else if (req.method === 'GET' && req.url === '/labels') {
+          // Doubles as the Node Designer's availability probe for the Name field: the
+          // designer disables renaming when this 404s, because outside `npm run dev`
+          // there is no way to write registry SOURCE (see the designer's save tiers).
+          loadSplice().then((splice) => {
+            const registry = Object.fromEntries(
+              splice.locateRegistryLabels(readFileSync(ND_REGISTRY, 'utf-8')).map((s) => [s.key, s.value]),
+            );
+            const lv = (JSON.parse(readFileSync(ND_I18N, 'utf-8')) as { nodes: Record<string, string> }).nodes;
+            send(200, { registry, lv });
+          }).catch(fail);
         } else if (req.method === 'GET' && req.url === '/citations') {
           send(200, JSON.parse(readFileSync(ND_CITATIONS, 'utf-8')));
+        } else if (req.method === 'GET' && req.url === '/visibility') {
+          send(200, JSON.parse(readFileSync(ND_VISIBILITY, 'utf-8')));
+        } else if (req.method === 'POST' && req.url === '/labels') {
+          if (!ndGuardWrite(req, send)) return;
+          ndReadBody(req, send, (parsed) => {
+            const { registry, lv } = (parsed ?? {}) as { registry?: unknown; lv?: unknown };
+            loadSplice().then((splice) => {
+              try {
+                // PLAN BOTH, THEN WRITE BOTH. A rename spans two files, and every rule in
+                // assertValidNodeLabels can reject the Latvian half — so writing the
+                // registry first left it renamed on disk (and HMR-reloaded) while the
+                // response said 400 and the designer said "nothing saved". Measured with a
+                // trailing space in the Latvian box, which is trivially typed. The folder
+                // tier (designerApp's writeLabelsToFolder) already worked this way.
+                const plans = [
+                  ndPlanLabels(splice, (registry ?? {}) as Record<string, unknown>),
+                  ndPlanLvLabels(splice, (lv ?? {}) as Record<string, unknown>),
+                ];
+                ndCommit(plans);
+                send(200, { ok: true, registry: plans[0].count, lv: plans[1].count });
+              } catch (e) {
+                // A rejected patch is the tool sending something wrong, not a server
+                // fault — 400 so the designer surfaces the reason verbatim.
+                send(400, { error: String((e as Error).message) });
+              }
+            }).catch(fail);
+          });
         } else if (req.method === 'POST' && req.url === '/glyphs') {
           if (!ndGuardWrite(req, send)) return;
           ndReadBody(req, send, (parsed) => {
@@ -540,7 +710,7 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
                 // server fault — 400 so node-editor.html surfaces the reason verbatim.
                 send(400, { error: String((e as Error).message) });
               }
-            }, fail);
+            }).catch(fail);
           });
         } else if (req.method === 'POST' && req.url === '/citations') {
           if (!ndGuardWrite(req, send)) return;
@@ -568,7 +738,43 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
             } catch (e) {
               send(400, { error: String((e as Error).message) });
             }
-            }, fail);
+            }).catch(fail);
+          });
+        } else if (req.method === 'POST' && req.url === '/visibility') {
+          if (!ndGuardWrite(req, send)) return;
+          ndReadBody(req, send, (parsed) => {
+            const { nodes, textures } = (parsed ?? {}) as { nodes?: unknown; textures?: unknown };
+            loadSplice().then((splice) => {
+              try {
+                // Whole-file rewrite, the citations shape: the page always sends
+                // the COMPLETE hidden lists, so an entry the user re-enabled is
+                // gone because it is absent, not because of a delete opcode.
+                // Keys are checked against the same locators citations uses —
+                // the registry/texture SOURCE, not the current visibility file,
+                // so a node can be hidden the first time it is ever listed.
+                // NB those locators key off the `description` literal, so a
+                // definition without one would be unhidable and 400 the whole
+                // save. All 74 currently have one (pinned by descriptionSplice
+                // tests); a description-less node needs its own locator, not a
+                // looser check here.
+                const validNodes = new Set(
+                  splice.locateRegistryDescriptions(readFileSync(ND_REGISTRY, 'utf-8')).map((s) => s.key));
+                const validTextures = new Set(
+                  splice.locateTextureDescriptions(readFileSync(ND_TEXTURES, 'utf-8')).map((s) => s.key));
+                const next = {
+                  nodes: ndValidateVisibility(nodes ?? [], validNodes, 'nodes'),
+                  textures: ndValidateVisibility(textures ?? [], validTextures, 'textures'),
+                };
+                // Compare before write (ndCommit's rule): this file is imported
+                // by nodeRegistry, so an mtime touch reloads the whole app graph
+                // through HMR. A no-op save must not do that.
+                const text = JSON.stringify(next, null, 2) + '\n';
+                if (text !== readFileSync(ND_VISIBILITY, 'utf-8')) writeFileSync(ND_VISIBILITY, text, 'utf-8');
+                send(200, { ok: true, nodes: next.nodes.length, textures: next.textures.length });
+              } catch (e) {
+                send(400, { error: String((e as Error).message) });
+              }
+            }).catch(fail);
           });
         } else {
           send(404, { error: 'not found' });

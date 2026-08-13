@@ -3,6 +3,7 @@ import { t } from '@/i18n';
 import type { GroupFlowNode } from '@/types';
 import { rowStyle, labelStyle, colorFieldStyle, wideFieldStyle } from './menuShared';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
+import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 
 interface GroupSettingsMenuProps {
   nodeId: string;
@@ -43,12 +44,16 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
 
       <div style={rowStyle}>
         <label style={labelStyle}>{t('color', language)}</label>
-        <input
-          type="color"
+        {/* `history="bracket"`: the frame colour is group node data written by
+            `updateGroupData`, which pushHistory's on every call — so the pick
+            is a real undoable graph edit and the picker owns the coalescing
+            bracket (this row used to open one by hand around the native
+            input's per-frame stream). */}
+        <PaletteColorPicker
+          className="context-menu__color"
+          history="bracket"
           value={color}
-          onChange={(e) => { bracket(); updateGroupData(nodeId, { color: e.target.value }); }}
-          onBlur={closeBracket}
-          style={colorFieldStyle}
+          onPick={(hex) => updateGroupData(nodeId, { color: hex })}
         />
       </div>
 

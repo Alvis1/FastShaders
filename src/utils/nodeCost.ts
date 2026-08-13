@@ -57,12 +57,8 @@ export function getCost(type: string | undefined): number {
   return type ? (ACTIVE[type] ?? 0) : 0;
 }
 
-/** The full ACTIVE table (base + any override). Read-only — do not mutate. */
-export function getActiveCosts(): Record<string, number> { return ACTIVE; }
 /** The authored table with no override applied. */
 export function getBaseCosts(): Record<string, number> { return BASE_COSTS; }
-/** The currently-applied override keys (empty when none). */
-export function getCostOverrides(): Record<string, number> { return overrides; }
 
 /**
  * GPU cost points for a node instance.
@@ -93,9 +89,11 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
 /**
  * Sum the GPU cost of every node reachable (backward) from the Output node —
  * the number the CostBar shows. Reverse-BFS over an incoming-edge adjacency map
- * (O(V+E)); a collapsed group contributes its cached `data.cost` (the group node
- * has no registry cost and its members are opaque to the walk). Returns 0 when
- * there's no Output node.
+ * (O(V+E)). Callers MUST hand in edges already run through
+ * `unwrapCollapsedGroupEdges` — collapsing a group must never change the
+ * budget, so the walk reaches the real members either way. The group container
+ * itself has no `registryType`, so `nodeCostPoints` prices it at 0 and only the
+ * members are counted. Returns 0 when there's no Output node.
  *
  * Shared by useSyncEngine (runs per graph change) and the store's device
  * selection (activating a cost profile changes the table, not the graph, so the
@@ -126,11 +124,13 @@ export function computeReachableCost(nodes: AppNode[], edges: AppEdge[]): number
   let total = 0;
   for (const node of nodes) {
     if (!visited.has(node.id) || node.id === outputNode.id) continue;
-    if (node.type === 'group' && node.data.collapsed && node.data.cost) {
-      total += node.data.cost;
-    } else {
-      total += nodeCostPoints(node, edges);
-    }
+    // No collapsed-group branch: `data.cost` was a snapshot taken at collapse
+    // time over ALL members with no reachability filter, so collapsing a group
+    // that held a dead-end branch inflated the budget, a group saved before the
+    // field existed reported 0, and a library group carried a price from
+    // whatever cost table was active when it was saved. Group containers price
+    // at 0 here (no registryType) and their members are walked normally.
+    total += nodeCostPoints(node, edges);
   }
   return total;
 }

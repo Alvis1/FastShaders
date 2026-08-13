@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   evaluateNodeOutput,
   evaluateNodeScalar,
   getComponentCount,
   getNodeOutputShape,
   evaluateNodeRange,
+  getTargetEdges,
 } from './cpuEvaluator';
 import { makeNode, makeEdge } from '@/test-utils';
+import type { AppNode } from '@/types';
 
 describe('evaluateNodeOutput — constants', () => {
   it('emits a scalar for float / int / slider / property_float', () => {
@@ -493,5 +496,110 @@ describe('non-finite poisoning (noise pos = coordinate-source name)', () => {
     if (r) {
       expect(r.min.every(Number.isFinite) && r.max.every(Number.isFinite)).toBe(true);
     }
+  });
+});
+
+describe('getTargetEdges — collapsed-group feeders (MicNode/ClockNode label regression)', () => {
+  // toggleGroupCollapsed rewrites an outgoing boundary edge to leave the GROUP
+  // (source: groupId, sourceHandle: '__out_<node>_<handle>'). A raw
+  // `edges.filter(e => e.target === id)` scan therefore hands edgeValueLabel a
+  // group id, which has no registry def: BOTH evaluators return null and the
+  // label degrades to the grey ellipsis. getTargetEdges reports the real
+  // producer — the same edge set graphToCode compiles.
+  const collapsedGroup = (id: string, socketId: string, childId: string): AppNode =>
+    ({
+      id,
+      type: 'group',
+      position: { x: 0, y: 0 },
+      data: {
+        label: id,
+        collapsed: true,
+        collapsedInputs: [],
+        collapsedOutputs: [
+          { socketId, originalNodeId: childId, originalHandleId: 'out', dataType: 'float' },
+        ],
+      },
+    }) as unknown as AppNode;
+
+  const feeder = makeNode('float1', 'float', { value: 0.42 });
+  const mic = makeNode('mic1', 'micNode');
+  const group = collapsedGroup('g1', '__out_float1_out', 'float1');
+  const nodes = [feeder, mic, group];
+  const edges = [makeEdge('g1', '__out_float1_out', 'mic1', 'gain')];
+
+  it('a raw target scan resolves to the group, which evaluates to nothing', () => {
+    expect(edges.filter((e) => e.target === 'mic1').map((e) => e.source)).toEqual(['g1']);
+    expect(evaluateNodeOutput('g1', nodes, edges, 0)).toBeNull();
+    expect(evaluateNodeRange('g1', nodes, edges, 0)).toBeNull();
+  });
+
+  it('getTargetEdges reports the real producer and its live value', () => {
+    const te = getTargetEdges(nodes, edges, 'mic1');
+    expect(te.map((e) => `${e.source}:${e.targetHandle}`)).toEqual(['float1:gain']);
+    expect(evaluateNodeOutput(te[0].source, nodes, edges, 0)).toEqual([0.42]);
+  });
+
+  it('does the same for a Time node speed port', () => {
+    const clock = makeNode('time1', 'time');
+    const n2 = [feeder, clock, collapsedGroup('g2', '__out_float1_out', 'float1')];
+    const e2 = [makeEdge('g2', '__out_float1_out', 'time1', 'speed')];
+    const found = getTargetEdges(n2, e2, 'time1').find((ed) => ed.targetHandle === 'speed');
+    expect(found?.source).toBe('float1');
+    expect(evaluateNodeOutput('float1', n2, e2, 0)).toEqual([0.42]);
+  });
+
+  // The three tests above pin the MECHANISM and pass with or without the
+  // component fix. This one pins the CALL: the vitest env is `node` and
+  // `include` is `src/**/*.test.ts`, so a .tsx cannot be rendered here — assert
+  // over the source text instead, the same way vendorSync.test.ts and
+  // previewFitBounds.test.ts guard their invariants. Without it, reverting
+  // MicNode/ClockNode to a raw `s.edges` scan leaves the whole suite green.
+  it.each(['MicNode.tsx', 'ClockNode.tsx', 'OutputNode.tsx'])(
+    '%s derives its wired-value labels from getTargetEdges, not a raw edge scan',
+    (file) => {
+      const src = readFileSync(
+        new URL(`../components/NodeEditor/nodes/${file}`, import.meta.url),
+        'utf8',
+      );
+      expect(src).toContain('getTargetEdges');
+      expect(src).not.toMatch(/for \(const \w+ of s\.edges\)/);
+      expect(src).not.toMatch(/for \(const \w+ of edges\)/);
+      expect(src).not.toMatch(/\bs\.edges\.find\(/);
+      expect(src).not.toMatch(/\bedges\.find\(\(\w+\) => \w+\.target ===/);
+    },
+  );
+});
+
+describe('select — GPU truthiness, not a 0.5 threshold', () => {
+  it('a condition of 0.2 takes the TRUE branch, matching Output.discard', () => {
+    // three builds the condition as `bool(cond)` (ConditionalNode), so ANY
+    // non-zero value is true on the GPU. The evaluator used `>= 0.5`, so the
+    // node card showed the opposite branch for conditions in (0, 0.5) — and
+    // the editor now remaps noise to 0..1, so sources land there constantly.
+    const c = makeNode('c', 'float', { value: 0.2 });
+    const a = makeNode('a', 'float', { value: 7 });
+    const b = makeNode('b', 'float', { value: 9 });
+    const sel = makeNode('sel', 'select');
+    const nodes = [c, a, b, sel];
+    const edges = [
+      makeEdge('c', 'out', 'sel', 'condition'),
+      makeEdge('a', 'out', 'sel', 'a'),
+      makeEdge('b', 'out', 'sel', 'b'),
+    ];
+    expect(evaluateNodeOutput('sel', nodes, edges, 0)).toEqual([7]);
+  });
+
+  it('only an exact 0 takes the FALSE branch', () => {
+    const c = makeNode('c', 'float', { value: 0 });
+    const a = makeNode('a', 'float', { value: 7 });
+    const b = makeNode('b', 'float', { value: 9 });
+    const sel = makeNode('sel', 'select');
+    const nodes = [c, a, b, sel];
+    const edges = [
+      makeEdge('c', 'out', 'sel', 'condition'),
+      makeEdge('a', 'out', 'sel', 'a'),
+      makeEdge('b', 'out', 'sel', 'b'),
+    ];
+    expect(evaluateNodeOutput('sel', nodes, edges, 0)).toEqual([9]);
   });
 });

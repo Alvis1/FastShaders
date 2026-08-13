@@ -4,6 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>FastShaders · Node Designer</title>
+<!-- Inline data: favicon — kills the automatic /favicon.ico 404 (same as index.html) -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
 <!--
   VITE ENTRY (rollupOptions.input in vite.config.ts) — the designer lives in
   the app's module graph. The stage preview is rendered by the REAL app
@@ -63,7 +65,13 @@
   .viewport{position:absolute;inset:0;cursor:grab;touch-action:none}
   .viewport.panning{cursor:grabbing}
   .panzoom{position:absolute;left:50%;top:50%;width:0;height:0}
-  .nodeWrap{position:relative;width:max-content;transform:translate(-50%,-50%)}
+  /* FIXED-px offset, deliberately NOT translate(-50%,-50%): a percentage
+     anchor depends on the node's OWN size, so the corner-resize grew the card
+     around its centre — every edge (and its sockets) shifted on each drag
+     frame. A fixed offset keeps the TOP-LEFT anchored: resizing extends only
+     toward the bottom-right corner being dragged, and the offset still lands
+     a typical card near the stage centre at boot. */
+  .nodeWrap{position:relative;width:max-content;transform:translate(-80px,-70px)}
   .stubs{position:absolute;left:-90px;top:-90px;pointer-events:none;overflow:visible}
 
   /* ====== designer-only affordances ON the real replica (NodeVisual) ======
@@ -113,6 +121,11 @@
   .kv .k{width:78px;color:var(--dim);font-size:11.5px;flex-shrink:0}
   .kv .v{font-size:12px}
   .kv input[type=number]{width:72px}
+  /* Name fields fill the row (min-width:0 so a long value shrinks instead of
+     pushing the "locked" chip out of the panel). */
+  .kv input[type=text]{flex:1;min-width:0}
+  .kv input[type=text]:disabled{background:var(--bg);color:var(--mut);cursor:not-allowed}
+  .hintline.bad{color:#B45309}
   .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;background:#f6f7f9;border:1px solid var(--line);border-radius:6px;padding:3px 9px}
   .chip .dot{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.12)}
   .lock{font-size:10px;color:var(--mut);border:1px solid var(--line2);border-radius:5px;padding:1px 5px}
@@ -200,7 +213,10 @@
     <div class="insp">
       <div class="sec">
         <h2>Node <span class="lock" id="dirtyFlag" style="display:none;color:#B45309;border-color:#FDE68A;background:#FEF3C7">unsaved</span></h2>
-        <div class="kv"><span class="k">Type</span><span class="v" id="iType">—</span></div>
+        <div class="kv"><span class="k">Type</span><span class="v" id="iType">—</span> <span class="lock" title="The registry key. It is stored in every saved .fastshader as registryType, is what codeToGraph matches on, and is not renameable here — changing it would orphan every existing graph. The display Name below is safe to change.">locked</span></div>
+        <div class="kv"><span class="k">Name</span><input type="text" id="nName" maxlength="40" spellcheck="false" placeholder="display name" title="The node's English display name (nodeRegistry.ts `label`). Display only — it never reaches generated code, a saved .fastshader, or any lookup."></div>
+        <div class="kv"><span class="k">Name (LV)</span><input type="text" id="nNameLv" maxlength="40" spellcheck="false" placeholder="untranslated" title="The Latvian display name (src/i18n/node-i18n.json). Empty = untranslated, which falls back to the English name."></div>
+        <div class="hintline" id="nameHint" style="display:none"></div>
         <div class="kv"><span class="k">Category</span><span class="v"><span class="chip" id="iCat"><span class="dot"></span><span></span></span> <span class="lock">locked</span></span></div>
         <div class="kv"><span class="k">Cost</span><span class="v"><span class="chip" id="iCost"><span class="dot"></span><span></span></span> <span class="lock">locked</span></span></div>
         <div class="btnrow">
@@ -219,7 +235,7 @@
         <h2>Visualization (glyph)</h2>
         <div class="glyph-card" id="glyphCard" title="Click to edit the SVG · drag the glyph on the canvas to nudge"></div>
         <div class="kv" style="margin-top:10px"><span class="k">Glyph scale</span><input type="number" id="gScale" min="0.2" max="3" step="0.05" title="Scales the glyph only — never the socket/value spacing. On art nodes (Colormap) it scales the ramp visually."></div>
-        <div class="kv"><span class="k">Nudge X / Y</span><input type="number" id="gDx" min="-28" max="28" step="0.5" title="dx — glyph-space units (art nodes: CSS px)"> <input type="number" id="gDy" min="-28" max="28" step="0.5" title="dy — glyph-space units (art nodes: CSS px)"> <button class="mini" id="nudge0" title="Reset nudge">0,0</button></div>
+        <div class="kv"><span class="k">Nudge X / Y</span><input type="number" id="gDx" min="-400" max="400" step="0.5" title="dx — glyph-space units (art nodes: CSS px)"> <input type="number" id="gDy" min="-400" max="400" step="0.5" title="dy — glyph-space units (art nodes: CSS px)"> <button class="mini" id="nudge0" title="Reset nudge">0,0</button></div>
       </div>
 
       <div class="sec">

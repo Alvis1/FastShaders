@@ -30,57 +30,29 @@
   overflow-wrap: normal;
 }
 
-/* Override node-base sizes for larger preview cards — EXCEPT the ShaderNode
-   replica (`--exact`), which must keep 1:1 live proportions (designer parity). */
-.node-preview-card .node-base:not(.node-preview-card__node--exact) {
-  min-width: 100px;
-}
+/* ── THE ONE RULE OF THIS FILE ────────────────────────────────────────────
+   An asset card may SCALE a node (FitNodeHeading + the strip's `zoom`) and
+   make it inert. It may never RESTYLE one: nothing here may set a geometry
+   property (width/height/padding/margin/font-size/inset/transform) on a
+   node-internal class — `.node-base*`, `.mic-node*`, `.clock-node*`,
+   `.preview-node*`, `.math-preview-node*`, `.color-node*`, `.output-node*`.
+   `assetCardGeometry.test.ts` fails the build if that happens.
 
-.node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__header {
-  padding: 2px 8px;
-}
+   This block used to hold `min-width: 100px` plus header/badge/row overrides,
+   to draw the hand-built cards "larger". They were pure distortion once
+   FitNodeHeading started normalizing heading size — and on a FIXED-geometry
+   node they were actively wrong: the Mic node is 80px wide, so a 100px card
+   frame left its body 20px short of the right edge, floating all four output
+   sockets INSIDE the card and pushing the arm light off centre, while the
+   canvas node sat with its sockets on the border. Same class of bug for Time
+   and Sine, which the min-width also widened past their own content.
 
-/* Title size is normalized by FitNodeHeading (CARD_HEADING_PX) for these cards
-   too, so they keep the 9px base — no fixed override (which would skew the
-   normalization and make their headers differ from the exact-replica cards). */
-
-.node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__cost-badge {
-  font-size: 14px;
-  top: -16px;
-}
-
-.node-preview-card .node-base:not(.node-preview-card__node--exact) .node-base__row {
-  min-height: 22px;
-  padding: 1px 8px;
-}
-
-/* Fake handle dots (inline in rows).
-   Sizes come from the SAME tokens the real socket uses (TypedHandle.css), not
-   hardcoded pixels: tokens.css bumps --handle-size to 12px under
-   (pointer: coarse), so a hardcoded 10px left the hand-built cards showing
-   smaller sockets than the NodeVisual/mic cards beside them in one asset strip
-   on iPad — and the -5px offsets, which are half the dot, went wrong with it. */
-.node-preview-card__handle {
-  width: var(--handle-size);
-  height: var(--handle-size);
-  border-radius: 50%;
-  border: var(--handle-border) solid white;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
-  flex-shrink: 0;
-}
-
-/* Absolutely positioned fake handles (for canvas-based variants) */
-.node-preview-card__handle--right-abs {
-  position: absolute;
-  right: calc(var(--handle-size) / -2);
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.node-preview-card__handle--left-abs {
-  position: absolute;
-  left: calc(var(--handle-size) / -2);
-}
+   Fake socket dots have no rules here either: they carry the LIVE handle
+   classes (see CardSocket in NodePreviewCard.tsx) and sit in the live
+   wrapper, so each node's own stylesheet positions them. The retired
+   `--right-abs`/`--left-abs` twins hardcoded `top: 50%` of the whole card,
+   which is why the Time tile's socket missed the clock face the live node
+   centres it on. */
 
 /* Wrapper that renders a REAL widget (DragNumberInput) on a card while
  * keeping it inert — a palette tile must not be another place to edit. */
@@ -89,48 +61,14 @@
   display: inline-flex;
 }
 
-/* --- Canvas-based preview variants --- */
-
-.node-preview-card__canvas-wrap {
-  padding: 3px 5px;
-  display: flex;
-  justify-content: center;
-}
-
-/* Math waveform canvas (72x72) */
-.node-preview-card__canvas--math {
-  width: 72px;
-  height: 72px;
-  border-radius: var(--border-radius-sm);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-}
-
-/* Noise pattern canvas (96x96, pixelated) */
-.node-preview-card__canvas--noise {
-  width: 96px;
-  height: 96px;
-  border-radius: var(--border-radius-sm);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  image-rendering: pixelated;
-}
-
-/* Clock face canvas (56x56, circular) */
-.node-preview-card__canvas--clock {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-}
-
-/* Math tile's bottom port row — mirrors .math-preview-node__port-row +
-   __left (MathPreviewNode.css): socket and the X value box side by side. */
-.node-preview-card__math-port-row {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 5px;
-  min-height: 16px;
-  position: relative;
-}
+/* (The canvas-variant twins lived here: `__canvas-wrap` and the --math/
+   --noise/--clock canvases, each a hand-copy of the live node's wrapper
+   padding and canvas size, plus a `__math-port-row` copy of
+   `.math-preview-node__port-row`. The cards render the REAL classes now —
+   `.preview-node__canvas`, `.math-preview-node__port-row`,
+   `.clock-node__canvas-wrap` — so those sizes have one definition, in the
+   node's own stylesheet, and the clock's socket inherits the face-centred
+   placement that the copy could not express.) */
 
 /* (The slider tile's hand-built track/fill/thumb/labels lived here. The tile
    now renders the same `<input type="range">` the canvas does — see the note

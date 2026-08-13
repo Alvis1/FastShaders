@@ -241,3 +241,88 @@ export default shader;
     expect(module).toContain('const _image1_tex =');
   });
 });
+
+describe('tslToShaderModule — module header is not a code-injection surface', () => {
+  it('cannot break out of the module header via a stored hex', () => {
+    // A newline in values.hex ends the `//` comment and would inject a real
+    // top-level statement into the downloaded .js.
+    const EVIL = "#ff0000\nglobalThis.__HDR_PWNED = 1;\n// ";
+    const p = makeNode('p', 'property_color', { name: 'col', hex: EVIL });
+    const out = makeNode('out', 'output');
+    const { code } = graphToCode([p, out], [makeEdge('p', 'out', 'out', 'color')]);
+    const mod = tslToShaderModule(code, undefined, [
+      { name: 'col', type: 'color', defaultValue: EVIL },
+    ]);
+    expect(mod.split('\n').some((l) => l.trim().startsWith('globalThis.'))).toBe(false);
+    expect(mod).toContain('col: #000000');
+  });
+});
+
+describe('tslToShaderModule — the declared property list is not derivable from `code`', () => {
+  it('changes the module even when the emitted TSL is byte-identical', () => {
+    // The declared property list is NOT derivable from `code`: graphToCode's
+    // claimName pre-pass already emitted `x` and `x2`, so renaming the second
+    // node from "x" to "x2" leaves the TSL byte-identical while buildHeader's
+    // dedupe-by-sanitized-name (tslToShaderModule.ts:57-63) gains a row. This
+    // is the invariant CodeEditor's Output-tab memo keys on; it is a
+    // DOCUMENTATION pin, not a guard — no node-env test can observe that memo's
+    // dep array (vitest env is `node`, include is src/**/*.test.ts).
+    const out = makeNode('out1', 'output');
+    const pa = makeNode('pa', 'property_float', { name: 'x', value: 0.5 });
+    const pbDup = makeNode('pb', 'property_float', { name: 'x', value: 0.25 });
+    const pbRenamed = makeNode('pb', 'property_float', { name: 'x2', value: 0.25 });
+    const edges = [makeEdge('pa', 'out', 'out1', 'color')];
+
+    const codeA = graphToCode([pa, pbDup, out], edges).code;
+    const codeB = graphToCode([pa, pbRenamed, out], edges).code;
+    expect(codeB).toBe(codeA); // byte-identical TSL
+    expect(codeA).toContain('const x = uniform(0.5);');
+    expect(codeA).toContain('const x2 = uniform(0.25);');
+
+    const modA = tslToShaderModule(codeA, undefined, [
+      { name: 'x', type: 'float', defaultValue: 0.5 },
+      { name: 'x', type: 'float', defaultValue: 0.25 },
+    ]);
+    const modB = tslToShaderModule(codeB, undefined, [
+      { name: 'x', type: 'float', defaultValue: 0.5 },
+      { name: 'x2', type: 'float', defaultValue: 0.25 },
+    ]);
+    expect(modB).not.toBe(modA);
+    expect(modA).toContain('src: shader.js; x: 0.5"');
+    expect(modB).toContain('src: shader.js; x: 0.5; x2: 0.25"');
+    expect(modB).toContain("el.setAttribute('shader', { x2: value });");
+    expect(modA).not.toContain('x2: value');
+  });
+});
+
+describe('adversarial dispatch keys never resolve through the prototype chain', () => {
+  // These dictionaries are indexed by strings out of untrusted input (a
+  // .fastshader's materialSettings, a pasted module's return-object keys). A
+  // bare Record resolved 'constructor' to Object.prototype's constructor — a
+  // truthy Function that was stringified into the emitted module as
+  // `function Object() { [native code] }`, a SyntaxError that killed the
+  // whole shader with an opaque parse error.
+  it('a tampered materialSettings.side emits side: 0, never an inherited Function', () => {
+    for (const evil of ['constructor', 'toString', 'valueOf', '__proto__']) {
+      const out = buildShaderModule(COLOR_POS, {
+        materialSettings: { transparent: true, side: evil as never },
+      });
+      expect(out, evil).toContain('side: 0');
+      expect(out, evil).not.toContain('native code');
+    }
+  });
+
+  it('a pasted return-object channel named constructor is dropped, not emitted', () => {
+    const src = `import { Fn, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  return { constructor: vec3(1, 0, 0), color: vec3(0, 1, 0) };
+});
+
+export default shader;
+`;
+    const out = buildShaderModule(src, {});
+    expect(out).not.toContain('native code');
+    expect(out).toContain('colorNode:');
+  });
+});
