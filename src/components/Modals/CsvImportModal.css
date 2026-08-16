@@ -98,6 +98,28 @@
   border-color: #6fa63e;
 }
 
+/* The DESTRUCTIVE answer — the same filled-plate treatment as --yes, in the
+   app's one red (#d92d20, the toolbar feedback button). Named --danger rather
+   than --no on purpose: it marks "this discards something", not "this is the
+   negative choice". ImageImportModal's "No" merely keeps the image as-is, so a
+   --no would invite painting a harmless answer red.
+   Deliberately the PALE plate and not the saturated red: the loudest button in
+   a dialog must not be the one that throws work away — the outlined primary
+   ("Export, then start new") stays the recommended path. Theme-invariant
+   literals + near-black text, exactly as --yes documents, since the panel's
+   own background flips between themes. */
+.csv-import-modal__button--danger {
+  font-weight: 700;
+  color: #1a1a1a;
+  background: #f8d2ce;
+  border-color: #e08b82;
+  min-width: 72px;
+}
+.csv-import-modal__button--danger:hover:not(:disabled) {
+  background: #f4bdb7;
+  border-color: #d92d20;
+}
+
 .csv-import-modal__button:disabled {
   opacity: 0.5;
   cursor: not-allowed;

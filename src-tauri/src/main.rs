@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bench_server;
+mod podest_window;
 mod work_folder;
 
 fn main() {
@@ -15,6 +16,7 @@ fn main() {
             bench_server::bench_server_start,
             bench_server::bench_server_stop,
             bench_server::bench_server_status,
+            podest_window::podest_open,
             work_folder::work_folder_status,
             work_folder::work_folder_pick,
             work_folder::work_folder_forget,
