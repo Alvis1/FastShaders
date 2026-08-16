@@ -192,6 +192,132 @@ describe('graphToCode: Data Range', () => {
     expect(gen.code).not.toContain('Infinity');
     expect(gen.code).toContain('.mul(1)'); // widened to a unit-wide domain
   });
+
+  /**
+   * The custom-formula key. The whole feature rests on one storage rule: an
+   * ABSENT (or unusable) `formula` emits exactly what this node emitted before
+   * the feature existed, so every already-saved graph and every already-exported
+   * `.js` is byte-identical.
+   */
+  describe('custom formula', () => {
+    const MODES = ['minmax', 'robust', 'symmetric', 'zscore', 'log', 'symlog', 'manual'];
+
+    it('emits identically to an untouched node when nothing was authored', () => {
+      // The byte-stability sweep, and the reason it is worth its length: an
+      // EXISTING saved graph has no `formula` key, and a corrupt or tampered one
+      // produces a NON-STRING (the fs:graph autosave turns a non-finite into
+      // `null`). Every value here must leave NOT ONE BYTE different — a coercing
+      // read (String(), Number(), a truthiness test) would break at least one,
+      // and `String(['(v-lo)'])` is a *valid formula*, which is exactly why the
+      // read is an exact `typeof === 'string'`.
+      //
+      // Whitespace-only counts as "nothing authored": parseFormula trims first,
+      // so the shader is already emitting the plain built-in chain, and every
+      // surface must agree (hasCustomFormula is the one predicate).
+      const NOT_AUTHORED: unknown[] = [
+        undefined, null, '', '   ', '\t\n ', 0, 1, true, false, [], {}, NaN, Infinity, ['(v-lo)'],
+      ];
+      for (const mode of MODES) {
+        const baseline = build({ mode }).code;
+        for (const junk of NOT_AUTHORED) {
+          const withJunk = build({ mode, formula: junk } as Record<string, string | number>).code;
+          expect(withJunk, `${mode} + ${JSON.stringify(junk)}`).toBe(baseline);
+        }
+      }
+    });
+
+    it('falls back to the built-in chain AND says why when an authored formula is refused', () => {
+      // A rejected formula still emits the method's chain, so the shader always
+      // compiles — but silently swapping what the user asked for is the failure
+      // this comment exists to prevent. It reaches the code panel, the Output
+      // tab and the downloaded `.js`, so a recipient of a shared file sees it
+      // too; the canvas chip cannot, because half these rejections depend on the
+      // wired column's statistics.
+      const REFUSED: [string, string][] = [
+        ['zzz', 'unknown name'],
+        ['v.mul(2)', 'unexpected character'],
+        ['0); globalThis.__x=1; float(0', 'unexpected character'],
+        ['аbs(v)', 'unexpected character'], // Cyrillic homoglyph
+        ['v / 0', 'divides by zero on this data'],
+        ['log2(0)', 'divides by zero on this data'],
+        ['min(1)', 'wrong number of arguments'],
+        ['lo(1)', 'that name is a value, not a function'],
+        ['1e999', 'invalid number'],
+        ['('.repeat(500) + 'v' + ')'.repeat(500), 'formula too long'],
+        ['v'.repeat(600), 'formula too long'],
+      ];
+      for (const [formula, why] of REFUSED) {
+        const gen = build({ mode: 'minmax', formula });
+        expectValidModule(gen.code);
+        // The chain itself is untouched...
+        expect(gen.code, formula).toContain(
+          'const dataRange1 = data1_col0.sub(0).mul(0.25).clamp(0.0, 1.0);',
+        );
+        // ...and the reason rides beside it.
+        expect(gen.code, formula).toContain(
+          `// Data Range: custom formula ignored (${why}) — using the minmax formula.`,
+        );
+      }
+    });
+
+    it('emits the user formula when it is usable', () => {
+      const gen = build({ mode: 'minmax', formula: 'v * 2' });
+      expectValidModule(gen.code);
+      expect(gen.code).toContain('const dataRange1 = data1_col0.mul(2).clamp(0.0, 1.0);');
+    });
+
+    it('resolves the domain variables against the wired column', () => {
+      // col0 spans 0…4, so `lo`/`hi` bind to 0 and 4 and the default text must
+      // reproduce the built-in chain's numbers.
+      const gen = build({ mode: 'minmax', formula: '(v - lo) / (hi - lo)' });
+      expect(gen.code).toContain('const dataRange1 = data1_col0.sub(0).mul(0.25).clamp(0.0, 1.0);');
+    });
+
+    it('still applies the clamp suffix, and drops it when turned off', () => {
+      expect(build({ mode: 'minmax', formula: 'v * 2', clamp: 0 }).code).toContain(
+        'const dataRange1 = data1_col0.mul(2);',
+      );
+    });
+
+    it('wraps a constant-only formula in float() so the clamp has a node to hang on', () => {
+      const gen = build({ mode: 'minmax', formula: '0.25 + 0.25' });
+      expectValidModule(gen.code);
+      expect(gen.code).toContain('const dataRange1 = float(0.5).clamp(0.0, 1.0);');
+    });
+
+    it('adds the imports its formula needs', () => {
+      // Without this the Output tab and the downloaded .js would reference a
+      // symbol they never imported.
+      const gen = build({ mode: 'minmax', formula: 'smoothstep(lo, hi, v)' });
+      expectValidModule(gen.code);
+      expect(gen.code).toMatch(/import \{[^}]*\bsmoothstep\b[^}]*\} from 'three\/tsl'/);
+    });
+
+    it('never lets a formula string reach the module', () => {
+      // The injection pin. A hostile formula contributes zero characters.
+      const payloads = [
+        '0); globalThis.__x=1; float(0',
+        'v.mul(fetch("http://evil"))',
+        'eval("x")',
+        'window.location="http://evil"',
+      ];
+      for (const formula of payloads) {
+        const code = build({ mode: 'minmax', formula }).code;
+        // The emitted CHAIN is exactly the untouched node's. (The whole module
+        // is not byte-equal any more — a refused formula also emits the comment
+        // saying so, which is the point of the test above.)
+        expect(code, formula).toContain(
+          'const dataRange1 = data1_col0.sub(0).mul(0.25).clamp(0.0, 1.0);',
+        );
+        // ...and not one character of the payload survives, comment included.
+        expect(code).not.toContain('globalThis.__x');
+        expect(code).not.toContain('fetch');
+        expect(code).not.toContain('eval');
+        expect(code).not.toContain('evil');
+        expect(code).not.toContain('location');
+      }
+    });
+  });
 });
 
 describe('graphToCode: Isolines', () => {

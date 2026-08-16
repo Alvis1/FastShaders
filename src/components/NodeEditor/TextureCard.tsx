@@ -5,6 +5,17 @@ import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } f
 import { useAssetTooltip } from './AssetTooltip';
 import { AssetCostBadge } from './AssetCostBadge';
 import { PREVIEW_SIZE, clamp01, lerp3, smoothstep, renderPixels } from './tilePreview';
+// This tile's `.saved-group-card*` classes are defined in ContentBrowser.css,
+// which until now was imported by ContentBrowser.tsx and NOTHING else — so on
+// node-editor.html (which mounts TextureCard directly, never the browser) the
+// texture tiles rendered with NO styling at all: no `zoom: 0.67`, no 108px
+// width, no frame, header or title rules, just a bare block filling the cell.
+// Owning the stylesheet here makes the component self-contained; the bundler
+// dedupes the second import, and every selector in the file is
+// `.content-browser*` / `.saved-group-card*`, which exist in no other
+// stylesheet — so nothing it brings along can match on a page that has no
+// content browser.
+import './ContentBrowser.css';
 
 export const BUILTIN_TEXTURE_DRAG_TYPE = 'application/fastshaders-builtin-texture';
 

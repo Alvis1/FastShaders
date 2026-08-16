@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { parseCostFile, buildMergedComplexity, profileFromParsed, sanitizeCostMeta } from './costOverride';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { parseCostFile, buildMergedComplexity, profileFromParsed, sanitizeCostMeta, mergedComplexityFileName } from './costOverride';
 import {
   setCostOverrides, getCost, nodeCostPoints, sanitizeCostMap, computeReachableCost,
 } from './nodeCost';
@@ -52,6 +54,72 @@ describe('parseCostFile', () => {
     }))!;
     expect(parsed.meta.valid).toBe(false);
     expect(parsed.meta.reasons).toEqual(['baseline-missing']);
+  });
+
+  it('accepts the RAW results shape { metadata, shaders } — the file users actually grab', () => {
+    const file = JSON.stringify({
+      metadata: {
+        bench: 'microplane', gpu: 'qualcomm / adreno-7xx', timingMethod: 'gpu-timestamp',
+        date: '2026-07-22', resolution: { width: 1024, height: 1024 },
+      },
+      shaders: [
+        { id: 'ref_baseline', stats: { marginalPoints: 0 } },  // baseline prices nothing
+        { id: 'noise_voronoi', stats: { marginalPoints: 228 } },
+        { id: 'noise_perlin', stats: { marginalPoints: 34 } },
+        { id: 'preset_marble', stats: { marginalPoints: 999 } }, // not a node key → dropped
+        { id: 'noise_fbm', stats: { marginalPoints: null } },    // underivable → skipped
+      ],
+    });
+    const parsed = parseCostFile(file, 'raw.json')!;
+    expect(parsed.costs).toEqual({ voronoi: 228, perlin: 34 });
+    expect(parsed.meta.valid).toBe(true);
+    expect(parsed.meta.device).toBe('qualcomm / adreno-7xx');
+    expect(parsed.meta.bench).toBe('microplane');
+    expect(parsed.meta.date).toBe('2026-07-22');
+  });
+
+  it('derives validity gating for a raw run with the same gates the bench applies', () => {
+    const base = {
+      metadata: { resolution: { width: 8, height: 8 }, timingMethod: 'gpu-timestamp' },
+      shaders: [
+        { id: 'ref_baseline', stats: { marginalPoints: 0 } },
+        { id: 'noise_voronoi', stats: { marginalPoints: 5 } },
+      ],
+    };
+    expect(parseCostFile(JSON.stringify(base))!.meta.valid).toBe(true);
+
+    const noBaseline = { ...base, shaders: base.shaders.slice(1) };
+    const p1 = parseCostFile(JSON.stringify(noBaseline))!;
+    expect(p1.meta.valid).toBe(false);
+    expect(p1.meta.reasons.join(' ')).toContain('baseline-missing');
+
+    const rafDelta = { ...base, metadata: { ...base.metadata, timingMethod: 'raf-delta' } };
+    const p2 = parseCostFile(JSON.stringify(rafDelta))!;
+    expect(p2.meta.valid).toBe(false);
+    expect(p2.meta.reasons.join(' ')).toContain('raf-delta');
+
+    const noRes = { ...base, metadata: { timingMethod: 'gpu-timestamp' } };
+    const p3 = parseCostFile(JSON.stringify(noRes))!;
+    expect(p3.meta.valid).toBe(false);
+    expect(p3.meta.reasons.join(' ')).toContain('resolution-unknown');
+  });
+
+  it('raw and suggestion exports of the SAME run parse to identical prices (exporter↔importer drift pin)', () => {
+    // The raw branch re-derives what bench-stats' buildSuggestion emits
+    // (id → stats.marginalPoints). If either side drifts, the two files of a
+    // committed run stop agreeing — this is the check that catches it.
+    const dir = join(process.cwd(), 'ShaderCarousel', 'benchData', 'quest3-20260723');
+    for (const bench of ['microplane', 'static']) {
+      const names = readdirSync(dir);
+      const rawName = names.find((f) => f.includes(`-${bench}-2026`) && f.endsWith('.json'))!;
+      const sugName = names.find((f) => f.includes(`-${bench}-complexity-suggestion`))!;
+      const raw = parseCostFile(readFileSync(join(dir, rawName), 'utf8'), rawName)!;
+      const sug = parseCostFile(readFileSync(join(dir, sugName), 'utf8'), sugName)!;
+      expect(raw, `${bench}: raw export must parse`).not.toBeNull();
+      expect(raw.costs, bench).toEqual(sug.costs);
+      expect(raw.meta.valid, bench).toBe(sug.meta.valid);
+      expect(raw.meta.device, bench).toBe(sug.meta.device);
+    }
   });
 
   it('returns null for junk, empty, or non-cost JSON', () => {
@@ -137,6 +205,18 @@ describe('profileFromParsed', () => {
     const diff = parseCostFile(JSON.stringify({ meta: { device: 'M4 Max', bench: 'static' }, costs: { voronoi: 999 } }))!;
     expect(profileFromParsed(same1, 200, 2048).id).toBe(profileFromParsed(same2, 200, 2048).id);  // identical → dedup
     expect(profileFromParsed(same1, 200, 2048).id).not.toBe(profileFromParsed(diff, 200, 2048).id); // different run → kept
+  });
+});
+
+describe('mergedComplexityFileName', () => {
+  it('carries device slug + date so downloads from two runs never collide', () => {
+    expect(mergedComplexityFileName({
+      ...sanitizeCostMeta({}), device: 'qualcomm / adreno-7xx', date: '2026-07-22T21:36:00.000Z',
+    })).toBe('complexity-qualcomm-adreno-7xx-2026-07-22.json');
+  });
+  it('degrades gracefully when provenance is missing', () => {
+    expect(mergedComplexityFileName(null)).toBe('complexity-measured.json');
+    expect(mergedComplexityFileName(sanitizeCostMeta({}))).toBe('complexity-measured.json');
   });
 });
 

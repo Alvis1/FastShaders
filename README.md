@@ -32,7 +32,7 @@ A visual shader editor for [TSL (Three.js Shading Language)](https://github.com/
 - **Property uniforms** — `property_float` and `property_color` nodes become live-tunable sliders / color pickers in the preview overlay and component attributes in the A-Frame export
 - **Copy / paste / duplicate** — Cmd/Ctrl+C, Cmd/Ctrl+V, Cmd/Ctrl+D across nodes (internal edges preserved)
 - **Undo / redo** — Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (50-step history), plus Undo/Redo buttons in the canvas bar
-- **VR cost budget** — per-headset cost meter (Quest 2/3/3s, Steam Frame, Pico 4, Apple Vision Pro) with a color-gradient bar that fills as the graph's GPU cost approaches the selected headset's budget (advisory, not a hard limit)
+- **VR cost budget** — a GPU-cost meter with a color-gradient bar that fills as the graph's cost approaches the selected device's budget (advisory, not a hard limit). Ships with the one measured device (Meta Quest 3, calibrated with the bundled ShaderCarousel benchmark); running the benchmark on another device and importing its result JSON (drag it onto the meter, or use the device dropdown's *Import result JSON…*) adds that device with its own measured per-node prices
 - **Offline desktop app** — a lightweight Tauri build for Windows and macOS, downloadable from the **Download app** button in the editor's toolbar; the whole editor (Monaco and fonts included) is bundled, so it runs with no internet at all
 
 ## Desktop app

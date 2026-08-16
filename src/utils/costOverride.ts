@@ -86,10 +86,21 @@ export function sanitizeCostMeta(m: unknown): CostOverrideMeta {
 const PREFIX = /^(noise_|preset_|saved_)/;
 
 /**
- * Parse a dropped JSON file into a sanitized cost override, accepting BOTH
- * shapes the bench can emit:
+ * Parse a dropped JSON file into a sanitized cost override, accepting EVERY
+ * JSON shape the bench can save (only its CSV is not importable):
  *   • patch / raw complexity — `{ meta?, costs: { <nodeKey>: points } }`
  *   • suggestion             — `{ metadata, suggestions: [{ id, suggestedPoints }] }`
+ *   • RAW results export     — `{ metadata, shaders: [{ id, stats }] }`
+ *
+ * The raw branch exists because it is the file a user most naturally grabs
+ * after a run (`shadercarousel-<bench>-<date>.json` — the suggestion file is
+ * its `…-complexity-suggestion-…` sibling, and rejecting the obvious one read
+ * as "the drop is broken"). The bench's own suggestion emitter
+ * (ShaderCarousel/lib/bench-stats.js `buildSuggestion`) just reads
+ * `stats.marginalPoints`, which `annotateMarginalCost` already computed at
+ * export time — so the raw file carries everything the suggestion file does,
+ * and this derivation mirrors that emitter (drift is pinned by a test against
+ * the committed benchData pair).
  *
  * Keys are validated against the authored table (`sanitizeCostMap` drops
  * unknown keys and non-finite/negative values — the file is adversarial), and
@@ -117,6 +128,33 @@ export function parseCostFile(text: string, fileName?: string): ParsedCostFile |
       rawCosts[s.id.replace(PREFIX, '')] = pts;
     }
     md = (o.metadata && typeof o.metadata === 'object' ? o.metadata : {}) as Record<string, unknown>;
+  } else if (Array.isArray(o.shaders)) {
+    // Raw results export. Points come from stats.marginalPoints (what the
+    // suggestion emitter reads); the baseline row prices nothing.
+    rawCosts = {};
+    let sawBaseline = false;
+    const insufficient: string[] = [];
+    for (const s of o.shaders as Array<Record<string, unknown>>) {
+      if (!s || typeof s.id !== 'string') continue;
+      if (s.id === 'ref_baseline') { sawBaseline = true; continue; }
+      const stats = (s.stats && typeof s.stats === 'object' ? s.stats : {}) as Record<string, unknown>;
+      if (stats.insufficientData) insufficient.push(s.id);
+      const pts = stats.marginalPoints;
+      if (typeof pts !== 'number' || !Number.isFinite(pts)) continue;
+      rawCosts[s.id.replace(PREFIX, '')] = pts;
+    }
+    md = (o.metadata && typeof o.metadata === 'object' ? o.metadata : {}) as Record<string, unknown>;
+    // Raw metadata carries no valid/reasons — derive them with the same gates
+    // bench-stats' buildSuggestion applies, so an unpriceable run announces
+    // itself here exactly as its suggestion file would.
+    const reasons: string[] = [];
+    if (!sawBaseline) reasons.push('baseline-missing: no ref_baseline in this run — marginal cost cannot be derived');
+    if (md.vsyncClamping) reasons.push('vsync-clamped: frametimes pinned to the display refresh — values reflect display cadence, not shader cost');
+    const res = (md.resolution && typeof md.resolution === 'object' ? md.resolution : null) as { width?: unknown; height?: unknown } | null;
+    if (!(Number(res?.width) > 0 && Number(res?.height) > 0)) reasons.push('resolution-unknown: marginal ms could not be normalized to the reference pixel count');
+    if (md.timingMethod === 'raf-delta') reasons.push('raf-delta timing: refresh-quantized frame deltas resolve budget fit, not per-node cost');
+    if (insufficient.length) reasons.push(`insufficient-data: ${insufficient.join(', ')} had <2 samples`);
+    md = { ...md, valid: reasons.length === 0, reasons };
   } else {
     return null;
   }
@@ -136,6 +174,20 @@ export function parseCostFile(text: string, fileName?: string): ParsedCostFile |
     count: Object.keys(costs).length,
   };
   return { costs, meta };
+}
+
+/**
+ * Filename for the CostBar's "⭳ complexity.json" download —
+ * `complexity-<device>-<date>.json` — so successive calibration runs from
+ * different devices don't all land as `complexity.json`, `complexity (1).json`…
+ * in a Downloads folder with nothing telling them apart. Mirrors the bench
+ * exporter's own device-slug naming (bench-stats.js `deviceSlug`). Pure.
+ */
+export function mergedComplexityFileName(meta: CostOverrideMeta | null): string {
+  const slug = (meta?.device ?? '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const date = (meta?.date ?? '').slice(0, 10);
+  return ['complexity', slug || 'measured', date].filter(Boolean).join('-') + '.json';
 }
 
 /**

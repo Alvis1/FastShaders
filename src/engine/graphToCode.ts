@@ -26,6 +26,14 @@ import {
   MAX_TEXTURE_WIDTH,
 } from '@/utils/dataViz';
 import {
+  parseFormula,
+  emitFormula,
+  formulaEnv,
+  hasCustomFormula,
+  formulaErrorSummary,
+  type FormulaErrorCode,
+} from '@/utils/dataRangeFormula';
+import {
   getColormap,
   buildColormapLut,
   LUT_SIZE,
@@ -1106,24 +1114,70 @@ export function graphToCode(
         src = 'uv().x';
       }
 
-      let expr: string;
-      if (plan.kind === 'affine') {
-        // Multiply by the reciprocal rather than divide: `div` is 4× the cost of
-        // `mul` in the complexity table for an identical result here, since the
-        // span is a compile-time constant.
-        const inv = 1 / (plan.hi - plan.lo);
-        expr = `${src}.sub(${num(plan.lo)}).mul(${num(inv)})`;
-      } else if (plan.kind === 'log') {
-        const l0 = Math.log2(plan.lo);
-        const inv = 1 / (Math.log2(plan.hi) - l0);
-        expr = `${src}.max(${num(plan.lo)}).log2().sub(${num(l0)}).mul(${num(inv)})`;
-      } else {
-        // symlog: linear within ±thresh, logarithmic beyond, 0 → exactly 0.5.
-        const invT = 1 / plan.thresh;
-        const invY = 1 / Math.log2(1 + plan.m / plan.thresh);
-        expr =
-          `${src}.sign().mul(${src}.abs().mul(${num(invT)}).add(1.0).log2().mul(${num(invY)}))` +
-          `.mul(0.5).add(0.5)`;
+      // A user-authored formula, when there is one. Reached ONLY when
+      // `values.formula` is a string that parses under the Data Range grammar
+      // AND folds without producing a non-finite constant. Every other case —
+      // absent key, a number/array/object, over-length, an unknown name, a
+      // homoglyph, a divide by zero on this dataset — falls through to the
+      // built-in chains below, which are byte-for-byte what this node has always
+      // emitted, so every already-saved graph and already-exported `.js` is
+      // unchanged.
+      //
+      // The user's string cannot contribute a single character to the output;
+      // see utils/dataRangeFormula.ts for why that is structural rather than
+      // filtered. No verdict cache is needed (unlike isSafeUnknownExpression,
+      // which runs Babel): this is a hand-rolled scan over <=512 chars, cheaper
+      // than the columnStats call three lines above that sorts the whole column
+      // on every pass.
+      let expr: string | null = null;
+      let rejected: FormulaErrorCode | null = null;
+      const parsed = parseFormula(nv.formula);
+      if (parsed.ok) {
+        const emitted = emitFormula(parsed.ast, src, formulaEnv(plan, stats, manual), (name) =>
+          addImport('three/tsl', name),
+        );
+        if (emitted.ok) expr = emitted.code;
+        else rejected = emitted.err.code;
+      } else if (hasCustomFormula(nv.formula)) {
+        rejected = parsed.err.code;
+      }
+
+      // Say WHY in the generated source when an authored formula was refused.
+      // The canvas chip cannot: half the rejections (`non-finite` — a divisor
+      // that folds to zero) depend on the wired column's statistics, which a
+      // node component has no cheap way to see, and a shared `.fastshader`
+      // would otherwise render as the plain method with nothing anywhere
+      // explaining the difference. A comment reaches the code panel, the Output
+      // tab and the downloaded `.js`, so the recipient sees it too.
+      //
+      // Byte-stability is unaffected: this needs `hasCustomFormula`, so an
+      // absent key — and every non-string a corrupt file can produce — still
+      // emits exactly what it always did.
+      if (rejected && hasCustomFormula(nv.formula)) {
+        bodyLines.push(
+          `  // Data Range: custom formula ignored (${formulaErrorSummary(rejected)}) — using the ${mode} formula.`,
+        );
+      }
+
+      if (expr === null) {
+        if (plan.kind === 'affine') {
+          // Multiply by the reciprocal rather than divide: `div` is 4× the cost of
+          // `mul` in the complexity table for an identical result here, since the
+          // span is a compile-time constant.
+          const inv = 1 / (plan.hi - plan.lo);
+          expr = `${src}.sub(${num(plan.lo)}).mul(${num(inv)})`;
+        } else if (plan.kind === 'log') {
+          const l0 = Math.log2(plan.lo);
+          const inv = 1 / (Math.log2(plan.hi) - l0);
+          expr = `${src}.max(${num(plan.lo)}).log2().sub(${num(l0)}).mul(${num(inv)})`;
+        } else {
+          // symlog: linear within ±thresh, logarithmic beyond, 0 → exactly 0.5.
+          const invT = 1 / plan.thresh;
+          const invY = 1 / Math.log2(1 + plan.m / plan.thresh);
+          expr =
+            `${src}.sign().mul(${src}.abs().mul(${num(invT)}).add(1.0).log2().mul(${num(invY)}))` +
+            `.mul(0.5).add(0.5)`;
+        }
       }
       if (doClamp) expr = `${expr}.clamp(0.0, 1.0)`;
       bodyLines.push(`  const ${varName} = ${expr};`);

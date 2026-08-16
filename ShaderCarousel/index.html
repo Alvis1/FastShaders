@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ShaderCarousel — TSL shader viewer &amp; benchmarks</title>
+<!-- The ShaderCarousel mark. Relative: this suite is copied verbatim into
+     dist/ShaderCarousel/ (web) and src-tauri/carousel-dist/ (the in-app LAN
+     bench server), and is never processed by Vite. -->
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #eee; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
   #frame { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: #000; }
@@ -30,10 +34,8 @@
     pointer-events: auto;
   }
 
-  #mode-overlay {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+  /* Primary card — the one-decision front door. */
+  #primary-panel {
     padding: 14px 18px;
     background: rgba(0, 0, 0, 0.78);
     backdrop-filter: blur(6px);
@@ -41,6 +43,57 @@
     border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 10px;
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    flex-shrink: 0;
+  }
+  #primary-row { display: flex; align-items: center; gap: 8px; }
+  #bench-device-btn {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 10px 14px;
+    background: #1d4ed8;
+    color: #fff;
+    border: 1px solid #3b82f6;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  #bench-device-btn:hover { background: #2563eb; }
+  #bench-device-btn:focus { outline: 2px solid #4af; outline-offset: 1px; }
+  #bench-device-btn:disabled { background: #24344d; border-color: #33507d; color: #9ab; cursor: default; }
+  #primary-note { margin-top: 10px; font-size: 12px; line-height: 1.55; color: #9aa; }
+  #primary-note b { color: #ccd; }
+  #primary-status {
+    margin-top: 8px; font-size: 12px; line-height: 1.5; color: #8fd0ff;
+  }
+  #primary-status.hidden { display: none; }
+
+  /* Advanced — collapsed by default; mode switch + per-mode honesty note. */
+  #advanced-panel {
+    flex-shrink: 0;
+    padding: 10px 18px 12px;
+    background: rgba(0, 0, 0, 0.78);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  }
+  #advanced-panel summary {
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9aa;
+    cursor: pointer;
+    user-select: none;
+  }
+  #advanced-panel summary:hover { color: #fff; }
+  #advanced-note { margin-top: 10px; font-size: 12px; line-height: 1.55; color: #9aa; }
+
+  #mode-overlay {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
     flex-shrink: 0;
   }
   #mode-overlay label {
@@ -206,20 +259,46 @@
 </head>
 <body>
   <div id="sidebar">
-    <div id="mode-overlay" role="region" aria-label="Mode selector">
-      <label for="mode-select">Mode</label>
-      <select id="mode-select" aria-label="Benchmark mode">
-        <option value="bench-inout">Sphere InOut — immersive WebXR</option>
-        <option value="bench-static">Sphere Static — WebGPU multi-pass</option>
-        <option value="bench-microplane">MicroPlane — per-node microbench</option>
-      </select>
-      <button id="hide-overlay" type="button" aria-label="Hide sidebar" title="Hide (press M to show)">×</button>
+    <!-- Primary flow: one button, zero decisions. Runs MicroPlane with its
+         shipped defaults — the ONE mode/config that prices nodes for the
+         editor's cost bar. Everything else (mode switch, group pickers,
+         research runs) is what the Advanced section below is for. -->
+    <div id="primary-panel" role="region" aria-label="Device benchmark">
+      <div id="primary-row">
+        <button id="bench-device-btn" type="button">▶ Benchmark this device</button>
+        <button id="hide-overlay" type="button" aria-label="Hide sidebar" title="Hide (press M to show)">×</button>
+      </div>
+      <div id="primary-note">
+        MicroPlane · prices each shader node on this GPU · ≈3 min · no VR session.<br>
+        When done, FastShaders on this browser offers the result in its points
+        box — or <b>Download</b> the profile .json and drag it there on another
+        device.
+      </div>
+      <div id="primary-status" class="hidden" aria-live="polite"></div>
     </div>
 
     <div id="tool-ui" aria-live="polite">
       <div class="tool-header tool-static">ShaderCarousel</div>
     </div>
     <div id="tool-empty" class="hidden"></div>
+
+    <details id="advanced-panel">
+      <summary>Advanced — modes &amp; research runs</summary>
+      <div id="mode-overlay" role="region" aria-label="Mode selector">
+        <label for="mode-select">Mode</label>
+        <select id="mode-select" aria-label="Benchmark mode">
+          <option value="bench-microplane">MicroPlane — per-node pricing (default)</option>
+          <option value="bench-static">Sphere Static — pricing cross-check at eye resolution</option>
+          <option value="bench-inout">Sphere InOut — WebXR budget fit (not for pricing)</option>
+        </select>
+      </div>
+      <div id="advanced-note">
+        All three modes run the same shader set; they differ in how it is
+        timed. Only MicroPlane and Static export prices the editor accepts —
+        InOut measures frame-budget fit inside a real WebXR session and its
+        export is research data.
+      </div>
+    </details>
   </div>
 
   <button id="toggle-overlay" type="button" aria-label="Show sidebar" title="Show sidebar (M)">≡</button>
@@ -237,7 +316,10 @@
       'bench-microplane': './bench-microplane/index.html',
     };
     const EMPTY_MESSAGES = {};
-    const DEFAULT_MODE = 'bench-static';
+    // MicroPlane is the front door: the one mode whose default run produces a
+    // valid device-pricing export for the editor. (bench-static cross-checks
+    // it; bench-inout can never price — see the Advanced note.)
+    const DEFAULT_MODE = 'bench-microplane';
     const STORAGE_KEY = 'shaderCarousel:mode';
 
     // IDs that we lift out of each sub-tool and into #tool-ui. Order
@@ -383,8 +465,109 @@
       }
     }
 
+    // ── "Benchmark this device" — the zero-decision path ─────────────────
+    // Loads MicroPlane (if not already current) and presses its start gate
+    // for the user. The gate lives INSIDE the iframe (XR benches need the
+    // gesture to originate there), but MicroPlane needs no gesture, so a
+    // programmatic click is safe. Three guards make the click honest:
+    //   • wait for `__benchReady` (bench-driver sets it after the renderer
+    //     initialises — clicking earlier throws into the error overlay),
+    //   • only click a VISIBLE, enabled gate (hidden gate = a run is already
+    //     in progress; clicking would start a second one),
+    //   • time out to "press ▶ Start yourself" rather than clicking blind.
+    const benchBtn = document.getElementById('bench-device-btn');
+    const primaryStatus = document.getElementById('primary-status');
+    let autoStartPending = false;
+
+    function setPrimaryStatus(text) {
+      primaryStatus.textContent = text || '';
+      primaryStatus.classList.toggle('hidden', !text);
+    }
+
+    function tryAutoStart() {
+      let doc;
+      try { doc = frame.contentDocument; } catch { return false; }
+      if (!doc || !doc.defaultView || doc.defaultView.__benchReady !== true) return false;
+      const gate = doc.getElementById('bench-start-gate');
+      const go = gate && !gate.classList.contains('hidden')
+        ? gate.querySelector('.gate-go') : null;
+      if (!go || go.disabled) return false;
+      go.click();
+      return true;
+    }
+
+    function pollAutoStart(deadline) {
+      if (!autoStartPending) return;
+      if (tryAutoStart()) {
+        autoStartPending = false;
+        benchBtn.disabled = false;
+        setPrimaryStatus('Running — progress below. The done popup has the downloads.');
+        return;
+      }
+      if (Date.now() > deadline) {
+        autoStartPending = false;
+        benchBtn.disabled = false;
+        setPrimaryStatus('Loaded, but could not auto-start (no WebGPU?) — press ▶ Start in the controls below.');
+        return;
+      }
+      setTimeout(() => pollAutoStart(deadline), 200);
+    }
+
+    // A running benchmark must never be silently destroyed: the click below
+    // reloads the iframe, and the button is re-enabled the moment a run
+    // starts, so a second click a minute into a ~3-minute run threw the whole
+    // partial run away with no warning. The gate hides for the entire run, so
+    // "gate hidden and no done popup" is the in-progress signature. (A done
+    // popup dismissed via Close matches it too — an extra confirm there is a
+    // harmless question; silent data loss is not.)
+    function benchMayBeRunning() {
+      let doc;
+      try { doc = frame.contentDocument; } catch { return false; }
+      if (!doc) return false;
+      const gate = doc.getElementById('bench-start-gate');
+      if (!gate || !gate.classList.contains('hidden')) return false;
+      return !doc.getElementById('bench-done-popup');
+    }
+
+    let loadWatchdog = 0;
+    benchBtn.addEventListener('click', () => {
+      if (benchMayBeRunning() &&
+          !window.confirm('A benchmark looks to be in progress — restart and lose the current run?')) {
+        return;
+      }
+      autoStartPending = true;
+      benchBtn.disabled = true;
+      setPrimaryStatus('Starting MicroPlane…');
+      // Always reload the mode: a fresh document is the cheapest way to
+      // guarantee "not mid-run" and default HUD state. Polling starts on the
+      // NEW document's `load` (the listener below) — polling now could click
+      // the OLD document's still-visible gate mid-teardown. The watchdog
+      // covers a load that never fires at all; `load` clears it.
+      applyMode('bench-microplane');
+      clearTimeout(loadWatchdog);
+      loadWatchdog = setTimeout(() => {
+        if (!autoStartPending) return;
+        autoStartPending = false;
+        benchBtn.disabled = false;
+        setPrimaryStatus('The bench page did not load — check the network / open Advanced.');
+      }, 20000);
+    });
+
+    frame.addEventListener('load', () => {
+      clearTimeout(loadWatchdog);
+      if (autoStartPending) pollAutoStart(Date.now() + 15000);
+    });
     frame.addEventListener('load', adoptIframeUI);
-    select.addEventListener('change', () => applyMode(select.value));
+    select.addEventListener('change', () => {
+      // A manual mode choice cancels a pending auto-start — otherwise the
+      // poll would press the START of whatever mode the user just switched
+      // to (Static publishes the same readiness flag MicroPlane does).
+      autoStartPending = false;
+      clearTimeout(loadWatchdog);
+      benchBtn.disabled = false;
+      setPrimaryStatus('');
+      applyMode(select.value);
+    });
 
     hideBtn.addEventListener('click', () => document.body.classList.add('overlay-hidden'));
     showBtn.addEventListener('click', () => document.body.classList.remove('overlay-hidden'));

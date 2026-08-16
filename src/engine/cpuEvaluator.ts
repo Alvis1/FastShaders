@@ -18,6 +18,7 @@ import { hexToRgb01 } from '@/utils/colorUtils';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
+import { buildTimeUpstreamSet } from '@/utils/graphTraversal';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
 const NOISE_UV_SCALE = 4;
@@ -87,6 +88,8 @@ interface EvalCtx {
   shapeCache: Map<string, number>;
   /** Lazy unwrapped-edge-by-id lookup (getUnwrappedEdge). */
   edgeById: Map<string, AppEdge> | null;
+  /** Lazy "is this node fed by a Time node" set (getTimeUpstreamSet). */
+  timeUpstream: Set<string> | null;
 }
 
 /**
@@ -152,6 +155,7 @@ function getCtx(nodes: AppNode[], edges: AppEdge[]): EvalCtx {
       rangeCachesT: new Map(),
       shapeCache: new Map(),
       edgeById: null,
+      timeUpstream: null,
     };
     byEdges.set(edges, ctx);
     // Internal recursion (e.g. computeRange → evaluateNodeOutput) re-enters
@@ -217,6 +221,43 @@ export function getTargetEdges(nodes: AppNode[], edges: AppEdge[], nodeId: strin
  */
 export function getUnwrappedEdges(nodes: AppNode[], edges: AppEdge[]): AppEdge[] {
   return getCtx(nodes, edges).edges;
+}
+
+/**
+ * Is `nodeId` fed by a Time node (or a Time node itself)? Exactly
+ * `hasTimeUpstream(nodeId, nodes, getUnwrappedEdges(nodes, edges))`, but O(1)
+ * per call: the whole answer is ONE forward BFS memoized on the shared ctx.
+ *
+ * Prefer this to `hasTimeUpstream` in anything that runs per notify or per
+ * frame. The per-node form rebuilds two whole-graph Maps on EVERY call, and
+ * the render layer asks once per connected edge per node card per store
+ * notify — which React Flow fires at refresh rate through a drag. Measured at
+ * 85-93% of all per-notify selector work on a 150n/220e graph.
+ *
+ * It also closes the raw-edges trap by construction: the walk runs over
+ * `ctx.edges`, so a Time node feeding INTO a collapsed group stays visible.
+ * That is the bug `getUnwrappedEdges`' contract warns about and which two
+ * callers (EdgeInfoCard, PreviewNode) were live instances of.
+ *
+ * Invalidation is free and exact: the set hangs off the ctx, and
+ * `sameGraphSemantics` mints a new ctx on any `data`-reference change (which
+ * is where `registryType` lives) or any edge-endpoint change — so adding,
+ * removing or rewiring a Time node rebuilds it, while a position-only drag
+ * frame reuses it.
+ */
+export function getTimeUpstreamSet(nodes: AppNode[], edges: AppEdge[]): ReadonlySet<string> {
+  const ctx = getCtx(nodes, edges);
+  if (!ctx.timeUpstream) ctx.timeUpstream = buildTimeUpstreamSet(nodes, ctx.edges);
+  return ctx.timeUpstream;
+}
+
+/**
+ * A node by id through the shared ctx's prebuilt index — the O(1) counterpart
+ * to the `nodes.find(...)` linear scans the render layer used to run per
+ * connected edge per notify.
+ */
+export function getNodeById(nodes: AppNode[], edges: AppEdge[], nodeId: string): AppNode | undefined {
+  return getCtx(nodes, edges).nodeIndex.get(nodeId);
 }
 
 /** Evaluate the output of a specific node, given the current time. */

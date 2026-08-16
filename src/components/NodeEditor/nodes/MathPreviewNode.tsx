@@ -5,12 +5,11 @@ import type { MathPreviewFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
-import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { WaveformSvg, applyWaveFrame, type WaveformDynamicRefs } from './WaveformSvg';
 import { appTime } from '@/utils/appClock';
-import { evaluateEdgeSource, getTargetEdges, getUnwrappedEdges } from '@/engine/cpuEvaluator';
+import { evaluateEdgeSource, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
 import './MathPreviewNode.css';
 
 /** Map registryType to its math function. */
@@ -66,9 +65,8 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   // ── Upstream-derived render inputs, without a whole-array subscription ──
   // Subscribing to s.nodes/s.edges re-rendered every sin/cos card on every
   // store notify (a drag pointermove mints new array identities, so the memo()
-  // above is bypassed), each render paying an O(E) edges.find plus an UNCACHED
-  // hasTimeUpstream BFS — it rebuilds a node map AND an adjacency map from
-  // scratch per call (graphTraversal.ts:9-19). Same idiom as PreviewNode's
+  // above is bypassed), each render paying an O(E) edges.find plus a full
+  // graph walk for the time check. Same idiom as PreviewNode's
   // inputsKey (PreviewNode.tsx:117-126) and ShaderNode's edgeKey
   // (ShaderNode.tsx:291-300): fold everything the waveform depends on into ONE
   // primitive string, so a position-only notify produces an identical string
@@ -87,16 +85,19 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   // BOTH lookups run on the UNWRAPPED view, and that pairing is load-bearing.
   // getTargetEdges reports the real producer inside a collapsed frame (a raw
   // scan reports the GROUP id, which has no registry def — the waveform froze
-  // at phase 0 whenever its Time feeder was collapsed). But hasTimeUpstream
-  // walks the graph ITSELF, so handing it raw edges after that would drop every
-  // wire crossing the frame's boundary: Time → Multiply(inside a collapsed
-  // group) → sin reads as time-less and goes static. One view, both calls.
+  // at phase 0 whenever its Time feeder was collapsed). The time check walks
+  // the graph ITSELF, so pairing it with the RAW edges would drop every wire
+  // crossing the frame's boundary: Time → Multiply(inside a collapsed group)
+  // → sin reads as time-less and goes static. Both calls go through the shared
+  // ctx, which unwraps by construction — that is why getTimeUpstreamSet is
+  // used here and not `hasTimeUpstream`, which takes the edge array as an
+  // argument and so leaves the trap open at every call site.
   // The flag is a single leading char so the key needs no separator (a raw NUL
   // would make grep treat this file as binary — see MicNode/OutputNode).
   const xKey = useAppStore((s) => {
     const e = getTargetEdges(s.nodes, s.edges, id).find((x) => x.targetHandle === 'x');
     if (!e) return '';
-    const timeFed = hasTimeUpstream(e.source, s.nodes, getUnwrappedEdges(s.nodes, s.edges));
+    const timeFed = getTimeUpstreamSet(s.nodes, s.edges).has(e.source);
     // The SOCKET rides the key too — re-wiring from one output of a source to
     // another leaves source/target/targetHandle identical, so a source-only
     // key would keep the waveform on the old channel.

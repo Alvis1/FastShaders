@@ -4,10 +4,14 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Podest</title>
-<!-- Inline data: favicon — kills the automatic /favicon.ico 404. Podest runs
-     unattended for weeks and rate-limits its own error relay, so a permanent
-     spurious console error would make a genuine one harder to spot. -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
+<!-- The Podest mark. RELATIVE, not root-absolute: this file lives in public/
+     and ships verbatim (Vite never rewrites it), so it has to resolve itself
+     under all four deploy bases — /FastShaders/, /fastshaders/, the desktop
+     shell's /, and a bare file open. It sits beside podest.html in every one
+     of them. Having an icon at all also kills the automatic /favicon.ico 404:
+     podest runs unattended for weeks and rate-limits its own error relay, so a
+     permanent spurious console error would make a genuine one harder to spot. -->
+<link rel="icon" type="image/svg+xml" href="favicon-podest.svg" />
 <!--
   Podest — standalone full-screen TSL shader viewer.
 
@@ -48,6 +52,14 @@
       confirm names it before the popup gets the shader. The floating ⛶
       keeps its fullscreen meaning — it is the presentation-mode escape
       hatch ("press ⛶, then Esc").
+    • Once inside, `vr-nav` owns where the visitor stands: it steps the
+      camera rig back so the artwork is framed rather than worn (local-floor
+      would otherwise start them inside a 1.6-unit mesh), teleports on the
+      controller trigger / hand pinch OR on a Quest-style fist-with-thumb
+      button classified from the raw joint poses, clamps every target into a
+      1.2–30 m ring around the piece, and walks a stranded visitor back
+      after 90 s of a motionless headset. See pushVrNav; the maths is pinned
+      by src/podestVrNav.test.ts.
 
   Presentation mode (pedestal / exhibition use):
     • ⛶ bottom-right (⤡ to leave) hides ALL chrome — panel, drop hint and the
@@ -148,6 +160,11 @@
   .dropzone strong { display: block; color: var(--text); font-size: 13px; margin-bottom: 2px; }
 
   .loaded { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--text-dim); }
+  /* Explicit, for the reason spelled out at #spin-speed below: `[hidden]` is a
+     UA-origin rule, so the `display: flex` above outranks it and the empty
+     "loaded" box kept claiming one of the panel body's 14px gaps — a dead band
+     between the drop area and the green button until a file is dropped. */
+  .loaded[hidden] { display: none; }
   .loaded .row { display: flex; gap: 6px; align-items: baseline; }
   .loaded .row span:first-child { flex-shrink: 0; }
   .loaded .name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -294,6 +311,88 @@
   }
   /* The hint shares the bottom-left corner — step it aside when the light is up. */
   body.has-mic #hint { left: 58px; }
+
+  /* ── Model animation controls ───────────────────────────────────────
+     A dropped glTF that carries clips gets a play/pause + in-place pill in the
+     bottom-left and a scrubber running across to the ⛶ button, mirroring the
+     editor preview's arrangement in podest's own white-on-translucent-dark
+     chrome (the editor's frosted-white pills would be a foreign object here,
+     and its near-black timeline would vanish into a dark artwork — the line is
+     drawn light with a dark halo instead, the same "one light line beside one
+     dark line" rule, mirrored for this palette).
+
+     UNLIKE the mic light, this IS in the `:root.is-present` hide rule:
+     playback controls are chrome over the artwork, not a privacy indicator.
+     `presenting()` is true for real fullscreen as well as the remembered mode,
+     so one rule covers both. */
+  #anim-bar { position: fixed; left: 12px; right: 58px; bottom: 12px; z-index: 21;
+              display: none; align-items: center; gap: 8px;
+              /* Spans most of the viewport, so it must stay transparent to the
+                 pointer or an orbit drag aimed at the gap would die on it. */
+              pointer-events: none; }
+  #anim-bar.show { display: flex; }
+  #anim-bar > * { pointer-events: auto; }
+  :root.is-present #anim-bar { display: none; }
+  /* The mic light owns the bottom-left corner when it is up (same rule #hint
+     follows), and the hint steps above the bar rather than under it. */
+  body.has-mic #anim-bar { left: 58px; }
+  body.has-anim #hint { bottom: 56px; }
+
+  #anim-pill { display: flex; align-items: center; gap: 6px; padding: 5px 6px;
+               background: rgba(20, 21, 25, 0.55); border: 1px solid rgba(255, 255, 255, 0.18);
+               border-radius: 8px; }
+  #anim-pill button { width: 28px; height: 28px; display: flex; align-items: center;
+                      justify-content: center; padding: 0; font-size: 13px; line-height: 1;
+                      color: #fff; background: rgba(255, 255, 255, 0.06);
+                      border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 6px;
+                      cursor: pointer; }
+  #anim-pill button:hover { background: rgba(255, 255, 255, 0.16); }
+  /* Lit while root motion is suppressed — a held state, so the control stays
+     visibly down rather than flashing on press. */
+  #anim-inplace.is-on, #anim-clips-btn.is-on { background: rgba(255, 255, 255, 0.28); border-color: rgba(255, 255, 255, 0.55); }
+  #anim-inplace:disabled { opacity: 0.35; cursor: default; background: rgba(255, 255, 255, 0.06); }
+
+  /* --thumb is the ONE place the scrubber's size is written: the line's end
+     insets derive from it and the JS reads it back off the element, so the
+     number cannot drift between the stylesheet and the script. */
+  #anim-timeline { --thumb: 20px; position: relative; flex: 1; height: 28px; min-width: 40px;
+                   cursor: pointer; touch-action: none; }
+  #anim-line { position: absolute; top: 50%; left: calc(var(--thumb) / 2); right: calc(var(--thumb) / 2);
+               height: 2px; transform: translateY(-50%); background: rgba(255, 255, 255, 0.9);
+               box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45); border-radius: 1px; pointer-events: none; }
+  /* border-box because podest ships no global reset: without it the 1px border
+     makes the thumb 22px wide while the line's end insets stay at 20/2, so the
+     thumb's extremes overhang the track it is meant to run along. The script
+     reads the LIVE offsetWidth, so the two only agree when this does. */
+  #anim-thumb { position: absolute; top: 50%; left: calc(var(--thumb) / 2); box-sizing: border-box;
+                width: var(--thumb); height: var(--thumb); transform: translate(-50%, -50%);
+                background: rgba(20, 21, 25, 0.75); border: 1px solid rgba(255, 255, 255, 0.55);
+                border-radius: 6px;
+                /* The track owns the pointer capture; the thumb must not eat
+                   the pointerdown that starts a scrub on top of it. */
+                pointer-events: none; }
+
+  /* Clip picker — the pill's ☰ button (right-click / long-press the pill are
+     shortcuts). Anchored in JS. */
+  #anim-clips { position: fixed; z-index: 32; display: none; min-width: 140px; max-width: 260px;
+                max-height: 50vh; overflow-y: auto; padding: 4px;
+                background: rgba(20, 21, 25, 0.94); border: 1px solid rgba(255, 255, 255, 0.18);
+                border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); }
+  #anim-clips.show { display: block; }
+  :root.is-present #anim-clips { display: none; }
+  #anim-clips .clip-head { padding: 3px 8px 5px; font-size: 10px; font-weight: 700;
+                           letter-spacing: 0.04em; text-transform: uppercase;
+                           color: rgba(255, 255, 255, 0.55); user-select: none; }
+  #anim-clips button { display: flex; align-items: center; gap: 6px; width: 100%;
+                       padding: 4px 8px; font: 12px/1.4 system-ui, sans-serif; text-align: left;
+                       color: #fff; background: none; border: none; border-radius: 5px;
+                       cursor: pointer; }
+  #anim-clips button:hover { background: rgba(255, 255, 255, 0.12); }
+  #anim-clips button.is-active { font-weight: 700; }
+  /* Fixed-width marker column so the names keep one left edge whether or not a
+     row carries the dot. */
+  #anim-clips .clip-mark { flex: 0 0 auto; width: 8px; font-size: 9px; line-height: 1; }
+  #anim-clips .clip-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -320,6 +419,19 @@
 
 <button id="mic-btn" type="button" title="Start microphone" aria-label="Start microphone"></button>
 
+<div id="anim-bar">
+  <div id="anim-pill">
+    <button id="anim-play" type="button" title="Play model animation" aria-label="Play model animation">&#9654;</button>
+    <button id="anim-inplace" type="button" title="Play in place: hold the model still and drop the animation&rsquo;s root movement" aria-label="Play in place">&#9678;</button>
+    <button id="anim-clips-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Animation clips" aria-label="Animation clips">&#9776;</button>
+  </div>
+  <div id="anim-timeline" role="slider" tabindex="0" aria-label="Animation timeline" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+    <div id="anim-line"></div>
+    <div id="anim-thumb"></div>
+  </div>
+</div>
+<div id="anim-clips" role="menu" aria-label="Animation clips"></div>
+
 <div id="panel">
   <div class="panel__head" id="panel-head">
     <span class="panel__title">Podest</span>
@@ -345,6 +457,15 @@
     <input type="file" id="file-input" accept=".js,.mjs,.tsl,.txt,.glb,.gltf,.obj,.zip" multiple hidden />
 
     <div class="loaded" id="loaded" hidden></div>
+
+    <!-- The primary action sits directly under what was loaded, NOT at the
+         bottom of the panel. It is the button that starts the show —
+         "Fullscreen" on a screen, "Enter VR" on a headset — and below it the
+         panel runs Scene → Unattended → Title → Properties, the last of which
+         GROWS with the shader's property count. A tuned shader pushed the
+         green button off the bottom of a 288px panel, so the one control a
+         visitor is meant to press was the one they had to scroll for. -->
+    <button class="btn btn--fs" id="fs-panel-btn" type="button" title="Show the shader full-screen with no controls">Fullscreen</button>
 
     <div class="section">
       <div class="section__label">Scene</div>
@@ -392,8 +513,6 @@
       <div class="section__label">Properties</div>
       <div id="uniforms"><div class="empty">Load a shader to expose its properties.</div></div>
     </div>
-
-    <button class="btn btn--fs" id="fs-panel-btn" type="button" title="Show the shader full-screen with no controls">Fullscreen</button>
   </div>
 </div>
 
@@ -450,7 +569,19 @@
     autoRestore: readStr("fs:viewerAutoRestore", "1") !== "0",
     presenting: readStr("fs:viewerPresenting", "0") === "1",
     viewReturn: readStr("fs:viewerViewReturn", "1") !== "0",
+    // Model animation. Playing defaults ON — a pedestal showing an animated
+    // model that stands still reads as a broken exhibit, not as a paused one.
+    // The CLIP index is deliberately not persisted: an index means nothing
+    // across models, and podest replays its last drop at boot.
+    animPlaying: readStr("fs:viewerAnimPlaying", "1") !== "0",
+    animInPlace: readStr("fs:viewerAnimInPlace", "0") === "1",
+    animClip: 0,
   };
+  // What the stage last reported about the loaded model's clips; null = the
+  // current model has none, which is also what hides the whole bar.
+  var animInfo = null;
+  var animTime = 0;        // last reported playhead, replayed across restarts
+  var animScrub = false;   // the pointer owns the thumb while true
   // A slower/faster rotation is a longer/shorter animation duration.
   function spinDur() { return Math.round(SPIN_BASE_DUR / (state.spinSpeed || 1)); }
   var objCache = {};       // built-in OBJ bytes, fetched once
@@ -686,6 +817,15 @@
       }
       micReset(mics);
       if (!state.showMaterials) onUniforms(uRest);
+    } else if (m.type === "fs:anim") {
+      onStageAnim(m);
+    } else if (m.type === "fs:anim-time") {
+      if (typeof m.time === "number" && isFinite(m.time)) {
+        animTime = m.time;
+        // While the user drags, the pointer owns the thumb — a report landing
+        // mid-gesture would fight it back to the playhead.
+        if (!animScrub) paintAnimThumb(animTime);
+      }
     } else if (m.type === "fs:error") {
       showError(m.message || "Shader stage error", true, !!m.sticky);
     } else if (m.type === "fs:applied") {
@@ -717,6 +857,297 @@
       if (dropped.length) handleFiles(dropped);
     }
   });
+
+  /* ── Model animation controls ────────────────────────────────────────────
+     A-Frame core ships no animation-mixer, so the stage's `gltf-anim`
+     component (pushGltfAnim, a twin of the editor's) owns the mixer and this
+     half owns the buttons. The contract both ways:
+       parent -> stage : fs:anim-set {playing, inPlace, clip, time}, fs:anim-seek {time}
+       stage  -> parent: fs:anim {has, duration, canInPlace, name, clip, clips},
+                         fs:anim-time {time}
+
+     The stage is DISPOSABLE (device loss, the stall watchdog, the ~4.4 h time
+     fold all rebuild it), so nothing here assumes continuity: the parent
+     replays playing/inPlace/clip AND the playhead on every fs:anim, which is
+     what keeps a restart invisible on an animated exhibit. */
+  var animBar = document.getElementById("anim-bar");
+  var animPlayBtn = document.getElementById("anim-play");
+  var animInPlaceBtn = document.getElementById("anim-inplace");
+  var animTimelineEl = document.getElementById("anim-timeline");
+  var animThumbEl = document.getElementById("anim-thumb");
+  var animClipsEl = document.getElementById("anim-clips");
+  var animClipsBtn = document.getElementById("anim-clips-btn");
+  var animPill = document.getElementById("anim-pill");
+
+  /** Move the thumb. Imperative: the stage reports ~30x/s while playing. */
+  function paintAnimThumb(time) {
+    if (!animInfo || !(animInfo.duration > 0)) return;
+    var w = animThumbEl.offsetWidth || 20;
+    var f = time / animInfo.duration;
+    f = f < 0 ? 0 : (f > 1 ? 1 : f);
+    animThumbEl.style.left = "calc(" + (w / 2) + "px + " + f + " * (100% - " + w + "px))";
+    animTimelineEl.setAttribute("aria-valuenow", String(Math.round(time * 100) / 100));
+  }
+
+  /** Pointer x -> clip time, over the same inset span paintAnimThumb writes. */
+  function animTimeFromPointer(clientX) {
+    if (!animInfo || !(animInfo.duration > 0)) return 0;
+    var w = animThumbEl.offsetWidth || 20;
+    var r = animTimelineEl.getBoundingClientRect();
+    var usable = r.width - w;
+    if (usable <= 0) return 0;
+    var f = (clientX - r.left - w / 2) / usable;
+    f = f < 0 ? 0 : (f > 1 ? 1 : f);
+    return f * animInfo.duration;
+  }
+
+  function seekAnim(t) {
+    animTime = t;
+    paintAnimThumb(t);
+    post({ type: "fs:anim-seek", time: t });
+  }
+
+  /** Push the toggles (not the playhead) into the running stage. */
+  function sendAnimState() {
+    post({ type: "fs:anim-set", playing: state.animPlaying, inPlace: state.animInPlace });
+  }
+
+  function syncAnimButtons() {
+    var on = !!animInfo;
+    animBar.classList.toggle("show", on);
+    document.body.classList.toggle("has-anim", on);
+    if (!on) { closeClipMenu(); return; }
+    animPlayBtn.textContent = state.animPlaying ? "⏸" : "▶";
+    var many = animInfo.clips.length > 1;
+    animPlayBtn.title = (state.animPlaying ? "Pause model animation" : "Play model animation")
+      + (animInfo.name ? " — " + animInfo.name : "")
+      + (many ? " (" + (animInfo.clip + 1) + "/" + animInfo.clips.length + ")" : "");
+    animClipsBtn.title = "Animation clips (" + animInfo.clips.length + ")";
+    animPlayBtn.setAttribute("aria-label", state.animPlaying ? "Pause model animation" : "Play model animation");
+    // A clip with no root translation has nothing to pin; a live button that
+    // does nothing reads as broken, so it goes inert instead.
+    animInPlaceBtn.disabled = !animInfo.canInPlace;
+    animInPlaceBtn.classList.toggle("is-on", state.animInPlace && animInfo.canInPlace);
+    animInPlaceBtn.title = animInfo.canInPlace
+      ? (state.animInPlace
+          ? "Playing in place — click to restore the animation’s own movement"
+          : "Play in place: hold the model still and drop the animation’s root movement")
+      : "This animation has no root movement to remove";
+    animTimelineEl.setAttribute("aria-valuemax", String(Math.round(animInfo.duration * 100) / 100));
+    paintAnimThumb(animTime);
+  }
+
+  /**
+   * The stage reported its clip set (or the lack of one). Coerce everything —
+   * the stage is sandboxed, so these numbers are untrusted whoever wrote the
+   * shader — then replay this parent's state onto it.
+   */
+  function onStageAnim(m) {
+    var dur = (typeof m.duration === "number" && isFinite(m.duration)) ? m.duration : 0;
+    if (!m.has || dur <= 0) { animInfo = null; syncAnimButtons(); return; }
+    // Placeholders are substituted IN PLACE for non-string entries, never
+    // compacted out — compaction would shift every later index, so the menu's
+    // rows would stop matching the stage's real clip indices.
+    var names = [];
+    if (Array.isArray(m.clips)) {
+      for (var i = 0; i < m.clips.length && i < 200; i++) {
+        names.push(typeof m.clips[i] === "string" ? m.clips[i].slice(0, 120) : "");
+      }
+    }
+    // The stage's OWN index, which it has already clamped. DISPLAY only —
+    // deliberately not written back into state.animClip: a stage rebuild
+    // (device loss, the stall watchdog, the ~4.4 h time fold) boots the
+    // component at its schema default of 0, so adopting the report would walk
+    // an unattended exhibit back to clip 0 the first time anything restarted.
+    // state.animClip stays the REQUEST; this is the answer.
+    var clip = (typeof m.clip === "number" && isFinite(m.clip)) ? (m.clip | 0) : 0;
+    animInfo = {
+      duration: dur,
+      canInPlace: !!m.canInPlace,
+      name: typeof m.name === "string" ? m.name.slice(0, 120) : "",
+      clip: clip,
+      clips: names
+    };
+    // Reset the remembered playhead only when the REPORTING clip is the one
+    // about to be replayed: a rebuilt stage reports its schema-default clip 0
+    // first, and zeroing an 8 s Walk playhead against a 2 s Idle's duration
+    // made every restart visibly rewind the exhibit — the exact discontinuity
+    // this replay exists to hide. On a clip switch the component's own seek()
+    // clamps against the correct post-swap duration.
+    if (clip === state.animClip && animTime > dur) animTime = 0;
+    syncAnimButtons();
+    renderClipMenu();
+    // clip leads: the component re-derives duration/canInPlace and rebinds at
+    // 0 on a clip change, so the time has to follow it.
+    post({
+      type: "fs:anim-set",
+      clip: state.animClip,
+      playing: state.animPlaying,
+      inPlace: state.animInPlace,
+      time: animTime
+    });
+  }
+
+  animPlayBtn.addEventListener("click", function () {
+    state.animPlaying = !state.animPlaying;
+    writePref("fs:viewerAnimPlaying", state.animPlaying ? "1" : "0");
+    sendAnimState();
+    syncAnimButtons();
+  });
+  animInPlaceBtn.addEventListener("click", function () {
+    state.animInPlace = !state.animInPlace;
+    writePref("fs:viewerAnimInPlace", state.animInPlace ? "1" : "0");
+    sendAnimState();
+    syncAnimButtons();
+  });
+
+  // Capture on the TRACK, never the thumb: the thumb is repositioned by an
+  // imperative style write on every report, and a pointer captured by an
+  // element the gesture keeps moving is how a drag gets lost mid-sweep.
+  animTimelineEl.addEventListener("pointerdown", function (e) {
+    if (!animInfo) return;
+    try { animTimelineEl.setPointerCapture(e.pointerId); } catch (err) {}
+    animScrub = true;
+    seekAnim(animTimeFromPointer(e.clientX));
+  });
+  animTimelineEl.addEventListener("pointermove", function (e) {
+    if (!animScrub) return;
+    seekAnim(animTimeFromPointer(e.clientX));
+  });
+  function endScrub(e) {
+    animScrub = false;
+    try { animTimelineEl.releasePointerCapture(e.pointerId); } catch (err) {}
+  }
+  animTimelineEl.addEventListener("pointerup", endScrub);
+  animTimelineEl.addEventListener("pointercancel", endScrub);
+  animTimelineEl.addEventListener("keydown", function (e) {
+    if (!animInfo) return;
+    var step = animInfo.duration / 50, next = null;
+    if (e.key === "ArrowRight" || e.key === "ArrowUp") next = animTime + step;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowDown") next = animTime - step;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = animInfo.duration;
+    if (next === null) return;
+    e.preventDefault();
+    seekAnim(Math.max(0, Math.min(animInfo.duration, next)));
+  });
+
+  /* ── Clip picker ────────────────────────────────────────────────────────
+     The visible ☰ button on the pill is the PRIMARY path; right-click /
+     long-press anywhere on the pill are shortcuts to the same menu. It
+     shipped first as a right-click-only context menu gated on two clips,
+     and that was reported as "does not work" — a control that exists on
+     some models and not others, reached by a gesture that silently no-ops,
+     is indistinguishable from a broken feature. */
+  function closeClipMenu() {
+    animClipsEl.classList.remove("show");
+    animClipsBtn.classList.remove("is-on");
+    animClipsBtn.setAttribute("aria-expanded", "false");
+  }
+  function renderClipMenu() {
+    animClipsEl.textContent = "";
+    // No ">= 2 clips" gate: a control that exists on some models and not
+    // others is the failure the old right-click-only path had, and on a
+    // single-clip file the list still answers "what is this clip called".
+    if (!animInfo) { closeClipMenu(); return; }
+    var head = document.createElement("div");
+    head.className = "clip-head";
+    head.textContent = "Animation clips";
+    animClipsEl.appendChild(head);
+    animInfo.clips.forEach(function (name, i) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "menuitemradio");
+      b.setAttribute("aria-checked", i === animInfo.clip ? "true" : "false");
+      if (i === animInfo.clip) b.className = "is-active";
+      var mark = document.createElement("span");
+      mark.className = "clip-mark";
+      mark.textContent = i === animInfo.clip ? "●" : "";
+      var label = document.createElement("span");
+      label.className = "clip-name";
+      // An unnamed clip is legal in glTF; the index is the only handle the
+      // user has on it, so never render an empty row. textContent only — the
+      // name came out of a dropped file.
+      label.textContent = name || ("Clip " + (i + 1));
+      b.title = label.textContent;
+      b.appendChild(mark);
+      b.appendChild(label);
+      b.addEventListener("click", function () {
+        state.animClip = i;
+        animTime = 0;
+        post({ type: "fs:anim-set", clip: i });
+        closeClipMenu();
+      });
+      animClipsEl.appendChild(b);
+    });
+  }
+  function openClipMenu() {
+    if (!animInfo) return;
+    renderClipMenu();
+    animClipsEl.classList.add("show");
+    animClipsBtn.classList.add("is-on");
+    animClipsBtn.setAttribute("aria-expanded", "true");
+    // Measured placement: this anchor is always near the bottom edge, so the
+    // menu has to open UPWARD unless there is genuinely room below.
+    var a = animClipsBtn.getBoundingClientRect();
+    var m = animClipsEl.getBoundingClientRect();
+    var left = Math.max(4, Math.min(a.left, window.innerWidth - m.width - 4));
+    var above = a.top - 4 - m.height;
+    var below = a.bottom + 4;
+    var top = (below + m.height <= window.innerHeight - 4) ? below
+            : (above >= 4 ? above : Math.max(4, window.innerHeight - m.height - 4));
+    animClipsEl.style.left = left + "px";
+    animClipsEl.style.top = top + "px";
+  }
+  function toggleClipMenu() {
+    if (animClipsEl.classList.contains("show")) closeClipMenu(); else openClipMenu();
+  }
+  animClipsBtn.addEventListener("click", toggleClipMenu);
+  // When a long-press opened the menu — the synthesized-contextmenu window.
+  var clipMenuTouchTs = 0;
+  // Right-click anywhere on the PILL, not just the ▶: the handler used to sit
+  // on the play button alone and be suppressed below two clips, so a near-miss
+  // OR a single-clip file both fell through to the browser's own menu, which is
+  // indistinguishable from the feature not working. The ☰ above is the primary,
+  // visible path; this is the shortcut.
+  animPill.addEventListener("contextmenu", function (e) {
+    if (!animInfo) return;
+    e.preventDefault();
+    // On Android/Quest Chromium a touch long-press ALSO synthesizes a native
+    // contextmenu right as the 500 ms timer fires — without this window the
+    // toggle closed the menu the same gesture just opened.
+    if (performance.now() - clipMenuTouchTs < 700) return;
+    toggleClipMenu();
+  });
+  // Touch/pen counterpart to the right-click. Mouse is ignored — right-click
+  // already covers it and a hold on the left button would fight the click.
+  (function () {
+    var timer = null, sx = 0, sy = 0, pid = -1;
+    function cancel() { if (timer !== null) { clearTimeout(timer); timer = null; } pid = -1; }
+    animPill.addEventListener("pointerdown", function (e) {
+      if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+      if (e.target === animClipsBtn) return;   // it already opens on tap
+      cancel(); sx = e.clientX; sy = e.clientY; pid = e.pointerId;
+      timer = setTimeout(function () { timer = null; clipMenuTouchTs = performance.now(); openClipMenu(); }, 500);
+    });
+    animPill.addEventListener("pointermove", function (e) {
+      if (pid !== e.pointerId || timer === null) return;
+      if (Math.abs(e.clientX - sx) > 10 || Math.abs(e.clientY - sy) > 10) cancel();
+    });
+    animPill.addEventListener("pointerup", cancel);
+    animPill.addEventListener("pointercancel", cancel);
+  })();
+  document.addEventListener("pointerdown", function (e) {
+    if (!animClipsEl.classList.contains("show")) return;
+    if (animClipsEl.contains(e.target) || animPill.contains(e.target)) return;
+    closeClipMenu();
+  }, true);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && animClipsEl.classList.contains("show")) {
+      e.stopPropagation();
+      closeClipMenu();
+    }
+  }, true);
 
   // ── Stage lifecycle: restore, watchdog, restart ─────────────────────
   // Everything below exists for ONE reason: podest is meant to run unattended
@@ -1007,6 +1438,9 @@
   }
 
   function loadModelBuffer(buf, name) {
+    // A clip index means nothing across models, and neither does a playhead.
+    state.animClip = 0;
+    animTime = 0;
     // Normalize to a standalone ArrayBuffer so it survives structured-clone
     // messaging regardless of whether the source was a File or a zip slice.
     var ab = buf instanceof ArrayBuffer ? buf : buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
@@ -1848,6 +2282,15 @@
   // reading the old one. Same rule as the editor's vrModelUrlRef.
   var vrModelUrl = null;
 
+  // Walkable bound, in metres (a WebXR unit IS a metre in a local-floor
+  // space). NAV_RADIUS is the requested 30-unit disc; NAV_INNER keeps the
+  // visitor from teleporting INSIDE the artwork (fit-bounds normalizes every
+  // mesh to 1.6 units, so 1.2 m from its centre clears it); NAV_HOME is how
+  // far back the rig places the head at entry and on the unattended return.
+  // Worth knowing when tuning: at the 30 m edge a 1.6 m piece subtends ~3°,
+  // i.e. a thumbnail — the bound is a leash, not a viewing distance.
+  var NAV_RADIUS = 30, NAV_INNER = 1.2, NAV_HOME = 2.5;
+
   // JSON that is safe to inline inside a script tag of a document.write'd
   // page: a closing script tag inside shader source would otherwise end the
   // element mid-string. (Spelled out, not quoted, here — the HTML parser
@@ -1871,6 +2314,18 @@
     // is local-floor, so the stage's 0 0 0 would put the mesh at the
     // visitor's feet. (The editor's XR popup still centres at the origin —
     // reconcile the two on the first real device test.)
+    //
+    // Eye HEIGHT alone is not enough: local-floor puts the visitor at the
+    // reference-space origin, i.e. INSIDE a 1.6-unit artwork centred on it
+    // (fit-bounds normalizes every mesh to that size), so the first thing a
+    // headset showed was the inside of the sphere. The visitor is not moved
+    // by placing the art off-origin — which direction "in front" points is
+    // unknown until a pose arrives, since local-floor's yaw comes from the
+    // guardian, not from where the wearer happens to be looking. `vr-nav`
+    // therefore offsets the CAMERA RIG on the first tracked frame, putting
+    // the head NAV_HOME metres from the artwork along its own current
+    // forward — so the piece is centred in view wherever the visitor stood
+    // when they entered. See pushVrNav.
     var EYE = "0 1.4 0";
     var entityAttrs;
     if (kind === "model" && state.modelBytes) {
@@ -1879,7 +2334,16 @@
       // Blob URLs are origin-scoped and the popup shares this origin, so a
       // parent-minted URL loads there directly (the editor popup's model path).
       vrModelUrl = URL.createObjectURL(new Blob([state.modelBytes], { type: mk === "obj" ? "text/plain" : "model/gltf-binary" }));
+      // gltf-anim rides along with the CURRENT anim state BAKED into the
+      // attribute: this popup is a top-level document, so the component's
+      // post() self-silences and no parent replay can reach it — without the
+      // attribute an animated GLB that plays on the flat stage froze at rest
+      // pose in VR (the component was registered but nothing carried it). An
+      // OBJ simply reports no clips, so the attribute is harmless there.
       entityAttrs = 'fit-bounds="size: 1.6; regen: ' + (mk === "obj" ? "true" : "false") + '" ' +
+        'gltf-anim="playing: ' + (state.animPlaying ? "true" : "false") +
+        '; inPlace: ' + (state.animInPlace ? "true" : "false") +
+        '; clip: ' + (state.animClip | 0) + '" ' +
         (mk === "obj" ? 'obj-model="obj: url(' + vrModelUrl + ')"' : 'gltf-model="url(' + vrModelUrl + ')"');
     } else if (isObjKey(kind)) {
       var objUrl = new URL("models/" + (kind === "bunny" ? "stanford-bunny.obj" : "teapot.obj"), window.location.href).href;
@@ -1892,6 +2356,10 @@
     var L = [];
     L.push('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" />');
     L.push('<title>' + esc(state.titleText || state.shaderName || "Podest VR") + '</title>');
+    // Absolute, not relative: this document is written into an about:blank
+    // popup, whose base URL is inherited rather than its own — `dir` is the
+    // reference every other asset here already resolves against.
+    L.push('<link rel="icon" type="image/svg+xml" href="' + dir + 'favicon-podest.svg" />');
     // WebGL2 up front: three r184 picks its WebGPU backend on the mere
     // presence of navigator.gpu, that backend hard-throws in
     // XRManager.setSession (r173–r184), and Quest Browser has no
@@ -1922,8 +2390,27 @@
     // on the one device (a headset) with no reachable devtools console.
     L.push('<div id="err"></div>');
     pushFitBounds(L);
-    L.push('<a-scene vr-mode-ui="enabled: true" loading-screen="enabled: false" background="color: ' + bg + '">');
-    L.push('  <a-entity camera="fov: 24; active: true" look-controls="enabled: false" orbit-controls="target: ' + EYE + '; minDistance: 2; maxDistance: 80; initialPosition: 0 1.4 7; rotateSpeed: 0.5"></a-entity>');
+    pushGltfAnim(L);
+    pushVrNav(L);
+    // hand-tracking is an OPTIONAL feature: a headset without it (or a user
+    // who has it switched off) still gets the session, just no hands — and
+    // the controller trigger path keeps working. hand-tracking-controls
+    // would push the feature itself, but only at its own init; declaring it
+    // on the scene keeps the request independent of component order.
+    L.push('<a-scene vr-mode-ui="enabled: true" webxr="optionalFeatures: hand-tracking, bounded-floor" vr-nav="radius: ' + NAV_RADIUS + '; inner: ' + NAV_INNER + '; home: ' + NAV_HOME + '; target: ' + EYE + '" loading-screen="enabled: false" background="color: ' + bg + '">');
+    // The rig is the teleport handle: three composes the XR pose with the
+    // camera's PARENT world matrix (WebXRManager.updateUserCamera), so
+    // moving this entity moves the visitor. It stays at the origin outside
+    // VR, which is what keeps the flat orbit view byte-identical to before.
+    L.push('  <a-entity id="rig" position="0 0 0">');
+    L.push('    <a-entity camera="fov: 24; active: true" look-controls="enabled: false" orbit-controls="target: ' + EYE + '; minDistance: 2; maxDistance: 80; initialPosition: 0 1.4 7; rotateSpeed: 0.5"></a-entity>');
+    // modelStyle MUST stay "dots": the default ("mesh") fetches a hand GLB
+    // from cdn.aframe.io, which this page must never need (offline rule) and
+    // which the loader URL-modifier above neutralizes anyway — the failure
+    // would surface as a red error banner inside the headset.
+    L.push('    <a-entity hand-tracking-controls="hand: left; modelStyle: dots; modelColor: #dbe6f2"></a-entity>');
+    L.push('    <a-entity hand-tracking-controls="hand: right; modelStyle: dots; modelColor: #dbe6f2"></a-entity>');
+    L.push('  </a-entity>');
     L.push('  <a-entity id="spin-parent" position="' + EYE + '"' + spinAttr + '>');
     L.push('    <a-entity id="preview-entity" ' + entityAttrs + ' position="0 0 0" rotation="' + (ROTATIONS[kind] || "0 0 0") + '"></a-entity>');
     L.push('  </a-entity>');
@@ -2022,6 +2509,32 @@
   // through the same assertions). regen:true rebuilds normals + spherical
   // UVs for OBJ; regen:false preserves a dropped GLB's own data and only
   // synthesizes what is missing.
+  /**
+   * `gltf-anim`: hand-minified twin of GLTF_ANIM_SCRIPT in
+   * src/engine/tslToPreviewHTML.ts — A-Frame core ships no animation-mixer, so
+   * without it a dropped animated glTF stands still in its rest pose.
+   *
+   * Pushed into BOTH stage documents alongside pushFitBounds, and covered by
+   * the same drift guard (src/engine/previewGltfAnim.test.ts extracts these
+   * exact lines and runs them through the editor's assertions). Keep the two in
+   * sync: the whole design rationale — freeze the root track rather than
+   * delete it, resolve the top-most animated node by depth, re-derive
+   * duration/canInPlace per clip — is documented on the editor copy.
+   *
+   * Each helper is ONE L.push line whose payload quotes with " so the
+   * single-quoted host string needs no unescaping, exactly like pushFitBounds.
+   */
+  function pushGltfAnim(L) {
+    L.push('<script>');
+    L.push('(function(){');
+    L.push('  if(!window.AFRAME||AFRAME.components["gltf-anim"])return;');
+    L.push('  function __depthOf(root,obj){var d=0;while(obj&&obj!==root){obj=obj.parent;d++;}return obj===root?d:Infinity;}');
+    L.push('  function __inPlaceClip(clip,root){var i,k,best=Infinity,depths=[];for(i=0;i<clip.tracks.length;i++){var node=null;try{node=THREE.PropertyBinding.findNode(root,clip.tracks[i].name.split(".")[0]);}catch(e){}var d=node?__depthOf(root,node):Infinity;depths.push(d);if(d<best)best=d;}if(best===Infinity)return null;var out=clip.clone(),changed=false;for(i=0;i<out.tracks.length;i++){if(depths[i]!==best)continue;var t=out.tracks[i];var dot=t.name.lastIndexOf(".");if(dot<0||t.name.slice(dot+1)!=="position")continue;var v=t.values,stride=t.getValueSize();if(!v||!stride||v.length<stride)continue;for(k=stride;k<v.length;k++)v[k]=v[k%stride];changed=true;}return changed?out:null;}');
+    L.push('  AFRAME.registerComponent("gltf-anim",{schema:{playing:{type:"boolean",default:true},inPlace:{type:"boolean",default:false},clip:{type:"int",default:0}},init:function(){this.mixer=null;this.action=null;this.clips=[];this.clip=null;this.clipIndex=0;this.clipInPlace=null;this.duration=0;this.lastPost=-1;this.onMessage=this.onMessage.bind(this);window.addEventListener("message",this.onMessage);this.el.addEventListener("model-loaded",this.onModel.bind(this));},remove:function(){window.removeEventListener("message",this.onMessage);if(this.mixer){try{this.mixer.stopAllAction();}catch(e){}}this.mixer=null;this.action=null;},onModel:function(){if(this.mixer){try{this.mixer.stopAllAction();}catch(e){}}this.mixer=null;this.action=null;this.clips=[];this.clip=null;this.clipInPlace=null;this.duration=0;var root=this.el.getObject3D("mesh");var clips=(root&&root.animations)||[];if(!root||!clips.length){this.report(false);return;}this.clips=clips;this.mixer=new THREE.AnimationMixer(root);this.selectClip(this.data.clip,0);},selectClip:function(i,time){var root=this.el.getObject3D("mesh");if(!this.mixer||!root||!this.clips.length)return;var idx=i|0;if(!(idx>=0)||idx>=this.clips.length)idx=0;this.clipIndex=idx;this.clip=this.clips[idx];this.clipInPlace=__inPlaceClip(this.clip,root);this.duration=this.clip.duration||0;this.bind(time||0);var names=[];for(var n=0;n<this.clips.length;n++)names.push(String(this.clips[n].name||""));this.report(true,names);},bind:function(time){if(!this.mixer||!this.clip)return;var want=this.data.inPlace&&this.clipInPlace?this.clipInPlace:this.clip;if(this.action&&this.action.getClip()===want){this.action.time=time;}else{if(this.action)this.action.stop();this.action=this.mixer.clipAction(want);this.action.setLoop(THREE.LoopRepeat,Infinity);this.action.clampWhenFinished=false;this.action.time=time;this.action.play();}this.action.paused=!this.data.playing;this.mixer.update(0);},update:function(oldData){if(!this.mixer)return;if(oldData&&typeof oldData.clip==="number"&&oldData.clip!==this.data.clip){this.selectClip(this.data.clip,0);return;}if(!this.action)return;if(oldData&&oldData.inPlace!==this.data.inPlace){this.bind(this.action.time);return;}this.action.paused=!this.data.playing;},tick:function(t,dt){if(!this.mixer||!this.action)return;if(this.data.playing&&dt)this.mixer.update(dt/1000);if(this.data.playing&&t-this.lastPost>=33){this.lastPost=t;this.post({type:"fs:anim-time",time:this.action.time});}},post:function(msg){if(window.parent===window)return;try{window.parent.postMessage(msg,"*");}catch(e){}},report:function(has,names){this.post({type:"fs:anim",has:!!has,duration:this.duration,canInPlace:!!this.clipInPlace,name:this.clip?String(this.clip.name||""):"",clip:this.clipIndex||0,clips:names||[]});},onMessage:function(e){if(e.source!==window.parent)return;var msg=e.data;if(!msg)return;if(msg.type==="fs:anim-set"){if(typeof msg.clip==="number"&&isFinite(msg.clip))this.el.setAttribute("gltf-anim","clip",msg.clip|0);if(typeof msg.inPlace==="boolean")this.el.setAttribute("gltf-anim","inPlace",msg.inPlace);if(typeof msg.playing==="boolean")this.el.setAttribute("gltf-anim","playing",msg.playing);if(typeof msg.time==="number"&&isFinite(msg.time))this.seek(msg.time);}else if(msg.type==="fs:anim-seek"){if(typeof msg.time==="number"&&isFinite(msg.time))this.seek(msg.time);}},seek:function(time){if(!this.action||!this.duration)return;if(typeof time!=="number"||!isFinite(time))return;var t=time<0?0:(time>this.duration?this.duration:time);this.action.time=t;this.mixer.update(0);this.post({type:"fs:anim-time",time:t});}});');
+    L.push('})();');
+    L.push('<\/script>');
+  }
+
   function pushFitBounds(L) {
     L.push('<script>');
     L.push('(function(){');
@@ -2029,10 +2542,143 @@
     L.push('  function mergeByPosition(geom){var pos=geom.attributes.position;if(!pos)return geom;var oldIndex=geom.index,precision=1e4,lookup=Object.create(null),newPositions=[],remap=new Uint32Array(pos.count),nextIndex=0;for(var i=0;i<pos.count;i++){var x=pos.getX(i),y=pos.getY(i),z=pos.getZ(i);var key=Math.round(x*precision)+"_"+Math.round(y*precision)+"_"+Math.round(z*precision);var idx=lookup[key];if(idx===undefined){idx=nextIndex++;lookup[key]=idx;newPositions.push(x,y,z);}remap[i]=idx;}var indexCount=oldIndex?oldIndex.count:pos.count;var Arr=nextIndex<65535?Uint16Array:Uint32Array;var newIndex=new Arr(indexCount);if(oldIndex){for(var j=0;j<indexCount;j++)newIndex[j]=remap[oldIndex.getX(j)];}else{for(var k=0;k<indexCount;k++)newIndex[k]=remap[k];}var merged=new THREE.BufferGeometry();merged.setAttribute("position",new THREE.BufferAttribute(new Float32Array(newPositions),3));merged.setIndex(new THREE.BufferAttribute(newIndex,1));return merged;}');
     L.push('  function sphericalUVs(g,c){var pos=g.attributes.position;var uvs=new Float32Array(pos.count*2);var v=new THREE.Vector3(),TWO_PI=Math.PI*2;for(var i=0;i<pos.count;i++){v.fromBufferAttribute(pos,i).sub(c);var len=v.length();if(len>0)v.multiplyScalar(1/len);uvs[i*2]=Math.atan2(v.z,v.x)/TWO_PI+0.5;uvs[i*2+1]=Math.asin(Math.max(-1,Math.min(1,v.y)))/Math.PI+0.5;}g.setAttribute("uv",new THREE.BufferAttribute(uvs,2));}');
     L.push('  function flipWinding(g){var idx=g.index;if(!idx){var pos=g.attributes.position;if(!pos)return;var n=pos.count,Arr=n<65535?Uint16Array:Uint32Array,arr=new Arr(n);for(var i=0;i<n;i++)arr[i]=i;for(var t0=0;t0+2<n;t0+=3){var tmp=arr[t0+1];arr[t0+1]=arr[t0+2];arr[t0+2]=tmp;}g.setIndex(new THREE.BufferAttribute(arr,1));return;}for(var t=0;t+2<idx.count;t+=3){var b=idx.getX(t+1);idx.setX(t+1,idx.getX(t+2));idx.setX(t+2,b);}idx.needsUpdate=true;}');
-    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var root=this.el.getObject3D("mesh");if(!root)return;var regen=this.data.regen,target=this.data.size;root.updateMatrixWorld(true);var rootInv=new THREE.Matrix4().copy(root.matrixWorld).invert();var pre=new THREE.Matrix4().multiplyMatrices(root.matrix,rootInv);var entries=[],skinned=false;root.traverse(function(node){if(!node.isMesh||!node.geometry)return;if(node.isSkinnedMesh||node.isInstancedMesh){skinned=true;return;}entries.push({node:node,m:new THREE.Matrix4().multiplyMatrices(pre,node.matrixWorld)});});if(skinned){var wbox=new THREE.Box3().setFromObject(root);if(wbox.isEmpty())return;var wsize=new THREE.Vector3(),wcenter=new THREE.Vector3();wbox.getSize(wsize);wbox.getCenter(wcenter);var ws=target/(Math.max(wsize.x,wsize.y,wsize.z)||1);root.position.sub(wcenter.multiplyScalar(ws));root.scale.setScalar(ws);return;}if(!entries.length)return;var box=new THREE.Box3();for(var i=0;i<entries.length;i++){var g0=entries[i].node.geometry;if(!g0.boundingBox)g0.computeBoundingBox();if(g0.boundingBox)box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));}if(box.isEmpty())return;var ext=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(ext);box.getCenter(center);var s=target/(Math.max(ext.x,ext.y,ext.z)||1);var N=new THREE.Matrix4().makeScale(s,s,s).multiply(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));for(var e=0;e<entries.length;e++){var node=entries[e].node;var bake=new THREE.Matrix4().multiplyMatrices(N,entries[e].m);var g=node.geometry.clone();g.applyMatrix4(bake);if(bake.determinant()<0)flipWinding(g);if(regen){g=mergeByPosition(g);g.computeVertexNormals();g.computeBoundingBox();var c=new THREE.Vector3();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var sv=0;sv<pos.count;sv+=step){var dot=(pos.getX(sv)-c.x)*nrm.getX(sv)+(pos.getY(sv)-c.y)*nrm.getY(sv)+(pos.getZ(sv)-c.z)*nrm.getZ(sv);if(dot<0)inward++;sampled++;}if(sampled>0&&inward*2>sampled){flipWinding(g);g.computeVertexNormals();}sphericalUVs(g,c);}else{if(!g.attributes.normal&&g.attributes.position)g.computeVertexNormals();if(!g.attributes.uv&&g.attributes.position){g.computeBoundingBox();var c0=new THREE.Vector3();g.boundingBox.getCenter(c0);sphericalUVs(g,c0);}}node.geometry=g;}root.traverse(function(node){node.position.set(0,0,0);node.quaternion.set(0,0,0,1);node.scale.set(1,1,1);});root.updateMatrixWorld(true);}});');
+    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var root=this.el.getObject3D("mesh");if(!root)return;var regen=this.data.regen,target=this.data.size;root.updateMatrixWorld(true);var animated=!!(root.animations&&root.animations.length);var rootInv=new THREE.Matrix4().copy(root.matrixWorld).invert();var pre=new THREE.Matrix4().multiplyMatrices(root.matrix,rootInv);var entries=[],skinned=false;root.traverse(function(node){if(!node.isMesh||!node.geometry)return;if(node.isSkinnedMesh||node.isInstancedMesh){skinned=true;return;}entries.push({node:node,m:new THREE.Matrix4().multiplyMatrices(pre,node.matrixWorld)});});if(skinned||animated){var wbox=new THREE.Box3().setFromObject(root);if(wbox.isEmpty())return;var wsize=new THREE.Vector3(),wcenter=new THREE.Vector3();wbox.getSize(wsize);wbox.getCenter(wcenter);var ws=target/(Math.max(wsize.x,wsize.y,wsize.z)||1);root.position.sub(wcenter.multiplyScalar(ws));root.scale.setScalar(ws);return;}if(!entries.length)return;var box=new THREE.Box3();for(var i=0;i<entries.length;i++){var g0=entries[i].node.geometry;if(!g0.boundingBox)g0.computeBoundingBox();if(g0.boundingBox)box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));}if(box.isEmpty())return;var ext=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(ext);box.getCenter(center);var s=target/(Math.max(ext.x,ext.y,ext.z)||1);var N=new THREE.Matrix4().makeScale(s,s,s).multiply(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));for(var e=0;e<entries.length;e++){var node=entries[e].node;var bake=new THREE.Matrix4().multiplyMatrices(N,entries[e].m);var g=node.geometry.clone();g.applyMatrix4(bake);if(bake.determinant()<0)flipWinding(g);if(regen){g=mergeByPosition(g);g.computeVertexNormals();g.computeBoundingBox();var c=new THREE.Vector3();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var sv=0;sv<pos.count;sv+=step){var dot=(pos.getX(sv)-c.x)*nrm.getX(sv)+(pos.getY(sv)-c.y)*nrm.getY(sv)+(pos.getZ(sv)-c.z)*nrm.getZ(sv);if(dot<0)inward++;sampled++;}if(sampled>0&&inward*2>sampled){flipWinding(g);g.computeVertexNormals();}sphericalUVs(g,c);}else{if(!g.attributes.normal&&g.attributes.position)g.computeVertexNormals();if(!g.attributes.uv&&g.attributes.position){g.computeBoundingBox();var c0=new THREE.Vector3();g.boundingBox.getCenter(c0);sphericalUVs(g,c0);}}node.geometry=g;}root.traverse(function(node){node.position.set(0,0,0);node.quaternion.set(0,0,0,1);node.scale.set(1,1,1);});root.updateMatrixWorld(true);}});');
     L.push('})();');
     L.push('<\/script>');
   }
+  // vr-nav: the VR popup's whole locomotion layer — entry framing, teleport
+  // aiming, the bounded floor, and the unattended return. VR-DOC ONLY (the
+  // sandboxed stage never enters a session), so nothing here can touch the
+  // pedestal's long-run loop.
+  //
+  // Everything is built from three primitives and joint maths, with no new
+  // dependency and no fetched asset: A-Frame ships no teleport component,
+  // aframe-extras is not vendored, and this page must work with no network.
+  //
+  // Input, in one path: each frame the component reads the SESSION's input
+  // sources directly rather than leaning on controller components — the
+  // controller entities A-Frame would need (laser-controls, oculus-touch)
+  // load their models from cdn.aframe.io, and `targetRaySpace` gives the
+  // system's own aim ray for a hand and a controller alike. Two triggers
+  // drive the same aim → commit path:
+  //   • select — the runtime's own gesture (controller trigger, or the
+  //     system pinch on a tracked hand). Press-and-hold aims, release goes.
+  //     This is the reliable path; it needs no gesture recognizer of ours.
+  //   • fist — the Quest-style hand button the exhibit was asked for: a
+  //     closed fist held thumb-up aims, folding the thumb down onto the
+  //     index finger is the press. Meta's own microgesture recognizer is
+  //     NOT exposed to WebXR (it is an OpenXR extension), so this is
+  //     classified here from the 25 joint poses `fillPoses` hands us.
+  //     Deliberately loose thresholds, all scaled by the wearer's own hand
+  //     size, plus a 4-frame arm and press/release hysteresis: the thumb is
+  //     self-occluded by the fist at exactly the moment it is pressed, so
+  //     tracking confidence is at its worst where the decision is made.
+  //     A tight fist can also read as a pinch to the runtime, so a hand the
+  //     fist detector owns ignores `select` (see onSelStart).
+  //
+  // The bound is a disc, not a nav mesh: the scene has no floor geometry to
+  // walk on (an artwork on a background colour is all there is), so a mesh
+  // would have to be invented before it could be raycast. The teleport
+  // target is clamped into the NAV_INNER…NAV_RADIUS annulus and the marker
+  // is drawn where the visitor will ACTUALLY land — a refused aim reads as
+  // a broken button, a clamped one reads as a wall. Physical walking is
+  // never counter-moved: pulling the rig back under someone's feet is how
+  // you make them sick.
+  function pushVrNav(L) {
+    L.push('<script>');
+    L.push('(function(){');
+    L.push('  if(!window.AFRAME||AFRAME.components["vr-nav"])return;');
+    // Joint indices into the WebXR hand enumeration, which is the order
+    // XRHand iterates (and the order A-Frame's own hand-tracking-controls
+    // indexes): wrist, then thumb → pinky, 5 joints each.
+    L.push('  var J_WRIST=0,J_THUMB=4,J_INDEX=6,J_PALM=10,TIPS=[9,14,19,24],NJ=25;');
+    L.push('  var FADE_IN=90,FADE_OUT=170,IDLE_MS=90000,STILL=0.05,ARM_FRAMES=4;');
+    L.push('  AFRAME.registerComponent("vr-nav",{');
+    L.push('    schema:{radius:{default:30},inner:{default:1.2},home:{default:2.5},target:{type:"vec3"}},');
+    L.push('    init:function(){var sceneEl=this.el;this.rig=null;this.session=null;this.poses=new Float32Array(16*NJ);this.hands={};this.aimSrc=null;this.aimMode="";this.valid=false;this.needRecenter=false;this.pending=null;this.fadeDir=0;this.idle=0;this.floorOp=0;' +
+      'this.orig=new THREE.Vector3();this.dir=new THREE.Vector3();this.hit=new THREE.Vector3();this.head=new THREE.Vector3();this.lastHead=new THREE.Vector3(0,-999,0);this.fwd=new THREE.Vector3(0,0,-1);this.q=new THREE.Quaternion();' +
+      // The floor guide only exists while aiming: a permanent grid under a
+      // pedestal piece is scenery nobody asked for.
+      'var floor=new THREE.PolarGridHelper(this.data.radius,8,6,64,0x8fa2b8,0x4a5a6b);floor.position.y=0.01;floor.material.transparent=true;floor.material.opacity=0;floor.visible=false;sceneEl.object3D.add(floor);this.floor=floor;' +
+      // depthTest:false on both overlays — a marker hidden behind the
+      // artwork is a marker the visitor cannot trust.
+      'var mk=new THREE.Mesh(new THREE.RingGeometry(0.22,0.34,36),new THREE.MeshBasicMaterial({color:0x4ea1ff,transparent:true,opacity:0.9,side:THREE.DoubleSide,depthTest:false}));mk.rotation.x=-Math.PI/2;mk.position.y=0.02;mk.renderOrder=998;mk.visible=false;sceneEl.object3D.add(mk);this.marker=mk;' +
+      // Comfort blink: the jump happens at full black, so it is never seen.
+      'var sh=new THREE.Mesh(new THREE.SphereGeometry(0.25,12,8),new THREE.MeshBasicMaterial({color:0x000000,side:THREE.BackSide,transparent:true,opacity:0,depthTest:false,depthWrite:false}));sh.renderOrder=999;sh.visible=false;this.shell=sh;' +
+      'this.onEnter=this.onEnter.bind(this);this.onExit=this.onExit.bind(this);this.onSelStart=this.onSelStart.bind(this);this.onSelEnd=this.onSelEnd.bind(this);sceneEl.addEventListener("enter-vr",this.onEnter);sceneEl.addEventListener("exit-vr",this.onExit);},');
+    // The rig is resolved lazily: a component on <a-scene> initializes
+    // before the scene's own children are parsed.
+    L.push('    getRig:function(){if(!this.rig)this.rig=document.getElementById("rig");return this.rig;},');
+    L.push('    onEnter:function(){var sceneEl=this.el;if(sceneEl.camera&&this.shell.parent!==sceneEl.camera)sceneEl.camera.add(this.shell);var s=sceneEl.xrSession||null;this.session=s;if(s){s.addEventListener("selectstart",this.onSelStart);s.addEventListener("selectend",this.onSelEnd);}this.hands={};this.needRecenter=true;this.idle=0;this.lastHead.set(0,-999,0);},');
+    // Leaving VR restores the flat framing exactly: the rig goes home to the
+    // origin, so orbit-controls is looking at what it was before.
+    L.push('    onExit:function(){var s=this.session;if(s){try{s.removeEventListener("selectstart",this.onSelStart);s.removeEventListener("selectend",this.onSelEnd);}catch(e){}}this.session=null;this.cancel();this.pending=null;this.fadeDir=0;this.floorOp=0;this.floor.visible=false;this.floor.material.opacity=0;this.shell.material.opacity=0;this.shell.visible=false;var r=this.getRig();if(r){r.object3D.position.set(0,0,0);r.object3D.updateMatrixWorld(true);}},');
+    // A closed fist can cross the runtime's pinch threshold; the gesture
+    // owns that hand, so its select events are not a second trigger.
+    L.push('    onSelStart:function(evt){var src=evt&&evt.inputSource;if(!src||this.aimSrc)return;if(src.hand){var st=this.hands[src.handedness];if(st&&st.fist)return;}this.aimSrc=src;this.aimMode="select";this.idle=0;},');
+    L.push('    onSelEnd:function(evt){if(!evt||this.aimSrc!==evt.inputSource||this.aimMode!=="select")return;this.commit();this.cancel();},');
+    L.push('    tick:function(t,dt){var sceneEl=this.el;if(!sceneEl.is("vr-mode")||!this.getRig())return;var d=Math.min(dt||16,100);var frame=sceneEl.frame,r=sceneEl.renderer,ref=r&&r.xr&&r.xr.getReferenceSpace&&r.xr.getReferenceSpace();var head=!!(frame&&ref)&&this.readHead(frame,ref);this.stepFade(d,head);if(!head)return;if(this.needRecenter){this.needRecenter=false;this.recenter();}this.scan(frame,ref);this.aim(frame,ref,d);this.watchIdle(d);},');
+    // The head pose is read from the FRAME, never from the camera object3D:
+    // tick runs before render, so on the first tick of a session the camera
+    // still carries its flat orbit-controls transform (0 1.4 7) and an
+    // entry recenter measured off it would be metres wrong.
+    L.push('    readHead:function(frame,ref){var vp=null;try{vp=frame.getViewerPose(ref);}catch(e){vp=null;}if(!vp)return false;var M=this.rig.object3D.matrixWorld,t=vp.transform;this.head.set(t.position.x,t.position.y,t.position.z).applyMatrix4(M);this.q.set(t.orientation.x,t.orientation.y,t.orientation.z,t.orientation.w);this.fwd.set(0,0,-1).applyQuaternion(this.q).transformDirection(M);this.fwd.y=0;if(this.fwd.lengthSq()<1e-6)this.fwd.set(0,0,-1);else this.fwd.normalize();return true;},');
+    L.push('    homeDelta:function(o){o.x=(this.data.target.x-this.fwd.x*this.data.home)-this.head.x;o.z=(this.data.target.z-this.fwd.z*this.data.home)-this.head.z;return o;},');
+    L.push('    recenter:function(){var o=this.rig.object3D,d=this.homeDelta({x:0,z:0});o.position.x+=d.x;o.position.z+=d.z;o.updateMatrixWorld(true);this.lastHead.set(0,-999,0);},');
+    L.push('    cancel:function(){this.aimSrc=null;this.aimMode="";this.valid=false;this.marker.visible=false;},');
+    L.push('    commit:function(){if(!this.valid)return;this.pending={x:this.hit.x,z:this.hit.z};this.fadeDir=1;this.idle=0;},');
+    // Hand gestures. fillPoses fails (and the hand goes untracked) far more
+    // often than it succeeds cleanly, so every failure path resets the
+    // state machine rather than leaving a half-armed hand behind.
+    L.push('    scan:function(frame,ref){var s=this.session;if(!s||!s.inputSources)return;var srcs=s.inputSources;for(var i=0;i<srcs.length;i++){var src=srcs[i];if(!src.hand)continue;var st=this.hands[src.handedness];if(!st)st=this.hands[src.handedness]={hold:0,fist:false,pressed:false};var ok=false;try{ok=frame.fillPoses(src.hand.values(),ref,this.poses);}catch(e){ok=false;}' +
+      'if(!ok){st.hold=0;st.fist=false;st.pressed=false;if(this.aimSrc===src&&this.aimMode==="fist")this.cancel();continue;}' +
+      'var g=this.classify();st.fist=g.fist;' +
+      'if(!g.fist){st.hold=0;st.pressed=false;if(this.aimSrc===src&&this.aimMode==="fist")this.cancel();continue;}' +
+      'if(g.thumbUp&&!st.pressed)st.hold++;' +
+      'if(st.hold>=ARM_FRAMES&&!this.aimSrc){this.aimSrc=src;this.aimMode="fist";this.idle=0;}' +
+      'if(this.aimSrc===src&&this.aimMode==="fist"){if(!st.pressed&&g.press){st.pressed=true;this.commit();}else if(st.pressed&&g.release){st.pressed=false;}}}},');
+    // Every threshold is a fraction of THIS wearer's hand (wrist → middle
+    // metacarpal, ~9 cm on an adult), so the same numbers fit a child's
+    // hand. "Thumb up" is measured against world up — that is what a person
+    // does when they hold a fist thumb-up, and it needs no assumption about
+    // the joint spaces' own axis convention.
+    L.push('    classify:function(){var p=this.poses;function px(i){return p[i*16+12];}function py(i){return p[i*16+13];}function pz(i){return p[i*16+14];}function dd(a,b){var x=px(a)-px(b),y=py(a)-py(b),z=pz(a)-pz(b);return Math.sqrt(x*x+y*y+z*z);}' +
+      'var sc=dd(J_WRIST,J_PALM)||0.09,c=0;for(var i=0;i<TIPS.length;i++)if(dd(TIPS[i],J_PALM)<1.05*sc)c++;var td=dd(J_THUMB,J_INDEX);' +
+      'return{fist:c>=3,thumbUp:(py(J_THUMB)-py(J_PALM))>0.30*sc,press:td<0.55*sc,release:td>0.85*sc};},');
+    // The !pose branch fades the floor OUT like the no-source branch: a
+    // controller that loses tracking mid-aim (occlusion, set down while
+    // select is held) takes this return every tick, and without the fade the
+    // polar grid froze at its current opacity over the artwork until a
+    // select-end or fist-cancel finally cleared aimSrc.
+    L.push('    aim:function(frame,ref,d){var mk=this.marker,src=this.aimSrc;if(!src||!src.targetRaySpace){this.valid=false;mk.visible=false;this.fadeFloor(d,false);return;}var pose=null;try{pose=frame.getPose(src.targetRaySpace,ref);}catch(e){pose=null;}if(!pose){this.valid=false;mk.visible=false;this.fadeFloor(d,false);return;}' +
+      'var t=pose.transform,M=this.rig.object3D.matrixWorld;this.orig.set(t.position.x,t.position.y,t.position.z).applyMatrix4(M);this.q.set(t.orientation.x,t.orientation.y,t.orientation.z,t.orientation.w);this.dir.set(0,0,-1).applyQuaternion(this.q).transformDirection(M);' +
+      // A distant hit is NOT rejected, only clamped by the annulus below: an
+      // almost-horizontal aim lands 60+ m out, and refusing it would put a
+      // dead zone right where "aim at the far edge" lives — the visitor sees
+      // the marker vanish and reads the button as broken. The 400 m cap is
+      // only there to keep a near-parallel ray out of float territory.
+      'this.valid=false;if(this.dir.y<-0.02){var k=-this.orig.y/this.dir.y;if(k>0){this.hit.copy(this.dir).multiplyScalar(Math.min(k,400)).add(this.orig);this.valid=true;}}' +
+      'this.idle=0;this.fadeFloor(d,true);if(!this.valid){mk.visible=false;return;}' +
+      'var dx=this.hit.x-this.data.target.x,dz=this.hit.z-this.data.target.z,dist=Math.sqrt(dx*dx+dz*dz),cl=false;' +
+      'if(dist>this.data.radius){var s=this.data.radius/dist;dx*=s;dz*=s;cl=true;}else if(dist<this.data.inner){if(dist<1e-4){dx=0;dz=this.data.inner;}else{var s2=this.data.inner/dist;dx*=s2;dz*=s2;}cl=true;}' +
+      'this.hit.set(this.data.target.x+dx,0,this.data.target.z+dz);mk.position.set(this.hit.x,0.02,this.hit.z);mk.material.color.setHex(cl?0xffb020:0x4ea1ff);mk.visible=true;},');
+    L.push('    fadeFloor:function(d,on){var f=this.floor,step=d/220,o=on?Math.min(0.4,this.floorOp+step):Math.max(0,this.floorOp-step);if(o===this.floorOp)return;this.floorOp=o;f.material.opacity=o;f.visible=o>0.01;},');
+    L.push('    stepFade:function(d,head){var m=this.shell.material;if(this.fadeDir===1){this.shell.visible=true;m.opacity=Math.min(1,m.opacity+d/FADE_IN);if(m.opacity>=1&&head){this.applyPending();this.fadeDir=-1;}}else if(this.fadeDir===-1){m.opacity=Math.max(0,m.opacity-d/FADE_OUT);if(m.opacity<=0){this.fadeDir=0;this.shell.visible=false;}}},');
+    // The marker names where the HEAD lands, not where the rig origin goes —
+    // a visitor who has physically walked two steps would otherwise arrive
+    // two steps off the ring they aimed at.
+    L.push('    applyPending:function(){var p=this.pending;this.pending=null;if(!p)return;if(p.home){this.recenter();return;}var o=this.rig.object3D;o.position.x+=p.x-this.head.x;o.position.z+=p.z-this.head.z;o.updateMatrixWorld(true);this.lastHead.set(0,-999,0);},');
+    // Unattended return: a visitor who teleports across the room and hands
+    // the headset back leaves the next one facing empty space. Idleness is
+    // measured on the HEAD, so it can only fire when the headset is off a
+    // face (a worn one is never still for 90 s), and a return shorter than
+    // 35 cm is skipped so an empty room does not blink every 90 seconds.
+    L.push('    watchIdle:function(d){if(this.head.distanceTo(this.lastHead)>STILL){this.lastHead.copy(this.head);this.idle=0;return;}this.idle+=d;if(this.idle<IDLE_MS)return;this.idle=0;var dl=this.homeDelta({x:0,z:0});if(Math.sqrt(dl.x*dl.x+dl.z*dl.z)<0.35)return;this.pending={home:true};this.fadeDir=1;}');
+    L.push('  });');
+    L.push('})();');
+    L.push('<\/script>');
+  }
+
   // ── Build the sandboxed stage iframe ────────────────────────────────
   // The A-Frame scene, shaderloader, and ALL shader/model execution live here.
   // Absolute URLs (off this page's origin) let the opaque-origin iframe load the
@@ -2138,6 +2784,7 @@
 
     // fit-bounds: shared with the VR popup document — see pushFitBounds above.
     pushFitBounds(L);
+    pushGltfAnim(L);
 
     // The <a-scene> is injected AFTER a WebGPU pre-flight (same rationale as
     // the editor preview, see tslToPreviewHTML.ts): three r184 picks its
@@ -2181,9 +2828,9 @@
     L.push('  window.addEventListener("shader-applied",function(){if(attached)reportUniforms();});');
     L.push('  function applyShaderSource(src){try{if(shaderUrl)URL.revokeObjectURL(shaderUrl);}catch(e){}shaderUrl=URL.createObjectURL(new Blob([src],{type:"text/javascript"}));attached=true;entity.setAttribute("shader","src: "+shaderUrl);var comp=entity.components&&entity.components.shader;if(comp)comp._propertyUniforms=null;reportUniforms();}');
     L.push('  function detachShader(){attached=false;entity.removeAttribute("shader");}');
-    L.push('  function clearGeo(){var comp=entity.components&&entity.components.shader;if(comp&&attached)comp._propertyUniforms=null;entity.removeAttribute("geometry");entity.removeAttribute("obj-model");entity.removeAttribute("gltf-model");entity.removeAttribute("fit-bounds");entity.removeAttribute("material");}');
+    L.push('  function clearGeo(){var comp=entity.components&&entity.components.shader;if(comp&&attached)comp._propertyUniforms=null;entity.removeAttribute("geometry");entity.removeAttribute("obj-model");entity.removeAttribute("gltf-model");entity.removeAttribute("fit-bounds");entity.removeAttribute("gltf-anim");entity.removeAttribute("material");toParent({type:"fs:anim",has:false,duration:0,canInPlace:false,name:"",clip:0,clips:[]});}');
     L.push('  function setPrimitive(attr,rot){clearGeo();entity.setAttribute("material","color: #808080");entity.setAttribute("geometry",attr);entity.setAttribute("rotation",rot||"45 45 0");if(attached){setTimeout(function(){var c=entity.components&&entity.components.shader;if(c&&typeof c.applyShader==="function")c.applyShader();reportUniforms();},0);}}');
-    L.push('  function setModel(kind,bytes,regen,rot){clearGeo();try{if(modelUrl)URL.revokeObjectURL(modelUrl);}catch(e){}var mime=kind==="obj"?"text/plain":"model/gltf-binary";modelUrl=URL.createObjectURL(new Blob([bytes],{type:mime}));entity.setAttribute("fit-bounds","size: 1.6; regen: "+(regen?"true":"false"));if(kind==="obj")entity.setAttribute("obj-model","obj: url("+modelUrl+")");else entity.setAttribute("gltf-model","url("+modelUrl+")");entity.setAttribute("rotation",rot||"0 0 0");if(attached)reportUniforms();}');
+    L.push('  function setModel(kind,bytes,regen,rot){clearGeo();try{if(modelUrl)URL.revokeObjectURL(modelUrl);}catch(e){}var mime=kind==="obj"?"text/plain":"model/gltf-binary";modelUrl=URL.createObjectURL(new Blob([bytes],{type:mime}));entity.setAttribute("fit-bounds","size: 1.6; regen: "+(regen?"true":"false"));entity.setAttribute("gltf-anim","");if(kind==="obj")entity.setAttribute("obj-model","obj: url("+modelUrl+")");else entity.setAttribute("gltf-model","url("+modelUrl+")");entity.setAttribute("rotation",rot||"0 0 0");if(attached)reportUniforms();}');
     // Colour uniforms mutate in place via .set() — assigning a hex string to
     // .value would replace the THREE.Color object with a string.
     L.push('  function setUniform(name,value){var comp=entity&&entity.components&&entity.components.shader;if(!comp||!comp._propertyUniforms||!comp._propertyUniforms[name])return;var u=comp._propertyUniforms[name];if(u.value&&u.value.isColor){try{u.value.set(value);}catch(e){}}else{u.value=value;}}');

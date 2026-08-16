@@ -257,6 +257,82 @@ describe('fit-bounds normalization', () => {
     expect(longestAxis(attributeBounds(root))).toBeCloseTo(20, 5);
   });
 
+  it('falls back to Object3D scaling for an ANIMATED model instead of baking it', () => {
+    // The bake moves each node's world matrix into its vertex data and then
+    // flattens every local matrix to identity — which is precisely the state an
+    // AnimationMixer overwrites, so a node-TRS clip would apply its keyframes a
+    // SECOND time on top of geometry that already carries them. (Morph clips
+    // break by a different route: applyMatrix4 transforms `position` and
+    // `normal` but NOT `morphAttributes`, so the deltas would stay in authored
+    // units while the base mesh shrank into the preview box.)
+    const root = new THREE.Object3D();
+    root.add(makeBoxMesh(10));
+    (root as THREE.Object3D & { animations: THREE.AnimationClip[] }).animations = [
+      new THREE.AnimationClip('Walk', 1, [
+        new THREE.VectorKeyframeTrack('.position', [0, 1], [0, 0, 0, 5, 0, 0]),
+      ]),
+    ];
+
+    runFit(root);
+
+    // Normalized on the Object3D, exactly like the skinned path above…
+    expect(root.scale.x).toBeCloseTo(1.6 / 20, 5);
+    // …and the attributes are deliberately left in the model's authored units,
+    // which is the known cost: position-driven shaders are mis-scaled on an
+    // animated model. Nothing renders inconsistently.
+    expect(longestAxis(attributeBounds(root))).toBeCloseTo(20, 5);
+    // Local transforms are NOT flattened — they are the animation's targets.
+    expect(root.children[0].position.length()).toBeLessThan(1e-9);
+  });
+
+  it('scales an ANIMATED model by the WORLD box, tilt and spin included', () => {
+    // Pins the known flaw rather than the fix, because the fix was worse. The
+    // fallback measures with Box3.setFromObject, so an ancestor rotation
+    // inflates the box and the model comes out smaller — up to ~1.7x, and it
+    // depends on the spin phase the model happened to load at.
+    //
+    // Measuring the meshes' own geometry boxes in the entity frame removes
+    // that, and was REVERTED: a local AABB is never larger than the world one,
+    // so every animated model grew, and the shortfall is NOT bounded by the
+    // rotation — setFromObject also expands by `Points`/`Line` primitives and
+    // by an InstancedMesh's per-instance spread, which a mesh-geometry union
+    // cannot see. A model carrying any of those measured far too small and
+    // scaled up hard. Slightly small beats blown up.
+    const fitAt = (angle: number) => {
+      const spinParent = new THREE.Object3D();
+      spinParent.rotation.set(0, angle, 0);
+      const root = new THREE.Object3D();
+      spinParent.add(root);
+      root.add(makeBoxMesh(10));
+      (root as THREE.Object3D & { animations: THREE.AnimationClip[] }).animations = [
+        new THREE.AnimationClip('Walk', 1, [
+          new THREE.VectorKeyframeTrack('.position', [0, 1], [0, 0, 0, 5, 0, 0]),
+        ]),
+      ];
+      spinParent.updateMatrixWorld(true);
+      runFit(root);
+      return root.scale.x;
+    };
+    // Unrotated: exactly the primitives' framing.
+    expect(fitAt(0)).toBeCloseTo(1.6 / 20, 6);
+    // Rotated 45°, the box's diagonal is what gets measured, so the model is
+    // framed smaller by √2. Documented, not desired — and cheaper than the
+    // alternative.
+    expect(fitAt(Math.PI / 4)).toBeCloseTo(1.6 / (20 * Math.SQRT2), 5);
+  });
+
+  it('still bakes a model whose animations array is present but empty', () => {
+    // GLTFLoader always sets `animations`; only a non-empty one means the
+    // mixer will be driving these nodes.
+    const root = new THREE.Object3D();
+    root.add(makeBoxMesh(10));
+    (root as THREE.Object3D & { animations: THREE.AnimationClip[] }).animations = [];
+
+    runFit(root);
+
+    expect(longestAxis(attributeBounds(root))).toBeCloseTo(1.6, 5);
+  });
+
   it('leaves an empty subtree alone', () => {
     const root = new THREE.Object3D();
     expect(() => runFit(root)).not.toThrow();
@@ -269,6 +345,12 @@ describe('fit-bounds normalization', () => {
  * can drift silently — and a drifted podest would frame and scale dropped models
  * differently from the editor preview for the same shader. These run the podest
  * copy through the same maths.
+ *
+ * The `animated` branch is in BOTH now: podest carries its own `gltf-anim`
+ * twin (pushGltfAnim), so an animated model there is driven by a mixer and must
+ * not be baked either. It was deliberately absent while only the editor could
+ * animate — skipping the bake with no mixer would have cost podest the
+ * attribute normalization and bought nothing.
  */
 describe('podest fit-bounds twin', () => {
   function loadPodestComponent(): FitComponent {
@@ -322,6 +404,29 @@ describe('podest fit-bounds twin', () => {
     expect(longestAxis(b)).toBeCloseTo(1.6, 5);
     expect(b.min.toArray()).toEqual(a.min.toArray().map((v) => expect.closeTo(v, 5)));
     expect(b.max.toArray()).toEqual(a.max.toArray().map((v) => expect.closeTo(v, 5)));
+  });
+
+  it('refuses to bake an ANIMATED model, exactly like the editor copy', () => {
+    // podest has a mixer of its own now (pushGltfAnim), so the two surfaces
+    // must agree: baking would be double-applied by every animation frame.
+    const build = () => {
+      const r = new THREE.Object3D();
+      r.add(makeBoxMesh(10));
+      (r as THREE.Object3D & { animations: THREE.AnimationClip[] }).animations = [
+        new THREE.AnimationClip('Walk', 1, [
+          new THREE.VectorKeyframeTrack('.position', [0, 1], [0, 0, 0, 5, 0, 0]),
+        ]),
+      ];
+      return r;
+    };
+    const editorRoot = build();
+    const podestRoot = build();
+    runFit(editorRoot);
+    runPodestFit(podestRoot);
+
+    expect(podestRoot.scale.x).toBeCloseTo(editorRoot.scale.x, 6);
+    expect(podestRoot.scale.x).toBeCloseTo(1.6 / 20, 5);
+    expect(longestAxis(attributeBounds(podestRoot))).toBeCloseTo(20, 5);
   });
 
   it('is likewise immune to an ancestor rotation', () => {

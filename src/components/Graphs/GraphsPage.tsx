@@ -12,7 +12,7 @@
  * makes GraphModal's store writes safe. Never write the store from a path that
  * could run before it.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { getAllDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
 import { getBuiltinPresets } from '@/registry/builtinPresets';
@@ -35,9 +35,48 @@ import { GraphModal } from './GraphModal';
 import { DesignerModal } from './DesignerModal';
 import './GraphsPage.css';
 import { initialNodeValues } from '@/utils/newNodeValues';
+import { readPersisted } from '@/hooks/usePersistedState';
+import {
+  SCROLL_KEY,
+  parseScrollPos,
+  serializeScrollPos,
+  clampScrollPos,
+  rowSetKey,
+  shouldOpenSaveGate,
+  isForcedClamp,
+  type ScrollPos,
+} from './scrollMemory';
 
 /** NodePreviewCard requires a drag handler; dragging goes nowhere on this page. */
 const noopDragStart = () => {};
+
+/** Trailing debounce on the localStorage write — a scroll fires ~60 events/s. */
+const SCROLL_SAVE_MS = 250;
+/**
+ * How many frames the mount-time restore may spend chasing the table's final
+ * height. The rows render synchronously, but every Graph cell is ZERO-height
+ * until FitNodeHeading's ResizeObserver measures its replica and commits a
+ * SECOND render (NodePreviewCard.tsx), so `scrollHeight` on the first frame is
+ * far short of final and a single-shot restore silently clamps to 0.
+ * ~20 frames ≈ 330 ms at 60 Hz — long enough for 82 rows to settle, short
+ * enough that a genuinely short table stops chasing almost immediately (the
+ * loop exits the moment the target is reachable, so this is only the ceiling).
+ */
+const RESTORE_MAX_FRAMES = 20;
+/**
+ * Input that means "the user is driving now" — bound on `document`, not on the
+ * scrollport. Every control that can rewrite the row set (the search box, the
+ * category chips, the hidden-only toggle, the sort headers) lives OUTSIDE
+ * `.gp__tablewrap`, so a scrollport-scoped listener let a click on a chip
+ * change the table with the chase still armed and chasing.
+ */
+const RESTORE_ABORT_EVENTS = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+/** CAPTURE phase, so a handler that stops propagation cannot hide the gesture
+ *  from us. `once` still needs the explicit removal — a listener that never
+ *  fires is never removed by it, and StrictMode mounts this twice in dev.
+ *  (Options must match on removal, which is why the capture flag is repeated.) */
+const RESTORE_ABORT_ADD: AddEventListenerOptions = { capture: true, passive: true, once: true };
+const RESTORE_ABORT_REMOVE: EventListenerOptions = { capture: true };
 
 // ─── Row model ──────────────────────────────────────────────────────────────
 
@@ -348,6 +387,338 @@ export function GraphsPage() {
     return out;
   }, [rows, query, activeCats, hiddenOnly, sortKey, sortAsc, edits]);
 
+  // ── Scroll memory ─────────────────────────────────────────────────────────
+  // The page's single scrollport is `.gp__tablewrap` (GraphsPage.css), and the
+  // normal way to leave this page is a RELOAD: Save writes nodeRegistry.ts /
+  // citations.json / editorVisibility.json through /__nd, all of which are in
+  // this page's own module graph, so HMR reloads it. Landing back at row 1
+  // after every save is what made editing anything past the fold tedious.
+  //
+  // Placed AFTER the filter memo on purpose: the restore has to know which row
+  // set it was armed for (see `rowSetKey`), and that is derived from `visible`.
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  /** Latest offset, refreshed per scroll event and flushed on a trailing
+   *  debounce. A REF, not state: this must never re-render 82 rows. */
+  const scrollPosRef = useRef({ top: 0, left: 0 });
+  /**
+   * The chase is no longer driving the scrollport — it landed, it was aborted by
+   * a gesture, it ran out of frame budget, or the row set changed under it. This
+   * says NOTHING about whether the offset it reached is worth keeping; that is
+   * `canSaveRef`, and keeping the two apart is the whole point (see
+   * `shouldOpenSaveGate`). Most of the ways the chase ends leave the port on a
+   * clamp taken while the table was still growing.
+   */
+  const restoreDoneRef = useRef(false);
+  /**
+   * May `flush()` write? Shut until there is EVIDENCE that `scrollPosRef` holds
+   * a position worth storing, which is exactly what `shouldOpenSaveGate` decides
+   * — restated here because a reader who assumes the simpler rule will delete
+   * the carve-out that makes it work:
+   *
+   *  - nothing was stored at mount → nothing to lose, open immediately (this is
+   *    the branch that lets a first visit record anything at all);
+   *  - otherwise the chase must be over, and then either it never wrote a
+   *    position at all, or the port has since moved somewhere that is neither
+   *    the restore's own write NOR a browser-forced clamp.
+   *
+   * That last carve-out is `isForcedClamp`, and it is why the gate is not just
+   * "the port moved somewhere the restore did not put it": when the table gets
+   * SHORTER than the offset parked in it the browser clamps the port, with no
+   * input of any kind, and a bare mismatch reads that as the user scrolling and
+   * writes the clamp over the good offset. Until the gate opens the stored
+   * offset is left ALONE rather than being replaced by a clamp taken while the
+   * table was still growing (or shrinking under a landed restore).
+   */
+  const canSaveRef = useRef(false);
+  /**
+   * The fingerprint every `scroll` event is measured against. Written by the
+   * restore as the offset it last wrote, READ BACK from the element so it is the
+   * clamped value the port actually took — which is what makes the comparison
+   * exact whichever frame the event lands in, since `el.scrollTop` always
+   * reflects the most recent write and so does this. An event reporting exactly
+   * this was produced by us.
+   *
+   * "Anything else" is NOT automatically the user. The browser moves the port on
+   * its own when the content shrinks under the parked offset: MEASURED with no
+   * input at all, the late webfont swap re-measures every row and the port is
+   * clamped 10992 → 6143. `isForcedClamp` is what separates that from a real
+   * scroll — and when it fires, the save handler below RE-WRITES this ref to the
+   * clamped position. So after a shrink this holds where the port really IS, not
+   * what the restore wrote; without that follow, the user's own next scroll would
+   * be measured against an offset the port can no longer hold and would be
+   * suppressed as yet another clamp.
+   */
+  const restoreWroteRef = useRef<ScrollPos | null>(null);
+  /**
+   * The offset the restore is chasing, read ONCE per component instance.
+   * `undefined` = not read yet; `null` = nothing valid stored.
+   *
+   * A ref rather than a plain read inside the effect because StrictMode runs
+   * mount → cleanup → mount in dev: re-reading the key on the second mount
+   * would pick up whatever the first pass had time to write, and a restore that
+   * had only reached a CLAMP (the table is still growing — the whole reason the
+   * loop below retries) would be re-targeted at that truncated value. It
+   * currently happens to land correctly because the first frame is already tall
+   * enough, which is exactly the assumption this loop exists not to make.
+   */
+  const wantScrollRef = useRef<ScrollPos | null | undefined>(undefined);
+
+  const visibleCount = visible.length;
+  /** Which rows the table is showing right now — see `rowSetKey`. */
+  const rowKey = useMemo(
+    () =>
+      rowSetKey({
+        count: visibleCount,
+        query,
+        cats: [...activeCats],
+        hiddenOnly,
+        sortKey,
+        sortAsc,
+      }),
+    [visibleCount, query, activeCats, hiddenOnly, sortKey, sortAsc],
+  );
+  /**
+   * The live row key, readable from the restore's rAF frames and its deferred
+   * font pass — both run outside React and would otherwise only ever see the
+   * mount-time closure. Declared BEFORE the restore effect so that on mount it
+   * is already written when the restore reads its armed value (layout effects
+   * run in declaration order).
+   */
+  const rowKeyRef = useRef(rowKey);
+  useLayoutEffect(() => {
+    rowKeyRef.current = rowKey;
+  }, [rowKey]);
+
+  // RESTORE — mount only. Deliberately NOT re-run when `visible` changes:
+  // filters and sort rewrite the row set, and re-applying a stale offset would
+  // drop the user somewhere arbitrary. The live position keeps being SAVED
+  // after a filter (the browser clamps it for us); only the restore is
+  // one-shot. useLayoutEffect so the jump happens before the first paint.
+  useLayoutEffect(() => {
+    const el = tableWrapRef.current;
+    if (wantScrollRef.current === undefined) {
+      wantScrollRef.current = readPersisted(SCROLL_KEY, parseScrollPos);
+    }
+    const want = wantScrollRef.current;
+    if (!el || !want) {
+      // Nothing to chase, and nothing stored that a save could destroy — so the
+      // gate opens immediately, or a first visit could never record anything.
+      restoreDoneRef.current = true;
+      canSaveRef.current = true;
+      return;
+    }
+
+    /**
+     * The row set this restore was computed for. A stored offset only means
+     * anything against the table that PRODUCED it: if a filter lands mid-chase
+     * (82 rows → 8, the browser clamps the offset to ~0 and the user starts
+     * reading), re-applying it against the new extent is not a restore, it is a
+     * yank to the bottom of a list they never scrolled — which the save gate,
+     * open by then, would go on to persist over the good offset.
+     */
+    const armedRowKey = rowKeyRef.current;
+
+    let cancelled = false;
+    let raf = 0;
+    let frames = 0;
+    /**
+     * True once the deferred font pass is the one running — or once we know no
+     * such pass is coming. Until then, running out of frame budget must not
+     * give up: the table is still growing (the case this loop exists for, and
+     * there is MORE of it to settle now that the tiles are 1.5x taller), so the
+     * offset reached so far is a clamp rather than a position and the font pass
+     * still has a real chance of reaching the target.
+     */
+    let finalPass = false;
+
+    /**
+     * Stop driving the scrollport — the restore landed, the user took over, or
+     * the table it was aiming at is gone. Deliberately does NOT decide that the
+     * offset reached is worth SAVING: at four of its five call sites the port is
+     * on a clamp taken mid-growth, and persisting that is the ratchet toward
+     * row 1 this whole module exists to prevent. `canSaveRef` is opened by
+     * observed movement instead — see `shouldOpenSaveGate`.
+     */
+    function endChase() {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      restoreDoneRef.current = true;
+      detach();
+    }
+    const detach = () => {
+      for (const ev of RESTORE_ABORT_EVENTS) {
+        document.removeEventListener(ev, endChase, RESTORE_ABORT_REMOVE);
+      }
+    };
+    for (const ev of RESTORE_ABORT_EVENTS) {
+      document.addEventListener(ev, endChase, RESTORE_ABORT_ADD);
+    }
+
+    const step = () => {
+      if (cancelled) return;
+      // Checked BEFORE any write, so a restore for a table that no longer
+      // exists can never move the one that replaced it.
+      if (rowKeyRef.current !== armedRowKey) {
+        endChase();
+        return;
+      }
+      const target = clampScrollPos(
+        want,
+        el.scrollHeight - el.clientHeight,
+        el.scrollWidth - el.clientWidth,
+      );
+      el.scrollTop = target.top;
+      el.scrollLeft = target.left;
+      // Read BACK, not `target`: the browser clamps the write, and this pair is
+      // what later tells our own scroll events apart from the user's. Both refs
+      // hold the one object because both are only ever REPLACED, never mutated
+      // — a mutation would move the restore's own fingerprint under it.
+      const wrote = { top: el.scrollTop, left: el.scrollLeft };
+      restoreWroteRef.current = wrote;
+      scrollPosRef.current = wrote;
+      // Landed on the real target rather than merely on a clamp → done. The
+      // 1px slack absorbs fractional layout. This does not open the save gate:
+      // the port is now at exactly the stored value, so there is nothing to
+      // write back. What happens NEXT is the part that had to be got right —
+      // the table keeps settling after this, and two browser-initiated moves
+      // used to be read as the user scrolling: scroll anchoring nudging the
+      // offset down the page as the tiles are measured (turned off in CSS,
+      // `overflow-anchor: none` on `.gp__tablewrap`) and the clamp that follows
+      // the table getting SHORTER (`isForcedClamp`, in the save handler below).
+      if (target.top >= want.top - 1) {
+        endChase();
+        return;
+      }
+      if (++frames >= RESTORE_MAX_FRAMES) {
+        // Out of budget, still clamped short. Only the LAST pass gives up; the
+        // earlier one leaves the chase paused for the font pass to resume.
+        if (finalPass) endChase();
+        return;
+      }
+      raf = requestAnimationFrame(step);
+    };
+
+    // The @fontsource woff2 subsets swap in after first layout and change every
+    // row's text metrics — the same reason useFitText re-fits on this promise —
+    // so take one more pass once they land.
+    const fontsReady = document.fonts?.ready;
+    // No Font Loading API → this first chase is also the last, so it owns the
+    // gate. Without that the gate could never open in such a browser and the
+    // scroll position would silently stop being remembered at all.
+    finalPass = !fontsReady;
+    step();
+
+    if (fontsReady) {
+      fontsReady
+        .then(() => {
+          if (cancelled) return;
+          if (rowKeyRef.current !== armedRowKey) {
+            endChase();
+            return;
+          }
+          // cancelAnimationFrame first so this can never race a still-running
+          // chain into two concurrent loops.
+          cancelAnimationFrame(raf);
+          frames = 0;
+          finalPass = true;
+          step();
+        })
+        .catch(() => {});
+    }
+
+    // Cancel and detach only. An unsettled restore has learned nothing better
+    // than what is already stored, and it does not touch `canSaveRef`, so the
+    // save effect's own cleanup-flush stays a no-op: a teardown mid-chase
+    // (StrictMode's dev remount, or a real unmount) can never persist the
+    // clamped-short position over the offset it was reaching for.
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      detach();
+    };
+  }, []);
+
+  // SAVE — ref-only per event, trailing debounce to localStorage, plus a
+  // guaranteed flush on the ways a page really leaves. A React cleanup is NOT
+  // guaranteed to run before a reload, which is exactly the stated case here.
+  useEffect(() => {
+    const el = tableWrapRef.current;
+    if (!el) return;
+    let timer = 0;
+
+    const flush = () => {
+      window.clearTimeout(timer);
+      timer = 0;
+      // NOT `restoreDoneRef`: the chase ending is not evidence that where it
+      // ended is worth keeping. Writing on that alone is what let a reload
+      // whose table had not finished growing persist its own clamp — 600 over
+      // a 4000 — so the next restore aimed lower again and the remembered row
+      // walked to the top over a few save-edit-reload cycles.
+      if (!canSaveRef.current) return;
+      try {
+        localStorage.setItem(SCROLL_KEY, serializeScrollPos(scrollPosRef.current));
+      } catch {
+        /* private mode / quota — a lost scroll offset is not worth a throw */
+      }
+    };
+    const onScroll = () => {
+      // Reading scrollTop inside a scroll handler is free: the value is already
+      // computed for that event, so this forces no reflow.
+      const now = { top: el.scrollTop, left: el.scrollLeft };
+      // The port moved somewhere neither the restore nor a browser clamp put it
+      // → someone else did, and from here on this page's offset is the user's
+      // own. The extents are read only while the gate is still shut, so the
+      // steady state after it opens is the two cheap scroll reads above and
+      // never a `scrollHeight` (which CAN force layout if the DOM is dirty).
+      if (!canSaveRef.current) {
+        const wrote = restoreWroteRef.current;
+        const max = {
+          top: el.scrollHeight - el.clientHeight,
+          left: el.scrollWidth - el.clientWidth,
+        };
+        if (
+          shouldOpenSaveGate({
+            hadStored: !!wantScrollRef.current,
+            chaseOver: restoreDoneRef.current,
+            restoreWrote: wrote,
+            now,
+            max,
+          })
+        ) {
+          canSaveRef.current = true;
+        } else if (wrote && restoreDoneRef.current && isForcedClamp(wrote, now, max)) {
+          // The table got shorter than the offset we put there, so the browser
+          // moved the port because that offset stopped existing. FOLLOW it: the
+          // fingerprint has to describe where the port really is, or the user's
+          // own next scroll would be measured against an offset the port can no
+          // longer hold and would be suppressed as another clamp. Only after the
+          // chase (`restoreDoneRef`) — while it runs, the chase owns this ref.
+          restoreWroteRef.current = now;
+        }
+      }
+      scrollPosRef.current = now;
+      if (timer) return;
+      timer = window.setTimeout(flush, SCROLL_SAVE_MS);
+    };
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+
+    el.addEventListener('scroll', onScroll, { passive: true });
+    // `pagehide`, not `beforeunload`: this page already owns a CONDITIONAL
+    // beforeunload for the unsaved-edits guard and must not depend on it being
+    // registered, and pagehide fires for the bfcache path too. visibilitychange
+    // is the reliable partner on mobile/backgrounded tabs.
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onHide);
+      flush();
+    };
+  }, []);
+
   const toggleCat = (cat: NodeCategory) => {
     setActiveCats((prev) => {
       const next = new Set(prev);
@@ -563,7 +934,7 @@ export function GraphsPage() {
         </span>
       </div>
 
-      <div className="gp__tablewrap">
+      <div className="gp__tablewrap" ref={tableWrapRef}>
         <table className="gp__table">
           <thead>
             <tr>

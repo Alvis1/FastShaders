@@ -236,6 +236,11 @@ label.field input[type="number"] { width: 56px; text-align: right; }
   text-align: left; padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 #bench-done-popup th { color: #9aa; font-weight: 600; font-size: 10px; text-transform: uppercase; }
+/* The "what next" line above the actions — the answer to "I have four files,
+   now what?", kept calm (no warning chrome): a step, not a problem. */
+#bench-done-popup .popup-hint {
+  color: #8fd0ff; font-size: 12px; line-height: 1.55; margin: 0 0 14px;
+}
 #bench-done-popup .popup-actions {
   display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;
 }

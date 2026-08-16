@@ -15,8 +15,7 @@ import { DragNumberInput } from '../inputs/DragNumberInput';
 // written under `.shader-node__left` so it does not depend on that ordering.)
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NodeGlyph, hasNodeGlyph, nodeJustify, nodeScale, nodeBox, nodeSockets, nodeTextScale, nodeArtStyle } from './glyphs/NodeGlyph';
-import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getEdgeOutputShape, getTargetEdges, getUnwrappedEdges } from '@/engine/cpuEvaluator';
-import { hasTimeUpstream } from '@/utils/graphTraversal';
+import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getEdgeOutputShape, getTargetEdges, getTimeUpstreamSet, getNodeById } from '@/engine/cpuEvaluator';
 import { edgeRangeText } from '@/utils/edgeValueText';
 import { LiveEdgeValue } from './LiveEdgeValue';
 import { makeConnectionRevealSelector } from './connectionReveal';
@@ -24,6 +23,7 @@ import { RevealSockets } from './RevealSockets';
 import { RAMP_COLOR_NODES, effectiveRampDef } from '@/utils/exposedPorts';
 import { displayImageFileName, validImageDataUrl } from '@/utils/imageNode';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
+import { parseFormula, hasCustomFormula } from '@/utils/dataRangeFormula';
 import './ShaderNode.css';
 
 // (fmtNum/rangeText moved to utils/edgeValueText.ts — shared with the
@@ -84,12 +84,14 @@ export function edgeValueLabel(
   // of a field. It is decided on the SOURCE NODE's category, BEFORE any
   // per-socket projection — the interval is the honest answer for every one
   // of a noise node's sockets.
-  const srcType = nodes.find((n) => n.id === sourceId)?.data?.registryType as string | undefined;
+  const srcType = getNodeById(nodes, edges, sourceId)?.data?.registryType as string | undefined;
   const preferRange = NODE_REGISTRY.get(srcType ?? '')?.category === 'noise';
   // Time-driven (on the UNWRAPPED graph, so a Time feeder inside a collapsed
   // frame still counts — the MathPreviewNode xKey pairing) → the label ticks.
-  const animated =
-    !preferRange && hasTimeUpstream(sourceId, nodes, getUnwrappedEdges(nodes, edges));
+  // Via the ctx-memoized SET, never the per-node `hasTimeUpstream`: this runs
+  // inside `edgeKey` below, i.e. once per connected edge per card per store
+  // notify, and the per-node form rebuilt two whole-graph Maps every time.
+  const animated = !preferRange && getTimeUpstreamSet(nodes, edges).has(sourceId);
   const edge = { source: sourceId, sourceHandle };
   const out = preferRange ? null : evaluateEdgeSource(edge, nodes, edges, 0);
   if (out && out.length >= 1 && out.every((v) => Number.isFinite(v))) {
@@ -256,6 +258,37 @@ export function buildRows(
 
   return rows;
 }
+
+/**
+ * Data Range's custom-formula marker: this node computes something its method
+ * name no longer describes, which is the surprising state and therefore the one
+ * that gets marked (the `×speed` / `±1` precedent).
+ *
+ * Its meaning is deliberately EXACT, because a marker that overstates what it
+ * knows is worse than none. `ƒ` means "carries a formula the grammar accepts";
+ * `ƒ!` means "carries one the grammar REJECTS", which is always wrong wherever
+ * it is opened. It does NOT claim the shader is running the formula: the other
+ * rejection class (`non-finite` — a divisor that folds to zero) depends on the
+ * wired column's statistics, and reaching those from a node component costs a
+ * whole-graph subscription per node. That case is reported in the generated
+ * code instead, as a comment graphToCode writes beside the fallback chain —
+ * visible in the code panel, the Output tab and the downloaded `.js`.
+ *
+ * Its own component so the parse happens once per render, and memoized on the
+ * string because ShaderNode re-renders on every graph notify while the formula
+ * changes only when someone edits it.
+ */
+const FormulaChip = memo(function FormulaChip({ formula }: { formula: string }) {
+  const ok = useMemo(() => parseFormula(formula).ok, [formula]);
+  return (
+    <span
+      className={`shader-node__formula-chip${ok ? '' : ' shader-node__formula-chip--bad'}`}
+      title={formula}
+    >
+      {ok ? 'ƒ' : 'ƒ!'}
+    </span>
+  );
+});
 
 export const ShaderNode = memo(function ShaderNode({
   id,
@@ -778,6 +811,23 @@ export const ShaderNode = memo(function ShaderNode({
             ...nodeArtStyle(data.registryType),
           }}
         />
+      )}
+
+      {/* Data Range carrying a user-authored formula. The SURPRISING state is
+          the one that gets marked (the ClockNode `×speed` and noise `±1`
+          precedent): a formula makes this node compute something the method
+          name no longer describes, and a REJECTED formula is worse — the
+          shader silently falls back to the method's own chain, so a shared
+          `.fastshader` would render differently for the recipient with nothing
+          on screen saying why. `ƒ!` is that missing signal; the tooltip carries
+          the formula itself.
+
+          Deliberately NOT mirrored into NodeVisual: `formula` is not a
+          `defaultValues` key, so the replica (asset tiles, the node-editor
+          overview, the designer stage) can never be handed one — mirroring it
+          there would be unreachable code, not parity. */}
+      {data.registryType === 'dataRange' && hasCustomFormula(data.values?.formula) && (
+        <FormulaChip formula={data.values.formula as string} />
       )}
 
       {/* Below-header region: glyph + rows. Wrapping both lets a designer-moved

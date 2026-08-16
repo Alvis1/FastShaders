@@ -80,6 +80,20 @@ const CARD_NODE_MAX_H = 270;
  * FitNodeHeading to normalize against. `.node-preview-card` carries
  * `zoom: 0.67`, so 1/0.67 renders the real COLOR_NODE_SIZE swatch at the size
  * it has on the canvas. Keep the two in step.
+ *
+ * This is a RATIO against the card's OWN zoom, and the ratio is what surfaces
+ * must preserve — NOT the absolute swatch size. A surface that wants bigger
+ * tiles multiplies the card's zoom from an ANCESTOR (node-editor.html's
+ * overview sets `zoom: var(--gp-preview-zoom)` on `.gp__preview`), and an
+ * ancestor zoom scales this wrapper by exactly the same factor as every other
+ * tile — the swatch keeps its size *relative to its neighbours* with no
+ * per-surface compensation. Re-deriving this constant per surface would
+ * therefore make things WORSE, pinning the swatch at 56px while its neighbours
+ * grew. The one thing that does break it is a surface that OVERRIDES
+ * `.node-preview-card`'s own `zoom` instead of multiplying it; that is why
+ * `assetCardGeometry.test.ts` fails on a `zoom` declaration aimed at a card
+ * class from any other stylesheet. Only a change to the 0.67 itself requires
+ * touching this number.
  */
 const CARD_COLOR_SCALE = 1.5;
 function FitNodeHeading({ visualScale, textScale, children }: { visualScale: number; textScale: number; children: React.ReactNode }) {

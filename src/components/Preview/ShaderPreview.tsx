@@ -28,6 +28,8 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import { displayImageFileName } from '@/utils/imageNode';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
+import { AnimClipMenu } from './AnimClipMenu';
+import { useLongPress } from '@/hooks/useLongPress';
 import {
   extractUniforms, isOverridden, overriddenUniforms,
   clearUniformValue, clearUniformValues, seedBounds, fallbackBounds,
@@ -203,6 +205,39 @@ function validatePlaying(v: string | null): boolean {
   return v === 'true';
 }
 
+/**
+ * What the iframe's `gltf-anim` component reports about the loaded model. Null
+ * whenever the current preview has no playable clip — a primitive, an OBJ, or a
+ * glTF that ships geometry only — which is also what hides the whole animation
+ * cluster and its timeline.
+ */
+interface AnimInfo {
+  /** Clip length in seconds. Always > 0 — a zero-length clip reports has:false. */
+  duration: number;
+  /**
+   * Whether the clip HAS root translation to remove. A spinning turbine or a
+   * morph-only blink has none, so the in-place toggle is disabled rather than
+   * left as a button that silently does nothing.
+   */
+  canInPlace: boolean;
+  name: string;
+  /** Index of the clip currently playing, within `clips`. */
+  clip: number;
+  /** Every clip in the file. Picked from the play button's context menu. */
+  clips: string[];
+}
+
+// Animation playback defaults to ON: a dropped model that carries an animation
+// and then sits perfectly still reads as the file being broken, not as the
+// preview being paused. In-place defaults to OFF — the authored motion is what
+// the file says, and pinning it is the opt-in.
+function validateAnimPlaying(v: string | null): boolean {
+  return v !== 'false';
+}
+function validateAnimInPlace(v: string | null): boolean {
+  return v === 'true';
+}
+
 // Both maps are adversarial: projectImport writes them straight out of an
 // imported project block. The bounds map was a bare CAST while its sibling had
 // a per-entry whitelist — `{min:'abc'}` makes the slider's step NaN and
@@ -363,6 +398,117 @@ export function ShaderPreview() {
     } else if (el) {
       (el.requestFullscreen ?? el.webkitRequestFullscreen)?.call(el);
     }
+  }, []);
+
+  // ── Model animation ────────────────────────────────────────────────────
+  // A-Frame core has no animation-mixer, so an animated glTF used to load as a
+  // static rest-pose mesh. The iframe's `gltf-anim` component owns the mixer
+  // and this half owns the controls: a play/pause + in-place pill and the
+  // scrubber between the two existing clusters.
+  const [animInfo, setAnimInfo] = useState<AnimInfo | null>(null);
+  const [animPlaying, setAnimPlaying] = usePersistedState('fs:previewAnimPlaying', validateAnimPlaying);
+  const [animInPlace, setAnimInPlace] = usePersistedState('fs:previewAnimInPlace', validateAnimInPlace);
+
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const thumbRef = useRef<HTMLDivElement>(null);
+  /**
+   * Last time the iframe reported, in seconds. Survives an iframe REBUILD (a
+   * shader edit swaps srcDoc, so the model reloads and the mixer restarts at
+   * 0) — without it, editing a node while an animation runs would snap the
+   * model back to frame 0 on every keystroke's debounce.
+   */
+  const animTimeRef = useRef(0);
+  /** Mirror of the two toggles for the mount-once message handler. */
+  const animStateRef = useRef({ playing: animPlaying, inPlace: animInPlace });
+  const animInfoRef = useRef<AnimInfo | null>(null);
+  /** True while the user is dragging the scrubber — incoming times are ignored. */
+  const scrubbingRef = useRef(false);
+  useEffect(() => { animInfoRef.current = animInfo; }, [animInfo]);
+
+  /**
+   * Which clip to play. Held in a REF, not persisted: an index means nothing
+   * across models (clip 3 of a walk cycle is clip 3 of nothing in the next
+   * file), so it survives a shader-edit rebuild — where the same model
+   * reloads — and resets with `geometryRebuildKey` alongside the playhead.
+   * The rendered value comes from `animInfo.clip`, i.e. from what the stage
+   * says it is actually playing, so the tick can never point at a clip the
+   * component clamped away.
+   */
+  const animClipRef = useRef(0);
+  const [clipMenuOpen, setClipMenuOpen] = useState(false);
+  const animPillRef = useRef<HTMLDivElement>(null);
+  const animClipsBtnRef = useRef<HTMLButtonElement>(null);
+  /** When a long-press opened the menu — the synthesized-contextmenu window. */
+  const clipMenuTouchTsRef = useRef(0);
+  // Touch/pen counterpart to the right-click, the Toolbar EXPORT precedent.
+  // Bound to the whole PILL, not the ▶: a near-miss on a 28px target is the
+  // common case, and a gesture that silently does nothing an inch away from
+  // where it works reads as the feature being broken. The ☰ button is
+  // excluded (podest's twin has the same guard): it already opens on tap, so
+  // a long-press starting on it would open at 500ms and the button's own
+  // toggle click on finger-lift would immediately close it again.
+  useLongPress(animPillRef, (target) => {
+    if (animClipsBtnRef.current?.contains(target)) return;
+    clipMenuTouchTsRef.current = performance.now();
+    setClipMenuOpen(true);
+  }, { disabled: !animInfo });
+
+  /**
+   * Move the scrubber. IMPERATIVE on purpose: the iframe reports ~30×/s while
+   * playing, and routing that through React state would re-render this
+   * ~1700-line panel at frame rate — the same reason the mic meter and the
+   * on-node live edge values are written by hand.
+   *
+   * The thumb's width is read from the element rather than duplicated here, so
+   * the CSS stays the single source of truth for it: the travel is inset by
+   * half a thumb at each end, which is exactly the span the line is drawn over.
+   */
+  const paintThumb = useCallback((time: number) => {
+    const thumb = thumbRef.current;
+    const dur = animInfoRef.current?.duration ?? 0;
+    if (!thumb || dur <= 0) return;
+    const w = thumb.offsetWidth || 20;
+    const f = Math.max(0, Math.min(1, time / dur));
+    thumb.style.left = `calc(${w / 2}px + ${f} * (100% - ${w}px))`;
+  }, []);
+
+  /** Pointer x → clip time, over the same inset span paintThumb writes into. */
+  const timeFromPointer = useCallback((clientX: number): number => {
+    const track = timelineRef.current;
+    const dur = animInfoRef.current?.duration ?? 0;
+    if (!track || dur <= 0) return 0;
+    const w = thumbRef.current?.offsetWidth || 20;
+    const rect = track.getBoundingClientRect();
+    const usable = rect.width - w;
+    if (usable <= 0) return 0;
+    const f = Math.max(0, Math.min(1, (clientX - rect.left - w / 2) / usable));
+    return f * dur;
+  }, []);
+
+  const seekAnim = useCallback((time: number) => {
+    animTimeRef.current = time;
+    paintThumb(time);
+    iframeRef.current?.contentWindow?.postMessage({ type: 'fs:anim-seek', time }, '*');
+  }, [paintThumb]);
+
+  // Push the toggles into the running document. Deliberately NOT gated on
+  // animInfo: the component's message listener is installed at `init`, i.e.
+  // before the model finishes loading, so an early post is stored in the
+  // component's schema and is already correct when the clip binds — which is
+  // what keeps a paused preview from playing one frame after every rebuild.
+  useEffect(() => {
+    animStateRef.current = { playing: animPlaying, inPlace: animInPlace };
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: 'fs:anim-set', playing: animPlaying, inPlace: animInPlace },
+      '*',
+    );
+  }, [animPlaying, animInPlace]);
+
+  /** Pick a clip. The stage re-reports, which is what resizes the scrubber. */
+  const selectClip = useCallback((index: number) => {
+    animClipRef.current = index;
+    animTimeRef.current = 0;
+    iframeRef.current?.contentWindow?.postMessage({ type: 'fs:anim-set', clip: index }, '*');
   }, []);
 
   // Defer the iframe's srcDoc until the container element has non-zero
@@ -751,8 +897,69 @@ export function ShaderPreview() {
       const data = e.data as {
         type?: string; x?: number; y?: number; z?: number;
         on?: boolean; files?: unknown;
+        has?: boolean; duration?: number; canInPlace?: boolean;
+        name?: unknown; clip?: number; clips?: unknown; time?: number;
       } | null;
       if (!data || typeof data.type !== 'string') return;
+      if (data.type === 'fs:anim') {
+        // The model finished loading and reported its clips (or the lack of
+        // them). A zero/absent duration is treated as "no animation" — a clip
+        // with no length has nothing to play and would divide the scrubber by
+        // zero.
+        const dur = typeof data.duration === 'number' && isFinite(data.duration) ? data.duration : 0;
+        if (!data.has || dur <= 0) {
+          setAnimInfo(null);
+          return;
+        }
+        // The stage is sandboxed adversarial code, so this report is untrusted:
+        // cap the clip count and every string length (podest applies the same
+        // caps), and substitute a placeholder IN PLACE for a non-string entry
+        // rather than compacting the array — compaction would shift every later
+        // index, so the menu's active mark and onPick(i) would stop matching
+        // the stage's real clip indices.
+        const clips = Array.isArray(data.clips)
+          ? data.clips.slice(0, 200).map((c) => (typeof c === 'string' ? c.slice(0, 120) : ''))
+          : [];
+        // The stage's own index, clamped by it. Used for DISPLAY only — which
+        // row the picker ticks — and deliberately NOT written back into
+        // animClipRef: a freshly built document reports its schema default of
+        // 0, so adopting it would throw away the user's chosen clip on every
+        // shader edit. The ref stays the request; the report is the answer.
+        const clip = (typeof data.clip === 'number' && isFinite(data.clip) ? data.clip : 0) | 0;
+        setAnimInfo({
+          duration: dur,
+          canInPlace: !!data.canInPlace,
+          name: typeof data.name === 'string' ? data.name.slice(0, 120) : '',
+          clip,
+          clips,
+        });
+        // Restore this parent's state into the freshly built document: the
+        // toggles AND the playhead, so a shader edit mid-animation resumes
+        // where it was instead of snapping to frame 0.
+        iframeRef.current?.contentWindow?.postMessage({
+          type: 'fs:anim-set',
+          // `clip` leads: the component re-derives duration/canInPlace and
+          // rebinds at 0 on a clip change, so the time must follow it.
+          clip: animClipRef.current,
+          playing: animStateRef.current.playing,
+          inPlace: animStateRef.current.inPlace,
+          // Deliberately UNCLAMPED: `dur` here is the fresh document's
+          // schema-default clip 0, not the clip this message selects, so a
+          // Math.min against it truncated the remembered playhead of a longer
+          // clip and flashed a wrong pose on every shader edit. The stage's
+          // own seek() clamps against the post-swap duration.
+          time: animTimeRef.current,
+        }, '*');
+        return;
+      }
+      if (data.type === 'fs:anim-time') {
+        if (typeof data.time !== 'number' || !isFinite(data.time)) return;
+        animTimeRef.current = data.time;
+        // While the user drags, the pointer owns the thumb — a report landing
+        // mid-gesture would fight it back to the playhead.
+        if (!scrubbingRef.current) paintThumb(data.time);
+        return;
+      }
       if (data.type === 'fs:preview-drag') {
         // Drag entered/left the iframe region — mirror the drop veil.
         iframeDragRef.current = !!data.on;
@@ -1089,6 +1296,21 @@ export function ShaderPreview() {
     return () => clearTimeout(id);
   }, [previewHtml, containerReady]);
 
+  // A rebuild throws the old document away, so the animation controls must go
+  // with it: the new one re-announces via fs:anim (or doesn't, if it has no
+  // clips). Without this a model→sphere switch would leave a timeline
+  // scrubbing a document that no longer has a mixer.
+  useEffect(() => { setAnimInfo(null); }, [previewHtml]);
+
+  // The remembered playhead is only meaningful for the model it was measured
+  // on, so it resets when the MODEL changes — not when the shader does, which
+  // is the whole point of remembering it.
+  useEffect(() => { animTimeRef.current = 0; animClipRef.current = 0; }, [geometryRebuildKey]);
+
+  // A rebuild replaces the document the menu's anchor lives over; more to the
+  // point, the new model may have a different clip list.
+  useEffect(() => { setClipMenuOpen(false); }, [previewHtml]);
+
   // Hot-update channels: push appearance changes to the running iframe
   // instead of triggering an iframe rebuild. Idempotency is enforced on
   // the *iframe* side (each handler compares the payload to a last-
@@ -1416,84 +1638,231 @@ export function ShaderPreview() {
           allow="fullscreen *; xr-spatial-tracking *"
           allowFullScreen
         />
-        {/* Bottom-LEFT playback/view cluster — floats over the 3D view (so it
-            stays available in fullscreen): play/pause, background color, reset.
-            The two "escape this pane" actions live in their own box at the
-            bottom-right (below), so a mis-aimed click on the everyday controls
-            can't throw the app into fullscreen or open a VR window. */}
-        <div className="shader-preview__bottom-controls">
-          {/* Only while the shader actually reads a mic uniform — the control
-              must never advertise capture for a graph that doesn't listen.
-              Leading position keeps it away from the destructive Reset ✕ that
-              ends this cluster. */}
-          {micUniformNames.length > 0 && (
-            <MicControl
-              status={mic.status}
-              onArm={mic.arm}
-              onDisarm={mic.disarm}
-              meterRef={mic.meterRef}
-              language={language}
+        {/* The bottom row, as ONE flex bar spanning the 3D view rather than two
+            independently-anchored boxes. That is what lets the timeline stretch
+            between the animation pill and the display cluster without measuring
+            either of them — the two ends keep hugging their edges because the
+            element between them takes the slack.
+
+            The bar covers the full width, so it MUST NOT eat orbit drags in the
+            gaps: it is pointer-events:none and its children opt back in. */}
+        <div className="shader-preview__bottom-bar">
+          {/* Bottom-LEFT playback/view cluster — floats over the 3D view (so it
+              stays available in fullscreen): play/pause, background color, reset.
+              The two "escape this pane" actions live in their own box at the
+              bottom-right (below), so a mis-aimed click on the everyday controls
+              can't throw the app into fullscreen or open a VR window. */}
+          <div className="shader-preview__bottom-controls">
+            {/* Only while the shader actually reads a mic uniform — the control
+                must never advertise capture for a graph that doesn't listen.
+                Leading position keeps it away from the destructive Reset ✕ that
+                ends this cluster. */}
+            {micUniformNames.length > 0 && (
+              <MicControl
+                status={mic.status}
+                onArm={mic.arm}
+                onDisarm={mic.disarm}
+                meterRef={mic.meterRef}
+                language={language}
+              />
+            )}
+            <button
+              className="shader-preview__play-btn"
+              onClick={() => setPlaying((p) => !p)}
+              title={playing ? t('Pause rotation', language) : t('Play rotation', language)}
+              aria-label={playing ? t('Pause rotation', language) : t('Play rotation', language)}
+            >
+              {playing ? '⏸' : '▶'}
+            </button>
+            {/* `history="none"`: the scene backdrop is a PREVIEW PREFERENCE
+                (`usePersistedState('fs:previewBgColor')`) — it never touches the
+                graph, so bracketing would push an undo entry that restores
+                nothing and wipe the redo stack on every pick. The popover follows
+                this pane into fullscreen on its own (`pickPortalHost`). */}
+            <PaletteColorPicker
+              className="shader-preview__bg-color"
+              history="none"
+              value={bgColor}
+              onPick={setBgColor}
+              title={t('Background color', language)}
             />
-          )}
-          <button
-            className="shader-preview__play-btn"
-            onClick={() => setPlaying((p) => !p)}
-            title={playing ? t('Pause rotation', language) : t('Play rotation', language)}
-            aria-label={playing ? t('Pause rotation', language) : t('Play rotation', language)}
-          >
-            {playing ? '⏸' : '▶'}
-          </button>
-          {/* `history="none"`: the scene backdrop is a PREVIEW PREFERENCE
-              (`usePersistedState('fs:previewBgColor')`) — it never touches the
-              graph, so bracketing would push an undo entry that restores
-              nothing and wipe the redo stack on every pick. The popover follows
-              this pane into fullscreen on its own (`pickPortalHost`). */}
-          <PaletteColorPicker
-            className="shader-preview__bg-color"
-            history="none"
-            value={bgColor}
-            onPick={setBgColor}
-            title={t('Background color', language)}
-          />
-          <button
-            type="button"
-            className="shader-preview__reset-btn"
-            onClick={handleReset}
-            title={t('Reset camera, lighting, subdivision, and uniform values to defaults', language)}
-            aria-label={t('Reset', language)}
-          >
-            {'✕'}
-          </button>
-        </div>
-        {/* Bottom-RIGHT display cluster: the two ways to hand the shader a
-            bigger screen. Fullscreen and VR are the same idea one step apart
-            (fill this display / fill your headset), and the XR page's own gate
-            button already collapses to Fullscreen where WebXR is absent. */}
-        <div className="shader-preview__display-controls">
-          {/* Hidden on desktop: the Tauri app has the LAN "VR" bench flow in
-              the toolbar, and window.open in its webview isn't this feature's
-              target. */}
-          {!__FS_DESKTOP__ && (
             <button
               type="button"
-              className="shader-preview__vr-btn"
-              onClick={handleOpenVR}
-              title={t('Open this shader in a new window and enter immersive VR, with a frame-time / FPS readout in view (WebXR requires a top-level page)', language)}
+              className="shader-preview__reset-btn"
+              onClick={handleReset}
+              title={t('Reset camera, lighting, subdivision, and uniform values to defaults', language)}
+              aria-label={t('Reset', language)}
             >
-              VR
+              {'✕'}
             </button>
+          </div>
+          {/* The model's OWN animation, in its own box beside the view cluster —
+              deliberately not folded in with the ▶ next door, which spins the
+              turntable. Two different things called play; two different boxes.
+              Present only while the loaded model actually carries a clip. */}
+          {animInfo && (
+            <div
+              className="shader-preview__anim-controls"
+              ref={animPillRef}
+              // Right-click anywhere on the PILL, not just on the ▶. The
+              // handler used to sit on the play button alone and be suppressed
+              // below two clips, so a near-miss OR a single-clip file both fell
+              // through to the browser's own menu — indistinguishable from the
+              // feature not working. The ☰ button beside it is the primary,
+              // visible path; this is the shortcut.
+              onContextMenu={(e) => {
+                e.preventDefault();
+                // On Android/Quest Chromium a touch long-press ALSO synthesizes
+                // a native contextmenu right as the 500ms timer fires — without
+                // this window the toggle would close the menu the same gesture
+                // just opened (an order-dependent flash).
+                if (performance.now() - clipMenuTouchTsRef.current < 700) return;
+                setClipMenuOpen((v) => !v);
+              }}
+            >
+              <button
+                type="button"
+                className="shader-preview__anim-play"
+                onClick={() => setAnimPlaying((p) => !p)}
+                title={
+                  `${animPlaying ? t('Pause model animation', language) : t('Play model animation', language)}` +
+                  `${animInfo.name ? ` — ${animInfo.name}` : ''}` +
+                  `${animInfo.clips.length > 1 ? ` (${animInfo.clip + 1}/${animInfo.clips.length})` : ''}`
+                }
+                aria-label={animPlaying ? t('Pause model animation', language) : t('Play model animation', language)}
+              >
+                {animPlaying ? '⏸' : '▶'}
+              </button>
+              {/* Toggle, not a pair of buttons: "off" is the same control
+                  unlit. Disabled when the clip has no root translation to
+                  remove — a live button that does nothing reads as broken. */}
+              <button
+                type="button"
+                className={`shader-preview__anim-inplace${animInPlace && animInfo.canInPlace ? ' shader-preview__anim-inplace--active' : ''}`}
+                onClick={() => setAnimInPlace((v) => !v)}
+                disabled={!animInfo.canInPlace}
+                aria-pressed={animInPlace && animInfo.canInPlace}
+                title={
+                  animInfo.canInPlace
+                    ? (animInPlace
+                        ? t('Playing in place — click to restore the animation’s own movement', language)
+                        : t('Play in place: hold the model still and drop the animation’s root movement', language))
+                    : t('This animation has no root movement to remove', language)
+                }
+              >
+                ◎
+              </button>
+              {/* The clip list, as a plain visible button. Rendered whenever
+                  there is an animation at all — NOT only for multi-clip files:
+                  a control that appears on some models and not others is the
+                  same "it doesn't work" failure the right-click gate caused,
+                  and on a single-clip file the menu still answers a real
+                  question (what is this clip called). */}
+              <button
+                type="button"
+                ref={animClipsBtnRef}
+                className={`shader-preview__anim-clips-btn${clipMenuOpen ? ' shader-preview__anim-clips-btn--active' : ''}`}
+                onClick={() => setClipMenuOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={clipMenuOpen}
+                title={`${t('Animation clips', language)} (${animInfo.clips.length})`}
+                aria-label={t('Animation clips', language)}
+              >
+                ☰
+              </button>
+              <AnimClipMenu
+                anchor={animClipsBtnRef.current}
+                dismissExempt={animPillRef.current}
+                open={clipMenuOpen}
+                clips={animInfo.clips}
+                active={animInfo.clip}
+                onPick={selectClip}
+                onClose={() => setClipMenuOpen(false)}
+                language={language}
+              />
+            </div>
           )}
-          <button
-            type="button"
-            className="shader-preview__fs-btn"
-            onClick={handleToggleFullscreen}
-            title={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
-            aria-label={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
-          >
-            {/* Distinct exit glyph — never '✕', which would twin with the red
-                Reset ✕ in the cluster next door while fullscreen. */}
-            {isFullscreen ? '⤡' : '⛶'}
-          </button>
+          {/* The scrubber. Stretches between the animation pill and the display
+              cluster; when there is no animation it isn't rendered at all and
+              the display cluster's `margin-left: auto` keeps the right edge. */}
+          {animInfo && (
+            <div
+              className="shader-preview__timeline"
+              ref={timelineRef}
+              role="slider"
+              tabIndex={0}
+              aria-label={t('Animation timeline', language)}
+              aria-valuemin={0}
+              aria-valuemax={animInfo.duration}
+              aria-valuenow={animTimeRef.current}
+              onPointerDown={(e) => {
+                // Capture on the TRACK, never on the thumb: the thumb is moved
+                // by an imperative style write on every report, and a pointer
+                // captured by an element the gesture keeps repositioning is the
+                // classic way to lose a drag halfway across. Throw-safe like
+                // the release below — a pointer can be inactive by dispatch
+                // time (fast pen lift), and the seek must still run.
+                try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* already gone */ }
+                scrubbingRef.current = true;
+                seekAnim(timeFromPointer(e.clientX));
+              }}
+              onPointerMove={(e) => {
+                if (!scrubbingRef.current) return;
+                seekAnim(timeFromPointer(e.clientX));
+              }}
+              onPointerUp={(e) => {
+                scrubbingRef.current = false;
+                try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+              }}
+              onPointerCancel={() => { scrubbingRef.current = false; }}
+              onKeyDown={(e) => {
+                // Arrow keys step 1/50th of the clip; Home/End jump the ends.
+                const dur = animInfo.duration;
+                const step = dur / 50;
+                let next: number | null = null;
+                if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = animTimeRef.current + step;
+                else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = animTimeRef.current - step;
+                else if (e.key === 'Home') next = 0;
+                else if (e.key === 'End') next = dur;
+                if (next === null) return;
+                e.preventDefault();
+                seekAnim(Math.max(0, Math.min(dur, next)));
+              }}
+            >
+              <div className="shader-preview__timeline-line" />
+              <div className="shader-preview__timeline-thumb" ref={thumbRef} />
+            </div>
+          )}
+          {/* Bottom-RIGHT display cluster: the two ways to hand the shader a
+              bigger screen. Fullscreen and VR are the same idea one step apart
+              (fill this display / fill your headset), and the XR page's own gate
+              button already collapses to Fullscreen where WebXR is absent. */}
+          <div className="shader-preview__display-controls">
+            {/* Hidden on desktop: the Tauri app has the LAN "VR" bench flow in
+                the toolbar, and window.open in its webview isn't this feature's
+                target. */}
+            {!__FS_DESKTOP__ && (
+              <button
+                type="button"
+                className="shader-preview__vr-btn"
+                onClick={handleOpenVR}
+                title={t('Open this shader in a new window and enter immersive VR, with a frame-time / FPS readout in view (WebXR requires a top-level page)', language)}
+              >
+                VR
+              </button>
+            )}
+            <button
+              type="button"
+              className="shader-preview__fs-btn"
+              onClick={handleToggleFullscreen}
+              title={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
+              aria-label={isFullscreen ? t('Exit fullscreen', language) : t('Fullscreen preview', language)}
+            >
+              {/* Distinct exit glyph — never '✕', which would twin with the red
+                  Reset ✕ in the cluster next door while fullscreen. */}
+              {isFullscreen ? '⤡' : '⛶'}
+            </button>
+          </div>
         </div>
         {uniforms.length > 0 && showUniforms && (
           <div className="shader-preview__uniforms">
