@@ -175,6 +175,73 @@ describe('the generated Data Range / Isolines / Stripes modules actually run', (
     }
   });
 
+  /**
+   * Custom formulas, actually EXECUTED. A chain-existence test cannot catch a
+   * wrong arity — `smoothstep(a, b)` looks fine as text and only throws when the
+   * node tree is built — and this emitter writes free-function calls whose arity
+   * comes from its own table.
+   */
+  it('runs a custom formula using every function in the grammar', () => {
+    const run = (formula: string) => {
+      const gen = graphToCode(
+        [
+          makeNode('d1', 'dataNode', dataNodeValues()),
+          makeNode('n1', 'dataRange', { mode: 'minmax', formula }),
+          makeNode('out', 'output', {}),
+        ],
+        [makeEdge('d1', 'col0', 'n1', 'value'), makeEdge('n1', 'out', 'out', 'opacity')],
+      );
+      return buildsShader(gen.code);
+    };
+
+    // Arity 1 — every unary in the table, each wrapping `v` so it cannot fold.
+    for (const f of [
+      'abs', 'sign', 'floor', 'ceil', 'round', 'fract', 'sqrt', 'exp', 'exp2',
+      'log', 'log2', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'saturate',
+    ]) {
+      expect(run(`${f}(v)`), f).toBe(true);
+    }
+    // Arity 2 and 3.
+    for (const f of ['min', 'max', 'pow', 'step']) {
+      expect(run(`${f}(v, 0.5)`), f).toBe(true);
+    }
+    for (const f of ['clamp', 'mix', 'smoothstep']) {
+      expect(run(`${f}(v, 0.25, 0.75)`), f).toBe(true);
+    }
+    // Operators, including the reciprocal rewrite and a runtime divisor.
+    for (const e of ['v + 1', 'v - 1', 'v * 2', 'v / 4', '4 / v', '1 - v', '-v', 'v ^ 2', '2 ^ v']) {
+      expect(run(e), e).toBe(true);
+    }
+    // A constant-only formula must still produce a NODE, or the clamp suffix
+    // would be applied to a bare number.
+    expect(run('0.25 + 0.25')).toBe(true);
+  });
+
+  it('still builds a working shader when the formula is REJECTED', () => {
+    // The property that matters for a shared file: every rejection path falls
+    // back to the built-in chain, so a hostile .fastshader can never produce a
+    // module that fails to compile.
+    for (const formula of [
+      '0); globalThis.__x=1; float(0',
+      'v.mul(2)',
+      'zzz',
+      'v / 0',
+      'log2(0)',
+      'min(1)',
+      'аbs(v)',
+    ]) {
+      const gen = graphToCode(
+        [
+          makeNode('d1', 'dataNode', dataNodeValues()),
+          makeNode('n1', 'dataRange', { mode: 'minmax', formula }),
+          makeNode('out', 'output', {}),
+        ],
+        [makeEdge('d1', 'col0', 'n1', 'value'), makeEdge('n1', 'out', 'out', 'opacity')],
+      );
+      expect(buildsShader(gen.code), formula).toBe(true);
+    }
+  });
+
   it('runs Isolines, including with a wired parameter', () => {
     const plain = graphToCode(
       [makeNode('i1', 'isolines', { levels: 12 }), makeNode('out', 'output', {})],

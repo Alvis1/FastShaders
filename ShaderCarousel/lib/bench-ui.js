@@ -320,7 +320,7 @@ export function createStartGate(opts) {
  *   • Run again — calls `onRunAgain()` (returns to start gate)
  *   • Close — dismisses the popup
  */
-export function showDonePopup({ title, subtitle, warning, rows, onDownload, onRunAgain }) {
+export function showDonePopup({ title, subtitle, warning, rows, hint, onDownload, downloadLabel, onDownloadResearch, onRunAgain }) {
   const existing = $('bench-done-popup');
   if (existing) existing.remove();
 
@@ -356,12 +356,31 @@ export function showDonePopup({ title, subtitle, warning, rows, onDownload, onRu
     card.appendChild(table);
   }
 
+  // What to do with the downloads — plain text (never HTML: benches pass
+  // fixed strings today, but hint is a "next step" surface and must stay
+  // injection-inert if one ever interpolates device names).
+  if (hint) {
+    const p = document.createElement('div');
+    p.className = 'popup-hint';
+    p.textContent = hint;
+    card.appendChild(p);
+  }
+
   const actions = document.createElement('div');
   actions.className = 'popup-actions';
   const btnDl = document.createElement('button');
   btnDl.className = 'primary'; btnDl.type = 'button';
-  btnDl.textContent = '⬇ Download JSON + CSV + suggestion';
+  btnDl.textContent = downloadLabel || '⬇ Download JSON + CSV + suggestion';
   btnDl.addEventListener('click', () => { try { onDownload?.(); } catch (e) { console.error(e); } });
+  // Secondary download (the research bundle) — rendered only when the bench
+  // splits its exports; single-export benches (InOut) keep one button.
+  let btnResearch = null;
+  if (onDownloadResearch) {
+    btnResearch = document.createElement('button');
+    btnResearch.type = 'button';
+    btnResearch.textContent = '⬇ Research data (raw + CSV + suggestion)';
+    btnResearch.addEventListener('click', () => { try { onDownloadResearch(); } catch (e) { console.error(e); } });
+  }
   const btnAgain = document.createElement('button');
   btnAgain.type = 'button';
   btnAgain.textContent = '↻ Run again';
@@ -370,7 +389,7 @@ export function showDonePopup({ title, subtitle, warning, rows, onDownload, onRu
   btnClose.className = 'ghost'; btnClose.type = 'button';
   btnClose.textContent = 'Close';
   btnClose.addEventListener('click', () => wrap.remove());
-  actions.append(btnDl, btnAgain, btnClose);
+  actions.append(btnDl, ...(btnResearch ? [btnResearch] : []), btnAgain, btnClose);
   card.appendChild(actions);
 
   wrap.appendChild(card);

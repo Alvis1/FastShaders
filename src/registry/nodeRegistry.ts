@@ -24,7 +24,7 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
     description:
-      'Position in local space after displacement is applied — Position gives the raw, pre-displacement value. Also: positionLocal, varying',
+      'Position in local space. Also: positionLocal, varying',
   },
   {
     type: 'positionWorld',
@@ -111,7 +111,7 @@ const definitions: NodeDefinition[] = [
     tslImportModule: 'three/tsl',
     inputs: [],
     outputs: [{ id: 'out', label: 'Normal', dataType: 'vec3' }],
-    description: 'Surface normal in local (object) space — the direction the surface faces.',
+    description: 'Direction the surface faces.',
   },
   {
     // The world-space counterpart of normalLocal. Needed because the preview
@@ -1001,8 +1001,11 @@ const definitions: NodeDefinition[] = [
       lowColor: '#1b2a4a',
       highColor: '#ffd24d',
     },
+    // The Also: tail keeps the node findable by its own socket's name and its
+    // displacement use — the trimmed prose used to carry both words, and input
+    // socket labels are never part of the search corpus.
     description:
-      'Map a Data node column to a colour ramp along one axis (or radially), with scale, offset, cutoffs, midpoint and contrast. Colour output for the surface; Value output (scalar height) for displacement. Wire a Data output into Signal; tone controls are in the right-click menu.',
+      'Map a Data node column to a colour ramp along one axis (or radially), with scale, offset, cutoffs, midpoint and contrast. Also: signal, displacement, height.',
   },
   // Colormap: scalar → colour through a scientific lookup table (viridis and
   // friends). The map choice, reverse flag and discrete-level count live in
@@ -1040,7 +1043,7 @@ const definitions: NodeDefinition[] = [
     inputs: [{ id: 'value', label: 'Value', dataType: 'float' }],
     outputs: [{ id: 'out', label: '0…1', dataType: 'float' }],
     description:
-      'Map raw data values into 0–1 so a colormap means something: min/max, robust percentile, zero-centred (for diverging maps), log, symlog or z-score. Reads the wired Data column\'s own statistics. Also: normalize normalise rescale remap domain scaling percentile logarithmic zscore.',
+      'Map and filter raw data values using formulas. Also: normalize normalise rescale remap domain scaling percentile logarithmic zscore.',
   },
   // Isolines: antialiased contour lines at regular value intervals. Same
   // continuous-phase + derivative-AA construction as Data Stripes (never take a

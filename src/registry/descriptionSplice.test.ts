@@ -177,12 +177,14 @@ describe('splitAliases / joinAliases', () => {
   const defs = getAllDefinitions();
   const tailed = defs.filter(d => d.description?.includes('Also:'));
 
-  it('33 definitions carry an "Also:" tail', () => {
+  it('34 definitions carry an "Also:" tail', () => {
     // Measured against the live registry; separator is uniformly " Also: ".
     // 33 since positionWorldDirection was renamed 'View Dir (world)' →
     // 'Outward Dir (world)' and grew an alias tail so the old query still
-    // reaches it (see nodeSearch.test.ts).
-    expect(tailed).toHaveLength(33);
+    // reaches it (see nodeSearch.test.ts); 34 since dataviz's trimmed prose
+    // lost 'Signal'/'displacement' and the words moved into an alias tail so
+    // the node stays findable by its own socket's name.
+    expect(tailed).toHaveLength(34);
   });
 
   it('round-trips every tailed description byte-exactly', () => {

@@ -477,6 +477,18 @@ export const FIT_BOUNDS_SCRIPT = `<script>
         var target = this.data.size;
         root.updateMatrixWorld(true);
 
+        // An ANIMATED model must not be baked, for the same reason a rigged one
+        // must not: the bake moves each node's world matrix into its vertex
+        // data and then flattens every local matrix to identity — and node TRS
+        // is exactly what an AnimationMixer writes, so a clip would apply its
+        // keyframes a SECOND time on top of geometry that already carries them
+        // (the model tears itself apart on the first frame). Morph clips break
+        // just as badly by a different route: \`applyMatrix4\` transforms
+        // \`position\` and \`normal\` but NOT \`morphAttributes\`, so the deltas
+        // would stay in authored units while the base mesh shrank into the
+        // preview box. Take the same Object3D escape hatch the skeleton takes.
+        var animated = !!(root.animations && root.animations.length);
+
         // Collect the mesh nodes and their transforms BEFORE mutating anything
         // — a glTF can share ONE BufferGeometry across several nodes carrying
         // different transforms, so measuring and baking must both work off a
@@ -497,13 +509,27 @@ export const FIT_BOUNDS_SCRIPT = `<script>
           entries.push({ node: node, m: new THREE.Matrix4().multiplyMatrices(pre, node.matrixWorld) });
         });
 
-        // A rigged or instanced model keeps the legacy Object3D normalization:
-        // baking would desync a skeleton's bind matrices and would miss an
-        // InstancedMesh's per-instance transforms. Its \`positionGeometry\` stays
-        // in authored units — position-driven shaders are mis-scaled on it, as
-        // they were on every dropped model before this — but nothing renders
-        // inconsistently.
-        if (skinned) {
+        // A rigged, instanced or ANIMATED model keeps the legacy Object3D
+        // normalization: baking would desync a skeleton's bind matrices, would
+        // miss an InstancedMesh's per-instance transforms, and would be
+        // double-applied by every animation frame (see \`animated\` above). Its
+        // \`positionGeometry\` stays in authored units — position-driven shaders
+        // are mis-scaled on it, as they were on every dropped model before
+        // this — but nothing renders inconsistently.
+        if (skinned || animated) {
+          // Box3.setFromObject, deliberately, even though it is WORLD-axis-
+          // aligned and therefore folds in #preview-entity's resting tilt and
+          // #spin-parent's live rotation — so the same model can come out up to
+          // ~1.7x smaller depending on the angle it loaded at.
+          //
+          // Replacing it with a union of the meshes' own geometry boxes in the
+          // entity frame was TRIED and REVERTED: a local AABB is never larger
+          // than the world one, so every animated model grew, and the shortfall
+          // is not bounded by the rotation — setFromObject also expands by
+          // \`Points\`/\`Line\` primitives and by an InstancedMesh's per-instance
+          // spread, none of which a mesh-geometry union sees, so a model
+          // carrying any of those measures far too small and scales up hard.
+          // Framing an animated model slightly small beats blowing it up.
           var wbox = new THREE.Box3().setFromObject(root);
           if (wbox.isEmpty()) return;
           var wsize = new THREE.Vector3(), wcenter = new THREE.Vector3();
@@ -717,6 +743,283 @@ const WELD_VERTS_SCRIPT = `<script>
       },
       remove: function () {
         if (this._welded) { this._welded.dispose(); this._welded = null; }
+      }
+    });
+  }
+<\/script>`;
+
+/**
+ * `gltf-anim` A-Frame component: plays a dropped glTF/GLB's own animation.
+ *
+ * A-Frame core has NO animation-mixer (that component ships in `aframe-extras`,
+ * which this project deliberately doesn't bundle). `gltf-model` parses the
+ * clips and hangs them off the loaded object3D — `model.animations = gltf.
+ * animations` — and then nothing ever reads them, so before this an animated
+ * model loaded as a static mesh in its rest pose.
+ *
+ * Attached to `#preview-entity` for every MODEL geometry (a built-in OBJ simply
+ * reports no clips). It owns the mixer, the in-place variants and the
+ * parent-facing message contract:
+ *   parent → iframe: `fs:anim-set` {playing, inPlace, time}, `fs:anim-seek` {time}
+ *   iframe → parent: `fs:anim` {has, duration, name, clips}, `fs:anim-time` {time}
+ *
+ * Two structural notes:
+ *  - `fit-bounds` refuses to bake an animated model into its vertex attributes
+ *    (see the `animated` branch there), so this component can assume the node
+ *    transforms it drives are still the ones the clip was authored against.
+ *  - The time report is throttled to ~30Hz rather than posted per frame. The
+ *    parent draws the scrubber imperatively from it, so this is the whole cost
+ *    of the timeline; per-frame posting would double the message traffic of the
+ *    mic pump for a control that can't show the difference.
+ */
+export const GLTF_ANIM_SCRIPT = `<script>
+  /**
+   * Depth of \`obj\` below \`root\`, or Infinity when it isn't in that subtree.
+   */
+  function __depthOf(root, obj) {
+    var d = 0;
+    while (obj && obj !== root) { obj = obj.parent; d++; }
+    return obj === root ? d : Infinity;
+  }
+
+  /**
+   * Build the ROOT-MOTION-FREE variant of a clip, or null when the clip has
+   * no root translation to remove.
+   *
+   * The root-motion track is the \`.position\` track of the TOP-MOST animated
+   * node — depth-from-root over the nodes the clip actually targets, not
+   * "a direct child of the scene root". In a rigged glTF the translation lives
+   * on the hips bone, several levels down inside an Armature that usually
+   * carries no tracks of its own; in a simple bouncing-cube export the mesh
+   * node itself is top-most. One rule covers both.
+   *
+   * Targets are resolved with THREE.PropertyBinding.findNode — the same lookup
+   * the mixer itself uses, so this can't disagree with what actually gets
+   * driven (a plain name match would miss the \`.bones[x]\` and \`parent/child\`
+   * track-name forms).
+   *
+   * Keyframes are FROZEN to the first frame's value, never deleted. A deleted
+   * track leaves the node wherever the last mixer write happened to put it, so
+   * toggling in-place mid-playback would strand the model at an arbitrary
+   * offset instead of returning it to where the clip starts — and "where the
+   * clip starts" is the pose fit-bounds measured its framing from.
+   *
+   * All three axes are frozen, not just the horizontal pair: "in place" here
+   * means the model does not travel, and a file whose motion happens to be
+   * vertical (a lift, an orbiting drone) is not a special case worth a second
+   * mode.
+   */
+  function __inPlaceClip(clip, root) {
+    var i, k;
+    var best = Infinity;
+    var depths = [];
+    for (i = 0; i < clip.tracks.length; i++) {
+      var node = null;
+      try { node = THREE.PropertyBinding.findNode(root, clip.tracks[i].name.split(".")[0]); } catch (e) {}
+      var d = node ? __depthOf(root, node) : Infinity;
+      depths.push(d);
+      if (d < best) best = d;
+    }
+    if (best === Infinity) return null;
+    var out = clip.clone(); // clone() deep-copies times+values, so this is safe to mutate
+    var changed = false;
+    for (i = 0; i < out.tracks.length; i++) {
+      if (depths[i] !== best) continue;
+      var t = out.tracks[i];
+      var dot = t.name.lastIndexOf(".");
+      if (dot < 0 || t.name.slice(dot + 1) !== "position") continue;
+      var v = t.values;
+      var stride = t.getValueSize();
+      if (!v || !stride || v.length < stride) continue;
+      for (k = stride; k < v.length; k++) v[k] = v[k % stride];
+      changed = true;
+    }
+    return changed ? out : null;
+  }
+
+  if (window.AFRAME && !AFRAME.components["gltf-anim"]) {
+    AFRAME.registerComponent("gltf-anim", {
+      schema: {
+        playing: { type: "boolean", default: true },
+        inPlace: { type: "boolean", default: false },
+        // Index into the file's clip list. Out-of-range values CLAMP rather
+        // than disable playback: the parent replays a remembered index onto a
+        // freshly booted stage, and after a model swap that index may no
+        // longer exist — falling back to clip 0 is the only behaviour that
+        // leaves something playing.
+        clip: { type: "int", default: 0 }
+      },
+      init: function () {
+        this.mixer = null;
+        this.action = null;
+        this.clips = [];       // every clip in the file
+        this.clip = null;      // the ACTIVE authored clip
+        this.clipIndex = 0;
+        this.clipInPlace = null; // its root-motion-free twin (null = none needed)
+        this.duration = 0;
+        this.lastPost = -1;
+        this.onMessage = this.onMessage.bind(this);
+        window.addEventListener("message", this.onMessage);
+        this.el.addEventListener("model-loaded", this.onModel.bind(this));
+      },
+      remove: function () {
+        window.removeEventListener("message", this.onMessage);
+        if (this.mixer) { try { this.mixer.stopAllAction(); } catch (e) {} }
+        this.mixer = null;
+        this.action = null;
+      },
+      onModel: function () {
+        // A second model-loaded on the same entity would otherwise leave the
+        // previous mixer driving nodes that are no longer in the scene. The
+        // editor rebuilds the whole document per model change, so this is
+        // defence for the XR page and for any future hot-swap.
+        if (this.mixer) { try { this.mixer.stopAllAction(); } catch (e) {} }
+        this.mixer = null;
+        this.action = null;
+        this.clips = [];
+        this.clip = null;
+        this.clipInPlace = null;
+        this.duration = 0;
+        var root = this.el.getObject3D("mesh");
+        var clips = (root && root.animations) || [];
+        if (!root || !clips.length) { this.report(false); return; }
+        this.clips = clips;
+        this.mixer = new THREE.AnimationMixer(root);
+        this.selectClip(this.data.clip, 0);
+      },
+      /**
+       * Make clip \`i\` active and report the whole set to the parent.
+       *
+       * Every per-clip fact is re-derived here — duration, and whether a
+       * root-motion-free twin even EXISTS — because both are properties of the
+       * clip, not of the file: an "Idle" clip usually has no root translation
+       * where "Walk" does, so switching clips must be able to disable the
+       * in-place toggle and resize the scrubber. That is why the parent is
+       * re-reported to rather than merely told the index changed.
+       */
+      selectClip: function (i, time) {
+        var root = this.el.getObject3D("mesh");
+        if (!this.mixer || !root || !this.clips.length) return;
+        var idx = i | 0;
+        if (!(idx >= 0) || idx >= this.clips.length) idx = 0;
+        this.clipIndex = idx;
+        this.clip = this.clips[idx];
+        this.clipInPlace = __inPlaceClip(this.clip, root);
+        this.duration = this.clip.duration || 0;
+        this.bind(time || 0);
+        var names = [];
+        for (var n = 0; n < this.clips.length; n++) names.push(String(this.clips[n].name || ""));
+        this.report(true, names);
+      },
+      /** (Re)bind the action to the clip the current inPlace state selects. */
+      bind: function (time) {
+        if (!this.mixer || !this.clip) return;
+        var want = this.data.inPlace && this.clipInPlace ? this.clipInPlace : this.clip;
+        if (this.action && this.action.getClip() === want) {
+          this.action.time = time;
+        } else {
+          // stop() zeroes the outgoing action's influence AND its time, so the
+          // incoming clip's first update() is what writes the node transforms —
+          // including the position track the in-place twin froze.
+          if (this.action) this.action.stop();
+          this.action = this.mixer.clipAction(want);
+          this.action.setLoop(THREE.LoopRepeat, Infinity);
+          this.action.clampWhenFinished = false;
+          this.action.time = time;
+          this.action.play();
+        }
+        this.action.paused = !this.data.playing;
+        // A zero-delta update lands the pose immediately, so a seek while
+        // paused is visible without waiting for the next play.
+        this.mixer.update(0);
+      },
+      update: function (oldData) {
+        if (!this.mixer) return;
+        // A clip change restarts at 0 ON PURPOSE: the playhead is a position
+        // in THIS clip, and clips differ in length, so carrying 3.2 s into a
+        // 1 s idle would land on a clamp that reads as the picker having
+        // chosen the end of the animation.
+        // The \`typeof\` is load-bearing, not defensive noise: A-Frame's FIRST
+        // update() is handed an EMPTY oldData, so a bare \`!==\` reads
+        // \`undefined !== 0\` as a clip change and rebinds at 0 — which would
+        // reset the playhead every time the parent pushes an unrelated
+        // play/pause. "The clip changed" requires knowing the old clip.
+        if (oldData && typeof oldData.clip === "number" && oldData.clip !== this.data.clip) {
+          this.selectClip(this.data.clip, 0);
+          return;
+        }
+        if (!this.action) return;
+        if (oldData && oldData.inPlace !== this.data.inPlace) {
+          this.bind(this.action.time);
+          return;
+        }
+        this.action.paused = !this.data.playing;
+      },
+      tick: function (t, dt) {
+        if (!this.mixer || !this.action) return;
+        if (this.data.playing && dt) this.mixer.update(dt / 1000);
+        var now = this.action.time;
+        // ~30Hz: smooth enough for a scrubber the user can't grab mid-frame,
+        // half the traffic of a per-frame post.
+        if (this.data.playing && t - this.lastPost >= 33) {
+          this.lastPost = t;
+          this.post({ type: "fs:anim-time", time: now });
+        }
+      },
+      post: function (msg) {
+        // The XR popup is a TOP-LEVEL document, where window.parent is itself:
+        // reporting there would post 30 messages a second into its own message
+        // queue for a listener that doesn't exist. It has no controls anyway —
+        // it just autoplays the baked-in defaults.
+        if (window.parent === window) return;
+        try { window.parent.postMessage(msg, "*"); } catch (e) {}
+      },
+      report: function (has, names) {
+        this.post({
+          type: "fs:anim",
+          has: !!has,
+          duration: this.duration,
+          // Whether an in-place variant EXISTS: a clip with no root translation
+          // (a spinning turbine, a morph blink) can't be pinned, and a toggle
+          // that silently does nothing reads as a broken button.
+          canInPlace: !!this.clipInPlace,
+          name: this.clip ? String(this.clip.name || "") : "",
+          clip: this.clipIndex || 0,
+          clips: names || []
+        });
+      },
+      onMessage: function (e) {
+        if (e.source !== window.parent) return;
+        var msg = e.data;
+        if (!msg) return;
+        if (msg.type === "fs:anim-set") {
+          // One setAttribute per changed field — A-Frame diffs and calls
+          // update() once, so a play+seek arrives as a single rebind.
+          // Clip FIRST: it re-derives duration/canInPlace and rebinds at 0, so a
+          // combined {clip, time} restore has to seek AFTER the swap or the
+          // seek would be clamped against the outgoing clip's length.
+          if (typeof msg.clip === "number" && isFinite(msg.clip)) this.el.setAttribute("gltf-anim", "clip", msg.clip | 0);
+          if (typeof msg.inPlace === "boolean") this.el.setAttribute("gltf-anim", "inPlace", msg.inPlace);
+          if (typeof msg.playing === "boolean") this.el.setAttribute("gltf-anim", "playing", msg.playing);
+          if (typeof msg.time === "number" && isFinite(msg.time)) this.seek(msg.time);
+        } else if (msg.type === "fs:anim-seek") {
+          if (typeof msg.time === "number" && isFinite(msg.time)) this.seek(msg.time);
+        }
+      },
+      seek: function (time) {
+        if (!this.action || !this.duration) return;
+        // The clamp below is written as two comparisons, and NaN fails BOTH —
+        // so a non-finite time would sail through it and be assigned straight
+        // onto the mixer clock, where it poisons every later update(). The
+        // guard belongs here rather than only at the two message handlers:
+        // this is the one place a time reaches the action.
+        if (typeof time !== "number" || !isFinite(time)) return;
+        var t = time < 0 ? 0 : (time > this.duration ? this.duration : time);
+        this.action.time = t;
+        this.mixer.update(0);
+        // Echo immediately: while paused no tick posts, so without this the
+        // parent's scrubber would be the only thing that knew it had moved.
+        this.post({ type: "fs:anim-time", time: t });
       }
     });
   }
@@ -1189,6 +1492,14 @@ export function tslToPreviewHTML(
     // schema default is the opposite (false), so relying on either default
     // would flip behavior in a future copy-paste between the two.
     const fitBoundsAttr = `fit-bounds="size: 1.6; regen: ${!isCustom || customRegen ? 'true' : 'false'}"`;
+    // Attached to every MODEL geometry, not just the dropped-GLB case: the
+    // component reports "no clips" for an OBJ and costs nothing there, and
+    // gating it on the file extension would leave a dropped `.gltf` that
+    // happens to be named `.glb` (or vice versa) silently un-animated. It
+    // carries no values — the schema defaults (playing, not in place) are what
+    // the XR popup wants, and the editor's parent corrects them with one
+    // `fs:anim-set` the moment the model reports in.
+    const animAttr = 'gltf-anim';
     if (xr) {
       // Top-level XR page: same-origin, CORS never applies — load directly.
       // Custom meshes use the parent-minted blob URL (same-origin here too).
@@ -1198,7 +1509,7 @@ export function tslToPreviewHTML(
       const modelAttr = isCustom && customModel?.kind !== 'obj'
         ? `gltf-model="url(${url})"`
         : `obj-model="obj: url(${url})"`;
-      entityAttrs = `${modelAttr} ${fitBoundsAttr}`;
+      entityAttrs = `${modelAttr} ${fitBoundsAttr} ${animAttr}`;
     } else {
       // Sandboxed preview: the iframe's opaque origin makes a model fetch a
       // CORS request, and generic hosts don't answer it (gh-pages sends
@@ -1208,7 +1519,7 @@ export function tslToPreviewHTML(
       // via fs:obj-model; the feed script below applies it as a blob: URL.
       // Until it arrives the entity has no mesh and the scene shows the bg
       // color, exactly like the old still-downloading state.
-      entityAttrs = fitBoundsAttr;
+      entityAttrs = `${fitBoundsAttr} ${animAttr}`;
     }
   } else {
     const geoAttr = buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane', subdivision);
@@ -1334,6 +1645,15 @@ export function tslToPreviewHTML(
   // primitive geometries — the component is only attached to OBJ entities.
   lines.push(FIT_BOUNDS_SCRIPT);
   lines.push('');
+
+  // Register the glTF animation mixer. Only attached (via entityAttrs) to model
+  // geometries, so primitives never see it. A-Frame core ships no
+  // animation-mixer, which is why an animated GLB used to load as a static
+  // mesh — see GLTF_ANIM_SCRIPT.
+  if (isModel) {
+    lines.push(GLTF_ANIM_SCRIPT);
+    lines.push('');
+  }
 
   // Register the in-headset stats panel. Attached via the <a-scene> attribute
   // below, so it only exists on the XR popup.

@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { makeNode, makeEdge } from '@/test-utils';
-import { getTargetEdges, getUnwrappedEdges, evaluateNodeScalar } from '@/engine/cpuEvaluator';
-import { hasTimeUpstream } from '@/utils/graphTraversal';
+import { getTargetEdges, getTimeUpstreamSet, evaluateNodeScalar } from '@/engine/cpuEvaluator';
 import type { AppNode, AppEdge, BoundarySocket } from '@/types';
 
 /**
@@ -51,7 +50,7 @@ function makeGroup(
 function xState(nodes: AppNode[], edges: AppEdge[], id: string) {
   const e = getTargetEdges(nodes, edges, id).find((x) => x.targetHandle === 'x');
   const xKey = e
-    ? `${hasTimeUpstream(e.source, nodes, getUnwrappedEdges(nodes, edges)) ? '1' : '0'}${e.source}`
+    ? `${getTimeUpstreamSet(nodes, edges).has(e.source) ? '1' : '0'}${e.source}`
     : '';
   return {
     xKey,
@@ -71,11 +70,16 @@ describe('MathPreviewNode xKey — drift guard', () => {
     );
     expect(selector).not.toBe('');
     expect(selector).toContain('getTargetEdges(s.nodes, s.edges, id)');
-    // THE regression this guards: `hasTimeUpstream(e.source, s.nodes, s.edges)`
-    // pairs an unwrapped feeder id with a raw graph walk, so a Time node feeding
-    // INTO a collapsed group goes invisible and the waveform freezes.
-    expect(selector).toContain('getUnwrappedEdges(s.nodes, s.edges)');
-    expect(selector).not.toContain('hasTimeUpstream(e.source, s.nodes, s.edges)');
+    // THE regression this guards: pairing an unwrapped feeder id with a RAW
+    // graph walk, so a Time node feeding INTO a collapsed group goes invisible
+    // and the waveform freezes. `getTimeUpstreamSet` unwraps by construction
+    // (it walks the shared ctx's own edge array), which is why the fix is to
+    // require it here rather than to re-check the argument passed along.
+    expect(selector).toContain('getTimeUpstreamSet(s.nodes, s.edges)');
+    // `hasTimeUpstream` takes the edge array as an ARGUMENT, so every call site
+    // re-opens the trap. Keep it out of this selector entirely — including the
+    // spelling that happens to be correct today.
+    expect(selector).not.toContain('hasTimeUpstream');
   });
 
   it('holds no whole-array subscription and no nodes/edges mirror ref', () => {

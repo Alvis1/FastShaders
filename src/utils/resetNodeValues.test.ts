@@ -19,6 +19,15 @@ describe('resetNodeValues', () => {
     // code-gen fallbacks, so removing the key IS the reset.
     expect(resetNodeValues(def('colormap'), { map: 'turbo', reverse: 1, levels: 8 })).toEqual({});
     expect(resetNodeValues(def('dataRange'), { mode: 'symlog', domainMin: -3 })).toEqual({});
+    // A custom formula is a SETTING, not payload, so Reset drops it and the node
+    // returns to its method's own chain — which is exactly the emitter's
+    // documented fallback for an absent key. It is deliberately NOT in
+    // PRESERVED_KEYS: unlike the noise `signed` flag, dropping it restores a
+    // real default rather than changing what the node outputs. Undo brings it
+    // back.
+    expect(
+      resetNodeValues(def('dataRange'), { mode: 'symlog', domainMin: -3, formula: 'v * 2' }),
+    ).toEqual({});
     expect(resetNodeValues(def('dataviz'), { radial: 1, midpoint: 0.2, lowColor: '#123456' })).toEqual(
       def('dataviz').defaultValues,
     );

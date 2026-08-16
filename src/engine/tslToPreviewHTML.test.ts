@@ -65,6 +65,27 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
     expect(html).not.toContain('__fsExpectedObj');
   });
 
+  it('every MODEL geometry carries the animation mixer; no primitive does', () => {
+    // A-Frame core ships no animation-mixer, so without this component a glTF's
+    // clips are parsed by gltf-model and then simply never read — the model
+    // loads in its rest pose and looks broken rather than static-by-choice.
+    for (const opts of [
+      { geometry: 'teapot' as const },
+      { geometry: 'custom' as const, customModel: { kind: 'glb' as const, id: 7 } },
+      { geometry: 'custom' as const, customModel: { kind: 'obj' as const, id: 3 } },
+      { geometry: 'custom' as const, customModel: { kind: 'glb' as const, id: 9 }, xr: true, url: '' },
+    ]) {
+      const html = tslToPreviewHTML(TSL, opts);
+      expect(html).toContain('AFRAME.registerComponent("gltf-anim"');
+      expect(html).toContain(esc('gltf-anim'));
+    }
+    // Primitives never load a model, so they pay for none of it.
+    for (const geometry of ['sphere', 'cube', 'plane'] as const) {
+      const html = tslToPreviewHTML(TSL, { geometry });
+      expect(html).not.toContain('gltf-anim');
+    }
+  });
+
   it('xr custom glb: direct gltf-model blob url, no feed, origin-widened URL allowlist', () => {
     const html = tslToPreviewHTML(TSL, {
       geometry: 'custom',

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as TSL from 'three/tsl';
+import { FORMULA_TSL_SYMBOLS } from '@/utils/dataRangeFormula';
 
 /**
  * Contract test: the TSL method chains graphToCode WRITES AS TEXT are real.
@@ -107,5 +108,62 @@ describe('TSL chains used by the dataviz emitters exist in the shipped three', (
     const chained = unwrap(lo.mix(hi, t));
     expect(hex(chained.aNode)).toBe('ffd24d');
     expect(hex(chained.cNode)).toBe('1b2a4a'); // the low colour AS THE FACTOR
+  });
+
+  /**
+   * The Data Range formula language's function table IS a contract with
+   * three/tsl: a table row naming a symbol that does not exist emits
+   * perfect-looking source and a blank preview pane. Driving the assertion off
+   * the exported table means a future row is pinned automatically.
+   */
+  it('exports every symbol the Data Range formula emitter can write', () => {
+    for (const name of FORMULA_TSL_SYMBOLS) {
+      expect(typeof (TSL as Record<string, unknown>)[name], name).toBe('function');
+    }
+  });
+
+  /**
+   * `mix` is NOT the only chained method whose receiver is displaced —
+   * `smoothstep` and `step` are too. Measured here rather than asserted from
+   * documentation, because CLAUDE.md claimed otherwise and was wrong.
+   *
+   * This is why the formula emitter writes every named function in FREE
+   * form: one rule that removes the whole receiver-slot bug class, instead of a
+   * per-function table of which slot the receiver lands in. If a future refactor
+   * "tidies" the emitter into method chains, this test explains the damage.
+   */
+  it('confirms mix, smoothstep and step ALL displace a chained receiver', () => {
+    const unwrap = (n: Chain): Chain => (n && n.isVarNode ? n.node : n);
+    const val = (n: Chain): number | undefined => unwrap(n)?.value;
+    const a = T.float(1), b = T.float(2), c = T.float(3);
+
+    // Free form: strictly positional, which is what the emitter relies on.
+    const freeMix = unwrap((TSL as Record<string, unknown> as { mix: (...x: Chain[]) => Chain }).mix(a, b, c));
+    expect([val(freeMix.aNode), val(freeMix.bNode), val(freeMix.cNode)]).toEqual([1, 2, 3]);
+
+    const freeSs = unwrap(
+      (TSL as Record<string, unknown> as { smoothstep: (...x: Chain[]) => Chain }).smoothstep(a, b, c),
+    );
+    expect([val(freeSs.aNode), val(freeSs.bNode), val(freeSs.cNode)]).toEqual([1, 2, 3]);
+
+    const freeStep = unwrap(
+      (TSL as Record<string, unknown> as { step: (...x: Chain[]) => Chain }).step(a, b),
+    );
+    expect([val(freeStep.aNode), val(freeStep.bNode)]).toEqual([1, 2]);
+
+    // Method form: the receiver moves. THREE separate methods, not one.
+    const chMix = unwrap(a.mix(b, c));
+    expect([val(chMix.aNode), val(chMix.bNode), val(chMix.cNode)]).toEqual([2, 3, 1]);
+
+    const chSs = unwrap(a.smoothstep(b, c));
+    expect([val(chSs.aNode), val(chSs.bNode), val(chSs.cNode)]).toEqual([2, 3, 1]);
+
+    const chStep = unwrap(a.step(b));
+    expect([val(chStep.aNode), val(chStep.bNode)]).toEqual([2, 1]);
+
+    // ...while clamp and pow really are positional as methods, so the rule is
+    // about these three specifically and not about chaining in general.
+    const chClamp = unwrap(a.clamp(b, c));
+    expect([val(chClamp.aNode), val(chClamp.bNode), val(chClamp.cNode)]).toEqual([1, 2, 3]);
   });
 });

@@ -297,3 +297,30 @@
   cursor: not-allowed;
 }
 
+
+/* Data Range's custom-formula marker. Same corner and weight as PreviewNode's
+   `±1` signed-noise chip — the two mean the same kind of thing ("this node is
+   not doing the default thing"), so they should read the same way. Plain `ƒ`
+   when the formula is usable; `ƒ!` in the error red when it is not, because a
+   rejected formula makes the shader fall back to the method's own chain and
+   nothing else on the canvas would say so. */
+.shader-node__formula-chip {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: #2d7dd2;
+  /* NOT pointer-events:none. The chip carries `title={formula}`, and
+     TooltipLayer finds its host with `target.closest('[title]')` from
+     elementFromPoint — a non-interactive chip is simply never the target, so
+     the tooltip that is the only way to READ the formula from the canvas
+     silently never fires. (The neighbouring colormap strip has that same dead
+     `title`; this one does not copy it.) */
+  cursor: help;
+}
+
+.shader-node__formula-chip--bad {
+  color: #e74c3c;
+}

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>FastShaders · Node Designer</title>
 <!-- Inline data: favicon — kills the automatic /favicon.ico 404 (same as index.html) -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <!--
   VITE ENTRY (rollupOptions.input in vite.config.ts) — the designer lives in
   the app's module graph. The stage preview is rendered by the REAL app
@@ -159,6 +159,50 @@
   #mPtsLay .pt-anchor{fill:#3366CC;stroke:#fff;stroke-width:.45}
   #mPtsLay .pt-ctrl{fill:#fff;stroke:#F57C00;stroke-width:.55}
   #mPtsLay .pt-guide{stroke:#E91E63;stroke-width:.3;stroke-dasharray:1.4 1}
+  /* multi-select: marquee backdrop + band, selection bbox + scale grips.
+     pointer-events is INHERITED and .gridlay sets none, so anything that must
+     be hittable re-enables it explicitly (like #mPtsLay circle above);
+     decorations need no rule at all — they inherit none.
+     .pt-sel MUST stay after .pt-anchor/.pt-ctrl: equal specificity, source order wins. */
+  #mPtsLay .pt-bg{pointer-events:all;fill:transparent;cursor:crosshair}
+  /* Selection is a pink RING on an independent channel — it must NOT take the
+     fill. Overriding both made a selected anchor (filled blue) and a selected
+     control point (hollow white/orange) identical pink-on-white, separated only
+     by 7.25px vs 6.5px radius; that filled/hollow distinction is what tells the
+     user whether Delete removes a segment, straightens a curve, or is refused. */
+  #mPtsLay .pt-sel{stroke:#E91E63;stroke-width:.7}
+  #mPtsLay .pt-marq{pointer-events:none;fill:rgba(51,102,204,.12);stroke:#3366CC;stroke-width:.3;stroke-dasharray:1.2 .8}
+  /* The frame's INTERIOR is the move surface (designerApp routes its pointerdown
+     into the same multi-move path a selected handle uses). It was inert over the
+     full-canvas .pt-bg, so grabbing the middle of a selection started a new band
+     and REPLACED the selection — the opposite of every comparable editor. */
+  #mPtsLay .pt-bbox{pointer-events:all;fill:transparent;cursor:move;stroke:#E91E63;stroke-width:.25;stroke-dasharray:1 .8;opacity:.75}
+  #mPtsLay .pt-scale{pointer-events:all;fill:#fff;stroke:#E91E63;stroke-width:.4;cursor:nwse-resize}
+  #mPtsLay .pt-scale.nesw{cursor:nesw-resize}
+  /* keyboard target: the gestures preventDefault (killing implicit focus) and
+     focus this box by hand — show where Del / ⌘A / arrows will land */
+  #mPrevBox:focus{outline:none;box-shadow:0 0 0 2px rgba(51,102,204,.35)}
+  .hintline kbd{font:10px var(--mono);border:1px solid var(--line2);border-radius:3px;padding:0 3px;background:#fff}
+  /* Point-editor legend. It lives on its OWN full-width row under the two-column
+     grid, not inside the 312px left column. Measured: 29 lines / 441px at 312px
+     wide, 19 lines / 295px at 764px — with MORE text than before, not less. That
+     441px wall was single-handedly what pushed the modal past its own
+     max-height:92vh (content 987px vs a 736px cap at an 800px viewport), so on
+     any normal laptop it scrolled, and the user scrolled down precisely to READ
+     this. It is now 845px open / 575px collapsed.
+     <details open> on top of that, so someone who knows the gestures can reclaim
+     the space for good (state persists, like the grid/points checkboxes).
+     Labelled rows rather than five run-on paragraphs: every gesture is still
+     documented, but you can find the one you want by scanning the left edge. */
+  #mPtsHint{margin:12px 0 0;border-top:1px solid var(--line);padding-top:8px}
+  /* the browser's OWN disclosure triangle, deliberately: the app self-hosts a
+     woff2 SUBSET of Inter and ▾/▸ are not in it — a CSS ::before marker rendered
+     as a stray dot, i.e. the one part of the control that says it is a control */
+  #mPtsHint>summary{cursor:pointer;color:var(--dim);font-weight:600;font-size:11px;user-select:none;margin-left:2px}
+  #mPtsHint p{margin:6px 0 0}
+  #mPtsHint dl{display:grid;grid-template-columns:max-content 1fr;column-gap:10px;row-gap:3px;margin:6px 0 0}
+  #mPtsHint dt{color:var(--dim);font-weight:600;text-align:right}
+  #mPtsHint dd{margin:0}
   .gridopt{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--dim);margin-top:6px}
   .drop{margin-top:8px;border:1.5px dashed var(--line2);border-radius:8px;padding:10px;text-align:center;color:var(--mut);font-size:11.5px}
   .drop.over{border-color:var(--accent);background:#f3f7ff;color:var(--accent)}
@@ -261,9 +305,9 @@
     <div class="mbody">
       <div class="grid">
         <div>
-          <div class="glyph-preview" id="mPrevBox"><div id="mPreview"></div><svg class="gridlay" id="mGridLay" viewBox="0 0 56 56" style="display:none"><rect x="0.25" y="0.25" width="55.5" height="55.5" fill="none" stroke="#3366CC" stroke-width=".5" opacity=".55"/><line x1="28" y1="0" x2="28" y2="56" stroke="#3366CC" stroke-width=".4" opacity=".55"/><line x1="0" y1="28" x2="56" y2="28" stroke="#3366CC" stroke-width=".4" opacity=".55"/><line x1="14" y1="0" x2="14" y2="56" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="42" y1="0" x2="42" y2="56" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="0" y1="14" x2="56" y2="14" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="0" y1="42" x2="56" y2="42" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/></svg><svg class="gridlay" id="mPtsLay" viewBox="0 0 56 56"></svg></div>
+          <div class="glyph-preview" id="mPrevBox" tabindex="0"><div id="mPreview"></div><svg class="gridlay" id="mGridLay" viewBox="0 0 56 56" style="display:none"><rect x="0.25" y="0.25" width="55.5" height="55.5" fill="none" stroke="#3366CC" stroke-width=".5" opacity=".55"/><line x1="28" y1="0" x2="28" y2="56" stroke="#3366CC" stroke-width=".4" opacity=".55"/><line x1="0" y1="28" x2="56" y2="28" stroke="#3366CC" stroke-width=".4" opacity=".55"/><line x1="14" y1="0" x2="14" y2="56" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="42" y1="0" x2="42" y2="56" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="0" y1="14" x2="56" y2="14" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="0" y1="42" x2="56" y2="42" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/></svg><svg class="gridlay" id="mPtsLay" viewBox="0 0 56 56"></svg></div>
           <label class="gridopt"><input type="checkbox" id="mGrid"> 56-grid &amp; center guides</label>
-          <label class="gridopt"><input type="checkbox" id="mMove"> drag points (●&nbsp;anchor · ○&nbsp;control/size · 0.5 snap · aligns to other points' rows/columns · <b>⇧&nbsp;= angle lock</b> 0/30/45/60/90°…)</label>
+          <label class="gridopt"><input type="checkbox" id="mMove"> drag points (●&nbsp;anchor · ○&nbsp;control/size)</label>
           <div class="drop" id="drop">Drop an <b>.svg</b> file here to replace</div>
         </div>
         <div>
@@ -272,6 +316,18 @@
           <div class="merr" id="mErr"></div>
         </div>
       </div>
+      <details class="hintline" id="mPtsHint" style="display:none" open>
+        <summary>Point editor — gestures &amp; keys</summary>
+        <p><b>The keys below act on the point canvas — click it first</b>: on open the caret sits in the SVG box (so you can paste), and there <kbd>Del</kbd> edits text. Any drag, marquee, grip or art replacement focuses the canvas for you; every other control on this window leaves the keys working.</p>
+        <dl>
+          <dt>select</dt><dd>drag empty canvas = <b>marquee</b> (<kbd>⇧</kbd>/<kbd>Shift</kbd> or <kbd>⌘</kbd>/<kbd>Ctrl</kbd> add · <kbd>⌥</kbd>/<kbd>Alt</kbd> remove · click = deselect) · <kbd>⇧</kbd>/<kbd>Shift</kbd> or <kbd>⌘</kbd>/<kbd>Ctrl</kbd>+click a point toggles just that point · <kbd>⌘A</kbd>/<kbd>Ctrl A</kbd> all · <kbd>Esc</kbd> clears, again closes</dd>
+          <dt>move</dt><dd>drag any <b>selected</b> point — or anywhere <b>inside the dashed frame</b> — moves the whole selection (a plain click inside the frame deselects) · 0.5 snap, aligns to other points' rows/columns · <b>hold <kbd>⇧</kbd>/<kbd>Shift</kbd> while dragging = angle lock</b> 0/30/45/60/90°… · <kbd>←↑→↓</kbd> nudge 0.5 (<kbd>⇧</kbd>/<kbd>Shift</kbd> 2; holding a key is ONE undo step)</dd>
+          <dt>scale</dt><dd>2+ selected → <b>corner grips</b> scale about the opposite corner (<kbd>⇧</kbd>/<kbd>Shift</kbd> uniform · <kbd>⌥</kbd>/<kbd>Alt</kbd> from the centre); a modifier press inside the frame starts a new band instead of moving</dd>
+          <dt>delete</dt><dd><kbd>Del</kbd>/<kbd>Backspace</kbd> · deleting a curve's ○ straightens the segment; ○ size handles on circle/ellipse/rect aren't deletable — delete the shape from its ● anchor (centre on a circle/ellipse, top-left on a rect); a sub-shape left with nothing to draw goes too (no handles on invisible art); deleting everything leaves the glyph <b>empty</b>, and <kbd>⌘Z</kbd>/<kbd>Ctrl Z</kbd> puts it back</dd>
+          <dt>undo</dt><dd><kbd>⌘Z</kbd>/<kbd>Ctrl Z</kbd> undo the last point edit <i>or art replacement</i> — a move, scale, nudge, delete, <b>Clear</b>, <b>Built-in</b>, a loaded/uploaded/dropped .svg (20 deep; typing in the SVG box resets it)</dd>
+          <dt>keeping</dt><dd>nothing here is kept until <b>Apply</b> — <b>Cancel</b> (or <kbd>Esc</kbd> from the SVG box) discards this window's edits, and asks first once you've changed something. <kbd>⌘S</kbd>/<kbd>Ctrl S</kbd> here says so rather than saving without them. <b>Built-in</b> reloads this node's built-in FastShaders art <i>where it has any</i> — many glyphs were authored right here and have none, so the button greys out for them.</dd>
+        </dl>
+      </details>
     </div>
     <div class="mactions">
       <select id="mLoad" title="Load another node's glyph art into the editor (Apply to keep it)" style="max-width:185px;font-size:11px;padding:4px 5px">

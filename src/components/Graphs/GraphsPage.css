@@ -16,6 +16,20 @@
   font-size: var(--font-size-md);
   display: flex;
   flex-direction: column;
+
+  /* Graph-column tile scale — the ONE number this page tunes.
+     It MULTIPLIES the card's own `zoom: 0.67` (NodePreviewCard.css) rather than
+     replacing it: 1.5 x 0.67 ~= 1.0, so a tile here reads at roughly the node's
+     true canvas size instead of the asset strip's two-thirds. Multiplying is
+     what keeps 0.67 out of this file AND what keeps the colour swatch honest —
+     ColorCardContent's CARD_COLOR_SCALE is a RATIO against the card's zoom, so
+     it rides this factor like every other tile instead of needing a second,
+     per-surface compensation (an OVERRIDE here would break exactly that; see
+     assetCardGeometry.test.ts, which fails on a `zoom` aimed at a card class).
+     The Graph column's width and the table's min-width are DERIVED from it
+     below — change this one number and the table follows. */
+  --gp-preview-zoom: 1.5;
+  --gp-graph-col: calc(132px * var(--gp-preview-zoom));
 }
 
 /* ── Top bar ─────────────────────────────────────────────────────────────── */
@@ -179,21 +193,47 @@
 
 /* ── Table ───────────────────────────────────────────────────────────────── */
 
-/* The page's single scrollport, in both axes (the table has a 1100px min-width,
-   so narrow windows scroll sideways here rather than on the body).
+/* The page's single scrollport, in both axes — narrow windows scroll sideways
+   here rather than on the body, because `.gp__table` below carries a min-width
+   DERIVED from --gp-preview-zoom (don't restate the number: growing the tiles
+   grows it).
    `min-height: 0` is load-bearing: a flex item's default `min-height: auto`
    refuses to shrink below its content, so without it this grows to fit all 76
-   rows and pushes the overflow back out to the clipped root — no scrollbar. */
+   rows and pushes the overflow back out to the clipped root — no scrollbar.
+
+   `overflow-anchor: none` is load-bearing too, and for a reason that is easy to
+   undo by accident: scrollMemory.ts OWNS this scrollport's offset across the
+   whole growth window after mount, and the browser must not also adjust it.
+   Chrome's scroll anchoring exists to keep the visible row still while content
+   ABOVE it changes size — which is precisely what happens here, since every
+   Graph cell is zero-height until FitNodeHeading measures its replica and the
+   table grows by ~600px a frame or two AFTER the restore has landed. MEASURED
+   (headless Chrome 1500x900, park at 6000 mid-table, reload 8x with no input at
+   all): the restore lands at top=6000 with scrollHeight=11349, then at t=190ms
+   one scroll event takes top to 6376 as scrollHeight reaches 11954 — anchoring
+   compensating for the rows above the viewport getting taller. The restore is
+   over by then, so the save gate reads that nudge as the user scrolling and
+   persists 6376; the next reload aims there and anchoring adds another ~400:
+   6000 → 6376 → 6772 → 7201 → 7657 → 8153 → 8663 → 9173 → 9683, i.e. the top row
+   walks 2-3 rows per refresh until it hits the bottom. With this one
+   declaration all 8 reloads land on top=6000 and the stored value stays
+   "6000,0". (The bottom-parked case never showed it: at maxTop the port is
+   clamped, so anchoring has nowhere to push.) */
 .gp__tablewrap {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  overflow-anchor: none;
   padding: 0 var(--space-4) var(--space-8);
 }
 
 .gp__table {
   width: 100%;
-  min-width: 1100px;
+  /* 968px = the eight NON-graph columns (92+58+150+96+190+170+150 = 906) plus
+     the 62px floor the `width: auto` description column had at the old
+     1100px/132px pairing. Deriving it means growing the tiles widens the table
+     instead of eating that floor 1:1 and squeezing the description editor. */
+  min-width: calc(968px + var(--gp-graph-col));
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -278,7 +318,7 @@
 .gp__c-kind { width: 58px; }
 .gp__c-name { width: 150px; }
 .gp__c-cat { width: 96px; }
-.gp__c-graph { width: 132px; }
+.gp__c-graph { width: var(--gp-graph-col); }  /* 132px x the tile zoom */
 .gp__c-desc { width: auto; }
 .gp__c-alias { width: 190px; }
 .gp__c-cite { width: 170px; }
@@ -375,6 +415,24 @@
 .gp__preview {
   display: block;
   pointer-events: none;
+  /* The tiles are drawn for a cramped 0.67 asset strip; this table has room for
+     them at full size, and the whole point of the Graph column is to SEE the
+     node. `zoom`, not `transform: scale()`, for two reasons: zoom scales the
+     LAYOUT box, so the <td>, the row height and the scrollport's scrollHeight
+     all reserve the enlarged tile automatically (a transform would leave the
+     row at the unscaled height and the tile would spill over its neighbours),
+     and zoomed text is re-laid-out and re-rasterized rather than composited
+     from a 1x raster.
+
+     It sits on this WRAPPER, never on `.node-preview-card`/`.saved-group-card`
+     themselves. That is the load-bearing part:
+       • it MULTIPLIES the card's own zoom instead of replacing it, so 0.67 is
+         never restated here and the colour swatch's counter-scale (a ratio
+         against that same zoom) stays correct without a second constant;
+       • one rule covers both card families (node cards + texture/preset tiles);
+       • `.gp__graphcount` is a SIBLING, so the footer line stays chrome-sized
+         while the artwork grows. */
+  zoom: var(--gp-preview-zoom);
 }
 
 /* The tiles are laid out for the asset strip (zoom:0.67 + a 20px top gutter for

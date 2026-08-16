@@ -260,6 +260,23 @@ function timestamp() {
 }
 
 /**
+ * Filename-safe device slug for export names, so runs from two headsets are
+ * distinguishable ON DISK (the device otherwise lives only inside metadata —
+ * `shadercarousel-static-2026-….json` from a Quest 3 and a Pico look
+ * identical in a Downloads folder). Prefer the recognizable headset name from
+ * the UA over the adapter string: `quest-3` beats `qualcomm-adreno-7xx`.
+ * Import is name-agnostic (the editor reads metadata), so this is labelling
+ * only. Exported for naming tests.
+ */
+export function deviceSlug(md) {
+  const ua = String(md?.userAgent || '');
+  const m = ua.match(/Quest 3S|Quest 3|Quest Pro|Quest 2|Pico Neo3|Pico 4/i);
+  const name = m ? m[0] : (md?.headset || md?.gpu || md?.device || '');
+  const slug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  return slug || 'unknown-device';
+}
+
+/**
  * Build the complexity-suggestion object (schema v2) from a bench run
  * payload. Pure — no DOM, so it's unit-testable and reusable.
  *
@@ -365,12 +382,51 @@ export function buildComplexityPatch(suggestion) {
 }
 
 /**
- * Write the raw frame data + per-shader stats as JSON, a flat per-shader CSV
- * for quick spreadsheet inspection, a complexity.json-shaped suggestion file
- * the FastShaders editor can diff against its current scoring, AND a
- * drag-onto-the-editor complexity PATCH.
- * Commit these into ShaderCarousel/benchData/ — browser downloads
- * otherwise evaporate and the calibration loop never closes.
+ * The one file a non-research user needs: the device PROFILE — the patch
+ * shape (`{ meta, costs }`, ~1 KB) the FastShaders cost bar imports. A single
+ * download also never trips the browser's "download multiple files"
+ * permission prompt, which the old 4-file export did on every run.
+ */
+export function exportProfile(data, prefix) {
+  if (!data?.shaders?.length) return { fileCount: 0 };
+  const ts = timestamp();
+  const stem = `${prefix}-${deviceSlug(data.metadata)}`;
+  const suggestion = buildSuggestion(data, `${stem}-${ts}.json`);
+  triggerDownload(
+    new Blob([JSON.stringify(buildComplexityPatch(suggestion), null, 2)], { type: 'application/json' }),
+    `${stem}-profile-${ts}.json`,
+  );
+  return { fileCount: 1, timestamp: ts, valid: suggestion.metadata.valid, reasons: suggestion.metadata.reasons };
+}
+
+/**
+ * Same-browser handoff to the editor: store the profile under
+ * `fs:benchResult` so a FastShaders tab on this origin can offer it with one
+ * click in the points box (it re-validates the payload as adversarial input —
+ * localStorage is untrusted by the editor's rules, whoever wrote it). The
+ * bench pages already share the editor's origin on every web deployment
+ * (bench-registry reads fs:savedGroups the same way). Throw-safe: private
+ * mode / quota simply degrade to the download path. NEVER call this for a
+ * run that cannot price (InOut) — the editor would offer a profile whose
+ * numbers are display cadence, not shader cost.
+ */
+export function storeBenchResult(data) {
+  if (!data?.shaders?.length) return false;
+  try {
+    const suggestion = buildSuggestion(data, 'bench-run');
+    localStorage.setItem('fs:benchResult', JSON.stringify(buildComplexityPatch(suggestion)));
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * The research bundle: raw frame data + per-shader stats JSON, a flat CSV for
+ * spreadsheet inspection, and the complexity-suggestion file. This is the
+ * material `benchData/` commits and `fit-calibration.mjs` regresses — browser
+ * downloads otherwise evaporate and the calibration loop never closes. Not
+ * the default download anymore: the profile (exportProfile) is, because the
+ * editor never needed the raw data — parseCostFile reduces every shape to
+ * id → points + provenance.
  *
  * `data.metadata.bench` should be one of 'inout' | 'static' | 'microplane'
  * so downstream analysis can group like-for-like.
@@ -378,13 +434,16 @@ export function buildComplexityPatch(suggestion) {
 export function exportResults(data, prefix) {
   if (!data?.shaders?.length) return { fileCount: 0 };
 
+  // Device + date both ride the filename (`shadercarousel-static-quest-3-…`):
+  // runs from different headsets must be tellable apart without opening them.
   const ts = timestamp();
-  const suggestion = buildSuggestion(data, `${prefix}-${ts}.json`);
+  const stem = `${prefix}-${deviceSlug(data.metadata)}`;
+  const suggestion = buildSuggestion(data, `${stem}-${ts}.json`);
 
   // 1) raw JSON — every frame, every shader (already thinned at capture time)
   triggerDownload(
     new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }),
-    `${prefix}-${ts}.json`,
+    `${stem}-${ts}.json`,
   );
 
   // 2) summary CSV — one row per shader
@@ -406,7 +465,7 @@ export function exportResults(data, prefix) {
   ].join('\n');
   triggerDownload(
     new Blob([csvRows], { type: 'text/csv' }),
-    `${prefix}-summary-${ts}.csv`,
+    `${stem}-summary-${ts}.csv`,
   );
 
   // 3) complexity.json suggestion — maps id → suggested points based on the
@@ -416,15 +475,11 @@ export function exportResults(data, prefix) {
   // before trusting suggestedPoints.
   triggerDownload(
     new Blob([JSON.stringify(suggestion, null, 2)], { type: 'application/json' }),
-    `${prefix}-complexity-suggestion-${ts}.json`,
+    `${stem}-complexity-suggestion-${ts}.json`,
   );
 
-  // 4) complexity PATCH — the same numbers reshaped as { meta, costs:{key:pts} }
-  // so it drops straight onto the FastShaders cost bar and reprices live.
-  triggerDownload(
-    new Blob([JSON.stringify(buildComplexityPatch(suggestion), null, 2)], { type: 'application/json' }),
-    `${prefix}-complexity-patch-${ts}.json`,
-  );
+  // (The complexity PATCH is no longer part of this bundle — it IS the
+  // device profile, downloaded by exportProfile as `…-profile-….json`.)
 
-  return { fileCount: 4, timestamp: ts, valid: suggestion.metadata.valid, reasons: suggestion.metadata.reasons };
+  return { fileCount: 3, timestamp: ts, valid: suggestion.metadata.valid, reasons: suggestion.metadata.reasons };
 }

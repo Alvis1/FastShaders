@@ -45,6 +45,22 @@ import { getAllDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
 const here = fileURLToPath(new URL('.', import.meta.url));
 const css = readFileSync(here + 'NodePreviewCard.css', 'utf8');
 const tsx = readFileSync(here + 'NodePreviewCard.tsx', 'utf8');
+/**
+ * node-editor.html's overview renders these SAME cards and scales them up
+ * (`zoom: var(--gp-preview-zoom)` on `.gp__preview`). Scaling a card is allowed;
+ * reaching INTO one is the same defect wherever it is written, and until this
+ * page started scaling them the guard could only see the two files above.
+ */
+const pageCss = readFileSync(
+  fileURLToPath(new URL('../Graphs/GraphsPage.css', import.meta.url)),
+  'utf8',
+);
+
+/** Stylesheets that draw an asset card, keyed by the file the failure names. */
+const CARD_STYLESHEETS: { file: string; source: string }[] = [
+  { file: 'NodePreviewCard.css', source: css },
+  { file: 'Graphs/GraphsPage.css', source: pageCss },
+];
 
 /** Class prefixes owned by a NODE's own stylesheet — off limits to the card. */
 const NODE_INTERNAL =
@@ -81,21 +97,51 @@ function cssRules(source: string): { selector: string; body: string }[] {
 }
 
 describe('asset-card geometry', () => {
-  it('the card stylesheet never sets geometry on a node-internal class', () => {
+  it('no card stylesheet sets geometry on a node-internal class', () => {
     const offenders: string[] = [];
-    for (const { selector, body } of cssRules(css)) {
-      if (!NODE_INTERNAL.test(selector)) continue;
-      for (const decl of body.split(';')) {
-        const prop = decl.split(':')[0]?.trim().toLowerCase();
-        if (prop && GEOMETRY_PROP.test(prop)) offenders.push(`${selector} { ${prop} }`);
+    for (const { file, source } of CARD_STYLESHEETS) {
+      for (const { selector, body } of cssRules(source)) {
+        if (!NODE_INTERNAL.test(selector)) continue;
+        for (const decl of body.split(';')) {
+          const prop = decl.split(':')[0]?.trim().toLowerCase();
+          if (prop && GEOMETRY_PROP.test(prop)) offenders.push(`${file}: ${selector} { ${prop} }`);
+        }
       }
     }
     expect(
       offenders,
-      'NodePreviewCard.css is resizing/repositioning part of a node. That is how the ' +
+      'a card stylesheet is resizing/repositioning part of a node. That is how the ' +
         'mic tile ended up 100px wide around an 80px node, with its sockets floating ' +
         'inside the frame. Put the value in the NODE\'s own stylesheet and let the card ' +
         `scale it:\n  ${offenders.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
+  it('a surface scales a card from a WRAPPER, never by overriding the card zoom', () => {
+    // `.node-preview-card` carries `zoom: 0.67` and ColorCardContent's
+    // CARD_COLOR_SCALE (1.5) is its INVERSE — the counter-scale that renders the
+    // headerless colour swatch at true canvas size. That inverse is a ratio, so
+    // it survives an ANCESTOR zoom (which multiplies swatch and neighbours
+    // alike) and dies to an OVERRIDE of the card's own zoom, which would leave
+    // the colour tile compensating for a 0.67 that is no longer there — the one
+    // tile in the set at the wrong size, with nothing in CSS to say why.
+    // node-editor.html therefore zooms `.gp__preview`, the wrapper. Pin that.
+    const offenders: string[] = [];
+    for (const { selector, body } of cssRules(pageCss)) {
+      if (!/\.(node-preview-card|saved-group-card)\b/.test(selector)) continue;
+      for (const decl of body.split(';')) {
+        if (decl.split(':')[0]?.trim().toLowerCase() === 'zoom') {
+          offenders.push(`${selector} { ${decl.trim()} }`);
+        }
+      }
+    }
+    expect(
+      offenders,
+      'GraphsPage.css is setting `zoom` ON a card instead of on a wrapper around it. ' +
+        'That REPLACES the card\'s own 0.67 rather than multiplying it, which strands ' +
+        'CARD_COLOR_SCALE (NodePreviewCard.tsx) as a compensation for a zoom that no ' +
+        'longer applies and mis-sizes the Color / Property Color tiles. Zoom the ' +
+        `wrapper (.gp__preview) instead:\n  ${offenders.join('\n  ')}`,
     ).toEqual([]);
   });
 

@@ -12,6 +12,7 @@
 import { useAppStore } from '@/store/useAppStore';
 import { sanitizeImageNodes } from '@/utils/imageNode';
 import { sanitizeDataNodes } from '@/utils/dataNode';
+import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
 import { sanitizeDrawings } from '@/utils/drawings';
 import { sanitizePalettes } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
@@ -88,6 +89,11 @@ function applyProjectToStore(project: FastShadersProject): void {
   // a shared `.js`/`.zip` has no localStorage quota standing in front of it.
   // The cap is the construction bound, so a file this app wrote is untouched.
   const dataSanitized = sanitizeDataNodes(sanitized.nodes);
+
+  // A Data Range formula is a user-authored string riding the same shared file.
+  // Bounded here for size; the grammar gate that stops it becoming code lives at
+  // the emitter, which every import path reaches by construction.
+  dataSanitized.nodes = sanitizeDataRangeNodes(dataSanitized.nodes);
 
   // Board drawings are adversarial too — bound them before they enter the store.
   const drawings = sanitizeDrawings(project.drawings);

@@ -29,6 +29,7 @@ import { normalizeChainOperands } from '@/utils/chainOperands';
 import { nodeCostPoints, setCostOverrides, computeReachableCost, sanitizeCostMap } from '@/utils/nodeCost';
 import { type ParsedCostFile, type CostProfile, profileFromParsed, sanitizeCostMeta } from '@/utils/costOverride';
 import { makeDataNodeData, sanitizeDataNodes } from '@/utils/dataNode';
+import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
 import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, type ImageOriginInfo } from '@/utils/imageNode';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
@@ -87,7 +88,9 @@ export function loadSavedGroups(): SavedGroup[] {
         autoExposeConnectedParamPorts(g.nodes, g.edges);
         return {
           ...g,
-          nodes: sanitizeDataNodes(sanitizeImageNodes(g.nodes, false).nodes).nodes,
+          nodes: sanitizeDataRangeNodes(
+            sanitizeDataNodes(sanitizeImageNodes(g.nodes, false).nodes).nodes,
+          ),
           edges: sanitizeEdgeExtras(g.edges),
         };
       });
@@ -604,6 +607,13 @@ export function loadGraph(): {
       // construction bound, so no payload this app wrote can be affected.
       data.nodes = sanitizeDataNodes(data.nodes).nodes;
 
+      // A Data Range formula is a user-authored STRING, so it is bounded here
+      // for the same reason — it rides ~50 history snapshots, every autosave and
+      // every export. This is a RESOURCE bound, not the security control: the
+      // grammar gate lives at the emitter, which is the only place the string
+      // could become code.
+      data.nodes = sanitizeDataRangeNodes(data.nodes);
+
       // Edge `data` is adversarial too, and it is the one graph payload nothing
       // validated — TypedEdge maps `waypoints` and dereferences `w.x` during
       // RENDER, with no error boundary anywhere in the app, so `waypoints:
@@ -636,20 +646,18 @@ export interface VRHeadset {
 }
 
 export const VR_HEADSETS: VRHeadset[] = [
+  // The ONE measured device — ShaderCarousel/benchData/quest3-20260723 is the
+  // calibration basis for complexity.json's prices AND this budget. The
+  // paper-spec presets (Quest 2/3S, Steam Frame, Pico 4, Vision Pro) were
+  // REMOVED 2026-08-14 by owner decision: an unmeasured budget certifies
+  // shaders for hardware nobody ran, and the CostBar's benchmark import is
+  // exactly how a device earns a row — run ShaderCarousel on it, import the
+  // result JSON, and it appears under "Measured" with its own prices. A
+  // persisted fs:headsetId naming a removed preset degrades to this entry
+  // (every resolver falls back to VR_HEADSETS[0]). For the record, the
+  // pixel-scaling arithmetic for a same-GPU sibling: Quest 3S = 200 ×
+  // (2064·2208)/(1832·1920) ≈ 260 (same Adreno 740, fewer pixels to fill).
   { id: 'quest3', label: 'Meta Quest 3', maxPoints: 200, maxTextureDim: 2048 },
-  // Quest 3S is the SAME Snapdragon XR2 Gen 2 / Adreno 740 as Quest 3, with
-  // Quest 2's panels: 1832x1920 per eye vs Quest 3's 2064x2208. A point is
-  // per-pixel work at the Quest 3 reference resolution (ShaderCarousel/
-  // benchData refPixels = 2064*2208 = 4557312), so the budget scales inversely
-  // with pixels: 200 * (2064*2208)/(1832*1920) = 200 * 1.2956 = 259 -> 260.
-  // Yes, it is HIGHER than Quest 3's: same GPU, fewer pixels to fill.
-  // The old 110 came from GPU_COST_ANALYSIS.md's Adreno 660 / 1.3 TFLOPS row,
-  // which is the wrong chip: 200 * (1.3/3.0) * 1.2956 = 112.
-  { id: 'quest3s', label: 'Meta Quest 3S', maxPoints: 260, maxTextureDim: 2048 },
-  { id: 'quest2', label: 'Meta Quest 2', maxPoints: 90, maxTextureDim: 1024 },
-  { id: 'steamframe', label: 'Steam Frame', maxPoints: 220, maxTextureDim: 2048 },
-  { id: 'pico4', label: 'Pico 4', maxPoints: 80, maxTextureDim: 1024 },
-  { id: 'visionpro', label: 'Apple Vision Pro (M5)', maxPoints: 350, maxTextureDim: 4096 },
 ];
 
 /** Recommended max texture dimension for a headset id (falls back to the first

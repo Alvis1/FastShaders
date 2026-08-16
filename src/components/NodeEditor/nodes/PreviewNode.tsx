@@ -5,9 +5,8 @@ import type { PreviewFlowNode, NodeCategory, AppNode, AppEdge, TSLDataType } fro
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
-import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { appTime } from '@/utils/appClock';
-import { evaluateEdgeSource, getTargetEdges } from '@/engine/cpuEvaluator';
+import { evaluateEdgeSource, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
 import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
 import './PreviewNode.css';
@@ -31,19 +30,22 @@ function handleTop(index: number, total: number): string {
   return `${start + index * step}%`;
 }
 
-/** For each input port of a node, check whether time feeds into it. */
-function getTimeInputs(
-  nodeId: string,
-  nodes: AppNode[],
-  edges: { source: string; target: string; targetHandle?: string | null }[],
-): TimeInputs {
+/**
+ * For each input port of a node, check whether time feeds into it.
+ *
+ * Both halves run on the UNWRAPPED view via the shared ctx — `getTargetEdges`
+ * for the incoming wires and `getTimeUpstreamSet` for the walk. Scanning the
+ * RAW array (as this did) reports a collapsed group's id as the producer and
+ * drops every wire crossing the frame's boundary, so a noise thumbnail whose
+ * Time feeder sat inside a collapsed group silently stopped animating.
+ */
+function getTimeInputs(nodeId: string, nodes: AppNode[], edges: AppEdge[]): TimeInputs {
   const result: TimeInputs = {};
-  // Find edges that connect into this node, grouped by target handle
-  for (const edge of edges) {
-    if (edge.target !== nodeId) continue;
+  const timeFed = getTimeUpstreamSet(nodes, edges);
+  for (const edge of getTargetEdges(nodes, edges, nodeId)) {
     const handle = edge.targetHandle;
     if (!handle) continue;
-    if (hasTimeUpstream(edge.source, nodes, edges)) {
+    if (timeFed.has(edge.source)) {
       (result as Record<string, boolean>)[handle] = true;
     }
   }
@@ -128,15 +130,15 @@ export const PreviewNode = memo(function PreviewNode({
     for (const e of getTargetEdges(s.nodes, s.edges, id)) {
       if (!e.targetHandle) continue;
       const v = evaluateEdgeSource(e, s.nodes, s.edges, 0)?.[0] ?? null;
-      const timeFed = hasTimeUpstream(e.source, s.nodes, s.edges);
+      const timeFed = getTimeUpstreamSet(s.nodes, s.edges).has(e.source);
       key += `${e.source}\u0000${e.sourceHandle ?? ''}\u0000${e.targetHandle}\u0000${v ?? 'n'}\u0000${timeFed ? 1 : 0}\u0001`;
     }
     return key;
   });
 
-  // getTimeInputs walks the graph per incoming edge (BFS), so rebuild it from
-  // getState() only when the folded key actually changes. The JSON.stringify
-  // second stage then stabilizes the *reference* by CONTENT: inputsKey also
+  // getTimeInputs allocates a fresh object, so rebuild it from getState() only
+  // when the folded key actually changes. The JSON.stringify second stage then
+  // stabilizes the *reference* by CONTENT: inputsKey also
   // changes on upstream VALUE edits, and handing the rAF effect a fresh (but
   // equal) object each time would tear the animation loop down and reset its
   // clock to t=0 on every scrub frame.

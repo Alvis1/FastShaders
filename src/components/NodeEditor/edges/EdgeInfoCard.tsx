@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { COUNT_CARD_COLORS, COUNT_LABELS } from '@/utils/colorUtils';
-import { hasTimeUpstream } from '@/utils/graphTraversal';
 import { appTime } from '@/utils/appClock';
-import { evaluateEdgeRange, getEdgeOutputShape, type RangeResult } from '@/engine/cpuEvaluator';
+import { evaluateEdgeRange, getEdgeOutputShape, getTimeUpstreamSet, type RangeResult } from '@/engine/cpuEvaluator';
 import './EdgeInfoCard.css';
 
 interface EdgeInfoCardProps {
@@ -35,7 +34,11 @@ export function EdgeInfoCard({
   nodesRef.current = nodes;
   edgesRef.current = edges;
 
-  const isTimeDriven = hasTimeUpstream(sourceId, nodes, edges);
+  // Through the shared ctx, which walks the UNWRAPPED edges: passing the raw
+  // store array here (as this did) is the trap getUnwrappedEdges' contract
+  // warns about — a Time feeder inside a collapsed group went invisible and
+  // the chip froze on its static branch.
+  const isTimeDriven = getTimeUpstreamSet(nodes, edges).has(sourceId);
 
   // Static (non-time-driven) range: recompute once whenever the graph changes.
   useEffect(() => {

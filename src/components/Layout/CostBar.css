@@ -95,6 +95,55 @@
   color: var(--cost-high);
 }
 
+/* Same-browser bench handoff — a finished ShaderCarousel run offers itself
+   here (fs:benchResult) with one click. Accent border = "news", not chrome. */
+.cost-bar__bench-offer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding: 2px var(--space-1) 2px var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--border-focus) 8%, transparent);
+  border: 1px solid var(--border-focus);
+  border-radius: var(--border-radius-sm);
+}
+.cost-bar__bench-offer-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cost-bar__bench-add {
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  /* --border-focus is #3366CC in BOTH themes (not redefined in the dark
+     block), so white type on it reads identically everywhere. */
+  color: #fff;
+  background: var(--border-focus);
+  border: 1px solid var(--border-focus);
+  border-radius: var(--border-radius-sm);
+  padding: 1px var(--space-2);
+  cursor: pointer;
+}
+.cost-bar__bench-add:hover { filter: brightness(1.1); }
+.cost-bar__bench-dismiss {
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  padding: 1px var(--space-1);
+  cursor: pointer;
+}
+.cost-bar__bench-dismiss:hover { color: var(--cost-high); }
+
 .cost-bar__headset-select:hover {
   border-color: var(--border-default);
 }

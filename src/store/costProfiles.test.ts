@@ -94,30 +94,36 @@ describe('cost profiles (store lifecycle)', () => {
     expect(getCost('voronoi')).toBe(999);                           // last import is active
   });
 
-  it('a new profile inherits the current device texture cap', () => {
-    useAppStore.setState({ selectedHeadsetId: 'quest2' });           // maxTextureDim 1024
-    useAppStore.getState().importCostProfile(parsedM4());
+  it('a new profile inherits the ACTIVE device texture cap, never loosening it', () => {
+    // Only ONE built-in preset ships (Quest 3, 2048 — untested presets were
+    // removed 2026-08-14), so the stricter-cap case is pinned through a
+    // measured profile: import while a 1024-cap profile is active and the new
+    // profile must inherit 1024, not bounce back to the preset's 2048.
+    useAppStore.getState().importCostProfile(parsedM4());            // auto-selects itself
+    const first = useAppStore.getState().costProfiles[0];
+    useAppStore.setState({ costProfiles: [{ ...first, maxTextureDim: 1024 }] });
+    useAppStore.getState().importCostProfile(
+      parseCostFile(JSON.stringify({ meta: { device: 'other', bench: 'static', valid: true }, costs: { voronoi: 111 } }))!,
+    );
     const s = useAppStore.getState();
-    expect(s.costProfiles[0].maxTextureDim).toBe(1024);
+    const latest = s.costProfiles.find((p) => p.label === 'other')!;
+    expect(latest.maxTextureDim).toBe(1024);
     expect(resolveDeviceTextureDim(s.selectedHeadsetId, s.costProfiles)).toBe(1024); // not loosened to 2048
   });
 
   it('setSelectedHeadsetId ignores an unknown/foreign id (no clobber, no persist)', () => {
-    useAppStore.setState({ selectedHeadsetId: 'visionpro' });
+    useAppStore.setState({ selectedHeadsetId: 'quest3' });
     useAppStore.getState().setSelectedHeadsetId('cp:foreign|from-an-imported-project');
-    expect(useAppStore.getState().selectedHeadsetId).toBe('visionpro'); // selection kept
+    expect(useAppStore.getState().selectedHeadsetId).toBe('quest3');    // selection kept
     expect(localStorage.getItem('fs:headsetId')).toBeNull();            // not persisted
   });
 
-  it('Quest 3S shares Quest 3s chip, so its budget scales by the pixel ratio', () => {
-    const q3 = VR_HEADSETS.find((h) => h.id === 'quest3')!;
-    const q3s = VR_HEADSETS.find((h) => h.id === 'quest3s')!;
-    // Same Snapdragon XR2 Gen 2 / Adreno 740; a point is per-pixel work at the
-    // Quest 3 reference resolution, so the budget scales inversely with pixels.
-    // Quest 3S panels are 1832x1920 per eye; Quest 3's are 2064x2208.
-    const pixelRatio = (2064 * 2208) / (1832 * 1920);   // 1.29560
-    expect(q3s.maxPoints).toBeGreaterThan(q3.maxPoints);
-    expect(q3s.maxPoints).toBeCloseTo(q3.maxPoints * pixelRatio, -1);
+  it('ships exactly the measured device presets (untested devices removed 2026-08-14)', () => {
+    // A budget nobody measured certifies shaders for hardware nobody ran. A
+    // device earns a row by being benchmarked — run ShaderCarousel on it and
+    // import the result JSON — so this list only ever grows with evidence.
+    expect(VR_HEADSETS.map((h) => h.id)).toEqual(['quest3']);
+    expect(VR_HEADSETS[0].maxPoints).toBe(200); // the quest3-20260723 calibration basis
   });
 
   /** A collapsed group whose boundary output 'o0' stands in for `<memberId>`/'out'. */

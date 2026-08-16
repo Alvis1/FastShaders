@@ -43,7 +43,7 @@
 
 import { WebGPURenderer } from 'three';
 import {
-  statsFromTwoLevelRun, annotateMarginalCost, exportResults,
+  statsFromTwoLevelRun, annotateMarginalCost, exportResults, exportProfile, storeBenchResult,
 } from './bench-stats.js';
 import { createBenchTimer, CALIBRATE_TARGET_MS } from './bench-timing.js';
 import {
@@ -231,11 +231,21 @@ export function createBenchDriver(spec) {
       shaders: results,
     };
 
+    // Same-browser handoff: store the profile so a FastShaders tab on this
+    // origin offers it with one click in the points box — no file needed.
+    // Driver benches only (static/microplane price nodes; InOut never can).
+    const stored = storeBenchResult(payload);
+
     showDonePopup({
       title: spec.report.popupTitle,
       subtitle: `${results.length} shaders @ ${res.width}×${res.height} on ${gpuInfo} (${timer.timingMethod}${spec.report.subtitleSuffix ?? ''})`,
       rows,
-      onDownload: () => exportResults(payload, spec.report.filename),
+      hint: stored
+        ? 'FastShaders on this browser now offers this run in its points box (one click). On another device: download the profile and drag it onto the points box.'
+        : 'Download the profile and drag it onto the points box (cost bar) in FastShaders — it becomes this device’s measured profile.',
+      downloadLabel: '⬇ Device profile (.json)',
+      onDownload: () => exportProfile(payload, spec.report.filename),
+      onDownloadResearch: () => exportResults(payload, spec.report.filename),
       onRunAgain: () => { gateApi.show(); },
     });
   }
@@ -284,6 +294,11 @@ export function createBenchDriver(spec) {
     try {
       await initRenderer();
       spec.afterInit?.(renderer);
+      // Readiness flag for the launcher's "Benchmark this device" auto-start:
+      // the parent polls this (same-origin) before clicking the gate, because
+      // runBenchmark dereferences `renderer` and a click during init would
+      // throw into the error overlay instead of starting the run.
+      window.__benchReady = true;
     } catch (e) {
       log(`Init failed: ${e.message}`, 'err');
       console.error(e);

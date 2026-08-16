@@ -19,9 +19,12 @@
     <!-- Substituted at build time by the fs-version-html plugin in vite.config.ts -->
     <meta name="version" content="%APP_VERSION%" />
     <title>FastShaders - TSL Visual Shader Editor</title>
-    <!-- Inline data: favicon — kills the browser's automatic /favicon.ico 404
-         without adding a network fetch (offline constraint). -->
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
+    <!-- The app mark, from public/ (a leading slash is the documented way to
+         reference a public asset — Vite prefixes the deploy base, which differs
+         across gh-pages, alvismisjuns and the desktop shell). Same-origin, so
+         it still resolves with no network; it also kills the browser's
+         automatic /favicon.ico 404. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!-- Fonts are self-hosted (@fontsource imports in main.tsx) so the app works offline. -->
     <!--
       Stamp the persisted theme before first paint so a dark-mode session doesn't

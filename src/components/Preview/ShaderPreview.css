@@ -69,7 +69,12 @@
   border-color: var(--border-focus);
 }
 
-.shader-preview__play-btn {
+/* The turntable ▶ and the model-animation ▶/◎ are the same control shape in
+   different boxes — see the JSX for why they are deliberately not merged. */
+.shader-preview__play-btn,
+.shader-preview__anim-play,
+.shader-preview__anim-inplace,
+.shader-preview__anim-clips-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -83,10 +88,25 @@
   background: var(--bg-panel);
   color: var(--text-primary);
   cursor: pointer;
+  font-family: var(--font-sans);
 }
 
-.shader-preview__play-btn:hover {
+.shader-preview__play-btn:hover,
+.shader-preview__anim-play:hover,
+.shader-preview__anim-clips-btn:hover,
+.shader-preview__anim-inplace:not(:disabled):hover {
   border-color: var(--border-focus);
+}
+
+/* Held open — the button is a disclosure, so it stays down while its menu is. */
+.shader-preview__anim-clips-btn--active {
+  color: var(--text-primary);
+  border-color: var(--border-focus);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:root[data-theme="dark"] .shader-preview__anim-clips-btn--active {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .shader-preview__fs-btn {
@@ -242,20 +262,50 @@
   white-space: nowrap;
 }
 
-/* The two clusters floating over the 3D view (kept inside __body so they
-   survive fullscreen): playback/view on the LEFT, display targets on the
-   RIGHT. Frosted pills like the canvas bar — one shared rule, since the only
-   thing that differs between them is which edge they hug.
+/* The bottom row (kept inside __body so it survives fullscreen): playback/view
+   on the LEFT, the model-animation pill beside it, the scrubber taking the
+   slack, display targets on the RIGHT.
 
-   Both stay on the same baseline (bottom: 10px) so they read as one row split
-   in two rather than two unrelated boxes. */
-.shader-preview__bottom-controls,
-.shader-preview__display-controls {
+   It is ONE flex bar rather than two absolutely-anchored boxes, and that is
+   what makes the timeline expressible: "stretch from the animation pill to the
+   display cluster" is a flex:1 sibling, whereas with `left: 10px` / `right:
+   10px` boxes it would mean measuring both at every render (the left cluster's
+   width changes on its own — the mic control appears and disappears with the
+   graph).
+
+   The bar spans the full width of the 3D view, so it MUST NOT swallow orbit
+   drags aimed at the gaps between its pills: it is pointer-events:none and its
+   children opt back in. */
+.shader-preview__bottom-bar {
   position: absolute;
+  left: 10px;
+  right: 10px;
   bottom: 10px;
   /* Above the iframe (z-auto) but UNDER the drop veil (z 3) — during a file
      drag the veil covers the whole body, these pills included. */
   z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* wrap-REVERSE, so overflow lines stack UPWARD from the bottom-anchored
+     bar. The pills are unshrinkable min-content rows of fixed buttons; on a
+     narrow pane (SplitPane allows ~200px, ~450px suffices with mic + an
+     animated model) a nowrap bar pushed the display cluster past the right
+     inset where the body's overflow:hidden clipped the ⛶/VR buttons — the
+     "escape this pane" pair must never be unreachable. */
+  flex-wrap: wrap-reverse;
+  pointer-events: none;
+}
+
+.shader-preview__bottom-bar > * {
+  pointer-events: auto;
+}
+
+/* Frosted pills like the canvas bar — one shared rule, since nothing differs
+   between the three but their contents. */
+.shader-preview__bottom-controls,
+.shader-preview__anim-controls,
+.shader-preview__display-controls {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -268,19 +318,186 @@
   -webkit-backdrop-filter: blur(8px);
 }
 
-.shader-preview__bottom-controls {
-  left: 10px;
-}
-
+/* Holds the right edge when no timeline is rendered to take up the slack (no
+   animation, or a primitive geometry). With a timeline present the flex:1
+   sibling has already eaten the free space, so this contributes nothing. */
 .shader-preview__display-controls {
-  right: 10px;
+  margin-left: auto;
 }
 
 /* Empty on desktop builds once VR is compiled out and fullscreen is the lone
    child — but never actually empty, so no :empty guard is needed. */
 :root[data-theme="dark"] .shader-preview__bottom-controls,
+:root[data-theme="dark"] .shader-preview__anim-controls,
 :root[data-theme="dark"] .shader-preview__display-controls {
   background: rgba(70, 74, 81, 0.85);
+}
+
+/* ── Model animation scrubber ─────────────────────────────────────────────
+   The thumb is the pill's own box at half scale, sliding along a bare line.
+   `--fs-anim-thumb` is the ONE place its size is written: the line's end
+   insets derive from it, and ShaderPreview.tsx reads it back off the element
+   (`thumb.offsetWidth`) for both the position write and the pointer→time
+   math, so the number can't drift between the stylesheet and the component. */
+.shader-preview__timeline {
+  --fs-anim-thumb: 20px;
+  position: relative;
+  flex: 1;
+  /* Taller than the thumb so the line has grab room above and below it; the
+     bar centres it against the taller pills either side. */
+  height: var(--ctl-size);
+  min-width: 40px;
+  cursor: pointer;
+  touch-action: none; /* the scrub owns the gesture — no scroll-steal on touch */
+}
+
+.shader-preview__timeline:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: var(--border-radius-sm);
+}
+
+/* The line is drawn in --text-primary rather than a literal black, the same
+   rule the uniform panel's controls follow: it floats over a user-pickable
+   scene background in both themes, and a fixed #000 disappears into a dark
+   backdrop exactly when the shader is at its most interesting. The 1px halo is
+   the seam convention — a light line beside a dark one, so at most one of the
+   two can vanish into whatever colour the user picked. */
+.shader-preview__timeline-line {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--fs-anim-thumb) / 2);
+  right: calc(var(--fs-anim-thumb) / 2);
+  height: 2px;
+  transform: translateY(-50%);
+  background: var(--text-primary);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+:root[data-theme="dark"] .shader-preview__timeline-line {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+/* Same frosted box as the button groups, half their height. `left` is written
+   imperatively per report — never here — so the resting position is the clip
+   start until the first frame lands. */
+.shader-preview__timeline-thumb {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--fs-anim-thumb) / 2);
+  width: var(--fs-anim-thumb);
+  height: var(--fs-anim-thumb);
+  transform: translate(-50%, -50%);
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  /* The track owns the pointer (it captures the gesture), so the thumb must
+     not intercept the pointerdown that starts a scrub on top of it. */
+  pointer-events: none;
+}
+
+:root[data-theme="dark"] .shader-preview__timeline-thumb {
+  background: rgba(70, 74, 81, 0.85);
+}
+
+/* Lit while root motion is suppressed: "in place" is a held state of the
+   playback, not a momentary action, so the control stays visibly down. */
+.shader-preview__anim-inplace--active {
+  color: var(--text-primary);
+  border-color: var(--border-focus);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:root[data-theme="dark"] .shader-preview__anim-inplace--active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* A clip with no root translation has nothing to pin — kept visible (the
+   cluster's width must not jump between models) but plainly inert. */
+.shader-preview__anim-inplace:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ── Clip picker ──────────────────────────────────────────────────────────
+   Right-click / long-press on the animation ▶. Portalled (into the fullscreen
+   element when the preview is the fullscreen element — see AnimClipMenu), so
+   `position: fixed` with left/top written from the measured placement. */
+.anim-clip-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 140px;
+  max-width: 260px;
+  /* Bounded so a file with dozens of clips scrolls instead of covering the
+     viewport — the same rule the colour popover follows. */
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.25));
+  font-family: var(--font-sans);
+}
+
+.anim-clip-menu__head {
+  padding: 3px 8px 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.anim-clip-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  color: var(--text-primary);
+  background: none;
+  border: none;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+}
+
+.anim-clip-menu__item:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+:root[data-theme="dark"] .anim-clip-menu__item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.anim-clip-menu__item--active {
+  font-weight: 600;
+}
+
+/* Fixed-width marker column so the names stay on one left edge whether or not
+   a row carries the dot — a bullet that reflows the label reads as two lists. */
+.anim-clip-menu__mark {
+  flex: 0 0 auto;
+  width: 8px;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--border-focus);
+}
+
+.anim-clip-menu__name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* "Compiling shader…" pill shown between a fresh srcDoc and the first painted
