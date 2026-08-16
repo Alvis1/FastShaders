@@ -205,6 +205,11 @@ function validatePlaying(v: string | null): boolean {
   return v === 'true';
 }
 
+/** FPS/frame-time readout — off by default, like podest's own. */
+function validateStats(v: string | null): boolean {
+  return v === 'true';
+}
+
 /**
  * What the iframe's `gltf-anim` component reports about the loaded model. Null
  * whenever the current preview has no playable clip — a primitive, an OBJ, or a
@@ -408,6 +413,22 @@ export function ShaderPreview() {
   const [animInfo, setAnimInfo] = useState<AnimInfo | null>(null);
   const [animPlaying, setAnimPlaying] = usePersistedState('fs:previewAnimPlaying', validateAnimPlaying);
   const [animInPlace, setAnimInPlace] = usePersistedState('fs:previewAnimInPlace', validateAnimInPlace);
+
+  /**
+   * FPS / frame-time readout over the viewport's top-right corner. The iframe
+   * owns the render loop and therefore the measurement (`fs-stats`); this half
+   * only asks for it and paints the number — the same split podest uses.
+   *
+   * The readout is written IMPERATIVELY into a ref'd node rather than held in
+   * state: reports land ~4x/s and routing them through React would re-render
+   * this whole panel at that rate, the same reason the scrubber thumb and the
+   * mic meter are hand-written.
+   */
+  const [showStats, setShowStats] = usePersistedState('fs:previewStats', validateStats);
+  const statsRef = useRef<HTMLDivElement>(null);
+  const showStatsRef = useRef(showStats);
+  /** Placeholder until the first report (~250 ms) so the chip is never blank. */
+  const STATS_PLACEHOLDER = '— FPS · — ms';
 
   const timelineRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
@@ -895,7 +916,7 @@ export function ShaderPreview() {
       // so e.origin will be "null"; identity is verified via e.source instead.
       if (e.source !== iframeRef.current?.contentWindow) return;
       const data = e.data as {
-        type?: string; x?: number; y?: number; z?: number;
+        type?: string; x?: number; y?: number; z?: number; fps?: number; ms?: number;
         on?: boolean; files?: unknown;
         has?: boolean; duration?: number; canInPlace?: boolean;
         name?: unknown; clip?: number; clips?: unknown; time?: number;
@@ -960,6 +981,21 @@ export function ShaderPreview() {
         if (!scrubbingRef.current) paintThumb(data.time);
         return;
       }
+      if (data.type === 'fs:stats') {
+        // Frame-rate report from the stage's render loop (~4x/s while on).
+        // Written straight to the DOM — see the showStats declaration for why
+        // this must not go through state. The numbers come from the sandboxed
+        // iframe, so they are coerced and bounded before they reach textContent
+        // (podest's paintStats does the same); textContent only, never HTML.
+        const el = statsRef.current;
+        if (!el || !showStatsRef.current) return;
+        const f = typeof data.fps === 'number' && isFinite(data.fps)
+          ? Math.min(9999, Math.max(0, data.fps)) : 0;
+        const ms = typeof data.ms === 'number' && isFinite(data.ms)
+          ? Math.min(9999, Math.max(0, data.ms)) : 0;
+        el.textContent = `${Math.round(f)} FPS · ${ms.toFixed(1)} ms`;
+        return;
+      }
       if (data.type === 'fs:preview-drag') {
         // Drag entered/left the iframe region — mirror the drop veil.
         iframeDragRef.current = !!data.on;
@@ -990,6 +1026,12 @@ export function ShaderPreview() {
         setCompiling(false);
         const win = iframeRef.current?.contentWindow;
         if (!win) return;
+        // Re-arm the stats reporter. Every shader edit swaps srcDoc, so the
+        // fresh component boots OFF — without this replay the readout would go
+        // dead on the first edit after switching it on and never come back,
+        // which reads as the toggle being broken. podest replays the same
+        // message from applyStateToStage for the same reason.
+        if (showStatsRef.current) win.postMessage({ type: 'fs:stats-on', on: true }, '*');
         // Uniforms aren't baked into the iframe HTML — shaderloader
         // initialises them from the module schema, so the user's
         // current slider values need to be pushed every time a fresh
@@ -1302,6 +1344,31 @@ export function ShaderPreview() {
   // scrubbing a document that no longer has a mixer.
   useEffect(() => { setAnimInfo(null); }, [previewHtml]);
 
+  /**
+   * Ask the stage to start or stop measuring, and mirror the flag into the ref
+   * the (mount-once) message handler reads.
+   *
+   * Blanking on the way OUT is what stops a stale number sitting frozen over
+   * the viewport: reports stop arriving the moment the stage is told to stop,
+   * so whatever was on screen would otherwise stay there, indistinguishable
+   * from a real reading — and on the way back in it would flash that old value
+   * for the ~250 ms before the first fresh report. Same reasoning as podest's
+   * applyStats.
+   */
+  useEffect(() => {
+    showStatsRef.current = showStats;
+    if (statsRef.current) statsRef.current.textContent = showStats ? STATS_PLACEHOLDER : '';
+    iframeRef.current?.contentWindow?.postMessage({ type: 'fs:stats-on', on: showStats }, '*');
+  }, [showStats]);
+
+  // A rebuild resets the chip to its placeholder for the same reason the anim
+  // controls reset: the numbers on screen describe a document that no longer
+  // exists. The re-arm itself rides fs:preview-ready, since the fresh
+  // component isn't listening yet at this point.
+  useEffect(() => {
+    if (showStats && statsRef.current) statsRef.current.textContent = STATS_PLACEHOLDER;
+  }, [previewHtml, showStats]);
+
   // The remembered playhead is only meaningful for the model it was measured
   // on, so it resets when the MODEL changes — not when the shader does, which
   // is the whole point of remembering it.
@@ -1574,20 +1641,34 @@ export function ShaderPreview() {
             <span className="shader-preview__subdivision-value">{subdivision}</span>
           </label>
         )}
-        {uniforms.length > 0 && (
+        {/* Right-hand toggles. The group carries the auto margin, NOT the
+            buttons: two `margin-left: auto` siblings SHARE the slack rather
+            than stacking, so the pair would drift apart across the bar. */}
+        <div className="shader-preview__ctl-right">
           <button
             type="button"
-            // The dot must survive a collapse: the overlay is collapsible, and
-            // with it shut an override would have no affordance anywhere.
-            className={`shader-preview__props-btn${showUniforms ? ' shader-preview__props-btn--active' : ''}${overrideCount ? ' shader-preview__props-btn--override' : ''}`}
-            onClick={() => setShowUniforms((v) => !v)}
-            title={showUniforms ? t('Hide uniforms', language) : t('Show uniforms', language)}
+            className={`shader-preview__props-btn${showStats ? ' shader-preview__props-btn--active' : ''}`}
+            onClick={() => setShowStats((v) => !v)}
+            title={t('Frames per second and the time between presented frames, over the top-right corner. The period includes vsync, so it reads the display refresh rate until the shader actually misses frames.', language)}
+            aria-pressed={showStats}
           >
-            {t('Uniforms', language)}
+            {t('FPS', language)}
           </button>
-        )}
+          {uniforms.length > 0 && (
+            <button
+              type="button"
+              // The dot must survive a collapse: the overlay is collapsible, and
+              // with it shut an override would have no affordance anywhere.
+              className={`shader-preview__props-btn${showUniforms ? ' shader-preview__props-btn--active' : ''}${overrideCount ? ' shader-preview__props-btn--override' : ''}`}
+              onClick={() => setShowUniforms((v) => !v)}
+              title={showUniforms ? t('Hide uniforms', language) : t('Show uniforms', language)}
+            >
+              {t('Uniforms', language)}
+            </button>
+          )}
+        </div>
       </div>
-      <div className="shader-preview__body" ref={bodyRef}>
+      <div className={`shader-preview__body${showStats ? ' shader-preview__body--stats' : ''}`} ref={bodyRef}>
         {compiling && (
           <div className="shader-preview__compiling" role="status" aria-live="polite">
             <span className="shader-preview__compiling-dot" />
@@ -1601,6 +1682,14 @@ export function ShaderPreview() {
         )}
         {dropNotice && (
           <div className="shader-preview__drop-notice" role="alert">{dropNotice}</div>
+        )}
+        {/* Always MOUNTED while enabled (never conditionally rendered on the
+            number), so the mount-once message handler can write into it via
+            the ref without waiting for a React commit. */}
+        {showStats && (
+          <div className="shader-preview__stats" ref={statsRef} aria-live="off">
+            {STATS_PLACEHOLDER}
+          </div>
         )}
         <iframe
           ref={iframeRef}

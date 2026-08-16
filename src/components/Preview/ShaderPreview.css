@@ -606,6 +606,16 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
   cursor: pointer;
+}
+
+/* The right-hand toggle group (FPS + Uniforms). The auto margin lives HERE
+   rather than on the buttons: two auto-margined flex siblings divide the free
+   space between them instead of both being pushed right, so putting it on each
+   button would strand them at opposite ends of the bar. */
+.shader-preview__ctl-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
 }
 
@@ -619,7 +629,46 @@
   background: rgba(0, 0, 0, 0.04);
 }
 
-/* Floating uniform overlay — compact */
+/* ── FPS / frame-time readout ─────────────────────────────────────────────
+   Opt-in from the top bar, drawn over the viewport's top-right corner.
+
+   z-index 2 puts it level with the bottom bar and UNDER the drop veil (3), so
+   a file drag covers it exactly like every other floating control — a chip
+   sitting on top of the "drop a model here" veil would read as part of the
+   drop target.
+
+   `pointer-events: none` is mandatory, not tidiness: the whole body is the
+   orbit-drag surface, and an opaque chip in the corner would silently eat the
+   start of any drag that began under it.
+
+   Monospace + tabular-nums so the digits keep their columns while the number
+   changes 4x/s — proportional figures jitter the whole chip's width and turn a
+   steady 60 into visible noise. */
+.shader-preview__stats {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  padding: 4px 8px;
+  color: #fff;
+  background: rgba(20, 21, 25, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--border-radius-sm);
+  font: 12px/1.35 var(--font-mono, ui-monospace, Menlo, monospace);
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+  pointer-events: none;
+}
+
+/* Floating uniform overlay — compact.
+   It shares the top-right corner with the stats chip, so it starts BELOW one
+   when both are up. A z-index fight would just hide one of them; the panel is
+   the taller, interactive surface, so the fixed-height chip is what yields the
+   corner. 6 + 24 (chip) + 6 = 36px. */
+.shader-preview__body--stats .shader-preview__uniforms {
+  top: 36px;
+}
+
 .shader-preview__uniforms {
   position: absolute;
   top: 6px;

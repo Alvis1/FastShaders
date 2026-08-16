@@ -73,7 +73,10 @@ export function NewShaderModal({ open, onCancel, onConfirm }: Props) {
           <button className="csv-import-modal__button" onClick={onCancel}>
             {t('Cancel', language)}
           </button>
-          <button className="csv-import-modal__button" onClick={() => onConfirm(false)}>
+          <button
+            className="csv-import-modal__button csv-import-modal__button--danger"
+            onClick={() => onConfirm(false)}
+          >
             {t('Don’t save', language)}
           </button>
           <button

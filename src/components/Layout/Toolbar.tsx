@@ -408,16 +408,43 @@ export function Toolbar() {
             <path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
           </svg>
         </button>
-        <a
-          className="toolbar__sc-link"
-          href={`${import.meta.env.BASE_URL}podest.html`}
-          target="_blank"
-          rel="noreferrer noopener"
-          title="Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
-          aria-label="Open Podest"
-        >
-          P
-        </a>
+        {/* Desktop opens Podest as a REAL second app window (a Rust command —
+            see src-tauri/src/podest_window.rs); the web build keeps the plain
+            new-tab anchor. `target="_blank"` is meaningless inside a Tauri
+            webview — neither WKWebView nor WebView2 honours it without a host
+            handler — so the shared anchor was simply inert on desktop. Branch
+            on the whole ELEMENT rather than just the handler: an <a href> with
+            a click-preventing onClick still shows a bogus status-bar URL and
+            still offers "Open in new window" on right-click. */}
+        {__FS_DESKTOP__ ? (
+          <button
+            type="button"
+            className="toolbar__sc-link"
+            onClick={() => {
+              benchInvoke<void>('podest_open').catch((e) =>
+                // No toast surface up here, and a silent no-op is exactly the
+                // failure this replaces — the console line is at least a thread
+                // to pull. A second click re-focuses rather than erroring.
+                console.error('Could not open the Podest window:', errorText(e)),
+              );
+            }}
+            title="Open Podest in a separate window — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
+            aria-label="Open Podest"
+          >
+            P
+          </button>
+        ) : (
+          <a
+            className="toolbar__sc-link"
+            href={`${import.meta.env.BASE_URL}podest.html`}
+            target="_blank"
+            rel="noreferrer noopener"
+            title="Open Podest — full-screen shader player (drop .js/.tsl shaders, .glb models, .zip)"
+            aria-label="Open Podest"
+          >
+            P
+          </a>
+        )}
         {/* ShaderCarousel is WebGPU-only and excluded from the FS_DESKTOP
             webview bundle — the link would 404 there. The desktop build
             instead ships it as a Tauri resource and serves it over LAN for

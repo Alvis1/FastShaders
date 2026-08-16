@@ -372,6 +372,87 @@ const XR_STATS_SCRIPT = `<script>
 <${''}/script>`;
 
 /**
+ * Frame-time / FPS reporter for the EDITOR's preview pane (non-xr).
+ *
+ * The XR twin above draws its own head-locked panel because a popup has no
+ * parent to draw for it. Here the parent owns the chrome, so this half only
+ * MEASURES and posts `fs:stats {fps, ms}` — the same split, and the same
+ * message vocabulary, that `public/podest.html` already uses between its stage
+ * and its panel, so the three surfaces share one contract.
+ *
+ * Measurement rides A-Frame's tick (driven by `renderer.setAnimationLoop`)
+ * rather than a bare `requestAnimationFrame` loop, so it counts frames the
+ * renderer actually presented instead of compositor callbacks that keep firing
+ * after the scene stops. The number is the presented frame PERIOD — it
+ * includes vsync, so it reads the display's refresh rate until the shader
+ * genuinely misses frames. Same caveat as the XR panel and podest.
+ *
+ * Reported ~4x/s: fast enough to react to an edit, slow enough that the
+ * readout cannot meaningfully bias the cost it reports. Deltas over 2 s are
+ * DROPPED rather than averaged in — that is a backgrounded tab returning, not
+ * a slow frame.
+ *
+ * Silent until the parent asks (`fs:stats-on`), so a preview with the readout
+ * off carries no traffic at all: this iframe is rebuilt on every shader edit,
+ * and an always-on feed would be pure cost for a number nobody switched on.
+ */
+export const STATS_REPORT_SCRIPT = `<script>
+  if (window.AFRAME && !AFRAME.components["fs-stats"]) {
+    AFRAME.registerComponent("fs-stats", {
+      init: function () {
+        this.on = false;
+        this.last = 0;
+        this.acc = 0;
+        this.frames = 0;
+        this.onMessage = this.onMessage.bind(this);
+        window.addEventListener("message", this.onMessage);
+      },
+      remove: function () {
+        window.removeEventListener("message", this.onMessage);
+      },
+      onMessage: function (e) {
+        if (e.source !== window.parent) return;
+        var m = e.data;
+        if (!m || m.type !== "fs:stats-on") return;
+        this.on = !!m.on;
+        // Reset the whole accumulator, not just the flag: the gap between
+        // switching off and back on is not a frame time.
+        this.last = 0;
+        this.acc = 0;
+        this.frames = 0;
+      },
+      tick: function () {
+        if (!this.on) { this.last = 0; return; }
+        // window.performance throughout — the XR twin above tests
+        // window.performance but then calls the BARE global, which is the same
+        // object in a browser and a different one anywhere else.
+        var now = (window.performance && window.performance.now)
+          ? window.performance.now() : Date.now();
+        if (this.last > 0) {
+          var dt = now - this.last;
+          if (dt > 0 && dt < 2000) {
+            this.acc += dt;
+            this.frames++;
+            if (this.acc >= 250) {
+              try {
+                window.parent.postMessage({
+                  type: "fs:stats",
+                  fps: this.frames * 1000 / this.acc,
+                  ms: this.acc / this.frames
+                }, "*");
+              } catch (err) {}
+              this.acc = 0;
+              this.frames = 0;
+            }
+          }
+        }
+        this.last = now;
+      }
+    });
+  }
+<${''}/script>`;
+
+/**
  * Exported for `previewFitBounds.test.ts`, which evaluates this script against a
  * real `three` import and a stubbed AFRAME to pin the normalization maths — the
  * function body is otherwise untested (the HTML tests only assert the emitted
@@ -1656,9 +1737,15 @@ export function tslToPreviewHTML(
   }
 
   // Register the in-headset stats panel. Attached via the <a-scene> attribute
-  // below, so it only exists on the XR popup.
+  // below, so it only exists on the XR popup. The editor's preview gets the
+  // reporting half instead (fs-stats) — same measurement, but the parent draws
+  // the readout, so the popup's canvas panel would be redundant chrome there
+  // and the editor's postMessage would have nobody to post to in the popup.
   if (xr) {
     lines.push(XR_STATS_SCRIPT);
+    lines.push('');
+  } else {
+    lines.push(STATS_REPORT_SCRIPT);
     lines.push('');
   }
 
@@ -1682,9 +1769,11 @@ export function tslToPreviewHTML(
   const sceneLines: string[] = [];
   // vr-mode-ui only in xr mode: A-Frame then renders its own Enter-VR button,
   // which is the immersive entry point for the popup page.
-  // fs-xr-stats draws the in-headset frame-time/FPS panel (xr only — the
-  // editor's sandboxed preview must not pay for it).
-  sceneLines.push(`<a-scene vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ''} loading-screen="enabled: false" background="color: ${bgColor}">`);
+  // fs-xr-stats draws the in-headset frame-time/FPS panel (xr only); fs-stats
+  // is its editor-side counterpart, which measures the same way but posts to
+  // the parent instead of drawing. Both are inert until switched on, so the
+  // attribute costs a component init and nothing else.
+  sceneLines.push(`<a-scene vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ' fs-stats'} loading-screen="enabled: false" background="color: ${bgColor}">`);
   sceneLines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
   // Parent holds the spin (so it tweens cleanly 0→360 on world Y/Z), child
   // holds the static tilt and the shader/geometry. The id stays on the child

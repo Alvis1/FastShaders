@@ -21,6 +21,13 @@ interface WorkFolderInfo {
 }
 interface WorkFolderEntry {
   fileName: string;
+  /**
+   * The shader's authored name, recovered Rust-side from the embedded
+   * FASTSHADERS_PROJECT_V1 block. Still sent, no longer DISPLAYED — the list
+   * shows file names only. Kept on the type because the command really does
+   * return it; if it stays unused, the scan in `work_folder.rs` (which reads
+   * up to MAX_SCAN_BYTES of every `.js` on each listing) is what to delete.
+   */
   displayName: string | null;
   sizeBytes: number;
   modifiedMs: number | null;
@@ -306,11 +313,19 @@ export function WorkFolder() {
                 disabled={busy}
                 title={t('Load this shader into the editor', language)}
               >
+                {/* The FILE NAME is the label — this is a folder listing, and
+                    the name on disk is the one the user can find again outside
+                    the app. It used to lead with the shader's authored name
+                    (recovered from the embedded project block) and repeat the
+                    file name underneath, which put two different names on one
+                    row: a file saved as `waves.js` whose graph was still called
+                    "Untitled" read as an unrelated shader. The size keeps the
+                    second line; the file name no longer needs repeating. */}
                 <span className="toolbar__local-os toolbar__wf-row-name">
-                  {entry.displayName ?? entry.fileName.replace(/\.(js|zip)$/i, '')}
+                  {entry.fileName}
                 </span>
                 <span className="toolbar__local-detail">
-                  {entry.fileName} · {formatSize(entry.sizeBytes)}
+                  {formatSize(entry.sizeBytes)}
                 </span>
               </button>
             ))
