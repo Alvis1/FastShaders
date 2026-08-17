@@ -174,7 +174,7 @@ describe('mic node — exported module', () => {
     // "this uses a microphone".
     const { nodes, edges } = micGraph(['bass']);
     const mod = tslToShaderModule(graphToCode(nodes, edges).code);
-    expect(mod).toContain('MICROPHONE INPUT — this file does NOT capture audio.');
+    expect(mod).toContain('LIVE AUDIO INPUT — this file does NOT capture audio.');
     expect(mod).toContain('mic1_bass');
     expect(mod).toContain('secure context');
   });
@@ -185,7 +185,7 @@ describe('mic node — exported module', () => {
     const mod = tslToShaderModule(
       graphToCode([color, out], [makeEdge('c', 'out', 'out', 'color')]).code,
     );
-    expect(mod).not.toContain('MICROPHONE INPUT');
+    expect(mod).not.toContain('LIVE AUDIO INPUT');
   });
 });
 

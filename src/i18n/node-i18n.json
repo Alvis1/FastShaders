@@ -77,7 +77,8 @@
     "unknown": "Nezināms",
     "dataNode": "Dati",
     "imageNode": "Attēls",
-    "micNode": "Mikrofons"
+    "micNode": "Mikrofons",
+    "audioInput": "Audio ievade"
   },
   "categories": {
     "input": "Ievade",

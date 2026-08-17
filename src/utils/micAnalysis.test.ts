@@ -7,8 +7,13 @@ import {
   bandBinRange,
   analyseMic,
   micUniformName,
-  isMicUniformName,
-  micChannelOf,
+  isLiveAudioUniformName,
+  liveAudioChannelOf,
+  liveAudioVarBaseOf,
+  liveAudioVarBase,
+  isLiveAudioNodeType,
+  MIC_VAR_BASE,
+  AUDIO_VAR_BASE,
 } from './micAnalysis';
 
 /** 48 kHz / fftSize 1024 → 512 bins, 46.875 Hz per bin. */
@@ -129,17 +134,50 @@ describe('uniform names', () => {
     expect(micUniformName('mic2', 'treble')).toBe('mic2_treble');
   });
 
-  it('recognises every emitted channel name', () => {
-    for (const ch of MIC_CHANNELS) {
-      expect(isMicUniformName(micUniformName('mic1', ch))).toBe(true);
-      expect(micChannelOf(micUniformName('mic7', ch))).toBe(ch);
+  it('recognises every emitted channel name, for BOTH live-audio nodes', () => {
+    for (const base of [MIC_VAR_BASE, AUDIO_VAR_BASE]) {
+      for (const ch of MIC_CHANNELS) {
+        expect(isLiveAudioUniformName(micUniformName(`${base}1`, ch))).toBe(true);
+        expect(liveAudioChannelOf(micUniformName(`${base}7`, ch))).toBe(ch);
+      }
     }
   });
 
-  it('rejects names that are not mic uniforms', () => {
-    for (const n of ['colorA', 'mic', 'mic1', 'mic1_', 'mic1_volume', 'xmic1_bass', 'mic1_bass2']) {
-      expect(isMicUniformName(n)).toBe(false);
-      expect(micChannelOf(n)).toBeNull();
+  it('rejects names that are not live-audio uniforms', () => {
+    for (const n of [
+      'colorA', 'mic', 'mic1', 'mic1_', 'mic1_volume', 'xmic1_bass', 'mic1_bass2',
+      'aud', 'aud1', 'aud1_', 'aud1_volume', 'xaud1_bass', 'audio1_bass',
+    ]) {
+      expect(isLiveAudioUniformName(n)).toBe(false);
+      expect(liveAudioChannelOf(n)).toBeNull();
+      expect(liveAudioVarBaseOf(n)).toBeNull();
+    }
+  });
+
+  /**
+   * The routing key the preview pump uses to send each uniform to its OWN
+   * capture session. If these two ever collapsed onto one base, a graph holding
+   * both nodes would drive one node's uniforms from the other node's sound —
+   * silently, and only in the graph that has both.
+   */
+  it('routes each node kind to a distinct variable base', () => {
+    expect(MIC_VAR_BASE).not.toBe(AUDIO_VAR_BASE);
+    expect(liveAudioVarBase('micNode')).toBe(MIC_VAR_BASE);
+    expect(liveAudioVarBase('audioInput')).toBe(AUDIO_VAR_BASE);
+    expect(liveAudioVarBaseOf('mic3_bass')).toBe(MIC_VAR_BASE);
+    expect(liveAudioVarBaseOf('aud3_bass')).toBe(AUDIO_VAR_BASE);
+  });
+
+  it('identifies the live-audio node types and nothing else', () => {
+    expect(isLiveAudioNodeType('micNode')).toBe(true);
+    expect(isLiveAudioNodeType('audioInput')).toBe(true);
+    for (const t of ['float', 'time', 'dataNode', 'imageNode', '', undefined, null]) {
+      expect(isLiveAudioNodeType(t as string)).toBe(false);
+    }
+    // `registryType` arrives from .fastshader files, so the lookup must not
+    // resolve prototype members — the documented Record-vs-Map trap.
+    for (const t of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      expect(isLiveAudioNodeType(t)).toBe(false);
     }
   });
 });

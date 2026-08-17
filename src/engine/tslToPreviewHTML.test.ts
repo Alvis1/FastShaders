@@ -153,3 +153,40 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
     expect(html).toContain(esc('vr-mode-ui="enabled: true"'));
   });
 });
+
+describe('tslToPreviewHTML — the WGSL/GLSL backend toggle', () => {
+  it('defaults to auto: user-force flag false, ahead of the platform rule', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'sphere' });
+    expect(html).toContain('var __FS_USER_FORCE_WEBGL2 = false;');
+    // The user branch runs BEFORE the platform rule (a forced document must
+    // not depend on UA sniffing) and both precede the adapter pre-flight.
+    const user = html.indexOf('if (__FS_USER_FORCE_WEBGL2) { hideGpu(); boot(); return; }');
+    const platform = html.indexOf('if (__fsForceWebGL2()) { hideGpu(); boot(); return; }');
+    expect(user).toBeGreaterThan(-1);
+    expect(platform).toBeGreaterThan(user);
+    // …and "precede the pre-flight" is pinned, not just asserted in prose: a
+    // forced document must never schedule requestAdapter (double boot() via
+    // the settled flag, or a 2s stall if the check moved inside go()).
+    expect(platform).toBeLessThan(html.indexOf('requestAdapter'));
+  });
+
+  it('forceWebGL2 bakes the flag true without touching the extractable platform rule', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'sphere', forceWebGL2: true });
+    expect(html).toContain('var __FS_USER_FORCE_WEBGL2 = true;');
+    // The drift-tested platform function must stay flag-free — the feedback
+    // report evaluates its extracted source with a bare navigator stub, so a
+    // flag reference inside it would throw there.
+    const start = html.indexOf('function __fsForceWebGL2() {');
+    const end = html.indexOf('\n    }', start);
+    expect(html.slice(start, end)).not.toContain('__FS_USER_FORCE_WEBGL2');
+  });
+
+  it('the sandboxed document reports its booted backend; the XR popup does not', () => {
+    const sandboxed = tslToPreviewHTML(TSL, { geometry: 'sphere' });
+    expect(sandboxed).toContain('type: "fs:backend"');
+    expect(sandboxed).toContain('backend: navigator.gpu ? "webgpu" : "webgl2"');
+    // A top-level popup's parent is itself — the report is sandbox-only.
+    const xr = tslToPreviewHTML(TSL, { geometry: 'sphere', xr: true });
+    expect(xr).not.toContain('fs:backend');
+  });
+});

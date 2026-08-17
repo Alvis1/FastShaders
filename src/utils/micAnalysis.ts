@@ -120,49 +120,113 @@ export function analyseMic(opts: {
   };
 }
 
-/** The emitted uniform name for one channel of a Mic node, e.g. `mic1_bass`. */
+/** The emitted uniform name for one channel of a live-audio node, e.g. `mic1_bass`. */
 export function micUniformName(varName: string, channel: MicChannel): string {
   return `${varName}_${channel}`;
 }
 
 /**
- * Does this EMITTED uniform name belong to a Mic node?
+ * The emitted variable BASES of the two live-audio nodes.
+ *
+ * `mic` is the Mic node (a microphone or another input device); `aud` is the
+ * Audio Input node (a shared tab/screen, or an input device such as a loopback
+ * driver). `claimName` turns each into `mic1`, `aud1`, … and reserves every
+ * `<var>_<channel>` as an alias, so a user property can never take one of these
+ * names out from under the emitter.
+ *
+ * The two must stay DISTINCT: the pump routes each uniform back to its own
+ * capture session by this prefix, so a shared base would make a graph holding
+ * both nodes drive one node's uniforms from the other's sound.
+ */
+export const MIC_VAR_BASE = 'mic';
+export const AUDIO_VAR_BASE = 'aud';
+
+export type LiveAudioVarBase = typeof MIC_VAR_BASE | typeof AUDIO_VAR_BASE;
+
+const LIVE_AUDIO_BASES = [MIC_VAR_BASE, AUDIO_VAR_BASE] as const;
+
+/**
+ * Registry type → emitted variable base, for the two hand-emitted live-audio
+ * nodes. THE pairing: codegen's name claim, its emission branch and
+ * `resolveEdgeRef` all read it here, so a third audio node cannot be added with
+ * a base that disagrees with what the pump routes on.
+ *
+ * A `Map`, not a plain object — a bare-object lookup resolves `constructor` /
+ * `__proto__` / `toString` to truthy values, and `registryType` arrives from
+ * `.fastshader` files this app treats as adversarial (the VALID_SWIZZLE /
+ * TOHSL_* class documented in CLAUDE.md).
+ */
+const LIVE_AUDIO_NODE_BASES = new Map<string, LiveAudioVarBase>([
+  ['micNode', MIC_VAR_BASE],
+  ['audioInput', AUDIO_VAR_BASE],
+]);
+
+/** Is this registry type one of the hand-emitted live-audio nodes? */
+export function isLiveAudioNodeType(type: string | undefined | null): boolean {
+  return typeof type === 'string' && LIVE_AUDIO_NODE_BASES.has(type);
+}
+
+/**
+ * The emitted variable base for a live-audio node type.
+ *
+ * Falls back to the mic base for anything unknown, which is unreachable from
+ * the call sites (all guarded by `isLiveAudioNodeType`) and keeps the return
+ * type non-nullable for the `claimName` call.
+ */
+export function liveAudioVarBase(type: string): LiveAudioVarBase {
+  return LIVE_AUDIO_NODE_BASES.get(type) ?? MIC_VAR_BASE;
+}
+
+/**
+ * Does this EMITTED uniform name belong to a live-audio node?
  *
  * The pump drives uniforms by name rather than by node id, because after a
  * code-panel Apply the node ids are fresh and `nodeVarNames` misses every
  * lookup — but the names in the code are still the names in the code.
  *
- * `mic` is the emitted variable base, so `claimName` produces `mic1`, `mic2`, …
- * (and reserves each `<var>_<channel>` as an alias, so a user property can
- * never take one of these names out from under the emitter).
- *
- * A user property named `mic1_bass` in a graph with NO Mic node would still
- * match this pattern, so callers that use it to HIDE things must intersect it
- * with the names actually emitted — see `micUniformNamesIn`. The pump itself is
- * safe either way: it only runs once the user has armed a graph that really
- * does contain a Mic node.
+ * A user property named `mic1_bass` in a graph with NO live-audio node would
+ * still match this pattern, so callers that use it to HIDE things must intersect
+ * it with the names actually emitted — see `liveAudioUniformNamesIn`. The pump
+ * itself is safe either way: it only runs once the user has armed a graph that
+ * really does contain the node.
  */
-const MIC_UNIFORM_RE = new RegExp(`^mic\\d*_(${MIC_CHANNELS.join('|')})$`);
+const LIVE_AUDIO_UNIFORM_RE = new RegExp(
+  `^(${LIVE_AUDIO_BASES.join('|')})\\d*_(${MIC_CHANNELS.join('|')})$`,
+);
 
-export function isMicUniformName(name: string): boolean {
-  return MIC_UNIFORM_RE.test(name);
+export function isLiveAudioUniformName(name: string): boolean {
+  return LIVE_AUDIO_UNIFORM_RE.test(name);
 }
 
-/** The channel a Mic uniform name refers to, or null if it isn't one. */
-export function micChannelOf(name: string): MicChannel | null {
-  const m = MIC_UNIFORM_RE.exec(name);
-  return m ? (m[1] as MicChannel) : null;
+/** The channel a live-audio uniform name refers to, or null if it isn't one. */
+export function liveAudioChannelOf(name: string): MicChannel | null {
+  const m = LIVE_AUDIO_UNIFORM_RE.exec(name);
+  return m ? (m[2] as MicChannel) : null;
 }
 
 /**
- * The mic uniform names a generated module declares, in source order.
+ * WHICH node — and therefore which capture session — owns this uniform name.
+ *
+ * This is the routing key that keeps the two sessions apart in the single pump
+ * loop. Null for anything that is not a live-audio uniform.
+ */
+export function liveAudioVarBaseOf(name: string): LiveAudioVarBase | null {
+  const m = LIVE_AUDIO_UNIFORM_RE.exec(name);
+  return m ? (m[1] as LiveAudioVarBase) : null;
+}
+
+/**
+ * The live-audio uniform names a generated module declares, in source order.
  *
  * Used by the exported module's header to name the exact properties the
  * recipient has to drive — a note saying "this has microphone properties"
  * without naming them is barely better than nothing.
  */
-export function micUniformNamesIn(code: string): string[] {
-  const re = new RegExp(`\\bconst\\s+(mic\\d*_(?:${MIC_CHANNELS.join('|')}))\\s*=\\s*uniform\\(`, 'g');
+export function liveAudioUniformNamesIn(code: string): string[] {
+  const re = new RegExp(
+    `\\bconst\\s+((?:${LIVE_AUDIO_BASES.join('|')})\\d*_(?:${MIC_CHANNELS.join('|')}))\\s*=\\s*uniform\\(`,
+    'g',
+  );
   const out: string[] = [];
   const seen = new Set<string>();
   let m: RegExpExecArray | null;

@@ -48,7 +48,7 @@ function collectEnv(): Omit<FeedbackEnv, 'uiLanguage'> {
     userAgent: ua,
     platform,
     gpuExposed,
-    previewBackend: previewBackend(ua, platform, touch, gpuExposed),
+    previewBackend: previewBackend(ua, platform, touch, gpuExposed, useAppStore.getState().previewForceWebGL2),
     display:
       `${window.screen.width}×${window.screen.height}` +
       ` · window ${window.innerWidth}×${window.innerHeight}` +

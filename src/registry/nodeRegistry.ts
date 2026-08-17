@@ -207,6 +207,36 @@ const definitions: NodeDefinition[] = [
       'Live microphone loudness and three frequency bands, 0–1 each. The values only move while capture is armed in the preview; a downloaded shader holds them at 0 unless the embedding page drives them. Also: audio, sound, music, reactive, spectrum, fft',
   },
   {
+    type: 'audioInput',
+    label: 'Audio Input',
+    category: 'input',
+    // Same hand-emitted shape as micNode — four `uniform(0)` lines, one per
+    // CONSUMED channel — sharing its alias-claiming branch in graphToCode. It
+    // needs its own variable base (`aud`, see AUDIO_VAR_BASE) because the pump
+    // routes each uniform back to its own capture session by that prefix: a
+    // graph may hold both nodes, and a shared base would drive one node's
+    // uniforms from the other node's sound.
+    tslFunction: '',
+    tslImportModule: '',
+    // Real def.inputs for the same reason micNode declares them — see above.
+    inputs: [
+      { id: 'smoothing', label: 'Smoothing', dataType: 'float' },
+      { id: 'gain', label: 'Gain', dataType: 'float' },
+    ],
+    outputs: [
+      { id: 'level', label: 'Level', dataType: 'float' },
+      { id: 'bass', label: 'Bass', dataType: 'float' },
+      { id: 'mid', label: 'Mid', dataType: 'float' },
+      { id: 'treble', label: 'Treble', dataType: 'float' },
+    ],
+    defaultValues: MIC_DEFAULT_VALUES,
+    // NB the SOURCE (share a tab / pick a device) is deliberately absent from
+    // defaultValues and from `values`: it is session-only, like the Mic node's
+    // device choice. See utils/audioSource.ts for why.
+    description:
+      'Reacts to sound already playing — a media player, a browser tab, or any audio input including a loopback device. Loudness plus three frequency bands, 0–1 each. Pick the source on the node; values only move while capture is armed, and a downloaded shader holds them at 0 unless the embedding page drives them. Also: system audio, music, speaker, tab, desktop, loopback, spectrum, fft',
+  },
+  {
     type: 'screenUV',
     label: 'Screen UV',
     category: 'input',
@@ -1383,7 +1413,7 @@ export function categoryEmptiedByHiding(category: NodeCategory): boolean {
 }
 
 /** Map a registry definition to its React Flow node type string. */
-export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'mic' | 'output';
+export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'mic' | 'audio' | 'output';
 
 export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   if (def.type === 'output') return 'output';
@@ -1391,6 +1421,8 @@ export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   // Places every socket itself (see MicNode.tsx) — ShaderNode's row layout
   // cannot express its arrangement.
   if (def.type === 'micNode') return 'mic';
+  // Same reason, plus a source <select> on the card that no row layout offers.
+  if (def.type === 'audioInput') return 'audio';
   // Both swatch nodes render as ColorNode: the constant is a circle, the named
   // uniform a rounded rectangle (ColorNode branches on registryType). The
   // uniform's `name` goes INSIDE the swatch, the way the constant already

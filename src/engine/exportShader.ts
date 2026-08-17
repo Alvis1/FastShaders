@@ -87,6 +87,16 @@ export function buildProjectState(): FastShadersProject {
 }
 
 /**
+ * The stem every export file name is built from. Exported so a surface that has
+ * to PREDICT the file name without paying for a full bundle build — the desktop
+ * Work folder's Save tooltip — cannot drift from what buildShaderBundle
+ * actually writes.
+ */
+export function shaderBaseName(shaderName: string): string {
+  return toKebabCase(shaderName || 'shader');
+}
+
+/**
  * Build the complete export bundle for the current graph: the shaderloader
  * module with the project snapshot embedded, plus images/model as a zip when
  * present. Shared by every export surface — the toolbar EXPORT download and
@@ -113,7 +123,7 @@ export function buildShaderBundle(): ExportBundle {
 
   const embedded = embedProjectState(script, buildProjectState());
   return buildExportBundle(
-    toKebabCase(state.shaderName || 'shader'),
+    shaderBaseName(state.shaderName),
     embedded,
     collectImageFiles(state.nodes),
     // The EXPORT button's right-click setting can exclude the loaded mesh.

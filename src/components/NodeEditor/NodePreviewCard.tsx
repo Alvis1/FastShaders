@@ -14,6 +14,19 @@ import { effectiveRampDef } from '@/utils/exposedPorts';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
 import complexityData from '@/registry/complexity.json';
 import { MIC_BODY_W, MIC_BODY_H, MIC_PARAM_TOPS, MIC_CHIP_H, MIC_BTN_TOP, MIC_OUT_TOPS } from './nodes/micGeometry';
+import {
+  AUD_BODY_W,
+  AUD_BODY_H,
+  AUD_PARAM_TOPS,
+  AUD_CHIP_H,
+  AUD_SOURCE_TOP,
+  AUD_SOURCE_H,
+  AUD_METER_TOP,
+  AUD_METER_H,
+  AUD_BTN_TOP,
+  AUD_OUT_TOPS,
+  AUD_PAD_X,
+} from './nodes/audioGeometry';
 import { ClockFaceSvg } from './nodes/ClockFaceSvg';
 import { useFitText } from '@/hooks/useFitText';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
@@ -32,6 +45,7 @@ import {
 } from './nodes/OutputNode';
 import './nodes/ClockNode.css';
 import './nodes/MicNode.css';
+import './nodes/AudioInputNode.css';
 import './nodes/OutputNode.css';
 import './NodePreviewCard.css';
 
@@ -382,6 +396,72 @@ function MicCardContent(props: ContentProps) {
   );
 }
 
+/* ============================================================
+ * AudioCardContent — inert replica of the AudioInputNode
+ * ============================================================ */
+
+function AudioCardContent(props: ContentProps) {
+  const { def } = props;
+  // Geometry comes from audioGeometry.ts — the SAME constants
+  // AudioInputNode.tsx and the auto-layout footprint read, so the tile is a
+  // true miniature by construction.
+  return (
+    <CardShell {...props} nodeClassName="audio-node" hideOutput>
+      <div className="audio-node__body" style={{ width: AUD_BODY_W, height: AUD_BODY_H }}>
+        {def.inputs.map((inp, i) => (
+          <div
+            key={inp.id}
+            className="audio-node__val"
+            style={{ top: AUD_PARAM_TOPS[i] ?? 0, height: AUD_CHIP_H, left: AUD_PAD_X, right: AUD_PAD_X }}
+          >
+            {/* Inert by the card's pointer-events: none — kept a real widget so
+                the tile matches the live node pixel for pixel. */}
+            <DragNumberInput
+              compact
+              value={Number(def.defaultValues?.[inp.id] ?? 0)}
+              onChange={() => {}}
+            />
+          </div>
+        ))}
+        {/* A DISABLED <select>, not the live AudioSourceSelect. The card's
+            pointer-events: none stops the pointer but NOT the keyboard, so a
+            real picker here would make every tile a tab stop that opens a
+            device list from a static replica — and enumerating devices for a
+            palette tile is not something a tile should ever do. `disabled`
+            also gives the greyed look the class already defines, the same way
+            the arm light needs --inert to stand in for :disabled. */}
+        <select
+          className="audio-node__source"
+          style={{ top: AUD_SOURCE_TOP, height: AUD_SOURCE_H, left: AUD_PAD_X, right: AUD_PAD_X }}
+          disabled
+          value="preview"
+          onChange={() => {}}
+          aria-hidden="true"
+          tabIndex={-1}
+        >
+          <option value="preview">Tab / system audio…</option>
+        </select>
+        <div
+          className="audio-node__meter audio-node__meter--idle"
+          style={{ top: AUD_METER_TOP, height: AUD_METER_H, left: AUD_PAD_X, right: AUD_PAD_X }}
+        >
+          <span className="audio-node__meter-fill" />
+        </div>
+        {/* Inert: a plain div, never a <button>. A palette tile must not become
+            another way to open a capture — armAudio has exactly ONE click path
+            and this is not it. */}
+        <div className="audio-node__btn-wrap" style={{ top: AUD_BTN_TOP }}>
+          {/* --inert stands in for :disabled, which a <div> can never match. */}
+          <div className="shader-node__mic-btn shader-node__mic-btn--inert" aria-hidden="true" />
+        </div>
+        {def.outputs.map((out, i) => (
+          <CardSocket key={out.id} side="right" dataType={out.dataType} style={{ top: AUD_OUT_TOPS[i] ?? 0 }} />
+        ))}
+      </div>
+    </CardShell>
+  );
+}
+
 /* (SliderCardContent is gone: it drew a hand-built div track + thumb + a
    min/value/max caption that NO other surface has. The canvas node and the
    Node Designer both render a real `<input type="range">` — ShaderNode.tsx and
@@ -589,6 +669,8 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
         <FitNodeHeading visualScale={shared.costScale} textScale={1}><ClockCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'mic' ? (
         <FitNodeHeading visualScale={shared.costScale} textScale={1}><MicCardContent {...shared} /></FitNodeHeading>
+      ) : flowType === 'audio' ? (
+        <FitNodeHeading visualScale={shared.costScale} textScale={1}><AudioCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'output' ? (
         // textScale carries the Output header's own type size: its heading is
         // `.output-node__title` (10px), not the 9px `.node-base__title` the

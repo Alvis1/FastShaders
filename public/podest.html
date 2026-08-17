@@ -2394,9 +2394,10 @@
     pushVrNav(L);
     // hand-tracking is an OPTIONAL feature: a headset without it (or a user
     // who has it switched off) still gets the session, just no hands — and
-    // the controller trigger path keeps working. hand-tracking-controls
-    // would push the feature itself, but only at its own init; declaring it
-    // on the scene keeps the request independent of component order.
+    // the controller trigger path keeps working. Declaring it HERE is what
+    // requests it at all now that vr-nav draws the hands itself and
+    // A-Frame's hand-tracking-controls (which would otherwise push the
+    // feature at its own init) is gone — see the ensureHands comment.
     L.push('<a-scene vr-mode-ui="enabled: true" webxr="optionalFeatures: hand-tracking, bounded-floor" vr-nav="radius: ' + NAV_RADIUS + '; inner: ' + NAV_INNER + '; home: ' + NAV_HOME + '; target: ' + EYE + '" loading-screen="enabled: false" background="color: ' + bg + '">');
     // The rig is the teleport handle: three composes the XR pose with the
     // camera's PARENT world matrix (WebXRManager.updateUserCamera), so
@@ -2404,12 +2405,11 @@
     // VR, which is what keeps the flat orbit view byte-identical to before.
     L.push('  <a-entity id="rig" position="0 0 0">');
     L.push('    <a-entity camera="fov: 24; active: true" look-controls="enabled: false" orbit-controls="target: ' + EYE + '; minDistance: 2; maxDistance: 80; initialPosition: 0 1.4 7; rotateSpeed: 0.5"></a-entity>');
-    // modelStyle MUST stay "dots": the default ("mesh") fetches a hand GLB
-    // from cdn.aframe.io, which this page must never need (offline rule) and
-    // which the loader URL-modifier above neutralizes anyway — the failure
-    // would surface as a red error banner inside the headset.
-    L.push('    <a-entity hand-tracking-controls="hand: left; modelStyle: dots; modelColor: #dbe6f2"></a-entity>');
-    L.push('    <a-entity hand-tracking-controls="hand: right; modelStyle: dots; modelColor: #dbe6f2"></a-entity>');
+    // No hand-tracking-controls entities: vr-nav renders the joints itself,
+    // under this rig, from the same poses it reads for the gesture. See the
+    // ensureHands comment for why the A-Frame component cannot be used with
+    // a camera rig. (It also defaults to a hand GLB fetched from
+    // cdn.aframe.io, which this page must never need.)
     L.push('  </a-entity>');
     L.push('  <a-entity id="spin-parent" position="' + EYE + '"' + spinAttr + '>');
     L.push('    <a-entity id="preview-entity" ' + entityAttrs + ' position="0 0 0" rotation="' + (ROTATIONS[kind] || "0 0 0") + '"></a-entity>');
@@ -2589,35 +2589,62 @@
     L.push('(function(){');
     L.push('  if(!window.AFRAME||AFRAME.components["vr-nav"])return;');
     // Joint indices into the WebXR hand enumeration, which is the order
-    // XRHand iterates (and the order A-Frame's own hand-tracking-controls
-    // indexes): wrist, then thumb → pinky, 5 joints each.
+    // XRHand iterates: wrist, then thumb → pinky, 5 joints each.
     L.push('  var J_WRIST=0,J_THUMB=4,J_INDEX=6,J_PALM=10,TIPS=[9,14,19,24],NJ=25;');
     L.push('  var FADE_IN=90,FADE_OUT=170,IDLE_MS=90000,STILL=0.05,ARM_FRAMES=4;');
+    // The thumb "button", measured as the thumb tip's height above the index
+    // knuckle in units of the wearer's own hand (wrist→middle metacarpal,
+    // ~9 cm). MEASURED-ON-DEVICE NOTE: an earlier build used the thumb-tip →
+    // index-knuckle DISTANCE with press < 0.55 and release > 0.85, and a
+    // thumbs-up fist sits inside that band — so the button latched pressed on
+    // the very frame it armed, could never release, and (because a
+    // fist-owned hand ignores `select`) killed the pinch path with it. The
+    // gap between ARM and PRESS here is the whole travel of the thumb, and
+    // RELEASE sits below ARM so re-arming cannot re-trigger.
+    L.push('  var THUMB_ARM=0.5,THUMB_PRESS=0.15,THUMB_RELEASE=0.38,FIST_CURL=1.15,ARC_N=20;');
     L.push('  AFRAME.registerComponent("vr-nav",{');
     L.push('    schema:{radius:{default:30},inner:{default:1.2},home:{default:2.5},target:{type:"vec3"}},');
-    L.push('    init:function(){var sceneEl=this.el;this.rig=null;this.session=null;this.poses=new Float32Array(16*NJ);this.hands={};this.aimSrc=null;this.aimMode="";this.valid=false;this.needRecenter=false;this.pending=null;this.fadeDir=0;this.idle=0;this.floorOp=0;' +
-      'this.orig=new THREE.Vector3();this.dir=new THREE.Vector3();this.hit=new THREE.Vector3();this.head=new THREE.Vector3();this.lastHead=new THREE.Vector3(0,-999,0);this.fwd=new THREE.Vector3(0,0,-1);this.q=new THREE.Quaternion();' +
+    L.push('    init:function(){var sceneEl=this.el;this.rig=null;this.session=null;this.jointPoses=new Float32Array(16*NJ);this.jointRadii=new Float32Array(NJ);this.hands={};this.handMesh=null;this.aimSrc=null;this.aimMode="";this.valid=false;this.needRecenter=false;this.pending=null;this.fadeDir=0;this.idle=0;this.floorOp=0;' +
+      'this.orig=new THREE.Vector3();this.dir=new THREE.Vector3();this.hit=new THREE.Vector3();this.head=new THREE.Vector3();this.lastHead=new THREE.Vector3(0,-999,0);this.fwd=new THREE.Vector3(0,0,-1);this.q=new THREE.Quaternion();this._m=new THREE.Matrix4();this._v=new THREE.Vector3();this._c=new THREE.Vector3();' +
       // The floor guide only exists while aiming: a permanent grid under a
       // pedestal piece is scenery nobody asked for.
       'var floor=new THREE.PolarGridHelper(this.data.radius,8,6,64,0x8fa2b8,0x4a5a6b);floor.position.y=0.01;floor.material.transparent=true;floor.material.opacity=0;floor.visible=false;sceneEl.object3D.add(floor);this.floor=floor;' +
-      // depthTest:false on both overlays — a marker hidden behind the
+      // depthTest:false on every overlay — a marker hidden behind the
       // artwork is a marker the visitor cannot trust.
-      'var mk=new THREE.Mesh(new THREE.RingGeometry(0.22,0.34,36),new THREE.MeshBasicMaterial({color:0x4ea1ff,transparent:true,opacity:0.9,side:THREE.DoubleSide,depthTest:false}));mk.rotation.x=-Math.PI/2;mk.position.y=0.02;mk.renderOrder=998;mk.visible=false;sceneEl.object3D.add(mk);this.marker=mk;' +
+      'var mk=new THREE.Mesh(new THREE.RingGeometry(0.24,0.38,36),new THREE.MeshBasicMaterial({color:0x4ea1ff,transparent:true,opacity:0.9,side:THREE.DoubleSide,depthTest:false}));mk.rotation.x=-Math.PI/2;mk.position.y=0.02;mk.renderOrder=998;mk.visible=false;sceneEl.object3D.add(mk);this.marker=mk;' +
+      // The aim arc — the "typical VR teleport" connector. Drawn as beads on
+      // an InstancedMesh rather than a THREE.Line because line width is
+      // capped at one pixel on every WebGL/WebGPU backend, and a one-pixel
+      // thread across a headset's field of view is not a visible control.
+      // World-space, so it is added to the scene rather than the rig.
+      'var arc=new THREE.InstancedMesh(new THREE.SphereGeometry(1,8,6),new THREE.MeshBasicMaterial({color:0x4ea1ff,transparent:true,opacity:0.95,depthTest:false}),ARC_N);arc.frustumCulled=false;arc.renderOrder=997;arc.visible=false;arc.instanceMatrix.setUsage(THREE.DynamicDrawUsage);sceneEl.object3D.add(arc);this.arc=arc;' +
       // Comfort blink: the jump happens at full black, so it is never seen.
       'var sh=new THREE.Mesh(new THREE.SphereGeometry(0.25,12,8),new THREE.MeshBasicMaterial({color:0x000000,side:THREE.BackSide,transparent:true,opacity:0,depthTest:false,depthWrite:false}));sh.renderOrder=999;sh.visible=false;this.shell=sh;' +
       'this.onEnter=this.onEnter.bind(this);this.onExit=this.onExit.bind(this);this.onSelStart=this.onSelStart.bind(this);this.onSelEnd=this.onSelEnd.bind(this);sceneEl.addEventListener("enter-vr",this.onEnter);sceneEl.addEventListener("exit-vr",this.onExit);},');
     // The rig is resolved lazily: a component on <a-scene> initializes
     // before the scene's own children are parsed.
     L.push('    getRig:function(){if(!this.rig)this.rig=document.getElementById("rig");return this.rig;},');
+    // The hands are drawn HERE, as joint beads parented to the RIG, and
+    // deliberately NOT by A-Frame's hand-tracking-controls. MEASURED ON
+    // DEVICE: that component adds a `wristObject3D` to the SCENE ROOT and
+    // registers a child-attached handler that reparents every child entity
+    // onto it — including the 25 joint dots it creates itself. The dots
+    // therefore render at wristPose × jointPose in scene-root space: they
+    // bypass the camera rig completely (so they ignore the entry framing and
+    // every teleport) AND carry the wrist transform twice. Hands drawn from
+    // the same poses under the same rig as the head cannot drift from it.
+    L.push('    ensureHands:function(){if(this.handMesh||!this.rig)return;var im=new THREE.InstancedMesh(new THREE.SphereGeometry(1,6,4),new THREE.MeshBasicMaterial({color:0xdbe6f2}),NJ*2);im.frustumCulled=false;im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);this.rig.object3D.add(im);this.handMesh=im;this.hideHand(0);this.hideHand(1);},');
+    L.push('    writeHand:function(slot){var im=this.handMesh;if(!im)return;var M=this._m,v=this._v;for(var i=0;i<NJ;i++){var r=this.jointRadii[i];if(!(r>0))r=0.008;M.fromArray(this.jointPoses,i*16);M.scale(v.set(r,r,r));im.setMatrixAt(slot*NJ+i,M);}im.instanceMatrix.needsUpdate=true;},');
+    L.push('    hideHand:function(slot){var im=this.handMesh;if(!im)return;var M=this._m.makeScale(0,0,0);for(var i=0;i<NJ;i++)im.setMatrixAt(slot*NJ+i,M);im.instanceMatrix.needsUpdate=true;},');
     L.push('    onEnter:function(){var sceneEl=this.el;if(sceneEl.camera&&this.shell.parent!==sceneEl.camera)sceneEl.camera.add(this.shell);var s=sceneEl.xrSession||null;this.session=s;if(s){s.addEventListener("selectstart",this.onSelStart);s.addEventListener("selectend",this.onSelEnd);}this.hands={};this.needRecenter=true;this.idle=0;this.lastHead.set(0,-999,0);},');
     // Leaving VR restores the flat framing exactly: the rig goes home to the
     // origin, so orbit-controls is looking at what it was before.
-    L.push('    onExit:function(){var s=this.session;if(s){try{s.removeEventListener("selectstart",this.onSelStart);s.removeEventListener("selectend",this.onSelEnd);}catch(e){}}this.session=null;this.cancel();this.pending=null;this.fadeDir=0;this.floorOp=0;this.floor.visible=false;this.floor.material.opacity=0;this.shell.material.opacity=0;this.shell.visible=false;var r=this.getRig();if(r){r.object3D.position.set(0,0,0);r.object3D.updateMatrixWorld(true);}},');
+    L.push('    onExit:function(){var s=this.session;if(s){try{s.removeEventListener("selectstart",this.onSelStart);s.removeEventListener("selectend",this.onSelEnd);}catch(e){}}this.session=null;this.cancel();this.hideHand(0);this.hideHand(1);this.pending=null;this.fadeDir=0;this.floorOp=0;this.floor.visible=false;this.floor.material.opacity=0;this.shell.material.opacity=0;this.shell.visible=false;var r=this.getRig();if(r){r.object3D.position.set(0,0,0);r.object3D.updateMatrixWorld(true);}},');
     // A closed fist can cross the runtime's pinch threshold; the gesture
     // owns that hand, so its select events are not a second trigger.
     L.push('    onSelStart:function(evt){var src=evt&&evt.inputSource;if(!src||this.aimSrc)return;if(src.hand){var st=this.hands[src.handedness];if(st&&st.fist)return;}this.aimSrc=src;this.aimMode="select";this.idle=0;},');
     L.push('    onSelEnd:function(evt){if(!evt||this.aimSrc!==evt.inputSource||this.aimMode!=="select")return;this.commit();this.cancel();},');
-    L.push('    tick:function(t,dt){var sceneEl=this.el;if(!sceneEl.is("vr-mode")||!this.getRig())return;var d=Math.min(dt||16,100);var frame=sceneEl.frame,r=sceneEl.renderer,ref=r&&r.xr&&r.xr.getReferenceSpace&&r.xr.getReferenceSpace();var head=!!(frame&&ref)&&this.readHead(frame,ref);this.stepFade(d,head);if(!head)return;if(this.needRecenter){this.needRecenter=false;this.recenter();}this.scan(frame,ref);this.aim(frame,ref,d);this.watchIdle(d);},');
+    L.push('    tick:function(t,dt){var sceneEl=this.el;if(!sceneEl.is("vr-mode")||!this.getRig())return;this.ensureHands();var d=Math.min(dt||16,100);var frame=sceneEl.frame,r=sceneEl.renderer,ref=r&&r.xr&&r.xr.getReferenceSpace&&r.xr.getReferenceSpace();var head=!!(frame&&ref)&&this.readHead(frame,ref);this.stepFade(d,head);if(!head)return;if(this.needRecenter){this.needRecenter=false;this.recenter();}this.scan(frame,ref);this.aim(frame,ref,d);this.watchIdle(d);},');
     // The head pose is read from the FRAME, never from the camera object3D:
     // tick runs before render, so on the first tick of a session the camera
     // still carries its flat orbit-controls transform (0 1.4 7) and an
@@ -2625,32 +2652,30 @@
     L.push('    readHead:function(frame,ref){var vp=null;try{vp=frame.getViewerPose(ref);}catch(e){vp=null;}if(!vp)return false;var M=this.rig.object3D.matrixWorld,t=vp.transform;this.head.set(t.position.x,t.position.y,t.position.z).applyMatrix4(M);this.q.set(t.orientation.x,t.orientation.y,t.orientation.z,t.orientation.w);this.fwd.set(0,0,-1).applyQuaternion(this.q).transformDirection(M);this.fwd.y=0;if(this.fwd.lengthSq()<1e-6)this.fwd.set(0,0,-1);else this.fwd.normalize();return true;},');
     L.push('    homeDelta:function(o){o.x=(this.data.target.x-this.fwd.x*this.data.home)-this.head.x;o.z=(this.data.target.z-this.fwd.z*this.data.home)-this.head.z;return o;},');
     L.push('    recenter:function(){var o=this.rig.object3D,d=this.homeDelta({x:0,z:0});o.position.x+=d.x;o.position.z+=d.z;o.updateMatrixWorld(true);this.lastHead.set(0,-999,0);},');
-    L.push('    cancel:function(){this.aimSrc=null;this.aimMode="";this.valid=false;this.marker.visible=false;},');
+    L.push('    cancel:function(){this.aimSrc=null;this.aimMode="";this.valid=false;this.marker.visible=false;this.arc.visible=false;},');
     L.push('    commit:function(){if(!this.valid)return;this.pending={x:this.hit.x,z:this.hit.z};this.fadeDir=1;this.idle=0;},');
     // Hand gestures. fillPoses fails (and the hand goes untracked) far more
     // often than it succeeds cleanly, so every failure path resets the
     // state machine rather than leaving a half-armed hand behind.
-    L.push('    scan:function(frame,ref){var s=this.session;if(!s||!s.inputSources)return;var srcs=s.inputSources;for(var i=0;i<srcs.length;i++){var src=srcs[i];if(!src.hand)continue;var st=this.hands[src.handedness];if(!st)st=this.hands[src.handedness]={hold:0,fist:false,pressed:false};var ok=false;try{ok=frame.fillPoses(src.hand.values(),ref,this.poses);}catch(e){ok=false;}' +
-      'if(!ok){st.hold=0;st.fist=false;st.pressed=false;if(this.aimSrc===src&&this.aimMode==="fist")this.cancel();continue;}' +
+    L.push('    scan:function(frame,ref){var s=this.session;if(!s||!s.inputSources)return;var srcs=s.inputSources,seenL=false,seenR=false;for(var i=0;i<srcs.length;i++){var src=srcs[i];if(!src.hand)continue;var left=src.handedness==="left",slot=left?0:1;var st=this.hands[src.handedness];if(!st)st=this.hands[src.handedness]={hold:0,fist:false,pressed:false,armed:0};var ok=false;try{ok=frame.fillPoses(src.hand.values(),ref,this.jointPoses);}catch(e){ok=false;}' +
+      'if(!ok){st.hold=0;st.fist=false;st.pressed=false;st.armed=0;if(this.aimSrc===src&&this.aimMode==="fist")this.cancel();continue;}' +
+      'try{frame.fillJointRadii(src.hand.values(),this.jointRadii);}catch(e){}' +
+      'if(left)seenL=true;else seenR=true;this.writeHand(slot);' +
       'var g=this.classify();st.fist=g.fist;' +
-      'if(!g.fist){st.hold=0;st.pressed=false;if(this.aimSrc===src&&this.aimMode==="fist")this.cancel();continue;}' +
-      'if(g.thumbUp&&!st.pressed)st.hold++;' +
-      'if(st.hold>=ARM_FRAMES&&!this.aimSrc){this.aimSrc=src;this.aimMode="fist";this.idle=0;}' +
-      'if(this.aimSrc===src&&this.aimMode==="fist"){if(!st.pressed&&g.press){st.pressed=true;this.commit();}else if(st.pressed&&g.release){st.pressed=false;}}}},');
-    // Every threshold is a fraction of THIS wearer's hand (wrist → middle
-    // metacarpal, ~9 cm on an adult), so the same numbers fit a child's
-    // hand. "Thumb up" is measured against world up — that is what a person
-    // does when they hold a fist thumb-up, and it needs no assumption about
-    // the joint spaces' own axis convention.
-    L.push('    classify:function(){var p=this.poses;function px(i){return p[i*16+12];}function py(i){return p[i*16+13];}function pz(i){return p[i*16+14];}function dd(a,b){var x=px(a)-px(b),y=py(a)-py(b),z=pz(a)-pz(b);return Math.sqrt(x*x+y*y+z*z);}' +
-      'var sc=dd(J_WRIST,J_PALM)||0.09,c=0;for(var i=0;i<TIPS.length;i++)if(dd(TIPS[i],J_PALM)<1.05*sc)c++;var td=dd(J_THUMB,J_INDEX);' +
-      'return{fist:c>=3,thumbUp:(py(J_THUMB)-py(J_PALM))>0.30*sc,press:td<0.55*sc,release:td>0.85*sc};},');
-    // The !pose branch fades the floor OUT like the no-source branch: a
-    // controller that loses tracking mid-aim (occlusion, set down while
-    // select is held) takes this return every tick, and without the fade the
-    // polar grid froze at its current opacity over the artwork until a
-    // select-end or fist-cancel finally cleared aimSrc.
-    L.push('    aim:function(frame,ref,d){var mk=this.marker,src=this.aimSrc;if(!src||!src.targetRaySpace){this.valid=false;mk.visible=false;this.fadeFloor(d,false);return;}var pose=null;try{pose=frame.getPose(src.targetRaySpace,ref);}catch(e){pose=null;}if(!pose){this.valid=false;mk.visible=false;this.fadeFloor(d,false);return;}' +
+      'if(!g.fist){st.hold=0;st.pressed=false;st.armed=0;if(this.aimSrc===src&&this.aimMode==="fist")this.cancel();continue;}' +
+      'if(g.up>THUMB_ARM&&!st.pressed)st.hold++;' +
+      'if(st.hold>=ARM_FRAMES&&!this.aimSrc){this.aimSrc=src;this.aimMode="fist";this.idle=0;st.armed=0;}' +
+      // st.armed>1 so a press can never land on the frame the aim armed:
+      // `valid` is only computed later in aim(), so a same-frame commit is a
+      // guaranteed no-op that still latches the button.
+      'if(this.aimSrc===src&&this.aimMode==="fist"){st.armed++;if(!st.pressed&&st.armed>1&&g.up<THUMB_PRESS){st.pressed=true;this.commit();}else if(st.pressed&&g.up>THUMB_RELEASE){st.pressed=false;}}}' +
+      'if(!seenL)this.hideHand(0);if(!seenR)this.hideHand(1);},');
+    // Both measures are fractions of THIS wearer's hand, so the same numbers
+    // fit a child's. "up" is the thumb tip's height over the index knuckle in
+    // world up — what a person actually does when they hold a fist thumb-up —
+    // and needs no assumption about the joint spaces' own axis convention.
+    L.push('    classify:function(){var p=this.jointPoses;function py(i){return p[i*16+13];}function dd(a,b){var x=p[a*16+12]-p[b*16+12],y=p[a*16+13]-p[b*16+13],z=p[a*16+14]-p[b*16+14];return Math.sqrt(x*x+y*y+z*z);}var sc=dd(J_WRIST,J_PALM)||0.09,c=0;for(var i=0;i<TIPS.length;i++)if(dd(TIPS[i],J_PALM)<FIST_CURL*sc)c++;return{fist:c>=3,up:(py(J_THUMB)-py(J_INDEX))/sc};},');
+    L.push('    aim:function(frame,ref,d){var mk=this.marker,src=this.aimSrc;if(!src||!src.targetRaySpace){this.valid=false;mk.visible=false;this.arc.visible=false;this.fadeFloor(d,false);return;}var pose=null;try{pose=frame.getPose(src.targetRaySpace,ref);}catch(e){pose=null;}if(!pose){this.valid=false;mk.visible=false;this.arc.visible=false;return;}' +
       'var t=pose.transform,M=this.rig.object3D.matrixWorld;this.orig.set(t.position.x,t.position.y,t.position.z).applyMatrix4(M);this.q.set(t.orientation.x,t.orientation.y,t.orientation.z,t.orientation.w);this.dir.set(0,0,-1).applyQuaternion(this.q).transformDirection(M);' +
       // A distant hit is NOT rejected, only clamped by the annulus below: an
       // almost-horizontal aim lands 60+ m out, and refusing it would put a
@@ -2658,10 +2683,17 @@
       // the marker vanish and reads the button as broken. The 400 m cap is
       // only there to keep a near-parallel ray out of float territory.
       'this.valid=false;if(this.dir.y<-0.02){var k=-this.orig.y/this.dir.y;if(k>0){this.hit.copy(this.dir).multiplyScalar(Math.min(k,400)).add(this.orig);this.valid=true;}}' +
-      'this.idle=0;this.fadeFloor(d,true);if(!this.valid){mk.visible=false;return;}' +
+      'this.idle=0;this.fadeFloor(d,true);if(!this.valid){mk.visible=false;this.arc.visible=false;return;}' +
       'var dx=this.hit.x-this.data.target.x,dz=this.hit.z-this.data.target.z,dist=Math.sqrt(dx*dx+dz*dz),cl=false;' +
       'if(dist>this.data.radius){var s=this.data.radius/dist;dx*=s;dz*=s;cl=true;}else if(dist<this.data.inner){if(dist<1e-4){dx=0;dz=this.data.inner;}else{var s2=this.data.inner/dist;dx*=s2;dz*=s2;}cl=true;}' +
-      'this.hit.set(this.data.target.x+dx,0,this.data.target.z+dz);mk.position.set(this.hit.x,0.02,this.hit.z);mk.material.color.setHex(cl?0xffb020:0x4ea1ff);mk.visible=true;},');
+      'this.hit.set(this.data.target.x+dx,0,this.data.target.z+dz);mk.position.set(this.hit.x,0.02,this.hit.z);var col=cl?0xffb020:0x4ea1ff;mk.material.color.setHex(col);this.arc.material.color.setHex(col);mk.visible=true;this.drawArc();},');
+    // The arc is a quadratic Bézier lofted above the straight aim, NOT a
+    // ballistic curve. Targeting stays the straight ray, so the whole
+    // NAV_RADIUS ring remains reachable (a projectile would cap the range at
+    // v²/g and silently make the outer bound unaimable); the loft exists so
+    // the connector reads as the arc people expect. Its only contract is
+    // that it ENDS on the marker, which it does by construction.
+    L.push('    drawArc:function(){var im=this.arc,M=this._m,v=this._v,c=this._c,p0=this.orig,p2=this.hit;var d=p0.distanceTo(p2);c.copy(p0).lerp(p2,0.5);c.y+=Math.min(0.35*d,1.5);for(var i=0;i<ARC_N;i++){var t=(i+1)/(ARC_N+1),u=1-t,a=u*u,b=2*u*t,e=t*t;v.set(a*p0.x+b*c.x+e*p2.x,a*p0.y+b*c.y+e*p2.y,a*p0.z+b*c.z+e*p2.z);var s=0.014+0.012*t;M.makeScale(s,s,s);M.setPosition(v);im.setMatrixAt(i,M);}im.instanceMatrix.needsUpdate=true;im.visible=true;},');
     L.push('    fadeFloor:function(d,on){var f=this.floor,step=d/220,o=on?Math.min(0.4,this.floorOp+step):Math.max(0,this.floorOp-step);if(o===this.floorOp)return;this.floorOp=o;f.material.opacity=o;f.visible=o>0.01;},');
     L.push('    stepFade:function(d,head){var m=this.shell.material;if(this.fadeDir===1){this.shell.visible=true;m.opacity=Math.min(1,m.opacity+d/FADE_IN);if(m.opacity>=1&&head){this.applyPending();this.fadeDir=-1;}}else if(this.fadeDir===-1){m.opacity=Math.max(0,m.opacity-d/FADE_OUT);if(m.opacity<=0){this.fadeDir=0;this.shell.visible=false;}}},');
     // The marker names where the HEAD lands, not where the rig origin goes —

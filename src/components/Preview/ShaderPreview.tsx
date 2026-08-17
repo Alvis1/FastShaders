@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { getNodeValues } from '@/types';
+import type { AppNode, AppEdge } from '@/types';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import {
   GEOMETRY_ROTATIONS,
@@ -16,7 +17,12 @@ import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previ
 import { bootGeometryWasCustom, loadPreviewMeshFromCache } from '@/utils/previewMeshCache';
 import { connectedUniformNamesKey, ALL_UNIFORMS } from '@/utils/connectedUniforms';
 import { evaluateEdgeSource, getTargetEdges } from '@/engine/cpuEvaluator';
-import { isMicUniformName } from '@/utils/micAnalysis';
+import {
+  isLiveAudioUniformName,
+  liveAudioVarBaseOf,
+  MIC_VAR_BASE,
+  AUDIO_VAR_BASE,
+} from '@/utils/micAnalysis';
 import { readMicSettings } from '@/utils/micNode';
 import { useMicPump } from './useMicPump';
 import { MicControl } from './MicControl';
@@ -27,6 +33,7 @@ import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import { displayImageFileName } from '@/utils/imageNode';
+import { platformWebGL2Reason } from '@/utils/feedbackReport';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { AnimClipMenu } from './AnimClipMenu';
 import { useLongPress } from '@/hooks/useLongPress';
@@ -129,6 +136,29 @@ function validateLighting(v: string | null): LightingMode {
 // Accept only hex, rgb()/rgba() with numeric content, or a bare CSS color
 // keyword (letters only — no spaces/quotes/brackets to break out with).
 const DEFAULT_BG_COLOR = '#808080';
+
+/**
+ * Whether AUTO mode can only ever yield WebGL2 here — derived from
+ * PARENT-observable facts (no `navigator.gpu`, or the platform rule shared
+ * with the feedback report), NEVER from the iframe's `fs:backend` report:
+ * that report comes from the sandboxed document, which runs the loaded
+ * shader (adversarial by project rule) and could forge it to pin the
+ * WGSL/GLSL toggle inert with a false "WebGPU is not available" tooltip —
+ * disabling exactly the diagnostic a user would reach for on a suspicious
+ * shader. The report drives the button's LABEL only, the same display-only
+ * trust `fs:anim` gets. Module-scope: none of these inputs change within a
+ * session. (The one case the parent can't see — gpu exposed but the
+ * pre-flight's adapter request failing — degrades to an unlocked toggle
+ * whose "force" click is a harmless no-op, which is honest UX rather than
+ * a forgeable lock.)
+ */
+const AUTO_IS_WEBGL2 = typeof navigator !== 'undefined'
+  && (!('gpu' in navigator)
+    || platformWebGL2Reason(
+      navigator.userAgent || '',
+      navigator.platform || '',
+      navigator.maxTouchPoints || 0,
+    ) !== null);
 function isValidCssColor(v: string): boolean {
   return /^#[0-9a-fA-F]{3,8}$/.test(v) ||
     /^rgba?\(\s*[\d.,\s%]+\)$/.test(v) ||
@@ -278,6 +308,53 @@ function fetchObjText(geometry: 'teapot' | 'bunny'): Promise<string> {
   return p;
 }
 
+/**
+ * Analyser settings for ONE live-audio node kind, as a VALUE-stable string —
+ * plus, via the empty string, whether the graph contains such a node at all.
+ *
+ * Shared by the Mic and Audio Input selectors rather than written twice: the two
+ * nodes declare the same `smoothing`/`gain` sockets and resolve them by the same
+ * split (gain in the shader, smoothing on the CPU), so a copy here would be two
+ * places to fix the next time that split moves.
+ *
+ * See the call site for why this returns a joined string rather than an object,
+ * and why absent keys are spelled `NaN` rather than `''`.
+ */
+function liveAudioSettingsKey(
+  s: { nodes: AppNode[]; edges: AppEdge[] },
+  registryType: string,
+): string {
+  const n = s.nodes.find((x) => x.data.registryType === registryType);
+  if (!n) return '';
+  const v = getNodeValues(n);
+  // `smoothing` is an exposed socket, but unlike `gain` it cannot be resolved
+  // in the shader: it sets the AnalyserNode's smoothingTimeConstant, which
+  // lives on the CPU in the audio thread. So a wired edge is resolved by
+  // EVALUATING its upstream chain on the CPU — the same evaluator that drives
+  // the node-card previews. That means it follows constants, sliders and
+  // arithmetic, and reads 0 for GPU-only sources (uv, position) which have no
+  // CPU value; the alternative was a socket that silently did nothing.
+  // Guarded on the edge existing, so a graph that doesn't wire it pays one
+  // lookup rather than a graph walk on every store notify.
+  //
+  // getTargetEdges, NOT raw s.edges: with the smoothing feeder inside a
+  // COLLAPSED group the raw scan sees a boundary edge whose source is the
+  // GROUP id, and evaluateNodeOutput on a group node returns nothing — the
+  // wire silently stops setting smoothingTimeConstant the moment its frame is
+  // collapsed. getTargetEdges reports the real producer. The `source !== n.id`
+  // self-edge guard stays (a node feeding its own smoothing would recurse).
+  let smoothing: string | number | undefined = v.smoothing;
+  const se = getTargetEdges(s.nodes, s.edges, n.id).find(
+    (x) => x.targetHandle === 'smoothing' && x.source !== n.id,
+  );
+  if (se) {
+    // Per-SOCKET: a wire from an HSL node's Lightness must set
+    // smoothingTimeConstant from L, not from channel 0's Hue.
+    const out = evaluateEdgeSource(se, s.nodes, s.edges, 0);
+    if (out && out.length > 0 && Number.isFinite(out[0])) smoothing = out[0];
+  }
+  return `${smoothing ?? NaN}|${v.gain ?? NaN}`;
+}
 
 export function ShaderPreview() {
   const previewCode = useAppStore((s) => s.previewCode);
@@ -285,6 +362,30 @@ export function ShaderPreview() {
   const language = useAppStore((s) => s.language);
   const previewMesh = useAppStore((s) => s.previewMesh);
   const setPreviewMesh = useAppStore((s) => s.setPreviewMesh);
+  // The top bar's WGSL/GLSL toggle (session-only store flag — see useAppStore).
+  const forceWebGL2 = useAppStore((s) => s.previewForceWebGL2);
+  const setPreviewForceWebGL2 = useAppStore((s) => s.setPreviewForceWebGL2);
+  /**
+   * Which renderer the CURRENT preview document reported at boot
+   * (`fs:backend`, posted from the pre-flight's boot()). LABEL-ONLY — the
+   * report is untrusted (see AUTO_IS_WEBGL2) and a forced document's own
+   * accurate 'webgl2' report would otherwise mislock the toggle for the
+   * whole rebuild window after unforcing. Last-known-wins across rebuilds:
+   * the fresh document re-reports at scene boot, and keeping the stale value
+   * in the gap stops the label flickering on every shader edit. Null only
+   * before the very first report.
+   */
+  const [activeBackend, setActiveBackend] = useState<'webgpu' | 'webgl2' | null>(null);
+  // Locked = auto mode already yields WebGL2, so the toggle has nothing to
+  // switch (Safari / no navigator.gpu) — derived from AUTO_IS_WEBGL2, never
+  // from the report. Locked rather than hidden: a control that vanishes
+  // per-browser reads as a regression, one that explains itself on hover
+  // doesn't. aria-disabled, not disabled — WebKit skips the native tooltip
+  // on a genuinely disabled control (the WorkFolder rule).
+  const backendLocked = !forceWebGL2 && AUTO_IS_WEBGL2;
+  // The label folds AUTO_IS_WEBGL2 in too, so Safari reads GLSL from the
+  // first frame instead of flashing a WGSL prediction until the report.
+  const backendIsGlsl = forceWebGL2 || AUTO_IS_WEBGL2 || activeBackend === 'webgl2';
 
   // Material settings from the output node. Narrow selector: a position/
   // selection-only store notify replaces the node OBJECT but keeps its .data
@@ -737,48 +838,28 @@ export function ShaderPreview() {
    * the 0.8 default. `Number('NaN')` is NaN, which the clamp maps to the
    * default as intended.
    *
-   * KNOWN LIMITATION: one analyser serves the whole graph, so a second Mic
-   * node's settings are ignored. `find` makes that deterministic (first in node
-   * order) rather than arbitrary. Two Mic nodes is a strange thing to want —
-   * they would hear the same room — but the node description says so.
+   * KNOWN LIMITATION: one analyser serves each SESSION, so a second node of the
+   * same kind has its settings ignored. `find` makes that deterministic (first
+   * in node order) rather than arbitrary. Two Mic nodes is a strange thing to
+   * want — they would hear the same room — but the node description says so.
+   * (A Mic node and an Audio Input node are two DIFFERENT sessions and do not
+   * contend: see the header of utils/audioSession.ts.)
    */
-  const micSettingsKey = useAppStore((s) => {
-    const n = s.nodes.find((x) => x.data.registryType === 'micNode');
-    if (!n) return '';
-    const v = getNodeValues(n);
-    // `smoothing` is an exposed socket, but unlike `gain` it cannot be resolved
-    // in the shader: it sets the AnalyserNode's smoothingTimeConstant, which
-    // lives on the CPU in the audio thread. So a wired edge is resolved by
-    // EVALUATING its upstream chain on the CPU — the same evaluator that drives
-    // the node-card previews. That means it follows constants, sliders and
-    // arithmetic, and reads 0 for GPU-only sources (uv, position) which have no
-    // CPU value; the alternative was a socket that silently did nothing.
-    // Guarded on the edge existing, so a graph that doesn't wire it pays one
-    // lookup rather than a graph walk on every store notify.
-    //
-    // getTargetEdges, NOT raw s.edges: with the smoothing feeder inside a
-    // COLLAPSED group the raw scan sees a boundary edge whose source is the
-    // GROUP id, and evaluateNodeOutput on a group node returns nothing — the
-    // wire silently stops setting smoothingTimeConstant the moment its frame is
-    // collapsed. getTargetEdges reports the real producer. The `source !== n.id`
-    // self-edge guard stays (a mic feeding its own smoothing would recurse).
-    let smoothing: string | number | undefined = v.smoothing;
-    const se = getTargetEdges(s.nodes, s.edges, n.id).find(
-      (x) => x.targetHandle === 'smoothing' && x.source !== n.id,
-    );
-    if (se) {
-      // Per-SOCKET: a wire from an HSL node's Lightness must set
-      // smoothingTimeConstant from L, not from channel 0's Hue.
-      const out = evaluateEdgeSource(se, s.nodes, s.edges, 0);
-      if (out && out.length > 0 && Number.isFinite(out[0])) smoothing = out[0];
-    }
-    return `${smoothing ?? NaN}|${v.gain ?? NaN}`;
-  });
+  const micSettingsKey = useAppStore((s) => liveAudioSettingsKey(s, 'micNode'));
   const hasMicNode = micSettingsKey !== '';
   const micSettings = useMemo(() => {
     const [smoothing, gain] = micSettingsKey.split('|');
     return readMicSettings({ smoothing, gain });
   }, [micSettingsKey]);
+
+  // The Audio Input node resolves its analyser settings by exactly the same
+  // rules — same sockets, same CPU-vs-shader split — so it shares the selector.
+  const audioSettingsKey = useAppStore((s) => liveAudioSettingsKey(s, 'audioInput'));
+  const hasAudioNode = audioSettingsKey !== '';
+  const audioSettings = useMemo(() => {
+    const [smoothing, gain] = audioSettingsKey.split('|');
+    return readMicSettings({ smoothing, gain });
+  }, [audioSettingsKey]);
 
   const allUniforms = useMemo(() => extractUniforms(previewCode), [previewCode]);
 
@@ -794,8 +875,28 @@ export function ShaderPreview() {
    * `<var>_<channel>` as a claimName alias, so a property is renamed instead.)
    */
   const micUniformNames = useMemo(
-    () => (hasMicNode ? allUniforms.filter((u) => isMicUniformName(u.name)).map((u) => u.name) : []),
+    () =>
+      hasMicNode
+        ? allUniforms
+            .filter((u) => liveAudioVarBaseOf(u.name) === MIC_VAR_BASE)
+            .map((u) => u.name)
+        : [],
     [allUniforms, hasMicNode],
+  );
+
+  /**
+   * The same, for the Audio Input node. Split by the uniform's variable BASE
+   * rather than by a single "is live audio" predicate, because each list is the
+   * driving target of a DIFFERENT capture session — the routing the pump does.
+   */
+  const audioUniformNames = useMemo(
+    () =>
+      hasAudioNode
+        ? allUniforms
+            .filter((u) => liveAudioVarBaseOf(u.name) === AUDIO_VAR_BASE)
+            .map((u) => u.name)
+        : [],
+    [allUniforms, hasAudioNode],
   );
 
   /**
@@ -816,9 +917,13 @@ export function ShaderPreview() {
     //     that has no `value` to bake it into.
     // It also covers the ALL_UNIFORMS branch below, where a graph with no
     // property nodes would otherwise fall through to "show everything".
-    const micNames = new Set(micUniformNames);
-    return allUniforms.filter((u) => !micNames.has(u.name));
-  }, [allUniforms, micUniformNames]);
+    //
+    // BOTH live-audio nodes are split off here. Missing the Audio Input half
+    // would reinstate every one of the bullets above for it — including writing
+    // its levels to DISK through the persisted uniformValues.
+    const liveNames = new Set([...micUniformNames, ...audioUniformNames]);
+    return allUniforms.filter((u) => !liveNames.has(u.name));
+  }, [allUniforms, micUniformNames, audioUniformNames]);
 
   // The overlay ROWS: only properties whose node has at least one outgoing edge
   // (i.e. is connected). BOTH property kinds must be scanned: with only
@@ -831,7 +936,13 @@ export function ShaderPreview() {
     return nonMicUniforms.filter((u) => connectedNames.has(u.name));
   }, [nonMicUniforms, connectedPropNamesKey]);
 
-  const mic = useMicPump({ iframeRef, micUniformNames, settings: micSettings });
+  const mic = useMicPump({
+    iframeRef,
+    micUniformNames,
+    settings: micSettings,
+    audioUniformNames,
+    audioSettings,
+  });
 
   // Per-uniform min/max — persisted across reloads, keyed by uniform name
   const [showUniforms, setShowUniforms] = useState(true);
@@ -920,8 +1031,15 @@ export function ShaderPreview() {
         on?: boolean; files?: unknown;
         has?: boolean; duration?: number; canInPlace?: boolean;
         name?: unknown; clip?: number; clips?: unknown; time?: number;
+        backend?: unknown;
       } | null;
       if (!data || typeof data.type !== 'string') return;
+      if (data.type === 'fs:backend') {
+        // Boot-time renderer report for the WGSL/GLSL toggle. Untrusted like
+        // every stage message — only the two known literals are accepted.
+        if (data.backend === 'webgpu' || data.backend === 'webgl2') setActiveBackend(data.backend);
+        return;
+      }
       if (data.type === 'fs:anim') {
         // The model finished loading and reported its clips (or the lack of
         // them). A zero/absent duration is treated as "no animation" — a clip
@@ -1058,14 +1176,15 @@ export function ShaderPreview() {
           const info = uniformInfoRef.current.get(name);
           if (!info) continue;
           if (typeof value !== (info.kind === 'color' ? 'string' : 'number')) continue;
-          // The rAF pump is the only thing that may write a mic uniform.
-          // uniformValues should never contain one (they are filtered out of
-          // `uniforms` before anything can store them), but this map is
-          // `usePersistedState` with reloadOnProjectImport — an imported
-          // project writes it — so an attacker-supplied fs:previewUniformValues
-          // could otherwise pin a mic uniform at a fixed value after every
-          // rebuild. Defence in depth, one line.
-          if (isMicUniformName(name)) continue;
+          // The rAF pump is the only thing that may write a live-audio uniform
+          // (mic OR audio input). uniformValues should never contain one (they
+          // are filtered out of `uniforms` before anything can store them), but
+          // this map is `usePersistedState` with reloadOnProjectImport — an
+          // imported project writes it — so an attacker-supplied
+          // fs:previewUniformValues could otherwise pin one at a fixed value
+          // after every rebuild. Defence in depth, one line; deliberately the
+          // BROAD predicate, so it cannot fall behind the split above.
+          if (isLiveAudioUniformName(name)) continue;
           win.postMessage({ type: 'fs:uniform', name, value }, '*');
         }
       } else if (data.type === 'fs:camera') {
@@ -1309,6 +1428,9 @@ export function ShaderPreview() {
       customModel: geometry === 'custom' && previewMesh
         ? { kind: previewMesh.kind, id: previewMesh.id }
         : null,
+      // Backend is decided at document boot, so the toggle joins the rebuild
+      // deps below (unlike bg/lighting/subdivision, which hot-update).
+      forceWebGL2,
       // Read from the ref at memo time so the user's current camera angle
       // survives setting changes (subdivision, lighting, etc.) without
       // joining the dep list (which would cause an infinite rebuild loop).
@@ -1326,7 +1448,7 @@ export function ShaderPreview() {
       options,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedPreviewCode, materialSettings, geometryRebuildKey]);
+  }, [debouncedPreviewCode, materialSettings, geometryRebuildKey, forceWebGL2]);
 
   // A new srcDoc means a full document reload, so raise the overlay again. Only
   // rebuilds go through here — the postMessage hot-update channels below mutate
@@ -1645,6 +1767,31 @@ export function ShaderPreview() {
             buttons: two `margin-left: auto` siblings SHARE the slack rather
             than stacking, so the pair would drift apart across the bar. */}
         <div className="shader-preview__ctl-right">
+          {/* WGSL/GLSL backend toggle. The label is the backend the CURRENT
+              document reported (a prediction only until the first report
+              lands); active styling marks the FORCED state, so auto-GLSL on
+              Safari reads as a fact, not a setting. */}
+          <button
+            type="button"
+            className={`shader-preview__props-btn${forceWebGL2 ? ' shader-preview__props-btn--active' : ''}`}
+            onClick={() => { if (backendLocked) return; setPreviewForceWebGL2(!forceWebGL2); }}
+            aria-pressed={forceWebGL2}
+            aria-disabled={backendLocked || undefined}
+            // Stable accessible name: the visible WGSL/GLSL text flips with
+            // state, and a flipping name beside aria-pressed reads as a
+            // contradiction in a screen reader ("GLSL, not pressed" while
+            // GLSL is exactly what runs). aria-label overrides text content
+            // in the accessible-name computation; the title stays the
+            // description.
+            aria-label={t('Force the WebGL2 (GLSL) backend', language)}
+            title={backendLocked
+              ? t('WebGPU is not available in this browser — the preview always renders through WebGL2 (GLSL).', language)
+              : forceWebGL2
+                ? t('Forced to the WebGL2 (GLSL) backend — what the VR popup and Safari run. Click to return to WebGPU (WGSL).', language)
+                : t('Rendering through WebGPU (WGSL). Click to force the WebGL2 (GLSL) backend — what the VR popup and Safari run — to check for backend-dependent differences.', language)}
+          >
+            {backendIsGlsl ? 'GLSL' : 'WGSL'}
+          </button>
           <button
             type="button"
             className={`shader-preview__props-btn${showStats ? ' shader-preview__props-btn--active' : ''}`}

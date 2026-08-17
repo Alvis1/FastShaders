@@ -32,8 +32,8 @@ describe('locateRegistryDescriptions', () => {
     // 74 = getAllDefinitions().length. NODE_REGISTRY.size is 77 because the three
     // hidden defs (unknown/dataNode/imageNode) are separate consts outside the
     // `definitions` array, so they are correctly not located here.
-    expect(slots).toHaveLength(74);
-    expect(defs).toHaveLength(74);
+    expect(slots).toHaveLength(75);
+    expect(defs).toHaveLength(75);
     expect(new Set(slots.map(s => s.key))).toEqual(new Set(defs.map(d => d.type)));
   });
 
@@ -177,14 +177,16 @@ describe('splitAliases / joinAliases', () => {
   const defs = getAllDefinitions();
   const tailed = defs.filter(d => d.description?.includes('Also:'));
 
-  it('34 definitions carry an "Also:" tail', () => {
+  it('35 definitions carry an "Also:" tail', () => {
     // Measured against the live registry; separator is uniformly " Also: ".
     // 33 since positionWorldDirection was renamed 'View Dir (world)' →
     // 'Outward Dir (world)' and grew an alias tail so the old query still
     // reaches it (see nodeSearch.test.ts); 34 since dataviz's trimmed prose
     // lost 'Signal'/'displacement' and the words moved into an alias tail so
-    // the node stays findable by its own socket's name.
-    expect(tailed).toHaveLength(34);
+    // the node stays findable by its own socket's name; 35 with the Audio
+    // Input node, whose tail carries the words people actually search for
+    // ('system audio', 'desktop', 'loopback') rather than its own label.
+    expect(tailed).toHaveLength(35);
   });
 
   it('round-trips every tailed description byte-exactly', () => {
@@ -257,7 +259,7 @@ describe('escaped-apostrophe safety', () => {
     // ...and must decode back to exactly the value we asked for.
     const relocated = locateRegistryDescriptions(out);
     expect(relocated.find(s => s.key === 'tangentLocal')!.value).toBe(nasty);
-    expect(relocated).toHaveLength(74);
+    expect(relocated).toHaveLength(75);
 
     // Still a single-line edit.
     const changed = registrySource
