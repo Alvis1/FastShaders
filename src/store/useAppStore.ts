@@ -432,6 +432,14 @@ function makePalette(
   return { ...clean, id };
 }
 
+/**
+ * The name a document starts life with — at first boot AND after NEW, so the
+ * two are indistinguishable. Exported because the shader name is a FILE name
+ * everywhere it leaves the app (export download, desktop Work-folder save), so
+ * "a document nobody has named" needs one spelling, not two.
+ */
+export const DEFAULT_SHADER_NAME = 'My Shader';
+
 const STORAGE_KEY = 'fs:graph';
 
 /**
@@ -793,6 +801,13 @@ interface AppState {
   // button's right-click setting). SESSION-ONLY like the mesh it governs — a
   // persisted "off" would silently strip models from exports weeks later.
   exportIncludeMesh: boolean;
+  // The preview top bar's WGSL/GLSL toggle — true forces the sandboxed 3D
+  // preview onto the WebGL2/GLSL backend (what the immersive popup and Safari
+  // always run), so backend-dependent shader behavior is checkable without a
+  // headset. SESSION-ONLY like exportIncludeMesh: a persisted force would
+  // leave the preview silently degraded weeks later, which reads as "WebGPU
+  // broke" rather than "I left a diagnostic on".
+  previewForceWebGL2: boolean;
 
   // Board drawings (freehand ink annotations) — VISUAL-ONLY, like notes /
   // waypoints. Separate slice so graphToCode / cpuEvaluator / the sync engine
@@ -974,6 +989,7 @@ interface AppState {
    */
   setPreviewMesh: (mesh: PreviewMesh | null, opts?: { persist?: boolean }) => void;
   setExportIncludeMesh: (include: boolean) => void;
+  setPreviewForceWebGL2: (force: boolean) => void;
   setSelectedHeadsetId: (id: string) => void;
 
   // Node variable name actions
@@ -1053,7 +1069,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   hideImageConvertNotice: loadString('fs:hideImageConvertNotice', '0') === '1',
   splitRatio: loadRatio('fs:splitRatio', 0.6),
   rightSplitRatio: loadRightSplitRatio(),
-  shaderName: loadString('fs:shaderName', 'My Shader'),
+  shaderName: loadString('fs:shaderName', DEFAULT_SHADER_NAME),
   selectedHeadsetId: bootSelectedId,
   nodeVarNames: {},
   costColorLow: loadString('fs:costColorLow', '#8BC34A'),
@@ -1072,6 +1088,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   savedGroups: loadSavedGroups(),
   previewMesh: null,
   exportIncludeMesh: true,
+  previewForceWebGL2: false,
 
   // Drawings are hydrated from fs:graph by App.tsx (loadGraph) alongside the
   // graph; tool prefs are their own persisted keys.
@@ -1214,8 +1231,21 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
-  newGraph: () =>
+  newGraph: () => {
+    // The name resets too, and that is load-bearing rather than tidiness: the
+    // shader name is what every export path turns into a FILE name, and the
+    // desktop Work folder now adopts the opened file's name on load (see
+    // utils/workFolderFile.ts). Keeping it would leave the name box — and so
+    // the derived save target — pointing at the file just opened. It is half of
+    // the fix; the `fs:graph-new` dispatch below is the other half, and NEITHER
+    // is redundant: the reset moves the DERIVED name, the event drops the
+    // TRACKED file, and a document already at the default name needs the second
+    // one because it kebabs to the same file the reset would produce. Not
+    // undoable (`shaderName` is absent from HistoryEntry), which is acceptable
+    // for a visible text box.
+    try { localStorage.setItem('fs:shaderName', DEFAULT_SHADER_NAME); } catch { /* quota */ }
     set((state) => ({
+      shaderName: DEFAULT_SHADER_NAME,
       // Snapshots inline rather than delegating to pushHistory for the same
       // reason beginInteraction does: pushHistory honours `isUndoRedo`, and a
       // not-yet-cleared flag (set by an undo whose sync reconciliation hasn't
@@ -1245,7 +1275,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
       shaderPalettes: [],
       syncSource: 'graph',
       isUndoRedo: false,
-    })),
+    }));
+    // The blank document has no file behind it. The name reset above cannot say
+    // that on its own — a document already AT the default kebabs to the same
+    // file name, so the desktop Work folder would keep treating the shader it
+    // last opened as this one's home and replace it on the next Save, silently
+    // (work_folder_write has no undo). Its own event, not `fs:graph-imported`:
+    // that one arms NodeEditor's import auto-fit, and startNewShader already
+    // schedules its own.
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('fs:graph-new'));
+    }
+  },
 
   // ── Drawing actions ──────────────────────────────────────────────────────
   // Drawings are visual-only: these NEVER touch syncSource, so the graph→code
@@ -1682,6 +1723,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setExportIncludeMesh: (include) => set({ exportIncludeMesh: include }),
+
+  setPreviewForceWebGL2: (force) => set({ previewForceWebGL2: force }),
 
   setSelectedHeadsetId: (id) => {
     // Selecting a device may be a measured cost profile (its id) or a built-in

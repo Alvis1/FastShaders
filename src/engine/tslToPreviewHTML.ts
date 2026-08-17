@@ -94,6 +94,16 @@ export interface PreviewOptions {
    *     postMessage model feed does not apply.
    */
   xr?: boolean;
+  /**
+   * Force the WebGL2/GLSL backend even where WebGPU is available — the
+   * preview top bar's WGSL/GLSL toggle. Diagnostic: the immersive popup and
+   * Safari always run GLSL, so this lets the flat preview show what THEY
+   * will render without leaving the editor. It can only narrow to WebGL2
+   * (WebGPU cannot be forced into existence), and the platform rule
+   * (`__fsForceWebGL2`) still applies underneath. Meaningless in xr mode,
+   * which hides `navigator.gpu` up front regardless.
+   */
+  forceWebGL2?: boolean;
   /** Document title — the XR popup shows the shader name in its tab. */
   title?: string;
   /**
@@ -1497,6 +1507,7 @@ export function tslToPreviewHTML(
     initialCameraPosition = null,
     initialRotation = null,
     xr = false,
+    forceWebGL2 = false,
     title,
   } = options;
   const customModel = options.customModel ?? null;
@@ -1810,6 +1821,15 @@ export function tslToPreviewHTML(
   lines.push('      document.getElementById("scene-slot").innerHTML = __fsSceneHTML;');
   lines.push('      window.__fsSceneBooted = true;');
   lines.push('      window.dispatchEvent(new Event("fs:scene-booted"));');
+  if (!xr) {
+    // Report which renderer this document settled on (post-pre-flight:
+    // hidden navigator.gpu = WebGL2) so the parent's WGSL/GLSL toggle can
+    // label itself with the truth instead of a prediction. Posted from
+    // boot() rather than fs:preview-ready so it arrives even when the
+    // shader itself fails to compile. Sandbox-only: the XR popup is a
+    // top-level document whose parent is itself.
+    lines.push('      try { parent.postMessage({ type: "fs:backend", backend: navigator.gpu ? "webgpu" : "webgl2" }, "*"); } catch (e) {}');
+  }
   lines.push('      // Watchdog: a WebGPU DEVICE-level failure (healthy adapter, dead');
   lines.push('      // device) still white-screens — surface it instead of staying silent.');
   lines.push('      setTimeout(function () {');
@@ -1839,6 +1859,14 @@ export function tslToPreviewHTML(
   lines.push('      if (/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(ua)) return false;');
   lines.push('      return /Safari|AppleWebKit/.test(ua);');
   lines.push('    }');
+  // The user's WGSL/GLSL toggle rides a SEPARATE branch, deliberately not a
+  // clause inside __fsForceWebGL2: feedbackReport.test.ts extracts that
+  // function's source verbatim and evaluates it against previewBackend()'s
+  // platform rule, so a flag reference inside it would break the drift guard
+  // (the toggle is app state the feedback report reads from the store
+  // instead).
+  lines.push(`    var __FS_USER_FORCE_WEBGL2 = ${forceWebGL2 ? 'true' : 'false'};`);
+  lines.push('    if (__FS_USER_FORCE_WEBGL2) { hideGpu(); boot(); return; }');
   lines.push('    if (__fsForceWebGL2()) { hideGpu(); boot(); return; }');
   lines.push('    if (!navigator.gpu) { boot(); return; }');
   lines.push('    var settled = false;');

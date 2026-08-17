@@ -28,6 +28,7 @@ import { MathPreviewNode } from './nodes/MathPreviewNode';
 import { OutputNode } from './nodes/OutputNode';
 import { ClockNode } from './nodes/ClockNode';
 import { MicNode } from './nodes/MicNode';
+import { AudioInputNode } from './nodes/AudioInputNode';
 import { GroupNode } from './nodes/GroupNode';
 import { NoteNode } from './nodes/NoteNode';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
@@ -142,6 +143,7 @@ const nodeTypes = {
   mathPreview: MathPreviewNode,
   clock: ClockNode,
   mic: MicNode,
+  audio: AudioInputNode,
   output: OutputNode,
   group: GroupNode,
   note: NoteNode,

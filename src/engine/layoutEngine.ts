@@ -5,6 +5,7 @@ import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRe
 import { nodeBox, hasNodeGlyph, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 import { MIC_W, MIC_HEADER_H, MIC_BODY_H } from '@/components/NodeEditor/nodes/micGeometry';
+import { AUD_W, AUD_HEADER_H, AUD_BODY_H } from '@/components/NodeEditor/nodes/audioGeometry';
 
 // ── Node-size estimation ─────────────────────────────────────────────────────
 // autoLayout usually runs BEFORE React Flow measures a node (on import/paste/
@@ -69,6 +70,8 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       return { width: 71 * scale, height: 112 * scale };
     case 'mic': // microphone: fixed footprint from micGeometry (MicNode)
       return { width: MIC_W * scale, height: (MIC_HEADER_H + MIC_BODY_H) * scale };
+    case 'audio': // audio input: fixed footprint from audioGeometry (AudioInputNode)
+      return { width: AUD_W * scale, height: (AUD_HEADER_H + AUD_BODY_H) * scale };
     case 'color': // borderless square swatch, no header, never cost-scaled
       return { width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE };
     case 'output': {

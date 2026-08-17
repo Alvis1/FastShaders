@@ -9,7 +9,13 @@ import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { isUnsignedNoise } from '@/utils/noiseRange';
 import { decodeDataNode, columnForHandle } from '@/utils/dataNode';
 import { readMicSettings } from '@/utils/micNode';
-import { MIC_CHANNELS, micUniformName, micChannelForHandle } from '@/utils/micAnalysis';
+import {
+  MIC_CHANNELS,
+  micUniformName,
+  micChannelForHandle,
+  isLiveAudioNodeType,
+  liveAudioVarBase,
+} from '@/utils/micAnalysis';
 import type { MicChannel } from '@/utils/micAnalysis';
 import { imageAssetFor } from './imageAssets';
 // Shape inference (1-4 channels) — the same authority the edge/preview layer
@@ -526,18 +532,18 @@ export function graphToCode(
       continue;
     }
 
-    // Mic nodes have the same aliasing problem as data nodes: the node emits
-    // `<var>_<channel>` identifiers, not `<var>`, so claiming only the base
-    // leaves `mic1_bass` free for a user property to take — and the emitted
+    // Live-audio nodes have the same aliasing problem as data nodes: the node
+    // emits `<var>_<channel>` identifiers, not `<var>`, so claiming only the
+    // base leaves `mic1_bass` free for a user property to take — and the emitted
     // `const mic1_bass = uniform(0);` then collides with the property's own
     // `const mic1_bass = uniform(...)`. Duplicate declaration = SyntaxError =
     // the whole module fails to load, not just this node.
-    if (def.type === 'micNode') {
+    if (isLiveAudioNodeType(def.type)) {
       const refChannels = new Set<MicChannel>();
       for (const e of outEdges(gidx, node.id)) {
         refChannels.add(micChannelForHandle(e.sourceHandle));
       }
-      varNames.set(node.id, claimName('mic', {
+      varNames.set(node.id, claimName(liveAudioVarBase(def.type), {
         // Both the uniform AND its gained twin (`_mic1_bass`) share the Fn-body
         // namespace, so both must be reserved or a user property could take one.
         aliases: (name) =>
@@ -1273,8 +1279,11 @@ export function graphToCode(
             ? `  const ${varName} = ${def.tslFunction};`
             : `  const ${varName} = ${def.tslFunction}.mul(${num(speed)});`,
       );
-    } else if (def.type === 'micNode') {
-      // Mic node: four live 0–1 values emitted as ORDINARY NUMERIC UNIFORMS.
+    } else if (isLiveAudioNodeType(def.type)) {
+      // Mic / Audio Input: four live 0–1 values emitted as ORDINARY NUMERIC
+      // UNIFORMS. Both nodes emit the IDENTICAL shape and differ only in their
+      // variable base (`mic1_…` vs `aud1_…`), which is what lets the preview
+      // pump route each one back to its own capture session.
       //
       // This shape is the whole design. `const mic1_bass = uniform(0);` means
       // the entire transport is the fs:uniform postMessage channel that already
@@ -1287,8 +1296,8 @@ export function graphToCode(
       // trade that away for nothing the preview can use.
       //
       // Handled BEFORE the generic `inputs.length === 0 && defaultValues`
-      // branch, which would emit `(0.8)` — micNode's tslFunction is empty
-      // because it is hand-emitted, and its defaultValues are the analyser
+      // branch, which would emit `(0.8)` — the tslFunction is empty because
+      // these are hand-emitted, and their defaultValues are the analyser
       // settings, not a constructor argument. Same trap the Time node avoids.
       //
       // Only CONSUMED channels are emitted (the Data node's `usedCols` rule):
@@ -1850,11 +1859,12 @@ function resolveEdgeRef(
     return base ? `${base}_${edge.sourceHandle}` : null;
   }
 
-  // Mic node: each channel is emitted as its own `<var>_<channel>` uniform
-  // (the node has no single value), so address the channel by its handle id.
-  // `micChannelForHandle` is the SAME normalization the emitter used, so a
-  // hand-edited handle in a `.fastshader` resolves to a variable that exists.
-  if (sourceNode.data.registryType === 'micNode') {
+  // Mic / Audio Input: each channel is emitted as its own `<var>_<channel>`
+  // uniform (the node has no single value), so address the channel by its
+  // handle id. `micChannelForHandle` is the SAME normalization the emitter
+  // used, so a hand-edited handle in a `.fastshader` resolves to a variable
+  // that exists.
+  if (isLiveAudioNodeType(sourceNode.data.registryType)) {
     const base = varNames.get(sourceNode.id);
     if (!base) return null;
     const u = micUniformName(base, micChannelForHandle(edge.sourceHandle));

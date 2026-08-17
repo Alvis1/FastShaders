@@ -18,6 +18,7 @@ import { MathPreviewNode } from '@/components/NodeEditor/nodes/MathPreviewNode';
 import { OutputNode } from '@/components/NodeEditor/nodes/OutputNode';
 import { ClockNode } from '@/components/NodeEditor/nodes/ClockNode';
 import { MicNode } from '@/components/NodeEditor/nodes/MicNode';
+import { AudioInputNode } from '@/components/NodeEditor/nodes/AudioInputNode';
 import { GroupNode } from '@/components/NodeEditor/nodes/GroupNode';
 import { NoteNode } from '@/components/NodeEditor/nodes/NoteNode';
 import { TypedEdge } from '@/components/NodeEditor/edges/TypedEdge';
@@ -32,7 +33,8 @@ import './GraphModal.css';
 // "armMic has exactly two click paths" rule: the node's arm light is one of
 // those two paths, and it gates itself on the node being wired — every graph
 // this modal shows is either a single edge-less node or a built-in
-// texture/preset (none contain a mic), so the light renders disabled.
+// texture/preset (none contain a mic), so the light renders disabled. The same
+// reasoning covers the Audio Input node, whose arm light gates identically.
 const nodeTypes = {
   shader: ShaderNode,
   color: ColorNode,
@@ -40,6 +42,7 @@ const nodeTypes = {
   mathPreview: MathPreviewNode,
   clock: ClockNode,
   mic: MicNode,
+  audio: AudioInputNode,
   output: OutputNode,
   group: GroupNode,
   note: NoteNode,

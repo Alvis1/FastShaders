@@ -13,6 +13,10 @@
  * mere existence, a message handler, `graphToCode`, or a lifecycle effect.
  * Keep it that way.
  *
+ * (`systemAudioCapture.ts` is the same statement for `getDisplayMedia`, which is
+ * how the Audio Input node hears a media player or a browser tab. The analyser
+ * graph both build is shared — see `audioCaptureCore.ts`.)
+ *
  * Nothing here persists. There is deliberately no `fs:micConsent` key and no
  * "remember this" affordance, because `projectImport.ts`'s `writeLs` block
  * copies preview preferences into localStorage straight out of an imported
@@ -26,56 +30,27 @@
  * No PCM ever leaves the audio graph.
  */
 
-import { analyseMic, type MicLevels, MIC_LEVELS_ZERO } from './micAnalysis';
 import type { MicSettings } from './micNode';
+import {
+  buildAnalyserCapture,
+  classifyAudioError,
+  audioContextCtor,
+  type AudioCapture,
+  type AudioStartError,
+  type AudioStartResult,
+} from './audioCaptureCore';
 
 /** How long to wait for the permission prompt before giving up. */
 const MIC_PROMPT_TIMEOUT_MS = 30_000;
 
-export type MicStartError =
-  | 'insecure-context'
-  | 'unsupported'
-  | 'denied'
-  | 'no-device'
-  | 'in-use'
-  | 'timeout'
-  | 'failed';
-
-export interface MicCapture {
-  /** Read the analyser and reduce it to the four shader values. */
-  readLevels(): MicLevels;
-  /** Re-apply settings without tearing down the stream. */
-  applySettings(settings: MicSettings): void;
-  /** Stop the tracks and close the AudioContext. Idempotent. */
-  stop(): void;
-  /** The context's real sample rate — the band maths needs it. */
-  readonly sampleRate: number;
-}
-
-export type MicStartResult =
-  | { ok: true; capture: MicCapture }
-  | { ok: false; error: MicStartError };
-
-/** Map a getUserMedia rejection onto something we can write a sentence about. */
-function classify(err: unknown): MicStartError {
-  const name = (err as { name?: string } | null)?.name ?? '';
-  switch (name) {
-    case 'NotAllowedError':
-    case 'PermissionDeniedError':
-      return 'denied';
-    case 'NotFoundError':
-    case 'DevicesNotFoundError':
-    case 'OverconstrainedError':
-      return 'no-device';
-    case 'NotReadableError':
-    case 'TrackStartError':
-      return 'in-use';
-    case 'SecurityError':
-      return 'insecure-context';
-    default:
-      return 'failed';
-  }
-}
+/**
+ * Historical names, kept because they are what the mic surfaces import. The
+ * underlying types are shared with the system-audio path — the two capture
+ * sources differ only in how the stream is obtained.
+ */
+export type MicStartError = AudioStartError;
+export type MicCapture = AudioCapture;
+export type MicStartResult = AudioStartResult;
 
 /**
  * Ask for the microphone and build the analyser graph.
@@ -85,10 +60,16 @@ function classify(err: unknown): MicStartError {
  * the permission prompt — and it also stalls while the document is hidden, so
  * without a bound the UI would sit on "starting…" forever with no way back.
  * A stream that arrives after the timeout is stopped rather than leaked.
+ *
+ * `deviceId` selects a specific input. Note that a LOOPBACK driver (BlackHole,
+ * VB-Cable, VoiceMeeter) appears here as an ordinary `audioinput`, which is how
+ * this path can hear what the machine is playing on browsers where
+ * `getDisplayMedia` carries no audio.
  */
 export async function startMicCapture(
   settings: MicSettings,
   deviceId?: string | null,
+  opts: { onEnded?: () => void } = {},
 ): Promise<MicStartResult> {
   // `navigator.mediaDevices` is undefined outside a secure context, which is
   // exactly the case for the LAN bench server (plain HTTP on 0.0.0.0:5199).
@@ -98,11 +79,7 @@ export async function startMicCapture(
     const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
     return { ok: false, error: insecure ? 'insecure-context' : 'unsupported' };
   }
-  const Ctor: typeof AudioContext | undefined =
-    typeof AudioContext !== 'undefined'
-      ? AudioContext
-      : (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctor) return { ok: false, error: 'unsupported' };
+  if (!audioContextCtor()) return { ok: false, error: 'unsupported' };
 
   let timedOut = false;
   let stream: MediaStream;
@@ -146,71 +123,8 @@ export async function startMicCapture(
         );
     });
   } catch (err) {
-    return { ok: false, error: timedOut ? 'timeout' : classify(err) };
+    return { ok: false, error: timedOut ? 'timeout' : classifyAudioError(err) };
   }
 
-  let ctx: AudioContext;
-  let analyser: AnalyserNode;
-  try {
-    ctx = new Ctor();
-    // A context created outside a gesture starts suspended and its graph never
-    // runs, so every band would read a flat 0 with no error anywhere.
-    if (ctx.state === 'suspended') await ctx.resume().catch(() => { /* best effort */ });
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = settings.fftSize;
-    analyser.smoothingTimeConstant = settings.smoothing;
-    ctx.createMediaStreamSource(stream).connect(analyser);
-    // Deliberately NOT connected to ctx.destination — that would play the
-    // microphone back through the speakers and feed back.
-  } catch {
-    for (const t of stream.getTracks()) t.stop();
-    return { ok: false, error: 'failed' };
-  }
-
-  let bins = new Uint8Array(analyser.frequencyBinCount);
-  let stopped = false;
-
-  const capture: MicCapture = {
-    get sampleRate() {
-      return ctx.sampleRate;
-    },
-    readLevels() {
-      if (stopped) return { ...MIC_LEVELS_ZERO };
-      // fftSize changes reallocate frequencyBinCount, so re-check rather than
-      // reading into a stale short buffer (getByteFrequencyData would silently
-      // fill only part of the spectrum).
-      if (bins.length !== analyser.frequencyBinCount) {
-        bins = new Uint8Array(analyser.frequencyBinCount);
-      }
-      analyser.getByteFrequencyData(bins);
-      // RAW 0-1, no gain. `gain` is applied in the SHADER (graphToCode emits a
-      // `.mul()` on the uniform) so that it can be driven by a wire — applying
-      // it here as well would scale twice, and the level meter would stop
-      // agreeing with what the shader actually receives.
-      return analyseMic({ freqBytes: bins, sampleRate: ctx.sampleRate });
-    },
-    applySettings(s) {
-      if (stopped) return;
-      // NB `s.gain` is deliberately ignored — see readLevels.
-      // Both setters throw IndexSizeError on out-of-range input; readMicSettings
-      // is what guarantees these are in range. Guard anyway — a throw here would
-      // kill the pump's rAF loop and freeze every band at its last value.
-      try {
-        if (analyser.fftSize !== s.fftSize) analyser.fftSize = s.fftSize;
-        if (analyser.smoothingTimeConstant !== s.smoothing) {
-          analyser.smoothingTimeConstant = s.smoothing;
-        }
-      } catch { /* keep the previous, known-good analyser config */ }
-    },
-    stop() {
-      if (stopped) return;
-      stopped = true;
-      for (const t of stream.getTracks()) t.stop();
-      // Closing releases the audio hardware; without it the OS recording
-      // indicator can linger even after the tracks stop.
-      void ctx.close().catch(() => { /* already closed */ });
-    },
-  };
-
-  return { ok: true, capture };
+  return buildAnalyserCapture(stream, settings, opts);
 }

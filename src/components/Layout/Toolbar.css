@@ -363,6 +363,17 @@ button.toolbar__local-row.toolbar__wf-row {
   white-space: nowrap;
 }
 
+/* The file the editor currently holds — the one Save writes back to. Marked
+   with the accent border + a left rule rather than a second line of text: the
+   row deliberately carries ONE name (see WorkFolder.tsx), and a "current" tag
+   beside the file name would put two labels back on it. Double-class to
+   out-rank the plain .toolbar__local-row border above. */
+button.toolbar__local-row.toolbar__wf-row--current {
+  border-color: var(--border-focus);
+  box-shadow: inset 3px 0 0 var(--border-focus);
+  font-weight: 600;
+}
+
 .toolbar__wf-forget {
   font-family: var(--font-sans);
   font-size: 10px;

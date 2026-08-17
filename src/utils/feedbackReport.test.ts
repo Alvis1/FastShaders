@@ -283,6 +283,15 @@ describe('feedbackReport — preview backend', () => {
     expect(previewBackend(UA_CASES[4].ua, 'MacIntel', 0, true)).toContain('WebGPU');
   });
 
+  it('reports the preview GLSL toggle, but only below the platform rules', () => {
+    // Chromium with WebGPU: the toggle is the operative cause.
+    expect(previewBackend(UA_CASES[4].ua, 'MacIntel', 0, true, true))
+      .toBe('WebGL2 (forced — preview GLSL toggle)');
+    // Safari forces regardless of the toggle — the platform reason keeps
+    // naming the more fundamental cause.
+    expect(previewBackend(UA_CASES[3].ua, 'MacIntel', 0, true, true)).toContain('Safari/WebKit');
+  });
+
   /**
    * DRIFT GUARD. `previewBackend` restates the rule that
    * `tslToPreviewHTML` emits as source text into the preview iframe

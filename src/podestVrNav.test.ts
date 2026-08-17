@@ -77,6 +77,8 @@ interface Nav {
   marker: Overlay & { position: THREE.Vector3 };
   floor: Overlay;
   shell: Overlay;
+  arc: Overlay & { count: number; parent: THREE.Object3D | null; getMatrixAt: (i: number, m: THREE.Matrix4) => void };
+  handMesh: (THREE.Object3D & { getMatrixAt: (i: number, m: THREE.Matrix4) => void }) | null;
   aimSrc: unknown;
   aimMode: string;
   valid: boolean;
@@ -126,6 +128,7 @@ function makeNav() {
       }
       return true;
     },
+    fillJointRadii: (_it: unknown, arr: Float32Array) => { arr.fill(0.008); return true; },
   };
   const sceneEl = {
     object3D: root,
@@ -177,18 +180,20 @@ function makeNav() {
  */
 function hand(mode: 'open' | 'fist' | 'press'): Joints {
   const wrist: [number, number, number] = [0, 1.2, 0];
-  const palm: [number, number, number] = [0, 1.29, 0];
+  const palm: [number, number, number] = [0, 1.29, 0];            // 9 cm from the wrist = the hand scale
   const j: Joints = Array.from({ length: 25 }, () => [...palm] as [number, number, number]);
   j[0] = [...wrist];
   j[10] = [...palm];
-  j[6] = [palm[0], palm[1] + 0.03, palm[2] + 0.01];                    // index proximal
+  j[6] = [palm[0], palm[1] + 0.03, palm[2] + 0.01];                // index proximal (the knuckle)
   const tip: [number, number, number] = mode === 'open'
     ? [palm[0], palm[1] + 0.18, palm[2]]
     : [palm[0], palm[1] + 0.05, palm[2] + 0.02];
   for (const t of [9, 14, 19, 24]) j[t] = [...tip];
+  // Thumb tip. "up" is (thumbTip.y − indexProximal.y) / handScale:
+  //   open  → +0.55   fist(up) → +0.89   press → −0.11
   j[4] = mode === 'press' ? [palm[0] + 0.01, palm[1] + 0.02, palm[2] + 0.01]
     : mode === 'open' ? [palm[0] + 0.06, palm[1] + 0.08, palm[2]]
-      : [palm[0], palm[1] + 0.11, palm[2]];                            // thumb up
+      : [palm[0], palm[1] + 0.11, palm[2]];
   return j;
 }
 
@@ -251,7 +256,7 @@ describe('podest vr-nav — hand gesture', () => {
     const target = h.nav.marker.position.clone();
     const before = h.nav.head.clone();
     h.setJoints(hand('press'));
-    h.tick(1);
+    h.tick(2);                                 // never on the arming frame
     expect(h.nav.pending).toBeTruthy();
     expect(h.nav.fadeDir).toBe(1);            // the jump happens at full black
     h.tick(8);
@@ -261,6 +266,39 @@ describe('podest vr-nav — hand gesture', () => {
     h.tick(14);
     expect(h.nav.fadeDir).toBe(0);
     expect(h.nav.shell.material.opacity).toBe(0);
+  });
+
+  it('does not read a held thumbs-up fist as a press (the on-device latch bug)', () => {
+    // The first build measured thumb→knuckle DISTANCE with press < 0.55 and
+    // release > 0.85 of the hand scale — a thumbs-up fist sits inside that
+    // band, so the button latched pressed on the arming frame, commit() no-op'd
+    // (no target computed yet), and it could never release. Nothing teleported
+    // again, and the pinch path died with it because a fist-owned hand ignores
+    // `select`.
+    const h = armed();
+    h.setJoints(hand('fist'));
+    h.tick(30);                                  // half a second of holding it
+    expect(h.nav.pending, 'a thumbs-up fist fired a teleport').toBeFalsy();
+    // …and the button still works afterwards.
+    h.setJoints(hand('press'));
+    h.tick(2);
+    expect(h.nav.pending).toBeTruthy();
+  });
+
+  it('fires again after the thumb comes back up', () => {
+    const h = armed();
+    h.setJoints(hand('fist'));
+    h.tick(5);
+    h.setJoints(hand('press'));
+    h.tick(2);
+    const first = h.nav.pending;
+    expect(first).toBeTruthy();
+    h.tick(10);                                  // ride the blink out
+    h.setJoints(hand('fist'));                   // thumb back up = button released
+    h.tick(2);
+    h.setJoints(hand('press'));
+    h.tick(2);
+    expect(h.nav.pending, 'the button only worked once').toBeTruthy();
   });
 
   it('cancels when the fist opens, and hides the guides', () => {
@@ -350,6 +388,70 @@ describe('podest vr-nav — the 30-unit bound', () => {
   });
 });
 
+describe('podest vr-nav — hands and the aim arc', () => {
+  function aiming() {
+    const h = makeNav();
+    h.session.inputSources = [HAND_SRC];
+    h.setViewer(0, 1.6, 0);
+    h.setRay(0, 1.3, 0, -45);
+    h.tick(2);
+    h.setJoints(hand('fist'));
+    h.tick(5);
+    return h;
+  }
+
+  it('parents the hand joints to the RIG, so they follow a teleport', () => {
+    // A-Frame's hand-tracking-controls hangs its joints off a wristObject3D
+    // added to the SCENE ROOT, so they ignore the rig entirely — measured on
+    // a headset as hands sitting metres from the real ones. Drawing them here
+    // is the fix, and this is the assertion that keeps them in the rig.
+    const h = aiming();
+    expect(h.nav.handMesh, 'no hand mesh was built').toBeTruthy();
+    expect(h.nav.handMesh!.parent).toBe(h.rig.object3D);
+  });
+
+  it('tracks the joints, and drops them when the hand is lost', () => {
+    const h = aiming();
+    const m = new THREE.Matrix4();
+    h.nav.handMesh!.getMatrixAt(24 + 1, m);                   // first joint of the right hand
+    const p = new THREE.Vector3().setFromMatrixPosition(m);
+    expect(p.length()).toBeGreaterThan(0.5);                  // a real wrist, not the origin
+    h.setJoints(null);
+    h.tick(1);
+    h.nav.handMesh!.getMatrixAt(24 + 1, m);
+    expect(new THREE.Vector3().setFromMatrixScale(m).length()).toBe(0);
+  });
+
+  it('draws the arc while aiming and lands its last bead on the marker', () => {
+    const h = aiming();
+    expect(h.nav.arc.visible).toBe(true);
+    const m = new THREE.Matrix4();
+    h.nav.arc.getMatrixAt(h.nav.arc.count - 1, m);
+    const last = new THREE.Vector3().setFromMatrixPosition(m);
+    expect(last.distanceTo(h.nav.marker.position)).toBeLessThan(0.35);
+  });
+
+  it('lifts the arc off the straight line, so it reads as an arc', () => {
+    const h = aiming();
+    const m = new THREE.Matrix4();
+    const mid = new THREE.Vector3();
+    h.nav.arc.getMatrixAt(Math.floor(h.nav.arc.count / 2), m);
+    mid.setFromMatrixPosition(m);
+    const chord = new THREE.Vector3().addVectors(h.nav.marker.position, new THREE.Vector3(0, 0.02, 0));
+    // The midpoint bead must sit above the straight hand→marker chord.
+    const straightY = (1.3 + chord.y) / 2;
+    expect(mid.y).toBeGreaterThan(straightY + 0.05);
+  });
+
+  it('hides the arc when the aim is released', () => {
+    const h = aiming();
+    h.setJoints(hand('open'));
+    h.tick(1);
+    expect(h.nav.arc.visible).toBe(false);
+    expect(h.nav.marker.visible).toBe(false);
+  });
+});
+
 describe('podest vr-nav — unattended exhibit', () => {
   it('returns a stranded visitor to the artwork after 90 s of a motionless head', () => {
     const h = makeNav();
@@ -389,15 +491,18 @@ describe('podest vr-nav — unattended exhibit', () => {
 });
 
 describe('podest vr-nav — offline + wiring', () => {
-  it('renders hands as dots, never the CDN hand mesh', () => {
+  it("does not use A-Frame's hand-tracking-controls", () => {
+    // It parents its joint dots to a wristObject3D on the SCENE ROOT, so they
+    // can never follow a camera rig — the on-device symptom was hands sitting
+    // metres away from the real ones. vr-nav draws them instead.
     const html = readFileSync(PODEST, 'utf8');
-    const handLines = html.split('\n').filter((l) => l.includes('hand-tracking-controls='));
-    expect(handLines).toHaveLength(2);
-    for (const line of handLines) expect(line).toContain('modelStyle: dots');
-    // The default modelStyle fetches a hand GLB from cdn.aframe.io. The name
-    // may appear in prose explaining that; it may never reach emitted output.
-    const emitted = html.split('\n').filter((l) => l.includes('cdn.aframe.io') && !l.trimStart().startsWith('//'));
-    expect(emitted).toEqual([]);
+    const used = html.split('\n').filter((l) => l.includes('hand-tracking-controls=') && !l.trimStart().startsWith('//'));
+    expect(used).toEqual([]);
+    // Nothing requests the feature for us any more, so the scene must.
+    expect(html).toContain('optionalFeatures: hand-tracking');
+    // Offline rule: nothing in the VR document may reach a CDN.
+    const cdn = html.split('\n').filter((l) => l.includes('cdn.aframe.io') && !l.trimStart().startsWith('//'));
+    expect(cdn).toEqual([]);
   });
 
   it('requests hand-tracking on the scene and wraps the camera in the rig', () => {

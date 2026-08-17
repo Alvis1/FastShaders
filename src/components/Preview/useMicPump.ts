@@ -9,7 +9,19 @@ import {
   micArmIntent,
   type MicStatus,
 } from '@/utils/micSession';
-import { micChannelOf } from '@/utils/micAnalysis';
+import {
+  liveAudioChannelOf,
+  liveAudioVarBaseOf,
+  MIC_VAR_BASE,
+} from '@/utils/micAnalysis';
+import {
+  readAudioLevels,
+  applyAudioSettings,
+  audioArmIntent,
+  disarmAudio,
+  subscribeAudio,
+  getAudioStatus,
+} from '@/utils/audioSession';
 import type { MicSettings } from '@/utils/micNode';
 
 export type { MicStatus };
@@ -57,21 +69,34 @@ export interface MicPump {
  */
 export function useMicPump(opts: {
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
-  /** Emitted mic uniform names present in the current shader. */
+  /** Emitted mic uniform names present in the current shader (`mic1_bass`, …). */
   micUniformNames: string[];
   settings: MicSettings;
+  /** Emitted Audio Input uniform names present in the current shader (`aud1_bass`, …). */
+  audioUniformNames?: string[];
+  /** The Audio Input node's analyser settings, resolved like the mic's. */
+  audioSettings?: MicSettings;
 }): MicPump {
   const { iframeRef, micUniformNames, settings } = opts;
+  // Stable empty default: a fresh `[]` per render would re-run every effect
+  // keyed on it, and the auto-disarm one would then fire on every render.
+  const audioUniformNames = opts.audioUniformNames ?? EMPTY_NAMES;
+  const audioSettings = opts.audioSettings;
 
   const status = useSyncExternalStore(subscribeMic, getMicStatus, getMicStatus);
+  // Subscribed for the zero-on-leave effect below; the Audio Input node draws
+  // its own meter and owns its own arm button, so nothing else here needs it.
+  const audioStatus = useSyncExternalStore(subscribeAudio, getAudioStatus, getAudioStatus);
   const meterRef = useRef<HTMLSpanElement>(null);
 
   // rAF-loop inputs live in refs so the loop can be started once with `[]`
   // deps and never restarted — the codebase's standard rAF ref pattern.
   const namesRef = useRef(micUniformNames);
+  const audioNamesRef = useRef(audioUniformNames);
   const settingsRef = useRef(settings);
   const iframeRefRef = useRef(iframeRef);
   useEffect(() => { namesRef.current = micUniformNames; }, [micUniformNames]);
+  useEffect(() => { audioNamesRef.current = audioUniformNames; }, [audioUniformNames]);
   useEffect(() => { iframeRefRef.current = iframeRef; }, [iframeRef]);
 
   // Settings changes re-configure the live analyser in place. No teardown, so
@@ -80,6 +105,10 @@ export function useMicPump(opts: {
     settingsRef.current = settings;
     applyMicSettings(settings);
   }, [settings]);
+
+  useEffect(() => {
+    if (audioSettings) applyAudioSettings(audioSettings);
+  }, [audioSettings]);
 
   const arm = useCallback(() => armMic(settingsRef.current), []);
   const disarm = useCallback(() => disarmMic(), []);
@@ -91,23 +120,40 @@ export function useMicPump(opts: {
     let raf = 0;
     const tick = () => {
       raf = requestAnimationFrame(tick);
-      if (!micArmIntent()) return;
+      const micOn = micArmIntent();
+      const audioOn = audioArmIntent();
+      if (!micOn && !audioOn) return;
 
-      const levels = readMicLevels();
+      // Read each session at most ONCE per frame, even though the names below
+      // are interleaved: readLevels() runs a full getByteFrequencyData + band
+      // reduction, so doing it per uniform would repeat that up to four times.
+      const micLevels = micOn ? readMicLevels() : null;
+      const audioLevels = audioOn ? readAudioLevels() : null;
 
       const win = iframeRefRef.current.current?.contentWindow;
       if (win) {
-        for (const name of namesRef.current) {
-          const ch = micChannelOf(name);
-          if (!ch) continue;
-          win.postMessage({ type: 'fs:uniform', name, value: levels[ch] }, '*');
-        }
+        // Routed by the uniform's PREFIX, which is the whole reason the two
+        // nodes claim different variable bases (`mic` vs `aud`). A graph may
+        // hold both nodes, and each must be driven by its OWN capture — sharing
+        // a base here would make one node's sound drive the other's uniforms.
+        const post = (names: readonly string[]) => {
+          for (const name of names) {
+            const ch = liveAudioChannelOf(name);
+            if (!ch) continue;
+            const levels = liveAudioVarBaseOf(name) === MIC_VAR_BASE ? micLevels : audioLevels;
+            if (!levels) continue;
+            win.postMessage({ type: 'fs:uniform', name, value: levels[ch] }, '*');
+          }
+        };
+        post(namesRef.current);
+        post(audioNamesRef.current);
       }
 
       const el = meterRef.current;
       // scaleX rather than width: transform-only so the compositor handles it
-      // and a 60 Hz meter never triggers layout.
-      if (el) el.style.transform = `scaleX(${levels.level.toFixed(3)})`;
+      // and a 60 Hz meter never triggers layout. This is the MIC's meter (the
+      // preview's MicControl); the Audio Input node draws its own on the card.
+      if (el && micLevels) el.style.transform = `scaleX(${micLevels.level.toFixed(3)})`;
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
@@ -133,6 +179,22 @@ export function useMicPump(opts: {
     wasLiveRef.current = live;
   }, [status]);
 
+  // Same rule for the Audio Input session, tracked separately: the two capture
+  // independently, so one stopping must not zero the other's uniforms.
+  const audioWasLiveRef = useRef(false);
+  useEffect(() => {
+    const live = audioStatus === 'on' || audioStatus === 'starting';
+    if (audioWasLiveRef.current && !live) {
+      const win = iframeRefRef.current.current?.contentWindow;
+      if (win) {
+        for (const name of audioNamesRef.current) {
+          win.postMessage({ type: 'fs:uniform', name, value: 0 }, '*');
+        }
+      }
+    }
+    audioWasLiveRef.current = live;
+  }, [audioStatus]);
+
   // An armed microphone with nothing left to drive is pure downside: the OS
   // indicator stays lit for a graph that no longer listens. Deleting the last
   // Mic node (or unwiring it, which drops its uniforms from the emitted code)
@@ -146,5 +208,16 @@ export function useMicPump(opts: {
     if (micUniformNames.length === 0 && micArmIntent()) disarmMic();
   }, [micUniformNames]);
 
+  // The same guarantee for the Audio Input node. It matters MORE here: this
+  // session can be holding a screen share, so an orphaned capture leaves the
+  // browser's "you are sharing your screen" bar up over a graph that no longer
+  // listens to it.
+  useEffect(() => {
+    if (audioUniformNames.length === 0 && audioArmIntent()) disarmAudio();
+  }, [audioUniformNames]);
+
   return { status, armed: status === 'on' || status === 'starting', arm, disarm, meterRef };
 }
+
+/** Stable identity for the default — see the note where it is used. */
+const EMPTY_NAMES: string[] = [];

@@ -1,0 +1,177 @@
+@import './NodeBase.css';
+
+/* The Audio Input node places every element itself — see AudioInputNode.tsx,
+   geometry in audioGeometry.ts. Nothing here is in flow except the header, so
+   mounting or unmounting a socket cannot move anything. Colours are literals:
+   graph nodes must render identically in light and dark, which is also why the
+   `<select>` below cannot reuse the preview chrome's `.shader-preview__geo-select`
+   (that one is built from --bg-panel / --text-primary and flips with the theme).
+
+   EVERY rule is scoped to .audio-node__body, NOT .audio-node — the asset tile
+   (AudioCardContent) renders the same body inside CardShell's frame and has no
+   .audio-node ancestor. That is the exact bug MicNode.css documents: the arm
+   light was scoped to .mic-node, so on the tile it fell back to ShaderNode.css's
+   in-flow margins and sat on top of the value chips. */
+
+.audio-node__body {
+  position: relative;
+}
+
+/* Sockets — and therefore their name tooltips — sit ABOVE everything else on
+   the card. Stated explicitly because of how stacking contexts trap the
+   tooltip: React Flow positions every handle with a `transform`, and a
+   transform CREATES a stacking context, so the tooltip's own `z-index: 10`
+   (TypedHandle.css) is sealed INSIDE the handle and can only compete with its
+   siblings at the handle's level — which is `auto`. The arm light's wrapper is
+   likewise a transform-made stacking context at `z-index: 1`, so without this
+   it out-paints every tooltip reaching over it and the lower output sockets
+   show nothing at all on hover.
+   Descendant, not child: the param handles are nested one level deeper. */
+.audio-node__body .react-flow__handle {
+  z-index: 2;
+}
+
+/* Handles are positioned by an inline `top` (px from the body's top edge) and
+   sit ON the card border. translateY only — never a hover transform, which
+   would move the socket under the cursor.
+   Child combinator: governs the OUTPUT handles only (the params are nested
+   deeper and keep React Flow's own centring). */
+.audio-node__body > .react-flow__handle {
+  transform: translateY(-50%) !important;
+}
+
+.audio-node__body > .react-flow__handle-left {
+  left: calc(var(--handle-size) / -2) !important;
+}
+
+.audio-node__body > .react-flow__handle-right {
+  right: calc(var(--handle-size) / -2) !important;
+}
+
+/* Parameter chip row — same construction as the Mic node's: a full-width
+   rectangle anchored to the same `top` as its socket, so the two read as one
+   row even though neither is in flow. HEIGHT comes inline from
+   audioGeometry's AUD_CHIP_H, so the chip height has exactly one source. */
+.audio-node__val {
+  position: absolute;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: stretch;
+}
+
+.audio-node__val .drag-num--compact {
+  flex: 1;
+  height: 100%;
+}
+
+/* A wired param is driven by its edge, so the stored number is dead — the row
+   shows the VALUE ARRIVING instead. Read-only, so no plate and no border: on a
+   node a fill means "you can edit this" and plain text means "this is derived".
+   Font/colour come from .shader-node__edge-val, which this element also
+   carries, so every derived number on any node reads at one size. */
+.audio-node__wired {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The SOURCE picker — the control this node exists for, which is why it is on
+   the card rather than in the settings menu.
+
+   Every colour is a literal for the theme-invariance rule above. The width is
+   pinned by the absolute left/right insets and `min-width: 0`, so a long device
+   name ellipsises instead of widening the node — `.node-base` is
+   `width: fit-content`, so an unbounded child here would let "MacBook Pro
+   Microphone (Built-in)" dictate the node's size. */
+.audio-node__source {
+  position: absolute;
+  transform: translateY(-50%);
+  min-width: 0;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: calc(8px * var(--node-text-scale, 1));
+  line-height: 1;
+  /* Right padding clears the caret drawn below. */
+  padding: 0 12px 0 3px;
+  color: #1a1a1a;
+  border: 1px solid #b9bfc7;
+  border-radius: 2px;
+  cursor: pointer;
+  /* Native appearance on macOS forces a large control with its own metrics and
+     ignores the 20px height, which would break every offset below it. Removing
+     it also removes the platform caret, so one is drawn back as a background
+     image — without it the control reads as a text FIELD, and a picker nobody
+     recognises as a picker is the problem this node exists to fix.
+     background-color/-image separately, never the `background` shorthand: the
+     shorthand would reset the image whenever a state below re-declares the
+     colour. */
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: #ffffff;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23555555' stroke-width='1.5' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 3px center;
+  background-size: 7px 5px;
+  text-overflow: ellipsis;
+}
+
+.audio-node__source:hover:not(:disabled) {
+  border-color: #7a828c;
+}
+
+.audio-node__source:disabled {
+  color: #8a9099;
+  background-color: #f0f1f3;
+  cursor: default;
+  opacity: 1; /* WebKit dims a disabled select on its own; the colours above already say it. */
+}
+
+/* The live level meter — "the input, visible on the node".
+
+   Written IMPERATIVELY by the preview's rAF pump (transform: scaleX), never
+   through React state: reports land ~60x/s and re-rendering a canvas node at
+   that rate is the trap useMicPump's header documents for the preview's own
+   meter. transform-only so the compositor handles it and the node never
+   relayouts. */
+.audio-node__meter {
+  position: absolute;
+  transform: translateY(-50%);
+  box-sizing: border-box;
+  background: #e3e6ea;
+  border: 1px solid #b9bfc7;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.audio-node__meter-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: #2f9e44;
+  /* No transition: the pump writes every frame, so a transition would fight it
+     and lag the reading behind the sound. */
+}
+
+/* Idle/failed states dim the fill so a stopped meter can't read as a live
+   signal frozen at its last value. */
+.audio-node__meter--idle .audio-node__meter-fill {
+  background: #b9bfc7;
+}
+
+/* The arm light. The wrapper carries the placement (inline `top` from
+   audioGeometry's AUD_BTN_TOP); sizing/colour/blink live in ShaderNode.css so
+   the canvas node, the Mic node and the palette tile share one definition.
+   z-index 1 lifts it over the rows; sockets sit above it at 2. */
+.audio-node__btn-wrap {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+}
+
+.audio-node__btn-wrap .shader-node__mic-btn {
+  margin: 0;
+}

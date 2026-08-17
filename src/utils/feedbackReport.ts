@@ -164,18 +164,45 @@ function projectRows(p: FeedbackProject): [string, string][] {
  * does not paint on Apple WebKit), and a report that answers it up front is the
  * difference between a diagnosable ticket and a round trip.
  */
+/**
+ * The platform half of the rule, as the REASON it forces (null = platform
+ * doesn't force). Split out so ShaderPreview's WGSL/GLSL toggle can derive
+ * its locked state from the SAME statement of the rule instead of a third
+ * copy — the toggle must not trust the iframe's own backend report for
+ * anything but its label, because that report comes from the sandboxed
+ * document, which runs the loaded shader (adversarial by project rule) and
+ * can forge `fs:backend`.
+ */
+export function platformWebGL2Reason(
+  userAgent: string,
+  platform: string,
+  maxTouchPoints: number,
+): string | null {
+  if (/iPad|iPhone|iPod/.test(userAgent)) return 'iOS WebKit';
+  if (platform === 'MacIntel' && maxTouchPoints > 1) return 'iPadOS desktop mode';
+  if (!/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(userAgent)
+      && /Safari|AppleWebKit/.test(userAgent)) {
+    return 'Safari/WebKit';
+  }
+  return null;
+}
+
 export function previewBackend(
   userAgent: string,
   platform: string,
   maxTouchPoints: number,
   gpuExposed: boolean,
+  userForcedWebGL2 = false,
 ): string {
-  if (/iPad|iPhone|iPod/.test(userAgent)) return 'WebGL2 (forced — iOS WebKit)';
-  if (platform === 'MacIntel' && maxTouchPoints > 1) return 'WebGL2 (forced — iPadOS desktop mode)';
-  if (!/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(userAgent)
-      && /Safari|AppleWebKit/.test(userAgent)) {
-    return 'WebGL2 (forced — Safari/WebKit)';
-  }
+  const reason = platformWebGL2Reason(userAgent, platform, maxTouchPoints);
+  if (reason) return `WebGL2 (forced — ${reason})`;
+  // The preview's WGSL/GLSL toggle. AFTER the platform checks — those force
+  // regardless of the toggle, so they are the more fundamental cause — and
+  // deliberately NOT part of the __fsForceWebGL2 mirror above: the emitted
+  // rule keeps the toggle as a separate branch (a constant baked per
+  // document), so the drift test's UA-shape comparison stays about the
+  // platform rule alone. This flag is app state, read from the store.
+  if (userForcedWebGL2) return 'WebGL2 (forced — preview GLSL toggle)';
   if (!gpuExposed) return 'WebGL2 (no navigator.gpu)';
   return 'WebGPU (if an adapter is granted, else WebGL2)';
 }
