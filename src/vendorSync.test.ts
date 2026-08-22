@@ -51,3 +51,57 @@ describe('vendored A-Frame scripts stay in sync with the submodule source', () =
     }
   }
 });
+
+/**
+ * The ShaderCarousel bench pages resolve `three` through their own
+ * `<script type="importmap">`. That works on every host that serves the suite
+ * as static files, but NOT under `vite dev`, which rewrites bare specifiers to
+ * its pre-bundled deps and ignores import maps — `three` then resolved to the
+ * app's PLAIN three build, whose module has no `WebGPURenderer` export, and
+ * `bench-driver.js` died with a SyntaxError before registering anything (the
+ * "Benchmark this device" button did nothing, with the cause console-only).
+ *
+ * `vite.config.ts`'s dev-only `fs-carousel-importmap-dev` plugin fixes that by
+ * READING these maps and resolving carousel imports the same way. One resolver
+ * serves both pages, so the two maps must agree — and every target must exist,
+ * since a dev-server resolution that points at a missing file fails as an
+ * opaque 404 mid-module-graph.
+ */
+describe('ShaderCarousel import maps (the dev resolver reads these)', () => {
+  const PAGES = ['bench-microplane', 'bench-static'];
+  const mapOf = (dir: string) => {
+    const page = path.resolve(process.cwd(), 'ShaderCarousel', dir, 'index.html');
+    const block = readFileSync(page, 'utf-8')
+      .match(/<script\s+type=["']importmap["']\s*>([\s\S]*?)<\/script>/i);
+    expect(block, `${dir}/index.html has no import map`).not.toBeNull();
+    return { page, imports: JSON.parse(block![1]).imports as Record<string, string> };
+  };
+
+  it('both bench pages declare the SAME map, and every target exists', () => {
+    const maps = PAGES.map(mapOf);
+    for (const { page, imports } of maps) {
+      expect(Object.keys(imports).length, page).toBeGreaterThan(0);
+      for (const [spec, rel] of Object.entries(imports)) {
+        const target = path.resolve(path.dirname(page), rel);
+        expect(existsSync(target), `${page}: "${spec}" → missing ${rel}`).toBe(true);
+      }
+    }
+    // Resolved to absolute paths: the two pages sit at the same depth, so
+    // identical relative values must land on identical files.
+    const resolved = maps.map(({ page, imports }) =>
+      Object.fromEntries(Object.entries(imports)
+        .map(([k, v]) => [k, path.resolve(path.dirname(page), v)])));
+    expect(resolved[1], 'the two bench pages must resolve `three` identically').toEqual(resolved[0]);
+  });
+
+  it('`three` resolves to the WEBGPU build — the plain one has no WebGPURenderer', () => {
+    // The exact confusion the dev-server bug produced: a build that parses but
+    // lacks the export the driver imports.
+    for (const dir of PAGES) {
+      const { imports } = mapOf(dir);
+      expect(imports.three, dir).toMatch(/three\.webgpu(\.min)?\.js$/);
+    }
+    const webgpu = path.resolve(process.cwd(), 'ShaderCarousel/lib/three/three.webgpu.min.js');
+    expect(readFileSync(webgpu, 'utf-8')).toContain('WebGPURenderer');
+  });
+});

@@ -1,0 +1,56 @@
+/* New / Export performance profile dialogs. The shell (backdrop, panel,
+   title, buttons) is CsvImportModal.css — only the two middles live here. */
+
+.cost-profile-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.cost-profile-modal__field input {
+  padding: 6px 8px;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  color: var(--text-primary);
+  background: var(--bg-input, var(--bg-panel));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+}
+
+.cost-profile-modal__field input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.cost-profile-modal__choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.cost-profile-modal__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* Kept visible-but-inert rather than hidden: "This profile" disappearing on a
+   built-in headset would read as the dialog being broken, where a dimmed row
+   naming the reason answers the question. */
+.cost-profile-modal__choice--off {
+  color: var(--text-secondary);
+  opacity: 0.6;
+  cursor: default;
+}
+
+.cost-profile-modal__choice input {
+  margin-top: 2px;
+  flex: none;
+}

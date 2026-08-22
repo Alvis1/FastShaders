@@ -12,8 +12,9 @@ overview, and the Node Designer's stage), `.../nodes/NodeBase.css`
 `.../nodes/glyphs/NodeGlyph.tsx`, `.../glyphs/customGlyphs.ts`,
 `.../handles/TypedHandle.{tsx,css}`, and `node-designer.html` + `src/nodeDesigner/`
 (a Vite entry — no `public/` copy exists). ShaderNode and NodeVisual mirror each
-other — **change them together**. See `CONTEXT.md → Node Visual Anatomy` for the
-prose version.
+other — **change them together**. This file IS the prose spec; the older
+`CONTEXT.md` it used to defer to was retired 2026-08-18 (superseded by
+`CLAUDE.md`, which carries the conventions and the rationale).
 
 ## Node anatomy (live nodes + asset cards)
 

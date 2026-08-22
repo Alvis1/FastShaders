@@ -13,7 +13,10 @@ import { WaveformSvg } from './nodes/WaveformSvg';
 import { effectiveRampDef } from '@/utils/exposedPorts';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
 import complexityData from '@/registry/complexity.json';
-import { MIC_BODY_W, MIC_BODY_H, MIC_PARAM_TOPS, MIC_CHIP_H, MIC_BTN_TOP, MIC_OUT_TOPS } from './nodes/micGeometry';
+import {
+  MIC_BODY_W, MIC_BODY_H, MIC_PARAM_TOPS, MIC_CHIP_H, MIC_METER_TOP, MIC_METER_H,
+  MIC_BTN_TOP, MIC_OUT_TOPS, MIC_PAD_X,
+} from './nodes/micGeometry';
 import {
   AUD_BODY_W,
   AUD_BODY_H,
@@ -369,7 +372,11 @@ function MicCardContent(props: ContentProps) {
     <CardShell {...props} nodeClassName="mic-node" hideOutput>
       <div className="mic-node__body" style={{ width: MIC_BODY_W, height: MIC_BODY_H }}>
         {def.inputs.map((inp, i) => (
-          <div key={inp.id} className="mic-node__val" style={{ top: MIC_PARAM_TOPS[i] ?? 0, height: MIC_CHIP_H }}>
+          <div
+            key={inp.id}
+            className="mic-node__val"
+            style={{ top: MIC_PARAM_TOPS[i] ?? 0, height: MIC_CHIP_H, left: MIC_PAD_X, right: MIC_PAD_X }}
+          >
             {/* Inert by the card's pointer-events: none — kept a real widget so
                 the tile matches the live node pixel for pixel. */}
             <DragNumberInput
@@ -379,6 +386,14 @@ function MicCardContent(props: ContentProps) {
             />
           </div>
         ))}
+        {/* Always idle here: a tile has no session to read, and a meter drawn
+            at some resting level would read as signal. */}
+        <div
+          className="shader-node__level-meter shader-node__level-meter--idle"
+          style={{ top: MIC_METER_TOP, height: MIC_METER_H, left: MIC_PAD_X, right: MIC_PAD_X }}
+        >
+          <span className="shader-node__level-meter-fill" />
+        </div>
         {/* Inert: a plain div, never a <button>. A palette tile must not become
             another way to switch the microphone on — armMic has exactly two
             click paths and this is not one of them. */}
@@ -442,10 +457,10 @@ function AudioCardContent(props: ContentProps) {
           <option value="preview">Tab / system audio…</option>
         </select>
         <div
-          className="audio-node__meter audio-node__meter--idle"
+          className="shader-node__level-meter shader-node__level-meter--idle"
           style={{ top: AUD_METER_TOP, height: AUD_METER_H, left: AUD_PAD_X, right: AUD_PAD_X }}
         >
-          <span className="audio-node__meter-fill" />
+          <span className="shader-node__level-meter-fill" />
         </div>
         {/* Inert: a plain div, never a <button>. A palette tile must not become
             another way to open a capture — armAudio has exactly ONE click path

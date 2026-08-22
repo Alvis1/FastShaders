@@ -8,7 +8,7 @@ import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { collectShaderProperties } from '@/engine/exportShader';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
-import { parseCostFile } from '@/utils/costOverride';
+import { parseCostFile, parseCostProfileBundle } from '@/utils/costOverride';
 import { getNodeValues } from '@/types';
 import type { OutputNodeData } from '@/types';
 import './CodeEditor.css';
@@ -167,6 +167,25 @@ export function CodeEditor() {
     if (/\.json$/i.test(file.name)) {
       file.text()
         .then((text) => {
+          // An exported PROFILE BUNDLE first — the CostBar's own "Export
+          // profiles… → all" file. It has no top-level `costs`, so the single
+          // parser reads it as junk and this surface would reject a file the
+          // app wrote seconds earlier (while accepting its single-profile
+          // sibling, which is the confusing half of the asymmetry).
+          const bundle = parseCostProfileBundle(text, file.name);
+          if (bundle) {
+            const bad = bundle.filter((p) => p.meta.valid === false);
+            let list = bundle;
+            if (bad.length && !window.confirm(
+              `${t('This file contains {n} benchmark runs flagged invalid:', language).replace('{n}', String(bad.length))}\n\n` +
+              `${bad.map((p) => `• ${p.self?.label ?? p.meta.device ?? '?'}: ${p.meta.reasons.join('; ')}`).join('\n')}\n\n` +
+              t('Add them as device profiles anyway? Cancel imports only the valid ones.', language),
+            )) {
+              list = bundle.filter((p) => p.meta.valid !== false);
+            }
+            if (list.length) useAppStore.getState().importCostProfiles(list, { select: 'current' });
+            return;
+          }
           const parsed = parseCostFile(text, file.name);
           if (!parsed) {
             window.alert(t('That JSON is not a recognizable complexity patch or bench suggestion.', language));

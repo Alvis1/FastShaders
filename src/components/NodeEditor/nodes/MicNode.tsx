@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, type CSSProperties } from 'react';
+import { memo, useEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties } from 'react';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
@@ -20,14 +20,18 @@ import { LiveEdgeValue } from './LiveEdgeValue';
 // OutputNode.tsx:85-90).
 import { getTargetEdges } from '@/engine/cpuEvaluator';
 import { MIC_DEFAULT_VALUES } from '@/utils/micNode';
+import { readMicLevels, micArmIntent, subscribeMic, getMicStatus } from '@/utils/micSession';
 import { portLabel } from '@/i18n';
 import {
   MIC_BODY_W,
   MIC_BODY_H,
   MIC_PARAM_TOPS,
   MIC_CHIP_H,
+  MIC_METER_TOP,
+  MIC_METER_H,
   MIC_BTN_TOP,
   MIC_OUT_TOPS,
+  MIC_PAD_X,
 } from './micGeometry';
 import './MicNode.css';
 
@@ -114,6 +118,30 @@ export const MicNode = memo(function MicNode({ id, data, selected }: NodeProps<S
     updateNodeInternals(id);
   }, [id, mountedKey, updateNodeInternals]);
 
+  // Live input level, drawn on the node itself. Reads `readMicLevels()` off the
+  // session rather than being fed by the preview's pump: the session is a
+  // module singleton in the parent document, so the meter keeps working while
+  // the shader is mid-rebuild — and the node can answer "is it hearing
+  // anything?" without the preview panel being open at all.
+  const status = useSyncExternalStore(subscribeMic, getMicStatus, getMicStatus);
+  const meterRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const el = meterRef.current;
+      if (!el) return;
+      // Idle costs one branch per frame — cheaper and far less error-prone than
+      // tearing an rAF loop up and down around a permission prompt.
+      const v = micArmIntent() ? readMicLevels().level : 0;
+      // scaleX rather than width: transform-only, so the compositor handles it
+      // and a 60 Hz meter never triggers layout inside the viewport.
+      el.style.transform = `scaleX(${v.toFixed(3)})`;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
   return (
     <div
       className={`node-base mic-node ${selected ? 'node-base--selected' : ''}`}
@@ -163,7 +191,7 @@ export const MicNode = memo(function MicNode({ id, data, selected }: NodeProps<S
                   identifiable without exposing the port. */}
               <div
                 className="mic-node__val"
-                style={{ top, height: MIC_CHIP_H }}
+                style={{ top, height: MIC_CHIP_H, left: MIC_PAD_X, right: MIC_PAD_X }}
                 title={portLabel(inp.label ?? inp.id, language)}
               >
                 {wiredInfo ? (
@@ -184,6 +212,13 @@ export const MicNode = memo(function MicNode({ id, data, selected }: NodeProps<S
             </div>
           );
         })}
+
+        <div
+          className={`shader-node__level-meter${status === 'on' ? '' : ' shader-node__level-meter--idle'}`}
+          style={{ top: MIC_METER_TOP, height: MIC_METER_H, left: MIC_PAD_X, right: MIC_PAD_X }}
+        >
+          <span className="shader-node__level-meter-fill" ref={meterRef} />
+        </div>
 
         <div className="mic-node__btn-wrap" style={{ top: MIC_BTN_TOP }}>
           <MicNodeButton nodeId={id} values={data.values} />
