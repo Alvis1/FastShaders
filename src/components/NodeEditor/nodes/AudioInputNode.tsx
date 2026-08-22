@@ -215,10 +215,10 @@ export const AudioInputNode = memo(function AudioInputNode({ id, data, selected 
         />
 
         <div
-          className={`audio-node__meter${status === 'on' ? '' : ' audio-node__meter--idle'}`}
+          className={`shader-node__level-meter${status === 'on' ? '' : ' shader-node__level-meter--idle'}`}
           style={{ top: AUD_METER_TOP, height: AUD_METER_H, left: AUD_PAD_X, right: AUD_PAD_X }}
         >
-          <span className="audio-node__meter-fill" ref={meterRef} />
+          <span className="shader-node__level-meter-fill" ref={meterRef} />
         </div>
 
         <div className="audio-node__btn-wrap" style={{ top: AUD_BTN_TOP }}>

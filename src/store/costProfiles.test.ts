@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useAppStore, VR_HEADSETS, resolveDeviceBudget, resolveDeviceTextureDim } from './useAppStore';
 import { getCost, setCostOverrides } from '@/utils/nodeCost';
-import { parseCostFile } from '@/utils/costOverride';
+import { parseCostFile, buildProfileFile } from '@/utils/costOverride';
 import complexityData from '@/registry/complexity.json';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
@@ -109,6 +109,86 @@ describe('cost profiles (store lifecycle)', () => {
     const latest = s.costProfiles.find((p) => p.label === 'other')!;
     expect(latest.maxTextureDim).toBe(1024);
     expect(resolveDeviceTextureDim(s.selectedHeadsetId, s.costProfiles)).toBe(1024); // not loosened to 2048
+  });
+
+  it('createCostProfile adds a hand-authored profile, selects it, and changes no price', () => {
+    const p = useAppStore.getState().createCostProfile('My Device');
+    const s = useAppStore.getState();
+    expect(s.costProfiles).toEqual([p]);
+    expect(s.selectedHeadsetId).toBe(p.id);
+    expect(p.meta.manual).toBe(true);
+    expect(p.maxPoints).toBe(200);              // inherits the active device budget (quest3)
+    expect(p.maxTextureDim).toBe(2048);         // …and its texture cap
+    // Seeded from the authored table, so creating one is a no-op for the bar
+    // until the user edits it — a "new profile" must not silently reprice.
+    expect(getCost('voronoi')).toBe(BASE.voronoi);
+    expect(s.totalCost).toBe(BASE.voronoi);
+    expect(localStorage.getItem('fs:costProfiles')).toContain(p.id);
+  });
+
+  it('the download → edit → re-import loop UPDATES the row instead of forking it', () => {
+    const p = useAppStore.getState().createCostProfile('My Device');
+    // What "Edit profile…" writes, hand-edited: one price changed.
+    const file = buildProfileFile(p) as { meta: Record<string, unknown>; costs: Record<string, number> };
+    file.costs.voronoi = 777;
+    useAppStore.getState().importCostProfile(parseCostFile(JSON.stringify(file), 'fastshaders-profile-my-device.json')!);
+    const s = useAppStore.getState();
+    expect(s.costProfiles).toHaveLength(1);      // same row — the id travelled in the file
+    expect(s.costProfiles[0].id).toBe(p.id);
+    expect(s.costProfiles[0].label).toBe('My Device');
+    expect(s.costProfiles[0].meta.manual).toBe(true);
+    expect(getCost('voronoi')).toBe(777);
+  });
+
+  it('a hand-authored file cannot overwrite a MEASURED profile', () => {
+    useAppStore.getState().importCostProfile(parsedM4());          // voronoi:230, measured
+    const measured = useAppStore.getState().costProfiles[0];
+    useAppStore.getState().importCostProfile(parseCostFile(JSON.stringify({
+      meta: { id: measured.id, label: 'typed', manual: true }, costs: { voronoi: 1 },
+    }))!);
+    const s = useAppStore.getState();
+    expect(s.costProfiles).toHaveLength(2);                        // landed beside it, not over it
+    expect(s.costProfiles.find((x) => x.id === measured.id)!.costs.voronoi).toBe(230);
+  });
+
+  it('a bundle imports every profile, each against the PRE-import device', () => {
+    const a = parseCostFile(JSON.stringify({ meta: { id: 'cp:manual:a', label: 'A', maxPoints: 111, manual: true }, costs: { voronoi: 10 } }))!;
+    const b = parseCostFile(JSON.stringify({ meta: { device: 'Rig B' }, costs: { voronoi: 20 } }))!;
+    expect(useAppStore.getState().importCostProfiles([a, b])).toBe(2);
+    const s = useAppStore.getState();
+    expect(s.costProfiles).toHaveLength(2);
+    expect(s.costProfiles.find((p) => p.label === 'A')!.maxPoints).toBe(111);   // its own claimed budget
+    // B has none of its own, so it inherits quest3's 200 — NOT A's 111, which
+    // is what resolving the budget per entry would have given it.
+    expect(s.costProfiles.find((p) => p.label === 'Rig B')!.maxPoints).toBe(200);
+    expect(s.selectedHeadsetId).toBe(s.costProfiles[1].id);                     // last one wins
+    expect(getCost('voronoi')).toBe(20);
+  });
+
+  it("a bundle keeps the active device, counts ROWS landed, and still refreshes prices", () => {
+    // Two entries claiming ONE id collapse to one row — the count the notice
+    // prints must be rows, not entries, or a bundle over-reports what landed.
+    const dup = (v: number) => parseCostFile(JSON.stringify({
+      meta: { id: 'cp:manual:same', label: 'Same', manual: true }, costs: { voronoi: v },
+    }))!;
+    expect(useAppStore.getState().importCostProfiles([dup(1), dup(2)])).toBe(1);
+    expect(useAppStore.getState().costProfiles).toHaveLength(1);
+
+    // select: 'current' — restoring a backup must not reprice the open shader
+    // against whichever entry the file happened to end with…
+    useAppStore.getState().setSelectedHeadsetId('quest3');
+    const other = parseCostFile(JSON.stringify({ meta: { device: 'Someone else' }, costs: { voronoi: 999 } }))!;
+    useAppStore.getState().importCostProfiles([other], { select: 'current' });
+    expect(useAppStore.getState().selectedHeadsetId).toBe('quest3');
+    expect(getCost('voronoi')).toBe(BASE.voronoi);          // still the authored table
+
+    // …but when an entry IS the active profile, its new prices must take
+    // effect: the selection is unchanged, so nothing else would re-apply them.
+    useAppStore.getState().setSelectedHeadsetId('cp:manual:same');
+    expect(getCost('voronoi')).toBe(2);
+    useAppStore.getState().importCostProfiles([dup(42)], { select: 'current' });
+    expect(useAppStore.getState().selectedHeadsetId).toBe('cp:manual:same');
+    expect(getCost('voronoi')).toBe(42);
   });
 
   it('setSelectedHeadsetId ignores an unknown/foreign id (no clobber, no persist)', () => {

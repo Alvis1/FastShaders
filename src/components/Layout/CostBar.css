@@ -144,6 +144,30 @@
 }
 .cost-bar__bench-dismiss:hover { color: var(--cost-high); }
 
+/* Transient "a file was saved / profiles were imported" strip. Same shape as
+   the bench offer above (and it borrows that strip's two buttons), but muted
+   rather than accented: the offer ASKS something and should catch the eye,
+   this only reports what already happened. Its text wraps — a file name is
+   the whole point of the message, so it must not be ellipsed away. */
+.cost-bar__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding: 3px var(--space-1) 3px var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+}
+.cost-bar__notice-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .cost-bar__headset-select:hover {
   border-color: var(--border-default);
 }

@@ -27,7 +27,9 @@ import { safeJsonReviver } from '@/utils/safeJson';
 import { authoredUniformChange } from '@/utils/uniformOverride';
 import { normalizeChainOperands } from '@/utils/chainOperands';
 import { nodeCostPoints, setCostOverrides, computeReachableCost, sanitizeCostMap } from '@/utils/nodeCost';
-import { type ParsedCostFile, type CostProfile, profileFromParsed, sanitizeCostMeta } from '@/utils/costOverride';
+import {
+  type ParsedCostFile, type CostProfile, profileFromParsed, sanitizeCostMeta, createManualProfile,
+} from '@/utils/costOverride';
 import { makeDataNodeData, sanitizeDataNodes } from '@/utils/dataNode';
 import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
 import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, type ImageOriginInfo } from '@/utils/imageNode';
@@ -313,6 +315,11 @@ function loadRightSplitRatio(): number {
 
 function loadString(key: string, fallback: string): string {
   try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
+}
+
+/** The ONE writer of `fs:costProfiles` — every mutation path goes through it. */
+function persistCostProfiles(list: CostProfile[]): void {
+  try { localStorage.setItem('fs:costProfiles', JSON.stringify(list)); } catch { /* quota */ }
 }
 
 function loadCostProfiles(): CostProfile[] {
@@ -921,6 +928,14 @@ interface AppState {
   // Complexity actions
   setTotalCost: (cost: number) => void;
   importCostProfile: (parsed: ParsedCostFile) => void;
+  /**
+   * Bulk entrance (an exported bundle). Returns how many ROWS landed, which
+   * is below the entry count when entries share an id. `select: 'current'`
+   * keeps the active device instead of switching to the last entry.
+   */
+  importCostProfiles: (parsed: ParsedCostFile[], opts?: { select?: 'last' | 'current' }) => number;
+  /** "New profile…" — a hand-authored profile, selected on creation. */
+  createCostProfile: (label: string) => CostProfile;
   deleteCostProfile: (id: string) => void;
 
   // Sync actions
@@ -1464,26 +1479,64 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setTotalCost: (cost) => set({ totalCost: cost }),
 
-  importCostProfile: (parsed) => {
-    // Budget for the new profile = the currently-active device's budget, so the
+  importCostProfile: (parsed) => { get().importCostProfiles([parsed]); },
+
+  importCostProfiles: (parsedList, opts) => {
+    // Budget for a new profile = the currently-active device's budget, so the
     // bar's scale doesn't jump on import; the meaningful change is the repriced
-    // table. Re-importing the same run replaces its entry (stable id).
+    // table. (A file this app WROTE carries its own budget — profileFromParsed
+    // prefers that.) Re-importing the same run replaces its entry (stable id).
     const { costProfiles, selectedHeadsetId } = get();
+    // Resolved ONCE, from the pre-import state: resolving per entry would make
+    // each profile in a bundle inherit the budget/cap of the one before it.
     const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles);
     const maxTextureDim = resolveDeviceTextureDim(selectedHeadsetId, costProfiles);
-    const profile = profileFromParsed(parsed, maxPoints, maxTextureDim);
-    const nextProfiles = [...costProfiles.filter((p) => p.id !== profile.id), profile];
-    try { localStorage.setItem('fs:costProfiles', JSON.stringify(nextProfiles)); } catch { /* quota */ }
+    let nextProfiles = costProfiles;
+    let last: CostProfile | null = null;
+    // Distinct rows, not entries: two entries claiming one id collapse, and a
+    // caller that reports "imported N" must not count the same row twice.
+    const landed = new Set<string>();
+    for (const parsed of parsedList) {
+      // `nextProfiles` (not the original list) is what a claimed id is checked
+      // against, so two entries of one bundle claiming the same id collapse
+      // the same way a re-import does instead of both landing.
+      const profile = profileFromParsed(parsed, maxPoints, maxTextureDim, nextProfiles);
+      nextProfiles = [...nextProfiles.filter((p) => p.id !== profile.id), profile];
+      landed.add(profile.id);
+      last = profile;
+    }
+    if (!last) return 0;
+    persistCostProfiles(nextProfiles);
     // Persist selection + activate: set the list first so setSelectedHeadsetId
     // can resolve the new profile, then select it (applies costs + recompute).
     set({ costProfiles: nextProfiles });
+    // Restoring a BACKUP must not reprice the open shader against whichever
+    // entry the file happened to end with, so a bundle keeps the active
+    // device — but still re-selects it, since one of the entries may BE that
+    // device with new numbers and the applied table has to catch up.
+    const keepCurrent = opts?.select === 'current'
+      && (VR_HEADSETS.some((h) => h.id === selectedHeadsetId)
+        || nextProfiles.some((p) => p.id === selectedHeadsetId));
+    get().setSelectedHeadsetId(keepCurrent ? selectedHeadsetId : last.id);
+    return landed.size;
+  },
+
+  createCostProfile: (label) => {
+    const { costProfiles, selectedHeadsetId } = get();
+    const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles);
+    const maxTextureDim = resolveDeviceTextureDim(selectedHeadsetId, costProfiles);
+    const profile = createManualProfile(label, maxPoints, maxTextureDim);
+    const nextProfiles = [...costProfiles.filter((p) => p.id !== profile.id), profile];
+    persistCostProfiles(nextProfiles);
+    set({ costProfiles: nextProfiles });
     get().setSelectedHeadsetId(profile.id);
+    return profile;
   },
 
   deleteCostProfile: (id) => {
     const { costProfiles, selectedHeadsetId } = get();
     const nextProfiles = costProfiles.filter((p) => p.id !== id);
-    try { localStorage.setItem('fs:costProfiles', JSON.stringify(nextProfiles)); } catch { /* */ }
+    persistCostProfiles(nextProfiles);
     set({ costProfiles: nextProfiles });
     // If the removed profile was active, fall back to the default headset — this
     // clears the override (base costs) and recomputes via setSelectedHeadsetId.

@@ -26,37 +26,44 @@
 /**
  * Outer card width, border-box (includes the 1.5px node border each side).
  *
- * Nearly twice the Mic node's 80px, and that is the dropdown's doing: a source
- * name like "BlackHole 2ch" or "Screen 1" has to be readable at rest, because
- * the whole point of putting the picker on the card is that you can see what the
- * node is listening to without opening anything. The `<select>` is width-capped
- * to the body and ellipsises rather than widening the node — `.node-base` is
- * `width: fit-content`, so an unbounded child would let a device name dictate
- * the node's size (the load-bearing cap the image thumbnail and colormap strip
- * both carry).
+ * Sized against the Mic node's width rather than against the longest device
+ * name a machine might report: the two are siblings and read as a pair on the
+ * canvas. The `<select>` is capped to the body by its absolute left/right
+ * insets plus `min-width: 0`, so a long name ellipsises instead of widening the
+ * node (`.node-base` is `width: fit-content`, so an unbounded child would let
+ * "MacBook Pro Microphone (Built-in)" dictate the node's size — the same cap
+ * the image thumbnail and colormap strip carry). Names that ellipsise are still
+ * answerable at a glance: AudioSourceSelect names the current source on the
+ * first line of its tooltip precisely because this width truncates.
  */
-export const AUD_W = 150;
+export const AUD_W = 88;
 /** Inner body width — AUD_W minus the two 1.5px borders. */
 export const AUD_BODY_W = AUD_W - 3;
 /** Body height. Everything below is placed inside it. */
-export const AUD_BODY_H = 184;
+export const AUD_BODY_H = 140;
 /** Header strip height (node-base__header, single line) — layout footprint. */
 export const AUD_HEADER_H = 18;
 /** Row CENTRES of the two parameter chips (socket + value box). */
-export const AUD_PARAM_TOPS = [16, 40];
+export const AUD_PARAM_TOPS = [13, 33];
 /** Height of a parameter chip (the value box the row centres on). */
 export const AUD_CHIP_H = 18;
 /** Centre of the source `<select>` row. */
-export const AUD_SOURCE_TOP = 66;
-/** Height of the source `<select>`. */
+export const AUD_SOURCE_TOP = 55;
+/**
+ * Height of the source `<select>`. Deliberately NOT shrunk with the rest: it is
+ * the one real pointer target on the card, and the caret has to stay legible.
+ */
 export const AUD_SOURCE_H = 20;
 /** Centre of the live level meter. */
-export const AUD_METER_TOP = 88;
+export const AUD_METER_TOP = 73;
 /** Height of the level meter bar. */
-export const AUD_METER_H = 6;
+export const AUD_METER_H = 5;
 /** Centre of the arm light (the circle itself is sized in ShaderNode.css). */
-export const AUD_BTN_TOP = 124;
-/** The four outputs, spread down the right edge beside the arm light. */
-export const AUD_OUT_TOPS = [102, 124, 146, 168];
+export const AUD_BTN_TOP = 105;
+/**
+ * The four outputs, spread down the right edge beside the arm light — 18px
+ * apart, which keeps a 6px gap between sockets even at the 12px touch size.
+ */
+export const AUD_OUT_TOPS = [78, 96, 114, 132];
 /** Horizontal inset of the full-width rows from the body edge. */
-export const AUD_PAD_X = 6;
+export const AUD_PAD_X = 5;

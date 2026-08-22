@@ -214,6 +214,72 @@ const copyShaderCarousel = (dst: string, opts?: { shareAppAFrameBundle?: boolean
     writeFileSync(benchInout, html.split(from).join(to));
   }
 };
+/**
+ * DEV SERVER ONLY: resolve the ShaderCarousel bench pages' bare `three`
+ * specifiers the way their own `<script type="importmap">` does.
+ *
+ * The suite is deliberately outside Vite's module graph for the BUILD (it is
+ * copied verbatim, import maps and all — see `copyShaderCarousel`), but the
+ * dev server serves and transforms every file under the project root, and
+ * `vite:import-analysis` rewrites bare specifiers to the pre-bundled deps
+ * while ignoring the page's import map. `three` then resolved to the app's
+ * PLAIN three build, whose module has no `WebGPURenderer` export — so
+ * `bench-driver.js` died with a SyntaxError before it could register anything
+ * and "Benchmark this device" did nothing at all, with the failure visible
+ * only in the console. Everything else about the suite works under `npm run
+ * dev`, which is exactly why this was easy to mistake for a broken button.
+ *
+ * The mapping is READ from the bench page's own import map rather than
+ * restated here, so the dev server cannot drift from what every other host
+ * (dist, the desktop LAN server, a plain static server) actually uses — and
+ * both bench pages are checked to agree, since one shared resolver serves
+ * them both.
+ */
+const CAROUSEL_DIR = path.resolve(__dirname, 'ShaderCarousel');
+const IMPORTMAP_PAGES = ['bench-microplane', 'bench-static'];
+const readCarouselImportMap = (): Record<string, string> => {
+  const maps = IMPORTMAP_PAGES.map((dir) => {
+    const page = path.join(CAROUSEL_DIR, dir, 'index.html');
+    const html = readFileSync(page, 'utf-8');
+    const block = html.match(/<script\s+type=["']importmap["']\s*>([\s\S]*?)<\/script>/i);
+    if (!block) throw new Error(`[fs-carousel-importmap] no import map in ${page}`);
+    const imports = (JSON.parse(block[1]) as { imports?: Record<string, string> }).imports ?? {};
+    // Values are relative to the HTML document that declares them.
+    return Object.fromEntries(
+      Object.entries(imports).map(([k, v]) => [k, path.resolve(path.dirname(page), v)]),
+    );
+  });
+  const [first, ...rest] = maps;
+  for (const [i, m] of rest.entries()) {
+    if (JSON.stringify(m) !== JSON.stringify(first)) {
+      throw new Error(
+        `[fs-carousel-importmap] ${IMPORTMAP_PAGES[0]} and ${IMPORTMAP_PAGES[i + 1]} declare different `
+        + 'import maps — one dev resolver cannot serve both; split the plugin or re-align the pages',
+      );
+    }
+  }
+  return first;
+};
+const shaderCarouselDevResolvePlugin = (): Plugin => {
+  let map: Record<string, string> = {};
+  const inCarousel = (id: string) => {
+    const rel = path.relative(CAROUSEL_DIR, id.split('?')[0]);
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  };
+  return {
+    name: 'fs-carousel-importmap-dev',
+    apply: 'serve',
+    // Ahead of vite:resolve, so the bare specifier never reaches the dep
+    // optimizer — for carousel importers only; the app keeps its own `three`.
+    enforce: 'pre',
+    configResolved() { map = readCarouselImportMap(); },
+    resolveId(source, importer) {
+      if (!importer || !inCarousel(importer)) return null;
+      return map[source] ?? null;
+    },
+  };
+};
+
 const shaderCarouselCopyPlugin = (): Plugin => ({
   name: 'fs-copy-shadercarousel',
   apply: 'build',
@@ -795,6 +861,7 @@ export default defineConfig({
     ...(FS_DESKTOP ? [] : [cspHtmlPlugin()]),
     vendorSyncPlugin(),
     ...(FS_DESKTOP ? [shaderCarouselDesktopStagePlugin()] : [shaderCarouselCopyPlugin()]),
+    shaderCarouselDevResolvePlugin(),
     nodeDesignerEndpointPlugin(),
   ],
   resolve: {

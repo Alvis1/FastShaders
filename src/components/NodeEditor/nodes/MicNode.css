@@ -53,10 +53,10 @@
    one row even though neither is in flow. The row's HEIGHT comes inline from
    micGeometry's MIC_CHIP_H (like the tops) — children just fill it, so the
    chip height has exactly one source. */
+/* left/right come INLINE from micGeometry's MIC_PAD_X — the same inset the
+   level meter beside it uses, so the two cannot drift apart. */
 .mic-node__val {
   position: absolute;
-  left: 8px;
-  right: 8px;
   transform: translateY(-50%);
   display: flex;
   align-items: stretch;

@@ -225,8 +225,14 @@
    deliberately not redefined in the dark block. */
 .shader-node__mic-btn {
   display: block;
-  width: 64px;
-  height: 64px;
+  /* 40, not the original 64: on both the Mic and Audio Input cards the light
+     was the tallest single element, so its size set the node's. Still a large
+     target by any normal measure — and it stays the privacy indicator, which
+     is why it is not smaller still (it blinks while a capture is live and has
+     to be noticeable from across a desk). Changing it here moves both canvas
+     nodes and both palette tiles together. */
+  width: 40px;
+  height: 40px;
   margin: 8px auto 6px;
   padding: 0;
   border: 2px solid rgba(0, 0, 0, 0.35);
@@ -323,4 +329,45 @@
 
 .shader-node__formula-chip--bad {
   color: #e74c3c;
+}
+
+/* ── Live level meter ─────────────────────────────────────────────────────
+   Shared by the Mic node, the Audio Input node and both palette tiles, the
+   same way .shader-node__mic-btn above is: ONE definition, with each node
+   supplying only the PLACEMENT inline from its own geometry module. It used
+   to live in AudioInputNode.css as .audio-node__meter, which was fine while
+   exactly one node had a meter — a second copy for the mic is the drift class
+   micGeometry.ts and assetCardGeometry.test.ts already exist to prevent.
+
+   Colours are literals: graph nodes must render identically in both themes.
+
+   The fill is written IMPERATIVELY by each node's rAF loop (transform:
+   scaleX) and never through React state — reports land ~60x/s and
+   re-rendering a canvas node at that rate is the trap useMicPump documents.
+   transform-only, so the compositor handles it and the node never relayouts. */
+.shader-node__level-meter {
+  position: absolute;
+  transform: translateY(-50%);
+  box-sizing: border-box;
+  background: #e3e6ea;
+  border: 1px solid #b9bfc7;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.shader-node__level-meter-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: #2f9e44;
+  /* No transition: the pump writes every frame, so a transition would fight
+     it and lag the reading behind the sound. */
+}
+
+/* Idle/failed dims the fill, so a stopped meter cannot read as a live signal
+   frozen at its last value. */
+.shader-node__level-meter--idle .shader-node__level-meter-fill {
+  background: #b9bfc7;
 }

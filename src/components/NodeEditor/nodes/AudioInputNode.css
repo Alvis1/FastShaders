@@ -127,40 +127,6 @@
   opacity: 1; /* WebKit dims a disabled select on its own; the colours above already say it. */
 }
 
-/* The live level meter — "the input, visible on the node".
-
-   Written IMPERATIVELY by the preview's rAF pump (transform: scaleX), never
-   through React state: reports land ~60x/s and re-rendering a canvas node at
-   that rate is the trap useMicPump's header documents for the preview's own
-   meter. transform-only so the compositor handles it and the node never
-   relayouts. */
-.audio-node__meter {
-  position: absolute;
-  transform: translateY(-50%);
-  box-sizing: border-box;
-  background: #e3e6ea;
-  border: 1px solid #b9bfc7;
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.audio-node__meter-fill {
-  display: block;
-  width: 100%;
-  height: 100%;
-  transform: scaleX(0);
-  transform-origin: left center;
-  background: #2f9e44;
-  /* No transition: the pump writes every frame, so a transition would fight it
-     and lag the reading behind the sound. */
-}
-
-/* Idle/failed states dim the fill so a stopped meter can't read as a live
-   signal frozen at its last value. */
-.audio-node__meter--idle .audio-node__meter-fill {
-  background: #b9bfc7;
-}
-
 /* The arm light. The wrapper carries the placement (inline `top` from
    audioGeometry's AUD_BTN_TOP); sizing/colour/blink live in ShaderNode.css so
    the canvas node, the Mic node and the palette tile share one definition.

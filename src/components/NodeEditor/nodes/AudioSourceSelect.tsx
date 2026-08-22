@@ -93,9 +93,26 @@ export function AudioSourceSelect({ style, disabled = false }: {
       ? systemOk
       : source.deviceId === '' || realDevices.some((d) => d.deviceId === source.deviceId);
 
-  const title = systemOk
+  const explain = systemOk
     ? t('Where the sound comes from. Share a tab, window or screen to react to what it is playing, or pick an audio input directly. Remembered for this session only — it is never saved into the shader.', language)
     : t('This browser cannot share tab or system audio (only Chromium-based browsers can). To react to music playing on this machine, route it through a loopback input device and pick it here. Remembered for this session only.', language);
+  // The node is deliberately narrow (audioGeometry's AUD_W, sized against the
+  // Mic node), so a longer name ellipsises in the closed control — which would
+  // otherwise leave "what is this node listening to?" answerable only by
+  // opening the picker, the exact question this control exists to answer at a
+  // glance. Naming the current source on the FIRST line of the tooltip gives
+  // the truncated text somewhere to resolve.
+  const selectedLabel = !known
+    ? (source.kind === 'system'
+      ? t('System audio (unavailable)', language)
+      : t('Input unavailable', language))
+    : source.kind === 'system'
+      ? t('Tab / system audio…', language)
+      : source.deviceId === ''
+        ? t('Default input', language)
+        : (realDevices.find((d) => d.deviceId === source.deviceId)?.label
+          || `${t('Input', language)} ${realDevices.findIndex((d) => d.deviceId === source.deviceId) + 1}`);
+  const title = `${selectedLabel}\n\n${explain}`;
 
   return (
     <select
