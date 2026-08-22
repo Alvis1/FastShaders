@@ -25,3 +25,6 @@ ShaderCarousel/.vscode/
 
 # Internal working material — not part of the public repo
 private/
+
+# Personal Claude Code permission allowlist (machine-local)
+.claude/settings.local.json
