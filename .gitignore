@@ -22,3 +22,6 @@ ShaderCarousel/.vscode/
 # Env files must never be trackable
 .env
 .env.*
+
+# Internal working material — not part of the public repo
+private/
