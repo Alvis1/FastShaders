@@ -12,6 +12,22 @@ Main features:
 
 **[Desktop app downloads](https://github.com/Alvis1/FastShaders/releases/latest)**
 
+## How it works
+
+![FastShaders architecture: images, 3D geometry, colour palettes, uniforms, audio, data files and a benchmark profile feed a node editor kept in sync with a Monaco TSL code editor by zustand; node assets supply 75+ nodes, visual-effect presets and reconstructed TSL textures; output goes to a real-time A-Frame preview in an iframe, a live shader cost estimate, and a .js or .zip download that the ShaderLoader A-Frame component loads into a scene, with ShaderCarousel supplying measured per-node performance points and Podest presenting the result standalone.](docs/fastshaders-function-diagram.png)
+
+## Also in this repo
+
+- **[Podest](public/PODEST.md)** — a standalone full-screen shader viewer built for
+  unattended pedestal displays. Drop a shader, a model or a `.zip`; it reopens
+  itself after a reload and can run for weeks.
+- **[ShaderCarousel](ShaderCarousel/README.md)** — the benchmark suite that
+  measures per-node GPU cost on the target headset, so the editor's cost bar
+  shows measured numbers rather than guesses.
+- **[a-frame-shaderloader](https://github.com/Alvis1/a-frame-shaderloader#readme)** — the A-Frame
+  component that runs an exported shader on any entity (a git submodule, and the
+  source of the two scripts below).
+
 ## Using the shader module with a-frame-shaderloader
 
 ```html

@@ -1,10 +1,17 @@
 # benchData — committed calibration runs
 
-The benches export three browser downloads per run:
+A finished run downloads **one** file by default — the device profile
+`shadercarousel-<bench>-<device>-profile-<ts>.json`, which is what the editor's
+cost bar imports. Research data is the second button,
+**⬇ Research data (raw + CSV + suggestion)**, and that is what this directory is
+for:
 
-- `shadercarousel-<bench>-<ts>.json` — raw payload (per-batch samples, full metadata)
-- `shadercarousel-<bench>-summary-<ts>.csv` — one row per shader
-- `shadercarousel-<bench>-complexity-suggestion-<ts>.json` — suggested points, diffable against `src/registry/complexity.json`
+- `shadercarousel-<bench>-<device>-<ts>.json` — raw payload (per-batch samples, full metadata)
+- `shadercarousel-<bench>-<device>-summary-<ts>.csv` — one row per shader
+- `shadercarousel-<bench>-<device>-complexity-suggestion-<ts>.json` — suggested points, diffable against `src/registry/complexity.json`
+
+`<device>` is a slug derived from the run's metadata (`quest-3`, else the adapter
+string). Files committed before 2026-08 predate it and carry no device segment.
 
 **Move the raw JSON + suggestion JSON here and commit them.** Browser downloads
 evaporate; this directory is what closes the measure → suggest → `complexity.json`
@@ -35,8 +42,15 @@ loop and keeps every update to the point table auditable back to a run.
 **To analyse a MicroPlane run:**
 
 ```
-node fit-calibration.mjs shadercarousel-microplane-<ts>.json
+node fit-calibration.mjs shadercarousel-microplane-<device>-<ts>.json
 ```
+
+The input is the **raw** results file, not the `-complexity-suggestion` sibling.
+The **Calibration** group must have been ticked in the picker for that run —
+it is off by default, and against a run without it the script prints a scaffold
+slope of zero, an empty op table and "missing data" for every combination. (The
+one run committed here, `quest3-20260723/`, is such a run: it measured the noise
+atomics, not the sweep.)
 
 Fits the k-sweep by OLS (per op: net ms/copy, R², suggested points, diff vs the
 current table, `mispriced`/`nonlinear?` flags), then reports additivity ratios,
@@ -51,14 +65,22 @@ cross-check) and why the shipped table stays additive.
 
 ```
 benchData/
-  <device-slug>/            e.g. m4-max/, quest3/
-    shadercarousel-<bench>-<ts>.json
-    shadercarousel-<bench>-complexity-suggestion-<ts>.json
+  <device>-<date>/          e.g. quest3-20260723/
+    shadercarousel-<bench>-<device>-<ts>.json
+    shadercarousel-<bench>-<device>-complexity-suggestion-<ts>.json
 ```
 
 ## Before trusting a suggestion file
 
-Check `metadata` in the suggestion JSON (schema v2):
+Check `metadata` in the **suggestion** JSON. The raw export carries the run's
+metadata but no validity block — `valid` / `reasons` are added by the suggestion
+emitter, which is why `fit-calibration.mjs` prints `valid: ?` right beside a
+`timingMethod` it read straight out of the raw file. The profile carries a
+smaller `meta` block: it keeps the provenance (`schemaVersion`, `kind`, `source`,
+`bench`, `device`, `generatedAt`, `note`) plus `valid`, `reasons`,
+`timingMethod`, `resolution` and `refPixels`, and drops the suggestion's
+`adapterInfo`, `browser`, `quantized`, `clockPinned`, `stereo`,
+`resolutionScale` and `budgetMs`. Schema v2:
 
 - `valid` — false means the run cannot price nodes; `reasons[]` says why
   (`baseline-missing`, `vsync-clamped`, `resolution-unknown`, `raf-delta timing`, …)

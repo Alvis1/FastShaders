@@ -11,7 +11,7 @@
      of them. Having an icon at all also kills the automatic /favicon.ico 404:
      podest runs unattended for weeks and rate-limits its own error relay, so a
      permanent spurious console error would make a genuine one harder to spot. -->
-<link rel="icon" type="image/svg+xml" href="favicon-podest.svg" />
+<link rel="icon" type="image/svg+xml" href="images/favicon-podest.svg" />
 <!--
   Podest — standalone full-screen TSL shader viewer.
 
@@ -2359,7 +2359,7 @@
     // Absolute, not relative: this document is written into an about:blank
     // popup, whose base URL is inherited rather than its own — `dir` is the
     // reference every other asset here already resolves against.
-    L.push('<link rel="icon" type="image/svg+xml" href="' + dir + 'favicon-podest.svg" />');
+    L.push('<link rel="icon" type="image/svg+xml" href="' + dir + 'images/favicon-podest.svg" />');
     // WebGL2 up front: three r184 picks its WebGPU backend on the mere
     // presence of navigator.gpu, that backend hard-throws in
     // XRManager.setSession (r173–r184), and Quest Browser has no

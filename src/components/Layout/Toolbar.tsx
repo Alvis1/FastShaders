@@ -244,7 +244,7 @@ export function Toolbar() {
             <div className="toolbar__contact-logos">
               <img
                 className="toolbar__contact-logo toolbar__contact-logo--eu"
-                src={`${import.meta.env.BASE_URL}logos/eu-cofunded.svg`}
+                src={`${import.meta.env.BASE_URL}images/logo-eu-cofunded.svg`}
                 alt="Co-funded by the European Union"
                 title="Co-funded by the European Union (European Regional Development Fund)"
                 onError={(e) => {
@@ -253,7 +253,7 @@ export function Toolbar() {
               />
               <img
                 className="toolbar__contact-logo toolbar__contact-logo--nap"
-                src={`${import.meta.env.BASE_URL}logos/nap2027.svg`}
+                src={`${import.meta.env.BASE_URL}images/logo-nap2027.svg`}
                 alt="National Development Plan 2027 (Nacionālais attīstības plāns 2027)"
                 title="National Development Plan 2027 (Nacionālais attīstības plāns 2027)"
                 onError={(e) => {
@@ -262,7 +262,7 @@ export function Toolbar() {
               />
               <img
                 className="toolbar__contact-logo"
-                src={`${import.meta.env.BASE_URL}logos/via.svg`}
+                src={`${import.meta.env.BASE_URL}images/logo-via.svg`}
                 alt="Vidzeme University of Applied Sciences (ViA)"
                 title="Vidzeme University of Applied Sciences (ViA)"
                 onError={(e) => {
