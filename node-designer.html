@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>FastShaders · Node Designer</title>
 <!-- Inline data: favicon — kills the automatic /favicon.ico 404 (same as index.html) -->
-<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="icon" type="image/svg+xml" href="/images/favicon-app.svg" />
 <!--
   VITE ENTRY (rollupOptions.input in vite.config.ts) — the designer lives in
   the app's module graph. The stage preview is rendered by the REAL app
@@ -179,6 +179,69 @@
   #mPtsLay .pt-bbox{pointer-events:all;fill:transparent;cursor:move;stroke:#E91E63;stroke-width:.25;stroke-dasharray:1 .8;opacity:.75}
   #mPtsLay .pt-scale{pointer-events:all;fill:#fff;stroke:#E91E63;stroke-width:.4;cursor:nwse-resize}
   #mPtsLay .pt-scale.nesw{cursor:nesw-resize}
+  /* DECORATIONS MUST SAY SO. `#mPtsLay circle` above re-enables pointer-events for
+     the whole layer — an ELEMENT rule, written when the only circles here were
+     draggable handles. Every decorative circle added since (a drawing tool's live
+     anchors, the insert marker, the rotate pivot) is therefore hittable by
+     default, and being appended above .pt-bg it swallows the very press it is
+     drawn to invite: the pen could not be closed by clicking its first anchor,
+     and the insert marker — drawn exactly under the cursor by construction —
+     ate every insert click. `.pt-dec` is (0,1,1,0) against that rule's (0,1,0,1),
+     so the class wins. Tag every non-interactive overlay element with it. */
+  #mPtsLay .pt-dec{pointer-events:none}
+  /* Same mechanism, other reason: outside the Select tool the handles are a
+     read-only picture of the selection, and a press belongs to the tool that is
+     armed. Without this, starting a rect on top of an existing point dragged
+     that point instead of drawing. */
+  #mPtsLay .pt-off{pointer-events:none}
+  #mPtsLay .pt-new{fill:#3366CC;stroke:#fff;stroke-width:.4}
+  #mPtsLay .pt-new-ctrl{fill:#fff;stroke:#F57C00;stroke-width:.45}
+  #mPtsLay .pt-ink{fill:none;stroke:#3366CC;stroke-width:.5}
+  #mPtsLay .pt-ink-soft{fill:none;stroke:#3366CC;stroke-width:.4;stroke-dasharray:1.2 .9;opacity:.8}
+  #mPtsLay .pt-ins{fill:#2E9E5B;stroke:#fff;stroke-width:.4}
+  #mPtsLay .pt-pivot{fill:none;stroke:#E91E63;stroke-width:.4}
+  #mPtsLay .pt-lbl{fill:#E91E63;font:2.6px var(--mono);paint-order:stroke;stroke:#fff;stroke-width:.8;font-weight:600}
+
+  /* ---- tool row ---- */
+  .tools{display:flex;flex-wrap:wrap;gap:3px;margin:0 0 8px}
+  .tools .tool{padding:4px 5px;line-height:0;border-radius:5px;background:#fff;border:1px solid var(--line2)}
+  .tools .tool svg{width:15px;height:15px;display:block;stroke:var(--ink);fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+  .tools .tool:hover{border-color:var(--accent)}
+  .tools .tool.is-on{background:var(--accent);border-color:var(--accent)}
+  .tools .tool.is-on svg{stroke:#fff}
+  .toolinfo{margin-top:6px;font-size:10.5px;color:var(--mut);min-height:13px;line-height:1.25}
+  .toolinfo b{color:var(--dim);font-weight:600}
+
+  /* ---- paint bar ---- */
+  .paintbar{margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+  .pb-row{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .pb-row:last-of-type{margin-bottom:0}
+  .pb-lbl{width:33px;flex-shrink:0;font-size:10.5px;color:var(--dim)}
+  .pb-chips{display:flex;gap:2px;flex-wrap:wrap}
+  .pb-chip{width:15px;height:15px;padding:0;border-radius:4px;border:1px solid var(--line2);position:relative}
+  .pb-chip.is-on{box-shadow:0 0 0 2px var(--accent);border-color:var(--accent)}
+  /* "no paint": a red slash, drawn in CSS so it needs no font glyph */
+  .pb-chip.none{background:#fff}
+  .pb-chip.none::after{content:'';position:absolute;inset:1px;background:linear-gradient(to top right,transparent 44%,#D33 44%,#D33 56%,transparent 56%)}
+  /* TWO selectors on purpose: the base rule at the top of this file is
+     `select,input[type=text],input[type=number],…` = (0,0,1,1), so a single class
+     would LOSE font-size, font-family and padding and render a 26px sans field. */
+  #mPaint input.pb-num{width:44px;padding:2px 4px;font-size:11px;font-family:var(--mono);text-align:right}
+  .pb-w{display:flex;align-items:center;gap:3px;font-size:10.5px;color:var(--dim);margin-left:auto}
+  .pb-note{margin-top:5px;font-size:10px;color:var(--mut);line-height:1.3}
+
+  /* ---- source highlight mirror ----
+     The textarea paints its own text on top; the mirror behind it carries the
+     same text, invisible, with <mark> rectangles behind the selected shapes'
+     markup. Metrics that decide WRAP POINTS are copied at runtime by
+     designerApp (font, padding, white-space, word-break, border widths) — only
+     the things that cannot differ live here. */
+  .hlwrap{position:relative;background:#fff;border-radius:6px}
+  .hlwrap textarea{position:relative;z-index:1;background:transparent;display:block}
+  .hlmirror{position:absolute;inset:0;z-index:0;overflow:hidden;border-style:solid;border-color:transparent;border-radius:6px;box-sizing:border-box;color:transparent;pointer-events:none;margin:0}
+  .hlmirror mark{color:transparent;background:rgba(51,102,204,.20);border-radius:2px}
+  .hlmirror mark.lead{background:rgba(233,30,99,.22)}
+  .mapnote{margin-top:6px;font-size:10.5px;color:var(--mut);line-height:1.3}
   /* keyboard target: the gestures preventDefault (killing implicit focus) and
      focus this box by hand — show where Del / ⌘A / arrows will land */
   #mPrevBox:focus{outline:none;box-shadow:0 0 0 2px rgba(51,102,204,.35)}
@@ -208,7 +271,12 @@
   .drop.over{border-color:var(--accent);background:#f3f7ff;color:var(--accent)}
   .merr{display:none;font-size:11px;color:#B91C1C;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:5px 8px;margin-top:8px}
   .merr.show{display:block}
-  .mactions{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
+  /* STICKY, because .modal is max-height:92vh with overflow:auto and its content
+     has been taller than that since the point-editor legend landed (measured
+     then: 987px of content against a 736px cap on an 800px viewport). Apply and
+     Cancel sitting below the fold is not a cosmetic problem — Apply is the ONLY
+     commit path, so a user who cannot see it loses the whole session to Cancel. */
+  .mactions{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line);position:sticky;bottom:0;background:#fff;z-index:2}
   .mactions .spacer{flex:1}
   .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1f2430;color:#fff;padding:9px 16px;border-radius:8px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:60;max-width:80vw;text-align:center}
   .toast.show{opacity:1}
@@ -305,21 +373,43 @@
     <div class="mbody">
       <div class="grid">
         <div>
+          <!-- Tool row. Icons are inline SVG, never characters: the app self-hosts a
+               woff2 SUBSET of Inter and symbol glyphs are not in it (the same reason
+               #mPtsHint keeps the browser's own disclosure triangle). -->
+          <div class="tools" id="mTools" role="toolbar" aria-label="Glyph tools"></div>
           <div class="glyph-preview" id="mPrevBox" tabindex="0"><div id="mPreview"></div><svg class="gridlay" id="mGridLay" viewBox="0 0 56 56" style="display:none"><rect x="0.25" y="0.25" width="55.5" height="55.5" fill="none" stroke="#3366CC" stroke-width=".5" opacity=".55"/><line x1="28" y1="0" x2="28" y2="56" stroke="#3366CC" stroke-width=".4" opacity=".55"/><line x1="0" y1="28" x2="56" y2="28" stroke="#3366CC" stroke-width=".4" opacity=".55"/><line x1="14" y1="0" x2="14" y2="56" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="42" y1="0" x2="42" y2="56" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="0" y1="14" x2="56" y2="14" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/><line x1="0" y1="42" x2="56" y2="42" stroke="#3366CC" stroke-width=".25" stroke-dasharray="1.5 1.5" opacity=".5"/></svg><svg class="gridlay" id="mPtsLay" viewBox="0 0 56 56"></svg></div>
+          <div class="toolinfo" id="mToolInfo"></div>
+          <!-- Paint bar. Swatch chips are built from GLYPH_PALETTE in designerApp so
+               the palette lives in ONE place; the width field is a real number input. -->
+          <div class="paintbar" id="mPaint">
+            <div class="pb-row"><span class="pb-lbl">Fill</span><div class="pb-chips" id="mFillChips"></div></div>
+            <div class="pb-row"><span class="pb-lbl">Stroke</span><div class="pb-chips" id="mStrokeChips"></div>
+              <label class="pb-w" title="Stroke width (view units)">w<input class="pb-num" type="number" id="mStrokeW" min="0" max="24" step="0.1"></label></div>
+            <div class="pb-note" id="mPaintNote"></div>
+          </div>
           <label class="gridopt"><input type="checkbox" id="mGrid"> 56-grid &amp; center guides</label>
           <label class="gridopt"><input type="checkbox" id="mMove"> drag points (●&nbsp;anchor · ○&nbsp;control/size)</label>
           <div class="drop" id="drop">Drop an <b>.svg</b> file here to replace</div>
         </div>
         <div>
           <label class="sub" style="color:var(--dim)">Inner SVG (0 0 56 56)</label>
-          <textarea id="mSvg" rows="21" spellcheck="false"></textarea>
+          <!-- The textarea is transparent and sits ON a mirror div that carries the
+               same text with <mark> spans behind the selected shapes' markup. A
+               textarea cannot style its own content, and this is the standard
+               backdrop technique; designerApp copies the metrics at runtime. -->
+          <div class="hlwrap" id="mHlWrap"><div class="hlmirror" id="mHl" aria-hidden="true"></div><textarea id="mSvg" rows="21" spellcheck="false"></textarea></div>
           <div class="merr" id="mErr"></div>
+          <div class="mapnote" id="mMapNote"></div>
         </div>
       </div>
       <details class="hintline" id="mPtsHint" style="display:none" open>
         <summary>Point editor — gestures &amp; keys</summary>
         <p><b>The keys below act on the point canvas — click it first</b>: on open the caret sits in the SVG box (so you can paste), and there <kbd>Del</kbd> edits text. Any drag, marquee, grip or art replacement focuses the canvas for you; every other control on this window leaves the keys working.</p>
         <dl>
+          <dt>tools</dt><dd>the row above the canvas: <b>Select</b> · <b>Pen</b> (click anchors, <b>drag</b> one to curve it; <kbd>Enter</kbd> or a click on the first anchor finishes, <kbd>Esc</kbd> cancels) · <b>Draw</b> freehand (the stroke is simplified to editable anchors) · <b>Line</b> · <b>Rect</b> · <b>Ellipse</b> · <b>Add point</b> (click a line or curve — the shape does not move) · <b>Rotate</b>. New shapes land <b>inside the group your selection is in</b>, use the colours in the Fill/Stroke bar, and come out selected so you can nudge or restyle them straight away. Picking a tool turns the point handles on.</dd>
+          <dt>colour</dt><dd>the <b>Fill</b> / <b>Stroke</b> swatches restyle every selected shape (and the ⊘ chip means "no paint"); <b>w</b> is the stroke width, applied when you leave the box. With <b>nothing</b> selected they set what the next shape you draw will use. The palette is the one the app's own glyphs are drawn from — for anything else, type it in the SVG box.</dd>
+          <dt>rotate</dt><dd>pick <b>Rotate</b> and drag anywhere on the canvas (2+ points selected) — the cross marks the pivot and the readout the angle · <kbd>⇧</kbd>/<kbd>Shift</kbd> snaps to 15° · <kbd>⌥</kbd>/<kbd>Alt</kbd>+<kbd>←</kbd>/<kbd>→</kbd> turns by 1° (<kbd>⇧</kbd> 15°) without leaving Select. Rects, ellipses and text turn by gaining a <code>rotate()</code> of their own — their coordinates cannot express one — so their numbers in the source stay readable.</dd>
+          <dt>source</dt><dd>the selected shapes' markup is <b>highlighted in the SVG box</b>, and clicking a line there selects that shape on the canvas · <b>Format</b> (bottom row) rewrites the markup with one element per line, groups indented — the drawing is untouched and <kbd>⌘Z</kbd>/<kbd>Ctrl Z</kbd> puts it back</dd>
           <dt>select</dt><dd>drag empty canvas = <b>marquee</b> (<kbd>⇧</kbd>/<kbd>Shift</kbd> or <kbd>⌘</kbd>/<kbd>Ctrl</kbd> add · <kbd>⌥</kbd>/<kbd>Alt</kbd> remove · click = deselect) · <kbd>⇧</kbd>/<kbd>Shift</kbd> or <kbd>⌘</kbd>/<kbd>Ctrl</kbd>+click a point toggles just that point · <kbd>⌘A</kbd>/<kbd>Ctrl A</kbd> all · <kbd>Esc</kbd> clears, again closes</dd>
           <dt>move</dt><dd>drag any <b>selected</b> point — or anywhere <b>inside the dashed frame</b> — moves the whole selection (a plain click inside the frame deselects) · 0.5 snap, aligns to other points' rows/columns · <b>hold <kbd>⇧</kbd>/<kbd>Shift</kbd> while dragging = angle lock</b> 0/30/45/60/90°… · <kbd>←↑→↓</kbd> nudge 0.5 (<kbd>⇧</kbd>/<kbd>Shift</kbd> 2; holding a key is ONE undo step)</dd>
           <dt>scale</dt><dd>2+ selected → <b>corner grips</b> scale about the opposite corner (<kbd>⇧</kbd>/<kbd>Shift</kbd> uniform · <kbd>⌥</kbd>/<kbd>Alt</kbd> from the centre); a modifier press inside the frame starts a new band instead of moving</dd>
@@ -335,6 +425,7 @@
       </select>
       <button class="mini" id="mUpload">Upload .svg…</button>
       <input type="file" id="mFile" accept=".svg,image/svg+xml" style="display:none">
+      <button class="mini" id="mFmt" title="Rewrite the markup with one element per line (groups indented) — the drawing is untouched">Format</button>
       <button class="mini" id="mCopy">Copy SVG</button>
       <button class="mini" id="mBuiltin" title="Restore the built-in FastShaders art">Built-in</button>
       <button class="mini" id="mClear">Clear</button>

@@ -6,7 +6,7 @@
  *
  *  1. **The reference form differs per page, and swapping them 404s.**
  *     index.html / node-designer.html are Vite entries, so a root-absolute
- *     `/favicon.svg` is the documented public-asset form and Vite prefixes the
+ *     `/images/favicon-app.svg` is the documented public-asset form and Vite prefixes the
  *     deploy base (`/FastShaders/`, `/fastshaders/`, or `/` on desktop).
  *     podest.html and ShaderCarousel/index.html are copied VERBATIM — nothing
  *     rewrites them — so they must be relative, or they resolve against the
@@ -32,19 +32,23 @@ const read = (rel: string) => readFileSync(root(rel), 'utf8');
 const FS_S_PATH = 'M1086.106,2086.788';
 
 const ICONS = [
-  { file: 'public/favicon.svg', ownMark: FS_S_PATH },
-  { file: 'public/favicon-podest.svg', ownMark: 'M1420.734,1949.375' },
-  { file: 'ShaderCarousel/favicon.svg', ownMark: 'M1054.547,2086.562' },
+  { file: 'public/images/favicon-app.svg', ownMark: FS_S_PATH },
+  { file: 'public/images/favicon-podest.svg', ownMark: 'M1420.734,1949.375' },
+  { file: 'ShaderCarousel/images/favicon-carousel.svg', ownMark: 'M1054.547,2086.562' },
 ] as const;
 
 const PAGES = [
   // Vite entries — root-absolute, base-prefixed at build.
-  { file: 'index.html', href: '/favicon.svg', asset: 'public/favicon.svg' },
-  { file: 'node-designer.html', href: '/favicon.svg', asset: 'public/favicon.svg' },
-  { file: 'node-editor.html', href: '/favicon.svg', asset: 'public/favicon.svg' },
-  // Copied verbatim — must be relative.
-  { file: 'public/podest.html', href: 'favicon-podest.svg', asset: 'public/favicon-podest.svg' },
-  { file: 'ShaderCarousel/index.html', href: 'favicon.svg', asset: 'ShaderCarousel/favicon.svg' },
+  { file: 'index.html', href: '/images/favicon-app.svg', asset: 'public/images/favicon-app.svg' },
+  { file: 'node-designer.html', href: '/images/favicon-app.svg', asset: 'public/images/favicon-app.svg' },
+  { file: 'node-editor.html', href: '/images/favicon-app.svg', asset: 'public/images/favicon-app.svg' },
+  // Copied verbatim — must be relative. `images/` sits beside each of these
+  // pages (public/images, ShaderCarousel/images), which is why each suite
+  // keeps its OWN folder rather than sharing one: the carousel is copied as a
+  // self-contained tree (dist, the desktop LAN server, any static host), so an
+  // icon reaching up into the app's public/ would 404 everywhere but dist.
+  { file: 'public/podest.html', href: 'images/favicon-podest.svg', asset: 'public/images/favicon-podest.svg' },
+  { file: 'ShaderCarousel/index.html', href: 'images/favicon-carousel.svg', asset: 'ShaderCarousel/images/favicon-carousel.svg' },
 ] as const;
 
 describe('favicons', () => {
@@ -79,7 +83,7 @@ describe('favicons', () => {
   });
 
   it('carries no neighbouring artboard in the derived icons', () => {
-    for (const file of ['public/favicon-podest.svg', 'ShaderCarousel/favicon.svg']) {
+    for (const file of ['public/images/favicon-podest.svg', 'ShaderCarousel/images/favicon-carousel.svg']) {
       expect(read(file), `${file} still contains the FastShaders mark`).not.toContain(FS_S_PATH);
     }
   });
@@ -87,7 +91,7 @@ describe('favicons', () => {
   it('flips its black shapes for a dark tab strip', () => {
     // Only the derived icons have black shapes; the app mark is brand colours
     // that read on either background.
-    for (const file of ['public/favicon-podest.svg', 'ShaderCarousel/favicon.svg']) {
+    for (const file of ['public/images/favicon-podest.svg', 'ShaderCarousel/images/favicon-carousel.svg']) {
       const svg = read(file);
       expect(svg).toContain('class="ink"');
       expect(svg).toMatch(/@media \(prefers-color-scheme: dark\)/);

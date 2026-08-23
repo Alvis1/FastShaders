@@ -13,7 +13,7 @@ const definitions: NodeDefinition[] = [
     tslImportModule: 'three/tsl',
     inputs: [],
     outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
-    description: 'Geometry position in local space',
+    description: 'Raw vertex position attribute, in local (object) space. Never rewritten by the vertex stage, so it stays a stable coordinate painted onto a deforming surface.',
   },
   {
     type: 'positionLocal',
@@ -24,7 +24,7 @@ const definitions: NodeDefinition[] = [
     inputs: [],
     outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
     description:
-      'Position in local space. Also: positionLocal, varying',
+      'Local-space vertex position AFTER the vertex stage has written to it — displacement, skinning, morph targets, instancing. Identical to Position on an undeformed, undisplaced mesh. Also: positionLocal, varying',
   },
   {
     type: 'positionWorld',

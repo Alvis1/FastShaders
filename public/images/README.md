@@ -1,4 +1,20 @@
-# Funding / institution logos
+# Image assets
+
+Everything the app serves as a picture: the three tab icons and the
+funding / institution logos. (Node artwork is not here — glyphs are SVG
+authored inside `src/components/NodeEditor/nodes/glyphs/customGlyphs.ts`, not files.)
+
+## Tab icons
+
+`favicon-app.svg` (index / node-designer / node-editor), `favicon-podest.svg`
+(podest and the VR popup it writes). The carousel keeps its own at
+`ShaderCarousel/images/favicon-carousel.svg`, because that suite is copied as a
+self-contained tree and an icon reaching up into `public/` would 404 everywhere
+but `dist`. `src/favicons.test.ts` pins each page's href, its reference FORM
+(root-absolute for the Vite entries, relative for the verbatim-copied pages)
+and the contents of each icon — read its header before changing any of them.
+
+## Funding / institution logos
 
 Shown in the FastShaders "About / Contact" popover (click the **FastShaders**
 brand in the toolbar), beside the funding acknowledgment. Referenced by
@@ -6,9 +22,9 @@ brand in the toolbar), beside the funding acknowledgment. Referenced by
 
 | File               | Logo                                              | Source                                                                 |
 | ------------------ | ------------------------------------------------- | ---------------------------------------------------------------------- |
-| `eu-cofunded.svg`  | "Co-funded by the European Union" emblem          | Built to the EU visual-identity spec (official 12-star flag + Arial statement). Emblem geometry & wording are the EU's; the SVG is app-generated. |
-| `nap2027.svg`      | National Development Plan 2027 (NAP2027)           | Official logo package from zm.gov.lv (`nap-logo.zip`) — colour, English, with name. |
-| `via.svg`          | Vidzeme University of Applied Sciences (ViA)       | Wikimedia Commons `File:Vidzemes_Augstskola_logo.svg` (CC BY-SA 4.0).  |
+| `logo-eu-cofunded.svg` | "Co-funded by the European Union" emblem          | Built to the EU visual-identity spec (official 12-star flag + Arial statement). Emblem geometry & wording are the EU's; the SVG is app-generated. |
+| `logo-nap2027.svg`     | National Development Plan 2027 (NAP2027)           | Official logo package from zm.gov.lv (`nap-logo.zip`) — colour, English, with name. |
+| `logo-via.svg`         | Vidzeme University of Applied Sciences (ViA)       | Wikimedia Commons `File:Vidzemes_Augstskola_logo.svg` (CC BY-SA 4.0).  |
 
 ## Notes
 
