@@ -3,7 +3,7 @@ import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType } from '@/types';
 import { setNodeValues } from '@/types';
-import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
+import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
 import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
@@ -622,22 +622,48 @@ function processCall(
     return;
   }
 
-  // Detect append pattern: vec2(ref, ref) where at least one arg is a variable reference
-  if (funcName === 'vec2' && callExpr.arguments.length === 2) {
+  // Detect the Append node: a vector CONSTRUCTOR that is not a plain
+  // component-wise build. `append` emits `vec2|vec3|vec4(...)` — the very text a
+  // Vec2/Vec3/Vec4 node emits — so the two are only separable by evidence, and
+  // there are exactly two pieces of it:
+  //
+  //  - `isConcat` (fewer arguments than the constructor has components) means at
+  //    least one argument carries several channels, which the VecN node
+  //    STRUCTURALLY cannot hold: its ports are per-component floats. Parsing
+  //    `vec3(uvVar, f)` as a Vec3 wired x=uvVar, y=f left z unwired, and the
+  //    next graph→code pass re-emitted `vec3(uvVar, f, 0)` — four components in
+  //    a three-slot constructor, i.e. a shader that no longer compiles.
+  //  - `namedAppend` — the assigned variable's own name. graphToCode names an
+  //    Append `append1`, a Vec3 `vec31`, so for code THIS APP emitted the name
+  //    is the node's identity and a full-arity `vec3(a, b, c)` survives an Apply
+  //    as an Append instead of degrading into a Vec3 (which is what happened to
+  //    every 3- and 4-operand append). It carries no reference requirement: an
+  //    unwired Append emits `vec2(0, 0)`, which has no ref to find.
+  //
+  // Deliberate limit: a HAND-WRITTEN full-arity `vec3(a, b, c)` under any other
+  // name stays a Vec3 node. The two nodes emit identical text, so nothing in the
+  // source can distinguish them — and keeping the component-wise form as VecN is
+  // what leaves the built-in textures/presets (26 such calls) byte-identical.
+  const VEC_CTOR_SIZE: Record<string, number> = { vec2: 2, vec3: 3, vec4: 4 };
+  const appendCtorSize = VEC_CTOR_SIZE[funcName] ?? 0;
+  if (appendCtorSize > 0 && callExpr.arguments.length >= 2 && callExpr.arguments.length <= appendCtorSize) {
+    const isConcat = callExpr.arguments.length < appendCtorSize;
+    const namedAppend = /^append\d*$/.test(varName);
     const hasVarRef = callExpr.arguments.some(
       (a) => t.isIdentifier(a) && varToNodeId.has(a.name)
     );
     const hasMemberRef = callExpr.arguments.some(
       (a) => t.isMemberExpression(a) && t.isIdentifier(a.object) && varToNodeId.has(a.object.name)
     );
-    if (hasVarRef || hasMemberRef) {
+    if (namedAppend || (isConcat && (hasVarRef || hasMemberRef))) {
       const appendDef = NODE_REGISTRY.get('append');
       if (appendDef) {
         const nodeId = generateId();
-        nodes.push(createNode(nodeId, appendDef, varName));
+        const appendNode = createNode(nodeId, appendDef, varName);
+        nodes.push(appendNode);
         varToNodeId.set(varName, nodeId);
-        const ports = ['a', 'b'];
-        for (let i = 0; i < 2; i++) {
+        const ports = ['a', 'b', 'c', 'd'];
+        for (let i = 0; i < callExpr.arguments.length; i++) {
           const arg = callExpr.arguments[i];
           if (t.isIdentifier(arg)) {
             const sourceId =
@@ -650,6 +676,9 @@ function processCall(
             if (ref) {
               addEdge(edges, ref.nodeId, ref.handle, nodeId, ports[i], 'float');
             }
+          } else {
+            const lit = extractLiteral(arg);
+            if (typeof lit === 'number') setNodeValues(appendNode, { [ports[i]]: lit });
           }
         }
         return;
@@ -785,24 +814,34 @@ function processCall(
 
   for (let i = 0; i < callExpr.arguments.length; i++) {
     const arg = callExpr.arguments[i];
-    // Chainable (variadic arithmetic) calls carry more args than the two static
-    // registry ports — synthesize the extra operand ports (c, d, …) so the whole
+    // Socket-growing calls carry more args than the two static registry ports —
+    // synthesize the extra operand ports (c, d, …) so the whole
     // `add(a, b, c, d)` chain wires up instead of stopping at `b`.
+    //
+    // Gated on `growsOperands`, NOT `chainable`: `append` grows too (it is
+    // `variadic`), and testing the fold flag here made a hand-typed
+    // `append(f1, f2, f3)` drop its third argument silently — no edge, no error,
+    // an orphaned source node, and `vec2(float1, float2)` back out. That is the
+    // exact split `growsOperands`' own docblock warns about ("use this for
+    // socket/layout questions; test `chainable` directly for fold semantics").
     const portIndex = inputIdx + i;
-    // graphToCode's effectiveInputs caps chains at MAX_CHAIN_OPERANDS, so any
-    // operand past that would be silently dropped on the next graph→code pass —
-    // changing the computed value (worse for sub/div). Stop here and warn
-    // instead of round-tripping into a different expression.
-    if (def.chainable && portIndex >= MAX_CHAIN_OPERANDS) {
+    // graphToCode's effectiveInputs caps operands at the node's own ceiling, so
+    // any operand past it would be silently dropped on the next graph→code pass
+    // — changing the computed value (worse for sub/div, and for `append` it
+    // changes the vector's width). Stop here and warn instead of round-tripping
+    // into a different expression. The number in the message is the node's REAL
+    // cap, so `append` says 4 rather than quoting the global 64.
+    const operandCap = Math.min(def.maxOperands ?? MAX_CHAIN_OPERANDS, MAX_CHAIN_OPERANDS);
+    if (growsOperands(def) && portIndex >= operandCap) {
       errors.push({
-        message: `"${funcName ?? def.type}" has more than ${MAX_CHAIN_OPERANDS} operands; the extras are ignored.`,
+        message: `"${funcName ?? def.type}" has more than ${operandCap} operands; the extras are ignored.`,
         line: callExpr.loc?.start.line,
         severity: 'warning',
       });
       break;
     }
     const port = def.inputs[portIndex]
-      ?? (def.chainable
+      ?? (growsOperands(def)
         ? { id: chainPortId(portIndex), label: chainPortId(portIndex).toUpperCase(), dataType: 'any' as const }
         : undefined);
 

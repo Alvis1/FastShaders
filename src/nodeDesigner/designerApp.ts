@@ -2198,7 +2198,11 @@ function defOffFor(key) { if (key === 'out') return 0; const n = NODE_BY_TYPE[st
    auto = 52px base grown just enough to fit the glyph */
 function opBodyH() { return state.height > 0 ? Math.max(28, state.height) : Math.max(52, Math.round(34 * state.scale) + 10); }
 /* operator layout = glyph present + exactly two inputs (NodeVisual's rule) */
-function layoutIsOp() { const n = NODE_BY_TYPE[state.type]; return !!state.glyph && n && n.in.length === 2; }
+/* Mirrors NodeGlyph's `usesOperatorLayout` (glyph OR socket-growing, 2 base
+   inputs) over the DRAFT glyph. Gating on the glyph alone left `append` — the
+   one glyphless growing node — measured against the rows layout the stage no
+   longer draws for it. */
+function layoutIsOp() { const n = NODE_BY_TYPE[state.type]; return !!n && n.in.length === 2 && (!!state.glyph || !!n.grows); }
 const ui = { zoom: parseFloat(lsGet('nd:zoom', '1')) || 1, panX: 0, panY: 0, bg: lsGet('nd:stageBg', '#FAFAFA') };
 /* Baseline = the app's LIVE saved designs (bridge import), so even without the
    dev endpoint or a linked folder (e.g. the deployed copy) the designer shows

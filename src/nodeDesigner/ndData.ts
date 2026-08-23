@@ -11,7 +11,7 @@
  *
  * Pure data (no React, no CSS imports) so it stays node-env testable.
  */
-import { getAllDefinitions, getFlowNodeType, NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { getAllDefinitions, getFlowNodeType, growsOperands, NODE_REGISTRY } from '@/registry/nodeRegistry';
 import complexityData from '@/registry/complexity.json';
 import { CAT_HEX, getTypeColor, getCostColor, getCostScale, getContrastColor, COUNT_EDGE_COLORS } from '@/utils/colorUtils';
 import { useAppStore } from '@/store/useAppStore';
@@ -26,6 +26,13 @@ export interface NdNodeInfo {
   in: [string, string][];
   out: [string, string][];
   def: Record<string, string | number> | null;
+  /**
+   * Does this node grow operand sockets? The designer's `layoutIsOp()` mirrors
+   * ShaderNode's `usesOperatorLayout`, which is "glyph OR grows" — `append` is
+   * glyphless and would otherwise be measured against a `.shader-node__region`
+   * the replica no longer renders for it.
+   */
+  grows: boolean;
 }
 
 /** Every designable node = every ShaderNode-rendered definition. */
@@ -39,6 +46,7 @@ export function designerNodes(): NdNodeInfo[] {
       in: d.inputs.map((p) => [p.id, p.dataType] as [string, string]),
       out: d.outputs.map((p) => [p.id, p.dataType] as [string, string]),
       def: d.defaultValues ?? null,
+      grows: growsOperands(d),
     }));
 }
 

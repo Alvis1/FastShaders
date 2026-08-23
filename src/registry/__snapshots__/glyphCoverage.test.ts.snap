@@ -2,6 +2,7 @@
 
 exports[`glyph coverage > the set of designer-authored SVGs changes only deliberately 1`] = `
 [
+  "abs",
   "add",
   "cameraFar",
   "cameraNear",
@@ -27,6 +28,7 @@ exports[`glyph coverage > the set of designer-authored SVGs changes only deliber
   "positionLocal",
   "positionView",
   "positionViewDirection",
+  "positionWorld",
   "positionWorldDirection",
   "pow",
   "screenUV",

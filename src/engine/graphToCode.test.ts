@@ -826,6 +826,129 @@ describe('graphToCode — append output sizing', () => {
     expect(componentsOf(line)).toBe(4);
     expect(line).not.toMatch(/float1/);
   });
+
+  // ===== Widths come from the SOURCE HANDLE, never from the source node =====
+  // The argument TEXT has always been built by the handle-aware
+  // `resolveEdgeRef`; the channel COUNTS beside it used to come from a
+  // per-NODE lookup. Every source whose non-head output narrows — `toHsl`
+  // (vec3 `out` plus float `h`/`s`/`l`, emitted as .x/.y/.z swizzles of ONE
+  // call) and `dataviz` (out:vec3 + value:float) — therefore desynchronised
+  // the constructor from its own arguments.
+
+  /** The width the emitted constructor NAME claims: vec2/vec3/vec4 → 2/3/4. */
+  const ctorWidth = (call: string): number => Number(/= vec([234])\(/.exec(call)![1]);
+
+  const appendLineOf = (nodes: ReturnType<typeof makeNode>[], edges: ReturnType<typeof makeEdge>[]) =>
+    graphToCode(nodes, edges).code.split('\n').find((l) => l.includes('const append1 ='))!;
+
+  /** color → toHsl → append, with each [sourceHandle, appendPort] wired. */
+  const toHslAppend = (wires: [string, string][], extra: ReturnType<typeof makeEdge>[] = [], extraNodes: ReturnType<typeof makeNode>[] = []) =>
+    appendLineOf(
+      [
+        makeNode('c', 'color', { hex: '#ff8800' }),
+        makeNode('th', 'toHsl'),
+        ...extraNodes,
+        makeNode('ap', 'append'),
+        makeNode('out', 'output'),
+      ],
+      [
+        makeEdge('c', 'out', 'th', 'rgb'),
+        ...wires.map(([h, p]) => makeEdge('th', h, 'ap', p)),
+        ...extra,
+        makeEdge('ap', 'out', 'out', 'color'),
+      ],
+    );
+
+  it('sizes the constructor from a narrow source HANDLE, not the source node', () => {
+    // `toHsl.h` is a float. Counting per node reported 3 for it, so this
+    // emitted `vec4(toHsl1.x, float1)` — a four-slot constructor handed two
+    // components, which is not valid TSL: the whole module failed to compile.
+    const line = toHslAppend(
+      [['h', 'a']],
+      [makeEdge('f', 'out', 'ap', 'b')],
+      [makeNode('f', 'float', { value: 3 })],
+    );
+    expect(line).toContain('const append1 = vec2(toHsl1.x, float1);');
+    expect(ctorWidth(line)).toBe(2);
+    expect(componentsOf(line)).toBe(ctorWidth(line));
+  });
+
+  it('keeps all three h/s/l operands instead of folding two into a double swizzle', () => {
+    // Previously `vec4(toHsl1.x, toHsl1.y.x)`: three per-node "3"s filled the
+    // vec4 after two operands, so the Lightness wire was dropped ENTIRELY and
+    // the survivor got `.x` applied to a float.
+    const line = toHslAppend([['h', 'a'], ['s', 'b'], ['l', 'c']]);
+    expect(line).toContain('const append1 = vec3(toHsl1.x, toHsl1.y, toHsl1.z);');
+    for (const swizzle of ['toHsl1.x', 'toHsl1.y', 'toHsl1.z']) {
+      expect(line).toContain(swizzle);
+    }
+    // A swizzle of a swizzle is the signature of the old handle-blind trim.
+    expect(line).not.toMatch(/\.[xyzw]+\.[xyzw]+/);
+    expect(componentsOf(line)).toBe(3);
+  });
+
+  it('reads a dataviz `value` socket as one channel, not the node vec3', () => {
+    // `dataviz` is the second node with a narrow non-head output. It needs no
+    // upstream Data node to emit — an unwired signal falls back to `uv().x` —
+    // so pinning it here costs no setup and no fixture.
+    const line = appendLineOf(
+      [
+        makeNode('dv', 'dataviz'),
+        makeNode('f', 'float', { value: 3 }),
+        makeNode('ap', 'append'),
+        makeNode('out', 'output'),
+      ],
+      [
+        makeEdge('dv', 'value', 'ap', 'a'),
+        makeEdge('f', 'out', 'ap', 'b'),
+        makeEdge('ap', 'out', 'out', 'color'),
+      ],
+    );
+    expect(ctorWidth(line)).toBe(2);
+    expect(line).not.toMatch(/vec4\(/);
+    expect(componentsOf(line)).toBe(2);
+  });
+
+  // The whole defect class in one assertion: a vecN handed anything other than
+  // N components is never valid TSL, however the operands were counted.
+  it('never emits a vecN handed anything but N components', () => {
+    const f = (n: string, v: number) => makeNode(n, 'float', { value: v });
+    const toAp = (src: string, handle: string, port: string) => makeEdge(src, handle, 'ap', port);
+    const ap = makeNode('ap', 'append');
+    const out = makeNode('out', 'output');
+    const sink = makeEdge('ap', 'out', 'out', 'color');
+
+    const cases: Array<[string, ReturnType<typeof makeNode>[], ReturnType<typeof makeEdge>[]]> = [
+      // One wired float and one unwired operand — the `0` still spends a channel.
+      ['float + unwired', [f('f1', 1), ap, out], [toAp('f1', 'out', 'a'), sink]],
+      ['float + float', [f('f1', 1), f('f2', 2), ap, out],
+        [toAp('f1', 'out', 'a'), toAp('f2', 'out', 'b'), sink]],
+      ['vec2 + float', [makeNode('v2', 'vec2', { x: 1, y: 2 }), f('f1', 3), ap, out],
+        [toAp('v2', 'out', 'a'), toAp('f1', 'out', 'b'), sink]],
+      // A split swizzle is a float reached through a vec3 node — the same
+      // handle-vs-node split as toHsl, by a different mechanism (it inlines
+      // as `<sourceVar>.y` with no variable of its own).
+      ['split.y + float', [makeNode('v', 'vec3', { x: 1, y: 2, z: 3 }), makeNode('s', 'split'), f('f1', 3), ap, out],
+        [makeEdge('v', 'out', 's', 'v'), toAp('s', 'y', 'a'), toAp('f1', 'out', 'b'), sink]],
+      ['toHsl.h + toHsl.l', [makeNode('c', 'color', { hex: '#ff8800' }), makeNode('th', 'toHsl'), ap, out],
+        [makeEdge('c', 'out', 'th', 'rgb'), toAp('th', 'h', 'a'), toAp('th', 'l', 'b'), sink]],
+      ['dataviz.value + vec2', [makeNode('dv', 'dataviz'), makeNode('v2', 'vec2', { x: 1, y: 2 }), ap, out],
+        [toAp('dv', 'value', 'a'), toAp('v2', 'out', 'b'), sink]],
+      ['four floats', [f('f1', 1), f('f2', 2), f('f3', 3), f('f4', 4), ap, out],
+        [toAp('f1', 'out', 'a'), toAp('f2', 'out', 'b'), toAp('f3', 'out', 'c'), toAp('f4', 'out', 'd'), sink]],
+      // The two over-capacity forms the trim tests above cover, re-checked
+      // through the same invariant.
+      ['vec3 + vec3 (trimmed)', [makeNode('p1', 'positionGeometry'), makeNode('p2', 'positionGeometry'), ap, out],
+        [toAp('p1', 'out', 'a'), toAp('p2', 'out', 'b'), sink]],
+      ['uv + uv + float (dropped)', [makeNode('u1', 'uv'), makeNode('u2', 'uv'), f('f1', 9), ap, out],
+        [toAp('u1', 'out', 'a'), toAp('u2', 'out', 'b'), toAp('f1', 'out', 'c'), sink]],
+    ];
+
+    for (const [name, nodes, edges] of cases) {
+      const line = appendLineOf(nodes, edges);
+      expect(componentsOf(line), `${name}: ${line.trim()}`).toBe(ctorWidth(line));
+    }
+  });
 });
 
 describe('graphToCode — output shape', () => {

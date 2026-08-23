@@ -47,7 +47,6 @@ import {
   LUT_COORD_OFFSET,
 } from '@/utils/colormaps';
 import { float32ToBase64, float16ToBase64 } from '@/utils/binaryCodec';
-import { getComponentCount } from './cpuEvaluator';
 import { topologicalSort } from './topologicalSort';
 
 /** Format a JS number as a TSL-safe numeric literal (finite or `0`). */
@@ -1238,7 +1237,7 @@ export function graphToCode(
       // the TOTAL component count (a vec2 + float must become vec3, not vec2),
       // and both it and the argument list are capped at vec4.
       const raw = resolveArguments(node, varNames, def, gidx);
-      const channels = appendOperandChannels(node, edges, sorted, def, gidx);
+      const channels = appendOperandChannels(node, def, gidx, shapeOfEdgeSource);
       const { ctor, args } = buildAppendConstructor(raw, channels);
       addImport('three/tsl', ctor);
       bodyLines.push(`  const ${varName} = ${ctor}(${args.join(', ')});`);
@@ -1787,13 +1786,28 @@ function buildAppendConstructor(
   return { ctor: size === 2 ? 'vec2' : size === 3 ? 'vec3' : 'vec4', args: out };
 }
 
-/** Channel count each of an append node's operands contributes, in socket order. */
+/**
+ * Channel count each of an append node's operands contributes, in socket order.
+ *
+ * Widths come from `shapeOfEdgeSource` — the PER-HANDLE lookup — never from a
+ * node-level count. The argument text beside these numbers is built by
+ * `resolveEdgeRef`, which IS handle-aware, so a node-level count desynchronised
+ * the two for every source whose non-head output narrows (`toHsl`'s h/s/l,
+ * `dataviz`'s `value`): `toHsl.h -> a` plus a float on `b` reported 3 + 1 and
+ * emitted `vec4(toHsl1.x, float1)` — a four-slot constructor handed two
+ * components, which is not valid TSL, so the whole module failed to compile.
+ * Wiring all three of h/s/l was worse: `vec4(toHsl1.x, toHsl1.y.x)`, silently
+ * dropping the Lightness wire and putting `.x` on a float. Same handle-blind
+ * class the edge-value convention documents.
+ *
+ * An unwired operand counts 1 — it still emits a `0` argument, so it still
+ * spends a channel.
+ */
 function appendOperandChannels(
   node: AppNode,
-  edges: AppEdge[],
-  nodes: AppNode[],
   def: NodeDefinition,
   gidx: GraphIndex,
+  shapeOf: (edge: AppEdge) => number,
 ): number[] {
   const connected = inEdges(gidx, node.id)
     .filter((e) => typeof e.targetHandle === 'string')
@@ -1801,7 +1815,9 @@ function appendOperandChannels(
   const inputs = effectiveInputs(def, connected, false, Object.keys(getNodeValues(node)));
   return inputs.map((input) => {
     const edge = inEdge(gidx, node.id, input.id);
-    return edge ? getComponentCount(edge.source, nodes, edges) : 1;
+    if (!edge) return 1;
+    const ch = shapeOf(edge);
+    return ch > 0 ? ch : 1;
   });
 }
 

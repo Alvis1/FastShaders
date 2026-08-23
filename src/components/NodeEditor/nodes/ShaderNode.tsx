@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, type CSSProperties } from 'react
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
 import { NODE_REGISTRY, effectiveInputs, growsOperands } from '@/registry/nodeRegistry';
+import { appendGrowthExhausted } from '@/utils/appendCapacity';
 import { useAppStore } from '@/store/useAppStore';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { portLabel } from '@/i18n';
@@ -14,7 +15,7 @@ import { DragNumberInput } from '../inputs/DragNumberInput';
 // specificity, and the on-node size must win. (The size override below is also
 // written under `.shader-node__left` so it does not depend on that ordering.)
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
-import { NodeGlyph, hasNodeGlyph, nodeJustify, nodeScale, nodeBox, nodeSockets, nodeTextScale, nodeArtStyle } from './glyphs/NodeGlyph';
+import { NodeGlyph, hasNodeGlyph, usesOperatorLayout, nodeJustify, nodeScale, nodeBox, nodeSockets, nodeTextScale, nodeArtStyle } from './glyphs/NodeGlyph';
 import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getEdgeOutputShape, getTargetEdges, getTimeUpstreamSet, getNodeById } from '@/engine/cpuEvaluator';
 import { edgeRangeText } from '@/utils/edgeValueText';
 import { LiveEdgeValue } from './LiveEdgeValue';
@@ -491,8 +492,18 @@ export const ShaderNode = memo(function ShaderNode({
   // positions.
   const updateNodeInternals = useUpdateNodeInternals();
   const valuedHandleList = useMemo(() => Object.keys(data.values ?? {}), [data.values]);
+  // `append` concatenates into a fixed-width vector, so its growth ceiling is
+  // CHANNELS, not sockets: one wired vec3 already spends three of the four, and
+  // the emitter trims whatever overflows. Without this the affordance kept
+  // offering a socket a wire could land on and never reach the shader. The
+  // arithmetic folds are unaffected — they consume every operand they take.
+  const growSockets =
+    revealGrowth &&
+    !appendGrowthExhausted(def, connectedHandleList, valuedHandleList, (portId) =>
+      graphInfo.inputChannels.get(portId),
+    );
   const opSocketCount = growsOperands(def)
-    ? effectiveInputs(def, connectedHandleList, revealGrowth, valuedHandleList).length
+    ? effectiveInputs(def, connectedHandleList, growSockets, valuedHandleList).length
     : def.inputs.length;
   // The Image node's opt-in sockets re-measure on any exposed-set change (the
   // count alone can stay equal while the handle ids differ) — same idiom as
@@ -605,20 +616,23 @@ export const ShaderNode = memo(function ShaderNode({
     [id, data.values, updateNodeData],
   );
 
-  // Operator layout for 2-input glyph nodes. COMPACT (the default, and the only
-  // mode for non-chainable ops): the glyph sits BETWEEN the two inputs — `a`
+  // Operator layout for 2-input socket-growing / glyph nodes (usesOperatorLayout
+  // — glyph OR grows; `append` is the glyphless member, and gating this on the
+  // glyph alone is what kept it two sockets wide forever). COMPACT (the default,
+  // and the only mode for non-growing ops): the glyph sits BETWEEN the two inputs — `a`
   // above, `b` below — output centered on the right. A chainable arithmetic node
   // with 3+ operands switches to LIST mode: a vertical socket column (no glyph),
   // each row a value beside its socket, output vertically centered, body growing
   // with the operand count. See `chainListMode` above.
-  if (hasNodeGlyph(data.registryType) && def.inputs.length === 2) {
+  if (usesOperatorLayout(def)) {
     // Chainable arithmetic grows past the two static ports: `effectiveInputs`
     // appends one empty grow-socket (the editable identity box) below the last
-    // operand — but ONLY while `revealGrowth` is set (a wire is being dragged
-    // near this node). At rest it returns just the wired operands, so a fully
+    // operand — but ONLY while `growSockets` is set (a wire is being dragged
+    // near this node, and — for `append` — the vector still has a free
+    // channel; see utils/appendCapacity). At rest it returns just the wired operands, so a fully
     // wired a+b stays the compact 2-op look instead of sprouting a dangling
     // socket. Non-chainable 2-input glyph nodes get their static [a, b] back.
-    const ins = effectiveInputs(def, connectedHandleList, revealGrowth, valuedHandleList);
+    const ins = effectiveInputs(def, connectedHandleList, growSockets, valuedHandleList);
     const N = ins.length;
     const identity = def.chainIdentity ?? 0;
     const scale = nodeScale(data.registryType);
@@ -664,7 +678,7 @@ export const ShaderNode = memo(function ShaderNode({
         <div className="shader-node__op" style={{ height: BODY_H, ...(box.width ? { minWidth: 0 } : null) }}>
           {/* Operator glyph only in the compact 2-operand look; the vertical
               list identifies the op by its header name instead. */}
-          {!chainListMode && (
+          {!chainListMode && hasNodeGlyph(data.registryType) && (
             <div className="shader-node__op-glyph">
               <NodeGlyph type={data.registryType} value={Number(data.values?.value ?? 0)} size={34} />
             </div>

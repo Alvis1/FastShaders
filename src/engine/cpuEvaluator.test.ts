@@ -603,3 +603,176 @@ describe('select — GPU truthiness, not a 0.5 threshold', () => {
     expect(evaluateNodeOutput('sel', nodes, edges, 0)).toEqual([9]);
   });
 });
+
+describe('append — grown operands agree with buildAppendConstructor', () => {
+  // The emitter has been pinned at four operands ever since `append` became
+  // variadic; the CPU side was pinned only at TWO (the a/b pair in the vector-ops
+  // block above). That asymmetry is part of why the renderer's two-socket gate
+  // stayed invisible for so long — nothing here ever asked what a GROWN append
+  // looks like on a card. Value, shape and range are pinned together per case,
+  // because the failure mode is a card advertising a different channel count
+  // from the vecN buildAppendConstructor actually emits.
+
+  it('folds three operands into value, shape and range', () => {
+    const a = makeNode('a', 'float', { value: 1 });
+    const b = makeNode('b', 'float', { value: 2 });
+    const c = makeNode('c', 'float', { value: 3 });
+    const op = makeNode('op', 'append');
+    const nodes = [a, b, c, op];
+    const edges = [
+      makeEdge('a', 'out', 'op', 'a'),
+      makeEdge('b', 'out', 'op', 'b'),
+      makeEdge('c', 'out', 'op', 'c'),
+    ];
+    expect(evaluateNodeOutput('op', nodes, edges, 0)).toEqual([1, 2, 3]);
+    expect(getNodeOutputShape('op', nodes, edges)).toBe(3);
+    expect(getComponentCount('op', nodes, edges)).toBe(3);
+    // Degenerate on purpose: computeRange takes a fully deterministic eval as
+    // the tightest possible range and never reaches its own `append` case. The
+    // pin that matters here is the LENGTH — a range two entries short is a card
+    // describing a vec2 beside a shader emitting a vec3.
+    expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
+      min: [1, 2, 3], max: [1, 2, 3],
+    });
+  });
+
+  it('folds four operands — maxOperands, the vec4 ceiling', () => {
+    const nodes = [
+      makeNode('a', 'float', { value: 1 }),
+      makeNode('b', 'float', { value: 2 }),
+      makeNode('c', 'float', { value: 3 }),
+      makeNode('d', 'float', { value: 4 }),
+      makeNode('op', 'append'),
+    ];
+    const edges = ['a', 'b', 'c', 'd'].map((h) => makeEdge(h, 'out', 'op', h));
+    expect(evaluateNodeOutput('op', nodes, edges, 0)).toEqual([1, 2, 3, 4]);
+    expect(getNodeOutputShape('op', nodes, edges)).toBe(4);
+    expect(getComponentCount('op', nodes, edges)).toBe(4);
+    expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
+      min: [1, 2, 3, 4], max: [1, 2, 3, 4],
+    });
+  });
+
+  it('walks every grown operand when the range has to be INFERRED', () => {
+    // `split` evaluates to null, so this graph skips the deterministic
+    // short-circuit and lands in computeRange's own `append` case — the branch
+    // the two tests above never reach. Each unknown scalar contributes the
+    // "assume normalized" [0, 1], so a walk that stopped at the base a/b pair
+    // would come back one entry short of the emitted vec3.
+    const nodes = [
+      makeNode('p', 'positionGeometry'),
+      makeNode('s', 'split'),
+      makeNode('op', 'append'),
+    ];
+    const edges = [
+      makeEdge('p', 'out', 's', 'v'),
+      makeEdge('s', 'x', 'op', 'a'),
+      makeEdge('s', 'y', 'op', 'b'),
+      makeEdge('s', 'z', 'op', 'c'),
+    ];
+    expect(evaluateNodeOutput('op', nodes, edges, 0)).toBeNull();
+    expect(getNodeOutputShape('op', nodes, edges)).toBe(3);
+    expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
+      min: [0, 0, 0], max: [1, 1, 1],
+    });
+  });
+
+  it('drops the SAME overflowing operand the emitter drops (uv + uv + float)', () => {
+    // 2 + 2 + 1 = 5 channels and there is no vec5. buildAppendConstructor fills
+    // left to right, so the two uvs consume the whole vec4 and the float is
+    // dropped from the ARGUMENT LIST outright — not swizzled, there is no room
+    // left to swizzle into: `vec4(uv1, uv2)`. The card has to report those same
+    // 4 channels, or it advertises a component the shader does not hold.
+    const nodes = [
+      makeNode('u1', 'uv'),
+      makeNode('u2', 'uv'),
+      makeNode('f', 'float', { value: 9 }),
+      makeNode('op', 'append'),
+    ];
+    const edges = [
+      makeEdge('u1', 'out', 'op', 'a'),
+      makeEdge('u2', 'out', 'op', 'b'),
+      makeEdge('f', 'out', 'op', 'c'),
+    ];
+    // 9 would be the dropped operand's value: its presence anywhere in the
+    // result proves the CPU fold kept an operand the constructor threw away.
+    expect(evaluateNodeOutput('op', nodes, edges, 0)).toEqual([0.5, 0.5, 0.5, 0.5]);
+    expect(getNodeOutputShape('op', nodes, edges)).toBe(4);
+    expect(getComponentCount('op', nodes, edges)).toBe(4);
+    expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
+      min: [0.5, 0.5, 0.5, 0.5], max: [0.5, 0.5, 0.5, 0.5],
+    });
+  });
+
+  it('truncates an INFERRED range at four channels, mid-operand like the swizzle', () => {
+    // positionGeometry (3 analytical channels) + two floats = 5. The emitter
+    // spends 3 on the position, 1 on `b`, and drops `c` — `vec4(pos, float1)`.
+    // The range must land on exactly those four bounds: an operand that kept
+    // its own fourth channel here would report a bound for a component that
+    // does not exist in the emitted constructor.
+    const nodes = [
+      makeNode('p', 'positionGeometry'),
+      makeNode('b', 'float', { value: 2 }),
+      makeNode('c', 'float', { value: 3 }),
+      makeNode('op', 'append'),
+    ];
+    const edges = [
+      makeEdge('p', 'out', 'op', 'a'),
+      makeEdge('b', 'out', 'op', 'b'),
+      makeEdge('c', 'out', 'op', 'c'),
+    ];
+    expect(evaluateNodeOutput('op', nodes, edges, 0)).toBeNull();
+    expect(getNodeOutputShape('op', nodes, edges)).toBe(4);
+    expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
+      min: [-0.8, -0.8, -0.8, 2], max: [0.8, 0.8, 0.8, 2],
+    });
+  });
+
+  it('counts an unwired middle operand as one zero channel', () => {
+    // a and c wired, b left empty: effectiveInputs still reports [a, b, c] and
+    // the emitter fills the hole with the bare `0` fallback (append declares no
+    // chainIdentity and no defaultValues) — `vec3(float1, 0, float2)`. So the
+    // hole SPENDS a channel; treating it as absent would shift c up one slot
+    // and make the card disagree with the shader about which component is which.
+    const nodes = [
+      makeNode('a', 'float', { value: 1 }),
+      makeNode('c', 'float', { value: 3 }),
+      makeNode('op', 'append'),
+    ];
+    const edges = [
+      makeEdge('a', 'out', 'op', 'a'),
+      makeEdge('c', 'out', 'op', 'c'),
+    ];
+    expect(evaluateNodeOutput('op', nodes, edges, 0)).toEqual([1, 0, 3]);
+    expect(getNodeOutputShape('op', nodes, edges)).toBe(3);
+    expect(getComponentCount('op', nodes, edges)).toBe(3);
+    expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
+      min: [1, 0, 3], max: [1, 0, 3],
+    });
+  });
+  it('sizes a grown operand by its SOURCE SOCKET, not by the source node', () => {
+    // `toHsl` is vec3 `out` plus float h/s/l, so a node-level width overstates
+    // every one of the three narrow sockets. Measured before the fix: the card
+    // reported 4 channels for `toHsl.h -> a` + `float -> b` while graphToCode
+    // emitted `vec2(toHsl1.x, float1)` — the two surfaces disagreeing about the
+    // same wire, which is the handle-blind class the edge-value convention
+    // documents. `portShapeForHandle` is the ONE per-handle lookup both sides
+    // now ask, so they cannot drift apart again.
+    const nodes = [
+      makeNode('h', 'toHsl'),
+      makeNode('f', 'float', { value: 1 }),
+      makeNode('op', 'append'),
+    ];
+    const edges = [
+      makeEdge('h', 'h', 'op', 'a'),
+      makeEdge('f', 'out', 'op', 'b'),
+    ];
+    expect(getNodeOutputShape('op', nodes, edges)).toBe(2);
+    expect(getComponentCount('op', nodes, edges)).toBe(2);
+
+    // The vec3 `out` socket of the SAME node still counts three, so the fix is
+    // per-socket rather than a blanket narrowing.
+    const wide = [makeEdge('h', 'out', 'op', 'a'), makeEdge('f', 'out', 'op', 'b')];
+    expect(getNodeOutputShape('op', nodes, wide)).toBe(4);
+  });
+});

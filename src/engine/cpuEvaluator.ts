@@ -373,7 +373,23 @@ function computeShape(
     let total = 0;
     for (const inp of appendOperands(nodeId, nodes, edges, nidx, edgeIndex)) {
       const e = targetEdges.find((edge) => edge.targetHandle === inp.id);
-      total += e ? computeShape(e.source, nodes, edges, visited, nidx, edgeIndex) : 1;
+      if (!e) {
+        total += 1;
+        continue;
+      }
+      // Per SOURCE SOCKET, not per node — the same rule graphToCode's
+      // `appendOperandChannels` follows. A node-level width overstates every
+      // source whose non-head output narrows (`toHsl`'s h/s/l, `dataviz`'s
+      // `value`): `toHsl.h -> a` counted 3, so the card advertised a vec4 while
+      // the emitter wrote `vec2(toHsl1.x, …)`, and the two surfaces disagreed
+      // about the same wire. `portShapeForHandle` is the ONE per-handle port
+      // lookup, shared with codegen so they cannot drift; 0 means unresolved
+      // (an `any` port), which falls back to whole-node inference.
+      const src = nidx.get(e.source);
+      const declared = src && e.sourceHandle ? portShapeForHandle(src, e.sourceHandle) : 0;
+      total += declared > 0
+        ? declared
+        : computeShape(e.source, nodes, edges, visited, nidx, edgeIndex);
     }
     return Math.min(Math.max(total, 2), 4);
   }
@@ -1128,8 +1144,20 @@ function computeRange(
 
   // Geometry attributes with well-defined bounds. Normals, tangents, and view
   // directions are unit vectors → every channel lies in [-1, 1].
+  //
+  // `normalWorld` belongs here for the same reason `normalLocal` does — three
+  // builds it as `normalView.transformDirection(cameraViewMatrix)`, and
+  // transformDirection ends in `normalize()` (MathNode.js TRANSFORM_DIRECTION),
+  // so it is unit BY CONSTRUCTION. It was missing, which is exactly the wire
+  // the four fresnel presets feed into `dot`, so those edges reported a bare
+  // `…` while the `normalLocal` beside them in this very list reported a range.
+  //
+  // The box is per-channel, so it cannot express |v| = 1 — (1,1,1) is inside it
+  // and has length √3. That is a limitation of RangeResult's shape, shared with
+  // every entry here, not a wrong bound: it is still the tightest AXIS-ALIGNED
+  // box a unit vector can occupy.
   if (
-    type === 'normalLocal' || type === 'tangentLocal' ||
+    type === 'normalLocal' || type === 'tangentLocal' || type === 'normalWorld' ||
     type === 'positionWorldDirection' || type === 'positionViewDirection'
   ) {
     result = { min: [-1, -1, -1], max: [1, 1, 1] };
