@@ -2,7 +2,7 @@ import dagre from '@dagrejs/dagre';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
 import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRegistry';
-import { nodeBox, hasNodeGlyph, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
+import { nodeBox, hasNodeGlyph, usesOperatorLayout, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 import { MIC_W, MIC_HEADER_H, MIC_BODY_H } from '@/components/NodeEditor/nodes/micGeometry';
 import { AUD_W, AUD_HEADER_H, AUD_BODY_H } from '@/components/NodeEditor/nodes/audioGeometry';
@@ -103,7 +103,11 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
   }
 
   // Body height: designer override wins; otherwise derive from the layout.
-  const isOperator = def != null && hasNodeGlyph(type) && def.inputs.length === 2;
+  // Glyph OR socket-growing — the same predicate ShaderNode/NodeVisual gate on,
+  // so the estimated footprint cannot describe a layout the node no longer uses
+  // (`append` is the glyphless member; the `growsOperands` list-height floor
+  // below only makes sense once it really enters that layout).
+  const isOperator = usesOperatorLayout(def);
   let bodyH = box.height;
   if (bodyH == null) {
     if (isOperator) {

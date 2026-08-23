@@ -54,13 +54,34 @@ const definitions: NodeDefinition[] = [
     tslImportModule: 'three/tsl',
     inputs: [],
     outputs: [{ id: 'out', label: 'Direction', dataType: 'vec3' }],
-    // NB: three's positionWorldDirection is the LOCAL POSITION rotated into
+    // NB: three's positionWorldDirection is the LOCAL POSITION carried into
     // world space — no camera term involved. It was labelled "View Dir (world)"
     // and sat beside the GENUINE view vector below, so the pair read as one
     // concept in two spaces; the Latvian label ("Pasaules virziens") never
     // agreed with the English one. Old queries survive via the Also: tail.
+    //
+    // Second NB, and the reason the description no longer says "rotated":
+    // three r184 emits the TRANSPOSE here. Position.js:72 spells it
+    // `positionLocal.transformDirection(modelWorldMatrix)` — VECTOR-first —
+    // and MathNode's TRANSFORM_DIRECTION then builds `vec4(dir, 0) * M`, a
+    // row-vector product, i.e. `Mᵀ·dir`. MEASURED in the compiled GLSL:
+    //   v_positionWorldDirection = normalize((vec4(positionLocal, 0.0) * M).xyz)
+    // versus positionWorld's matrix-first `M * vec4(positionLocal, 1.0)`.
+    // The vector-first spelling is deliberate and CORRECT at every other call
+    // site (normalWorld, tangentWorld, reflectVector) because those convert
+    // view->world and genuinely want the inverse of cameraViewMatrix; this is
+    // the only one whose matrix is the MODEL matrix, where the forward
+    // transform is what is wanted. For a pure rotation the emitted value is
+    // therefore R⁻¹·p, the local direction COUNTER-rotated. Invisible inside
+    // three (its only consumers render at the origin under an identity world
+    // matrix) but live here: every preview geometry but `plane` carries a
+    // resting tilt (GEOMETRY_ROTATIONS), so M·v and Mᵀ·v diverge by 38.7°-58.8°
+    // on the default sphere before the turntable even starts. Since the
+    // preview object sits at the world origin, the correct outward direction
+    // there is `normalize(positionWorld)`, not this node. Upstream defect —
+    // documented, not worked around.
     description:
-      'The local position rotated into world space as a unit direction — points from the object origin out through the surface (sky/equirect-style lookups). Also: view dir, world direction, outward, equirect',
+      'The local position carried into world space by the model matrix, as a unit direction — points from the LOCAL origin out through the surface (sky/equirect-style lookups). Non-uniform scale skews it. Also: view dir, world direction, outward, equirect',
   },
   {
     type: 'positionViewDirection',
@@ -804,9 +825,19 @@ const definitions: NodeDefinition[] = [
     // N−1 operations and fold absent operands through an identity — neither
     // applies to a constructor.)
     //
+    // Growing here requires ShaderNode/NodeVisual to enter the operator branch
+    // on `usesOperatorLayout` — glyph OR grows — and NOT on `hasNodeGlyph`
+    // alone: this node is DELIBERATELY glyphless (glyphCoverage.test.ts's
+    // exempt list), and while the gate tested the glyph it fell into the rows
+    // layout, which never calls effectiveInputs. That made this comment
+    // aspirational for the whole of the node's life — everything below the
+    // renderer grew, the canvas showed two sockets.
+    //
     // Capped at 4 operands because there is no vec5. Note the real limit is on
     // CHANNELS, not sockets — 4 floats fill a vec4, but so do 2 vec2s — so the
-    // emitter, not this count, guarantees the constructor never overflows.
+    // socket-side cap lives in utils/appendCapacity.ts (which withholds the
+    // trailing GROW slot once the vector is full) and the emitter, not this
+    // count, is what guarantees the constructor never overflows.
     // See buildAppendConstructor in graphToCode.
     variadic: true,
     maxOperands: 4,

@@ -396,3 +396,205 @@ describe('round-trip: the wider stored-value channel set', () => {
     expect(code1).toContain('Discard(float(0.5));');
   });
 });
+
+/**
+ * Append is the one node whose emitted TEXT is indistinguishable from another
+ * node's: it builds `vec2|vec3|vec4(...)`, exactly what a component-wise
+ * Vec2/Vec3/Vec4 node emits. So `code2 === code1` is NOT a sufficient pin here
+ * — a 3-scalar append used to round-trip byte-identically while the node
+ * silently came back as a **Vec3**, which then re-emitted the same text from a
+ * different graph and quietly cost the user their grow sockets. Every case
+ * below therefore checks the parsed GRAPH as well as the text.
+ */
+function parsedAppend(code: string) {
+  const parsed = codeToGraph(code);
+  const node = parsed.nodes.find((n) => n.data.registryType === 'append');
+  const handles = parsed.edges
+    .filter((e) => node !== undefined && e.target === node.id)
+    .map((e) => e.targetHandle as string)
+    .sort();
+  return { parsed, node, handles };
+}
+
+describe('round-trip: Append (the vector constructor)', () => {
+  const out = () => makeNode('out', 'output');
+  const flt = (id: string, value: number) => makeNode(id, 'float', { value });
+
+  /** Round-trip, then pin that the surviving node is still an Append. */
+  function appendRoundTrip(nodes: AppNode[], edges: AppEdge[]) {
+    const { code1, code2 } = roundTrip(nodes, edges);
+    expect(code2).toBe(code1);
+    const { parsed, node, handles } = parsedAppend(code1);
+    expect(node, `no append node in the parse of:\n${code1}`).toBeDefined();
+    return { code1, parsed, node: node!, handles };
+  }
+
+  it('2 scalars → vec2', () => {
+    const { code1, handles } = appendRoundTrip(
+      [flt('f1', 0.1), flt('f2', 0.2), makeNode('ap', 'append'), out()],
+      [
+        makeEdge('f1', 'out', 'ap', 'a'),
+        makeEdge('f2', 'out', 'ap', 'b'),
+        makeEdge('ap', 'out', 'out', 'color'),
+      ],
+    );
+    expect(code1).toContain('const append1 = vec2(float1, float2);');
+    expect(handles).toEqual(['a', 'b']);
+  });
+
+  it('3 scalars → vec3, and does NOT degrade into a Vec3 node', () => {
+    // The regression this whole block exists for. `vec3(f1, f2, f3)` is
+    // full-arity, so the `isConcat` evidence is absent and only the variable
+    // NAME (`append1`, which graphToCode mints from the def's tslFunction)
+    // separates it from a component-wise Vec3. Before that name check the parse
+    // returned a Vec3 whose x/y/z happened to re-emit identical text, so the
+    // text assertion alone stayed green while the node type flipped.
+    const { code1, parsed, handles } = appendRoundTrip(
+      [flt('f1', 0.1), flt('f2', 0.2), flt('f3', 0.3), makeNode('ap', 'append'), out()],
+      [
+        makeEdge('f1', 'out', 'ap', 'a'),
+        makeEdge('f2', 'out', 'ap', 'b'),
+        makeEdge('f3', 'out', 'ap', 'c'),
+        makeEdge('ap', 'out', 'out', 'color'),
+      ],
+    );
+    expect(code1).toContain('const append1 = vec3(float1, float2, float3);');
+    expect(handles).toEqual(['a', 'b', 'c']);
+    expect(parsed.nodes.filter((n) => n.data.registryType === 'vec3')).toHaveLength(0);
+  });
+
+  it('4 scalars → vec4, and does NOT degrade into a Vec4 node', () => {
+    const { code1, parsed, handles } = appendRoundTrip(
+      [flt('f1', 0.1), flt('f2', 0.2), flt('f3', 0.3), flt('f4', 0.4), makeNode('ap', 'append'), out()],
+      [
+        makeEdge('f1', 'out', 'ap', 'a'),
+        makeEdge('f2', 'out', 'ap', 'b'),
+        makeEdge('f3', 'out', 'ap', 'c'),
+        makeEdge('f4', 'out', 'ap', 'd'),
+        makeEdge('ap', 'out', 'out', 'color'),
+      ],
+    );
+    expect(code1).toContain('const append1 = vec4(float1, float2, float3, float4);');
+    expect(handles).toEqual(['a', 'b', 'c', 'd']);
+    expect(parsed.nodes.filter((n) => n.data.registryType === 'vec4')).toHaveLength(0);
+  });
+
+  it('mixed widths: a vec2 plus a float → vec3', () => {
+    // Two ARGUMENTS in a three-slot constructor: the operand widths, not the
+    // socket count, decide the constructor. This is also the shape that used to
+    // parse as a Vec3 with x=vec21, y=float1, z unwired and re-emit
+    // `vec3(vec21, float1, 0)` — four components in three slots, i.e. a module
+    // that no longer compiles.
+    const { code1, handles } = appendRoundTrip(
+      [makeNode('v', 'vec2', { x: 1, y: 2 }), flt('f1', 0.3), makeNode('ap', 'append'), out()],
+      [
+        makeEdge('v', 'out', 'ap', 'a'),
+        makeEdge('f1', 'out', 'ap', 'b'),
+        makeEdge('ap', 'out', 'out', 'color'),
+      ],
+    );
+    expect(code1).toContain('const append1 = vec3(vec21, float1);');
+    expect(handles).toEqual(['a', 'b']);
+  });
+
+  it('exactly full: two vec2 sources → vec4 with two arguments', () => {
+    // 2 + 2 channels fill the vec4 with no room to spare, so nothing is
+    // swizzled down and no operand is dropped by buildAppendConstructor's cap.
+    const { code1, handles } = appendRoundTrip(
+      [makeNode('u1', 'uv'), makeNode('u2', 'uv'), makeNode('ap', 'append'), out()],
+      [
+        makeEdge('u1', 'out', 'ap', 'a'),
+        makeEdge('u2', 'out', 'ap', 'b'),
+        makeEdge('ap', 'out', 'out', 'color'),
+      ],
+    );
+    expect(code1).toContain('const append1 = vec4(uv1, uv2);');
+    expect(handles).toEqual(['a', 'b']);
+  });
+
+  it('a per-handle source width: toHsl.h plus a float → vec2, not vec4', () => {
+    // The handle-blind channel count: `toHsl` is out:vec3 + float h/s/l, and a
+    // node-level width reported 3 for the `h` socket while the argument text
+    // beside it came from the handle-aware resolver — emitting
+    // `vec4(toHsl1.x, float1)`, a four-slot constructor handed two components.
+    // The parse must also map `toHsl1.x` back to the `h` OUTPUT handle rather
+    // than minting a Split node, or the re-emit drifts.
+    const { code1, parsed, handles } = appendRoundTrip(
+      [
+        makeNode('c', 'color', { hex: '#ff8800' }),
+        makeNode('th', 'toHsl'),
+        flt('f1', 0.2),
+        makeNode('ap', 'append'),
+        out(),
+      ],
+      [
+        makeEdge('c', 'out', 'th', 'rgb'),
+        makeEdge('th', 'h', 'ap', 'a'),
+        makeEdge('f1', 'out', 'ap', 'b'),
+        makeEdge('ap', 'out', 'out', 'color'),
+      ],
+    );
+    expect(code1).toContain('const append1 = vec2(toHsl1.x, float1);');
+    expect(handles).toEqual(['a', 'b']);
+    expect(parsed.nodes.filter((n) => n.data.registryType === 'split')).toHaveLength(0);
+    const toA = parsed.edges.find((e) => e.targetHandle === 'a')!;
+    expect(toA.sourceHandle).toBe('h');
+  });
+
+  it('a wired operand beside a STORED literal keeps both', () => {
+    // Append declares no defaultValues, so an unwired operand emits the bare
+    // `0` unless the node carries a stored value — and that literal has to
+    // survive the parse as a value rather than being read as a wire or dropped.
+    const { code1, node, handles } = appendRoundTrip(
+      [flt('f1', 0.1), makeNode('ap', 'append', { b: 0.5 }), out()],
+      [makeEdge('f1', 'out', 'ap', 'a'), makeEdge('ap', 'out', 'out', 'color')],
+    );
+    expect(code1).toContain('const append1 = vec2(float1, 0.5);');
+    expect(handles).toEqual(['a']);
+    expect(getNodeValues(node).b).toBe(0.5);
+  });
+
+  it('nothing wired at all stays an Append', () => {
+    // An unwired Append emits `vec2(0, 0)` — no variable reference anywhere in
+    // the call. The parse branch used to REQUIRE a reference, so this fell
+    // through and came back as a Vec2 node: dropping an Append onto the canvas
+    // and pressing Apply before wiring it silently replaced it.
+    const { code1, node, handles } = appendRoundTrip(
+      [makeNode('ap', 'append'), out()],
+      [makeEdge('ap', 'out', 'out', 'color')],
+    );
+    expect(code1).toContain('const append1 = vec2(0, 0);');
+    expect(handles).toEqual([]);
+    expect(getNodeValues(node).a).toBe(0);
+    expect(getNodeValues(node).b).toBe(0);
+  });
+
+  it('a fully wired Vec2/Vec3/Vec4 is NOT hijacked by the append parser', () => {
+    // The other half of the name-based disambiguation. A component-wise VecN
+    // emits `vecN1`, and the 26 full-arity constructor calls inside the
+    // built-in textures/presets are exactly this shape — parsing them as
+    // Appends would change what every shipped asset is drawn with.
+    const cases: Array<[string, string[]]> = [
+      ['vec2', ['x', 'y']],
+      ['vec3', ['x', 'y', 'z']],
+      ['vec4', ['x', 'y', 'z', 'w']],
+    ];
+    for (const [type, ports] of cases) {
+      const floats = ports.map((_, i) => flt(`f${i}`, (i + 1) / 10));
+      const { code1, code2 } = roundTrip(
+        [...floats, makeNode('v', type), out()],
+        [
+          ...ports.map((p, i) => makeEdge(`f${i}`, 'out', 'v', p)),
+          makeEdge('v', 'out', 'out', 'color'),
+        ],
+      );
+      expect(code2).toBe(code1);
+      const parsed = codeToGraph(code1);
+      expect(
+        parsed.nodes.map((n) => n.data.registryType).sort(),
+        `${type} was hijacked:\n${code1}`,
+      ).toEqual([...floats.map(() => 'float'), 'output', type].sort());
+      expect(parsed.nodes.filter((n) => n.data.registryType === 'append')).toHaveLength(0);
+    }
+  });
+});

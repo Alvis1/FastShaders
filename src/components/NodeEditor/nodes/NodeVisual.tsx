@@ -10,6 +10,7 @@ import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import {
   NodeGlyph,
   hasNodeGlyph,
+  usesOperatorLayout,
   nodeBox,
   nodeSockets,
   nodeTextScale,
@@ -245,7 +246,7 @@ export function NodeVisual({
   );
 
   // ── Operator layout (2-input glyph nodes) ──
-  if (hasNodeGlyph(def.type, design) && def.inputs.length === 2) {
+  if (usesOperatorLayout(def, design)) {
     const BODY_H = box.height ?? Math.max(52, Math.round(34 * gScale) + 10);
     const DEF_OFF = [-12.5, 12.5];
     const offOf = (id: string, i: number) => sockets[id] ?? DEF_OFF[i] ?? 0;
@@ -256,9 +257,15 @@ export function NodeVisual({
         <div className={cardClass} style={nodeStyle}>
           {header}
           <div className="shader-node__op" style={{ height: BODY_H, ...(box.width ? { minWidth: 0 } : null) }}>
-            <div className="shader-node__op-glyph" data-nd-glyph={interactive ? '' : undefined} style={interactiveStyle}>
-              <NodeGlyph type={def.type} value={num('value')} size={34} design={design} />
-            </div>
+            {/* `append` is the one glyphless node in this layout, so the art
+                wrapper (and the designer's glyph drag hook) must not mount for
+                it — an empty `data-nd-glyph` box would offer a gesture that
+                moves nothing. */}
+            {hasNodeGlyph(def.type, design) && (
+              <div className="shader-node__op-glyph" data-nd-glyph={interactive ? '' : undefined} style={interactiveStyle}>
+                <NodeGlyph type={def.type} value={num('value')} size={34} design={design} />
+              </div>
+            )}
             {def.inputs.map((inp, i) => {
               const s = stateOf(inp.id);
               return (

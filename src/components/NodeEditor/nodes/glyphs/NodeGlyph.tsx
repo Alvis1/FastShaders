@@ -1,5 +1,7 @@
 import { memo, type CSSProperties, type ReactNode } from 'react';
 import { CUSTOM_GLYPHS } from './customGlyphs';
+import { growsOperands } from '@/registry/nodeRegistry';
+import type { NodeDefinition } from '@/types';
 
 /**
  * One node's designer overrides — the value type of CUSTOM_GLYPHS, named so a
@@ -80,6 +82,37 @@ export function hasNodeGlyph(type: string, design?: GlyphDesign): boolean {
   // falls back to built-in art.
   if (design) return !!design.svg;
   return NODE_GLYPH_TYPES.has(type) || !!CUSTOM_GLYPHS[type]?.svg;
+}
+
+/**
+ * Does this node render through the OPERATOR layout (glyph between two sockets,
+ * flipping to the vertical list at 3+ operands) rather than the rows layout?
+ *
+ * The gate used to be `hasNodeGlyph(type) && def.inputs.length === 2` at all
+ * four call sites, which quietly made "has art" the test for "grows sockets".
+ * That is wrong for exactly one node and it was the node that needed it most:
+ * `append` is DELIBERATELY glyphless (glyphCoverage.test.ts's exempt list — its
+ * socket set is its whole meaning), so it fell into the rows layout, and the
+ * rows layout is the only branch that never calls `effectiveInputs`. Result: a
+ * node the registry, the splice, the compaction, the evaluator and codegen had
+ * all been taught to grow showed two sockets forever, with no UI path to a
+ * third — while `revealGrowth`, `opSocketCount` and `chainListMode` were
+ * computed for it and read by nothing it could reach.
+ *
+ * So the test is now "glyph OR grows": art decides how the node is DRAWN, the
+ * registry decides how it BEHAVES. `growsOperands` covers add/sub/mul/div
+ * (already glyphed, so unchanged) plus `append`.
+ *
+ * Keep all four gates on this one predicate — ShaderNode, NodeVisual (the
+ * one-node-one-look replica), layoutEngine's footprint estimate, and the Node
+ * Designer's `layoutIsOp` (which mirrors it over its own draft state).
+ */
+export function usesOperatorLayout(
+  def: NodeDefinition | undefined,
+  design?: GlyphDesign,
+): boolean {
+  if (!def || def.inputs.length !== 2) return false;
+  return hasNodeGlyph(def.type, design) || growsOperands(def);
 }
 
 /** Input-value alignment for a node (designer override; default 'center'). */

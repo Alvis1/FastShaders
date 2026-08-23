@@ -955,3 +955,144 @@ describe('codeToGraph — the normal widget wrapper', () => {
     expect(result.nodes.filter((n) => n.data.registryType === 'color')).toHaveLength(1);
   });
 });
+
+describe('codeToGraph — the Append node', () => {
+  const wrap = (body: string, imports = '') =>
+    `import { Fn, vec3${imports ? `, ${imports}` : ''} } from 'three/tsl';
+
+const shader = Fn(() => {
+${body}
+
+  return vec3(1, 0, 0);
+});
+
+export default shader;
+`;
+  type Parsed = ReturnType<typeof codeToGraph>;
+  // Nodes are found by LABEL here, not by registryType: half these pins are
+  // about which of two node types one declaration became, and createNode stores
+  // the declared variable name as the label.
+  const byLabel = (r: Parsed, label: string) =>
+    r.nodes.find((n) => n.data.label === label)!;
+  const handlesInto = (r: Parsed, id: string) =>
+    r.edges.filter((e) => e.target === id).map((e) => e.targetHandle).sort();
+
+  // A hand-typed `append(f1, f2, f3)` used to stop at `b`: the extra-operand
+  // port synthesis was gated on `def.chainable`, and `append` is `variadic`, so
+  // the third argument was dropped with no edge, no error and an orphaned float
+  // node left on the canvas — then re-emitted as `vec2(float1, float2)`, a
+  // silently narrower vector. Both the synthesis and the cap read
+  // `growsOperands` now.
+  it('wires every operand of a hand-typed append(), not just the first two', () => {
+    const r = codeToGraph(wrap(`  const f1 = float(0.1);
+  const f2 = float(0.2);
+  const f3 = float(0.3);
+  const combined = append(f1, f2, f3);`, 'float, append'));
+
+    expect(r.errors).toEqual([]);
+    const combined = byLabel(r, 'combined');
+    expect(combined.data.registryType).toBe('append');
+    expect(handlesInto(r, combined.id)).toEqual(['a', 'b', 'c']);
+
+    // The third float must not be left orphaned — that was the visible symptom.
+    for (const label of ['f1', 'f2', 'f3']) {
+      const src = byLabel(r, label);
+      expect(r.edges.filter((e) => e.source === src.id && e.target === combined.id)).toHaveLength(1);
+    }
+  });
+
+  // The overflow message quotes the NODE's own cap, not the global one. Sharing
+  // MAX_CHAIN_OPERANDS for both would tell an Append author it may have 64
+  // operands when the fifth is already gone (there is no vec5).
+  it('warns with append\'s own 4-operand cap, not the global 64', () => {
+    const r = codeToGraph(wrap('  const combined = append(0.1, 0.2, 0.3, 0.4, 0.5);', 'append'));
+
+    // Non-blocking: useSyncEngine only refuses an Apply on severity !== 'warning'.
+    expect(r.errors.filter((e) => e.severity !== 'warning')).toEqual([]);
+    const warnings = r.errors.filter((e) => e.severity === 'warning');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain('more than 4 operands');
+    expect(warnings[0].message).not.toContain('64');
+  });
+
+  // …and the shared cap must not have flattened the folds down to 4. `add` is
+  // chainable with no maxOperands of its own, so it still quotes the global 64.
+  it('still reports 64 for a chainable fold that exceeds MAX_CHAIN_OPERANDS', () => {
+    const args = Array.from({ length: 65 }, (_, i) => i / 100).join(', ');
+    const r = codeToGraph(wrap(`  const summed = add(${args});`, 'add'));
+
+    const warnings = r.errors.filter((e) => e.severity === 'warning');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain('more than 64 operands');
+  });
+
+  // `append` emits `vec2|vec3|vec4(...)` — byte-identical to what a Vec2/Vec3/
+  // Vec4 node emits — so the parser separates them on exactly two pieces of
+  // evidence, and each has its own regression behind it.
+  describe('telling an Append constructor apart from a VecN node', () => {
+    // namedAppend: for code THIS APP emitted the variable name IS the node's
+    // identity (graphToCode names an Append `append1`, a Vec3 `vec31`), so a
+    // full-arity append survives an Apply instead of degrading into a Vec3.
+    it('keeps a full-arity `append1 = vec3(a, b, c)` an append node', () => {
+      const r = codeToGraph(wrap(`  const f1 = float(0.1);
+  const f2 = float(0.2);
+  const f3 = float(0.3);
+  const append1 = vec3(f1, f2, f3);`, 'float'));
+
+      const node = byLabel(r, 'append1');
+      expect(node.data.registryType).toBe('append');
+      expect(handlesInto(r, node.id)).toEqual(['a', 'b', 'c']);
+    });
+
+    // isConcat: fewer arguments than components means one of them is
+    // multi-channel, which a Vec3's per-component float ports structurally
+    // cannot hold. Parsed as a Vec3 this wired x=uvVar, y=f and left z unwired,
+    // so the next graph→code pass re-emitted `vec3(uvVar, f, 0)` — four
+    // components in a three-slot constructor, i.e. a shader that no longer
+    // compiles.
+    it('treats a short-arity `vec3(uvVar, f)` as an append, whatever it is called', () => {
+      const r = codeToGraph(wrap(`  const uvVar = uv();
+  const f = float(0.5);
+  const combined = vec3(uvVar, f);`, 'float, uv'));
+
+      const node = byLabel(r, 'combined');
+      expect(node.data.registryType).toBe('append');
+      expect(handlesInto(r, node.id)).toEqual(['a', 'b']);
+    });
+
+    // The deliberate limit. A hand-written full-arity constructor under any
+    // other name stays a VecN — nothing in the source can distinguish the two,
+    // and keeping this form component-wise is what leaves the 26 such calls in
+    // the built-in textures/presets byte-identical.
+    it('leaves a full-arity `vec3(a, b, c)` under another name a vec3 node', () => {
+      const r = codeToGraph(wrap(`  const f1 = float(0.1);
+  const f2 = float(0.2);
+  const f3 = float(0.3);
+  const stripePos = vec3(f1, f2, f3);`, 'float'));
+
+      const node = byLabel(r, 'stripePos');
+      expect(node.data.registryType).toBe('vec3');
+      expect(handlesInto(r, node.id)).toEqual(['x', 'y', 'z']);
+    });
+
+    it('leaves an all-literal `vec3(0.1, 0.2, 0.3)` a vec3 node with stored values', () => {
+      const r = codeToGraph(wrap('  const tint = vec3(0.1, 0.2, 0.3);'));
+
+      const node = byLabel(r, 'tint');
+      expect(node.data.registryType).toBe('vec3');
+      expect(getNodeValues(node)).toMatchObject({ x: 0.1, y: 0.2, z: 0.3 });
+    });
+  });
+
+  // An UNWIRED Append emits exactly `vec2(0, 0)` — full arity, no reference of
+  // any kind for isConcat to find. The branch used to require a variable or
+  // member reference, so the node came back from every Apply as a Vec2: adding
+  // an Append and touching the code panel destroyed it before it could be wired.
+  it('recognises the unwired `append1 = vec2(0, 0)` form (no references at all)', () => {
+    const r = codeToGraph(wrap('  const append1 = vec2(0, 0);', 'vec2'));
+
+    const node = byLabel(r, 'append1');
+    expect(node.data.registryType).toBe('append');
+    expect(getNodeValues(node)).toMatchObject({ a: 0, b: 0 });
+  });
+});
