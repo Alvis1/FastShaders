@@ -62,6 +62,27 @@ expect {
 }
 EOF
 
+# Verification is a HARD GATE, not a print. It used to just echo the served
+# version meta, which is how three releases (0.3.20-0.3.22) uploaded cleanly
+# into a directory nobody serves without anyone noticing: the server was
+# restructured on 2026-08-21/22 and the web root moved into `src/public/`,
+# while remotePath still pointed at `src/`. Every file transferred, psftp
+# exited 0, the site stayed on 0.3.19 — for a week. So: compare what the site
+# actually serves against the version we just built, and FAIL on a mismatch.
+# The cache-buster matters because Apache serves index.html with an ETag and
+# no explicit no-cache, so a plain GET can answer from an intermediary.
 echo "==> verifying"
+EXPECTED="$(node -p "require('$ROOT/package.json').version")"
 curl -sS -o /dev/null -w 'https://alvismisjuns.lv/fastshaders/ -> HTTP %{http_code}\n' https://alvismisjuns.lv/fastshaders/
-curl -sS https://alvismisjuns.lv/fastshaders/ | grep -o '<meta name="version"[^>]*>' || true
+SERVED="$(curl -sS -H 'Cache-Control: no-cache' "https://alvismisjuns.lv/fastshaders/index.html?cb=$(date +%s)" \
+  | sed -n 's/.*<meta name="version" content="\([^"]*\)".*/\1/p')"
+if [ "$SERVED" = "$EXPECTED" ]; then
+  echo "version $SERVED live ✓"
+else
+  echo "DEPLOY VERIFICATION FAILED: built $EXPECTED, site serves '${SERVED:-<none>}'" >&2
+  echo "The upload reported success, so the bytes most likely landed OUTSIDE the" >&2
+  echo "served docroot — check remotePath in .vscode/sftp.json against the real" >&2
+  echo "web root (it is the directory whose index.html mtime matches the site's" >&2
+  echo "Last-Modified header). As of 2026-08-24: /var/www/alvis/src/public" >&2
+  exit 1
+fi
