@@ -14,6 +14,7 @@ import {
 } from '@/engine/tslToPreviewHTML';
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
+import { sanitizeMeshInventory } from '@/utils/meshInventory';
 import { bootGeometryWasCustom, loadPreviewMeshFromCache } from '@/utils/previewMeshCache';
 import { connectedUniformNamesKey, ALL_UNIFORMS } from '@/utils/connectedUniforms';
 import { evaluateEdgeSource, getTargetEdges } from '@/engine/cpuEvaluator';
@@ -676,6 +677,10 @@ export function ShaderPreview() {
   // useMemo that rebuilds the iframe — that would create an infinite loop.
   // The memo reads `current` at rebuild time and embeds it as the restore
   // target for the next iframe instance.
+  // The model key the CURRENT document was built for, readable from the
+  // message handler (which mounts once, with [] deps, so it cannot close over
+  // it). Kept in sync with geometryRebuildKey below.
+  const modelKeyRef = useRef<string>('');
   const cameraPosRef = useRef<CameraPosition | null>(loadCameraPos());
   const rotationRef = useRef<CameraPosition | null>(loadRotation());
 
@@ -1031,9 +1036,20 @@ export function ShaderPreview() {
         on?: boolean; files?: unknown;
         has?: boolean; duration?: number; canInPlace?: boolean;
         name?: unknown; clip?: number; clips?: unknown; time?: number;
-        backend?: unknown;
+        backend?: unknown; geometry?: unknown; meshes?: unknown;
       } | null;
       if (!data || typeof data.type !== 'string') return;
+      if (data.type === 'fs:model-meshes') {
+        // What named sub-meshes the loaded model actually put in the scene.
+        // Forgeable like every stage message — the document runs the loaded
+        // shader — so it is validated before it is believed, and the KEY is
+        // what makes a late report from a torn-down document (every shader
+        // edit mints a fresh one) identifiable as stale rather than plausible.
+        const inv = sanitizeMeshInventory(data.geometry, data.meshes);
+        if (!inv || inv.key !== modelKeyRef.current) return;
+        useAppStore.getState().setPreviewMeshInventory({ key: inv.key, meshes: inv.meshes });
+        return;
+      }
       if (data.type === 'fs:backend') {
         // Boot-time renderer report for the WGSL/GLSL toggle. Untrusted like
         // every stage message — only the two known literals are accepted.
@@ -1417,6 +1433,18 @@ export function ShaderPreview() {
   const geometryRebuildKey = isModelGeometry(geometry)
     ? (geometry === 'custom' ? `custom:${previewMesh?.id ?? 0}` : geometry)
     : '__primitive__';
+  // Track it for the message handler, and drop a now-stale inventory the
+  // moment the model changes rather than waiting for the new document to
+  // report: a picker showing the previous model's meshes is worse than one
+  // showing none, because only the second is obviously "not ready yet".
+  useEffect(() => {
+    modelKeyRef.current = geometryRebuildKey;
+    const store = useAppStore.getState();
+    if (store.previewMeshInventory && store.previewMeshInventory.key !== geometryRebuildKey) {
+      store.setPreviewMeshInventory(null);
+    }
+  }, [geometryRebuildKey]);
+
   const previewHtml = useMemo(() => {
     const options: PreviewOptions = {
       geometry,

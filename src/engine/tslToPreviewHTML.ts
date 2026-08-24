@@ -1939,6 +1939,111 @@ export function tslToPreviewHTML(
     lines.push('  })();');
     lines.push(`<${''}/script>`);
     lines.push('');
+
+    // Sub-mesh protocol: what named meshes this model actually put in the
+    // scene (up), and which one to light up while the user picks (down).
+    //
+    // It lives HERE, in the model-only block, rather than in the bridge
+    // template, for two reasons: a primitive has exactly one unnamed mesh and
+    // nothing to report, and both halves need the same traversal, so keeping
+    // them together is what stops the report and the highlight from ever
+    // disagreeing about which nodes are "the meshes".
+    //
+    // The parent treats everything posted from here as forgeable — this
+    // document runs the loaded shader — so nothing below is a security
+    // boundary; the caps are here only so a pathological model cannot post a
+    // structured-clone payload big enough to hurt the parent.
+    lines.push('<script>');
+    lines.push(`  var __fsMeshKey = ${JSON.stringify(customKey ?? geometry)};`);
+    lines.push('  (function () {');
+    lines.push('    var HL_CAP = 512;');
+    lines.push('    var lit = [];');
+    lines.push('    var hlMat = null;');
+    lines.push('    function ent() { return document.getElementById("preview-entity"); }');
+    lines.push('    function shaderComp() {');
+    lines.push('      var e = ent();');
+    lines.push('      return (e && e.components && e.components.shader) || null;');
+    lines.push('    }');
+    lines.push('    function meshList() {');
+    lines.push('      var out = [];');
+    lines.push('      var e = ent();');
+    lines.push('      var root = e && e.getObject3D ? e.getObject3D("mesh") : null;');
+    lines.push('      if (!root || typeof root.traverse !== "function") return out;');
+    lines.push('      root.traverse(function (n) { if (n && n.isMesh && out.length < HL_CAP) out.push(n); });');
+    lines.push('      return out;');
+    lines.push('    }');
+    lines.push('    function report() {');
+    lines.push('      var list = meshList();');
+    lines.push('      var comp = shaderComp();');
+    lines.push('      var payload = [];');
+    lines.push('      for (var i = 0; i < list.length; i++) {');
+    lines.push('        var n = list[i];');
+    lines.push('        // The AUTHORED material name. By now the shaderloader has usually');
+    lines.push('        // already stamped its own material over every mesh, so ask it for the');
+    lines.push('        // original it kept by uuid first and only then look at the mesh.');
+    lines.push('        var orig = comp && comp.originalMaterials ? comp.originalMaterials[n.uuid] : null;');
+    lines.push('        var mat = orig || n.material;');
+    lines.push('        var pos = n.geometry && n.geometry.attributes ? n.geometry.attributes.position : null;');
+    lines.push('        payload.push({');
+    lines.push('          index: i,');
+    lines.push('          name: typeof n.name === "string" ? n.name.slice(0, 128) : "",');
+    lines.push('          materialName: mat && typeof mat.name === "string" ? mat.name.slice(0, 64) : "",');
+    lines.push('          vertexCount: pos && typeof pos.count === "number" ? pos.count : 0');
+    lines.push('        });');
+    lines.push('      }');
+    lines.push('      try {');
+    lines.push('        window.parent.postMessage({ type: "fs:model-meshes", geometry: __fsMeshKey, meshes: payload }, "*");');
+    lines.push('      } catch (e) {}');
+    lines.push('    }');
+    lines.push('    function clearHighlight() {');
+    lines.push('      // Restore by RE-DERIVING the material from the live shader component —');
+    lines.push('      // never by writing back a reference stashed before the swap. The');
+    lines.push('      // loader disposes the outgoing material BEFORE assigning the new one,');
+    lines.push('      // so a stash taken across a shader re-apply would restore a disposed');
+    lines.push('      // material, and a restore landing after the apply would overwrite the');
+    lines.push('      // material that apply just installed.');
+    lines.push('      var comp = shaderComp();');
+    lines.push('      for (var i = 0; i < lit.length; i++) {');
+    lines.push('        var n = lit[i];');
+    lines.push('        var next = (comp && comp._shaderMaterial) ||');
+    lines.push('          (comp && comp.originalMaterials ? comp.originalMaterials[n.uuid] : null);');
+    lines.push('        if (next) n.material = next;');
+    lines.push('      }');
+    lines.push('      lit = [];');
+    lines.push('    }');
+    lines.push('    function highlight(name) {');
+    lines.push('      clearHighlight();');
+    lines.push('      if (typeof name !== "string" || !name) return;');
+    lines.push('      // One shared flat material for every match, minted once: a highlight is');
+    lines.push('      // transient and must not add a pipeline per hovered row.');
+    lines.push('      if (!hlMat && window.THREE) hlMat = new window.THREE.MeshBasicMaterial({ color: 0xffc400 });');
+    lines.push('      if (!hlMat) return;');
+    lines.push('      var list = meshList();');
+    lines.push('      for (var i = 0; i < list.length; i++) {');
+    lines.push('        if (list[i].name === name) { list[i].material = hlMat; lit.push(list[i]); }');
+    lines.push('      }');
+    lines.push('    }');
+    lines.push('    window.addEventListener("message", function (e) {');
+    lines.push('      if (e.source !== window.parent) return;');
+    lines.push('      var msg = e.data;');
+    lines.push('      if (!msg || msg.type !== "fs:highlight-mesh") return;');
+    lines.push('      highlight(msg.name);');
+    lines.push('    });');
+    lines.push('    window.__fsWhenSceneBooted(function () {');
+    lines.push('      var e = ent();');
+    lines.push('      if (!e) return;');
+    lines.push('      // Deferred one tick so the report is taken AFTER fit-bounds has baked');
+    lines.push('      // the geometry and the loader has stored the authored materials —');
+    lines.push('      // both listen for model-loaded and both were registered before this.');
+    lines.push('      e.addEventListener("model-loaded", function () { setTimeout(report, 0); });');
+    lines.push('      // A model that finished loading before this listener existed still');
+    lines.push('      // gets reported: without this a fast local blob: URL can beat the');
+    lines.push('      // registration and the picker would stay empty until the next edit.');
+    lines.push('      if (e.getObject3D && e.getObject3D("mesh")) setTimeout(report, 0);');
+    lines.push('    });');
+    lines.push('  })();');
+    lines.push(`<${''}/script>`);
+    lines.push('');
   }
 
   // Immersive entry. The VR button's promise is "press it and you're in VR",

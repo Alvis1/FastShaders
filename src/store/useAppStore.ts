@@ -46,6 +46,7 @@ import {
 } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
 import type { PreviewMesh } from '@/utils/previewMesh';
+import type { MeshInventory } from '@/utils/meshInventory';
 import { savePreviewMeshToCache } from '@/utils/previewMeshCache';
 import { encodeImageFile } from '@/utils/imageImport';
 import { transposeCsv, type ParsedCsv } from '@/utils/csvParser';
@@ -804,6 +805,14 @@ interface AppState {
   // from history snapshots, graph autosave, and the project embed (the bytes
   // can be tens of MB; the zip export carries the model as a file instead).
   previewMesh: PreviewMesh | null;
+  // The named sub-meshes the SANDBOX reports for the loaded model
+  // (utils/meshInventory.ts). SESSION-ONLY and deliberately NEVER persisted —
+  // stronger than the previewMesh rule it sits beside, which is only about
+  // size: this list is what a future mesh picker validates bindings against,
+  // so a persisted copy would let a tampered fs:graph inject an inventory that
+  // vouches for meshes no loaded model contains. It is re-reported by every
+  // fresh preview document, so there is nothing to save.
+  previewMeshInventory: MeshInventory | null;
   // Whether Export bundles the loaded preview mesh into the zip (the EXPORT
   // button's right-click setting). SESSION-ONLY like the mesh it governs — a
   // persisted "off" would silently strip models from exports weeks later.
@@ -1003,6 +1012,14 @@ interface AppState {
    * write the bytes it just read straight back.
    */
   setPreviewMesh: (mesh: PreviewMesh | null, opts?: { persist?: boolean }) => void;
+  /**
+   * Record what the sandbox reported for the model it just loaded, or clear it.
+   *
+   * Only ever called with a payload that has been through
+   * `sanitizeMeshInventory` — the preview runs adversarial shader code and can
+   * forge the message this comes from.
+   */
+  setPreviewMeshInventory: (inventory: MeshInventory | null) => void;
   setExportIncludeMesh: (include: boolean) => void;
   setPreviewForceWebGL2: (force: boolean) => void;
   setSelectedHeadsetId: (id: string) => void;
@@ -1102,6 +1119,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   language: (loadString('fs:lang', 'en') === 'lv' ? 'lv' : 'en'),
   savedGroups: loadSavedGroups(),
   previewMesh: null,
+  previewMeshInventory: null,
   exportIncludeMesh: true,
   previewForceWebGL2: false,
 
@@ -1768,12 +1786,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setPreviewMesh: (mesh, opts) => {
-    set({ previewMesh: mesh });
+    // Clear the inventory with the mesh, ALWAYS — including on the restore
+    // path that passes { persist: false }. The list describes one model; the
+    // fresh preview document re-reports for the new one, and until it does,
+    // "nothing known yet" is the only honest answer. Keeping the previous
+    // model's names would leave a picker offering meshes that are no longer
+    // on screen, which is indistinguishable from the new model having them.
+    set({ previewMesh: mesh, previewMeshInventory: null });
     // Fire-and-forget: the cache is a convenience, so a quota/private-mode
     // failure must never make the drop itself fail. savePreviewMeshToCache
     // resolves on every error path rather than rejecting.
     if (opts?.persist !== false) void savePreviewMeshToCache(mesh);
   },
+
+  setPreviewMeshInventory: (inventory) => set({ previewMeshInventory: inventory }),
 
   setExportIncludeMesh: (include) => set({ exportIncludeMesh: include }),
 
