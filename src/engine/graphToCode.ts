@@ -1417,8 +1417,19 @@ export function graphToCode(
     }
   }
 
-  // Handle output node — resolve all connected channels
-  const outputNode = sorted.find((n) => n.data.registryType === 'output');
+  // Handle output node — resolve all connected channels.
+  //
+  // Picked from the NODES array, not from `sorted`. With the single Output the
+  // editor normally enforces the two are the same node, so this is byte-stable
+  // — but they diverge the moment a second one exists, and one is reachable
+  // today by pasting or duplicating an Output. `topologicalSort` seeds Kahn's
+  // queue with every in-degree-0 node, so an UNWIRED Output always sorts BEFORE
+  // a wired one: `sorted.find` would pick the empty one and emit the red
+  // `vec3(1, 0, 0)` fallback, turning a working shader red the instant a copy
+  // appeared. Array order is creation order, is stable under wiring (nothing
+  // re-sorts it), and `addNode` appends — so a newly added Output lands last
+  // and is inert instead of hijacking the shader.
+  const outputNode = nodes.find((n) => n.data.registryType === 'output');
   // `metalness` is appended (not slotted in visual order) so the emitted
   // return-object key order for existing graphs stays byte-identical; `env`
   // is deliberately NOT here — it needs the source's TEXTURE, not a sampled
