@@ -2301,7 +2301,7 @@
   function buildXrDoc() {
     var dir = new URL(".", window.location.href).href;
     var iife = dir + "js/a-frame-180-a-01.min.js";
-    var loader = dir + "js/a-frame-shaderloader-0.5.js";
+    var loader = dir + "js/a-frame-shaderloader-0.6.js";
     var orbit = dir + "js/aframe-orbit-controls.min.js";
     var bg = isHex6(state.bgColor) ? state.bgColor : DEFAULT_BG;
     // Same pure-Y turntable as the stage; the per-geometry tilt stays on
@@ -2718,7 +2718,7 @@
   function buildStageDoc() {
     var dir = new URL(".", window.location.href).href; // e.g. https://host/FastShaders/
     var iife = dir + "js/a-frame-180-a-01.min.js";
-    var loader = dir + "js/a-frame-shaderloader-0.5.js";
+    var loader = dir + "js/a-frame-shaderloader-0.6.js";
     var orbit = dir + "js/aframe-orbit-controls.min.js";
     // Bake the persisted background + spin prefs straight into the initial scene
     // so boot matches the saved state without a post-ready restart. bg is

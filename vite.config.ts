@@ -407,6 +407,7 @@ const VENDOR_TARGETS: { file: string; dests: string[] }[] = [
   { file: 'a-frame-180-a-01.min.js', dests: ['public/js', 'ShaderCarousel/components/three'] },
   { file: 'a-frame-shaderloader-0.4.js', dests: ['public/js'] },
   { file: 'a-frame-shaderloader-0.5.js', dests: ['public/js'] },
+  { file: 'a-frame-shaderloader-0.6.js', dests: ['public/js'] },
   { file: 'aframe-orbit-controls.min.js', dests: ['public/js'] },
 ];
 const vendorSyncPlugin = (): Plugin => ({

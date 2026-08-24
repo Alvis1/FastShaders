@@ -258,7 +258,7 @@ keeping the layout:
 ```
 podest.html                          202 KB
 js/a-frame-180-a-01.min.js           1.6 MB
-js/a-frame-shaderloader-0.5.js        31 KB
+js/a-frame-shaderloader-0.6.js        36 KB
 js/aframe-orbit-controls.min.js       25 KB
 models/teapot.obj                    212 KB   ┐ only for the Teapot /
 models/stanford-bunny.obj            2.4 MB   ┘ Bunny geometry options

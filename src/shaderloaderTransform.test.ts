@@ -21,14 +21,23 @@ import { parse } from '@babel/parser';
  * output parses as a valid ES module.
  */
 
-const LOADER = path.resolve(
-  __dirname,
-  '../public/js/a-frame-shaderloader-0.5.js',
-);
+/**
+ * Every ACTIVE loader version, checked identically.
+ *
+ * 0.6 is a copy of 0.5 plus per-sub-mesh material dispatch, so its transforms
+ * are the same code — which is exactly why it needs the same guard rather than
+ * an assumption: the two files drift the moment anyone edits one. 0.4 is
+ * deliberately absent; it is frozen for shaders exported before 0.5 and is not
+ * a maintained target.
+ */
+const LOADER_VERSIONS = ['0.5', '0.6'] as const;
+
+const loaderPath = (version: string) =>
+  path.resolve(__dirname, `../public/js/a-frame-shaderloader-${version}.js`);
 
 // Eval the vendored A-Frame component file in a sandbox that stubs the browser
 // globals it touches, then expose the internal transform helpers.
-function loadTransforms(): {
+function loadTransforms(version: string): {
   globalizeBareImports: (s: string) => string;
   autoInjectTSLImports: (s: string) => string;
 } {
@@ -42,7 +51,7 @@ function loadTransforms(): {
   sandbox.globalThis = sandbox;
   sandbox.window = sandbox.window;
   vm.createContext(sandbox);
-  const src = readFileSync(LOADER, 'utf8');
+  const src = readFileSync(loaderPath(version), 'utf8');
   vm.runInContext(
     src +
       '\n;globalThis.__t = { globalizeBareImports, autoInjectTSLImports };',
@@ -87,56 +96,58 @@ export default function (params) {
 END_FASTSHADERS_PROJECT */
 `;
 
-describe('shaderloader globalizeBareImports', () => {
-  it('rewrites a real property-bearing export header into a parseable module', () => {
-    const { globalizeBareImports } = loadTransforms();
-    const out = globalizeBareImports(EXPORT_WITH_PROPERTY);
-    // The real import is globalized...
-    expect(out).toContain('= globalThis.THREE.TSL;');
-    // ...no bare `import … from` statement survives...
-    expect(/^[ \t]*import\b/m.test(out)).toBe(false);
-    // ...and the whole thing still parses (the original bug threw here).
-    expect(parsesAsModule(out)).toBe(true);
+for (const version of LOADER_VERSIONS) {
+  describe(`shaderloader ${version} globalizeBareImports`, () => {
+    it('rewrites a real property-bearing export header into a parseable module', () => {
+      const { globalizeBareImports } = loadTransforms(version);
+      const out = globalizeBareImports(EXPORT_WITH_PROPERTY);
+      // The real import is globalized...
+      expect(out).toContain('= globalThis.THREE.TSL;');
+      // ...no bare `import … from` statement survives...
+      expect(/^[ \t]*import\b/m.test(out)).toBe(false);
+      // ...and the whole thing still parses (the original bug threw here).
+      expect(parsesAsModule(out)).toBe(true);
+    });
+
+    it('does not let the word "import" in a comment hijack the real import', () => {
+      const { globalizeBareImports } = loadTransforms(version);
+      const src = `// example: import { foo } from 'three/tsl' — see the docs
+  // you can also import from your own bundler
+  import { color } from 'three/tsl';
+  export default function () { return { colorNode: color(1) }; }`;
+      const out = globalizeBareImports(src);
+      expect(out).toContain('const { color } = globalThis.THREE.TSL;');
+      expect(parsesAsModule(out)).toBe(true);
+    });
+
+    it('handles multi-line, aliased, default and namespace imports', () => {
+      const { globalizeBareImports } = loadTransforms(version);
+      const cases = [
+        `import {\n  add,\n  color as col\n} from 'three/tsl';\nexport default () => col(add(1));`,
+        `import Three from 'three';\nimport { vec3 } from 'three/tsl';\nexport default () => vec3(1);`,
+        `import * as TSL from 'three/tsl';\nexport default () => TSL.vec3(1);`,
+      ];
+      for (const c of cases) {
+        expect(parsesAsModule(globalizeBareImports(c))).toBe(true);
+      }
+    });
   });
 
-  it('does not let the word "import" in a comment hijack the real import', () => {
-    const { globalizeBareImports } = loadTransforms();
-    const src = `// example: import { foo } from 'three/tsl' — see the docs
-// you can also import from your own bundler
-import { color } from 'three/tsl';
-export default function () { return { colorNode: color(1) }; }`;
-    const out = globalizeBareImports(src);
-    expect(out).toContain('const { color } = globalThis.THREE.TSL;');
-    expect(parsesAsModule(out)).toBe(true);
+  describe(`shaderloader ${version} autoInjectTSLImports`, () => {
+    it('does not leak keys from the trailing FASTSHADERS_PROJECT_V1 JSON block', () => {
+      const { autoInjectTSLImports } = loadTransforms(version);
+      const out = autoInjectTSLImports(EXPORT_WITH_PROPERTY);
+      const importLine = out
+        .split('\n')
+        .find((l) => /^import \{/.test(l)) as string;
+      for (const key of [
+        'FASTSHADERS_PROJECT_V1',
+        'shaderName',
+        'nodeEditorBgColor',
+        'version',
+      ]) {
+        expect(importLine).not.toContain(key);
+      }
+    });
   });
-
-  it('handles multi-line, aliased, default and namespace imports', () => {
-    const { globalizeBareImports } = loadTransforms();
-    const cases = [
-      `import {\n  add,\n  color as col\n} from 'three/tsl';\nexport default () => col(add(1));`,
-      `import Three from 'three';\nimport { vec3 } from 'three/tsl';\nexport default () => vec3(1);`,
-      `import * as TSL from 'three/tsl';\nexport default () => TSL.vec3(1);`,
-    ];
-    for (const c of cases) {
-      expect(parsesAsModule(globalizeBareImports(c))).toBe(true);
-    }
-  });
-});
-
-describe('shaderloader autoInjectTSLImports', () => {
-  it('does not leak keys from the trailing FASTSHADERS_PROJECT_V1 JSON block', () => {
-    const { autoInjectTSLImports } = loadTransforms();
-    const out = autoInjectTSLImports(EXPORT_WITH_PROPERTY);
-    const importLine = out
-      .split('\n')
-      .find((l) => /^import \{/.test(l)) as string;
-    for (const key of [
-      'FASTSHADERS_PROJECT_V1',
-      'shaderName',
-      'nodeEditorBgColor',
-      'version',
-    ]) {
-      expect(importLine).not.toContain(key);
-    }
-  });
-});
+}

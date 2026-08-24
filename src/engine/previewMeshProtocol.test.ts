@@ -81,7 +81,10 @@ describe('fs:highlight-mesh (parent → sandbox)', () => {
   it('restores by RE-DERIVING from the live component, never from a stash', () => {
     const html = tslToPreviewHTML(TSL, { geometry: 'custom', customModel });
     const block = html.slice(html.indexOf('__fsMeshKey'));
-    // The restore reads the material that is current NOW…
+    // The restore reads the material that is current NOW, per MESH first —
+    // a mesh wearing a per-part material (loader 0.6) must come back to that
+    // one, not to the default every other mesh wears.
+    expect(block).toContain('comp._appliedMaterials ? comp._appliedMaterials[n.uuid] : null');
     expect(block).toContain('comp._shaderMaterial');
     expect(block).toContain('comp.originalMaterials ? comp.originalMaterials[n.uuid] : null');
     // …and must never have captured one on the way in. Asserted against the
@@ -95,6 +98,11 @@ describe('fs:highlight-mesh (parent → sandbox)', () => {
     expect(code).toContain('lit.push(list[i]);');
     expect(code).not.toMatch(/lit\.push\(\{/);
     expect(code).not.toMatch(/(prev|saved|stashed)Material/i);
+  });
+
+  it('flags the highlight material so the loader cannot adopt it as an original', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'custom', customModel });
+    expect(html).toContain('hlMat.userData.__fsHighlight = true;');
   });
 
   it('mints ONE shared highlight material, not one per hovered row', () => {
