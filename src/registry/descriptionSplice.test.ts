@@ -29,11 +29,14 @@ describe('locateRegistryDescriptions', () => {
   const defs = getAllDefinitions();
 
   it('finds one slot per definition, keyed by node type', () => {
-    // 74 = getAllDefinitions().length. NODE_REGISTRY.size is 77 because the three
-    // hidden defs (unknown/dataNode/imageNode) are separate consts outside the
+    // 76 = getAllDefinitions().length (the comment said 74 while the assertion
+    // said 75 — it had drifted; corrected here rather than left to rot).
+    // NODE_REGISTRY.size is 3 higher because the hidden defs
+    // (unknown/dataNode/imageNode) are separate consts outside the
     // `definitions` array, so they are correctly not located here.
-    expect(slots).toHaveLength(75);
-    expect(defs).toHaveLength(75);
+    // 76 with the Vertex Color node.
+    expect(slots).toHaveLength(76);
+    expect(defs).toHaveLength(76);
     expect(new Set(slots.map(s => s.key))).toEqual(new Set(defs.map(d => d.type)));
   });
 
@@ -177,7 +180,7 @@ describe('splitAliases / joinAliases', () => {
   const defs = getAllDefinitions();
   const tailed = defs.filter(d => d.description?.includes('Also:'));
 
-  it('35 definitions carry an "Also:" tail', () => {
+  it('36 definitions carry an "Also:" tail', () => {
     // Measured against the live registry; separator is uniformly " Also: ".
     // 33 since positionWorldDirection was renamed 'View Dir (world)' →
     // 'Outward Dir (world)' and grew an alias tail so the old query still
@@ -185,8 +188,11 @@ describe('splitAliases / joinAliases', () => {
     // lost 'Signal'/'displacement' and the words moved into an alias tail so
     // the node stays findable by its own socket's name; 35 with the Audio
     // Input node, whose tail carries the words people actually search for
-    // ('system audio', 'desktop', 'loopback') rather than its own label.
-    expect(tailed).toHaveLength(35);
+    // ('system audio', 'desktop', 'loopback') rather than its own label; 36
+    // with Vertex Color, whose tail carries 'COLOR_0' plus the two things
+    // people actually come looking for ('mesh id', 'face id') — none of which
+    // belong in prose, since that is the ranked search corpus.
+    expect(tailed).toHaveLength(36);
   });
 
   it('round-trips every tailed description byte-exactly', () => {
@@ -259,7 +265,7 @@ describe('escaped-apostrophe safety', () => {
     // ...and must decode back to exactly the value we asked for.
     const relocated = locateRegistryDescriptions(out);
     expect(relocated.find(s => s.key === 'tangentLocal')!.value).toBe(nasty);
-    expect(relocated).toHaveLength(75);
+    expect(relocated).toHaveLength(76);
 
     // Still a single-line edit.
     const changed = registrySource

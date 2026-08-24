@@ -121,7 +121,13 @@ describe('every declared default is a finite number codegen can emit', () => {
       const ids = new Set(def.inputs.map((i) => i.id));
       for (const key of Object.keys(def.defaultValues ?? {})) {
         if (NODE_REGISTRY.get(def.type)?.tslFunction === '') continue; // hand-emitted
-        if (['name', 'hex', 'value', 'min', 'max', 'signed'].includes(key)) continue;
+        // Constructor-argument keys, not ports: the generic
+        // `inputs.length === 0 && defaultValues` branch emits
+        // `<tslFunction>(<first key>)`. `index` is vertexColor's colour-set
+        // argument and is the very thing that keeps it OFF the bare-reference
+        // branch (which would emit an uncalled function reference and render
+        // black) — see the comment on its registry def.
+        if (['name', 'hex', 'value', 'min', 'max', 'signed', 'index'].includes(key)) continue;
         expect(ids.has(key), `${def.type}.${key} is not an input port`).toBe(true);
       }
     }

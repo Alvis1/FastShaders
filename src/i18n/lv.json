@@ -11,6 +11,7 @@
     "cameraFar": "Aktīvās kameras tālās plaknes attālums.",
     "normalLocal": "Virsmas normāle lokālajā (objekta) telpā.",
     "tangentLocal": "Ģeometrijas pieskares atribūts lokālajā telpā.",
+    "vertexColor": "Krāsa, kas uzzīmēta uz modeļa virsotnēm un saglabāta failā. Iebūvētajām formām tādu nav — tās rāda baltu; nomests .glb saglabā datus, .obj tos zaudē.",
     "time": "Pagājušais laiks sekundēs vērtību animēšanai; ar labo peles pogu var iestatīt ātrumu.",
     "screenUV": "Skatloga koordinātas (0–1 pa ekrānu), neatkarīgas no ģeometrijas.",
     "uv": "Tekstūras koordinātas ar flīzēšanu un pagriešanu.",

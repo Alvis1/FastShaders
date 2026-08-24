@@ -168,6 +168,45 @@ const definitions: NodeDefinition[] = [
       'The geometry\'s tangent attribute in local space — zero on meshes without tangent data (including the built-in preview shapes).',
   },
   {
+    // Reads the mesh's own COLOR_0 vertex-colour attribute — the one thing in
+    // this registry that can carry AUTHORED per-mesh / per-face data.
+    //
+    // Why it is shaped like this, and not like positionGeometry beside it:
+    // `vertexColor` is a FUNCTION in three/tsl (`(index = 0) => new
+    // VertexColorNode(index)`), not a node OBJECT. The bare-reference branch in
+    // graphToCode is gated on `!def.defaultValues`, so a def without one would
+    // emit `const vertexColor1 = vertexColor;` — a bare function reference that
+    // does NOT throw, compiles to vec4(0,0,0,0) (black) in the preview AND the
+    // export, and turns any downstream method chain into a module-killing
+    // `vertexColor1.mul is not a function`. Declaring `index` moves it onto the
+    // generic `inputs.length === 0 && defaultValues` branch, which emits
+    // `vertexColor(0)` and round-trips byte-identically through codeToGraph.
+    // `index` must therefore STAY, and stay FIRST (the positional key-order
+    // contract). Do NOT promote it to a real input port: a wired
+    // `vertexColor(<node>)` silently evaluates `node > 0` as false and reads
+    // `color`, ignoring the wire.
+    //
+    // Output is vec4 unconditionally — VertexColorNode is `super(null, 'vec4')`
+    // whatever the file's itemSize — so the Output node's alpha-widen rule
+    // fires and a wire to Color emits `vec3(vertexColor1)`. Declaring vec3 here
+    // would skip that widen and hand the attribute's `w` straight to alpha.
+    //
+    // Absent attribute renders WHITE, not black and not an error: the node
+    // overrides generate() and emits a `vec4(1,1,1,1)` const, never reaching
+    // AttributeNode's "not found on geometry" warning. Every built-in preview
+    // shape lands there — see the description.
+    type: 'vertexColor',
+    label: 'Vertex Color',
+    category: 'input',
+    tslFunction: 'vertexColor',
+    tslImportModule: 'three/tsl',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Color', dataType: 'vec4' }],
+    defaultValues: { index: 0 },
+    description:
+      'Colour painted onto the model\'s own vertices and stored in the file. The built-in shapes carry none and show plain white; a dropped .glb keeps its data, a dropped .obj loses it. Index picks the colour set. Also: vertex colour, COLOR_0, vertex attribute, mesh id, face id, painted, baked',
+  },
+  {
     type: 'time',
     label: 'Time',
     category: 'input',
