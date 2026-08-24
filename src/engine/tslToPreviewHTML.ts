@@ -240,7 +240,7 @@ export const LIGHT_PRESETS: Record<LightingMode, LightSpec[]> = {
 function getScriptUrls() {
   return {
     iife: resolveAssetUrl('js/a-frame-180-a-01.min.js'),
-    shaderloader: resolveAssetUrl('js/a-frame-shaderloader-0.5.js'),
+    shaderloader: resolveAssetUrl('js/a-frame-shaderloader-0.6.js'),
     orbitControls: resolveAssetUrl('js/aframe-orbit-controls.min.js'),
   };
 }
@@ -2002,10 +2002,17 @@ export function tslToPreviewHTML(
     lines.push('      // so a stash taken across a shader re-apply would restore a disposed');
     lines.push('      // material, and a restore landing after the apply would overwrite the');
     lines.push('      // material that apply just installed.');
+    lines.push('      //');
+    lines.push('      // Per-mesh FIRST (loader 0.6 records what each mesh actually got): a');
+    lines.push('      // mesh wearing a per-part material must come back to THAT material,');
+    lines.push('      // not to the default every other mesh wears. The default is the 0.5');
+    lines.push('      // fallback, and the authored material covers a part-only module,');
+    lines.push('      // where unmatched meshes never had a shader material at all.');
     lines.push('      var comp = shaderComp();');
     lines.push('      for (var i = 0; i < lit.length; i++) {');
     lines.push('        var n = lit[i];');
-    lines.push('        var next = (comp && comp._shaderMaterial) ||');
+    lines.push('        var next = (comp && comp._appliedMaterials ? comp._appliedMaterials[n.uuid] : null) ||');
+    lines.push('          (comp && comp._shaderMaterial) ||');
     lines.push('          (comp && comp.originalMaterials ? comp.originalMaterials[n.uuid] : null);');
     lines.push('        if (next) n.material = next;');
     lines.push('      }');
@@ -2016,7 +2023,11 @@ export function tslToPreviewHTML(
     lines.push('      if (typeof name !== "string" || !name) return;');
     lines.push('      // One shared flat material for every match, minted once: a highlight is');
     lines.push('      // transient and must not add a pipeline per hovered row.');
-    lines.push('      if (!hlMat && window.THREE) hlMat = new window.THREE.MeshBasicMaterial({ color: 0xffc400 });');
+    lines.push('      if (!hlMat && window.THREE) {');
+    lines.push('        hlMat = new window.THREE.MeshBasicMaterial({ color: 0xffc400 });');
+    lines.push('        // Flagged so the loader can never record it as a mesh\'s "original".');
+    lines.push('        hlMat.userData.__fsHighlight = true;');
+    lines.push('      }');
     lines.push('      if (!hlMat) return;');
     lines.push('      var list = meshList();');
     lines.push('      for (var i = 0; i < list.length; i++) {');

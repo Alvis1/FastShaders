@@ -37,6 +37,23 @@ export interface PropertyInfo {
 // scripts the exported shader references.
 const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js';
 
+/**
+ * The loader version a NEW export tells its embedding page to load.
+ *
+ * Every new export references 0.6 — deliberately unconditional, not "0.6 only
+ * when the shader uses per-mesh parts". A partless module behaves identically
+ * on 0.5 and 0.6, so a conditional would buy nothing except the one thing this
+ * codebase must not have: the editor previewing on one loader while the file it
+ * hands the user runs another. Shaders exported BEFORE this keep referencing
+ * 0.4/0.5 by URL and are unaffected — which is exactly why those files are
+ * frozen, and why this constant is a version string rather than an edit to one.
+ *
+ * NB the CDN serves @master, so a bumped version here is only real once the
+ * submodule is pushed AND jsdelivr is purged for the new file — otherwise every
+ * export 404s for its recipient while working perfectly for the author.
+ */
+const LOADER_FILE = 'a-frame-shaderloader-0.6.js';
+
 /** Build the usage-comment header prepended to the exported module. */
 function buildHeader(props: PropertyInfo[], tslCode = ''): string[] {
   const hasProps = props.length > 0;
@@ -45,9 +62,9 @@ function buildHeader(props: PropertyInfo[], tslCode = ''): string[] {
     '//',
     '// HTML setup — these two scripts are all you need (no import map, no shim):',
     '//   a-frame-180-a-01.min.js = A-Frame 1.8.0 + Three.js r184 (WebGPU) bundle',
-    '//   a-frame-shaderloader-0.5.js rewrites the three/tsl import to that bundle',
+    `//   ${LOADER_FILE} rewrites the three/tsl import to that bundle`,
     `//   <script src="${CDN_BASE}/a-frame-180-a-01.min.js"><${''}/script>`,
-    `//   <script src="${CDN_BASE}/a-frame-shaderloader-0.5.js"><${''}/script>`,
+    `//   <script src="${CDN_BASE}/${LOADER_FILE}"><${''}/script>`,
   ];
   if (hasProps) {
     // Use the sanitized identifier — that's the actual schema key / a-entity

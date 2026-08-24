@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, readdirSync } from 'fs';
 import path from 'path';
 
 /**
@@ -26,6 +26,7 @@ const COPIES: Record<string, string[]> = {
   'a-frame-180-a-01.min.js': ['public/js', 'ShaderCarousel/components/three'],
   'a-frame-shaderloader-0.4.js': ['public/js'],
   'a-frame-shaderloader-0.5.js': ['public/js'],
+  'a-frame-shaderloader-0.6.js': ['public/js'],
   'aframe-orbit-controls.min.js': ['public/js'],
 };
 
@@ -50,6 +51,43 @@ describe('vendored A-Frame scripts stay in sync with the submodule source', () =
       );
     }
   }
+
+  /**
+   * COPIES is an ALLOW-LIST, which is the one way this guard rots silently: a
+   * script added to the submodule and never listed here is simply not checked,
+   * so it can drift from its vendored copy forever while the suite stays green.
+   * (Measured risk, not hypothetical — 0.6 was added to the submodule and to
+   * vite's sync targets in the same change as this assertion.) Scanning the
+   * source directory turns "forgot to add a row" into a failure instead.
+   */
+  // Scripts the submodule ships that this app deliberately does NOT vendor.
+  // Deliberate-only, and checked for staleness below, so an entry can never
+  // quietly excuse a future file.
+  const NOT_VENDORED: Record<string, string> = {
+    'tsl-textures.min.js':
+      'dropped when the noise family moved to three\'s built-in MaterialX ' +
+      'functions; the submodule still ships it for its own demos.',
+  };
+
+  it('lists every script the submodule ships — no unpoliced vendored file', () => {
+    if (!existsSync(SRC)) return; // fresh clone without the submodule checked out
+    const shipped = readdirSync(SRC).filter((f) => f.endsWith('.js')).sort();
+    const accounted = new Set([...Object.keys(COPIES), ...Object.keys(NOT_VENDORED)]);
+    expect(
+      shipped.filter((f) => !accounted.has(f)),
+      'vendored script missing from COPIES — add it (and to VENDOR_TARGETS in ' +
+        'vite.config.ts), or add it to NOT_VENDORED with the reason',
+    ).toEqual([]);
+  });
+
+  it('carries no stale not-vendored exemption', () => {
+    if (!existsSync(SRC)) return;
+    const shipped = new Set(readdirSync(SRC));
+    expect(
+      Object.keys(NOT_VENDORED).filter((f) => !shipped.has(f)),
+      'exemption for a file the submodule no longer ships — delete the entry',
+    ).toEqual([]);
+  });
 });
 
 /**
