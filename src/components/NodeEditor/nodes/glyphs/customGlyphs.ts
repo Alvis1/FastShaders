@@ -31,7 +31,18 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "tangentLocal": {
-    "svg": "<g transform=\"translate(28 28)\"><path d=\"M-18 7 Q0 -3 18 7\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.3\"/><line x1=\"-12\" y1=\"0\" x2=\"10\" y2=\"-5\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"/><polygon points=\"8,-9 8,-1 16,-6\" fill=\"#F57C00\"/><rect x=\"-9\" y=\"12\" width=\"18\" height=\"7\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.2\"/></g>"
+    "svg": "<g transform=\"translate(28 28)\"><line x1=\"-5.5\" y1=\"4\" x2=\"11.94\" y2=\"-10.88\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></line><polygon points=\"7.06 -12.97 13.2 -5.93 16.92 -14.37\" fill=\"#2B2B2B\"></polygon><rect x=\"-24.07\" y=\"-0.63\" width=\"31\" height=\"11.32\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.2\" transform=\"rotate(20.66 -6.5 13.34)\"></rect></g>\n<path d=\"M 29.5 27.5 Q 22.5 20.17 15.68 28.5\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.7\"></path>",
+    "scale": 1.5,
+    "dx": 1,
+    "dy": -5.5,
+    "width": 44,
+    "height": 41,
+    "sockets": {
+      "out": 16
+    }
+  },
+  "vertexColor": {
+    "svg": "<g transform=\"translate(28 28)\"><path d=\"M 0 -16 L 15 10 L -15 10 Z\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.5\" stroke-linejoin=\"round\"></path><circle cx=\"0\" cy=\"-16\" r=\"4.2\" fill=\"#F57C00\"></circle><circle cx=\"15\" cy=\"10\" r=\"4.2\" fill=\"#2E9E5B\"></circle><circle cx=\"-15\" cy=\"10\" r=\"4.2\" fill=\"#2D6CDF\"></circle></g>"
   },
   "normalWorld": {
     "svg": "<g transform=\"translate(28 28)\"><g stroke=\"#8A8F9C\" stroke-width=\".8\" fill=\"none\"><line x1=\"-22\" y1=\"-18\" x2=\"22\" y2=\"-18\" stroke-width=\".8\"></line><circle cx=\"0\" cy=\"-18\" r=\"0.5\" fill=\"#8A8F9C\" stroke=\"none\"></circle><line x1=\"-22\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"-11\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"0\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"11\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"22\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"-22\" y1=\"20\" x2=\"22\" y2=\"20\"></line><line x1=\"-16\" y1=\"10\" x2=\"17\" y2=\"10\"></line><line x1=\"-13\" y1=\"2\" x2=\"13\" y2=\"2\"></line><line x1=\"-8.08\" y1=\"-4\" x2=\"10\" y2=\"-4\"></line></g></g>\n\n<path d=\"M 24.67 49.36 L 31.38 49.36 L 39.16 39.49 L 29.15 30.99 L 23.03 31 L 14 42.56 L 24.67 49.36 Z\" fill=\"#FFFFFF\" stroke=\"none\" stroke-width=\"1.4\"></path>\n\n<path d=\"M 24.67 49.36 L 31.38 49.36 L 39.16 39.49 L 29.15 30.99 L 23.03 31 L 14.91 42.56 L 24.67 49.36 Z\" fill=\"#FFFFFF\" stroke=\"none\" stroke-width=\"1.4\"></path>\n\n<g transform=\"translate(28 28)\"><g fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.4\" stroke-linejoin=\"round\"><rect x=\"0.47\" y=\"4.02\" width=\"13.13\" height=\"12.93\" transform=\"rotate(40.33 -0.88 -3.91)\"></rect><path d=\"M -4.97 2.99 L 1.15 2.53 L 11.16 11.04 L 5.04 11.49 M 11.16 11.04 L 2.8 20.9 L -3.33 21.35\" fill=\"none\" stroke=\"#2B2B2B\"></path></g></g>\n\n\n\n\n\n<line x1=\"10\" y1=\"14\" x2=\"10\" y2=\"22.5\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\"></line><line x1=\"17\" y1=\"22.5\" x2=\"10\" y2=\"22.5\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\"></line><line x1=\"6.5\" y1=\"28.5\" x2=\"10\" y2=\"22.5\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\"></line>",
@@ -389,15 +400,15 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "normalize": {
-    "svg": "<g transform=\"translate(28 32)\"><line x1=\"-14\" y1=\"8\" x2=\"24\" y2=\"-5.5\" stroke=\"#B4B7C0\" stroke-dasharray=\"2 2\" stroke-width=\"1\"></line><line x1=\"-14\" y1=\"8\" x2=\"5\" y2=\"1.5\" stroke=\"#F57C00\" stroke-width=\"2\"></line><polygon points=\"10.03 0 3 -1.8 3 5.69\" fill=\"#F57C00\"></polygon></g>",
-    "scale": 1.5,
-    "dx": -6.5,
-    "dy": -18.5,
-    "width": 58,
-    "height": 37,
+    "svg": "<text x=\"26.12\" y=\"16.81\" font-family=\"sans-serif\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\">\n    <tspan fill=\"#F57C00\">-1</tspan>\n    <tspan fill=\"#F57C00\">+1</tspan>\n  </text>\n\n<g transform=\"translate(28 32)\"><line x1=\"-26\" y1=\"3\" x2=\"25.45\" y2=\"-15.19\" stroke=\"#B4B7C0\" stroke-dasharray=\"2 2\" stroke-width=\"1\"></line><line x1=\"-12.6\" y1=\"-1.69\" x2=\"6.4\" y2=\"-8.19\" stroke=\"#2B2B2B\" stroke-width=\"2\"></line><polygon points=\"11.43 -9.69 4.4 -11.49 4.4 -4\" fill=\"#2B2B2B\"></polygon><line x1=\"-12.6\" y1=\"2.71\" x2=\"-12.6\" y2=\"-13.19\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\"></line><line x1=\"11.43\" y1=\"2.71\" x2=\"11.43\" y2=\"-13.19\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\"></line></g>",
+    "scale": 1.3,
+    "dx": 1.5,
+    "dy": -1.5,
+    "width": 46,
+    "height": 47,
     "sockets": {
-      "v": 8,
-      "out": 8
+      "v": 12,
+      "out": 12
     }
   },
   "length": {

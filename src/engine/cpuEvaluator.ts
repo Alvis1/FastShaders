@@ -1165,6 +1165,22 @@ function computeRange(
     return result;
   }
 
+  // Vertex colours are a normalized attribute (glTF permits only normalized
+  // byte/short component types for COLOR_0), so every channel is [0, 1] —
+  // including alpha, which is 1 for the vec3 case because VertexColorNode is
+  // vec4 whatever the file's itemSize.
+  //
+  // A RANGE, deliberately not an `evaluate` case returning [1,1,1,1]: white is
+  // only what the MISSING-attribute fallback emits, and asserting it as the
+  // value would be a confident lie the moment a coloured .glb is dropped. Four
+  // channels to match portShapeForHandle's shapeOfDataType('vec4'), so
+  // handleSlice / evaluateEdgeRange project consistently.
+  if (type === 'vertexColor') {
+    result = { min: [0, 0, 0, 0], max: [1, 1, 1, 1] };
+    cache.set(nodeId, result);
+    return result;
+  }
+
   // Model-space positions follow the preview convention: fit-bounds rescales
   // geometry so the longest axis spans 1.6 (matching primitive framing), so
   // each channel sits within roughly [-0.8, 0.8].
