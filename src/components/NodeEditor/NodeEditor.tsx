@@ -697,6 +697,18 @@ export function NodeEditor() {
       const store = useAppStore.getState();
       const idMap = new Map<string, string>();
 
+      // The Output node is a SINGLETON and this is the one path that could mint
+      // a second one: every other add surface gates it, but paste and duplicate
+      // write through setNodes and never reach that gate. A second Output is
+      // not merely redundant — only one is ever emitted, so the copy is dead
+      // weight that the next code-panel Apply then deletes without a word, and
+      // in the meantime it changes what the canvas claims the shader does.
+      // Dropped from the clone set rather than refusing the whole paste: a
+      // selection is usually a working cluster that happens to include the
+      // Output, and losing the rest of it would be the bigger surprise.
+      sourceNodes = sourceNodes.filter((n) => n.data.registryType !== 'output');
+      if (sourceNodes.length === 0) return [];
+
       const clones = sourceNodes.map((node) => {
         const newId = generateId();
         idMap.set(node.id, newId);
