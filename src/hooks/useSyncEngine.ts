@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
+import { findDefaultOutput } from '@/utils/outputTargets';
 import { useAppStore } from '@/store/useAppStore';
 import { graphToCode } from '@/engine/graphToCode';
 import { codeToGraph } from '@/engine/codeToGraph';
@@ -380,7 +381,7 @@ export function useSyncEngine() {
 
     // Collapse the `setTotalCost` write and the output-node cost write into a
     // single setState so we don't re-enter this effect twice for one change.
-    const outputNode = nodes.find((n) => n.data.registryType === 'output');
+    const outputNode = findDefaultOutput(nodes);
     const needsOutputUpdate = !!(outputNode && outputNode.data.cost !== total);
     useAppStore.setState((state) => ({
       totalCost: total,

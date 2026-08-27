@@ -2,7 +2,7 @@ import { parseExpression } from '@babel/parser';
 import type { Node } from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData } from '@/types';
 import { getNodeValues } from '@/types';
-import { meshTargetName, MAX_TARGETED_OUTPUTS } from '@/utils/outputTargets';
+import { meshTargetName, findDefaultOutput, MAX_TARGETED_OUTPUTS } from '@/utils/outputTargets';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
@@ -1448,7 +1448,12 @@ export function graphToCode(
   // appeared. Array order is creation order, is stable under wiring (nothing
   // re-sorts it), and `addNode` appends — so a newly added Output lands last
   // and is inert instead of hijacking the shader.
-  const outputNode = nodes.find((n) => n.data.registryType === 'output');
+  // The default output is the first UNTARGETED one — see findDefaultOutput.
+  // Not simply the first Output: targeting the one you already had (and adding
+  // a second for the rest of the model) is an ordinary way to reach two
+  // materials, and taking a targeted node as the default would ignore its
+  // target and drop the other Output entirely.
+  const outputNode = findDefaultOutput(nodes);
   // `metalness` is appended (not slotted in visual order) so the emitted
   // return-object key order for existing graphs stays byte-identical; `env`
   // is deliberately NOT here — it needs the source's TEXTURE, not a sampled
@@ -1713,7 +1718,7 @@ export function graphToCode(
   // First claim wins, matching sanitizeOutputTargets, so a live duplicate and a
   // reloaded one emit the same module.
   const parts: { name: string; channels: Record<string, string>; discardRef: string | null }[] = [];
-  if (outputNode) {
+  {
     const claimed = new Set<string>();
     for (const node of nodes) {
       if (node.data.registryType !== 'output' || node === outputNode) continue;
@@ -1739,10 +1744,17 @@ export function graphToCode(
     // the simple-API branch and get assigned as a node, failing deep in the
     // renderer. The red fallback is the same value an output with nothing
     // wired emits today, so the meaning is unchanged: nothing is wired.
+    // With no default Output at all, the module is parts ONLY: loader 0.6
+    // leaves every unclaimed mesh on the material the model was authored with,
+    // which is the whole point of shading just the one part. A default Output
+    // that exists but has nothing wired still emits the red fallback, exactly
+    // as a lone empty Output always has.
     const defaultProps = channelEntries.length > 0
       ? channelEntries
-      : ([['color', 'vec3(1, 0, 0)']] as [string, string][]);
-    if (channelEntries.length === 0) addImport('three/tsl', 'vec3');
+      : outputNode
+        ? ([['color', 'vec3(1, 0, 0)']] as [string, string][])
+        : [];
+    if (defaultProps.length > 0 && channelEntries.length === 0) addImport('three/tsl', 'vec3');
     const partProps = parts.map((part) => {
       const entries = Object.entries(part.channels);
       // A targeted output with nothing wired still emits its entry. It must:
@@ -1753,7 +1765,8 @@ export function graphToCode(
       return `${partKeyLiteral(part.name)}: { ${body} }`;
     });
     const props = defaultProps.map(([k, v]) => `${k}: ${v}`).join(', ');
-    returnLine = `  return { ${props}, parts: { ${partProps.join(', ')} } };`;
+    const lead = props ? `${props}, ` : '';
+    returnLine = `  return { ${lead}parts: { ${partProps.join(', ')} } };`;
   } else if (channelEntries.length === 0) {
     // No trailing comment: a `//` on a return line used to defeat parseBody's
     // end-anchored regexes in tslCodeProcessor, which then treated this as a

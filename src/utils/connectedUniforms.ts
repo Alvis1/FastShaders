@@ -1,4 +1,5 @@
 import type { AppNode, AppEdge } from '@/types';
+import { outputNodes, findDefaultOutput, meshTargetName } from '@/utils/outputTargets';
 import { getNodeValues } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -52,18 +53,27 @@ export function connectedUniformNamesKey(
   // property inside it unreachable and blank the overlay on collapse.
   const real = unwrapCollapsedGroupEdges(nodes, edges);
 
-  const outputNode = nodes.find((n) => n.data.registryType === 'output');
-  /** Nodes that feed the Output, found by walking edges BACKWARDS from it. */
+  // EVERY output that emits, not just the default: with per-mesh materials a
+  // slider can drive a targeted Output alone, and walking back from the
+  // default only would leave that slider out of the Uniforms overlay — the
+  // "scrubbing does nothing" failure this module exists to prevent, one mesh
+  // away. An UNTARGETED extra Output emits nothing (codegen ignores it), so it
+  // is excluded here too: listing its uniforms would offer controls for dead
+  // code.
+  const emitting = outputNodes(nodes).filter(
+    (n) => n === findDefaultOutput(nodes) || meshTargetName(n) !== null,
+  );
+  /** Nodes that feed an emitting Output, walking edges BACKWARDS from each. */
   const live = new Set<string>();
-  if (outputNode) {
+  if (emitting.length > 0) {
     const incoming = new Map<string, string[]>();
     for (const e of real) {
       const list = incoming.get(e.target);
       if (list) list.push(e.source);
       else incoming.set(e.target, [e.source]);
     }
-    const queue = [outputNode.id];
-    live.add(outputNode.id);
+    const queue = emitting.map((n) => n.id);
+    for (const n of emitting) live.add(n.id);
     while (queue.length) {
       for (const src of incoming.get(queue.pop()!) ?? []) {
         if (live.has(src)) continue; // also the cycle guard
@@ -73,11 +83,12 @@ export function connectedUniformNamesKey(
     }
   }
 
-  // With no Output node there is nothing to be reachable FROM, so fall back to
-  // the weaker "is wired to something" rule rather than blanking the overlay.
+  // With no emitting Output at all there is nothing to be reachable FROM, so
+  // fall back to the weaker "is wired to something" rule rather than blanking
+  // the overlay.
   const wired = new Set<string>();
-  if (!outputNode) for (const e of real) wired.add(e.source);
-  const isLive = (id: string) => (outputNode ? live.has(id) : wired.has(id));
+  if (emitting.length === 0) for (const e of real) wired.add(e.source);
+  const isLive = (id: string) => (emitting.length > 0 ? live.has(id) : wired.has(id));
 
   let hasProp = false;
   const names: string[] = [];

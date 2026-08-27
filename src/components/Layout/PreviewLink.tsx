@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { findDefaultOutput } from '@/utils/outputTargets';
 import { useAppStore } from '@/store/useAppStore';
 import { linkPath, rectCenter } from './previewLinkGeometry';
 import './PreviewLink.css';
@@ -32,7 +33,10 @@ import './PreviewLink.css';
 export function PreviewLink() {
   // Primitive selector → re-render only when the Output node's identity changes.
   const outputId = useAppStore(
-    (s) => s.nodes.find((n) => n.data.registryType === 'output')?.id ?? null,
+    // The decorative wire points at the DEFAULT output — the one that shades
+    // the model as a whole. Drawing one per targeted material would turn a
+    // single quiet flourish into a bundle of wires across the canvas.
+    (s) => findDefaultOutput(s.nodes)?.id ?? null,
   );
   const outputIdRef = useRef(outputId);
   outputIdRef.current = outputId;

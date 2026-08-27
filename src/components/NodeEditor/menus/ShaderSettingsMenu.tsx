@@ -7,6 +7,9 @@ import { removeEdgesForPort } from '@/utils/edgeUtils';
 import { toggleExposedPort } from '@/utils/exposedPorts';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
+import { findDefaultOutput, meshTargetName } from '@/utils/outputTargets';
+import { highlightMesh } from '@/utils/meshHighlight';
+import { meshNameCounts } from '@/utils/meshInventory';
 
 /** Ports that can be toggled on/off in the output node settings, listed in
  *  the SAME order as the node's socket arrangement (the registry def's
@@ -14,7 +17,7 @@ import { useHistoryBracket } from '@/hooks/useHistoryBracket';
  *  it's auto-managed by transparent/alphaTest. */
 const OPTIONAL_OUTPUT_PORTS = ['emissive', 'roughness', 'metalness', 'discard', 'normal', 'env'];
 
-export function ShaderSettingsMenu() {
+export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const language = useAppStore((s) => s.language);
   const totalCost = useAppStore((s) => s.totalCost);
@@ -29,9 +32,32 @@ export function ShaderSettingsMenu() {
   const { bracket, closeBracket } = useHistoryBracket();
   const device = resolveDeviceBudget(selectedHeadsetId, costProfiles);
 
-  const outputNode = nodes.find((n) => n.data.registryType === 'output');
+  // The Output the user right-clicked, not "the first one". With per-mesh
+  // materials there are several, and editing one material's transparency from
+  // a menu opened on another is exactly the kind of wrong that never announces
+  // itself. Falls back to the default Output for the paths that open this menu
+  // without a node id.
+  const outputNode = (nodeId ? nodes.find((n) => n.id === nodeId) : null)
+    ?? findDefaultOutput(nodes);
   const outputData = outputNode?.data as OutputNodeData | undefined;
   const settings: MaterialSettings = outputData?.materialSettings ?? {};
+
+  // Sub-mesh targeting state. The inventory is session-only and arrives from
+  // the sandboxed preview, so it is absent until a model has actually loaded.
+  const inventory = useAppStore((s) => s.previewMeshInventory);
+  const currentTarget = outputNode ? meshTargetName(outputNode) : null;
+  const counts = meshNameCounts(inventory?.meshes ?? []);
+  const inventoryHasTarget = !!currentTarget
+    && !!inventory?.meshes.some((m) => m.name === currentTarget);
+  // A mesh already claimed by ANOTHER Output cannot be claimed twice — one
+  // mesh wears one material — so those rows are disabled rather than silently
+  // losing to the first claimant at emission time.
+  const claimedElsewhere = new Map<string, string>();
+  for (const n of nodes) {
+    if (n.id === outputNode?.id) continue;
+    const name = meshTargetName(n);
+    if (name) claimedElsewhere.set(name, n.id);
+  }
 
   const exposedPorts = outputData?.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
   const exposedSet = new Set(exposedPorts);
@@ -272,6 +298,66 @@ export function ShaderSettingsMenu() {
           />
           <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', minWidth: 28, textAlign: 'right' }}>
             {settings.alphaTest.toFixed(2)}
+          </span>
+        </div>
+      )}
+
+      {/* Which mesh this material shades. Only shown for a MODEL: the primitive
+          geometries are a single unnamed mesh, so there is nothing to choose
+          between and an empty picker would just raise a question the shader
+          cannot answer. */}
+      {inventory && inventory.meshes.length > 0 && (
+        <div style={{ ...labelStyle, cursor: 'default' }}>
+          <span>{t('Target mesh', language)}</span>
+          <select
+            value={currentTarget ?? ''}
+            onChange={(e) => {
+              const name = e.target.value;
+              // One updateNodeData, so picking a target is one undo entry.
+              updateNodeData(outputNode!.id, name
+                ? { meshTarget: { name } }
+                : { meshTarget: undefined });
+              // Flash the chosen mesh in the 3D view. Deliberately on CHANGE
+              // rather than on hovering each option: a native select popup is
+              // drawn by the OS, so `<option>` mouse events are unreliable
+              // across browsers and absent entirely on touch — a highlight
+              // that only some users ever see is worse than one that always
+              // fires at the moment of choosing.
+              highlightMesh(name || null);
+              if (name) window.setTimeout(() => highlightMesh(null), 1200);
+            }}
+            style={selectStyle}
+          >
+            <option value="">{t('All meshes (default)', language)}</option>
+            {inventory.meshes.map((m) => {
+              const shared = counts.get(m.name) ?? 1;
+              const takenBy = claimedElsewhere.get(m.name);
+              return (
+                <option
+                  key={`${m.index}:${m.name}`}
+                  value={m.name}
+                  disabled={takenBy !== undefined}
+                >
+                  {m.name}
+                  {shared > 1 ? ` (x${shared})` : ''}
+                  {m.materialName ? ` — ${m.materialName}` : ''}
+                  {takenBy !== undefined ? ` — ${t('already targeted', language)}` : ''}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+      )}
+
+      {/* A target whose mesh is not in the loaded model — the NORMAL case, not
+          an edge case: the graph persists and the model does not, so this is
+          what every reload without the model looks like. Named rather than
+          silently cleared, so re-dropping the model restores the binding. */}
+      {currentTarget && !inventoryHasTarget && (
+        <div style={{ ...labelStyle, cursor: 'default', color: 'var(--text-secondary)' }}>
+          <span>
+            {'\u26A0 '}
+            {t('Not in the loaded model', language)}: {currentTarget}
           </span>
         </div>
       )}

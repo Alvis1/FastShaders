@@ -1,4 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
+import { findDefaultOutput } from '@/utils/outputTargets';
 import { tslToShaderModule, type PropertyInfo } from './tslToShaderModule';
 import { embedProjectState, type FastShadersProject } from './fastShadersProject';
 import { inlineImageAssetsFromNodes } from './imageAssets';
@@ -105,7 +106,7 @@ export function shaderBaseName(shaderName: string): string {
  */
 export function buildShaderBundle(): ExportBundle {
   const state = useAppStore.getState();
-  const outputNode = state.nodes.find((n) => n.data.registryType === 'output');
+  const outputNode = findDefaultOutput(state.nodes);
   const materialSettings = (outputNode?.data as OutputNodeData | undefined)?.materialSettings;
 
   let script: string;

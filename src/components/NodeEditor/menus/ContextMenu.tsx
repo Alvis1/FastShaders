@@ -96,7 +96,7 @@ export function ContextMenu() {
       >
         {type === 'canvas' && <AddNodeMenu />}
         {type === 'node' && nodeId && <NodeSettingsMenu nodeId={nodeId} />}
-        {type === 'shader' && <ShaderSettingsMenu />}
+        {type === 'shader' && <ShaderSettingsMenu nodeId={nodeId} />}
         {type === 'edge' && edgeId && <EdgeContextMenu edgeId={edgeId} />}
         {type === 'group' && nodeId && <GroupSettingsMenu nodeId={nodeId} />}
         {type === 'note' && nodeId && <NoteSettingsMenu nodeId={nodeId} />}

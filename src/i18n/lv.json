@@ -795,6 +795,10 @@
     "System audio (unavailable)": "Sistēmas audio (nav pieejams)",
     "Input unavailable": "Ievade nav pieejama",
     "Input": "Ievade",
-    "Default input": "Noklusējuma ievade"
+    "Default input": "Noklusējuma ievade",
+    "Target mesh": "Mērķa tīkls",
+    "All meshes (default)": "Visi tīkli (noklusējums)",
+    "already targeted": "jau piesaistīts",
+    "Not in the loaded model": "Nav ielādētajā modelī"
   }
 }

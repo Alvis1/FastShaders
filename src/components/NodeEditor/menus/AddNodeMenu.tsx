@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { outputNodes, MAX_TARGETED_OUTPUTS } from '@/utils/outputTargets';
 import { useReactFlow } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 import {
@@ -49,6 +50,15 @@ export function AddNodeMenu() {
   const addNote = useAppStore((s) => s.addNote);
   const setEdges = useAppStore((s) => s.setEdges);
   const nodes = useAppStore((s) => s.nodes);
+  // A second Output is only useful once there is a model to point it at: it
+  // shades a named sub-mesh, and with no inventory there is no name to pick.
+  // So the FIRST Output is always offerable (a graph needs one), and further
+  // ones appear only when the loaded model actually has meshes to target.
+  const meshInventory = useAppStore((s) => s.previewMeshInventory);
+  const outputCount = outputNodes(nodes).length;
+  const canAddOutput =
+    outputCount === 0
+    || (outputCount <= MAX_TARGETED_OUTPUTS && (meshInventory?.meshes.length ?? 0) > 0);
   const groupSelection = useAppStore((s) => s.groupSelection);
   const organizeSelection = useAppStore((s) => s.organizeSelection);
   const costColorLow = useAppStore((s) => s.costColorLow);
@@ -120,8 +130,11 @@ export function AddNodeMenu() {
     let newNodeId: string;
 
     if (def.type === 'output') {
-      // Only allow one output node
-      if (nodes.some((n) => n.data.registryType === 'output')) {
+      // Outputs are CAPPED, not limited to one: each extra one is a per-mesh
+      // material, and the cap is what bounds the compile cost (every distinct
+      // material is its own shader program, and the preview recompiles them
+      // all on each debounced edit).
+      if (outputNodes(nodes).length > MAX_TARGETED_OUTPUTS) {
         closeContextMenu();
         return;
       }
@@ -200,7 +213,7 @@ export function AddNodeMenu() {
     if (!query.trim() && canGroup) {
       items.push({ kind: 'group', key: '__group__', run: handleGroupSelection });
     }
-    if (!query.trim() && !nodes.some((n) => n.data.registryType === 'output')) {
+    if (!query.trim() && canAddOutput) {
       items.push({
         kind: 'output',
         key: '__output__',
@@ -415,7 +428,7 @@ export function AddNodeMenu() {
         )}
 
         {/* Add output node option */}
-        {!query.trim() && !nodes.some((n) => n.data.registryType === 'output') && (
+        {!query.trim() && canAddOutput && (
           <>
             <div className="context-menu__category">
               {formatCategoryLabel('Output', 'output', language, true)}

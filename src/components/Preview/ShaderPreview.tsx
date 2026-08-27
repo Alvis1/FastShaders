@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { findDefaultOutput } from '@/utils/outputTargets';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { getNodeValues } from '@/types';
@@ -15,6 +16,7 @@ import {
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
 import { sanitizeMeshInventory } from '@/utils/meshInventory';
+import { MESH_HIGHLIGHT_EVENT, type MeshHighlightDetail } from '@/utils/meshHighlight';
 import { bootGeometryWasCustom, loadPreviewMeshFromCache } from '@/utils/previewMeshCache';
 import { connectedUniformNamesKey, ALL_UNIFORMS } from '@/utils/connectedUniforms';
 import { evaluateEdgeSource, getTargetEdges } from '@/engine/cpuEvaluator';
@@ -394,7 +396,7 @@ export function ShaderPreview() {
   // ~1000-line panel no longer re-renders on every drag pointermove the way
   // the old whole-array nodes/edges subscriptions made it.
   const materialSettings = useAppStore((s) =>
-    (s.nodes.find((n) => n.data.registryType === 'output')?.data as
+    (findDefaultOutput(s.nodes)?.data as
       { materialSettings?: PreviewOptions['materialSettings'] } | undefined)?.materialSettings,
   );
 
@@ -422,7 +424,9 @@ export function ShaderPreview() {
   // position-only graph notify bails on Object.is instead of re-rendering the
   // whole preview — the MicNode/edgeValueLabel subscription pattern.
   const envMapName = useAppStore((s) => {
-    const out = s.nodes.find((n) => n.data.registryType === 'output');
+    // The DEFAULT output. An env map wired to a TARGETED one lights only that
+    // mesh, so naming the Light dropdown after it would misdescribe the scene.
+    const out = findDefaultOutput(s.nodes);
     // getTargetEdges, NOT raw s.edges: a feeder inside a COLLAPSED group is
     // reached through a rewritten boundary edge whose source is the group id,
     // so a raw scan finds an edge whose `source` node has no registry def and
@@ -1219,6 +1223,22 @@ export function ShaderPreview() {
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
+  }, []);
+
+  // Forward a "show me this mesh" hint to the sandboxed document. Fire and
+  // forget by design: with no model loaded, the pane collapsed, or the iframe
+  // mid-rebuild there is simply nothing to light up, and a hover hint that
+  // reports its own failure would be worse than one that quietly does nothing.
+  useEffect(() => {
+    const onHighlight = (e: Event) => {
+      const detail = (e as CustomEvent<MeshHighlightDetail>).detail;
+      const win = iframeRef.current?.contentWindow;
+      if (!win) return;
+      const name = typeof detail?.name === 'string' ? detail.name : null;
+      win.postMessage({ type: 'fs:highlight-mesh', name }, '*');
+    };
+    window.addEventListener(MESH_HIGHLIGHT_EVENT, onHighlight);
+    return () => window.removeEventListener(MESH_HIGHLIGHT_EVENT, onHighlight);
   }, []);
 
   // Reset the iframe to defaults: camera home, studio lighting, default
