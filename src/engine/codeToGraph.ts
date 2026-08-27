@@ -3,6 +3,8 @@ import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType } from '@/types';
 import { setNodeValues } from '@/types';
+import { isUsableMeshName } from '@/utils/meshInventory';
+import { MAX_TARGETED_OUTPUTS } from '@/utils/outputTargets';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
 import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
@@ -160,6 +162,105 @@ export function codeToGraph(code: string): CodeToGraphResult {
     );
   };
 
+  /**
+   * Read an object-property key as a string. Channels arrive as IDENTIFIERS
+   * (`color:`), mesh names inside `parts` as STRING LITERALS (`"Glass":`) —
+   * a mesh name is not necessarily a valid identifier, and quoting it is what
+   * lets a name contain spaces or punctuation at all.
+   */
+  const propKeyName = (prop: t.ObjectProperty): string | null => {
+    if (t.isIdentifier(prop.key)) return prop.key.name;
+    if (t.isStringLiteral(prop.key)) return prop.key.value;
+    return null;
+  };
+
+  /**
+   * Wire one output node's channels from an object expression. Shared by the
+   * default output and every `parts` entry, so a per-mesh material parses
+   * exactly as well as the top-level one — including stored widget values.
+   *
+   * `tempPrefix` namespaces the synthetic variable a call-expression channel
+   * needs. It MUST differ per output: two materials both wiring `color: mix(…)`
+   * would otherwise both claim `_return_color`, and the second would silently
+   * steal the first's node.
+   */
+  const wireOutputChannels = (
+    outputId: string,
+    obj: t.ObjectExpression,
+    tempPrefix: string,
+  ): void => {
+    const storedValues: Record<string, string | number> = {};
+  for (const rawProp of obj.properties) {
+    if (!t.isObjectProperty(rawProp)) continue;
+    const channel = propKeyName(rawProp);
+    // `parts` is the per-mesh map, handled by buildPartOutputs — never a
+    // channel of the output it appears on.
+    if (channel === null || channel === 'parts') continue;
+      // Same widening undo as the single-value form above — a multi-channel
+      // return carries `{ color: vec3(noise1), opacity: … }`.
+      const prop = { ...rawProp, value: unwrapScalarWiden(rawProp.value) } as t.ObjectProperty;
+      // Stored widget values first: an inline `float(0.35)` / `color(0x…)`
+      // in channel position is the Output node's own value, not a node.
+      const stored = matchStoredChannelValue(channel, prop.value);
+      if (stored !== null) {
+        storedValues[channel] = stored;
+        continue;
+      }
+      if (t.isIdentifier(prop.value)) {
+        const sourceId = varToNodeId.get(prop.value.name)
+          ?? ensureBareInputNode(prop.value.name, rawNodes, varToNodeId);
+        if (sourceId) {
+          addEdge(rawEdges, sourceId, varToHandle.get(prop.value.name) ?? 'out', outputId, channel);
+        }
+      } else if (t.isMemberExpression(prop.value)) {
+        const ref = resolveMemberExpr(prop.value, rawNodes, rawEdges, varToNodeId, splitNodes);
+        if (ref) {
+          addEdge(rawEdges, ref.nodeId, ref.handle, outputId, channel, 'float');
+        }
+      } else if (t.isCallExpression(prop.value)) {
+        const tempVar = `${tempPrefix}${channel}`;
+        processCall(prop.value, tempVar, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
+        const sourceId = varToNodeId.get(tempVar);
+        if (sourceId) {
+          addEdge(rawEdges, sourceId, 'out', outputId, channel);
+        }
+      }
+    }
+    applyStoredOutputValues(outputId, storedValues);
+  };
+
+  /**
+   * Mint one Output node per `parts` entry, each bound to its mesh.
+   *
+   * Names are validated exactly as the emitter validates them: this parses
+   * files other people wrote, and an unusable name is one the loader could
+   * never match anyway, so dropping the entry loses nothing real.
+   */
+  const buildPartOutputs = (arg: t.ObjectExpression): void => {
+    const outputDef = NODE_REGISTRY.get('output');
+    if (!outputDef) return;
+    const partsProp = arg.properties.find(
+      (p): p is t.ObjectProperty => t.isObjectProperty(p) && propKeyName(p) === 'parts',
+    );
+    if (!partsProp || !t.isObjectExpression(partsProp.value)) return;
+
+    const claimed = new Set<string>();
+    let index = 0;
+    for (const rawPart of partsProp.value.properties) {
+      if (!t.isObjectProperty(rawPart) || !t.isObjectExpression(rawPart.value)) continue;
+      const name = propKeyName(rawPart);
+      if (name === null || !isUsableMeshName(name) || claimed.has(name)) continue;
+      if (claimed.size >= MAX_TARGETED_OUTPUTS) break;
+      claimed.add(name);
+      const partId = generateId();
+      const node = createNode(partId, outputDef, 'Output');
+      (node.data as Record<string, unknown>).meshTarget = { name };
+      rawNodes.push(node);
+      wireOutputChannels(partId, rawPart.value, `_part${index}_`);
+      index += 1;
+    }
+  };
+
   // Build the OutputNode and wire its channels from a return/output expression.
   // Shared between `return X` (FastShaders canonical form) and `output = X`
   // (three.js TSL editor compatible form).
@@ -176,44 +277,10 @@ export function codeToGraph(code: string): CodeToGraphResult {
 
     // Multi-channel: { color: x, position: y, ... }
     if (t.isObjectExpression(arg)) {
-      const storedValues: Record<string, string | number> = {};
-      for (const rawProp of arg.properties) {
-        if (!t.isObjectProperty(rawProp) || !t.isIdentifier(rawProp.key)) continue;
-        const channel = rawProp.key.name;
-        // Same widening undo as the single-value form above — a multi-channel
-        // return carries `{ color: vec3(noise1), opacity: … }`.
-        const prop = { ...rawProp, value: unwrapScalarWiden(rawProp.value) } as t.ObjectProperty;
-        // Stored widget values first: an inline `float(0.35)` / `color(0x…)`
-        // in channel position is the Output node's own value, not a node.
-        const stored = matchStoredChannelValue(channel, prop.value);
-        if (stored !== null) {
-          storedValues[channel] = stored;
-          continue;
-        }
-        if (t.isIdentifier(prop.value)) {
-          const sourceId = varToNodeId.get(prop.value.name)
-            ?? ensureBareInputNode(prop.value.name, rawNodes, varToNodeId);
-          if (sourceId) {
-            addEdge(rawEdges, sourceId, varToHandle.get(prop.value.name) ?? 'out', outputId, channel);
-          }
-        } else if (t.isMemberExpression(prop.value)) {
-          const ref = resolveMemberExpr(prop.value, rawNodes, rawEdges, varToNodeId, splitNodes);
-          if (ref) {
-            addEdge(rawEdges, ref.nodeId, ref.handle, outputId, channel, 'float');
-          }
-        } else if (t.isCallExpression(prop.value)) {
-          const tempVar = `_return_${channel}`;
-          processCall(prop.value, tempVar, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
-          const sourceId = varToNodeId.get(tempVar);
-          if (sourceId) {
-            addEdge(rawEdges, sourceId, 'out', outputId, channel);
-          }
-        }
-      }
-      applyStoredOutputValues(outputId, storedValues);
+      wireOutputChannels(outputId, arg, '_return_');
+      buildPartOutputs(arg);
       return;
     }
-
     // Single-value: an inline `color(0x…)` is the color widget's stored value
     // (graphToCode's color-only bare-return form); anything else wires to
     // output.color as before.

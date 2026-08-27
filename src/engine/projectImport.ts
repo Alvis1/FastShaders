@@ -16,6 +16,7 @@ import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
 import { sanitizeDrawings } from '@/utils/drawings';
 import { sanitizePalettes } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
+import { sanitizeOutputTargets } from '@/utils/outputTargets';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { generateId } from '@/utils/idGenerator';
 import { readZip, type ZipReadEntry } from '@/utils/zipReader';
@@ -94,6 +95,13 @@ function applyProjectToStore(project: FastShadersProject): void {
   // Bounded here for size; the grammar gate that stops it becoming code lives at
   // the emitter, which every import path reaches by construction.
   dataSanitized.nodes = sanitizeDataRangeNodes(dataSanitized.nodes);
+
+  // A per-mesh binding is a plain string riding the same shared file, and it
+  // reaches GENERATED CODE — which the XR popup executes at the app's real
+  // origin. Emission re-validates every name, so this bounds what the STORE
+  // carries (history clones, the autosave, the next export) and de-dupes two
+  // Outputs claiming one mesh.
+  dataSanitized.nodes = sanitizeOutputTargets(dataSanitized.nodes);
 
   // Board drawings are adversarial too — bound them before they enter the store.
   const drawings = sanitizeDrawings(project.drawings);

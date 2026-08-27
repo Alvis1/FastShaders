@@ -126,6 +126,26 @@ export interface OutputNodeData {
    *  NB `getNodeValues()` deliberately still returns `{}` for output nodes;
    *  readers access this field directly. */
   values?: Record<string, string | number>;
+  /**
+   * Which sub-mesh of the loaded model this Output shades.
+   *
+   * ABSENT means "the default output" — it shades every mesh no other Output
+   * claims, i.e. exactly the whole-model behaviour that predates this field, so
+   * a graph without one emits byte-identically. A PRESENT target makes this
+   * Output emit into the module's `parts` map instead of the top-level return.
+   *
+   * Deliberately a top-level field and NOT a `values` key: `values` is typed as
+   * channel state and is read as such — ShaderSettingsMenu deletes a key when
+   * its channel is hidden, and useSyncEngine unions `Object.keys(values)` into
+   * `exposedPorts` on every Apply, which would inject the literal string
+   * "meshTarget" into the exposed-port list and then persist it.
+   *
+   * `name` is the mesh's name in the loaded SCENE (post-sanitize, post-dedupe —
+   * see utils/meshInventory.ts), matched by exact string against every mesh, so
+   * a name shared by several meshes targets all of them. Adversarial like every
+   * persisted field: validated on both restore paths and again at emission.
+   */
+  meshTarget?: { name: string };
   [key: string]: unknown;
 }
 
