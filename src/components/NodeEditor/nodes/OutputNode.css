@@ -26,6 +26,25 @@
   background: var(--cat-output);
 }
 
+/* The mesh this Output shades, beside the title. Pushed right with `auto` so
+   it sits at the far edge whatever the header width, and allowed to SHRINK and
+   ellipsize: a mesh name comes from someone else's file and can be far longer
+   than the node, and a header that stretches to fit one would resize the node
+   itself. `min-width: 0` is what actually lets the ellipsis happen inside a
+   flex row — without it the item refuses to shrink below its content. */
+.output-node__target {
+  margin-left: auto;
+  padding-left: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  opacity: 0.85;
+}
+
 .output-node__title {
   font-size: 10px;
   font-weight: 700;

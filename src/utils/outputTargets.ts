@@ -52,6 +52,32 @@ export function meshTargetName(node: AppNode): string | null {
   return isUsableMeshName(name) ? name : null;
 }
 
+/** Every Output node, in array (creation) order. */
+export function outputNodes(nodes: readonly AppNode[]): AppNode[] {
+  return nodes.filter((n) => n.data.registryType === 'output');
+}
+
+/**
+ * THE default Output — the one that shades every mesh no other Output claims.
+ *
+ * One definition, shared by codegen and by every surface that asks "what is
+ * this shader's output?" (material settings, the environment-map label, the
+ * cost badge, the decorative preview wire). Before per-mesh materials they all
+ * wrote `nodes.find(registryType === 'output')` independently; with several
+ * Outputs that stops meaning the same thing at each site, and the failure is
+ * silent — the settings menu editing one material while the export writes
+ * another's.
+ *
+ * The first UNTARGETED Output wins, so it is stable under wiring (nothing
+ * re-orders the array) and follows creation order, which is the order the user
+ * sees. Returns null when every Output is targeted: that is a legitimate
+ * document — it shades only the meshes it names and leaves the rest on the
+ * materials the model was authored with — not an error state.
+ */
+export function findDefaultOutput(nodes: readonly AppNode[]): AppNode | null {
+  return outputNodes(nodes).find((n) => meshTargetName(n) === null) ?? null;
+}
+
 /**
  * Drop every unusable or duplicate `meshTarget` from a restored node list.
  *

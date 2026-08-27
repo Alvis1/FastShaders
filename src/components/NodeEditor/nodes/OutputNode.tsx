@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useMemo } from 'react';
 import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { meshTargetName } from '@/utils/outputTargets';
+import type { AppNode } from '@/types';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import type { OutputFlowNode, OutputNodeData } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
@@ -90,6 +92,13 @@ export const OutputNode = memo(function OutputNode({
   selected,
 }: NodeProps<OutputFlowNode>) {
   const def = NODE_REGISTRY.get('output')!;
+  // Read from `data` (not the store) so the chip re-renders with the node.
+  const meshTarget = meshTargetName({ id, data } as unknown as AppNode);
+  // Cheap-string subscription: the whole inventory would re-render every
+  // Output on any preview report, and all this needs is a yes/no.
+  const targetKnown = useAppStore(
+    (s) => !meshTarget || !!s.previewMeshInventory?.meshes.some((m) => m.name === meshTarget),
+  );
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
@@ -271,9 +280,27 @@ export const OutputNode = memo(function OutputNode({
         </span>
       )}
 
-      {/* Main header */}
+      {/* Main header. A TARGETED output names the mesh it shades right here:
+          with several Outputs on the canvas the only thing distinguishing them
+          is what they are for, and a node that looks identical to its
+          neighbour while doing something different is how a user ends up
+          editing the wrong material. The ⚠ form means the binding exists but
+          the loaded model has no such mesh — the ordinary state after a reload
+          without the model, since the graph persists and the mesh does not —
+          so it reads as "not right now", not as an error. */}
       <div className="output-node__header" style={{ background: costColor }}>
         <span className="output-node__title" style={{ color: headerTextColor }}>Output</span>
+        {meshTarget && (
+          <span
+            className="output-node__target"
+            style={{ color: headerTextColor }}
+            title={targetKnown
+              ? `Shades the mesh "${meshTarget}"`
+              : `Shades the mesh "${meshTarget}", which the loaded model does not contain`}
+          >
+            {targetKnown ? '\u2192' : '\u26A0'} {meshTarget}
+          </span>
+        )}
       </div>
 
       {/* Pixel Shader section */}

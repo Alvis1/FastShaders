@@ -1,4 +1,5 @@
 import type { AppNode, AppEdge } from '@/types';
+import { findDefaultOutput } from '@/utils/outputTargets';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import complexityData from '@/registry/complexity.json';
@@ -100,7 +101,10 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
  * `[nodes, edges]` effect wouldn't otherwise re-fire).
  */
 export function computeReachableCost(nodes: AppNode[], edges: AppEdge[]): number {
-  const outputNode = nodes.find((n) => n.data.registryType === 'output');
+  // The DEFAULT output: with per-mesh materials, cost means "what the whole
+  // model costs to shade", and the default is the one whose chain every
+  // unclaimed mesh runs. (Per-part totals are a separate, later question.)
+  const outputNode = findDefaultOutput(nodes);
   if (!outputNode) return 0;
 
   const incoming = new Map<string, string[]>();

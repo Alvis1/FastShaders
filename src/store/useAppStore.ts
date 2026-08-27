@@ -32,7 +32,7 @@ import {
 } from '@/utils/costOverride';
 import { makeDataNodeData, sanitizeDataNodes } from '@/utils/dataNode';
 import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
-import { sanitizeOutputTargets } from '@/utils/outputTargets';
+import { sanitizeOutputTargets, findDefaultOutput } from '@/utils/outputTargets';
 import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, type ImageOriginInfo } from '@/utils/imageNode';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
@@ -1823,7 +1823,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try { localStorage.setItem('fs:headsetId', id); } catch { /* */ }
     setCostOverrides(costProfiles.find((p) => p.id === id)?.costs ?? null);
     const total = computeReachableCost(nodes, unwrapCollapsedGroupEdges(nodes, edges));
-    const outputNode = nodes.find((n) => n.data.registryType === 'output');
+    const outputNode = findDefaultOutput(nodes);
     set((state) => ({
       selectedHeadsetId: id,
       costVersion: state.costVersion + 1,

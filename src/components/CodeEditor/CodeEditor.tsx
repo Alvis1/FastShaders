@@ -1,4 +1,5 @@
 import './monacoSetup';
+import { findDefaultOutput } from '@/utils/outputTargets';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { useAppStore } from '@/store/useAppStore';
@@ -54,7 +55,7 @@ export function CodeEditor() {
   // holds the identical dependency on that fact.)
   const materialSettings = useAppStore(
     (s) =>
-      (s.nodes.find((n) => n.data.registryType === 'output')?.data as
+      (findDefaultOutput(s.nodes)?.data as
         | OutputNodeData
         | undefined)?.materialSettings,
   );
