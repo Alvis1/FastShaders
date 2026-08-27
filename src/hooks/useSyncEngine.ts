@@ -128,10 +128,22 @@ export function useSyncEngine() {
           const positioned: AppNode[] = [];
 
           // Index old nodes by registryType+label and registryType for O(n) lookup
+          // Pass-1 identity. Every parsed Output is labelled literally
+          // "Output", so with per-mesh materials they ALL collapse into one
+          // bucket and pair by array order — which silently swaps one
+          // material's stored values, exposed ports and settings onto
+          // another. Folding the mesh target in makes the pairing mean what
+          // it says: this material matches the material for the same mesh.
+          const matchKey = (n: AppNode): string => {
+            const target = n.data.registryType === 'output'
+              ? ((n.data as { meshTarget?: { name?: unknown } }).meshTarget?.name ?? '')
+              : '';
+            return `${n.data.registryType}\0${n.data.label}\0${String(target)}`;
+          };
           const oldByExactKey = new Map<string, AppNode[]>();
           const oldByType = new Map<string, AppNode[]>();
           for (const old of oldNodes) {
-            const exactKey = `${old.data.registryType}\0${old.data.label}`;
+            const exactKey = matchKey(old);
             if (!oldByExactKey.has(exactKey)) oldByExactKey.set(exactKey, []);
             oldByExactKey.get(exactKey)!.push(old);
             if (!oldByType.has(old.data.registryType)) oldByType.set(old.data.registryType, []);
@@ -208,7 +220,7 @@ export function useSyncEngine() {
 
           // Pass 1: exact match by registryType + label
           for (const newNode of result.nodes) {
-            const exactKey = `${newNode.data.registryType}\0${newNode.data.label}`;
+            const exactKey = matchKey(newNode);
             const candidates = oldByExactKey.get(exactKey);
             const match = candidates?.find((old) => !usedOldIds.has(old.id));
             if (match) {

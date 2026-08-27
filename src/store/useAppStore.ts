@@ -32,6 +32,7 @@ import {
 } from '@/utils/costOverride';
 import { makeDataNodeData, sanitizeDataNodes } from '@/utils/dataNode';
 import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
+import { sanitizeOutputTargets } from '@/utils/outputTargets';
 import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, type ImageOriginInfo } from '@/utils/imageNode';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
@@ -629,6 +630,9 @@ export function loadGraph(): {
       // grammar gate lives at the emitter, which is the only place the string
       // could become code.
       data.nodes = sanitizeDataRangeNodes(data.nodes);
+      // Per-mesh Output bindings — see projectImport for the reasoning; the
+      // two restore paths must agree or a reload changes what renders.
+      data.nodes = sanitizeOutputTargets(data.nodes);
 
       // Edge `data` is adversarial too, and it is the one graph payload nothing
       // validated — TypedEdge maps `waypoints` and dereferences `w.x` during

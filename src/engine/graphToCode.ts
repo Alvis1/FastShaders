@@ -2,6 +2,7 @@ import { parseExpression } from '@babel/parser';
 import type { Node } from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData } from '@/types';
 import { getNodeValues } from '@/types';
+import { meshTargetName, MAX_TARGETED_OUTPUTS } from '@/utils/outputTargets';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
@@ -390,6 +391,24 @@ function outEdges(gidx: GraphIndex, id: string): AppEdge[] {
 /** Indexed twin of `edges.find(e => e.target === id && e.targetHandle === handle)`. */
 function inEdge(gidx: GraphIndex, id: string, handle: string): AppEdge | undefined {
   return inEdges(gidx, id).find((e) => e.targetHandle === handle);
+}
+
+// A mesh name as a JS string-literal key in the emitted `parts` object.
+//
+// `JSON.stringify` handles the quoting, the backslashes and the control
+// characters. The extra star-slash escape is not redundant: the exported `.js`
+// carries the FASTSHADERS_PROJECT_V1 block as a BLOCK COMMENT, and other
+// tooling wraps generated modules the same way, so a name that contains a
+// comment terminator would end that comment early. Escaping the slash keeps
+// the string's VALUE identical (it parses back to the original name) while
+// making it inert. Line comments here on purpose — the sequence being escaped
+// cannot be written inside the block comment that describes it.
+//
+// Names reaching here have already passed `isUsableMeshName`, which is what
+// keeps `__proto__` and the invisible characters out; this is the encoding
+// step, not the validation step.
+function partKeyLiteral(name: string): string {
+  return JSON.stringify(name).replace(/\*\//g, '*\\u002F');
 }
 
 export function graphToCode(
@@ -1435,12 +1454,12 @@ export function graphToCode(
   // is deliberately NOT here — it needs the source's TEXTURE, not a sampled
   // ref, and is resolved after this loop.
   const OUTPUT_CHANNELS = ['color', 'emissive', 'normal', 'position', 'opacity', 'roughness', 'metalness'] as const;
-  const channels: Record<string, string> = {};
-  // Discard is a side-effect statement, not a return channel — emitted as
+  // Discard is a side-effect statement for the DEFAULT output — emitted as
   // `Discard(cond);` between definitions and the return so the wired condition
   // (e.g. greaterThan(distance(positionWorld, cameraPosition), maxDist)) kills
-  // the fragment before any further work.
-  let discardLine: string | null = null;
+  // the fragment before any further work. A TARGETED output cannot use a
+  // statement (a statement belongs to the whole module, not to one mesh), so
+  // the resolver returns the raw CONDITION and each caller decides its form.
 
   // Channels that the WebGL/WebGPU backend will validate as vec3-typed. A
   // bool-producing source (logic category) wired straight into one of these
@@ -1460,7 +1479,19 @@ export function graphToCode(
    */
   const ALPHA_BEARING_CHANNELS = new Set(['color', 'emissive']);
 
-  if (outputNode) {
+  /**
+   * Resolve one Output node into its channel expressions plus its discard
+   * condition. Declared inside `graphToCode` so it closes over the whole
+   * emission context (gidx, varNames, registry, addImport, resolveEdgeRef,
+   * shapeOfEdgeSource, imageAssetFor …) instead of threading a dozen
+   * parameters through — the body below is the block that used to run inline
+   * for the single output, moved verbatim apart from returning its results.
+   */
+  const resolveOutputChannels = (
+    outputNode: AppNode,
+  ): { channels: Record<string, string>; discardRef: string | null } => {
+    const channels: Record<string, string> = {};
+    let discardRef: string | null = null;
     // Stored per-channel values (the Output node's on-node widgets). Read
     // DIRECTLY from data — getNodeValues() deliberately returns {} for output
     // nodes. Three rules keep this safe and byte-stable:
@@ -1630,7 +1661,7 @@ export function graphToCode(
         ) {
           addImport('three/tsl', 'Discard');
           addImport('three/tsl', 'float');
-          discardLine = `  Discard(float(${num(dv)}));`;
+          discardRef = `float(${num(dv)})`;
         }
       }
     }
@@ -1658,8 +1689,41 @@ export function graphToCode(
         : scalarRefOf(discardEdge);
       if (ref) {
         addImport('three/tsl', 'Discard');
-        discardLine = `  Discard(${ref});`;
+        discardRef = ref;
       }
+    }
+    return { channels, discardRef };
+  };
+
+  // Resolve the DEFAULT output (the one with no mesh target) plus every
+  // TARGETED one. Order is the nodes array — creation order — so which Output
+  // is the default cannot change as the user wires the graph.
+  const defaultResolved = outputNode
+    ? resolveOutputChannels(outputNode)
+    : { channels: {} as Record<string, string>, discardRef: null as string | null };
+  const channels = defaultResolved.channels;
+  const discardLine = defaultResolved.discardRef
+    ? `  Discard(${defaultResolved.discardRef});`
+    : null;
+
+  // Targeted outputs become `parts` entries. Re-validated here even though the
+  // restore paths sanitize: emission is the gate that decides what becomes
+  // CODE, and a node can reach this without ever passing a restore (codeToGraph
+  // mints them, and the store is mutable from anywhere in the session).
+  // First claim wins, matching sanitizeOutputTargets, so a live duplicate and a
+  // reloaded one emit the same module.
+  const parts: { name: string; channels: Record<string, string>; discardRef: string | null }[] = [];
+  if (outputNode) {
+    const claimed = new Set<string>();
+    for (const node of nodes) {
+      if (node.data.registryType !== 'output' || node === outputNode) continue;
+      const name = meshTargetName(node);
+      // An untargeted EXTRA output emits nothing at all: only one output can
+      // shade the unclaimed meshes, and silently blending two would be worse
+      // than ignoring one. (The editor surfaces it; see the UI phase.)
+      if (!name || claimed.has(name) || parts.length >= MAX_TARGETED_OUTPUTS) continue;
+      claimed.add(name);
+      parts.push({ name, ...resolveOutputChannels(node) });
     }
   }
 
@@ -1667,7 +1731,30 @@ export function graphToCode(
   let returnLine: string;
   const channelEntries = Object.entries(channels);
 
-  if (channelEntries.length === 0) {
+  if (parts.length > 0) {
+    // A `parts` key can only ride the OBJECT form, so its presence forces the
+    // shape — the bare-node forms below cannot carry it. The default must also
+    // keep at least one real channel: the loader decides "object API" by
+    // looking for a known channel prop, so a parts-ONLY return would fall to
+    // the simple-API branch and get assigned as a node, failing deep in the
+    // renderer. The red fallback is the same value an output with nothing
+    // wired emits today, so the meaning is unchanged: nothing is wired.
+    const defaultProps = channelEntries.length > 0
+      ? channelEntries
+      : ([['color', 'vec3(1, 0, 0)']] as [string, string][]);
+    if (channelEntries.length === 0) addImport('three/tsl', 'vec3');
+    const partProps = parts.map((part) => {
+      const entries = Object.entries(part.channels);
+      // A targeted output with nothing wired still emits its entry. It must:
+      // the parse is what re-creates the node, so an omitted entry means the
+      // Output and its edges vanish on the next code-panel Apply.
+      if (part.discardRef) entries.push(['discard', part.discardRef]);
+      const body = entries.map(([k, v]) => `${k}: ${v}`).join(', ');
+      return `${partKeyLiteral(part.name)}: { ${body} }`;
+    });
+    const props = defaultProps.map(([k, v]) => `${k}: ${v}`).join(', ');
+    returnLine = `  return { ${props}, parts: { ${partProps.join(', ')} } };`;
+  } else if (channelEntries.length === 0) {
     // No trailing comment: a `//` on a return line used to defeat parseBody's
     // end-anchored regexes in tslCodeProcessor, which then treated this as a
     // plain statement and let it short-circuit the real module return.

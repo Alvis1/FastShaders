@@ -708,6 +708,85 @@ export function buildShaderModule(
     returnProps.unshift(`${CHANNEL_TO_PROP.get('color')}: __pixel(${pixelCallArgs.join(', ')})`);
   }
 
+  // --- Per-sub-mesh materials (loader 0.6's `parts`) ----------------------
+  //
+  // The editor speaks CHANNEL names (`color`) and the loader speaks node-prop
+  // names (`colorNode`), and that translation is this function's job — so a
+  // part's inner keys go through the very same CHANNEL_TO_PROP map as the
+  // default's. Re-emitting the block verbatim would hand the loader keys it
+  // does not know, and it would silently render the default material on every
+  // mesh: right-looking source, wrong picture, no error.
+  //
+  // A part's `discard` is a KEY rather than a statement (a statement belongs
+  // to the module, not to one mesh), so it becomes that part's own __pixel
+  // wrapper. The wrappers are INDEXED because a mesh name is not an
+  // identifier — `Body.001` and `my mesh` are both legal names.
+  const partWrappers: string[] = [];
+  const partsSrc = channels.parts;
+  if (partsSrc) {
+    const inner = partsSrc.trim().replace(/^\{/, '').replace(/\}$/, '');
+    const entries: string[] = [];
+    for (const entry of splitTopLevelArgs(inner)) {
+      const colon = entry.indexOf(':');
+      if (colon === -1) continue;
+      const nameLit = entry.slice(0, colon).trim();
+      const bodySrc = entry.slice(colon + 1).trim();
+      if (!nameLit.startsWith('"') || !bodySrc.startsWith('{')) continue;
+      const props: string[] = [];
+      let partDiscard: string | null = null;
+      for (const partProp of splitTopLevelArgs(bodySrc.replace(/^\{/, '').replace(/\}$/, ''))) {
+        const c = partProp.indexOf(':');
+        if (c === -1) continue;
+        const key = partProp.slice(0, c).trim();
+        const val = partProp.slice(c + 1).trim();
+        if (!key || !val) continue;
+        if (key === 'discard') { partDiscard = val; continue; }
+        const partPropName = CHANNEL_TO_PROP.get(key);
+        if (!partPropName) continue;
+        if (key === 'position') {
+          const displacement = displacementMode === 'normal'
+            ? `normalLocal.mul(${val})`
+            : val;
+          props.push(`${partPropName}: positionLocal.add(${displacement})`);
+        } else {
+          props.push(`${partPropName}: ${val}`);
+        }
+      }
+      if (partDiscard) {
+        const wrapper = `__partPixel${partWrappers.length}`;
+        const existingColor = props.findIndex((s) => s.startsWith('colorNode:'));
+        const colorRef = existingColor === -1
+          ? 'vec3(1, 1, 1)'
+          : props[existingColor].slice('colorNode:'.length).trim();
+        partWrappers.push(
+          `const ${wrapper} = Fn(([__c, __col]) => { Discard(__c); return __col; });`,
+        );
+        const call = `colorNode: ${wrapper}(${partDiscard}, ${colorRef})`;
+        if (existingColor === -1) props.unshift(call);
+        else props[existingColor] = call;
+      }
+      if (props.length > 0) entries.push(`${nameLit}: { ${props.join(', ')} }`);
+    }
+    if (entries.length > 0) returnProps.push(`parts: { ${entries.join(', ')} }`);
+    // Imports for what the parts block itself emitted. Registered here rather
+    // than beside the default's, because `hasDiscard` describes the DEFAULT
+    // output only — a cutout that exists solely on one mesh would otherwise
+    // emit `Fn(...)`/`Discard(...)` with neither imported, and the module dies
+    // on a ReferenceError before it renders anything.
+    if (partWrappers.length > 0) {
+      if (!tslNames.includes('Fn')) tslNames.push('Fn');
+      if (!tslNames.includes('Discard')) tslNames.push('Discard');
+    }
+    const partsOut = returnProps[returnProps.length - 1] ?? '';
+    if (/\bvec3\(/.test(partsOut) && !tslNames.includes('vec3')) tslNames.push('vec3');
+    if (/\bpositionLocal\b/.test(partsOut) && !tslNames.includes('positionLocal')) {
+      tslNames.push('positionLocal');
+    }
+    if (/\bnormalLocal\b/.test(partsOut) && !tslNames.includes('normalLocal')) {
+      tslNames.push('normalLocal');
+    }
+  }
+
   if (materialSettings?.transparent) returnProps.push('transparent: true');
   if (materialSettings?.side) {
     returnProps.push(`side: ${SIDE_VALUES.get(materialSettings.side) ?? 0}`);
@@ -778,6 +857,10 @@ export function buildShaderModule(
     `export default function(${hasParams ? 'params' : ''}) {`,
     ...nonDiscardLines.map((l) => '  ' + l.trimStart()),
     ...pixelFnLines,
+    // One tiny Fn per part that culls, declared beside the default's __pixel
+    // for the same reason: Discard() needs an active TSL stack, so it only
+    // works inside an Fn body.
+    ...partWrappers.map((l) => '  ' + l),
     `  return { ${returnProps.join(', ')} };`,
     '}',
   ];
