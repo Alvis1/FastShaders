@@ -241,3 +241,71 @@
   box-shadow: var(--shadow-sm);
   transition: left var(--transition-normal);
 }
+
+/* ── Point-cap editor (right-click on the bar) ──────────────────────────────
+   Portalled to the body, so it is positioned in VIEWPORT coordinates and needs
+   its own z-index above the canvas chrome — the cost overlay's own stacking
+   context does not contain it. */
+.cost-cap-menu {
+  position: fixed;
+  z-index: var(--z-menu);
+  min-width: 200px;
+  padding: var(--space-2);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-md);
+  box-shadow: var(--shadow-md);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+.cost-cap-menu__title {
+  margin-bottom: var(--space-1);
+  font-weight: 600;
+}
+.cost-cap-menu__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.cost-cap-menu__input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+}
+.cost-cap-menu__unit {
+  color: var(--text-secondary);
+}
+.cost-cap-menu__apply,
+.cost-cap-menu__reset {
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.cost-cap-menu__reset {
+  width: 100%;
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+  text-align: left;
+}
+.cost-cap-menu__apply:hover:not(:disabled),
+.cost-cap-menu__reset:hover:not(:disabled) {
+  border-color: var(--border-focus);
+}
+.cost-cap-menu__reset:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The mark that keeps a typed cap from reading as a measured one. */
+.cost-bar__cap-mark {
+  color: var(--text-secondary);
+}

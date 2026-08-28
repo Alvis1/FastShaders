@@ -219,12 +219,52 @@ describe('the Output node\'s preview socket', () => {
     expect(menu).not.toMatch(/<select[\s\S]{0,200}?setMaterialIndex/);
   });
 
+  it('dormant sections hide, announce themselves, and re-measure on waking', () => {
+    // The "different model clears it, the right model restores it" rule:
+    // every consumer must route through dormantIndicesForPreview (the shared
+    // context rules — inventory-unknown hold-off + the 0.6 single-mesh
+    // fallback exemption), and each half fails SILENTLY on its own —
+    // 1. the node skips dormant sections and shows the chip (or they vanish
+    //    with no signal at all);
+    expect(tsx).toContain('dormantIndicesForPreview(materials');
+    expect(tsx).toContain('dormant.has(index) ? null : renderMaterial(index)');
+    expect(tsx).toContain('output-node__dormant');
+    // 2. the updateNodeInternals key folds dormancy — a hidden section
+    //    unmounts REAL channel handles, and without a key change the waking
+    //    section's handles are never re-measured, so every restored wire
+    //    stays undrawn until a reload;
+    expect(tsx).toMatch(/dormant\.has\(i\)\s*\n?\s*\? '~'/);
+    // 3. PreviewLink counts VISIBLE materials for its wire paths through the
+    //    SAME whole-store derivation, or the anchor cache chases a socket
+    //    count the DOM can never reach, re-querying every frame.
+    expect(link).toContain('outputDormancyFromState(');
+  });
+
+  it('an edge into a dormant section is neither hit-testable nor a console flood', () => {
+    const nodeEditor = readFileSync(path.resolve(__dirname, '../NodeEditor.tsx'), 'utf8');
+    // What is not DRAWN must not be hit-testable: without the drawable guard,
+    // handleAnchor's first-handle fallback anchored the invisible edge on the
+    // Output's first mounted handle and drop-on-edge could SPLICE a phantom
+    // curve with no highlight ever painted — committing what was never
+    // previewed, into a sleeping material's wiring.
+    expect(nodeEditor).toContain('edgeEndpointDrawable(srcNode, edge.sourceHandle');
+    expect(nodeEditor).toContain('edgeEndpointDrawable(tgtNode, edge.targetHandle');
+    // And React Flow's 008 stays "always a bug" for everything EXCEPT handles
+    // that parse to a currently-dormant material: unscoped, a sleeping
+    // section warns at frame rate on every pan; blanket suppression would
+    // hide the real missing-useUpdateNodeInternals class.
+    expect(nodeEditor).toContain("onError={onFlowError}");
+    expect(nodeEditor).toContain('outputDormancyFromState(useAppStore.getState()).dormant.has(');
+  });
+
   it('is where the preview wires start — one per socket — and the card replicates it', () => {
     // PreviewLink resolves ALL sockets (plural) and keeps one <path> per
     // material; a singular querySelector would silently pin every wire to
     // material 0's socket.
     expect(link).toContain("querySelectorAll<HTMLElement>('.output-node__preview-socket')");
-    expect(link).toContain('outputMaterials(');
+    // The path count follows the store's VISIBLE-material derivation (see the
+    // dormancy test above for why it is the shared one).
+    expect(link).toContain('outputDormancyFromState(');
     // The per-index d-string dedupe cache must be truncated to the live path
     // count: a shrink-then-regrow (remove a material, undo) mounts a FRESH
     // <path d=""> whose recomputed d matches the stale entry byte-for-byte,

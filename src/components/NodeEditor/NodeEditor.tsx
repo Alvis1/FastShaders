@@ -76,6 +76,7 @@ import {
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
 import { pickSpliceInputPort } from './edgeSplice';
 import { existingOutputId, focusOutputNode } from './outputFocus';
+import { outputDormancyFromState } from '@/utils/outputMaterials';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { getCostScale, getContrastColor } from '@/utils/colorUtils';
@@ -414,6 +415,28 @@ function makeRoomBoxes(
  * internals / hidden boundary edges) are skipped so a node can't splice onto an
  * edge the user can't see.
  */
+/**
+ * What is not DRAWN must not be hit-testable. React Flow renders an edge only
+ * when its NAMED handle resolves in the node's measured bounds — an edge into
+ * a DORMANT Output section's unmounted `m<n>:<channel>` handle renders as
+ * NOTHING — but `handleAnchor`'s first-handle fallback would still anchor it
+ * at the node's first mounted handle, so `findNearestEdge` measured a phantom
+ * curve across empty-looking canvas that a drop could then SPLICE with no
+ * highlight ever painted ("what wasn't previewed is never committed"). A null
+ * handle id keeps the first-handle fallback (React Flow's own rule), and
+ * unmeasured bounds stay permissive (a one-frame mid-mount state).
+ */
+function edgeEndpointDrawable(
+  node: InternalNode,
+  handleId: string | null | undefined,
+  kind: 'source' | 'target',
+): boolean {
+  if (!handleId) return true;
+  const bounds = node.internals.handleBounds?.[kind];
+  if (!bounds) return true;
+  return bounds.some((b) => b.id === handleId);
+}
+
 function findNearestEdge(
   cx: number, cy: number,
   allEdges: AppEdge[],
@@ -431,6 +454,8 @@ function findNearestEdge(
     const srcNode = getInternalNode(edge.source);
     const tgtNode = getInternalNode(edge.target);
     if (!srcNode || !tgtNode) continue;
+    if (!edgeEndpointDrawable(srcNode, edge.sourceHandle, 'source')) continue;
+    if (!edgeEndpointDrawable(tgtNode, edge.targetHandle, 'target')) continue;
 
     const s = handleAnchor(srcNode, edge.sourceHandle, 'source');
     const t = handleAnchor(tgtNode, edge.targetHandle, 'target');
@@ -1609,6 +1634,28 @@ export function NodeEditor() {
     },
     [openContextMenu]
   );
+
+  // React Flow error 008 ("Couldn't create edge for … handle id") is ALWAYS a
+  // bug — the missing-useUpdateNodeInternals trap CLAUDE.md documents — with
+  // ONE deliberate exception: edges into a DORMANT Output section, whose
+  // unmounted handles are the visibility rule's steady state. Unscoped, a
+  // sleeping section floods the dev console at frame rate on every pan (the
+  // edge position selector re-runs per internal store write) and buries the
+  // real 008s. The swallow is scoped to handles that parse to a CURRENTLY
+  // dormant material — blanket 008 suppression would hide the real bug class.
+  const onFlowError = useCallback((code: string, message: string) => {
+    if (code === '008') {
+      const m = /handle id: "m(\d+):/.exec(message);
+      if (m && outputDormancyFromState(useAppStore.getState()).dormant.has(Number(m[1]))) {
+        return;
+      }
+    }
+    // Everything else keeps React Flow's default reporting: warn in dev,
+    // silent in production.
+    if (process.env.NODE_ENV === 'development') {
+      console.warn(`[React Flow]: ${message}`);
+    }
+  }, []);
 
   const onNodeContextMenu = useCallback(
     (event: React.MouseEvent, node: AppNode) => {
@@ -2868,6 +2915,7 @@ export function NodeEditor() {
           // further out; larger graphs that fit below 1.5 are unaffected, and
           // manual zoom can still reach 3.
           fitViewOptions={FIT_VIEW_OPTIONS}
+          onError={onFlowError}
           minZoom={0.1}
           maxZoom={3}
           proOptions={PRO_OPTIONS}

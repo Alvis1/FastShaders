@@ -413,7 +413,54 @@ function loadCostProfiles(): CostProfile[] {
       .filter((p) => Object.keys(p.costs).length > 0);
   } catch { return []; }
 }
+/**
+ * User-set point caps, keyed by device id (a VR_HEADSETS id OR a cost-profile
+ * id). The CostBar's right-click editor is the ONE writer.
+ *
+ * Why a separate map rather than editing the device: VR_HEADSETS is a module
+ * constant carrying a MEASURED budget (see its comment — an unmeasured budget
+ * certifies shaders for hardware nobody ran), and a profile's `maxPoints` is
+ * part of the file it was imported from, which the download → edit → drop-back
+ * loop round-trips byte-for-byte. An override map leaves both intact, survives
+ * a profile re-import, and makes Reset mean exactly "forget my number" with
+ * the device's own budget still underneath it.
+ */
+const MAX_BUDGET_ENTRIES = 64;
+const MAX_BUDGET_POINTS = 1000000;
+
+function persistCostBudgets(map: Record<string, number>): void {
+  try { localStorage.setItem('fs:costBudgets', JSON.stringify(map)); } catch { /* quota */ }
+}
+
+/**
+ * Null-prototype BY CONSTRUCTION: the keys are device ids out of localStorage,
+ * which anything at this origin can write, and a plain object would resolve
+ * `__proto__` / `constructor` / `toString` to inherited values — the
+ * Record-vs-Map trap this codebase documents for every other externally-keyed
+ * map. Reads are plain property access, never `in`.
+ */
+function loadCostBudgets(): Record<string, number> {
+  const out = Object.create(null) as Record<string, number>;
+  try {
+    const raw = localStorage.getItem('fs:costBudgets');
+    if (!raw) return out;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out;
+    let n = 0;
+    for (const [id, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (n >= MAX_BUDGET_ENTRIES) break;
+      if (!id || id.length > 200) continue;
+      const points = Number(v);
+      if (!Number.isFinite(points) || points < 1 || points > MAX_BUDGET_POINTS) continue;
+      out[id] = Math.round(points);
+      n++;
+    }
+  } catch { /* corrupt data */ }
+  return out;
+}
+
 const bootCostProfiles = loadCostProfiles();
+const bootCostBudgets = loadCostBudgets();
 const bootSelectedId = loadString('fs:headsetId', 'quest3');
 // Apply the active profile's measured costs to the nodeCost module BEFORE React
 // mounts, so the first CostBar/badge render already reflects the selected device.
@@ -763,11 +810,27 @@ export function deviceMaxTextureDim(headsetId: string): number {
 export function resolveDeviceBudget(
   id: string,
   profiles: { id: string; label: string; maxPoints: number }[],
-): { label: string; maxPoints: number; isProfile: boolean } {
+  budgetOverrides?: Record<string, number>,
+): { label: string; maxPoints: number; isProfile: boolean; deviceMaxPoints: number; overridden: boolean } {
   const p = profiles.find((x) => x.id === id);
-  if (p) return { label: p.label, maxPoints: p.maxPoints, isProfile: true };
   const h = VR_HEADSETS.find((x) => x.id === id) ?? VR_HEADSETS[0];
-  return { label: h.label, maxPoints: h.maxPoints, isProfile: false };
+  const label = p ? p.label : h.label;
+  // The device's OWN number, kept alongside the effective one so a surface can
+  // say what Reset would restore without re-deriving it (and getting it wrong).
+  const deviceMaxPoints = p ? p.maxPoints : h.maxPoints;
+  // Keyed by the id PASSED IN, not the resolved device: a dangling id (a
+  // profile id from an imported project the user doesn't have) resolves to the
+  // fallback headset, and its override has to travel with the id the rest of
+  // this call is about, or the editor writes to a key nothing reads.
+  const raw = budgetOverrides ? Number(budgetOverrides[id]) : NaN;
+  const overridden = Number.isFinite(raw) && raw > 0;
+  return {
+    label,
+    maxPoints: overridden ? raw : deviceMaxPoints,
+    isProfile: p != null,
+    deviceMaxPoints,
+    overridden,
+  };
 }
 
 /**
@@ -852,6 +915,11 @@ interface AppState {
   // table changes so cost readers (badges) re-render.
   costProfiles: CostProfile[];
   costVersion: number;
+
+  // Point caps the USER typed, by device id — the CostBar's right-click
+  // editor. Layered over the device's own budget by resolveDeviceBudget; see
+  // loadCostBudgets for why it is a map rather than an edit of the device.
+  costBudgetOverrides: Record<string, number>;
 
   // Node editor background color (canvas backdrop). `nodeEditorBgColor` is the
   // EFFECTIVE value for the active theme (what the canvas + edge-contrast read);
@@ -1018,6 +1086,8 @@ interface AppState {
   /** "New profile…" — a hand-authored profile, selected on creation. */
   createCostProfile: (label: string) => CostProfile;
   deleteCostProfile: (id: string) => void;
+  /** Set (or, with null, forget) the user's point cap for one device id. */
+  setCostBudgetOverride: (id: string, points: number | null) => void;
 
   // Sync actions
   setSyncInProgress: (v: boolean) => void;
@@ -1179,6 +1249,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   costColorLow: loadString('fs:costColorLow', '#8BC34A'),
   costColorHigh: loadString('fs:costColorHigh', '#FF5722'),
   costProfiles: bootCostProfiles,
+  costBudgetOverrides: bootCostBudgets,
   costVersion: 0,
   nodeEditorBgColorLight: loadString('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
   nodeEditorBgColorDark: loadString('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK),
@@ -1590,10 +1661,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // bar's scale doesn't jump on import; the meaningful change is the repriced
     // table. (A file this app WROTE carries its own budget — profileFromParsed
     // prefers that.) Re-importing the same run replaces its entry (stable id).
-    const { costProfiles, selectedHeadsetId } = get();
+    const { costProfiles, selectedHeadsetId, costBudgetOverrides } = get();
     // Resolved ONCE, from the pre-import state: resolving per entry would make
     // each profile in a bundle inherit the budget/cap of the one before it.
-    const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles);
+    // Overrides included on purpose — a typed cap is the budget the user is
+    // working to, and that is exactly what "don't let the scale jump" means.
+    const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles, costBudgetOverrides);
     const maxTextureDim = resolveDeviceTextureDim(selectedHeadsetId, costProfiles);
     let nextProfiles = costProfiles;
     let last: CostProfile | null = null;
@@ -1626,8 +1699,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   createCostProfile: (label) => {
-    const { costProfiles, selectedHeadsetId } = get();
-    const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles);
+    const { costProfiles, selectedHeadsetId, costBudgetOverrides } = get();
+    const { maxPoints } = resolveDeviceBudget(selectedHeadsetId, costProfiles, costBudgetOverrides);
     const maxTextureDim = resolveDeviceTextureDim(selectedHeadsetId, costProfiles);
     const profile = createManualProfile(label, maxPoints, maxTextureDim);
     const nextProfiles = [...costProfiles.filter((p) => p.id !== profile.id), profile];
@@ -1645,6 +1718,24 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // If the removed profile was active, fall back to the default headset — this
     // clears the override (base costs) and recomputes via setSelectedHeadsetId.
     if (selectedHeadsetId === id) get().setSelectedHeadsetId(VR_HEADSETS[0].id);
+  },
+
+  setCostBudgetOverride: (id, points) => {
+    // Rebuilt rather than mutated: the map is a store value React compares by
+    // reference, and it is rebuilt null-prototype so a device id can never
+    // reach Object.prototype (loadCostBudgets documents the rule).
+    const next = Object.create(null) as Record<string, number>;
+    for (const [k, v] of Object.entries(get().costBudgetOverrides)) if (k !== id) next[k] = v;
+    if (points !== null) {
+      const n = Math.round(Number(points));
+      // Out-of-range input CLEARS rather than clamping: the editor already
+      // shows what the device's own budget is, so "forget my number" is the
+      // honest reading of a value this can't represent — a silent clamp would
+      // put a number on screen that nobody typed.
+      if (Number.isFinite(n) && n >= 1 && n <= MAX_BUDGET_POINTS) next[id] = n;
+    }
+    persistCostBudgets(next);
+    set({ costBudgetOverrides: next });
   },
 
   setSyncInProgress: (v) => set({ syncInProgress: v }),

@@ -31,6 +31,11 @@ import {
   sanitizeOutputMaterials,
   shiftMaterialHandles,
   foldExtraOutputs,
+  dormantMaterialIndices,
+  dormantIndicesForPreview,
+  outputDefaultContributes,
+  outputDormancyFromState,
+  storedValueEmits,
   MAX_ADDED_MATERIALS,
   MAX_PARTS,
   assignMeshTargets,
@@ -465,5 +470,132 @@ describe('shiftMaterialHandles — removing a material renumbers the rest', () =
     const list = edges();
     // Removing the LAST material moves nothing below it.
     expect(shiftMaterialHandles(list, 'o1', 9)).toBe(list);
+  });
+});
+
+/**
+ * Dormant sections — the "different model clears it, the right model restores
+ * it" behaviour is a pure VISIBILITY rule over the session-only inventory:
+ * data, edges and emission never change, which is what makes the restore
+ * perfect. These pins are the rule's edges.
+ */
+describe('dormantMaterialIndices', () => {
+  const mats = (...targets: (string[] | null)[]) =>
+    [{}, ...targets.map((t) => (t ? { meshTargets: t } : {}))];
+
+  it('hides an added material whose EVERY mesh is absent', () => {
+    expect(dormantMaterialIndices(mats(['Body']), [])).toEqual(new Set([1]));
+    expect(dormantMaterialIndices(mats(['Body']), ['Other'])).toEqual(new Set([1]));
+  });
+
+  it('keeps a PARTIALLY present material visible (the picker marks the rest)', () => {
+    expect(dormantMaterialIndices(mats(['Body', 'Glass']), ['Glass'])).toEqual(new Set());
+  });
+
+  it('never hides material 0 or an EMPTY added material', () => {
+    // Material 0 is the node's own channel state; an empty material names
+    // nothing to be missing — it is a "No mesh" state to resolve, and hiding
+    // it would orphan it forever.
+    expect(dormantMaterialIndices(mats(null), [])).toEqual(new Set());
+    expect(dormantMaterialIndices([{ meshTargets: ['Gone'] }, { meshTargets: ['Gone2'] }], [])).toEqual(
+      new Set([1]),
+    );
+  });
+
+  it('reads the legacy single meshTarget shape through materialTargetNames', () => {
+    const legacy = [{}, { meshTarget: { name: 'Old' } }];
+    expect(dormantMaterialIndices(legacy, [])).toEqual(new Set([1]));
+    expect(dormantMaterialIndices(legacy, ['Old'])).toEqual(new Set());
+  });
+
+  it('wakes the section the moment its name is back', () => {
+    expect(dormantMaterialIndices(mats(['Body']), ['Body'])).toEqual(new Set());
+  });
+});
+
+describe('outputDefaultContributes / dormantIndicesForPreview (the context rules)', () => {
+  const mats = (...targets: string[][]) => [{}, ...targets.map((t) => ({ meshTargets: t }))];
+
+  it('storedValueEmits treats the documented no-ops as absent', () => {
+    expect(storedValueEmits('discard', 0)).toBe(false);
+    expect(storedValueEmits('position', 0)).toBe(false);
+    expect(storedValueEmits('normal', '#8080FF')).toBe(false);
+    expect(storedValueEmits('color', '#00ff00')).toBe(true);
+    expect(storedValueEmits('discard', 0.5)).toBe(true);
+  });
+
+  it('material 0 contributes via a BARE-handle edge, never an m<n>: one', () => {
+    const out = output('o1', [{ meshTargets: ['Body'] }]);
+    expect(outputDefaultContributes(out, [makeEdge('f1', 'out', 'o1', 'm1:color')])).toBe(false);
+    expect(outputDefaultContributes(out, [makeEdge('f1', 'out', 'o1', 'color')])).toBe(true);
+  });
+
+  it('material 0 contributes via an emitting stored value on an EXPOSED channel only', () => {
+    const out = output('o1');
+    (out.data as { values?: Record<string, unknown> }).values = { color: '#00ff00' };
+    expect(outputDefaultContributes(out, [])).toBe(true);
+    // Exposure-gated (emission is): a tampered value on a hidden channel is inert.
+    (out.data as { exposedPorts?: string[] }).exposedPorts = ['roughness'];
+    expect(outputDefaultContributes(out, [])).toBe(false);
+    // A documented no-op value never counts.
+    const noop = output('o2');
+    (noop.data as { values?: Record<string, unknown> }).values = { discard: 0 };
+    expect(outputDefaultContributes(noop, [])).toBe(false);
+  });
+
+  it('an UNKNOWN inventory (model loaded, report pending) hides nothing', () => {
+    // The swap window: the chip must not claim "for another model" about the
+    // very model that is loading.
+    expect(
+      dormantIndicesForPreview(mats(['Body']), {
+        meshNames: [], inventoryKnown: false, defaultContributes: true,
+      }),
+    ).toEqual(new Set());
+  });
+
+  it("mirrors the 0.6 single-mesh fallback: parts-only + one mesh keeps the FIRST named material visible", () => {
+    // That material is actively SHADING the screen — hiding it behind a
+    // "for another model" chip would be a lie.
+    const opts = { meshNames: [] as string[], inventoryKnown: true, defaultContributes: false };
+    expect(dormantIndicesForPreview(mats(['Body'], ['Glass']), opts)).toEqual(new Set([2]));
+    // A contributing default disarms the loader fallback, so both sleep.
+    expect(
+      dormantIndicesForPreview(mats(['Body'], ['Glass']), { ...opts, defaultContributes: true }),
+    ).toEqual(new Set([1, 2]));
+    // On a MULTI-mesh mismatched model the loader leaves authored materials
+    // alone (variants fallback), so no exemption — both sleep.
+    expect(
+      dormantIndicesForPreview(mats(['Body'], ['Glass']), {
+        ...opts, meshNames: ['OtherX', 'OtherY'],
+      }),
+    ).toEqual(new Set([1, 2]));
+    // The exemption skips an EMPTY material and lands on the first NAMED one.
+    expect(
+      dormantIndicesForPreview([{}, {}, { meshTargets: ['Body'] }], opts),
+    ).toEqual(new Set());
+  });
+
+  it('outputDormancyFromState derives the same set from a whole-store shape', () => {
+    const out = output('o1', [{ meshTargets: ['Body'] }]);
+    (out.data as { values?: Record<string, unknown> }).values = { color: '#00ff00' };
+    const state = {
+      nodes: [out], edges: [], previewMesh: null,
+      previewMeshInventory: null,
+    };
+    // No custom model: inventory KNOWN (primitives), default contributes ->
+    // the section sleeps and the visible count drops to material 0 alone.
+    expect(outputDormancyFromState(state)).toEqual({
+      outputId: 'o1', dormant: new Set([1]), visibleCount: 1,
+    });
+    // The matching model wakes it.
+    expect(
+      outputDormancyFromState({
+        ...state, previewMesh: {}, previewMeshInventory: { meshes: [{ name: 'Body' }] },
+      }).dormant,
+    ).toEqual(new Set());
+    // Loaded but unreported: hold off.
+    expect(
+      outputDormancyFromState({ ...state, previewMesh: {}, previewMeshInventory: null }).dormant,
+    ).toEqual(new Set());
   });
 });

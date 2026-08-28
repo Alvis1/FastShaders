@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { useAppStore, VR_HEADSETS, resolveDeviceBudget } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import {
@@ -14,6 +15,7 @@ import {
 // the pole-picker rule below is written with two classes anyway, so this is
 // belt-and-braces rather than the mechanism.
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
+import { placePopover, pickPortalHost } from '@/components/inputs/colorPickerModel';
 import './CostBar.css';
 
 /**
@@ -53,6 +55,8 @@ export const CostBar = memo(function CostBar() {
   const setCostColorLow = useAppStore((s) => s.setCostColorLow);
   const setCostColorHigh = useAppStore((s) => s.setCostColorHigh);
   const costProfiles = useAppStore((s) => s.costProfiles);
+  const costBudgetOverrides = useAppStore((s) => s.costBudgetOverrides);
+  const setCostBudgetOverride = useAppStore((s) => s.setCostBudgetOverride);
   const importCostProfile = useAppStore((s) => s.importCostProfile);
   const importCostProfiles = useAppStore((s) => s.importCostProfiles);
   const createCostProfile = useAppStore((s) => s.createCostProfile);
@@ -87,11 +91,109 @@ export const CostBar = memo(function CostBar() {
   const activeProfile = costProfiles.find((p) => p.id === selectedHeadsetId) ?? null;
   const measuredProfiles = costProfiles.filter((p) => !p.meta.manual);
   const manualProfiles = costProfiles.filter((p) => p.meta.manual);
-  const { label: deviceLabel, maxPoints: maxBudget } = resolveDeviceBudget(selectedHeadsetId, costProfiles);
+  const { label: deviceLabel, maxPoints: maxBudget, deviceMaxPoints, overridden: capOverridden } =
+    resolveDeviceBudget(selectedHeadsetId, costProfiles, costBudgetOverrides);
   // A dangling id (e.g. a profile id from an imported project the user doesn't
   // have) resolves to base budget but isn't a real option — show the fallback.
   const knownId = activeProfile != null || VR_HEADSETS.some((h) => h.id === selectedHeadsetId);
   const selectValue = knownId ? selectedHeadsetId : VR_HEADSETS[0].id;
+  /* ── The point cap's right-click editor ────────────────────────────────
+   * The cap is the one number on this panel that is a JUDGEMENT rather than a
+   * measurement: 200 is what a Quest 3 was benchmarked at, but an exhibit
+   * targeting 90 Hz, or a piece that shares the frame with other content,
+   * wants its own line. It is a context menu rather than an always-visible
+   * field because this panel already carries a device picker, a gradient and
+   * a provenance tag, and a fourth editable control would bury them.
+   *
+   * Anchored to the POINTER, not to the bar: a right-click's menu appearing
+   * anywhere but under the cursor reads as a different control opening.
+   */
+  const [capMenuAt, setCapMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [capDraft, setCapDraft] = useState('');
+  const [capPos, setCapPos] = useState<{ left: number; top: number } | null>(null);
+  const [capHost, setCapHost] = useState<HTMLElement | null>(null);
+  const capBoxRef = useRef<HTMLDivElement | null>(null);
+  const capInputRef = useRef<HTMLInputElement | null>(null);
+  const barRef = useRef<HTMLDivElement | null>(null);
+
+  const openCapMenu = useCallback((e: ReactMouseEvent) => {
+    // The native menu would cover our own, and the canvas behind this overlay
+    // has its own contextmenu handling — neither may see this press.
+    e.preventDefault();
+    e.stopPropagation();
+    setCapDraft(String(maxBudget));
+    setCapPos(null);                         // re-measured below; never a stale frame
+    setCapMenuAt({ x: e.clientX, y: e.clientY });
+  }, [maxBudget]);
+
+  const closeCapMenu = useCallback(() => setCapMenuAt(null), []);
+
+  const commitCap = useCallback(() => {
+    const n = Math.round(Number(capDraft.trim()));
+    if (Number.isFinite(n) && n >= 1) {
+      // Typing the device's OWN number clears the override instead of storing
+      // a redundant one — otherwise the ✎ mark would claim a custom cap that
+      // is identical to the measured one (the uniform-overlay rule: an
+      // override is a DIFFERENCE, never a stored copy of the default).
+      setCostBudgetOverride(selectedHeadsetId, n === deviceMaxPoints ? null : n);
+    }
+    closeCapMenu();
+  }, [capDraft, deviceMaxPoints, selectedHeadsetId, setCostBudgetOverride, closeCapMenu]);
+
+  const resetCap = useCallback(() => {
+    setCostBudgetOverride(selectedHeadsetId, null);
+    closeCapMenu();
+  }, [selectedHeadsetId, setCostBudgetOverride, closeCapMenu]);
+
+  // Measured placement (placePopover's rule: never a hardcoded height), then
+  // focus. Both are keyed on `capMenuAt`, so they run for the popover that is
+  // actually mounted — an effect without that key attaches to nothing.
+  useLayoutEffect(() => {
+    if (!capMenuAt) return;
+    // Both spellings, per the picker's rule — WebKit only has the prefixed one.
+    const doc = document as Document & { webkitFullscreenElement?: Element | null };
+    const fsEl = (document.fullscreenElement ?? doc.webkitFullscreenElement ?? null) as HTMLElement | null;
+    setCapHost(pickPortalHost(fsEl, barRef.current, document.body));
+  }, [capMenuAt]);
+  useLayoutEffect(() => {
+    if (!capMenuAt || !capBoxRef.current) return;
+    const box = capBoxRef.current.getBoundingClientRect();
+    setCapPos(placePopover(
+      { left: capMenuAt.x, top: capMenuAt.y, bottom: capMenuAt.y },
+      { width: box.width, height: box.height },
+      { width: window.innerWidth, height: window.innerHeight },
+    ));
+  }, [capMenuAt, capHost]);
+  useEffect(() => {
+    // `capHost` is a dependency because the popover does not exist until the
+    // host resolves: on the FIRST open this effect would otherwise run against
+    // an unmounted box and the input would never take focus.
+    if (!capMenuAt || !capHost) return;
+    const input = capInputRef.current;
+    if (input) { input.focus(); input.select(); }
+    const onDown = (e: PointerEvent) => {
+      if (!capBoxRef.current?.contains(e.target as Node)) closeCapMenu();
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); closeCapMenu(); }
+    };
+    // A click into the 3D preview IFRAME never reaches this document, so the
+    // outside-pointerdown listener alone leaves the menu open over the largest
+    // target on screen. Focus is the only signal that crosses; read on a
+    // macrotask because at blur time activeElement is still the old node.
+    const onBlur = () => window.setTimeout(() => {
+      if (document.activeElement instanceof HTMLIFrameElement) closeCapMenu();
+    }, 0);
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [capMenuAt, capHost, closeCapMenu]);
+
   const percentage = Math.min(totalCost / maxBudget, 1);
   const over = totalCost > maxBudget;
   const invalid = activeProfile?.meta.valid === false;
@@ -378,11 +480,13 @@ export const CostBar = memo(function CostBar() {
 
   return (
     <div
+      ref={barRef}
       className={`cost-bar${dragOver ? ' cost-bar--drop' : ''}`}
       onDrop={onDrop}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
-      title={t('Drop a benchmark result or an exported profile (.json) here to add it as a device profile.', language)}
+      onContextMenu={openCapMenu}
+      title={`${t('Drop a benchmark result or an exported profile (.json) here to add it as a device profile.', language)}\n${t('Right-click to set the point cap.', language)}`}
     >
       <div className="cost-bar__device-row">
         <select
@@ -497,8 +601,11 @@ export const CostBar = memo(function CostBar() {
         <span className="cost-bar__label-end">0</span>
         <span
           className={`cost-bar__value ${over ? 'cost-bar__value--over' : ''}`}
-          title={`${t('Estimated GPU cost: {total} of {max} points for {headset}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.', language).replace('{total}', String(totalCost)).replace('{max}', String(maxBudget)).replace('{headset}', deviceLabel)}${over ? t(' You are over budget.', language) : ''}`}
+          title={`${t('Estimated GPU cost: {total} of {max} points for {headset}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.', language).replace('{total}', String(totalCost)).replace('{max}', String(maxBudget)).replace('{headset}', deviceLabel)}${over ? t(' You are over budget.', language) : ''}${capOverridden ? `\n${t('Custom cap — {device} measures {n}. Right-click to change or reset it.', language).replace('{device}', deviceLabel).replace('{n}', String(deviceMaxPoints))}` : `\n${t('Right-click to set the point cap.', language)}`}`}
         >
+          {/* A typed cap must never pass for the device's measured budget —
+              same rule as the "✎ custom" tag on a hand-authored profile. */}
+          {capOverridden && <span className="cost-bar__cap-mark">✎ </span>}
           {totalCost} / {maxBudget} {t('pts', language)}
         </span>
         <span className="cost-bar__label-end">{maxBudget}</span>
@@ -565,6 +672,58 @@ export const CostBar = memo(function CostBar() {
             ⭳ complexity.json
           </button>
         </div>
+      )}
+      {capMenuAt && capHost && createPortal(
+        <div
+          ref={capBoxRef}
+          className="cost-cap-menu"
+          role="dialog"
+          aria-label={t('Point cap', language)}
+          style={{
+            left: capPos ? `${capPos.left}px` : `${capMenuAt.x}px`,
+            top: capPos ? `${capPos.top}px` : `${capMenuAt.y}px`,
+            // Hidden for the one frame between mount and measurement, or the
+            // menu visibly jumps from the cursor to its placed position.
+            visibility: capPos ? 'visible' : 'hidden',
+          }}
+          // stopPropagation only, NOT preventDefault: a React portal bubbles
+          // through the REACT tree, so a right-click in here would reach the
+          // bar's own handler and re-open the menu — but suppressing the
+          // native menu as well would take the input's paste entry with it.
+          onContextMenu={(e) => e.stopPropagation()}
+        >
+          <div className="cost-cap-menu__title">{t('Point cap', language)}</div>
+          <div className="cost-cap-menu__row">
+            <input
+              ref={capInputRef}
+              className="cost-cap-menu__input"
+              type="number"
+              min={1}
+              step={10}
+              value={capDraft}
+              onChange={(e) => setCapDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); commitCap(); }
+              }}
+              aria-label={t('Point cap', language)}
+            />
+            <span className="cost-cap-menu__unit">{t('pts', language)}</span>
+            <button className="cost-cap-menu__apply" onClick={commitCap}>
+              {t('Set', language)}
+            </button>
+          </div>
+          {/* Always shown, not only when overridden: the device's own number is
+              the context that makes a typed one meaningful, and it is what the
+              reset restores. */}
+          <button
+            className="cost-cap-menu__reset"
+            onClick={resetCap}
+            disabled={!capOverridden}
+          >
+            {t('Use {device} budget ({n})', language).replace('{device}', deviceLabel).replace('{n}', String(deviceMaxPoints))}
+          </button>
+        </div>,
+        capHost,
       )}
       {modal && (
         <CostProfileModal

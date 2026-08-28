@@ -3,6 +3,9 @@ import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react'
 import {
   assignMeshTargets,
   outputMaterials,
+  dormantIndicesForPreview,
+  storedValueEmits,
+  parseChannelHandle,
   materialTargetNames,
   materialExposedPorts,
   channelHandle,
@@ -83,16 +86,9 @@ export const OUTPUT_COLOR_VALUE_PORTS: Record<string, string> = {
  */
 export const OUTPUT_EMPTY_COLOR = '#ff0000';
 
-/** Stored channel values that graphToCode deliberately treats as no-ops and
- *  emits NOTHING for, so they do not make the node "contribute" (see the
- *  Output-node stored-value contract in CLAUDE.md: zero discard/displacement
- *  and the identity normal texel are indistinguishable from an absent key). */
-function storedValueEmits(channel: string, v: unknown): boolean {
-  if (v === undefined || v === null || v === '') return false;
-  if (channel === 'discard' || channel === 'position') return Number(v) !== 0;
-  if (channel === 'normal') return String(v).toLowerCase() !== '#8080ff';
-  return true;
-}
+// storedValueEmits moved to utils/outputMaterials — the red-fallback swatch
+// below and outputDefaultContributes (the 0.6 single-mesh-fallback mirror)
+// must share ONE notion of "this value emits".
 
 /** Displacement may go negative / beyond 1; everything else is a 0-1 dial. */
 const CLAMP01_PORTS = new Set(['roughness', 'metalness', 'opacity', 'discard']);
@@ -128,6 +124,9 @@ export const OutputNode = memo(function OutputNode({
     [meshNamesKey],
   );
   const hasMeshes = meshNames.length > 0;
+  // A custom model that has not REPORTED yet (the swap window) must not put
+  // sections to sleep — see dormantIndicesForPreview rule 1.
+  const inventoryKnown = useAppStore((s) => !s.previewMesh || !!s.previewMeshInventory);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
@@ -300,6 +299,31 @@ export const OutputNode = memo(function OutputNode({
     );
   }, [wiredLabels, values, exposedSet]);
 
+  // Sections whose EVERY named mesh is absent from the loaded model are
+  // DORMANT — hidden behind the chip below, never deleted: drop a different
+  // model and the multimesh setup clears itself from the node; load the
+  // matching model again and it is back, wiring intact, because nothing but
+  // visibility ever changed. Two context rules ride along (see
+  // dormantIndicesForPreview): an unreported model hides nothing, and on a
+  // ONE-mesh model with a non-contributing material 0 the FIRST named
+  // material stays visible — the 0.6 loader's single-mesh fallback is
+  // actively painting the screen with it, and hiding what is being rendered
+  // would make the chip a lie. Material 0's contribution is derived from the
+  // SAME wiredLabels/values the red-fallback swatch uses, scoped to the bare
+  // (index-0) handles.
+  const defaultContributes = useMemo(() => {
+    for (const h of wiredLabels.keys()) {
+      if (parseChannelHandle(h).index === 0) return true;
+    }
+    return Object.keys(values).some(
+      (k) => exposedSet.has(k) && storedValueEmits(k, values[k]),
+    );
+  }, [wiredLabels, values, exposedSet]);
+  const dormant = useMemo(
+    () => dormantIndicesForPreview(materials, { meshNames, inventoryKnown, defaultContributes }),
+    [materials, meshNames, inventoryKnown, defaultContributes],
+  );
+
   /**
    * Write one material's stored channel values.
    *
@@ -370,7 +394,14 @@ export const OutputNode = memo(function OutputNode({
   const updateNodeInternals = useUpdateNodeInternals();
   const exposedKey = materials
     .map((m, i) =>
-      (i === 0 ? exposedPorts : materialExposedPorts(m, OUTPUT_DEFAULT_EXPOSED)).join('|'),
+      // A DORMANT section renders nothing, so its whole handle block is
+      // unmounted — the key must change when a section sleeps or WAKES, or
+      // the remounted handles are never re-measured and every wire restored
+      // with the section stays undrawn until a reload. '~' cannot collide
+      // with a joined port list (port ids are word characters).
+      dormant.has(i)
+        ? '~'
+        : (i === 0 ? exposedPorts : materialExposedPorts(m, OUTPUT_DEFAULT_EXPOSED)).join('|'),
     )
     .join('\u0001');
   useEffect(() => {
@@ -572,7 +603,27 @@ export const OutputNode = memo(function OutputNode({
         <span className="output-node__title" style={{ color: headerTextColor }}>Output</span>
       </div>
 
-      {materials.map((_, index) => renderMaterial(index))}
+      {materials.map((_, index) => (dormant.has(index) ? null : renderMaterial(index)))}
+
+      {/* The "nothing silently vanished" signal: counts the dormant sections,
+          its title names their meshes, and the sections return — wiring
+          intact — the moment a model carrying those names is loaded. */}
+      {dormant.size > 0 && (
+        <div
+          className="output-node__dormant"
+          title={`${t('Mesh materials for another model — the loaded model has none of their meshes. They still emit, and their sections return (wiring intact) when a matching model is loaded', language)}: ${[...dormant]
+            .flatMap((i) => materialTargetNames(materials[i]))
+            .join(', ')}`}
+        >
+          {dormant.size}{' '}
+          {t(
+            dormant.size === 1
+              ? 'mesh material for another model'
+              : 'mesh materials for another model',
+            language,
+          )}
+        </div>
+      )}
 
       {/* Add another mesh material. Present only for a MODEL with a mesh left
           to claim: with none free the button could only mint a material that

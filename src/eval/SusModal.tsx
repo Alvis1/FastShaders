@@ -22,6 +22,7 @@ import {
 } from './telemetry';
 import { deriveSummary, runQualityChecks, type QualityCheck } from './telemetryModel';
 import { buildEvalPackageEntries, evalZipFileName } from './evalPackage';
+import { EVAL_UPLOAD_URL, uploadEvalPackage, type EvalUploadResult } from './evalUpload';
 import {
   SUS_ANCHOR_HIGH_EN,
   SUS_ANCHOR_HIGH_LV,
@@ -64,6 +65,8 @@ interface DoneState {
   zipBytes: Uint8Array;
   mailto: string;
   failedChecks: QualityCheck[];
+  /** Delivery option B: 'pending' while in flight; 'disabled' = not configured. */
+  upload: EvalUploadResult | 'pending';
 }
 
 function downloadBytes(fileName: string, bytes: Uint8Array): void {
@@ -219,7 +222,23 @@ export function SusModal({ open, onClose }: Props) {
     ];
     const mailto = buildMailtoUrl(EVAL_STUDY_EMAIL, subject, bodyLines.join('\n'));
 
-    setDone({ fileName, zipBytes, mailto, failedChecks: quality.filter((q) => !q.ok) });
+    // Delivery option B (fire-and-forget): the download above already happened
+    // — the upload is IN ADDITION, and every failure mode degrades to the
+    // attach-it-yourself instructions the thank-you screen shows anyway. The
+    // disabled state is decided synchronously so "Sending…" never flashes on
+    // the default (no-endpoint) configuration.
+    setDone({
+      fileName,
+      zipBytes,
+      mailto,
+      failedChecks: quality.filter((q) => !q.ok),
+      upload: EVAL_UPLOAD_URL ? 'pending' : 'disabled',
+    });
+    if (EVAL_UPLOAD_URL) {
+      void uploadEvalPackage(fileName, zipBytes).then((result) => {
+        setDone((d) => (d && d.fileName === fileName ? { ...d, upload: result } : d));
+      });
+    }
   };
 
   if (!open) return null;
@@ -247,6 +266,13 @@ export function SusModal({ open, onClose }: Props) {
               {done.failedChecks.map((q) => q.id).join(', ')}
             </div>
           )}
+          {done.upload === 'ok' ? (
+            <div className="csv-import-modal__message">
+              {t('The package was also sent to the researcher automatically — the email step below is only a backup.', language)}
+            </div>
+          ) : done.upload === 'pending' ? (
+            <div className="csv-import-modal__message">{t('Sending to the researcher…', language)}</div>
+          ) : null}
           <div className="csv-import-modal__message">
             {t('Last step: press “Open email”, attach the downloaded file to the message, and send it. If no email app opens, just tell the researcher — the file is in the Downloads folder.', language)}
           </div>
