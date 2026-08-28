@@ -1,7 +1,7 @@
 import { memo, useEffect, type MouseEvent } from 'react';
 import { NodeResizeControl, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { GroupFlowNode } from '@/types';
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, MIN_GROUP_W, MIN_GROUP_H } from '@/store/useAppStore';
 import { getGroupFrameColors } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import './GroupNode.css';
@@ -90,8 +90,8 @@ export const GroupNode = memo(function GroupNode({
         <NodeResizeControl
           position="bottom-right"
           color={color}
-          minWidth={120}
-          minHeight={80}
+          minWidth={MIN_GROUP_W}
+          minHeight={MIN_GROUP_H}
           style={{ width: 15, height: 15, borderRadius: 3, border: '2px solid #fff' }}
         />
       )}

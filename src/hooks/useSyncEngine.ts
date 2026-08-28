@@ -1,11 +1,11 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { findDefaultOutput } from '@/utils/outputTargets';
 import { useAppStore } from '@/store/useAppStore';
 import { graphToCode } from '@/engine/graphToCode';
 import { codeToGraph } from '@/engine/codeToGraph';
 import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { computeReachableCost } from '@/utils/nodeCost';
+import { findDefaultOutput } from '@/utils/outputMaterials';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
@@ -128,19 +128,18 @@ export function useSyncEngine() {
           const usedOldIds = new Set<string>();
           const positioned: AppNode[] = [];
 
-          // Index old nodes by registryType+label and registryType for O(n) lookup
-          // Pass-1 identity. Every parsed Output is labelled literally
-          // "Output", so with per-mesh materials they ALL collapse into one
-          // bucket and pair by array order — which silently swaps one
-          // material's stored values, exposed ports and settings onto
-          // another. Folding the mesh target in makes the pairing mean what
-          // it says: this material matches the material for the same mesh.
-          const matchKey = (n: AppNode): string => {
-            const target = n.data.registryType === 'output'
-              ? ((n.data as { meshTarget?: { name?: unknown } }).meshTarget?.name ?? '')
-              : '';
-            return `${n.data.registryType}\0${n.data.label}\0${String(target)}`;
-          };
+          // Index old nodes by registryType+label and registryType for O(n) lookup.
+          //
+          // Pass-1 identity. Per-mesh materials live INSIDE the one Output
+          // node, so there is only ever one to pair and its materials ride
+          // along with it — no per-material key is needed here. (While each
+          // targeted mesh had its own Output NODE this key had to fold the
+          // mesh in: every parsed Output is labelled literally "Output", so
+          // they all collapsed into one bucket and paired by array order,
+          // silently swapping one material's values and settings onto
+          // another. That whole class is gone with the extra nodes.)
+          const matchKey = (n: AppNode): string =>
+            `${n.data.registryType}\0${n.data.label}`;
           const oldByExactKey = new Map<string, AppNode[]>();
           const oldByType = new Map<string, AppNode[]>();
           for (const old of oldNodes) {
@@ -379,8 +378,11 @@ export function useSyncEngine() {
     if (total === lastCostRef.current) return;
     lastCostRef.current = total;
 
-    // Collapse the `setTotalCost` write and the output-node cost write into a
+    // Collapse the `setTotalCost` write and the output-node cost writes into a
     // single setState so we don't re-enter this effect twice for one change.
+    //
+    // The Output node's badge is the whole-shader total — it is one node, and
+    // every material's chain is reachable from it.
     const outputNode = findDefaultOutput(nodes);
     const needsOutputUpdate = !!(outputNode && outputNode.data.cost !== total);
     useAppStore.setState((state) => ({

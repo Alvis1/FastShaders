@@ -16,7 +16,7 @@ import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
 import { sanitizeDrawings } from '@/utils/drawings';
 import { sanitizePalettes } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
-import { sanitizeOutputTargets } from '@/utils/outputTargets';
+import { sanitizeOutputMaterials, foldExtraOutputs } from '@/utils/outputMaterials';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { generateId } from '@/utils/idGenerator';
 import { readZip, type ZipReadEntry } from '@/utils/zipReader';
@@ -101,7 +101,7 @@ function applyProjectToStore(project: FastShadersProject): void {
   // origin. Emission re-validates every name, so this bounds what the STORE
   // carries (history clones, the autosave, the next export) and de-dupes two
   // Outputs claiming one mesh.
-  dataSanitized.nodes = sanitizeOutputTargets(dataSanitized.nodes);
+  dataSanitized.nodes = sanitizeOutputMaterials(dataSanitized.nodes);
 
   // Board drawings are adversarial too — bound them before they enter the store.
   const drawings = sanitizeDrawings(project.drawings);
@@ -124,11 +124,18 @@ function applyProjectToStore(project: FastShadersProject): void {
   // boundary to catch it.
   const edges = sanitizeEdgeExtras(project.graph.edges);
 
+  // A project written by the multi-Output design (or hand-edited to look like
+  // one) is folded into the single-node shape, keeping the edges that fed the
+  // extras — otherwise those Outputs sit on the canvas emitting nothing and
+  // whatever was wired into them is silently lost. Runs on the SANITIZED edges,
+  // since it re-points and re-ids some of them.
+  const folded = foldExtraOutputs(dataSanitized.nodes, edges);
+
   // Restore graph last — switching syncSource to 'graph' will trigger
   // graphToCode in useSyncEngine, regenerating the editor code to match.
   useAppStore.setState({
-    nodes: dataSanitized.nodes,
-    edges,
+    nodes: folded.nodes,
+    edges: folded.edges,
     drawings,
     shaderPalettes: palettes,
     syncSource: 'graph',

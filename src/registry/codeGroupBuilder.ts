@@ -133,21 +133,31 @@ export function buildCodeGroup(entry: CodeGroupEntry, groupIdPrefix: string): Co
 
   // Create group container
   const groupId = `${groupIdPrefix}${entry.id}`;
+  const frameW = maxX - minX + PAD * 2;
+  const frameH = maxY - minY + TOP_PAD + noteBand + PAD;
   const groupNode: AppNode = {
     id: groupId,
     type: 'group',
     position: { x: 0, y: 0 },
+    // TOP-LEVEL width/height plus the `data` mirror — the exact shape
+    // `groupSelection` writes. This used to be a `style: { width, height }`
+    // instead, which React Flow renders identically (`node.width ??
+    // node.style?.width`) and which therefore looked correct for as long as
+    // nobody ASKED the node how big it was. `toggleGroupCollapsed` asks: it
+    // read `node.width ?? data.width ?? 200`, found neither, recorded 200 as
+    // the remembered expanded size, and expanded every dropped preset and
+    // texture to a 200x120 stub with its whole graph outside the frame.
+    width: frameW,
+    height: frameH,
     data: {
       registryType: 'group',
       label: entry.name,
       color: entry.color,
       collapsed: false,
       titleSize: entry.titleSize,
+      width: frameW,
+      height: frameH,
     } as GroupNodeData,
-    style: {
-      width: maxX - minX + PAD * 2,
-      height: maxY - minY + TOP_PAD + noteBand + PAD,
-    },
   } as AppNode;
 
   // Reparent nodes into group, offset positions relative to group. The note

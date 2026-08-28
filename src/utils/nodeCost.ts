@@ -1,5 +1,5 @@
 import type { AppNode, AppEdge } from '@/types';
-import { findDefaultOutput } from '@/utils/outputTargets';
+import { outputNodes } from '@/utils/outputMaterials';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import complexityData from '@/registry/complexity.json';
@@ -88,7 +88,7 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
 }
 
 /**
- * Sum the GPU cost of every node reachable (backward) from the Output node —
+ * Sum the GPU cost of every node reachable (backward) from an Output node —
  * the number the CostBar shows. Reverse-BFS over an incoming-edge adjacency map
  * (O(V+E)). Callers MUST hand in edges already run through
  * `unwrapCollapsedGroupEdges` — collapsing a group must never change the
@@ -96,17 +96,33 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
  * itself has no `registryType`, so `nodeCostPoints` prices it at 0 and only the
  * members are counted. Returns 0 when there's no Output node.
  *
+ * EVERY Output seeds the walk. Per-mesh materials live inside the one Output
+ * now, so its chains — the default's and every added material's — are all
+ * reachable from that single seed; the multi-seed form stays as the defensive
+ * case for a graph that reaches here before `foldExtraOutputs` has run.
+ *
+ * A node feeding two materials is counted ONCE (the `visited` set), so the
+ * total is a lower bound on true multi-pipeline cost: the GPU compiles the
+ * shared node into every material that uses it. Real per-part pricing needs a
+ * ShaderCarousel calibration entry and is still to come.
+ *
  * Shared by useSyncEngine (runs per graph change) and the store's device
  * selection (activating a cost profile changes the table, not the graph, so the
  * `[nodes, edges]` effect wouldn't otherwise re-fire).
  */
 export function computeReachableCost(nodes: AppNode[], edges: AppEdge[]): number {
-  // The DEFAULT output: with per-mesh materials, cost means "what the whole
-  // model costs to shade", and the default is the one whose chain every
-  // unclaimed mesh runs. (Per-part totals are a separate, later question.)
-  const outputNode = findDefaultOutput(nodes);
-  if (!outputNode) return 0;
+  const outputs = outputNodes(nodes);
+  if (outputs.length === 0) return 0;
+  return sumReachable(nodes, edges, outputs.map((n) => n.id), new Set(outputs.map((n) => n.id)));
+}
 
+/** Reverse-BFS from `seeds`, summing everything reached except the Outputs. */
+function sumReachable(
+  nodes: AppNode[],
+  edges: AppEdge[],
+  seeds: string[],
+  outputIds: Set<string>,
+): number {
   const incoming = new Map<string, string[]>();
   for (const e of edges) {
     const list = incoming.get(e.target);
@@ -114,7 +130,7 @@ export function computeReachableCost(nodes: AppNode[], edges: AppEdge[]): number
     else incoming.set(e.target, [e.source]);
   }
   const visited = new Set<string>();
-  const queue = [outputNode.id];
+  const queue = [...seeds];
   for (let head = 0; head < queue.length; head++) {
     const id = queue[head];
     if (visited.has(id)) continue;
@@ -127,7 +143,9 @@ export function computeReachableCost(nodes: AppNode[], edges: AppEdge[]): number
 
   let total = 0;
   for (const node of nodes) {
-    if (!visited.has(node.id) || node.id === outputNode.id) continue;
+    // Every Output is excluded, not just the seeds: an Output is a sink, not a
+    // priced operation, and with per-mesh materials there are several.
+    if (!visited.has(node.id) || outputIds.has(node.id)) continue;
     // No collapsed-group branch: `data.cost` was a snapshot taken at collapse
     // time over ALL members with no reachability filter, so collapsing a group
     // that held a dead-end branch inflated the budget, a group saved before the

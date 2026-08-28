@@ -19,6 +19,31 @@ type Shade = (x: number, y: number) => [number, number, number];
 // Static snapshots of each preset's default parameters (animated presets are
 // frozen mid-motion). Normal-based presets fake a sphere: nz = sqrt(1-x²-y²).
 
+/**
+ * Hue/saturation/lightness -> RGB, matching the branchless helper graphToCode
+ * emits for the `hsl` node (HSL_HELPER_LINES) so the Hue Shift tile lands on
+ * the same colors the shader does.
+ */
+function hsl2rgb(h: number, s: number, l: number): [number, number, number] {
+  const h6 = h * 6;
+  const k = (n: number) => clamp01(Math.abs(((h6 + n) % 6) - 3) - 1);
+  const sat = s * (1 - Math.abs(2 * l - 1));
+  const lo = l - sat / 2;
+  return [k(0) * sat + lo, k(4) * sat + lo, k(2) * sat + lo];
+}
+
+/**
+ * Stand-in for `mx_cell_noise_float`: one stable pseudo-random value per
+ * integer cell. Deterministic on purpose — Math.random would give the Mosaic
+ * tile a different face on every mount.
+ */
+function cellHash(ix: number, iy: number, iz: number): number {
+  let h = (ix | 0) * 374761393 + (iy | 0) * 668265263 + (iz | 0) * 2147483647;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 1274126177) >>> 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
 const PRESET_SHADES: Record<string, Shade> = {
   'gradient':
   (x, y) => {
@@ -50,6 +75,20 @@ const PRESET_SHADES: Record<string, Shade> = {
     const fy = Math.floor(uy * count);
     const m = (((fx + fy) % 2) + 2) % 2;
     return lerp3(A, B, m);
+  },
+  'circle':
+  (x, y) => {
+    // Pure UV space, so the tile IS the plane view: a true circle here, while
+    // the sphere's equirectangular UV stretches it into a lobe (as the card
+    // description says).
+    const u = (x + 1) / 2;
+    const v = (1 - y) / 2;
+    const field = Math.hypot(u - 0.5, v - 0.5);
+    const soft = Math.max(0.04, 0.001); // discSoftness, guarded as the preset does
+    const disc = 1 - smoothstep(0.32, 0.32 + soft, field); // discRadius = 0.32
+    const back: [number, number, number] = [0.078, 0.125, 0.227]; // 0x14203A
+    const disc0: [number, number, number] = [1.0, 0.784, 0.271]; // 0xFFC845
+    return lerp3(back, disc0, clamp01(disc));
   },
   'edge-glow':
   (x: number, y: number): [number, number, number] => {
@@ -99,6 +138,20 @@ const PRESET_SHADES: Record<string, Shade> = {
     const b = clamp01(base + amp * Math.cos(6.2832 * (t + 0.67)));
     return [r, g, b];
   },
+  'hue-shift':
+  (x, y) => {
+    // The base 0x8E6FD8 in HSL — computed once rather than converted per pixel,
+    // since the preset only ever shifts its HUE. s is pre-multiplied by the
+    // hueBoost of 1.3 and clamped, exactly as the graph's Clamp does.
+    const h0 = 0.7159, s0 = 0.7459, l0 = 0.6412;
+    const v = (1 - y) / 2;
+    // Frozen at t = 2 (hueSpeed 0.15): puts the red-to-green quarter of the
+    // wheel on the tile. Lightness is constant by construction, so this reads
+    // as a band of hue and not as a light ramp.
+    const turned = (h0 + v * 0.35 + 2.0 * 0.15) % 1; // hueSpread = 0.35
+    const [r, g, b] = hsl2rgb(turned, s0, l0);
+    return [clamp01(r), clamp01(g), clamp01(b)];
+  },
   'noise-mask':
   (x: number, y: number): [number, number, number] => {
     const n = perlin2D(x * 3, y * 3);
@@ -110,6 +163,20 @@ const PRESET_SHADES: Record<string, Shade> = {
     const colorA: [number, number, number] = [0.106, 0.369, 0.125];
     const colorB: [number, number, number] = [1.0, 0.976, 0.769];
     return lerp3(colorA, colorB, k);
+  },
+  'mosaic':
+  (x: number, y: number): [number, number, number] => {
+    const r2 = x * x + y * y;
+    if (r2 > 1) return [0.06, 0.07, 0.10];
+    const nz = Math.sqrt(1 - r2);
+    // mosaicScale 7 x the sphere's 0.8 radius, then x0.62 for the tile: at the
+    // authored scale the facets fall to a few pixels each and read as static
+    // rather than as cells (the tile-scale adjustment dissolve/noise-mask make).
+    const S = 7 * 0.8 * 0.62;
+    const id = cellHash(Math.floor(x * S), Math.floor(-y * S), Math.floor(nz * S));
+    const a: [number, number, number] = [0.043, 0.235, 0.365]; // 0x0B3C5D
+    const b: [number, number, number] = [0.949, 0.757, 0.306]; // 0xF2C14E
+    return lerp3(a, b, clamp01(Math.pow(id, 1.6))); // mosaicContrast = 1.6
   },
   'toon-ramp':
   (x: number, y: number): [number, number, number] => {
@@ -148,6 +215,26 @@ const PRESET_SHADES: Record<string, Shade> = {
     const g = clamp01(0.3 + 0.55 * nz + 0.15 * swell);
     return [g, g, clamp01(g * 1.06)];
   },
+  'noise-blob':
+  (x: number, y: number): [number, number, number] => {
+    // Displacement, like vertex-wave — so the tile draws the SILHOUETTE the
+    // displacement produces, not a painted pattern. Here the radius is
+    // perturbed by noise rather than by a travelling sine.
+    const drift = 0.6 * 0.4; // t = 0.6, blobSpeed = 0.4
+    // x0.33 tames perlin2D's real ~±1.5 spread to mx_noise_float's ~±1 (the
+    // file-wide convention); the noise stays SIGNED, so lumps dent and bulge.
+    const nAt = (ax: number, ay: number) =>
+      perlin2D(ax * 0.8 * 2.4 + drift, ay * 0.8 * 2.4 + drift) * 0.33;
+    const r = Math.hypot(x, y);
+    const dx = r > 1e-4 ? x / r : 0;
+    const dy = r > 1e-4 ? y / r : 0;
+    const R = 0.8 + nAt(dx, dy) * 0.28; // blobAmount = 0.28
+    if (r > R) return [0.12, 0.13, 0.17];
+    const q = r / R;
+    const nz = Math.sqrt(Math.max(0, 1 - q * q));
+    const g = clamp01(0.3 + 0.55 * nz + 0.55 * nAt(x, y));
+    return [clamp01(g * 1.04), clamp01(g * 0.96), clamp01(g * 0.88)];
+  },
   'top-cover':
   (x: number, y: number): [number, number, number] => {
     const r2 = x * x + y * y;
@@ -159,6 +246,37 @@ const PRESET_SHADES: Record<string, Shade> = {
     // coverage 0.6 -> snow line 1−0.6 = 0.4, softness 0.2 -> smoothstep(0.2, 0.6, n.y)
     const k = clamp01(smoothstep(0.2, 0.6, ny));
     return lerp3(base, cover, k);
+  },
+  'distance-fog':
+  (x: number, y: number): [number, number, number] => {
+    const r2 = x * x + y * y;
+    if (r2 > 1) return [0.10, 0.11, 0.12];
+    const nz = Math.sqrt(1 - r2);
+    // `behind` is the fragment's offset from the model centre ALONG the view,
+    // negative toward the camera — which on the faked sphere is exactly
+    // -nz * 0.8. fogNear = -0.8 (the nose) to fogFar = 0 (the centre plane).
+    const behind = -nz * 0.8;
+    const k = clamp01((behind + 0.8) / 0.8);
+    const surface: [number, number, number] = [0.847, 0.263, 0.082]; // 0xD84315
+    const fog: [number, number, number] = [0.690, 0.745, 0.773];     // 0xB0BEC5
+    return lerp3(surface, fog, k);
+  },
+  'iridescence':
+  (x: number, y: number): [number, number, number] => {
+    const r2 = x * x + y * y;
+    if (r2 > 1) return [0.07, 0.07, 0.09];
+    const nz = Math.sqrt(1 - r2);
+    // viewDir = (0,0,1), so the fresnel term is just nz. iriSharpness = 0.7.
+    const rim = Math.pow(1 - clamp01(nz), 0.7);
+    const sweep = rim * 1.6; // iriSpread
+    const base = [0.549, 0.549, 0.627]; // 0x8C8CA0
+    const sheen = [0.451, 0.400, 0.502]; // 0x736680
+    const ph = [0, 0.33, 0.67];
+    // The rim drives the palette PHASE and then scales its amplitude, so the
+    // head-on centre stays base colour and the bands crowd toward the edge.
+    return [0, 1, 2].map((i) =>
+      clamp01(base[i] + sheen[i] * Math.cos((ph[i] + sweep) * 6.2832) * rim),
+    ) as [number, number, number];
   },
   'dissolve':
   (x, y) => {
@@ -176,6 +294,27 @@ const PRESET_SHADES: Record<string, Shade> = {
       clamp01(body[2] * solid + edge[2] * band),
     ];
   },
+  'lava-crust':
+  (x: number, y: number): [number, number, number] => {
+    const r2 = x * x + y * y;
+    if (r2 > 1) return [0.05, 0.04, 0.04];
+    // lavaScale 2.5 x the sphere's 0.8 radius, then x1.15 for the tile — the
+    // crack network has to show a few whole loops at 128px, and the taming
+    // factor is 0.62 rather than the file's usual 0.33 because what matters
+    // here is the WIDTH of the zero contour, and perlin2D runs ~1.5x the
+    // amplitude of the shader's mx_noise_float.
+    const n = perlin2D(x * 2.5 * 0.8 * 1.15 + 0.072, y * 2.5 * 0.8 * 1.15 + 0.072) * 0.62;
+    const ridge = Math.abs(n);
+    const crust = smoothstep(0, 0.14, ridge); // lavaCrackWidth, tile-widened
+    const heat = 1 - crust;
+    const plate = 1 - ridge * 0.7;
+    const rock: [number, number, number] = [0.227 * plate, 0.165 * plate, 0.133 * plate];
+    const hot: [number, number, number] = [1.0, 0.353, 0.0]; // 0xFF5A00
+    const surface = lerp3(rock, hot, heat);
+    // Colour AND emissive, since that is what the user sees once both are wired.
+    const hotAmt = heat * heat * 2;
+    return [0, 1, 2].map((i) => clamp01(surface[i] + hot[i] * hotAmt)) as [number, number, number];
+  },
   'hologram':
   (x: number, y: number): [number, number, number] => {
     const r2 = x * x + y * y;
@@ -188,6 +327,30 @@ const PRESET_SHADES: Record<string, Shade> = {
     const scanDim = s01 * 0.4;
     const lifted = rim + scanDim + 0.15;
     return [clamp01((0x18 / 255) * lifted), clamp01(lifted), clamp01(lifted)];
+  },
+  'teleport-beam':
+  (x: number, y: number): [number, number, number] => {
+    // Cut pixels return the BACKGROUND, so the bite reads as missing surface
+    // rather than as a dark band.
+    const bg: [number, number, number] = [0.06, 0.07, 0.08];
+    const r2 = x * x + y * y;
+    if (r2 > 1) return bg;
+    const nz = Math.sqrt(1 - r2);
+    const py = -y * 0.8; // world Y; y = -1 is the top row
+    // Frozen at t = 1.93 (beamSpeed 0.35): the sweep sits in the upper third,
+    // so most of the body survives to be bitten INTO.
+    const center = ((1.93 * 0.35) % 1) * 2 - 1;
+    const d = Math.abs(py - center);
+    const span = 0.25; // beamHeight
+    // beamDensity is 26 here, not the authored 60: at 128px the real density
+    // puts a scanline period near Nyquist and the band moires into a smear.
+    const radius = (Math.sin(py * 26) * 0.5 + 0.5) * span;
+    if (d < radius) return bg;
+    const heat = 1 - smoothstep(0, span, d);
+    const body = lerp3([0.180, 0.247, 0.322], [0.251, 1.0, 0.784], heat);
+    const glow: [number, number, number] = [0.251, 1.0, 0.784]; // 0x40FFC8
+    const shade = 0.75 + 0.6 * nz;
+    return [0, 1, 2].map((i) => clamp01(body[i] * shade + glow[i] * heat)) as [number, number, number];
   },
   'force-field':
   (x: number, y: number): [number, number, number] => {
@@ -243,6 +406,24 @@ const PRESET_SHADES: Record<string, Shade> = {
       clamp01(base[1] + 0.95 * light),
       clamp01(base[2] + light),
     ];
+  },
+  'studio-shine':
+  (x: number, y: number): [number, number, number] => {
+    const r2 = x * x + y * y;
+    if (r2 > 1) return [0.06, 0.07, 0.09];
+    const nz = Math.sqrt(1 - r2);
+    // In tile space the camera basis IS the tile axes: camRight = (1,0,0),
+    // camUp = (0,1,0), viewDir = (0,0,1). So the three dot products against the
+    // sphere normal (x, -y, nz) are just its components.
+    const keyLit = clamp01(x * -0.36 + -y * 0.48 + nz * 0.8);
+    const light = clamp01(
+      keyLit * 0.7                          // shineKeyLevel
+      + Math.pow(keyLit, 120)               // shineTightness
+      + smoothstep(0.55, 1, 1 - nz) * 0.6,  // shineRimStrength
+    );
+    const base: [number, number, number] = [0.118, 0.141, 0.188]; // 0x1E2430
+    const key: [number, number, number] = [1.0, 0.945, 0.835];    // 0xFFF1D5
+    return lerp3(base, key, light);
   },
 };
 

@@ -677,6 +677,9 @@
    corner. 6 + 24 (chip) + 6 = 36px. */
 .shader-preview__body--stats .shader-preview__uniforms {
   top: 36px;
+  /* Re-derived height cap for the lower top edge: 36px top + the same 59px
+     bottom reserve as the base rule. */
+  max-height: calc(100% - 95px);
 }
 
 .shader-preview__uniforms {
@@ -689,6 +692,19 @@
   gap: 4px;
   padding: 6px 8px;
   max-width: 220px;
+  /* A long uniform list scrolls INSIDE the panel instead of growing past the
+     3D view: the panel is an absolute child of `.shader-preview__body`, so
+     100% is the pane's height. 65 = the 6px top offset + 59px reserved for
+     the bottom bar's row (10px inset + a MEASURED 43px single-row bar), so an
+     overflowing panel stops above the play/fullscreen controls rather than
+     covering them — the panel is z-index 5 over the bar's 2, so an overlap
+     would occlude the pills, not just shade them. A wrap-reverse bar that
+     stacks a second row can still be overlapped; that needs a pane too short
+     to matter. `overscroll-behavior` keeps a wheel at the list's end from
+     bleeding into whatever scrolls behind the pane. */
+  max-height: calc(100% - 65px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);

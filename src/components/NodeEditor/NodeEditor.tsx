@@ -51,6 +51,7 @@ import { NewShaderModal } from '@/components/Modals/NewShaderModal';
 import { ImageImportModal, type ImageImportChoice } from '@/components/Modals/ImageImportModal';
 import { ImageConvertInfoModal } from '@/components/Modals/ImageConvertInfoModal';
 import { downloadShader } from '@/engine/exportShader';
+import { evalLog, isEvalSessionActive } from '@/eval/telemetry';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
 import { BUILTIN_TEXTURE_DRAG_TYPE } from './TextureCard';
 import { BUILTIN_PRESET_DRAG_TYPE } from './PresetCard';
@@ -74,6 +75,7 @@ import {
 } from './dragConnect';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
 import { pickSpliceInputPort } from './edgeSplice';
+import { existingOutputId, focusOutputNode } from './outputFocus';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { getCostScale, getContrastColor } from '@/utils/colorUtils';
@@ -697,12 +699,11 @@ export function NodeEditor() {
       const store = useAppStore.getState();
       const idMap = new Map<string, string>();
 
-      // The Output node is a SINGLETON and this is the one path that could mint
-      // a second one: every other add surface gates it, but paste and duplicate
-      // write through setNodes and never reach that gate. A second Output is
-      // not merely redundant — only one is ever emitted, so the copy is dead
-      // weight that the next code-panel Apply then deletes without a word, and
-      // in the meantime it changes what the canvas claims the shader does.
+      // Outputs are dropped from a paste/duplicate. The Output is a SINGLETON
+      // — per-mesh shading lives INSIDE it as stacked materials (see
+      // outputFocus.ts and the CLAUDE.md per-mesh convention) — so a clone
+      // could never emit: `findDefaultOutput` takes the first, and the copy is
+      // dead weight the next code-panel Apply deletes without a word.
       // Dropped from the clone set rather than refusing the whole paste: a
       // selection is usually a working cluster that happens to include the
       // Output, and losing the rest of it would be the bigger surprise.
@@ -815,6 +816,15 @@ export function NodeEditor() {
 
         const selectedNodeIds = new Set(selectedNodes.map((n) => n.id));
         const selectedEdgeIds = new Set(selectedEdges.map((edge) => edge.id));
+        // Eval telemetry: this deletion path bypasses store.removeNode/
+        // removeEdge (it rewrites via setNodes/setEdges), so it logs its own.
+        for (const n of selectedNodes) {
+          evalLog('node-remove', {
+            nodeType: (n.data as { registryType?: string })?.registryType ?? n.type ?? 'unknown',
+            how: 'delete-key',
+          });
+        }
+        for (let i = 0; i < selectedEdges.length; i++) evalLog('edge-disconnect', { how: 'delete-key' });
         store.pushHistory();
 
         // Deleting a group should dissolve it, not orphan its children with a
@@ -959,6 +969,13 @@ export function NodeEditor() {
       }
       const pos = screenToFlowPosition({ x: clientX, y: clientY });
       const store = useAppStore.getState();
+      // An Output tile's drop is REDIRECTED to the existing node (the singleton
+      // rule — see placeTilePayload), so previewing a connection here would
+      // promise a wire the drop will never commit.
+      if (def.type === 'output' && existingOutputId(store.nodes)) {
+        clearConnectPreview();
+        return false;
+      }
       const boxes = connectTargetBoxes(TILE_PHANTOM_ID, store.nodes);
       const hoverId = pickDropTargetNode(pos.x, pos.y, boxes);
       const hoverBox = hoverId ? boxes.find((b) => b.id === hoverId) : undefined;
@@ -1082,6 +1099,23 @@ export function NodeEditor() {
       );
       setEdges(addEdge(newEdge, filtered) as AppEdge[]);
       exposeConnectedTarget(connection.target, connection.targetHandle);
+
+      // Eval telemetry: this is the ONE connect path (wire drops, drag-connect
+      // and tile drag-connect all funnel here), so one call covers them all.
+      // Gated so normal sessions don't pay the two node scans for a log call
+      // that would be dropped (evalLog's own guard covers only the call).
+      if (isEvalSessionActive()) {
+        const ns = useAppStore.getState().nodes;
+        const typeOf = (id: string | null): string => {
+          const n = ns.find((x) => x.id === id);
+          return (n?.data as { registryType?: string } | undefined)?.registryType ?? n?.type ?? 'unknown';
+        };
+        evalLog('edge-connect', {
+          sourceType: typeOf(connection.source),
+          targetType: typeOf(connection.target),
+          targetHandle: connection.targetHandle ?? '',
+        });
+      }
 
       // Auto-linearize an image wired into the Output's Normal socket. The
       // codegen decodes it as a tangent-space normal MAP via normalMap(), which
@@ -1585,7 +1619,18 @@ export function NodeEditor() {
           : node.type === 'note'
             ? 'note'
             : NODE_MENU_TYPES[node.data.registryType] ?? 'node';
-      openContextMenu(event.clientX, event.clientY, menuType, node.id);
+      // Which Output MATERIAL SECTION was under the cursor: each block carries
+      // `data-material-index`, so the settings menu opens already scoped to
+      // that section (its channels, its material settings). The touch
+      // long-press path re-dispatches contextmenu on the pointerdown target,
+      // so `event.target` resolves identically there.
+      const section = (event.target as HTMLElement | null)?.closest?.('[data-material-index]');
+      const raw = section ? Number(section.getAttribute('data-material-index')) : NaN;
+      const materialIndex = Number.isInteger(raw) && raw >= 0 ? raw : undefined;
+      openContextMenu(
+        event.clientX, event.clientY, menuType, node.id,
+        undefined, undefined, undefined, materialIndex,
+      );
     },
     [openContextMenu]
   );
@@ -1721,6 +1766,31 @@ export function NodeEditor() {
       clearConnectPreview();
       const position = screenToFlowPosition({ x: clientX, y: clientY });
 
+      // The Output-singleton redirect runs BEFORE the asset-drop telemetry:
+      // once an Output exists the tile is a "take me to it" affordance — the
+      // drop glides the view to the existing node instead of silently doing
+      // nothing, which read as a broken tile — and a redirected drop places
+      // nothing, so an eval session must not count it as an asset placement.
+      if (payload.kind === 'node') {
+        const dropDef = NODE_REGISTRY.get(payload.nodeType);
+        if (dropDef?.type === 'output') {
+          const nodesNow = useAppStore.getState().nodes;
+          const existing = existingOutputId(nodesNow);
+          if (existing) {
+            focusOutputNode(fitView, nodesNow, existing);
+            return;
+          }
+        }
+      }
+
+      // Eval telemetry: which ready-made asset (or palette node) was placed.
+      // Node-kind drops ALSO produce a node-add via addNode — this event is
+      // the "came from the palette" marker, not a duplicate count.
+      evalLog('asset-drop', {
+        kind: payload.kind,
+        id: payload.kind === 'node' ? payload.nodeType : payload.id,
+      });
+
       if (payload.kind === 'savedGroup') {
         useAppStore.getState().instantiateSavedGroup(payload.id, position);
         return;
@@ -1742,7 +1812,8 @@ export function NodeEditor() {
 
       let newNodeId: string | undefined;
       if (def.type === 'output') {
-        if (currentNodes.some((n) => n.data.registryType === 'output')) return;
+        // Reached only with NO Output present (the user deleted it) — the
+        // singleton redirect above returned before the telemetry otherwise.
         const newNode: AppNode = {
           id: generateId(),
           type: 'output',
@@ -1809,6 +1880,7 @@ export function NodeEditor() {
       addNode,
       getInternalNode,
       getViewport,
+      fitView,
       clearConnectPreview,
       applyConnection,
       scheduleTileConnectSnap,

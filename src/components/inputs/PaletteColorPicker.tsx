@@ -177,13 +177,27 @@ export function ColorPickerPopover({
     [brackets, bracket, clearIdle, onPick],
   );
 
-  /** A swatch click is its own commit: one deliberate choice, one recent. */
-  const commitPick = useCallback(
+  /**
+   * Pick a colour that is ALREADY on screen — a palette swatch, or one of the
+   * recents.
+   *
+   * Deliberately records NOTHING. "Recent" is for colours the user MIXED: a
+   * palette colour is permanently one click away in the rows above, so pushing
+   * it into a 12-slot MRU spends a slot to duplicate something already visible
+   * and evicts a mixed colour that exists nowhere else. Re-recording a recent
+   * has the same problem from the other side — it would reorder the rows under
+   * the pointer mid-click.
+   *
+   * It still FLUSHES first, so a custom colour the user had just dragged to is
+   * committed rather than dropped by the swatch click that follows it.
+   */
+  const pickSwatch = useCallback(
     (hex: string) => {
-      applyLive(hex);
       flushCommit();
+      if (brackets) bracket();
+      onPick(hex);
     },
-    [applyLive, flushCommit],
+    [flushCommit, brackets, bracket, onPick],
   );
 
   const handleClear = useCallback(() => {
@@ -262,11 +276,37 @@ export function ColorPickerPopover({
       e.stopPropagation();
       closeSelf();
     };
+    /**
+     * A click inside an IFRAME never reaches this document, so `onDown` above
+     * cannot see it — and the 3D preview is an iframe filling most of the right
+     * column, so "click elsewhere to dismiss" simply stopped working over the
+     * largest target on screen (the popover sat there over the viewport until
+     * something else was clicked). Focus DOES cross: the browser focuses the
+     * `<iframe>` element and blurs this window, which is the only signal
+     * available for a cross-origin/sandboxed frame.
+     *
+     * Gated on the newly-focused element actually BEING an iframe. A window
+     * blur also fires when the user switches app or tab — and, on macOS, when
+     * the "Custom" row opens the OS colour dialog, where closing the popover
+     * would kill the picker mid-pick. Read on a macrotask because at blur time
+     * `document.activeElement` is still the old element.
+     */
+    let focusProbe = 0;
+    const onWinBlur = () => {
+      window.clearTimeout(focusProbe);
+      focusProbe = window.setTimeout(() => {
+        if (document.activeElement instanceof HTMLIFrameElement) closeSelf();
+      }, 0);
+    };
+
     document.addEventListener('pointerdown', onDown, true);
     document.addEventListener('keydown', onKey, true);
+    window.addEventListener('blur', onWinBlur);
     return () => {
+      window.clearTimeout(focusProbe);
       document.removeEventListener('pointerdown', onDown, true);
       document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('blur', onWinBlur);
     };
   }, [open, anchor, closeSelf]);
 
@@ -344,7 +384,7 @@ export function ColorPickerPopover({
                 // `names` is materialized to the same length as `colors` by
                 // buildPickerSections, so this index is always in range.
                 title={swatchTitle(hex, sec.names[i])}
-                onClick={() => commitPick(hex)}
+                onClick={() => pickSwatch(hex)}
               />
             ))}
           </div>
@@ -376,7 +416,7 @@ export function ColorPickerPopover({
                 className={`palette-pop__swatch ${current === hex ? 'palette-pop__swatch--current' : ''}`}
                 style={{ background: hex }}
                 title={hex}
-                onClick={() => commitPick(hex)}
+                onClick={() => pickSwatch(hex)}
               />
             ))}
           </div>

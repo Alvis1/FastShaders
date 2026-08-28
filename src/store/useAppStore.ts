@@ -32,7 +32,7 @@ import {
 } from '@/utils/costOverride';
 import { makeDataNodeData, sanitizeDataNodes } from '@/utils/dataNode';
 import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
-import { sanitizeOutputTargets, findDefaultOutput } from '@/utils/outputTargets';
+import { sanitizeOutputMaterials, foldExtraOutputs, findDefaultOutput } from '@/utils/outputMaterials';
 import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, type ImageOriginInfo } from '@/utils/imageNode';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
@@ -46,6 +46,11 @@ import {
   type Palette,
 } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
+// Eval-mode telemetry: `evalLog` is a no-op outside a study session, so these
+// calls cost one boolean check in normal use. The chokepoint set is pinned by
+// src/eval/evalHooks.test.ts. telemetry.ts never imports this store (bridge
+// pattern), so the dependency is one-way.
+import { evalLog } from '@/eval/telemetry';
 import type { PreviewMesh } from '@/utils/previewMesh';
 import type { MeshInventory } from '@/utils/meshInventory';
 import { savePreviewMeshToCache } from '@/utils/previewMeshCache';
@@ -67,6 +72,50 @@ export interface SavedGroup {
 
 const SAVED_GROUPS_KEY = 'fs:savedGroups';
 
+/**
+ * The smallest a group frame may be — the bounds GroupNode hands its resize
+ * grip, exported so the two cannot drift.
+ *
+ * They are also the test `toggleGroupCollapsed` uses to decide whether a
+ * REMEMBERED expanded size is real: a value below what the grip itself can
+ * produce is a lost or half-written one, not a size the user chose, so the
+ * expand falls back to fitting the members instead of trusting it.
+ */
+export const MIN_GROUP_W = 120;
+export const MIN_GROUP_H = 80;
+
+/**
+ * A group frame's authored size, wherever that node happens to carry it.
+ *
+ * There are two shapes in the wild and React Flow renders BOTH identically
+ * (`node.width ?? node.style?.width`), which is exactly why the divergence went
+ * unnoticed: `groupSelection` writes top-level `width`/`height` plus a `data`
+ * mirror, while `codeGroupBuilder` — every built-in preset and texture — wrote
+ * `style: { width, height }` and nothing else. Anything that ASKED the node how
+ * big it was got 200x120 for the second kind, and `toggleGroupCollapsed` asks:
+ * it recorded that as the remembered expanded size, so expanding a collapsed
+ * preset produced a 200x120 stub with the whole graph outside the frame.
+ *
+ * The builder writes the canonical shape now, but a `style`-only group sits in
+ * every graph saved before that — hence reading all of them here rather than
+ * migrating on load: one function, no version bump, and a hand-edited file with
+ * junk in one field falls through to the next.
+ */
+export function groupFrameSize(node: AppNode): { w: number; h: number } {
+  const n = node as AppNode & {
+    width?: unknown; height?: unknown;
+    style?: { width?: unknown; height?: unknown };
+    measured?: { width?: unknown; height?: unknown };
+    data?: { width?: unknown; height?: unknown };
+  };
+  const num = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+  return {
+    w: num(n.width) ?? num(n.style?.width) ?? num(n.data?.width) ?? num(n.measured?.width) ?? 200,
+    h: num(n.height) ?? num(n.style?.height) ?? num(n.data?.height) ?? num(n.measured?.height) ?? 120,
+  };
+}
+
 // Exported for savedGroupsSanitize.test.ts — module init calls it against the
 // real localStorage, the test re-runs it against a stubbed one.
 export function loadSavedGroups(): SavedGroup[] {
@@ -87,13 +136,21 @@ export function loadSavedGroups(): SavedGroup[] {
       // bounds, edge-`data` sanitizing (TypedEdge dereferences `waypoints`
       // during RENDER, no error boundary), and exposedPorts normalization
       // (ShaderNode does `new Set(data.exposedPorts)` during render, and
-      // `new Set(5)` throws).
+      // `new Set(5)` throws) — and Output mesh-target lists, since a group may
+      // legitimately CONTAIN an Output (groupSelection filters only groups and
+      // notes) and instantiating one clones it into the live graph
+      // (`instantiateSavedGroup` then folds a second Output into the existing
+      // one — the singleton rule). Without this, a tampered `fs:savedGroups`
+      // could plant an unbounded target payload that then rides every history
+      // clone, the autosave and the project embed.
       .map((g) => {
         autoExposeConnectedParamPorts(g.nodes, g.edges);
         return {
           ...g,
-          nodes: sanitizeDataRangeNodes(
-            sanitizeDataNodes(sanitizeImageNodes(g.nodes, false).nodes).nodes,
+          nodes: sanitizeOutputMaterials(
+            sanitizeDataRangeNodes(
+              sanitizeDataNodes(sanitizeImageNodes(g.nodes, false).nodes).nodes,
+            ),
           ),
           edges: sanitizeEdgeExtras(g.edges),
         };
@@ -257,6 +314,10 @@ interface ContextMenuState {
   /** Source pin info when menu was opened by dragging from an output handle. */
   sourceNodeId?: string;
   sourceHandleId?: string;
+  /** Which Output MATERIAL SECTION was right-clicked (`data-material-index`
+   *  on `.output-node__material`) — ShaderSettingsMenu seeds its material
+   *  selector from it, so each section opens its own scoped menu. */
+  materialIndex?: number;
 }
 
 interface HistoryEntry {
@@ -630,9 +691,16 @@ export function loadGraph(): {
       // grammar gate lives at the emitter, which is the only place the string
       // could become code.
       data.nodes = sanitizeDataRangeNodes(data.nodes);
-      // Per-mesh Output bindings — see projectImport for the reasoning; the
-      // two restore paths must agree or a reload changes what renders.
-      data.nodes = sanitizeOutputTargets(data.nodes);
+      // Per-mesh materials — see projectImport for the reasoning; the restore
+      // paths must agree or a reload changes what renders. The fold covers a
+      // session saved by the multi-Output design, whose extra nodes would
+      // otherwise sit inert with their wiring stranded.
+      data.nodes = sanitizeOutputMaterials(data.nodes);
+      {
+        const folded = foldExtraOutputs(data.nodes, data.edges);
+        data.nodes = folded.nodes;
+        data.edges = folded.edges;
+      }
 
       // Edge `data` is adversarial too, and it is the one graph payload nothing
       // validated — TypedEdge maps `waypoints` and dereferences `w.x` during
@@ -984,7 +1052,7 @@ interface AppState {
   endInteraction: () => void;
 
   // UI actions
-  openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string) => void;
+  openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string, materialIndex?: number) => void;
   closeContextMenu: () => void;
   /** Add a CSV import awaiting a decision to the queue. */
   enqueueCsvImport: (item: PendingCsvImport) => void;
@@ -1178,11 +1246,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }),
 
   addNode: (node) => {
+    evalLog('node-add', { nodeType: (node.data as { registryType?: string })?.registryType ?? node.type ?? 'unknown' });
     get().pushHistory();
     set((state) => ({ nodes: [...state.nodes, node], syncSource: 'graph', isUndoRedo: false }));
   },
 
   removeNode: (nodeId) => {
+    const removed = get().nodes.find((n) => n.id === nodeId);
+    if (removed) {
+      evalLog('node-remove', {
+        nodeType: (removed.data as { registryType?: string })?.registryType ?? removed.type ?? 'unknown',
+      });
+    }
     get().pushHistory();
     set((state) => {
       const nodes = state.nodes.filter((n) => n.id !== nodeId);
@@ -1195,6 +1270,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   removeEdge: (edgeId) => {
+    // Both the drag-to-disconnect gesture (onReconnectEnd) and the edge menu's
+    // delete land here — the keyboard-delete path logs its own (NodeEditor).
+    evalLog('edge-disconnect', { how: 'remove-edge' });
     get().pushHistory();
     set((state) => {
       const norm = normalizeChainOperands(
@@ -1269,6 +1347,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   newGraph: () => {
+    evalLog('new-graph');
     // The name resets too, and that is load-bearing rather than tidiness: the
     // shader name is what every export path turns into a FILE name, and the
     // desktop Work folder now adopts the opened file's name on load (see
@@ -1497,6 +1576,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setCodeErrors: (errors) => set({ codeErrors: errors }),
 
+  // NB deliberately NO evalLog here: projectImport also calls this on the
+  // bare-script import path, which would conflate imports with user Applies —
+  // the 'code-apply' event is logged at CodeEditor's two Apply gestures.
   requestCodeSync: () => set({ codeSyncRequested: true, previewCode: get().code }),
 
   setTotalCost: (cost) => set({ totalCost: cost }),
@@ -1570,7 +1652,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
   coalescingHistory: false,
   interactionDepth: 0,
 
-  beginInteraction: () =>
+  beginInteraction: () => {
+    // One `gesture` event per bracket-OPENING (a gesture is one act, not one
+    // per pointermove frame — the same coalescing rationale as history). No
+    // `kind` payload: brackets are opened by value scrubs AND colour-picker
+    // sessions alike, and this chokepoint cannot tell them apart.
+    if (!get().coalescingHistory) evalLog('gesture');
     set((state) => {
       if (state.coalescingHistory) {
         // Nested gesture riding the open bracket — count it so a deferred
@@ -1590,7 +1677,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         interactionDepth: 1,
         isUndoRedo: false,
       };
-    }),
+    });
+  },
 
   endInteraction: () => {
     const state = get();
@@ -1617,7 +1705,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       };
     }),
 
-  undo: () =>
+  undo: () => {
+    // Log only a REAL undo (Akers 2009 — undo events as problem indicators);
+    // a no-op press on an empty history is not one.
+    if (get().past.length > 0) evalLog('undo');
     set((state) => {
       const prev = state.past[state.past.length - 1];
       if (!prev) return {};
@@ -1632,9 +1723,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
         syncSource: 'graph',
         isUndoRedo: true,
       };
-    }),
+    });
+  },
 
-  redo: () =>
+  redo: () => {
+    if (get().future.length > 0) evalLog('redo');
     set((state) => {
       const next = state.future[state.future.length - 1];
       if (!next) return {};
@@ -1649,10 +1742,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
         syncSource: 'graph',
         isUndoRedo: true,
       };
-    }),
+    });
+  },
 
-  openContextMenu: (x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId) =>
-    set({ contextMenu: { open: true, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId } }),
+  openContextMenu: (x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, materialIndex) =>
+    set({ contextMenu: { open: true, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, materialIndex } }),
 
   closeContextMenu: () =>
     set({ contextMenu: { open: false, x: 0, y: 0, type: 'canvas' } }),
@@ -1902,10 +1996,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // out of their parent we'd need to translate, but `sameParent` short-circuits
     // that — positions stay valid as-is.
     type Measured = AppNode & { measured?: { width?: number; height?: number }; width?: number; height?: number };
-    const getSize = (n: AppNode) => ({
-      w: (n as Measured).measured?.width ?? (n as Measured).width ?? 160,
-      h: (n as Measured).measured?.height ?? (n as Measured).height ?? 60,
-    });
+    const getSize = (n: AppNode) => {
+      // A member that is itself a GROUP may carry its size in any of the
+      // places `groupFrameSize` knows about, and `measured` is the pill's box
+      // while it is collapsed — so the frame is built around what is on screen.
+      if (n.type === 'group' && !(n.data as GroupNodeData).collapsed) return groupFrameSize(n);
+      return {
+        w: (n as Measured).measured?.width ?? (n as Measured).width ?? 160,
+        h: (n as Measured).measured?.height ?? (n as Measured).height ?? 60,
+      };
+    };
 
     const PADDING = 24;
     const HEADER_H = 22;
@@ -2324,10 +2424,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
       groupCostSum += nodeCostPoints(m, state.edges);
     }
 
-    // Compact pill size when collapsed; restore to remembered expanded size otherwise.
-    type Sized = AppNode & { width?: number; height?: number };
-    const currentWidth = (groupNode as Sized).width ?? groupData.width ?? 200;
-    const currentHeight = (groupNode as Sized).height ?? groupData.height ?? 120;
+    // Compact pill size when collapsed; restore to remembered expanded size
+    // otherwise. Read through `groupFrameSize`, NOT `node.width ?? data.width`:
+    // a built-in preset or texture group carries its size in `style` alone
+    // (see that function), and reading past it recorded 200x120 as the
+    // "expanded" size for every one of them.
+    const { w: currentWidth, h: currentHeight } = groupFrameSize(groupNode);
 
     get().pushHistory();
 
@@ -2521,13 +2623,113 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // edges, unhide member nodes, and clear the synthetic socket lists on the group.
     const restoredEdges = restoreCollapsedEdges(state.edges, state.nodes, groupNode);
 
+    /**
+     * The frame the members need, in the group's own coordinate space.
+     *
+     * `currentWidth` here is the PILL's width, so falling back to it — which is
+     * what `data.expandedWidth ?? currentWidth` did — expands the group to
+     * 130x78 and leaves every member outside a frame the size of a button.
+     * That reads as the expand silently failing, and it is unrecoverable by any
+     * visible control: the corner grip only appears on an expanded frame and
+     * React Flow's resizer refuses to shrink a parent below its children, so
+     * the user cannot drag their way back to a sane size either.
+     *
+     * A remembered size is still preferred whenever there is one — this is the
+     * floor for when there is not, so the frame always comes back AROUND its
+     * contents. Member positions are parent-relative, hence the bare max.
+     */
+    const memberFit = (): {
+      /** Exact, or null when any member's box is not yet known. */
+      contain: { w: number; h: number } | null;
+      /** Always available — estimates where a box is missing. */
+      padded: { w: number; h: number };
+    } => {
+      const PADDING = 24;
+      let w = 0;
+      let h = 0;
+      let exact = true;
+      for (const m of state.nodes) {
+        if (!memberIds.has(m.id)) continue;
+        const box = m as AppNode & {
+          measured?: { width?: number; height?: number }; width?: number; height?: number;
+        };
+        const mw = box.measured?.width ?? box.width;
+        const mh = box.measured?.height ?? box.height;
+        // React Flow has not measured this node yet — right after a load, or in
+        // a test env with no DOM. The 160x60 guesses below are fine for BUILDING
+        // a frame (there is nothing better) but must never become a FLOOR under
+        // a size the user really chose: they overestimate a small node badly
+        // enough to grow a correct frame on every expand.
+        if (mw === undefined || mh === undefined) exact = false;
+        w = Math.max(w, m.position.x + (mw ?? 160));
+        h = Math.max(h, m.position.y + (mh ?? 60));
+      }
+      return {
+        contain: exact ? { w, h } : null,
+        padded: { w: Math.max(w + PADDING, MIN_GROUP_W), h: Math.max(h + PADDING, MIN_GROUP_H) },
+      };
+    };
+
+    /** A remembered dimension is usable only if it is a real number no smaller
+     *  than what the resize grip itself can produce — anything else is a
+     *  half-written or lost value, not a size the user ever chose. */
+    const remembered = (v: unknown, min: number): number | null =>
+      typeof v === 'number' && Number.isFinite(v) && v >= min ? v : null;
+
+    /**
+     * Repair a group COLLAPSED by the pre-fix build, whose remembered size is
+     * the `?? 200` fallback rather than anything it ever was.
+     *
+     * The signature is exact, not a guess. `style` is written by exactly one
+     * thing — `codeGroupBuilder`, at build time, as the authored frame — and
+     * neither the collapse nor the resizer ever touches it. So a group that
+     * still carries a `style` size collapsed with NO top-level `width` and NO
+     * `data.width` to read, which means the old code necessarily recorded
+     * 200x120: that pair beside a `style` size cannot arise any other way.
+     * (Resize first and the collapse read the real `width` instead, giving a
+     * different pair — which is why the PAIR is checked, not just the presence
+     * of `style`.)
+     *
+     * One-shot: the expand below writes the canonical fields and drops `style`
+     * with them, so nothing can repair twice.
+     */
+    const styleSize = (() => {
+      const st = (groupNode as AppNode & { style?: { width?: unknown; height?: unknown } }).style;
+      const w = typeof st?.width === 'number' && Number.isFinite(st.width) ? st.width : null;
+      const h = typeof st?.height === 'number' && Number.isFinite(st.height) ? st.height : null;
+      return w !== null && h !== null ? { w, h } : null;
+    })();
+    const damagedByStyleOnlySizing =
+      styleSize !== null
+      && (groupData as { expandedWidth?: unknown }).expandedWidth === 200
+      && (groupData as { expandedHeight?: unknown }).expandedHeight === 120;
+
     set((s) => ({
       nodes: s.nodes.map((n) => {
         if (n.id === groupId) {
           const data = { ...(n.data as GroupNodeData) } as GroupNodeData;
           data.collapsed = false;
-          data.width = data.expandedWidth ?? currentWidth;
-          data.height = data.expandedHeight ?? currentHeight;
+          // A remembered size wins, but never below "the frame contains its
+          // members". The floor is DELIBERATELY unpadded: React Flow's resizer
+          // already refuses to shrink a parent below its children and
+          // `reparentedNode` detaches anything dropped outside, so a member
+          // flush against the edge is a real, reachable layout — a padded floor
+          // would grow every tight frame by 24px on each expand. With NO
+          // remembered size the padded fit is used instead, because that is
+          // building a frame rather than checking one.
+          //
+          // This is also what rescues a group already damaged by the bug below:
+          // the stale `expandedWidth: 200` is still trusted as a number, but a
+          // 200px frame that cannot hold a 300px graph loses to the floor.
+          const { contain, padded } = memberFit();
+          const rw = damagedByStyleOnlySizing
+            ? styleSize!.w
+            : remembered(data.expandedWidth, MIN_GROUP_W);
+          const rh = damagedByStyleOnlySizing
+            ? styleSize!.h
+            : remembered(data.expandedHeight, MIN_GROUP_H);
+          data.width = rw === null ? padded.w : Math.max(rw, contain?.w ?? 0);
+          data.height = rh === null ? padded.h : Math.max(rh, contain?.h ?? 0);
           delete data.collapsedInputs;
           delete data.collapsedOutputs;
           // Drop the cached cost — the expanded frame doesn't show a badge.
@@ -2537,8 +2739,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
             // Top-right anchor, inverse of the collapse shift: the frame grows
             // LEFTWARD from wherever the pill's top-right sits now (following
             // any pill drags), and an untouched pill restores the pre-collapse
-            // position exactly. `currentWidth` here is the pill's width;
-            // legacy groups without expandedWidth get delta 0.
+            // position exactly. `currentWidth` here is the pill's width.
             position: { x: n.position.x + (currentWidth - data.width), y: n.position.y },
             width: data.width,
             height: data.height,
@@ -2547,6 +2748,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
             // waiting for the ResizeObserver tick that would otherwise leave
             // it reporting the pill footprint.
             measured: { width: data.width, height: data.height },
+            // The pre-canonical `style` size is dropped here, so a group is
+            // migrated to ONE shape the first time it is expanded. React Flow
+            // reads `node.width ?? node.style?.width`, so leaving it would be
+            // inert — but it is exactly the second source of truth that caused
+            // this bug, and keeping it would let the repair above fire again on
+            // a frame the user has since resized.
+            style: undefined,
             data,
           } as AppNode;
         }
@@ -2636,9 +2844,24 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const { group, members, edges } = cloneGroupSnapshot(saved, position);
     // React Flow requires the parent container before its children in the array.
     get().pushHistory();
+    // Re-run the target repairs against the COMBINED list, not just the
+    // group's own nodes: a group may contain an Output (groupSelection filters
+    // only groups and notes), and its mesh claims are only checkable against
+    // the graph it lands in — `loadSavedGroups` validates each group in
+    // isolation. Then FOLD: the Output is a SINGLETON, and this was the one
+    // live path that could still mint a second one at runtime.
+    // `foldExtraOutputs` keeps the FIRST output — the live graph's, since
+    // `state.nodes` precedes the arriving members in this array — and folds a
+    // TARGETED copy into it as materials with its feeder edges re-pointed; an
+    // UNTARGETED copy is dropped as dead weight (fold's standing rule on every
+    // restore path). No-op (same array identities) with at most one Output.
+    const folded = foldExtraOutputs(
+      sanitizeOutputMaterials([group, ...state.nodes, ...members] as AppNode[]),
+      [...state.edges, ...edges] as AppEdge[],
+    );
     set({
-      nodes: [group, ...state.nodes, ...members] as AppNode[],
-      edges: [...state.edges, ...edges] as AppEdge[],
+      nodes: folded.nodes,
+      edges: folded.edges,
       syncSource: 'graph',
       isUndoRedo: false,
     });

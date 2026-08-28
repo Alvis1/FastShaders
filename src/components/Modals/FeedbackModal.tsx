@@ -33,8 +33,11 @@ const KINDS: { id: FeedbackKind; label: string; hint: string }[] = [
  * `uiLanguage` is deliberately NOT read here — it can change while the dialog
  * is open, and re-snapshotting on that would restamp the timestamp and yank
  * focus back to the textarea mid-sentence. It is merged in at report time.
+ *
+ * Exported (with collectProject) for the eval-mode package: the study zip's
+ * session.json records the same environment facts this report does.
  */
-function collectEnv(): Omit<FeedbackEnv, 'uiLanguage'> {
+export function collectEnv(): Omit<FeedbackEnv, 'uiLanguage'> {
   const ua = navigator.userAgent || '';
   // `navigator.platform` is deprecated but universally present, and it is the
   // signal the preview's own force-WebGL2 rule keys on for iPadOS desktop mode.
@@ -67,7 +70,7 @@ function collectEnv(): Omit<FeedbackEnv, 'uiLanguage'> {
  * store: it is only ever wanted at this one moment, and a 64 MB model would
  * otherwise be scanned on load for a number nothing else reads.
  */
-function collectProject(): FeedbackProject {
+export function collectProject(): FeedbackProject {
   const s = useAppStore.getState();
   const headset = VR_HEADSETS.find((h) => h.id === s.selectedHeadsetId) ?? VR_HEADSETS[0];
   const mesh = s.previewMesh;

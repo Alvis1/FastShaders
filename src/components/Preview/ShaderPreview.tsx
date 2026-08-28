@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { findDefaultOutput } from '@/utils/outputTargets';
+import { findDefaultOutput } from '@/utils/outputMaterials';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { getNodeValues } from '@/types';

@@ -393,6 +393,35 @@
      row carries the dot. */
   #anim-clips .clip-mark { flex: 0 0 auto; width: 8px; font-size: 9px; line-height: 1; }
   #anim-clips .clip-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Mesh-material picker — the panel's "Mesh materials…" button is the PRIMARY
+     path; right-clicking the 3D view is the shortcut (the stage forwards the
+     contextmenu, since that iframe covers the whole viewport). Same visual as
+     the clip picker, and — like it, and UNLIKE the mic light — it IS in the
+     is-present hide rule: authoring chrome over the artwork is exactly what
+     presentation mode exists to remove. */
+  #parts-menu { position: fixed; z-index: 32; display: none; min-width: 168px; max-width: 300px;
+                max-height: 60vh; overflow-y: auto; padding: 4px;
+                background: rgba(20, 21, 25, 0.94); border: 1px solid rgba(255, 255, 255, 0.18);
+                border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); }
+  #parts-menu.show { display: block; }
+  :root.is-present #parts-menu { display: none; }
+  #parts-menu .parts-head { padding: 3px 8px 5px; font-size: 10px; font-weight: 700;
+                            letter-spacing: 0.04em; text-transform: uppercase;
+                            color: rgba(255, 255, 255, 0.55); user-select: none; }
+  #parts-menu .parts-mesh { padding: 6px 8px 3px; font-size: 11px; font-weight: 700;
+                            color: rgba(255, 255, 255, 0.78); user-select: none;
+                            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #parts-menu .parts-mesh + .parts-mesh, #parts-menu button + .parts-mesh {
+                            border-top: 1px solid rgba(255, 255, 255, 0.1); margin-top: 3px; }
+  #parts-menu button { display: flex; align-items: center; gap: 6px; width: 100%;
+                       padding: 4px 8px 4px 14px; font: 12px/1.4 system-ui, sans-serif; text-align: left;
+                       color: #fff; background: none; border: none; border-radius: 5px;
+                       cursor: pointer; }
+  #parts-menu button:hover { background: rgba(255, 255, 255, 0.12); }
+  #parts-menu button.is-active { font-weight: 700; }
+  #parts-menu .parts-mark { flex: 0 0 auto; width: 8px; font-size: 9px; line-height: 1; }
+  #parts-menu .parts-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -431,6 +460,7 @@
   </div>
 </div>
 <div id="anim-clips" role="menu" aria-label="Animation clips"></div>
+<div id="parts-menu" role="menu" aria-label="Mesh materials"></div>
 
 <div id="panel">
   <div class="panel__head" id="panel-head">
@@ -491,6 +521,17 @@
         <button class="btn" id="mat-toggle" hidden title="Switch between the shader and the model's own materials">Show model materials</button>
         <button class="btn" id="reset-view" title="Reset camera">Reset view</button>
       </div>
+      <!-- A VISIBLE affordance for the mesh-material picker. Right-clicking the
+           3D view opens the same menu, but a right-click-only control that
+           silently does nothing on the models that lack parts is
+           indistinguishable from a broken feature — the exact mistake the
+           animation clip picker shipped with and had to correct. Hidden until
+           the loaded shader really has materials to assign. -->
+      <!-- The ROW carries the `hidden`, not the button: a hidden button inside
+           a shown row still leaves its 6px margin behind as dead space. -->
+      <div class="controls-row" id="parts-row" hidden style="margin-top:6px;">
+        <button class="btn" id="parts-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Assign this shader's materials to the model's meshes">Mesh materials…</button>
+      </div>
       <div class="controls-row" style="margin-top:6px;">
         <label class="ctl-label" for="bg-color">Background</label>
         <input type="color" id="bg-color" class="color-input" title="Scene background color" />
@@ -535,6 +576,9 @@
   var fsBtn = document.getElementById("fs-btn");
   var fsPanelBtn = document.getElementById("fs-panel-btn");
   var statsEl = document.getElementById("stats");
+  var partsMenuEl = document.getElementById("parts-menu");
+  var partsBtn = document.getElementById("parts-btn");
+  var partsRow = document.getElementById("parts-row");
   var docEl = document.documentElement;
 
   // Per-geometry resting tilt, matching the in-app preview.
@@ -555,6 +599,15 @@
     bgColor: isHex6(readStr("fs:viewerBg", DEFAULT_BG)) ? readStr("fs:viewerBg", DEFAULT_BG) : DEFAULT_BG,
     bounds: loadBounds(),  // { uniformName: {min,max} } persisted here (top origin)
     values: {},            // last slider value per uniform name
+    // Mesh name -> part name, or null for "the shader's default material".
+    // SESSION state, owned here so it survives a stage rebuild (device loss,
+    // the stall watchdog, the ~4.4 h time fold) — see sendPartAssignments.
+    // Deliberately NOT persisted: an assignment only means anything against
+    // the exact shader AND model pair that produced it, and both are dropped.
+    // Null-prototype: the keys are mesh names out of a dropped model file, so
+    // a mesh called `__proto__` would otherwise reach Object.prototype through
+    // a bracket assignment (the same trap the loader's Map avoids).
+    partAssign: Object.create(null),
     // Title overlay. titleText is "" until a shader is dropped or the user
     // types one; only a USER-typed name is persisted (an auto-derived name
     // must not outlive the shader it names — nothing reloads the shader).
@@ -817,6 +870,14 @@
       }
       micReset(mics);
       if (!state.showMaterials) onUniforms(uRest);
+    } else if (m.type === "fs:parts") {
+      onStageParts(m);
+    } else if (m.type === "fs:contextmenu") {
+      // A right-click landed on the stage iframe, which covers the whole
+      // viewport so the parent never sees one. The stage only forwards these
+      // while the parent has told it there is a menu to open (fs:context-hook),
+      // so the browser's own menu still works everywhere else.
+      openPartsMenuAt(m.x, m.y);
     } else if (m.type === "fs:anim") {
       onStageAnim(m);
     } else if (m.type === "fs:anim-time") {
@@ -846,6 +907,11 @@
       // dismisses an open title editor, exactly like a press on the chrome.
       bumpActivity();
       if (m.down) commitTitle();
+      // A press on the stage is the only "click outside" the parts menu can
+      // ever see — the iframe covers the viewport, so no parent pointerdown
+      // fires there. Safe against the gesture that OPENS it: pointerdown
+      // precedes contextmenu, so this closes nothing that is not already open.
+      if (m.down) closePartsMenu();
     } else if (m.type === "fs:dropped") {
       // Files were dropped ONTO the stage iframe; it forwarded the File objects
       // here so a drop anywhere loads through the same path as a panel drop.
@@ -1149,6 +1215,241 @@
     }
   }, true);
 
+  /* ── Mesh-material picker ────────────────────────────────────────────────
+     A shader module may return per-sub-mesh materials (shaderloader 0.6's
+     `parts`), dispatched by mesh NAME. Drop a DIFFERENT model and those names
+     stop matching, so the meshes fall back to whatever the loader's rules give
+     them — and there was no way to say "this mesh takes that material". This
+     menu is that way. The contract, mirroring fs:anim / fs:anim-set:
+
+       stage  -> parent: fs:parts {meshes:[name…], parts:[name…], hasDefault}
+       parent -> stage : fs:assign-part {mesh, part}   // part === null ⇒ default
+
+     Reported after the shader applies AND after a model loads, because either
+     one changes the answer. The stage applies an assignment by RE-DERIVING the
+     material from the live shader component (part material → default →
+     authored original) — never from a stashed reference, since the loader
+     disposes the outgoing material before assigning the new one.
+
+     The stage is DISPOSABLE, so nothing here assumes continuity: the parent
+     owns the assignments and replays them (applyStateToStage on fs:ready, and
+     again on every fs:parts, which is when the part materials actually exist). */
+  var partsInfo = null;              // last fs:parts report, or null
+  var PARTS_MAX_ROWS = 200;          // bound the report; a model has a handful
+  var PARTS_NAME_MAX = 200;          // longer names are REJECTED, not truncated
+  var PARTS_LABEL_MAX = 48;          // …and this is all that is ever DRAWN
+
+  function partsAvailable() {
+    return !!(partsInfo && partsInfo.meshes.length && partsInfo.parts.length);
+  }
+
+  /** Cap for DISPLAY only — the full string is the key an assignment carries. */
+  function partsLabel(s) {
+    return s.length > PARTS_LABEL_MAX ? s.slice(0, PARTS_LABEL_MAX - 1) + "…" : s;
+  }
+
+  /**
+   * Coerce one half of a report. Over-long names are DROPPED rather than
+   * truncated: the string is the protocol key, so a shortened one would
+   * address no mesh at all — a row that silently does nothing. Duplicates are
+   * folded (several meshes legitimately share a name; an assignment applies to
+   * every match, which is the loader's own semantics).
+   */
+  function partsNameList(v) {
+    var out = [];
+    if (!Array.isArray(v)) return out;
+    for (var i = 0; i < v.length && out.length < PARTS_MAX_ROWS; i++) {
+      var s = v[i];
+      if (typeof s !== "string" || !s || s.length > PARTS_NAME_MAX) continue;
+      if (out.indexOf(s) < 0) out.push(s);
+    }
+    return out;
+  }
+
+  /** What the LOADER gives this mesh when nothing has been assigned to it. */
+  function derivedPart(mesh) {
+    if (!partsInfo) return null;
+    if (partsInfo.parts.indexOf(mesh) >= 0) return mesh;
+    // shaderloader 0.6: a parts-only module on a SINGLE-mesh model puts its
+    // FIRST part on that mesh. A multi-mesh model keeps its authored materials
+    // instead, which is why the count is part of the test here too.
+    if (!partsInfo.hasDefault && partsInfo.meshes.length === 1 && partsInfo.parts.length) {
+      return partsInfo.parts[0];
+    }
+    return null;   // the default material — or the authored one when there is none
+  }
+
+  /**
+   * Replay every stored assignment onto the stage. Idempotent by design.
+   *
+   * Each entry is checked against the CURRENT report first, because an
+   * assignment naming a part this shader does not have is not inert: the stage
+   * resolves an unknown part to the DEFAULT material, so replaying a stale one
+   * would actively override what the loader had just decided for that mesh.
+   */
+  function sendPartAssignments() {
+    if (!partsAvailable()) return;
+    var a = state.partAssign;
+    for (var mesh in a) {
+      if (!Object.prototype.hasOwnProperty.call(a, mesh)) continue;
+      if (partsInfo.meshes.indexOf(mesh) < 0) continue;
+      var p = a[mesh];
+      if (p !== null && partsInfo.parts.indexOf(p) < 0) continue;
+      post({ type: "fs:assign-part", mesh: mesh, part: p });
+    }
+  }
+
+  function onStageParts(m) {
+    var meshes = partsNameList(m.meshes);
+    var parts = partsNameList(m.parts);
+    partsInfo = { meshes: meshes, parts: parts, hasDefault: !!m.hasDefault };
+    // PRUNE against the fresh report — but ONLY against a report that carries
+    // both halves. An EMPTY report means "nothing is loaded right now", not
+    // "these assignments are invalid", and empty reports are routine: every
+    // stage rebuild replays the geometry, whose clearGeo posts one before the
+    // model has loaded. Pruning on that would wipe the assignments on exactly
+    // the restart this replay exists to make invisible. (Nothing stale is ever
+    // SENT either way — sendPartAssignments re-checks each entry.)
+    if (meshes.length && parts.length) {
+      var keep = Object.create(null), a = state.partAssign;
+      for (var mesh in a) {
+        if (!Object.prototype.hasOwnProperty.call(a, mesh)) continue;
+        if (meshes.indexOf(mesh) < 0) continue;
+        var p = a[mesh];
+        if (p !== null && parts.indexOf(p) < 0) continue;
+        keep[mesh] = p;
+      }
+      state.partAssign = keep;
+    }
+    syncPartsButton();
+    if (partsMenuEl.classList.contains("show")) renderPartsMenu();
+    // NOW the part materials exist — the applyStateToStage replay ran before
+    // the shader had even finished importing.
+    sendPartAssignments();
+  }
+
+  function syncPartsButton() {
+    var on = partsAvailable();
+    partsRow.hidden = !on;
+    if (!on) closePartsMenu();
+    else {
+      partsBtn.title = "Assign this shader's " + partsInfo.parts.length
+        + " material" + (partsInfo.parts.length === 1 ? "" : "s")
+        + " to the model's " + partsInfo.meshes.length
+        + " mesh" + (partsInfo.meshes.length === 1 ? "" : "es")
+        + " — or right-click the 3D view";
+    }
+    // Tell the stage whether to intercept right-clicks at all. With nothing to
+    // assign it must NOT: a swallowed contextmenu that opens no menu removes
+    // the browser's own for no gain.
+    post({ type: "fs:context-hook", on: on });
+  }
+
+  function closePartsMenu() {
+    partsMenuEl.classList.remove("show");
+    partsBtn.classList.remove("active");
+    partsBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function renderPartsMenu() {
+    partsMenuEl.textContent = "";
+    if (!partsAvailable()) { closePartsMenu(); return; }
+    var head = document.createElement("div");
+    head.className = "parts-head";
+    head.textContent = "Mesh materials";
+    partsMenuEl.appendChild(head);
+    partsInfo.meshes.forEach(function (mesh) {
+      var explicit = Object.prototype.hasOwnProperty.call(state.partAssign, mesh);
+      var current = explicit ? state.partAssign[mesh] : derivedPart(mesh);
+      var h = document.createElement("div");
+      h.className = "parts-mesh";
+      // textContent only, and capped — the name came out of a dropped file.
+      h.textContent = partsLabel(mesh);
+      h.title = partsLabel(mesh);
+      partsMenuEl.appendChild(h);
+      // The null row first: it is how an assignment is UNDONE. Its wording
+      // follows what null actually resolves to — the module's own default
+      // material, or (a parts-only module) the material the model was
+      // authored with.
+      var rows = [{ part: null, label: partsInfo.hasDefault ? "Default material" : "Model’s own material" }];
+      partsInfo.parts.forEach(function (p) { rows.push({ part: p, label: partsLabel(p) }); });
+      rows.forEach(function (row) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.setAttribute("role", "menuitemradio");
+        var active = row.part === current;
+        b.setAttribute("aria-checked", active ? "true" : "false");
+        if (active) b.className = "is-active";
+        var mark = document.createElement("span");
+        mark.className = "parts-mark";
+        mark.textContent = active ? "●" : "";
+        var label = document.createElement("span");
+        label.className = "parts-name";
+        label.textContent = row.label;
+        b.title = row.label;
+        b.appendChild(mark);
+        b.appendChild(label);
+        b.addEventListener("click", function () {
+          state.partAssign[mesh] = row.part;
+          post({ type: "fs:assign-part", mesh: mesh, part: row.part });
+          // Repaint but stay OPEN: assigning materials is a per-mesh sweep,
+          // and closing after each pick would mean reopening once per mesh.
+          renderPartsMenu();
+        });
+        partsMenuEl.appendChild(b);
+      });
+    });
+  }
+
+  /** Measured placement inside the viewport, from an anchor rect. */
+  function placePartsMenu(rect) {
+    var m = partsMenuEl.getBoundingClientRect();
+    var left = Math.max(4, Math.min(rect.left, window.innerWidth - m.width - 4));
+    var below = rect.bottom + 4;
+    var above = rect.top - 4 - m.height;
+    var top = (below + m.height <= window.innerHeight - 4) ? below
+            : (above >= 4 ? above : Math.max(4, window.innerHeight - m.height - 4));
+    partsMenuEl.style.left = left + "px";
+    partsMenuEl.style.top = top + "px";
+  }
+
+  function openPartsMenu(rect) {
+    // Presentation mode hides it in CSS anyway; not opening it at all also
+    // keeps the state honest for the moment the exhibitor comes back out.
+    if (!partsAvailable() || presenting()) return;
+    renderPartsMenu();
+    partsMenuEl.classList.add("show");
+    partsBtn.classList.add("active");
+    partsBtn.setAttribute("aria-expanded", "true");
+    placePartsMenu(rect);
+  }
+
+  /** Right-click shortcut: the coordinates come from the SANDBOX — coerce. */
+  function openPartsMenuAt(x, y) {
+    var px = (typeof x === "number" && isFinite(x)) ? x : window.innerWidth / 2;
+    var py = (typeof y === "number" && isFinite(y)) ? y : window.innerHeight / 2;
+    px = Math.max(0, Math.min(window.innerWidth, px));
+    py = Math.max(0, Math.min(window.innerHeight, py));
+    openPartsMenu({ left: px, right: px, top: py, bottom: py });
+  }
+
+  partsBtn.addEventListener("click", function () {
+    if (partsMenuEl.classList.contains("show")) closePartsMenu();
+    else openPartsMenu(partsBtn.getBoundingClientRect());
+  });
+
+  document.addEventListener("pointerdown", function (e) {
+    if (!partsMenuEl.classList.contains("show")) return;
+    if (partsMenuEl.contains(e.target) || partsBtn.contains(e.target)) return;
+    closePartsMenu();
+  }, true);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && partsMenuEl.classList.contains("show")) {
+      e.stopPropagation();
+      closePartsMenu();
+    }
+  }, true);
+
   // ── Stage lifecycle: restore, watchdog, restart ─────────────────────
   // Everything below exists for ONE reason: podest is meant to run unattended
   // on a pedestal for weeks. Over that span the stage WILL be interrupted (a
@@ -1178,6 +1479,12 @@
     if (state.geometry !== "sphere") setGeometry(state.geometry);
     if (state.showMaterials) post({ type: "fs:detach-shader" });
     else if (state.shaderSource) post({ type: "fs:shader", source: state.shaderSource });
+    // Per-mesh material assignments. Posted here so the replay is complete in
+    // one place — but the shader above only finishes importing a moment later,
+    // so the assignment that actually LANDS is the one onStageParts re-posts
+    // when the stage reports the materials it built. Both are idempotent.
+    post({ type: "fs:context-hook", on: partsAvailable() });
+    sendPartAssignments();
   }
 
   function noteStageAlive() {
@@ -1680,7 +1987,12 @@
   // back into fullscreen.
   var presentParam = /[?&]present=1/.test(location.search);
   function presenting() { return !!fsElement() || presentParam || state.presenting; }
-  function syncPresentClass() { docEl.classList.toggle("is-present", presenting()); }
+  function syncPresentClass() {
+    docEl.classList.toggle("is-present", presenting());
+    // The CSS rule hides it, but leaving `.show` set would spring the menu
+    // back open the moment the exhibitor left presentation mode.
+    if (presenting()) closePartsMenu();
+  }
   function toggleFullscreen() {
     try {
       if (fsElement()) {
@@ -2857,11 +3169,27 @@
     // Re-arm the report whenever the shaderloader (re)applies: a model that
     // parses longer than the poll window (~6s) would otherwise leave the
     // parent stuck on the empty-uniforms report until a manual re-drop.
-    L.push('  window.addEventListener("shader-applied",function(){if(attached)reportUniforms();});');
+    L.push('  window.addEventListener("shader-applied",function(){if(attached)reportUniforms();reportParts();});');
+    // ── Per-mesh materials (shaderloader 0.6 `parts`) ───────────────────
+    // Reported after the shader applies AND after a model loads, since either
+    // changes the answer, and applied by RE-DERIVING the material from the
+    // live shader component every time: part material → default → the material
+    // the model was authored with. Never from a reference stashed on this side
+    // — the loader disposes the outgoing material BEFORE assigning the new
+    // one, so a stash taken across an apply restores a disposed material.
+    L.push('  function shaderComp(){return (entity&&entity.components&&entity.components.shader)||null;}');
+    L.push('  function meshList(){var out=[],root=entity&&entity.getObject3D&&entity.getObject3D("mesh");if(root&&root.traverse)root.traverse(function(n){if(n.isMesh)out.push(n);});return out;}');
+    L.push('  function reportParts(){var c=shaderComp(),list=meshList(),meshes=[],parts=[],i;for(i=0;i<list.length&&i<200;i++)meshes.push(String(list[i].name||""));if(attached&&c&&c._partMaterials&&c._partMaterials.forEach)c._partMaterials.forEach(function(v,k){if(parts.length<200)parts.push(String(k));});toParent({type:"fs:parts",meshes:meshes,parts:parts,hasDefault:!!(attached&&c&&c._shaderMaterial)});}');
+    L.push('  function assignPart(meshName,partName){if(typeof meshName!=="string"||!meshName)return;var c=shaderComp(),list=meshList(),want=(typeof partName==="string"&&partName)?partName:null,i;for(i=0;i<list.length;i++){var n=list[i];if(n.name!==meshName)continue;var next=null;if(want&&c&&c._partMaterials&&c._partMaterials.get)next=c._partMaterials.get(want)||null;if(!next)next=(c&&c._shaderMaterial)||null;if(!next)next=(c&&c.originalMaterials)?(c.originalMaterials[n.uuid]||null):null;if(next)n.material=next;}}');
+    // Right-click forwarding: this iframe covers the viewport, so the parent
+    // never sees a contextmenu over the 3D view. Gated on fs:context-hook so
+    // the browser's own menu survives everywhere there is nothing to open.
+    L.push('  var ctxHook=false;');
+    L.push('  addEventListener("contextmenu",function(e){if(!ctxHook)return;e.preventDefault();toParent({type:"fs:contextmenu",x:e.clientX,y:e.clientY});});');
     L.push('  function applyShaderSource(src){try{if(shaderUrl)URL.revokeObjectURL(shaderUrl);}catch(e){}shaderUrl=URL.createObjectURL(new Blob([src],{type:"text/javascript"}));attached=true;entity.setAttribute("shader","src: "+shaderUrl);var comp=entity.components&&entity.components.shader;if(comp)comp._propertyUniforms=null;reportUniforms();}');
-    L.push('  function detachShader(){attached=false;entity.removeAttribute("shader");}');
-    L.push('  function clearGeo(){var comp=entity.components&&entity.components.shader;if(comp&&attached)comp._propertyUniforms=null;entity.removeAttribute("geometry");entity.removeAttribute("obj-model");entity.removeAttribute("gltf-model");entity.removeAttribute("fit-bounds");entity.removeAttribute("gltf-anim");entity.removeAttribute("material");toParent({type:"fs:anim",has:false,duration:0,canInPlace:false,name:"",clip:0,clips:[]});}');
-    L.push('  function setPrimitive(attr,rot){clearGeo();entity.setAttribute("material","color: #808080");entity.setAttribute("geometry",attr);entity.setAttribute("rotation",rot||"45 45 0");if(attached){setTimeout(function(){var c=entity.components&&entity.components.shader;if(c&&typeof c.applyShader==="function")c.applyShader();reportUniforms();},0);}}');
+    L.push('  function detachShader(){attached=false;entity.removeAttribute("shader");reportParts();}');
+    L.push('  function clearGeo(){var comp=entity.components&&entity.components.shader;if(comp&&attached)comp._propertyUniforms=null;entity.removeAttribute("geometry");entity.removeAttribute("obj-model");entity.removeAttribute("gltf-model");entity.removeAttribute("fit-bounds");entity.removeAttribute("gltf-anim");entity.removeAttribute("material");toParent({type:"fs:anim",has:false,duration:0,canInPlace:false,name:"",clip:0,clips:[]});toParent({type:"fs:parts",meshes:[],parts:[],hasDefault:false});}');
+    L.push('  function setPrimitive(attr,rot){clearGeo();entity.setAttribute("material","color: #808080");entity.setAttribute("geometry",attr);entity.setAttribute("rotation",rot||"45 45 0");if(attached){setTimeout(function(){var c=entity.components&&entity.components.shader;if(c&&typeof c.applyShader==="function")c.applyShader();reportUniforms();reportParts();},0);}else setTimeout(reportParts,0);}');
     L.push('  function setModel(kind,bytes,regen,rot){clearGeo();try{if(modelUrl)URL.revokeObjectURL(modelUrl);}catch(e){}var mime=kind==="obj"?"text/plain":"model/gltf-binary";modelUrl=URL.createObjectURL(new Blob([bytes],{type:mime}));entity.setAttribute("fit-bounds","size: 1.6; regen: "+(regen?"true":"false"));entity.setAttribute("gltf-anim","");if(kind==="obj")entity.setAttribute("obj-model","obj: url("+modelUrl+")");else entity.setAttribute("gltf-model","url("+modelUrl+")");entity.setAttribute("rotation",rot||"0 0 0");if(attached)reportUniforms();}');
     // Colour uniforms mutate in place via .set() — assigning a hex string to
     // .value would replace the THREE.Color object with a string.
@@ -2877,7 +3205,7 @@
     // idle return in fullscreen restores the framing the exhibitor chose —
     // not the boot camera.
     L.push('  function saveView(){var oc=camEl&&camEl.components&&camEl.components["orbit-controls"];if(oc&&oc.controls&&typeof oc.controls.saveState==="function"){try{oc.controls.saveState();}catch(e){}}}');
-    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:stats-on":setStats(m.on);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;case"fs:save-view":saveView();break;}});');
+    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:assign-part":assignPart(m.mesh,m.part);break;case"fs:context-hook":ctxHook=!!m.on;break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:stats-on":setStats(m.on);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;case"fs:save-view":saveView();break;}});');
     // kickResize: a fresh WebGPU boot can record a stale/zero canvas size,
     // leaving the scene unpainted until renderer.setSize re-runs (the "blank
     // until the window is resized" bug) — re-run A-Frame's resize path a few
@@ -2950,7 +3278,11 @@
     L.push('    if(nf&&typeof nf.time==="number"){if(nf.time>TIME_WRAP)nf.time=nf.time%TIME_WRAP;}');
     L.push('    else if((Date.now()-wrapBase)/1000>TIME_WRAP){wrap=true;wrapBase=Date.now();}');
     L.push('    toParent({type:"fs:beat",frameId:renderCount(),wrapNeeded:wrap});}');
-    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");entity.addEventListener("model-error",function(){fsPost("Failed to load the 3D model: the file could not be parsed (corrupt, or a DRACO/meshopt-compressed glTF - not supported).");});toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);if(!beatTimer){beat();beatTimer=setInterval(beat,BEAT_MS);}}');
+    // The model-loaded report is deferred one tick so it is taken AFTER
+    // fit-bounds has baked the geometry and the shaderloader has stored the
+    // authored materials — both listen for the same event, and both were
+    // registered before this one.
+    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");entity.addEventListener("model-error",function(){fsPost("Failed to load the 3D model: the file could not be parsed (corrupt, or a DRACO/meshopt-compressed glTF - not supported).");});entity.addEventListener("model-loaded",function(){setTimeout(reportParts,0);});toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);if(!beatTimer){beat();beatTimer=setInterval(beat,BEAT_MS);}}');
     L.push('  if(!window.AFRAME){toParent({type:"fs:error",message:"A-Frame failed to initialize"});return;}');
     // The scene arrives via the pre-flight injector above — wire boot to it
     // (the helper also handles the already-booted case).

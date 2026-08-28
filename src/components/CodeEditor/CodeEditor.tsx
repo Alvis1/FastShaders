@@ -1,5 +1,5 @@
 import './monacoSetup';
-import { findDefaultOutput } from '@/utils/outputTargets';
+import { findDefaultOutput } from '@/utils/outputMaterials';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { useAppStore } from '@/store/useAppStore';
@@ -9,6 +9,7 @@ import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { collectShaderProperties } from '@/engine/exportShader';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
+import { evalLog } from '@/eval/telemetry';
 import { parseCostFile, parseCostProfileBundle } from '@/utils/costOverride';
 import { getNodeValues } from '@/types';
 import type { OutputNodeData } from '@/types';
@@ -112,11 +113,15 @@ export function CodeEditor() {
     [setCode]
   );
 
-  // Ctrl+S / Cmd+S shortcut
+  // Ctrl+S / Cmd+S shortcut. The eval 'code-apply' event lives at these two
+  // Apply GESTURES rather than in store.requestCodeSync, because projectImport
+  // also calls requestCodeSync on the bare-script import path — logging there
+  // would count imports as user Applies.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
+        evalLog('code-apply');
         requestCodeSync();
       }
     };
@@ -333,7 +338,10 @@ export function CodeEditor() {
           {isTSL && (
             <button
               className="code-editor__save"
-              onClick={requestCodeSync}
+              onClick={() => {
+                evalLog('code-apply');
+                requestCodeSync();
+              }}
               title={t('Compile this TSL into the node graph — your work is auto-saved separately', language)}
             >
               {t('Apply', language)}

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Copied VERBATIM into dist (public/ is not rewritten by Vite), so every
+       reference must stay RELATIVE — favicons.test.ts pins this. Served at
+       /FastShaders/eval/ (Pages), /fastshaders/eval/ (alvismisjuns). -->
+  <link rel="icon" type="image/svg+xml" href="../images/favicon-app.svg" />
+  <title>FastShaders — evaluation session</title>
+</head>
+<body>
+  <p style="font-family: sans-serif; padding: 2rem;">Starting the FastShaders evaluation session…</p>
+  <script>
+    // Arm eval mode for THIS TAB and hand over to the app. sessionStorage,
+    // never localStorage — the flag must die with the tab, or this browser
+    // would stay in eval mode for every later visit. A fresh /eval visit
+    // always starts a NEW session: the previous session record is dropped
+    // here so the app's consent screen runs again (a mid-session reload of
+    // the APP url keeps the record and resumes instead).
+    try {
+      sessionStorage.setItem('fs:evalArm', '1');
+      sessionStorage.removeItem('fs:evalSession');
+    } catch (e) { /* storage blocked — the app just boots normally */ }
+    location.replace('../');
+  </script>
+  <noscript>
+    <p style="font-family: sans-serif; padding: 0 2rem;">
+      JavaScript is required. Open the app at <a href="../">the main page</a>.
+    </p>
+  </noscript>
+</body>
+</html>

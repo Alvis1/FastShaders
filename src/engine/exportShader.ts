@@ -1,5 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
-import { findDefaultOutput } from '@/utils/outputTargets';
+import { findDefaultOutput } from '@/utils/outputMaterials';
 import { tslToShaderModule, type PropertyInfo } from './tslToShaderModule';
 import { embedProjectState, type FastShadersProject } from './fastShadersProject';
 import { inlineImageAssetsFromNodes } from './imageAssets';
@@ -8,6 +8,7 @@ import type { AppNode, OutputNodeData } from '@/types';
 import { toKebabCase } from '@/utils/nameUtils';
 import { collectImageFiles } from '@/utils/imageNode';
 import { buildExportBundle, type ExportBundle } from '@/utils/exportBundle';
+import { evalLog } from '@/eval/telemetry';
 
 /**
  * Shared "Download Shader" path. Lives outside any component so the toolbar
@@ -138,6 +139,8 @@ export function buildShaderBundle(): ExportBundle {
  */
 export function downloadShader(): void {
   const bundle = buildShaderBundle();
+  // Eval telemetry only — a no-op outside a study session.
+  evalLog('export', { kind: bundle.kind });
   const blob = new Blob([bundle.bytes], { type: bundle.mime });
 
   const url = URL.createObjectURL(blob);
