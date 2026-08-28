@@ -12,6 +12,10 @@
  *        - A module with parts and NO top-level channels leaves unmatched
  *          meshes on their AUTHORED materials rather than blanking them —
  *          the KHR_materials_variants fallback shape.
+ *        - EXCEPT on a SINGLE-mesh model, where that same parts-only module
+ *          puts its FIRST part on the one mesh instead. A model with one mesh
+ *          has no material to choose between, so "nothing matched" there is a
+ *          naming mismatch, not an authored fallback — see applyMaterialToMesh.
  *      A module WITHOUT `parts` behaves identically to 0.5 in every respect,
  *      which is what lets the editor preview and every new export run 0.6
  *      unconditionally. 0.5 is frozen: shaders exported before this reference
@@ -556,6 +560,34 @@ AFRAME.registerComponent("shader", {
     // must never hold a material reference of its own across an apply (the
     // outgoing material is disposed before the new one is assigned).
     const applied = {};
+    // Single-mesh fallback for a parts-only module. All three conditions are
+    // load-bearing:
+    //   - parts, no default: with a default the unmatched mesh already has a
+    //     material the shader described, and taking a part instead would
+    //     silently ignore what the author wrote at the top level.
+    //   - EXACTLY ONE mesh in the model: a multi-mesh model whose meshes match
+    //     nothing must keep its AUTHORED materials (the KHR_materials_variants
+    //     fallback above) — repainting those would silently restyle a model
+    //     the shader never claimed. With one mesh there is no choice to make:
+    //     "no name matched" can only be a naming mismatch (the shader was
+    //     authored against a different model, or the glTF loader renamed the
+    //     mesh), and leaving the one mesh unshaded reads as the shader having
+    //     failed to load.
+    //   - The FIRST part in ITERATION ORDER, which is the emitted source order
+    //     (Object.keys → an insertion-ordered Map above), so the choice is
+    //     deterministic and is the entry the editor lists first.
+    // A module WITHOUT parts never reaches this: partMaterials is null.
+    let soleMeshFallback = null;
+    if (partMaterials && !material) {
+      let meshCount = 0;
+      mesh.traverse(function (node) {
+        if (node.isMesh) meshCount++;
+      });
+      if (meshCount === 1) {
+        const first = partMaterials.values().next();
+        soleMeshFallback = first.done ? null : first.value;
+      }
+    }
     mesh.traverse((node) => {
       if (!node.isMesh) return;
       let m = material;
@@ -565,8 +597,9 @@ AFRAME.registerComponent("shader", {
           m = part;
         } else if (!material) {
           // No default was declared: leave this mesh on the material the
-          // MODEL was authored with rather than blanking it.
-          m = this.originalMaterials[node.uuid] || node.material;
+          // MODEL was authored with rather than blanking it — unless this is
+          // the model's only mesh, which takes the first part instead.
+          m = soleMeshFallback || this.originalMaterials[node.uuid] || node.material;
         }
       }
       if (!m) return;

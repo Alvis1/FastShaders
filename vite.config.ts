@@ -853,6 +853,27 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
   },
 });
 
+/**
+ * Serve-only: make `<base>/eval/` reach `public/eval/index.html` in dev. On
+ * the static deploy targets a directory URL serves its index.html, but vite
+ * dev's SPA fallback answers the extensionless URL with the APP's index.html
+ * — so the eval-mode entry (the user-study redirector) silently didn't exist
+ * in dev. Same dev-parity class as shaderCarouselDevResolvePlugin.
+ */
+const evalDevIndexPlugin = (): Plugin => ({
+  name: 'fs-eval-dev-index',
+  apply: 'serve',
+  configureServer(server) {
+    server.middlewares.use((req, _res, next) => {
+      const url = (req.url ?? '').split('?')[0];
+      if (url === `${FS_BASE}eval` || url === `${FS_BASE}eval/`) {
+        req.url = `${FS_BASE}eval/index.html`;
+      }
+      next();
+    });
+  },
+});
+
 export default defineConfig({
   base: FS_BASE,
   plugins: [
@@ -864,6 +885,7 @@ export default defineConfig({
     ...(FS_DESKTOP ? [shaderCarouselDesktopStagePlugin()] : [shaderCarouselCopyPlugin()]),
     shaderCarouselDevResolvePlugin(),
     nodeDesignerEndpointPlugin(),
+    evalDevIndexPlugin(),
   ],
   resolve: {
     alias: {

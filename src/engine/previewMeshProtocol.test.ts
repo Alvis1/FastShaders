@@ -52,6 +52,18 @@ describe('fs:model-meshes (sandbox → parent)', () => {
     expect(html).not.toContain('fs:model-meshes');
   });
 
+  it('reports an over-long mesh name as EMPTY rather than truncating it', () => {
+    // A truncated name would be offered in the picker, targeted, and emitted —
+    // and would then match nothing at runtime, because the loader dispatches on
+    // the raw `node.name`. The mesh would silently keep the default material
+    // AND show no warning, since the truncated name IS in the inventory the
+    // node checks itself against. Reported empty, the parent's sanitizer drops
+    // it and the mesh is honestly never offered.
+    const html = tslToPreviewHTML(TSL, { geometry: 'custom', customModel });
+    expect(html).toContain('n.name.length <= 128 ? n.name : ""');
+    expect(html).not.toContain('n.name.slice(0, 128)');
+  });
+
   it('reports the AUTHORED material name, not the shader material', () => {
     // By report time the loader has usually stamped its own material over every
     // mesh; it keeps the originals keyed by uuid, so that map is asked first.

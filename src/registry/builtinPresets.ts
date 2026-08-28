@@ -511,6 +511,338 @@ const shader = Fn(() => {
 });
 export default shader;`;
 
+// ── Circle (Distance Field) ───────────────────────────────────────────
+// The shapes rung of the ladder: a coordinate's DISTANCE from a point is a
+// field you can threshold, which is every SDF shape in one node.
+//
+// The softness is guarded with max(s, 0.001) for the reason Stripes documents:
+// smoothstep(e, e, x) is undefined behaviour, and this uniform is meant to be
+// scrubbed to zero.
+const CIRCLE_CODE = `import { add, color, distance, Fn, max, mix, oneMinus, smoothstep, uniform, uv, vec2 } from "three/tsl";
+
+const shader = Fn(() => {
+  const discRadius = uniform(0.32);
+  const discSoftness = uniform(0.04);
+  const discColor = uniform(color(0xFFC845));
+  const discBackColor = uniform(color(0x14203A));
+  const u = uv();
+  const centre = vec2(0.5, 0.5);
+  const field = distance(u, centre);
+  const soft = max(discSoftness, 0.001);
+  const outer = add(discRadius, soft);
+  const edge = smoothstep(discRadius, outer, field);
+  const disc = oneMinus(edge);
+  const result = mix(discBackColor, discColor, disc);
+  return result;
+});
+export default shader;`;
+
+// ── Hue Shift (HSL Round Trip) ────────────────────────────────────
+// The colour-space rung, and the only shipped asset that exercises hsl/toHsl.
+//
+// Those two are NOT three/tsl exports - graphToCode emits its own branchless
+// helper Fn for each at module scope and codeToGraph skips the declarator by
+// name (see the hsl/toHsl convention in CLAUDE.md). This preset is therefore
+// the first artwork that compiles those helpers on both backends.
+//
+// The hue is shifted by adding into the h channel alone, then wrapped with
+// fract: h is periodic, so a bare add would walk out of range and clamp.
+const HUE_SHIFT_CODE = `import { add, clamp, color, Fn, fract, hsl, mul, time, toHsl, uniform, uv } from "three/tsl";
+
+const shader = Fn(() => {
+  const hueColor = uniform(color(0x8E6FD8));
+  const hueSpread = uniform(0.35);
+  const hueSpeed = uniform(0.15);
+  const hueBoost = uniform(1.3);
+  const src = toHsl(hueColor);
+  const u = uv();
+  const sweep = mul(u.y, hueSpread);
+  const drift = mul(time, hueSpeed);
+  const travel = add(sweep, drift);
+  const turned = add(src.x, travel);
+  const wrapped = fract(turned);
+  const boosted = mul(src.y, hueBoost);
+  const vivid = clamp(boosted, 0, 1);
+  const result = hsl(wrapped, vivid, src.z);
+  return result;
+});
+export default shader;`;
+
+// ── Mosaic (Cell Noise ID) ───────────────────────────────────────
+// The Voronoi family's cheap half, and the library's plainest cost lesson.
+//
+// mx_cell_noise_float returns ONE flat random number per integer cell and
+// nothing inside it - no distance field, so no per-fragment site search. That
+// is the whole 7-point price. The distance-carrying members of the same family
+// (mx_worley_noise_float 230, mx_worley_noise_vec2 235) buy cell WALLS, which
+// is why Stylized Water fakes those with ranked sine waves instead.
+const MOSAIC_CODE = `import { color, Fn, mix, mul, mx_cell_noise_float, positionGeometry, pow, uniform } from "three/tsl";
+
+const shader = Fn(() => {
+  const mosaicScale = uniform(7);
+  const mosaicContrast = uniform(1.6);
+  const mosaicColorA = uniform(color(0x0B3C5D));
+  const mosaicColorB = uniform(color(0xF2C14E));
+  const pos = positionGeometry;
+
+  const cellPos = mul(pos, mosaicScale);
+  const id = mx_cell_noise_float(cellPos);
+  const graded = pow(id, mosaicContrast);
+  const result = mix(mosaicColorA, mosaicColorB, graded);
+  return result;
+});
+export default shader;`;
+
+// ── Noise Blob (Vertex Noise Displacement) ───────────────────────────
+// Vertex Wave's skeleton with noise in place of the sine, so the two read as
+// siblings: same Displacement channel, same return-the-HEIGHT contract.
+//
+// The noise is left SIGNED here, unlike Noise Mask and Dissolve. That is the
+// point - negatives dent and positives bulge, so the mesh deforms about its
+// own radius instead of only inflating.
+const NOISE_BLOB_CODE = `import { add, Fn, mul, mx_noise_float, positionGeometry, time, uniform } from "three/tsl";
+
+const shader = Fn(() => {
+  const blobScale = uniform(2.4);
+  const blobAmount = uniform(0.28);
+  const blobSpeed = uniform(0.4);
+
+  const pos = positionGeometry;
+  const t = time;
+
+  const field = mul(pos, blobScale);
+  const drift = mul(t, blobSpeed);
+  const boil = add(field, drift);
+  const n = mx_noise_float(boil);
+  const height = mul(n, blobAmount);
+
+  // One Add of a single float shifts all three noise axes at once, so the
+  // whole field drifts along its own diagonal. The noise is left SIGNED on
+  // purpose: negatives dent and positives bulge, so the mesh deforms around
+  // its own radius instead of only inflating. Return the height alone - the
+  // Output node pushes each vertex along its normal.
+  return { position: height };
+});
+export default shader;`;
+
+// ── Distance Fog (Camera Depth) ─────────────────────────────────
+// The first preset that reads where the CAMERA is, rather than where the
+// surface faces.
+//
+// Depth is measured RELATIVE to the model's centre - distance(camera, fragment)
+// minus the camera's own orbit radius - so the fade spans the mesh at any zoom.
+// Absolute camera distances would have been simpler to read and useless the
+// moment the user scrolled: the whole model would leave the fog range.
+// The offsets are signed, negative toward the viewer, so fogNear < fogFar.
+const DISTANCE_FOG_CODE = `import { cameraPosition, clamp, color, distance, div, Fn, length, max, mix, positionWorld, sub, uniform } from "three/tsl";
+
+const shader = Fn(() => {
+  const fogNear = uniform(-0.8);
+  const fogFar = uniform(0);
+  const fogSurfaceColor = uniform(color(0xD84315));
+  const fogColor = uniform(color(0xB0BEC5));
+  const camPos = cameraPosition;
+  const wPos = positionWorld;
+
+  const depth = distance(camPos, wPos);
+  const orbit = length(camPos);
+  const behind = sub(depth, orbit);
+
+  const pastNear = sub(behind, fogNear);
+  const spanRaw = sub(fogFar, fogNear);
+  const fogSpan = max(spanRaw, 0.001);
+  const fogRatio = div(pastNear, fogSpan);
+  const fogAmount = clamp(fogRatio, 0, 1);
+
+  const result = mix(fogSurfaceColor, fogColor, fogAmount);
+  return result;
+});
+export default shader;`;
+
+// ── Iridescence (Fresnel Palette) ───────────────────────────────
+// Tier 1 x tier 1 = tier 3, and the clearest statement of the library's thesis:
+// Edge Glow's rim mask feeds Colour Ramp's cosine palette as its PHASE, so the
+// hue depends on viewing angle. No noise anywhere - 45 points.
+//
+// The rim is used twice, as phase and again as amplitude, which is what keeps
+// the head-on centre at the base colour instead of banding across the whole
+// surface. normalWorld, bare - see the world-normal convention.
+const IRIDESCENCE_CODE = `import { add, cameraPosition, clamp, color, cos, dot, Fn, mul, normalize, normalWorld, oneMinus, positionWorld, pow, sub, uniform, vec3 } from "three/tsl";
+
+const shader = Fn(() => {
+  const iriSharpness = uniform(0.7);
+  const iriSpread = uniform(1.6);
+  const iriBaseColor = uniform(color(0x8C8CA0));
+  const iriSheenColor = uniform(color(0x736680));
+
+  const camPos = cameraPosition;
+  const wPos = positionWorld;
+  const nrm = normalWorld;
+
+  const toCam = sub(camPos, wPos);
+  const viewDir = normalize(toCam);
+  const ndv = dot(nrm, viewDir);
+  const facing = clamp(ndv, 0, 1);
+  const inv = oneMinus(facing);
+  const rim = pow(inv, iriSharpness);
+
+  const sweep = mul(rim, iriSpread);
+  const phase = vec3(0, 0.33, 0.67);
+  const shifted = add(phase, sweep);
+  const ang = mul(shifted, 6.2832);
+  const cs = cos(ang);
+  const wob = mul(iriSheenColor, cs);
+  const sheen = mul(wob, rim);
+  const raw = add(iriBaseColor, sheen);
+  const result = clamp(raw, 0, 1);
+  return result;
+});
+export default shader;`;
+
+// ── Lava Crust (Ridged Noise) ──────────────────────────────────
+// Dissolve's other half: where Dissolve thresholds noise to CUT, this folds it
+// about zero to draw the contour itself.
+//
+// abs() on a signed Perlin turns its zero crossing - a set of winding closed
+// curves - into a valley; smoothstep widens that valley into the crack. One
+// noise sample pays for the cracks, the plate shading AND the emissive core,
+// which is the whole reason this is 55 points rather than three times that.
+const LAVA_CRUST_CODE = `import { abs, add, color, Fn, max, mix, mul, mx_noise_float, oneMinus, positionGeometry, smoothstep, time, uniform } from "three/tsl";
+
+const shader = Fn(() => {
+  const lavaScale = uniform(2.5);
+  const lavaFlowSpeed = uniform(0.12);
+  const lavaCrackWidth = uniform(0.1);
+  const lavaCrustColor = uniform(color(0x3A2A22));
+  const lavaHotColor = uniform(color(0xFF5A00));
+  const pos = positionGeometry;
+  const t = time;
+
+  // ONE noise sample. Everything below is built from it - the cracks, the
+  // plate shading and the emissive core all reuse this one value.
+  const scaled = mul(pos, lavaScale);
+  const creep = mul(t, lavaFlowSpeed);
+  const p = add(scaled, creep);
+  const n = mx_noise_float(p);
+
+  // abs() folds the signed noise about zero, so its zero contour - a set of
+  // winding closed curves - becomes a valley at 0. Smoothstep widens that
+  // valley into the crack; invert makes 1 the hot side.
+  const ridge = abs(n);
+  const w = max(lavaCrackWidth, 0.001);
+  const crust = smoothstep(0, w, ridge);
+  const heat = oneMinus(crust);
+
+  // The same sample again, for free: the plates darken away from the cracks.
+  const cool = mul(ridge, 0.7);
+  const plate = oneMinus(cool);
+  const rock = mul(lavaCrustColor, plate);
+  const surface = mix(rock, lavaHotColor, heat);
+
+  // Squared, so only the thin core of a vein burns past 1 and reads as molten.
+  const core = mul(heat, heat);
+  const hotAmt = mul(core, 2);
+  const glow = mul(lavaHotColor, hotAmt);
+  return { color: surface, emissive: glow };
+});
+export default shader;`;
+
+// ── Teleport Beam (Scanline Cutout) ─────────────────────────────
+// The only preset that teaches the Output node's Discard channel and the logic
+// category, and it teaches the Quest 3 lesson with them: a tiled mobile GPU
+// pays real overdraw for transparent blending, so a CUTOUT is the cheap way to
+// make a hole. (Discard is not free either - it costs early-Z - but it does not
+// multiply with depth complexity the way blending does.)
+//
+// Discard is a TRUTHINESS test, so the mask is a Less Than, not a ramp: any
+// non-zero value culls, which is why a soft edge would eat the whole model.
+const TELEPORT_BEAM_CODE = `import { abs, add, color, Fn, fract, lessThan, max, mix, mul, oneMinus, positionWorld, remap, sin, smoothstep, sub, time, uniform } from "three/tsl";
+
+const shader = Fn(() => {
+  const beamBodyColor = uniform(color(0x2E3F52));
+  const beamGlowColor = uniform(color(0x40FFC8));
+  const beamHeight = uniform(0.25);
+  const beamDensity = uniform(60);
+  const beamSpeed = uniform(0.35);
+  const wPos = positionWorld;
+  const t = time;
+
+  const tw = mul(t, beamSpeed);
+  const sweep = fract(tw);
+  const center = remap(sweep, 0, 1, -1, 1);
+
+  const offset = sub(wPos.y, center);
+  const d = abs(offset);
+  const span = max(beamHeight, 0.001);
+
+  const sy = mul(wPos.y, beamDensity);
+  const s = sin(sy);
+  const sHalf = mul(s, 0.5);
+  const s01 = add(sHalf, 0.5);
+  const radius = mul(s01, span);
+  const cut = lessThan(d, radius);
+
+  const fall = smoothstep(0, span, d);
+  const heat = oneMinus(fall);
+
+  const glow = mul(beamGlowColor, heat);
+  const body = mix(beamBodyColor, beamGlowColor, heat);
+  return { color: body, emissive: glow, discard: cut };
+});
+export default shader;`;
+
+// ── Studio Shine (Matcap Basis) ────────────────────────────────
+// The matcap idea, built without the normalView node this registry does not
+// have and without a matcap texture.
+//
+// Two cross products raise a camera-aligned basis out of the view direction and
+// world up; three dot products then read the world normal in that frame, which
+// is exactly what a matcap's UV lookup does. The rig therefore turns with the
+// CAMERA, not the mesh - cheap stylised lighting that stays put while the model
+// spins, which is why matcaps are worth knowing in VR.
+//
+// worldUp carries a 0.001 z nudge so the cross product cannot collapse to zero
+// when the viewer orbits directly overhead. It prevents the NaN, not the roll
+// about the view axis, which is inherent to every up-vector matcap.
+const STUDIO_SHINE_CODE = `import { add, cameraPosition, clamp, color, cross, dot, Fn, mix, mul, normalize, normalWorld, oneMinus, positionWorld, pow, smoothstep, sub, uniform, vec3 } from "three/tsl";
+
+const shader = Fn(() => {
+  const shineBaseColor = uniform(color(0x1E2430));
+  const shineKeyColor = uniform(color(0xFFF1D5));
+  const shineKeyLevel = uniform(0.7);
+  const shineTightness = uniform(120);
+  const shineRimStrength = uniform(0.6);
+
+  const camOffset = sub(cameraPosition, positionWorld);
+  const viewDir = normalize(camOffset);
+  const worldUp = vec3(0, 1, 0.001);
+  const rightAxis = cross(worldUp, viewDir);
+  const camRight = normalize(rightAxis);
+  const camUp = cross(viewDir, camRight);
+
+  const nRight = dot(normalWorld, camRight);
+  const nUp = dot(normalWorld, camUp);
+  const nFace = dot(normalWorld, viewDir);
+
+  const keyRight = mul(nRight, -0.36);
+  const keyUp = mul(nUp, 0.48);
+  const keyFace = mul(nFace, 0.8);
+  const keyDot = add(keyRight, keyUp, keyFace);
+  const keyLit = clamp(keyDot, 0, 1);
+  const keyWash = mul(keyLit, shineKeyLevel);
+  const shineSpot = pow(keyLit, shineTightness);
+
+  const away = oneMinus(nFace);
+  const rimBand = smoothstep(0.55, 1, away);
+  const rimLit = mul(rimBand, shineRimStrength);
+
+  const lightRaw = add(keyWash, shineSpot, rimLit);
+  const light = clamp(lightRaw, 0, 1);
+  const result = mix(shineBaseColor, shineKeyColor, light);
+  return result;
+});
+export default shader;`;
+
 const PRESET_ENTRIES: PresetEntry[] = [
   { id: 'gradient', tier: 1, name: 'Gradient (UV Mix)', color: '#43A047', code: GRADIENT_CODE,
     description: 'The hello-world of shading: the vertical texture coordinate drives a mix from deep indigo at the bottom to warm coral at the top. Wire it to the Output node\'s Color channel and scrub topColor first.',
@@ -529,6 +861,12 @@ const PRESET_ENTRIES: PresetEntry[] = [
     note: {
       heading: 'Floor -> Mod 2 -> Mix',
       text: 'Multiply scales the UV, then Floor turns it into whole tile numbers. Adding the x and y numbers and taking Modulo 2 leaves an alternating 0/1 that feeds the Mix directly.',
+    } },
+  { id: 'circle', tier: 1, name: 'Circle (Distance Field)', color: '#FFC845', code: CIRCLE_CODE,
+    description: 'A soft-edged amber shape on a deep navy field, drawn purely from how far each UV coordinate sits from the center - the cheapest distance-field shape there is. Switch the preview Model to Plane to see it as a true circle; the sphere stretches UV twice as wide as it is tall, so there it reads as a broad lobe. Wire it to the Output node\'s Color channel and scrub discRadius UP first - below about 0.15 the disc hides on the far side of the sphere.',
+    note: {
+      heading: 'Distance -> Smoothstep',
+      text: 'Distance from the UV node to a Vec2 center gives a radial field. Add sets the outer edge, Smoothstep fades across the rim, Invert makes 1 mean inside, and Max keeps softness above zero.',
     } },
   { id: 'edge-glow', tier: 1, name: 'Edge Glow (Fresnel)', color: '#00ACC1', code: EDGE_GLOW_CODE,
     description: 'A dark surface whose silhouette lights up with a cyan fresnel rim, built from dot(normal, view) inverted and sharpened. Wire it to Color (or Emissive for a true glow) and scrub glowPower first to tighten or spread the rim.',
@@ -554,11 +892,23 @@ const PRESET_ENTRIES: PresetEntry[] = [
       heading: 'UV.x + phase -> Cosine',
       text: 'Add offsets UV.x per channel (0, 0.33, 0.67), so one Cosine peaks in red, green and blue at different points; Multiply scales that cosine by ampColor, Add lays it on baseColor, Clamp bounds it 0..1.',
     } },
+  { id: 'hue-shift', tier: 2, name: 'Hue Shift (HSL Round Trip)', color: '#D81B60', code: HUE_SHIFT_CODE,
+    description: 'A saturated violet surface whose hue slides steadily round the color wheel, banded up the model. The base color only supplies the starting hue and the lightness every shifted color keeps, so nothing clips. Wire it to the Output node\'s Color channel and scrub hueSpread first - past 1 the whole wheel fits on the model at once - then hueBoost, which drains it to gray at 0.',
+    note: {
+      heading: 'Add Into the Hue Channel',
+      text: 'RGB to HSL splits the base color into h, s and l. Multiply scales UV.y and Time, two Adds push them into h alone, Fract keeps it inside one turn, Clamp bounds s, and HSL to RGB rebuilds it.',
+    } },
   { id: 'noise-mask', tier: 2, name: 'Noise Mask (Threshold)', color: '#42A5F5', code: NOISE_MASK_CODE,
     description: 'Perlin noise pushed through a soft smoothstep threshold, carving the surface into organic dark-green and cream patches — the kernel inside dissolve and coverage effects. Wire to Color and scrub threshold to slide the mask across the surface.',
     note: {
       heading: 'Smoothstep Band on Noise',
       text: 'Perlin Noise is remapped to 0-1, then Subtract and Add place the Smoothstep edges around threshold: one value slides the cut, softness sets its blur, and the result is the Mix factor.',
+    } },
+  { id: 'mosaic', tier: 2, name: 'Mosaic (Cell Noise ID)', color: '#1A4E7A', code: MOSAIC_CODE,
+    description: 'Flat facets of navy and amber tiling the surface, each cell painted from a single random number. Cell Noise gives one value per whole-number cell and nothing inside it, which is why it costs 7 points where the Voronoi distance functions cost over 200 - the cheapest way to say \'random, but in patches\'. Wire it to the Output node\'s Color channel and scrub mosaicScale first to resize the facets.',
+    note: {
+      heading: 'One Random Value per Cell',
+      text: 'Multiply drops Position into cell space, where Cell Noise returns one flat random number per whole-number cell and nothing inside it. Power biases the split; Mix picks between the two colors.',
     } },
   { id: 'toon-ramp', tier: 2, name: 'Toon Ramp (Quantized Light)', color: '#7E57C2', code: TOON_RAMP_CODE,
     description: 'Cel-shaded sphere: the surface normal is dotted with a fixed light direction and the lighting value is posterized with floor() into flat bands between a shadow purple and a lit cream. Wire to the Color channel; scrub toonSteps first to change the band count.',
@@ -572,11 +922,29 @@ const PRESET_ENTRIES: PresetEntry[] = [
       heading: 'Position.y - Time -> Sine',
       text: 'Position y sets the sine phase, so the ripple would stand frozen; subtracting Time slides that phase, which is what makes the wave travel up. The last Multiply only scales its height.',
     } },
+  { id: 'noise-blob', tier: 2, name: 'Noise Blob (Vertex Noise Displacement)', color: '#A1887F', code: NOISE_BLOB_CODE,
+    description: 'A sphere whose silhouette boils: 3D Perlin noise sampled at each vertex\'s rest position decides how far that vertex moves along its own normal, and Time drifts the noise field so the lumps keep re-forming. Wire it to the Output node\'s Displacement channel (the value is the AMOUNT to move, not a finished position). Scrub blobAmount first to grow the lumps, then blobScale to trade a few big blobs for many small ones.',
+    note: {
+      heading: 'Signed Noise Displaces',
+      text: 'Multiply drops Position into noise space; one Add drifts all three axes by a single Time value; the last Multiply scales it. Perlin stays SIGNED - unremapped, so samples dent as well as bulge.',
+    } },
   { id: 'top-cover', tier: 2, name: 'Top Cover (Normal Mask)', color: '#8E24AA', code: TOP_COVER_CODE,
     description: 'Snow-white cover that settles only on up-facing surfaces — the mask is a smoothstep of the world-space surface normal\'s Y component, not a painted pattern, so the snow line stays level even as the model turns. Wire it to the Output node\'s Color channel and scrub coverage first to raise or lower the snow line.',
     note: {
       heading: 'Normal Y -> Smoothstep Mix',
       text: 'World Normal\'s .y says how up-facing a face is. Invert turns coverage into a cutoff on that value; Subtract/Add widen it into a band, Smoothstep makes a soft 0-1 mask, Mix blends ground to cover.',
+    } },
+  { id: 'distance-fog', tier: 2, name: 'Distance Fog (Camera Depth)', color: '#78909C', code: DISTANCE_FOG_CODE,
+    description: 'A warm orange surface that washes out into pale blue-gray haze as it recedes. Switch the preview Model to Cube or Teapot to read it properly - whole faces sink back there, while on the sphere the fade lands on the shaded rim and is easy to mistake for shading. Unlike a fresnel rim it is measured from the camera, so it moves when you do; and it tints the surface COLOR, so the lighting still falls on the fogged result. Wire it to the Output node\'s Color channel and scrub fogFar first: both uniforms are offsets from the model\'s center along the view (negative is toward you), so zooming never washes the fog away.',
+    note: {
+      heading: 'Length, Distance -> Mix',
+      text: 'Distance measures Camera Position to Position (world); Length measures the camera to the model center. Subtract turns the pair into a signed depth, Divide scales it 0-1, Clamp bounds the Mix.',
+    } },
+  { id: 'iridescence', tier: 3, name: 'Iridescence (Fresnel Palette)', color: '#9575CD', code: IRIDESCENCE_CODE,
+    description: 'A pearl body that blooms into oil-slick bands of lavender, violet, blue and sea-green as the surface turns away from you, with no noise node anywhere. Wire it to the Output node\'s Color channel and scrub iriSpread first to set how many hue cycles fit between the center and the silhouette. Orbit the view and the bands sweep - that angle dependence IS iridescence.',
+    note: {
+      heading: 'Edge Glow x Color Ramp',
+      text: 'Dot, Invert and Power build the Edge Glow rim mask. That mask is used twice: inside the Color Ramp Cosine as phase, then on its output as amplitude, so the center stays base color.',
     } },
   { id: 'dissolve', tier: 3, name: 'Dissolve (Noise Cutoff)', color: '#F4511E', code: DISSOLVE_CODE,
     description: 'Classic noise-cutoff dissolve: where noise falls below the threshold the surface goes black, with a hot orange rim burning exactly along the edge. Wire it to the Output Color channel and scrub dissolveAmount to sweep the dissolve — for a true cutout, add a Less Than node (the noise vs dissolveAmount) into the Output node\'s Discard channel.',
@@ -584,11 +952,23 @@ const PRESET_ENTRIES: PresetEntry[] = [
       heading: 'Mask x Invert = Edge Rim',
       text: 'Smoothstep squeezes the Perlin Noise into a near-binary mask; multiplying it by its own Invert leaves light only in the thin blend zone, so the rim draws itself on the cutoff line.',
     } },
+  { id: 'lava-crust', tier: 3, name: 'Lava Crust (Ridged Noise)', color: '#BF360C', code: LAVA_CRUST_CODE,
+    description: 'Dark basalt plates split by a network of molten veins that creeps slowly across the surface. The graph ends in two unwired nodes at the right edge: wire the Mix to the Output Color channel and the Multiply to Emissive, so the cracks light themselves instead of waiting for a lamp. Scrub lavaCrackWidth first to open or close the veins, then lavaScale for more of them.',
+    note: {
+      heading: 'One Mask, Two Channels',
+      text: 'Abs folds the signed Perlin about zero, so its zero contour becomes the crack; Smoothstep and Invert widen it. The same mask squared by a Multiply drives Emissive, so only the vein core is self-lit.',
+    } },
   { id: 'hologram', tier: 3, name: 'Hologram (Fresnel + Scanlines)', color: '#EC407A', code: HOLOGRAM_CODE,
     description: 'A sci-fi hologram: a Fresnel rim glow layered with animated horizontal scanlines, all tinted a single cyan. Wire it to Emissive (and lower Opacity) for the classic look, then scrub rimPower to sharpen or soften the edge glow.',
     note: {
       heading: 'Invert Dot -> Rim Mask',
       text: 'Dot Product of normal and view direction is 1 head-on, 0 at edges, so Invert then Power carves a rim mask. Rim plus a Time-scrolled Sine on Y sum into one brightness that Multiply tints.',
+    } },
+  { id: 'teleport-beam', tier: 3, name: 'Teleport Beam (Scanline Cutout)', color: '#1DE9B6', code: TELEPORT_BEAM_CODE,
+    description: 'A horizontal beam sweeps up the model and eats it away one scanline at a time, with a hot aqua fringe burning along every cut. Wire the Less Than output to the Output node\'s Discard channel, the last Multiply to Emissive and the Mix to Color, then scrub beamHeight first to widen the bite. A cutout is the Quest 3 friendly way to make a hole - a tiler pays real overdraw for transparent blending.',
+    note: {
+      heading: 'Less Than Feeds Discard',
+      text: 'Sine on world Y sets a per-line cut radius; Less Than compares it to the Abs distance from the swept plane and feeds Discard. Smoothstep plus Invert reuse that same distance as the emissive heat.',
     } },
   { id: 'force-field', tier: 3, name: 'Force Field (Fresnel + Grid Pulse)', color: '#FF7043', code: FORCE_FIELD_CODE,
     description: 'A sci-fi energy barrier: a violet Fresnel rim glow layered over a pulsing grid mesh mapped on uv. Wire it to the Emissive channel (and lower Opacity for a translucent field), then scrub tiling to change the mesh density.',
@@ -601,6 +981,12 @@ const PRESET_ENTRIES: PresetEntry[] = [
     note: {
       heading: 'Min/Max Rank Three Waves',
       text: 'Two Sines: the first warps the scaled position, the second turns it into three waves at once. Max and Min rank the three, and Subtract takes the top-two gap - zero exactly where the leaders tie.',
+    } },
+  { id: 'studio-shine', tier: 3, name: 'Studio Shine (Matcap Basis)', color: '#455A64', code: STUDIO_SHINE_CODE,
+    description: 'A slate ball lit like a product shot: a broad warm key wash from the upper left, a tight glossy highlight, and a bright rim along the silhouette. The light rig is built from the CAMERA direction rather than from the model, so the studio stays put while the mesh spins - the matcap trick, with no matcap texture. Wire it to the Output node\'s Color channel and scrub shineTightness first: 4 to 30 is a broad soft-box sheen, 200 is a pinpoint gloss, and 0 flattens the whole surface to the key color.',
+    note: {
+      heading: 'Two Crosses = Camera Axes',
+      text: 'Cross of World Up with the view direction gives camera-right; a second Cross gives camera-up. Three Dot Products read the World Normal in that frame, so the rig turns with the camera, not the mesh.',
     } },
 ];
 

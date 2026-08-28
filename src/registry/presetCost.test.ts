@@ -31,22 +31,42 @@ const EXPECTED: Record<string, number> = {
   gradient: 4,
   stripes: 30,
   checker: 11,
+  // 22 — distance (12) is most of it; the whole point is that a shape costs
+  // barely more than a checkerboard.
+  circle: 22,
   'edge-glow': 36,
   pulse: 9,
   'uv-scroll': 7,
   'color-ramp': 12,
+  // 40, of which toHsl (15) and hsl (15) are 30 — the round trip IS the preset.
+  'hue-shift': 40,
   // 49, of which the perlin call is 35 — the point of the preset. The two-node
   // 0..1 remap around it costs 2; folding it into the `remap` node would cost 5.
   'noise-mask': 49,
+  // 22. mx_cell_noise_float is 7; its distance-carrying siblings are 230+.
+  mosaic: 22,
   'toon-ramp': 34,
   // 8 — it returns the wave HEIGHT; the Output node adds it along the normal,
   // so the preset no longer pays for the normalize/mul/add it used to duplicate.
   'vertex-wave': 8,
+  // 39 — the perlin call is 35, exactly as in noise-mask. The vertex stage is
+  // not what costs; the noise is.
+  'noise-blob': 39,
   'top-cover': 19,
+  // 27 — the max() guard on the span is one node, and stops a scrub that
+  // collapses fogFar onto fogNear from dividing by zero.
+  'distance-fog': 27,
   dissolve: 52,
+  // 45 with no noise node at all — a tier-3 look for less than noise-mask.
+  iridescence: 45,
+  'lava-crust': 55,
   hologram: 46,
+  'teleport-beam': 29,
   'force-field': 64,
   'stylized-water': 49,
+  // 78 — the library's priciest preset (two cross products at 12 each, three
+  // dot products, a pow). Still 39% of the 200-point Quest 3 CostBar budget.
+  'studio-shine': 78,
 };
 
 describe('preset GPU cost', () => {

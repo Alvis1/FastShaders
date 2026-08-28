@@ -1727,7 +1727,20 @@ export function tslToPreviewHTML(
 
   // Create shader blob URL before the scene is parsed
   lines.push('<script>');
-  lines.push(`  var __shaderCode = ${JSON.stringify(shaderModule)};`);
+  // The module is inlined into a real `<script>` element, and the HTML
+  // tokenizer ends that element at the first `</script` in the RAW TEXT — being
+  // inside a JS string literal is invisible to it. So every `<` becomes the
+  // `<` escape, which JS decodes back to `<`: the blob the module is built
+  // from is byte-identical, and the HTML source contains no tag-open at all.
+  //
+  // This is the SINK half of the defence (`graphToCode.partKeyLiteral` is the
+  // source half). It is written here as well as there because it covers every
+  // string that can reach this line — mesh names, an `unknown` node's raw
+  // expression, an image asset's file name — rather than the one that is known
+  // to be attacker-chosen today. Without it, a hostile `.fastshader` could
+  // close this script early and run markup in the XR popup, which unlike the
+  // sandboxed preview is a top-level document at the app's REAL origin.
+  lines.push(`  var __shaderCode = ${JSON.stringify(shaderModule).replace(/</g, '\\u003C')};`);
   lines.push('  var __shaderBlob = new Blob([__shaderCode], { type: "text/javascript" });');
   lines.push('  window.__shaderUrl = URL.createObjectURL(__shaderBlob);');
   lines.push(`<${''}/script>`);
@@ -1986,7 +1999,15 @@ export function tslToPreviewHTML(
     lines.push('        var pos = n.geometry && n.geometry.attributes ? n.geometry.attributes.position : null;');
     lines.push('        payload.push({');
     lines.push('          index: i,');
-    lines.push('          name: typeof n.name === "string" ? n.name.slice(0, 128) : "",');
+    // Over-length names are reported EMPTY, never truncated. The parent's
+    // sanitizer drops an unusable name, so the mesh is honestly not offered as
+    // a target; a truncated one would be offered, targeted, and emitted, and
+    // would then match nothing at runtime (the loader dispatches on the raw
+    // `node.name`) — the mesh silently keeps the default material, and the node
+    // shows no warning because the truncated name IS in the inventory it is
+    // checked against. The cap is still applied here so the message stays
+    // bounded whatever the model contains.
+    lines.push('          name: typeof n.name === "string" && n.name.length <= 128 ? n.name : "",');
     lines.push('          materialName: mat && typeof mat.name === "string" ? mat.name.slice(0, 64) : "",');
     lines.push('          vertexCount: pos && typeof pos.count === "number" ? pos.count : 0');
     lines.push('        });');

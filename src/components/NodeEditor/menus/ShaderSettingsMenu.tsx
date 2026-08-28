@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
 import { t, portLabel } from '@/i18n';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
@@ -7,9 +8,14 @@ import { removeEdgesForPort } from '@/utils/edgeUtils';
 import { toggleExposedPort } from '@/utils/exposedPorts';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
-import { findDefaultOutput, meshTargetName } from '@/utils/outputTargets';
-import { highlightMesh } from '@/utils/meshHighlight';
-import { meshNameCounts } from '@/utils/meshInventory';
+import {
+  findDefaultOutput,
+  outputMaterials,
+  materialExposedPorts,
+  materialTargetNames,
+  channelHandle,
+  type OutputMaterial,
+} from '@/utils/outputMaterials';
 
 /** Ports that can be toggled on/off in the output node settings, listed in
  *  the SAME order as the node's socket arrangement (the registry def's
@@ -32,35 +38,77 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   const { bracket, closeBracket } = useHistoryBracket();
   const device = resolveDeviceBudget(selectedHeadsetId, costProfiles);
 
-  // The Output the user right-clicked, not "the first one". With per-mesh
-  // materials there are several, and editing one material's transparency from
-  // a menu opened on another is exactly the kind of wrong that never announces
-  // itself. Falls back to the default Output for the paths that open this menu
-  // without a node id.
+  // The Output the user right-clicked, falling back to THE Output for the
+  // paths that open this menu without a node id (the canvas background).
   const outputNode = (nodeId ? nodes.find((n) => n.id === nodeId) : null)
     ?? findDefaultOutput(nodes);
   const outputData = outputNode?.data as OutputNodeData | undefined;
-  const settings: MaterialSettings = outputData?.materialSettings ?? {};
 
-  // Sub-mesh targeting state. The inventory is session-only and arrives from
-  // the sandboxed preview, so it is absent until a model has actually loaded.
-  const inventory = useAppStore((s) => s.previewMeshInventory);
-  const currentTarget = outputNode ? meshTargetName(outputNode) : null;
-  const counts = meshNameCounts(inventory?.meshes ?? []);
-  const inventoryHasTarget = !!currentTarget
-    && !!inventory?.meshes.some((m) => m.name === currentTarget);
-  // A mesh already claimed by ANOTHER Output cannot be claimed twice — one
-  // mesh wears one material — so those rows are disabled rather than silently
-  // losing to the first claimant at emission time.
-  const claimedElsewhere = new Map<string, string>();
-  for (const n of nodes) {
-    if (n.id === outputNode?.id) continue;
-    const name = meshTargetName(n);
-    if (name) claimedElsewhere.set(name, n.id);
-  }
+  // WHICH MATERIAL this menu edits. Per-mesh materials are sections of the one
+  // Output node, and each carries its own channels and its own material
+  // settings — SCOPED by the section the user right-clicked; the menu shows a
+  // static scope line and deliberately carries no selector of its own (see the
+  // scope row below). Material 0 is the default (the whole-model material);
+  // the rest are named by their mesh.
+  //
+  // The MESH each material shades is deliberately NOT editable here: that
+  // picker lives on the node itself, where the sections are, and two controls
+  // for one binding is how they end up disagreeing.
+  const materials = outputNode ? outputMaterials(outputNode) : [];
+  // Seeded from the SECTION the user right-clicked (`data-material-index` on
+  // the node's material blocks → contextMenu.materialIndex), so each section
+  // opens its own scoped menu and channels can be exposed per material without
+  // hunting through the selector. The effect matters for the second click: a
+  // right-click on ANOTHER section while this menu is open moves the menu
+  // rather than remounting it, so the initializer alone would keep the old
+  // section — and it keys on the contextMenu OBJECT (a fresh identity per
+  // openContextMenu call), never the index VALUE: re-right-clicking the SAME
+  // section after manually switching the selector writes the same number, and
+  // a value-keyed effect would never fire, leaving the menu scoped to the
+  // manual choice on exactly the gesture that re-asserts the section.
+  const menuState = useAppStore((s) => s.contextMenu);
+  const seededIndex = menuState.materialIndex;
+  const [materialIndex, setMaterialIndex] = useState(seededIndex ?? 0);
+  useEffect(() => {
+    if (typeof seededIndex === 'number') setMaterialIndex(seededIndex);
+  }, [menuState, seededIndex]);
+  // Materials are ANONYMOUS (indices, no ids), so adding or removing one on
+  // the node while this menu is open shifts every later index under the
+  // selection — the menu would silently edit the NEIGHBOUR of the section it
+  // was opened on. A visible reset to the default material is the honest
+  // option; the next right-click re-scopes.
+  const materialCount = materials.length;
+  const countRef = useRef(materialCount);
+  useEffect(() => {
+    if (countRef.current !== materialCount) {
+      countRef.current = materialCount;
+      setMaterialIndex(0);
+    }
+  }, [materialCount]);
+  const activeIndex = materialIndex < materials.length ? materialIndex : 0;
+  const activeMaterial: OutputMaterial | undefined = materials[activeIndex];
 
-  const exposedPorts = outputData?.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
+  const settings: MaterialSettings = (activeIndex === 0
+    ? outputData?.materialSettings
+    : activeMaterial?.materialSettings) ?? {};
+  const exposedPorts = activeIndex === 0
+    ? (outputData?.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED)
+    : materialExposedPorts(activeMaterial, OUTPUT_DEFAULT_EXPOSED);
   const exposedSet = new Set(exposedPorts);
+
+  /** Patch the ACTIVE material — the node's own fields for material 0, its
+   *  `materials` entry otherwise. One writer, so the two shapes cannot drift. */
+  const patchMaterial = (patch: Partial<OutputMaterial>) => {
+    if (!outputNode) return;
+    if (activeIndex === 0) {
+      updateNodeData(outputNode.id, patch as Partial<OutputNodeData>);
+      return;
+    }
+    const added = materials.slice(1).map((m, i) =>
+      i === activeIndex - 1 ? { ...m, ...patch } : m,
+    );
+    updateNodeData(outputNode.id, { materials: added } as Partial<OutputNodeData>);
+  };
 
   const outputDef = NODE_REGISTRY.get('output');
 
@@ -72,9 +120,7 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   // node is the authoring surface.
 
   const updateSettings = (patch: Partial<MaterialSettings>) => {
-    if (!outputNode) return;
-    const merged = { ...settings, ...patch };
-    updateNodeData(outputNode.id, { materialSettings: merged } as Partial<OutputNodeData>);
+    patchMaterial({ materialSettings: { ...settings, ...patch } });
   };
 
   /** Hiding a channel clears its stored widget value too — the documented
@@ -82,7 +128,7 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
    *  values: emission is exposure-gated, so a kept value would either emit
    *  invisibly or silently vanish from the code, depending on the gate. */
   const valuesWithout = (portId: string): Record<string, string | number> | undefined => {
-    const values = outputData?.values;
+    const values = activeIndex === 0 ? outputData?.values : activeMaterial?.values;
     if (!values || !(portId in values)) return undefined;
     const { [portId]: _dropped, ...rest } = values;
     return rest;
@@ -92,17 +138,19 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   const setOpacityPort = (show: boolean) => {
     if (!outputNode) return;
     const current = new Set(exposedPorts);
-    const patch: Partial<OutputNodeData> = {};
+    const patch: Partial<OutputMaterial> = {};
     if (show) {
       current.add('opacity');
     } else {
       current.delete('opacity');
-      removeEdgesForPort(outputNode.id, 'opacity');
+      // The handle this material's opacity is wired through — bare for the
+      // default, namespaced for an added material.
+      removeEdgesForPort(outputNode.id, channelHandle(activeIndex, 'opacity'));
       const rest = valuesWithout('opacity');
       if (rest) patch.values = rest;
     }
     patch.exposedPorts = Array.from(current);
-    updateNodeData(outputNode.id, patch);
+    patchMaterial(patch);
   };
 
   // updateSettings + setOpacityPort are two updateNodeData calls, and hiding a
@@ -145,13 +193,18 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
     // updateNodeData below, which pushes again. Bracketed, hiding a wired
     // channel is one undoable act.
     asOneHistoryEntry(() => {
-      const next = toggleExposedPort(outputNode.id, exposedPorts, portId);
-      const patch: Partial<OutputNodeData> = { exposedPorts: next };
+      const next = toggleExposedPort(
+        outputNode.id,
+        exposedPorts,
+        portId,
+        channelHandle(activeIndex, portId),
+      );
+      const patch: Partial<OutputMaterial> = { exposedPorts: next };
       if (!next.includes(portId)) {
         const rest = valuesWithout(portId);
         if (rest) patch.values = rest;
       }
-      updateNodeData(outputNode.id, patch);
+      patchMaterial(patch);
     });
   };
 
@@ -259,6 +312,28 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
       <div className="context-menu__divider" />
       <div className="context-menu__category">{t('Material', language)}</div>
 
+      {/* WHICH material these settings belong to — a static scope LINE, not a
+          selector: right-clicking a SECTION on the node is the ONE scoping
+          control (data-material-index → contextMenu.materialIndex), and a
+          dropdown here was a second control for the same scope — the exact
+          argument that keeps the MESH picker off this menu. Named by MESH
+          (the first one plus an ellipsis, the node picker's own rule), since
+          that is how the user thinks of them — "the glass one" — and the
+          node's sections are labelled the same way. Shown only when there is
+          more than one, when "which one am I editing" is a real question;
+          `#i` is the last resort for a material whose target the loaded model
+          no longer has. */}
+      {materials.length > 1 && (
+        <div style={{ ...labelStyle, cursor: 'default' }}>
+          <span>{t('Material', language)}</span>
+          <span style={{ fontWeight: 700 }}>
+            {activeMaterial && materialTargetNames(activeMaterial)[0]
+              ? `${materialTargetNames(activeMaterial)[0]}${materialTargetNames(activeMaterial).length > 1 ? ' \u2026' : ''}`
+              : (activeIndex === 0 ? t('All meshes (default)', language) : `#${activeIndex}`)}
+          </span>
+        </div>
+      )}
+
       <label style={labelStyle}>
         <input
           type="checkbox"
@@ -298,66 +373,6 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
           />
           <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', minWidth: 28, textAlign: 'right' }}>
             {settings.alphaTest.toFixed(2)}
-          </span>
-        </div>
-      )}
-
-      {/* Which mesh this material shades. Only shown for a MODEL: the primitive
-          geometries are a single unnamed mesh, so there is nothing to choose
-          between and an empty picker would just raise a question the shader
-          cannot answer. */}
-      {inventory && inventory.meshes.length > 0 && (
-        <div style={{ ...labelStyle, cursor: 'default' }}>
-          <span>{t('Target mesh', language)}</span>
-          <select
-            value={currentTarget ?? ''}
-            onChange={(e) => {
-              const name = e.target.value;
-              // One updateNodeData, so picking a target is one undo entry.
-              updateNodeData(outputNode!.id, name
-                ? { meshTarget: { name } }
-                : { meshTarget: undefined });
-              // Flash the chosen mesh in the 3D view. Deliberately on CHANGE
-              // rather than on hovering each option: a native select popup is
-              // drawn by the OS, so `<option>` mouse events are unreliable
-              // across browsers and absent entirely on touch — a highlight
-              // that only some users ever see is worse than one that always
-              // fires at the moment of choosing.
-              highlightMesh(name || null);
-              if (name) window.setTimeout(() => highlightMesh(null), 1200);
-            }}
-            style={selectStyle}
-          >
-            <option value="">{t('All meshes (default)', language)}</option>
-            {inventory.meshes.map((m) => {
-              const shared = counts.get(m.name) ?? 1;
-              const takenBy = claimedElsewhere.get(m.name);
-              return (
-                <option
-                  key={`${m.index}:${m.name}`}
-                  value={m.name}
-                  disabled={takenBy !== undefined}
-                >
-                  {m.name}
-                  {shared > 1 ? ` (x${shared})` : ''}
-                  {m.materialName ? ` — ${m.materialName}` : ''}
-                  {takenBy !== undefined ? ` — ${t('already targeted', language)}` : ''}
-                </option>
-              );
-            })}
-          </select>
-        </div>
-      )}
-
-      {/* A target whose mesh is not in the loaded model — the NORMAL case, not
-          an edge case: the graph persists and the model does not, so this is
-          what every reload without the model looks like. Named rather than
-          silently cleared, so re-dropping the model restores the binding. */}
-      {currentTarget && !inventoryHasTarget && (
-        <div style={{ ...labelStyle, cursor: 'default', color: 'var(--text-secondary)' }}>
-          <span>
-            {'\u26A0 '}
-            {t('Not in the loaded model', language)}: {currentTarget}
           </span>
         </div>
       )}

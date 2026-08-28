@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { outputNodes, MAX_TARGETED_OUTPUTS } from '@/utils/outputTargets';
+import { existingOutputId, firstFreeOutputChannel, focusOutputNode } from '../outputFocus';
 import { useReactFlow } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 import {
@@ -50,21 +50,19 @@ export function AddNodeMenu() {
   const addNote = useAppStore((s) => s.addNote);
   const setEdges = useAppStore((s) => s.setEdges);
   const nodes = useAppStore((s) => s.nodes);
-  // A second Output is only useful once there is a model to point it at: it
-  // shades a named sub-mesh, and with no inventory there is no name to pick.
-  // So the FIRST Output is always offerable (a graph needs one), and further
-  // ones appear only when the loaded model actually has meshes to target.
-  const meshInventory = useAppStore((s) => s.previewMeshInventory);
-  const outputCount = outputNodes(nodes).length;
-  const canAddOutput =
-    outputCount === 0
-    || (outputCount <= MAX_TARGETED_OUTPUTS && (meshInventory?.meshes.length ?? 0) > 0);
+  // The Output is a SINGLETON: per-mesh shading lives in its materials (the
+  // node's own "+ Add output"), so a second node has nothing to express — only
+  // the first would ever emit, and the copy would be dead weight the next
+  // code-panel Apply deletes without a word. The row is therefore always
+  // OFFERED (browse and search alike) and, once an Output exists, selecting it
+  // glides the view to the existing node instead of silently doing nothing.
+  const existingOutput = existingOutputId(nodes);
   const groupSelection = useAppStore((s) => s.groupSelection);
   const organizeSelection = useAppStore((s) => s.organizeSelection);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const language = useAppStore((s) => s.language);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
 
   // Selected nodes eligible for grouping — excludes groups + notes (annotations).
   const selectedGroupable = useMemo(
@@ -130,11 +128,29 @@ export function AddNodeMenu() {
     let newNodeId: string;
 
     if (def.type === 'output') {
-      // Outputs are CAPPED, not limited to one: each extra one is a per-mesh
-      // material, and the cap is what bounds the compile cost (every distinct
-      // material is its own shader program, and the preview recompiles them
-      // all on each debounced edit).
-      if (outputNodes(nodes).length > MAX_TARGETED_OUTPUTS) {
+      // One Output, always. Per-mesh materials are sections INSIDE it, so a
+      // second node would emit nothing and only confuse the canvas — selecting
+      // the row instead takes the user TO the existing node.
+      const existing = existingOutputId(nodes);
+      if (existing) {
+        // This menu can open from a wire dropped on empty canvas (sourceNodeId
+        // set), where "pick Output" means "connect me to the Output" — the same
+        // gesture that auto-connects every other def below. Honour it: land on
+        // the first FREE EXPOSED channel. With none free, only focus — silently
+        // replacing a wire the user can see would be worse than not connecting.
+        if (sourceNodeId && sourceHandleId) {
+          const store = useAppStore.getState();
+          const outNode = store.nodes.find((n) => n.id === existing);
+          const channel = outNode
+            ? firstFreeOutputChannel(outNode, store.edges, def.inputs)
+            : null;
+          if (channel) {
+            store.pushHistory();
+            const newEdge = makeTypedEdge(sourceNodeId, sourceHandleId, existing, channel);
+            setEdges([...store.edges, newEdge] as AppEdge[]);
+          }
+        }
+        focusOutputNode(fitView, nodes, existing);
         closeContextMenu();
         return;
       }
@@ -186,7 +202,7 @@ export function AddNodeMenu() {
     }
 
     closeContextMenu();
-  }, [contextMenu.x, contextMenu.y, screenToFlowPosition, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, setEdges]);
+  }, [contextMenu.x, contextMenu.y, screenToFlowPosition, fitView, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, setEdges]);
 
   const handleGroupSelection = useCallback(() => {
     groupSelection(selectedGroupable.map((n) => n.id));
@@ -213,7 +229,7 @@ export function AddNodeMenu() {
     if (!query.trim() && canGroup) {
       items.push({ kind: 'group', key: '__group__', run: handleGroupSelection });
     }
-    if (!query.trim() && canAddOutput) {
+    if (!query.trim()) {
       items.push({
         kind: 'output',
         key: '__output__',
@@ -352,11 +368,17 @@ export function AddNodeMenu() {
     const desc = def.description
       ? nodeDescription(displayDescription(def), def.type, language)
       : undefined;
+    // Searching "output" surfaces the def as an ordinary result row, and
+    // clicking it is redirected to the existing node (the singleton rule) — so
+    // the tooltip must say THAT, not describe an add that will not happen.
+    const goTo = def.type === 'output' && existingOutput
+      ? t('The graph already has its Output — takes you to it', language)
+      : undefined;
     return (
       <button
         key={key}
         className={itemClass(key)}
-        title={desc}
+        title={goTo ?? desc}
         data-add-node-focused={focusedAttr(key)}
         onClick={() => handleAddNode(def)}
         onMouseEnter={() => hoverFocus(key)}
@@ -427,14 +449,19 @@ export function AddNodeMenu() {
           </>
         )}
 
-        {/* Add output node option */}
-        {!query.trim() && canAddOutput && (
+        {/* Add output node option. Kept OFFERED while an Output exists — the
+            singleton rule turns the row into "take me to it" (see outputFocus).
+            A row that vanishes reads as the node not existing at all. */}
+        {!query.trim() && (
           <>
             <div className="context-menu__category">
               {formatCategoryLabel('Output', 'output', language, true)}
             </div>
             <button
               className={itemClass('__output__')}
+              title={existingOutput
+                ? t('The graph already has its Output — takes you to it', language)
+                : undefined}
               data-add-node-focused={focusedAttr('__output__')}
               onClick={() => handleAddNode(NODE_REGISTRY.get('output')!)}
               onMouseEnter={() => hoverFocus('__output__')}

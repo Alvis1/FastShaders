@@ -16,7 +16,9 @@
   box-shadow: 0 0 0 var(--node-selection-width) var(--cat-output), var(--shadow-node);
 }
 
-/* Main header */
+/* Main header. Back to a single row: the mesh line moved OUT of it, down into
+   the material block it describes, so every material — the default included —
+   states its mesh in the same place, in the same control. */
 .output-node__header {
   display: flex;
   align-items: center;
@@ -26,23 +28,94 @@
   background: var(--cat-output);
 }
 
-/* The mesh this Output shades, beside the title. Pushed right with `auto` so
-   it sits at the far edge whatever the header width, and allowed to SHRINK and
-   ellipsize: a mesh name comes from someone else's file and can be far longer
-   than the node, and a header that stretches to fit one would resize the node
-   itself. `min-width: 0` is what actually lets the ellipsis happen inside a
-   flex row — without it the item refuses to shrink below its content. */
-.output-node__target {
-  margin-left: auto;
-  padding-left: 6px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* The socket a decorative Output -> 3D-preview wire leaves from — ONE PER
+   MATERIAL SECTION (`.output-node__material` is the offset parent, so each
+   socket centres on ITS OWN block and PreviewLink draws one wire per socket).
+   TWICE the normal socket size (`--handle-size`, which coarse pointers already
+   bump from 10 to 12px, so this follows touch too) and drawn permanently
+   CONNECTED — a solid fill, never the hollow "free port" state — because the
+   Output feeding the viewer is a fact about the shader, not something the user
+   plugs in.
+
+   Its colour is the WIRE's colour, not a literal black: `--node-cost-text` is
+   the auto-contrast value NodeEditor publishes from the user-picked canvas
+   background (the same one cost badges and 1-channel edges flip on), so the
+   two match on the default light canvas -- where both are black -- AND on a
+   dark one, where a hardcoded black socket would disappear while the wire went
+   white. That token is read ONLY inside `.react-flow` (the scoped rule below):
+   NodeEditor publishes it on `.node-editor`, which the asset bar ALSO sits
+   inside, so an unscoped read let a dark canvas turn the palette TILE's socket
+   white-on-white. The base rule is the default-canvas black -- a card shows
+   the node's one look, only the live canvas restyles by backdrop (the
+   NodeBase.css cost-badge precedent).
+
+   `pointer-events: none` is load-bearing: this is NOT a React Flow handle, so a
+   drag started on it would pan the canvas from what looks like a port.
+
+   It is centred ON the node's right border the way a real handle is (half its
+   width outside — a material block's padding box is the node's, so `right`
+   resolves identically to the old node-level placement), and vertically on its
+   MATERIAL BLOCK, so each section's socket sits at the middle of that section
+   however many rows it grows. PreviewLink anchors a wire on every socket, so
+   moving them in CSS moves the wires with no second rule to keep in step. */
+.output-node__preview-socket {
+  position: absolute;
+  top: 50%;
+  right: calc(var(--handle-size) * -1);
+  width: calc(var(--handle-size) * 2);
+  height: calc(var(--handle-size) * 2);
+  transform: translateY(-50%);
+  border: var(--handle-border) solid white;
+  border-radius: 50%;
+  background: #000;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+
+/* Canvas only: follow the canvas-contrast token (see the block comment above). */
+.react-flow .output-node__preview-socket {
+  background: var(--node-cost-text, #000);
+}
+
+/* One material's block. */
+.output-node__material {
+  position: relative;
+}
+
+/* The mesh a material shades: its picker, plus (added materials only) the
+   control to drop it. It OPENS every material block — under the header for
+   material 0, under the divider for the rest — so the mesh is always the first
+   thing read about the rows beneath it. */
+.output-node__mesh-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px 1px;
+}
+
+/* The bottom row's "+ Add output". Full width so it reads as an action
+   belonging to the whole node rather than to the last material above it. */
+.output-node__add-row {
+  padding: 2px 8px 4px;
+}
+
+.output-node__add {
+  width: 100%;
+  padding: 2px 0;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 3px;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.55);
+  font-family: var(--font-sans);
   font-size: 9px;
   font-weight: 600;
-  letter-spacing: 0.2px;
-  opacity: 0.85;
+  cursor: pointer;
+}
+
+.output-node__add:hover {
+  border-color: var(--cat-output);
+  color: rgba(0, 0, 0, 0.85);
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .output-node__title {
@@ -140,9 +213,23 @@
   justify-content: center;
 }
 
-/* Divider between sections */
+/* Divider between one material and the next — the node's own FRAME colour, run
+   edge to edge, so a stack of materials reads as sections of one framed node
+   rather than as a list of faint separators. Deliberately the same red as the
+   1.5px border, and deliberately heavier than `__subdivider`, which separates
+   the two halves of a SINGLE material. */
 .output-node__divider {
+  height: 1.5px;
+  margin: 4px 0;
+  background: var(--cat-output);
+}
+
+/* Between the Pixel and Vertex sections of ONE material — deliberately fainter
+   than `__divider`, which separates one material from the next: the two lines
+   mean different things and a reader must be able to tell which block they are
+   still inside. */
+.output-node__subdivider {
   height: 1px;
-  margin: 2px 6px;
-  background: rgba(0, 0, 0, 0.12);
+  margin: 2px 10px;
+  background: rgba(0, 0, 0, 0.06);
 }

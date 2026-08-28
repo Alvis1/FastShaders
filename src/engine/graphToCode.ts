@@ -2,10 +2,17 @@ import { parseExpression } from '@babel/parser';
 import type { Node } from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData } from '@/types';
 import { getNodeValues } from '@/types';
-import { meshTargetName, findDefaultOutput, MAX_TARGETED_OUTPUTS } from '@/utils/outputTargets';
+import {
+  findDefaultOutput,
+  outputMaterials,
+  materialTargetNames,
+  materialExposedPorts,
+  channelHandle,
+  MAX_PARTS,
+} from '@/utils/outputMaterials';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
-import { effectiveExposedPorts } from '@/utils/exposedPorts';
+import { effectiveExposedPorts, OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { isUnsignedNoise } from '@/utils/noiseRange';
 import { decodeDataNode, columnForHandle } from '@/utils/dataNode';
@@ -396,19 +403,42 @@ function inEdge(gidx: GraphIndex, id: string, handle: string): AppEdge | undefin
 // A mesh name as a JS string-literal key in the emitted `parts` object.
 //
 // `JSON.stringify` handles the quoting, the backslashes and the control
-// characters. The extra star-slash escape is not redundant: the exported `.js`
-// carries the FASTSHADERS_PROJECT_V1 block as a BLOCK COMMENT, and other
-// tooling wraps generated modules the same way, so a name that contains a
-// comment terminator would end that comment early. Escaping the slash keeps
-// the string's VALUE identical (it parses back to the original name) while
-// making it inert. Line comments here on purpose — the sequence being escaped
-// cannot be written inside the block comment that describes it.
+// characters. The two extra escapes cover the contexts JSON does not know it
+// is being written into, and BOTH are load-bearing:
+//
+//  - The star-slash: the exported `.js` carries the FASTSHADERS_PROJECT_V1
+//    block as a BLOCK COMMENT, and other tooling wraps generated modules the
+//    same way, so a name containing a comment terminator would end that
+//    comment early. (Line comments here on purpose — the sequence being
+//    escaped cannot be written inside the block comment that describes it.)
+//
+//  - The less-than: the generated module is inlined INTO AN HTML `<script>`
+//    element by `tslToPreviewHTML` (`var __shaderCode = <json>`), and the HTML
+//    tokenizer ends that element at the first `</script...` in the raw text —
+//    it does not know or care that the sequence sits inside a JS string
+//    literal. A mesh name is attacker-chosen (it comes out of a dropped glTF,
+//    and out of the `meshTarget` a shared `.fastshader` carries), so a name
+//    spelling `x</script><img src=x onerror=…>` would close the script early
+//    and run as live markup. In the sandboxed preview that is contained by the
+//    opaque origin, but the XR popup is a TOP-LEVEL document at the app's real
+//    origin, where it would be arbitrary code with the user's storage.
+//    Escaping `<` alone is enough — every breakout sequence (`</script`,
+//    `<!--`, `<script`) starts with one.
+//
+// Both escapes keep the string's VALUE identical: `/` and `<` parse
+// back to `/` and `<`, so the emitted key still matches the mesh exactly.
+// (`tslToPreviewHTML` escapes the whole embedded module the same way — this is
+// the source-side half of a defence written at both ends, because the sink
+// protects every other string in the module and this protects the key wherever
+// else it is written.)
 //
 // Names reaching here have already passed `isUsableMeshName`, which is what
 // keeps `__proto__` and the invisible characters out; this is the encoding
 // step, not the validation step.
 function partKeyLiteral(name: string): string {
-  return JSON.stringify(name).replace(/\*\//g, '*\\u002F');
+  return JSON.stringify(name)
+    .replace(/\*\//g, '*\\u002F')
+    .replace(/</g, '\\u003C');
 }
 
 export function graphToCode(
@@ -1438,21 +1468,16 @@ export function graphToCode(
 
   // Handle output node — resolve all connected channels.
   //
-  // Picked from the NODES array, not from `sorted`. With the single Output the
-  // editor normally enforces the two are the same node, so this is byte-stable
-  // — but they diverge the moment a second one exists, and one is reachable
-  // today by pasting or duplicating an Output. `topologicalSort` seeds Kahn's
-  // queue with every in-degree-0 node, so an UNWIRED Output always sorts BEFORE
-  // a wired one: `sorted.find` would pick the empty one and emit the red
-  // `vec3(1, 0, 0)` fallback, turning a working shader red the instant a copy
-  // appeared. Array order is creation order, is stable under wiring (nothing
-  // re-sorts it), and `addNode` appends — so a newly added Output lands last
-  // and is inert instead of hijacking the shader.
-  // The default output is the first UNTARGETED one — see findDefaultOutput.
-  // Not simply the first Output: targeting the one you already had (and adding
-  // a second for the rest of the model) is an ordinary way to reach two
-  // materials, and taking a targeted node as the default would ignore its
-  // target and drop the other Output entirely.
+  // Picked from the NODES array, not from `sorted`. `topologicalSort` seeds
+  // Kahn's queue with every in-degree-0 node, so an UNWIRED Output always sorts
+  // BEFORE a wired one: `sorted.find` would pick the empty one and emit the red
+  // `vec3(1, 0, 0)` fallback, turning a working shader red the instant a second
+  // Output existed. Array order is creation order and is stable under wiring.
+  //
+  // Per-mesh shading lives in this ONE node's materials now, so there is
+  // normally nothing to choose between; a graph carrying several Outputs is
+  // folded on load (`foldExtraOutputs`). The array-order rule still stands as
+  // the tie-break for anything that reaches emission without passing a restore.
   const outputNode = findDefaultOutput(nodes);
   // `metalness` is appended (not slotted in visual order) so the emitted
   // return-object key order for existing graphs stays byte-identical; `env`
@@ -1494,7 +1519,13 @@ export function graphToCode(
    */
   const resolveOutputChannels = (
     outputNode: AppNode,
+    materialIndex = 0,
   ): { channels: Record<string, string>; discardRef: string | null } => {
+    // Which material's state to read, and which handles its channels are wired
+    // through. Index 0 is the node's own fields and the BARE handle ids, so a
+    // document with no added materials resolves exactly as it always has.
+    const material = outputMaterials(outputNode)[materialIndex];
+    const handleOf = (ch: string) => channelHandle(materialIndex, ch);
     const channels: Record<string, string> = {};
     let discardRef: string | null = null;
     // Stored per-channel values (the Output node's on-node widgets). Read
@@ -1511,8 +1542,12 @@ export function graphToCode(
     // Values are adversarial (.fastshader / localStorage): numbers go through
     // Number()+num(), colors through the hexLiteral whitelist — nothing is
     // interpolated verbatim.
-    const outValues = ((outputNode.data as { values?: Record<string, unknown> }).values ?? {});
-    const outExposed = new Set(effectiveExposedPorts(outputNode));
+    const outValues = (material?.values ?? {}) as Record<string, unknown>;
+    const outExposed = new Set(
+      materialIndex === 0
+        ? effectiveExposedPorts(outputNode)
+        : materialExposedPorts(material, OUTPUT_DEFAULT_EXPOSED),
+    );
     const FLOAT_VALUE_CHANNELS = new Set(['roughness', 'metalness', 'opacity', 'position']);
     const COLOR_VALUE_CHANNELS = new Set(['color', 'emissive', 'normal', 'env']);
     const storedChannelExpr = (ch: string): string | null => {
@@ -1550,7 +1585,7 @@ export function graphToCode(
     };
 
     for (const ch of OUTPUT_CHANNELS) {
-      const edge = inEdge(gidx, outputNode.id, ch);
+      const edge = inEdge(gidx, outputNode.id, handleOf(ch));
       if (!edge) {
         const stored = storedChannelExpr(ch);
         if (stored) channels[ch] = stored;
@@ -1619,7 +1654,7 @@ export function graphToCode(
     // Color node acts as a uniform ambient environment; non-3-channel shapes
     // are widened to vec3 like the alpha-bearing channels so the lighting
     // model's radiance stays well-typed on both backends.
-    const envEdge = inEdge(gidx, outputNode.id, 'env');
+    const envEdge = inEdge(gidx, outputNode.id, handleOf('env'));
     if (!envEdge) {
       // Stored env color: a constant ambient environment (EnvironmentNode
       // consumes any node — a color is uniform radiance+irradiance).
@@ -1649,7 +1684,7 @@ export function graphToCode(
       }
     }
 
-    const discardEdge = inEdge(gidx, outputNode.id, 'discard');
+    const discardEdge = inEdge(gidx, outputNode.id, handleOf('discard'));
     if (!discardEdge) {
       // Stored discard value. Discard is a TRUTHINESS test, so a non-zero
       // stored value is an UNCONDITIONAL cull (the whole mesh vanishes —
@@ -1700,35 +1735,47 @@ export function graphToCode(
     return { channels, discardRef };
   };
 
-  // Resolve the DEFAULT output (the one with no mesh target) plus every
-  // TARGETED one. Order is the nodes array — creation order — so which Output
-  // is the default cannot change as the user wires the graph.
-  const defaultResolved = outputNode
-    ? resolveOutputChannels(outputNode)
+  // MATERIAL 0 is the default UNLESS it names a mesh of its own, in which case
+  // it is a `parts` entry like any other and the module carries NO default —
+  // loader 0.6 then leaves every unclaimed mesh on its authored material.
+  const material0Target = outputNode
+    ? materialTargetNames(outputMaterials(outputNode)[0]).length > 0
+    : false;
+  const defaultResolved = outputNode && !material0Target
+    ? resolveOutputChannels(outputNode, 0)
     : { channels: {} as Record<string, string>, discardRef: null as string | null };
   const channels = defaultResolved.channels;
   const discardLine = defaultResolved.discardRef
     ? `  Discard(${defaultResolved.discardRef});`
     : null;
 
-  // Targeted outputs become `parts` entries. Re-validated here even though the
-  // restore paths sanitize: emission is the gate that decides what becomes
-  // CODE, and a node can reach this without ever passing a restore (codeToGraph
-  // mints them, and the store is mutable from anywhere in the session).
-  // First claim wins, matching sanitizeOutputTargets, so a live duplicate and a
-  // reloaded one emit the same module.
+  // Every TARGETED material becomes a `parts` entry. Re-validated here even
+  // though the restore paths sanitize: emission is the gate that decides what
+  // becomes CODE, and a material can reach this without ever passing a restore
+  // (the node UI writes them, codeToGraph mints them, and the store is mutable
+  // from anywhere in the session).
+  //
+  // FIRST CLAIM WINS for a duplicate name. The picker deliberately lets two
+  // materials name one mesh (so they can be swapped without deleting one), and
+  // a `parts` map has one slot per mesh — so the later one is shadowed here.
+  // The node marks that section, because a silently inert material is exactly
+  // the kind of thing nobody reports as a bug.
   const parts: { name: string; channels: Record<string, string>; discardRef: string | null }[] = [];
-  {
+  if (outputNode) {
     const claimed = new Set<string>();
-    for (const node of nodes) {
-      if (node.data.registryType !== 'output' || node === outputNode) continue;
-      const name = meshTargetName(node);
-      // An untargeted EXTRA output emits nothing at all: only one output can
-      // shade the unclaimed meshes, and silently blending two would be worse
-      // than ignoring one. (The editor surfaces it; see the UI phase.)
-      if (!name || claimed.has(name) || parts.length >= MAX_TARGETED_OUTPUTS) continue;
-      claimed.add(name);
-      parts.push({ name, ...resolveOutputChannels(node) });
+    const materials = outputMaterials(outputNode);
+    for (let i = 0; i < materials.length; i++) {
+      const names = materialTargetNames(materials[i]);
+      if (names.length === 0) continue;
+      // Resolved ONCE per material, not once per mesh: the channels are the
+      // material's, so N meshes emit N entries pointing at the same expressions.
+      let resolved: { channels: Record<string, string>; discardRef: string | null } | null = null;
+      for (const name of names) {
+        if (claimed.has(name) || parts.length >= MAX_PARTS) continue;
+        claimed.add(name);
+        resolved ??= resolveOutputChannels(outputNode, i);
+        parts.push({ name, ...resolved });
+      }
     }
   }
 
@@ -1738,23 +1785,22 @@ export function graphToCode(
 
   if (parts.length > 0) {
     // A `parts` key can only ride the OBJECT form, so its presence forces the
-    // shape — the bare-node forms below cannot carry it. The default must also
-    // keep at least one real channel: the loader decides "object API" by
-    // looking for a known channel prop, so a parts-ONLY return would fall to
-    // the simple-API branch and get assigned as a node, failing deep in the
-    // renderer. The red fallback is the same value an output with nothing
-    // wired emits today, so the meaning is unchanged: nothing is wired.
-    // With no default Output at all, the module is parts ONLY: loader 0.6
-    // leaves every unclaimed mesh on the material the model was authored with,
-    // which is the whole point of shading just the one part. A default Output
-    // that exists but has nothing wired still emits the red fallback, exactly
-    // as a lone empty Output always has.
-    const defaultProps = channelEntries.length > 0
-      ? channelEntries
-      : outputNode
-        ? ([['color', 'vec3(1, 0, 0)']] as [string, string][])
-        : [];
-    if (defaultProps.length > 0 && channelEntries.length === 0) addImport('three/tsl', 'vec3');
+    // shape — the bare-node forms below cannot carry it.
+    //
+    // An EMPTY default material emits parts ALONE: loader 0.6 then leaves every
+    // unclaimed mesh on the material the model was authored with, which is the
+    // whole point of shading just one mesh. The red `vec3(1, 0, 0)` fallback is
+    // deliberately NOT emitted here, and that is a behaviour decision rather
+    // than an omission: it is the "you have wired nothing yet" sentinel for a
+    // shader that has nothing else to say, and once a mesh material exists the
+    // user HAS said something — painting every other mesh red would throw away
+    // the model's own materials to announce a state they can see on the node.
+    // It also makes the shape round-trip: a parts-only module parses to an
+    // empty material 0 and re-emits parts-only.
+    //
+    // The lone-Output case is untouched: with no parts at all, an unwired
+    // Output still emits `return vec3(1, 0, 0);` in the branch below.
+    const defaultProps = channelEntries;
     const partProps = parts.map((part) => {
       const entries = Object.entries(part.channels);
       // A targeted output with nothing wired still emits its entry. It must:

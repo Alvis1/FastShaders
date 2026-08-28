@@ -1,0 +1,156 @@
+/* Eval-mode surfaces: the consent screen and the SUS questionnaire. Both ride
+   the CsvImportModal backdrop/panel/button primitives (the FeedbackModal
+   precedent) — these rules only add what those don't have. Colors are tokens,
+   so the dark theme comes for free. */
+
+/* Both dialogs hold real reading material, so they get a wider panel than the
+   440px question box, and scroll internally rather than overflowing. */
+.eval-modal__panel {
+  width: min(640px, 94vw);
+  max-height: 92vh;
+  overflow-y: auto;
+}
+
+/* ---- Consent ---- */
+
+.eval-consent__section {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.eval-consent__section strong {
+  color: var(--text-primary);
+}
+
+.eval-consent__list {
+  margin: var(--space-1) 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.eval-consent__code-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+
+.eval-consent__code-row input {
+  width: 110px;
+  padding: 4px 8px;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+}
+
+/* ---- SUS form ---- */
+
+.sus-modal__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.sus-modal__items {
+  display: flex;
+  flex-direction: column;
+}
+
+.sus-modal__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--border-subtle);
+}
+
+.sus-modal__item:last-child {
+  border-bottom: none;
+}
+
+.sus-modal__statement {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+/* The 1–5 radio strip. Radios stay REAL inputs (keyboard + screen-reader
+   semantics for free); only the layout is ours. */
+.sus-modal__scale {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.sus-modal__scale label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* End anchors above the strip, stated once (per Brooke's form the scale is
+   anchored only at the ends). */
+.sus-modal__anchors {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  padding: 0 0 2px;
+}
+
+.sus-modal__comment {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 56px;
+  padding: 6px 8px;
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  resize: vertical;
+}
+
+.sus-modal__progress {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+/* ---- Thank-you / package screen ---- */
+
+.eval-done__file {
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  word-break: break-all;
+  padding: 6px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+}
+
+.eval-done__warn {
+  font-size: var(--font-size-sm);
+  color: #b42318;
+  line-height: 1.5;
+}
+
+:root[data-theme='dark'] .eval-done__warn {
+  color: #f2938c;
+}

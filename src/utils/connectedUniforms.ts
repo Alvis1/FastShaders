@@ -1,5 +1,5 @@
 import type { AppNode, AppEdge } from '@/types';
-import { outputNodes, findDefaultOutput, meshTargetName } from '@/utils/outputTargets';
+import { outputNodes } from '@/utils/outputMaterials';
 import { getNodeValues } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -53,16 +53,12 @@ export function connectedUniformNamesKey(
   // property inside it unreachable and blank the overlay on collapse.
   const real = unwrapCollapsedGroupEdges(nodes, edges);
 
-  // EVERY output that emits, not just the default: with per-mesh materials a
-  // slider can drive a targeted Output alone, and walking back from the
-  // default only would leave that slider out of the Uniforms overlay — the
-  // "scrubbing does nothing" failure this module exists to prevent, one mesh
-  // away. An UNTARGETED extra Output emits nothing (codegen ignores it), so it
-  // is excluded here too: listing its uniforms would offer controls for dead
-  // code.
-  const emitting = outputNodes(nodes).filter(
-    (n) => n === findDefaultOutput(nodes) || meshTargetName(n) !== null,
-  );
+  // The Output node — every material's chain hangs off it, so one walk back
+  // from it reaches a slider driving the default AND one driving a per-mesh
+  // material. Missing the latter would leave that slider out of the Uniforms
+  // overlay, which is the "scrubbing does nothing" failure this module exists
+  // to prevent, one mesh away.
+  const emitting = outputNodes(nodes);
   /** Nodes that feed an emitting Output, walking edges BACKWARDS from each. */
   const live = new Set<string>();
   if (emitting.length > 0) {

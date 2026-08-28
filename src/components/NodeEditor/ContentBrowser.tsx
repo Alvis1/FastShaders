@@ -24,8 +24,10 @@ import { CAT_HEX } from '@/utils/colorUtils';
 import complexityData from '@/registry/complexity.json';
 import './ContentBrowser.css';
 
-// Exclude 'output' (the graph has at most one, not draggable from the palette)
-// and 'unknown' (the registry hides unknown defs, so the tab would always be empty).
+// Exclude 'unknown' (the registry hides unknown defs, so the tab would always
+// be empty). 'output' IS listed: the graph has at most one, but its tile is the
+// way to FIND it — dropping (or clicking) it while an Output exists glides the
+// view to the existing node instead of adding a second (see outputFocus.ts).
 // The ready-made-asset tabs (Presets, Textures, Noise, DataViz) lead; the
 // building-block categories follow in their canonical CATEGORIES order.
 const ASSET_TABS_FIRST: NodeCategory[] = ['presets', 'texture', 'noise', 'dataviz'];
@@ -39,7 +41,7 @@ const allTexturesHidden = getBuiltinTextureIds().every(isTextureHiddenFromEditor
 const displayCategories = [
   ...ASSET_TABS_FIRST.map((id) => CATEGORIES.find((c) => c.id === id)!),
   ...CATEGORIES.filter(
-    (c) => !ASSET_TABS_FIRST.includes(c.id) && c.id !== 'output' && c.id !== 'unknown',
+    (c) => !ASSET_TABS_FIRST.includes(c.id) && c.id !== 'unknown',
   ),
 ].filter((c) => (c.id === 'texture' ? !allTexturesHidden : !categoryEmptiedByHiding(c.id)));
 const costs = complexityData.costs as Record<string, number>;
@@ -482,10 +484,11 @@ export const ContentBrowser = memo(function ContentBrowser() {
 
   // getEditorDefinitions, not getAllDefinitions: nodes switched off in
   // node-editor.html ("In editor") must not have a tile here. See
-  // registry/editorVisibility.ts.
-  const allDefs = useMemo(() => {
-    return getEditorDefinitions().filter((d) => d.type !== 'output');
-  }, []);
+  // registry/editorVisibility.ts. `output` is included — its tile doubles as
+  // "take me to the Output" once one exists (placeTilePayload redirects the
+  // drop; see outputFocus.ts), and its cost of 0 plus last-in-registry order
+  // parks it at the end of the zero-cost run rather than at the strip's head.
+  const allDefs = useMemo(() => getEditorDefinitions(), []);
 
   const q = search.trim().toLowerCase();
 
@@ -533,18 +536,35 @@ export const ContentBrowser = memo(function ContentBrowser() {
   }, [savedGroups, q]);
 
   /**
-   * Ready-made assets read simplest-first, by MEMBER COUNT rather than by the
-   * cost the node tiles sort on: an asset is a graph you are going to open and
-   * read, so "how much is in it" is what predicts the effort, and points can
-   * rank a 3-node voronoi above a 20-node arithmetic chain. `nodes` includes the
-   * group container, so the +1 is constant and doesn't affect the order. Name
-   * breaks ties so equal-sized assets keep a stable, non-arbitrary order.
+   * Textures read simplest-first, by MEMBER COUNT: a texture is a graph you are
+   * going to open and read, so "how much is in it" predicts the effort. `nodes`
+   * includes the group container, so the +1 is constant and doesn't affect the
+   * order. Name breaks ties so equal-sized assets keep a stable order.
    */
   const bySize = <T extends { nodes: { type?: string }[]; name: string }>(a: T, b: T) => {
     // Count only shader nodes — the frame and the explainer note are chrome.
     const n = (x: T) => x.nodes.filter((k) => k.type !== 'group' && k.type !== 'note').length;
     return n(a) - n(b) || a.name.localeCompare(b.name);
   };
+
+  /**
+   * Presets read cheapest-first, on the SAME number their tile prints.
+   *
+   * `totalCost` is what `AssetCostBadge` draws, so the strip reads as a price
+   * ladder you can scan — which is the point of a library whose whole pedagogy
+   * is that a tier-3 look need not be expensive (Iridescence is 45 and cheaper
+   * than the tier-2 Noise Mask at 49; Studio Shine is 78 and the priciest thing
+   * here). Deliberately NOT `nodeCostPoints`: that re-derives a variadic fold's
+   * price as base x (N-1) and can disagree with the badge by a point or two
+   * (studio-shine 78 vs 76), and a sort that contradicts the number on screen
+   * reads as a bug.
+   *
+   * This orders ACROSS tiers, so the strip is no longer the easy->advanced
+   * ladder `PRESET_ENTRIES` still encodes — the tier survives in each preset's
+   * card blurb and its in-frame note, not in the strip position.
+   */
+  const byCost = <T extends { totalCost: number; name: string }>(a: T, b: T) =>
+    a.totalCost - b.totalCost || a.name.localeCompare(b.name);
 
   const filteredTextures = useMemo(() => {
     // Lazily built, same rule as the presets memo below: the first
@@ -566,15 +586,13 @@ export const ContentBrowser = memo(function ContentBrowser() {
   }, [q, activeCategory]);
 
   const filteredPresets = useMemo(() => {
-    // Lazily built: the first getBuiltinPresets() call parses 15 TSL snippets
+    // Lazily built: the first getBuiltinPresets() call parses 24 TSL snippets
     // and lays them out (~40ms of synchronous work), so don't pay it at first
     // render for a tab that may never open. A live search needs them too —
     // matching presets surface in the generic strip (see `items` below).
     if (activeCategory !== 'presets' && !q) return [];
-    // Sorted by size, NOT by the registry's tier order. Size is a close proxy
-    // for tier here (the tier-1 primitives are the small graphs) while also
-    // ordering within a tier, and it keeps the two asset tabs consistent.
-    const all = [...getBuiltinPresets()].sort(bySize);
+    // Sorted by GPU cost, NOT by the registry's tier order — see byCost.
+    const all = [...getBuiltinPresets()].sort(byCost);
     if (!q) return all;
     return all.filter(
       (p) =>

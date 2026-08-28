@@ -1,10 +1,10 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
-import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType } from '@/types';
+import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType, OutputMaterial } from '@/types';
 import { setNodeValues } from '@/types';
 import { isUsableMeshName } from '@/utils/meshInventory';
-import { MAX_TARGETED_OUTPUTS } from '@/utils/outputTargets';
+import { MAX_PARTS, findDefaultOutput, outputNodes, channelHandle } from '@/utils/outputMaterials';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
 import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
@@ -151,13 +151,17 @@ export function codeToGraph(code: string): CodeToGraphResult {
   const applyStoredOutputValues = (
     outputId: string,
     values: Record<string, string | number>,
+    material?: OutputMaterial,
   ): void => {
     const keys = Object.keys(values);
     if (keys.length === 0) return;
-    const node = rawNodes.find((n) => n.id === outputId);
-    if (!node) return;
-    (node.data as Record<string, unknown>).values = values;
-    (node.data as Record<string, unknown>).exposedPorts = Array.from(
+    // A MATERIAL owns its own values and exposed set; only material 0 writes
+    // the node's fields (where they have always lived).
+    const sink = material
+      ?? (rawNodes.find((n) => n.id === outputId)?.data as Record<string, unknown> | undefined);
+    if (!sink) return;
+    (sink as Record<string, unknown>).values = values;
+    (sink as Record<string, unknown>).exposedPorts = Array.from(
       new Set([...OUTPUT_DEFAULT_EXPOSED, ...keys]),
     );
   };
@@ -188,6 +192,8 @@ export function codeToGraph(code: string): CodeToGraphResult {
     outputId: string,
     obj: t.ObjectExpression,
     tempPrefix: string,
+    materialIndex = 0,
+    material?: OutputMaterial,
   ): void => {
     const storedValues: Record<string, string | number> = {};
   for (const rawProp of obj.properties) {
@@ -210,23 +216,31 @@ export function codeToGraph(code: string): CodeToGraphResult {
         const sourceId = varToNodeId.get(prop.value.name)
           ?? ensureBareInputNode(prop.value.name, rawNodes, varToNodeId);
         if (sourceId) {
-          addEdge(rawEdges, sourceId, varToHandle.get(prop.value.name) ?? 'out', outputId, channel);
+          addEdge(rawEdges, sourceId, varToHandle.get(prop.value.name) ?? 'out', outputId, channelHandle(materialIndex, channel));
         }
       } else if (t.isMemberExpression(prop.value)) {
         const ref = resolveMemberExpr(prop.value, rawNodes, rawEdges, varToNodeId, splitNodes);
         if (ref) {
-          addEdge(rawEdges, ref.nodeId, ref.handle, outputId, channel, 'float');
+          addEdge(rawEdges, ref.nodeId, ref.handle, outputId, channelHandle(materialIndex, channel), 'float');
         }
       } else if (t.isCallExpression(prop.value)) {
-        const tempVar = `${tempPrefix}${channel}`;
+        // The synthetic name must not be one the MODULE already defines:
+        // `processCall` writes it into `varToNodeId`, so a user variable
+        // spelled `_return_color` / `_part0_color` would have its mapping
+        // overwritten, and every reference resolved after the return — a
+        // deferred `Discard(_part0_color)`, a later part naming it — would
+        // silently point at this channel's node instead. Declarations are
+        // visited before the return, so asking the map is enough.
+        let tempVar = `${tempPrefix}${channel}`;
+        for (let n = 2; varToNodeId.has(tempVar); n += 1) tempVar = `${tempPrefix}${channel}_${n}`;
         processCall(prop.value, tempVar, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
         const sourceId = varToNodeId.get(tempVar);
         if (sourceId) {
-          addEdge(rawEdges, sourceId, 'out', outputId, channel);
+          addEdge(rawEdges, sourceId, 'out', outputId, channelHandle(materialIndex, channel));
         }
       }
     }
-    applyStoredOutputValues(outputId, storedValues);
+    applyStoredOutputValues(outputId, storedValues, material);
   };
 
   /**
@@ -236,28 +250,90 @@ export function codeToGraph(code: string): CodeToGraphResult {
    * files other people wrote, and an unusable name is one the loader could
    * never match anyway, so dropping the entry loses nothing real.
    */
-  const buildPartOutputs = (arg: t.ObjectExpression): void => {
-    const outputDef = NODE_REGISTRY.get('output');
-    if (!outputDef) return;
+  const buildPartMaterials = (outputId: string, arg: t.ObjectExpression): void => {
     const partsProp = arg.properties.find(
       (p): p is t.ObjectProperty => t.isObjectProperty(p) && propKeyName(p) === 'parts',
     );
     if (!partsProp || !t.isObjectExpression(partsProp.value)) return;
 
-    const claimed = new Set<string>();
-    let index = 0;
+    // LAST occurrence wins, because that is what the RUNTIME does: `parts` is a
+    // JS object literal, so a repeated key overwrites, and loader 0.6 iterates
+    // the evaluated object. Keeping the first would make an Apply silently swap
+    // which material a mesh wears — the code says one thing before Apply and
+    // the graph renders the other after it, with no error either side.
+    const lastByName = new Map<string, t.ObjectProperty>();
     for (const rawPart of partsProp.value.properties) {
-      if (!t.isObjectProperty(rawPart) || !t.isObjectExpression(rawPart.value)) continue;
+      if (!t.isObjectProperty(rawPart)) continue;
       const name = propKeyName(rawPart);
-      if (name === null || !isUsableMeshName(name) || claimed.has(name)) continue;
-      if (claimed.size >= MAX_TARGETED_OUTPUTS) break;
-      claimed.add(name);
-      const partId = generateId();
-      const node = createNode(partId, outputDef, 'Output');
-      (node.data as Record<string, unknown>).meshTarget = { name };
-      rawNodes.push(node);
-      wireOutputChannels(partId, rawPart.value, `_part${index}_`);
-      index += 1;
+      if (name === null) continue;
+      if (!isUsableMeshName(name)) {
+        // Not tidiness: the graph→code sync writes the parse's result straight
+        // back over the user's source, so an entry dropped in silence deletes
+        // itself from the file the user is looking at. Same reason the
+        // unconditional-Discard and extra-argument cases warn.
+        warnings.push({
+          message: `Part "${String(name).slice(0, 64)}" has an unusable mesh name — it was dropped.`,
+          line: rawPart.loc?.start.line,
+          severity: 'warning',
+        });
+        continue;
+      }
+      if (!t.isObjectExpression(rawPart.value)) {
+        warnings.push({
+          message: `Part "${name}" is not a channel object — it was dropped.`,
+          line: rawPart.loc?.start.line,
+          severity: 'warning',
+        });
+        continue;
+      }
+      lastByName.set(name, rawPart);
+    }
+
+    // Each DISTINCT part body becomes a MATERIAL on the one Output node, wired
+    // through that material's namespaced handles (`m1:color`). The node's own
+    // fields stay material 0 — the default — so a module whose `parts` are all
+    // dropped parses to exactly the Output it would have without them.
+    //
+    // Parts whose bodies are BYTE-IDENTICAL merge into ONE material naming
+    // several meshes, because that is what emission does in reverse: a material
+    // shading three meshes writes three entries carrying the same expressions.
+    // Without the merge the feature would not survive its own round trip — a
+    // three-mesh material would split into three on the first code-panel Apply.
+    // EMPTY bodies are deliberately NOT merged: they carry nothing to match on,
+    // and two freshly-added mesh materials (the state right before you wire
+    // them differently) are exactly the pair that would be collapsed.
+    const materials: OutputMaterial[] = [];
+    /** part-body source -> the material it already produced. */
+    const byBody = new Map<string, OutputMaterial>();
+    for (const [name, rawPart] of lastByName) {
+      const value = rawPart.value as t.ObjectExpression;
+      const body = value.properties.length > 0 && value.start != null && value.end != null
+        ? code.slice(value.start, value.end)
+        : null;
+      const merged = body === null ? undefined : byBody.get(body);
+      if (merged) {
+        (merged.meshTargets as string[]).push(name);
+        continue;
+      }
+      if (materials.length >= MAX_PARTS) {
+        warnings.push({
+          message:
+            `More than ${MAX_PARTS} targeted meshes — "${name}" and any after it were dropped.`,
+          line: rawPart.loc?.start.line,
+          severity: 'warning',
+        });
+        break;
+      }
+      const index = materials.length + 1;
+      const material: OutputMaterial = { meshTargets: [name] };
+      materials.push(material);
+      if (body !== null) byBody.set(body, material);
+      wireOutputChannels(outputId, value, `_part${index}_`, index, material);
+    }
+    if (materials.length === 0) return;
+    const outputNode = rawNodes.find((n) => n.id === outputId);
+    if (outputNode) {
+      (outputNode.data as Record<string, unknown>).materials = materials;
     }
   };
 
@@ -271,16 +347,24 @@ export function codeToGraph(code: string): CodeToGraphResult {
     const outputDef = NODE_REGISTRY.get('output');
     if (!outputDef) return;
 
+    // Multi-channel: { color: x, position: y, ... } — and/or `parts`.
+    //
+    // ONE Output node either way. A parts-only return leaves material 0 with
+    // nothing wired, which is exactly what it means — the module shades the
+    // meshes it names and leaves the rest on their authored materials — and it
+    // re-emits parts-only, because an empty default emits no channels.
+    if (t.isObjectExpression(arg)) {
+      hasOutput = true;
+      const outputId = generateId();
+      rawNodes.push(createNode(outputId, outputDef, 'Output'));
+      wireOutputChannels(outputId, arg, '_return_');
+      buildPartMaterials(outputId, arg);
+      return;
+    }
+
     const outputId = generateId();
     rawNodes.push(createNode(outputId, outputDef, 'Output'));
     hasOutput = true;
-
-    // Multi-channel: { color: x, position: y, ... }
-    if (t.isObjectExpression(arg)) {
-      wireOutputChannels(outputId, arg, '_return_');
-      buildPartOutputs(arg);
-      return;
-    }
     // Single-value: an inline `color(0x…)` is the color widget's stored value
     // (graphToCode's color-only bare-return form); anything else wires to
     // output.color as before.
@@ -413,8 +497,12 @@ export function codeToGraph(code: string): CodeToGraphResult {
     return { nodes: [], edges: [], errors: [{ message: msg }] };
   }
 
-  // If no return/output assignment produced an output node, add an unconnected one
-  if (!hasOutput) {
+  // If nothing produced an output NODE, add an unconnected one. Asked of the
+  // NODES rather than of `hasOutput`, because the two can disagree — a return
+  // this parser consumed may still have produced no node — and a graph with no
+  // Output is one the user cannot wire. (An existence check, not a "which one
+  // is THE output" question, so `outputNodes` rather than a `find`.)
+  if (outputNodes(rawNodes).length === 0) {
     const outputDef = NODE_REGISTRY.get('output');
     if (outputDef) {
       rawNodes.push(createNode(generateId(), outputDef, 'Output'));
@@ -423,7 +511,12 @@ export function codeToGraph(code: string): CodeToGraphResult {
 
   // Wire any deferred Discard(cond) into the output node's discard port.
   if (pendingDiscardArg) {
-    const outputNode = rawNodes.find((n) => n.data.registryType === 'output');
+    // A module-level `Discard()` belongs to the MODULE, so it is the default
+    // material's cutout — never one mesh's. It therefore lands on material 0's
+    // bare `discard` handle, and never on a `m<n>:discard` one. (A per-mesh
+    // cutout is a `discard` KEY inside that part, which `wireOutputChannels`
+    // has already handled.)
+    const outputNode = findDefaultOutput(rawNodes);
     if (outputNode) {
       // `Discard(float(<lit>))` is the discard widget's stored value (the
       // emitted form of a non-zero dial) — collapse it back into data.values

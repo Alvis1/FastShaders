@@ -4,13 +4,15 @@ import { getBuiltinTextures } from './builtinTextures';
 import { codeToGraph } from '@/engine/codeToGraph';
 import { graphToCode } from '@/engine/graphToCode';
 import { getNodeValues } from '@/types';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 describe('builtinPresets', () => {
   const presets = getBuiltinPresets();
 
   it('ships the full three-tier library with unique ids', () => {
-    expect(presets.length).toBe(15);
-    expect(new Set(presets.map((p) => p.id)).size).toBe(15);
+    expect(presets.length).toBe(24);
+    expect(new Set(presets.map((p) => p.id)).size).toBe(24);
     // Ordered easy→advanced: tiers never decrease along the strip.
     const tiers = presets.map((p) => p.tier);
     expect([...tiers].sort((a, b) => a - b)).toEqual(tiers);
@@ -147,6 +149,32 @@ describe('builtinPresets', () => {
         seen.set(name, preset.id);
       }
     }
+  });
+
+  it('prices every preset, so the cost sort is total and every tile shows a badge', () => {
+    // The Presets strip is ordered by `totalCost` (ContentBrowser's `byCost`),
+    // and AssetCostBadge renders nothing at cost <= 0 — so a zero-cost preset
+    // would both clump at the head of the strip and show no badge to explain
+    // why it is there.
+    for (const p of presets) {
+      expect(p.totalCost, `${p.id} has no cost`).toBeGreaterThan(0);
+    }
+  });
+
+  it('sorts the two asset strips by the rule each one documents', () => {
+    // Display-layer sorts live in ContentBrowser, which the node test env
+    // cannot render — so this is a source pin, the same shape as
+    // assetCardGeometry.test.ts. Presets read as a PRICE ladder (the number
+    // their tile prints); textures still read simplest-first by member count.
+    const src = readFileSync(
+      resolve(__dirname, '../components/NodeEditor/ContentBrowser.tsx'),
+      'utf8',
+    );
+    expect(src).toMatch(/getBuiltinPresets\(\)\]\.sort\(byCost\)/);
+    expect(src).toMatch(/getBuiltinTextures\(\)[\s\S]{0,120}\.sort\(bySize\)/);
+    // byCost must sort on the SAME field AssetCostBadge draws, or the strip
+    // contradicts the numbers on it.
+    expect(src).toMatch(/a\.totalCost - b\.totalCost/);
   });
 
   it('keeps the built-in textures building through the shared group builder', () => {

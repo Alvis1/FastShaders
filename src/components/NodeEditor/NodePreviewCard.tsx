@@ -3,7 +3,7 @@ import type { NodeDefinition, NodeCategory } from '@/types';
 import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, getContrastColor, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType, displayDescription } from '@/registry/nodeRegistry';
-import { formatNodeLabel, nodeDescription } from '@/i18n';
+import { formatNodeLabel, nodeDescription, t } from '@/i18n';
 import { useAssetTooltip } from './AssetTooltip';
 import { useAppStore } from '@/store/useAppStore';
 import { NodeVisual } from './nodes/NodeVisual';
@@ -549,14 +549,27 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
       <div className="output-node__header" style={{ background: costColor }}>
         <span className="output-node__title" style={{ color: headerTextColor }}>Output</span>
       </div>
-      <div className="output-node__section">
-        <div className="output-node__section-label">Pixel Shader</div>
-        <div className="output-node__ports">{rows(section(OUTPUT_PIXEL_PORTS))}</div>
-      </div>
-      <div className="output-node__divider" />
-      <div className="output-node__section">
-        <div className="output-node__section-label">Vertex Shader</div>
-        <div className="output-node__ports">{rows(section(OUTPUT_VERTEX_PORTS))}</div>
+      {/* The card shows ONE material, wrapped in the canvas node's own
+          `.output-node__material` block so the permanently-connected preview
+          socket centres on the section exactly as it does live (one socket per
+          material — the multimesh node stacks more of these). Decorative
+          there and inert here, so the card carries the same element — the mic
+          card's arm-light precedent: a replica that silently drops a visible
+          part of the node is exactly the drift these cards keep reintroducing. */}
+      <div className="output-node__material">
+        <span className="output-node__preview-socket" aria-hidden="true" />
+        <div className="output-node__section">
+          <div className="output-node__section-label">Pixel Shader</div>
+          <div className="output-node__ports">{rows(section(OUTPUT_PIXEL_PORTS))}</div>
+        </div>
+        {/* SUB-divider: this separates the two halves of ONE material, which is
+            what `__divider` now means on the node only BETWEEN materials (and it
+            is the node's red frame colour). The card shows one material. */}
+        <div className="output-node__subdivider" />
+        <div className="output-node__section">
+          <div className="output-node__section-label">Vertex Shader</div>
+          <div className="output-node__ports">{rows(section(OUTPUT_VERTEX_PORTS))}</div>
+        </div>
       </div>
     </div>
   );
@@ -639,6 +652,15 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const language = useAppStore((s) => s.language);
+  // The Output tile's activation REDIRECTS to the existing node once one
+  // exists (the singleton rule — outputFocus.ts, placeTilePayload), so its
+  // accessible name must say so: a label promising an add that will not happen
+  // is the same lie the AddNodeMenu row's title already corrects. The selector
+  // short-circuits to a constant false for every non-output card, so the ~75
+  // other tiles pay O(1) per store notify.
+  const redirectsToOutput = useAppStore(
+    (s) => def.type === 'output' && s.nodes.some((n) => n.data.registryType === 'output'),
+  );
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
   const costColor = getCostColor(cost, costColorLow, costColorHigh);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
@@ -670,7 +692,12 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
       draggable
       onDragStart={(e) => onDragStart(e, def)}
       onPointerDown={onPointerDown}
-      {...tileActivationProps({ kind: 'node', nodeType: def.type }, `Add ${def.label} node`)}
+      {...tileActivationProps(
+        { kind: 'node', nodeType: def.type },
+        redirectsToOutput
+          ? t('The graph already has its Output — takes you to it', language)
+          : `Add ${def.label} node`,
+      )}
       {...tooltipHandlers}
     >
       {tooltip}

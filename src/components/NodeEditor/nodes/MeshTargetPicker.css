@@ -1,0 +1,147 @@
+/* ===== Mesh target picker (Output node) =====
+   The closed control replaces the `<select>` the node used to carry. It keeps
+   that element's geometry contract exactly — see outputTargetChip.test.ts: a
+   mesh name is attacker-supplied and up to 128 characters, and the node is
+   `width: fit-content` inside React Flow's abspos wrapper (which resolves to
+   MAX-CONTENT), so without the cap one file stretches the node past a thousand
+   pixels. `min-width: 0` alone does not do it. */
+.mesh-picker {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  max-width: 104px;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  /* WHITE, not --node-bg: this is an input, and the node's own off-white body
+     behind it read as a disabled plate rather than a field. */
+  background: #ffffff;
+  font-family: var(--font-sans);
+  color: rgba(0, 0, 0, 0.85);
+  cursor: pointer;
+  text-align: left;
+}
+
+.mesh-picker:hover {
+  border-color: rgba(0, 0, 0, 0.35);
+}
+
+/* The mesh NAME, on the node and in the list alike: bold, and 1.3x the 9px the
+   surrounding node chrome uses (9 x 1.3 = 11.7). It is the one word on the
+   block that says what the block is about, so it outranks the channel labels
+   around it rather than matching them. The 20px control height above is sized
+   for it — at 16px the descenders clipped. */
+.mesh-picker__label,
+.mesh-picker__name {
+  font-size: 11.7px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.mesh-picker__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "there are more meshes" — its own element so the label's ellipsis clip cannot
+   eat it (see the comment at its JSX). */
+.mesh-picker__more {
+  flex: none;
+  font-size: 11.7px;
+  font-weight: 700;
+  opacity: 0.6;
+}
+
+.mesh-picker__caret {
+  flex: none;
+  width: 0;
+  height: 0;
+  margin-left: 1px;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 4px solid rgba(0, 0, 0, 0.45);
+}
+
+/* A mesh the loaded model does not contain — MARKED, not an error colour: it is
+   the ordinary state after reopening a graph without its model. */
+.mesh-picker--missing {
+  border-color: var(--cost-high, #c26a2a);
+  color: var(--cost-high, #c26a2a);
+}
+
+/* Nothing ticked on an ADDED material: it shades nothing and emits nothing.
+   Marked the same way a missing mesh is — this is a state to resolve, not an
+   error, and the two are equally "this material is not doing anything yet". */
+.mesh-picker--unassigned {
+  border-color: var(--cost-high, #c26a2a);
+  color: var(--cost-high, #c26a2a);
+}
+
+/* An earlier material already shades this mesh, so emission's first-claim rule
+   leaves this section inert. Dimmed rather than coloured like an error: picking
+   a duplicate is a legal step on the way to swapping two materials. */
+.mesh-picker--shadowed {
+  opacity: 0.55;
+}
+
+/* ----- the portalled checkbox list ----- */
+.mesh-picker__pop {
+  position: fixed;
+  /* The ContextMenu layer: this picker can be opened from a node sitting
+     under an open settings menu, and it must land above it. */
+  z-index: var(--z-menu);
+  min-width: 150px;
+  max-width: 260px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 3px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-md);
+}
+
+.mesh-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 5px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.mesh-picker__row:hover {
+  background: rgba(127, 127, 127, 0.16);
+}
+
+.mesh-picker__row input {
+  flex: none;
+  margin: 0;
+  cursor: pointer;
+}
+
+.mesh-picker__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+/* "All meshes (default)" is a different KIND of choice from a mesh name, so it
+   is set apart rather than sorted in among them. */
+.mesh-picker__row--default {
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 3px 3px 0 0;
+  margin-bottom: 2px;
+}
+
+.mesh-picker__row--missing .mesh-picker__name {
+  color: var(--cost-high, #c26a2a);
+}

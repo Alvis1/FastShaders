@@ -460,6 +460,25 @@ button.toolbar__local-row.toolbar__wf-row--current {
   outline-offset: 2px;
 }
 
+/* Eval-mode badge — the visible "this session is being recorded" marker,
+   parked beside the red ! it shares meaning with. Outlined, not filled: it is
+   a status, not a control, and only the ! should read as pressable. Same red
+   literal (and same both-themes rationale) as the feedback plate above. */
+.toolbar__eval-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 7px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  color: #d92d20;
+  border: 1px solid #d92d20;
+  border-radius: var(--border-radius-sm);
+  user-select: none;
+  cursor: default;
+}
+
 .toolbar__refresh svg {
   width: 15px;
   height: 15px;
@@ -701,6 +720,13 @@ button.toolbar__sc-link {
 :root[data-theme="dark"] .toolbar__sc-link.toolbar__feedback:hover {
   background: #f2555a;
   border-color: #f2555a;
+}
+
+/* Same lift as the feedback plate above — #d92d20 as TEXT on the dark chrome
+   reads even muddier than the filled plate does. */
+:root[data-theme="dark"] .toolbar__eval-badge {
+  color: #e5484d;
+  border-color: #e5484d;
 }
 
 :root[data-theme="dark"] .toolbar__vr-error {

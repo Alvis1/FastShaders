@@ -35,8 +35,13 @@ const withNote: CodeGroupEntry = {
 };
 
 const frameSize = (group: AppNode) => {
-  const s = (group as AppNode & { style?: { width?: number; height?: number } }).style ?? {};
-  return { w: s.width ?? 0, h: s.height ?? 0 };
+  // TOP-LEVEL width/height, the shape `groupSelection` writes and the one
+  // `toggleGroupCollapsed` reads. It was `style: { width, height }` — which
+  // React Flow renders identically and which therefore hid the fact that the
+  // collapse/expand round-trip could not see the frame's size at all.
+  const m = group as AppNode & { width?: number; height?: number; style?: object };
+  expect(m.style, 'the size must not live in `style` any more').toBeUndefined();
+  return { w: m.width ?? 0, h: m.height ?? 0 };
 };
 const sizeOf = (n: AppNode) => {
   const m = n as AppNode & { width?: number; height?: number };

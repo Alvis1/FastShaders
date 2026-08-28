@@ -6,6 +6,7 @@ export type {
   ShaderNodeData,
   MaterialSettings,
   OutputNodeData,
+  OutputMaterial,
   GroupNodeData,
   NoteNodeData,
   BoundarySocket,

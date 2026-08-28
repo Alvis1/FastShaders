@@ -466,10 +466,11 @@ describe('PaletteColorPicker source guards', () => {
     const calls = code.match(/(?<![A-Za-z])bracket\(\);/g) ?? [];
     const gated = code.match(/if \(brackets\) bracket\(\);/g) ?? [];
     expect(calls.length).toBe(gated.length);
-    // applyLive (every live value) + the onClear path, which used to call
-    // bracket() directly and unguarded — the one bracketing path a `history`
-    // prop applied to the picks alone would have missed.
-    expect(gated.length).toBe(2);
+    // applyLive (every live value), pickSwatch (a palette / recent click) and
+    // the onClear path, which used to call bracket() directly and unguarded —
+    // the one bracketing path a `history` prop applied to the picks alone would
+    // have missed.
+    expect(gated.length).toBe(3);
   });
 
   it('B2: the live path never records, and the commit path is the flush', () => {
@@ -538,6 +539,40 @@ describe('PaletteColorPicker source guards', () => {
       /const r = el\.getBoundingClientRect\(\);\s*const next = placePopover\(/,
     );
     expect(src).toMatch(/width: r\.width, height: r\.height/);
+  });
+
+  it('a swatch click records NO recent — only a MIXED colour does', () => {
+    // "Recent" is for colours the user mixed. A palette colour is permanently
+    // one click away in the rows above, so recording it spends an MRU slot to
+    // duplicate something already on screen and evicts a mixed colour that
+    // exists nowhere else; re-recording a RECENT reorders the row under the
+    // pointer mid-click. So both swatch rows go through pickSwatch, which
+    // applies without staging — staging is what the flush later records.
+    expect((src.match(/onClick=\{\(\) => pickSwatch\(hex\)\}/g) ?? []).length).toBe(2);
+    const body = /const pickSwatch = useCallback\(([\s\S]*?)\n  \);/.exec(src)?.[1] ?? '';
+    expect(body, 'pickSwatch must exist').toBeTruthy();
+    expect(body, 'staging here is exactly what would record it').not.toMatch(/\.stage\(/);
+    // It still FLUSHES first, or a custom colour the user had just dragged to
+    // would be dropped by the swatch click that follows it.
+    expect(body).toMatch(/flushCommit\(\)/);
+    // …and nothing else may stage: only the live (custom-input) path does.
+    expect((src.match(/\.stage\(/g) ?? []).length).toBe(1);
+  });
+
+  it('a click inside an IFRAME closes the popover', () => {
+    // The 3D preview is an iframe filling most of the right column, and a
+    // pointerdown inside it never reaches this document — so the outside-click
+    // listener could not see it and the popover stayed open over the viewport.
+    // Focus is the only signal that crosses: the browser focuses the <iframe>
+    // and blurs this window.
+    expect(src).toContain("window.addEventListener('blur', onWinBlur)");
+    expect(src).toContain("window.removeEventListener('blur', onWinBlur)");
+    // Gated on an IFRAME really taking focus. A bare close-on-blur would also
+    // fire when the OS colour dialog opens from the "Custom" row (macOS), which
+    // would tear the picker down mid-pick.
+    expect(src).toMatch(
+      /document\.activeElement instanceof HTMLIFrameElement\) closeSelf\(\);/,
+    );
   });
 
   it('the shader palettes are read through a reference-stable selector', () => {

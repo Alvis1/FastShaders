@@ -113,6 +113,26 @@ export interface MaterialSettings {
   alphaTest?: number;
 }
 
+/**
+ * One material on the Output node — a set of channel values plus the sub-mesh
+ * it shades. The rules live in `utils/outputMaterials.ts`; this is only the
+ * shape, declared here so that module can import the AppNode types without a
+ * cycle.
+ */
+export interface OutputMaterial {
+  /** The sub-meshes this material shades — a material may name SEVERAL, and
+   *  each becomes its own `parts` entry. Material 0 is the default when the
+   *  list is empty/absent; every ADDED material must name at least one, or it
+   *  means nothing. Read through `materialTargetNames`, never directly. */
+  meshTargets?: string[];
+  /** LEGACY single target, still READ (never written) so a graph or a saved
+   *  group from before the list existed keeps what it shaded. */
+  meshTarget?: { name: string };
+  exposedPorts?: string[];
+  values?: Record<string, string | number>;
+  materialSettings?: MaterialSettings;
+}
+
 export interface OutputNodeData {
   registryType: 'output';
   label: string;
@@ -127,23 +147,35 @@ export interface OutputNodeData {
    *  readers access this field directly. */
   values?: Record<string, string | number>;
   /**
-   * Which sub-mesh of the loaded model this Output shades.
+   * ADDED materials — one per targeted sub-mesh (see utils/outputMaterials.ts).
    *
-   * ABSENT means "the default output" — it shades every mesh no other Output
-   * claims, i.e. exactly the whole-model behaviour that predates this field, so
-   * a graph without one emits byte-identically. A PRESENT target makes this
-   * Output emit into the module's `parts` map instead of the top-level return.
+   * The fields above (`values`, `exposedPorts`, `materialSettings`) ARE material
+   * 0: always the default, always present, and it shades every mesh no material
+   * here claims. So an ABSENT `materials` key is exactly the whole-model shader
+   * that predates per-mesh shading, and such a document emits byte-identically —
+   * which is what keeps every saved graph, every built-in and every exported
+   * `.js` valid.
+   *
+   * Each entry's channels are wired through NAMESPACED handles (`m1:color`),
+   * material 0 keeping the bare ids every existing edge already uses.
    *
    * Deliberately a top-level field and NOT a `values` key: `values` is typed as
    * channel state and is read as such — ShaderSettingsMenu deletes a key when
    * its channel is hidden, and useSyncEngine unions `Object.keys(values)` into
    * `exposedPorts` on every Apply, which would inject the literal string
-   * "meshTarget" into the exposed-port list and then persist it.
+   * "materials" into the exposed-port list and then persist it.
    *
-   * `name` is the mesh's name in the loaded SCENE (post-sanitize, post-dedupe —
-   * see utils/meshInventory.ts), matched by exact string against every mesh, so
-   * a name shared by several meshes targets all of them. Adversarial like every
-   * persisted field: validated on both restore paths and again at emission.
+   * A material's mesh `name` is the name in the loaded SCENE (post-sanitize,
+   * post-dedupe — see utils/meshInventory.ts), matched by exact string, so a
+   * name shared by several meshes targets all of them. Adversarial like every
+   * persisted field: validated on every restore path and again at emission.
+   */
+  materials?: OutputMaterial[];
+  /**
+   * LEGACY: the mesh a whole Output node targeted, back when each targeted mesh
+   * had its own Output node. Never written any more — `foldExtraOutputs` folds
+   * such a graph into the single-node shape on load — but still READ there, so
+   * a session or file from that shape does not lose its wiring.
    */
   meshTarget?: { name: string };
   [key: string]: unknown;

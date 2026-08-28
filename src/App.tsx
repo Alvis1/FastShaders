@@ -3,6 +3,8 @@ import { ReactFlowProvider } from '@xyflow/react';
 import { useAppStore, loadGraph } from './store/useAppStore';
 import { AppLayout } from './components/Layout/AppLayout';
 import { useSyncEngine } from './hooks/useSyncEngine';
+import { isEvalMode } from './eval/evalMode';
+import { EvalGate } from './eval/EvalGate';
 import complexityData from './registry/complexity.json';
 import type { AppNode, AppEdge, OutputNodeData, ShaderNodeData } from './types';
 import { generateId } from './utils/idGenerator';
@@ -136,6 +138,9 @@ export default function App() {
   return (
     <ReactFlowProvider>
       <SyncController />
+      {/* User-study mode (…/eval): consent gate + telemetry boot. The guard
+          keeps every eval-mode module inert for normal sessions. */}
+      {isEvalMode() && <EvalGate />}
       <AppLayout />
     </ReactFlowProvider>
   );

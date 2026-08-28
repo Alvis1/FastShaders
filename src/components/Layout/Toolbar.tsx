@@ -5,6 +5,8 @@ import { useLongPress } from '@/hooks/useLongPress';
 import { downloadShader } from '@/engine/exportShader';
 import { FeedbackModal } from '@/components/Modals/FeedbackModal';
 import { PalettesModal } from '@/components/Modals/PalettesModal';
+import { isEvalMode } from '@/eval/evalMode';
+import { SusModal } from '@/eval/SusModal';
 import { WorkFolder } from './WorkFolder';
 import { t } from '@/i18n';
 import './Toolbar.css';
@@ -630,24 +632,47 @@ export function Toolbar() {
         >
           {isDark ? '☼' : '☾'}
         </button>
+        {/* Eval mode is VISIBLE by design: covert recording is what the study's
+            ethics posture forbids, so the badge stays for the whole session. */}
+        {isEvalMode() && (
+          <span
+            className="toolbar__eval-badge"
+            title={t('Evaluation session — interactions are being recorded for the study', language)}
+          >
+            EVAL
+          </span>
+        )}
         {/* Feedback — the one deliberately loud control in the chrome. Sits in
             the far corner and is the only red thing in the toolbar, so a user
             who hit a wall can find it without hunting. Composes a report and
             hands it to the user's mail client; nothing is uploaded (see
-            utils/feedbackReport.ts for why a hosted form is not an option). */}
+            utils/feedbackReport.ts for why a hosted form is not an option).
+            In EVAL mode the same button ends the study session instead: it
+            opens the SUS questionnaire (see src/eval/) — the consent screen
+            told the participant this is the finish control. */}
         <button
           type="button"
           className="toolbar__sc-link toolbar__feedback"
           onClick={() => setFeedbackOpen(true)}
           aria-haspopup="dialog"
           aria-expanded={feedbackOpen}
-          title={t('Send feedback — report a problem or suggest an improvement', language)}
-          aria-label={t('Send feedback', language)}
+          title={
+            isEvalMode()
+              ? t('Finish the session and answer the questionnaire', language)
+              : t('Send feedback — report a problem or suggest an improvement', language)
+          }
+          aria-label={
+            isEvalMode() ? t('Finish and answer the questionnaire', language) : t('Send feedback', language)
+          }
         >
           !
         </button>
       </div>
-      <FeedbackModal open={feedbackOpen} onClose={closeFeedback} />
+      {isEvalMode() ? (
+        <SusModal open={feedbackOpen} onClose={closeFeedback} />
+      ) : (
+        <FeedbackModal open={feedbackOpen} onClose={closeFeedback} />
+      )}
       <PalettesModal open={palettesOpen} onClose={closePalettes} />
     </div>
   );

@@ -108,4 +108,60 @@ describe('loadSavedGroups sanitizes fs:savedGroups as adversarial input', () => 
     stubStorage(JSON.stringify([null, 42, { id: 'x' }, { id: 'y', nodes: 'nope', edges: [] }]));
     expect(loadSavedGroups()).toEqual([]);
   });
+
+  /**
+   * A group may legitimately CONTAIN the Output — `groupSelection` filters only
+   * groups and notes — so its per-mesh MATERIALS arrive by this path too. It
+   * was the one restore path `sanitizeOutputMaterials`' own docstring claimed
+   * to cover and did not: `loadGraph` and `applyProjectToStore` ran it, this
+   * did not.
+   */
+  it('repairs Output materials, the third payload this path carries', () => {
+    const output = (id: string, materials: unknown) => ({
+      id,
+      type: 'output',
+      position: { x: 0, y: 0 },
+      data: { registryType: 'output', label: 'Output', materials },
+    });
+    stubStorage(JSON.stringify([
+      {
+        id: 'g3',
+        name: 'materials',
+        color: '#00ff00',
+        nodes: [
+          output('a', 'Glass'),                       // not an array
+          output('b', [
+            { meshTargets: ['Glass'], junk: 'x'.repeat(4000) }, // unbounded ride-along
+            { meshTargets: ['Glass'] },        // duplicate claim: LEGAL
+            { values: { color: '#ff0000' } },         // no target: shades nothing
+            // A control character, built rather than written: a raw byte makes
+            // this file binary to grep (`sourceControlBytes.test.ts` fails on
+            // one) and an escape is easy to mis-copy as a literal backslash.
+            { meshTarget: { name: String.fromCharCode(1) + 'hidden' } },
+          ]),
+        ],
+        edges: [],
+      },
+    ]));
+
+    const groups = loadSavedGroups();
+    expect(groups).toHaveLength(1);
+    const [a, b] = groups[0].nodes;
+    // A non-array `materials` is dropped outright.
+    expect((a.data as { materials?: unknown }).materials).toBeUndefined();
+    // The ride-along is stripped to `{ meshTargets }`. Nothing is DELETED: an
+    // entry whose names are all unusable is kept EMPTY (it shades nothing,
+    // which is a legal state and the one a mesh swap passes through), and a
+    // duplicate claim is kept too — emission resolves that, first claim
+    // winning. Dropping either here would delete a section the user can see,
+    // with its wiring, on the next reload.
+    expect((b.data as { materials?: unknown }).materials).toEqual([
+      { meshTargets: ['Glass'] },
+      { meshTargets: ['Glass'] },
+      { meshTargets: [], values: { color: '#ff0000' } },
+      { meshTargets: [] },
+    ]);
+    // Neither node is DELETED — each carries the user's wiring.
+    expect(groups[0].nodes).toHaveLength(2);
+  });
 });

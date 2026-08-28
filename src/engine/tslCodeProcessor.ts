@@ -153,6 +153,40 @@ export function splitTopLevelArgs(s: string): string[] {
   return args;
 }
 
+/**
+ * The colon that separates a `parts` entry's KEY from its body.
+ *
+ * Not `indexOf(':')`: the key is a JSON string literal and a mesh name may
+ * legally contain a colon. three's `PropertyBinding.sanitizeNodeName` strips
+ * `:` so no glTF name reaches here with one — but OBJ names never pass through
+ * that sanitizer, so a Maya-style `g Char:Body` really does land in the scene
+ * as `Char:Body`, and `isUsableMeshName` deliberately admits it (refusing it
+ * would hide a mesh that is visibly right there). Splitting on the first colon
+ * cut INSIDE the literal, the body then failed the `{` check, and the whole
+ * part was skipped: the canvas showed the mesh targeted, the code panel showed
+ * the part, and the module silently omitted it — the mesh rendered the default
+ * material with no error and no warning chip, because the name IS in the
+ * inventory. Exactly the "right-looking source, wrong picture, no error"
+ * failure the parts block is written to avoid.
+ *
+ * Walks the leading string literal honouring backslash escapes, then returns
+ * the next colon. -1 when the entry does not start with a string literal (the
+ * caller's `"` check rejects it anyway) or the literal never closes.
+ */
+function partEntryColon(entry: string): number {
+  let i = 0;
+  while (i < entry.length && /\s/.test(entry[i])) i += 1;
+  if (entry[i] !== '"') return entry.indexOf(':');
+  i += 1;
+  for (; i < entry.length; i += 1) {
+    const c = entry[i];
+    if (c === '\\') { i += 1; continue; }
+    if (c === '"') break;
+  }
+  if (i >= entry.length) return -1;
+  return entry.indexOf(':', i + 1);
+}
+
 /** Collect imported names from 'three/tsl'. */
 function collectImports(tslCode: string, excludeFn = false): TSLImports {
   const tslNames: string[] = [];
@@ -727,11 +761,24 @@ export function buildShaderModule(
     const inner = partsSrc.trim().replace(/^\{/, '').replace(/\}$/, '');
     const entries: string[] = [];
     for (const entry of splitTopLevelArgs(inner)) {
-      const colon = entry.indexOf(':');
+      const colon = partEntryColon(entry);
       if (colon === -1) continue;
-      const nameLit = entry.slice(0, colon).trim();
+      const rawKey = entry.slice(0, colon).trim();
       const bodySrc = entry.slice(colon + 1).trim();
-      if (!nameLit.startsWith('"') || !bodySrc.startsWith('{')) continue;
+      if (!bodySrc.startsWith('{')) continue;
+      // graphToCode always quotes the key, but the code panel is a real editing
+      // surface and a hand-written `parts: { Glass: {…} }` is valid JS that
+      // `codeToGraph` accepts. Quoting it here rather than skipping keeps the
+      // preview showing what the module says; the alternative is the part
+      // silently vanishing from the render until the user happens to press
+      // Apply (which re-emits it quoted). Anything that is neither a string
+      // literal nor a plain identifier is still refused.
+      const nameLit = rawKey.startsWith('"')
+        ? rawKey
+        : /^[A-Za-z_$][\w$]*$/.test(rawKey)
+          ? JSON.stringify(rawKey)
+          : '';
+      if (!nameLit) continue;
       const props: string[] = [];
       let partDiscard: string | null = null;
       for (const partProp of splitTopLevelArgs(bodySrc.replace(/^\{/, '').replace(/\}$/, ''))) {
@@ -755,9 +802,20 @@ export function buildShaderModule(
       if (partDiscard) {
         const wrapper = `__partPixel${partWrappers.length}`;
         const existingColor = props.findIndex((s) => s.startsWith('colorNode:'));
-        const colorRef = existingColor === -1
-          ? 'vec3(1, 1, 1)'
-          : props[existingColor].slice('colorNode:'.length).trim();
+        // Emissive before white, for the reason the DEFAULT path documents
+        // above (`discardColor`): the loader copies emissiveNode→colorNode only
+        // when colorNode is undefined, and this wrapper always defines it — so
+        // falling straight to white washes an emissive-only part out to lit
+        // white. The ordinary glow-cutout wiring (Emissive + Discard, no
+        // Colour) rendered correctly on the default Output and wrong on a
+        // targeted one: the same graph, two pictures, decided only by whether
+        // the Output happened to carry a mesh target.
+        const existingEmissive = props.findIndex((s) => s.startsWith('emissiveNode:'));
+        const colorRef = existingColor !== -1
+          ? props[existingColor].slice('colorNode:'.length).trim()
+          : existingEmissive !== -1
+            ? props[existingEmissive].slice('emissiveNode:'.length).trim()
+            : 'vec3(1, 1, 1)';
         partWrappers.push(
           `const ${wrapper} = Fn(([__c, __col]) => { Discard(__c); return __col; });`,
         );

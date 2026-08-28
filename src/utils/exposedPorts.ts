@@ -164,11 +164,19 @@ export function toggleExposedPort(
   nodeId: string,
   exposedPorts: readonly string[],
   portId: string,
+  /**
+   * The HANDLE the port's edges are wired through, when it differs from the
+   * port id. The Output node's added materials namespace theirs (`m2:opacity`),
+   * and passing the bare id there would drop the DEFAULT material's edge
+   * instead — the right number of wires disappearing from the wrong material,
+   * with the hidden channel keeping its own.
+   */
+  handleId: string = portId,
 ): string[] {
   const current = new Set(exposedPorts);
   if (current.has(portId)) {
     current.delete(portId);
-    removeEdgesForPort(nodeId, portId);
+    removeEdgesForPort(nodeId, handleId);
   } else {
     current.add(portId);
   }
