@@ -802,6 +802,9 @@
     "This material shades nothing — tick a mesh, or remove it": "Šis materiāls neēno neko — atzīmē tīklu vai noņem to",
     "All meshes (default)": "Visi tīkli (noklusējums)",
     "Not in the loaded model": "Nav ielādētajā modelī",
+    "mesh material for another model": "tīkla materiāls citam modelim",
+    "mesh materials for another model": "tīkla materiāli citam modelim",
+    "Mesh materials for another model — the loaded model has none of their meshes. They still emit, and their sections return (wiring intact) when a matching model is loaded": "Tīklu materiāli citam modelim — ielādētajā modelī nav neviena to tīkla. Tie joprojām emitē, un to sadaļas atgriežas (ar visiem vadiem) līdz ar atbilstošu modeli",
     "The graph already has its Output — takes you to it": "Grafā jau ir Output mezgls — aizved pie tā",
     "Add output": "Pievienot izeju",
     "Shades": "Ēno",
@@ -832,12 +835,19 @@
     "Some data-quality checks did not pass — please tell the researcher before leaving:": "Dažas datu kvalitātes pārbaudes neizdevās — lūdzu, pasakiet to pētniekam pirms aiziešanas:",
     "Last step: press “Open email”, attach the downloaded file to the message, and send it. If no email app opens, just tell the researcher — the file is in the Downloads folder.": "Pēdējais solis: nospiediet “Atvērt e-pastu”, pievienojiet lejupielādēto failu vēstulei un nosūtiet to. Ja e-pasta lietotne neatveras, vienkārši pasakiet pētniekam — fails ir mapē “Lejupielādes”.",
     "Download again": "Lejupielādēt vēlreiz",
+    "The package was also sent to the researcher automatically — the email step below is only a backup.": "Pakete tika automātiski nosūtīta pētniekam — e-pasta solis zemāk ir tikai rezerves variants.",
+    "Sending to the researcher…": "Notiek sūtīšana pētniekam…",
     "Before you finish — 10 quick statements": "Pirms beidzat — 10 īsi apgalvojumi",
     "For each statement, mark how much you agree or disagree. Record your immediate response rather than thinking about it for long; if you cannot respond to one, mark the centre point (3).": "Par katru apgalvojumu atzīmējiet, cik lielā mērā piekrītat vai nepiekrītat. Atzīmējiet savu tūlītējo reakciju, ilgi nedomājot; ja uz kādu nevarat atbildēt, atzīmējiet viduspunktu (3).",
     "Participant code:": "Dalībnieka kods:",
     "Anything else you want to say? (optional)": "Vai vēlaties vēl ko piebilst? (neobligāti)",
     "Back to the editor": "Atpakaļ uz redaktoru",
     "Finish and package my session": "Pabeigt un sapakot manu sesiju",
-    "Please answer all 10 statements first": "Lūdzu, vispirms atbildiet uz visiem 10 apgalvojumiem"
+    "Please answer all 10 statements first": "Lūdzu, vispirms atbildiet uz visiem 10 apgalvojumiem",
+    "Point cap": "Punktu ierobežojums",
+    "Set": "Iestatīt",
+    "Right-click to set the point cap.": "Ar peles labo pogu — iestatīt punktu ierobežojumu.",
+    "Use {device} budget ({n})": "Lietot {device} budžetu ({n})",
+    "Custom cap — {device} measures {n}. Right-click to change or reset it.": "Pielāgots ierobežojums — {device} izmērītais ir {n}. Ar peles labo pogu var mainīt vai atiestatīt."
   }
 }

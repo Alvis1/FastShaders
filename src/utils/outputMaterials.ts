@@ -45,6 +45,7 @@
 import type { AppNode, AppEdge, MaterialSettings, OutputMaterial } from '@/types';
 import { isUsableMeshName } from './meshInventory';
 import { generateEdgeId } from './idGenerator';
+import { OUTPUT_DEFAULT_EXPOSED } from './exposedPorts';
 
 export type { OutputMaterial };
 
@@ -146,6 +147,146 @@ export function materialTargetNames(material: OutputMaterial | undefined): strin
   if (Array.isArray(list)) for (const n of list) push(n);
   else push(material?.meshTarget?.name);
   return out;
+}
+
+/**
+ * Added materials whose EVERY named mesh is absent from the live inventory —
+ * DORMANT: the model on screen has no surface they could shade, so the Output
+ * node hides their sections behind a one-line chip and shows them again,
+ * wiring intact, the moment a model carrying their names is loaded.
+ *
+ * A pure VISIBILITY rule, deliberately not a data rule: the materials, their
+ * edges, the undo history and EMISSION are all untouched — emission may never
+ * depend on the inventory, which is session-only (absent after every reload)
+ * and forgeable by the sandboxed preview — and that untouched data is what
+ * makes the "restore" perfect by construction. Material 0 never hides (it is
+ * the node's own channel state; this loop starts at 1), an EMPTY added
+ * material never hides (it names nothing to be missing — it is a state to
+ * resolve, shown as "No mesh"), and a PARTIALLY missing material stays
+ * visible with its absent names marked by the picker.
+ *
+ * Consumers must agree: OutputNode skips these sections (and folds this set
+ * into its updateNodeInternals key — a hidden section UNMOUNTS real channel
+ * handles, and the remount must be re-measured or restored wires never draw),
+ * and PreviewLink counts only visible materials for its wire paths.
+ */
+export function dormantMaterialIndices(
+  materials: readonly OutputMaterial[],
+  meshNames: readonly string[],
+): Set<number> {
+  const present = new Set(meshNames);
+  const dormant = new Set<number>();
+  for (let i = 1; i < materials.length; i++) {
+    const targets = materialTargetNames(materials[i]);
+    if (targets.length > 0 && targets.every((n) => !present.has(n))) dormant.add(i);
+  }
+  return dormant;
+}
+
+/** Stored channel values graphToCode deliberately treats as no-ops and emits
+ *  NOTHING for (zero discard/displacement, the identity normal texel — see
+ *  the Output stored-value contract in CLAUDE.md). Lives here, not in
+ *  OutputNode, so the node's red-fallback swatch and
+ *  `outputDefaultContributes` share ONE notion of "this value emits". */
+export function storedValueEmits(channel: string, v: unknown): boolean {
+  if (v === undefined || v === null || v === '') return false;
+  if (channel === 'discard' || channel === 'position') return Number(v) !== 0;
+  if (channel === 'normal') return String(v).toLowerCase() !== '#8080ff';
+  return true;
+}
+
+/**
+ * Does MATERIAL 0 contribute anything to the emitted module? Mirrors
+ * graphToCode's channelEntries test: a wire on a bare channel handle, or an
+ * emitting stored value on an EXPOSED channel (emission is exposure-gated, so
+ * a tampered value on a hidden channel must not count — the same guard the
+ * node's red-fallback swatch applies). False means the module is PARTS-ONLY,
+ * which is what arms the 0.6 loader's single-mesh fallback — see
+ * `dormantIndicesForPreview`.
+ */
+export function outputDefaultContributes(
+  node: AppNode,
+  edges: readonly Pick<AppEdge, 'target' | 'targetHandle'>[],
+): boolean {
+  if (
+    edges.some(
+      (e) =>
+        e.target === node.id &&
+        typeof e.targetHandle === 'string' &&
+        parseChannelHandle(e.targetHandle).index === 0,
+    )
+  ) {
+    return true;
+  }
+  const data = node.data as { values?: Record<string, unknown>; exposedPorts?: unknown };
+  const values = data.values;
+  if (!values) return false;
+  const exposed = new Set(
+    Array.isArray(data.exposedPorts)
+      ? data.exposedPorts.filter((p): p is string => typeof p === 'string')
+      : OUTPUT_DEFAULT_EXPOSED,
+  );
+  return Object.entries(values).some(([ch, v]) => exposed.has(ch) && storedValueEmits(ch, v));
+}
+
+/**
+ * The dormant set every SURFACE actually uses — `dormantMaterialIndices` plus
+ * the two context rules all consumers must share (OutputNode's render,
+ * PreviewLink's wire count, NodeEditor's scoped onError):
+ *
+ * 1. UNKNOWN inventory hides NOTHING. A custom model that is loaded but has
+ *    not reported yet (`previewMesh` set, inventory null — every model swap
+ *    passes through this window) must not flash the chip claiming "for
+ *    another model" about the very model that is loading.
+ * 2. The 0.6 loader's single-mesh fallback is MIRRORED: a parts-only module
+ *    (material 0 contributes nothing) on a ONE-mesh model paints the FIRST
+ *    part — that material is actively shading the screen, and hiding it
+ *    behind a chip that says "for another model" would be a lie. It stays
+ *    visible with its missing names marked, the pre-dormancy honest state.
+ *    `meshNames.length <= 1` covers both the one-mesh custom model (one
+ *    reported name) and every primitive/built-in (no inventory, one unnamed
+ *    mesh).
+ */
+export function dormantIndicesForPreview(
+  materials: readonly OutputMaterial[],
+  opts: { meshNames: readonly string[]; inventoryKnown: boolean; defaultContributes: boolean },
+): Set<number> {
+  if (!opts.inventoryKnown) return new Set();
+  const dormant = dormantMaterialIndices(materials, opts.meshNames);
+  if (!opts.defaultContributes && opts.meshNames.length <= 1) {
+    for (let i = 1; i < materials.length; i++) {
+      if (materialTargetNames(materials[i]).length > 0) {
+        dormant.delete(i);
+        break;
+      }
+    }
+  }
+  return dormant;
+}
+
+/**
+ * One derivation for the consumers that see the WHOLE store (PreviewLink's
+ * selector, NodeEditor's scoped onError), keeping their opts in lockstep.
+ * OutputNode derives the same opts from its granular subscriptions instead
+ * (a whole-store selector there would re-render every Output per notify);
+ * `outputTargetChip.test.ts` pins that both routes end in
+ * `dormantIndicesForPreview`.
+ */
+export function outputDormancyFromState(state: {
+  nodes: readonly AppNode[];
+  edges: readonly AppEdge[];
+  previewMesh: unknown;
+  previewMeshInventory: { meshes?: readonly { name: string }[] } | null;
+}): { outputId: string | null; dormant: Set<number>; visibleCount: number } {
+  const out = findDefaultOutput(state.nodes as AppNode[]);
+  if (!out) return { outputId: null, dormant: new Set(), visibleCount: 0 };
+  const materials = outputMaterials(out);
+  const dormant = dormantIndicesForPreview(materials, {
+    meshNames: (state.previewMeshInventory?.meshes ?? []).map((m) => m.name),
+    inventoryKnown: !state.previewMesh || !!state.previewMeshInventory,
+    defaultContributes: outputDefaultContributes(out, state.edges),
+  });
+  return { outputId: out.id, dormant, visibleCount: materials.length - dormant.size };
 }
 
 /**

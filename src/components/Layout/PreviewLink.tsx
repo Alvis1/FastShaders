@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { findDefaultOutput, outputMaterials } from '@/utils/outputMaterials';
+import { findDefaultOutput, outputDormancyFromState } from '@/utils/outputMaterials';
 import { useAppStore } from '@/store/useAppStore';
 import { linkPath, rectCenter } from './previewLinkGeometry';
 import './PreviewLink.css';
@@ -38,10 +38,15 @@ export function PreviewLink() {
   const outputId = useAppStore(
     (s) => findDefaultOutput(s.nodes)?.id ?? null,
   );
-  const materialCount = useAppStore((s) => {
-    const out = findDefaultOutput(s.nodes);
-    return out ? outputMaterials(out).length : 0;
-  });
+  // VISIBLE materials only: the node hides DORMANT sections (their every
+  // mesh absent from the loaded model), and each <path> here pairs with a
+  // RENDERED socket — counting raw materials would leave the anchor cache
+  // below chasing a socket count the DOM can never reach, re-querying every
+  // frame for as long as a section sleeps. outputDormancyFromState is the
+  // shared derivation (inventory-unknown hold-off + the 0.6 single-mesh
+  // fallback exemption included), so this count cannot drift from what the
+  // node actually renders.
+  const materialCount = useAppStore((s) => outputDormancyFromState(s).visibleCount);
   const outputIdRef = useRef(outputId);
   outputIdRef.current = outputId;
   const pathCount = Math.max(1, materialCount);

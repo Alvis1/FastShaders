@@ -93,6 +93,21 @@
   padding: 3px 8px 1px;
 }
 
+/* Sections hidden because the loaded model has NONE of their meshes (dormant
+   — see dormantMaterialIndices). The chip is the "nothing silently vanished"
+   signal: it counts them, its title names their meshes, and the sections
+   return untouched when a matching model is loaded. Muted and dashed so it
+   reads as a note about absent content, not as a control. */
+.output-node__dormant {
+  margin: 3px 8px 4px;
+  padding: 2px 6px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 3px;
+  font-size: 8px;
+  color: rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+
 /* The bottom row's "+ Add output". Full width so it reads as an action
    belonging to the whole node rather than to the last material above it. */
 .output-node__add-row {
