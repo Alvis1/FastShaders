@@ -2933,8 +2933,23 @@ export function NodeEditor() {
       }, IMPORT_FIT_TIMEOUT_MS);
     };
     window.addEventListener('fs:graph-imported', arm);
+    // `newGraph()` is the same "nodes replaced, viewport not" case and fires its
+    // OWN event, so it needs arming here too. The toolbar's NEW button has
+    // always framed the fresh document itself (startNewShader schedules its own
+    // fit, which is why this listener was originally only for imports) — but
+    // that is the BUTTON's path, and EvalGate's `cleanSlateForStudy` calls
+    // `newGraph()` on the store directly. Nothing framed the blank document
+    // there; it merely happened to stay on screen because the boot fit had run
+    // over the previous graph, whose box contains the flow origin the new
+    // Output sits at. Remembering the viewport removed that accident, so a
+    // study session could open on the PREVIOUS participant's pan with the
+    // blank document metres off-screen. The two events stay distinct — the
+    // Work folder's `fs:graph-new` tracking is untouched — and arming twice on
+    // the NEW button is two fits to the same box, i.e. free.
+    window.addEventListener('fs:graph-new', arm);
     return () => {
       window.removeEventListener('fs:graph-imported', arm);
+      window.removeEventListener('fs:graph-new', arm);
       window.clearTimeout(importFitTimerRef.current);
       cancelAnimationFrame(importFitRafRef.current);
     };
