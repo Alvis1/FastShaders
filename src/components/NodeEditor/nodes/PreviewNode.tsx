@@ -11,6 +11,7 @@ import { TypedHandle } from '../handles/TypedHandle';
 import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noisePreview';
 import './PreviewNode.css';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
+import { NODE_BORDER_WIDTH } from './nodeFrame';
 
 const PREVIEW_SIZE = 96;
 /** Registry types this preview node can render — all MaterialX noise variants. */
@@ -243,7 +244,7 @@ export const PreviewNode = memo(function PreviewNode({
   return (
     <div
       className={`node-base preview-node ${selected ? 'node-base--selected' : ''}`}
-      style={{ background: 'var(--node-bg)', border: `1.5px solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left', '--node-cat': catHex } as CSSProperties}
+      style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' } as CSSProperties}
     >
       {/* Cost badge above node */}
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}

@@ -11,6 +11,7 @@ import {
 } from './evalMode';
 import { initEvalBridge, startEvalSession, type EvalBridge } from './telemetry';
 import { ConsentModal } from './ConsentModal';
+import { VIEWPORT_KEY } from '@/utils/viewportMemory';
 
 /**
  * Orchestrates eval-mode boot. Mounted by App.tsx ONLY when `isEvalMode()` —
@@ -81,6 +82,10 @@ function cleanSlateForStudy(): void {
   try {
     localStorage.removeItem('fs:previewUniformValues');
     localStorage.removeItem('fs:previewUniformBounds');
+    // The remembered canvas pan/zoom (utils/viewportMemory.ts) — measured
+    // against the PREVIOUS user's graph, so a reload mid-session would restore
+    // this participant's blank document to wherever the last one was looking.
+    localStorage.removeItem(VIEWPORT_KEY);
   } catch {
     /* storage blocked — nothing persisted to leak either */
   }

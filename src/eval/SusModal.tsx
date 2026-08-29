@@ -239,6 +239,20 @@ export function SusModal({ open, onClose }: Props) {
         setDone((d) => (d && d.fileName === fileName ? { ...d, upload: result } : d));
       });
     }
+
+    // Submit MEANS submit: open the addressed message straight away rather
+    // than leaving it behind a button the participant has to notice. This is
+    // a navigation, so it is CSP-exempt and does not unload the page — the
+    // thank-you screen stays up behind the mail client, and its "Open email"
+    // button remains for the case where no handler is registered. The one
+    // step no platform allows us to skip is the attachment: `mailto:` cannot
+    // carry files, which is why the download runs first and the body names
+    // the file to attach.
+    try {
+      window.location.href = mailto;
+    } catch {
+      /* no mail handler — the thank-you screen's button covers it */
+    }
   };
 
   if (!open) return null;
@@ -274,7 +288,7 @@ export function SusModal({ open, onClose }: Props) {
             <div className="csv-import-modal__message">{t('Sending to the researcher…', language)}</div>
           ) : null}
           <div className="csv-import-modal__message">
-            {t('Last step: press “Open email”, attach the downloaded file to the message, and send it. If no email app opens, just tell the researcher — the file is in the Downloads folder.', language)}
+            {t('Your email app should have opened with the message ready. Attach the file named above and press Send. If it did not open, use “Open email” below — or simply tell the researcher, the file is in the Downloads folder.', language)}
           </div>
           <div className="csv-import-modal__buttons">
             <button
@@ -391,7 +405,7 @@ export function SusModal({ open, onClose }: Props) {
             title={complete ? undefined : t('Please answer all 10 statements first', language)}
             onClick={handleSubmit}
           >
-            {t('Finish and package my session', language)}
+            {t('Submit', language)}
           </button>
         </div>
       </div>

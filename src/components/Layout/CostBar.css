@@ -197,6 +197,28 @@
   color: var(--text-primary);
 }
 
+/* The clickable variant is a real <button>, so it needs the UA's own plate
+   stripped back off: everything above already sets the type, and the box must
+   stay indistinguishable from the inert <span> it replaces — the affordance is
+   the cursor and the tooltip, not a second bordered control inside the pill. */
+.cost-bar__value--link {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  /* The underline reads as a link on hover rather than as a state change; it is
+     drawn under the number without moving it (text-decoration reserves no
+     space, unlike a border). */
+  text-decoration: none;
+}
+.cost-bar__value--link:hover {
+  text-decoration: underline;
+}
+.cost-bar__value--link:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
 .cost-bar__value--over {
   color: var(--cost-high);
 }
@@ -218,7 +240,7 @@
   height: 20px;
   padding: 0;
   border: 1px solid var(--border-subtle);
-  border-radius: 3px;
+  border-radius: 0;
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -226,7 +248,7 @@
 .cost-bar__track {
   flex: 1;
   height: 10px;
-  border-radius: 5px;
+  border-radius: 0;
   position: relative;
 }
 
@@ -236,7 +258,7 @@
   width: 5px;
   height: 16px;
   background: var(--text-primary);
-  border-radius: 2px;
+  border-radius: 0;
   transform: translateX(-50%);
   box-shadow: var(--shadow-sm);
   transition: left var(--transition-normal);

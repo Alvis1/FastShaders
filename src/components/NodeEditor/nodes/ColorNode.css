@@ -3,11 +3,11 @@
    source of truth rather than a CSS value the socket math has to mirror. */
 .color-node {
   border-radius: 50%;
-  border: 1.5px solid rgba(0, 0, 0, 0.12);
+  border: calc(1.5px * var(--fs-node-border-scale, 1)) solid rgba(0, 0, 0, 0.12);
   cursor: grab;
   position: relative;
-  transition: box-shadow var(--transition-normal);
-  box-shadow: var(--shadow-node);
+  transition: box-shadow var(--transition-fast);
+  box-shadow: var(--fs-node-lift, var(--shadow-node));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -24,11 +24,12 @@
   cursor: grabbing;
 }
 
-/* Same FILLED selection band as every other node shell (see NodeBase.css). The
-   swatch carries no category colour, so it falls back to the focus colour. */
+/* Same selection treatment as every other node shell: LIFTED, not banded (see
+   NodeBase.css / tokens.css). The `transition` above predates all of this and
+   is now what every shell does; it was retimed from --transition-normal to
+   --transition-fast so this swatch eases at the same rate as its neighbours. */
 .color-node--selected {
-  box-shadow: 0 0 0 var(--node-selection-width) var(--border-focus), var(--shadow-node);
-  border-color: var(--border-focus);
+  --fs-node-lift: var(--shadow-node-selected);
 }
 
 .color-node__label {

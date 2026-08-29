@@ -7,6 +7,24 @@
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   height: auto;
+  /* Containing block for the popovers this bar owns. Deliberately NO z-index:
+     a positioned element with one creates a STACKING CONTEXT, which traps every
+     descendant's z-index inside it — and the toolbar's descendants are exactly
+     the things that have to float over the rest of the app.
+
+     That is not hypothetical. This rule briefly carried `z-index: 1` so the
+     toolbar could cast `--shadow-sm` over the layout below (a later sibling,
+     which otherwise paints over it), and the 3D preview opted out by raising
+     itself to 2. Both popovers then broke, in opposite directions and for the
+     same reason: the About/Contact panel (z-index 100) fell BEHIND the canvas's
+     NEW button (10), and the "Download app" dropdown vanished entirely behind
+     the preview — measured, `elementFromPoint` at its centre returned the
+     preview iframe.
+
+     The toolbar's shadow is now drawn by the pane that should receive it
+     (`.app-layout__left::before` in AppLayout.css), which needs no z-index pair
+     to be kept in sync and cannot reach the preview at all. */
+  position: relative;
 }
 
 .toolbar__left {
@@ -39,7 +57,6 @@
 .toolbar__brand:focus-visible {
   outline: 1px solid var(--border-focus);
   outline-offset: 2px;
-  border-radius: 2px;
 }
 
 .toolbar__contact-popover {
@@ -55,7 +72,7 @@
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-lg);
 }
 
 .toolbar__contact-label {
@@ -99,7 +116,6 @@
   height: 26px;
   width: auto;
   object-fit: contain;
-  border-radius: 2px;
 }
 
 /* The EU lockup carries two lines of text — give it a touch more height so
@@ -138,10 +154,16 @@
 
 .toolbar__contact-copy {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
   font-family: var(--font-sans);
-  font-size: 10px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  padding: 2px 8px;
+  line-height: 1;
+  padding: 0 8px;
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
@@ -168,14 +190,20 @@
 .toolbar__center {
   flex: 1;
   display: flex;
-  align-items: baseline;
+  /* Centred, not baseline: every control in this row is now a fixed
+     --ctl-size box (input + EXPORT + the desktop Save pair), so vertical
+     centring is what lines their borders up; baseline alignment would hang
+     the fixed-height boxes at differing offsets. */
+  align-items: center;
   justify-content: center;
   gap: var(--space-2);
 }
 
 .toolbar__name-label {
   font-family: var(--font-sans);
-  font-size: var(--font-size-lg);
+  /* Same size as the buttons around it — the app-wide one-chrome-font-size
+     rule; the label keeps its lighter weight for hierarchy. */
+  font-size: var(--font-size-sm);
   font-weight: 500;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -187,14 +215,16 @@
    background are the editable affordance: with a transparent border this looked
    like static text until you happened to hover it. */
 .toolbar__name-input {
+  box-sizing: border-box;
+  height: var(--ctl-size);
   font-family: var(--font-sans);
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--text-primary);
   background: var(--bg-input);
   border: 1px solid var(--border-default);
   border-radius: var(--border-radius-sm);
-  padding: var(--space-1) var(--space-3);
+  padding: 0 var(--space-3);
   text-align: left;
   min-width: 200px;
   max-width: 400px;
@@ -221,16 +251,22 @@
 /* EXPORT — the one primary action in the toolbar; accent-filled so it reads
    as the "take my shader" button next to the name field. */
 .toolbar__export {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   font-weight: 700;
   letter-spacing: 0.05em;
+  line-height: 1;
   text-transform: uppercase;
   color: #fff;
   background: var(--text-accent);
   border: 1px solid var(--text-accent);
   border-radius: var(--border-radius-sm);
-  padding: 6px 14px;
+  padding: 0 14px;
   cursor: pointer;
   transition: filter var(--transition-fast);
   align-self: center;
@@ -330,7 +366,7 @@ button.toolbar__sc-link.toolbar__wf-caret {
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
   border-left: 0;
-  padding: 6px 8px;
+  padding: 0 8px;
 }
 
 .toolbar__wf-caret svg {
@@ -396,7 +432,7 @@ button.toolbar__local-row.toolbar__wf-row--current {
 .toolbar__sc-link.toolbar__theme-toggle {
   font-size: 16px;
   line-height: 1;
-  padding: 5px 10px;
+  padding: 0 10px;
 }
 
 /* Refresh: an inline SVG rather than a letter, so it needs the flex centring
@@ -406,7 +442,7 @@ button.toolbar__local-row.toolbar__wf-row--current {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 5px 10px;
+  padding: 0 10px;
   /* INVERTED against its sibling chips: dark plate, light glyph. Expressed via
      the same two tokens the siblings use, just swapped — so the inversion
      survives the theme toggle (both tokens flip in the dark block) instead of
@@ -438,7 +474,7 @@ button.toolbar__local-row.toolbar__wf-row--current {
   align-items: center;
   justify-content: center;
   min-width: 30px;
-  padding: 5px 10px;
+  padding: 0 10px;
   font-size: 17px;
   font-weight: 800;
   line-height: 1;
@@ -467,7 +503,9 @@ button.toolbar__local-row.toolbar__wf-row--current {
 .toolbar__eval-badge {
   display: inline-flex;
   align-items: center;
-  padding: 4px 7px;
+  box-sizing: border-box;
+  height: var(--ctl-size);
+  padding: 0 7px;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -508,7 +546,7 @@ button.toolbar__local-row.toolbar__wf-row--current {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-lg);
 }
 
 .toolbar__local-header {
@@ -561,15 +599,24 @@ button.toolbar__local-row.toolbar__wf-row--current {
 }
 
 .toolbar__sc-link {
+  /* Uniform app-wide button height: inline-flex + --ctl-size gives the anchor
+     chips and the <button> variants the identical box (an anchor's line box
+     and a button's UA padding used to disagree by a couple of px). */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   font-weight: 700;
   letter-spacing: 0.04em;
+  line-height: 1;
   color: var(--text-primary);
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
-  padding: 6px 12px;
+  padding: 0 12px;
   text-decoration: none;
   cursor: pointer;
   transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
@@ -597,11 +644,14 @@ button.toolbar__sc-link {
   line-height: 1;
 }
 
-.toolbar__sc-link--active,
-.toolbar__sc-link--active:hover {
-  background: var(--border-focus);
-  border-color: var(--border-focus);
-  color: #fff;
+/* Language switch. Compact — it is two letters — with a fixed min-width so
+   the toolbar does not reflow when the label flips between LV and EN. The
+   old `--active` filled state is gone with the pressed-toggle semantics: the
+   button now names the language it switches TO, so there is no "on" state to
+   paint. */
+.toolbar__sc-link.toolbar__lang {
+  padding: 0 8px;
+  min-width: 34px;
 }
 
 /* --- VR bench popover (desktop builds only) ------------------------------ */
@@ -625,10 +675,16 @@ button.toolbar__sc-link {
 }
 
 .toolbar__vr-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   font-weight: 600;
-  padding: 6px 10px;
+  line-height: 1;
+  padding: 0 10px;
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
@@ -685,7 +741,6 @@ button.toolbar__sc-link {
   font-size: 10px;
   background: var(--bg-surface-hover);
   padding: 0 3px;
-  border-radius: 2px;
   overflow-wrap: anywhere;
 }
 
@@ -703,7 +758,7 @@ button.toolbar__sc-link {
 :root[data-theme="dark"] .toolbar__contact-popover,
 :root[data-theme="dark"] .toolbar__local-popover,
 :root[data-theme="dark"] .toolbar__vr-popover {
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 :root[data-theme="dark"] .toolbar__vr-live {

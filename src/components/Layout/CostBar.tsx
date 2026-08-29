@@ -43,9 +43,19 @@ function downloadJson(data: unknown, fileName: string): void {
   URL.revokeObjectURL(url);
 }
 
+export interface CostBarProps {
+  /**
+   * Jump the canvas to the Output node. Supplied by NodeEditor (the only
+   * consumer), which owns React Flow's `fitView`; absent means "no Output in
+   * the graph", and the total then renders as plain text rather than as a
+   * control that would do nothing — the same rule the Output tile follows.
+   */
+  onFocusOutput?: () => void;
+}
+
 // memo(): rendered by NodeEditor, which re-renders every drag frame; this
 // panel reads everything it shows from its own store selectors.
-export const CostBar = memo(function CostBar() {
+export const CostBar = memo(function CostBar({ onFocusOutput }: CostBarProps) {
   const totalCost = useAppStore((s) => s.totalCost);
   const language = useAppStore((s) => s.language);
   const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
@@ -599,15 +609,36 @@ export const CostBar = memo(function CostBar() {
       )}
       <div className="cost-bar__labels">
         <span className="cost-bar__label-end">0</span>
-        <span
-          className={`cost-bar__value ${over ? 'cost-bar__value--over' : ''}`}
-          title={`${t('Estimated GPU cost: {total} of {max} points for {headset}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.', language).replace('{total}', String(totalCost)).replace('{max}', String(maxBudget)).replace('{headset}', deviceLabel)}${over ? t(' You are over budget.', language) : ''}${capOverridden ? `\n${t('Custom cap — {device} measures {n}. Right-click to change or reset it.', language).replace('{device}', deviceLabel).replace('{n}', String(deviceMaxPoints))}` : `\n${t('Right-click to set the point cap.', language)}`}`}
-        >
-          {/* A typed cap must never pass for the device's measured budget —
-              same rule as the "✎ custom" tag on a hand-authored profile. */}
-          {capOverridden && <span className="cost-bar__cap-mark">✎ </span>}
-          {totalCost} / {maxBudget} {t('pts', language)}
-        </span>
+        {/* The total is the shader's price, and the Output node is where that
+            price is spent — so the number doubles as the way to GET there, the
+            same "take me to it" affordance the Output's palette tile and its
+            Add-node row carry (outputFocus.ts). A real <button>, not a span
+            with a click handler: it is keyboard-reachable and announces itself.
+            It renders as an inert <span> when there is no Output to jump to. */}
+        {(() => {
+          const label = (
+            <>
+              {/* A typed cap must never pass for the device's measured budget —
+                  same rule as the "✎ custom" tag on a hand-authored profile. */}
+              {capOverridden && <span className="cost-bar__cap-mark">✎ </span>}
+              {totalCost} / {maxBudget} {t('pts', language)}
+            </>
+          );
+          const cls = `cost-bar__value ${over ? 'cost-bar__value--over' : ''}`;
+          const explain = `${t('Estimated GPU cost: {total} of {max} points for {headset}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.', language).replace('{total}', String(totalCost)).replace('{max}', String(maxBudget)).replace('{headset}', deviceLabel)}${over ? t(' You are over budget.', language) : ''}${capOverridden ? `\n${t('Custom cap — {device} measures {n}. Right-click to change or reset it.', language).replace('{device}', deviceLabel).replace('{n}', String(deviceMaxPoints))}` : `\n${t('Right-click to set the point cap.', language)}`}`;
+          return onFocusOutput ? (
+            <button
+              type="button"
+              className={`${cls} cost-bar__value--link`}
+              onClick={onFocusOutput}
+              title={`${explain}\n${t('Click to jump to the Output node.', language)}`}
+            >
+              {label}
+            </button>
+          ) : (
+            <span className={cls} title={explain}>{label}</span>
+          );
+        })()}
         <span className="cost-bar__label-end">{maxBudget}</span>
       </div>
       {/* Both gradient poles take `history="none"`: `setCostColorLow`/`High`

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -76,6 +76,10 @@ import {
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
 import { pickSpliceInputPort } from './edgeSplice';
 import { existingOutputId, focusOutputNode } from './outputFocus';
+import {
+  readStoredViewport, writeStoredViewport, VIEWPORT_MIN_ZOOM, VIEWPORT_MAX_ZOOM,
+  type StoredViewport,
+} from '@/utils/viewportMemory';
 import { outputDormancyFromState } from '@/utils/outputMaterials';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
@@ -104,6 +108,9 @@ import './NodeEditor.css';
 // inside @xyflow/react's GraphView/Controls/MiniMap 60x/s during drags.
 const DEFAULT_EDGE_OPTIONS = { type: 'typed', animated: true } as const;
 const FIT_VIEW_OPTIONS = { maxZoom: 1.5 } as const;
+
+/** Trailing window for persisting the viewport — the graph autosave's 300ms. */
+const VIEWPORT_SAVE_DEBOUNCE_MS = 300;
 const PRO_OPTIONS = { hideAttribution: true } as const;
 const DESKTOP_PAN_ON_DRAG = [1, 2];
 
@@ -627,6 +634,39 @@ export function NodeEditor() {
   const openContextMenu = useAppStore((s) => s.openContextMenu);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const contextMenu = useAppStore((s) => s.contextMenu);
+  // While a node's settings menu is open, that node stays ACTIVE — same lift
+  // (shadow + rise) it gets from hover or selection, held for the life of the
+  // menu. Without it the node drops back to resting the instant the pointer
+  // travels the few px to the menu, so the panel you are editing sits beside a
+  // graph that no longer says which node it belongs to.
+  //
+  // Imperative, following `clearConnectPreview` above: the alternative is a
+  // className on the node OBJECT, and node data changes push through history
+  // and the autosave — opening a menu is not an edit. `contextMenu` already
+  // lives in the store, so the effect key is simply the id it carries.
+  //
+  // The cleanup covers EVERY way the menu ends, without enumerating them:
+  // closing (nodeId -> undefined), choosing an action, Escape, clicking away,
+  // and a second right-click MOVING the menu to another node — that last one
+  // only re-renders the same menu, so the id change is the only signal, and
+  // running cleanup first is what stops the previous node keeping the class.
+  // `CSS.escape` is load-bearing: node ids arrive from `.fastshader` files, so
+  // an unescaped id could throw out of querySelector during an effect.
+  const menuNodeId = contextMenu.open ? contextMenu.nodeId : undefined;
+  useEffect(() => {
+    if (!menuNodeId) return;
+    let el: Element | null = null;
+    try {
+      el = document.querySelector(`.react-flow__node[data-id="${CSS.escape(menuNodeId)}"]`);
+    } catch {
+      return;
+    }
+    if (!el) return;
+    el.classList.add('fs-menu-active');
+    // Safe even if the node was deleted while its menu was open: the element is
+    // detached by then and removing a class from it is a no-op.
+    return () => el?.classList.remove('fs-menu-active');
+  }, [menuNodeId]);
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
   // Canvas-background picker. `ColorPickerPopover` rather than the trigger-
@@ -666,6 +706,60 @@ export function NodeEditor() {
   const livePathRef = useRef<SVGPathElement | null>(null);
   const { screenToFlowPosition, getViewport, setViewport, getInternalNode, zoomIn, zoomOut, fitView } =
     useReactFlow();
+  /**
+   * Where the canvas was left last time, or null to fit the graph instead.
+   *
+   * A lazy `useState` initializer, so the read happens exactly ONCE — during the
+   * first render, before any effect and before React Flow's own initialisation
+   * can move (and therefore record) a viewport. `useRef(readStoredViewport())`
+   * would look equivalent and hit localStorage on every one of this component's
+   * many renders.
+   */
+  const [bootViewport] = useState(readStoredViewport);
+  /**
+   * The cost pill's total doubles as "take me to the Output" — the number is
+   * this shader's price and the Output node is where it is spent, so the same
+   * "take me to it" glide the Output's palette tile and Add-node row already
+   * perform (outputFocus.ts, same framing so all three land identically).
+   *
+   * The node is looked up at CLICK time rather than captured, so the callback
+   * stays stable across every drag frame and cannot hold a deleted id.
+   */
+  const focusOutput = useCallback(() => {
+    const nodesNow = useAppStore.getState().nodes;
+    const id = existingOutputId(nodesNow);
+    if (id) focusOutputNode(fitView, nodesNow, id);
+  }, [fitView]);
+  /** …but only offered while there IS one. The user can delete the Output, and
+   *  a visible control that silently does nothing reads as the app being
+   *  broken — the lesson the Output tile's own redirect is built around. */
+  const hasOutput = useMemo(() => existingOutputId(nodes) != null, [nodes]);
+  const viewportSaveRef = useRef(0);
+  /**
+   * Record the viewport, trailing-debounced.
+   *
+   * `onMoveEnd` looks like it fires once per gesture, and for React Flow's own
+   * pan/zoom it does — but the custom trackpad and two-finger paths below drive
+   * the canvas by calling `setViewport` imperatively per pointermove, and each
+   * of those is a complete d3-zoom start/zoom/end cycle. Without the debounce
+   * that is a localStorage write per frame for the whole gesture.
+   *
+   * Programmatic moves report through here too, which is deliberate: `fitView`
+   * after an import, NEW, or a Work-folder load re-aims the memory at the graph
+   * that is now on screen, so nothing has to remember to clear it.
+   */
+  const rememberViewport = useCallback((_: unknown, vp: StoredViewport) => {
+    window.clearTimeout(viewportSaveRef.current);
+    viewportSaveRef.current = window.setTimeout(
+      () => writeStoredViewport(vp),
+      VIEWPORT_SAVE_DEBOUNCE_MS,
+    );
+  }, []);
+  // A pending write is dropped on unmount rather than fired: the only way this
+  // component unmounts is the page going away, and the last committed viewport
+  // is already good enough to come back to.
+  useEffect(() => () => window.clearTimeout(viewportSaveRef.current), []);
+
   // Disable the bar's zoom buttons at the zoom limits, mirroring the selector
   // React Flow's own <Controls> used before this bar replaced it.
   const { minZoomReached, maxZoomReached } = useStore(
@@ -1563,6 +1657,32 @@ export function NodeEditor() {
     [],
   );
 
+  /**
+   * Which node the pointer is over — published to the store so the WIRES on a
+   * lifted node can move with its sockets (see TypedEdge). React Flow's own
+   * mouse-enter/leave are used rather than CSS, because CSS `:hover` is not
+   * readable from the edge components.
+   *
+   * Suppressed for the whole of a connection drag: dragging a wire sweeps the
+   * pointer across every node between the socket and the target, and lifting
+   * each one in turn is noise on top of a gesture that already has its own
+   * target affordance (the revealed sockets). `fs-connecting` on the canvas
+   * root does the same for the CSS half; the two MUST agree, or the card lifts
+   * while its wires do not — the exact defect this whole mechanism exists to
+   * prevent.
+   */
+  const setHoveredNode = useAppStore((s) => s.setHoveredNode);
+  const connectingRef = useRef(false);
+  const [connecting, setConnecting] = useState(false);
+  const onNodeMouseEnter = useCallback(
+    (_e: React.MouseEvent, node: AppNode) => {
+      if (connectingRef.current) return;
+      setHoveredNode(node.id);
+    },
+    [setHoveredNode],
+  );
+  const onNodeMouseLeave = useCallback(() => setHoveredNode(null), [setHoveredNode]);
+
   // Track whether a connection attempt succeeded; if not, open add-node menu
   const connectSucceeded = useRef(false);
   const pendingSourceRef = useRef<{ nodeId: string; handleId: string } | null>(null);
@@ -1570,6 +1690,12 @@ export function NodeEditor() {
   const onConnectStart = useCallback(
     (_event: MouseEvent | TouchEvent, params: { nodeId: string | null; handleId: string | null; handleType: string | null }) => {
       connectSucceeded.current = false;
+      // A node already lifted under the pointer must drop back BEFORE the wire
+      // starts moving, or it stays raised for the whole drag with no pointer on
+      // it (mouse-leave is swallowed once React Flow captures the pointer).
+      connectingRef.current = true;
+      setConnecting(true);
+      setHoveredNode(null);
       // NB: deliberately NO clearSocketTapTooltip() here — a bare touch tap on
       // a socket ALSO starts a connection (every handle is isConnectableStart),
       // so clearing on connect-start would dismiss the tooltip the tap itself
@@ -1587,6 +1713,11 @@ export function NodeEditor() {
 
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
+      // Cleared up front, above every early return below: this function has
+      // several, and a missed reset would leave the canvas permanently unable
+      // to highlight a node again.
+      connectingRef.current = false;
+      setConnecting(false);
       const pending = pendingSourceRef.current;
       pendingSourceRef.current = null;
       if (connectSucceeded.current) return;
@@ -2306,9 +2437,55 @@ export function NodeEditor() {
   // NB no `--canvas-bg` here: the canvas color is applied directly to the React
   // Flow root. Publishing it as a var invited chrome (the asset bar) to tint
   // itself with the user's canvas pick, which it must not do.
+  /**
+   * How far the SELECTED nodes' visible cards overhang React Flow's own
+   * selection rectangle, on the right and the bottom, in flow px.
+   *
+   * React Flow builds that rectangle from each node's MEASURED layout box, but
+   * the expensive node types paint up to 1.35x larger than it — `getCostScale`
+   * as a `transform: scale()` with `transform-origin: top left`, and a
+   * transform does not affect layout (the same fact `nodeVisualSize` above
+   * exists for). So the rectangle is correct along the top and left edges and
+   * falls SHORT along the other two, by a different amount per node: a marquee
+   * around two 35-point noise nodes drew its line straight through both cards.
+   *
+   * Only two numbers are needed because the shortfall is one-sided. They are
+   * published as CSS variables and consumed by the boundary's `inset`
+   * (NodeEditor.css) — the rectangle's own geometry is React Flow's and is left
+   * exactly as it is, so the element the user drags to move a selection keeps
+   * the size and hit area React Flow gave it. The 5px standoff and the selected
+   * nodes' uniform `--fs-node-rise` are folded in there too, in CSS, so no px
+   * literal from tokens.css has to be duplicated here.
+   *
+   * Computed as a difference of UNIONS, never as the largest per-node
+   * difference: the node with the right-most measured edge need not be the one
+   * whose card reaches furthest right.
+   */
+  const selectionOverflow = useMemo(() => {
+    let measuredR = -Infinity, measuredB = -Infinity;
+    let visualR = -Infinity, visualB = -Infinity;
+    for (const n of nodes) {
+      if (!n.selected) continue;
+      const p = nodeAbsolutePos(n, nodes);
+      const m = getNodeSize(n);
+      const v = nodeVisualSize(n);
+      measuredR = Math.max(measuredR, p.x + m.w);
+      measuredB = Math.max(measuredB, p.y + m.h);
+      visualR = Math.max(visualR, p.x + v.w);
+      visualB = Math.max(visualB, p.y + v.h);
+    }
+    if (!Number.isFinite(measuredR)) return { dr: 0, db: 0 };
+    return {
+      dr: Math.max(0, visualR - measuredR),
+      db: Math.max(0, visualB - measuredB),
+    };
+  }, [nodes]);
+
   const canvasCssVars = {
     '--node-cost-text': contrastColor,
     '--node-cost-text-shadow': contrastShadow,
+    '--fs-sel-dr': `${selectionOverflow.dr}px`,
+    '--fs-sel-db': `${selectionOverflow.db}px`,
   } as React.CSSProperties;
 
   // Let middle/right-click pan through the selection overlay.
@@ -2800,7 +2977,7 @@ export function NodeEditor() {
   return (
     <div className="node-editor" style={canvasCssVars}>
       <div
-        className={`node-editor__canvas${drawToolActive ? ' fs-draw-active' : ''}${drawToolActive && drawEraser ? ' fs-erase-active' : ''}`}
+        className={`node-editor__canvas${drawToolActive ? ' fs-draw-active' : ''}${drawToolActive && drawEraser ? ' fs-erase-active' : ''}${connecting ? ' fs-connecting' : ''}`}
         ref={canvasRef}
         // HTML5 drag wandering off the canvas (into the code editor / assets
         // bar) must tear down the live previews — dragover stops firing here,
@@ -2825,7 +3002,7 @@ export function NodeEditor() {
         }}
       >
         <div className="node-editor__cost-overlay">
-          <CostBar />
+          <CostBar onFocusOutput={hasOutput ? focusOutput : undefined} />
         </div>
         {/* Top-RIGHT chrome, immediately left of the cost pill: start a fresh
             shader. Kept well away from the bottom-left working bar — it throws
@@ -2844,6 +3021,8 @@ export function NodeEditor() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          onNodeMouseEnter={onNodeMouseEnter}
+          onNodeMouseLeave={onNodeMouseLeave}
           onConnectStart={onConnectStart}
           onConnectEnd={onConnectEnd}
           onNodeDragStart={onNodeDragStart}
@@ -2909,15 +3088,22 @@ export function NodeEditor() {
           // d3 `dblclick.zoom` (which fires first, at an ancestor) — leaving it
           // on would zoom the canvas every time a waypoint is placed/removed.
           zoomOnDoubleClick={false}
-          fitView
+          // Fit only when there is nothing remembered. A stored viewport means
+          // the user left the canvas somewhere deliberate and the graph it was
+          // measured against is still on disk (utils/viewportMemory.ts); fitting
+          // over it would throw that away on every reload. Both props apply on
+          // the first render only, so this reads once and never flips.
+          fitView={bootViewport == null}
+          defaultViewport={bootViewport ?? undefined}
           // Without a cap, fitView blows a small graph (the first-open demo)
           // up to maxZoom=3 — nodes fill the screen. 1.5 opens the canvas 2x
           // further out; larger graphs that fit below 1.5 are unaffected, and
           // manual zoom can still reach 3.
           fitViewOptions={FIT_VIEW_OPTIONS}
           onError={onFlowError}
-          minZoom={0.1}
-          maxZoom={3}
+          onMoveEnd={rememberViewport}
+          minZoom={VIEWPORT_MIN_ZOOM}
+          maxZoom={VIEWPORT_MAX_ZOOM}
           proOptions={PRO_OPTIONS}
           style={{ background: nodeEditorBgColor }}
         >

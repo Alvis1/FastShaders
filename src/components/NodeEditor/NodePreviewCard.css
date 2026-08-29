@@ -6,6 +6,30 @@
   zoom: 0.67;
 }
 
+/* Hover = the same LIFT a node gets on the canvas and a texture/preset tile
+   gets in the strip beside it: the node's shadow steps from 2px to 8px while
+   the tile moves the same distance toward the light.
+
+   It is published as `--fs-node-lift` on the CARD rather than as a box-shadow
+   on the node inside it, which is what keeps this legal and honest — the card
+   layer may scale a node, never restyle one (`assetCardGeometry.test.ts`), and
+   handing the replica the same variable the canvas wrapper hands the real node
+   means the tile cannot drift into looking like a different node.
+
+   The move is the same `--fs-node-rise` the canvas uses, so the two surfaces
+   travel the same distance — but written as `transform` here and as the
+   standalone `translate` property there. That is not a style choice: on the
+   canvas React Flow owns the wrapper's `transform` (it IS the node's position),
+   so only `translate` can compose with it. A tile's transform is its own. */
+.node-preview-card:hover {
+  --fs-node-lift: var(--shadow-node-selected);
+  transform: translate(var(--fs-node-rise), var(--fs-node-rise));
+}
+
+.node-preview-card {
+  transition: transform var(--transition-fast);
+}
+
 .node-preview-card:active {
   cursor: grabbing;
   opacity: 0.7;

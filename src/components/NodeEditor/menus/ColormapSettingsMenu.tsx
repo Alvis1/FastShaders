@@ -60,7 +60,7 @@ export function ColormapSettingsMenu({ nodeId }: ColormapSettingsMenuProps) {
                   width: '52px',
                   height: '10px',
                   flex: '0 0 auto',
-                  borderRadius: '2px',
+                  borderRadius: 0,
                   border: '1px solid var(--border-subtle)',
                   background: colormapGradientCss(map, reverse, levels),
                 }}
@@ -100,7 +100,7 @@ export function ColormapSettingsMenu({ nodeId }: ColormapSettingsMenuProps) {
         <div
           style={{
             height: '16px',
-            borderRadius: '2px',
+            borderRadius: 0,
             border: '1px solid var(--border-subtle)',
             background: colormapGradientCss(getColormap(currentId), reverse, levels),
           }}

@@ -5,9 +5,12 @@
    --bg-panel — see the token's note in tokens.css. */
 .content-browser {
   position: relative;
-  /* 2px in --edge-color to match the grip's outline exactly — the tab and this
-     border are meant to read as one continuous line. */
-  border-top: 2px solid var(--edge-color);
+  /* --fs-seam, the SAME thickness and colour as the SplitPane seams: this is a
+     window divider like any other, and it used to carry its own hardcoded
+     thickness, so the app drew two different dividers depending which edge you
+     looked at. Reading the token also means it follows the coarse-pointer bump
+     that keeps a boundary visible on touch, which a literal never did. */
+  border-top: var(--fs-seam) solid var(--edge-color);
   transition: border-color var(--transition-fast);
   background: var(--bg-raised);
   display: flex;
@@ -22,24 +25,33 @@
   max-height: calc(100% - 120px);
 }
 
-/* Anchor for the grip tab, spanning EXACTLY the bar's 2px border-top (top: -2px
-   reaches from the padding box back over the border). The grip positions flush
-   against its containing block's far edge (see .fs-grip--h in
+/* Anchor for the grip tab, spanning EXACTLY the bar's border-top (the negative
+   `top` reaches from the padding box back over the border). The grip positions
+   flush against its containing block's far edge (see .fs-grip--h in
    styles/controls.css), so the anchor's box must BE the seam — an anchor below
    the border would push the grip's side edges visibly past the border line.
+   Both dimensions therefore read --fs-seam, the same token the border does.
    Not itself a hit target (pointer-events:none), so the canvas underneath stays
    fully interactive right up to the bar's border. The grip hangs ABOVE it,
    which is why .content-browser keeps overflow:visible. */
 .content-browser__resizer {
   position: absolute;
-  top: calc(-1 * var(--fs-grip-border));
+  top: calc(-1 * var(--fs-seam));
   left: 0;
   right: 0;
-  height: var(--fs-grip-border);
+  height: var(--fs-seam);
   z-index: var(--z-controls);
   pointer-events: none;
-  /* Inherited by the grip: its outline matches this bar's own 2px border-top
-     (see .fs-grip in styles/controls.css). */
+  /* Transparent: `.content-browser`'s own border-top paints the line, and this
+     is purely the anchor the tab positions against. It briefly also painted the
+     seam so a `filter: drop-shadow` here could cast the line and the tab as one
+     silhouette — dividers cast no shadow now (see SplitPane.css), so the
+     duplicate paint went with it. */
+  /* Inherited by the grip: its outline matches this bar's border-top, and it is
+     the SAME value the SplitPane seams publish. Deliberately a literal equal to
+     --fs-seam's DESKTOP width rather than the token itself, for the reason
+     SplitPane.css documents: the seam bumps on coarse pointers and an outline
+     that thick on a --ctl-size tab would crowd the diamond. */
   --fs-grip-border: 2px;
 }
 
@@ -61,9 +73,16 @@
   position: relative;
   display: flex;
   flex-shrink: 0;
+  /* The backdrop the row's scroll arrows must match. There are TWO of these
+     wrappers and they sit on DIFFERENT surfaces — the category tab row is
+     --bg-raised-sub, the tile strip below it is --bg-raised — which the arrows'
+     old fade-to-transparent background hid. A solid plate cannot hide it, so
+     each row hands its own colour to its arrows. */
+  --cb-arrow-bg: var(--bg-raised-sub);
 }
 
 .content-browser__scroll-wrapper:last-child {
+  --cb-arrow-bg: var(--bg-raised);
   flex: 1;
   min-height: 0;
   /* when the bar hits its max-height cap, clip the strip instead of letting
@@ -85,22 +104,38 @@
   font-size: 20px;
   font-weight: 700;
   color: var(--text-secondary);
-  background: linear-gradient(to right, var(--bg-raised-sub) 60%, transparent);
+  /* SOLID bar. The fade this replaces was doing one real job — dissolving the
+     tiles that scroll under the arrow so they didn't appear cut off — but it
+     achieved that by making the control itself have no edge, which in a flat
+     technical style reads as a smear over the strip rather than a button. The
+     tiles are clipped by the scroller anyway; the arrow is now a plate with a
+     hard edge, and that edge IS the "content continues past here" line.
+
+     Per-ROW colour (see --cb-arrow-bg above): the two rows this component
+     scrolls sit on different surfaces. Known and accepted: the tile strip also
+     takes an inline 10%-alpha category tint while a category tab is active
+     (ContentBrowser.tsx), which the arrow does not pick up — at 10% the step is
+     slight, and the arrow's own border now makes it read as a control parked
+     beside the strip rather than as a colour mismatch in it. */
+  background: var(--cb-arrow-bg, var(--bg-raised-sub));
   padding: 0;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
+/* The edge faces the strip, so the rule goes on the inner side of each arrow. */
 .content-browser__arrow--left {
   left: 0;
-  background: linear-gradient(to right, var(--bg-raised-sub) 60%, transparent);
+  border-right: 1px solid var(--border-default);
 }
 
 .content-browser__arrow--right {
   right: 0;
-  background: linear-gradient(to left, var(--bg-raised-sub) 60%, transparent);
+  border-left: 1px solid var(--border-default);
 }
 
 .content-browser__arrow:hover {
   color: var(--text-primary);
+  background: var(--bg-surface-hover);
 }
 
 .content-browser__categories {
@@ -147,11 +182,18 @@
   font-weight: 500;
 }
 
-/* Folder-style tabs — mirrors the CodeEditor TSL/Script tabs */
+/* Category tabs. These KEEP the folder merge the code panel's TSL/Output tabs
+   dropped (`bottom: -1px` plus an active `borderBottomColor` matching the strip
+   below — see tabStyle() in ContentBrowser.tsx), and that is not drift: here the
+   merge carries information. The active tab's colour IS the tint of the tile
+   strip underneath it, so the join says "these tiles are that category". The
+   code panel's tabs sit above a Monaco editor with its own background and had
+   nothing to merge into, which is why they became plain segments.
+   The chrome font rule applies to both, though — 12px, not the old 10px. */
 .content-browser__cat-btn {
   flex-shrink: 0;
   padding: 5px 14px 4px;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-family: var(--font-sans);
   font-weight: 600;
   cursor: pointer;
@@ -242,15 +284,27 @@
 
 .saved-group-card__frame {
   border: 2px solid;
-  border-radius: 8px;
+  border-radius: 0;
   overflow: hidden;
   box-shadow: var(--shadow-sm);
   transition: box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
+/* Hover = the tile LIFTS, in the app's elevation language (tokens.css): its
+   hard shadow moves out while the tile itself moves the same distance TOWARD
+   the light (up-left), which is what separating from the surface looks like.
+
+   The numbers are large on purpose. The previous 1px rise plus a 2px→4px
+   shadow was a real rule that really fired — measured in Chromium, the frame
+   did go to `translateY(-1px)` — but it was invisible to the user, because the
+   whole strip is drawn through a computed `zoom` that scales every tile to fit
+   the asset bar's height (typically ~0.5–0.7x). At that scale a 1px rise is
+   sub-pixel: the tile "did not animate" as far as anyone could see. Anything
+   in here has to survive being multiplied by that zoom, so the lift is
+   expressed in units big enough to still read after it. */
 .saved-group-card:hover .saved-group-card__frame {
-  box-shadow: var(--shadow-md);
-  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg);
+  transform: translate(var(--fs-node-rise), var(--fs-node-rise));
 }
 
 .saved-group-card__header {
@@ -267,7 +321,7 @@
   font-size: var(--font-size-xs);
   font-weight: 600;
   color: #ffffff;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.45);
   /* Wrap to at most 2 lines, then ellipsis. -webkit-line-clamp is the only
      cross-browser way to cap LINES (not height) and is supported everywhere
      this app runs, including the WKWebView desktop shell. */

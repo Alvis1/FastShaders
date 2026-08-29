@@ -2,15 +2,17 @@
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  border: 1px solid rgba(0, 0, 0, 0.18);
+  border: calc(1px * var(--fs-node-border-scale, 1)) solid rgba(0, 0, 0, 0.18);
   border-radius: var(--border-radius-sm);
-  box-shadow: var(--shadow-node);
+  box-shadow: var(--fs-node-lift, var(--shadow-node));
+  transition: box-shadow var(--transition-fast);
   overflow: hidden;
 }
 
-/* Same FILLED selection band as every other node shell (see NodeBase.css). */
+/* Same selection treatment as every other node shell: LIFTED, not banded
+   (see NodeBase.css / tokens.css). */
 .note-node--selected {
-  box-shadow: 0 0 0 var(--node-selection-width) var(--border-focus), var(--shadow-node);
+  --fs-node-lift: var(--shadow-node-selected);
 }
 
 /* Colored header bar — the only drag handle (dragHandle on the node). */

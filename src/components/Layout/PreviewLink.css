@@ -29,7 +29,10 @@
      feeds the view". */
   stroke-dasharray: 6 3;
   opacity: 0.8;
-  filter: drop-shadow(0 0 2px var(--node-cost-text-shadow, rgba(0, 0, 0, 0.35)));
+  /* Hard offset, no blur — the app-wide shadow idiom. It was a 2px GLOW, which
+     is the one thing the technical style has no room for; the contrast token
+     stays, so the halo still flips with the canvas the wire is drawn on. */
+  filter: drop-shadow(1px 1px 0 var(--node-cost-text-shadow, rgba(0, 0, 0, 0.35)));
   animation: preview-link-flow 0.9s linear infinite;
 }
 

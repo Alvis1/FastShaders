@@ -32,21 +32,21 @@
   .topbar h1{font-size:15px;font-weight:600;margin:0}
   .topbar .sub{font-size:11px;color:var(--mut)}
   .topbar .spacer{flex:1}
-  select,input[type=text],input[type=number],input[type=search],textarea{font-family:var(--sans);font-size:12px;color:var(--ink);background:#fff;border:1px solid var(--line2);border-radius:6px;padding:5px 7px;outline:none}
+  select,input[type=text],input[type=number],input[type=search],textarea{font-family:var(--sans);font-size:12px;color:var(--ink);background:#fff;border:1px solid var(--line2);border-radius:0;padding:5px 7px;outline:none}
   select:focus,input:focus,textarea:focus{border-color:var(--accent)}
   textarea{font-family:var(--mono);font-size:11.5px;line-height:1.5;resize:vertical;width:100%}
-  button{font-family:var(--sans);font-size:12px;font-weight:500;cursor:pointer;background:#fff;border:1px solid var(--line2);border-radius:6px;padding:6px 11px;color:var(--ink)}
+  button{font-family:var(--sans);font-size:12px;font-weight:500;cursor:pointer;background:#fff;border:1px solid var(--line2);border-radius:0;padding:6px 11px;color:var(--ink)}
   button:hover{background:#f6f7f9}
   button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
   button.primary:hover{filter:brightness(1.05)}
   button:disabled{opacity:.5;cursor:not-allowed}
   button.mini{padding:3px 8px;font-size:11px}
-  kbd{font:10px var(--mono);background:#f1f2f5;border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--dim)}
-  .dirty-pill{font-size:11px;color:#B45309;background:#FEF3C7;border:1px solid #FDE68A;border-radius:10px;padding:2px 8px;display:none}
+  kbd{font:10px var(--mono);background:#f1f2f5;border:1px solid var(--line2);border-bottom-width:2px;border-radius:0;padding:0 4px;color:var(--dim)}
+  .dirty-pill{font-size:11px;color:#B45309;background:#FEF3C7;border:1px solid #FDE68A;border-radius:0;padding:2px 8px;display:none}
   .dirty-pill.show{display:inline-block}
   /* local-only notice — hidden automatically once the dev-server endpoint responds */
   .devnote{background:#FEF3C7;border-bottom:1px solid #FDE68A;color:#92400E;font-size:11.5px;padding:6px 14px;line-height:1.5}
-  .devnote code{font-family:var(--mono);font-size:10.5px;background:rgba(255,255,255,.6);border-radius:3px;padding:0 3px}
+  .devnote code{font-family:var(--mono);font-size:10.5px;background:rgba(255,255,255,.6);border-radius:0;padding:0 3px}
   /* ?node=<type> asked for something the designer can't design — shown instead of a silent fallback */
   .notice{display:none;position:relative;padding-right:32px}
   .notice.show{display:block}
@@ -57,9 +57,9 @@
   /* ============================= stage ============================= */
   .stage{flex:1;position:relative;overflow:hidden}
   .stage-hint{position:absolute;top:10px;left:12px;font-size:10.5px;color:var(--mut);z-index:4;line-height:1.6;pointer-events:none}
-  .stage-tools{position:absolute;top:10px;right:12px;z-index:4;display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:8px;padding:4px 8px;font-size:11px;color:var(--dim)}
-  .stage-tools input[type=color]{width:24px;height:18px;padding:0;border:1px solid var(--line2);border-radius:4px;background:none;cursor:pointer}
-  .zoombar{position:absolute;bottom:12px;right:12px;z-index:4;display:flex;align-items:center;gap:2px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:8px;padding:3px}
+  .stage-tools{position:absolute;top:10px;right:12px;z-index:4;display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:0;padding:4px 8px;font-size:11px;color:var(--dim)}
+  .stage-tools input[type=color]{width:24px;height:18px;padding:0;border:1px solid var(--line2);border-radius:0;background:none;cursor:pointer}
+  .zoombar{position:absolute;bottom:12px;right:12px;z-index:4;display:flex;align-items:center;gap:2px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:0;padding:3px}
   .zoombar button{border:none;background:transparent;padding:3px 8px;font-size:13px}
   .zoombar .zval{font:11px var(--mono);min-width:46px;text-align:center}
   .viewport{position:absolute;inset:0;cursor:grab;touch-action:none}
@@ -96,8 +96,8 @@
   #nodeWrap .shader-node__glyph{position:relative;cursor:pointer}
   #nodeWrap .shader-node__op-glyph{cursor:pointer}
   #nodeWrap [data-nd-art]{position:relative;cursor:move}
-  #nodeWrap .shader-node__glyph:hover::after,#nodeWrap .shader-node__op-glyph:hover::after{content:'edit · drag';position:absolute;top:1px;right:3px;font-size:7px;color:var(--accent);background:rgba(255,255,255,.85);border-radius:3px;padding:0 3px;pointer-events:none}
-  #nodeWrap [data-nd-art]:hover::after{content:'drag = move art';position:absolute;top:-11px;right:0;font-size:7px;color:var(--accent);background:rgba(255,255,255,.85);border-radius:3px;padding:0 3px;pointer-events:none;white-space:nowrap}
+  #nodeWrap .shader-node__glyph:hover::after,#nodeWrap .shader-node__op-glyph:hover::after{content:'edit · drag';position:absolute;top:1px;right:3px;font-size:7px;color:var(--accent);background:rgba(255,255,255,.85);border-radius:0;padding:0 3px;pointer-events:none}
+  #nodeWrap [data-nd-art]:hover::after{content:'drag = move art';position:absolute;top:-11px;right:0;font-size:7px;color:var(--accent);background:rgba(255,255,255,.85);border-radius:0;padding:0 3px;pointer-events:none;white-space:nowrap}
   /* React Flow's stylesheet ships `.react-flow__handle{pointer-events:none}`
      (only its own connection classes re-enable them, and those never apply
      outside a flow pane) — without this override every socket gesture on the
@@ -106,7 +106,7 @@
   #nodeWrap .typed-handle[data-io='in']{cursor:ns-resize}
   #nodeWrap .typed-handle[data-io='out']{cursor:pointer}
   /* corner resize handle — positioned against the card by layoutOverlays() */
-  .nres{position:absolute;width:13px;height:13px;border-radius:3px;background:#fff;border:1.5px solid var(--accent);cursor:nwse-resize;z-index:5}
+  .nres{position:absolute;width:13px;height:13px;border-radius:0;background:#fff;border:1.5px solid var(--accent);cursor:nwse-resize;z-index:5}
   /* snap ruler shown along the border while dragging a socket (rendered by
      NodeVisual inside the body/region; bg aligned by layoutOverlays) */
   .nd-snapcol{position:absolute;top:0;bottom:0;width:3px;background:repeating-linear-gradient(to bottom,rgba(51,102,204,.6) 0 1px,transparent 1px 4px);pointer-events:none;z-index:2}
@@ -126,11 +126,11 @@
   .kv input[type=text]{flex:1;min-width:0}
   .kv input[type=text]:disabled{background:var(--bg);color:var(--mut);cursor:not-allowed}
   .hintline.bad{color:#B45309}
-  .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;background:#f6f7f9;border:1px solid var(--line);border-radius:6px;padding:3px 9px}
-  .chip .dot{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.12)}
-  .lock{font-size:10px;color:var(--mut);border:1px solid var(--line2);border-radius:5px;padding:1px 5px}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;background:#f6f7f9;border:1px solid var(--line);border-radius:0;padding:3px 9px}
+  .chip .dot{width:12px;height:12px;border-radius:0;border:1px solid rgba(0,0,0,.12)}
+  .lock{font-size:10px;color:var(--mut);border:1px solid var(--line2);border-radius:0;padding:1px 5px}
   .unit{font-size:10px;color:var(--mut)}
-  .glyph-card{position:relative;border:1px dashed var(--line2);border-radius:8px;padding:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:#fafbfc;min-height:74px}
+  .glyph-card{position:relative;border:1px dashed var(--line2);border-radius:0;padding:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:#fafbfc;min-height:74px}
   .glyph-card:hover{border-color:var(--accent);background:#f3f7ff}
   .glyph-card .nudge-tag{position:absolute;bottom:3px;right:5px;font:9px var(--mono);color:var(--mut)}
   .hintline{font-size:10.5px;color:var(--mut);margin:8px 0 0;line-height:1.45}
@@ -146,12 +146,12 @@
   /* ============================= modal ============================= */
   .overlay{position:fixed;inset:0;background:rgba(15,18,26,.45);display:none;align-items:center;justify-content:center;z-index:50}
   .overlay.show{display:flex}
-  .modal{background:#fff;border-radius:12px;width:800px;max-width:96vw;max-height:92vh;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+  .modal{background:#fff;border-radius:0;width:800px;max-width:96vw;max-height:92vh;overflow:auto;box-shadow:8px 8px 0 rgba(0,0,0,.3)}
   .modal .mhd{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
   .modal .mhd h3{margin:0;font-size:14px;font-weight:600}
   .modal .mbody{padding:16px 18px}
   .modal .grid{display:grid;grid-template-columns:312px 1fr;gap:14px}
-  .glyph-preview{position:relative;border:1px solid var(--line);border-radius:8px;background:repeating-conic-gradient(#f2f3f5 0% 25%,#fff 0% 50%) 0 0/14px 14px;display:flex;align-items:center;justify-content:center;height:312px}
+  .glyph-preview{position:relative;border:1px solid var(--line);border-radius:0;background:repeating-conic-gradient(#f2f3f5 0% 25%,#fff 0% 50%) 0 0/14px 14px;display:flex;align-items:center;justify-content:center;height:312px}
   .glyph-preview svg{width:280px;height:280px;display:block;overflow:visible}
   .glyph-preview .gridlay{position:absolute;inset:0;margin:auto;width:280px;height:280px;pointer-events:none}
   /* handle/guide sizes are in 56-space units — tuned for the 280px (5px/unit) canvas */
@@ -204,7 +204,7 @@
 
   /* ---- tool row ---- */
   .tools{display:flex;flex-wrap:wrap;gap:3px;margin:0 0 8px}
-  .tools .tool{padding:4px 5px;line-height:0;border-radius:5px;background:#fff;border:1px solid var(--line2)}
+  .tools .tool{padding:4px 5px;line-height:0;border-radius:0;background:#fff;border:1px solid var(--line2)}
   .tools .tool svg{width:15px;height:15px;display:block;stroke:var(--ink);fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
   .tools .tool:hover{border-color:var(--accent)}
   .tools .tool.is-on{background:var(--accent);border-color:var(--accent)}
@@ -213,12 +213,12 @@
   .toolinfo b{color:var(--dim);font-weight:600}
 
   /* ---- paint bar ---- */
-  .paintbar{margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+  .paintbar{margin-top:8px;border:1px solid var(--line);border-radius:0;padding:6px 8px}
   .pb-row{display:flex;align-items:center;gap:6px;margin-bottom:4px}
   .pb-row:last-of-type{margin-bottom:0}
   .pb-lbl{width:33px;flex-shrink:0;font-size:10.5px;color:var(--dim)}
   .pb-chips{display:flex;gap:2px;flex-wrap:wrap}
-  .pb-chip{width:15px;height:15px;padding:0;border-radius:4px;border:1px solid var(--line2);position:relative}
+  .pb-chip{width:15px;height:15px;padding:0;border-radius:0;border:1px solid var(--line2);position:relative}
   .pb-chip.is-on{box-shadow:0 0 0 2px var(--accent);border-color:var(--accent)}
   /* "no paint": a red slash, drawn in CSS so it needs no font glyph */
   .pb-chip.none{background:#fff}
@@ -236,16 +236,16 @@
      markup. Metrics that decide WRAP POINTS are copied at runtime by
      designerApp (font, padding, white-space, word-break, border widths) — only
      the things that cannot differ live here. */
-  .hlwrap{position:relative;background:#fff;border-radius:6px}
+  .hlwrap{position:relative;background:#fff;border-radius:0}
   .hlwrap textarea{position:relative;z-index:1;background:transparent;display:block}
-  .hlmirror{position:absolute;inset:0;z-index:0;overflow:hidden;border-style:solid;border-color:transparent;border-radius:6px;box-sizing:border-box;color:transparent;pointer-events:none;margin:0}
-  .hlmirror mark{color:transparent;background:rgba(51,102,204,.20);border-radius:2px}
+  .hlmirror{position:absolute;inset:0;z-index:0;overflow:hidden;border-style:solid;border-color:transparent;border-radius:0;box-sizing:border-box;color:transparent;pointer-events:none;margin:0}
+  .hlmirror mark{color:transparent;background:rgba(51,102,204,.20);border-radius:0}
   .hlmirror mark.lead{background:rgba(233,30,99,.22)}
   .mapnote{margin-top:6px;font-size:10.5px;color:var(--mut);line-height:1.3}
   /* keyboard target: the gestures preventDefault (killing implicit focus) and
      focus this box by hand — show where Del / ⌘A / arrows will land */
   #mPrevBox:focus{outline:none;box-shadow:0 0 0 2px rgba(51,102,204,.35)}
-  .hintline kbd{font:10px var(--mono);border:1px solid var(--line2);border-radius:3px;padding:0 3px;background:#fff}
+  .hintline kbd{font:10px var(--mono);border:1px solid var(--line2);border-radius:0;padding:0 3px;background:#fff}
   /* Point-editor legend. It lives on its OWN full-width row under the two-column
      grid, not inside the 312px left column. Measured: 29 lines / 441px at 312px
      wide, 19 lines / 295px at 764px — with MORE text than before, not less. That
@@ -267,9 +267,9 @@
   #mPtsHint dt{color:var(--dim);font-weight:600;text-align:right}
   #mPtsHint dd{margin:0}
   .gridopt{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--dim);margin-top:6px}
-  .drop{margin-top:8px;border:1.5px dashed var(--line2);border-radius:8px;padding:10px;text-align:center;color:var(--mut);font-size:11.5px}
+  .drop{margin-top:8px;border:1.5px dashed var(--line2);border-radius:0;padding:10px;text-align:center;color:var(--mut);font-size:11.5px}
   .drop.over{border-color:var(--accent);background:#f3f7ff;color:var(--accent)}
-  .merr{display:none;font-size:11px;color:#B91C1C;background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:5px 8px;margin-top:8px}
+  .merr{display:none;font-size:11px;color:#B91C1C;background:#FEF2F2;border:1px solid #FECACA;border-radius:0;padding:5px 8px;margin-top:8px}
   .merr.show{display:block}
   /* STICKY, because .modal is max-height:92vh with overflow:auto and its content
      has been taller than that since the point-editor legend landed (measured
@@ -278,7 +278,7 @@
      commit path, so a user who cannot see it loses the whole session to Cancel. */
   .mactions{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line);position:sticky;bottom:0;background:#fff;z-index:2}
   .mactions .spacer{flex:1}
-  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1f2430;color:#fff;padding:9px 16px;border-radius:8px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:60;max-width:80vw;text-align:center}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1f2430;color:#fff;padding:9px 16px;border-radius:0;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:60;max-width:80vw;text-align:center}
   .toast.show{opacity:1}
 </style>
 </head>

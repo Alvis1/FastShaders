@@ -15,6 +15,7 @@ import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { evaluateEdgeSource, getEdgeOutputShape, getUnwrappedEdge } from '@/engine/cpuEvaluator';
 import { bezierControlOffset, radialControlPoint, splinePath } from './bezierGeometry';
 import { EdgeInfoCard } from './EdgeInfoCard';
+import { nodeRisePx } from '../nodes/nodeFrame';
 
 type Waypoint = { x: number; y: number };
 
@@ -108,6 +109,23 @@ function EdgeWaypointHandles({
 
 const GAP = 3.5 / 3;
 
+/** A selected wire simply gets THICKER — no shadow, no glow, no colour change.
+ *
+ *  Deliberately NOT the elevation shadow the node cards use: a wire is a line,
+ *  not a plate, so an offset copy of it is just another line, and at any offset
+ *  large enough to see it stops reading as that wire's shadow and starts
+ *  reading as a second wire beside it. Weight is the property a line actually
+ *  has to spend.
+ *
+ *  The boost scales the WHOLE ribbon — both the stroke width and the
+ *  per-channel perpendicular offsets (see getOffsets) — rather than the stroke
+ *  alone. Multi-channel lines sit GAP (1.167px) apart and are already up to
+ *  1.2px wide, so thickening the strokes on their own would close those gaps
+ *  and fuse a 4-channel ribbon into one solid band: the selection highlight
+ *  would destroy the channel count it is highlighting. Scaling both keeps the
+ *  ribbon geometrically similar, just bigger. */
+const SELECTED_EDGE_BOOST = 1.8;
+
 function getOffsets(count: number): number[] {
   if (count <= 1) return [0];
   const offsets: number[] = [];
@@ -168,16 +186,59 @@ export function TypedEdge({
   source,
   target,
   sourceHandleId,
-  sourceX,
-  sourceY,
-  targetX,
-  targetY,
+  sourceX: rawSourceX,
+  sourceY: rawSourceY,
+  targetX: rawTargetX,
+  targetY: rawTargetY,
   sourcePosition,
   targetPosition,
   selected,
   data,
 }: EdgeProps<AppEdge>) {
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
+
+  /**
+   * A LIFTED node (hovered, selected, or holding an open settings menu) moves
+   * by --fs-node-rise toward the light — and its SOCKETS move with it, while
+   * React Flow keeps computing this edge's endpoints from the node's POSITION,
+   * which a CSS translate never touches. Left alone, every wire on a lifted
+   * node hangs a few px off its port and reads as unplugged.
+   *
+   * So each endpoint is offset by the same rise when ITS node is lifted — only
+   * that end, because the other node has not moved.
+   *
+   * Both selectors fold to a small NUMBER, which is what keeps this cheap: the
+   * result is 0 for every edge that does not touch the node in question, so a
+   * hover or a selection change re-renders the one or two edges that actually
+   * moved and nothing else. (Same reasoning as `isColorSource` below, and the
+   * reason neither reads the app store's whole `nodes` array — that array's
+   * identity changes on every drag frame.)
+   */
+  const liftedBySelection = useReactFlowStore(
+    useCallback(
+      (s: ReactFlowState) =>
+        (s.nodeLookup.get(source)?.selected ? 1 : 0) | (s.nodeLookup.get(target)?.selected ? 2 : 0),
+      [source, target],
+    ),
+  );
+  // Hover and "its settings menu is open" both live in the app store; folded
+  // into ONE subscription so an edge carries two, not three.
+  const liftedByPointer = useAppStore(
+    useCallback(
+      (s: { hoveredNodeId: string | null; contextMenu: { open: boolean; nodeId?: string } }) => {
+        const menuId = s.contextMenu.open ? s.contextMenu.nodeId : undefined;
+        const lifted = (id: string) => s.hoveredNodeId === id || menuId === id;
+        return (lifted(source) ? 1 : 0) | (lifted(target) ? 2 : 0);
+      },
+      [source, target],
+    ),
+  );
+  const liftMask = liftedBySelection | liftedByPointer;
+  const rise = liftMask === 0 ? 0 : nodeRisePx();
+  const sourceX = rawSourceX + (liftMask & 1 ? rise : 0);
+  const sourceY = rawSourceY + (liftMask & 1 ? rise : 0);
+  const targetX = rawTargetX + (liftMask & 2 ? rise : 0);
+  const targetY = rawTargetY + (liftMask & 2 ? rise : 0);
 
   // Color-circle sources get a radial exit tangent (perpendicular to the
   // circle) instead of a cardinal one — see getRadialBezierPath. The radial
@@ -264,9 +325,13 @@ export function TypedEdge({
     count === 1
       ? [getContrastColor(nodeEditorBgColor)]
       : COUNT_EDGE_COLORS[count] ?? COUNT_EDGE_COLORS[1];
-  const offsets = getOffsets(count);
-  // Thinner lines when more channels
-  const strokeWidth = count >= 4 ? 0.8 : count >= 3 ? 1 : count >= 2 ? 1.2 : selected ? 2 : 1.5;
+  // Thinner lines when more channels; a selected edge scales the whole ribbon
+  // (widths AND offsets, see SELECTED_EDGE_BOOST) so it reads as the same wire,
+  // drawn heavier. Previously only the 1-channel case thickened, which left a
+  // selected multi-channel edge marked by nothing but an opacity nudge.
+  const boost = selected ? SELECTED_EDGE_BOOST : 1;
+  const offsets = getOffsets(count).map((d) => d * boost);
+  const strokeWidth = (count >= 4 ? 0.8 : count >= 3 ? 1 : count >= 2 ? 1.2 : 1.5) * boost;
 
   const [px, py] = perp(sourceX, sourceY, targetX, targetY);
   const waypoints = (data?.waypoints ?? []) as Waypoint[];
@@ -401,7 +466,6 @@ export function TypedEdge({
             strokeWidth={strokeWidth}
             strokeDasharray={count > 1 ? '4 0.5' : undefined}
             opacity={selected ? 1 : 0.9}
-            filter={selected ? `drop-shadow(0 0 3px ${lineColor})` : undefined}
             style={{ pointerEvents: 'none' }}
           />
         );

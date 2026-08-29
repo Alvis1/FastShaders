@@ -13,6 +13,44 @@
   position: relative;
 }
 
+/* THE TOOLBAR'S DROP SHADOW — drawn here, by the pane that receives it, rather
+   than by the toolbar that casts it.
+
+   The toolbar is the app's top plate and should look like one. But it spans the
+   full window and has no idea where the column seam falls, and the one surface
+   that must NOT take the shadow is the 3D preview: a hard black band across the
+   top of the viewport reads as part of the rendered scene rather than as chrome
+   above it. The obvious implementation — shadow on the toolbar, preview raised
+   over it by z-index — was tried and is a trap. Giving the toolbar a z-index
+   makes it a STACKING CONTEXT, which seals its own popovers inside: the
+   About/Contact panel fell behind the canvas's NEW button and the "Download
+   app" dropdown disappeared behind the preview entirely (see Toolbar.css).
+
+   Scoping the shadow to this pane needs no z-index on the toolbar, no opt-out
+   to keep in sync, and cannot reach the preview by construction — the preview
+   is the TOP pane of the OTHER column, so "the left column only" and
+   "everywhere except the 3D view" are the same region.
+
+   The geometry restates `--shadow-sm` (2px down, 2px right, no blur): the strip
+   is 2px tall, starts 2px in from the left, and ends at the column seam. Its
+   COLOUR is not restated — `--shadow-sm-color` is a token precisely so this
+   strip darkens with the theme exactly as every real box-shadow does. */
+.app-layout__left::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 2px;
+  right: 0;
+  height: 2px;
+  background: var(--shadow-sm-color);
+  /* Above the node editor, which is a positioned (`position: relative`) sibling
+     LATER in DOM order and would otherwise paint over it. Deliberately below
+     `--z-controls`: the canvas chrome starts 12px down and never meets this
+     strip, so there is nothing to win against and no reason to outrank it. */
+  z-index: 1;
+  pointer-events: none;
+}
+
 .app-layout__node-editor {
   flex: 1;
   overflow: hidden;

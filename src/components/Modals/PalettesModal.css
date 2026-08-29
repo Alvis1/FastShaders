@@ -209,7 +209,7 @@
   flex: none;
   width: 22px;
   height: 22px;
-  border-radius: 3px;
+  border-radius: 0;
   /* A neutral hairline, or a white/near-white swatch disappears into the row. */
   border: 1px solid var(--border-default);
 }
@@ -234,14 +234,20 @@
 }
 
 .palettes-modal__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
   font-family: var(--font-sans);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 600;
+  line-height: 1;
   color: var(--text-primary);
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-sm);
-  padding: 4px 8px;
+  padding: 0 8px;
   cursor: pointer;
   transition: border-color var(--transition-fast), color var(--transition-fast),
     background var(--transition-fast);
@@ -317,7 +323,7 @@
   padding: 0;
   background: none;
   border: 1px solid var(--border-default);
-  border-radius: 3px;
+  border-radius: 0;
   cursor: pointer;
 }
 

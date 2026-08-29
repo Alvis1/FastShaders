@@ -18,6 +18,10 @@ import { useAppStore } from '@/store/useAppStore';
 import { readPersisted, usePersistedState } from '@/hooks/usePersistedState';
 import { beginDragChrome } from '@/utils/dragChrome';
 import { setAssetBarHeight } from '@/utils/assetBarHeight';
+import {
+  registerAssetBarPush, cornerGripElement, gripClearance, readGripMetrics,
+  maxBarHeightForCross, maxCrossForBarHeight, CROSS_MIN_TOP_RATIO,
+} from '@/utils/splitClearance';
 import { formatCategoryLabel, t } from '@/i18n';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
@@ -147,6 +151,10 @@ const BAR_DEFAULT_SCALE = 1.35;
 const BAR_CANVAS_RESERVE = 120;
 /** Floor when the tabs row hasn't been measured yet (its own height). */
 const BAR_MIN_H = 28;
+
+/** How long a run of discrete resizes (wheel notches, held arrows) keeps its
+ *  origin for the row-seam push — see `discreteStartCross`. */
+const DISCRETE_RESIZE_IDLE_MS = 400;
 /**
  * Vertical chrome that shares the strip with a tile but is NOT part of the
  * measured tile box: the strip's own padding-top (--space-1) + padding-bottom
@@ -159,9 +167,22 @@ const BAR_MIN_H = 28;
  */
 const STRIP_CHROME_V = 4 + 8 + 8;
 
-/** Tile scale for a bar height, given the measured tabs row + tallest tile. */
-const zoomForHeight = (h: number, tabsH: number, tileH: number) =>
-  clampZoom((h - tabsH) / ((tileH || TILE_BASE_FALLBACK_H) + STRIP_CHROME_V));
+/**
+ * Tile scale for a bar height, given the chrome above the strip and the tallest
+ * tile.
+ *
+ * `chromeH` is the tabs row PLUS the bar's own top border — the window seam.
+ * `h` is a BORDER-BOX height (the inline `height` the drag writes, under the
+ * app-wide `box-sizing: border-box`), so the seam is inside it and has to come
+ * back out; leaving it in over-claims the strip by exactly the seam width and
+ * the tallest tile is then clipped by that much, because the strip is
+ * `overflow-y: hidden`. That is the same defect STRIP_CHROME_V documents having
+ * already caused once. It only became visible when the seam went from 2px to
+ * 4px to match the SplitPane dividers — and it is 12px on coarse pointers,
+ * where the tiles are smallest to begin with.
+ */
+const zoomForHeight = (h: number, chromeH: number, tileH: number) =>
+  clampZoom((h - chromeH) / ((tileH || TILE_BASE_FALLBACK_H) + STRIP_CHROME_V));
 
 // Module-scope (stable identity) per the readPersisted/usePersistedState
 // contract. validateCollapsed + validateZoom now exist ONLY to migrate the two
@@ -221,6 +242,8 @@ export const ContentBrowser = memo(function ContentBrowser() {
     return () => window.clearTimeout(t);
   }, [barHeight]);
   // Measured layout constants the scale depends on (see zoomForHeight).
+  // `tabsH` is the whole chrome above the tile strip — the tabs row AND the
+  // bar's top border/seam — not the tabs row alone.
   const [tabsH, setTabsH] = useState(TABS_FALLBACK_H);
   const [tileH, setTileH] = useState(TILE_BASE_FALLBACK_H);
   /** False until the first real tile measurement replaces the fallback. */
@@ -274,10 +297,20 @@ export const ContentBrowser = memo(function ContentBrowser() {
       // Mid-drag: the DOM zoom is paintHeight's imperative value while
       // metricsRef.zoom is still the committed state, so dividing one by the
       // other would bake a bogus (inflated) high-water tileH. The gesture
-      // owns the strip until pointerup; the commit render re-measures.
-      if (resizeRef.current) return;
+      // owns the strip until pointerup; the commit render re-measures. The
+      // corner grip's push paints through the same path, so it counts too.
+      if (resizeRef.current || pushedRef.current) return;
+      // Tabs row + the bar's top border. `clientHeight` excludes borders while
+      // the rect includes them, so their difference IS the seam — measured
+      // rather than read from --fs-seam, so it needs no knowledge of the token
+      // or of the coarse-pointer bump.
+      const rootEl = rootRef.current;
+      const seam = rootEl ? Math.max(0, rootEl.getBoundingClientRect().height - rootEl.clientHeight) : 0;
       const nextTabs = tabsRef.current?.offsetHeight;
-      if (nextTabs && Math.abs(nextTabs - metricsRef.current.tabsH) > 1) setTabsH(nextTabs);
+      if (nextTabs) {
+        const nextChrome = nextTabs + seam;
+        if (Math.abs(nextChrome - metricsRef.current.tabsH) > 1) setTabsH(nextChrome);
+      }
       const z = metricsRef.current.zoom || 1;
       let tallest = 0;
       for (const child of Array.from(strip.children) as HTMLElement[]) {
@@ -315,7 +348,21 @@ export const ContentBrowser = memo(function ContentBrowser() {
     max: number;
     pending: number;
     raf: number;
+    /** The span both columns share, and the clearance the corner grip needs
+     *  below the row seam — measured once at pointerdown (see the push below). */
+    span: number;
+    clearance: number;
+    /** The row split's ratio when the gesture began. The seam is pushed UP from
+     *  here and returns to it if the bar shrinks again within the same drag — the
+     *  mirror of SplitPane's `barH`. */
+    startCross: number;
   } | null>(null);
+  /** True while the CORNER GRIP is painting a height onto this bar (the push in
+   *  the other direction). Same "the gesture owns the height" meaning as
+   *  `resizeRef`, which is why every guard tests both. */
+  const pushedRef = useRef(false);
+  /** The push gesture's bar bounds, measured once (see the handle below). */
+  const pushBoundsRef = useRef<{ min: number; max: number } | null>(null);
   /** This gesture's dragChrome end call (idempotent; no-op before any drag). */
   const endDragChrome = useRef<() => void>(() => {});
 
@@ -372,13 +419,83 @@ export const ContentBrowser = memo(function ContentBrowser() {
    * bar would grow without the tiles growing, i.e. pure dead space.
    */
   const measureBounds = useCallback(() => {
-    // Floor at the tabs row: dragging fully down leaves tabs + grip, which is
-    // what the removed ▾ collapse used to produce.
-    const min = tabsRef.current?.offsetHeight || BAR_MIN_H;
+    // Floor at the tabs row PLUS the seam: dragging fully down leaves the
+    // window edge, the tabs and the grip, which is what the removed ▾ collapse
+    // used to produce. The seam has to be in the floor because the height being
+    // bounded is a border-box one — without it the border eats into the tabs
+    // row at the minimum, and the row does not shrink (flex-shrink: 0), so it
+    // overflows the bar instead.
+    const rootEl = rootRef.current;
+    const seam = rootEl ? Math.max(0, rootEl.getBoundingClientRect().height - rootEl.clientHeight) : 0;
+    const min = (tabsRef.current?.offsetHeight || BAR_MIN_H) + seam;
     const availableH = rootRef.current?.parentElement?.clientHeight ?? window.innerHeight;
     const { tabsH: tb, tileH: tl } = metricsRef.current;
     const max = Math.min(availableH - BAR_CANVAS_RESERVE, tb + (tl + STRIP_CHROME_V) * ZOOM_MAX);
     return { min, max: Math.max(min, max) };
+  }, []);
+
+  /**
+   * The span both columns share, and how much room the corner grip needs below
+   * the row seam. Measured once per gesture rather than per frame: neither can
+   * change while a pointer is captured (the window cannot be resized mid-drag,
+   * and the grip's own size is token-driven).
+   */
+  const measureClearance = useCallback(() => ({
+    span: rootRef.current?.parentElement?.clientHeight ?? 0,
+    clearance: gripClearance(readGripMetrics(cornerGripElement())),
+  }), []);
+
+  /**
+   * Take the row seam (the 3D-preview / code split) up with the bar, so the
+   * corner grip stays welded to it instead of clamping and detaching — the
+   * mirror of SplitPane's `pushAssetBar`.
+   *
+   * Returns the bar height that is actually reachable: once the seam is at its
+   * own floor there is nowhere left to push, and the BAR is what has to stop.
+   */
+  /**
+   * The row seam's ratio before the CURRENT RUN of discrete resizes began.
+   *
+   * The pointer drag gets this for free: it latches `startCross` at pointerdown
+   * and drops it at pointerup, which is what lets `pushRowSeam` put the seam
+   * back when the bar shrinks again inside one gesture. Wheel notches and arrow
+   * presses have no such bracket, and re-reading the live ratio each time makes
+   * that restore a NO-OP in one direction — notch N moves the seam to 0.43,
+   * notch N+1 takes 0.43 as its own origin, and `Math.min(startCross, …)` can
+   * never choose anything higher. The seam then ratchets up with no way back
+   * short of grabbing the corner grip, while the identical in-and-out done with
+   * this bar's own grip restores exactly.
+   *
+   * So a run latches on its first push and releases after a short idle — long
+   * enough to span a trackpad pinch stream or a held arrow key, short enough
+   * that a later, separate adjustment starts from where the user can see the
+   * seam actually is.
+   */
+  const discreteCrossRef = useRef<{ cross: number; timer: number } | null>(null);
+  const discreteStartCross = useCallback(() => {
+    const held = discreteCrossRef.current;
+    if (held) window.clearTimeout(held.timer);
+    const cross = held ? held.cross : useAppStore.getState().rightSplitRatio;
+    discreteCrossRef.current = {
+      cross,
+      timer: window.setTimeout(() => { discreteCrossRef.current = null; }, DISCRETE_RESIZE_IDLE_MS),
+    };
+    return cross;
+  }, []);
+  useEffect(() => () => {
+    if (discreteCrossRef.current) window.clearTimeout(discreteCrossRef.current.timer);
+  }, []);
+
+  const pushRowSeam = useCallback((h: number, span: number, clearance: number, startCross: number) => {
+    if (!(span > 0)) return h;
+    const capped = Math.min(h, maxBarHeightForCross(CROSS_MIN_TOP_RATIO, span, clearance));
+    const cross = Math.max(
+      CROSS_MIN_TOP_RATIO,
+      Math.min(startCross, maxCrossForBarHeight(capped, span, clearance)),
+    );
+    const store = useAppStore.getState();
+    if (cross !== store.rightSplitRatio) store.setRightSplitRatio(cross);
+    return capped;
   }, []);
 
   const handleResizeDown = useCallback((e: React.PointerEvent) => {
@@ -392,10 +509,14 @@ export const ContentBrowser = memo(function ContentBrowser() {
     e.preventDefault();
     const { min, max } = measureBounds();
     const startH = root.getBoundingClientRect().height;
-    resizeRef.current = { startY: e.clientY, startH, min, max, pending: startH, raf: 0 };
+    const { span, clearance } = measureClearance();
+    resizeRef.current = {
+      startY: e.clientY, startH, min, max, pending: startH, raf: 0,
+      span, clearance, startCross: useAppStore.getState().rightSplitRatio,
+    };
     e.currentTarget.setPointerCapture(e.pointerId);
     endDragChrome.current = beginDragChrome('row-resize');
-  }, [measureBounds]);
+  }, [measureBounds, measureClearance]);
 
   /**
    * Re-clamp to the pane. The CSS max-height caps the RENDERED box, but the
@@ -408,19 +529,41 @@ export const ContentBrowser = memo(function ContentBrowser() {
     const parent = rootRef.current?.parentElement;
     if (!parent) return;
     const ro = new ResizeObserver(() => {
-      if (resizeRef.current) return; // mid-drag: the gesture owns the height
+      // Mid-gesture the height is owned by the drag (either this bar's own grip
+      // or the corner grip pushing it), and a state write here would fight it.
+      if (resizeRef.current || pushedRef.current) return;
       const { min, max } = measureBounds();
-      setBarHeight((h) => (h > max ? Math.max(min, max) : h));
+      // A SHRINKING window moves the row seam up proportionally (it is a ratio)
+      // while the grip's clearance stays a fixed number of pixels — so a bar
+      // that fitted a moment ago can stop fitting with no gesture involved.
+      // Clamp rather than push: a window resize is not a deliberate request to
+      // re-proportion the right-hand column.
+      const { span, clearance } = measureClearance();
+      const ceil = span > 0
+        ? Math.min(max, maxBarHeightForCross(useAppStore.getState().rightSplitRatio, span, clearance))
+        : max;
+      setBarHeight((h) => (h > ceil ? Math.max(min, ceil) : h));
     });
     ro.observe(parent);
     return () => ro.disconnect();
-  }, [measureBounds]);
+  }, [measureBounds, measureClearance]);
 
   /** Ctrl/Cmd+wheel (and macOS trackpad pinch) resizes the bar. */
   const changeHeight = useCallback((factor: number) => {
     const { min, max } = measureBounds();
-    setBarHeight((h) => Math.max(min, Math.min(max, h * factor)));
-  }, [measureBounds]);
+    const { span, clearance } = measureClearance();
+    // Read the live height from the DOM rather than from a `setBarHeight`
+    // updater: pushing the row seam WRITES to the store, and a state updater
+    // must stay pure (React calls it twice under StrictMode, which would push
+    // the seam twice from one wheel notch).
+    const current = rootRef.current?.getBoundingClientRect().height;
+    if (current == null) return;
+    const want = Math.max(min, Math.min(max, current * factor));
+    // A wheel resize is as deliberate as a drag, so it pushes the row seam too —
+    // otherwise the same bar height would be reachable one way and not the
+    // other, which reads as the wheel being broken near the limit.
+    setBarHeight(Math.max(min, pushRowSeam(want, span, clearance, discreteStartCross())));
+  }, [measureBounds, measureClearance, pushRowSeam, discreteStartCross]);
 
   const handleResizeMove = useCallback((e: React.PointerEvent) => {
     const d = resizeRef.current;
@@ -435,9 +578,58 @@ export const ContentBrowser = memo(function ContentBrowser() {
       const live = resizeRef.current;
       if (!live) return;
       live.raf = 0;
+      // The seam push belongs INSIDE the coalescing, not beside it: it is a
+      // synchronous localStorage write plus a zustand `set` that re-renders
+      // AppLayout, both SplitPanes and the whole NodeEditor tree — by far the
+      // more expensive of this frame's two writes, and the one the comment
+      // above is really about. Run per pointermove it would fire two or three
+      // times per displayed frame on a 120Hz pointer.
+      live.pending = Math.max(
+        live.min,
+        pushRowSeam(live.pending, live.span, live.clearance, live.startCross),
+      );
       paintHeight(live.pending);
     });
-  }, [paintHeight]);
+  }, [paintHeight, pushRowSeam]);
+
+  /**
+   * The other half of the coupling: let the CORNER GRIP shrink this bar so it
+   * never has to clamp and detach from its own seam (utils/splitClearance.ts).
+   *
+   * `push` deliberately goes through `paintHeight`, the same imperative path
+   * this bar's own drag uses — the height drives the tile strip's inherited
+   * `zoom`, so a React state write per pointermove would re-lay-out ~1,700
+   * elements a frame. `commit` bakes the final value in once, at pointerup.
+   */
+  useEffect(() => registerAssetBarPush({
+    height: () => rootRef.current?.getBoundingClientRect().height ?? 0,
+    push: (px) => {
+      // Bounds are measured once per push GESTURE, not per frame: `push` runs on
+      // every pointermove of the corner grip's drag, and re-measuring would
+      // interleave forced layout reads with the style writes of the frame
+      // before it — the thrash `paintHeight` is written to avoid.
+      const bounds = pushBoundsRef.current ?? (pushBoundsRef.current = measureBounds());
+      const clamped = Math.max(bounds.min, Math.min(bounds.max, px));
+      const current = rootRef.current?.getBoundingClientRect().height ?? clamped;
+      // The common case by far: the grip is nowhere near the bar and there is
+      // nothing to move. Costing that nothing is what keeps an ordinary corner
+      // drag exactly as cheap as it was before the coupling existed.
+      if (Math.abs(clamped - current) < 0.5) return current;
+      pushedRef.current = true;
+      paintHeight(clamped);
+      return clamped;
+    },
+    commit: () => {
+      pushBoundsRef.current = null;
+      if (!pushedRef.current) return;
+      pushedRef.current = false;
+      // Read BEFORE dropping the transform, exactly as handleResizeUp does, so
+      // the committed number is the one that was on screen.
+      const finalH = rootRef.current?.getBoundingClientRect().height;
+      clearDragTransform();
+      if (finalH != null) setBarHeight(finalH);
+    },
+  }), [measureBounds, paintHeight, clearDragTransform]);
 
   const handleResizeUp = useCallback((e: React.PointerEvent) => {
     const d = resizeRef.current;
@@ -473,8 +665,20 @@ export const ContentBrowser = memo(function ContentBrowser() {
     else return;
     e.preventDefault();
     const { min, max } = measureBounds();
-    setBarHeight((h) => Math.max(min, Math.min(max, h + delta)));
-  }, [measureBounds]);
+    const { span, clearance } = measureClearance();
+    // The grip is a real tab stop, so this is a first-class way to resize the
+    // bar and has to take the row seam with it exactly as the drag and the
+    // wheel do — without the push, one press of Home grows the bar straight
+    // through the clearance boundary and the CSS backstop strands the corner
+    // grip mid-canvas, which is the whole failure splitClearance.ts removes.
+    // Live height off the DOM, not a `setBarHeight` updater: pushRowSeam writes
+    // to the store and an updater must stay pure (see changeHeight).
+    // Home/End pass ±Infinity, which the clamp below resolves to max/min.
+    const current = rootRef.current?.getBoundingClientRect().height;
+    if (current == null) return;
+    const want = Math.max(min, Math.min(max, current + delta));
+    setBarHeight(Math.max(min, pushRowSeam(want, span, clearance, discreteStartCross())));
+  }, [measureBounds, measureClearance, pushRowSeam, discreteStartCross]);
 
   // Unmounting mid-drag would otherwise strand the cursor override and the
   // app-wide selection block with nothing left to clear them.
@@ -536,19 +740,8 @@ export const ContentBrowser = memo(function ContentBrowser() {
   }, [savedGroups, q]);
 
   /**
-   * Textures read simplest-first, by MEMBER COUNT: a texture is a graph you are
-   * going to open and read, so "how much is in it" predicts the effort. `nodes`
-   * includes the group container, so the +1 is constant and doesn't affect the
-   * order. Name breaks ties so equal-sized assets keep a stable order.
-   */
-  const bySize = <T extends { nodes: { type?: string }[]; name: string }>(a: T, b: T) => {
-    // Count only shader nodes — the frame and the explainer note are chrome.
-    const n = (x: T) => x.nodes.filter((k) => k.type !== 'group' && k.type !== 'note').length;
-    return n(a) - n(b) || a.name.localeCompare(b.name);
-  };
-
-  /**
-   * Presets read cheapest-first, on the SAME number their tile prints.
+   * BOTH ready-made strips read cheapest-first, on the SAME number their tile
+   * prints.
    *
    * `totalCost` is what `AssetCostBadge` draws, so the strip reads as a price
    * ladder you can scan — which is the point of a library whose whole pedagogy
@@ -562,6 +755,15 @@ export const ContentBrowser = memo(function ContentBrowser() {
    * This orders ACROSS tiers, so the strip is no longer the easy->advanced
    * ladder `PRESET_ENTRIES` still encodes — the tier survives in each preset's
    * card blurb and its in-frame note, not in the strip position.
+   *
+   * Textures used to sort by MEMBER COUNT instead, on the reasoning that a
+   * texture is a graph you open and read so "how much is in it" predicts the
+   * effort. Two strips sorted by two different rules is the thing that was
+   * actually confusing: the number printed on a texture tile is its PRICE, and
+   * a strip ordered by something the tile does not show reads as unordered.
+   * They are one ladder now (Grid 22 -> Crumpled Fabric 510), and node count
+   * turns out to be a poor proxy for it anyway — Static Noise is the smallest
+   * texture at 16 nodes and the third most expensive of the cheap half.
    */
   const byCost = <T extends { totalCost: number; name: string }>(a: T, b: T) =>
     a.totalCost - b.totalCost || a.name.localeCompare(b.name);
@@ -575,7 +777,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // open. A live search needs them too — matching textures surface in the
     // generic strip (see `items` below).
     if (activeCategory !== 'texture' && !q) return [];
-    const all = getBuiltinTextures().filter((t) => !isTextureHiddenFromEditor(t.id)).sort(bySize);
+    const all = getBuiltinTextures().filter((t) => !isTextureHiddenFromEditor(t.id)).sort(byCost);
     if (!q) return all;
     return all.filter(
       (t) =>
@@ -689,7 +891,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
       // canvas previews are always torn down.
       onDragEnd={endHtml5TileDrag}
     >
-      {/* Zero-height anchor pinned to the bar's top edge; the grip tab hangs
+      {/* Seam-height anchor pinned to the bar's top edge; the grip tab hangs
           off it and is the ONLY drag target. Dragging is now the only
           tile-size control (it replaced the −/+ zoom pair and the ▾ collapse). */}
       <div className="content-browser__resizer">

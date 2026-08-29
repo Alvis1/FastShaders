@@ -154,3 +154,19 @@
 :root[data-theme='dark'] .eval-done__warn {
   color: #f2938c;
 }
+
+/* Consent panel header: title left, language switch right. The dialog is
+   modal, so this is the only reachable language control while it is open. */
+.eval-consent__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.eval-consent__lang {
+  flex: none;
+  min-width: 34px;
+  padding: 4px 8px;
+  font-weight: 700;
+}

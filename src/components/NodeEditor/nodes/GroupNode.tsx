@@ -92,7 +92,7 @@ export const GroupNode = memo(function GroupNode({
           color={color}
           minWidth={MIN_GROUP_W}
           minHeight={MIN_GROUP_H}
-          style={{ width: 15, height: 15, borderRadius: 3, border: '2px solid #fff' }}
+          style={{ width: 15, height: 15, borderRadius: 0, border: '2px solid #fff' }}
         />
       )}
       <div

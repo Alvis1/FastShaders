@@ -35,6 +35,7 @@ import {
   AUD_PAD_X,
 } from './audioGeometry';
 import './AudioInputNode.css';
+import { NODE_BORDER_WIDTH } from './nodeFrame';
 
 /**
  * The Audio Input node — reacts to sound the machine is already PLAYING.
@@ -148,10 +149,9 @@ export const AudioInputNode = memo(function AudioInputNode({ id, data, selected 
       style={
         {
           background: 'var(--node-bg)',
-          border: `1.5px solid ${catHex}`,
+          border: `${NODE_BORDER_WIDTH} solid ${catHex}`,
           transform: `scale(${costScale})`,
           transformOrigin: 'top left',
-          '--node-cat': catHex,
         } as CSSProperties
       }
     >

@@ -26,7 +26,14 @@ import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges, unwrapCollapsedGr
 import { safeJsonReviver } from '@/utils/safeJson';
 import { authoredUniformChange } from '@/utils/uniformOverride';
 import { normalizeChainOperands } from '@/utils/chainOperands';
-import { nodeCostPoints, setCostOverrides, computeReachableCost, sanitizeCostMap } from '@/utils/nodeCost';
+import { nodeCostPoints, computeReachableCost } from '@/utils/nodeCost';
+// From the LEAF cost table, not from nodeCost: both of these are called at
+// MODULE SCOPE below (loadCostProfiles + the boot setCostOverrides), and
+// nodeCost sits in an import cycle that runs back through this file — so
+// reaching them through it re-entered a half-initialised module and threw a
+// TDZ ReferenceError depending on which module the entry point hit first.
+// costTable.ts imports nothing and therefore can never be caught mid-init.
+import { setCostOverrides, sanitizeCostMap } from '@/utils/costTable';
 import {
   type ParsedCostFile, type CostProfile, profileFromParsed, sanitizeCostMeta, createManualProfile,
 } from '@/utils/costOverride';
@@ -873,6 +880,22 @@ interface AppState {
 
   // UI
   contextMenu: ContextMenuState;
+  /**
+   * The node the pointer is currently over, or null.
+   *
+   * Transient UI state — never persisted, never in history — and it exists for
+   * exactly one reason: a hovered node LIFTS (it moves by --fs-node-rise), and
+   * the wires attached to it have to move with it or they visibly detach from
+   * their sockets. React Flow computes edge endpoints from node POSITIONS and
+   * knows nothing about a CSS translate, so TypedEdge reads this and offsets
+   * the matching endpoint itself.
+   *
+   * Deliberately the node ID and not a boolean-per-edge: every edge subscribes
+   * with a selector that folds it to a small number ("is my source and/or my
+   * target the hovered node"), which is 0 for every edge but the one or two
+   * that touch it — so a hover re-renders those and nothing else.
+   */
+  hoveredNodeId: string | null;
   /** Queue of over-wide CSV drops awaiting a user decision (shown one at a time). */
   pendingCsvImports: PendingCsvImport[];
   /** Queue of limit/storage notices awaiting acknowledgement (LimitModal). */
@@ -1124,6 +1147,7 @@ interface AppState {
   // UI actions
   openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string, materialIndex?: number) => void;
   closeContextMenu: () => void;
+  setHoveredNode: (id: string | null) => void;
   /** Add a CSV import awaiting a decision to the queue. */
   enqueueCsvImport: (item: PendingCsvImport) => void;
   /** Resolve the head of the CSV-import queue and advance to the next. */
@@ -1232,6 +1256,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   future: [],
   isUndoRedo: false,
   contextMenu: { open: false, x: 0, y: 0, type: 'canvas' },
+  hoveredNodeId: null,
   pendingCsvImports: [],
   pendingLimitNotices: [],
   ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
@@ -1259,7 +1284,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
       ? loadString('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK)
       : loadString('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
   codeEditorTheme: (loadString('fs:codeEditorTheme', 'vs') === 'vs-dark' ? 'vs-dark' : 'vs'),
-  language: (loadString('fs:lang', 'en') === 'lv' ? 'lv' : 'en'),
+  // Latvian is the DEFAULT (this is a Latvian research project and the user
+  // study runs in Latvian); English is one click away on the toolbar's EN
+  // button. Only a fresh browser gets the default — a stored `fs:lang` from
+  // before this change keeps whatever the user last chose.
+  language: (loadString('fs:lang', 'lv') === 'en' ? 'en' : 'lv'),
   savedGroups: loadSavedGroups(),
   previewMesh: null,
   previewMeshInventory: null,
@@ -1841,6 +1870,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   closeContextMenu: () =>
     set({ contextMenu: { open: false, x: 0, y: 0, type: 'canvas' } }),
+
+  // Guarded so an unchanged hover cannot notify: React Flow fires mouse-enter
+  // per node crossing, and every edge in the graph runs its selector on each
+  // notify.
+  setHoveredNode: (id) => {
+    if (get().hoveredNodeId !== id) set({ hoveredNodeId: id });
+  },
 
   enqueueCsvImport: (item) =>
     set((state) => ({ pendingCsvImports: [...state.pendingCsvImports, item] })),

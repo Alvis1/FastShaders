@@ -31,7 +31,7 @@
 }
 
 .code-editor__drop-title {
-  font-size: 13px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -45,7 +45,12 @@
 /* Tab bar — sits above the editor, contains folder tabs + actions */
 .code-editor__tabbar {
   display: flex;
-  align-items: flex-end;
+  /* CENTRED, not flex-end. Every control in this row is now one --ctl-size box
+     — the two tabs on the left, Apply/Import on the right — so centring is what
+     puts their top and bottom edges on the same two lines. Under flex-end the
+     tabs hung 5px below the buttons, because the tabs bottom-anchored into the
+     bar's border while the actions row held itself up with its own padding. */
+  align-items: center;
   justify-content: space-between;
   /* The top padding is breathing room under the preview/code seam, which lands
      directly on this bar. Without it the Apply/Import buttons and the tab tops
@@ -53,34 +58,58 @@
      the seam reads as the 3D viewport's own bottom edge — content butting the
      line from below is the side that can afford to give way. Matches the 4px
      .code-editor__actions already puts under the buttons, so they sit evenly
-     in the bar. SplitPane's CROSS_MIN_PANE_PX (the collapsed-code floor) is
-     measured against the resulting bar height — move them together. */
-  padding: 4px var(--space-2) 0;
+     in the bar. The matching 4px BELOW is now the bar's own padding rather than
+     the actions row's, so the tabs get it too.
+
+     Bar height = 4 + --ctl-size (28) + 4 + the 1px bottom border = 37px, and
+     TWO other numbers are derived from that 37 and must move with it:
+     SplitPane's CROSS_MIN_PANE_PX (the collapsed-code floor, 37 + a small
+     margin) and controls.css's --fs-tabbar-h, which is what makes the resize
+     grip's bottom edge land exactly on this bar's bottom edge. */
+  padding: 4px var(--space-2);
   background: var(--bg-surface);
   flex-shrink: 0;
   border-bottom: 1px solid var(--border-subtle);
 }
 
-/* Folder-style tab row */
+/* Tab row. The old FOLDER metaphor is gone with the app's rounded corners: a
+   tab used to be a rounded-top plate pushed 1px down so its erased bottom
+   border merged it into the editor below. With square corners that reads as a
+   plain rectangle whose bottom edge is missing, so the tabs are now what they
+   look like — two segments of one control, the active one filled. */
 .code-editor__tabs {
   display: flex;
   gap: 0;
   position: relative;
-  bottom: -1px; /* overlap the tabbar border so active tab merges with content */
 }
 
+/* Same height and same font as every other button in the app (--ctl-size /
+   --font-size-sm), which is what the Apply/Import pair opposite them already
+   uses — they sit in the same row and used to be 10px type in a 23px box
+   beside 12px type in a 28px box. */
 .code-editor__tab {
-  padding: 5px 16px 4px;
-  font-size: var(--font-size-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
+  padding: 0 16px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
+  line-height: 1;
   color: var(--text-secondary);
   background: var(--bg-surface);
-  border: 1px solid transparent;
-  border-bottom: 1px solid var(--border-subtle);
-  border-radius: var(--border-radius-sm) var(--border-radius-sm) 0 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
   cursor: pointer;
   transition: color 0.15s, background 0.15s;
   position: relative;
+}
+
+/* Segmented: the pair shares one outline instead of drawing a doubled 2px
+   line down the middle. */
+.code-editor__tab + .code-editor__tab {
+  border-left: none;
 }
 
 .code-editor__tab:hover {
@@ -88,20 +117,20 @@
   background: rgba(0, 0, 0, 0.02);
 }
 
-/* Active tab: connected to the page below — border on top/sides, no bottom border */
+/* Active tab: the filled segment. */
 .code-editor__tab--active {
   color: var(--text-primary);
   background: var(--bg-panel);
-  border-color: var(--border-subtle);
-  border-bottom-color: var(--bg-panel); /* erase the bar's bottom border */
+  border-color: var(--border-strong);
 }
 
-/* Actions row (right side of tabbar) */
+/* Actions row (right side of tabbar). No bottom padding of its own any more —
+   the bar's symmetric 4px now holds every child off both edges, which is what
+   lets the buttons and the tabs share one centre line. */
 .code-editor__actions {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding-bottom: 4px;
 }
 
 .code-editor__errors {
@@ -121,9 +150,15 @@
 }
 
 .code-editor__save {
-  padding: 4px 14px;
-  font-size: var(--font-size-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
+  padding: 0 14px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
+  line-height: 1;
   color: white;
   background: var(--text-secondary);
   border: none;
@@ -137,9 +172,15 @@
 }
 
 .code-editor__action-btn {
-  padding: 4px 14px;
-  font-size: var(--font-size-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
+  padding: 0 14px;
+  font-size: var(--font-size-sm);
   font-weight: 600;
+  line-height: 1;
   color: white;
   background: var(--text-accent);
   border: none;

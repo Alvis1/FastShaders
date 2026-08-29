@@ -32,6 +32,7 @@ import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { MeshTargetPicker } from './MeshTargetPicker';
 import './OutputNode.css';
+import { NODE_BORDER_WIDTH } from './nodeFrame';
 
 /** Ports that belong to the pixel (fragment) shader section.
  *  Exported so the asset/overview card replica groups the channels the same
@@ -584,7 +585,7 @@ export const OutputNode = memo(function OutputNode({
   return (
     <div
       className={`output-node ${selected ? 'output-node--selected' : ''}`}
-      style={{ background: 'var(--node-bg)', border: '1.5px solid var(--cat-output)' }}
+      style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}
     >
       {/* Bare number, matching every ShaderNode badge — the unit is spelled out
           once on the CostBar meter rather than repeated on every node. */}

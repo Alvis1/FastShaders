@@ -34,6 +34,7 @@ import {
   MIC_PAD_X,
 } from './micGeometry';
 import './MicNode.css';
+import { NODE_BORDER_WIDTH } from './nodeFrame';
 
 /**
  * The Mic node — its own React Flow component rather than a ShaderNode.
@@ -148,10 +149,9 @@ export const MicNode = memo(function MicNode({ id, data, selected }: NodeProps<S
       style={
         {
           background: 'var(--node-bg)',
-          border: `1.5px solid ${catHex}`,
+          border: `${NODE_BORDER_WIDTH} solid ${catHex}`,
           transform: `scale(${costScale})`,
           transformOrigin: 'top left',
-          '--node-cat': catHex,
         } as CSSProperties
       }
     >
