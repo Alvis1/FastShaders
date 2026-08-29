@@ -324,8 +324,17 @@
      It used to add `--ctl-size + 8px` to clear the asset bar's resize grip,
      which hangs --ctl-size above the bar's top edge into the bottom of this
      pane. That grip sits at 90% (far right) and this bar at the left, so on any
-     ordinary pane width they are hundreds of px apart; they can only meet on a
-     very narrow one, where the bar has already wrapped to fill the width. */
+     ordinary pane width they are hundreds of px apart.
+
+     They can only meet on a very narrow pane — and there the wrap saves it.
+     MEASURED at the splitter's minimum (320px pane, draw cluster expanded, the
+     widest the bar ever gets): the two BOXES do overlap, bar [15,506,305,590]
+     against grip [266,579,310,607], but every one of the bar's 7 controls is
+     still hit-testable at its own bottom-right corner, because the bar has
+     wrapped to three rows by then and its bottom row does not reach that far
+     right. The overlap is padding against tab. So this stays a plain corner
+     inset; don't reintroduce a clearance margin for a collision that does not
+     land on anything. */
 }
 /* Import one-liner (top-centre). Deliberately NOT a modal: a conversion that
    fell back is information about the browser, not a decision — it must not
