@@ -362,6 +362,55 @@ describe('SUS sequence integrity', () => {
     expect(checks.find((c) => c.id === 'sus-in-one-sitting')?.ok).toBe(false);
   });
 
+  it('a 30s snapshot stream cannot mask a long gap in the questionnaire', () => {
+    // telemetry.ts logs a `snapshot` every 30 s while the tab is VISIBLE — half
+    // the 60 s threshold — so with snapshots counted the measured gap could
+    // never reach it and this check could only fire for a hidden tab. That is
+    // the exact inverse of what it is for: the scenario is "the participant
+    // walked away with the questionnaire open ON SCREEN". The original test
+    // passed only because its synthetic stream contained no snapshots.
+    const snaps: [string, number][] = [];
+    for (let t = 40_000; t < 320_000; t += 30_000) snaps.push(['snapshot', t]);
+    const ev = stream([
+      ...base,
+      ['sus-open', 10_000],
+      ...snaps,
+      ['sus-submit', 320_000],
+      ['session-end', 321_000],
+    ] as never);
+    const checks = runQualityChecks(ev, deriveSummary(ev, { idleThresholdMs: T }));
+    expect(checks.find((c) => c.id === 'sus-in-one-sitting')?.ok).toBe(false);
+  });
+
+  it('going Back to the editor and returning is not an integrity failure', () => {
+    // The questionnaire has a "Back to the editor" button, so open → fix one
+    // thing → reopen → submit is a supported flow. Keying the edit window on
+    // the FIRST sus-open reported every edit in between, showed the participant
+    // a red data-quality panel and made eval-analysis.mjs exit 1 for a package
+    // that is entirely fine.
+    const ev = stream([
+      ...base,
+      ['sus-open', 10_000],
+      ['node-add', 20_000, { nodeType: 'mix' }],
+      ['sus-open', 30_000],
+      ['sus-submit', 60_000],
+      ['session-end', 61_000],
+    ] as never);
+    const checks = runQualityChecks(ev, deriveSummary(ev, { idleThresholdMs: T }));
+    expect(checks.find((c) => c.id === 'no-edits-after-sus-open')?.ok).toBe(true);
+    // …but an edit after the LAST open still fails.
+    const ev2 = stream([
+      ...base,
+      ['sus-open', 10_000],
+      ['sus-open', 30_000],
+      ['node-add', 40_000, { nodeType: 'mix' }],
+      ['sus-submit', 60_000],
+      ['session-end', 61_000],
+    ] as never);
+    const checks2 = runQualityChecks(ev2, deriveSummary(ev2, { idleThresholdMs: T }));
+    expect(checks2.find((c) => c.id === 'no-edits-after-sus-open')?.ok).toBe(false);
+  });
+
   it('flags edits made after the questionnaire opened', () => {
     // The packaged shader would then not be the artifact that was rated.
     const ev = stream([...base, ['sus-open', 10_000], ['node-add', 20_000, { nodeType: 'mix' }], ['sus-submit', 40_000], ['session-end', 41_000]] as never);

@@ -33,6 +33,14 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# Serialize runs for one tag (a pushed tag plus a `workflow_dispatch` recovery
+# run of the SAME tag would otherwise both try to create the draft release).
+# Never cancel-in-progress: a half-cancelled release leaves a draft with some
+# assets uploaded and no job left to finish it.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -50,7 +58,9 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npx tsc --noEmit
+      # `npm run build`, not `tsc --noEmit` — see the note in ci.yml. A tag must
+      # not be able to reach the native build legs with a broken vite config.
+      - run: npm run build
       - run: npm test
       - name: Create draft release
         env:

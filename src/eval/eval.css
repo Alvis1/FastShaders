@@ -170,3 +170,85 @@
   padding: 4px 8px;
   font-weight: 700;
 }
+
+/* ---- Consent: the "what is collected" summary and its ? escape hatch ---- */
+
+/* Heading row so the ? sits beside the heading rather than after the list —
+   it has to be visible while the bullets are being read, since the bullets are
+   deliberately a SUMMARY and the ? is where the complete answer lives. */
+.eval-consent__what-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Mirrors .node-editor__import-note-btn exactly — the app already has one "?"
+   look (the image-conversion notice) and a second one would read as a
+   different kind of control. */
+.eval-consent__help {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.eval-consent__help:hover {
+  border-color: var(--border-focus);
+  color: var(--border-focus);
+}
+
+.eval-consent__help:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.eval-consent__note {
+  margin-top: var(--space-2);
+}
+
+/* A real <button>, not an <a>: it opens a dialog, it does not navigate. Styled
+   as a link because inside a sentence that is what "more detail here" looks
+   like, and a chrome button there would break the paragraph. */
+.eval-consent__inline-link {
+  padding: 0;
+  font: inherit;
+  color: var(--border-focus);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.eval-consent__inline-link:focus-visible {
+  outline: 1px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* ---- The disclosure dialog ---- */
+
+/* One step above --z-overlay: this opens FROM the consent dialog, which is
+   itself at --z-overlay, and a modal over a modal has to win. */
+.eval-disclosure__backdrop {
+  z-index: calc(var(--z-overlay) + 1);
+}
+
+/* The file list runs long, so it gets more room between items than the
+   consent's four-bullet summary needs. */
+.eval-disclosure__list {
+  gap: var(--space-2);
+}
+
+.eval-disclosure__body {
+  margin-top: var(--space-1);
+}

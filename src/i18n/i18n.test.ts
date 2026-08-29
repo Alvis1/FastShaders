@@ -100,6 +100,28 @@ describe('default UI language', () => {
     expect(line, 'the fs:lang fallback must be lv').toContain("'fs:lang', 'lv'");
   });
 
+  it("index.html's pre-paint guard resolves an absent fs:lang to lv, like the store", () => {
+    // The guard is the ONLY writer of <html lang> for a first-time visitor, and it
+    // used to default to 'en' while the store defaulted to 'lv' — so the default
+    // population of a Latvian-first app got a document advertising English (wrong
+    // screen-reader phonetics, a browser translate prompt, an English spellcheck
+    // dictionary over Latvian text input). WCAG 3.1.1 Level A. The two resolutions
+    // must stay mirror images; nothing at runtime fails when they drift.
+    const html = readFileSync(fileURLToPath(new URL('../../index.html', import.meta.url)), 'utf8');
+    const line = html.split('\n').find((l) => l.includes("setAttribute('lang'"));
+    expect(line, 'index.html no longer stamps <html lang>').toBeTruthy();
+    expect(line, "an absent fs:lang must resolve to 'lv'").toContain("=== 'en' ? 'en' : 'lv'");
+  });
+
+  it('the store applies <html lang> at init, not only on toggle', () => {
+    // `applyLangAttribute` had exactly ONE call site — inside setLanguage — so on
+    // node-editor.html and node-designer.html (neither of which carries the inline
+    // guard) the attribute never matched the UI until the user toggled the language,
+    // while two source comments claimed the store re-applied it on init.
+    const src = readFileSync(fileURLToPath(new URL('../store/useAppStore.ts', import.meta.url)), 'utf8');
+    expect(src).toContain('applyLangAttribute(useAppStore.getState().language);');
+  });
+
   it('offers the OTHER language on the toolbar button, so the label is an action', () => {
     const toolbar = readFileSync(fileURLToPath(new URL('../components/Layout/Toolbar.tsx', import.meta.url)), 'utf8');
     expect(toolbar).toContain("{language === 'lv' ? 'EN' : 'LV'}");

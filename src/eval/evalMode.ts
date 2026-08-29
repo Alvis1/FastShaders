@@ -33,9 +33,63 @@ export const EVAL_SCHEMA = 'fs-eval-1';
  * Version tag of the consent text shown; recorded with the consent act, so a
  * package always says which wording its participant agreed to. BUMP IT
  * whenever the text changes materially — consent-2 added the automatic
- * transfer to the university server (delivery option B going live).
+ * transfer to the study server (delivery option B going live); consent-3
+ * corrected the collection description, which had drifted badly behind the
+ * code: the dialog promised "browser and platform version, screen size, and
+ * time zone" and closed with "Nothing else is recorded", while the package had
+ * grown a 14-field device block (unmasked GPU renderer, core count, deviceMemory
+ * — a recognised fingerprinting triple), a preview.png of the participant's
+ * work, a free-text comment box, and a shader bundle carrying note text, typed
+ * property names and any dropped image or 3D model INCLUDING its file name.
+ * consent-3 also stopped calling the researcher's own host "the university's
+ * server" and made the outgoing email opt-in instead of automatic.
  */
-export const CONSENT_TEXT_VERSION = 'consent-2';
+export const CONSENT_TEXT_VERSION = 'consent-3';
+
+/**
+ * The two addresses the study app is served from. The upload target is a
+ * SAME-ORIGIN relative path (`evalUpload.ts`), so the host is simply wherever
+ * the participant loaded the app — moving between these needs no code change.
+ * They are named here for the reader; the consent text spells them literally,
+ * because in this codebase the English sentence IS the i18n key and an
+ * interpolated constant would never match an entry in lv.json.
+ */
+export const EVAL_SERVER_HOSTS = ['alvismisjuns.lv', 'fs.sferas.lv'] as const;
+
+/**
+ * Data-protection officer contact, from the institution's data-management plan.
+ *
+ * EMPTY means "we do not have one to give", and the consent dialog then says so
+ * by OMITTING the sentence rather than promising a route it cannot supply —
+ * which is what consent-2 did ("you can also contact the university's data
+ * protection officer", with no name, address or route). Fill this in and the
+ * sentence appears automatically.
+ */
+export const EVAL_DPO_CONTACT = '';
+
+/**
+ * Concrete retention period, e.g. 'until 31 December 2028'. EMPTY falls back to
+ * the honest-but-vague "for the duration of the research project"; a real
+ * period is what GDPR Art. 13(2)(a) actually asks for.
+ */
+export const EVAL_RETENTION_PERIOD = '';
+
+/**
+ * Shouted at the researcher (never at the participant) on every study boot
+ * while the two constants above are unset. The consent text stays truthful
+ * either way — this exists so the gap cannot be forgotten, which is what the
+ * TODO comment alone failed to prevent.
+ */
+export function warnIfConsentIncomplete(): void {
+  const missing: string[] = [];
+  if (!EVAL_DPO_CONTACT) missing.push('EVAL_DPO_CONTACT');
+  if (!EVAL_RETENTION_PERIOD) missing.push('EVAL_RETENTION_PERIOD');
+  if (missing.length === 0) return;
+  console.warn(
+    `[fs:eval] Consent text is incomplete: ${missing.join(', ')} unset in src/eval/evalMode.ts. ` +
+      'Fill these in from the data-management plan before the first real participant.',
+  );
+}
 
 /**
  * Active-time idle threshold. There is NO validated threshold in the
