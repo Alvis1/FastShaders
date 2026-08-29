@@ -4,7 +4,7 @@ import { getTypeColor } from '@/utils/colorUtils';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { formatNodeLabel } from '@/i18n';
 import { useAppStore } from '@/store/useAppStore';
-import { buildRows } from './ShaderNode';
+import { buildRows, visiblePortRows } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
@@ -306,6 +306,10 @@ export function NodeVisual({
   // ── Rows layout (ShaderNode's rows branch) ──
   const rows = buildRows(def);
   const outMoved = sockets['out'] != null && !!def.outputs[0];
+  /** Drop rows that draw nothing — THE SAME function ShaderNode uses, not a
+   *  copy of the rule: without it the asset tiles and the Designer stage hang
+   *  an empty port row below the card exactly as the canvas did. */
+  const visibleRows = visiblePortRows(rows, sockets, def.outputs);
   return (
     <div className={`${wrapClassName}`.trim()} style={wrapStyle}>
       {stackLayers}
@@ -343,7 +347,7 @@ export function NodeVisual({
           )}
 
           <div className="node-base__body">
-            {rows.map((row, i) => {
+            {visibleRows.map((row, i) => {
               const inputMoved = row.input ? sockets[row.input.id] != null : false;
               const state = row.input ? stateOf(row.input.id) : null;
               const isConnected = row.input ? connected(row.input.id) : false;

@@ -137,6 +137,43 @@ export interface PortRow {
  *   appended as extra rows after the input port rows
  * - Property nodes hide the `name` key (shown in the header instead)
  */
+/**
+ * The rows of the ROWS layout that still DRAW something.
+ *
+ * A designer socket override detaches a socket — and the value that follows it —
+ * from its row, placing it against the region's centre instead. So a row whose
+ * input is moved renders an empty left half, and a row carrying the moved `out`
+ * renders an empty right half. When BOTH are empty the row is a bare 14px
+ * strip, and because `.shader-node__region` carries the authored height EXACTLY,
+ * that strip has nowhere to go but past the card's own bottom border.
+ *
+ * MEASURED across the registry: 26 node types hung 5–39px of empty row outside
+ * their frame, on the canvas AND on every asset tile (`cameraNear` worst at
+ * 39px). It is pre-existing — 0.3.24 renders identically — and it happens with
+ * nothing connected at all, so the multi-channel case that makes it obvious is
+ * not the cause: the offset stack layers merely give the spill something to
+ * show up against.
+ *
+ * Filtering here rather than growing the region is what keeps every authored
+ * design intact — the region's height is untouched, so the 25 affected types
+ * whose sockets are placed against its centre do not move a pixel.
+ *
+ * Shared so ShaderNode and its NodeVisual replica cannot drift; the two
+ * predicates mirror the JSX in both, and `rowPorts.test.ts` pins them.
+ */
+export function visiblePortRows(
+  rows: readonly PortRow[],
+  sockets: Record<string, number | undefined>,
+  outputs: readonly PortDefinition[],
+): PortRow[] {
+  const outMoved = sockets['out'] != null;
+  return rows.filter(
+    (row) =>
+      (!!row.input && sockets[row.input.id] == null) ||
+      (!!row.output && !(outMoved && row.output === outputs[0])),
+  );
+}
+
 export function buildRows(
   def: { type?: string; inputs: PortDefinition[]; outputs: PortDefinition[]; defaultValues?: Record<string, string | number> },
   outputsOverride?: PortDefinition[],
@@ -744,6 +781,8 @@ export const ShaderNode = memo(function ShaderNode({
   const rowsOutOff = sockOv['out'];
   const rowsJustify = nodeJustify(data.registryType);
   const calcTop = (off: number) => `calc(50% ${off < 0 ? '-' : '+'} ${Math.abs(off)}px)`;
+  /** Rows that still draw something — see {@link visiblePortRows}. */
+  const visibleRows = visiblePortRows(rows, sockOv, def.outputs);
 
   return (
     <div style={wrapStyle}>
@@ -855,7 +894,7 @@ export const ShaderNode = memo(function ShaderNode({
 
       {/* Port rows */}
       <div className="node-base__body">
-        {rows.map((row, i) => {
+        {visibleRows.map((row, i) => {
           const inputConnected = row.input ? connectedInputs.has(row.input.id) : false;
           // Image node's `uv` port never shows an inline number: codegen falls
           // back to the uv() expression, so an editable scalar here would be a
