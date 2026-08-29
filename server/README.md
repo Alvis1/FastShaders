@@ -1,19 +1,45 @@
 # Collecting study results in one place
 
-Two small PHP files turn `alvismisjuns.lv` into the single inbox for eval-mode
-packages. Until they are deployed the app behaves exactly as it does today
-(download + prefilled email); nothing here is active by default.
+**Live since 2026-08-29** at `https://alvismisjuns.lv/fastshaders-eval/list.php`
+(user `researcher`). Every submitted study package is POSTed there
+automatically, and the page lists them with download links.
 
 | file | role |
 |---|---|
 | `fastshaders-eval-upload.php` | receives a package POSTed by the app |
 | `fastshaders-eval-list.php` | password-protected page listing/downloading what arrived |
 
+Both are **templates**: this repo is public, so the real secrets live in the
+gitignored `.vscode/eval-endpoint.json` and are rendered in at deploy time by
+`bash scripts/deploy-eval-endpoint.sh` (run it after editing either file).
+
+## How the live install is wired
+
+The site runs as a Docker container (`php:8.5-apache` behind Traefik), with the
+host directory `/var/www/alvis/src` mounted at `/app` and `DocumentRoot
+/app/public`. Two consequences, both learned the hard way and both load-bearing:
+
+* **The inbox must be addressed by its CONTAINER path** (`/app/eval-inbox-…`).
+  A host-absolute path is invisible to PHP — only the mount exists inside the
+  container.
+* **The inbox must sit OUTSIDE `/app/public`.** With it under the docroot the
+  packages were downloadable by URL with no password: `AllowOverride` is `None`
+  in that image, so the `.htaccess` guard is ignored, and Apache runs as the
+  same `www-data` that owns the files, so `chmod 0700` does not stop it either.
+  Outside the docroot, `list.php` streaming it is the only way in. **Verified**:
+  a direct URL to a stored package returns 404, an anonymous `list.php?get=`
+  returns 401, and an authenticated download is byte-identical to the file the
+  participant's browser produced.
+
 ## Checklist
+
+*(Done for alvismisjuns.lv — this is the record of what was set up, and the
+recipe if it ever has to be rebuilt or moved to another host.)*
 
 1. **Confirm the host runs PHP.** Upload a one-line `t.php` containing
    `<?php echo 'php ok';` and open it. If it downloads as text instead of
    printing, PHP is not enabled — see *No PHP?* below. Delete it afterwards.
+   (alvismisjuns.lv: PHP 8.5.9, `apache2handler`, running as `www-data`.)
 2. **Pick two different secrets.**
    - `$SECRET` in `upload.php` — also set `EVAL_UPLOAD_KEY` in
      `src/eval/evalUpload.ts` to the same string. **This one is public**: it

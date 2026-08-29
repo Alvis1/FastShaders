@@ -20,7 +20,7 @@
 
 $VIEW_USER     = 'researcher';
 $VIEW_PASSWORD = 'CHANGE-ME-AND-MAKE-IT-DIFFERENT';
-$INBOX         = __DIR__ . '/eval-inbox';   // must match upload.php
+$INBOX         = __DIR__ . '/eval-inbox';   // must match upload.php (absolute path recommended)
 
 // --- auth ---------------------------------------------------------------
 $user = $_SERVER['PHP_AUTH_USER'] ?? '';

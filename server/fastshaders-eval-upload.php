@@ -34,7 +34,7 @@ $MAX_BYTES = 64 * 1024 * 1024;
 // list.php's streaming is the only way in. The default below keeps the two
 // files self-contained and relies on the 0700 mode + the deny-all .htaccess
 // written on first use (which needs AllowOverride to be on).
-$INBOX     = __DIR__ . '/eval-inbox';
+$INBOX     = __DIR__ . '/eval-inbox';   // ← set an ABSOLUTE path outside the web root
 $NOTIFY    = ''; // e.g. 'alvis.misjuns@va.lv' — empty disables the notification mail
 
 // Same-origin deployments need no CORS. If the endpoint must ever accept the

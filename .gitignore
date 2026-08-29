@@ -28,3 +28,4 @@ private/
 
 # Personal Claude Code permission allowlist (machine-local)
 .claude/settings.local.json
+.vscode/eval-endpoint.json
