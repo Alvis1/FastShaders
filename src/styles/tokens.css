@@ -66,10 +66,11 @@
      Technical style: a shadow is a solid down-right offset with NO blur, and
      the offset grows with how high the surface floats — sm = chips/indicators
      sitting just off their surface (2px), md = cards/tooltips/dropdown panes
-     (4px), lg = the top layer: modals, menus, popovers (8px). Light source is
-     fixed top-left, so x always equals y. Never reintroduce a blur radius.
+     (4px), lg = modals, menus and popovers over ORDINARY content (8px), float =
+     chrome over the NODE CANVAS (12px). Light source is fixed top-left, so x
+     always equals y. Never reintroduce a blur radius.
 
-     The COLOURS are their own tokens because one surface cannot use a
+     The COLOURS are their own tokens because two surfaces cannot use a
      box-shadow at all: the toolbar's shadow is drawn as a plain strip by
      `.app-layout__left::before` (see AppLayout.css for why it cannot be cast by
      the toolbar itself), and it has to darken with the theme exactly as every
@@ -79,6 +80,38 @@
   --shadow-sm: 2px 2px 0 var(--shadow-sm-color);
   --shadow-md: 4px 4px 0 rgba(0, 0, 0, 0.36);
   --shadow-lg: 8px 8px 0 rgba(0, 0, 0, 0.45);
+
+  /* FLOATING CANVAS CHROME — ONE elevation for every panel that floats over
+     the node graph: the settings/context menus, the Add-node menu, the cost
+     pill, NEW, the bottom canvas bar and its draw cluster, the edge value
+     card, the mesh-target picker, the drop hints. The token exists for the
+     "one" far more than for the number: that set used to span three different
+     shadows (menus at 8px, canvas bar and draw cluster at 4px, cost pill and
+     NEW at 2px), so the app's own controls sat at three apparent heights over
+     one canvas.
+
+     The DEPTH is authored, and 6px is a deliberate second pass: the first cut
+     was 12px, chosen to clear a selected node's 8px so a menu could never cast
+     the same shadow as the node it was opened from. That ordering was right in
+     principle and too heavy in practice — at 12px the chrome read as peeling
+     off the canvas — so it was halved. The ALPHA deliberately does not change
+     from --shadow-lg: distance is what encodes elevation in this system, and a
+     second variable would make two panels at the same height look different.
+
+     KNOWN INVERSION, accepted: 6px is BELOW --shadow-node-selected (8px), so a
+     selected node casts a longer shadow than the panel floating over it. The
+     comparison that actually matters on screen is against a node at REST (2px)
+     — that is what every node except the one or two selected ones is doing —
+     and 6px clears it plainly. Raising the floor again means either bringing
+     --shadow-node-selected down (it is the selection affordance, and the 4x
+     jump from 2px is what makes it unmissable) or going back to a chrome depth
+     that was rejected by eye. Do not "fix" this by nudging the token: it is a
+     decision, and cssTokens.test.ts pins the parts of the ramp that are not.
+
+     Not used for modals, toolbar popovers or asset tiles: those float over
+     ordinary content that tops out at 4px. */
+  --shadow-float-color: rgba(0, 0, 0, 0.45);
+  --shadow-float: 6px 6px 0 var(--shadow-float-color);
   /* Graph nodes rest CLOSE to the canvas — a tight 2px contact shadow, so a
      dense graph reads as cards lying ON a board rather than hovering above it.
      SELECTION IS THE ELEVATION CHANGE: a selected node's shadow jumps to 8px,
@@ -241,6 +274,8 @@
   --shadow-sm: 2px 2px 0 var(--shadow-sm-color);
   --shadow-md: 4px 4px 0 rgba(0, 0, 0, 0.48);
   --shadow-lg: 8px 8px 0 rgba(0, 0, 0, 0.55);
+  --shadow-float-color: rgba(0, 0, 0, 0.55);
+  --shadow-float: 6px 6px 0 var(--shadow-float-color);
 }
 
 /* ===== TOUCH / COARSE-POINTER OVERRIDES =====

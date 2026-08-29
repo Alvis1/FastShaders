@@ -66,7 +66,7 @@
   background: #cdeab0;
   border: 1px solid #8fbf5e;
   border-radius: var(--border-radius-sm);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-float);
   padding: 0 14px;
   cursor: pointer;
   transition: border-color var(--transition-fast), background var(--transition-fast);
@@ -86,7 +86,7 @@
   backdrop-filter: blur(8px);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-float);
 }
 
 /* Dark theme: the frosted cost pill floats over the dark canvas, so its
@@ -306,7 +306,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-float);
   /* Kept from the bottom-CENTER era and still load-bearing: a wrapped row must
      size to its content, not stretch to max-width. */
   width: max-content;
@@ -360,7 +360,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-default);
   border-radius: var(--border-radius-sm);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-float);
 }
 .node-editor__import-note-btn {
   display: inline-flex;
@@ -403,7 +403,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-default);
   border-radius: var(--border-radius-sm);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-float);
   /* Never a drop target itself — a drag crossing it must reach the canvas. */
   pointer-events: none;
   /* Centred on the drop point rather than hanging off it. */
@@ -535,7 +535,7 @@
   background: var(--bg-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-float);
   /* max-content is still required even now that `left: 50%` is gone: an
      auto-width abspos box shrink-to-fits, and this one previously collapsed to
      ~160px of the ~320px bar, cramming the cluster into a 3–4 row stack. The

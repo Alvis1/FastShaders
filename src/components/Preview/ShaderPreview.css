@@ -5,6 +5,16 @@
   background: var(--bg-panel);
 }
 
+/* Scroll host for the control bar: the arrows are absolutely positioned
+   against this, and it publishes the ONE thing `.fs-scroll-arrow` needs — the
+   colour of the strip the plate has to match (see styles/controls.css). */
+.shader-preview__ctl-wrap {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  --fs-arrow-bg: var(--bg-surface);
+}
+
 .shader-preview__controls {
   display: flex;
   align-items: center;
@@ -12,6 +22,24 @@
   padding: var(--space-1) var(--space-3);
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  /* Scrolls instead of squeezing: the pane is user-resizable, and a squeezed
+     <select> is unreadable long before the bar runs out of room. The scrollbar
+     is hidden because the arrows ARE the affordance — a horizontal bar under a
+     one-line strip would eat a third of its height. */
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.shader-preview__controls::-webkit-scrollbar {
+  display: none;
+}
+
+/* Nothing in the bar may shrink — shrinking is what the scrolling replaces. */
+.shader-preview__controls > * {
   flex-shrink: 0;
 }
 

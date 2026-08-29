@@ -482,6 +482,30 @@ export function ShaderPreview() {
   // Horizontal overflow of the top control bar — see the bar's own comment.
   const ctlRef = useRef<HTMLDivElement>(null);
   const ctlArrows = useScrollArrows(ctlRef);
+  // Wheel over the bar scrolls it sideways: it is one line tall, so a vertical
+  // wheel there has nothing else it could mean, and a trackpad's horizontal
+  // component is added on top rather than replaced (a two-finger sideways
+  // swipe must not be cancelled out by the deltaY mapping). Non-passive, so
+  // preventDefault can stop the gesture from also scrolling an ancestor.
+  useEffect(() => {
+    const el = ctlRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) return; // leave browser/page zoom alone
+      const dx = e.deltaX + e.deltaY;
+      if (dx === 0) return;
+      // Only claim the gesture when there is somewhere to go, or the bar
+      // swallows a wheel that should have reached the page.
+      const max = el.scrollWidth - el.clientWidth;
+      if (max <= 0) return;
+      const next = Math.max(0, Math.min(max, el.scrollLeft + dx));
+      if (next === el.scrollLeft) return;
+      e.preventDefault();
+      el.scrollLeft = next;
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Fullscreen toggle for the whole preview pane (controls + canvas + property
@@ -1774,7 +1798,7 @@ export function ShaderPreview() {
           wheel-to-horizontal mapping, since the bar is one line tall and a
           vertical wheel over it has nothing else to mean. */}
       <div className="shader-preview__ctl-wrap">
-        {ctlArrows.canLeft && <ScrollArrow direction="left" onClick={() => ctlArrows.scrollBy(-1)} />}
+        {ctlArrows.canLeft && <ScrollArrow direction="left" invert onClick={() => ctlArrows.scrollBy(-1)} />}
       <div className="shader-preview__controls" ref={ctlRef}>
         <label className="shader-preview__ctl">
           <span className="shader-preview__ctl-label">{t('Light', language)}</span>
@@ -1886,7 +1910,7 @@ export function ShaderPreview() {
           )}
         </div>
       </div>
-        {ctlArrows.canRight && <ScrollArrow direction="right" onClick={() => ctlArrows.scrollBy(1)} />}
+        {ctlArrows.canRight && <ScrollArrow direction="right" invert onClick={() => ctlArrows.scrollBy(1)} />}
       </div>
       <div className={`shader-preview__body${showStats ? ' shader-preview__body--stats' : ''}`} ref={bodyRef}>
         {compiling && (

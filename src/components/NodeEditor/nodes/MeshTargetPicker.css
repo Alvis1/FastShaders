@@ -104,7 +104,7 @@
   border: 1px solid var(--border-default);
   border-radius: var(--border-radius-sm);
   background: var(--bg-panel);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-float);
 }
 
 .mesh-picker__row {

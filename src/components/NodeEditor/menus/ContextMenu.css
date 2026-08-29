@@ -24,7 +24,7 @@
   background: var(--bg-panel);
   border: 1px solid var(--border-default);
   border-radius: var(--border-radius-md);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-float);
   overflow: hidden;
   min-width: 260px;
   /* Never taller than the viewport — ContextMenu.tsx clamps x/y to keep the
