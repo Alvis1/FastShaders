@@ -49,9 +49,36 @@
    from hover only in that they STAY. */
 .react-flow__node:hover,
 .react-flow__node.selected,
-.react-flow__node.fs-menu-active {
+.react-flow__node.fs-menu-active,
+.react-flow__node:focus-visible {
   --fs-node-lift: var(--shadow-node-selected);
   --fs-node-shift: var(--fs-node-rise);
+}
+
+/* KEYBOARD FOCUS. React Flow already makes every node a tab stop and ships
+   `.react-flow__node.selectable:focus { outline: none }` on the assumption that
+   the app supplies its own ring — this app did not, and NodeEditor.css then
+   stripped the Output node's remaining one, so Tab moved an INVISIBLE cursor
+   around the graph. That is why "you can tab to a node" was true and useless at
+   the same time.
+
+   Focus gets the same lift as hover (above) so the node comes forward, PLUS a
+   ring — because the lift alone cannot distinguish "the cursor is here" from
+   "the pointer is here", and a keyboard user has no pointer to reason from. The
+   ring is SOLID, which is what separates it from the two other outline-style
+   indicators on this canvas: the marquee is dotted, and drag-connect's target
+   is `--type-*` coloured. `outline` rather than `border` so it costs no layout
+   and cannot disturb the card's own category border; offset outward so it
+   clears the 3px rise the lift applies.
+
+   `!important` for the same reason the marquee needs it: React Flow's own
+   `:focus { outline: none }` ships at equal specificity and would otherwise win
+   by source order, which is a silent failure that reads as the rule never
+   having matched. */
+.node-editor .react-flow__node:focus-visible,
+.node-editor .react-flow__node.selectable:focus-visible {
+  outline: 2px solid var(--border-focus) !important;
+  outline-offset: 4px;
 }
 
 /* CLICKING a node doubles its frame, on top of the lift — and hover pointedly

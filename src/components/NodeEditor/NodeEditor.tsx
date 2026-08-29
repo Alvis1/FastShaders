@@ -46,6 +46,7 @@ import {
 } from '@/utils/drawings';
 import { ContextMenu } from './menus/ContextMenu';
 import { ContentBrowser } from './ContentBrowser';
+import { useKeyboardNav } from './useKeyboardNav';
 import { ColorPickerPopover } from '@/components/inputs/PaletteColorPicker';
 import { NewShaderModal } from '@/components/Modals/NewShaderModal';
 import { ImageImportModal, type ImageImportChoice } from '@/components/Modals/ImageImportModal';
@@ -2534,6 +2535,13 @@ export function NodeEditor() {
   // then restore it on the next frame.
   const canvasRef = useRef<HTMLDivElement>(null);
 
+  // Keyboard navigation: Tab cycles nodes (canvas-scoped), arrows move the
+  // focused node, Cmd/Ctrl+arrows walk the graph, Alt+arrows cycle panes. It
+  // runs in CAPTURE phase so it can stand in front of React Flow's own node
+  // onKeyDown rather than firing alongside it — see useKeyboardNav.ts.
+  useKeyboardNav({ drawToolActive });
+
+
   // Keyboard entry point for adding a node. The graph was otherwise pointer-only
   // — the Add-Node menu could be reached ONLY by right-click or by dropping a
   // wire, so a keyboard user had no way to author a node at all. Shift+A mirrors
@@ -3129,6 +3137,11 @@ export function NodeEditor() {
           edgeTypes={edgeTypes}
           defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
           deleteKeyCode={null}
+          // React Flow makes every EDGE a tab stop by default, so a graph of N
+          // nodes and E edges had N+E stops before the asset bar's dozens — Tab
+          // was unusable as a way of reaching a node. Nodes stay focusable;
+          // edges are reached from the node they touch.
+          edgesFocusable={false}
           panActivationKeyCode={null}
           edgesReconnectable
           connectionRadius={CONNECTION_RADIUS}
