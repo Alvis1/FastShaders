@@ -203,7 +203,7 @@ export function collectImageFiles(nodes: AppNode[]): ImageFileEntry[] {
   const out: ImageFileEntry[] = [];
   let counter = 0;
   for (const n of nodes) {
-    if (n.data.registryType !== 'imageNode') continue;
+    if (n.data?.registryType !== 'imageNode') continue;
     const values = getNodeValues(n);
     const decoded = decodeImageNode(values);
     if (!decoded) continue;
@@ -294,7 +294,7 @@ export function resolveImageDrop(
 export function totalImageChars(nodes: AppNode[]): number {
   let total = 0;
   for (const n of nodes) {
-    if (n.data.registryType !== 'imageNode') continue;
+    if (n.data?.registryType !== 'imageNode') continue;
     const url = getNodeValues(n).imageB64;
     if (typeof url === 'string') total += url.length;
   }
@@ -324,7 +324,7 @@ export function sanitizeImageNodes(
   let runningTotal = 0;
   let changed = false;
   const out = nodes.map((n) => {
-    if (n.data.registryType !== 'imageNode') return n;
+    if (n.data?.registryType !== 'imageNode') return n;
     const values = getNodeValues(n);
 
     // Provenance keys ride imported JSON like everything else. `originId`
@@ -366,15 +366,22 @@ function sanitizeOriginKeys(
   values: Record<string, string | number>,
 ): Record<string, string | number> | null {
   const drop: string[] = [];
-  if ('originId' in values) {
+  // Plain property access, never `'originId' in values` — the `in` operator
+  // THROWS on a primitive, and these values come straight out of an untrusted
+  // `fs:graph` / `.fastshader` / `fs:savedGroups` payload. `getNodeValues` now
+  // coerces a non-object to `{}` so this is belt-and-braces, but the rule is
+  // the one `sanitizeDataRangeNodes` states and this function is where it was
+  // still being broken.
+  const has = (k: string): boolean => (values as Record<string, unknown>)[k] !== undefined;
+  if (has('originId')) {
     const id = values.originId;
     if (typeof id !== 'string' || !ORIGIN_ID_RE.test(id)) drop.push('originId');
   }
   const dimOk = (v: unknown) => Number.isInteger(Number(v)) && Number(v) > 0 && Number(v) <= MAX_IMAGE_DIM_FIELD;
-  if ('srcWidth' in values && !dimOk(values.srcWidth)) drop.push('srcWidth');
-  if ('srcHeight' in values && !dimOk(values.srcHeight)) drop.push('srcHeight');
+  if (has('srcWidth') && !dimOk(values.srcWidth)) drop.push('srcWidth');
+  if (has('srcHeight') && !dimOk(values.srcHeight)) drop.push('srcHeight');
   // Half a pair is meaningless to the consumer (a CSS aspect-ratio needs both).
-  if (('srcWidth' in values) !== ('srcHeight' in values)) {
+  if (has('srcWidth') !== has('srcHeight')) {
     drop.push('srcWidth', 'srcHeight');
   }
   if (drop.length === 0) return null;

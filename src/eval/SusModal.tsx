@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
@@ -90,6 +90,7 @@ export function SusModal({ open, onClose }: Props) {
     () => Array<number | null>(SUS_ITEM_COUNT).fill(null),
   );
   const [comment, setComment] = useState('');
+  const submittingRef = useRef(false);
   const [participant, setParticipant] = useState(() => readEvalSession()?.participant ?? '');
   const [done, setDone] = useState<DoneState | null>(null);
 
@@ -121,7 +122,16 @@ export function SusModal({ open, onClose }: Props) {
   const complete = answered === SUS_ITEM_COUNT;
 
   const handleSubmit = async () => {
-    if (!complete || done) return;
+    // A REF, not the `done` state: `capturePreviewShot()` below waits up to 4 s
+    // (its own timeout) and nothing on screen changes while it does, so a
+    // participant who clicks Submit twice — or once, sees nothing happen, and
+    // clicks again — used to run the whole submission twice: two sus-submit
+    // events, endEvalSession() twice, two downloads, two uploads and two
+    // mailto navigations, leaving the server holding two packages for one
+    // session id. State cannot close that window because React has not
+    // re-rendered yet; a ref is set synchronously.
+    if (!complete || done || submittingRef.current) return;
+    submittingRef.current = true;
     const filled = responses.map((r) => r ?? 3);
     const score = computeSusScore(filled);
     const submittedIso = new Date().toISOString();
@@ -256,19 +266,13 @@ export function SusModal({ open, onClose }: Props) {
       });
     }
 
-    // Submit MEANS submit: open the addressed message straight away rather
-    // than leaving it behind a button the participant has to notice. This is
-    // a navigation, so it is CSP-exempt and does not unload the page — the
-    // thank-you screen stays up behind the mail client, and its "Open email"
-    // button remains for the case where no handler is registered. The one
-    // step no platform allows us to skip is the attachment: `mailto:` cannot
-    // carry files, which is why the download runs first and the body names
-    // the file to attach.
-    try {
-      window.location.href = mailto;
-    } catch {
-      /* no mail handler — the thank-you screen's button covers it */
-    }
+    // The mailto is OFFERED, never opened automatically. It used to navigate
+    // here unconditionally, which meant the participant sent the package from
+    // their own mail client and their own address — handing the researcher an
+    // identifying email beside a code the consent form promises is
+    // pseudonymous. It stays as a button because it is still the delivery
+    // floor when the upload fails and the study machine is not the
+    // researcher's; the consent text now discloses what pressing it reveals.
   };
 
   if (!open) return null;
@@ -298,7 +302,7 @@ export function SusModal({ open, onClose }: Props) {
           )}
           {done.upload === 'ok' ? (
             <div className="csv-import-modal__message">
-              {t('The package was also sent to the researcher automatically — the email step below is only a backup.', language)}
+              {t('The package was sent to the researcher automatically.', language)}
             </div>
           ) : done.upload === 'pending' ? (
             <div className="csv-import-modal__message">{t('Sending to the researcher…', language)}</div>
@@ -311,7 +315,9 @@ export function SusModal({ open, onClose }: Props) {
             </div>
           ) : null}
           <div className="csv-import-modal__message">
-            {t('Your email app should have opened with the message ready. Attach the file named above and press Send. If it did not open, use “Open email” below — or simply tell the researcher, the file is in the Downloads folder.', language)}
+            {done.upload === 'ok'
+              ? t('Nothing more is needed. If the researcher asks you to send the file by email as well, use the button below — note that this shows them the address you send from.', language)
+              : t('Please make sure the researcher receives the file: it is in your Downloads folder, and “Download” below gives you another copy. You can also email it with the button below — note that this shows the researcher the address you send from.', language)}
           </div>
           <div className="csv-import-modal__buttons">
             <button
@@ -327,7 +333,7 @@ export function SusModal({ open, onClose }: Props) {
               {t('Close', language)}
             </button>
             <a className="csv-import-modal__button csv-import-modal__button--primary" href={done.mailto}>
-              {t('Open email', language)}
+              {t('Email to researcher', language)}
             </a>
           </div>
         </div>

@@ -191,7 +191,7 @@ export function sanitizeDataNodes(nodes: AppNode[]): DataSanitizeResult {
   let strippedCount = 0;
   let changed = false;
   const out = nodes.map((n) => {
-    if (n.data.registryType !== 'dataNode') return n;
+    if (n.data?.registryType !== 'dataNode') return n;
     const values = getNodeValues(n);
     const b64 = values.dataB64;
     if (typeof b64 !== 'string' || b64.length <= MAX_DATA_ENCODED_CHARS) return n;

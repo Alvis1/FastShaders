@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { EVAL_DPO_CONTACT, EVAL_RETENTION_PERIOD, warnIfConsentIncomplete } from './evalMode';
+import { DataDisclosureModal } from './DataDisclosureModal';
 import '@/components/Modals/CsvImportModal.css';
 import './eval.css';
 
@@ -19,8 +21,22 @@ import './eval.css';
  * from the data.
  */
 
-// TODO(study): confirm the retention wording and the DPO contact line with
-// the institution's data-management plan before the first real participant.
+/*
+ * TWO THINGS ARE STILL MISSING and the text is written to survive their absence
+ * rather than to paper over it: `EVAL_DPO_CONTACT` and `EVAL_RETENTION_PERIOD`
+ * in evalMode.ts. While they are empty this dialog OMITS the data-protection-
+ * officer sentence and falls back to "for the duration of the research
+ * project" — consent-2 instead promised "you can also contact the university's
+ * data protection officer" with no name, address or route, which is a promise
+ * the app could not keep. Fill the constants in and both sentences appear.
+ * `warnIfConsentIncomplete()` shouts at the researcher on every study boot until
+ * then; the participant sees nothing untrue either way.
+ *
+ * THE SUMMARY IS SHORT ON PURPOSE, AND THE ? BUTTON IS WHY IT CAN BE. A consent
+ * screen nobody finishes reading is not consent, but "what do you collect" has a
+ * page-long honest answer. `DataDisclosureModal` holds the literal walk of the
+ * package; these five bullets have to be true, not complete.
+ */
 
 interface Props {
   onAgree: (participant: string) => void;
@@ -31,6 +47,9 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
   const language = useAppStore((s) => s.language);
   const setLanguage = useAppStore((s) => s.setLanguage);
   const [participant, setParticipant] = useState('');
+  const [showDisclosure, setShowDisclosure] = useState(false);
+
+  useEffect(warnIfConsentIncomplete, []);
 
   return createPortal(
     <div className="csv-import-modal__backdrop">
@@ -65,22 +84,52 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
         <div className="eval-consent__section">
           {t('You are invited to take part in a usability study of FastShaders, a visual shader editor developed as part of a research project.', language)}{' '}
           <strong>{t('Data controller: Vidzeme University of Applied Sciences (ViA).', language)}</strong>{' '}
-          {t('Contact: alvis.misjuns@va.lv. For data-protection questions you can also contact the university’s data protection officer.', language)}
+          {t('Contact: alvis.misjuns@va.lv.', language)}{' '}
+          {EVAL_DPO_CONTACT
+            ? `${t('For data-protection questions you can also contact the data protection officer:', language)} ${EVAL_DPO_CONTACT}`
+            : t('You can raise any data-protection question with the researcher at that address.', language)}
         </div>
 
         <div className="eval-consent__section">
-          <strong>{t('What is recorded during the session:', language)}</strong>
+          <div className="eval-consent__what-head">
+            <strong>{t('What is recorded during the session:', language)}</strong>
+            <button
+              type="button"
+              className="eval-consent__help"
+              onClick={() => setShowDisclosure(true)}
+              title={t('What exactly is collected', language)}
+              aria-label={t('What exactly is collected', language)}
+            >
+              ?
+            </button>
+          </div>
           <ul className="eval-consent__list">
-            <li>{t('Interaction events inside this app — timestamps of adding nodes, making and removing connections, undo/redo, applying code, and how long the app is active.', language)}</li>
-            <li>{t('Your answers to a short questionnaire (10 statements) at the end.', language)}</li>
-            <li>{t('The shader you create during the session.', language)}</li>
-            <li>{t('Basic technical facts needed to interpret the results — browser and platform version, screen size, and time zone.', language)}</li>
+            <li>{t('What you do in the editor — timestamps of adding nodes, connecting and disconnecting them, undo and redo, applying code, and how long the app is active. What you do, not what you type.', language)}</li>
+            <li>{t('Your answers to a short questionnaire (10 statements) at the end, including the comment box if you write in it.', language)}</li>
+            <li>{t('The shader you build, in full — including any note text, image or 3D model you add to it, and the file name of anything you drop in.', language)}</li>
+            <li>{t('A picture of the 3D preview as it looks when you submit.', language)}</li>
+            <li>{t('Technical facts about this computer — browser, operating system, screen and window size, graphics card name, processor count, memory, language and time zone. Together these are reasonably distinctive to this machine.', language)}</li>
           </ul>
-          {t('Nothing else is recorded: no keystroke content, no audio or video, nothing outside this app. The data is packaged into one file only when you submit the questionnaire; that file is then sent to the university’s server (alvismisjuns.lv), where only the researcher can open it, and a copy is saved on this computer.', language)}
+          <div className="eval-consent__note">
+            {t('No keystroke content, no microphone or camera, and nothing outside this app.', language)}{' '}
+            <button
+              type="button"
+              className="eval-consent__inline-link"
+              onClick={() => setShowDisclosure(true)}
+            >
+              {t('See the complete list of every file and field.', language)}
+            </button>
+          </div>
         </div>
 
         <div className="eval-consent__section">
-          {t('The data is stored under your participant code (not your name), used only for this research, kept for the duration of the research project, and deleted afterwards.', language)}{' '}
+          {t('Nothing is sent while you work. When you submit the questionnaire the data is packaged into one file, saved to this computer, and uploaded to the study server — alvismisjuns.lv, also reachable as fs.sferas.lv. That server is operated by the researcher personally, not by the university. You are also offered a button to email the package to the researcher: that is optional, and if you use it the researcher will see the address you send from.', language)}
+        </div>
+
+        <div className="eval-consent__section">
+          {EVAL_RETENTION_PERIOD
+            ? `${t('The data is stored under your participant code (not your name), used only for this research, and kept', language)} ${EVAL_RETENTION_PERIOD}.`
+            : t('The data is stored under your participant code (not your name), used only for this research, kept for the duration of the research project, and deleted afterwards.', language)}{' '}
           {t('Participation is voluntary: you can stop at any time by closing this tab, and the study data is discarded unless you submit the questionnaire. (The editor keeps its usual local autosave of the current shader on this computer, as it does for any user.) You may later ask for your data to be removed by contacting the researcher and quoting your participant code, and you have the right to complain to the Data State Inspectorate (Datu valsts inspekcija).', language)}
         </div>
 
@@ -114,6 +163,7 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
           </button>
         </div>
       </div>
+      {showDisclosure && <DataDisclosureModal onClose={() => setShowDisclosure(false)} />}
     </div>,
     document.body,
   );

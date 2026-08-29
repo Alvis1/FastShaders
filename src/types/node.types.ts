@@ -287,7 +287,18 @@ export type AppEdge = Edge<TypedEdgeData>;
 /** Safely extract values from any AppNode's data. */
 export function getNodeValues(node: AppNode): Record<string, string | number> {
   if (node.type === 'output' || node.type === 'group' || node.type === 'note') return {};
-  return (node.data as ShaderNodeData).values ?? {};
+  const values = (node.data as ShaderNodeData).values;
+  // `?? {}` guards nullish and NOTHING else, which is not enough for a field
+  // that arrives verbatim from `fs:graph` / a `.fastshader` / `fs:savedGroups`.
+  // A tampered `values: 5` used to reach every caller as a primitive, where
+  // `'originId' in values` THROWS — and that throw, inside `loadGraph`, returns
+  // null and lets the 300 ms autosave overwrite the user's entire saved graph
+  // with the demo one. Closing it at this one accessor (which the codebase
+  // already mandates over `node.data as ...`) covers every call site at once.
+  // Identity is preserved for the normal case, so no memo is invalidated.
+  return typeof values === 'object' && values !== null && !Array.isArray(values)
+    ? (values as Record<string, string | number>)
+    : {};
 }
 
 /** Spread-merge a patch into a node's values (mutates node.data in place). */

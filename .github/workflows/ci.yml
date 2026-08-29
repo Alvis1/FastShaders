@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# One run per ref: pushing twice in a minute should not leave two suites racing
+# for the same answer.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test + typecheck
@@ -30,8 +36,15 @@ jobs:
 
       - run: npm ci
 
-      - name: Typecheck
-        run: npx tsc --noEmit
+      # `npm run build` (tsc -b && vite build), NOT `tsc --noEmit`. Two holes
+      # close together: --noEmit does not follow project references, so
+      # vite.config.ts — which owns the build CSP, the FS_DESKTOP profile, every
+      # custom plugin and the rollup input map — was never typechecked at all
+      # (--listFiles showed 884 src files and zero hits for it); and a
+      # bundler-only breakage used to merge green and surface only after a tag
+      # had been pushed and the native Rust legs had already burned.
+      - name: Typecheck + build
+        run: npm run build
 
       - name: Test
         run: npm test

@@ -38,8 +38,14 @@
         var el = document.documentElement;
         el.setAttribute('data-theme', dark ? 'dark' : 'light');
         el.style.background = dark ? '#17181b' : '#F5F5F5';
-        // Stamp the persisted UI language too; the store re-applies it on init.
-        el.setAttribute('lang', localStorage.getItem('fs:lang') === 'lv' ? 'lv' : 'en');
+        // Stamp the persisted UI language too. This MUST mirror the store's own
+        // resolution (useAppStore.ts: `loadString('fs:lang','lv') === 'en' ? 'en' : 'lv'`)
+        // — Latvian is the DEFAULT, so an ABSENT key means 'lv', not 'en'. Reading it
+        // the other way round is what left every first-time visitor with a document
+        // advertising English while the UI rendered Latvian: wrong screen-reader
+        // phonetics, a browser 'translate from English' prompt, and an English
+        // spellcheck dictionary over Latvian note and shader-name input (WCAG 3.1.1).
+        el.setAttribute('lang', localStorage.getItem('fs:lang') === 'en' ? 'en' : 'lv');
       } catch (e) { /* private mode / storage disabled — default light */ }
     </script>
   </head>

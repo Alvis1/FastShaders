@@ -19,7 +19,7 @@
  * visits.
  */
 
-import { useAppStore, VR_HEADSETS } from '@/store/useAppStore';
+import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
 
 export interface CostTableProvenance {
   /** e.g. `complexity.json@0.3.27` or a cost-profile id. */
@@ -34,22 +34,29 @@ export interface CostTableProvenance {
 export function costTableProvenance(): CostTableProvenance {
   const s = useAppStore.getState();
   const profile = s.costProfiles.find((p) => p.id === s.selectedHeadsetId);
-  const headset = VR_HEADSETS.find((h) => h.id === s.selectedHeadsetId) ?? VR_HEADSETS[0];
+  // Budget comes from the store's own resolver rather than from
+  // `profile.maxPoints` / `headset.maxPoints`: those are the device's RAW
+  // numbers, and a `costBudgetOverrides` entry means the app — and the
+  // participant's cost bar — were using a different one. This field exists so a
+  // point total is interpretable later, which it is not if it states a budget
+  // nobody was working to. Calling the shared resolver also stops this being a
+  // second copy of the profile-lookup + VR_HEADSETS fallback rule.
+  const resolved = resolveDeviceBudget(s.selectedHeadsetId, s.costProfiles, s.costBudgetOverrides);
   if (profile) {
     return {
       source: profile.id,
       // `manual` is set by the profile editor; absent means the numbers came
       // from a benchmark run (the CostBar's own measured/custom distinction).
       kind: profile.meta?.manual ? 'manual' : 'measured',
-      device: profile.label,
-      budget: profile.maxPoints,
+      device: resolved.label,
+      budget: resolved.maxPoints,
     };
   }
   return {
     source: `complexity.json@${__APP_VERSION__}`,
     kind: 'builtin',
-    device: headset.label,
-    budget: headset.maxPoints,
+    device: resolved.label,
+    budget: resolved.maxPoints,
   };
 }
 

@@ -53,6 +53,7 @@ import {
   type Palette,
 } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
+import { sanitizeGraphShape } from '@/utils/graphShape';
 // Eval-mode telemetry: `evalLog` is a no-op outside a study session, so these
 // calls cost one boolean check in normal use. The chokepoint set is pinned by
 // src/eval/evalHooks.test.ts. telemetry.ts never imports this store (bridge
@@ -150,18 +151,29 @@ export function loadSavedGroups(): SavedGroup[] {
       // one — the singleton rule). Without this, a tampered `fs:savedGroups`
       // could plant an unbounded target payload that then rides every history
       // clone, the autosave and the project embed.
+      // Per-group try/catch, and a per-group shape pass. Without the catch, a
+      // throw anywhere in this map escaped to the outer one and returned `[]`,
+      // which EMPTIES the whole library — and the next saved group then
+      // re-persists that empty array, destroying every group the user had,
+      // each with its embedded images. One bad entry should cost one entry.
       .map((g) => {
-        autoExposeConnectedParamPorts(g.nodes, g.edges);
-        return {
-          ...g,
-          nodes: sanitizeOutputMaterials(
-            sanitizeDataRangeNodes(
-              sanitizeDataNodes(sanitizeImageNodes(g.nodes, false).nodes).nodes,
+        try {
+          const shape = sanitizeGraphShape<AppNode, AppEdge>(g.nodes, g.edges);
+          autoExposeConnectedParamPorts(shape.nodes, shape.edges);
+          return {
+            ...g,
+            nodes: sanitizeOutputMaterials(
+              sanitizeDataRangeNodes(
+                sanitizeDataNodes(sanitizeImageNodes(shape.nodes, false).nodes).nodes,
+              ),
             ),
-          ),
-          edges: sanitizeEdgeExtras(g.edges),
-        };
-      });
+            edges: sanitizeEdgeExtras(shape.edges),
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter((g): g is SavedGroup => g !== null);
   } catch {
     return [];
   }
@@ -643,6 +655,28 @@ export function loadGraph(): {
     if (!raw) return null;
     const data = JSON.parse(raw, safeJsonReviver);
     if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
+      // Element-shape pass FIRST. Everything below — the migrations, the value
+      // sanitizers, React Flow itself — dereferences `node.data` and
+      // `node.position` without guarding, so one malformed element used to
+      // throw into this function's outer catch, return null, and let the demo
+      // graph plus the 300 ms autosave overwrite the user's real work. Repair
+      // rather than reject: this is the user's own graph, and a node at the
+      // origin is recoverable in a way a deleted one is not.
+      const shape = sanitizeGraphShape<AppNode, AppEdge>(data.nodes, data.edges, {
+        // A whole graph owns both endpoints of every edge, so a dangling one is
+        // garbage — and loadGraph already prunes edges this way for the legacy
+        // node types it drops below.
+        pruneDanglingEdges: true,
+      });
+      if (shape.droppedNodes || shape.repairedPositions || shape.droppedEdges) {
+        console.warn(
+          `[fs:graph] repaired a malformed saved graph: dropped ${shape.droppedNodes} node(s), ` +
+            `repositioned ${shape.repairedPositions}, dropped ${shape.droppedEdges} edge(s).`,
+        );
+      }
+      data.nodes = shape.nodes;
+      data.edges = shape.edges;
+
       // Migrate: legacy tsl-textures nodes are removed — drop them entirely
       // so the graph still loads. Edges that referenced them are also pruned
       // below. Nodes saved with the (now-removed) `texturePreview` flow type
@@ -3021,6 +3055,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
     });
   },
 }));
+
+// Stamp <html lang> at module init. index.html's pre-paint guard sets it too
+// (so the FIRST frame is right), but that inline script is absent from
+// node-editor.html and node-designer.html, and `applyLangAttribute` used to have
+// exactly ONE call site — inside `setLanguage` — so on those pages the attribute
+// simply never matched the UI until the user toggled the language. Two source
+// comments claimed the store re-applied it on init; now it does.
+applyLangAttribute(useAppStore.getState().language);
 
 // Auto-save graph to localStorage on changes
 let saveTimer: ReturnType<typeof setTimeout> | null = null;

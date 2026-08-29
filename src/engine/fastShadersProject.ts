@@ -2,6 +2,7 @@ import type { AppNode, AppEdge } from '@/types';
 import type { DrawStroke } from '@/utils/drawings';
 import type { Palette } from '@/utils/palettes';
 import { safeJsonReviver } from '@/utils/safeJson';
+import { isRenderableNode, isUsableEdge } from '@/utils/graphShape';
 
 /**
  * Snapshot of FastShaders editor state embedded into a downloaded `.js` shader
@@ -106,14 +107,16 @@ export function extractProjectState(
   // after the shader name and preview prefs were already written. Reject the
   // block here instead; the caller then degrades to importing the file as a
   // plain shader script.
-  const isRecord = (v: unknown): v is Record<string, unknown> =>
-    typeof v === 'object' && v !== null && !Array.isArray(v);
-  const validNodes = project.graph.nodes.every(
-    (n) => isRecord(n) && typeof n.id === 'string' && isRecord(n.data),
-  );
-  const validEdges = project.graph.edges.every(
-    (e) => isRecord(e) && typeof e.source === 'string' && typeof e.target === 'string',
-  );
+  // `position` is part of the gate: React Flow's commit path dereferences
+  // `node.position.x` unguarded and there is no error boundary above the
+  // canvas, so a block carrying a node with a missing or non-finite position
+  // blanks the app — after the shader name and preview prefs have already been
+  // written. `isRenderableNode` is the shared statement of that shape; this
+  // path REJECTS rather than repairs (the caller falls back to importing the
+  // file as a plain shader script), because a foreign file has no claim on
+  // being fixed up.
+  const validNodes = project.graph.nodes.every(isRenderableNode);
+  const validEdges = project.graph.edges.every(isUsableEdge);
   if (!validNodes || !validEdges) return null;
 
   const blockEnd = endIdx + END_MARKER.length;

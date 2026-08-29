@@ -415,13 +415,38 @@ export function runQualityChecks(
   // The questionnaire must be answered in ONE sitting, immediately after the
   // session (Brooke's administration instruction). A long gap inside the SUS
   // phase means the participant left and came back to it.
-  const susOpen = events.find((e) => e.type === 'sus-open');
   const susSubmit = events.find((e) => e.type === 'sus-submit');
+  // The LAST sus-open before the submit, not the first. The questionnaire has a
+  // "Back to the editor" button, so opening it, going back to fix one thing and
+  // returning is a supported flow — and keying on the first open made that flow
+  // report every edit in between as "edits after the questionnaire opened",
+  // showing the participant a red data-quality panel and exiting
+  // eval-analysis.mjs non-zero for a package that is perfectly fine.
+  const susOpen = susSubmit
+    ? [...events].reverse().find((e) => e.type === 'sus-open' && e.t <= susSubmit.t)
+    : undefined;
   if (susOpen && susSubmit) {
-    const phase = events.filter((e) => e.t >= susOpen.t && e.t <= susSubmit.t);
+    // `snapshot` is EXCLUDED from the gap measurement. telemetry.ts logs one
+    // every 30 s while the tab is visible, which is half the 60 s threshold —
+    // so with snapshots counted the gap could never reach it and this check
+    // could only ever fire for a tab that was hidden or backgrounded. The
+    // scenario it exists to catch is "the participant walked away with the
+    // questionnaire open ON SCREEN", which is precisely the case snapshots
+    // masked. Same for `activity`, which is a liveness ping rather than an
+    // answer: the check is about progress through the form.
+    const phase = events.filter(
+      (e) =>
+        e.t >= susOpen.t &&
+        e.t <= susSubmit.t &&
+        e.type !== 'snapshot' &&
+        e.type !== 'activity',
+    );
     let worstGap = 0;
     for (let i = 1; i < phase.length; i++) worstGap = Math.max(worstGap, phase[i].t - phase[i - 1].t);
     const span = susSubmit.t - susOpen.t;
+    // With snapshots filtered out the phase can legitimately hold only the two
+    // bounding events, and then the whole span IS the gap — a participant who
+    // opened the form, sat for ten minutes and submitted logs nothing between.
     const gap = Math.max(worstGap, phase.length < 2 ? span : 0);
     checks.push({
       id: 'sus-in-one-sitting',

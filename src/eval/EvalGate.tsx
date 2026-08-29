@@ -87,10 +87,16 @@ function cleanSlateForStudy(): void {
     // against the PREVIOUS user's graph, so a reload mid-session would restore
     // this participant's blank document to wherever the last one was looking.
     localStorage.removeItem(VIEWPORT_KEY);
+    // Per-device budget overrides (the CostBar's right-click point cap). This
+    // is a study CONDITION, not a preference: it decides where the cost bar
+    // turns red and therefore what `budget-crossed` measures, and it persists
+    // across participants. Leaving it set meant participant 2 silently
+    // inherited a cap someone had typed during participant 1.
+    localStorage.removeItem('fs:costBudgets');
   } catch {
     /* storage blocked — nothing persisted to leak either */
   }
-  useAppStore.setState({ past: [], future: [] });
+  useAppStore.setState({ past: [], future: [], costBudgetOverrides: {} });
 }
 
 export function EvalGate() {
@@ -114,7 +120,18 @@ export function EvalGate() {
     if (!readEvalSession()) return undefined;
     let over: boolean | null = null;
     return useAppStore.subscribe((state) => {
-      const budget = resolveDeviceBudget(state.selectedHeadsetId, state.costProfiles).maxPoints;
+      // `costBudgetOverrides` is the THIRD argument and it is not optional here:
+      // the CostBar passes it, so on a machine where the researcher has set a
+      // per-device cap the participant sees a red bar at 150 while this watcher
+      // compares against the device default of 200 — budgetCrossings 0 and
+      // overBudgetMs 0 for a session spent visibly over budget. Cost feedback is
+      // the study's independent variable, so the dependent measure must be taken
+      // against the same threshold that was on screen.
+      const budget = resolveDeviceBudget(
+        state.selectedHeadsetId,
+        state.costProfiles,
+        state.costBudgetOverrides,
+      ).maxPoints;
       if (!Number.isFinite(budget) || budget <= 0) return;
       const now = state.totalCost > budget;
       if (over === null) {
