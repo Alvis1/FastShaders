@@ -65,10 +65,28 @@ export function buildTimeUpstreamSet(
   nodes: AppNode[],
   edges: { source: string; target: string }[],
 ): Set<string> {
+  return buildDownstreamClosure(nodes, edges, (n) => n.data.registryType === 'time');
+}
+
+/**
+ * Every node reachable DOWNSTREAM of a seed, seeds included — the shape both
+ * `buildTimeUpstreamSet` ("fed by a Time node") and cpuEvaluator's
+ * `getFieldUpstreamSet` ("fed by a sampled field") are instances of. One
+ * forward BFS answers the question for every node at once; see
+ * buildTimeUpstreamSet's note for why the backward per-node form is the wrong
+ * shape for anything the render layer calls per edge per notify.
+ *
+ * Hand it the UNWRAPPED edges, never the raw store array.
+ */
+export function buildDownstreamClosure(
+  nodes: AppNode[],
+  edges: { source: string; target: string }[],
+  isSeed: (node: AppNode) => boolean,
+): Set<string> {
   const reached = new Set<string>();
   const queue: string[] = [];
   for (const n of nodes) {
-    if (n.data.registryType === 'time') {
+    if (isSeed(n)) {
       reached.add(n.id);
       queue.push(n.id);
     }

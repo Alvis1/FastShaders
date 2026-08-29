@@ -31,6 +31,13 @@ export interface EvalPackageInput {
   quality: QualityCheck[];
   /** The shader bundle; null only if bundle assembly itself failed. */
   shader: { fileName: string; bytes: Uint8Array } | null;
+  /**
+   * PNG of the 3D preview at submit — what the blinded quality-rating panel
+   * judges. Null when the stage could not produce one (no preview mounted, a
+   * backend that refuses toDataURL, a timeout); the package is valid without
+   * it, and the README says whether it is there.
+   */
+  shot?: Uint8Array | null;
 }
 
 /** `fastshaders-eval-<participant>-<YYYYMMDDHHMM>.zip` */
@@ -56,9 +63,16 @@ export function buildSummaryCsv(
   participant: string,
   susScore: number | null,
   summary: EvalSummary,
+  /** Identity/condition columns, so one row is self-describing. */
+  extra: { sessionId?: string; task?: string; briefBudget?: number | null; costBarVisible?: boolean; costTable?: string } = {},
 ): string {
   const cols: [string, unknown][] = [
     ['participant', participant],
+    ['session_id', extra.sessionId ?? ''],
+    ['task', extra.task ?? ''],
+    ['brief_budget', extra.briefBudget ?? ''],
+    ['cost_bar_visible', extra.costBarVisible == null ? '' : String(extra.costBarVisible)],
+    ['cost_table', extra.costTable ?? ''],
     ['sus_score', susScore],
     ['wall_min', (summary.wallMs / 60_000).toFixed(2)],
     ['active_min', (summary.activeMs / 60_000).toFixed(2)],
@@ -73,6 +87,8 @@ export function buildSummaryCsv(
     ['code_applies', summary.codeApplyCount],
     ['preview_rebuilds', summary.previewRebuildCount],
     ['exports', summary.exportCount],
+    ['budget_crossings', summary.budgetCrossings],
+    ['over_budget_min', (summary.overBudgetMs / 60_000).toFixed(2)],
     ['time_to_first_connect_s', summary.timeToFirstConnectMs == null ? '' : (summary.timeToFirstConnectMs / 1000).toFixed(1)],
     ['time_to_first_node_add_s', summary.timeToFirstNodeAddMs == null ? '' : (summary.timeToFirstNodeAddMs / 1000).toFixed(1)],
   ];
@@ -94,6 +110,9 @@ export function buildEvalReadme(input: EvalPackageInput): string {
     '  shader/                 the shader the participant made (byte-identical to the',
     '                          editor\'s EXPORT download; a .zip there carries embedded',
     '                          images/model alongside the .js module)',
+    input.shot && input.shot.length
+      ? '  preview.png             the 3D preview at the moment of submission'
+      : '  (no preview.png — the preview could not produce an image this session)',
     '',
     'Timestamps: each event carries `t` = milliseconds on the page\'s monotonic clock',
     '(performance.now()); session.json carries the wall-clock ISO anchor. Durations are',
@@ -118,6 +137,16 @@ export function buildEvalReadme(input: EvalPackageInput): string {
   ].join('\n');
 }
 
+/** Read a nested value out of the caller-assembled session block, or undefined. */
+function readPath<T>(obj: Record<string, unknown>, path: string[]): T | undefined {
+  let cur: unknown = obj;
+  for (const k of path) {
+    if (typeof cur !== 'object' || cur === null) return undefined;
+    cur = (cur as Record<string, unknown>)[k];
+  }
+  return cur as T | undefined;
+}
+
 export function buildEvalPackageEntries(input: EvalPackageInput): ZipEntry[] {
   const enc = new TextEncoder();
   const json = (v: unknown): Uint8Array => enc.encode(`${JSON.stringify(v, null, 2)}\n`);
@@ -130,11 +159,25 @@ export function buildEvalPackageEntries(input: EvalPackageInput): ZipEntry[] {
     { name: 'sus.json', data: json(input.sus) },
     { name: 'telemetry-events.json', data: json({ schema: input.schema, events: input.events }) },
     { name: 'telemetry-summary.json', data: json({ schema: input.schema, summary: input.summary, quality: input.quality }) },
-    { name: 'summary.csv', data: enc.encode(buildSummaryCsv(participant, susScore, input.summary)) },
+    {
+      name: 'summary.csv',
+      data: enc.encode(
+        buildSummaryCsv(participant, susScore, input.summary, {
+          sessionId: readPath(input.session, ['session', 'id']),
+          task: readPath(input.session, ['task', 'id']),
+          briefBudget: readPath(input.session, ['task', 'briefBudget']),
+          costBarVisible: readPath(input.session, ['task', 'costBarVisible']),
+          costTable: readPath(input.session, ['costTable', 'source']),
+        }),
+      ),
+    },
     { name: 'README.txt', data: enc.encode(buildEvalReadme(input)) },
   ];
   if (input.shader) {
     entries.push({ name: `shader/${input.shader.fileName}`, data: input.shader.bytes });
+  }
+  if (input.shot && input.shot.length) {
+    entries.push({ name: 'preview.png', data: input.shot });
   }
   return entries;
 }

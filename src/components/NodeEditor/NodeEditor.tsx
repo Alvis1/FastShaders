@@ -52,6 +52,7 @@ import { ImageImportModal, type ImageImportChoice } from '@/components/Modals/Im
 import { ImageConvertInfoModal } from '@/components/Modals/ImageConvertInfoModal';
 import { downloadShader } from '@/engine/exportShader';
 import { evalLog, isEvalSessionActive } from '@/eval/telemetry';
+import { evalTask } from '@/eval/evalTask';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
 import { BUILTIN_TEXTURE_DRAG_TYPE } from './TextureCard';
 import { BUILTIN_PRESET_DRAG_TYPE } from './PresetCard';
@@ -74,6 +75,7 @@ import {
   type NodeBox,
 } from './dragConnect';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
+import { WheelGesture } from './wheelKind';
 import { pickSpliceInputPort } from './edgeSplice';
 import { existingOutputId, focusOutputNode } from './outputFocus';
 import {
@@ -2640,21 +2642,45 @@ export function NodeEditor() {
     return () => el.removeEventListener('mousedown', handler, true);
   }, []);
 
-  // Horizontal-wheel pan. Vertical wheel (deltaY) keeps zooming via React
-  // Flow's zoomOnScroll. A mouse tilt-wheel or trackpad horizontal swipe emits
-  // deltaX on its own, so this is unambiguous and doesn't conflict with the
-  // smooth-scroll inertia that previously made mouse wheels misfire as pans.
+  // Wheel panning. A TRACKPAD two-finger swipe pans both axes; a notched MOUSE
+  // WHEEL keeps zooming through React Flow's zoomOnScroll, which is what every
+  // node editor does and what this canvas has always done. The two arrive as
+  // the same event, so `WheelGesture` discriminates them (see wheelKind.ts —
+  // pixel-vs-line delta mode, then the legacy wheelDelta detent) and latches
+  // the answer for the whole flick, upgrade-only, so one gesture can never
+  // alternate between panning and zooming.
+  //
+  // The horizontal half predates this and is unchanged: a mouse tilt-wheel or a
+  // trackpad sideways swipe emits deltaX on its own, which is unambiguous
+  // whatever the device. Only the VERTICAL half needs the discriminator, and it
+  // is deliberately biased toward "wheel" — misreading a trackpad costs a pan
+  // the user can repeat, misreading a mouse takes their zoom control away.
+  //
+  // Pinch (ctrlKey) and an explicit Cmd/Ctrl+wheel pass straight through, so
+  // zooming stays available on a trackpad without a mouse.
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
 
+    const gesture = new WheelGesture();
+
     const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) return; // pinch-to-zoom
-      if (e.deltaX === 0) return; // pure vertical wheel → let React Flow zoom
+      if (e.ctrlKey || e.metaKey) return; // pinch-to-zoom / explicit zoom
+      // React Flow's own opt-out, honoured here too: the canvas bar and the
+      // cost overlay are scrollable chrome sitting inside this element, and a
+      // capture-phase listener would otherwise pan the graph out from under a
+      // wheel aimed at them.
+      if ((e.target as Element | null)?.closest?.('.nowheel')) return;
+      const trackpad = gesture.next(e, e.timeStamp);
+      if (!trackpad && e.deltaX === 0) return; // notched wheel → let React Flow zoom
       e.preventDefault();
       e.stopImmediatePropagation();
       const vp = getViewport();
-      setViewport({ x: vp.x - e.deltaX, y: vp.y, zoom: vp.zoom });
+      setViewport({
+        x: vp.x - e.deltaX,
+        y: trackpad ? vp.y - e.deltaY : vp.y,
+        zoom: vp.zoom,
+      });
     };
 
     el.addEventListener('wheel', onWheel, { passive: false, capture: true });
@@ -3052,7 +3078,10 @@ export function NodeEditor() {
         }}
       >
         <div className="node-editor__cost-overlay">
-          <CostBar onFocusOutput={hasOutput ? focusOutput : undefined} />
+          {/* The study's cost-feedback condition can hide the bar entirely
+              (`?costbar=off` on the /eval launch URL). Outside eval mode the
+              task defaults to visible, so this is inert for normal users. */}
+          {evalTask().costBarVisible && <CostBar onFocusOutput={hasOutput ? focusOutput : undefined} />}
         </div>
         {/* Top-RIGHT chrome, immediately left of the cost pill: start a fresh
             shader. Kept well away from the bottom-left working bar — it throws

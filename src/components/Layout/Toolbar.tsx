@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { useDismiss } from '@/hooks/useDismiss';
 import { useLongPress } from '@/hooks/useLongPress';
@@ -10,6 +10,7 @@ import { SusModal } from '@/eval/SusModal';
 import { EvalFinishModal } from '@/eval/EvalFinishModal';
 import { WorkFolder } from './WorkFolder';
 import { t } from '@/i18n';
+import { foldOverflow, OVERFLOW_INITIAL } from './toolbarOverflow';
 import './Toolbar.css';
 
 const CONTACT = {
@@ -179,6 +180,49 @@ export function Toolbar() {
   }, []);
   const closePalettes = useCallback(() => setPalettesOpen(false), []);
 
+  // ── Narrow-window overflow ────────────────────────────────────────────────
+  // Below a certain width the right cluster stops fitting and the toolbar
+  // simply overflows (the centre's name field is the only flexible child and
+  // it bottoms out at its min-width). Rather than pick a breakpoint, MEASURE:
+  // the needed width differs between the web and desktop builds (SC + Download
+  // app vs VR) and between languages, so a media query would be wrong for
+  // three of those four combinations. `foldOverflow` owns the hysteresis —
+  // collapsing removes the very overflow that triggered it, so the expand
+  // threshold has to be captured while the bar is still expanded.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState(OVERFLOW_INITIAL);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useDismiss(menuOpen, setMenuOpen, [menuRef]);
+
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const measure = () =>
+      setOverflow((s) => foldOverflow(s, { clientWidth: el.clientWidth, scrollWidth: el.scrollWidth }));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+    // `language` is a dependency because switching it relabels several chips
+    // (and the EXPORT/name row), which changes the natural width without
+    // changing the element's own box — so no resize is observed.
+  }, [language]);
+
+  // Re-measure after a collapse/expand commits: the observer fires on the
+  // toolbar's own box, which does NOT change when its children do, so the
+  // expanded-again bar would never learn that it overflows.
+  useLayoutEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    setOverflow((s) => foldOverflow(s, { clientWidth: el.clientWidth, scrollWidth: el.scrollWidth }));
+  }, [overflow.collapsed, language]);
+
+  // Nothing to keep open once the buttons are back on the bar.
+  useEffect(() => {
+    if (!overflow.collapsed) setMenuOpen(false);
+  }, [overflow.collapsed]);
+
   const handleCopy = useCallback(async (key: string, value: string) => {
     try {
       await navigator.clipboard.writeText(value);
@@ -193,7 +237,7 @@ export function Toolbar() {
   }, []);
 
   return (
-    <div className="toolbar">
+    <div className="toolbar" ref={barRef}>
       <div className="toolbar__left">
         <button
           ref={brandRef}
@@ -415,6 +459,18 @@ export function Toolbar() {
         </button>
       </div>
       <div className="toolbar__right">
+        {/* Everything from the reload button through the theme toggle is
+            COLLAPSIBLE: below the measured width these move into the ☰ menu
+            below, rendered from this same fragment so the two states cannot
+            drift. Deliberately NOT collapsible, and therefore outside it: the
+            EVAL badge (visible by design — covert recording is what the
+            study's ethics posture forbids) and the feedback "!" (the one loud
+            control in the chrome, and in eval mode the FINISH button the
+            consent screen told the participant to press). Hiding either behind
+            a menu on a small window would defeat the reason each exists. */}
+        {(() => {
+          const collapsible = (
+            <>
         {/* Hard reload of the tab. Safe to offer without a confirm: the graph
             autosaves to fs:graph (plus every UI pref to its own key), so a
             reload restores the session rather than discarding it. The one
@@ -657,6 +713,39 @@ export function Toolbar() {
         >
           {isDark ? '☼' : '☾'}
         </button>
+            </>
+          );
+          if (!overflow.collapsed) return collapsible;
+          return (
+            <div className="toolbar__overflow" ref={menuRef}>
+              <button
+                type="button"
+                className="toolbar__sc-link toolbar__overflow-btn"
+                onClick={() => setMenuOpen((o) => !o)}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                title={t('More tools', language)}
+                aria-label={t('More tools', language)}
+              >
+                {/* Inline SVG for the same reason the reload icon is one: the
+                    app self-hosts a woff2 SUBSET of Inter, so ☰ is not
+                    guaranteed to be in the font offline. */}
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M3 5h18v2.4H3zm0 5.8h18v2.4H3zm0 5.8h18V19H3z" />
+                </svg>
+              </button>
+              {menuOpen && (
+                <div
+                  className="toolbar__overflow-menu"
+                  role="menu"
+                  aria-label={t('More tools', language)}
+                >
+                  {collapsible}
+                </div>
+              )}
+            </div>
+          );
+        })()}
         {/* Eval mode is VISIBLE by design: covert recording is what the study's
             ethics posture forbids, so the badge stays for the whole session. */}
         {isEvalMode() && (

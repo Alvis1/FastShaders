@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { findDefaultOutput } from '@/utils/outputMaterials';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { ScrollArrow, useScrollArrows } from '@/components/Layout/ScrollArrows';
+import { evalLog } from '@/eval/telemetry';
 import { getNodeValues } from '@/types';
 import type { AppNode, AppEdge } from '@/types';
 import { usePersistedState } from '@/hooks/usePersistedState';
@@ -477,6 +479,9 @@ export function ShaderPreview() {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  // Horizontal overflow of the top control bar — see the bar's own comment.
+  const ctlRef = useRef<HTMLDivElement>(null);
+  const ctlArrows = useScrollArrows(ctlRef);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Fullscreen toggle for the whole preview pane (controls + canvas + property
@@ -1119,6 +1124,15 @@ export function ShaderPreview() {
         if (!scrubbingRef.current) paintThumb(data.time);
         return;
       }
+      if (data.type === 'fs:activity') {
+        // Eval telemetry only (no-op otherwise): input INSIDE the preview is
+        // invisible to the parent's own capture-phase listeners, so without
+        // this a participant studying the shader for minutes reads as idle
+        // and gets timed out of active time. Throttled in the stage; the
+        // payload is a bare presence signal, never what was done.
+        evalLog('activity', { source: 'preview' });
+        return;
+      }
       if (data.type === 'fs:stats') {
         // Frame-rate report from the stage's render loop (~4x/s while on).
         // Written straight to the DOM — see the showStats declaration for why
@@ -1752,7 +1766,16 @@ export function ShaderPreview() {
         if (files.length) handleDroppedFiles(files);
       }}
     >
-      <div className="shader-preview__controls">
+      {/* The control bar SCROLLS rather than wrapping or clipping: the pane is
+          user-resizable down to a couple of hundred px, and at that width the
+          Light/Model/Subd controls and the WGSL/FPS/Uniforms group cannot all
+          fit. Same treatment as the asset browser's two rows, through the same
+          implementation (components/Layout/ScrollArrows.tsx) — including the
+          wheel-to-horizontal mapping, since the bar is one line tall and a
+          vertical wheel over it has nothing else to mean. */}
+      <div className="shader-preview__ctl-wrap">
+        {ctlArrows.canLeft && <ScrollArrow direction="left" onClick={() => ctlArrows.scrollBy(-1)} />}
+      <div className="shader-preview__controls" ref={ctlRef}>
         <label className="shader-preview__ctl">
           <span className="shader-preview__ctl-label">{t('Light', language)}</span>
           <select
@@ -1862,6 +1885,8 @@ export function ShaderPreview() {
             </button>
           )}
         </div>
+      </div>
+        {ctlArrows.canRight && <ScrollArrow direction="right" onClick={() => ctlArrows.scrollBy(1)} />}
       </div>
       <div className={`shader-preview__body${showStats ? ' shader-preview__body--stats' : ''}`} ref={bodyRef}>
         {compiling && (

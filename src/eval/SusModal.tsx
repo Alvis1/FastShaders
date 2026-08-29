@@ -21,6 +21,9 @@ import {
   clearEvalJournal,
 } from './telemetry';
 import { deriveSummary, runQualityChecks, type QualityCheck } from './telemetryModel';
+import { evalTask } from './evalTask';
+import { collectDevice, costTableProvenance } from './evalContext';
+import { capturePreviewShot } from './previewShot';
 import { buildEvalPackageEntries, evalZipFileName } from './evalPackage';
 import { EVAL_UPLOAD_URL, uploadEvalPackage, type EvalUploadResult } from './evalUpload';
 import {
@@ -117,7 +120,7 @@ export function SusModal({ open, onClose }: Props) {
   const answered = useMemo(() => responses.filter((r) => r != null).length, [responses]);
   const complete = answered === SUS_ITEM_COUNT;
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!complete || done) return;
     const filled = responses.map((r) => r ?? 3);
     const score = computeSusScore(filled);
@@ -125,13 +128,18 @@ export function SusModal({ open, onClose }: Props) {
     const session = readEvalSession();
     const trimmedParticipant = participant.trim() || session?.participant || '';
 
+    // The image is captured FIRST, while the preview still shows the finished
+    // shader and before the session is torn down. Best-effort: a null here
+    // just means the package ships without preview.png.
+    const shot = await capturePreviewShot();
+
     // Order matters: the sus-submit + session-end events must be IN the log
     // the package carries, so log first, end the session, then read events.
     evalLog('sus-submit', { language });
     endEvalSession();
     const events = getEvalEvents();
     const summary = deriveSummary(events, { idleThresholdMs: IDLE_THRESHOLD_MS });
-    const quality = runQualityChecks(events, summary);
+    const quality = runQualityChecks(events, summary, { susResponses: filled });
 
     // buildShaderBundle never throws (it catches internally), but the belt
     // matches the braces: a package without the shader still beats no package.
@@ -187,6 +195,13 @@ export function SusModal({ open, onClose }: Props) {
           givenAtIso: session?.consentIso ?? '',
           textVersion: session?.consentVersion ?? '',
         },
+        // Which task and which experimental condition this session ran under.
+        task: evalTask(),
+        // Which price table valued the graph: a point total is only
+        // interpretable against the table that produced it, and the tables
+        // move with each  calibration round.
+        costTable: costTableProvenance(),
+        device: collectDevice(),
         project: collectProject(),
       },
       sus,
@@ -194,6 +209,7 @@ export function SusModal({ open, onClose }: Props) {
       summary,
       quality,
       shader,
+      shot,
     };
 
     const zipBytes = buildZip(buildEvalPackageEntries(input));

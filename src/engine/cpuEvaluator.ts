@@ -18,7 +18,7 @@ import { hexToRgb01 } from '@/utils/colorUtils';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
-import { buildTimeUpstreamSet } from '@/utils/graphTraversal';
+import { buildTimeUpstreamSet, buildDownstreamClosure } from '@/utils/graphTraversal';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
 const NOISE_UV_SCALE = 4;
@@ -90,6 +90,8 @@ interface EvalCtx {
   edgeById: Map<string, AppEdge> | null;
   /** Lazy "is this node fed by a Time node" set (getTimeUpstreamSet). */
   timeUpstream: Set<string> | null;
+  /** Lazy "is this node fed by a sampled FIELD" set (getFieldUpstreamSet). */
+  fieldUpstream: Set<string> | null;
 }
 
 /**
@@ -156,6 +158,7 @@ function getCtx(nodes: AppNode[], edges: AppEdge[]): EvalCtx {
       shapeCache: new Map(),
       edgeById: null,
       timeUpstream: null,
+      fieldUpstream: null,
     };
     byEdges.set(edges, ctx);
     // Internal recursion (e.g. computeRange → evaluateNodeOutput) re-enters
@@ -249,6 +252,28 @@ export function getTimeUpstreamSet(nodes: AppNode[], edges: AppEdge[]): Readonly
   const ctx = getCtx(nodes, edges);
   if (!ctx.timeUpstream) ctx.timeUpstream = buildTimeUpstreamSet(nodes, ctx.edges);
   return ctx.timeUpstream;
+}
+
+/**
+ * Is `nodeId` fed by a sampled FIELD — a node whose value varies across the
+ * surface (uv/screenUV, the geometry attributes, the noise family) — or one
+ * itself? Memoized on the shared ctx exactly like `getTimeUpstreamSet`, and
+ * seeded by the SAME table that gives those nodes their analytical range
+ * (`analyticalRange`), so the two can't drift.
+ *
+ * This is the "is the deterministic value the whole story?" question. For a
+ * field node it is not: `evaluate` samples ONE point (uv's centre, noise's
+ * fixed lattice UV), and that one number is meaningless as a bound — which is
+ * why every consumer of a field's value must fall back to interval arithmetic
+ * instead of treating the sample as a degenerate range. See the `det`
+ * shortcut in computeRange and `preferRange` in ShaderNode's edgeValueLabel.
+ */
+export function getFieldUpstreamSet(nodes: AppNode[], edges: AppEdge[]): ReadonlySet<string> {
+  const ctx = getCtx(nodes, edges);
+  if (!ctx.fieldUpstream) {
+    ctx.fieldUpstream = buildDownstreamClosure(nodes, ctx.edges, (n) => analyticalRange(n) !== null);
+  }
+  return ctx.fieldUpstream;
 }
 
 /**
@@ -1040,6 +1065,83 @@ function rangeOfValue(v: number[]): RangeResult {
   return { min: [...v], max: [...v] };
 }
 
+/**
+ * The analytically-known range of a SAMPLED FIELD — a node whose value varies
+ * across the surface, so the deterministic evaluator's answer for it is one
+ * arbitrary point rather than the whole story. Returns null for every other
+ * node (constants, uniforms, operators), which is what makes this table serve
+ * two jobs at once: `computeRange` returns it directly, and
+ * `getFieldUpstreamSet` uses `!== null` as its BFS seed predicate. Keeping
+ * them one table is deliberate — a field added here without a matching seed
+ * would silently reintroduce the collapse the `det` gate exists to prevent.
+ */
+function analyticalRange(node: AppNode): RangeResult | null {
+  const type = node.data.registryType;
+  const def = NODE_REGISTRY.get(type);
+  if (!def) return null;
+
+  // UV/screenUV: span [0, 1] across the surface even though point-sampling
+  // returns the centre (0.5, 0.5). Range is more useful here than the sample.
+  if (type === 'uv' || type === 'screenUV') return { min: [0, 0], max: [1, 1] };
+
+  // Geometry attributes with well-defined bounds. Normals, tangents, and view
+  // directions are unit vectors → every channel lies in [-1, 1].
+  //
+  // `normalWorld` belongs here for the same reason `normalLocal` does — three
+  // builds it as `normalView.transformDirection(cameraViewMatrix)`, and
+  // transformDirection ends in `normalize()` (MathNode.js TRANSFORM_DIRECTION),
+  // so it is unit BY CONSTRUCTION. It was missing, which is exactly the wire
+  // the four fresnel presets feed into `dot`, so those edges reported a bare
+  // `…` while the `normalLocal` beside them in this very list reported a range.
+  //
+  // The box is per-channel, so it cannot express |v| = 1 — (1,1,1) is inside it
+  // and has length √3. That is a limitation of RangeResult's shape, shared with
+  // every entry here, not a wrong bound: it is still the tightest AXIS-ALIGNED
+  // box a unit vector can occupy.
+  if (
+    type === 'normalLocal' || type === 'tangentLocal' || type === 'normalWorld' ||
+    type === 'positionWorldDirection' || type === 'positionViewDirection'
+  ) {
+    return { min: [-1, -1, -1], max: [1, 1, 1] };
+  }
+
+  // Vertex colours are a normalized attribute (glTF permits only normalized
+  // byte/short component types for COLOR_0), so every channel is [0, 1] —
+  // including alpha, which is 1 for the vec3 case because VertexColorNode is
+  // vec4 whatever the file's itemSize.
+  //
+  // A RANGE, deliberately not an `evaluate` case returning [1,1,1,1]: white is
+  // only what the MISSING-attribute fallback emits, and asserting it as the
+  // value would be a confident lie the moment a coloured .glb is dropped. Four
+  // channels to match portShapeForHandle's shapeOfDataType('vec4'), so
+  // handleSlice / evaluateEdgeRange project consistently.
+  if (type === 'vertexColor') return { min: [0, 0, 0, 0], max: [1, 1, 1, 1] };
+
+  // Model-space positions follow the preview convention: fit-bounds rescales
+  // geometry so the longest axis spans 1.6 (matching primitive framing), so
+  // each channel sits within roughly [-0.8, 0.8].
+  if (type === 'positionGeometry' || type === 'positionLocal') {
+    return { min: [-0.8, -0.8, -0.8], max: [0.8, 0.8, 0.8] };
+  }
+
+  // MaterialX noise. NOT a property of the category any more: perlin/fBm carry
+  // a per-node range flag, and cellNoise/voronoi were always [0, 1]. This block
+  // used to assert [0, 1] for everything — which is exactly why the signed GPU
+  // output came as a surprise, since the editor's own edge cards had been
+  // reporting 0…1 for a shader emitting -1…1. vec2/vec3 variants share the same
+  // per-channel bound, just with more channels; exact analytical ranges per
+  // noise function still aren't worth the complexity.
+  if (def.category === 'noise') {
+    const n = shapeOfDataType(def.outputs[0].dataType);
+    const signedNoise = hasNoiseRangeFlag(type) && !isUnsignedNoise(type, getNodeValues(node));
+    return signedNoise
+      ? { min: Array(n).fill(-1), max: Array(n).fill(1) }
+      : { min: Array(n).fill(0), max: Array(n).fill(1) };
+  }
+
+  return null;
+}
+
 /** Element-wise broadcast binary op on ranges (broadcasts shorter to longer). */
 function broadcastRange(
   a: RangeResult,
@@ -1134,92 +1236,35 @@ function computeRange(
   let result: RangeResult | null = null;
 
   // ─── Special-case nodes with analytical ranges ──────────────────────────
-  // UV/screenUV: span [0, 1] across the surface even though point-sampling
-  // returns the centre (0.5, 0.5). Range is more useful here than the sample.
-  if (type === 'uv' || type === 'screenUV') {
-    result = { min: [0, 0], max: [1, 1] };
-    cache.set(nodeId, result);
-    return result;
-  }
-
-  // Geometry attributes with well-defined bounds. Normals, tangents, and view
-  // directions are unit vectors → every channel lies in [-1, 1].
-  //
-  // `normalWorld` belongs here for the same reason `normalLocal` does — three
-  // builds it as `normalView.transformDirection(cameraViewMatrix)`, and
-  // transformDirection ends in `normalize()` (MathNode.js TRANSFORM_DIRECTION),
-  // so it is unit BY CONSTRUCTION. It was missing, which is exactly the wire
-  // the four fresnel presets feed into `dot`, so those edges reported a bare
-  // `…` while the `normalLocal` beside them in this very list reported a range.
-  //
-  // The box is per-channel, so it cannot express |v| = 1 — (1,1,1) is inside it
-  // and has length √3. That is a limitation of RangeResult's shape, shared with
-  // every entry here, not a wrong bound: it is still the tightest AXIS-ALIGNED
-  // box a unit vector can occupy.
-  if (
-    type === 'normalLocal' || type === 'tangentLocal' || type === 'normalWorld' ||
-    type === 'positionWorldDirection' || type === 'positionViewDirection'
-  ) {
-    result = { min: [-1, -1, -1], max: [1, 1, 1] };
-    cache.set(nodeId, result);
-    return result;
-  }
-
-  // Vertex colours are a normalized attribute (glTF permits only normalized
-  // byte/short component types for COLOR_0), so every channel is [0, 1] —
-  // including alpha, which is 1 for the vec3 case because VertexColorNode is
-  // vec4 whatever the file's itemSize.
-  //
-  // A RANGE, deliberately not an `evaluate` case returning [1,1,1,1]: white is
-  // only what the MISSING-attribute fallback emits, and asserting it as the
-  // value would be a confident lie the moment a coloured .glb is dropped. Four
-  // channels to match portShapeForHandle's shapeOfDataType('vec4'), so
-  // handleSlice / evaluateEdgeRange project consistently.
-  if (type === 'vertexColor') {
-    result = { min: [0, 0, 0, 0], max: [1, 1, 1, 1] };
-    cache.set(nodeId, result);
-    return result;
-  }
-
-  // Model-space positions follow the preview convention: fit-bounds rescales
-  // geometry so the longest axis spans 1.6 (matching primitive framing), so
-  // each channel sits within roughly [-0.8, 0.8].
-  if (type === 'positionGeometry' || type === 'positionLocal') {
-    result = { min: [-0.8, -0.8, -0.8], max: [0.8, 0.8, 0.8] };
-    cache.set(nodeId, result);
-    return result;
-  }
-
-  // MaterialX noise. NOT a property of the category any more: perlin/fBm carry
-  // a per-node range flag, and cellNoise/voronoi were always [0, 1]. This block
-  // used to assert [0, 1] for everything — which is exactly why the signed GPU
-  // output came as a surprise, since the editor's own edge cards had been
-  // reporting 0…1 for a shader emitting -1…1. vec2/vec3 variants share the same
-  // per-channel bound, just with more channels; exact analytical ranges per
-  // noise function still aren't worth the complexity.
-  if (def.category === 'noise') {
-    const n = shapeOfDataType(def.outputs[0].dataType);
-    const signedNoise = hasNoiseRangeFlag(type) && !isUnsignedNoise(type, getNodeValues(node));
-    result = signedNoise
-      ? { min: Array(n).fill(-1), max: Array(n).fill(1) }
-      : { min: Array(n).fill(0), max: Array(n).fill(1) };
-    cache.set(nodeId, result);
-    return result;
+  const analytical = analyticalRange(node);
+  if (analytical) {
+    cache.set(nodeId, analytical);
+    return analytical;
   }
 
   // ─── Try deterministic eval ─────────────────────────────────────────────
   // For nodes without a special range, the actual evaluated value is the
-  // tightest possible range. Eval handles all the simple cases (constants,
-  // arithmetic on constants, time, etc.) and gives a degenerate range.
+  // tightest possible range — but ONLY when the value is a constant across the
+  // surface. Downstream of a FIELD (uv, the geometry attributes, noise) it is
+  // one arbitrary sample, and taking it as the range collapsed every wire below
+  // a field to a single number: `mul(perlin, gradient)` reported a flat `0.00`
+  // between an input reading `0…1` and one reading `-1…1`, because the noise
+  // probe lands on an integer lattice where Perlin is exactly 0. The block
+  // comment above this section always claimed interval arithmetic carried those
+  // chains; it never ran, because `evaluate` learned to sample noise on the CPU
+  // after this shortcut was written and has short-circuited it ever since.
+  //
   // Only accept a deterministic value as the range when every channel is finite.
   // A non-finite eval (NaN/Infinity from a poisoned input) must fall through to
   // interval arithmetic below — otherwise the range collapses to a NaN range and
   // the EdgeInfoCard renders '…' instead of the real bounds.
-  const det = evaluateNodeOutput(nodeId, nodes, edges, time);
-  if (det && det.length > 0 && det.every(Number.isFinite)) {
-    result = rangeOfValue(det);
-    cache.set(nodeId, result);
-    return result;
+  if (!getFieldUpstreamSet(nodes, edges).has(nodeId)) {
+    const det = evaluateNodeOutput(nodeId, nodes, edges, time);
+    if (det && det.length > 0 && det.every(Number.isFinite)) {
+      result = rangeOfValue(det);
+      cache.set(nodeId, result);
+      return result;
+    }
   }
 
   // ─── Range propagation through operations ──────────────────────────────
@@ -1276,6 +1321,86 @@ function computeRange(
       result = unaryRange(x, (lo, hi) => [Math.sqrt(Math.max(0, lo)), Math.sqrt(Math.max(0, hi))]);
       break;
     }
+    // The five below were missing while the deterministic shortcut covered for
+    // them: every chain reaching one had already collapsed to a probe value, so
+    // interval arithmetic never got here. With the `det` gate in place they are
+    // the difference between a real bound and a bare '…' on any wire below a
+    // field — `pow` alone carries all four fresnel presets.
+    case 'exp': {
+      const x = portRange('x', 0);
+      result = unaryRange(x, (lo, hi) => [Math.exp(lo), Math.exp(hi)]);
+      break;
+    }
+    case 'log2': {
+      // Floored at 1e-10 exactly as `evaluate` floors it, so the interval and
+      // the sample agree about a non-positive input instead of one reporting
+      // -Infinity and the other -33.2.
+      const x = portRange('x', 1);
+      const safeLog = (v: number) => Math.log2(Math.max(1e-10, v));
+      result = unaryRange(x, (lo, hi) => [safeLog(lo), safeLog(hi)]);
+      break;
+    }
+    case 'pow': {
+      const base = portRange('base', 1);
+      const exp = portRange('exp', 1);
+      result = broadcastRange(base, exp, (blo, bhi, elo, ehi) => {
+        const corners = [
+          Math.pow(blo, elo), Math.pow(blo, ehi),
+          Math.pow(bhi, elo), Math.pow(bhi, ehi),
+        ];
+        // pow is monotone in each argument separately, so the corners bound it
+        // — EXCEPT when the base straddles 0, where the extremum sits AT 0 and
+        // no corner sees it (base [-1, 1] squared gives 1, 1, 1, 1 while the
+        // true minimum is 0).
+        if (blo < 0 && bhi > 0) corners.push(Math.pow(0, elo), Math.pow(0, ehi));
+        // A negative base with a fractional exponent is NaN — there is no real
+        // bound to report, so hand the caller an unbounded interval (which both
+        // surfaces render as '…') rather than a confident wrong one.
+        if (!corners.every(Number.isFinite)) return [-Infinity, Infinity];
+        return [Math.min(...corners), Math.max(...corners)];
+      });
+      break;
+    }
+    case 'mod': {
+      const x = portRange('x', 0);
+      const y = portRange('y', 1);
+      result = broadcastRange(x, y, (xlo, _xhi, ylo, yhi) => {
+        // Only a strictly positive divisor is bounded usefully; one spanning 0
+        // is the div case (evaluate returns 0 there, which is not a bound).
+        if (!(ylo > 0)) return [-Infinity, Infinity];
+        // JS `%` is TRUNCATED, matching evaluate — so the result keeps the
+        // dividend's sign and a non-negative dividend cannot go below 0.
+        return [xlo >= 0 ? 0 : -yhi, yhi];
+      });
+      break;
+    }
+    case 'dot': {
+      // Interval sum of the per-channel interval products, broadcasting the
+      // shorter operand exactly as evaluate's `i % length` does.
+      const a = portRange('a', 0);
+      const b = portRange('b', 0);
+      const len = Math.max(a.min.length, b.min.length);
+      let lo = 0, hi = 0;
+      for (let i = 0; i < len; i++) {
+        const ai = i % a.min.length, bi = i % b.min.length;
+        const corners = [
+          a.min[ai] * b.min[bi], a.min[ai] * b.max[bi],
+          a.max[ai] * b.min[bi], a.max[ai] * b.max[bi],
+        ];
+        lo += Math.min(...corners);
+        hi += Math.max(...corners);
+      }
+      result = { min: [lo], max: [hi] };
+      break;
+    }
+    case 'hsl':
+      // Both conversions are closed over the unit cube whatever the input —
+      // hsl() builds an RGB triple, toHsl() a normalized (h, s, l).
+      result = { min: [0, 0, 0], max: [1, 1, 1] };
+      break;
+    case 'toHsl':
+      result = { min: [0, 0, 0], max: [1, 1, 1] };
+      break;
     case 'floor':
     case 'round': {
       const x = portRange('x', 0);
@@ -1388,8 +1513,30 @@ function computeRange(
     }
     case 'length':
     case 'distance': {
-      // Non-negative scalar; without per-component bounds we can't tighten further
-      result = { min: [0], max: [Infinity] };
+      // Euclidean norm of the per-channel intervals — of `v` itself, or of the
+      // element-wise difference for `distance`. The old rule was a flat
+      // [0, Infinity], which the label surfaces both render as a bare '…': that
+      // was the honest answer only while this branch was unreachable for
+      // anything with real bounds, and it is the one place the `det` gate would
+      // otherwise have LOST information (Circle's `distance(uv, 0.5)` reported
+      // its centre sample `0` before and would report nothing now).
+      const d =
+        type === 'length'
+          ? portRange('v', 0)
+          : broadcastRange(portRange('a', 0), portRange('b', 0), (amin, amax, bmin, bmax) => [
+              amin - bmax,
+              amax - bmin,
+            ]);
+      let lo2 = 0, hi2 = 0;
+      for (let i = 0; i < d.min.length; i++) {
+        const lo = d.min[i], hi = d.max[i];
+        // |x| over an interval: 0 when it straddles zero, else the nearer end.
+        const amin = lo <= 0 && hi >= 0 ? 0 : Math.min(Math.abs(lo), Math.abs(hi));
+        const amax = Math.max(Math.abs(lo), Math.abs(hi));
+        lo2 += amin * amin;
+        hi2 += amax * amax;
+      }
+      result = { min: [Math.sqrt(lo2)], max: [Math.sqrt(hi2)] };
       break;
     }
   }
