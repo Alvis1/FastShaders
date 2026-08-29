@@ -12,6 +12,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The suite reads the a-frame-shaderloader submodule directly:
+          # `vendorSync.test.ts` compares it against the tracked public/js/
+          # copies, and `perMeshMaterials.test.ts` reads loader 0.6's own source
+          # to state WHY the vendored gate has to match. Without this, that read
+          # is an ENOENT and CI is red for a reason that has nothing to do with
+          # the change being tested — which is how it sat failing from v0.3.23
+          # while every release stayed green (release.yml checks out submodules
+          # on all three of its jobs, and runs the same `npm test`).
+          submodules: recursive
 
       - uses: actions/setup-node@v4
         with:
