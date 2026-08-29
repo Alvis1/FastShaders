@@ -286,6 +286,13 @@ export function SusModal({ open, onClose }: Props) {
             </div>
           ) : done.upload === 'pending' ? (
             <div className="csv-import-modal__message">{t('Sending to the researcher…', language)}</div>
+          ) : done.upload === 'failed' ? (
+            // The automatic transfer is the only step that can fail silently
+            // (offline room, server down), so it says so plainly and points at
+            // the copy that always exists: the file downloaded at submit.
+            <div className="eval-done__warn">
+              {t('The package could not be sent automatically. Please make sure the researcher receives the file — it is already in your Downloads folder, and the “Download” button below gives you another copy.', language)}
+            </div>
           ) : null}
           <div className="csv-import-modal__message">
             {t('Your email app should have opened with the message ready. Attach the file named above and press Send. If it did not open, use “Open email” below — or simply tell the researcher, the file is in the Downloads folder.', language)}
@@ -293,10 +300,12 @@ export function SusModal({ open, onClose }: Props) {
           <div className="csv-import-modal__buttons">
             <button
               type="button"
-              className="csv-import-modal__button"
+              className={`csv-import-modal__button${
+                done.upload === 'failed' ? ' csv-import-modal__button--yes' : ''
+              }`}
               onClick={() => downloadBytes(done.fileName, done.zipBytes)}
             >
-              {t('Download again', language)}
+              {t('Download', language)}
             </button>
             <button type="button" className="csv-import-modal__button" onClick={onClose}>
               {t('Close', language)}
