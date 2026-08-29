@@ -9,6 +9,7 @@ import complexityData from './registry/complexity.json';
 import type { AppNode, AppEdge, OutputNodeData, ShaderNodeData } from './types';
 import { generateId } from './utils/idGenerator';
 import { makeTypedEdge } from './utils/edgeUtils';
+import { readStoredViewport } from './utils/viewportMemory';
 
 function SyncController() {
   useSyncEngine();
@@ -132,6 +133,16 @@ export default function App() {
     // first visit. The import-fit arm in NodeEditor solves exactly this
     // "nodes replaced, viewport not" case, and its listener is attached by
     // the same effect-ordering guarantee.
+    //
+    // …but NOT when the canvas has a remembered viewport for this very graph.
+    // Framing is the right default for a graph the user has not seen yet; it is
+    // exactly wrong when they left the canvas somewhere deliberate, and this is
+    // the line that decides it — NodeEditor's `defaultViewport` has already put
+    // the viewport back by now, and the arm fits straight over it (measured:
+    // the restore looked like it had simply not been implemented). Gated on
+    // `saved` rather than on the stored viewport alone, so a corrupt or missing
+    // autosave — which lands the DEMO graph on screen instead — is still framed.
+    if (saved && readStoredViewport()) return;
     window.dispatchEvent(new CustomEvent('fs:graph-imported'));
   }, []);
 

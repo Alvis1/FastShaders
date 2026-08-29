@@ -21,7 +21,7 @@
 
 /* ---------- Resize grip ----------
    A tab growing OUT of the edge it resizes: outlined in the edge's own color,
-   flat where it meets the edge and rounded on the far side, so it reads as
+   square on every corner like the rest of the technical chrome, so it reads as
    part of the divider rather than a button parked on top of it.
 
    It is the ONLY drag target — the divider bar itself is inert — so it owns
@@ -41,11 +41,26 @@
   box-sizing: border-box;
   background: var(--bg-surface);
   /* Same color AND same thickness as the seam it grows from, so the outline
-     and the edge are literally one line. Each consumer sets --fs-grip-border
-     to its own edge's thickness (SplitPane's 4px seam, the asset bar's 2px
-     top border); the fallback covers any future host. */
+     and the edge are literally one line. Both hosts publish the SAME value
+     (SplitPane's divider and the asset bar's resizer) — they used to disagree,
+     4px against 2px, which is what made the app draw two different dividers
+     depending which one you looked at. The fallback covers a future host.
+     NB the LINE tracks --fs-seam and so bumps on coarse pointers, while this
+     outline stays at the desktop 2px — see SplitPane.css for why. */
   border: var(--fs-grip-border, 2px) solid var(--edge-color);
-  color: var(--text-secondary);
+  /* --text-primary, not --text-secondary: the mark is a FILLED square now, and
+     a filled shape at #555 reads as a greyed-out control where an outline at
+     the same colour read as a line weight. The token is the app's "black"
+     (#1A1A1A light / #eceef0 dark), so it is black where the user sees black
+     and stays legible on the dark grip surface — the same reasoning as the
+     Output node's socket and the uniform panel's chips. */
+  color: var(--text-primary);
+  /* NO shadow — the whole divider system is flat (see SplitPane.css). And if
+     one is ever added back, it belongs on the grip's PARENT as a
+     `filter: drop-shadow`, never as a box-shadow here: the grip sits flush
+     against its seam, so its own shadow column would land on the seam's and
+     the two translucent blacks composite into a darker notch exactly where the
+     tab meets the line. */
   transition: border-color var(--transition-fast), color var(--transition-fast);
   /* the grip drags; nothing else does */
   touch-action: none;
@@ -69,10 +84,19 @@
   outline-offset: 2px;
 }
 
-/* The diamond (::before). Split by a line (::after) into two triangles ONLY on
-   single-axis grips, where they read as arrows along the drag axis — the
-   two-axis corner grip keeps the plain diamond, since ▲▼ or ◀▶ would lie
-   about half its directions.
+/* The diamond (::before) — a SOLID filled square turned 45°, and it is the ONE
+   mark every grip carries. Both halves of that are deliberate.
+
+   FILLED, not outlined: an outline is a line weight competing with the seam's
+   own line and with the border the grip is already drawn in, and at the sizes
+   involved the hollow centre read as a third, empty box.
+
+   IDENTICAL on every grip: the single-axis grip used to split its diamond with
+   a bar (::after) into ▲▼ arrows while the two-axis corner grip kept the plain
+   shape, so the two resize affordances did not look like the same control. The
+   arrows also carried no information the cursor doesn't already give (row-resize
+   / col-resize / move are set per grip), while costing the app a second mark to
+   keep in sync. One mark, one meaning: "this is the thing you drag."
 
    A rotated square rather than a ◇ glyph: the app self-hosts a woff2 SUBSET of
    Inter (see main.tsx), so a geometric-shapes codepoint is not guaranteed to
@@ -84,8 +108,8 @@
   left: 50%;
   width: 13px;
   height: 13px;
-  border: 2px solid currentColor;
-  border-radius: 1px;
+  background: currentColor;
+  border-radius: 0;
   /* Centered explicitly: the static position of an abspos child of a flex
      container is spec'd from align/justify, but relying on that is subtle —
      and the rotate here would have to compose with it anyway. */
@@ -101,37 +125,69 @@
    split's ratio, set inline on this divider by SplitPane; the 50% fallback
    covers a splitter mounted without one. */
 .fs-grip--v {
-  --fs-grip-h: calc(var(--ctl-size) * 1.6);
+  /* The code panel's tab bar, which begins immediately below the row seam this
+     grip anchors to: 4px padding + a --ctl-size control row + 4px + its 1px
+     bottom border. Kept as an expression rather than `37px` so it tracks the
+     app-wide button height; if CodeEditor.css's padding ever changes, this and
+     SplitPane's CROSS_MIN_PANE_PX move together. */
+  --fs-tabbar-h: calc(var(--ctl-size) + 9px);
+  /* Height is chosen so the grip's BOTTOM edge lands exactly on that bar's
+     bottom edge, making the grip and the TSL/Output tab strip read as one
+     band: bottom = top + h, and `top` resolves to
+     seam_top + seam/2 - border/2 (see the arm below), so
+     h = seam/2 + border/2 + tabbar. At the 2px defaults that is 39px, and on
+     coarse pointers (6px seam, 2px outline) 41px — both landing on the bar,
+     because the seam it starts from grew by exactly the difference.
+
+     NB this couples the grip's HEIGHT to the bar — deliberately, and it is a
+     different thing from the trap the `top` arm below documents, which is about
+     its POSITION. Position stays anchored to the seam alone, so the top edge
+     cannot drift whatever ends up underneath; only the bottom edge follows the
+     bar it is being aligned with. */
+  --fs-grip-h: calc(
+    var(--fs-seam, 2px) / 2 + var(--fs-grip-border, 2px) / 2 + var(--fs-tabbar-h)
+  );
   /* First arm: offset IS the row seam's top edge. Centring the grip half a
      height below it lands the tab's own top border ON that seam, so the
      horizontal line crosses the column seam unbroken — the seam to the right,
      the tab's top edge to the left. The ±half-thickness pair CENTRES the
      border in the seam rather than top-aligning it, which matters only on
-     coarse pointers, where --fs-seam bumps to 12px while --fs-grip-border
-     deliberately stays at 4px (see SplitPane.css); at the 4px default the two
-     terms cancel exactly.
+     coarse pointers, where --fs-seam bumps while --fs-grip-border deliberately
+     stays at the desktop width (see SplitPane.css); when the two are equal the
+     terms cancel exactly and the grip's top edge lands on the seam's.
 
      This is deliberately anchored to the SEAM, not to whatever chrome bar sits
      under it. The formula used to read "seam + half the pane's top bar", which
-     worked only because the preview's control bar (--ctl-size + 9 = 37px)
-     happens to equal --fs-grip-h - 2×--fs-seam (36.8px) — so it was landing on
-     the seam by arithmetic accident, and honestly re-deriving it for the 26px
-     tab bar when the panes swapped moved the tab 5.4px up and put a visible
-     step in the line. Expressed against the seam it cannot drift again,
-     whatever ends up below it.
+     worked only by arithmetic accident: back when --fs-grip-h was
+     --ctl-size × 1.6 (44.8px) and the seam was 4px, the preview's control bar
+     (--ctl-size + 9 = 37px) happened to equal --fs-grip-h − 2×--fs-seam
+     (36.8px). Honestly re-deriving it for the 26px tab bar when the panes
+     swapped moved the tab 5.4px up and put a visible step in the line. (Those
+     numbers are history — neither the height formula nor the seam is what it
+     was — which is exactly the point: expressed against the seam this cannot
+     drift again, whatever ends up below it or whatever the thicknesses become.)
 
-     Second arm: ceiling. The tab pokes ~24px into the LEFT pane, where the
-     asset bar lives — with the row seam low and the bar tall (reachable at
-     stock ratios on a laptop-height window) the grip would sit on top of the
-     bar's tiles and scroll arrow, stealing their clicks. Clamp its centre a
-     half-grip above the bar's top edge (--fs-asset-bar-h is published per
-     element by ContentBrowser via utils/assetBarHeight.ts); when clamped it
-     slides up the seam, detaching from the line — still on the seam, still
-     draggable, never a dead zone. */
+     Second arm: ceiling, and now a BACKSTOP rather than the mechanism. The tab
+     pokes ~24px into the LEFT pane, where the asset bar lives, so with the row
+     seam low and the bar tall the grip would sit on top of the bar's tiles and
+     scroll arrow, stealing their clicks. This clamps its centre a half-grip
+     above the bar's top edge (--fs-asset-bar-h is published per element by
+     ContentBrowser via utils/assetBarHeight.ts).
+
+     But a clamped grip DETACHES: it slides up the seam and sits stranded in the
+     middle of the canvas, measured at 239px from the very line it is supposed
+     to be part of — a control that comes away from the thing it controls reads
+     as a rendering bug. So the collision is resolved by MOVING THE ASSET BAR
+     instead (utils/splitClearance.ts): drag the grip down and the bar gets
+     shorter, drag the bar's own grip up and this seam goes up with it. This arm
+     only bites at the very end of travel, once the bar is at its own minimum
+     and there is genuinely nowhere left to push — which is why the 4px here and
+     `GRIP_BOTTOM_MARGIN` there are one rule stated twice, and pinned as such by
+     splitClearance.test.ts. */
   top: min(
     calc(
       var(--fs-grip-offset, 50%)
-      + var(--fs-seam, 4px) / 2 - var(--fs-grip-border, 4px) / 2
+      + var(--fs-seam, 2px) / 2 - var(--fs-grip-border, 2px) / 2
       + var(--fs-grip-h) / 2
     ),
     calc(100% - var(--fs-asset-bar-h, 0px) - var(--fs-grip-h) / 2 - 4px)
@@ -150,7 +206,6 @@
      ceiling can't drift from the actual box. */
   height: var(--fs-grip-h);
   cursor: col-resize;
-  /* Flat against the divider (right), rounded away from it (left). */
   border-radius: var(--border-radius-md) 0 0 var(--border-radius-md);
   /* The divider supplies the line on that side. */
   border-right: none;
@@ -164,9 +219,11 @@
 }
 
 /* ---------- Horizontal edge (the asset bar's top border) ----------
-   Drag is vertical, so the pill sits ABOVE the edge and the diamond is
-   split by a HORIZONTAL line into ▲ ▼. Sits 10% in from the right, well
-   clear of the canvas bar now pinned to the pane's bottom-LEFT. */
+   Drag is vertical, so the pill sits ABOVE the edge. It carries the SAME plain
+   filled diamond as the column grip (see the ::before note) — it is the same
+   rectangle transposed, 28×44.8 rather than 44.8×28, because a tab has to grow
+   out of its own edge. Sits 10% in from the right, well clear of the canvas bar
+   now pinned to the pane's bottom-LEFT. */
 .fs-grip--h {
   left: 90%;
   /* Same containing-block contract as --v: the anchor spans the seam (the
@@ -177,19 +234,6 @@
   height: var(--ctl-size);
   width: calc(var(--ctl-size) * 1.6);
   cursor: row-resize;
-  /* Flat against the divider (bottom), rounded away from it (top). */
   border-radius: var(--border-radius-md) var(--border-radius-md) 0 0;
   border-bottom: none;
-}
-
-/* The ▲▼ splitter line — see the diamond note above for why only --h has one. */
-.fs-grip--h::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: currentColor;
-  height: 2px;
-  width: 18px;
 }

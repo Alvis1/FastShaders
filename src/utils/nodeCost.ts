@@ -2,64 +2,30 @@ import type { AppNode, AppEdge } from '@/types';
 import { outputNodes } from '@/utils/outputMaterials';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
-import complexityData from '@/registry/complexity.json';
+import { getCost } from '@/utils/costTable';
 
 /**
- * The authored, build-time cost table — the source of truth shipped in the
- * bundle. `ACTIVE` is what every cost reader actually consults: it's `BASE`
- * until a measured-benchmark override is applied (drag a complexity patch onto
- * the cost bar → `setCostOverrides`), then it's `BASE` with the override keys
- * layered on top. Kept module-scope (a singleton) so all consumers — the CostBar
- * BFS, node badges, the asset-browser sort — see one table without prop-drilling.
+ * GPU cost READERS that need the node graph — the per-instance price and the
+ * reachable-subtree total.
+ *
+ * The TABLE itself (the authored prices, the measured override, the sanitizer)
+ * lives in `costTable.ts`, deliberately: this module sits in an import cycle
+ * (outputMaterials -> exposedPorts -> edgeUtils -> useAppStore -> back here),
+ * and the store calls the table's functions during its own module
+ * initialisation. Read costTable.ts's header before moving anything back —
+ * that split is what stopped the test suite failing at random.
+ *
+ * Re-exported here so every existing consumer keeps one import site for
+ * "costs", and because `getCost`/`getBaseCosts` read naturally beside
+ * `nodeCostPoints`.
  */
-const BASE_COSTS = complexityData.costs as Record<string, number>;
-let overrides: Record<string, number> = {};
-let ACTIVE: Record<string, number> = BASE_COSTS;
-
-/** Sane per-node cost ceiling. Real prices are ≤ ~1000; this only exists to
- *  stop an adversarial huge value from overflowing to Infinity downstream. */
-export const MAX_NODE_COST = 1_000_000;
-
-/** Keys the override is allowed to touch — only real node types already in the
- *  authored table. A dropped file is adversarial, so unknown keys are dropped
- *  rather than trusted, and values must be finite, non-negative, and clamped. */
-export function sanitizeCostMap(map: unknown): Record<string, number> {
-  const out: Record<string, number> = {};
-  if (!map || typeof map !== 'object') return out;
-  for (const [k, v] of Object.entries(map as Record<string, unknown>)) {
-    if (!Object.prototype.hasOwnProperty.call(BASE_COSTS, k)) continue;
-    // Accept only real numbers or numeric strings — never null/boolean/object,
-    // which Number() would silently coerce to 0 and inject a free cost.
-    let n: number;
-    if (typeof v === 'number') n = v;
-    else if (typeof v === 'string' && v.trim() !== '') n = Number(v);
-    else continue;
-    // Upper clamp: no single node price can plausibly exceed this. Without it a
-    // crafted 1e308 cost overflows to Infinity once a chainable node multiplies
-    // it (base × operands), corrupting the total and any exported complexity.json.
-    if (Number.isFinite(n) && n >= 0) out[k] = Math.min(n, MAX_NODE_COST);
-  }
-  return out;
-}
-
-/**
- * Layer a measured override over the authored table (or clear it with an empty
- * map / null). Returns the sanitized override actually applied, so the caller
- * can persist exactly what took effect.
- */
-export function setCostOverrides(map: Record<string, number> | null | undefined): Record<string, number> {
-  overrides = sanitizeCostMap(map);
-  ACTIVE = Object.keys(overrides).length ? { ...BASE_COSTS, ...overrides } : BASE_COSTS;
-  return overrides;
-}
-
-/** Cost for one node type from the ACTIVE (override-aware) table. */
-export function getCost(type: string | undefined): number {
-  return type ? (ACTIVE[type] ?? 0) : 0;
-}
-
-/** The authored table with no override applied. */
-export function getBaseCosts(): Record<string, number> { return BASE_COSTS; }
+export {
+  MAX_NODE_COST,
+  sanitizeCostMap,
+  setCostOverrides,
+  getCost,
+  getBaseCosts,
+} from '@/utils/costTable';
 
 /**
  * GPU cost points for a node instance.
@@ -77,7 +43,7 @@ export function getBaseCosts(): Record<string, number> { return BASE_COSTS; }
 export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
   const type = node.data.registryType;
   if (!type) return 0;
-  const base = ACTIVE[type] ?? 0;
+  const base = getCost(type);
   const def = NODE_REGISTRY.get(type);
   if (!def?.chainable) return base;
   const connected = edges

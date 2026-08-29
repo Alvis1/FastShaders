@@ -12,15 +12,21 @@
   overflow: hidden;
 }
 
-/* Pinned to the canvas's RIGHT edge, but stopped short of the column seam's
-   grip tab: that tab is --ctl-size wide and hangs off the divider into this
-   pane, so a plain `right: var(--space-4)` would put the pill underneath it
-   whenever the row seam rides high. Offsetting by the full tab width plus a
-   gap means the two can never intersect at any split ratio. */
+/* Pinned to the canvas's top-RIGHT corner with the SAME gap on both edges, so
+   the pill sits in the corner rather than floating at an arbitrary inset — it
+   used to stand `--ctl-size + --space-2` (36px) off the right while keeping a
+   12px gap at the top, which read as a misalignment.
+
+   That 36px was clearance for the column seam's grip tab, which is --ctl-size
+   wide and hangs off the divider into this pane. It can only reach the pill on
+   a very short window: the tab's top edge sits at the row split's ratio, which
+   never goes above a quarter of the column (CROSS_MIN_TOP_RATIO), so the two
+   can meet only below roughly 430px of canvas height. `.split-pane__divider`
+   outranks this overlay for exactly that case — see SplitPane.css. */
 .node-editor__cost-overlay {
   position: absolute;
   top: var(--space-3);
-  right: calc(var(--ctl-size) + var(--space-2));
+  right: var(--space-3);
   z-index: var(--z-controls);
   width: 280px;
   /* Yields to the NEW button on a narrow pane. Both are pinned to the same
@@ -40,6 +46,12 @@
   top: var(--space-3);
   left: var(--space-3);
   z-index: var(--z-controls);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
+  line-height: 1;
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   font-weight: 700;
@@ -55,7 +67,7 @@
   border: 1px solid #8fbf5e;
   border-radius: var(--border-radius-sm);
   box-shadow: var(--shadow-sm);
-  padding: 6px 14px;
+  padding: 0 14px;
   cursor: pointer;
   transition: border-color var(--transition-fast), background var(--transition-fast);
 }
@@ -123,11 +135,64 @@
   box-shadow: none;
 }
 
+/* Selection marquee — BOUNDARY ONLY, dotted, and never a fill. The translucent
+   blue wash this replaces tinted every node it swept over, which on a canvas
+   whose whole job is colour made the selection change what the shader looked
+   like. `!important` because React Flow ships its own background/border for
+   both of these and its stylesheet loads after ours. */
 .node-editor .react-flow__nodesselection-rect,
 .node-editor .react-flow__selection {
-  background: rgba(99, 130, 255, 0.08) !important;
-  border: 1px solid rgba(99, 130, 255, 0.4) !important;
-  border-radius: 2px;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0;
+}
+
+/* The LIVE band, while the pointer is still down. Its edge means exactly "what
+   is inside this", so it is drawn ON the dragged rectangle with no standoff —
+   an inflated live band would claim nodes it is not going to catch. */
+.node-editor .react-flow__selection {
+  outline: 1px dotted var(--border-focus);
+}
+
+/* The box that REMAINS once the pointer is released (React Flow's own drag
+   wrapper for the selected set) stands 5px off the CARDS it holds — a selected
+   node casts an 8px shadow and rides toward the light, so a tight box cuts
+   through both.
+
+   It is a PSEUDO-ELEMENT and not an `outline-offset`, for two independent
+   reasons. React Flow sizes that rectangle from each node's MEASURED layout
+   box, while the expensive node types PAINT up to 1.35x bigger (getCostScale,
+   applied as a `transform`, which does not affect layout) — so the rectangle is
+   right along its top and left edges and short along the other two, by a
+   different amount per selection, and one even offset drew the line straight
+   through a pair of noise cards. A single outline cannot correct two sides
+   independently. And React Flow also ships
+   `.react-flow__nodesselection-rect:focus { outline: none }` to suppress the UA
+   focus ring — the rect really is focused after a marquee, since it is a
+   focusable div so the selection can be nudged by keyboard — which silently ate
+   an outline here; a pseudo-element's own border is out of that rule's reach.
+   The rectangle itself is left with the exact geometry and hit area React Flow
+   gave it, so dragging a selection still grabs where it always did. */
+.node-editor .react-flow__nodesselection-rect::after {
+  /* Standoff from the visible card. */
+  --fs-sel-pad: 5px;
+  content: '';
+  position: absolute;
+  /* Top/left: the cards sit --fs-node-rise beyond the rectangle (selected nodes
+     translate toward the light), so the line starts there and steps out by the
+     pad. Right/bottom: the same rise, plus the per-selection cost-scale
+     shortfall NodeEditor publishes as --fs-sel-dr / --fs-sel-db.
+     Reading --fs-node-rise here rather than in the JS is deliberate — the rise
+     is uniform on all four sides, so folding it in at this end keeps the px
+     literal in exactly one place (tokens.css). */
+  inset:
+    calc(var(--fs-node-rise) - var(--fs-sel-pad))
+    calc(-1 * (var(--fs-sel-dr, 0px) + var(--fs-sel-pad) + var(--fs-node-rise)))
+    calc(-1 * (var(--fs-sel-db, 0px) + var(--fs-sel-pad) + var(--fs-node-rise)))
+    calc(var(--fs-node-rise) - var(--fs-sel-pad));
+  border: 1px dotted var(--border-focus);
+  /* The rectangle under it is the drag target; this is only the drawn line. */
+  pointer-events: none;
 }
 
 
@@ -153,7 +218,10 @@
   display: none !important;
 }
 
-/* Drop-on-edge highlight: thicken when a dragged node is near enough to snap. */
+/* Drop-on-edge highlight: thicken when a dragged node is near enough to snap.
+   NB this rule means "any path in the edge that isn't the hit area", so it
+   reaches EVERY path TypedEdge renders — anything added there inherits the
+   4px/opacity-1 override mid-gesture whether or not that makes sense for it. */
 .node-editor .react-flow__edge.fs-edge-drop-target path:not(.react-flow__edge-interaction) {
   stroke-width: 4 !important;
   opacity: 1 !important;
@@ -206,7 +274,7 @@
   width: 14px;
   height: 14px;
   border: 1px solid var(--border-default);
-  border-radius: 3px;
+  border-radius: 0;
   pointer-events: none;
 }
 
@@ -248,13 +316,16 @@
   flex-wrap: wrap;
   justify-content: flex-start;
   max-width: calc(100% - 30px);
-  /* Clear the asset bar's resize grip, which hangs --ctl-size above the bar's
-     top edge — i.e. into the bottom of this pane. React Flow's own 15px panel
-     margin is not enough. The grip now sits at 90% (far right) and this bar at
-     the left, so they only meet on a very narrow pane — but overlap would be
-     worse than cosmetic there: the grip sits at a higher z-index and would
-     swallow clicks on whichever button it covered. */
-  margin-bottom: calc(var(--ctl-size) + 8px);
+  /* No `margin-bottom` override: React Flow's own `.react-flow__panel` margin
+     is 15px on every side, so the bar now sits the same distance from the pane's
+     bottom edge as from its left one — which is what makes it read as parked in
+     the corner rather than floating above it.
+
+     It used to add `--ctl-size + 8px` to clear the asset bar's resize grip,
+     which hangs --ctl-size above the bar's top edge into the bottom of this
+     pane. That grip sits at 90% (far right) and this bar at the left, so on any
+     ordinary pane width they are hundreds of px apart; they can only meet on a
+     very narrow one, where the bar has already wrapped to fill the width. */
 }
 /* Import one-liner (top-centre). Deliberately NOT a modal: a conversion that
    fell back is information about the browser, not a decision — it must not

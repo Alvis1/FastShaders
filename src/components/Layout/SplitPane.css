@@ -4,16 +4,36 @@
    seam must not move the layout. */
 .split-pane__divider {
   background: var(--edge-color);
-  /* Inherited by the grip: its outline matches this seam's own 4px thickness
-     (see .fs-grip in styles/controls.css). */
-  --fs-grip-border: 4px;
+  /* Inherited by the grip: its outline matches this seam's own thickness
+     (see .fs-grip in styles/controls.css), so the tab and the line are one
+     stroke. The asset bar's seam publishes the same value — one divider
+     thickness app-wide — and it must stay equal to --fs-seam's DESKTOP value;
+     it is a literal only so it does not follow the coarse-pointer bump. */
+  --fs-grip-border: 2px;
+  /* NO shadow — a divider is a drawn LINE, not a raised strip. It was given the
+     chip-level hard shadow briefly and dropped again: at --fs-seam's 2px the
+     shadow is as wide as the line itself, so it reads as a second, softer seam
+     beside the real one rather than as depth. Neither the seam nor its grip
+     casts anything (see .fs-grip in controls.css). If one is ever wanted again,
+     it must be `filter: drop-shadow` on THIS element and not a `box-shadow`
+     here plus another on the grip: the grip is a flush child, so two box-shadows
+     put its shadow column exactly on the seam's and composite 0.28 into 0.48 —
+     a visibly darker notch where the tab meets the line. */
   flex-shrink: 0;
   touch-action: none;
   transition: background var(--transition-fast);
   position: relative;
   /* Above the adjacent panes' content so the grip tab isn't clipped or
-     overpainted; well below popovers/menus (z 100+). */
-  z-index: 5;
+     overpainted; well below popovers/menus (z 100+).
+
+     `--z-controls` and not the old 5, because the tab hangs INTO the canvas and
+     the canvas's own floating chrome sits at exactly that level. Now that the
+     cost pill is pinned to the corner (its 36px grip-clearance inset is gone —
+     see NodeEditor.css) the two can overlap on a very short window, and the
+     grip has to win: a partly covered pill is cosmetic, a grip that cannot be
+     grabbed is a layout the user can no longer resize. The tie at equal
+     z-index is broken by DOM order, and this divider comes after the pane. */
+  z-index: var(--z-controls);
 }
 
 /* The whole seam lights up with its grip — they are one control, and seeing
@@ -37,8 +57,10 @@
 
 /* Both seams take their thickness from the same token (tokens.css), which also
    bumps them on coarse pointers so a panel boundary stays visible on touch.
-   --fs-grip-border deliberately stays at 4px rather than tracking that bump: a
-   12px outline on a --ctl-size tab would swallow the diamond. */
+   --fs-grip-border deliberately stays at the desktop 2px rather than tracking
+   that bump: an outline as thick as the touch seam on a --ctl-size tab would
+   crowd the diamond, and .fs-grip--v's ±half-thickness term already centres the
+   thinner outline inside the wider seam. */
 .split-pane__divider--h {
   width: var(--fs-seam);
 }

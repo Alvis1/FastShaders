@@ -10,6 +10,8 @@ import {
   t,
 } from './index';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Runtime behaviour of the i18n helpers against the REAL translation data
@@ -80,5 +82,28 @@ describe('i18n helpers', () => {
     expect(t(en, 'en')).toBe(en);
     expect(t(en, 'lv')).not.toBe(en); // fails if the lv.json key drifts by one char
     expect(t(en, 'lv')).toContain('Lielāks par');
+  });
+});
+
+/**
+ * Latvian is the app's DEFAULT language (a Latvian research project; the user
+ * study runs in Latvian), with English one click away on the toolbar's EN
+ * button. That is a product decision a refactor of the store's boot-time
+ * `loadString` call could silently flip, and nothing would fail — the app
+ * would simply come up in the wrong language for every new user.
+ */
+describe('default UI language', () => {
+  it('is Latvian for a browser with no stored preference', () => {
+    const src = readFileSync(fileURLToPath(new URL('../store/useAppStore.ts', import.meta.url)), 'utf8');
+    const line = src.split('\n').find((l) => l.includes("loadString('fs:lang'"));
+    expect(line, "the store no longer reads fs:lang").toBeTruthy();
+    expect(line, 'the fs:lang fallback must be lv').toContain("'fs:lang', 'lv'");
+  });
+
+  it('offers the OTHER language on the toolbar button, so the label is an action', () => {
+    const toolbar = readFileSync(fileURLToPath(new URL('../components/Layout/Toolbar.tsx', import.meta.url)), 'utf8');
+    expect(toolbar).toContain("{language === 'lv' ? 'EN' : 'LV'}");
+    // A flipping label beside aria-pressed reads as a contradiction.
+    expect(toolbar).not.toMatch(/toolbar__lang[\s\S]{0,400}aria-pressed/);
   });
 });

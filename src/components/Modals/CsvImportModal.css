@@ -21,8 +21,10 @@
   gap: var(--space-3);
 }
 
+/* Same font size as the buttons (the app-wide header rule — hierarchy comes
+   from weight, never from size). */
 .csv-import-modal__title {
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   font-weight: 700;
   color: var(--text-primary);
   word-break: break-word;
@@ -60,9 +62,18 @@
   flex-wrap: wrap;
 }
 
+/* Uniform app-wide button height (--ctl-size) — inline-flex so the anchor
+   variant (the eval "Open email" link) gets the identical box as a <button>. */
 .csv-import-modal__button {
-  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
+  padding: 0 12px;
   font-size: var(--font-size-sm);
+  line-height: 1;
+  text-decoration: none;
   color: var(--text-primary);
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import { beginDragChrome } from '@/utils/dragChrome';
 import { registerAssetBarHeightConsumer } from '@/utils/assetBarHeight';
+import {
+  assetBarPushHandle, gripClearance, maxBarHeightForCross, maxCrossForBarHeight,
+  readGripMetrics, registerCornerGrip, CROSS_MIN_TOP_RATIO,
+} from '@/utils/splitClearance';
 import { t } from '@/i18n';
 import { useAppStore } from '@/store/useAppStore';
 import './SplitPane.css';
@@ -14,18 +18,20 @@ const clampRatio = (r: number) => Math.max(0.05, Math.min(0.95, r));
  * The BOTTOM pane's floor is in PANE px rather than a ratio: the seam may ride
  * DOWN until only the code editor's TSL/Output tab bar remains, and a ratio
  * floor would leave a screen-height-dependent stub of Monaco visible instead of
- * stopping AT the bar. ~30px measured bar (25px of content plus the 4px
- * padding-top that clears the seam — see CodeEditor.css) and a small margin.
+ * stopping AT the bar. ~37px measured bar (the 28px --ctl-size Apply/Import
+ * buttons plus the actions row's 4px bottom padding, the 4px padding-top that
+ * clears the seam, and the 1px border — see CodeEditor.css) and a small margin.
  *
  * The TOP pane takes a plain ratio floor instead — the 3D view has no collapsed
  * state worth stopping at, so it simply never drops below a quarter of the
- * column (the share it was guaranteed back when it was the bottom pane).
+ * column (the share it was guaranteed back when it was the bottom pane). That
+ * one is `CROSS_MIN_TOP_RATIO`, and it lives in utils/splitClearance.ts because
+ * the asset bar pushes against it from the other side.
  *
  * The store's clamp mirrors both as a persistence safety net; these are the
  * bounds that actually stop the drag.
  */
-const CROSS_MIN_PANE_PX = 34;
-const CROSS_MIN_TOP_RATIO = 0.25;
+const CROSS_MIN_PANE_PX = 41;
 const clampCross = (r: number, spanPx: number) =>
   Math.max(
     CROSS_MIN_TOP_RATIO,
@@ -82,6 +88,7 @@ export function SplitPane({
 }: SplitPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dividerRef = useRef<HTMLDivElement>(null);
+  const gripRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   /** This gesture's dragChrome end call (idempotent; no-op before any drag). */
   const endDragChrome = useRef<() => void>(() => {});
@@ -92,9 +99,39 @@ export function SplitPane({
    * position — so grabbing the grip off-centre doesn't snap the seam, and the
    * axis locks have a fixed origin to restore the locked axis to.
    */
-  const dragStart = useRef({ x: 0, y: 0, ratio: 0, cross: 0, axis: 'free' as DragAxis });
+  const dragStart = useRef({
+    x: 0, y: 0, ratio: 0, cross: 0, axis: 'free' as DragAxis,
+    /**
+     * The asset bar's height when this gesture began — the height it is pushed
+     * back UP to when the grip comes back off it. Kept per-gesture rather than
+     * as a persistent "desired height": within one drag, down-then-up restores
+     * the bar exactly, and across gestures the bar simply stays where the user
+     * left it. A ghost height that outlived the gesture would mean the bar you
+     * see and the bar the app thinks you want are different numbers.
+     */
+    barH: 0,
+  });
   const isH = direction === 'horizontal';
   const twoAxis = isH && crossRatio != null && onCrossRatioChange != null;
+
+  /**
+   * Move the asset bar out of the corner grip's way, and report the cross ratio
+   * that is actually reachable.
+   *
+   * The bar shrinks first (that is the whole point — the grip stays welded to
+   * its seam), and only once the bar is at ITS minimum does the seam clamp. The
+   * bar clamps to its own bounds and tells us the height it adopted, so the
+   * fallback clamp is computed from what really happened rather than from what
+   * we asked for.
+   */
+  const pushAssetBar = useCallback((cross: number, span: number, desiredBarH: number): number => {
+    const bar = assetBarPushHandle();
+    if (!bar) return cross;
+    const clearance = gripClearance(readGripMetrics(gripRef.current));
+    const want = Math.min(desiredBarH, maxBarHeightForCross(cross, span, clearance));
+    const adopted = bar.push(want);
+    return Math.min(cross, maxCrossForBarHeight(adopted, span, clearance));
+  }, []);
 
   // currentTarget, not target: the grip's pseudo-element children are inside
   // it, so capture and release must land on the same element.
@@ -114,6 +151,7 @@ export function SplitPane({
       // Touch gestures on the two-axis grip start axis-locked (see the
       // constants above); everything else moves freely from the first pixel.
       axis: twoAxis && e.pointerType === 'touch' ? 'undecided' : 'free',
+      barH: assetBarPushHandle()?.height() ?? 0,
     };
     e.currentTarget.setPointerCapture(e.pointerId);
     endDragChrome.current = beginDragChrome(
@@ -158,12 +196,15 @@ export function SplitPane({
     if (twoAxis) {
       // Same span for both axes: the nested pane fills this one's height (see
       // the crossRatio prop note), so its ratio resolves against rect.height.
-      onCrossRatioChange!(clampCross(
+      const cross = clampCross(
         holdY ? s.cross : s.cross + (e.clientY - s.y) / rect.height,
         rect.height,
-      ));
+      );
+      // Push the asset bar down ahead of the grip rather than letting the grip
+      // clamp and detach from its seam (utils/splitClearance.ts).
+      onCrossRatioChange!(pushAssetBar(cross, rect.height, s.barH));
     }
-  }, [isH, twoAxis, onRatioChange, onCrossRatioChange]);
+  }, [isH, twoAxis, onRatioChange, onCrossRatioChange, pushAssetBar]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     dragging.current = false;
@@ -171,6 +212,11 @@ export function SplitPane({
     // the browser already released), the cursor override and the app-wide
     // selection block must not be stranded on.
     endDragChrome.current();
+    // Bake in whatever height the gesture painted onto the asset bar. Safe to
+    // call unconditionally — it is a no-op when this drag never pushed it, and
+    // it must run on pointercancel too or a cancelled drag would leave the bar
+    // showing a height React does not know about.
+    assetBarPushHandle()?.commit();
     e.currentTarget.releasePointerCapture(e.pointerId);
   }, []);
 
@@ -185,15 +231,25 @@ export function SplitPane({
     const vertical = e.key === 'ArrowUp' || e.key === 'ArrowDown';
     if (twoAxis && vertical) {
       const span = containerRef.current?.getBoundingClientRect().height ?? 0;
-      onCrossRatioChange!(clampCross(crossRatio! + dir * step, span));
+      const cross = clampCross(crossRatio! + dir * step, span);
+      // A key press is a discrete move, so it pushes and commits in one go —
+      // there is no gesture to restore the bar at the end of.
+      const bar = assetBarPushHandle();
+      onCrossRatioChange!(pushAssetBar(cross, span, bar?.height() ?? 0));
+      bar?.commit();
     } else if (vertical === !isH) onRatioChange(clampRatio(ratio + dir * step));
     else return;
     e.preventDefault();
-  }, [isH, twoAxis, ratio, crossRatio, onRatioChange, onCrossRatioChange]);
+  }, [isH, twoAxis, ratio, crossRatio, onRatioChange, onCrossRatioChange, pushAssetBar]);
 
   // Unmounting mid-drag would otherwise strand the cursor override and the
-  // app-wide selection block with nothing left to clear them.
-  useEffect(() => () => endDragChrome.current(), []);
+  // app-wide selection block with nothing left to clear them — and, if this
+  // gesture was pushing the asset bar, leave it at a height painted
+  // imperatively that React was never told about.
+  useEffect(() => () => {
+    endDragChrome.current();
+    assetBarPushHandle()?.commit();
+  }, []);
 
   /**
    * The corner grip's position clamps above the asset bar (the min() on
@@ -207,6 +263,17 @@ export function SplitPane({
     if (!el || !isH) return;
     return registerAssetBarHeightConsumer(el);
   }, [isH]);
+
+  /**
+   * Publish the corner grip so the asset bar can measure the clearance it has to
+   * leave (utils/splitClearance.ts). Only the two-axis grip is registered — it
+   * is the one that hangs into the bar's pane.
+   */
+  useEffect(() => {
+    const el = gripRef.current;
+    if (!el || !twoAxis) return;
+    return registerCornerGrip(el);
+  }, [twoAxis, grip]);
 
   const firstSize = isH
     ? { width: `${ratio * 100}%` }
@@ -242,6 +309,7 @@ export function SplitPane({
              stray press on the seam can't nudge the layout.
              isH (a horizontal split) draws a VERTICAL bar, hence --v. */
           <div
+            ref={gripRef}
             className={`fs-grip fs-grip--${isH ? 'v' : 'h'}${twoAxis ? ' fs-grip--xy' : ''}`}
             role="separator"
             // A two-axis grip has no single orientation, and claiming one would

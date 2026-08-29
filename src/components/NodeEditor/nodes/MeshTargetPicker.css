@@ -15,7 +15,7 @@
   height: 20px;
   padding: 0 4px;
   border: 1px solid var(--border-subtle);
-  border-radius: 3px;
+  border-radius: 0;
   /* WHITE, not --node-bg: this is an input, and the node's own off-white body
      behind it read as a disabled plate rather than a field. */
   background: #ffffff;
@@ -112,7 +112,7 @@
   align-items: center;
   gap: 6px;
   padding: 3px 5px;
-  border-radius: 3px;
+  border-radius: 0;
   cursor: pointer;
 }
 
@@ -138,7 +138,7 @@
    is set apart rather than sorted in among them. */
 .mesh-picker__row--default {
   border-bottom: 1px solid var(--border-subtle);
-  border-radius: 3px 3px 0 0;
+  border-radius: 0;
   margin-bottom: 2px;
 }
 

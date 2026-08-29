@@ -1710,7 +1710,7 @@ export function tslToPreviewHTML(
   if (xr) {
     // Bottom-center, not dead-center: it overlays a live canvas the user can
     // still orbit, so it must not sit on the previewed object.
-    lines.push('    #vr-gate { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 11; padding: 14px 30px; font: 600 17px/1 system-ui, sans-serif; color: #fff; background: rgba(0,0,0,0.72); border: 1px solid rgba(255,255,255,0.35); border-radius: 10px; cursor: pointer; }');
+    lines.push('    #vr-gate { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 11; padding: 14px 30px; font: 600 17px/1 system-ui, sans-serif; color: #fff; background: rgba(0,0,0,0.72); border: 1px solid rgba(255,255,255,0.35); cursor: pointer; }');
     lines.push('    #vr-gate[hidden] { display: none; }');
   }
   lines.push('  </style>');

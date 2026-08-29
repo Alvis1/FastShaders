@@ -7,6 +7,7 @@ import { FeedbackModal } from '@/components/Modals/FeedbackModal';
 import { PalettesModal } from '@/components/Modals/PalettesModal';
 import { isEvalMode } from '@/eval/evalMode';
 import { SusModal } from '@/eval/SusModal';
+import { EvalFinishModal } from '@/eval/EvalFinishModal';
 import { WorkFolder } from './WorkFolder';
 import { t } from '@/i18n';
 import './Toolbar.css';
@@ -87,6 +88,10 @@ export function Toolbar() {
   // document.body so nothing here constrains where it paints.
   const [feedbackOpen, setFeedbackOpen] = useState(false);
 
+  // Eval mode only: EXPORT asks "finished or continuing?" before it ends the
+  // study session (see eval/EvalFinishModal). Inert in the normal app.
+  const [evalFinishOpen, setEvalFinishOpen] = useState(false);
+
   // Palette manager — same precedent as the feedback composer above, and for
   // the same two reasons. The store-queue pattern (CsvImportModal,
   // LimitModal) exists because those dialogs are raised by non-UI code and can
@@ -166,6 +171,12 @@ export function Toolbar() {
 
   // Stable identity: the modal binds its Escape listener against this.
   const closeFeedback = useCallback(() => setFeedbackOpen(false), []);
+  const closeEvalFinish = useCallback(() => setEvalFinishOpen(false), []);
+  /** Finish → the questionnaire; the package is built when it is submitted. */
+  const finishEvalSession = useCallback(() => {
+    setEvalFinishOpen(false);
+    setFeedbackOpen(true);
+  }, []);
   const closePalettes = useCallback(() => setPalettesOpen(false), []);
 
   const handleCopy = useCallback(async (key: string, value: string) => {
@@ -298,17 +309,29 @@ export function Toolbar() {
                 suppressExportClickRef.current = false;
                 return;
               }
+              // In a study session EXPORT is the natural "I'm done" button, so
+              // it opens the finish dialog instead of quietly downloading a
+              // bare shader — the participant's package is assembled at the
+              // end of the questionnaire and carries this shader inside it.
+              if (isEvalMode()) {
+                setEvalFinishOpen(true);
+                return;
+              }
               downloadShader();
             }}
             onContextMenu={(e) => {
               e.preventDefault();
               setExportOpen((o) => !o);
             }}
-            title={`${t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}. ${
-              previewMesh && !exportIncludeMesh
-                ? t('The 3D model is currently excluded from the export — right-click to change.', language)
-                : t('Right-click for export settings.', language)
-            }`}
+            title={
+              isEvalMode()
+                ? t('Finish the session — answer a short questionnaire, then submit your shader and session data to the researcher', language)
+                : `${t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}. ${
+                    previewMesh && !exportIncludeMesh
+                      ? t('The 3D model is currently excluded from the export — right-click to change.', language)
+                      : t('Right-click for export settings.', language)
+                  }`
+            }
           >
             {t('Export', language)}
           </button>
@@ -463,22 +486,24 @@ export function Toolbar() {
             SC
           </a>
         )}
-        {/* Language toggle (English ⇄ Latvian). Latvian is a display-only
-            overlay — see src/i18n. Shows "LV" and pressed-highlights when
-            Latvian is active. */}
+        {/* Language switch (Latvian ⇄ English). Latvian is a display-only
+            overlay — see src/i18n — and the app's DEFAULT, so the button
+            labels the language it switches TO ("EN" while Latvian is on).
+            That makes it an action, not a state: no `aria-pressed`, which
+            beside a flipping label reads as a contradiction in a screen
+            reader (the WGSL/GLSL toggle documents the same trap). */}
         <button
           type="button"
-          className={`toolbar__sc-link${language === 'lv' ? ' toolbar__sc-link--active' : ''}`}
+          className="toolbar__sc-link toolbar__lang"
           onClick={() => setLanguage(language === 'lv' ? 'en' : 'lv')}
-          aria-pressed={language === 'lv'}
           title={
             language === 'lv'
               ? 'Pārslēgt uz angļu valodu (Switch to English)'
               : 'Pārslēgt uz latviešu valodu (Switch to Latvian)'
           }
-          aria-label={t('Switch language', language)}
+          aria-label={language === 'lv' ? 'Switch to English' : 'Pārslēgt uz latviešu valodu'}
         >
-          LV
+          {language === 'lv' ? 'EN' : 'LV'}
         </button>
         {/* Inside the desktop app, offering a download of itself makes no
             sense — __FS_DESKTOP__ builds hide the button. */}
@@ -668,6 +693,13 @@ export function Toolbar() {
           !
         </button>
       </div>
+      {isEvalMode() && (
+        <EvalFinishModal
+          open={evalFinishOpen}
+          onContinue={closeEvalFinish}
+          onFinish={finishEvalSession}
+        />
+      )}
       {isEvalMode() ? (
         <SusModal open={feedbackOpen} onClose={closeFeedback} />
       ) : (

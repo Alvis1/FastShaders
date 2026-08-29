@@ -29,6 +29,7 @@ interface Props {
 
 export function ConsentModal({ onAgree, onDecline }: Props) {
   const language = useAppStore((s) => s.language);
+  const setLanguage = useAppStore((s) => s.setLanguage);
   const [participant, setParticipant] = useState('');
 
   return createPortal(
@@ -39,8 +40,26 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
         aria-modal="true"
         aria-labelledby="eval-consent-title"
       >
-        <div className="csv-import-modal__title" id="eval-consent-title">
-          {t('FastShaders user study', language)}
+        {/* The panel carries its OWN language switch: this dialog is modal, so
+            the toolbar's button is unreachable behind the backdrop — and a
+            consent form nobody can read in their language is not consent. */}
+        <div className="eval-consent__head">
+          <div className="csv-import-modal__title" id="eval-consent-title">
+            {t('FastShaders user study', language)}
+          </div>
+          <button
+            type="button"
+            className="csv-import-modal__button eval-consent__lang"
+            onClick={() => setLanguage(language === 'lv' ? 'en' : 'lv')}
+            title={
+              language === 'lv'
+                ? 'Pārslēgt uz angļu valodu (Switch to English)'
+                : 'Pārslēgt uz latviešu valodu (Switch to Latvian)'
+            }
+            aria-label={language === 'lv' ? 'Switch to English' : 'Pārslēgt uz latviešu valodu'}
+          >
+            {language === 'lv' ? 'EN' : 'LV'}
+          </button>
         </div>
 
         <div className="eval-consent__section">
@@ -66,7 +85,7 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
         </div>
 
         <div className="eval-consent__section">
-          <strong>{t('When you are finished, click the red ! button in the top-right corner to answer the questionnaire.', language)}</strong>
+          <strong>{t('When you are finished, press the EXPORT button at the top and choose “Submit”.', language)}</strong>
         </div>
 
         <div className="eval-consent__code-row">

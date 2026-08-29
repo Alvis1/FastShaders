@@ -510,7 +510,7 @@ export const PresetCard = memo(function PresetCard({ preset }: PresetCardProps) 
             height={PREVIEW_SIZE}
             // Fills the card's content width — the tile is meant to be the
             // image, not a small swatch adrift in a large frame.
-            style={{ width: '100%', height: 'auto', aspectRatio: '1 / 1', display: 'block', borderRadius: 4, imageRendering: 'auto' }}
+            style={{ width: '100%', height: 'auto', aspectRatio: '1 / 1', display: 'block', borderRadius: 0, imageRendering: 'auto' }}
           />
           <span className="saved-group-card__count" style={{ marginTop: 2 }}>
             {memberCount} {memberCount === 1 ? 'node' : 'nodes'}

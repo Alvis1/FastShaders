@@ -22,10 +22,16 @@
 
 .feedback-modal__kind {
   flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: var(--ctl-size);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   font-weight: 600;
-  padding: 7px 10px;
+  line-height: 1;
+  padding: 0 10px;
   color: var(--text-secondary);
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);

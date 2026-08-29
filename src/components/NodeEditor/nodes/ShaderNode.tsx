@@ -26,6 +26,7 @@ import { displayImageFileName, validImageDataUrl } from '@/utils/imageNode';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { parseFormula, hasCustomFormula } from '@/utils/dataRangeFormula';
 import './ShaderNode.css';
+import { NODE_BORDER_WIDTH } from './nodeFrame';
 
 // (fmtNum/rangeText moved to utils/edgeValueText.ts — shared with the
 // animated LiveEdgeValue span so both paths format identically.)
@@ -439,11 +440,10 @@ export const ShaderNode = memo(function ShaderNode({
     transform: `scale(${costScale})`,
     transformOrigin: 'top left',
     // Category color for the selection outline (card + stacked-node frame).
-    '--node-cat': catHex,
   } as CSSProperties;
   const nodeStyle: CSSProperties = {
     background: 'var(--node-bg)',
-    border: `1.5px solid ${catHex}`,
+    border: `${NODE_BORDER_WIDTH} solid ${catHex}`,
   };
   // Exact width override applied below, once we know whether a chainable node
   // has grown into list mode (which needs a comfortable width, not the compact
@@ -555,11 +555,12 @@ export const ShaderNode = memo(function ShaderNode({
    *  all but the deepest strip.) */
   const stackLayerCount = inChannels - 1;
   // While stacked, the card drops its own shadow so no shadow falls BETWEEN
-  // cards — the deepest layer casts the single group shadow instead. This holds
-  // even when SELECTED: the whole-stack selection band is drawn by
-  // .node-base__stack-frame, so the card must not ALSO paint the selection
-  // band (.node-base--selected is a box-shadow spread) — that would read as a
-  // second highlight around just the top card.
+  // cards — the DEEPEST layer casts the single group shadow instead. That is
+  // also what makes selection work on a stack: selection is an elevation change
+  // (2px -> 8px, see tokens.css), and putting it on the deepest layer lifts the
+  // whole stack as one object. Banding the top card instead — which is what the
+  // retired .node-base__stack-frame did with a ring — highlighted a part of a
+  // thing the user selected whole.
   if (stackLayerCount > 0) nodeStyle.boxShadow = 'none';
   const stackLayers = stackLayerCount > 0
     ? [...Array(stackLayerCount).keys()].map((k) => (
@@ -570,25 +571,17 @@ export const ShaderNode = memo(function ShaderNode({
             transform: `translateY(${(k + 1) * STACK_STEP_Y}px)`,
             zIndex: -(k + 1),
             borderColor: catHex,
-            ...(k === stackLayerCount - 1 ? { boxShadow: 'var(--shadow-node)' } : null),
+            // Reads the shared lift variable (NodeBase.css) rather than
+            // branching on `selected` here, so the deepest layer follows HOVER
+            // too — the wrapper publishes one value for both states and the
+            // whole stack rises together.
+            ...(k === stackLayerCount - 1
+              ? { boxShadow: 'var(--fs-node-lift, var(--shadow-node))' }
+              : null),
           }}
         />
       ))
     : null;
-
-  // Selection outline for a stacked node must enclose the WHOLE stack, not just
-  // the top card. A single rounded-rect frame spans the union of the card and
-  // its downward-offset layers (same width, extended down by the deepest
-  // layer's offset) and carries the selection band; the top card's own band
-  // is suppressed while stacked (see `.node-base--stacked.node-base--selected`).
-  // It renders ABOVE the card (z-index) so the card can't paint over the top/
-  // side edges, and is pointer-events:none so it never blocks sockets.
-  const stackFrame = stackLayerCount > 0 && selected ? (
-    <div
-      className="node-base__stack-frame"
-      style={{ bottom: -(stackLayerCount * STACK_STEP_Y) }}
-    />
-  ) : null;
 
   const cardClass =
     `node-base${selected ? ' node-base--selected' : ''}` +
@@ -662,7 +655,6 @@ export const ShaderNode = memo(function ShaderNode({
     return (
       <div style={wrapStyle}>
         {stackLayers}
-        {stackFrame}
         <div
           className={cardClass}
           style={nodeStyle}
@@ -756,7 +748,6 @@ export const ShaderNode = memo(function ShaderNode({
   return (
     <div style={wrapStyle}>
       {stackLayers}
-      {stackFrame}
       <div
         className={cardClass}
         style={nodeStyle}

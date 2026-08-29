@@ -18,6 +18,7 @@ import { edgeValueLabel } from './ShaderNode';
 // still shows its number instead of a grey ellipsis.
 import { getTargetEdges } from '@/engine/cpuEvaluator';
 import './ClockNode.css';
+import { NODE_BORDER_WIDTH } from './nodeFrame';
 
 // (`formatSpeed` lived here to render the read-only `×N` chip without printing
 // "×0" for a slow-motion 0.001. The speed is an editable DragNumberInput now,
@@ -132,7 +133,7 @@ export const ClockNode = memo(function ClockNode({
   return (
     <div
       className={`node-base clock-node ${selected ? 'node-base--selected' : ''}`}
-      style={{ background: 'var(--node-bg)', border: `1.5px solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left', '--node-cat': catHex } as CSSProperties}
+      style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid ${catHex}`, transform: `scale(${costScale})`, transformOrigin: 'top left' } as CSSProperties}
     >
       {data.cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{data.cost}</span>}
 

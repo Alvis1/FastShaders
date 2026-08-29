@@ -1,13 +1,18 @@
 .group-node {
   position: relative;
-  border: 2px solid;
-  border-radius: 8px;
+  border: calc(2px * var(--fs-node-border-scale, 1)) solid;
+  border-radius: 0;
   box-sizing: border-box;
   /* The frame body deliberately does NOT capture pointer events — see the
      pass-through block at the bottom of this file. */
   overflow: visible;
 }
 
+/* An EXPANDED group is a frame, not a card: transparent body, no fill and no
+   resting shadow, so there is no elevation to raise the way a node card's
+   selection does. It keeps a faint band — the one place in the graph that
+   still has one, because a frame around other people's nodes is the only
+   selectable thing here whose own edge IS an outline. */
 .group-node--selected {
   box-shadow: 0 0 0 2px rgba(99, 130, 255, 0.25);
 }
@@ -18,8 +23,6 @@
   gap: 6px;
   height: 22px;
   padding: 0 4px 0 10px;
-  border-top-left-radius: 6px;
-  border-top-right-radius: 6px;
   cursor: grab;
   user-select: none;
 }
@@ -28,7 +31,7 @@
   font-size: var(--font-size-xs);
   font-weight: 600;
   color: #ffffff;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.45);
   letter-spacing: 0.02em;
   white-space: nowrap;
   overflow: hidden;
@@ -51,7 +54,7 @@
   color: #ffffff;
   background: rgba(0, 0, 0, 0.18);
   border: 1px solid rgba(255, 255, 255, 0.35);
-  border-radius: 3px;
+  border-radius: 0;
   cursor: pointer;
   transition: background 0.12s ease;
 }
@@ -73,9 +76,17 @@
    flag, but boundary edges stay live and connect to synthetic handles
    positioned over the body area. */
 .group-node--collapsed {
-  border-radius: 6px;
+  border-radius: 0;
   overflow: visible;
-  box-shadow: var(--shadow-node);
+  box-shadow: var(--fs-node-lift, var(--shadow-node));
+  transition: box-shadow var(--transition-fast);
+}
+
+/* A collapsed pill stands in for a NODE, so it selects like one — lifted, not
+   banded. Two classes, so it beats both single-class rules above regardless of
+   the order they happen to sit in this file. */
+.group-node--collapsed.group-node--selected {
+  --fs-node-lift: var(--shadow-node-selected);
 }
 
 .group-node--collapsed .group-node__header {

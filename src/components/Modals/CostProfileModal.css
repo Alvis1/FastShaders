@@ -13,7 +13,7 @@
 .cost-profile-modal__field input {
   padding: 6px 8px;
   font-family: var(--font-sans);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   color: var(--text-primary);
   background: var(--bg-input, var(--bg-panel));
   border: 1px solid var(--border-subtle);

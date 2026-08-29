@@ -48,7 +48,7 @@ export const NoteNode = memo(function NoteNode({
           color={headerColor}
           minWidth={120}
           minHeight={70}
-          style={{ width: 15, height: 15, borderRadius: 3, border: '2px solid #fff' }}
+          style={{ width: 15, height: 15, borderRadius: 0, border: '2px solid #fff' }}
         />
       )}
       {/* The header is the drag handle (see addNote's `dragHandle`). */}

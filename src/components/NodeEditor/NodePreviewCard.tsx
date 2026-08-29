@@ -51,6 +51,7 @@ import './nodes/MicNode.css';
 import './nodes/AudioInputNode.css';
 import './nodes/OutputNode.css';
 import './NodePreviewCard.css';
+import { NODE_BORDER_WIDTH } from './nodes/nodeFrame';
 
 interface NodePreviewCardProps {
   def: NodeDefinition;
@@ -222,7 +223,7 @@ function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, h
   return (
     <div
       className={`node-base node-preview-card__node${nodeClassName ? ` ${nodeClassName}` : ''}`}
-      style={{ background: 'var(--node-bg)', border: `1.5px solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
+      style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid ${catColor}`, transform: `scale(${costScale})`, transformOrigin: 'top left' }}
     >
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
@@ -542,7 +543,7 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
     ));
 
   return (
-    <div className="output-node node-preview-card__node" style={{ background: 'var(--node-bg)', border: '1.5px solid var(--cat-output)' }}>
+    <div className="output-node node-preview-card__node" style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}>
       {cost > 0 && (
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}

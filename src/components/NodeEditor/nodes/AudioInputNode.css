@@ -96,7 +96,7 @@
   padding: 0 12px 0 3px;
   color: #1a1a1a;
   border: 1px solid #b9bfc7;
-  border-radius: 2px;
+  border-radius: 0;
   cursor: pointer;
   /* Native appearance on macOS forces a large control with its own metrics and
      ignores the 20px height, which would break every offset below it. Removing

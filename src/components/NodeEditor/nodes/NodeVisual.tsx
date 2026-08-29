@@ -7,6 +7,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { buildRows } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
+import { NODE_BORDER_WIDTH } from './nodeFrame';
 import {
   NodeGlyph,
   hasNodeGlyph,
@@ -140,7 +141,7 @@ export function NodeVisual({
   };
   const nodeStyle: CSSProperties = {
     background: 'var(--node-bg)',
-    border: `1.5px solid ${catColor}`,
+    border: `${NODE_BORDER_WIDTH} solid ${catColor}`,
   };
   if (box.width) {
     if (exactWidth) {

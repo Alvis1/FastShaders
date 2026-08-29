@@ -48,9 +48,12 @@
   --border-default: #CCCCCC;
   --border-strong: #999999;
   --border-focus: #3366CC;
-  --border-radius-sm: 4px;
-  --border-radius-md: 8px;
-  --border-radius-lg: 12px;
+  /* Technical style: every corner is SQUARE. The three tokens survive (dozens
+     of consumers) but all resolve to 0 — keep new rules reading the tokens so
+     a future radius change stays one edit. */
+  --border-radius-sm: 0;
+  --border-radius-md: 0;
+  --border-radius-lg: 0;
 
   /* ===== TEXT ===== */
   --text-primary: #1A1A1A;
@@ -59,20 +62,52 @@
   --text-accent: #3366CC;
   --text-on-node: #1A1A1A;
 
-  /* ===== SHADOWS (sharp + dark — high contrast against any canvas bg) ===== */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
-  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.36);
-  --shadow-lg: 0 3px 8px rgba(0, 0, 0, 0.45);
-  /* Two layers: a tight contact shadow + a slightly diffused offset for depth.
-     Both kept tight (small blur) so the edges stay sharp instead of feathery. */
-  --shadow-node: 0 1px 2px rgba(0, 0, 0, 0.55), 0 3px 6px rgba(0, 0, 0, 0.4);
-  --shadow-node-selected: 0 0 0 2px var(--border-focus), 0 2px 4px rgba(0, 0, 0, 0.55), 0 5px 10px rgba(0, 0, 0, 0.45);
-  /* Selection band thickness, shared by every node shell (NodeBase's card +
-     stack frame, ColorNode's swatch) so one value keeps them identical. The
-     band is FILLED — drawn as a box-shadow spread, never an offset outline,
-     which would leave a canvas-coloured gap inside the ring. Deliberately NOT
-     redefined in the dark block: graph nodes render identically in both themes. */
-  --node-selection-width: 4px;
+  /* ===== SHADOWS (hard-edged — zero blur, offset encodes ELEVATION) =====
+     Technical style: a shadow is a solid down-right offset with NO blur, and
+     the offset grows with how high the surface floats — sm = chips/indicators
+     sitting just off their surface (2px), md = cards/tooltips/dropdown panes
+     (4px), lg = the top layer: modals, menus, popovers (8px). Light source is
+     fixed top-left, so x always equals y. Never reintroduce a blur radius.
+
+     The COLOURS are their own tokens because one surface cannot use a
+     box-shadow at all: the toolbar's shadow is drawn as a plain strip by
+     `.app-layout__left::before` (see AppLayout.css for why it cannot be cast by
+     the toolbar itself), and it has to darken with the theme exactly as every
+     real shadow does. A literal there would be a fourth copy of this number
+     that nothing keeps in step. */
+  --shadow-sm-color: rgba(0, 0, 0, 0.28);
+  --shadow-sm: 2px 2px 0 var(--shadow-sm-color);
+  --shadow-md: 4px 4px 0 rgba(0, 0, 0, 0.36);
+  --shadow-lg: 8px 8px 0 rgba(0, 0, 0, 0.45);
+  /* Graph nodes rest CLOSE to the canvas — a tight 2px contact shadow, so a
+     dense graph reads as cards lying ON a board rather than hovering above it.
+     SELECTION IS THE ELEVATION CHANGE: a selected node's shadow jumps to 8px,
+     which under this fixed light source is the same card lifted toward the
+     viewer. That IS the selection indicator — there is deliberately no coloured
+     band or outline any more (see the selection convention in CLAUDE.md). Two
+     reasons it is better than the ring it replaced: a 4x offset jump is
+     unmissable even on one node among fifty, and a ring in the node's own
+     category colour competed with the node's own category BORDER, which is the
+     thing directly beneath it.
+     Neither is redefined in the dark block: graph nodes render identically in
+     both themes. */
+  --shadow-node: 2px 2px 0 rgba(0, 0, 0, 0.45);
+  --shadow-node-selected: 8px 8px 0 rgba(0, 0, 0, 0.45);
+
+  /* How far a lifted node MOVES toward the light, on both axes. The shadow
+     stepping out is only half the effect; the object rising is the other half,
+     and without it a lifted node reads as having grown a shadow rather than as
+     having come forward.
+     3px and not more, because on the canvas this moves a node's SOCKETS while
+     React Flow keeps drawing its wires to the handle positions it measured
+     earlier. A diagonal 3px is 4.24px of displacement against a socket whose
+     radius is 5px (--handle-size / 2), so the wire's endpoint stays inside the
+     disc that paints over it and the wire still reads as landing on the port.
+     Raising this past ~3.5px is what would make hovered nodes look unplugged —
+     and note the bound moves with --handle-size, which coarse pointers already
+     bump to 12px. Zoom is not a factor: the node and its sockets scale
+     together inside the viewport transform, so the ratio holds at any zoom. */
+  --fs-node-rise: -3px;
 
   /* ===== TYPOGRAPHY ===== */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -100,17 +135,28 @@
      redefinition of --border-strong below flows through automatically. */
   --edge-color: var(--border-strong);
 
-  /* Seam thickness, shared by BOTH splitter bars (SplitPane.css) and by the
-     column grip, which centres itself on the row seam it now tracks
-     (.fs-grip--v in controls.css). Those two live in different subtrees, so a
-     token is the only way they can agree on the number. */
-  --fs-seam: 4px;
+  /* Seam thickness — EVERY window divider in the app: both splitter bars
+     (SplitPane.css) and the asset bar's top edge (ContentBrowser.css), plus the
+     column grip, which centres itself on the row seam it tracks (.fs-grip--v in
+     controls.css). Those live in different subtrees, so a token is the only way
+     they can agree on the number.
+     The grips' OUTLINE must equal this at the desktop value — that is what
+     makes a tab and its seam read as one continuous line — but is published
+     separately as --fs-grip-border by each host, because it deliberately does
+     NOT follow the coarse-pointer bump below. */
+  --fs-seam: 2px;
 
   /* ===== CHROME CONTROLS =====
      One size for every small square control OUTSIDE the graph: canvas-bar
      buttons, preview buttons, and the shared .fs-grip resize handle
-     (styles/controls.css). Node/socket dimensions are separate and live
-     below — never size chrome from --handle-size. */
+     (styles/controls.css). It is ALSO the app-wide BUTTON HEIGHT: every
+     standalone chrome button (toolbar chips, EXPORT, modal footers, the code
+     panel's Apply/Import, preview text buttons) is exactly --ctl-size tall —
+     inline-flex + centred content, padding only horizontal. Compact in-row
+     widgets (palette swatches, card delete dots, node-internal controls) are
+     exempt: they are sized by the row they live in, not by this token.
+     Node/socket dimensions are separate and live below — never size chrome
+     from --handle-size. */
   --ctl-size: 28px;
 
   /* ===== NODE DIMENSIONS ===== */
@@ -187,14 +233,14 @@
   --text-secondary: #c0c5cc;
   --text-muted: #9aa1aa;
 
-  /* Chrome elevation shadows: still deepened relative to light mode so
-     panels/menus/popovers separate from the backdrop, but eased back a step
-     now that the backdrop is grey rather than near-black — full-strength black
-     against a #33363b app reads as a smudge instead of a lift. Node shadows
-     (--shadow-node*) are intentionally left untouched above. */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.42);
-  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.48);
-  --shadow-lg: 0 4px 14px rgba(0, 0, 0, 0.55);
+  /* Chrome elevation shadows: SAME hard-offset geometry as light mode (the
+     offset is the elevation system — it never changes per theme), only the
+     alpha deepens so the lift still reads against the darker backdrop. Node
+     shadows (--shadow-node*) are intentionally left untouched above. */
+  --shadow-sm-color: rgba(0, 0, 0, 0.42);
+  --shadow-sm: 2px 2px 0 var(--shadow-sm-color);
+  --shadow-md: 4px 4px 0 rgba(0, 0, 0, 0.48);
+  --shadow-lg: 8px 8px 0 rgba(0, 0, 0, 0.55);
 }
 
 /* ===== TOUCH / COARSE-POINTER OVERRIDES =====
@@ -210,9 +256,11 @@
        18px here rendered ~2x oversized on iPad. */
     --handle-size: 12px;
 
-    /* Thicker seams so a panel boundary stays visible on a touch screen. The
-       grips are already --ctl-size targets, so they need no matching bump —
-       but the column grip's centring nudge tracks this automatically. */
-    --fs-seam: 12px;
+    /* Thicker seams so a panel boundary stays visible on a touch screen — 3x
+       the desktop line, the same ratio as before it was halved. The grips are
+       already --ctl-size targets, so they need no matching bump; the column
+       grip's centring nudge tracks this automatically, keeping its (unbumped)
+       outline centred inside the wider seam. */
+    --fs-seam: 6px;
   }
 }
