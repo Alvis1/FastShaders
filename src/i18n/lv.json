@@ -831,7 +831,6 @@
     "Thank you!": "Paldies!",
     "Your answers, the shader you made, and the session data were packaged into one file, which has just been downloaded:": "Jūsu atbildes, izveidotais šeiders un sesijas dati tika sapakoti vienā failā, kas tikko lejupielādēts:",
     "Some data-quality checks did not pass — please tell the researcher before leaving:": "Dažas datu kvalitātes pārbaudes neizdevās — lūdzu, pasakiet to pētniekam pirms aiziešanas:",
-    "Download again": "Lejupielādēt vēlreiz",
     "The package was also sent to the researcher automatically — the email step below is only a backup.": "Pakete tika automātiski nosūtīta pētniekam — e-pasta solis zemāk ir tikai rezerves variants.",
     "Sending to the researcher…": "Notiek sūtīšana pētniekam…",
     "Before you finish — 10 quick statements": "Pirms beidzat — 10 īsi apgalvojumi",
@@ -854,6 +853,8 @@
     "When you are finished, press the EXPORT button at the top and choose “Submit”.": "Kad esat pabeidzis/-usi, nospiediet pogu EXPORT augšpusē un izvēlieties “Iesniegt”.",
     "Finish the session — answer a short questionnaire, then submit your shader and session data to the researcher": "Pabeigt sesiju — atbildēt uz īsu anketu un iesniegt pētniekam savu šeideru un sesijas datus",
     "Your email app should have opened with the message ready. Attach the file named above and press Send. If it did not open, use “Open email” below — or simply tell the researcher, the file is in the Downloads folder.": "Jūsu e-pasta lietotnei vajadzēja atvērties ar sagatavotu vēstuli. Pievienojiet augstāk nosaukto failu un nospiediet “Sūtīt”. Ja tā neatvērās, izmantojiet “Atvērt e-pastu” zemāk — vai vienkārši pasakiet pētniekam, fails ir mapē “Lejupielādes”.",
-    "Nothing else is recorded: no keystroke content, no audio or video, nothing outside this app. The data is packaged into one file only when you submit the questionnaire; that file is then sent to the university’s server (alvismisjuns.lv), where only the researcher can open it, and a copy is saved on this computer.": "Nekas cits netiek pierakstīts: ne ievadītais teksts, ne audio vai video, nekas ārpus šīs lietotnes. Dati tiek sapakoti vienā failā tikai tad, kad iesniedzat anketu; šis fails pēc tam tiek nosūtīts uz augstskolas serveri (alvismisjuns.lv), kur to var atvērt tikai pētnieks, un kopija tiek saglabāta šajā datorā."
+    "Nothing else is recorded: no keystroke content, no audio or video, nothing outside this app. The data is packaged into one file only when you submit the questionnaire; that file is then sent to the university’s server (alvismisjuns.lv), where only the researcher can open it, and a copy is saved on this computer.": "Nekas cits netiek pierakstīts: ne ievadītais teksts, ne audio vai video, nekas ārpus šīs lietotnes. Dati tiek sapakoti vienā failā tikai tad, kad iesniedzat anketu; šis fails pēc tam tiek nosūtīts uz augstskolas serveri (alvismisjuns.lv), kur to var atvērt tikai pētnieks, un kopija tiek saglabāta šajā datorā.",
+    "Download": "Lejupielādēt",
+    "The package could not be sent automatically. Please make sure the researcher receives the file — it is already in your Downloads folder, and the “Download” button below gives you another copy.": "Paketi neizdevās nosūtīt automātiski. Lūdzu, pārliecinieties, ka pētnieks saņem failu — tas jau ir jūsu mapē “Lejupielādes”, un poga “Lejupielādēt” zemāk sniedz vēl vienu kopiju."
   }
 }
