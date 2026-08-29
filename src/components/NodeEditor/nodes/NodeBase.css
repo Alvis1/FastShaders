@@ -17,24 +17,32 @@
    React Flow's `.selected` class (GraphModal, the Node Designer stage). */
 .react-flow__node {
   --fs-node-lift: var(--shadow-node);
+  --fs-node-shift: 0px;
   --fs-node-border-scale: 1;
-  /* Only `translate` transitions — never `transform`. React Flow writes the
-     node's POSITION into the inline `transform` and rewrites it every frame of
-     a drag; transitioning that property would make every dragged node lag its
-     own pointer by the transition duration. */
-  transition: translate var(--transition-fast);
 }
 
 /* The lift, both halves of it: the shadow steps out AND the node itself moves
    the same distance toward the light, exactly as an asset tile does.
-   `translate` is the standalone CSS property, NOT `transform` — this is what
-   makes moving the node possible at all. React Flow owns the wrapper's
-   `transform` (it is the node's x/y), and the used matrix is
-   translate → rotate → scale → transform, so writing `translate` here composes
-   with React Flow's positioning instead of destroying it.
-   Moving the WRAPPER rather than the card is deliberate: the card, its
-   multi-channel stack layers and its handles are all inside it, so they travel
-   as one object rather than sliding apart. */
+
+   BOTH halves are published as inherited custom properties and applied by the
+   SHELLS (`.node-base` below, plus `.color-node`, `.output-node`, `.note-node`
+   and the collapsed group pill in their own files) — never on this wrapper.
+   That is the whole point: this wrapper is the hover TARGET, so moving it moves
+   the box that decides whether the pointer is still over the node. Sweeping
+   along a node's lower edge then produced a feedback loop — lift, the card
+   slides out from under the pointer, unhover, drop, hover again — MEASURED at
+   38 state flips across a 40-step creep along the bottom edge, i.e. a jitter on
+   almost every mouse move.
+   Applying the shift to the shells instead leaves this wrapper AND ShaderNode's
+   cost-scale wrapper (whose box is the painted card, larger than this one on
+   expensive nodes) exactly where they are, so the trigger area is the node's
+   RESTING footprint and cannot move out from under the pointer.
+
+   `translate` is the standalone CSS property, NOT `transform`: React Flow owns
+   the wrapper's `transform` (the node's x/y) and ShaderNode's inner wrapper
+   uses `transform: scale()` for the cost scale, and the used matrix is
+   translate → rotate → scale → transform, so `translate` composes with both
+   instead of destroying them. */
 /* THREE states raise a node, and they are deliberately the same raise:
    hovered, selected, and "its settings menu is open" (`fs-menu-active`, put on
    by NodeEditor for the life of the menu). Selection and the open menu differ
@@ -43,7 +51,7 @@
 .react-flow__node.selected,
 .react-flow__node.fs-menu-active {
   --fs-node-lift: var(--shadow-node-selected);
-  translate: var(--fs-node-rise) var(--fs-node-rise);
+  --fs-node-shift: var(--fs-node-rise);
 }
 
 /* CLICKING a node doubles its frame, on top of the lift — and hover pointedly
@@ -73,7 +81,7 @@
    its wires stay put — the exact thing the lift-offset exists to prevent. */
 .node-editor__canvas.fs-connecting .react-flow__node:hover:not(.selected):not(.fs-menu-active) {
   --fs-node-lift: var(--shadow-node);
-  translate: none;
+  --fs-node-shift: 0px;
 }
 
 /* An EXPANDED group frame is the one node that must NOT move, in any of those
@@ -85,7 +93,7 @@
    order is what decides, and it must stay below.
    A COLLAPSED pill stands in for a node and travels like one. */
 .react-flow__node-group:not(:has(.group-node--collapsed)) {
-  translate: none;
+  --fs-node-shift: 0px;
 }
 
 /* ===== Shared node shell ===== */
@@ -100,9 +108,42 @@
      card with no wrapper to inherit from, and a node at rest is what they mean
      to show. */
   box-shadow: var(--fs-node-lift, var(--shadow-node));
-  transition: box-shadow var(--transition-fast);
+  translate: var(--fs-node-shift, 0px) var(--fs-node-shift, 0px);
+  transition: box-shadow var(--transition-fast), translate var(--transition-fast);
   font-family: var(--font-sans);
   overflow: visible;
+}
+
+/* The hover TRIGGER, for the one case the wrapper cannot cover.
+ *
+ * Moving the shift onto the shells (above) leaves React Flow's node wrapper
+ * stationary, which is enough for every node whose painted card fits inside it
+ * — MEASURED: `sub` and `mix` go from a jittering 38 flips to a clean 2 (one
+ * enter, one leave) along their bottom edge.
+ *
+ * The EXPENSIVE nodes are the exception. `getCostScale` is applied as a
+ * `transform`, which does not affect layout, so their card PAINTS well past the
+ * wrapper's box — 17.3px on a noise node. Out there the card is the only thing
+ * under the pointer, so hover is driven by the very element that moves, and the
+ * loop came straight back (47 flips).
+ *
+ * This extends the card's hit area to the RIGHT and DOWN by exactly the
+ * distance the card travels UP and LEFT, so the union has a boundary that does
+ * not move: `--fs-node-shift` is 0 at rest and the negative rise while lifted,
+ * and a negative `right`/`bottom` grows the box outward. The top/left edges are
+ * left alone on purpose — the card moves TOWARD them, so that side of the hit
+ * area only ever grows, which cannot oscillate either.
+ *
+ * A shim rather than a bigger box: at rest it adds nothing at all, so a node
+ * grabs no pointer events it did not grab before. `z-index: -1` keeps it behind
+ * the card's own content so it can never intercept a widget or a socket; it is
+ * only ever the topmost thing in the sliver outside the moved card, which is
+ * precisely where it is needed. */
+.node-base::before {
+  content: '';
+  position: absolute;
+  inset: 0 var(--fs-node-shift, 0px) var(--fs-node-shift, 0px) 0;
+  z-index: -1;
 }
 
 /* Cost badge positioned above the node, centered */
@@ -186,11 +227,12 @@
   border: calc(1.5px * var(--fs-node-border-scale, 1)) solid; /* color set inline (category) */
   background: var(--node-bg);
   z-index: -1;
+  translate: var(--fs-node-shift, 0px) var(--fs-node-shift, 0px);
   pointer-events: none;
   /* The deepest layer carries the whole stack's shadow (set inline from
      --fs-node-lift), so it needs the same transition the card has or a stacked
      node would snap between elevations while an unstacked one eases. */
-  transition: box-shadow var(--transition-fast);
+  transition: box-shadow var(--transition-fast), translate var(--transition-fast);
 }
 
 /* ===== Header ===== */

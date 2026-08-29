@@ -6,8 +6,9 @@
   border: calc(1.5px * var(--fs-node-border-scale, 1)) solid rgba(0, 0, 0, 0.12);
   cursor: grab;
   position: relative;
-  transition: box-shadow var(--transition-fast);
+  transition: box-shadow var(--transition-fast), translate var(--transition-fast);
   box-shadow: var(--fs-node-lift, var(--shadow-node));
+  translate: var(--fs-node-shift, 0px) var(--fs-node-shift, 0px);
   display: flex;
   align-items: center;
   justify-content: center;
