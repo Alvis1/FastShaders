@@ -2,10 +2,13 @@
  * Delivery option B — automatic upload of the study package to the
  * researcher's own server (see EVAL_MODE_PLAN.md §4 Phase 5 and §7).
  *
- * DISABLED by default: `EVAL_UPLOAD_URL` is empty, so `uploadEvalPackage`
- * returns 'disabled' and the submit flow behaves exactly as before (download
- * + prefilled mailto). To enable, deploy `server/fastshaders-eval-upload.php`
- * (see its header for the steps), then set the URL and key here to match.
+ * LIVE since 2026-08-29 on the alvismisjuns deploy: every submitted package
+ * is POSTed to `/fastshaders-eval/upload.php` and appears at
+ * `/fastshaders-eval/list.php` (password-protected). Set `EVAL_UPLOAD_URL`
+ * back to '' to disable. The endpoint itself is deployed by
+ * `scripts/deploy-eval-endpoint.sh`, which renders `server/*.php` with the
+ * secrets from the gitignored `.vscode/eval-endpoint.json` — this repo is
+ * public, so the listing password never enters it.
  *
  * Why this is CSP-legal on the study host: the alvismisjuns deploy already
  * carries `https://alvismisjuns.lv` in `connect-src` (the deploy script's
@@ -25,9 +28,9 @@
  */
 
 /** e.g. '/fastshaders-eval/upload.php' (same-origin on alvismisjuns). Empty = disabled. */
-export const EVAL_UPLOAD_URL: string = '';
+export const EVAL_UPLOAD_URL: string = '/fastshaders-eval/upload.php';
 /** Must match $SECRET in server/fastshaders-eval-upload.php. */
-export const EVAL_UPLOAD_KEY: string = 'CHANGE-ME';
+export const EVAL_UPLOAD_KEY: string = 'fsx-ecec3b0ce84df95b09ca';
 
 const UPLOAD_TIMEOUT_MS = 30_000;
 /** Client-side mirror of the server's cap — refuse before shipping bytes. */

@@ -29,8 +29,13 @@ export const EVAL_STUDY_EMAIL = FEEDBACK_EMAIL;
 /** Rides every package so analysis scripts can dispatch on the log format. */
 export const EVAL_SCHEMA = 'fs-eval-1';
 
-/** Version tag of the consent text shown; recorded with the consent act. */
-export const CONSENT_TEXT_VERSION = 'consent-1';
+/**
+ * Version tag of the consent text shown; recorded with the consent act, so a
+ * package always says which wording its participant agreed to. BUMP IT
+ * whenever the text changes materially — consent-2 added the automatic
+ * transfer to the university server (delivery option B going live).
+ */
+export const CONSENT_TEXT_VERSION = 'consent-2';
 
 /**
  * Active-time idle threshold. There is NO validated threshold in the

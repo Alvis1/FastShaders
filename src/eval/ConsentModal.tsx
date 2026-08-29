@@ -76,7 +76,7 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
             <li>{t('The shader you create during the session.', language)}</li>
             <li>{t('Basic technical facts needed to interpret the results — browser and platform version, screen size, and time zone.', language)}</li>
           </ul>
-          {t('Nothing else is recorded: no keystroke content, no audio or video, nothing outside this app. Nothing is uploaded automatically — the data is packaged into one file only when you submit the questionnaire, and handed to the researcher.', language)}
+          {t('Nothing else is recorded: no keystroke content, no audio or video, nothing outside this app. The data is packaged into one file only when you submit the questionnaire; that file is then sent to the university’s server (alvismisjuns.lv), where only the researcher can open it, and a copy is saved on this computer.', language)}
         </div>
 
         <div className="eval-consent__section">

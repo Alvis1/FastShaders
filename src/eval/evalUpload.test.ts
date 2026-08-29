@@ -8,14 +8,18 @@ afterEach(() => {
 });
 
 describe('uploadEvalPackage', () => {
-  it('ships DISABLED — the default configuration must not upload anything', async () => {
-    // The repo's committed state keeps option B dark: enabling it is a
-    // deliberate act (deploy the PHP endpoint, set URL + key, extend the
-    // consent text — see server/fastshaders-eval-upload.php).
-    expect(EVAL_UPLOAD_URL).toBe('');
+  it('points at the study endpoint as a SAME-ORIGIN path', async () => {
+    // Same-origin is what keeps the POST inside the app's own CSP
+    // (`connect-src 'self' …`) — an absolute URL to another host would be
+    // blocked at runtime with nothing but a console error to show for it.
+    expect(EVAL_UPLOAD_URL).toBe('/fastshaders-eval/upload.php');
+    expect(EVAL_UPLOAD_URL.startsWith('/')).toBe(true);
+  });
+
+  it('still no-ops when the endpoint is switched off', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
-    await expect(uploadEvalPackage('x.zip', bytes)).resolves.toBe('disabled');
+    await expect(uploadEvalPackage('x.zip', bytes, '', 'k')).resolves.toBe('disabled');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
