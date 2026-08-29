@@ -36,6 +36,10 @@ const DESKTOP_DOWNLOADS = [
   { key: 'mac', os: 'macOS', detail: 'disk image (.dmg)', file: 'FastShaders-macOS.dmg' },
 ];
 
+/** Width of the right-click preferences popover — kept in step with its CSS
+ *  `width` so the on-screen clamp above matches the box actually painted. */
+const PREFS_W = 200;
+
 /** Result shape of the desktop bench-server commands (src-tauri/src/bench_server.rs). */
 type BenchServerInfo = { url: string; ip: string; port: number };
 
@@ -180,6 +184,32 @@ export function Toolbar() {
   }, []);
   const closePalettes = useCallback(() => setPalettesOpen(false), []);
 
+  // ── Right-click preferences popup ─────────────────────────────────────────
+  // The toolbar's own context menu. It exists for `trackpadScroll`, which has
+  // to be a setting rather than a device sniff (see the store field and
+  // NodeEditor's wheel handler for why guessing was tried and reverted), and is
+  // the natural home for any later app-wide input preference.
+  const [prefsAt, setPrefsAt] = useState<{ x: number; y: number } | null>(null);
+  const prefsRef = useRef<HTMLDivElement>(null);
+  const trackpadScroll = useAppStore((s) => s.trackpadScroll);
+  const setTrackpadScroll = useAppStore((s) => s.setTrackpadScroll);
+  const closePrefs = useCallback(() => setPrefsAt(null), []);
+  useDismiss(prefsAt != null, closePrefs, [prefsRef]);
+
+  const openPrefs = useCallback((e: React.MouseEvent) => {
+    const el = e.target as HTMLElement | null;
+    // Never steal a right-click that already means something else. The name
+    // field needs its native cut/copy/paste menu (a text input's context menu
+    // is the one place users genuinely rely on the OS one), and EXPORT owns
+    // right-click for its export-settings popover — that handler preventDefaults
+    // but does NOT stopPropagation, so without this guard both would fire and
+    // the two popovers would open on top of each other.
+    if (el?.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (el?.closest('.toolbar__export-wrap, .toolbar__local, .toolbar__overflow')) return;
+    e.preventDefault();
+    setPrefsAt({ x: e.clientX, y: e.clientY });
+  }, []);
+
   // ── Narrow-window overflow ────────────────────────────────────────────────
   // Below a certain width the right cluster stops fitting and the toolbar
   // simply overflows (the centre's name field is the only flexible child and
@@ -237,7 +267,7 @@ export function Toolbar() {
   }, []);
 
   return (
-    <div className="toolbar" ref={barRef}>
+    <div className="toolbar" ref={barRef} onContextMenu={openPrefs}>
       <div className="toolbar__left">
         <button
           ref={brandRef}
@@ -795,6 +825,47 @@ export function Toolbar() {
         <FeedbackModal open={feedbackOpen} onClose={closeFeedback} />
       )}
       <PalettesModal open={palettesOpen} onClose={closePalettes} />
+      {prefsAt && (
+        <div
+          ref={prefsRef}
+          className="toolbar__prefs-popover"
+          role="menu"
+          aria-label={t('Input settings', language)}
+          // Positioned at the pointer, so it reads as that click's menu. Fixed,
+          // not absolute: the toolbar is the containing block and clamping
+          // against it would fight the bar's own horizontal scroll-free layout.
+          // The right/bottom clamps keep it on screen near the far corner,
+          // where the right cluster lives.
+          style={{
+            left: Math.min(prefsAt.x, window.innerWidth - PREFS_W - 8),
+            top: Math.min(prefsAt.y, window.innerHeight - 96),
+          }}
+        >
+          <div className="toolbar__local-header">
+            <span className="toolbar__contact-label">{t('Input settings', language)}</span>
+          </div>
+          {/* The explanation is the row's `title`, picked up by the app-wide
+              TooltipLayer — the same "one line you scan, the detail arrives on
+              hover" rule the Add-node menu follows. It sits on the LABEL, which
+              wraps both the box and the text, so either half raises it
+              (TooltipLayer resolves its host with closest('[title]')). */}
+          <label
+            className="toolbar__prefs-row"
+            title={
+              trackpadScroll
+                ? t('Two fingers pan the node canvas; pinch to zoom.', language)
+                : t('The mouse wheel zooms the node canvas. Turn this on for a trackpad, where two fingers should pan instead.', language)
+            }
+          >
+            <input
+              type="checkbox"
+              checked={trackpadScroll}
+              onChange={(e) => setTrackpadScroll(e.target.checked)}
+            />
+            <span className="toolbar__prefs-label">{t('Trackpad scrolling', language)}</span>
+          </label>
+        </div>
+      )}
     </div>
   );
 }

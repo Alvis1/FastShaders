@@ -75,7 +75,6 @@ import {
   type NodeBox,
 } from './dragConnect';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
-import { WheelGesture } from './wheelKind';
 import { pickSpliceInputPort } from './edgeSplice';
 import { existingOutputId, focusOutputNode } from './outputFocus';
 import {
@@ -2642,27 +2641,30 @@ export function NodeEditor() {
     return () => el.removeEventListener('mousedown', handler, true);
   }, []);
 
-  // Wheel panning. A TRACKPAD two-finger swipe pans both axes; a notched MOUSE
-  // WHEEL keeps zooming through React Flow's zoomOnScroll, which is what every
-  // node editor does and what this canvas has always done. The two arrive as
-  // the same event, so `WheelGesture` discriminates them (see wheelKind.ts —
-  // pixel-vs-line delta mode, then the legacy wheelDelta detent) and latches
-  // the answer for the whole flick, upgrade-only, so one gesture can never
-  // alternate between panning and zooming.
+  // Wheel handling. A HORIZONTAL wheel always pans — a mouse tilt-wheel and a
+  // trackpad sideways swipe both emit `deltaX` on its own, which is unambiguous
+  // whatever the device. What a VERTICAL wheel does is the user's `trackpadScroll`
+  // setting: OFF (default) it falls through to React Flow's `zoomOnScroll`, ON it
+  // pans.
   //
-  // The horizontal half predates this and is unchanged: a mouse tilt-wheel or a
-  // trackpad sideways swipe emits deltaX on its own, which is unambiguous
-  // whatever the device. Only the VERTICAL half needs the discriminator, and it
-  // is deliberately biased toward "wheel" — misreading a trackpad costs a pan
-  // the user can repeat, misreading a mouse takes their zoom control away.
+  // A SETTING rather than a device sniff, and that is the design. The two
+  // gestures arrive as the SAME event, so separating them needs a heuristic —
+  // one was built (`wheelKind.ts`: pixel-vs-line delta mode, then the legacy
+  // `wheelDelta` detent of 120), shipped, and REVERTED, because it read a real
+  // macOS mouse as a trackpad and removed that user's zoom. Almost certainly
+  // because macOS accelerates mouse wheels too, so `wheelDelta` is rarely a
+  // clean multiple of 120. Two properties make the class unsafe to guess at:
+  // the failure is ASYMMETRIC (misreading a trackpad costs a pan you repeat,
+  // misreading a mouse removes a primary control), and it is UNTESTABLE from
+  // here — CDP's `Input.dispatchMouseEvent` hardcodes `wheelDeltaY` to ±120
+  // whatever delta you ask for, and a constructed `WheelEvent` leaves it at 0.
+  // Don't reintroduce a sniff; the toolbar's right-click menu owns this now.
   //
-  // Pinch (ctrlKey) and an explicit Cmd/Ctrl+wheel pass straight through, so
-  // zooming stays available on a trackpad without a mouse.
+  // Zooming stays reachable in BOTH modes: pinch and Ctrl/Cmd+wheel pass
+  // straight through to React Flow, which is also the trackpad's native zoom.
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
-
-    const gesture = new WheelGesture();
 
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) return; // pinch-to-zoom / explicit zoom
@@ -2671,14 +2673,18 @@ export function NodeEditor() {
       // capture-phase listener would otherwise pan the graph out from under a
       // wheel aimed at them.
       if ((e.target as Element | null)?.closest?.('.nowheel')) return;
-      const trackpad = gesture.next(e, e.timeStamp);
-      if (!trackpad && e.deltaX === 0) return; // notched wheel → let React Flow zoom
+      // Read the flag off the store at EVENT time rather than closing over it:
+      // this listener is bound once (its deps are the stable viewport helpers),
+      // so a captured value would freeze whatever the setting was at mount and
+      // the toggle would only take effect after a remount.
+      const panVertically = useAppStore.getState().trackpadScroll;
+      if (!panVertically && e.deltaX === 0) return; // → React Flow zooms
       e.preventDefault();
       e.stopImmediatePropagation();
       const vp = getViewport();
       setViewport({
         x: vp.x - e.deltaX,
-        y: trackpad ? vp.y - e.deltaY : vp.y,
+        y: panVertically ? vp.y - e.deltaY : vp.y,
         zoom: vp.zoom,
       });
     };

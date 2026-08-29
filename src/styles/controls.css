@@ -286,6 +286,34 @@
   background: var(--bg-surface-hover);
 }
 
+/* INVERTED variant — dark plate, light glyph — for a surface where the arrow
+   has to be FOUND rather than merely available. The 3D preview's control bar is
+   a near-white chrome strip, so the default (plate matches the strip) left the
+   arrow reading as part of the bar rather than as a button on it.
+
+   Expressed with the SAME two tokens the default uses, just swapped, exactly as
+   `.toolbar__refresh` does: both flip in the dark block, so the inversion
+   survives the theme toggle instead of turning into a light-on-light plate. The
+   divider border takes the plate colour too — at --border-default it drew a
+   pale seam down the side of a dark plate. */
+.fs-scroll-arrow--invert {
+  background: var(--text-primary);
+  color: var(--bg-surface);
+  border-color: var(--text-primary);
+}
+
+/* The hover plate is --border-focus, which is a FIXED blue in both themes, so
+   the glyph on it must be fixed too — the `.toolbar__export` precedent. Reading
+   --bg-panel here (as .toolbar__refresh:hover does) looks right in light mode
+   and collapses in dark, where that token is a dark grey: MEASURED at 1.66:1
+   against the blue, i.e. the glyph all but disappears on the hover that is
+   supposed to confirm the button. #fff holds 5.6:1 in both. */
+.fs-scroll-arrow--invert:hover {
+  background: var(--border-focus);
+  border-color: var(--border-focus);
+  color: #fff;
+}
+
 /* Touch: swipe-scroll is native, so these are a fallback — but when they do
    appear they have to be tappable. */
 @media (pointer: coarse) {

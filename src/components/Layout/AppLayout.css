@@ -31,22 +31,29 @@
    is the TOP pane of the OTHER column, so "the left column only" and
    "everywhere except the 3D view" are the same region.
 
-   The geometry restates `--shadow-sm` (2px down, 2px right, no blur): the strip
-   is 2px tall, starts 2px in from the left, and ends at the column seam. Its
-   COLOUR is not restated — `--shadow-sm-color` is a token precisely so this
-   strip darkens with the theme exactly as every real box-shadow does. */
+   The geometry restates `--shadow-float` (6px down, 6px right, no blur): the
+   strip is 6px tall, starts 6px in from the left, and ends at the column seam.
+   It reads that token and not `--shadow-sm` because the toolbar is the app's
+   TOP plate and this is the only shadow it casts — at 2px it sat below the
+   canvas chrome it is meant to be above, so the topmost surface in the app
+   cast the shallowest shadow in it. The numbers are duplicated here and
+   nowhere else, so cssTokens.test.ts asserts they still equal the token's
+   offset. Its COLOUR is not restated — `--shadow-float-color` is a token
+   precisely so this strip darkens with the theme exactly as every real
+   box-shadow does. */
 .app-layout__left::before {
   content: '';
   position: absolute;
   top: 0;
-  left: 2px;
+  left: 6px;
   right: 0;
-  height: 2px;
-  background: var(--shadow-sm-color);
+  height: 6px;
+  background: var(--shadow-float-color);
   /* Above the node editor, which is a positioned (`position: relative`) sibling
      LATER in DOM order and would otherwise paint over it. Deliberately below
-     `--z-controls`: the canvas chrome starts 12px down and never meets this
-     strip, so there is nothing to win against and no reason to outrank it. */
+     `--z-controls`: the canvas chrome starts 12px down (--space-3), so the
+     strip clears it with room to spare — and even if they met, the chrome
+     outranks it. */
   z-index: 1;
   pointer-events: none;
 }

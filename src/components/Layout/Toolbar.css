@@ -865,3 +865,43 @@ button.toolbar__sc-link {
   right: 100%;
   margin-right: var(--space-2);
 }
+
+/* ── Right-click preferences popup ─────────────────────────────────────────
+   The toolbar's own context menu (see Toolbar.tsx for what it guards against
+   opening on top of). `position: fixed` because it is placed at the POINTER,
+   not against the bar: the toolbar is the containing block for its other
+   popovers, all of which hang off a specific control, and this one belongs to
+   the click. Width is mirrored by PREFS_W in Toolbar.tsx, which clamps the
+   popup on screen — keep the two in step. */
+.toolbar__prefs-popover {
+  position: fixed;
+  z-index: 100;
+  /* Sized for the rows themselves: the explanation that used to sit under the
+     checkbox is the row's `title` now, so nothing here needs paragraph width. */
+  width: 200px;
+  box-sizing: border-box;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-lg);
+}
+
+.toolbar__prefs-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  /* The whole row is the hit target, so the label must not take the caret. */
+  user-select: none;
+}
+
+.toolbar__prefs-label {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}

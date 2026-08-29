@@ -907,6 +907,26 @@ interface AppState {
    *  (persisted; set via that notice's "Don't show again" checkbox). Distinct
    *  from `ignoreImageLimits` — this hides a warning, it doesn't lift a cap. */
   hideImageDownscaleWarning: boolean;
+  /**
+   * Canvas wheel behaviour: false (default) = a vertical wheel ZOOMS, the
+   * mouse model; true = it PANS, the trackpad model. Persisted to
+   * `fs:trackpadScroll`.
+   *
+   * A SETTING and not a device sniff, which is the whole point. A trackpad's
+   * two-finger swipe and a mouse's wheel notch arrive as the same DOM event,
+   * so telling them apart needs a heuristic — one was built, shipped and
+   * reverted after it read a real macOS mouse as a trackpad and took that
+   * user's zoom away (see the navigation convention in CLAUDE.md, and
+   * NodeEditor's wheel handler). The failure is asymmetric enough, and the
+   * hardware unreachable enough from a test, that the honest answer is to let
+   * the user state which device they are on.
+   *
+   * Defaults to the MOUSE model: it is the historical behaviour, it is what
+   * every node editor does, and a wrong default costs a trackpad user a pan
+   * they can still get (two-finger horizontal, double-tap-drag) rather than
+   * costing a mouse user their zoom, which has no substitute.
+   */
+  trackpadScroll: boolean;
   /** Drop-time image conversion (WebP + power-of-two): ask each time, or a
    *  remembered answer. Persisted to `fs:imageConvert`. Conversion is lossy in
    *  ways the app can't judge for the user (a normal map wants "keep", a photo
@@ -1163,6 +1183,7 @@ interface AppState {
   resolveLimitNotice: (action: 'dismiss' | 'proceed', ignoreFuture: boolean | null) => void;
   setIgnoreImageLimits: (v: boolean) => void;
   setHideImageDownscaleWarning: (v: boolean) => void;
+  setTrackpadScroll: (v: boolean) => void;
   setImageConvertMode: (v: 'ask' | 'always' | 'never') => void;
   setHideImageConvertNotice: (v: boolean) => void;
   setSplitRatio: (ratio: number) => void;
@@ -1261,6 +1282,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   pendingLimitNotices: [],
   ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
   hideImageDownscaleWarning: loadString('fs:hideImageDownscaleWarning', '0') === '1',
+  trackpadScroll: loadString('fs:trackpadScroll', '0') === '1',
   imageConvertMode: (() => {
     const v = loadString('fs:imageConvert', 'ask');
     return v === 'always' || v === 'never' ? v : 'ask';
@@ -1972,6 +1994,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setIgnoreImageLimits: (v) => {
     try { localStorage.setItem('fs:ignoreImageLimits', v ? '1' : '0'); } catch { /* */ }
     set({ ignoreImageLimits: v });
+  },
+
+  setTrackpadScroll: (v) => {
+    try { localStorage.setItem('fs:trackpadScroll', v ? '1' : '0'); } catch { /* */ }
+    set({ trackpadScroll: v });
   },
 
   setHideImageDownscaleWarning: (v) => {

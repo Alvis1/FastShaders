@@ -99,3 +99,103 @@ describe('CSS custom properties', () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * The elevation RAMP is a set of inequalities, not a list of numbers — and
+ * every one of them is invisible to a typecheck, a build and every other test
+ * in the suite. What they encode: a hard offset with no blur is the only thing
+ * saying how high a surface floats, so the ordering IS the design. Break it and
+ * nothing errors; the app just stops reading as layered.
+ *
+ * The specific defect these were written after: canvas chrome sat BELOW the
+ * graph it floats over — the settings menus matched a selected node exactly
+ * (both 8px), and the cost pill, NEW and the canvas bar were shallower than it
+ * (2–4px), so a selected node appeared to hover above the app's own controls.
+ */
+describe('shadow elevation ramp', () => {
+  const tokens = decomment(readFileSync(join(SRC, 'styles/tokens.css'), 'utf8'));
+
+  /** Offset (px) of a hard shadow token, read from the LIGHT (`:root`) block. */
+  const offsetOf = (name: string): number => {
+    const m = new RegExp(`${name}:\\s*(-?\\d+)px\\s+(-?\\d+)px\\s+0`).exec(tokens);
+    if (!m) throw new Error(`${name} is not declared as a hard "Npx Npx 0" shadow`);
+    expect(m[1], `${name} must be square — the light source is fixed top-left`).toBe(m[2]);
+    return Number(m[1]);
+  };
+
+  it('keeps the chrome ramp strictly ordered: chip < card < popover', () => {
+    const sm = offsetOf('--shadow-sm'), md = offsetOf('--shadow-md'), lg = offsetOf('--shadow-lg');
+    expect([sm, md, lg]).toEqual([...[sm, md, lg]].sort((a, b) => a - b));
+    expect(new Set([sm, md, lg]).size, 'two layers at the same offset are one layer').toBe(3);
+  });
+
+  it('gives canvas chrome its own depth, distinct from every chrome layer', () => {
+    // --shadow-float is deliberately NOT a member of the sm/md/lg ramp — it
+    // describes a different region (over the graph, not over ordinary content)
+    // and is authored by eye. What must hold is that it is its own value:
+    // collapsing it onto one of the others is how the canvas chrome silently
+    // rejoins the layer it was split out of.
+    const float = offsetOf('--shadow-float');
+    for (const other of ['--shadow-sm', '--shadow-md', '--shadow-lg']) {
+      expect(float, `--shadow-float must not collapse onto ${other}`).not.toBe(offsetOf(other));
+    }
+  });
+
+  it('floats canvas chrome above a node AT REST', () => {
+    // The comparison that matters on screen: every node except the one or two
+    // selected ones is resting, so this is what the chrome is read against.
+    //
+    // Deliberately NOT asserted against --shadow-node-selected. The first cut
+    // of --shadow-float was 12px precisely to clear it, and that read as too
+    // heavy; at the authored 6px a SELECTED node casts a longer shadow than the
+    // panel over it. That inversion is a known, accepted trade (see the token's
+    // note) — pinning it either way would freeze a judgement call that belongs
+    // to whoever is looking at the screen.
+    expect(offsetOf('--shadow-float')).toBeGreaterThan(offsetOf('--shadow-node'));
+  });
+
+  it('keeps a node RESTING below every chrome layer, and selection above most', () => {
+    expect(offsetOf('--shadow-node')).toBeLessThan(offsetOf('--shadow-md'));
+    expect(offsetOf('--shadow-node-selected')).toBeGreaterThan(offsetOf('--shadow-md'));
+  });
+
+  it('draws the toolbar strip with the same geometry it claims to restate', () => {
+    // The one shadow in the app that cannot be a box-shadow (see AppLayout.css):
+    // a plain strip, so its height and left inset ARE the offset and nothing but
+    // this test keeps them in step with the token.
+    const layout = decomment(readFileSync(join(SRC, 'components/Layout/AppLayout.css'), 'utf8'));
+    const rule = /\.app-layout__left::before\s*\{([^}]*)\}/.exec(layout);
+    expect(rule, 'the toolbar shadow strip is gone').not.toBeNull();
+    const body = rule![1];
+    const px = (prop: string) => Number(new RegExp(`${prop}:\\s*(\\d+)px`).exec(body)?.[1]);
+    const off = offsetOf('--shadow-float');
+    expect(px('height'), 'strip height must equal the shadow offset').toBe(off);
+    expect(px('left'), 'strip left inset must equal the shadow offset').toBe(off);
+    // Colour comes from the token, never a literal — that is what makes the
+    // strip darken with the theme like every real shadow.
+    expect(body).toContain('background: var(--shadow-float-color)');
+  });
+
+  it('gives every floating canvas panel the SAME shadow', () => {
+    // "Same" is the requirement, so the check is that the set has one member.
+    const panels: [string, string][] = [
+      ['components/NodeEditor/menus/ContextMenu.css', '.context-menu'],
+      ['components/NodeEditor/edges/EdgeInfoCard.css', '.edge-info-card'],
+      ['components/NodeEditor/nodes/MeshTargetPicker.css', '.mesh-picker__pop'],
+    ];
+    const used = new Set<string>();
+    for (const [file, sel] of panels) {
+      const css = decomment(readFileSync(join(SRC, file), 'utf8'));
+      const rule = new RegExp(`\\${sel}\\s*\\{([^}]*)\\}`).exec(css);
+      expect(rule, `${sel} not found in ${file}`).not.toBeNull();
+      const m = /box-shadow:\s*var\((--shadow-[a-z]+)\)/.exec(rule![1]);
+      expect(m, `${sel} must take its shadow from a token`).not.toBeNull();
+      used.add(m![1]);
+    }
+    // NodeEditor.css holds the rest (NEW, cost pill, canvas bar, draw cluster,
+    // the two drop hints) — every hard shadow in it must be the same token.
+    const ne = decomment(readFileSync(join(SRC, 'components/NodeEditor/NodeEditor.css'), 'utf8'));
+    for (const m of ne.matchAll(/box-shadow:\s*var\((--shadow-[a-z-]+)\)/g)) used.add(m[1]);
+    expect([...used]).toEqual(['--shadow-float']);
+  });
+});
