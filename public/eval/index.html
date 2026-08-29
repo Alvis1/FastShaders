@@ -21,6 +21,13 @@
     try {
       sessionStorage.setItem('fs:evalArm', '1');
       sessionStorage.removeItem('fs:evalSession');
+      // Task / condition identity: ?task=T7-fire&budget=200&costbar=off.
+      // Stored rather than forwarded so the app URL stays clean and the
+      // parameters survive a mid-session reload. Parsed and validated
+      // app-side by src/eval/evalTask.ts — this only carries the string.
+      var q = location.search || '';
+      if (q.length > 1 && q.length < 2048) sessionStorage.setItem('fs:evalTaskQuery', q);
+      else sessionStorage.removeItem('fs:evalTaskQuery');
     } catch (e) { /* storage blocked — the app just boots normally */ }
     location.replace('../');
   </script>

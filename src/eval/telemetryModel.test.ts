@@ -3,6 +3,7 @@ import {
   deriveSummary,
   runQualityChecks,
   sanitizeJournal,
+  susResponsePattern,
   type EvalEvent,
   type EvalEventType,
 } from './telemetryModel';
@@ -313,5 +314,87 @@ describe('sanitizeJournal — adversarial storage', () => {
     });
     expect(j).not.toBeNull();
     expect(j!.events.map((e) => e.type)).toEqual(['session-start', 'activity']);
+  });
+});
+
+describe('budget crossings', () => {
+  it('accumulates the time spent above budget and closes an open interval', () => {
+    const s = deriveSummary(
+      stream([
+        ['session-start', 0],
+        ['budget-crossed', 10_000, { direction: 'over', total: 250, budget: 200 }],
+        ['budget-crossed', 40_000, { direction: 'under', total: 180, budget: 200 }],
+        ['budget-crossed', 60_000, { direction: 'over', total: 210, budget: 200 }],
+        ['session-end', 100_000],
+      ]),
+      { idleThresholdMs: T },
+    );
+    // 10k→40k plus 60k→end.
+    expect(s.overBudgetMs).toBe(70_000);
+    expect(s.budgetCrossings).toBe(3);
+  });
+
+  it('is zero when the budget was never crossed', () => {
+    const s = deriveSummary(stream([['session-start', 0], ['session-end', 5_000]]), { idleThresholdMs: T });
+    expect(s.overBudgetMs).toBe(0);
+    expect(s.budgetCrossings).toBe(0);
+  });
+});
+
+describe('SUS sequence integrity', () => {
+  const base: [string, number, Record<string, unknown>?][] = [
+    ['session-start', 0],
+    ['node-add', 1_000, { nodeType: 'perlin' }],
+  ];
+
+  it('passes a questionnaire answered in one sitting with no edits after it opened', () => {
+    const ev = stream([...base, ['sus-open', 10_000], ['sus-submit', 60_000], ['session-end', 61_000]] as never);
+    const checks = runQualityChecks(ev, deriveSummary(ev, { idleThresholdMs: T }));
+    expect(checks.find((c) => c.id === 'sus-in-one-sitting')?.ok).toBe(true);
+    expect(checks.find((c) => c.id === 'no-edits-after-sus-open')?.ok).toBe(true);
+  });
+
+  it('flags a long gap inside the questionnaire phase', () => {
+    // Opened, then answered five minutes later — not the immediate response
+    // Brooke's administration instruction asks for.
+    const ev = stream([...base, ['sus-open', 10_000], ['sus-submit', 320_000], ['session-end', 321_000]] as never);
+    const checks = runQualityChecks(ev, deriveSummary(ev, { idleThresholdMs: T }));
+    expect(checks.find((c) => c.id === 'sus-in-one-sitting')?.ok).toBe(false);
+  });
+
+  it('flags edits made after the questionnaire opened', () => {
+    // The packaged shader would then not be the artifact that was rated.
+    const ev = stream([...base, ['sus-open', 10_000], ['node-add', 20_000, { nodeType: 'mix' }], ['sus-submit', 40_000], ['session-end', 41_000]] as never);
+    const checks = runQualityChecks(ev, deriveSummary(ev, { idleThresholdMs: T }));
+    expect(checks.find((c) => c.id === 'no-edits-after-sus-open')?.ok).toBe(false);
+  });
+});
+
+describe('susResponsePattern', () => {
+  it('flags straight-lining — which always scores exactly 50', () => {
+    for (const v of [1, 2, 3, 4, 5]) {
+      expect(susResponsePattern(Array(10).fill(v)).straightLining, `all ${v}`).toBe(true);
+    }
+  });
+
+  it('flags odd/even inconsistency (agreeing with opposite claims)', () => {
+    expect(susResponsePattern([5, 5, 5, 5, 5, 4, 4, 4, 4, 4]).oddEvenInconsistent).toBe(true);
+    expect(susResponsePattern([1, 1, 1, 1, 1, 2, 2, 2, 2, 2]).oddEvenInconsistent).toBe(true);
+  });
+
+  it('leaves a coherent response set unflagged', () => {
+    // Positive items agreed with, negative items disagreed with.
+    const coherent = [5, 1, 4, 2, 5, 1, 4, 2, 5, 1];
+    expect(susResponsePattern(coherent)).toEqual({ straightLining: false, oddEvenInconsistent: false });
+  });
+
+  it('reports the flags through the quality checks', () => {
+    const ev = stream([['session-start', 0], ['sus-open', 1_000], ['sus-submit', 20_000], ['session-end', 21_000]] as never);
+    const checks = runQualityChecks(ev, deriveSummary(ev, { idleThresholdMs: T }), {
+      susResponses: Array(10).fill(3),
+    });
+    const rp = checks.find((c) => c.id === 'response-pattern');
+    expect(rp?.ok).toBe(false);
+    expect(rp?.detail).toContain('straight-lined');
   });
 });

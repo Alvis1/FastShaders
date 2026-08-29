@@ -406,6 +406,67 @@ const XR_STATS_SCRIPT = `<script>
  * off carries no traffic at all: this iframe is rebuilt on every shader edit,
  * and an always-on feed would be pure cost for a number nobody switched on.
  */
+/**
+ * Two small services the eval study needs from inside the sandboxed stage.
+ *
+ * **Activity pings.** The preview is an iframe, so the parent's capture-phase
+ * pointer/key/wheel listeners never see input inside it: a participant who
+ * spends two minutes orbiting the shader looks IDLE to the active-time
+ * derivation, which then idles them out after the threshold. A throttled
+ * `fs:activity` post fixes that at the source. Throttled at 5 s to match the
+ * parent's own heartbeat — this is a presence signal, not an input log, and
+ * nothing about WHAT was done in the preview is reported.
+ *
+ * **Screenshot.** The blinded quality-rating panel needs an image of each
+ * participant's result; judges cannot run forty shaders. The parent asks with
+ * `fs:shot`, and the reply carries a PNG data URL. Two details make it work:
+ * the canvas is read in the SAME task as an explicit re-render (a WebGL
+ * context without `preserveDrawingBuffer` is cleared at composite time, so a
+ * later read returns blank), and failure is answered rather than dropped —
+ * `{ ok: false }` lets the parent stop waiting instead of timing out.
+ *
+ * Both are unconditional: unlike the stats feed there is no per-frame cost —
+ * the ping is bounded by its throttle and the shot only happens when asked.
+ */
+export const EVAL_BRIDGE_SCRIPT = `<script>
+  (function () {
+    var last = 0;
+    function ping() {
+      var now = (window.performance && window.performance.now)
+        ? window.performance.now() : Date.now();
+      if (now - last < 5000) return;
+      last = now;
+      try { window.parent.postMessage({ type: "fs:activity" }, "*"); } catch (e) {}
+    }
+    ["pointerdown", "wheel", "keydown"].forEach(function (t) {
+      window.addEventListener(t, ping, { capture: true, passive: true });
+    });
+
+    window.addEventListener("message", function (e) {
+      if (e.source !== window.parent) return;
+      var m = e.data;
+      if (!m || m.type !== "fs:shot") return;
+      var reply = { type: "fs:shot-result", ok: false };
+      try {
+        var scene = document.querySelector("a-scene");
+        var renderer = scene && scene.renderer;
+        var canvas = renderer && renderer.domElement;
+        if (canvas) {
+          // Re-render first: without preserveDrawingBuffer the drawing buffer
+          // is cleared once the frame is composited, so reading a canvas that
+          // was merely painted earlier gives a blank image.
+          try { renderer.render(scene.object3D, scene.camera); } catch (err) {}
+          var url = canvas.toDataURL("image/png");
+          if (url && url.length > 128) { reply.ok = true; reply.dataUrl = url; }
+        }
+      } catch (err) {
+        reply.error = String(err && err.message ? err.message : err).slice(0, 200);
+      }
+      try { window.parent.postMessage(reply, "*"); } catch (err) {}
+    });
+  })();
+<\/script>`;
+
 export const STATS_REPORT_SCRIPT = `<script>
   if (window.AFRAME && !AFRAME.components["fs-stats"]) {
     AFRAME.registerComponent("fs-stats", {
@@ -1770,6 +1831,7 @@ export function tslToPreviewHTML(
     lines.push('');
   } else {
     lines.push(STATS_REPORT_SCRIPT);
+    lines.push(EVAL_BRIDGE_SCRIPT);
     lines.push('');
   }
 

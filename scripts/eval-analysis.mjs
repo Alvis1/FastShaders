@@ -153,8 +153,18 @@ for (const zp of zipPaths) {
       problems.push(`${name}: event count mismatch (${events.events?.length} vs summary ${s.eventCount})`);
     }
 
+    const task = session.task ?? {};
     rows.push({
       file: name,
+      // Session id is how a server-inbox package is reconciled against one
+      // returned by hand — the same session must never be counted twice.
+      sessionId: session.session?.id ?? '?',
+      task: task.id ?? '',
+      briefBudget: task.briefBudget ?? '',
+      costBarVisible: task.costBarVisible == null ? '' : String(task.costBarVisible),
+      costTable: session.costTable?.source ?? '',
+      device: session.device ? `${session.device.gpu ?? '?'} · ${session.device.cores ?? '?'} cores` : '',
+      hasShot: entries.has('preview.png'),
       participant: sus.participant || '?',
       language: sus.language ?? '?',
       sus: recomputed ?? sus.score,
@@ -172,6 +182,8 @@ for (const zp of zipPaths) {
       rebuilds: s.previewRebuildCount ?? 0,
       ttfConnectS: s.timeToFirstConnectMs == null ? null : s.timeToFirstConnectMs / 1000,
       ttfNodeS: s.timeToFirstNodeAddMs == null ? null : s.timeToFirstNodeAddMs / 1000,
+      budgetCrossings: s.budgetCrossings ?? 0,
+      overBudgetMin: (s.overBudgetMs ?? 0) / 60000,
       comment: sus.comment ?? '',
     });
   } catch (e) {
@@ -183,15 +195,22 @@ for (const zp of zipPaths) {
 const byParticipant = new Map();
 for (const r of rows) byParticipant.set(r.participant, (byParticipant.get(r.participant) ?? 0) + 1);
 for (const [p, n] of byParticipant) if (n > 1) problems.push(`participant "${p}" appears ${n} times`);
+// The same SESSION arriving twice (server inbox + a hand-returned copy) is a
+// double count, not a second participant — reconcile on the session id.
+const bySession = new Map();
+for (const r of rows) bySession.set(r.sessionId, (bySession.get(r.sessionId) ?? 0) + 1);
+for (const [id, n] of bySession) {
+  if (n > 1) problems.push(`session ${id} appears ${n} times — same session returned twice (server + by hand?)`);
+}
 
 // ---------- report ----------
 
 const fmt = (v, d = 1) => (v == null ? '—' : typeof v === 'number' ? v.toFixed(d) : String(v));
 console.log(`# FastShaders eval analysis — ${rows.length} package(s)\n`);
-console.log('| participant | lang | SUS | active min | wall min | node adds | types | connects | undos | applies | rebuilds | t→1st connect s |');
+console.log('| participant | task | costbar | lang | SUS | active min | node adds | connects | undos | over-budget min | png | session |');
 console.log('|---|---|---|---|---|---|---|---|---|---|---|---|');
 for (const r of rows) {
-  console.log(`| ${r.participant} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${fmt(r.wallMin, 2)} | ${r.nodeAdds} | ${r.distinctTypes} | ${r.connects} | ${r.undos} | ${r.applies} | ${r.rebuilds} | ${fmt(r.ttfConnectS)} |`);
+  console.log(`| ${r.participant} | ${r.task || '—'} | ${r.costBarVisible === '' ? '—' : (r.costBarVisible === 'true' ? 'on' : 'OFF')} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${r.nodeAdds} | ${r.connects} | ${r.undos} | ${fmt(r.overBudgetMin, 2)} | ${r.hasShot ? 'y' : '—'} | ${r.sessionId} |`);
 }
 
 const scores = rows.map((r) => r.sus).filter((v) => typeof v === 'number');
@@ -203,7 +222,33 @@ if (scores.length >= 2) {
   console.log(`\n## SUS aggregate`);
   console.log(`- N = ${n}, mean = ${mean.toFixed(1)}, SD = ${sd.toFixed(1)}`);
   console.log(`- 95% t-CI: ${(mean - half).toFixed(1)} … ${(mean + half).toFixed(1)} (±${half.toFixed(1)})`);
+  // A t-CI at n=2..4 routinely runs outside SUS's own 0-100 range: it is
+  // arithmetically correct and substantively useless, so say so rather than
+  // letting a pilot number look like a finding. Planned N is 12-15 (Tullis &
+  // Stetson 2004: SUS stabilises around n≈12; Caine 2016: the CHI norm is 12).
+  if (n < 5 || mean - half < 0 || mean + half > 100) {
+    console.log(`  ⚠ this interval is not informative at N = ${n} — it exceeds the 0-100 scale; collect the planned 12-15 before interpreting`);
+  }
   console.log(`- vs. industrial mean 68: ${mean >= 68 ? 'above' : 'below'} average · Sauro–Lewis grade ${grade(mean)} · adjective ≈ ${adjective(mean)} (Bangor et al. 2009)`);
+  // Condition breakdown — the point of recording the task/costbar identity.
+  const conds = new Map();
+  for (const r of rows) {
+    const key = `${r.task || 'untasked'} / costbar ${r.costBarVisible === 'false' ? 'OFF' : 'on'}`;
+    if (!conds.has(key)) conds.set(key, []);
+    conds.get(key).push(r.sus);
+  }
+  if (conds.size > 1) {
+    console.log('\n## By condition');
+    for (const [key, xs] of conds) {
+      const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+      console.log(`- ${key}: n = ${xs.length}, SUS mean = ${m.toFixed(1)}`);
+    }
+    console.log('  (descriptive only — a single-tool study cannot attribute a difference to the condition)');
+  }
+  const tables = [...new Set(rows.map((r) => r.costTable).filter(Boolean))];
+  if (tables.length > 1) {
+    problems.push(`packages were priced by DIFFERENT cost tables (${tables.join(', ')}) — point totals are not comparable across them`);
+  }
   const langs = [...new Set(rows.map((r) => r.language))];
   console.log(`- language versions answered: ${langs.map((l) => `${l}×${rows.filter((r) => r.language === l).length}`).join(', ')} (report the split; the LV form is a non-validated adaptation)`);
 
@@ -223,7 +268,7 @@ if (problems.length) {
 }
 
 // CSV — one row per participant, spreadsheet-ready.
-const cols = ['file', 'participant', 'language', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'comment'];
+const cols = ['file', 'sessionId', 'participant', 'task', 'briefBudget', 'costBarVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'overBudgetMin', 'language', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'comment'];
 const esc = (v) => {
   let s = v == null ? '' : String(v);
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;

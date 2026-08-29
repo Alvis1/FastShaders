@@ -16,7 +16,7 @@ import { DragNumberInput } from '../inputs/DragNumberInput';
 // written under `.shader-node__left` so it does not depend on that ordering.)
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NodeGlyph, hasNodeGlyph, usesOperatorLayout, nodeJustify, nodeScale, nodeBox, nodeSockets, nodeTextScale, nodeArtStyle } from './glyphs/NodeGlyph';
-import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getEdgeOutputShape, getTargetEdges, getTimeUpstreamSet, getNodeById } from '@/engine/cpuEvaluator';
+import { evaluateNodeOutput, evaluateEdgeSource, evaluateEdgeRange, getEdgeOutputShape, getTargetEdges, getTimeUpstreamSet, getFieldUpstreamSet } from '@/engine/cpuEvaluator';
 import { edgeRangeText } from '@/utils/edgeValueText';
 import { LiveEdgeValue } from './LiveEdgeValue';
 import { makeConnectionRevealSelector } from './connectionReveal';
@@ -77,17 +77,20 @@ export function edgeValueLabel(
    *  Hue in live blue. */
   sourceHandle?: string | null,
 ): { text: string; live: boolean; animated: boolean } {
-  // A noise node's "live" value is one arbitrary probe point — cpuEvaluator
-  // samples a fixed UV, and an unwired node lands on an integer lattice where
+  // A FIELD's "live" value is one arbitrary probe point — cpuEvaluator samples
+  // a fixed UV, and an unwired noise node lands on an integer lattice where
   // Perlin is exactly 0, which on a card reads as a dead wire. The interval is
-  // both the honest answer for a noise field and the only on-canvas tell of the
-  // node's range mode (`-1…1` vs `0…1`). The same rule keeps noise OUT of the
-  // animated path: a ticking probe point would still be one arbitrary sample
-  // of a field. It is decided on the SOURCE NODE's category, BEFORE any
-  // per-socket projection — the interval is the honest answer for every one
-  // of a noise node's sockets.
-  const srcType = getNodeById(nodes, edges, sourceId)?.data?.registryType as string | undefined;
-  const preferRange = NODE_REGISTRY.get(srcType ?? '')?.category === 'noise';
+  // both the honest answer for a field and the only on-canvas tell of a noise
+  // node's range mode (`-1…1` vs `0…1`). The same rule keeps fields OUT of the
+  // animated path: a ticking probe point would still be one arbitrary sample.
+  //
+  // It asks about the whole upstream CHAIN, not just the source node's own
+  // category — the probe point survives every operator below it, so a `mul`
+  // fed by a `0…1` gradient and a `-1…1` noise reported a flat `0` between two
+  // inputs that each read as a range. It is decided BEFORE any per-socket
+  // projection: the interval is the honest answer for every one of a field's
+  // sockets.
+  const preferRange = getFieldUpstreamSet(nodes, edges).has(sourceId);
   // Time-driven (on the UNWRAPPED graph, so a Time feeder inside a collapsed
   // frame still counts — the MathPreviewNode xKey pairing) → the label ticks.
   // Via the ctx-memoized SET, never the per-node `hasTimeUpstream`: this runs

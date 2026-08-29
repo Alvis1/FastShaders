@@ -50,6 +50,28 @@ if (isset($_GET['get'])) {
 }
 
 // --- listing ------------------------------------------------------------
+/**
+ * Peek at session.json inside a package: the SESSION ID is what reconciles a
+ * server-collected bundle against one the researcher was handed by hand — the
+ * same session must never be counted twice. Best-effort: without ext-zip the
+ * column simply reads "—".
+ */
+function peek(string $path): array {
+  if (!class_exists('ZipArchive')) return [];
+  $z = new ZipArchive();
+  if ($z->open($path) !== true) return [];
+  $raw = $z->getFromName('session.json');
+  $hasShot = $z->locateName('preview.png') !== false;
+  $z->close();
+  $j = $raw ? json_decode($raw, true) : null;
+  return [
+    'session' => $j['session']['id'] ?? null,
+    'task'    => $j['task']['id'] ?? null,
+    'costbar' => isset($j['task']['costBarVisible']) ? ($j['task']['costBarVisible'] ? 'on' : 'OFF') : null,
+    'shot'    => $hasShot,
+  ];
+}
+
 $files = is_dir($INBOX)
   ? array_values(array_filter(scandir($INBOX), fn($f) => str_ends_with($f, '.zip')))
   : [];
@@ -80,15 +102,20 @@ $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
   <p class="empty">Nothing received yet.</p>
 <?php else: ?>
 <table>
-  <tr><th>participant</th><th>received</th><th>size</th><th>file</th></tr>
+  <tr><th>participant</th><th>task</th><th>costbar</th><th>png</th><th>received</th><th>size</th><th>session id</th><th>file</th></tr>
 <?php foreach ($files as $f):
   // fastshaders-eval-<participant>-<YYYYMMDDHHMM>.zip
   preg_match('/^fastshaders-eval-(.+)-\d{12}/', $f, $m);
-  $participant = $m[1] ?? '?'; ?>
+  $participant = $m[1] ?? '?';
+  $meta = peek("$INBOX/$f"); ?>
   <tr>
     <td><?= $h($participant) ?></td>
+    <td><?= $h($meta['task'] ?? '—') ?></td>
+    <td><?= $h($meta['costbar'] ?? '—') ?></td>
+    <td><?= isset($meta['shot']) && $meta['shot'] ? 'y' : '—' ?></td>
     <td><?= $h(date('Y-m-d H:i', filemtime("$INBOX/$f"))) ?></td>
     <td><?= number_format(filesize("$INBOX/$f") / 1024, 0) ?> KB</td>
+    <td><code><?= $h($meta['session'] ?? '—') ?></code></td>
     <td><a href="?get=<?= urlencode($f) ?>"><?= $h($f) ?></a></td>
   </tr>
 <?php endforeach; ?>

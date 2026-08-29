@@ -7,6 +7,7 @@ import {
   getNodeOutputShape,
   evaluateNodeRange,
   getTargetEdges,
+  getFieldUpstreamSet,
 } from './cpuEvaluator';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
@@ -491,10 +492,13 @@ describe('non-finite poisoning (noise pos = coordinate-source name)', () => {
     const e = makeNode('e', 'exp');
     const edges = [makeEdge('big', 'out', 'e', 'x')];
     const r = evaluateNodeRange('e', [big, e], edges, 0);
-    // exp has no interval-propagation case → falls through to null rather than a
-    // NaN/Infinity range. Either way it must NOT be a non-finite range.
+    // exp DOES have an interval-propagation case now, and over [1000, 1000] its
+    // honest answer is the unbounded [Infinity, Infinity] — which both label
+    // surfaces render as '…', exactly as `length`'s [0, Infinity] always has.
+    // NaN is the thing that must never appear: it is not a bound at all, and it
+    // is what wrapping a non-finite EVAL into a degenerate range would produce.
     if (r) {
-      expect(r.min.every(Number.isFinite) && r.max.every(Number.isFinite)).toBe(true);
+      expect(r.min.every((v) => !Number.isNaN(v)) && r.max.every((v) => !Number.isNaN(v))).toBe(true);
     }
   });
 });
@@ -699,8 +703,12 @@ describe('append — grown operands agree with buildAppendConstructor', () => {
     expect(evaluateNodeOutput('op', nodes, edges, 0)).toEqual([0.5, 0.5, 0.5, 0.5]);
     expect(getNodeOutputShape('op', nodes, edges)).toBe(4);
     expect(getComponentCount('op', nodes, edges)).toBe(4);
+    // The RANGE reports uv's real span rather than the centre sample the eval
+    // returns: uv is a FIELD, so the deterministic shortcut is gated off for it
+    // and every one of these four channels comes from interval arithmetic. Same
+    // assertion either way — four channels, and no trace of the dropped 9.
     expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
-      min: [0.5, 0.5, 0.5, 0.5], max: [0.5, 0.5, 0.5, 0.5],
+      min: [0, 0, 0, 0], max: [1, 1, 1, 1],
     });
   });
 
@@ -774,5 +782,130 @@ describe('append — grown operands agree with buildAppendConstructor', () => {
     // per-socket rather than a blanket narrowing.
     const wide = [makeEdge('h', 'out', 'op', 'a'), makeEdge('f', 'out', 'op', 'b')];
     expect(getNodeOutputShape('op', nodes, wide)).toBe(4);
+  });
+});
+
+describe('field gate — a probe point is not a range (the "goes in a range, comes out 0" bug)', () => {
+  // cpuEvaluator samples a FIXED uv, and every noise function in the family
+  // lands on an integer lattice there where Perlin is exactly 0. That sample is
+  // a fine "live value" for the node itself, but it is not a BOUND — and the
+  // deterministic shortcut in computeRange took it as one for everything
+  // downstream, so a multiply between a 0…1 gradient and a -1…1 noise reported
+  // a flat 0 while both of its own input labels read as ranges. Reported from
+  // the canvas: "the value range goes in and comes out 0, although it is
+  // visible that it is not just zero."
+  //
+  // The gate is `getFieldUpstreamSet`, seeded by the SAME `analyticalRange`
+  // table that gives those nodes their bounds — which is why this suite pins
+  // the set and the resulting ranges together.
+
+  it('propagates intervals through a whole chain below a noise node', () => {
+    const nodes = [
+      makeNode('n', 'perlin'),          // signed by default → -1…1
+      makeNode('g', 'uv'),              // a field too → 0…1
+      makeNode('sp', 'split'),
+      makeNode('m', 'mul'),
+      makeNode('c', 'clamp', { min: 0, max: 1 }),
+      makeNode('k', 'float', { value: 3 }),
+      makeNode('m2', 'mul'),
+    ];
+    const edges = [
+      makeEdge('g', 'out', 'sp', 'v'),
+      makeEdge('sp', 'x', 'm', 'a'),
+      makeEdge('n', 'out', 'm', 'b'),
+      makeEdge('m', 'out', 'c', 'x'),
+      makeEdge('c', 'out', 'm2', 'a'),
+      makeEdge('k', 'out', 'm2', 'b'),
+    ];
+    // 0…1 times -1…1
+    expect(evaluateNodeRange('m', nodes, edges, 0)).toEqual({ min: [-1], max: [1] });
+    // ...clamped back into 0…1...
+    expect(evaluateNodeRange('c', nodes, edges, 0)).toEqual({ min: [0], max: [1] });
+    // ...and scaled. Every one of these was { min: [0], max: [0] } before.
+    expect(evaluateNodeRange('m2', nodes, edges, 0)).toEqual({ min: [0], max: [3] });
+  });
+
+  it('leaves a field-free chain on the exact deterministic value', () => {
+    // The gate must not cost constants their tight degenerate range: a chain of
+    // literals still reports the number, not a widened interval.
+    const nodes = [
+      makeNode('a', 'float', { value: 2 }),
+      makeNode('b', 'float', { value: 5 }),
+      makeNode('m', 'mul'),
+    ];
+    const edges = [makeEdge('a', 'out', 'm', 'a'), makeEdge('b', 'out', 'm', 'b')];
+    expect(evaluateNodeRange('m', nodes, edges, 0)).toEqual({ min: [10], max: [10] });
+    expect(getFieldUpstreamSet(nodes, edges).has('m')).toBe(false);
+  });
+
+  it('seeds the set from every analytical field, and only those', () => {
+    const nodes = [
+      makeNode('u', 'uv'),
+      makeNode('p', 'perlin'),
+      makeNode('pos', 'positionGeometry'),
+      makeNode('n', 'normalWorld'),
+      makeNode('vc', 'vertexColor'),
+      makeNode('t', 'time'),
+      makeNode('f', 'float', { value: 1 }),
+      makeNode('col', 'color', { color: '#ffffff' }),
+    ];
+    const set = getFieldUpstreamSet(nodes, []);
+    // Time is deliberately NOT a field: it varies, but in TIME, and the
+    // animated label path evaluates it at real t rather than bounding it.
+    expect([...set].sort()).toEqual(['n', 'p', 'pos', 'u', 'vc']);
+  });
+
+  it('carries the field flag downstream, so an operator inherits it', () => {
+    const nodes = [makeNode('u', 'uv'), makeNode('s', 'split'), makeNode('o', 'oneMinus')];
+    const edges = [makeEdge('u', 'out', 's', 'v'), makeEdge('s', 'x', 'o', 'x')];
+    const set = getFieldUpstreamSet(nodes, edges);
+    expect(set.has('s')).toBe(true);
+    expect(set.has('o')).toBe(true);
+    // 1 - [0, 1] REVERSES the interval; a naive [1-min, 1-max] would report
+    // 1…0 and read as backwards on the card.
+    expect(evaluateNodeRange('o', nodes, edges, 0)).toEqual({ min: [0], max: [1] });
+  });
+
+  it('bounds the ops that only became reachable once the gate existed', () => {
+    // Each of these had NO interval rule, because the deterministic shortcut
+    // had swallowed every chain that could reach them. Without a rule they
+    // would now report a bare '…' — a real regression on, among others, all
+    // four fresnel presets, which are `pow(oneMinus(dot(...)), k)`.
+    const field = makeNode('u', 'uv');
+    const spl = makeNode('s', 'split');
+    const base = [field, spl];
+    const wire = [makeEdge('u', 'out', 's', 'v')];
+    const two = makeNode('k', 'float', { value: 2 });
+    const pw = makeNode('pw', 'pow');
+    expect(
+      evaluateNodeRange('pw', [...base, two, pw], [...wire,
+        makeEdge('s', 'x', 'pw', 'base'), makeEdge('k', 'out', 'pw', 'exp')], 0),
+    ).toEqual({ min: [0], max: [1] });
+
+    const md = makeNode('md', 'mod');
+    expect(
+      evaluateNodeRange('md', [...base, two, md], [...wire,
+        makeEdge('s', 'x', 'md', 'x'), makeEdge('k', 'out', 'md', 'y')], 0),
+    ).toEqual({ min: [0], max: [2] });
+
+    const nw = makeNode('nw', 'normalWorld');
+    const dt = makeNode('dt', 'dot');
+    // Two unit vectors, bounded per channel at [-1, 1]: the axis-aligned box
+    // gives ±3, not the true ±1 — a bound, and honestly a loose one.
+    expect(
+      evaluateNodeRange('dt', [nw, makeNode('nw2', 'normalLocal'), dt],
+        [makeEdge('nw', 'out', 'dt', 'a'), makeEdge('nw2', 'out', 'dt', 'b')], 0),
+    ).toEqual({ min: [-3], max: [3] });
+
+    // distance() over a field used to be the flat [0, Infinity] every label
+    // surface renders as '…' — the one place the gate would have LOST
+    // information, since the probe at least printed a number. Circle's
+    // `distance(uv, vec2(0.5))` really does span 0 to √0.5.
+    const half = makeNode('h', 'vec2', { x: 0.5, y: 0.5 });
+    const ds = makeNode('ds', 'distance');
+    const d = evaluateNodeRange('ds', [field, half, ds],
+      [makeEdge('u', 'out', 'ds', 'a'), makeEdge('h', 'out', 'ds', 'b')], 0)!;
+    expect(d.min[0]).toBe(0);
+    expect(d.max[0]).toBeCloseTo(Math.SQRT1_2, 6);
   });
 });

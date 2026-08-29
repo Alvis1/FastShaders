@@ -1,4 +1,4 @@
-import { memo, useState, useMemo, useRef, useCallback, useEffect, type RefObject } from 'react';
+import { memo, useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import {
   getEditorDefinitions,
@@ -26,6 +26,7 @@ import { formatCategoryLabel, t } from '@/i18n';
 import type { NodeCategory, NodeDefinition } from '@/types';
 import { CAT_HEX } from '@/utils/colorUtils';
 import complexityData from '@/registry/complexity.json';
+import { ScrollArrow, useScrollArrows } from '@/components/Layout/ScrollArrows';
 import './ContentBrowser.css';
 
 // Exclude 'unknown' (the registry hides unknown defs, so the tab would always
@@ -49,53 +50,6 @@ const displayCategories = [
   ),
 ].filter((c) => (c.id === 'texture' ? !allTexturesHidden : !categoryEmptiedByHiding(c.id)));
 const costs = complexityData.costs as Record<string, number>;
-
-/** Track overflow state of a horizontally scrollable element and provide scroll actions. */
-function useScrollArrows(ref: RefObject<HTMLDivElement | null>) {
-  const [canLeft, setCanLeft] = useState(false);
-  const [canRight, setCanRight] = useState(false);
-
-  const update = useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    setCanLeft(el.scrollLeft > 1);
-    setCanRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
-  }, [ref]);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    update();
-    el.addEventListener('scroll', update, { passive: true });
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => {
-      el.removeEventListener('scroll', update);
-      ro.disconnect();
-    };
-  }, [ref, update]);
-
-  const scrollBy = useCallback(
-    (dir: -1 | 1) => {
-      ref.current?.scrollBy({ left: dir * 200, behavior: 'smooth' });
-    },
-    [ref],
-  );
-
-  return { canLeft, canRight, scrollBy };
-}
-
-function ScrollArrow({ direction, onClick }: { direction: 'left' | 'right'; onClick: () => void }) {
-  return (
-    <button
-      className={`content-browser__arrow content-browser__arrow--${direction}`}
-      onClick={onClick}
-      aria-label={`Scroll ${direction}`}
-    >
-      {direction === 'left' ? '\u2039' : '\u203A'}
-    </button>
-  );
-}
 
 /** Pseudo-category id for the user's saved-group library. */
 type BrowserCategory = NodeCategory | 'all' | 'saved';

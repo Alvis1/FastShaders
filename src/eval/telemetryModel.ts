@@ -40,6 +40,10 @@ export type EvalEventType =
   | 'export'
   // periodic totals
   | 'snapshot'
+  // task / condition identity
+  | 'task-start'
+  // cost feedback: the graph crossed the device budget in either direction
+  | 'budget-crossed'
   // questionnaire
   | 'sus-open'
   | 'sus-submit';
@@ -113,6 +117,15 @@ export interface EvalSummary {
   exportCount: number;
   /** Payload of the last `snapshot` event (final graph totals), if any. */
   finalSnapshot: Record<string, unknown> | null;
+  /** How many times the graph crossed the device budget, either way. */
+  budgetCrossings: number;
+  /**
+   * Total time the graph sat ABOVE the budget, from the `budget-crossed`
+   * events alone (an 'over' opens the interval, the next 'under' closes it;
+   * an interval still open at session end closes there). This is what makes
+   * "did the warning change what they built" a one-line question.
+   */
+  overBudgetMs: number;
 }
 
 interface Interval {
@@ -210,6 +223,8 @@ export function deriveSummary(
       previewRebuildCount: 0,
       exportCount: 0,
       finalSnapshot: null,
+      budgetCrossings: 0,
+      overBudgetMs: 0,
     };
   }
 
@@ -217,6 +232,9 @@ export function deriveSummary(
   const tEnd = events[events.length - 1].t;
 
   const markers: Interval[] = [];
+  let overSince: number | null = null;
+  let overBudgetMs = 0;
+  let budgetCrossings = 0;
   for (const e of events) {
     counts[e.type] = (counts[e.type] ?? 0) + 1;
     if (e.type === 'node-add') {
@@ -225,6 +243,15 @@ export function deriveSummary(
       if (firstAdd == null) firstAdd = e.t;
     }
     if (e.type === 'edge-connect' && firstConnect == null) firstConnect = e.t;
+    if (e.type === 'budget-crossed') {
+      budgetCrossings++;
+      if (e.direction === 'over') {
+        if (overSince == null) overSince = e.t;
+      } else if (overSince != null) {
+        overBudgetMs += e.t - overSince;
+        overSince = null;
+      }
+    }
     if (e.type === 'snapshot') {
       const { seq: _s, t: _t, type: _ty, ...rest } = e;
       finalSnapshot = rest;
@@ -264,6 +291,9 @@ export function deriveSummary(
     previewRebuildCount: counts['preview-rebuild'] ?? 0,
     exportCount: counts['export'] ?? 0,
     finalSnapshot,
+    budgetCrossings,
+    // Still above budget when the session ended — close the interval there.
+    overBudgetMs: overBudgetMs + (overSince == null ? 0 : tEnd - overSince),
   };
 }
 
@@ -279,7 +309,52 @@ export interface QualityCheck {
  * leaves, and embedded in the zip so the analysis can trust or reject a log
  * without re-deriving these by hand.
  */
-export function runQualityChecks(events: EvalEvent[], summary: EvalSummary): QualityCheck[] {
+/** Events that mean the participant CHANGED THE GRAPH (not merely looked). */
+const EDIT_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
+  'node-add', 'node-remove', 'edge-connect', 'edge-disconnect',
+  'undo', 'redo', 'gesture', 'new-graph', 'code-apply', 'asset-drop', 'import',
+]);
+
+/**
+ * SUS responses that look like the participant stopped reading.
+ *  - straight-lining: one answer for all ten items. SUS alternates polarity,
+ *    so a uniform pattern agrees and disagrees with the same claim — it always
+ *    scores exactly 50 and carries no information.
+ *  - odd/even inconsistency: the positively worded items (odd) and the
+ *    negatively worded ones (even) both read as agreement (or both as
+ *    disagreement), which is self-contradictory.
+ * Neither is proof of a bad response — both are FLAGS for the researcher to
+ * weigh, which is why they ship in the package rather than blocking submit.
+ */
+export function susResponsePattern(responses: readonly number[]): {
+  straightLining: boolean;
+  oddEvenInconsistent: boolean;
+} {
+  if (responses.length !== 10 || responses.some((r) => !Number.isInteger(r))) {
+    return { straightLining: false, oddEvenInconsistent: false };
+  }
+  const odd = responses.filter((_, i) => i % 2 === 0);
+  const even = responses.filter((_, i) => i % 2 === 1);
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const o = mean(odd);
+  const e = mean(even);
+  return {
+    straightLining: responses.every((r) => r === responses[0]),
+    // Both halves agreeing (or both disagreeing) with opposite claims.
+    oddEvenInconsistent: (o >= 4 && e >= 4) || (o <= 2 && e <= 2),
+  };
+}
+
+export interface QualityInput {
+  /** The ten SUS responses, for the response-pattern checks. */
+  susResponses?: readonly number[];
+}
+
+export function runQualityChecks(
+  events: EvalEvent[],
+  summary: EvalSummary,
+  input: QualityInput = {},
+): QualityCheck[] {
   const checks: QualityCheck[] = [];
   checks.push({
     id: 'has-events',
@@ -337,6 +412,54 @@ export function runQualityChecks(events: EvalEvent[], summary: EvalSummary): Qua
     detail: truncated === 0 ? 'no events were dropped' : `event cap reached ${truncated} time(s) — the tail of the session is missing`,
   });
 
+  // The questionnaire must be answered in ONE sitting, immediately after the
+  // session (Brooke's administration instruction). A long gap inside the SUS
+  // phase means the participant left and came back to it.
+  const susOpen = events.find((e) => e.type === 'sus-open');
+  const susSubmit = events.find((e) => e.type === 'sus-submit');
+  if (susOpen && susSubmit) {
+    const phase = events.filter((e) => e.t >= susOpen.t && e.t <= susSubmit.t);
+    let worstGap = 0;
+    for (let i = 1; i < phase.length; i++) worstGap = Math.max(worstGap, phase[i].t - phase[i - 1].t);
+    const span = susSubmit.t - susOpen.t;
+    const gap = Math.max(worstGap, phase.length < 2 ? span : 0);
+    checks.push({
+      id: 'sus-in-one-sitting',
+      ok: gap <= summary.idleThresholdMs,
+      detail:
+        gap <= summary.idleThresholdMs
+          ? `answered in ${Math.round(span / 1000)} s with no gap over ${summary.idleThresholdMs / 1000} s`
+          : `a ${Math.round(gap / 1000)} s gap inside the questionnaire (threshold ${summary.idleThresholdMs / 1000} s)`,
+    });
+
+    // Editing after the questionnaire opened means the shader in the package
+    // is not the artifact the participant was rating.
+    const editedAfter = events.filter((e) => e.t > susOpen.t && EDIT_EVENT_TYPES.has(e.type));
+    checks.push({
+      id: 'no-edits-after-sus-open',
+      ok: editedAfter.length === 0,
+      detail:
+        editedAfter.length === 0
+          ? 'the graph was not touched once the questionnaire opened'
+          : `${editedAfter.length} edit(s) after the questionnaire opened — the packaged shader is not what was rated`,
+    });
+  }
+
+  if (input.susResponses && input.susResponses.length === 10) {
+    const pattern = susResponsePattern(input.susResponses);
+    const flagged = pattern.straightLining || pattern.oddEvenInconsistent;
+    checks.push({
+      id: 'response-pattern',
+      ok: !flagged,
+      detail: flagged
+        ? [
+            pattern.straightLining ? 'straight-lined (one answer for all ten items)' : '',
+            pattern.oddEvenInconsistent ? 'odd/even inconsistent (agrees with opposite claims)' : '',
+          ].filter(Boolean).join('; ')
+        : 'no straight-lining or odd/even inconsistency',
+    });
+  }
+
   const recovered = events.filter((e) => e.type === 'recovered').length;
   checks.push({
     id: 'recovery-noted',
@@ -371,7 +494,7 @@ const EVENT_TYPES: ReadonlySet<string> = new Set<string>([
   'node-add', 'node-remove', 'edge-connect', 'edge-disconnect',
   'undo', 'redo', 'gesture', 'new-graph',
   'code-apply', 'preview-rebuild', 'asset-drop', 'import', 'export',
-  'snapshot', 'sus-open', 'sus-submit',
+  'snapshot', 'task-start', 'budget-crossed', 'sus-open', 'sus-submit',
 ]);
 
 /**

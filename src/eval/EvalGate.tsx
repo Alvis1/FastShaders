@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
 import { countProject } from '@/utils/feedbackReport';
 import {
   CONSENT_TEXT_VERSION,
@@ -9,7 +9,8 @@ import {
   writeEvalSession,
   type EvalSessionRecord,
 } from './evalMode';
-import { initEvalBridge, startEvalSession, type EvalBridge } from './telemetry';
+import { evalLog, initEvalBridge, startEvalSession, type EvalBridge } from './telemetry';
+import { evalTask } from './evalTask';
 import { ConsentModal } from './ConsentModal';
 import { VIEWPORT_KEY } from '@/utils/viewportMemory';
 
@@ -104,6 +105,28 @@ export function EvalGate() {
     startEvalSession(rec);
   }, []);
 
+  // Budget crossings, as EVENTS rather than something to reconstruct from
+  // snapshots: "how long did they sit over budget" and "did the warning cause
+  // the substitution" are then one-liners in analysis. Edge-triggered — only
+  // the transition is logged, not every recompute — and registered for the
+  // whole session, so it survives the questionnaire opening.
+  useEffect(() => {
+    if (!readEvalSession()) return undefined;
+    let over: boolean | null = null;
+    return useAppStore.subscribe((state) => {
+      const budget = resolveDeviceBudget(state.selectedHeadsetId, state.costProfiles).maxPoints;
+      if (!Number.isFinite(budget) || budget <= 0) return;
+      const now = state.totalCost > budget;
+      if (over === null) {
+        over = now;   // first reading is the baseline, not a crossing
+        return;
+      }
+      if (now === over) return;
+      over = now;
+      evalLog('budget-crossed', { direction: now ? 'over' : 'under', total: state.totalCost, budget });
+    });
+  }, [consented]);
+
   const handleAgree = (participant: string) => {
     const nowIso = new Date().toISOString();
     const rec: EvalSessionRecord = {
@@ -128,6 +151,14 @@ export function EvalGate() {
     // resets the name to DEFAULT_SHADER_NAME. Empty code keeps that default;
     // the participant can still rename the shader themselves afterwards.
     if (participant) useAppStore.getState().setShaderName(participant);
+    // Task / condition identity, logged as its own event so the timeline says
+    // when the task began — session.json carries the same values.
+    const task = evalTask();
+    evalLog('task-start', {
+      task: task.id,
+      briefBudget: task.briefBudget,
+      costBarVisible: task.costBarVisible,
+    });
     setConsented(true);
   };
 

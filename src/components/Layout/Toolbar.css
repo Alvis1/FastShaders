@@ -798,3 +798,70 @@ button.toolbar__sc-link {
 :root[data-theme="dark"] .toolbar__wf-forget:hover {
   color: #ff7b72;
 }
+
+/* ── Narrow-window overflow (☰) ────────────────────────────────────────────
+   Below the measured width at which the right cluster stops fitting, its
+   collapsible half moves into this dropdown (see toolbarOverflow.ts for why
+   the threshold is measured rather than a media query, and why the decision
+   needs hysteresis). The EVAL badge and the feedback "!" stay on the bar. */
+.toolbar__overflow {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.toolbar__sc-link.toolbar__overflow-btn {
+  padding: 0 10px;
+}
+
+.toolbar__overflow-btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  fill: currentColor;
+}
+
+/* Right-aligned like the "Download app" popover, and for the same reason: the
+   trigger sits near the viewport's right edge. `align-items: stretch` makes
+   every chip fill the row, so the menu reads as a list rather than a ragged
+   pile of differently-sized plates — the chips keep their own --ctl-size
+   height, which is what the app's one-button-height rule asks for. */
+.toolbar__overflow-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+  min-width: 168px;
+  padding: var(--space-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-lg);
+}
+
+/* The two chips that own a nested popover ("Download app", "VR") are wrappers,
+   not chips — stretch them so the button inside fills the row like its
+   siblings. Their popovers stay absolutely positioned against the wrapper, so
+   they open beside the row that owns them. */
+.toolbar__overflow-menu .toolbar__local {
+  display: flex;
+  align-self: stretch;
+}
+
+.toolbar__overflow-menu .toolbar__local > .toolbar__sc-link {
+  flex: 1;
+}
+
+/* Anchored to the LEFT edge inside the menu and pulled clear of it: the menu
+   is already flush with the viewport's right edge, so a nested popover keeping
+   its own `right: 0` would open directly on top of its own trigger. */
+.toolbar__overflow-menu .toolbar__local-popover {
+  top: 0;
+  left: auto;
+  right: 100%;
+  margin-right: var(--space-2);
+}

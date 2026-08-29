@@ -55,14 +55,23 @@ const HOOKS: { file: string; events: string[] }[] = [
     file: 'engine/exportShader.ts',
     events: ["evalLog('export'"],
   },
+  {
+    // The preview is an iframe, so input inside it is invisible to the
+    // parent's own listeners — the stage posts fs:activity and this forwards
+    // it, or long shader inspection reads as idle.
+    file: 'components/Preview/ShaderPreview.tsx',
+    events: ["evalLog('activity'"],
+  },
 ];
 
 /** Every file allowed to mention evalLog at all. */
 const ALLOWED_FILES = new Set([
   ...HOOKS.map((h) => h.file),
-  // The eval module itself (definition + the questionnaire's own events).
+  // The eval module itself (definition + the questionnaire's own events, plus
+  // EvalGate's task-start and the budget-crossing watcher).
   'eval/telemetry.ts',
   'eval/SusModal.tsx',
+  'eval/EvalGate.tsx',
   'eval/evalHooks.test.ts',
 ]);
 
