@@ -121,6 +121,13 @@ export function EvalGate() {
     // cleanSlateForStudy for why newGraph() alone would leak the previous
     // user's material into this participant's package.
     cleanSlateForStudy();
+    // The participant code becomes the shader NAME, so the file inside the
+    // package is `shader/p01.js` rather than an anonymous `my-shader.js` —
+    // the artifact is then identifiable on its own, without opening the zip
+    // to find out whose it is. AFTER cleanSlateForStudy, because newGraph()
+    // resets the name to DEFAULT_SHADER_NAME. Empty code keeps that default;
+    // the participant can still rename the shader themselves afterwards.
+    if (participant) useAppStore.getState().setShaderName(participant);
     setConsented(true);
   };
 

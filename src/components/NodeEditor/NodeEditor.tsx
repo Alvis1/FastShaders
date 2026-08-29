@@ -111,6 +111,29 @@ const FIT_VIEW_OPTIONS = { maxZoom: 1.5 } as const;
 
 /** Trailing window for persisting the viewport — the graph autosave's 300ms. */
 const VIEWPORT_SAVE_DEBOUNCE_MS = 300;
+
+/**
+ * While a canvas gesture is in flight, take the 3D preview's IFRAME out of
+ * hit-testing (`:root.fs-canvas-busy` — see ShaderPreview.css).
+ *
+ * A middle-button pan that wandered over the preview never ended: the iframe is
+ * a SANDBOXED, opaque-origin document, so the moment the pointer crosses into it
+ * the parent stops receiving mouse events entirely — including the `mouseup`
+ * that d3-zoom listens for on the window. Release the button there and the pane
+ * simply kept panning, because as far as the parent knew the button was still
+ * down. Node drags and connection drags cross the same boundary and hang the
+ * same way.
+ *
+ * Refcounted, because these gestures overlap: React Flow fires `onMoveStart`
+ * for the pan under a selection drag, and a connect can start while a move is
+ * still settling. A boolean would let whichever finished first re-arm the
+ * iframe under the one still running.
+ */
+let canvasBusy = 0;
+function setCanvasBusy(busy: boolean): void {
+  canvasBusy = Math.max(0, canvasBusy + (busy ? 1 : -1));
+  document.documentElement.classList.toggle('fs-canvas-busy', canvasBusy > 0);
+}
 const PRO_OPTIONS = { hideAttribution: true } as const;
 const DESKTOP_PAN_ON_DRAG = [1, 2];
 
@@ -716,6 +739,9 @@ export function NodeEditor() {
    * many renders.
    */
   const [bootViewport] = useState(readStoredViewport);
+  const onMoveStartBusy = useCallback(() => setCanvasBusy(true), []);
+  // A gesture interrupted by unmount must not leave the preview inert.
+  useEffect(() => () => document.documentElement.classList.remove('fs-canvas-busy'), []);
   /**
    * The cost pill's total doubles as "take me to the Output" — the number is
    * this shader's price and the Output node is where it is spent, so the same
@@ -749,6 +775,7 @@ export function NodeEditor() {
    * that is now on screen, so nothing has to remember to clear it.
    */
   const rememberViewport = useCallback((_: unknown, vp: StoredViewport) => {
+    setCanvasBusy(false);
     window.clearTimeout(viewportSaveRef.current);
     viewportSaveRef.current = window.setTimeout(
       () => writeStoredViewport(vp),
@@ -994,6 +1021,8 @@ export function NodeEditor() {
   // Capture the start position; defer the history push to onNodeDragStop
   // (so click-only "drags" don't pollute the undo buffer with no-op snapshots).
   const onNodeDragStart = useCallback((_event: React.MouseEvent, node: AppNode) => {
+    // The drag can wander over the 3D preview; see setCanvasBusy.
+    setCanvasBusy(true);
     dragStartPosRef.current = { x: node.position.x, y: node.position.y };
     // A drag-connect preview forces tooltips of its own; a leftover tap-shown
     // label next to them would muddy which socket the drop will commit to.
@@ -1373,6 +1402,10 @@ export function NodeEditor() {
   // + Anti-overlap: nudge dropped node so it doesn't sit on top of another
   const onNodeDragStop = useCallback(
     (_event: React.MouseEvent, draggedNode: AppNode) => {
+      // Released FIRST, above everything that can throw or return early below —
+      // the same rule the drag chrome follows. Leaving it set would make the 3D
+      // preview permanently unclickable.
+      setCanvasBusy(false);
       const store = useAppStore.getState();
 
       clearEdgeHighlight();
@@ -1689,6 +1722,7 @@ export function NodeEditor() {
 
   const onConnectStart = useCallback(
     (_event: MouseEvent | TouchEvent, params: { nodeId: string | null; handleId: string | null; handleType: string | null }) => {
+      setCanvasBusy(true);
       connectSucceeded.current = false;
       // A node already lifted under the pointer must drop back BEFORE the wire
       // starts moving, or it stays raised for the whole drag with no pointer on
@@ -1715,7 +1749,8 @@ export function NodeEditor() {
     (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
       // Cleared up front, above every early return below: this function has
       // several, and a missed reset would leave the canvas permanently unable
-      // to highlight a node again.
+      // to highlight a node again — and would strand the 3D preview inert.
+      setCanvasBusy(false);
       connectingRef.current = false;
       setConnecting(false);
       const pending = pendingSourceRef.current;
@@ -3116,6 +3151,9 @@ export function NodeEditor() {
           // manual zoom can still reach 3.
           fitViewOptions={FIT_VIEW_OPTIONS}
           onError={onFlowError}
+          // Pan/zoom brackets the iframe suppression; the matching release
+          // lives in `rememberViewport`, which is this gesture's own end.
+          onMoveStart={onMoveStartBusy}
           onMoveEnd={rememberViewport}
           minZoom={VIEWPORT_MIN_ZOOM}
           maxZoom={VIEWPORT_MAX_ZOOM}

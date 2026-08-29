@@ -553,6 +553,22 @@
   display: block;
 }
 
+/* While a canvas gesture is in flight, this iframe must not eat the pointer.
+ *
+ * It is a SANDBOXED, opaque-origin document, so the instant the pointer crosses
+ * into it the parent stops receiving mouse events at all — including the
+ * `mouseup` that ends the gesture. A middle-button pan dragged over the preview
+ * therefore never ended: release the button here and the canvas kept panning,
+ * because as far as the parent was concerned the button was still down. Node
+ * drags and connection drags cross the same boundary and hang the same way.
+ *
+ * `fs-canvas-busy` is set on <html> by NodeEditor for the length of the gesture
+ * (see setCanvasBusy — it is refcounted, because these gestures overlap). At
+ * rest the iframe keeps every event, so orbiting the 3D view is untouched. */
+:root.fs-canvas-busy .shader-preview__iframe {
+  pointer-events: none;
+}
+
 /* Drop veil raised while a file drag hovers the preview (parent chrome OR the
    iframe region, which forwards its drag signal — see fs:preview-drag).
    pointer-events:none is load-bearing: HTML5 drag events must keep flowing to

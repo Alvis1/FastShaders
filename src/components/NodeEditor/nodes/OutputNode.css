@@ -6,7 +6,8 @@
   border: none;
   border-radius: var(--border-radius-md);
   box-shadow: var(--fs-node-lift, var(--shadow-node));
-  transition: box-shadow var(--transition-fast);
+  translate: var(--fs-node-shift, 0px) var(--fs-node-shift, 0px);
+  transition: box-shadow var(--transition-fast), translate var(--transition-fast);
   font-family: var(--font-sans);
   overflow: visible;
 }

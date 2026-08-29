@@ -5,7 +5,8 @@
   border: calc(1px * var(--fs-node-border-scale, 1)) solid rgba(0, 0, 0, 0.18);
   border-radius: var(--border-radius-sm);
   box-shadow: var(--fs-node-lift, var(--shadow-node));
-  transition: box-shadow var(--transition-fast);
+  translate: var(--fs-node-shift, 0px) var(--fs-node-shift, 0px);
+  transition: box-shadow var(--transition-fast), translate var(--transition-fast);
   overflow: hidden;
 }
 
