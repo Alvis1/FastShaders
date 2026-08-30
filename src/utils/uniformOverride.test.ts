@@ -324,13 +324,42 @@ describe('end to end against real graphToCode', () => {
     expect(authoredUniformChange(b, b, Object.fromEntries(flipped))).toBeNull();
   });
 
-  it('a DISCONNECTED property still emits a uniform — badges must not be connection-filtered', () => {
+  it('a DISCONNECTED property emits NOTHING, so it reaches no schema and no overlay', () => {
+    // This inverts an earlier pin ("a disconnected property still emits a
+    // uniform"). That rule existed so the override bookkeeping — which runs on
+    // the connection-AGNOSTIC `nonMicUniforms` — could still see a stale tuned
+    // value on a property the user had unwired, and warn before the wire
+    // landed again. The cost was that an orphaned property reached the module
+    // body, `export const schema` AND the usage header, advertising an
+    // `<a-entity shader="…; cutoff: 2">` attribute and a `params.cutoff` that
+    // cannot change a pixel.
+    //
+    // What is actually given up is narrower than that comment implied, which is
+    // why the trade is worth taking: an unemitted uniform cannot be pushed at
+    // `fs:preview-ready` either, so the stale value is INERT for exactly as long
+    // as it is invisible. The moment the wire lands the uniform returns to the
+    // code, `nonMicUniforms` picks it up, and the badge + "Set as default" count
+    // flag it — at the one moment it can affect the picture.
     const { code } = graphToCode(
       [makeNode('p1', 'property_float', { name: 'cutoff', value: 0.42 }), makeNode('out', 'output')],
       [],
     );
+    expect(code).not.toContain('uniform(0.42)');
+    expect(code).not.toContain('cutoff');
+    expect(extractUniforms(code)).toEqual([]);
+  });
+
+  it('…and emits again, with its tuning flagged, the moment it is wired', () => {
+    const { code } = graphToCode(
+      [makeNode('p1', 'property_float', { name: 'cutoff', value: 0.42 }), makeNode('out', 'output')],
+      [makeEdge('p1', 'out', 'out', 'opacity')],
+    );
     expect(code).toContain('const cutoff = uniform(0.42);');
-    expect(extractUniforms(code)[0].defaultValue).toBe(0.42);
+    const [row] = extractUniforms(code);
+    expect(row.defaultValue).toBe(0.42);
+    // A value tuned to something else while it was live is still an override
+    // when it comes back — the self-healing half of the trade above.
+    expect(isOverridden(row, 0.9)).toBe(true);
   });
 
   it('a colour property extracts as its authored hex', () => {

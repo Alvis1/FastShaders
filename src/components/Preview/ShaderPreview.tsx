@@ -939,10 +939,19 @@ export function ShaderPreview() {
 
   /**
    * Every uniform the shader has, minus the mic's. Connection-agnostic ON
-   * PURPOSE — this is the list the override bookkeeping works from. A value
-   * edited while its property is DISCONNECTED has no overlay row, so a
-   * connection-filtered list would never notice it and a stale stored value
-   * would re-apply the instant the wire landed: the same trap, one wire away.
+   * PURPOSE — this is the list the override bookkeeping works from, so a value
+   * tuned on a property that is currently hidden from the overlay still counts
+   * as an override rather than lurking unflagged.
+   *
+   * NOTE the scope of "connection-agnostic" changed: graphToCode no longer
+   * emits a `uniform(...)` for a property whose output feeds nothing, so an
+   * ORPHANED property is absent from `allUniforms` and cannot be seen here at
+   * all. That is deliberate and self-correcting — an unemitted uniform is also
+   * not pushed at `fs:preview-ready`, so its stale value is inert for exactly
+   * as long as it is invisible, and the badge appears the moment the wire lands
+   * and the uniform returns. What this list still covers is the case it was
+   * really written for: a property that IS wired but is filtered out of the
+   * visible rows.
    */
   const nonMicUniforms = useMemo(() => {
     // Mic uniforms are split off BEFORE anything else looks at this list, and
@@ -1381,7 +1390,7 @@ export function ShaderPreview() {
   /**
    * "Set as default" — bake the tuned uniform values into the graph, so they
    * become the shader's authored defaults (and thus the defaults in the
-   * generated code, the Output tab, and the exported module's `schema`).
+   * generated code, the A-Frame tab, and the exported module's `schema`).
    *
    * Deliberately NOT a per-slider write: uniformValues stays overlay-local so
    * scrubbing doesn't tear the iframe down (see the note on the state above).
@@ -2206,7 +2215,7 @@ export function ShaderPreview() {
                 type="button"
                 // Highlighted while anything is overridden: this is the one
                 // path that makes a tuned value durable and agreed-on across
-                // the node card, the Output tab and the exported .js.
+                // the node card, the A-Frame tab and the exported .js.
                 className={`shader-preview__uniforms-default-btn${overrideCount ? ' shader-preview__uniforms-default-btn--active' : ''}`}
                 onClick={handleSetDefaults}
                 title={t('Bake the values below into the graph as the shader’s defaults. Recompiles the preview. Slider min/max stay a preview setting — the graph has no field for them.', language)}

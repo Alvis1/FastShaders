@@ -7,13 +7,17 @@ import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 /**
  * Which property uniforms the preview's Uniforms overlay should show.
  *
- * Only properties that actually REACH the Output node are listed. graphToCode
- * emits every node in the graph, reachable or not, so an orphaned property
- * still lands in the module and its `export const schema` — but scrubbing it
- * changes nothing on screen, which reads as a broken slider. "Has an outgoing
- * edge" is not enough: a property feeding a dead-end subgraph (a half-built
- * branch, or one left dangling after a delete) is just as inert as one feeding
- * nothing at all.
+ * Only properties that actually REACH the Output node are listed.
+ *
+ * graphToCode now drops a property with NO outgoing edge, so the fully orphaned
+ * case never gets this far. This rule is the stronger one and still earns its
+ * keep: "has an outgoing edge" is not enough, because a property feeding a
+ * dead-end subgraph — a half-built branch, or one left dangling after a delete
+ * — is just as inert on screen as one feeding nothing, and scrubbing it reads
+ * as a broken slider either way. Codegen deliberately uses the WEAKER test,
+ * because it also runs on graphs with no Output at all (every built-in preset
+ * and texture, and every saved group), where the stronger rule would delete
+ * every property they have.
  *
  * Pure and node-testable: ShaderPreview has no test coverage (the vitest env is
  * `node`, no jsdom), so the rule that decides WHICH uniforms are live lives
