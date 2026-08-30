@@ -459,6 +459,33 @@ export function graphToCode(
 
   const gidx = buildGraphIndex(sorted, edges);
 
+  /**
+   * A property whose output feeds NOTHING is not emitted at all — no
+   * `uniform(...)` line, no import, and therefore no `export const schema` entry
+   * and no `<a-entity shader="…">` attribute row. It used to emit regardless, so
+   * an orphaned property advertised a settable `params.myKnob` on the exported
+   * module that could not change a single pixel; `utils/connectedUniforms.ts`
+   * was already hiding those rows from the preview's Uniforms overlay for
+   * exactly that reason.
+   *
+   * "Has an outgoing edge", NOT connectedUniforms' stronger "reaches an emitting
+   * Output": codegen legitimately runs on graphs with no Output at all — every
+   * built-in preset and texture is emitted that way, and so is a saved group —
+   * and the stronger rule would strip every property they own.
+   *
+   * `edges` was unwrapped at the top of this function, so a property inside a
+   * COLLAPSED group is judged on its real edges: collapse state cannot change
+   * what compiles.
+   *
+   * Read by BOTH the import collector and the body loop — two passes over the
+   * same nodes, and if they disagree the module carries an unused `uniform`
+   * import (which is what happened when only the body was filtered).
+   */
+  const isOrphanedProperty = (node: AppNode): boolean =>
+    (node.data.registryType === 'property_float' ||
+      node.data.registryType === 'property_color') &&
+    outEdges(gidx, node.id).length === 0;
+
   // Assign unique variable names
   const varNames = new Map<string, string>();
   const usedNames = new Set<string>();
@@ -637,6 +664,9 @@ export function graphToCode(
   for (const node of sorted) {
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || !def.tslImportModule) continue;
+    // An orphaned property emits no statement, so importing `uniform` for it
+    // leaves the module with an unused import.
+    if (isOrphanedProperty(node)) continue;
     // UV import is handled in body generation (with channel parameter)
     if (def.type === 'uv') continue;
     // hsl/toHsl are local helpers, not TSL exports — never try to import them.
@@ -734,6 +764,12 @@ export function graphToCode(
   for (const node of sorted) {
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
+
+    // See isOrphanedProperty. The name is still CLAIMED in the pre-pass above,
+    // deliberately: an unemitted property keeps its reservation, so wiring it up
+    // later cannot find its name taken by an ordinary node and silently rename
+    // the public schema key from `speed` to `speed2`.
+    if (isOrphanedProperty(node)) continue;
 
     const varName = varNames.get(node.id)!;
 
@@ -840,7 +876,7 @@ export function graphToCode(
       // What lands HERE is a short `fs-asset:` PLACEHOLDER, not the payload —
       // `inlineImageAssets` (engine/imageAssets.ts) expands it at the surfaces
       // that actually run or export the module (preview iframe, XR popup,
-      // Output tab, Download Shader). The editor's TSL tab shows this generated
+      // A-Frame tab, Download Shader). The editor's TSL tab shows this generated
       // text verbatim, and a word-wrapped 600K-char data: URL buries the shader
       // under thousands of rows. Nothing is lost: image nodes are already
       // one-way through codeToGraph, so the payload here was never read back.

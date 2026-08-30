@@ -271,7 +271,14 @@ describe('tslToShaderModule — the declared property list is not derivable from
     const pa = makeNode('pa', 'property_float', { name: 'x', value: 0.5 });
     const pbDup = makeNode('pb', 'property_float', { name: 'x', value: 0.25 });
     const pbRenamed = makeNode('pb', 'property_float', { name: 'x2', value: 0.25 });
-    const edges = [makeEdge('pa', 'out', 'out1', 'color')];
+    // BOTH properties are wired: this test is about the claimName pre-pass
+    // producing `x` and `x2`, and an unwired property no longer emits at all
+    // (graphToCode skips a property with no consumer), which would leave
+    // nothing to collide.
+    const edges = [
+      makeEdge('pa', 'out', 'out1', 'color'),
+      makeEdge('pb', 'out', 'out1', 'opacity'),
+    ];
 
     const codeA = graphToCode([pa, pbDup, out], edges).code;
     const codeB = graphToCode([pa, pbRenamed, out], edges).code;

@@ -273,6 +273,47 @@ export function useSyncEngine() {
             finalNodes = positioned;
           }
 
+          // Preserve ORPHANED PROPERTY NODES — the same problem as groups, from
+          // the other direction. graphToCode deliberately emits nothing for a
+          // property whose output feeds nothing (so it cannot advertise a
+          // schema key and an `<a-entity>` attribute that change no pixel), and
+          // codeToGraph can only build what is in the text — so without this an
+          // Apply DELETES the property node you dropped a moment ago and had
+          // not wired up yet. Measured before this existed: a graph with an
+          // unwired `cutoff` came back holding only the wired property.
+          //
+          // The carry is safe because it is precise about WHY the node is
+          // missing. A property the user deleted by hand had a `uniform(...)`
+          // line to delete; one that was never emitted cannot have been removed
+          // from the code, because it was never in it. So the test is exactly:
+          // it existed, it has no outgoing edge (which is why it was skipped),
+          // and the parse did not produce it.
+          //
+          // Skipped when autoLayout ran, mirroring the group rule below and for
+          // the same reason: that path means a bare script was imported, so the
+          // "old" graph is a different shader and its leftovers do not belong in
+          // it. This runs BEFORE the group block so carried nodes inherit its
+          // dangling-parentId cleanup, and so a group whose only surviving
+          // member is a carried property is itself kept.
+          if (unpositioned.length === 0) {
+            const survivingIds = new Set(finalNodes.map((n) => n.id));
+            // Unwrapped, so the test matches graphToCode's own decision exactly:
+            // a collapsed group rewrites its boundary edges to synthetic group
+            // sockets, so a raw read would see a property feeding OUT of a
+            // collapsed group as having no consumer, call it an orphan, and carry
+            // a duplicate of a node the parse legitimately produced.
+            const realOldEdges = unwrapCollapsedGroupEdges(oldNodes, oldEdges);
+            const hasConsumer = new Set(realOldEdges.map((e) => e.source));
+            const orphanProps = oldNodes.filter(
+              (n) =>
+                (n.data.registryType === 'property_float' ||
+                  n.data.registryType === 'property_color') &&
+                !hasConsumer.has(n.id) &&
+                !survivingIds.has(n.id),
+            );
+            if (orphanProps.length > 0) finalNodes = [...finalNodes, ...orphanProps];
+          }
+
           // Preserve group nodes from the old graph — codeToGraph doesn't know about
           // them, so they'd otherwise be lost on every Save. Carry over both the
           // group containers themselves AND any parentId/extent on members whose
