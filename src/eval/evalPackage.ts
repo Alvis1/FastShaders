@@ -64,7 +64,15 @@ export function buildSummaryCsv(
   susScore: number | null,
   summary: EvalSummary,
   /** Identity/condition columns, so one row is self-describing. */
-  extra: { sessionId?: string; task?: string; briefBudget?: number | null; costBarVisible?: boolean; costTable?: string } = {},
+  extra: {
+    sessionId?: string;
+    task?: string;
+    briefBudget?: number | null;
+    costBarVisible?: boolean;
+    costTable?: string;
+    /** The sus.json block, for the experience levels. */
+    susBlock?: Record<string, unknown>;
+  } = {},
 ): string {
   const cols: [string, unknown][] = [
     ['participant', participant],
@@ -74,6 +82,17 @@ export function buildSummaryCsv(
     ['cost_bar_visible', extra.costBarVisible == null ? '' : String(extra.costBarVisible)],
     ['cost_table', extra.costTable ?? ''],
     ['sus_score', susScore],
+    // Experience levels 0-4 (none..expert) — the covariate a usability score
+    // is read against; `readPath` pulls them out of the sus block the caller
+    // assembled, so this file keeps knowing nothing about the questions.
+    ...(['blender', 'unreal', 'otherNodeEditors', 'shaderCode'] as const).map(
+      (id): [string, unknown] => [
+        `exp_${id}`,
+        (readPath<{ id: string; level: number | null }[]>(
+          extra.susBlock ?? {}, ['background', 'items'],
+        ) ?? []).find((it) => it.id === id)?.level ?? '',
+      ],
+    ),
     ['wall_min', (summary.wallMs / 60_000).toFixed(2)],
     ['active_min', (summary.activeMs / 60_000).toFixed(2)],
     ['idle_threshold_s', summary.idleThresholdMs / 1000],
@@ -168,6 +187,7 @@ export function buildEvalPackageEntries(input: EvalPackageInput): ZipEntry[] {
           briefBudget: readPath(input.session, ['task', 'briefBudget']),
           costBarVisible: readPath(input.session, ['task', 'costBarVisible']),
           costTable: readPath(input.session, ['costTable', 'source']),
+          susBlock: input.sus,
         }),
       ),
     },

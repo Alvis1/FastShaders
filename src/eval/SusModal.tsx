@@ -22,6 +22,13 @@ import {
 } from './telemetry';
 import { deriveSummary, runQualityChecks, type QualityCheck } from './telemetryModel';
 import { evalTask } from './evalTask';
+import {
+  BACKGROUND_ITEMS,
+  EXPERIENCE_LEVELS,
+  backgroundComplete,
+  buildBackgroundRecord,
+  type BackgroundAnswers,
+} from './background';
 import { collectDevice, costTableProvenance } from './evalContext';
 import { capturePreviewShot } from './previewShot';
 import { buildEvalPackageEntries, evalZipFileName } from './evalPackage';
@@ -90,6 +97,11 @@ export function SusModal({ open, onClose }: Props) {
     () => Array<number | null>(SUS_ITEM_COUNT).fill(null),
   );
   const [comment, setComment] = useState('');
+  // Asked BEFORE the SUS: a usability score is not interpretable without
+  // knowing whose it is, and answering them first keeps thinking about one's
+  // own expertise from colouring the SUS items.
+  const [background, setBackground] = useState<BackgroundAnswers>({});
+  const [otherEditors, setOtherEditors] = useState('');
   const submittingRef = useRef(false);
   const [participant, setParticipant] = useState(() => readEvalSession()?.participant ?? '');
   const [done, setDone] = useState<DoneState | null>(null);
@@ -119,7 +131,7 @@ export function SusModal({ open, onClose }: Props) {
   const anchorLow = language === 'lv' ? SUS_ANCHOR_LOW_LV : SUS_ANCHOR_LOW_EN;
   const anchorHigh = language === 'lv' ? SUS_ANCHOR_HIGH_LV : SUS_ANCHOR_HIGH_EN;
   const answered = useMemo(() => responses.filter((r) => r != null).length, [responses]);
-  const complete = answered === SUS_ITEM_COUNT;
+  const complete = answered === SUS_ITEM_COUNT && backgroundComplete(background);
 
   const handleSubmit = async () => {
     // A REF, not the `done` state: `capturePreviewShot()` below waits up to 4 s
@@ -172,6 +184,7 @@ export function SusModal({ open, onClose }: Props) {
     const sus = {
       participant: trimmedParticipant,
       language,
+      background: buildBackgroundRecord(background, otherEditors),
       itemsVersion: 'brooke-1996-item8-awkward',
       items: items.map((text, i) => ({ n: i + 1, item: text, response: filled[i] })),
       score,
@@ -375,6 +388,52 @@ export function SusModal({ open, onClose }: Props) {
           </div>
         </div>
 
+        {/* Experience questions — BEFORE the SUS. Same radio-strip shape as
+            the SUS items so the questionnaire reads as one instrument, but on
+            its own none→expert scale, with its own anchors. */}
+        <div className="sus-modal__section-head">{t('First, a little about your experience', language)}</div>
+        <div className="sus-modal__anchors" aria-hidden="true">
+          <span>{t(EXPERIENCE_LEVELS[0], language)}</span>
+          <span>{t(EXPERIENCE_LEVELS[EXPERIENCE_LEVELS.length - 1], language)}</span>
+        </div>
+        <div className="sus-modal__items">
+          {BACKGROUND_ITEMS.map((it) => (
+            <div className="sus-modal__item" key={it.id}>
+              <span className="sus-modal__statement" id={`bg-item-${it.id}`}>
+                {t(it.question, language)}
+              </span>
+              <span className="sus-modal__scale" role="radiogroup" aria-labelledby={`bg-item-${it.id}`}>
+                {EXPERIENCE_LEVELS.map((label, level) => (
+                  <label key={label} title={t(label, language)}>
+                    <input
+                      type="radio"
+                      name={`bg-${it.id}`}
+                      value={level}
+                      checked={background[it.id] === level}
+                      onChange={() => setBackground((prev) => ({ ...prev, [it.id]: level }))}
+                    />
+                    {level + 1}
+                  </label>
+                ))}
+              </span>
+            </div>
+          ))}
+        </div>
+        {/* The one question that asks WHICH software. Optional: a participant
+            with no such experience has nothing to name. */}
+        <label className="sus-modal__followup" htmlFor="bg-other-text">
+          {t('Please state the software and your skill level', language)}
+        </label>
+        <input
+          id="bg-other-text"
+          type="text"
+          className="sus-modal__followup-input"
+          value={otherEditors}
+          maxLength={300}
+          onChange={(e) => setOtherEditors(e.target.value)}
+        />
+
+        <div className="sus-modal__section-head">{t('Now the statements about FastShaders', language)}</div>
         <div className="sus-modal__anchors" aria-hidden="true">
           <span>1 — {anchorLow}</span>
           <span>5 — {anchorHigh}</span>

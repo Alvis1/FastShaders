@@ -320,3 +320,37 @@
   border-color: var(--border-focus);
   color: var(--border-focus);
 }
+
+/* The questionnaire is now two instruments in one dialog — an experience block
+   then the SUS statements — so each gets a heading, and the second one needs
+   air above it to read as a new section rather than more of the first. */
+.sus-modal__section-head {
+  font-size: var(--font-size-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+  padding-top: var(--space-2);
+}
+.sus-modal__section-head + .sus-modal__anchors {
+  padding-top: 2px;
+}
+.sus-modal__items + .sus-modal__section-head {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
+}
+
+.sus-modal__followup {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+.sus-modal__followup-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--border-radius-sm);
+}

@@ -166,6 +166,11 @@ for (const zp of zipPaths) {
       device: session.device ? `${session.device.gpu ?? '?'} · ${session.device.cores ?? '?'} cores` : '',
       hasShot: entries.has('preview.png'),
       participant: sus.participant || '?',
+      // Experience covariate: 0-4 per tool, none..expert.
+      exp: Object.fromEntries(
+        ((sus.background?.items) ?? []).map((it) => [it.id, it.level ?? '']),
+      ),
+      expOther: sus.background?.otherNodeEditorsText ?? '',
       language: sus.language ?? '?',
       sus: recomputed ?? sus.score,
       responses,
@@ -191,6 +196,14 @@ for (const zp of zipPaths) {
   }
 }
 
+for (const r of rows) {
+  r.expBlender = r.exp?.blender ?? '';
+  r.expUnreal = r.exp?.unreal ?? '';
+  r.expOtherNodeEditors = r.exp?.otherNodeEditors ?? '';
+  r.expShaderCode = r.exp?.shaderCode ?? '';
+  r.expOther = r.expOther ?? '';
+}
+
 // Duplicate participants: legitimate (pilot vs real) but worth a loud note.
 const byParticipant = new Map();
 for (const r of rows) byParticipant.set(r.participant, (byParticipant.get(r.participant) ?? 0) + 1);
@@ -207,11 +220,14 @@ for (const [id, n] of bySession) {
 
 const fmt = (v, d = 1) => (v == null ? '—' : typeof v === 'number' ? v.toFixed(d) : String(v));
 console.log(`# FastShaders eval analysis — ${rows.length} package(s)\n`);
-console.log('| participant | task | costbar | lang | SUS | active min | node adds | connects | undos | over-budget min | png | session |');
-console.log('|---|---|---|---|---|---|---|---|---|---|---|---|');
+const EXP = ['blender', 'unreal', 'otherNodeEditors', 'shaderCode'];
+console.log('| participant | task | costbar | lang | SUS | active min | node adds | connects | undos | blend/unreal/other/code | session |');
+console.log('|---|---|---|---|---|---|---|---|---|---|---|');
 for (const r of rows) {
-  console.log(`| ${r.participant} | ${r.task || '—'} | ${r.costBarVisible === '' ? '—' : (r.costBarVisible === 'true' ? 'on' : 'OFF')} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${r.nodeAdds} | ${r.connects} | ${r.undos} | ${fmt(r.overBudgetMin, 2)} | ${r.hasShot ? 'y' : '—'} | ${r.sessionId} |`);
+  const exp = EXP.map((k) => (r.exp?.[k] === '' || r.exp?.[k] == null ? '–' : r.exp[k])).join('/');
+  console.log(`| ${r.participant} | ${r.task || '—'} | ${r.costBarVisible === '' ? '—' : (r.costBarVisible === 'true' ? 'on' : 'OFF')} | ${r.language} | ${fmt(r.sus)} | ${fmt(r.activeMin, 2)} | ${r.nodeAdds} | ${r.connects} | ${r.undos} | ${exp} | ${r.sessionId} |`);
 }
+console.log('\n(experience 0–4 = none…expert, in the order Blender / Unreal / other node editors / shader code)');
 
 const scores = rows.map((r) => r.sus).filter((v) => typeof v === 'number');
 if (scores.length >= 2) {
@@ -268,7 +284,7 @@ if (problems.length) {
 }
 
 // CSV — one row per participant, spreadsheet-ready.
-const cols = ['file', 'sessionId', 'participant', 'task', 'briefBudget', 'costBarVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'overBudgetMin', 'language', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'comment'];
+const cols = ['file', 'sessionId', 'participant', 'expBlender', 'expUnreal', 'expOtherNodeEditors', 'expShaderCode', 'expOther', 'task', 'briefBudget', 'costBarVisible', 'costTable', 'device', 'hasShot', 'budgetCrossings', 'overBudgetMin', 'language', 'sus', 'activeMin', 'wallMin', 'idleThresholdS', 'events', 'nodeAdds', 'distinctTypes', 'connects', 'undos', 'redos', 'applies', 'rebuilds', 'ttfConnectS', 'ttfNodeS', 'comment'];
 const esc = (v) => {
   let s = v == null ? '' : String(v);
   if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;

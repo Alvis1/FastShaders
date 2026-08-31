@@ -46,7 +46,7 @@ export const EVAL_SCHEMA = 'fs-eval-1';
  * consent-3 also stopped calling the researcher's own host "the university's
  * server" and made the outgoing email opt-in instead of automatic.
  */
-export const CONSENT_TEXT_VERSION = 'consent-4';
+export const CONSENT_TEXT_VERSION = 'consent-5';
 
 /**
  * The two addresses the study app is served from. The upload target is a
