@@ -60,9 +60,21 @@ export function DataDisclosureModal({ onClose }: Props) {
     return () => document.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
+  /**
+   * One disclosed item: the file (or field group) is the visible label, and
+   * its full description rides the `title` — the app-wide TooltipLayer borrows
+   * any title and paints above this modal, so the list stays scannable and
+   * each explanation is one hover away.
+   *
+   * `title` rather than a nested element on purpose: the text stays in the
+   * accessibility tree (screen readers announce a title) instead of being
+   * hidden behind a `display: none` that would read as absent. The trade-off
+   * is real and deliberate — a hover has no touch equivalent — so the items
+   * are also written to be meaningful on their own.
+   */
   const item = (heading: string, body: string) => (
-    <li>
-      <strong>{t(heading, language)}</strong> {t(body, language)}
+    <li title={t(body, language)} className="eval-disclosure__item">
+      <strong>{t(heading, language)}</strong>
     </li>
   );
 

@@ -273,3 +273,14 @@
 :root[data-fs-points='off'] .cost-bar {
   display: none !important;
 }
+
+/* The disclosure's items carry their explanation on `title`, so the label is
+   the hit target for the tooltip — give it a hint that there is more to read.
+   `help` rather than `pointer`: nothing is navigated by clicking it. */
+.eval-disclosure__item {
+  cursor: help;
+  padding: 3px 0;
+}
+.eval-disclosure__item strong {
+  border-bottom: 1px dotted var(--border-default);
+}

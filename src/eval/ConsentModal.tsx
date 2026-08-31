@@ -90,6 +90,11 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
             : t('You can raise any data-protection question with the researcher at that address.', language)}
         </div>
 
+        {/* A LAYERED notice: one sentence naming the categories, with the
+            complete field-by-field list one click away behind "View". The
+            long list used to sit here in full, which made the dialog a page
+            of prose nobody reads — the categories are what informs the
+            decision, the detail is what answers a question about it. */}
         <div className="eval-consent__section">
           <div className="eval-consent__what-head">
             <strong>{t('What is recorded during the session:', language)}</strong>
@@ -98,39 +103,22 @@ export function ConsentModal({ onAgree, onDecline }: Props) {
               className="eval-consent__help"
               onClick={() => setShowDisclosure(true)}
               title={t('What exactly is collected', language)}
-              aria-label={t('What exactly is collected', language)}
             >
-              ?
+              {t('View', language)}
             </button>
           </div>
-          <ul className="eval-consent__list">
-            <li>{t('What you do in the editor — timestamps of adding nodes, connecting and disconnecting them, undo and redo, applying code, and how long the app is active. What you do, not what you type.', language)}</li>
-            <li>{t('Your answers to a short questionnaire (10 statements) at the end, including the comment box if you write in it.', language)}</li>
-            <li>{t('The shader you build, in full — including any note text, image or 3D model you add to it, and the file name of anything you drop in.', language)}</li>
-            <li>{t('A picture of the 3D preview as it looks when you submit.', language)}</li>
-            <li>{t('Technical facts about this computer — browser, operating system, screen and window size, graphics card name, processor count, memory, language and time zone. Together these are reasonably distinctive to this machine.', language)}</li>
-          </ul>
-          <div className="eval-consent__note">
-            {t('No keystroke content, no microphone or camera, and nothing outside this app.', language)}{' '}
-            <button
-              type="button"
-              className="eval-consent__inline-link"
-              onClick={() => setShowDisclosure(true)}
-            >
-              {t('See the complete list of every file and field.', language)}
-            </button>
-          </div>
+          {t('What you do in the editor (not what you type), your questionnaire answers, the shader you build together with a picture of it, and technical facts about this computer.', language)}
         </div>
 
         <div className="eval-consent__section">
-          {t('Nothing is sent while you work. When you submit the questionnaire the data is packaged into one file, saved to this computer, and uploaded to the study server — alvismisjuns.lv, also reachable as fs.sferas.lv. That server is operated by the researcher personally, not by the university. You are also offered a button to email the package to the researcher: that is optional, and if you use it the researcher will see the address you send from.', language)}
+          {t('Nothing is sent while you work. When you submit the questionnaire the data is packaged into one file, saved to this computer, and uploaded to the study server — alvismisjuns.lv, also reachable as fs.sferas.lv — which is operated by the researcher personally, not by the university. The optional email button would additionally reveal the address you send from.', language)}
         </div>
 
         <div className="eval-consent__section">
           {EVAL_RETENTION_PERIOD
-            ? `${t('The data is stored under your participant code (not your name), used only for this research, and kept', language)} ${EVAL_RETENTION_PERIOD}.`
-            : t('The data is stored under your participant code (not your name), used only for this research, kept for the duration of the research project, and deleted afterwards.', language)}{' '}
-          {t('Participation is voluntary: you can stop at any time by closing this tab, and the study data is discarded unless you submit the questionnaire. (The editor keeps its usual local autosave of the current shader on this computer, as it does for any user.) You may later ask for your data to be removed by contacting the researcher and quoting your participant code, and you have the right to complain to the Data State Inspectorate (Datu valsts inspekcija).', language)}
+            ? `${t('Stored under your participant code (not your name), used only for this research, and kept', language)} ${EVAL_RETENTION_PERIOD}.`
+            : t('Stored under your participant code (not your name), used only for this research, kept for the duration of the project and deleted afterwards.', language)}{' '}
+          {t('Taking part is voluntary: close this tab to stop, and nothing is kept unless you submit. You may later ask for your data to be removed by quoting your participant code, and you may complain to the Data State Inspectorate (Datu valsts inspekcija).', language)}
         </div>
 
         <div className="eval-consent__section">
