@@ -844,7 +844,7 @@
     "Participant code:": "Dalībnieka kods:",
     "Anything else you want to say? (optional)": "Vai vēlaties vēl ko piebilst? (neobligāti)",
     "Back to the editor": "Atpakaļ uz redaktoru",
-    "Please answer all 10 statements first": "Lūdzu, vispirms atbildiet uz visiem 10 apgalvojumiem",
+    "Please answer all 10 statements first": "Lūdzu, vispirms atbildiet uz visiem jautājumiem",
     "Point cap": "Punktu ierobežojums",
     "Set": "Iestatīt",
     "Right-click to set the point cap.": "Ar peles labo pogu — iestatīt punktu ierobežojumu.",
@@ -928,6 +928,19 @@
     "the 3D view exactly as it looked when you pressed Submit. Only the rendered 3D view: no toolbar, no node graph, no screen outside the app.": "3D skats tieši tāds, kāds tas izskatījās, kad nospiedāt “Iesniegt”. Tikai renderētais 3D skats: bez rīkjoslas, bez mezglu grafa, bez ekrāna ārpus lietotnes.",
     "a plain-text description of all of the above for whoever opens the package.": "vienkārša teksta apraksts par visu iepriekš minēto tam, kas atver paketi.",
     "how long the session ran, how much of it was active, counts per action, which node types you used, how long until your first node and first connection, and automatic quality checks.": "cik ilgi sesija norisinājās, cik no tā bija aktīvs laiks, darbību skaits, kādus mezglu tipus izmantojāt, cik ilgi līdz pirmajam mezglam un pirmajam savienojumam, kā arī automātiskās kvalitātes pārbaudes.",
-    "browser and version, operating system, screen and window size and pixel ratio, graphics card name as the browser reports it, number of processor cores, approximate memory, touch support, whether WebGPU is available, browser language, time zone, and your dark-mode and reduced-motion settings. Collected to explain performance differences between participants. Together they are reasonably distinctive to this machine.": "pārlūks un versija, operētājsistēma, ekrāna un loga izmērs un pikseļu attiecība, videokartes nosaukums, kā to ziņo pārlūks, procesora kodolu skaits, aptuvenā atmiņa, skārienatbalsts, vai ir pieejams WebGPU, pārlūka valoda, laika josla un jūsu tumšā režīma un samazinātas kustības iestatījumi. Tiek vākts, lai izskaidrotu veiktspējas atšķirības starp dalībniekiem. Kopā tie ir samērā raksturīgi šai iekārtai."
+    "browser and version, operating system, screen and window size and pixel ratio, graphics card name as the browser reports it, number of processor cores, approximate memory, touch support, whether WebGPU is available, browser language, time zone, and your dark-mode and reduced-motion settings. Collected to explain performance differences between participants. Together they are reasonably distinctive to this machine.": "pārlūks un versija, operētājsistēma, ekrāna un loga izmērs un pikseļu attiecība, videokartes nosaukums, kā to ziņo pārlūks, procesora kodolu skaits, aptuvenā atmiņa, skārienatbalsts, vai ir pieejams WebGPU, pārlūka valoda, laika josla un jūsu tumšā režīma un samazinātas kustības iestatījumi. Tiek vākts, lai izskaidrotu veiktspējas atšķirības starp dalībniekiem. Kopā tie ir samērā raksturīgi šai iekārtai.",
+    "Experience with Blender Shader Editor": "Pieredze ar Blender Shader Editor",
+    "Experience with Unreal Engine Material Editor": "Pieredze ar Unreal Engine Material Editor",
+    "Experience with other node-based editors": "Pieredze ar citiem uz mezgliem balstītiem redaktoriem",
+    "Please state the software and your skill level": "Lūdzu, norādiet programmatūru un savu prasmju līmeni",
+    "Technical knowledge of shader programming (e.g. GLSL, HLSL)": "Tehniskās zināšanas ēnotāju (shader) programmēšanā (piem., GLSL, HLSL)",
+    "None": "Nav",
+    "Beginner": "Iesācēja",
+    "Intermediate": "Vidēja",
+    "Advanced": "Padziļināta",
+    "Expert": "Eksperta",
+    "First, a little about your experience": "Vispirms nedaudz par jūsu pieredzi",
+    "Now the statements about FastShaders": "Tagad apgalvojumi par FastShaders",
+    "your four experience answers (and the software you name, if you name any), your ten questionnaire answers, the score computed from them, and the free-text comment if you write one. Whatever you type in those boxes is stored word for word.": "jūsu četras atbildes par pieredzi (un programmatūra, ko nosaucat, ja to darāt), jūsu desmit anketas atbildes, no tām aprēķinātais rezultāts un brīvā teksta komentārs, ja to rakstāt. Viss, ko ierakstāt šajos lodziņos, tiek saglabāts vārds vārdā."
   }
 }

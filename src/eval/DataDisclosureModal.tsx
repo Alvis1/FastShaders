@@ -137,7 +137,7 @@ export function DataDisclosureModal({ onClose }: Props) {
             {item(
               'Your questionnaire answers',
               'sus.json',
-              'your ten answers, the score computed from them, and the free-text comment if you write one. Whatever you type in that box is stored word for word.',
+              'your four experience answers (and the software you name, if you name any), your ten questionnaire answers, the score computed from them, and the free-text comment if you write one. Whatever you type in those boxes is stored word for word.',
             )}
             {item(
               'The same numbers as one spreadsheet row',
