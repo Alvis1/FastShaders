@@ -71,7 +71,7 @@ const SIDE_NAMES = new Map<string, 'front' | 'back' | 'double'>([
  * ALWAYS returns a FRESH object (or undefined) — never a mutation of an
  * existing one. ShaderPreview, CodeEditor and useSyncEngine's mergeMatch all
  * subscribe to `materialSettings` BY REFERENCE and bail on Object.is, so an
- * in-place update would leave the preview and the Output tab showing the old
+ * in-place update would leave the preview and the A-Frame tab showing the old
  * settings with no error.
  */
 function sanitizeMaterialSettings(

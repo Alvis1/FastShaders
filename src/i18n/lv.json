@@ -625,6 +625,7 @@
     "Export the project (the \"Export\" button in the toolbar) as a backup before going over the budget.": "Pirms budžeta pārsniegšanas eksportējiet projektu (poga “Eksportēt” rīkjoslā) kā rezerves kopiju.",
     "Click \"Export\" in the toolbar now — that file embeds the whole project and is your reliable backup.": "Tagad rīkjoslā noklikšķiniet “Eksportēt” — šis fails satur visu projektu un ir uzticama rezerves kopija.",
     "Import a shaderloader .js file into the editor": "Importēt shaderloader .js failu redaktorā",
+    "A ready-to-run VR page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.": "Gatava VR lapa. Novietojiet {file} tai blakus un pasniedziet mapi caur http(s) — file:// bloķē ēnotāja ielādi.",
     "Canvas background color": "Audekla fona krāsa",
     "Draw": "Zīmēt",
     "Draw settings": "Zīmēšanas iestatījumi",

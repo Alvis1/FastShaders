@@ -4,13 +4,13 @@ import { makeNode } from '@/test-utils';
 
 /**
  * `collectShaderProperties` is the ONE property-list implementation: the
- * Download-Shader bundle and the code panel's Output tab both read it (the tab
+ * Download-Shader bundle and the code panel's A-Frame tab both read it (the tab
  * used to hold a byte-for-byte hand copy, which was a live drift site — the tab
  * could have started describing a file the user never gets). These pin the four
  * fallbacks and the ordering both surfaces now inherit from it.
  */
 describe('collectShaderProperties', () => {
-  it('applies the documented fallbacks for empty values (shared by the Output tab and the download)', () => {
+  it('applies the documented fallbacks for empty values (shared by the A-Frame tab and the download)', () => {
     const nodes = [
       makeNode('p1', 'property_float'),
       makeNode('c1', 'property_color'),

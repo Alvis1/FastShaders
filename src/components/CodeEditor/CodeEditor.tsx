@@ -7,7 +7,8 @@ import { t } from '@/i18n';
 import { registerTSLLanguage } from './tslLanguage';
 import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule';
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
-import { collectShaderProperties } from '@/engine/exportShader';
+import { collectShaderProperties, shaderBaseName } from '@/engine/exportShader';
+import { buildAFrameEmbedHTML, readPreviewGeometry } from '@/engine/tslToAFrameHTML';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import { evalLog } from '@/eval/telemetry';
 import { parseCostFile, parseCostProfileBundle } from '@/utils/costOverride';
@@ -40,12 +41,16 @@ export function CodeEditor() {
   const setCode = useAppStore((s) => s.setCode);
   const requestCodeSync = useAppStore((s) => s.requestCodeSync);
   const codeEditorTheme = useAppStore((s) => s.codeEditorTheme);
+  // The exported module's file name — what the generated index.html loads.
+  // shaderBaseName is the SAME stem buildShaderBundle writes, so the page's
+  // `src:` and the downloaded file agree without the user renaming anything.
+  const shaderName = useAppStore((s) => s.shaderName);
   const editorRef = useRef<unknown>(null);
 
   // ── Node-derived inputs, without a whole-array subscription ──────────────
   // `s.nodes` gets a NEW identity on every drag pointermove, so subscribing to
   // it re-rendered this whole panel (both Monaco element trees) at pointer rate
-  // AND re-fired the scriptCode memo below — which, with the Output tab open
+  // AND re-fired the scriptCode memo below — which, with the A-Frame tab open
   // and an embedded image, is ~6 ms of string work per frame per 600K payload
   // (~18 ms at three images: more than a whole 60 Hz frame, for a read-only
   // display tab). Same two conversions the 3D preview already uses.
@@ -61,6 +66,7 @@ export function CodeEditor() {
         | undefined)?.materialSettings,
   );
   const [activeTab, setActiveTab] = useState<CodeTab>('tsl');
+  const [copied, setCopied] = useState(false);
 
   // Declared property list — the cheap-key two-step (ShaderNode.tsx:291-332):
   // fold every property node's type/name/default into ONE primitive string, in
@@ -90,7 +96,7 @@ export function CodeEditor() {
     }
     return key;
   });
-  // The SAME implementation the Download-Shader bundle uses, so the Output tab
+  // The SAME implementation the Download-Shader bundle uses, so the A-Frame tab
   // cannot drift from the file the user actually gets (exportShader.ts:18-36 —
   // this was a byte-for-byte hand copy of it).
   const properties: PropertyInfo[] = useMemo(
@@ -130,7 +136,7 @@ export function CodeEditor() {
   }, [requestCodeSync]);
 
   // Only compute export code when that tab is active; catch errors to avoid blank tabs.
-  // The Output tab shows the REAL module, so image placeholders are expanded back
+  // The A-Frame tab shows the REAL module, so image placeholders are expanded back
   // to their `data:` payloads here — the TSL tab above keeps the short references.
   //
   // Nodes are read IMPERATIVELY, for the same reason and with the same proof as
@@ -155,6 +161,41 @@ export function CodeEditor() {
       return `// Export error: ${e instanceof Error ? e.message : String(e)}`;
     }
   }, [code, activeTab, materialSettings, properties]);
+
+  // ── The A-Frame tab: a copy-ready index.html, and nothing else ──────────
+  //
+  // The page's one editor-derived setting (the preview's primitive) is
+  // localStorage-backed and fires no change event, so the page is a SNAPSHOT
+  // taken when the tab is opened — `embedStamp` is what re-takes it.
+  const [embedStamp, setEmbedStamp] = useState(0);
+
+  const jsFileName = useMemo(() => `${shaderBaseName(shaderName)}.js`, [shaderName]);
+
+  const embedHtml = useMemo(() => {
+    if (activeTab !== 'script') return '';
+    try {
+      return buildAFrameEmbedHTML(scriptCode, {
+        shaderFile: jsFileName,
+        title: shaderName,
+        geometry: readPreviewGeometry(),
+      });
+    } catch (e) {
+      return `<!-- Export error: ${e instanceof Error ? e.message : String(e)} -->`;
+    }
+    // embedStamp is the deliberate re-read trigger; it feeds nothing else.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scriptCode, jsFileName, shaderName, activeTab, embedStamp]);
+
+  const handleCopyEmbed = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(embedHtml);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard API is unavailable in insecure contexts; the text is still
+      // selectable in the editor, so failing quietly is right here.
+    }
+  }, [embedHtml]);
 
   const isTSL = activeTab === 'tsl';
 
@@ -316,9 +357,12 @@ export function CodeEditor() {
           </button>
           <button
             className={`code-editor__tab ${activeTab === 'script' ? 'code-editor__tab--active' : ''}`}
-            onClick={() => setActiveTab('script')}
+            onClick={() => {
+              setActiveTab('script');
+              setEmbedStamp((n) => n + 1);
+            }}
           >
-            {t('Output', language)}
+            A-Frame
           </button>
         </div>
         <div className="code-editor__actions">
@@ -351,6 +395,26 @@ export function CodeEditor() {
             <button className="code-editor__action-btn" onClick={handleLoadScript} title={t('Import a shaderloader .js file into the editor', language)}>
               {t('Import', language)}
             </button>
+          )}
+          {!isTSL && (
+            <>
+              {/* The tab holds ONE file. This label is the ONLY place the two
+                  install facts are stated — put `jsFileName` beside it, and
+                  serve the folder — because the page itself carries no
+                  comments and the loader `fetch`es the module, which a
+                  double-clicked file:// page silently fails (a plain white
+                  default-material primitive, one console line, nothing on
+                  screen). Keep them here if the page stays comment-free. */}
+              <span
+                className="code-editor__filename"
+                title={t('A ready-to-run VR page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.', language).replace('{file}', jsFileName)}
+              >
+                index.html
+              </span>
+              <button className="code-editor__action-btn" onClick={handleCopyEmbed}>
+                {copied ? t('Copied', language) : t('Copy', language)}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -395,13 +459,15 @@ export function CodeEditor() {
             </div>
           )}
         </div>
-        {/* Shader script preview (read-only) — for a-frame-shaderloader */}
+        {/* The A-Frame drop-in page (read-only). `path` gives it its own Monaco
+            model so it is tokenized as HTML, not as the TSL editor's JS. */}
         {activeTab === 'script' && (
           <div className="code-editor__pane">
             <Editor
               height="100%"
-              defaultLanguage="javascript"
-              value={scriptCode}
+              path="index.html"
+              language="html"
+              value={embedHtml}
               theme={codeEditorTheme}
               options={READONLY_EDITOR_OPTIONS}
             />

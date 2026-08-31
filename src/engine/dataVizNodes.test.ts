@@ -286,7 +286,7 @@ describe('graphToCode: Data Range', () => {
     });
 
     it('adds the imports its formula needs', () => {
-      // Without this the Output tab and the downloaded .js would reference a
+      // Without this the A-Frame tab and the downloaded .js would reference a
       // symbol they never imported.
       const gen = build({ mode: 'minmax', formula: 'smoothstep(lo, hi, v)' });
       expectValidModule(gen.code);

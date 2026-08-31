@@ -124,6 +124,19 @@
   border-color: var(--border-strong);
 }
 
+/* The A-Frame tab names the one file it holds. A label, not a control — the
+   tab bar opposite it is where the choices live — so it is plain mono type at
+   the shared control height rather than another button-looking box. */
+.code-editor__filename {
+  display: inline-flex;
+  align-items: center;
+  height: var(--ctl-size);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 /* Actions row (right side of tabbar). No bottom padding of its own any more —
    the bar's symmetric 4px now holds every child off both edges, which is what
    lets the buttons and the tabs share one centre line. */

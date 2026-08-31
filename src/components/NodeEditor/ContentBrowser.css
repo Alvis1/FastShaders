@@ -136,7 +136,7 @@
   font-weight: 500;
 }
 
-/* Category tabs. These KEEP the folder merge the code panel's TSL/Output tabs
+/* Category tabs. These KEEP the folder merge the code panel's TSL/A-Frame tabs
    dropped (`bottom: -1px` plus an active `borderBottomColor` matching the strip
    below — see tabStyle() in ContentBrowser.tsx), and that is not drift: here the
    merge carries information. The active tab's colour IS the tint of the tile

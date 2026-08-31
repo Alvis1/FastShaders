@@ -35,7 +35,9 @@ export interface PropertyInfo {
 // CDN base for the a-frame-shaderloader project. Pinned to @master — that is
 // the repo's default branch (it has no `main`), so jsdelivr serves the vendored
 // scripts the exported shader references.
-const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js';
+// Exported so the A-Frame index.html preview (tslToAFrameHTML.ts) points at the
+// same base and loader version this header documents — one source of truth.
+export const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js';
 
 /**
  * The loader version a NEW export tells its embedding page to load.
@@ -52,11 +54,40 @@ const CDN_BASE = 'https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master
  * submodule is pushed AND jsdelivr is purged for the new file — otherwise every
  * export 404s for its recipient while working perfectly for the author.
  */
-const LOADER_FILE = 'a-frame-shaderloader-0.6.js';
+export const LOADER_FILE = 'a-frame-shaderloader-0.6.js';
+
+/**
+ * Schema keys the `shader` component already owns, so a property that
+ * sanitizes to one of them can never be set from an `<a-entity>` attribute.
+ *
+ * A-Frame's style parser is LAST-WINS over `;`-separated chunks
+ * (aframe/src/utils/styleParser.js), so printing such a row after `src:` does
+ * not merely fail to set the uniform — it REPLACES the module path with the
+ * property's default, and the entity loads no shader at all. Both surfaces
+ * that write an `<a-entity …>` example — this header and the A-Frame tab's
+ * generated page (tslToAFrameHTML.ts) — drop the row for that reason.
+ */
+export const RESERVED_ATTRIBUTE_KEYS: ReadonlySet<string> = new Set(['src']);
 
 /** Build the usage-comment header prepended to the exported module. */
 function buildHeader(props: PropertyInfo[], tslCode = ''): string[] {
-  const hasProps = props.length > 0;
+  // Sanitized identifiers are the actual schema keys / a-entity attributes the
+  // module exposes (a property named "my speed" → `my_speed`). Deduped so two
+  // names that collapse to the same key don't print twice, and stripped of the
+  // component's own keys — see RESERVED_ATTRIBUTE_KEYS.
+  //
+  // Computed BEFORE the branch below, not inside it: a shader whose only
+  // property is named `src` has `props.length > 0` but nothing printable, and
+  // the old `hasProps` would have emitted a dangling `shader="src: shader.js; "`
+  // followed by an empty "can be updated at runtime" list.
+  const seenKeys = new Set<string>();
+  const uniqueProps = props.filter((p) => {
+    const key = sanitizeIdentifier(p.name);
+    if (seenKeys.has(key) || RESERVED_ATTRIBUTE_KEYS.has(key)) return false;
+    seenKeys.add(key);
+    return true;
+  });
+  const hasProps = uniqueProps.length > 0;
   const header: string[] = [
     '// TSL Shader Module — for use with a-frame-shaderloader',
     '//',
@@ -67,17 +98,6 @@ function buildHeader(props: PropertyInfo[], tslCode = ''): string[] {
     `//   <script src="${CDN_BASE}/${LOADER_FILE}"><${''}/script>`,
   ];
   if (hasProps) {
-    // Use the sanitized identifier — that's the actual schema key / a-entity
-    // attribute the module exposes (a property named "my speed" → `my_speed`).
-    // Dedupe by sanitized name so two names that collapse to the same key don't
-    // print a duplicate attribute in the example.
-    const seen = new Set<string>();
-    const uniqueProps = props.filter((p) => {
-      const key = sanitizeIdentifier(p.name);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
     // `defaultValue` comes straight out of node `values` (adversarial:
     // .fastshader / fs:graph / pasted TSL). The colour branch of
     // collectShaderProperties is a RAW `String(values.hex)`, so a stored hex
