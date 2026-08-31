@@ -103,3 +103,31 @@ describe('the /evalp entry', () => {
   });
 });
 
+describe('leaving the study returns the STANDARD app', () => {
+  it('clearEvalMode erases the launch CONDITION, not just the arm flag', async () => {
+    // The bug this pins: declining at the consent screen cleared fs:evalArm
+    // and fs:evalSession but left fs:evalTaskQuery, so "No thanks — open the
+    // normal app" handed back an editor with no cost bar, no node prices and
+    // no budget lines — opted out of the study, still inside its condition,
+    // with no way back short of clearing site data. Same after a submit.
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const src = readFileSync(fileURLToPath(new URL('./evalMode.ts', import.meta.url)), 'utf8');
+    const body = src.slice(src.indexOf('export function clearEvalMode'));
+    const fn = body.slice(0, body.indexOf('\n}') + 2);
+    for (const key of ['EVAL_ARM_KEY', 'EVAL_SESSION_KEY', 'EVAL_TASK_KEY']) {
+      expect(fn, `clearEvalMode must remove ${key}`).toContain(`removeItem(${key})`);
+    }
+  });
+
+  it('a study condition cannot apply outside a study session', () => {
+    // Belt and braces behind the eraser: evalTask() gates on isEvalMode(), so
+    // a stale or hand-written key is inert in the standard app. Verified in a
+    // browser too — declining from /evalp returns 55 cost badges and the bar.
+    const { readFileSync } = require('node:fs') as typeof import('node:fs');
+    const { fileURLToPath } = require('node:url') as typeof import('node:url');
+    const src = readFileSync(fileURLToPath(new URL('./evalTask.ts', import.meta.url)), 'utf8');
+    expect(src).toContain('if (!isEvalMode()) return { ...DEFAULT_EVAL_TASK };');
+  });
+});
+
