@@ -204,7 +204,7 @@ export function importShaderText(
   // The value is a FRESH object (or undefined) and the node/data are rebuilt by
   // spread, never mutated: ShaderPreview, CodeEditor and mergeMatch all
   // subscribe to `materialSettings` BY REFERENCE and bail on Object.is, so an
-  // in-place update would leave the preview and the Output tab on the old
+  // in-place update would leave the preview and the A-Frame tab on the old
   // settings with no error.
   //
   // A raw setState, not updateNodeData: that would push a history entry (the

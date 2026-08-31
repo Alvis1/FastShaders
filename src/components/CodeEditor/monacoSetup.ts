@@ -15,6 +15,9 @@
  *     everywhere (including tslLanguage.ts via the loader)
  *   - the javascript/typescript Monarch tokenizers (javascript's grammar is
  *     defined in terms of typescript's) for syntax highlighting
+ *   - the html Monarch tokenizer, for the A-Frame tab's index.html view. Also
+ *     tokenizer-only: `basic-languages/html` is the grammar, NOT the html
+ *     language client/worker that `editor.main` would drag in.
  *
  * Deliberately NO TypeScript language service: its ts.worker was the single
  * largest dist asset (7MB) and it spun up on every boot only to type-check
@@ -27,6 +30,7 @@ import 'monaco-editor/esm/vs/editor/edcore.main.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js';
 import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js';
+import 'monaco-editor/esm/vs/basic-languages/html/html.contribution.js';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { loader, type Monaco } from '@monaco-editor/react';
 

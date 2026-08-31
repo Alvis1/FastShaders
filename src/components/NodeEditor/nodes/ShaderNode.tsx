@@ -314,7 +314,7 @@ export function buildRows(
  * wired column's statistics, and reaching those from a node component costs a
  * whole-graph subscription per node. That case is reported in the generated
  * code instead, as a comment graphToCode writes beside the fallback chain —
- * visible in the code panel, the Output tab and the downloaded `.js`.
+ * visible in the code panel, the A-Frame tab and the downloaded `.js`.
  *
  * Its own component so the parse happens once per render, and memoized on the
  * string because ShaderNode re-renders on every graph notify while the formula

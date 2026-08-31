@@ -172,7 +172,7 @@ export function collectImageAssets(nodes: AppNode[]): Map<string, string> {
 
 /**
  * Expand every placeholder back to its real `data:` URL. Call this at the
- * surfaces that RUN or EXPORT the module (preview iframe, XR popup, Output tab,
+ * surfaces that RUN or EXPORT the module (preview iframe, XR popup, A-Frame tab,
  * Download Shader) — never for what the TSL editor displays.
  *
  * Replacement goes through a function so a `$&`/`$1` sequence inside a payload

@@ -132,7 +132,7 @@
      SplitPane's CROSS_MIN_PANE_PX move together. */
   --fs-tabbar-h: calc(var(--ctl-size) + 9px);
   /* Height is chosen so the grip's BOTTOM edge lands exactly on that bar's
-     bottom edge, making the grip and the TSL/Output tab strip read as one
+     bottom edge, making the grip and the TSL/A-Frame tab strip read as one
      band: bottom = top + h, and `top` resolves to
      seam_top + seam/2 - border/2 (see the arm below), so
      h = seam/2 + border/2 + tabbar. At the 2px defaults that is 39px, and on
