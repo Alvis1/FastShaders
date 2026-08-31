@@ -18,8 +18,11 @@
  * the app URL stays clean and the parameters survive a mid-session reload.
  */
 
-/** The raw query string the /eval redirector captured at launch. */
-export const EVAL_TASK_KEY = 'fs:evalTaskQuery';
+// The storage keys all live in evalMode.ts, so the writer (the redirector),
+// this reader and clearEvalMode's eraser cannot drift apart. Importing the
+// key rather than defining it here also keeps the dependency one-way.
+export { EVAL_TASK_KEY } from './evalMode';
+import { EVAL_TASK_KEY as TASK_KEY, isEvalMode } from './evalMode';
 
 export interface EvalTask {
   /** Task identifier from `?task=` — null when the session is unlabelled. */
@@ -106,9 +109,15 @@ export function parseEvalTask(search: string): EvalTask {
  * source: parsing it again here means the validation above is the only rule.
  */
 const TASK: EvalTask = (() => {
+  // A condition only exists INSIDE a study session. Without this gate a
+  // leftover key would keep shaping the standard app — which is exactly how
+  // declining at the consent screen used to return a point-less editor. The
+  // eraser in clearEvalMode is the primary fix; this makes a stale or
+  // hand-written key harmless on its own.
+  if (!isEvalMode()) return { ...DEFAULT_EVAL_TASK };
   let raw: string | null = null;
   try {
-    raw = sessionStorage.getItem(EVAL_TASK_KEY);
+    raw = sessionStorage.getItem(TASK_KEY);
   } catch {
     return { ...DEFAULT_EVAL_TASK };
   }

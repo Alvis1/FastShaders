@@ -21,6 +21,8 @@ import { FEEDBACK_EMAIL } from '@/utils/feedbackReport';
 export const EVAL_ARM_KEY = 'fs:evalArm';
 export const EVAL_SESSION_KEY = 'fs:evalSession';
 export const EVAL_JOURNAL_KEY = 'fs:evalJournal';
+/** The raw query string the /eval and /evalp redirectors capture at launch. */
+export const EVAL_TASK_KEY = 'fs:evalTaskQuery';
 
 /** Where the study package is addressed. Kept beside FEEDBACK_EMAIL on purpose
  *  — one constant to change if the study uses a different inbox. */
@@ -166,11 +168,24 @@ export function writeEvalSession(rec: EvalSessionRecord): void {
   }
 }
 
-/** Decline path: drop the flag + record so a reload boots the normal app. */
+/**
+ * Decline path (and the post-submit teardown): drop the flag, the session
+ * record AND the launch conditions, so a reload boots the STANDARD app.
+ *
+ * The task query is not optional here. `/evalp` stores `points=off`, and
+ * leaving it behind meant "No thanks — open the normal app" handed the user an
+ * app with no cost bar, no node prices and no budget lines: they had opted out
+ * of the study and were still in its experimental condition, with no way back
+ * short of clearing site data. Same for a reload after submitting.
+ *
+ * `EVAL_TASK_KEY` is imported from evalTask rather than re-spelled, so the
+ * writer (the redirector), the reader and this eraser cannot drift apart.
+ */
 export function clearEvalMode(): void {
   try {
     sessionStorage.removeItem(EVAL_ARM_KEY);
     sessionStorage.removeItem(EVAL_SESSION_KEY);
+    sessionStorage.removeItem(EVAL_TASK_KEY);
   } catch {
     /* nothing to clear */
   }
