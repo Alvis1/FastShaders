@@ -23,6 +23,17 @@ export function normalizeHex(v: unknown): string | null {
   return /^#[0-9a-f]{6}$/.test(s) ? s : null;
 }
 
+/**
+ * The raw `#rrggbb` predicate, shared by every module that whitelists a stored
+ * colour (drawings, uniform defaults/overrides, group colours). `normalizeHex`
+ * above is the CANONICALIZER — it trims and lowercases first, so it accepts
+ * strings this does not (' #FF0000 '); use it when you want a value back, and
+ * this when you want a yes/no on the string exactly as stored.
+ *
+ * Stateless (no /g), so one shared instance is safe.
+ */
+export const HEX6 = /^#[0-9a-fA-F]{6}$/;
+
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
@@ -151,7 +162,7 @@ export function getGroupFrameColors(
   hex: string,
   selected = false,
 ): { background: string; borderColor: string } {
-  const base = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : GROUP_DEFAULT_COLOR;
+  const base = HEX6.test(hex) ? hex : GROUP_DEFAULT_COLOR;
   const [r, g, b] = hexToRgb(base);
   const [wr, wg, wb] = NODE_WHITE;
   const mix = (t: number) => rgbToHex(lerp(wr, r, t), lerp(wg, g, t), lerp(wb, b, t));

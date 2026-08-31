@@ -9,7 +9,7 @@ import path from 'path';
  * (`ShaderCarousel/components/three`) at dev/build start.
  *
  * This suite fails on DRIFT — a consumer copy that differs from the source
- * (e.g. someone hand-edits `public/js/a-frame-shaderloader-0.4.js` instead of
+ * (e.g. someone hand-edits `public/js/a-frame-shaderloader-0.6.js` instead of
  * the submodule source). Fix drift by editing the submodule source and
  * re-running `vite` (dev or build), never by editing a copy.
  *
@@ -24,8 +24,6 @@ const SRC = path.join(ROOT, 'a-frame-shaderloader/js');
 
 const COPIES: Record<string, string[]> = {
   'a-frame-180-a-01.min.js': ['public/js', 'ShaderCarousel/components/three'],
-  'a-frame-shaderloader-0.4.js': ['public/js'],
-  'a-frame-shaderloader-0.5.js': ['public/js'],
   'a-frame-shaderloader-0.6.js': ['public/js'],
   'aframe-orbit-controls.min.js': ['public/js'],
 };
@@ -67,6 +65,18 @@ describe('vendored A-Frame scripts stay in sync with the submodule source', () =
     'tsl-textures.min.js':
       'dropped when the noise family moved to three\'s built-in MaterialX ' +
       'functions; the submodule still ships it for its own demos.',
+    // 51 KB of dist (17 KB gzipped) that nothing could ever load. Verified by
+    // grep: same-origin loader resolution happens only in tslToPreviewHTML
+    // (LOADER_FILE = 0.6) and podest.html (0.6 hardcoded, twice). Shaders
+    // exported against 0.4/0.5 reference them on jsdelivr BY URL — i.e. from
+    // the SUBMODULE, which is why they must stay frozen there and why dropping
+    // the copies cannot break a single already-exported shader.
+    'a-frame-shaderloader-0.4.js':
+      'frozen for shaders exported before 0.5; they load it from the CDN, ' +
+      'never from this app, so the vendored copy had no consumer.',
+    'a-frame-shaderloader-0.5.js':
+      'frozen for shaders exported before 0.6; same as 0.4 — CDN-only. ' +
+      'Tests/index.html loads it from the submodule path, not public/js.',
   };
 
   it('lists every script the submodule ships — no unpoliced vendored file', () => {
@@ -77,6 +87,24 @@ describe('vendored A-Frame scripts stay in sync with the submodule source', () =
       shipped.filter((f) => !accounted.has(f)),
       'vendored script missing from COPIES — add it (and to VENDOR_TARGETS in ' +
         'vite.config.ts), or add it to NOT_VENDORED with the reason',
+    ).toEqual([]);
+  });
+
+  /**
+   * The other direction. The two assertions around this one both read the
+   * SUBMODULE, so nothing noticed if a deliberately-dropped script reappeared
+   * in public/js — and the sync plugin only ever copies, never prunes, so it
+   * would ship silently. MEASURED: putting 0.4 + 0.5 back left the whole suite
+   * green while adding 51 KB to dist/js.
+   */
+  it('does not re-vendor a deliberately dropped script', () => {
+    const backAgain = Object.keys(NOT_VENDORED).filter((f) =>
+      existsSync(path.join(ROOT, 'public/js', f)));
+    expect(
+      backAgain,
+      'a NOT_VENDORED script is back in public/js — it was dropped on purpose. ' +
+        'Delete the copy, or move it to COPIES + VENDOR_TARGETS if it really ' +
+        'has a same-origin consumer again.',
     ).toEqual([]);
   });
 

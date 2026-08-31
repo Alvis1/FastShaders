@@ -304,10 +304,11 @@
 
 /* The hover plate is --border-focus, which is a FIXED blue in both themes, so
    the glyph on it must be fixed too — the `.toolbar__export` precedent. Reading
-   --bg-panel here (as .toolbar__refresh:hover does) looks right in light mode
-   and collapses in dark, where that token is a dark grey: MEASURED at 1.66:1
-   against the blue, i.e. the glyph all but disappears on the hover that is
-   supposed to confirm the button. #fff holds 5.6:1 in both. */
+   --bg-panel here (as `.toolbar__refresh:hover` did until 2026-08-31, when it
+   was fixed the same way) looks right in light mode and collapses in dark,
+   where that token is a dark grey: MEASURED at 1.66:1 against the blue, i.e.
+   the glyph all but disappears on the hover that is supposed to confirm the
+   button. #fff holds 5.6:1 in both. */
 .fs-scroll-arrow--invert:hover {
   background: var(--border-focus);
   border-color: var(--border-focus);

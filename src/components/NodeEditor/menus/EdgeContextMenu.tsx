@@ -44,7 +44,7 @@ export function EdgeContextMenu({ edgeId }: EdgeContextMenuProps) {
       <button className="context-menu__item" onClick={handleAddPoint}>
         {t('Add routing point', language)}
       </button>
-      <button className="context-menu__item" onClick={handleDelete} style={{ color: '#e74c3c' }}>
+      <button className="context-menu__item context-menu__item--danger" onClick={handleDelete}>
         {t('Delete Connection', language)}
       </button>
     </div>

@@ -69,8 +69,9 @@ describe('useScrollArrows — overflow detection', () => {
     const controls = readFileSync(join(__dirname, '../../styles/controls.css'), 'utf8');
     expect(controls).toContain('.fs-scroll-arrow--invert');
     // The hover glyph must be a LITERAL: --border-focus is a fixed blue in both
-    // themes, and --bg-panel (what .toolbar__refresh:hover reads) is a dark grey
-    // in dark mode — measured at 1.66:1 against that blue.
+    // themes, and --bg-panel (what .toolbar__refresh:hover read until it was
+    // fixed the same way) is a dark grey in dark mode — measured at 1.66:1
+    // against that blue.
     const hover = /\.fs-scroll-arrow--invert:hover\s*\{([^}]*)\}/.exec(controls);
     expect(hover, 'the inverted hover rule is gone').not.toBeNull();
     expect(hover![1]).not.toContain('var(--bg-panel)');

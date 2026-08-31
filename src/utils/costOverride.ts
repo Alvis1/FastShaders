@@ -1,5 +1,6 @@
 import complexityData from '@/registry/complexity.json';
 import { sanitizeCostMap } from '@/utils/nodeCost';
+import { toKebabCase } from '@/utils/nameUtils';
 
 /**
  * Provenance for an applied cost override — what benchmark produced it, and
@@ -390,10 +391,16 @@ export function parseCostProfileBundle(text: string, fileName?: string): ParsedC
   return out.length ? out : null;
 }
 
+/**
+ * The 40-char slug every id and filename here is built from. The EMPTY fallback
+ * is deliberate: each call site supplies its own ('custom' / 'profile' /
+ * 'measured'), so the shared helper must not pick one for them.
+ */
+const slug40 = (s: string): string => toKebabCase(s, '').slice(0, 40);
+
 /** `fastshaders-profile-<label>.json` — the label is what the user recognises. */
 export function profileFileName(p: CostProfile): string {
-  const slug = p.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
-  return `fastshaders-profile-${slug || 'custom'}.json`;
+  return `fastshaders-profile-${slug40(p.label) || 'custom'}.json`;
 }
 
 /** Filename for the all-profiles bundle. */
@@ -444,7 +451,7 @@ export function createManualProfile(
   now: Date = new Date(),
 ): CostProfile {
   const clean = cleanLabel(label) ?? 'Custom profile';
-  const slug = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const slug = slug40(clean);
   const costs = blankProfileCosts();
   return {
     id: `cp:manual:${slug || 'profile'}-${now.getTime().toString(36)}`,
@@ -476,8 +483,7 @@ export function createManualProfile(
  * exporter's own device-slug naming (bench-stats.js `deviceSlug`). Pure.
  */
 export function mergedComplexityFileName(meta: CostOverrideMeta | null): string {
-  const slug = (meta?.device ?? '')
-    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const slug = slug40(meta?.device ?? '');
   const date = (meta?.date ?? '').slice(0, 10);
   return ['complexity', slug || 'measured', date].filter(Boolean).join('-') + '.json';
 }

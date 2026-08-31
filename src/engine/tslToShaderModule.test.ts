@@ -302,6 +302,42 @@ describe('tslToShaderModule — the declared property list is not derivable from
   });
 });
 
+/**
+ * `mergeVertices` is how the Output node's "Merge Vertices" reaches
+ * shaderloader 0.6, which welds a displaced primitive's coincident vertices so
+ * a box does not split into floating faces. It is the FIRST key here that is
+ * not a THREE.Material property — the loader reads it off the module's return
+ * object rather than copying it onto the material.
+ *
+ * The polarity is what makes it safe: only an explicit `false` is emitted, so
+ * every module written before the key existed is byte-identical to one written
+ * after, and absent === weld matches the editor's own `undefined === true`.
+ */
+describe('mergeVertices — the opt-OUT key', () => {
+  it('emits nothing for every state except an explicit false', () => {
+    const base = buildShaderModule(COLOR_POS);
+    for (const settings of [undefined, {}, { mergeVertices: true }]) {
+      const out = buildShaderModule(COLOR_POS, { materialSettings: settings });
+      expect(out, JSON.stringify(settings)).toBe(base);
+      expect(out).not.toContain('mergeVertices');
+    }
+  });
+
+  it('emits the key only when the author unticked the box', () => {
+    const out = buildShaderModule(COLOR_POS, { materialSettings: { mergeVertices: false } });
+    expect(out).toContain('mergeVertices: false');
+  });
+
+  // The settings menu writes a literal `true` when the box is re-ticked, so a
+  // `!== true` or truthiness gate would add the key to a perfectly default
+  // node — and every already-exported shader would stop matching its own
+  // re-export. Pinned because the difference is one operator.
+  it('an explicit true is indistinguishable from absent', () => {
+    expect(buildShaderModule(COLOR_POS, { materialSettings: { mergeVertices: true } }))
+      .toBe(buildShaderModule(COLOR_POS, { materialSettings: {} }));
+  });
+});
+
 describe('adversarial dispatch keys never resolve through the prototype chain', () => {
   // These dictionaries are indexed by strings out of untrusted input (a
   // .fastshader's materialSettings, a pasted module's return-object keys). A

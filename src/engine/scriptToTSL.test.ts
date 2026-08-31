@@ -640,6 +640,28 @@ ${props}  };
       .toBeUndefined();
   });
 
+  /**
+   * `mergeVertices` used to be preview-only and never emitted, so importing a
+   * module RESET the author's "Merge Vertices" choice to its default. It rides
+   * the module now (shaderloader 0.6 needs it at runtime), so it must also be
+   * read back — and it must be STRIPPED from the editor TSL like every other
+   * material key, or the pass-through leaves a literal `mergeVertices: false`
+   * entry in the graph's own code.
+   */
+  it('recovers mergeVertices:false from the module and strips it from the TSL', () => {
+    const r = scriptToTSLWithSettings(mod('    mergeVertices: false,\n'));
+    expect(r.materialSettings).toEqual({ mergeVertices: false });
+    expect(r.code).not.toContain('mergeVertices');
+  });
+
+  it('reads nothing from an absent or explicitly-true mergeVertices', () => {
+    // Absent === weld, so a module that never carried the key must not be
+    // read as an author having chosen anything.
+    expect(scriptToTSLWithSettings(mod('')).materialSettings).toBeUndefined();
+    expect(scriptToTSLWithSettings(mod('    mergeVertices: true,\n')).materialSettings)
+      .toBeUndefined();
+  });
+
   it('drops depthWrite:false on an opaque module (it self-occludes into holes)', () => {
     expect(scriptToTSLWithSettings(mod('    depthWrite: false,\n')).materialSettings)
       .toBeUndefined();

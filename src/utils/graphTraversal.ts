@@ -1,6 +1,15 @@
 import type { AppNode } from '@/types';
 
-/** Walk upstream from a given node to check if a Time node is an ancestor. */
+/**
+ * Walk upstream from a given node to check if a Time node is an ancestor.
+ *
+ * TEST-ORACLE ONLY. Production code asks `getTimeUpstreamSet` (cpuEvaluator) /
+ * `buildTimeUpstreamSet` below: this per-call form is O(V+E) EVERY call, which
+ * is the wrong shape for anything invoked per node per React Flow notify — the
+ * memoized set exists precisely because this ran at refresh rate and cost
+ * 38-82x on a large graph. It survives as the tests' straightforward reference
+ * implementation to check the memoized closures against.
+ */
 export function hasTimeUpstream(
   nodeId: string,
   nodes: AppNode[],

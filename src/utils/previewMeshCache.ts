@@ -22,15 +22,12 @@
  */
 
 import { createPreviewMesh, type PreviewMesh } from './previewMesh';
+import { withTimeout, openDb as openDbShared } from './idbSafe';
 
 const DB_NAME = 'fastshaders';
 const DB_VERSION = 1;
 const STORE = 'previewMesh';
 const RECORD_KEY = 'current';
-
-/** Ceiling on any single IndexedDB step. Safari private mode can leave an open
- *  request pending forever; boot must not wait on it. */
-const IDB_TIMEOUT_MS = 5000;
 
 /**
  * Whether the last session's geometry preference was the custom mesh, sampled
@@ -57,57 +54,9 @@ export function bootGeometryWasCustom(): boolean {
   return bootGeometryWasCustomFlag;
 }
 
-/** Resolve `fallback` if `p` hasn't settled in time (never rejects). */
-function withTimeout<T>(p: Promise<T>, fallback: T): Promise<T> {
-  return new Promise<T>((resolve) => {
-    let done = false;
-    const finish = (v: T) => {
-      if (done) return;
-      done = true;
-      resolve(v);
-    };
-    const timer = setTimeout(() => finish(fallback), IDB_TIMEOUT_MS);
-    p.then(
-      (v) => {
-        clearTimeout(timer);
-        finish(v);
-      },
-      () => {
-        clearTimeout(timer);
-        finish(fallback);
-      },
-    );
-  });
-}
-
+/** Out-of-line keys (the single RECORD_KEY), so no `keyPath` store option. */
 function openDb(): Promise<IDBDatabase | null> {
-  return withTimeout(
-    new Promise<IDBDatabase | null>((resolve) => {
-      let factory: IDBFactory | undefined;
-      try {
-        factory = globalThis.indexedDB;
-      } catch {
-        /* access itself can throw in sandboxed/partitioned contexts */
-      }
-      if (!factory) return resolve(null);
-
-      let req: IDBOpenDBRequest;
-      try {
-        req = factory.open(DB_NAME, DB_VERSION);
-      } catch {
-        return resolve(null);
-      }
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(null);
-      // Another tab holds an older version open — skip rather than hang.
-      req.onblocked = () => resolve(null);
-    }),
-    null,
-  );
+  return openDbShared(DB_NAME, DB_VERSION, STORE);
 }
 
 /** Serialize a mesh for storage. `text` and `id` are deliberately dropped:

@@ -121,13 +121,6 @@
   background: var(--bg-panel);
 }
 
-.palettes-modal__row-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
 /* The name column is the one that ABSORBS a narrow viewport: it shrinks (and
    ellipses) so the swatch strip and the controls keep their size, which is what
    drops the one-line floor from a ~600px viewport to roughly 460px. */

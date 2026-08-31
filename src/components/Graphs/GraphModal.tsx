@@ -11,46 +11,16 @@
 import { useEffect, useMemo } from 'react';
 import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
-import { ShaderNode } from '@/components/NodeEditor/nodes/ShaderNode';
-import { ColorNode } from '@/components/NodeEditor/nodes/ColorNode';
-import { PreviewNode } from '@/components/NodeEditor/nodes/PreviewNode';
-import { MathPreviewNode } from '@/components/NodeEditor/nodes/MathPreviewNode';
-import { OutputNode } from '@/components/NodeEditor/nodes/OutputNode';
-import { ClockNode } from '@/components/NodeEditor/nodes/ClockNode';
-import { MicNode } from '@/components/NodeEditor/nodes/MicNode';
-import { AudioInputNode } from '@/components/NodeEditor/nodes/AudioInputNode';
-import { GroupNode } from '@/components/NodeEditor/nodes/GroupNode';
-import { NoteNode } from '@/components/NodeEditor/nodes/NoteNode';
-import { TypedEdge } from '@/components/NodeEditor/edges/TypedEdge';
-import type { AppNode, AppEdge } from '@/types';
-import './GraphModal.css';
-
-// Mirrors the registration in NodeEditor.tsx — same components, same keys, so
-// the modal renders nodes exactly as the real editor does. An unregistered
-// type falls back to React Flow's DEFAULT node (bare white box, top/bottom
-// handles) — which is exactly how the Mic node rendered here before `mic` was
-// added. Registering the REAL MicNode is safe for the mic convention's
+// The shared registry — see flowTypes.ts for why this is imported rather than
+// mirrored here. Registering the REAL MicNode is safe for the mic convention's
 // "armMic has exactly two click paths" rule: the node's arm light is one of
 // those two paths, and it gates itself on the node being wired — every graph
 // this modal shows is either a single edge-less node or a built-in
 // texture/preset (none contain a mic), so the light renders disabled. The same
 // reasoning covers the Audio Input node, whose arm light gates identically.
-const nodeTypes = {
-  shader: ShaderNode,
-  color: ColorNode,
-  preview: PreviewNode,
-  mathPreview: MathPreviewNode,
-  clock: ClockNode,
-  mic: MicNode,
-  audio: AudioInputNode,
-  output: OutputNode,
-  group: GroupNode,
-  note: NoteNode,
-};
-
-const edgeTypes = {
-  typed: TypedEdge,
-};
+import { nodeTypes, edgeTypes } from '@/components/NodeEditor/flowTypes';
+import type { AppNode, AppEdge } from '@/types';
+import './GraphModal.css';
 
 export interface GraphModalProps {
   title: string;

@@ -106,8 +106,13 @@ export interface MaterialSettings {
    * undefined === true). A BoxGeometry splits every face into its own verts, so
    * normal-based displacement pushes the shared corners apart and the faces
    * separate; welding collapses them into one shared, smooth-normal vertex so
-   * the surface deforms as a single skin. Only affects primitive previews with
-   * displacement — OBJ models always weld via fit-bounds. */
+   * the surface deforms as a single skin. Only affects PRIMITIVES with
+   * displacement — models weld via fit-bounds instead.
+   *
+   * No longer preview-only: since 2026-08-31 an explicit `false` is EMITTED
+   * into the module (`mergeVertices: false`) and shaderloader 0.6 does the
+   * welding, so the choice reaches podest, the copy-ready A-Frame page and
+   * every exported module, and survives an export→import round trip. */
   mergeVertices?: boolean;
   /** Alpha clip threshold. 0 = disabled, >0 = discard fragments below this alpha value. */
   alphaTest?: number;

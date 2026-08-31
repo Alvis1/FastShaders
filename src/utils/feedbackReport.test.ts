@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   FEEDBACK_EMAIL,
   MAILTO_SAFE_CHARS,
@@ -319,6 +320,41 @@ describe('feedbackReport — preview backend', () => {
       expect(iframeForces, `iframe rule disagrees with the fixture for ${c.name}`).toBe(c.forced);
       const reported = previewBackend(c.ua, c.platform, c.touch, true).startsWith('WebGL2');
       expect(reported, `feedback report disagrees with the iframe for ${c.name}`).toBe(iframeForces);
+    }
+  });
+});
+
+/**
+ * THIRD copy of the same rule, and the last one without a guard.
+ *
+ * `public/podest.html` is a standalone vanilla page that cannot import
+ * anything, so its sandboxed STAGE document carries its own hand-minified
+ * `__fsForceWebGL2`. If it drifts from the editor's, the same shader picks a
+ * different renderer on the pedestal than in the preview it was authored in —
+ * silently, and only on WebKit.
+ *
+ * Podest's copy legitimately lacks the `__FS_USER_FORCE_WEBGL2` branch (there
+ * is no WGSL/GLSL toggle there), so this pins the PLATFORM function only —
+ * exactly what the test above does for the editor's emitted copy.
+ */
+describe('podest.html restates the same WebKit force rule', () => {
+  it('agrees with previewBackend across the whole UA matrix', () => {
+    const podest = readFileSync(new URL('../../public/podest.html', import.meta.url), 'utf8');
+    // Hand-minified into one line, and its body carries no inner braces (every
+    // `if` is brace-less), so the first `}` really is the function's own.
+    const m = /function __fsForceWebGL2\(\)\{[^}]*\}/.exec(podest);
+    expect(m, 'podest.html no longer defines __fsForceWebGL2').not.toBeNull();
+
+    const podestForces = new Function(
+      'navigator',
+      `${m![0]}\nreturn __fsForceWebGL2();`,
+    ) as (nav: { userAgent: string; platform: string; maxTouchPoints: number }) => boolean;
+
+    for (const c of UA_CASES) {
+      const forced = podestForces({ userAgent: c.ua, platform: c.platform, maxTouchPoints: c.touch });
+      expect(forced, `podest rule disagrees with the fixture for ${c.name}`).toBe(c.forced);
+      const reported = previewBackend(c.ua, c.platform, c.touch, true).startsWith('WebGL2');
+      expect(reported, `podest disagrees with the feedback report for ${c.name}`).toBe(forced);
     }
   });
 });

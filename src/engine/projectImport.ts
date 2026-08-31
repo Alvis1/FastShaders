@@ -215,9 +215,12 @@ export function importShaderText(
   // `data` by reference) and overwrite the freshly-imported `code` with a
   // regeneration of the OLD graph.
   //
-  // NOT recoverable from the module text and therefore RESET to its default
-  // by this stamp: `mergeVertices` (preview-only, never emitted; absent ===
-  // true). `displacementMode` IS recovered — but only because
+  // `mergeVertices` IS recovered now: it used to be preview-only and never
+  // emitted, so an import reset it to its default; shaderloader 0.6 needs it at
+  // runtime, so an explicit `false` is emitted into the module and read back
+  // here. Absent still means true, which is what keeps a module that never
+  // carried the key indistinguishable from a default one.
+  // `displacementMode` IS recovered — but only because
   // scriptToTSLWithSettings distinguishes the two positionNode forms; without
   // that, importing an offset-displacement module would silently switch it to
   // normal mode. A raw editor-TSL file (the pass-through branch) carries no

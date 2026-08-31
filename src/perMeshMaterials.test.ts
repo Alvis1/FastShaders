@@ -22,9 +22,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { LOADER_FILE } from '@/engine/tslToShaderModule';
 
 const repoRoot = path.resolve(__dirname, '..');
 const LOADER = path.join(repoRoot, 'public/js/a-frame-shaderloader-0.6.js');
@@ -181,10 +182,29 @@ describe('shaderloader 0.6 — single-mesh fallback for a parts-only module', ()
     expect(fn).toContain('partMaterials.values().next()');
   });
 
-  it('the submodule source and the vendored copy carry the same gate', () => {
+  // Skipped on a NON-RECURSIVE checkout, where the submodule directory is
+  // empty — vendorSync.test.ts guards its own rows the same way. Without it
+  // this throws ENOENT rather than reporting a skip, i.e. a fresh clone looks
+  // like a broken test suite.
+  it.skipIf(!existsSync(LOADER_SRC))('the submodule source and the vendored copy carry the same gate', () => {
     // vendorSync.test.ts already fails on drift; this states WHY it matters
     // here — the submodule is the single source and public/js/ is a copy.
     expect(readFileSync(LOADER_SRC, 'utf8')).toBe(loaderText);
+  });
+
+  /**
+   * One loader version across every surface. The exported `.js` and the
+   * A-Frame tab derive their URL from LOADER_FILE, the preview iframe now does
+   * too, and podest hardcodes it in two places (its stage doc and its XR
+   * popup). A bump that misses podest would leave the pedestal running an
+   * older loader than the editor it previews in — the class of split that
+   * `parts` (a 0.6-only feature) turns into a wrong picture rather than an
+   * error.
+   */
+  it('podest loads the same loader version the exports pin', () => {
+    const refs = [...podestText.matchAll(/js\/a-frame-shaderloader-\d+\.\d+\.js/g)].map((m) => m[0]);
+    expect(refs.length, 'podest.html no longer references the shaderloader by file name').toBeGreaterThan(0);
+    for (const ref of refs) expect(ref).toBe(`js/${LOADER_FILE}`);
   });
 });
 

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { deflateRawSync } from 'node:zlib';
 import { buildZip, crc32 } from './zipWriter';
 import { readZip } from './zipReader';
@@ -84,5 +85,38 @@ describe('readZip', () => {
     const cdStart = dv.getUint32(zip.length - 22 + 16, true);
     dv.setUint32(cdStart + 24, 100 * 1024 * 1024, true); // uncompressed size
     await expect(readZip(zip)).rejects.toThrow(/too large/);
+  });
+});
+
+/**
+ * DRIFT GUARD. `public/podest.html` accepts dropped `.zip` shaders too, and
+ * being a standalone vanilla page it carries its OWN hand-written reader with
+ * its own copy of these caps beside a comment saying it mirrors this module.
+ * The name cap had already drifted (256 there against 512 here) — a divergence
+ * that shows up only as a legitimate archive being refused on the pedestal
+ * while it opens fine in the editor, which reads as a corrupt file.
+ *
+ * Both sides are read as SOURCE TEXT: podest cannot be imported, and these
+ * constants are module-private here, so text is what the two have in common.
+ */
+describe('podest.html zip caps mirror zipReader', () => {
+  const num = (src: string, decl: RegExp, what: string): number => {
+    const m = decl.exec(src);
+    expect(m, `${what} not found`).not.toBeNull();
+    // Evaluated rather than parsed: the totals are written as `64 * 1024 * 1024`.
+    const v = Number(new Function(`return (${m![1]});`)());
+    expect(Number.isFinite(v), `${what} is not a finite number`).toBe(true);
+    return v;
+  };
+
+  it('agrees on entry count, total uncompressed size and name length', () => {
+    const podest = readFileSync(new URL('../../public/podest.html', import.meta.url), 'utf8');
+    const reader = readFileSync(new URL('./zipReader.ts', import.meta.url), 'utf8');
+
+    for (const name of ['MAX_ENTRIES', 'MAX_TOTAL_UNCOMPRESSED', 'MAX_NAME_LENGTH']) {
+      const mine = num(reader, new RegExp(`const ${name} = ([^;]+);`), `zipReader ${name}`);
+      const theirs = num(podest, new RegExp(`var ${name} = ([^;]+);`), `podest ${name}`);
+      expect(theirs, `podest.html's ${name} has drifted from zipReader's`).toBe(mine);
+    }
   });
 });

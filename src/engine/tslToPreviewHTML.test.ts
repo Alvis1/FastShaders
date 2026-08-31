@@ -101,18 +101,64 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
     expect(html).toContain('window.location.origin');
   });
 
-  it('xr teapot: direct obj-model url, gpu hider first, xr NOT hidden, VR UI on, escaped title', () => {
+  it('xr teapot: direct obj-model url, backend forced via renderer attribute, xr NOT hidden, VR UI on, escaped title', () => {
     const html = tslToPreviewHTML(TSL, { geometry: 'teapot', xr: true, title: 'My <"Shader">' });
     expect(html).toContain(esc('obj-model="obj: url('));
     expect(html).toContain(esc('vr-mode-ui="enabled: true"'));
     expect(html).not.toContain('Object.defineProperty(navigator,"xr"');
     expect(html).not.toContain('fs:obj-model');
     expect(html).toContain('<title>My &lt;&quot;Shader&quot;&gt;</title>');
-    // The gpu hider must run before the vendored bundles can read navigator.gpu.
-    const gpuIdx = html.indexOf('Object.defineProperty(Navigator.prototype,"gpu"');
-    const bundleIdx = html.indexOf('a-frame-180-a-01.min.js');
-    expect(gpuIdx).toBeGreaterThan(-1);
-    expect(gpuIdx).toBeLessThan(bundleIdx);
+    // The backend is forced DECLARATIVELY: the scene tag carries the bundle's
+    // aframe#5847 backend property (aframeBackendProperty.test.ts guards the
+    // patch and its exact spelling). The old gpu-hiding script and the
+    // adapter pre-flight must both be gone — the popup boots immediately.
+    expect(html).toContain(esc('renderer="backend: webgl"'));
+    expect(html).not.toContain('Navigator.prototype');
+    expect(html).not.toContain('requestAdapter');
+  });
+
+  /**
+   * The parent bridge is emitted into BOTH documents, but in the XR popup
+   * `window.parent === window`, so its reporting half has nobody to talk to:
+   * the handshake, both 200 ms pollers and the hot-update listener would post
+   * to the popup's own queue — and the listener's `e.source !== window.parent`
+   * check cannot filter a self-post, because it genuinely passes. In a session
+   * three decomposes the XR pose into camera.position every frame, so the
+   * camera poller alone reports on essentially every tick.
+   *
+   * Two blocks must SURVIVE in the popup: the saved-camera restore (it is what
+   * frames the view) and the resize kicks.
+   */
+  it('xr: the bridge reports nothing to itself, but keeps the restore and resize kicks', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'sphere', xr: true, initialCameraPosition: { x: 1, y: 2, z: 3 } });
+    // All four self-post sites guarded on being a real child document.
+    expect(html).toContain('if (window.parent !== window) checkShaderReady();');
+    expect(html).toContain('if (window.parent === window) return;');
+    expect(html).toContain('if (window.parent !== window) setInterval(function() {');
+    expect(html).toContain('if (window.parent !== window) window.addEventListener("message"');
+    // The survivors.
+    expect(html).toContain('function scheduleResizeKicks()');
+    expect(html).toContain('cam.position.set(saved.x, saved.y, saved.z);');
+    expect(html).toContain('window.__savedCameraPos = {"x":1,"y":2,"z":3};');
+  });
+
+  it('sandbox: the same guards are present and are all satisfied there', () => {
+    // The sandboxed preview IS a child document, so every guard evaluates true
+    // and its behaviour is unchanged — the guards are emitted identically.
+    const html = tslToPreviewHTML(TSL, { geometry: 'sphere' });
+    expect(html).toContain('if (window.parent !== window) checkShaderReady();');
+    expect(html).toContain('if (window.parent !== window) window.addEventListener("message"');
+  });
+
+  it('sandbox (non-xr): keeps the gpu pre-flight and never spells the backend attribute', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'sphere' });
+    // The sandbox preview deliberately KEEPS hideGpu + the adapter pre-flight:
+    // its gpu-hiding serves Safari-no-paint / adapter-failure / the WGSL-GLSL
+    // toggle, and the fs:backend report reads navigator.gpu as the truth —
+    // renderer="backend: webgl" would silently break that label.
+    expect(html).toContain('function hideGpu()');
+    expect(html).toContain('requestAdapter');
+    expect(html).not.toContain(esc('renderer="backend: webgl"'));
   });
 
   it('xr: emits the head-locked stats panel + the immersive entry gate', () => {

@@ -32,14 +32,11 @@
  */
 
 import { validImageDataUrl, HARD_MAX_IMAGE_ENCODED_CHARS, MAX_IMAGE_ENCODED_CHARS } from './imageNode';
+import { withTimeout, openDb as openDbShared } from './idbSafe';
 
 const DB_NAME = 'fastshaders-images';
 const DB_VERSION = 1;
 const STORE = 'imageOrigins';
-
-/** Ceiling on any single IndexedDB step (Safari private mode can leave a
- *  request pending forever). */
-const IDB_TIMEOUT_MS = 5000;
 
 /** Store-wide caps. A record can't exceed the per-image payload cap, so 32
  *  records is ~19 MB worst case; the byte cap binds first for big ones. */
@@ -147,51 +144,9 @@ export function recordToPayload(rec: unknown, expectedId: string): ImageOriginPa
   return { dataUrl, width, height, fileName };
 }
 
-/** Resolve `fallback` if `p` hasn't settled in time (never rejects). */
-function withTimeout<T>(p: Promise<T>, fallback: T): Promise<T> {
-  return new Promise<T>((resolve) => {
-    let done = false;
-    const finish = (v: T) => {
-      if (done) return;
-      done = true;
-      resolve(v);
-    };
-    const timer = setTimeout(() => finish(fallback), IDB_TIMEOUT_MS);
-    p.then(
-      (v) => { clearTimeout(timer); finish(v); },
-      () => { clearTimeout(timer); finish(fallback); },
-    );
-  });
-}
-
+/** Records are keyed BY their content digest, hence the in-line `keyPath`. */
 function openDb(): Promise<IDBDatabase | null> {
-  return withTimeout(
-    new Promise<IDBDatabase | null>((resolve) => {
-      let factory: IDBFactory | undefined;
-      try {
-        factory = globalThis.indexedDB;
-      } catch {
-        /* access itself can throw in sandboxed/partitioned contexts */
-      }
-      if (!factory) return resolve(null);
-
-      let req: IDBOpenDBRequest;
-      try {
-        req = factory.open(DB_NAME, DB_VERSION);
-      } catch {
-        return resolve(null);
-      }
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'originId' });
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(null);
-      // Another tab holds an older version open — skip rather than hang.
-      req.onblocked = () => resolve(null);
-    }),
-    null,
-  );
+  return openDbShared(DB_NAME, DB_VERSION, STORE, { keyPath: 'originId' });
 }
 
 function rememberInMemory(rec: ImageOriginRecord): void {
