@@ -61,20 +61,28 @@ export function DataDisclosureModal({ onClose }: Props) {
   }, [onClose]);
 
   /**
-   * One disclosed item: the file (or field group) is the visible label, and
-   * its full description rides the `title` — the app-wide TooltipLayer borrows
-   * any title and paints above this modal, so the list stays scannable and
-   * each explanation is one hover away.
+   * One disclosed item: a plain-language LINE anyone can read at a glance,
+   * plus a `?` whose tooltip names the file it lands in and spells out the
+   * fields. The list answers "what do you take" in eight lines; the `?`
+   * answers "what exactly, and where does it go" without turning the dialog
+   * back into the page of prose it started as.
    *
-   * `title` rather than a nested element on purpose: the text stays in the
-   * accessibility tree (screen readers announce a title) instead of being
-   * hidden behind a `display: none` that would read as absent. The trade-off
-   * is real and deliberate — a hover has no touch equivalent — so the items
-   * are also written to be meaningful on their own.
+   * The detail rides `title`, so it stays in the accessibility tree (a screen
+   * reader announces it) rather than behind a `display: none` that reads as
+   * absent. A hover has no touch equivalent, so every LINE is written to be
+   * true and sufficient on its own.
    */
-  const item = (heading: string, body: string) => (
-    <li title={t(body, language)} className="eval-disclosure__item">
-      <strong>{t(heading, language)}</strong>
+  const item = (line: string, file: string, detail: string) => (
+    <li className="eval-disclosure__item">
+      <span>{t(line, language)}</span>
+      <button
+        type="button"
+        className="eval-disclosure__q"
+        title={`${file} — ${t(detail, language)}`}
+        aria-label={`${file} — ${t(detail, language)}`}
+      >
+        ?
+      </button>
     </li>
   );
 
@@ -117,42 +125,57 @@ export function DataDisclosureModal({ onClose }: Props) {
           <strong>{t('Files in the package', language)}</strong>
           <ul className="eval-consent__list eval-disclosure__list">
             {item(
-              'telemetry-events.json —',
+              'What you did, step by step',
+              'telemetry-events.json',
               'every action you took, as a list of timestamped events: nodes added or removed (by node type), connections made and broken, undo and redo, applying code, dropping an asset, the app becoming visible or hidden, and a periodic count of how large your graph is. It records WHAT you did, never WHAT you typed — no keystroke content, no text, no file contents, no clipboard, no addresses.',
             )}
             {item(
-              'telemetry-summary.json —',
-              'totals worked out from that list: how long the session ran, how much of it was active, counts per action, which node types you used, how long until your first node and first connection, and automatic quality checks.',
+              'Totals worked out from those steps',
+              'telemetry-summary.json',
+              'how long the session ran, how much of it was active, counts per action, which node types you used, how long until your first node and first connection, and automatic quality checks.',
             )}
             {item(
-              'sus.json —',
-              'your ten questionnaire answers, the score computed from them, and the free-text comment if you write one. Whatever you type in that box is stored word for word.',
+              'Your questionnaire answers',
+              'sus.json',
+              'your ten answers, the score computed from them, and the free-text comment if you write one. Whatever you type in that box is stored word for word.',
             )}
             {item(
-              'summary.csv —',
-              'the same numbers again as one spreadsheet row, for analysis.',
+              'The same numbers as one spreadsheet row',
+              'summary.csv',
+              'the headline figures repeated in a spreadsheet-friendly form, for analysis.',
             )}
             {item(
-              'session.json —',
-              'the session record: your participant code, start and submit times, time zone, the task and cost-budget condition you were given, which price table valued your shader, counts of your graph, and the technical facts about this computer listed below.',
+              'The session record',
+              'session.json',
+              'your participant code, start and submit times, time zone, the task and cost-budget condition you were given, which price table valued your shader, counts of your graph, and the technical facts about this computer.',
             )}
             {item(
-              'shader/ —',
-              'the shader you built, complete and openable. It contains the whole node graph: any text you typed into notes, any names you gave to properties or colours, any freehand drawing on the board, and any image or 3D model you added — as the actual file, plus its file name.',
+              'The shader you built',
+              'shader/',
+              'the shader, complete and openable. It contains the whole node graph: any text you typed into notes, any names you gave to properties or colours, any freehand drawing on the board, and any image or 3D model you added — as the actual file, plus its file name.',
             )}
             {item(
-              'preview.png —',
-              'a picture of the 3D preview exactly as it looked when you pressed Submit. Only the rendered 3D view: no toolbar, no node graph, no screen outside the app.',
+              'A picture of the 3D preview',
+              'preview.png',
+              'the 3D view exactly as it looked when you pressed Submit. Only the rendered 3D view: no toolbar, no node graph, no screen outside the app.',
             )}
-            {item('README.txt —', 'a plain-text explanation of the above for whoever opens the package.')}
+            {item(
+              'An explanation of the package',
+              'README.txt',
+              'a plain-text description of all of the above for whoever opens the package.',
+            )}
           </ul>
         </div>
 
         <div className="eval-consent__section">
           <strong>{t('Technical facts about this computer', language)}</strong>
-          <div className="eval-disclosure__body">
-            {t('Browser and version, operating system, screen and window size and pixel ratio, graphics card name as the browser reports it, number of processor cores, approximate memory, touch support, whether WebGPU is available, browser language, time zone, and your dark-mode and reduced-motion settings. These are collected to explain performance differences between participants. Together they are reasonably distinctive to this machine.', language)}
-          </div>
+          <ul className="eval-consent__list eval-disclosure__list">
+            {item(
+              'What this computer is and how fast it is',
+              'session.json → device',
+              'browser and version, operating system, screen and window size and pixel ratio, graphics card name as the browser reports it, number of processor cores, approximate memory, touch support, whether WebGPU is available, browser language, time zone, and your dark-mode and reduced-motion settings. Collected to explain performance differences between participants. Together they are reasonably distinctive to this machine.',
+            )}
+          </ul>
         </div>
 
         <div className="eval-consent__section">
