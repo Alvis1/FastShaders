@@ -252,3 +252,24 @@
 .eval-disclosure__body {
   margin-top: var(--space-1);
 }
+
+/* ── The "pointless" study arm (/evalp, or ?points=off) ───────────────────
+   Every point figure the app draws, removed in one place. Badges are rendered
+   by a dozen components — each node type, the collapsed-group pill, all three
+   asset-tile kinds, the node-editor overview — so gating them individually in
+   React would be a dozen chances to miss one, and a missed one silently
+   contaminates the condition.
+
+   `display: none`, not `visibility: hidden`: the badge is absolutely
+   positioned above its node, so removing it leaves no hole. The cost bar and
+   the two PROSE point figures (the Add-node menu's per-row cost, the shader
+   settings' total/budget lines) are gated in their components instead —
+   hiding a sentence with CSS would leave a blank row where text was.
+
+   Telemetry is untouched: snapshots keep recording cost points and the
+   package still carries the cost table, because the researcher has to price
+   what was built in the arm where the participant could not see the price. */
+:root[data-fs-points='off'] .node-base__cost-badge,
+:root[data-fs-points='off'] .cost-bar {
+  display: none !important;
+}

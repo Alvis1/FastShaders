@@ -16,6 +16,7 @@ import './styles/tokens.css';
 import './styles/reset.css';
 import './styles/controls.css';
 import '@xyflow/react/dist/style.css';
+import { applyEvalTaskFlags } from './eval/evalTask';
 
 // Renderer-triage switches (e.g. the Safari zoom-blur hunt): ?fsdbg=a,b,...
 // injects coarse CSS overrides so a browser-specific compositing culprit can
@@ -40,6 +41,9 @@ if (fsdbg) {
     .join('\n');
   document.head.appendChild(style);
 }
+
+// Study conditions that change what the UI SHOWS (see eval/evalTask.ts).
+applyEvalTaskFlags();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -7,6 +7,9 @@ describe('parseEvalTask', () => {
       id: 'T7-fire',
       briefBudget: 200,
       costBarVisible: false,
+      // costbar=off hides the BAR only — per-node prices stay. /evalp is the
+      // stronger arm; see its own block below.
+      pointsVisible: true,
     });
   });
 
@@ -50,3 +53,53 @@ describe('parseEvalTask', () => {
     expect(parseEvalTask('%%%').costBarVisible).toBe(true);
   });
 });
+
+describe('the pointless arm (/evalp, ?points=off)', () => {
+  it('removes every point figure and the cost bar with it', () => {
+    // The bar IS a point figure, so "no points" must imply "no bar" — a
+    // condition that hid the total but left per-node prices on screen would
+    // not be an absence of cost feedback at all.
+    const t = parseEvalTask('?points=off');
+    expect(t.pointsVisible).toBe(false);
+    expect(t.costBarVisible).toBe(false);
+  });
+
+  it('is the STRONGER arm — costbar=off alone leaves the prices visible', () => {
+    const t = parseEvalTask('?costbar=off');
+    expect(t.costBarVisible).toBe(false);
+    expect(t.pointsVisible).toBe(true);
+  });
+
+  it('still carries the task label and brief budget', () => {
+    // /evalp appends points=off to whatever the researcher launched with.
+    expect(parseEvalTask('?task=T7-fire&budget=200&points=off')).toEqual({
+      id: 'T7-fire',
+      briefBudget: 200,
+      costBarVisible: false,
+      pointsVisible: false,
+    });
+  });
+
+  it('keeps points visible unless explicitly switched off', () => {
+    for (const q of ['', '?points=on', '?points=', '?points=offf', '?task=T1']) {
+      expect(parseEvalTask(q).pointsVisible, q).toBe(true);
+    }
+    for (const v of ['off', 'OFF', '0', 'false']) {
+      expect(parseEvalTask(`?points=${v}`).pointsVisible, v).toBe(false);
+    }
+  });
+});
+
+describe('the /evalp entry', () => {
+  it('forces points=off while preserving other launch parameters', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const html = readFileSync(fileURLToPath(new URL('../../public/evalp/index.html', import.meta.url)), 'utf8');
+    expect(html).toContain("'&points=off'");
+    expect(html).toContain("'?points=off'");
+    // Same session-scoped arming as /eval — the flag must die with the tab.
+    expect(html).toContain("sessionStorage.setItem('fs:evalArm', '1')");
+    expect(html).not.toMatch(/localStorage\s*\./);
+  });
+});
+

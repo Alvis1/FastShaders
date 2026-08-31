@@ -52,6 +52,7 @@ const PAGES = [
   // The eval-mode redirector sits one level DOWN inside public/, so its
   // relative ref reaches UP — still relative, still verbatim-copied.
   { file: 'public/eval/index.html', href: '../images/favicon-app.svg', asset: 'public/images/favicon-app.svg' },
+  { file: 'public/evalp/index.html', href: '../images/favicon-app.svg', asset: 'public/images/favicon-app.svg' },
 ] as const;
 
 describe('favicons', () => {
@@ -65,7 +66,7 @@ describe('favicons', () => {
   it('keeps the verbatim-copied pages on RELATIVE hrefs', () => {
     // A leading slash here resolves to the server root, which is wrong on every
     // deployment except the desktop shell's.
-    for (const file of ['public/podest.html', 'ShaderCarousel/index.html', 'public/eval/index.html']) {
+    for (const file of ['public/podest.html', 'ShaderCarousel/index.html', 'public/eval/index.html', 'public/evalp/index.html']) {
       const links = read(file).split('\n').filter((l) => l.includes('rel="icon"'));
       expect(links.length, `${file} icon links`).toBeGreaterThan(0);
       for (const l of links) expect(l, file).not.toMatch(/href="\//);
