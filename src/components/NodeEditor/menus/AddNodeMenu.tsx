@@ -18,6 +18,7 @@ import { getCostTextColor } from '@/utils/colorUtils';
 import { initialNodeValues } from '@/utils/newNodeValues';
 import { getRecentNodeTypes, noteNodeUsed } from './recentNodes';
 import complexityData from '@/registry/complexity.json';
+import { evalTask } from '@/eval/evalTask';
 
 const COSTS = complexityData.costs as Record<string, number>;
 
@@ -388,7 +389,10 @@ export function AddNodeMenu() {
           {/* GPU cost, same badge colour ramp (and the same `> 0` hide rule)
               the node itself uses, so the number the user picks by is the
               number they'll see on the canvas. */}
-          {cost > 0 && (
+          {/* Gated in React rather than by the CSS sweep in eval/eval.css: this
+              is prose in a flex row, and hiding it would leave a gap where a
+              number was. See the pointless-arm rule there. */}
+          {cost > 0 && evalTask().pointsVisible && (
             <span
               className="context-menu__item-cost"
               style={{ color: getCostTextColor(cost, costColorLow, costColorHigh) }}

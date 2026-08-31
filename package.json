@@ -12,7 +12,8 @@
     "deploy": "npm run build && gh-pages -d dist",
     "tauri": "tauri",
     "eval:analysis": "node scripts/eval-analysis.mjs",
-    "deploy:alvismisjuns": "bash scripts/deploy-alvismisjuns.sh"
+    "deploy:alvismisjuns": "bash scripts/deploy-alvismisjuns.sh",
+    "deploy:sferas": "bash scripts/deploy-sferas.sh"
   },
   "dependencies": {
     "@babel/parser": "^7.26.0",

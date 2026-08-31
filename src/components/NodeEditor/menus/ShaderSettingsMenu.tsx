@@ -16,6 +16,7 @@ import {
   channelHandle,
   type OutputMaterial,
 } from '@/utils/outputMaterials';
+import { evalTask } from '@/eval/evalTask';
 
 /** Ports that can be toggled on/off in the output node settings, listed in
  *  the SAME order as the node's socket arrangement (the registry def's
@@ -245,10 +246,16 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
           color: 'var(--text-secondary)',
         }}
       >
-        <div>{t('Total Cost:', language)} <strong style={{ color: 'var(--text-primary)' }}>{totalCost}</strong> {t('pts', language)}</div>
-        <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
-          {t('Budget:', language)} {device.maxPoints} {t('pts max', language)} ({device.label})
-        </div>
+        {/* The pointless study arm removes every point figure; these two are
+            prose, so they are gated here rather than by eval.css's sweep. */}
+        {evalTask().pointsVisible && (
+          <>
+            <div>{t('Total Cost:', language)} <strong style={{ color: 'var(--text-primary)' }}>{totalCost}</strong> {t('pts', language)}</div>
+            <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
+              {t('Budget:', language)} {device.maxPoints} {t('pts max', language)} ({device.label})
+            </div>
+          </>
+        )}
       </div>
 
       {/* Output port visibility toggles */}

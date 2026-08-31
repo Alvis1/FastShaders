@@ -28,12 +28,27 @@ export interface EvalTask {
   briefBudget: number | null;
   /** `?costbar=off` hides the cost bar — the cost-feedback manipulation. */
   costBarVisible: boolean;
+  /**
+   * `?points=off` (and the `/evalp` entry) removes EVERY point figure from the
+   * UI: the cost bar, each node's cost badge, the asset tiles' badges, the
+   * Add-node menu's per-row cost, and the shader-settings total/budget lines.
+   * This is the stronger arm — `costbar=off` alone leaves per-node prices on
+   * screen, so a participant can still add them up, which is not "no cost
+   * feedback" at all.
+   *
+   * It is a DISPLAY condition only: the telemetry keeps recording cost points
+   * in every snapshot, and the package still carries the cost table. The
+   * researcher must be able to price what was built in the arm where the
+   * participant could not see the price.
+   */
+  pointsVisible: boolean;
 }
 
 export const DEFAULT_EVAL_TASK: EvalTask = {
   id: null,
   briefBudget: null,
   costBarVisible: true,
+  pointsVisible: true,
 };
 
 const MAX_ID_LEN = 64;
@@ -67,13 +82,20 @@ export function parseEvalTask(search: string): EvalTask {
   } catch {
     return { ...DEFAULT_EVAL_TASK };
   }
-  const costbar = (params.get('costbar') ?? '').trim().toLowerCase();
+  // Only an explicit off/0/false hides a surface; anything else leaves it
+  // visible, so a typo cannot silently drop the participant into the other
+  // condition.
+  const isOff = (v: string | null): boolean => {
+    const t = (v ?? '').trim().toLowerCase();
+    return t === 'off' || t === '0' || t === 'false';
+  };
+  const pointsVisible = !isOff(params.get('points'));
   return {
     id: cleanId(params.get('task')),
     briefBudget: cleanBudget(params.get('budget')),
-    // Only an explicit off/0/false hides it; anything else leaves it visible,
-    // so a typo cannot silently drop the participant into the other condition.
-    costBarVisible: !(costbar === 'off' || costbar === '0' || costbar === 'false'),
+    // No points at all implies no cost bar — the bar is a point figure.
+    costBarVisible: pointsVisible && !isOff(params.get('costbar')),
+    pointsVisible,
   };
 }
 
@@ -96,4 +118,20 @@ const TASK: EvalTask = (() => {
 
 export function evalTask(): EvalTask {
   return TASK;
+}
+
+/**
+ * Stamp the no-points condition on the document root, so the CSS sweep in
+ * `eval.css` can hide every price the app draws — badges are rendered by a
+ * dozen components (each node type, the group pill, all three asset-tile
+ * kinds, the node-editor overview) and gating each one in React would be a
+ * dozen chances to miss one. The two places that render a point figure as
+ * PROSE (the Add-node menu row, the shader-settings total/budget lines) are
+ * gated in their components instead: hiding those with CSS would leave a
+ * blank row where a sentence was.
+ *
+ * Called once from main.tsx. A no-op outside the pointless arm.
+ */
+export function applyEvalTaskFlags(): void {
+  if (!TASK.pointsVisible) document.documentElement.dataset.fsPoints = 'off';
 }

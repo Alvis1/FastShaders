@@ -853,8 +853,12 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
   },
 });
 
+/** The study entries under public/ — each a directory with an index.html. */
+const EVAL_ENTRY_DIRS = ['eval', 'evalp'];
+
 /**
- * Serve-only: make `<base>/eval/` reach `public/eval/index.html` in dev. On
+ * Serve-only: make `<base>/eval/` and `<base>/evalp/` reach their
+ * `public/<dir>/index.html` in dev. On
  * the static deploy targets a directory URL serves its index.html, but vite
  * dev's SPA fallback answers the extensionless URL with the APP's index.html
  * — so the eval-mode entry (the user-study redirector) silently didn't exist
@@ -866,8 +870,14 @@ const evalDevIndexPlugin = (): Plugin => ({
   configureServer(server) {
     server.middlewares.use((req, _res, next) => {
       const url = (req.url ?? '').split('?')[0];
-      if (url === `${FS_BASE}eval` || url === `${FS_BASE}eval/`) {
-        req.url = `${FS_BASE}eval/index.html`;
+      for (const dir of EVAL_ENTRY_DIRS) {
+        if (url === `${FS_BASE}${dir}` || url === `${FS_BASE}${dir}/`) {
+          // Preserve the query: the launch parameters (?task=…&costbar=off)
+          // are exactly what these entries exist to carry.
+          const qs = (req.url ?? '').slice(url.length);
+          req.url = `${FS_BASE}${dir}/index.html${qs}`;
+          break;
+        }
       }
       next();
     });
