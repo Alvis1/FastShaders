@@ -19,7 +19,7 @@
  *     in it — so a page built from it cannot list a uniform the shader doesn't
  *     have, or miss one it does.
  *
- *  3. **A-Frame defaults, nothing else — with ONE exception.** No comments, no
+ *  3. **A-Frame defaults, nothing else — with TWO exceptions.** No comments, no
  *     light rig, no background, no camera rig, no orbit-controls: the default
  *     camera (eye height, look/wasd controls), the default lighting and the
  *     default `vr-mode-ui` Enter-VR button are what the page is meant to use,
@@ -28,41 +28,49 @@
  *     own lighting, background and spin are deliberately NOT mirrored; only
  *     the primitive follows what the preview is showing.
  *
- *     The exception is TESSELLATION FOR A DISPLACEMENT SHADER, and it is a
+ *     The first exception is TESSELLATION FOR A DISPLACEMENT SHADER, and it is a
  *     correctness fix rather than a taste one. `<a-plane>` and `<a-box>`
  *     default to ONE segment per axis (aframe/src/geometries/plane.js, box.js),
  *     so a plane is four vertices sharing one normal: a `positionNode` has
  *     nothing to move and the relief the editor shows vanishes completely —
  *     not "coarser", absent. `<a-sphere>`'s 36x18 survives but is visibly
  *     blockier than the preview. So when the module declares a `positionNode`
- *     — the same `/positionNode\s*:/` predicate the preview gates its own
- *     tessellation on (tslToPreviewHTML.ts:1596-1600) — the primitive gets
- *     explicit segment attributes and nothing else changes. A-Frame maps the
+ *     — this file's own `/positionNode\s*:/` predicate; the loader answers the
+ *     same question structurally, off the BUILT material, which is a luxury
+ *     only it has — the primitive gets explicit segment attributes and nothing
+ *     else changes. A-Frame maps the
  *     hyphenated form onto `geometry.*` for every primitive
  *     (extras/primitives/primitives/meshPrimitives.js), and the schema's
  *     `max: 20` is inspector metadata that nothing enforces — the app's own
  *     preview already passes 64-256 through the same field.
  *
- *     KNOWN LIMIT: a displaced `<a-box>` still splits at its 12 shared edges.
+ *     A displaced `<a-box>` used to split at its 12 shared edges here —
  *     BoxGeometry duplicates those positions with per-face normals at ANY
- *     segment count, so each face slides outward along its own normal. The
- *     editor preview fixes this with a `weld-verts` component that merges by
- *     position and recomputes normals; inlining that here would cost the page
- *     its whole reason to exist. Spheres and planes are unaffected — their
- *     duplicate positions share normals.
+ *     segment count, so each face slid outward along its own normal — and the
+ *     fix could not be inlined without costing the page its whole reason to
+ *     exist. It is fixed now because shaderloader 0.6 welds those vertices
+ *     itself, which this page gets for free: it already loads the loader.
+ *     Spheres and planes were never affected (their duplicate positions share
+ *     normals, so the loader's weld correctly leaves them alone).
  *
- * The ONE piece of script on the page is the `navigator.gpu` suppression, and
- * it is load-bearing for rule 3's VR promise: three r184 picks its WebGPU
- * backend on `navigator.gpu != null` alone, and that backend hard-throws in
- * XRManager.setSession — Enter VR dies with it. Hiding `gpu` before A-Frame
- * loads makes three take the WebGL2 path, which compiles the same TSL through
- * GLSLNodeBuilder and is the only one that can present to a headset. Copied
- * from the app's own XR popup (tslToPreviewHTML.ts's `xr` branch), including
- * the both-places define: some browsers expose `gpu` on `Navigator.prototype`,
- * where an instance-only define wouldn't stick.
+ * The page carries NO script of its own. The VR promise rides rule 3's SECOND
+ * deliberate exception instead: `<a-scene renderer="backend: webgl">`. The
+ * bundle carries aframevr/aframe#5847's `backend` renderer property (applied
+ * by a-frame-shaderloader/build/build.mjs, guarded by
+ * aframeBackendProperty.test.ts), which maps onto `WebGPURenderer`'s
+ * `forceWebGL` BEFORE the renderer is constructed — three r184 otherwise
+ * picks its WebGPU backend on `navigator.gpu != null` alone, and that backend
+ * hard-throws in XRManager.setSession, so Enter VR dies with it. WebGL2
+ * compiles the same TSL through GLSLNodeBuilder and is the only backend that
+ * can present to a headset. The SPELLING is load-bearing: the patched branch
+ * runs only when the raw attribute contains `backend:` and forces only on the
+ * exact value `webgl` — a typo silently does nothing and VR throws again.
+ * This replaced an inline navigator.gpu-hiding script (2026-08-31); pages
+ * exported before then still carry that script and keep working, because
+ * hiding gpu and forcing WebGL compose to the same backend.
  */
 
-import { isModelGeometry, type GeometryType } from './tslToPreviewHTML';
+import { isModelGeometry, escapeHtml, type GeometryType } from './tslToPreviewHTML';
 import { CDN_BASE, LOADER_FILE, RESERVED_ATTRIBUTE_KEYS } from './tslToShaderModule';
 
 /** One row of the module's exported `schema` — i.e. one `shader` attribute. */
@@ -123,13 +131,6 @@ export function parseShaderModuleSchema(moduleSource: string): EmbedUniform[] {
   return out;
 }
 
-/** Escape text for HTML content / a double-quoted attribute. */
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
-  ));
-}
-
 /**
  * The module file name as written into `src:`. Export names come from
  * `toKebabCase`, but this page is also the one artefact a user hand-edits, so
@@ -174,12 +175,6 @@ function segmentAttributes(tag: string): string[] {
   return attrs;
 }
 
-// Hides `navigator.gpu` before A-Frame loads so three r184 takes its WebGL2
-// backend — the only one that can enter a WebXR session. See the file header.
-const HIDE_GPU =
-  'try{Object.defineProperty(Navigator.prototype,"gpu",{get:function(){return undefined;},configurable:true});}catch(e){}'
-  + 'try{Object.defineProperty(navigator,"gpu",{value:undefined,configurable:true});}catch(e){}';
-
 /**
  * The preview panel's current primitive — the ONE editor setting the page
  * mirrors. It lives in localStorage (ShaderPreview's `usePersistedState` owns
@@ -211,12 +206,12 @@ export function buildAFrameEmbedHTML(
   L.push('<head>');
   L.push('  <meta charset="utf-8">');
   L.push(`  <title>${title}</title>`);
-  L.push(`  <script>${HIDE_GPU}<${''}/script>`);
   L.push(`  <script src="${CDN_BASE}/a-frame-180-a-01.min.js"><${''}/script>`);
   L.push(`  <script src="${CDN_BASE}/${LOADER_FILE}"><${''}/script>`);
   L.push('</head>');
   L.push('<body>');
-  L.push('  <a-scene>');
+  // The backend force — the page's one non-default setting; see the header.
+  L.push('  <a-scene renderer="backend: webgl">');
 
   // Both continuation indents are DERIVED from the opening tag, not counted by
   // hand: `attrCol` puts each later attribute under `position=`, and `valueCol`

@@ -221,27 +221,6 @@
   color: var(--text-muted);
 }
 
-/* Rows that carry a hint line under the label stack instead of using the
-   single-row label/value layout every other menu item wants. Scoped to a
-   modifier because `.context-menu__item` is shared by all submenus.
-   Sole user: DataRangeSettingsMenu's mode rows, where the hint is the whole
-   point of the choice (a domain decision the user cannot see the effect of).
-   AddNodeMenu's node rows used to stack too — their description is a `title`
-   tooltip now, so they are back to the shared one-line layout and the
-   `__item-head` wrapper that split the two lines is gone. */
-.context-menu__item--stacked {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-}
-
-.context-menu__item-desc {
-  font-size: var(--font-size-xs);
-  color: var(--text-muted);
-  line-height: 1.35;
-  white-space: normal;
-}
-
 .context-menu__divider {
   height: 1px;
   background: var(--border-subtle);

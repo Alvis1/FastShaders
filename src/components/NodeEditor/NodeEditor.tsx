@@ -21,19 +21,9 @@ import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, resolveDeviceTextureDim, resolveDeviceBudget } from '@/store/useAppStore';
 import type { ContextMenuType } from '@/store/useAppStore';
 import { useLongPress } from '@/hooks/useLongPress';
-import { ShaderNode } from './nodes/ShaderNode';
-import { ColorNode } from './nodes/ColorNode';
-import { PreviewNode } from './nodes/PreviewNode';
-import { MathPreviewNode } from './nodes/MathPreviewNode';
-import { OutputNode } from './nodes/OutputNode';
-import { ClockNode } from './nodes/ClockNode';
-import { MicNode } from './nodes/MicNode';
-import { AudioInputNode } from './nodes/AudioInputNode';
-import { GroupNode } from './nodes/GroupNode';
-import { NoteNode } from './nodes/NoteNode';
+import { nodeTypes, edgeTypes } from './flowTypes';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
 import { clearSocketTapTooltip } from './handles/TypedHandle';
-import { TypedEdge } from './edges/TypedEdge';
 import { cardinalControlPoint, radialControlPoint, distancePointToCubicBezier, distancePointToSpline, insertWaypointOrdered, splinePath } from './edges/bezierGeometry';
 import { DrawingLayer } from './DrawingLayer';
 import { DrawToolbar } from './DrawToolbar';
@@ -170,23 +160,6 @@ const NODE_MENU_TYPES: Record<string, ContextMenuType> = {
  * drag (the same reason the objects above are hoisted).
  */
 const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'];
-
-const nodeTypes = {
-  shader: ShaderNode,
-  color: ColorNode,
-  preview: PreviewNode,
-  mathPreview: MathPreviewNode,
-  clock: ClockNode,
-  mic: MicNode,
-  audio: AudioInputNode,
-  output: OutputNode,
-  group: GroupNode,
-  note: NoteNode,
-};
-
-const edgeTypes = {
-  typed: TypedEdge,
-};
 
 // The edge-snap radius (CONNECTION_RADIUS) lives in connectionReveal.ts —
 // shared with the drag-reveal system so hidden sockets appear at exactly

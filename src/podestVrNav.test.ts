@@ -507,10 +507,14 @@ describe('podest vr-nav — offline + wiring', () => {
 
   it('requests hand-tracking on the scene and wraps the camera in the rig', () => {
     const html = readFileSync(PODEST, 'utf8');
-    const scene = html.split('\n').find((l) => l.includes('<a-scene vr-mode-ui="enabled: true"'));
+    // Matched by vr-nav rather than by the tag's leading attribute: the scene
+    // also carries renderer="backend: webgl" (the WebXR backend force — see
+    // aframeBackendProperty.test.ts), and attribute order is not this test's
+    // business.
+    const scene = html.split('\n').find((l) => l.includes('<a-scene') && l.includes('vr-nav='));
     expect(scene).toBeTruthy();
     expect(scene).toContain('optionalFeatures: hand-tracking');
-    expect(scene).toContain('vr-nav=');
+    expect(scene).toContain('vr-mode-ui="enabled: true"');
     const rig = html.indexOf(`L.push('  <a-entity id="rig"`);
     const cam = html.indexOf('orbit-controls="target');
     expect(rig).toBeGreaterThan(-1);

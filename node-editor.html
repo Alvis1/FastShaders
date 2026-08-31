@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FastShaders — Node & Graph Overview</title>
-    <!-- Inline data: favicon — kills the automatic /favicon.ico 404 (same as index.html) -->
+    <!-- SVG favicon — kills the automatic /favicon.ico 404 (same as index.html) -->
     <link rel="icon" type="image/svg+xml" href="/images/favicon-app.svg" />
     <!--
       LOCALHOST TOOL — deliberately NOT a build entry.
@@ -25,9 +25,11 @@
     -->
     <!--
       Stamp the persisted theme before first paint so a dark-mode session doesn't
-      flash light while the JS/CSS bundle loads. Copied verbatim from index.html —
-      the store re-applies data-theme on init and on every toggle; the inline
-      background mirrors tokens.css --bg-app so the pre-CSS frame matches too.
+      flash light while the JS/CSS bundle loads. The THEME half mirrors
+      index.html — the store re-applies data-theme on init and on every toggle,
+      and the inline background mirrors tokens.css --bg-app so the pre-CSS frame
+      matches too. index.html additionally stamps `lang` from fs:lang; this page
+      deliberately does not, being an English-only localhost tool.
     -->
     <script>
       try {

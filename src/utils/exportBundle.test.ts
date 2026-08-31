@@ -62,6 +62,9 @@ describe('exportBundle: README content', () => {
 
   it('uses obj-model for an obj mesh', () => {
     expect(meshPairingSnippet(OBJ_MESH, 's.js')).toContain('obj-model="obj: url(models/rock.obj)"');
+    // Eye height, three metres out — must agree with the A-Frame tab's
+    // OBJECT_POSITION so the app's two pairing instructions match.
+    expect(meshPairingSnippet(OBJ_MESH, 's.js')).toContain('position="0 1.6 -3"');
   });
 
   it('keeps the images section without a mesh (pre-mesh behavior)', () => {

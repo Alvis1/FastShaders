@@ -17,6 +17,7 @@
  *      hex would smuggle alpha past the group-opacity isolation and reintroduce
  *      compounding.
  */
+import { HEX6 } from '@/utils/colorUtils';
 
 export interface DrawStroke {
   id: string;
@@ -38,7 +39,6 @@ export const OPACITY_STEP = 0.05; // 20 possible isolation groups
 export const MIN_STROKE_WIDTH = 0.5;
 export const MAX_STROKE_WIDTH = 200; // flow units
 const COORD_LIMIT = 1e6;
-const HEX6 = /^#[0-9a-fA-F]{6}$/;
 
 /** Clamp + quantize an opacity to a valid isolation-group key in [step, 1]. */
 export function quantizeOpacity(o: number): number {

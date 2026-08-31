@@ -93,30 +93,30 @@ function meanNorm(bytes: ArrayLike<number>, start: number, end: number): number 
  * on" tracks spectral mean closely enough. It is not an SPL measurement and
  * must not be presented as one.
  *
- * `gain` multiplies after normalization and before the clamp, so it can lift a
- * quiet room without changing the band ratios. Everything saturates at 1.
+ * There is deliberately NO gain parameter: the Mic node's `gain` is applied
+ * SHADER-side, as a separate `const _mic1_bass = mic1_bass.mul(g);` statement
+ * graphToCode emits (see the live-microphone convention). Applying it here too
+ * would scale twice — which is exactly what the one caller
+ * (`audioCaptureCore.readLevels`) was avoiding by never passing the option.
+ * The clamps stay: they guard hostile ArrayLike input, not the gain.
  */
 export function analyseMic(opts: {
   freqBytes: ArrayLike<number>;
   sampleRate: number;
-  gain?: number;
 }): MicLevels {
   const { freqBytes, sampleRate } = opts;
   const binCount = freqBytes.length;
   if (binCount <= 0) return { ...MIC_LEVELS_ZERO };
-
-  const rawGain = Number(opts.gain);
-  const gain = Number.isFinite(rawGain) && rawGain > 0 ? rawGain : 1;
 
   const bass = bandBinRange(0, MIC_BAND_LO_HZ, sampleRate, binCount);
   const mid = bandBinRange(MIC_BAND_LO_HZ, MIC_BAND_HI_HZ, sampleRate, binCount);
   const treble = bandBinRange(MIC_BAND_HI_HZ, sampleRate / 2, sampleRate, binCount);
 
   return {
-    level: clamp01(meanNorm(freqBytes, 0, binCount) * gain),
-    bass: clamp01(meanNorm(freqBytes, bass.start, bass.end) * gain),
-    mid: clamp01(meanNorm(freqBytes, mid.start, mid.end) * gain),
-    treble: clamp01(meanNorm(freqBytes, treble.start, treble.end) * gain),
+    level: clamp01(meanNorm(freqBytes, 0, binCount)),
+    bass: clamp01(meanNorm(freqBytes, bass.start, bass.end)),
+    mid: clamp01(meanNorm(freqBytes, mid.start, mid.end)),
+    treble: clamp01(meanNorm(freqBytes, treble.start, treble.end)),
   };
 }
 

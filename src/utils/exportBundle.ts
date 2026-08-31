@@ -24,11 +24,16 @@ export type ExportBundle =
   | { kind: 'js'; fileName: string; mime: 'application/javascript'; bytes: Uint8Array<ArrayBuffer> }
   | { kind: 'zip'; fileName: string; mime: 'application/zip'; bytes: Uint8Array<ArrayBuffer> };
 
-/** The A-Frame pairing snippet for a bundled model (README + docs use it). */
+/**
+ * The A-Frame pairing snippet for a bundled model (README + docs use it).
+ * `0 1.6 -3` is eye height, three metres out — the same placement the A-Frame
+ * tab's page uses (OBJECT_POSITION in engine/tslToAFrameHTML.ts; kept a
+ * literal here so this pure util doesn't pull in the engine chain).
+ */
 export function meshPairingSnippet(mesh: ExportMesh, jsName: string): string {
   return mesh.kind === 'obj'
-    ? `<a-entity obj-model="obj: url(models/${mesh.name})" shader="src: ${jsName}" position="0 1.5 -3"></a-entity>`
-    : `<a-entity gltf-model="url(models/${mesh.name})" shader="src: ${jsName}" position="0 1.5 -3"></a-entity>`;
+    ? `<a-entity obj-model="obj: url(models/${mesh.name})" shader="src: ${jsName}" position="0 1.6 -3"></a-entity>`
+    : `<a-entity gltf-model="url(models/${mesh.name})" shader="src: ${jsName}" position="0 1.6 -3"></a-entity>`;
 }
 
 export function buildExportReadme(

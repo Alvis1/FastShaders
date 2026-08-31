@@ -18,7 +18,7 @@ Main features:
 
 ## Also in this repo
 
-- **[Podest](public/PODEST.md)** — a standalone full-screen shader viewer built for
+- **[Podest](docs/PODEST.md)** — a standalone full-screen shader viewer built for
   unattended pedestal displays. Drop a shader, a model or a `.zip`; it reopens
   itself after a reload and can run for weeks.
 - **[ShaderCarousel](ShaderCarousel/README.md)** — the benchmark suite that
@@ -32,14 +32,16 @@ Main features:
 
 ```html
 <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-180-a-01.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-shaderloader-0.5.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-shaderloader-0.6.js"></script>
 
-<a-scene>
-  <a-sphere shader="src: myshader.js" position="0 1.5 -3"></a-sphere>
+<a-scene renderer="backend: webgl">
+  <a-sphere shader="src: myshader.js" position="0 1.6 -3"></a-sphere>
 </a-scene>
 ```
 
-Those two scripts are all you need: `a-frame-180-a-01.min.js` bundles **A-Frame 1.8.0 + Three.js r184 (WebGPU)**, and `a-frame-shaderloader-0.5.js` rewrites the module's `import … from 'three/tsl'` to read that bundle's single Three.js instance — so **no import map and no shim are required**. The exported `.js` also works directly with Three.js, or any bundler that resolves `three/tsl`. Serve the page over http(s): the loader `fetch`es `myshader.js` and imports it as a blob, so opening the HTML straight from disk (`file://`) leaves the mesh unshaded with `Failed to fetch` in the console.
+Those two scripts are all you need: `a-frame-180-a-01.min.js` bundles **A-Frame 1.8.0 + Three.js r184 (WebGPU)**, and `a-frame-shaderloader-0.6.js` rewrites the module's `import … from 'three/tsl'` to read that bundle's single Three.js instance — so **no import map and no shim are required**. The loader version is not a choice: every export the app produces pins it (`LOADER_FILE` in `src/engine/tslToShaderModule.ts`), so bump this snippet whenever that moves. The exported `.js` also works directly with Three.js, or any bundler that resolves `three/tsl`. Serve the page over http(s): the loader `fetch`es `myshader.js` and imports it as a blob, so opening the HTML straight from disk (`file://`) leaves the mesh unshaded with `Failed to fetch` in the console.
+
+`renderer="backend: webgl"` is what makes the page enter VR: Three.js r184 picks its WebGPU backend whenever `navigator.gpu` exists, and that backend refuses a WebXR session outright. The attribute forces the WebGL2 path, which compiles the same TSL and can present to a headset. Drop it for a flat page if you would rather have WebGPU.
 
 ## Tech Stack
 

@@ -22,7 +22,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { NodeVisual, type PortPreviewState } from '@/components/NodeEditor/nodes/NodeVisual';
 import { renderArt, hasBuiltinGlyph, type GlyphDesign } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
 import { CUSTOM_GLYPHS } from '@/components/NodeEditor/nodes/glyphs/customGlyphs';
-import { formatNodeLabel, formatCategoryLabel, type Language } from '@/i18n';
+import { formatCategoryLabel, type Language } from '@/i18n';
 import { getCostColor, getCostScale, getContrastColor } from '@/utils/colorUtils';
 import { useAppStore } from '@/store/useAppStore';
 import { definitionOf, NODE_COSTS, categoryHex } from './ndData';
@@ -46,29 +46,11 @@ export function builtinGlyphSvg(type: string): string {
   return art == null ? '' : renderToStaticMarkup(<>{art}</>);
 }
 
-export function baseLabel(type: string, lang: Language): string {
-  const en = definitionOf(type)?.label ?? type;
-  return formatNodeLabel(en, type, lang, false);
-}
-
-/** Bilingual display label — "Latviešu (English)" in LV mode. The header the
- *  designer sizes glyph widths against, so it must be the real rendered one. */
-export function displayLabel(type: string, lang: Language): string {
-  const en = definitionOf(type)?.label ?? type;
-  return formatNodeLabel(en, type, lang, true);
-}
-
-/** Latvian name (EN fallback) — feeds the search corpus in either mode. */
-export function lvName(type: string): string {
-  const en = definitionOf(type)?.label ?? type;
-  return formatNodeLabel(en, type, 'lv', false);
-}
-
 /**
- * RAW Latvian name — '' when the node is untranslated, where `lvName` would hand
- * back the English one. The Name (LV) field has to tell those apart: a fallback
- * would show "Multiply" in the Latvian box and saving it would write English into
- * node-i18n.json as if someone had translated it.
+ * RAW Latvian name — '' when the node is untranslated, where an EN-fallback
+ * helper would hand back the English one. The Name (LV) field has to tell those
+ * apart: a fallback would show "Multiply" in the Latvian box and saving it would
+ * write English into node-i18n.json as if someone had translated it.
  */
 export { nodeLabelLV } from '@/i18n';
 

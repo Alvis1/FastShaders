@@ -405,8 +405,10 @@ const syncVendoredFile = (srcPath: string, dstPath: string): void => {
 const VENDOR_SRC = path.resolve(__dirname, 'a-frame-shaderloader/js');
 const VENDOR_TARGETS: { file: string; dests: string[] }[] = [
   { file: 'a-frame-180-a-01.min.js', dests: ['public/js', 'ShaderCarousel/components/three'] },
-  { file: 'a-frame-shaderloader-0.4.js', dests: ['public/js'] },
-  { file: 'a-frame-shaderloader-0.5.js', dests: ['public/js'] },
+  // 0.4 and 0.5 are deliberately NOT vendored — see NOT_VENDORED in
+  // src/vendorSync.test.ts. Nothing resolves them same-origin: every export
+  // and the A-Frame tab reference them on the CDN by URL, and the preview and
+  // podest load 0.6. Shipping them cost 51 KB of dist for zero consumers.
   { file: 'a-frame-shaderloader-0.6.js', dests: ['public/js'] },
   { file: 'aframe-orbit-controls.min.js', dests: ['public/js'] },
 ];

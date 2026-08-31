@@ -79,9 +79,11 @@ describe('buildAFrameEmbedHTML', () => {
   // "Use A-Frame defaults" is the whole design of this page: the default camera
   // (eye height + look/wasd controls), the default light rig and the default
   // Enter-VR button. Anything the page sets that A-Frame would have set itself
-  // is a regression, so this pins their ABSENCE.
+  // is a regression, so this pins their ABSENCE. The scene's renderer backend
+  // (pinned separately below) and displacement tessellation are the two
+  // deliberate exceptions — correctness fixes, not cosmetic overrides.
   it('overrides none of A-Frame\'s defaults', () => {
-    expect(html).toContain('<a-scene>');
+    expect(html).toContain('<a-scene renderer="backend: webgl">');
     for (const attr of ['vr-mode-ui', 'loading-screen', 'background', 'orbit-controls',
       'look-controls', 'wasd-controls', 'a-light', 'a-camera', 'a-entity camera', 'geometry=',
       'material=', 'segments-width', 'animation=', 'rotation=']) {
@@ -99,20 +101,30 @@ describe('buildAFrameEmbedHTML', () => {
   });
 
   // Enter VR is the point of the page, and three's WebGPU backend throws in
-  // XRManager.setSession — so the page must arrive on the WebGL2 path.
-  it('hides navigator.gpu before A-Frame loads so WebXR can start', () => {
-    const gpuAt = html.indexOf('Navigator.prototype,"gpu"');
-    const aframeAt = html.indexOf('a-frame-180-a-01.min.js');
-    expect(gpuAt).toBeGreaterThan(-1);
-    expect(gpuAt).toBeLessThan(aframeAt);
-    // Both defines: some browsers expose gpu on the prototype only.
-    expect(html).toContain('Object.defineProperty(navigator,"gpu"');
+  // XRManager.setSession — so the page must arrive on the WebGL2 path. The
+  // bundle's aframe#5847 carry maps this attribute onto WebGPURenderer's
+  // forceWebGL (aframeBackendProperty.test.ts guards the patch itself); the
+  // SPELLING is load-bearing — only the raw key `backend:` reaches the patched
+  // branch and only the exact value `webgl` forces.
+  it('forces the WebGL2 backend via the renderer attribute so WebXR can start', () => {
+    expect(html).toContain('renderer="backend: webgl"');
+    // The old mechanism (hiding navigator.gpu) must not come back beside it.
+    expect(html).not.toContain('navigator.gpu');
+    expect(html).not.toContain('Navigator.prototype');
+  });
+
+  // With the backend moved onto the scene attribute the page carries NO script
+  // of its own — the two <script src> tags are everything, which is the purest
+  // statement of the "A-Frame defaults, nothing else" rule.
+  it('contains no inline script at all', () => {
+    expect(html).not.toMatch(/<script(?![^>]*\bsrc=)/);
+    expect(html.match(/<script /g)).toHaveLength(2);
   });
 
   it('is a complete document with a single scene and one balanced primitive', () => {
     expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
     expect(html.trimEnd().endsWith('</html>')).toBe(true);
-    expect(html.match(/<a-scene>/g)).toHaveLength(1);
+    expect(html.match(/<a-scene /g)).toHaveLength(1);
     expect(html.match(/<\/a-scene>/g)).toHaveLength(1);
     expect(html.match(/<a-sphere /g)).toHaveLength(1);
     expect(html.match(/<\/a-sphere>/g)).toHaveLength(1);
@@ -133,7 +145,7 @@ describe('buildAFrameEmbedHTML', () => {
       shaderFile: 'evil".js"><img src=x onerror=alert(1)>',
     });
     expect(/shader="src: ([^;"]+)/.exec(out)![1]).toMatch(/^[A-Za-z0-9._-]+$/);
-    expect(out.match(/<a-scene>/g)).toHaveLength(1);
+    expect(out.match(/<a-scene /g)).toHaveLength(1);
     expect(out).not.toContain('<img');
   });
 
@@ -203,10 +215,11 @@ export default shader;
 });
 
 /**
- * The ONE deliberate exception to "A-Frame defaults only", and it is a
- * correctness fix: `<a-plane>`/`<a-box>` default to a SINGLE segment per axis,
- * so a plane is four vertices sharing one normal and a `positionNode` has
- * nothing to move — the relief the editor shows disappears entirely.
+ * One of the two deliberate exceptions to "A-Frame defaults only" (the other is
+ * the scene's renderer backend), and it is a correctness fix: `<a-plane>` /
+ * `<a-box>` default to a SINGLE segment per axis, so a plane is four vertices
+ * sharing one normal and a `positionNode` has nothing to move — the relief the
+ * editor shows disappears entirely.
  */
 describe('displacement tessellation', () => {
   const DISPLACE = `import { Fn, uniform, positionLocal, normalLocal, sin, vec3 } from 'three/tsl';

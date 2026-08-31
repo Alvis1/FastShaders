@@ -2,7 +2,7 @@
 
 A standalone full-screen viewer for TSL shaders — drop a file, get a shader on a
 3D object filling the screen. It is one self-contained HTML page
-([`podest.html`](./podest.html)) with no build step and no framework, and it is
+([`podest.html`](../public/podest.html)) with no build step and no framework, and it is
 built to run on a pedestal display for **weeks** with nobody touching it.
 
 Podest is a *player*, not an editor: it shows shaders exported from FastShaders

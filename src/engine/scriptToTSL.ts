@@ -39,7 +39,7 @@ const NODE_PROP_TO_CHANNEL = new Map<string, string>([
 ]);
 
 /** Material settings keys injected by tslToShaderModule that should be stripped */
-const MATERIAL_KEYS = new Set(['transparent', 'side', 'alphaTest', 'depthWrite']);
+const MATERIAL_KEYS = new Set(['transparent', 'side', 'alphaTest', 'depthWrite', 'mergeVertices']);
 
 /**
  * Reverse of buildShaderModule's SIDE_VALUES (tslCodeProcessor.ts).
@@ -90,6 +90,12 @@ function sanitizeMaterialSettings(
   const alphaTest = Number(raw.alphaTest);
   if (Number.isFinite(alphaTest) && alphaTest > 0) out.alphaTest = Math.min(alphaTest, 0.99);
   if (out.transparent && raw.depthWrite?.trim() === 'false') out.depthWrite = false;
+  // Only an explicit `false` is meaningful — absent means the default (weld),
+  // which is exactly what a module that never carried the key is saying. This
+  // is what makes the setting survive an export→import round trip, so the
+  // "NOT recoverable from the module text" note in projectImport no longer
+  // applies to it.
+  if (raw.mergeVertices?.trim() === 'false') out.mergeVertices = false;
   return Object.keys(out).length > 0 ? out : undefined;
 }
 

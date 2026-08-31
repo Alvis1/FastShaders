@@ -9,6 +9,7 @@
  */
 
 import { buildShaderModule } from './tslCodeProcessor';
+import { LOADER_FILE } from './tslToShaderModule';
 import type { MaterialSettings } from '@/types';
 import type { PreviewMeshKind } from '@/utils/previewMesh';
 
@@ -23,7 +24,7 @@ export type GeometryType = 'sphere' | 'cube' | 'plane' | 'teapot' | 'bunny' | 'c
 /** Geometry types backed by a BUILT-IN OBJ model file (public/models/). */
 const OBJ_GEOMETRIES: ReadonlySet<GeometryType> = new Set(['teapot', 'bunny']);
 
-export function isObjGeometry(geometry: GeometryType): boolean {
+function isObjGeometry(geometry: GeometryType): boolean {
   return OBJ_GEOMETRIES.has(geometry);
 }
 
@@ -80,12 +81,14 @@ export interface PreviewOptions {
    * met from the app's chrome anyway. Hence entry happens from a top-level
    * document (ShaderPreview opens an about:blank popup that inherits the
    * app's real origin). In xr mode the page:
-   *   - hides `navigator.gpu` up front so three r184 auto-falls back to its
-   *     WebGL2 backend — the WebGPU backend hard-throws in
-   *     XRManager.setSession (r173–r184) and Quest Browser has no
-   *     WebXR+WebGPU at all; TSL compiles identically via GLSLNodeBuilder.
-   *     This is the no-bundle-patch equivalent of the proven forceWebGL
-   *     recipe (aframe issue 5749).
+   *   - forces the WebGL2 backend with `renderer="backend: webgl"` on the
+   *     scene tag (the bundle's aframe#5847 carry maps it onto
+   *     WebGPURenderer's `forceWebGL`; aframeBackendProperty.test.ts guards
+   *     the patch) — the WebGPU backend hard-throws in XRManager.setSession
+   *     (r173–r184) and Quest Browser has no WebXR+WebGPU at all; TSL
+   *     compiles identically via GLSLNodeBuilder. This replaced hiding
+   *     `navigator.gpu` up front (2026-08-31), which forced the same backend
+   *     imperatively.
    *   - keeps `navigator.xr` visible (the normal preview hides it because
    *     A-Frame's XR init path breaks on the WebGPU backend).
    *   - enables A-Frame's own Enter-VR button (`vr-mode-ui`).
@@ -160,8 +163,11 @@ function resolveAssetUrl(pathFromBase: string): string {
   return new URL(`${base}${pathFromBase}`, window.location.href).href;
 }
 
-/** Escape text for safe interpolation into HTML content (the <title>). */
-function escapeHtml(s: string): string {
+/**
+ * Escape text for safe interpolation into HTML content or a double-quoted
+ * attribute (the <title> here; tslToAFrameHTML imports it for its page).
+ */
+export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
   ));
@@ -240,34 +246,11 @@ export const LIGHT_PRESETS: Record<LightingMode, LightSpec[]> = {
 function getScriptUrls() {
   return {
     iife: resolveAssetUrl('js/a-frame-180-a-01.min.js'),
-    shaderloader: resolveAssetUrl('js/a-frame-shaderloader-0.6.js'),
+    shaderloader: resolveAssetUrl(`js/${LOADER_FILE}`),
     orbitControls: resolveAssetUrl('js/aframe-orbit-controls.min.js'),
   };
 }
 
-/**
- * A-Frame component registration for OBJ-backed previews. On `model-loaded`,
- * for every Mesh in the loaded hierarchy:
- *   1. **Merge vertices by position.** OBJLoader returns non-indexed geometry
- *      where every triangle owns its own vertices, so a position shared by N
- *      faces becomes N duplicate vertices with N different face normals. Per-
- *      vertex displacement (`positionLocal + normalLocal * val`) then pushes
- *      each duplicate along *its own* face normal and the shape splits open.
- *      Merging by quantized position rebuilds an index so shared points stay
- *      a single vertex — and after \`computeVertexNormals\` they share a single
- *      averaged smooth normal, so displacement keeps faces stitched together.
- *   2. Compute vertex normals from the merged (indexed) geometry, producing
- *      smooth shading regardless of whether the source file had normals.
- *   3. Generate spherical UVs from each vertex's direction relative to the
- *      geometry's local center, so TSL shaders reading \`uv()\` get meaningful
- *      values. Spherical projection seams at the atan2 wrap; acceptable for
- *      procedural shaders (proper unwrap needs offline tools).
- *   4. Recenter the world bbox at the origin and rescale so the longest axis
- *      equals \`data.size\` — bunny (mm) and teapot (tens of units) otherwise
- *      would not frame anywhere near the primitives.
- *
- * String literal so the iframe sees raw JS — no Vite transformation pass.
- */
 /**
  * Frame-time / FPS readout for the immersive popup (xr only).
  *
@@ -428,7 +411,7 @@ const XR_STATS_SCRIPT = `<script>
  * Both are unconditional: unlike the stats feed there is no per-frame cost —
  * the ping is bounded by its throttle and the shot only happens when asked.
  */
-export const EVAL_BRIDGE_SCRIPT = `<script>
+const EVAL_BRIDGE_SCRIPT = `<script>
   (function () {
     var last = 0;
     function ping() {
@@ -790,111 +773,6 @@ export const FIT_BOUNDS_SCRIPT = `<script>
           node.scale.set(1, 1, 1);
         });
         root.updateMatrixWorld(true);
-      }
-    });
-  }
-<\/script>`;
-
-/**
- * `weld-verts` A-Frame component: welds coincident primitive vertices so
- * per-vertex displacement stays continuous across faces.
- *
- * BoxGeometry splits every face into its own 4 vertices (24 total) each
- * carrying that face's normal + UV. Normal-based displacement
- * (`positionLocal + normalLocal * h`) then drives the 3 coincident copies at
- * each corner along 3 different normals, so the faces visibly separate. Welding
- * collapses same-position vertices into one (with smooth, recomputed normals),
- * so the surface deforms as a single skin — the same merge `fit-bounds` does
- * for OBJ models.
- *
- * Only attached to primitive entities that actually displace, and only when the
- * output node's "Merge Vertices" displacement setting is on (default). It
- * re-welds on every geometry (re)build — the initial mesh plus subdivision /
- * geometry hot-swaps — via A-Frame's componentinitialized/componentchanged
- * events (plus a direct call in case geometry initialized first). UVs are
- * preserved (representative per welded vertex) so texture-driven shaders keep
- * working; a plane (no coincident verts) is left untouched.
- *
- * String literal so the iframe sees raw JS — no Vite transformation pass.
- */
-const WELD_VERTS_SCRIPT = `<script>
-  if (window.AFRAME && !AFRAME.components["weld-verts"]) {
-    function weldByPosition(geom) {
-      var pos = geom.attributes.position;
-      if (!pos) return null;
-      var uv = geom.attributes.uv;
-      var oldIndex = geom.index;
-      var precision = 1e4; // 4 decimal places
-      var lookup = Object.create(null);
-      var newPositions = [];
-      var newUVs = uv ? [] : null;
-      var remap = new Uint32Array(pos.count);
-      var nextIndex = 0;
-      for (var i = 0; i < pos.count; i++) {
-        var x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-        var key = Math.round(x * precision) + "_" + Math.round(y * precision) + "_" + Math.round(z * precision);
-        var idx = lookup[key];
-        if (idx === undefined) {
-          idx = nextIndex++;
-          lookup[key] = idx;
-          newPositions.push(x, y, z);
-          if (newUVs) newUVs.push(uv.getX(i), uv.getY(i));
-        }
-        remap[i] = idx;
-      }
-      // Nothing coincident (e.g. a plane, or an already-welded grid) — leave the
-      // geometry and its original attributes untouched.
-      if (nextIndex === pos.count) return null;
-      var indexCount = oldIndex ? oldIndex.count : pos.count;
-      var Arr = nextIndex < 65535 ? Uint16Array : Uint32Array;
-      var newIndex = new Arr(indexCount);
-      if (oldIndex) {
-        for (var j = 0; j < indexCount; j++) newIndex[j] = remap[oldIndex.getX(j)];
-      } else {
-        for (var k = 0; k < indexCount; k++) newIndex[k] = remap[k];
-      }
-      var merged = new THREE.BufferGeometry();
-      merged.setAttribute("position", new THREE.BufferAttribute(new Float32Array(newPositions), 3));
-      if (newUVs) merged.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(newUVs), 2));
-      merged.setIndex(new THREE.BufferAttribute(newIndex, 1));
-      merged.computeVertexNormals();
-      merged.userData.__welded = true;
-      return merged;
-    }
-
-    AFRAME.registerComponent("weld-verts", {
-      init: function () {
-        this.weld = this.weld.bind(this);
-        var self = this;
-        var onGeom = function (e) { if (e.detail && e.detail.name === "geometry") self.weld(); };
-        // componentinitialized covers the case where the geometry component
-        // inits after this one; componentchanged covers subdivision / geometry
-        // hot-swaps; the direct call covers geometry already being built.
-        this.el.addEventListener("componentinitialized", onGeom);
-        this.el.addEventListener("componentchanged", onGeom);
-        this.weld();
-      },
-      weld: function () {
-        var mesh = this.el.getObject3D("mesh");
-        if (!mesh || !mesh.geometry) return;
-        var g = mesh.geometry;
-        // Already our welded copy — nothing to do (guards against re-welding
-        // when unrelated components change).
-        if (g.userData && g.userData.__welded) return;
-        var welded = weldByPosition(g);
-        if (!welded) {
-          // Mark so we don't rescan the same original every componentchanged.
-          g.userData.__welded = true;
-          return;
-        }
-        mesh.geometry = welded;
-        // Dispose only geometries WE created; the geometry component owns and
-        // disposes the originals it builds.
-        if (this._welded) this._welded.dispose();
-        this._welded = welded;
-      },
-      remove: function () {
-        if (this._welded) { this._welded.dispose(); this._welded = null; }
       }
     });
   }
@@ -1337,7 +1215,13 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       }
       if (shaderRetries++ < 200) setTimeout(checkShaderReady, 50);
     }
-    checkShaderReady();
+    // Only the SANDBOXED preview has a parent listening. The XR popup is a
+    // TOP-LEVEL document, so window.parent === window and this would post the
+    // handshake to its own queue up to 200 times — and the listener's
+    // \`e.source !== window.parent\` guard PASSES for a self-post, so every one
+    // is delivered and walked. Same guard, and same reason, as the animation
+    // component's post() a few blocks up.
+    if (window.parent !== window) checkShaderReady();
 
     var camRetries = 0;
     function whenOrbitReady(cb) {
@@ -1358,6 +1242,12 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
         cam.position.set(saved.x, saved.y, saved.z);
         try { oc.controls.update(); } catch (e) {}
       }
+      // The RESTORE above is what the XR popup needs from this block; the
+      // reporting below has nobody to report to there. In a session three
+      // decomposes the XR pose into camera.position every frame
+      // (WebXRManager.updateUserCamera), so this would self-post 5x a second
+      // for the life of the window.
+      if (window.parent === window) return;
       var lx = NaN, ly = NaN, lz = NaN;
       setInterval(function() {
         var c = getCam();
@@ -1373,8 +1263,10 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
 
     // Rotation polling runs independently of orbit controls — the spin
     // parent's object3D is available as soon as A-Frame initializes the entity.
+    // Skipped in a top-level document for the same reason as the camera poller:
+    // with the spin animation running, the value changes on every tick.
     var rx = NaN, ry = NaN, rz = NaN;
-    setInterval(function() {
+    if (window.parent !== window) setInterval(function() {
       var r = spinEl && spinEl.object3D && spinEl.object3D.rotation;
       if (!r) return;
       var dx = r.x * 180 / Math.PI;
@@ -1502,7 +1394,12 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       }
     }
 
-    window.addEventListener("message", function(e) {
+    // Not registered in a TOP-LEVEL document: every hot-update the parent can
+    // send targets iframeRef.current.contentWindow, so the XR popup — which is
+    // opened with window.open and never messaged — can only ever receive its
+    // OWN posts here. The source check below cannot filter those, because a
+    // self-post genuinely satisfies it: e.source IS window.parent.
+    if (window.parent !== window) window.addEventListener("message", function(e) {
       // Accept messages only from our parent document — both extra safety
       // and a guard against accidental fan-out from other embedded frames.
       if (e.source !== window.parent) return;
@@ -1539,22 +1436,6 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
   });
 <\/script>`;
 
-/**
- * Convert editor TSL code (with Fn wrapper) into a shaderloader-compatible
- * ES module that exports a default function returning shader node properties.
- *
- * Thin wrapper over the shared `buildShaderModule` so the live preview and the
- * `.js` export (tslToShaderModule) emit byte-identical shader logic — the only
- * difference being the export's usage-comment header. The preview auto-detects
- * property uniforms (no explicit `properties` list).
- */
-function convertToShaderModule(
-  tslCode: string,
-  materialSettings?: MaterialSettings,
-): string {
-  return buildShaderModule(tslCode, { materialSettings });
-}
-
 export function tslToPreviewHTML(
   tslCode: string,
   options: PreviewOptions = {},
@@ -1579,7 +1460,9 @@ export function tslToPreviewHTML(
   const geometry: GeometryType =
     requestedGeometry === 'custom' && !customModel ? 'sphere' : requestedGeometry;
 
-  const shaderModule = convertToShaderModule(tslCode, materialSettings);
+  // The preview and the .js export share buildShaderModule, so both emit
+  // byte-identical shader logic (only the export's usage header differs).
+  const shaderModule = buildShaderModule(tslCode, { materialSettings });
   const isModel = isModelGeometry(geometry);
   const isCustom = geometry === 'custom';
   // The dropped mesh's feed key: ties every model message to the document
@@ -1590,14 +1473,13 @@ export function tslToPreviewHTML(
   const customRegen = customModel?.kind === 'obj';
   const { iife, shaderloader, orbitControls } = getScriptUrls();
 
-  // Weld coincident primitive vertices so displacement stays continuous across
-  // faces (default on). Only relevant when the shader actually displaces —
-  // `positionNode` in the emitted module is the tell — and only for primitives
-  // (model files weld via fit-bounds' regen path instead). Attaching the
-  // `weld-verts` component to the entity does the work; see WELD_VERTS_SCRIPT.
-  const hasDisplacement = /positionNode\s*:/.test(shaderModule);
-  const weldPrimitive =
-    !isModel && hasDisplacement && materialSettings?.mergeVertices !== false;
+  // NB welding coincident primitive vertices (so a displaced box does not split
+  // into floating faces) is NOT done here any more: shaderloader 0.6 owns it,
+  // gated on the same three conditions this file used to express — a primitive,
+  // a material carrying a positionNode, and the author's "Merge Vertices"
+  // choice, which now travels as `mergeVertices: false` in the emitted module.
+  // That put ONE implementation behind the editor preview, podest, the
+  // copy-ready A-Frame page and every exported module at once.
 
   // Plane spins on its Z axis (in-plane, like a record), since the flat face
   // is already pointed at the camera. Everything else spins on Y like a turntable.
@@ -1676,7 +1558,7 @@ export function tslToPreviewHTML(
     }
   } else {
     const geoAttr = buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane', subdivision);
-    entityAttrs = `geometry="${geoAttr}"${weldPrimitive ? ' weld-verts' : ''}`;
+    entityAttrs = `geometry="${geoAttr}"`;
   }
 
   const lines: string[] = [];
@@ -1685,15 +1567,10 @@ export function tslToPreviewHTML(
   lines.push('<html lang="en">');
   lines.push('<head>');
   lines.push('  <meta charset="UTF-8">');
-  if (xr) {
-    // XR mode: hide navigator.gpu BEFORE anything can read it (first head
-    // script) so three r184 deterministically picks its WebXR-capable WebGL2
-    // backend — see the `xr` option doc on PreviewOptions. Both the prototype
-    // getter and the instance property are overridden, mirroring hideGpu in
-    // the scene-boot pre-flight (some browsers expose gpu on
-    // Navigator.prototype, where an instance define alone wouldn't stick).
-    lines.push(`  <script>try{Object.defineProperty(Navigator.prototype,"gpu",{get:function(){return undefined;},configurable:true});}catch(e){}try{Object.defineProperty(navigator,"gpu",{value:undefined,configurable:true});}catch(e){}<${''}/script>`);
-  }
+  // XR mode no longer hides navigator.gpu here: the scene tag below carries
+  // `renderer="backend: webgl"` (the bundle's aframe#5847 carry — see
+  // aframeBackendProperty.test.ts), which maps onto WebGPURenderer's
+  // forceWebGL before the renderer is constructed. Same backend, declaratively.
   if (title) {
     lines.push(`  <title>${escapeHtml(title)}</title>`);
   }
@@ -1835,13 +1712,6 @@ export function tslToPreviewHTML(
     lines.push('');
   }
 
-  // Register the weld-verts component used by displaced primitive previews.
-  // Only attached (via entityAttrs) when weldPrimitive; inert otherwise.
-  if (weldPrimitive) {
-    lines.push(WELD_VERTS_SCRIPT);
-    lines.push('');
-  }
-
   // The <a-scene> is injected AFTER a WebGPU pre-flight instead of being
   // parsed statically: three r184 picks its WebGPU backend on
   // `navigator.gpu != null` ALONE (no adapter check), and Safari 26 exposes
@@ -1851,7 +1721,9 @@ export function tslToPreviewHTML(
   // when navigator.gpu is absent. Requesting a real adapter first (with a 2s
   // timeout against a hung requestAdapter) and hiding navigator.gpu when it
   // can't deliver makes three fall back to WebGL2 deterministically. Scripts
-  // that need the scene run via __fsWhenSceneBooted.
+  // that need the scene run via __fsWhenSceneBooted. XR popups skip the
+  // pre-flight entirely — their backend is forced by the scene tag's
+  // renderer="backend: webgl" attribute, so they boot() immediately.
   const sceneLines: string[] = [];
   // vr-mode-ui only in xr mode: A-Frame then renders its own Enter-VR button,
   // which is the immersive entry point for the popup page.
@@ -1859,7 +1731,10 @@ export function tslToPreviewHTML(
   // is its editor-side counterpart, which measures the same way but posts to
   // the parent instead of drawing. Both are inert until switched on, so the
   // attribute costs a component init and nothing else.
-  sceneLines.push(`<a-scene vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ' fs-stats'} loading-screen="enabled: false" background="color: ${bgColor}">`);
+  // In xr mode the backend is forced DECLARATIVELY: renderer="backend: webgl"
+  // maps onto WebGPURenderer's forceWebGL via the bundle's aframe#5847 carry,
+  // so the popup needs neither the gpu-hiding script nor the pre-flight below.
+  sceneLines.push(`<a-scene${xr ? ' renderer="backend: webgl"' : ''} vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ' fs-stats'} loading-screen="enabled: false" background="color: ${bgColor}">`);
   sceneLines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
   // Parent holds the spin (so it tweens cleanly 0→360 on world Y/Z), child
   // holds the static tilt and the shader/geometry. The id stays on the child
@@ -1910,51 +1785,62 @@ export function tslToPreviewHTML(
   lines.push('      setTimeout(function () {');
   lines.push('        var s = document.querySelector("a-scene");');
   lines.push('        if (s && !s.renderStarted) {');
-  lines.push('          __fsShowStickyError("3D preview failed to start: the " + (navigator.gpu ? "WebGPU" : "WebGL2") + " renderer never began rendering. Reload to retry.");');
+  // xr documents are forced onto WebGL2 by the scene's renderer attribute, so
+  // navigator.gpu (still visible there) would misname the backend.
+  lines.push(`          __fsShowStickyError("3D preview failed to start: the " + ${xr ? '"WebGL2"' : '(navigator.gpu ? "WebGPU" : "WebGL2")'} + " renderer never began rendering. Reload to retry.");`);
   lines.push('        }');
   lines.push('      }, 6000);');
   lines.push('    }');
-  lines.push('    function hideGpu() {');
-  lines.push('      try { Object.defineProperty(Navigator.prototype, "gpu", { get: function () { return undefined; }, configurable: true }); } catch (e) {}');
-  lines.push('      try { Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true }); } catch (e) {}');
-  lines.push('    }');
-  // three r184's WebGPU backend does not paint reliably on Apple's WebKit: an
-  // adapter can be granted (so the pre-flight below keeps WebGPU) yet no frame
-  // ever renders — a flat-color pane with no error, exactly the reported
-  // symptom. WebKit's WebGL2 path (GLSLNodeBuilder) is solid and compiles TSL
-  // identically, so force it there — the same move the XR popup makes. This must
-  // cover ALL WebKit, not just desktop Safari: every browser on iOS/iPadOS is
-  // WKWebView (Chrome/Firefox/Edge for iOS included), and iPadOS 13+ desktop-
-  // mode reports as Macintosh. Vendor can be blanked by privacy settings, so
-  // desktop Safari is matched by UA shape (WebKit, no Chromium/Gecko token).
-  lines.push('    function __fsForceWebGL2() {');
-  lines.push('      var ua = navigator.userAgent || "";');
-  lines.push('      if (/iPad|iPhone|iPod/.test(ua)) return true;');
-  lines.push('      if (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1) return true;');
-  lines.push('      if (/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(ua)) return false;');
-  lines.push('      return /Safari|AppleWebKit/.test(ua);');
-  lines.push('    }');
-  // The user's WGSL/GLSL toggle rides a SEPARATE branch, deliberately not a
-  // clause inside __fsForceWebGL2: feedbackReport.test.ts extracts that
-  // function's source verbatim and evaluates it against previewBackend()'s
-  // platform rule, so a flag reference inside it would break the drift guard
-  // (the toggle is app state the feedback report reads from the store
-  // instead).
-  lines.push(`    var __FS_USER_FORCE_WEBGL2 = ${forceWebGL2 ? 'true' : 'false'};`);
-  lines.push('    if (__FS_USER_FORCE_WEBGL2) { hideGpu(); boot(); return; }');
-  lines.push('    if (__fsForceWebGL2()) { hideGpu(); boot(); return; }');
-  lines.push('    if (!navigator.gpu) { boot(); return; }');
-  lines.push('    var settled = false;');
-  lines.push('    function go(adapter) {');
-  lines.push('      if (settled) return;');
-  lines.push('      settled = true;');
-  lines.push('      if (!adapter) hideGpu();');
-  lines.push('      boot();');
-  lines.push('    }');
-  lines.push('    try {');
-  lines.push('      Promise.resolve(navigator.gpu.requestAdapter()).then(go, function () { go(null); });');
-  lines.push('    } catch (e) { go(null); }');
-  lines.push('    setTimeout(function () { go(null); }, 2000);');
+  if (xr) {
+    // The scene attribute (renderer="backend: webgl") already fixed the
+    // backend, so the popup boots straight away: the adapter pre-flight would
+    // only delay scene injection (up to the 2s timeout on a hung
+    // requestAdapter) to decide something that is no longer a decision, and
+    // hideGpu() would only restate what the attribute already says.
+    lines.push('    boot();');
+  } else {
+    lines.push('    function hideGpu() {');
+    lines.push('      try { Object.defineProperty(Navigator.prototype, "gpu", { get: function () { return undefined; }, configurable: true }); } catch (e) {}');
+    lines.push('      try { Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true }); } catch (e) {}');
+    lines.push('    }');
+    // three r184's WebGPU backend does not paint reliably on Apple's WebKit: an
+    // adapter can be granted (so the pre-flight below keeps WebGPU) yet no frame
+    // ever renders — a flat-color pane with no error, exactly the reported
+    // symptom. WebKit's WebGL2 path (GLSLNodeBuilder) is solid and compiles TSL
+    // identically, so force it there — the same move the XR popup makes. This must
+    // cover ALL WebKit, not just desktop Safari: every browser on iOS/iPadOS is
+    // WKWebView (Chrome/Firefox/Edge for iOS included), and iPadOS 13+ desktop-
+    // mode reports as Macintosh. Vendor can be blanked by privacy settings, so
+    // desktop Safari is matched by UA shape (WebKit, no Chromium/Gecko token).
+    lines.push('    function __fsForceWebGL2() {');
+    lines.push('      var ua = navigator.userAgent || "";');
+    lines.push('      if (/iPad|iPhone|iPod/.test(ua)) return true;');
+    lines.push('      if (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1) return true;');
+    lines.push('      if (/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(ua)) return false;');
+    lines.push('      return /Safari|AppleWebKit/.test(ua);');
+    lines.push('    }');
+    // The user's WGSL/GLSL toggle rides a SEPARATE branch, deliberately not a
+    // clause inside __fsForceWebGL2: feedbackReport.test.ts extracts that
+    // function's source verbatim and evaluates it against previewBackend()'s
+    // platform rule, so a flag reference inside it would break the drift guard
+    // (the toggle is app state the feedback report reads from the store
+    // instead).
+    lines.push(`    var __FS_USER_FORCE_WEBGL2 = ${forceWebGL2 ? 'true' : 'false'};`);
+    lines.push('    if (__FS_USER_FORCE_WEBGL2) { hideGpu(); boot(); return; }');
+    lines.push('    if (__fsForceWebGL2()) { hideGpu(); boot(); return; }');
+    lines.push('    if (!navigator.gpu) { boot(); return; }');
+    lines.push('    var settled = false;');
+    lines.push('    function go(adapter) {');
+    lines.push('      if (settled) return;');
+    lines.push('      settled = true;');
+    lines.push('      if (!adapter) hideGpu();');
+    lines.push('      boot();');
+    lines.push('    }');
+    lines.push('    try {');
+    lines.push('      Promise.resolve(navigator.gpu.requestAdapter()).then(go, function () { go(null); });');
+    lines.push('    } catch (e) { go(null); }');
+    lines.push('    setTimeout(function () { go(null); }, 2000);');
+  }
   lines.push('  })();');
   lines.push(`<${''}/script>`);
   lines.push('');

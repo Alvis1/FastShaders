@@ -1,5 +1,6 @@
 import type { AppNode } from '@/types';
 import { getNodeValues } from '@/types';
+import { HEX6 } from '@/utils/colorUtils';
 
 /**
  * Writing tuned preview-uniform values back into the graph as the authored
@@ -28,10 +29,15 @@ export type UniformDefaultPlan = Map<string, Record<string, string | number>>;
  * legitimately tiny uniform (1e-7) survives instead of being flattened to 0 —
  * which a fixed 6-decimal round would do silently.
  */
-const FLOAT_PRECISION = 9;
-const roundFloat = (n: number) => Number(n.toPrecision(FLOAT_PRECISION));
-
-const HEX6 = /^#[0-9a-fA-F]{6}$/;
+export const FLOAT_PRECISION = 9;
+/**
+ * Exported because uniformOverride's "is this an override?" comparison MUST
+ * round at exactly this precision — it decides whether to show a ↺ chip beside
+ * a button (`planUniformDefaults`) that would then refuse to plan anything.
+ * The two used to hold separate copies of the constant with a comment saying
+ * they must agree; the import is what makes that true.
+ */
+export const roundFloat = (n: number) => Number(n.toPrecision(FLOAT_PRECISION));
 
 /**
  * Decide what "make these the defaults" should change.

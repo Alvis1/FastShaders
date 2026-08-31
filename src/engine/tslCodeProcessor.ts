@@ -873,6 +873,26 @@ export function buildShaderModule(
     returnProps.push('depthWrite: false');
   }
 
+  // The Output node's "Merge Vertices", carried to every host that runs this
+  // module. shaderloader 0.6 welds a displaced PRIMITIVE's coincident vertices
+  // so a displaced box does not split into floating faces; this key is how an
+  // author who unticked that reaches it.
+  //
+  // Emitted ONLY for an explicit `false` — `=== false`, never `!== true`,
+  // because the settings menu writes a literal `true` when the box is re-ticked
+  // and a truthiness test would then add the key to a perfectly default node.
+  // Absent means weld, matching MaterialSettings.mergeVertices' own
+  // `undefined === true` contract, which is what keeps every already-exported
+  // module and all 23 built-in snapshots byte-identical.
+  //
+  // NB this is the first key here that is not a THREE.Material property — it is
+  // a geometry directive the loader reads off the module's return object rather
+  // than copying onto the material. Older CDN loaders (0.4/0.5) copy named keys
+  // only, so it is inert there.
+  if (materialSettings?.mergeVertices === false) {
+    returnProps.push('mergeVertices: false');
+  }
+
   // --- The __pixel Fn: conditions + color as explicit params (see rule 2) -
   const pixelFnLines: string[] = [];
   if (hasDiscard) {

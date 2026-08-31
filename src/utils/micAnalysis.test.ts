@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   MIC_CHANNELS,
   MIC_BAND_LO_HZ,
@@ -95,22 +96,9 @@ describe('analyseMic', () => {
     expect(r.treble).toBe(0);
   });
 
-  it('applies gain after normalization and clamps at 1', () => {
-    const quiet = bytes(() => 25); // ~0.098 normalized
-    const g1 = analyseMic({ freqBytes: quiet, sampleRate: SR, gain: 1 });
-    const g4 = analyseMic({ freqBytes: quiet, sampleRate: SR, gain: 4 });
-    expect(g4.level).toBeCloseTo(g1.level * 4, 6);
-    const g100 = analyseMic({ freqBytes: quiet, sampleRate: SR, gain: 100 });
-    expect(g100.level).toBe(1);
-  });
-
-  it('treats a missing or hostile gain as 1', () => {
-    const b = bytes(() => 128);
-    const ref = analyseMic({ freqBytes: b, sampleRate: SR, gain: 1 });
-    for (const g of [undefined, NaN, Infinity, -3, 0, '2x' as unknown as number]) {
-      expect(analyseMic({ freqBytes: b, sampleRate: SR, gain: g as number })).toEqual(ref);
-    }
-  });
+  // NB there is no gain here on purpose — the Mic node's gain is applied
+  // shader-side (graphToCode emits a separate `.mul()`), so applying it in the
+  // analyser too would scale twice. See analyseMic's doc.
 
   it('returns zeros rather than NaN for an empty spectrum', () => {
     expect(analyseMic({ freqBytes: new Uint8Array(0), sampleRate: SR })).toEqual(MIC_LEVELS_ZERO);
@@ -119,7 +107,7 @@ describe('analyseMic', () => {
   it('never emits a value outside 0…1', () => {
     // Plain arrays can carry values a Uint8Array cannot.
     const hostile = [NaN, Infinity, -1e9, 1e9, 255, 0] as unknown as ArrayLike<number>;
-    const r = analyseMic({ freqBytes: hostile, sampleRate: SR, gain: 8 });
+    const r = analyseMic({ freqBytes: hostile, sampleRate: SR });
     for (const ch of MIC_CHANNELS) {
       expect(Number.isFinite(r[ch])).toBe(true);
       expect(r[ch]).toBeGreaterThanOrEqual(0);
@@ -179,5 +167,74 @@ describe('uniform names', () => {
     for (const t of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
       expect(isLiveAudioNodeType(t)).toBe(false);
     }
+  });
+});
+
+/**
+ * DRIFT GUARD for the documented hand-written twin.
+ *
+ * `public/podest.html` is a standalone vanilla page — it cannot import this
+ * module, so it carries its own `micBand`/`micMean` beside a comment saying
+ * they mirror it. That was the ONE documented twin with nothing checking it;
+ * a divergence here is silent, and it would make the same shader react
+ * differently on the pedestal than in the editor.
+ *
+ * The two are evaluated against each other over a finite matrix rather than
+ * compared as text: podest's copy is minified-by-hand and legitimately spells
+ * things differently.
+ */
+describe('podest.html mic band maths mirrors micAnalysis', () => {
+  const podest = readFileSync(new URL('../../public/podest.html', import.meta.url), 'utf8');
+
+  const grab = (name: string): string => {
+    const start = podest.indexOf(`function ${name}(`);
+    expect(start, `podest.html no longer defines ${name}`).toBeGreaterThan(-1);
+    // Each is a self-contained declaration ending at a line holding just "  }".
+    const end = podest.indexOf('\n  }', start);
+    expect(end).toBeGreaterThan(start);
+    return podest.slice(start, end + '\n  }'.length);
+  };
+
+  const podestBand = new Function(
+    `${grab('micBand')}\nreturn micBand;`,
+  )() as (lo: number, hi: number, rate: number, n: number) => [number, number];
+  const podestMean = new Function(
+    `${grab('micMean')}\nreturn micMean;`,
+  )() as (arr: ArrayLike<number>, a: number, b: number) => number;
+
+  it('agrees with bandBinRange across rates, bin counts and the three shipped bands', () => {
+    for (const rate of [8000, 44100, 48000, 96000]) {
+      for (const n of [1, 16, 512, 1024]) {
+        const bands: [number, number][] = [
+          [0, MIC_BAND_LO_HZ],
+          [MIC_BAND_LO_HZ, MIC_BAND_HI_HZ],
+          [MIC_BAND_HI_HZ, rate / 2],
+        ];
+        for (const [lo, hi] of bands) {
+          const mine = bandBinRange(lo, hi, rate, n);
+          const theirs = podestBand(lo, hi, rate, n);
+          expect(theirs, `rate=${rate} n=${n} band=${lo}..${hi}`).toEqual([mine.start, mine.end]);
+        }
+      }
+    }
+  });
+
+  it('agrees on the degenerate rate, where both must still yield a usable range', () => {
+    // NB podest's guard is `!(rate > 0)` and this module's is a finite check
+    // plus `<= 0`; they agree on rate <= 0, which is the case that reaches
+    // either in practice. Non-finite rates are deliberately not swept — the
+    // two spell that case differently on purpose.
+    for (const n of [1, 16, 512]) {
+      const mine = bandBinRange(0, 200, 0, n);
+      expect(podestBand(0, 200, 0, n)).toEqual([mine.start, mine.end]);
+    }
+  });
+
+  it('agrees on the normalized mean, including the empty-range case', () => {
+    const bins = Array.from({ length: 512 }, (_, i) => (i * 7) % 256);
+    // analyseMic's level is the whole-spectrum mean, so it IS micMean(0, n).
+    const whole = analyseMic({ freqBytes: bins, sampleRate: SR });
+    expect(podestMean(bins, 0, bins.length)).toBeCloseTo(whole.level, 12);
+    expect(podestMean(bins, 5, 5)).toBe(0);
   });
 });

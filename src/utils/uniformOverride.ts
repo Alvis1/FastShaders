@@ -1,6 +1,8 @@
 import type { AppNode } from '@/types';
 import { getNodeValues } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
+import { HEX6 } from '@/utils/colorUtils';
+import { roundFloat } from '@/utils/uniformDefaults';
 
 /**
  * Does the 3D preview's uniform value still agree with the graph, and what
@@ -53,7 +55,7 @@ export interface UniformBounds {
 export function isValidUniformValue(v: unknown): v is number | string {
   return (
     (typeof v === 'number' && Number.isFinite(v)) ||
-    (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v))
+    (typeof v === 'string' && HEX6.test(v))
   );
 }
 
@@ -66,9 +68,11 @@ export function isValidUniformValue(v: unknown): v is number | string {
  * "different" while both render identically at three decimals AND
  * `planUniformDefaults` refuses to plan anything, i.e. the button meant to
  * resolve it would do nothing.
+ *
+ * The agreement is enforced by IMPORT, not by a comment: this used to hold its
+ * own copy of the constant beside a note saying the two must match.
  */
-const FLOAT_PRECISION = 9;
-const round9 = (n: number): number => Number(n.toPrecision(FLOAT_PRECISION));
+const round9 = roundFloat;
 
 export function sameUniformValue(
   kind: 'float' | 'color',

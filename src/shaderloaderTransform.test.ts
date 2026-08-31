@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 import vm from 'vm';
 import { parse } from '@babel/parser';
@@ -32,8 +32,13 @@ import { parse } from '@babel/parser';
  */
 const LOADER_VERSIONS = ['0.5', '0.6'] as const;
 
+// The SUBMODULE is the source of truth, and since 2026-08-31 it is also the
+// only place 0.5 exists in this repo: it is frozen and CDN-only, so it is no
+// longer vendored into public/js (see NOT_VENDORED in vendorSync.test.ts).
+// 0.6 is vendored too, and vendorSync pins the copy byte-for-byte, so reading
+// both from here keeps this suite reading ONE file per version.
 const loaderPath = (version: string) =>
-  path.resolve(__dirname, `../public/js/a-frame-shaderloader-${version}.js`);
+  path.resolve(__dirname, `../a-frame-shaderloader/js/a-frame-shaderloader-${version}.js`);
 
 // Eval the vendored A-Frame component file in a sandbox that stubs the browser
 // globals it touches, then expose the internal transform helpers.
@@ -97,7 +102,11 @@ END_FASTSHADERS_PROJECT */
 `;
 
 for (const version of LOADER_VERSIONS) {
-  describe(`shaderloader ${version} globalizeBareImports`, () => {
+  // Skipped on a NON-RECURSIVE checkout, where the submodule is empty —
+  // vendorSync.test.ts guards its own rows the same way. Reading the source
+  // rather than a vendored copy is what makes this necessary.
+  const srcMissing = !existsSync(loaderPath(version));
+  describe.skipIf(srcMissing)(`shaderloader ${version} globalizeBareImports`, () => {
     it('rewrites a real property-bearing export header into a parseable module', () => {
       const { globalizeBareImports } = loadTransforms(version);
       const out = globalizeBareImports(EXPORT_WITH_PROPERTY);
@@ -133,7 +142,7 @@ for (const version of LOADER_VERSIONS) {
     });
   });
 
-  describe(`shaderloader ${version} autoInjectTSLImports`, () => {
+  describe.skipIf(srcMissing)(`shaderloader ${version} autoInjectTSLImports`, () => {
     it('does not leak keys from the trailing FASTSHADERS_PROJECT_V1 JSON block', () => {
       const { autoInjectTSLImports } = loadTransforms(version);
       const out = autoInjectTSLImports(EXPORT_WITH_PROPERTY);

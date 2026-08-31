@@ -2,8 +2,8 @@
  * Pricing guards for node costs no other suite covers.
  *
  * `unknown` is the load-bearing one. An unrecognised TSL function still RUNS:
- * shaderloader 0.5's `autoInjectTSLImports`
- * (public/js/a-frame-shaderloader-0.5.js:573, called at :88) injects any called
+ * the shaderloader's `autoInjectTSLImports`
+ * (a-frame-shaderloader/js/a-frame-shaderloader-0.6.js) injects any called
  * name that exists in `THREE.TSL`, so a shader pasted from the three.js TSL
  * editor using a function outside the 74-node registry compiles and renders.
  * On top of that, codeToGraph's unknown branch wires no argument edges, so the

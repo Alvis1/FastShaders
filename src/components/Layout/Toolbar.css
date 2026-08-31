@@ -453,11 +453,19 @@ button.toolbar__local-row.toolbar__wf-row--current {
 }
 
 /* The shared .toolbar__sc-link:hover would re-light the plate and darken the
-   glyph, un-inverting it. Keep the inversion and shift to the focus colour. */
+   glyph, un-inverting it. Keep the inversion and shift to the focus colour.
+
+   The glyph is a LITERAL for the reason .fs-scroll-arrow--invert:hover and
+   .toolbar__export document: --border-focus is a fixed blue in BOTH themes, so
+   whatever sits on it must be fixed too. This read --bg-panel until 2026-08-31,
+   which looks right in light mode and collapses in dark, where that token is a
+   dark grey — MEASURED at 1.66:1 against the blue, i.e. the glyph all but
+   vanishes on the hover that is supposed to confirm the button. #fff holds
+   5.6:1 in both. */
 .toolbar__sc-link.toolbar__refresh:hover {
   background: var(--border-focus);
   border-color: var(--border-focus);
-  color: var(--bg-panel);
+  color: #fff;
 }
 
 /* Feedback "!" — the only red element in the chrome, so it stays findable when

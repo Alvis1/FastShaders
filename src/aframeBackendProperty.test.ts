@@ -73,3 +73,33 @@ describe('the A-Frame `backend` renderer property survives a rebuild', () => {
     expect(src).toContain('XR is currently not supported with a WebGPU backend');
   });
 });
+
+/**
+ * The consumers: every VR-entry document must SPELL the attribute, and the
+ * spelling is load-bearing — the patched branch runs only when the raw
+ * `renderer` attribute contains `backend:` and forces only on the exact value
+ * `webgl`, so a typo silently does nothing and Enter VR throws on a headset,
+ * much later. The editor emitters have their own pins (tslToAFrameHTML.test.ts,
+ * tslToPreviewHTML.test.ts); podest is a hand-written standalone page nothing
+ * else guards, so its XR popup is pinned here at the source level.
+ */
+describe('podest XR popup rides the backend property', () => {
+  const podest = read('../public/podest.html');
+
+  it('buildXrDoc spells renderer="backend: webgl" on its a-scene', () => {
+    const xrScene = podest.match(/<a-scene[^>]*vr-nav[^>]*>/);
+    expect(xrScene, 'buildXrDoc no longer emits its vr-nav a-scene?').not.toBeNull();
+    expect(xrScene![0]).toContain('renderer="backend: webgl"');
+  });
+
+  it('buildXrDoc no longer hides navigator.gpu (the STAGE doc still may)', () => {
+    // The XR popup's document is assembled between these two markers; the
+    // stage doc's conditional pre-flight (which legitimately hides gpu when
+    // no adapter is granted) lies outside them.
+    const start = podest.indexOf('function buildXrDoc');
+    const end = podest.indexOf('function buildStageDoc');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(podest.slice(start, end)).not.toContain('Navigator.prototype,"gpu"');
+  });
+});
