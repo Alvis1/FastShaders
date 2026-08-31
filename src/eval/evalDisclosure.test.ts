@@ -89,13 +89,17 @@ describe('the consent and disclosure are fully translated', () => {
     expect(missing, `untranslated: ${missing.join(' | ')}`).toEqual([]);
   });
 
-  it('the disclosure item() pairs are translated too', () => {
-    // item(heading, body) does not match the t(...) shape above, so it needs
-    // its own sweep — this is exactly where a key would be missed.
-    const pairs = [...disclosure.matchAll(/item\(\s*'((?:[^'\\]|\\.)*)',\s*'((?:[^'\\]|\\.)*)',?\s*\)/gs)];
-    expect(pairs.length, 'no item() pairs found — did the shape change?').toBeGreaterThan(5);
-    const missing = pairs
-      .flatMap((m) => [m[1], m[2]])
+  it('the disclosure item() strings are translated too', () => {
+    // item(line, file, detail) does not match the t(...) shape above, so it
+    // needs its own sweep — this is exactly where a key would be missed.
+    // The MIDDLE argument is a file name (`sus.json`, `shader/`), which is
+    // deliberately not translated, so only the first and third are checked.
+    const items = [...disclosure.matchAll(
+      /item\(\s*'((?:[^'\\]|\\.)*)',\s*'((?:[^'\\]|\\.)*)',\s*'((?:[^'\\]|\\.)*)',?\s*\)/gs,
+    )];
+    expect(items.length, 'no item() calls found — did the shape change?').toBeGreaterThan(5);
+    const missing = items
+      .flatMap((m) => [m[1], m[3]])
       .map((k) => k.replace(/\\'/g, "'"))
       .filter((k) => !(k in ui));
     expect(missing, `untranslated: ${missing.join(' | ')}`).toEqual([]);
