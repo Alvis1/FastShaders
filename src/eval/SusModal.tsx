@@ -29,6 +29,7 @@ import {
   buildBackgroundRecord,
   type BackgroundAnswers,
 } from './background';
+import { PRO_ITEMS, buildProRecord, proComplete, type ProAnswers } from './proQuestions';
 import { collectDevice, costTableProvenance } from './evalContext';
 import { capturePreviewShot } from './previewShot';
 import { buildEvalPackageEntries, evalZipFileName } from './evalPackage';
@@ -102,6 +103,8 @@ export function SusModal({ open, onClose }: Props) {
   // own expertise from colouring the SUS items.
   const [background, setBackground] = useState<BackgroundAnswers>({});
   const [otherEditors, setOtherEditors] = useState('');
+  // The professional block — only in the /evalpro arm.
+  const [pro, setPro] = useState<ProAnswers>({});
   const submittingRef = useRef(false);
   const [participant, setParticipant] = useState(() => readEvalSession()?.participant ?? '');
   const [done, setDone] = useState<DoneState | null>(null);
@@ -131,7 +134,9 @@ export function SusModal({ open, onClose }: Props) {
   const anchorLow = language === 'lv' ? SUS_ANCHOR_LOW_LV : SUS_ANCHOR_LOW_EN;
   const anchorHigh = language === 'lv' ? SUS_ANCHOR_HIGH_LV : SUS_ANCHOR_HIGH_EN;
   const answered = useMemo(() => responses.filter((r) => r != null).length, [responses]);
-  const complete = answered === SUS_ITEM_COUNT && backgroundComplete(background);
+  const proAsked = evalTask().proQuestions;
+  const complete =
+    answered === SUS_ITEM_COUNT && backgroundComplete(background) && (!proAsked || proComplete(pro));
 
   const handleSubmit = async () => {
     // A REF, not the `done` state: `capturePreviewShot()` below waits up to 4 s
@@ -185,6 +190,7 @@ export function SusModal({ open, onClose }: Props) {
       participant: trimmedParticipant,
       language,
       background: buildBackgroundRecord(background, otherEditors),
+      ...(proAsked ? { professional: buildProRecord(pro) } : {}),
       itemsVersion: 'brooke-1996-item8-awkward',
       items: items.map((text, i) => ({ n: i + 1, item: text, response: filled[i] })),
       score,
@@ -432,6 +438,51 @@ export function SusModal({ open, onClose }: Props) {
           maxLength={300}
           onChange={(e) => setOtherEditors(e.target.value)}
         />
+
+        {proAsked && (
+          <>
+            <div className="sus-modal__section-head">{t('About your professional work', language)}</div>
+            {PRO_ITEMS.map((q) =>
+              q.kind === 'text' ? (
+                <label className="sus-modal__followup" key={q.id} htmlFor={`pro-${q.id}`}>
+                  {t(q.question, language)}
+                  <input
+                    id={`pro-${q.id}`}
+                    type="text"
+                    className="sus-modal__followup-input"
+                    value={typeof pro[q.id] === 'string' ? (pro[q.id] as string) : ''}
+                    maxLength={300}
+                    onChange={(e) => setPro((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                  />
+                </label>
+              ) : (
+                <div className="sus-modal__pro-scale" key={q.id}>
+                  <span className="sus-modal__statement" id={`pro-item-${q.id}`}>
+                    {t(q.question, language)}
+                  </span>
+                  <span
+                    className="sus-modal__scale sus-modal__scale--wide"
+                    role="radiogroup"
+                    aria-labelledby={`pro-item-${q.id}`}
+                  >
+                    {q.levels.map((label, level) => (
+                      <label key={label} title={t(label, language)}>
+                        <input
+                          type="radio"
+                          name={`pro-${q.id}`}
+                          value={level}
+                          checked={pro[q.id] === level}
+                          onChange={() => setPro((prev) => ({ ...prev, [q.id]: level }))}
+                        />
+                        <span className="sus-modal__level-label">{t(label, language)}</span>
+                      </label>
+                    ))}
+                  </span>
+                </div>
+              ),
+            )}
+          </>
+        )}
 
         <div className="sus-modal__section-head">{t('Now the statements about FastShaders', language)}</div>
         <div className="sus-modal__anchors" aria-hidden="true">

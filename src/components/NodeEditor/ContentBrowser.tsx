@@ -7,6 +7,7 @@ import {
   NO_MATCH,
 } from '@/registry/nodeRegistry';
 import { isTextureHiddenFromEditor } from '@/registry/editorVisibility';
+import { areTexturesUnlocked } from '@/utils/texturesUnlock';
 import { getBuiltinTextures, getBuiltinTextureIds } from '@/registry/builtinTextures';
 import { getBuiltinPresets } from '@/registry/builtinPresets';
 import { NodePreviewCard } from './NodePreviewCard';
@@ -43,12 +44,21 @@ const ASSET_TABS_FIRST: NodeCategory[] = ['presets', 'texture', 'noise', 'datavi
 // — the cheap accessor), never by building them: this runs at module scope and
 // the ~84 ms texture parse is deliberately deferred to first use.
 const allTexturesHidden = getBuiltinTextureIds().every(isTextureHiddenFromEditor);
+// The ready-made textures are OFF by default and unlocked for one page load by
+// arriving through the `/textures` entry (utils/texturesUnlock.ts). Sampled
+// here at MODULE scope, which is where the unlock has to be read: the tab list,
+// BROWSER_TABS and the `fs:assetTab` validator below are all module-scope
+// constants that usePersistedState requires to have stable identities, so a
+// per-render read would both come too late and hand one render two answers.
+const texturesUnlocked = areTexturesUnlocked();
 const displayCategories = [
   ...ASSET_TABS_FIRST.map((id) => CATEGORIES.find((c) => c.id === id)!),
   ...CATEGORIES.filter(
     (c) => !ASSET_TABS_FIRST.includes(c.id) && c.id !== 'unknown',
   ),
-].filter((c) => (c.id === 'texture' ? !allTexturesHidden : !categoryEmptiedByHiding(c.id)));
+].filter((c) =>
+  c.id === 'texture' ? !allTexturesHidden && texturesUnlocked : !categoryEmptiedByHiding(c.id),
+);
 const costs = complexityData.costs as Record<string, number>;
 
 /** Pseudo-category id for the user's saved-group library. */
@@ -730,6 +740,12 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // module warm-up), so don't pay it at first render for a tab that may never
     // open. A live search needs them too — matching textures surface in the
     // generic strip (see `items` below).
+    // Locked: the tab is not drawn, but a live SEARCH surfaces matching assets
+    // on every tab (see `items` below) — so without this the strip would hand
+    // back every TextureCard to anyone who typed "wood". Above the lazy build
+    // as well as the tab test, so a locked session never pays the ~84 ms
+    // texture parse at all.
+    if (!texturesUnlocked) return [];
     if (activeCategory !== 'texture' && !q) return [];
     const all = getBuiltinTextures().filter((t) => !isTextureHiddenFromEditor(t.id)).sort(byCost);
     if (!q) return all;

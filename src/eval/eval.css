@@ -354,3 +354,27 @@
   border: 1px solid var(--border-default);
   border-radius: var(--border-radius-sm);
 }
+
+/* The professional block's scales carry NAMED options ("Monthly", "Weekly"),
+   not 1–5, so each row stacks the question over a wrapping option strip —
+   the SUS's side-by-side layout has nowhere to put five words per option. */
+.sus-modal__pro-scale {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--border-subtle);
+}
+.sus-modal__scale--wide {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.sus-modal__scale--wide label {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+.sus-modal__level-label {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}

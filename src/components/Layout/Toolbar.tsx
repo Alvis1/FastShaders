@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useAppStore } from '@/store/useAppStore';
 import { useDismiss } from '@/hooks/useDismiss';
 import { useLongPress } from '@/hooks/useLongPress';
+import { hardReload } from '@/utils/hardReload';
 import { downloadShader } from '@/engine/exportShader';
 import { FeedbackModal } from '@/components/Modals/FeedbackModal';
 import { PalettesModal } from '@/components/Modals/PalettesModal';
@@ -205,7 +206,11 @@ export function Toolbar() {
     // but does NOT stopPropagation, so without this guard both would fire and
     // the two popovers would open on top of each other.
     if (el?.closest('input, textarea, select, [contenteditable="true"]')) return;
-    if (el?.closest('.toolbar__export-wrap, .toolbar__local, .toolbar__overflow')) return;
+    // `.toolbar__reload-wrap` is redundant with `.toolbar__local` (the reload
+    // wrapper carries both) and is named anyway, so the reason this control is
+    // excluded is legible from here. APPEND only: trackpadScroll.test.ts pins
+    // this string with a regex anchored at the opening quote.
+    if (el?.closest('.toolbar__export-wrap, .toolbar__local, .toolbar__overflow, .toolbar__reload-wrap')) return;
     e.preventDefault();
     setPrefsAt({ x: e.clientX, y: e.clientY });
   }, []);
@@ -224,6 +229,38 @@ export function Toolbar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   useDismiss(menuOpen, setMenuOpen, [menuRef]);
+
+  // ── Reload, and its right-click menu ──────────────────────────────────────
+  // The menu is the only place a HARD reload is offered: the desktop shell has
+  // no browser chrome at all, and an iPad's has no hard-reload gesture.
+  const [reloadOpen, setReloadOpen] = useState(false);
+  const reloadRef = useRef<HTMLDivElement>(null);
+  const suppressReloadClickRef = useRef(false);
+  // The BUTTON is held in STATE, not a ref: React unmounts it from the bar and
+  // remounts it inside the ☰ menu when the toolbar collapses, and useLongPress
+  // keys its listeners on the target's identity — a ref object's identity never
+  // changes, so the first collapse would leave the gesture bound to a detached
+  // node and silently dead (see the hook).
+  const [reloadBtn, setReloadBtn] = useState<HTMLButtonElement | null>(null);
+  useDismiss(reloadOpen, setReloadOpen, [reloadRef]);
+  useLongPress(reloadBtn, () => {
+    suppressReloadClickRef.current = true;
+    // Same latch the EXPORT long-press uses: if the finger lifts outside the
+    // button no click consumes it, so clear it at the next pointerdown.
+    document.addEventListener(
+      'pointerdown',
+      () => { suppressReloadClickRef.current = false; },
+      { once: true, capture: true },
+    );
+    setReloadOpen(true);
+  });
+  // A popover opened on the bar and then collapsed away (window resize, or a
+  // language switch relabelling the chips) would otherwise still be open, so
+  // the ☰ would render it with no gesture — worse here than for the other
+  // popovers, because one of these rows takes the page down.
+  useEffect(() => {
+    setReloadOpen(false);
+  }, [overflow.collapsed]);
 
   useEffect(() => {
     const el = barRef.current;
@@ -501,24 +538,97 @@ export function Toolbar() {
         {(() => {
           const collapsible = (
             <>
-        {/* Hard reload of the tab. Safe to offer without a confirm: the graph
-            autosaves to fs:graph (plus every UI pref to its own key), so a
-            reload restores the session rather than discarding it. The one
-            exception is the session-only preview mesh, which is deliberately
-            never persisted — hence the warning in the tooltip. */}
-        <button
-          type="button"
-          className="toolbar__sc-link toolbar__refresh"
-          onClick={() => window.location.reload()}
-          title={t('Reload the page (a dropped preview model is not kept)', language)}
-          aria-label={t('Reload the page', language)}
-        >
-          {/* Inline SVG, not a glyph: the app self-hosts a woff2 SUBSET of
-              Inter, so ↻/⟳ are not guaranteed to be in the font offline. */}
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-          </svg>
-        </button>
+        {/* Reload. Left-click reloads; right-click — or a sustained press on
+            touch, where there is no second button — opens the two-item menu,
+            which is the only place a HARD reload is offered.
+
+            Safe to offer without a confirm: the graph autosaves to fs:graph
+            (and every UI pref to its own key), and the dropped preview mesh is
+            mirrored to IndexedDB (previewMeshCache.ts), so a reload restores
+            the session rather than discarding it. The tooltip used to warn
+            that the model was lost; that stopped being true when the mesh
+            cache landed.
+
+            The wrapper carries `.toolbar__local` — the app's generic anchored-
+            popover class — which buys three things at once: `position:
+            relative` for the popover, the `.toolbar__overflow-menu
+            .toolbar__local-popover` re-anchoring that keeps it from opening on
+            top of its own trigger inside the ☰, and the dark-theme shadow rule
+            (an explicit selector list, so a bespoke class would render a flat
+            patch on dark chrome — invisible in the light theme it is built
+            in). It is also already in openPrefs' right-click guard. */}
+        <div className="toolbar__local toolbar__reload-wrap" ref={reloadRef}>
+          <button
+            type="button"
+            ref={setReloadBtn}
+            className="toolbar__sc-link toolbar__refresh"
+            onClick={() => {
+              if (suppressReloadClickRef.current) {
+                suppressReloadClickRef.current = false;
+                return;
+              }
+              window.location.reload();
+            }}
+            onContextMenu={(e) => {
+              // preventDefault only, like EXPORT's: the bar-root handler is
+              // kept off this subtree by the `.toolbar__local` guard, so there
+              // is nothing to stopPropagation for.
+              e.preventDefault();
+              setReloadOpen((o) => !o);
+            }}
+            title={`${t('Reload the page', language)}. ${t('Right-click for a hard reload.', language)}`}
+            aria-label={t('Reload the page', language)}
+            aria-haspopup="menu"
+            aria-expanded={reloadOpen}
+          >
+            {/* Inline SVG, not a glyph: the app self-hosts a woff2 SUBSET of
+                Inter, so ↻/⟳ are not guaranteed to be in the font offline. */}
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
+            </svg>
+          </button>
+          {reloadOpen && (
+            <div
+              className="toolbar__local-popover toolbar__reload-popover"
+              role="menu"
+              aria-label={t('Reload', language)}
+            >
+              <div className="toolbar__local-header">
+                <span className="toolbar__contact-label">{t('Reload', language)}</span>
+              </div>
+              {/* One line each, explanation on hover via the app-wide
+                  TooltipLayer — the rule the Add-node menu and the input-
+                  settings popup follow. */}
+              <button
+                type="button"
+                role="menuitem"
+                className="toolbar__local-row toolbar__reload-row"
+                onClick={() => {
+                  setReloadOpen(false);
+                  window.location.reload();
+                }}
+                title={t('The same as clicking the button.', language)}
+              >
+                <span>{t('Reload', language)}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="toolbar__local-row toolbar__reload-row"
+                onClick={() => {
+                  setReloadOpen(false);
+                  hardReload();
+                }}
+                title={t('Fetch the page again instead of reusing the browser\u2019s cached copy — use this after an update if the app looks stale. Files loaded alongside the page may still come from the cache.', language)}
+              >
+                <span>{t('Hard reload', language)}</span>
+              </button>
+              <div className="toolbar__local-note">
+                {t('Your shader, its settings and a dropped model are all saved — either option restores them.', language)}
+              </div>
+            </div>
+          )}
+        </div>
         {/* Desktop opens Podest as a REAL second app window (a Rust command —
             see src-tauri/src/podest_window.rs); the web build keeps the plain
             new-tab anchor. `target="_blank"` is meaningless inside a Tauri

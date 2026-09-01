@@ -17,6 +17,7 @@ import './styles/reset.css';
 import './styles/controls.css';
 import '@xyflow/react/dist/style.css';
 import { applyEvalTaskFlags } from './eval/evalTask';
+import { stripHardReloadMarker } from './utils/hardReload';
 
 // Renderer-triage switches (e.g. the Safari zoom-blur hunt): ?fsdbg=a,b,...
 // injects coarse CSS overrides so a browser-specific compositing culprit can
@@ -44,6 +45,13 @@ if (fsdbg) {
 
 // Study conditions that change what the UI SHOWS (see eval/evalTask.ts).
 applyEvalTaskFlags();
+
+// Tidy the cache-busting marker the toolbar's Hard reload navigated with out
+// of the address bar. The fresh fetch has already happened, so this undoes
+// nothing — it just stops the parameter being carried into every bookmark and
+// shared link made from this page. Runs AFTER the ?fsdbg read above, which
+// looks at a different parameter and is unaffected either way.
+stripHardReloadMarker();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
