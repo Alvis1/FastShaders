@@ -2165,7 +2165,7 @@
   // can't balloon memory (decompression bomb) or slip in a blank shader.
   var MAX_ENTRIES = 512;
   var MAX_TOTAL_UNCOMPRESSED = 64 * 1024 * 1024; // 64 MB across all entries
-  var MAX_NAME_LENGTH = 256;
+  var MAX_NAME_LENGTH = 512;
 
   // Minimal in-browser unzip: parse the ZIP central directory and inflate
   // deflate entries with the native DecompressionStream (no dependency).
@@ -2672,12 +2672,16 @@
     // popup, whose base URL is inherited rather than its own — `dir` is the
     // reference every other asset here already resolves against.
     L.push('<link rel="icon" type="image/svg+xml" href="' + dir + 'images/favicon-podest.svg" />');
-    // WebGL2 up front: three r184 picks its WebGPU backend on the mere
+    // WebGL2 is forced DECLARATIVELY on the <a-scene> below via
+    // renderer="backend: webgl" (the bundle's aframe#5847 carry maps it onto
+    // WebGPURenderer's forceWebGL — aframeBackendProperty.test.ts guards the
+    // patch): three r184 otherwise picks its WebGPU backend on the mere
     // presence of navigator.gpu, that backend hard-throws in
     // XRManager.setSession (r173–r184), and Quest Browser has no
     // WebXR+WebGPU at all. TSL compiles identically via GLSLNodeBuilder.
-    // navigator.xr stays VISIBLE — it is the whole point here.
-    L.push('<script>try{Object.defineProperty(Navigator.prototype,"gpu",{get:function(){return undefined;},configurable:true});}catch(e){}try{Object.defineProperty(navigator,"gpu",{value:undefined,configurable:true});}catch(e){}<\/script>');
+    // navigator.xr stays VISIBLE — it is the whole point here. (The gpu-hiding
+    // script this replaced lives on in the STAGE doc, where hiding gpu is the
+    // conditional pre-flight's fallback, not a VR requirement.)
     // Local error surface (no parent bridge — the opener is throttled while
     // the headset presents): the shaderloader swallows module load/build
     // failures into console.error, so mirror it; shader-error is its
@@ -2710,7 +2714,7 @@
     // requests it at all now that vr-nav draws the hands itself and
     // A-Frame's hand-tracking-controls (which would otherwise push the
     // feature at its own init) is gone — see the ensureHands comment.
-    L.push('<a-scene vr-mode-ui="enabled: true" webxr="optionalFeatures: hand-tracking, bounded-floor" vr-nav="radius: ' + NAV_RADIUS + '; inner: ' + NAV_INNER + '; home: ' + NAV_HOME + '; target: ' + EYE + '" loading-screen="enabled: false" background="color: ' + bg + '">');
+    L.push('<a-scene renderer="backend: webgl" vr-mode-ui="enabled: true" webxr="optionalFeatures: hand-tracking, bounded-floor" vr-nav="radius: ' + NAV_RADIUS + '; inner: ' + NAV_INNER + '; home: ' + NAV_HOME + '; target: ' + EYE + '" loading-screen="enabled: false" background="color: ' + bg + '">');
     // The rig is the teleport handle: three composes the XR pose with the
     // camera's PARENT world matrix (WebXRManager.updateUserCamera), so
     // moving this entity moves the visitor. It stays at the origin outside
@@ -2726,10 +2730,7 @@
     L.push('  <a-entity id="spin-parent" position="' + EYE + '"' + spinAttr + '>');
     L.push('    <a-entity id="preview-entity" ' + entityAttrs + ' position="0 0 0" rotation="' + (ROTATIONS[kind] || "0 0 0") + '"></a-entity>');
     L.push('  </a-entity>');
-    L.push('  <a-light type="directional" color="#ffffff" position="-3 4 2" intensity="2.5"></a-light>');
-    L.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
-    L.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
-    L.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
+    STUDIO_LIGHTS.forEach(function (l) { L.push(l); });
     L.push('</a-scene>');
     L.push('<button id="vr-gate" type="button" hidden>Enter VR</button>');
     // Shader + tuned values, all baked. The shader blob is minted in the
@@ -2846,6 +2847,16 @@
     L.push('})();');
     L.push('<\/script>');
   }
+
+  // The studio light rig, shared by the stage doc and the XR popup so the two
+  // documents cannot drift (it mirrors LIGHT_PRESETS.studio in the editor's
+  // tslToPreviewHTML.ts — podest is standalone and cannot import it).
+  var STUDIO_LIGHTS = [
+    '  <a-light type="directional" color="#ffffff" position="-3 4 2" intensity="2.5"></a-light>',
+    '  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>',
+    '  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>',
+    '  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>',
+  ];
 
   function pushFitBounds(L) {
     L.push('<script>');
@@ -3145,10 +3156,7 @@
     S.push('  <a-entity id="spin-parent"' + spinAttr + '>');
     S.push('    <a-entity id="preview-entity" geometry="primitive: sphere; radius: 1; segmentsWidth: 64; segmentsHeight: 64" material="color: #808080" position="0 0 0" rotation="45 45 0"></a-entity>');
     S.push('  </a-entity>');
-    S.push('  <a-light type="directional" color="#ffffff" position="-3 4 2" intensity="2.5"></a-light>');
-    S.push('  <a-light type="directional" color="#d4e5ff" position="2 3 -4" intensity="2.0"></a-light>');
-    S.push('  <a-light type="directional" color="#e8e8e8" position="4 1 3" intensity="0.6"></a-light>');
-    S.push('  <a-light type="ambient" color="#ffffff" intensity="0.15"></a-light>');
+    STUDIO_LIGHTS.forEach(function (l) { S.push(l); });
     S.push('</a-scene>');
     L.push('<div id="scene-slot"></div>');
     L.push('<script>');

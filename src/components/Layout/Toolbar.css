@@ -874,6 +874,37 @@ button.toolbar__sc-link {
   margin-right: var(--space-2);
 }
 
+/* ── Reload button + its right-click menu ──────────────────────────────────
+   The wrapper reuses `.toolbar__local` (position: relative) so the popover
+   inherits the shared anchoring, the ☰-menu re-anchoring and the dark-theme
+   shadow. `display: flex` matches `.toolbar__export-wrap`: the wrapper takes
+   the button's place as a flex child of `.toolbar__right`, and a block box
+   would add line-box height around a `--ctl-size` button. */
+.toolbar__reload-wrap {
+  display: flex;
+  align-self: center;
+}
+
+/* Sized for two short rows — the 236px base is tuned for the Download-app
+   list, and an empty half reads as a missing column. */
+.toolbar__local-popover.toolbar__reload-popover {
+  min-width: 180px;
+}
+
+/* Rows are <button>s wearing the anchor rows' card look, so reset the button
+   box the same way `.toolbar__wf-row` does. */
+button.toolbar__local-row.toolbar__reload-row {
+  font-family: var(--font-sans);
+  /* A <button> inherits neither the chrome's size nor its colour — without
+     these the rows render in the UA's small default at `buttontext`, which is
+     invisible against the dark theme's panel. */
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
 /* ── Right-click preferences popup ─────────────────────────────────────────
    The toolbar's own context menu (see Toolbar.tsx for what it guards against
    opening on top of). `position: fixed` because it is placed at the POINTER,

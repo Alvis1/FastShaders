@@ -45,6 +45,15 @@ export interface EvalTask {
    * participant could not see the price.
    */
   pointsVisible: boolean;
+  /**
+   * `?pro=on` (and the `/evalpro` entry) adds a block of professional
+   * questions after the experience ones — role, how long, which platforms,
+   * how often shaders are authored, whether GPU budgets constrain the work.
+   * They are asked only of professionals because they are meaningless (and
+   * mildly alienating) to a student participant, and because keeping them out
+   * of the ordinary arm keeps that questionnaire short.
+   */
+  proQuestions: boolean;
 }
 
 export const DEFAULT_EVAL_TASK: EvalTask = {
@@ -52,6 +61,7 @@ export const DEFAULT_EVAL_TASK: EvalTask = {
   briefBudget: null,
   costBarVisible: true,
   pointsVisible: true,
+  proQuestions: false,
 };
 
 const MAX_ID_LEN = 64;
@@ -93,12 +103,16 @@ export function parseEvalTask(search: string): EvalTask {
     return t === 'off' || t === '0' || t === 'false';
   };
   const pointsVisible = !isOff(params.get('points'));
+  // Opt-IN, unlike the two suppression flags: an absent parameter must not
+  // hand a student the professional block.
+  const pro = (params.get('pro') ?? '').trim().toLowerCase();
   return {
     id: cleanId(params.get('task')),
     briefBudget: cleanBudget(params.get('budget')),
     // No points at all implies no cost bar — the bar is a point figure.
     costBarVisible: pointsVisible && !isOff(params.get('costbar')),
     pointsVisible,
+    proQuestions: pro === 'on' || pro === '1' || pro === 'true',
   };
 }
 

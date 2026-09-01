@@ -10,16 +10,26 @@ interface LongPressOptions {
 }
 
 /**
- * Fire `onLongPress` after a sustained touch / pen press on `targetRef`. Mouse
+ * Fire `onLongPress` after a sustained touch / pen press on `target`. Mouse
  * presses are ignored — right-click already covers desktop, and a hold-to-fire
  * gesture on the left button would conflict with selection and drag.
  *
  * The callback receives the *original event target* so the caller can dispatch
  * a synthesized event on it (e.g. `contextmenu` for React Flow's per-element
  * handlers, which key off the precise DOM target — pane vs node vs edge).
+ *
+ * `target` is EITHER a ref object or the element itself, and the difference is
+ * load-bearing for anything React can move: the effect's deps hold the target,
+ * and a ref object's identity NEVER changes, so a caller whose button is
+ * re-parented (the toolbar's reload button, which React unmounts from the bar
+ * and remounts inside the ☰ overflow menu) keeps its listeners on the detached
+ * node and the gesture silently dies for the rest of the session. Passing the
+ * element — held in state via a callback ref — makes the identity change with
+ * the node, so the effect rebinds. Ref callers are unaffected: their identity
+ * is stable today and stays stable.
  */
 export function useLongPress(
-  targetRef: React.RefObject<HTMLElement | null>,
+  target: React.RefObject<HTMLElement | null> | HTMLElement | null,
   onLongPress: (target: HTMLElement, clientX: number, clientY: number) => void,
   options: LongPressOptions = {},
 ): void {
@@ -29,7 +39,10 @@ export function useLongPress(
 
   useEffect(() => {
     if (disabled) return;
-    const el = targetRef.current;
+    // `in` rather than `instanceof HTMLElement`: this module is imported by
+    // suites running under vitest's `node` environment, where that global does
+    // not exist.
+    const el = target && 'current' in target ? target.current : target;
     if (!el) return;
 
     let timerId: number | null = null;
@@ -84,5 +97,5 @@ export function useLongPress(
       el.removeEventListener('pointerup', onPointerEnd);
       el.removeEventListener('pointercancel', onPointerEnd);
     };
-  }, [targetRef, delayMs, moveTolerance, disabled]);
+  }, [target, delayMs, moveTolerance, disabled]);
 }

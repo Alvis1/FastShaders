@@ -1,5 +1,11 @@
 # ShaderCarousel — Research Context
 
+> **Historical (pre-2026-07-23).** This document records the design rationale
+> from before the calibration loop was closed. Its status claims are superseded:
+> a measured Quest 3 run IS committed (`benchData/quest3-20260723/`) and its
+> suggestions are the basis of the prices in `src/registry/complexity.json`.
+> For what the suite does today, read [README.md](./README.md).
+
 ## Overview
 
 ShaderCarousel is the benchmarking arm of the research project *Performance-Aware
@@ -30,7 +36,7 @@ ShaderCarousel/
 │   ├── bench-registry.js       # canonical corpus (baseline + presets + noises + saved)
 │   ├── bench-ui.js             # picker, settings, start gate, done popup, headset detect
 │   └── three/                  # Three.js r184 WebGPU ESM (three.webgpu.min.js, three.tsl.min.js, three.core.min.js — official .min builds copied from node_modules/three@0.184)
-├── benchData/                  # committed calibration runs (raw JSON + suggestion JSON per device-slug); currently only a README — the loop is NOT yet closed (no measured run committed)
+├── benchData/                  # committed calibration runs (raw JSON + suggestion JSON per device-slug) + fit-calibration.mjs; the loop IS closed — quest3-20260723 is the measured basis of complexity.json
 ├── components/three/
 │   └── a-frame-180-a-01.min.js # A-Frame 1.8.0 IIFE, r184 WebGPU (synced from a-frame-shaderloader/js/ by fs-vendor-sync; only the InOut bench uses this)
 ├── sphere-mover.js             # A-Frame component — linear ping-pong z animation (InOut only)
@@ -176,8 +182,8 @@ Total bench time per device (default corpora — 17 shaders for Static/InOut, 9 
 
 ## Defaults (rationale)
 
-Picked from the existing `face/bench.js` calibration loop + the
-`shaderRegistry.js` ShaderSphere defaults the paper used:
+Picked from the pre-existing calibration loop this suite replaced, plus the
+ShaderSphere defaults the paper used:
 
 | Setting | InOut | Static | MicroPlane | Why |
 |---|---|---|---|---|

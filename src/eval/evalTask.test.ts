@@ -10,6 +10,7 @@ describe('parseEvalTask', () => {
       // costbar=off hides the BAR only — per-node prices stay. /evalp is the
       // stronger arm; see its own block below.
       pointsVisible: true,
+      proQuestions: false,
     });
   });
 
@@ -77,6 +78,7 @@ describe('the pointless arm (/evalp, ?points=off)', () => {
       briefBudget: 200,
       costBarVisible: false,
       pointsVisible: false,
+      proQuestions: false,
     });
   });
 
@@ -128,6 +130,40 @@ describe('leaving the study returns the STANDARD app', () => {
     const { fileURLToPath } = require('node:url') as typeof import('node:url');
     const src = readFileSync(fileURLToPath(new URL('./evalTask.ts', import.meta.url)), 'utf8');
     expect(src).toContain('if (!isEvalMode()) return { ...DEFAULT_EVAL_TASK };');
+  });
+});
+
+describe('the professional arm (/evalpro, ?pro=on)', () => {
+  it('is opt-IN — an absent parameter must never hand a student the pro block', () => {
+    for (const q of ['', '?task=T1', '?points=off', '?pro=', '?pro=off', '?pro=yes']) {
+      expect(parseEvalTask(q).proQuestions, q).toBe(false);
+    }
+    for (const v of ['on', 'ON', '1', 'true']) {
+      expect(parseEvalTask(`?pro=${v}`).proQuestions, v).toBe(true);
+    }
+  });
+
+  it('composes with the other conditions rather than replacing them', () => {
+    const t = parseEvalTask('?task=T7-fire&budget=200&costbar=off&pro=on');
+    expect(t).toEqual({
+      id: 'T7-fire',
+      briefBudget: 200,
+      costBarVisible: false,
+      pointsVisible: true,
+      proQuestions: true,
+    });
+  });
+});
+
+describe('the /evalpro entry', () => {
+  it('forces pro=on while preserving other launch parameters', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const html = readFileSync(fileURLToPath(new URL('../../public/evalpro/index.html', import.meta.url)), 'utf8');
+    expect(html).toContain("'&pro=on'");
+    expect(html).toContain("'?pro=on'");
+    expect(html).toContain("sessionStorage.setItem('fs:evalArm', '1')");
+    expect(html).not.toMatch(/localStorage\s*\./);
   });
 });
 

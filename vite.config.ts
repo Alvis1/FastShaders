@@ -855,27 +855,35 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
   },
 });
 
-/** The study entries under public/ — each a directory with an index.html. */
-const EVAL_ENTRY_DIRS = ['eval', 'evalp'];
+/**
+ * Directory entries under public/ — each a redirector with an index.html that
+ * arms a sessionStorage flag and hands over to the app. Two study arms (/eval,
+ * /evalp) and the /textures unlock; the list is not "study entries" any more,
+ * so do not treat membership here as a study condition.
+ */
+const PUBLIC_ENTRY_DIRS = ['eval', 'evalp', 'evalpro', 'textures'];
 
 /**
- * Serve-only: make `<base>/eval/` and `<base>/evalp/` reach their
- * `public/<dir>/index.html` in dev. On
- * the static deploy targets a directory URL serves its index.html, but vite
- * dev's SPA fallback answers the extensionless URL with the APP's index.html
- * — so the eval-mode entry (the user-study redirector) silently didn't exist
- * in dev. Same dev-parity class as shaderCarouselDevResolvePlugin.
+ * Serve-only: make `<base>/eval/`, `<base>/evalp/` and `<base>/textures/`
+ * reach their `public/<dir>/index.html` in dev. On the static deploy targets a
+ * directory URL serves its index.html, but vite dev's SPA fallback answers the
+ * extensionless URL with the APP's index.html — so these redirector entries
+ * silently didn't exist in dev. And silently is the word: the request returns
+ * 200 with a fully working editor, so the missing unlock/arm looks like a bug
+ * in the flag reader rather than in the dev server. Same dev-parity class as
+ * shaderCarouselDevResolvePlugin.
  */
-const evalDevIndexPlugin = (): Plugin => ({
-  name: 'fs-eval-dev-index',
+const publicEntryDevIndexPlugin = (): Plugin => ({
+  name: 'fs-public-entry-dev-index',
   apply: 'serve',
   configureServer(server) {
     server.middlewares.use((req, _res, next) => {
       const url = (req.url ?? '').split('?')[0];
-      for (const dir of EVAL_ENTRY_DIRS) {
+      for (const dir of PUBLIC_ENTRY_DIRS) {
         if (url === `${FS_BASE}${dir}` || url === `${FS_BASE}${dir}/`) {
-          // Preserve the query: the launch parameters (?task=…&costbar=off)
-          // are exactly what these entries exist to carry.
+          // Preserve the query: the eval entries' launch parameters
+          // (?task=…&costbar=off) are exactly what they exist to carry.
+          // /textures ignores it, and losing it here would be silent.
           const qs = (req.url ?? '').slice(url.length);
           req.url = `${FS_BASE}${dir}/index.html${qs}`;
           break;
@@ -897,7 +905,7 @@ export default defineConfig({
     ...(FS_DESKTOP ? [shaderCarouselDesktopStagePlugin()] : [shaderCarouselCopyPlugin()]),
     shaderCarouselDevResolvePlugin(),
     nodeDesignerEndpointPlugin(),
-    evalDevIndexPlugin(),
+    publicEntryDevIndexPlugin(),
   ],
   resolve: {
     alias: {

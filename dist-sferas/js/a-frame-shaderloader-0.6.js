@@ -21,6 +21,22 @@
  *      unconditionally. 0.5 is frozen: shaders exported before this reference
  *      it from the CDN by URL, so it must never change.
  *
+ * 0.6: vertex WELD for displaced primitives. The editor preview always did this
+ *      with an inline `weld-verts` component, so a displaced <a-box> rendered
+ *      as one skin in the editor and as six separated faces EVERYWHERE else —
+ *      podest, the copy-ready A-Frame page, and any page embedding an exported
+ *      module. Doing it here fixes all of them at once and leaves ONE
+ *      implementation. Gated on three things, each load-bearing (see
+ *      shouldWeld): an A-FRAME PRIMITIVE (welding a model would drop vertex
+ *      colours, skin weights and morph targets — `fit-bounds` handles models);
+ *      a built material actually carrying a `positionNode` (structural, since
+ *      this is the only layer holding the built material); and the author not
+ *      having unticked "Merge Vertices", which arrives as `mergeVertices:
+ *      false` in the module's return object (ABSENT means weld, so every
+ *      already-exported module is unaffected by the key's existence).
+ *      weldByPosition itself merges only groups whose NORMALS DIFFER — see its
+ *      header for the measurements, and for why welding a sphere is pure loss.
+ *
  * 0.5: typed schema entries — number/color/map. Schema entries dispatch on
  *      `def.type`: 'number' (float uniform, the 0.4 behavior and the default),
  *      'color' (THREE.Color uniform; also auto-detected from
@@ -42,6 +58,31 @@ AFRAME.registerComponent("shader", {
     this._appliedMaterials = null;
     this._currentSrc = null;
     this._extending = false;
+
+    // --- vertex weld (0.6) ---------------------------------------------------
+    // `_weldWanted` is decided per apply (see shouldWeld); `_welded` is the
+    // geometry WE built and therefore own; `_weldSource` is the original we
+    // displaced and must put back — never dispose it, A-Frame's geometry SYSTEM
+    // refcounts and SHARES it with any other entity using the same primitive.
+    // `_weldScanned` remembers a geometry we already found nothing to weld in,
+    // so a re-apply does not rescan it.
+    this._weldWanted = false;
+    this._welded = null;
+    this._weldSource = null;
+    this._weldScanned = null;
+    // Does the shader READ uv()? A uv-driven height splits a sphere's seam and
+    // pole fans even though their normals agree — see weldByPosition.
+    this._weldUvDriven = false;
+
+    // A-Frame's geometry component replaces `mesh.geometry` IN PLACE on every
+    // rebuild (a subdivision change, a sphere→box swap) while keeping the mesh
+    // and its material, so a weld done once at apply time is silently undone.
+    // Re-welding on the geometry component's own events is what survives that.
+    this._onGeometryEvent = (e) => {
+      if (e.detail && e.detail.name === "geometry") this.syncWeld();
+    };
+    this.el.addEventListener("componentinitialized", this._onGeometryEvent);
+    this.el.addEventListener("componentchanged", this._onGeometryEvent);
 
     this.el.addEventListener("model-loaded", this.applyShader);
   },
@@ -372,6 +413,15 @@ AFRAME.registerComponent("shader", {
       this._shaderMaterial = material;
       this._partMaterials = partMaterials;
       this.applyMaterialToMesh(mesh, material, partMaterials);
+      // Weld coincident vertices when this shader DISPLACES a primitive. Kept
+      // out of applyMaterialToMesh so that method keeps the exact 3-arg
+      // signature src/perMeshMaterials.test.ts drives it with.
+      this._weldWanted = this.shouldWeld(shaderResult, material, partMaterials);
+      // A shader that reads uv() can displace a sphere's seam and pole fans
+      // apart despite their shared normals, so those groups must weld too.
+      // Read off the SOURCE because the built material cannot be asked.
+      this._weldUvDriven = /\buv\s*\(/.test(source);
+      this.syncWeld();
       // Announce success so embedding pages (editor preview, viewer) can
       // clear any error overlay. Bubbles like every A-Frame entity event.
       this.el.emit("shader-applied", { src: tslPath });
@@ -384,6 +434,10 @@ AFRAME.registerComponent("shader", {
       }
       console.error(`Failed to load TSL shader from ${tslPath}`, err);
       this.restoreOriginalMaterials(mesh);
+      // A shader that failed to load must not leave the geometry welded on its
+      // behalf — the entity is back on its original materials.
+      this._weldWanted = false;
+      this.unweld();
       // Surface the failure as a DOM event — console.error alone leaves
       // embedding pages with a silently-fallback material and no signal.
       this.el.emit("shader-error", {
@@ -608,6 +662,91 @@ AFRAME.registerComponent("shader", {
     });
     this._appliedMaterials = applied;
   },
+  /*
+   * Should this entity's geometry be welded for the shader just applied?
+   *
+   * Three gates, in cost order, each load-bearing:
+   *
+   *  1. PRIMITIVES ONLY. `el.components.geometry` exists exactly when A-Frame's
+   *     geometry system built this mesh (<a-sphere>/<a-box>/<a-plane>, or an
+   *     explicit geometry attribute). A MODEL entity carries gltf-model /
+   *     obj-model instead. Welding a model would be DESTRUCTIVE, not merely
+   *     redundant: weldByPosition rebuilds with position/uv/index only, so it
+   *     would drop `color` (vertex colours), skinIndex/skinWeight and
+   *     morphAttributes — breaking every skinned or morph-target clip.
+   *
+   *  2. THE AUTHOR'S CHOICE. `mergeVertices: false` in the module's return
+   *     object means the author unticked "Merge Vertices". ABSENT means weld,
+   *     matching the editor's own `undefined === true` contract, which is what
+   *     keeps every already-exported module byte-identical.
+   *
+   *  3. IT MUST ACTUALLY DISPLACE. `material.positionNode != null` — `!= null`
+   *     and NOT `!== undefined`, because three's NodeMaterial constructor sets
+   *     `this.positionNode = null`, so an `undefined` test is true for every
+   *     material ever built and would weld every primitive shader. This is the
+   *     one layer that holds the BUILT material, so the question is answered
+   *     structurally instead of by a regex over module text; a `parts` module
+   *     is covered by testing the part materials too.
+   */
+  shouldWeld: function (shaderResult, material, partMaterials) {
+    if (!this.el.components || !this.el.components.geometry) return false;
+    if (shaderResult && shaderResult.mergeVertices === false) return false;
+    if (material && material.positionNode != null) return true;
+    if (partMaterials) {
+      for (const m of partMaterials.values()) {
+        if (m && m.positionNode != null) return true;
+      }
+    }
+    return false;
+  },
+  /* Bring the mesh's geometry into line with `_weldWanted`. Idempotent. */
+  syncWeld: function () {
+    const mesh = this.el.getObject3D("mesh");
+    if (!mesh || !mesh.geometry) return;
+    if (!this._weldWanted) {
+      this.unweld();
+      return;
+    }
+    const current = mesh.geometry;
+    // Already ours, or already known to have nothing to weld.
+    if (current === this._welded || current === this._weldScanned) return;
+
+    const merged = weldByPosition(current, this._weldUvDriven);
+    if (!merged) {
+      // Nothing to weld: leave the geometry EXACTLY as the system built it.
+      // Drop ours first — the mesh is wearing a geometry we did not build, so
+      // keeping `_welded` would leave the init() invariant ("the geometry WE
+      // built, and the mesh is wearing it") false, and `_weldSource` pointing
+      // at a geometry A-Frame's system has already disposed. Reached whenever a
+      // weldable primitive is swapped for an unweldable one (a box → sphere
+      // change from podest's geometry picker or the preview's subdivision).
+      if (this._welded) {
+        this._welded.dispose();
+        this._welded = null;
+        this._weldSource = null;
+      }
+      // Remembering it stops a re-apply rescanning a sphere every time.
+      this._weldScanned = current;
+      return;
+    }
+    if (this._welded && this._welded !== current) this._welded.dispose();
+    this._weldSource = current;
+    this._welded = merged;
+    mesh.geometry = merged;
+  },
+  /* Put the system's own geometry back and drop ours. */
+  unweld: function () {
+    const mesh = this.el.getObject3D("mesh");
+    // Identity guard: only restore if the mesh is still wearing OUR geometry.
+    // A-Frame's geometry `remove()` swaps in a shared empty BufferGeometry, and
+    // putting `_weldSource` back over that would resurrect a disposed geometry.
+    if (mesh && this._welded && mesh.geometry === this._welded && this._weldSource) {
+      mesh.geometry = this._weldSource;
+    }
+    if (this._welded) this._welded.dispose();
+    this._welded = null;
+    this._weldSource = null;
+  },
   disposeShaderMaterial: function () {
     // HYGIENE, not leak prevention — say so, because a future reader will
     // otherwise "verify" this against a counter that never moves. MEASURED in
@@ -645,6 +784,13 @@ AFRAME.registerComponent("shader", {
     }
     this.disposeShaderMaterial();
     this.el.removeEventListener("model-loaded", this.applyShader);
+    this.el.removeEventListener("componentinitialized", this._onGeometryEvent);
+    this.el.removeEventListener("componentchanged", this._onGeometryEvent);
+    this._onGeometryEvent = null;
+    // The weld belonged to the shader; the shader is going away.
+    this._weldWanted = false;
+    this._weldScanned = null;
+    this.unweld();
   },
   restoreOriginalMaterials: function (mesh) {
     mesh.traverse((node) => {
@@ -654,6 +800,128 @@ AFRAME.registerComponent("shader", {
     });
   },
 });
+
+/*
+ * Weld coincident vertices of a PRIMITIVE geometry so per-vertex displacement
+ * stays continuous across faces.
+ *
+ * A BoxGeometry splits every face into its own 4 vertices (24 total) carrying
+ * that face's normal, so normal-based displacement drives the 3 copies at each
+ * corner along 3 DIFFERENT normals and the faces visibly separate. Merging
+ * those copies and recomputing normals makes the surface deform as one skin.
+ *
+ * A group is merged when its members would receive DIFFERENT displacement,
+ * which is the whole correctness of this function rather than an optimisation.
+ * We cannot evaluate the shader on the CPU, so we test the two attributes that
+ * can drive it apart:
+ *
+ *   - NORMALS DIFFER. A box's 3 copies at each corner carry 3 face normals, so
+ *     normal-driven displacement pulls them apart. Always weld.
+ *   - UVs DIFFER **and the shader reads uv()** (`uvDriven`). A sphere's u=0/u=1
+ *     seam column and its pole fans are coincident with IDENTICAL normals but
+ *     DIFFERENT UVs, so a uv-driven height splits them too.
+ *
+ * The `uvDriven` qualifier is what stops this welding a sphere for nothing.
+ * MEASURED against three r184: a-sphere(36,18) has 19 coincident groups, 0 with
+ * differing normals and 19 with differing UVs, the largest being a 37-vertex
+ * POLE FAN collapsing 37 distinct u values into one; the 64x64 preview sphere
+ * gives 65/0/65. A welded vertex can only keep ONE representative uv, so
+ * merging those for a POSITION-driven shader smears the whole polar cap and
+ * repairs nothing — measured, such a shader moves every member of a group by
+ * exactly the same amount. a-box gives 8 groups, ALL with differing normals.
+ *
+ * So: a box always welds; a sphere welds only when the shader actually reads
+ * uv (where the old always-weld behaviour was right and its UV cost is the
+ * lesser evil against a cracked surface); a plane never has anything to weld.
+ *
+ * Returns a NEW BufferGeometry, or null when there was nothing to weld — the
+ * caller then leaves the original alone, which is what keeps a no-op truly
+ * free of side effects.
+ *
+ * Rebuilds with position/uv/index ONLY. That is why the caller must never run
+ * this on a MODEL: it would drop vertex colours, skinIndex/skinWeight and
+ * morphAttributes. Models are normalized (and welded) by `fit-bounds` instead.
+ */
+function weldByPosition(geom, uvDriven) {
+  const pos = geom.attributes.position;
+  const nor = geom.attributes.normal;
+  if (!pos || !nor) return null;
+  const uv = geom.attributes.uv;
+  const oldIndex = geom.index;
+  const precision = 1e4; // 4 decimal places
+
+  // Pass 1 — group vertex ids by quantized position.
+  const groups = new Map();
+  for (let i = 0; i < pos.count; i++) {
+    const key =
+      Math.round(pos.getX(i) * precision) + "_" +
+      Math.round(pos.getY(i) * precision) + "_" +
+      Math.round(pos.getZ(i) * precision);
+    const g = groups.get(key);
+    if (g) g.push(i); else groups.set(key, [i]);
+  }
+
+  // Pass 2 — a group is weldable when its members could displace apart: their
+  // normals differ, or (for a shader that reads uv) their UVs do.
+  const remap = new Uint32Array(pos.count);
+  let next = 0;
+  let welds = 0;
+  for (const ids of groups.values()) {
+    let differs = false;
+    for (let a = 1; a < ids.length && !differs; a++) {
+      const i = ids[0], j = ids[a];
+      if (
+        Math.abs(nor.getX(i) - nor.getX(j)) > 1e-6 ||
+        Math.abs(nor.getY(i) - nor.getY(j)) > 1e-6 ||
+        Math.abs(nor.getZ(i) - nor.getZ(j)) > 1e-6
+      ) differs = true;
+      else if (
+        uvDriven && uv &&
+        (Math.abs(uv.getX(i) - uv.getX(j)) > 1e-6 ||
+         Math.abs(uv.getY(i) - uv.getY(j)) > 1e-6)
+      ) differs = true;
+    }
+    if (differs) {
+      const slot = next++;
+      for (const i of ids) remap[i] = slot;
+      welds++;
+    } else {
+      for (const i of ids) remap[i] = next++;
+    }
+  }
+  if (welds === 0) return null;
+
+  // Pass 3 — build the compacted attributes. The kept uv is the FIRST
+  // occurrence, matching what the editor's weld-verts always did.
+  const positions = new Float32Array(next * 3);
+  const uvs = uv ? new Float32Array(next * 2) : null;
+  const seen = new Uint8Array(next);
+  for (let i = 0; i < pos.count; i++) {
+    const slot = remap[i];
+    if (seen[slot]) continue;
+    seen[slot] = 1;
+    positions[slot * 3] = pos.getX(i);
+    positions[slot * 3 + 1] = pos.getY(i);
+    positions[slot * 3 + 2] = pos.getZ(i);
+    if (uvs) {
+      uvs[slot * 2] = uv.getX(i);
+      uvs[slot * 2 + 1] = uv.getY(i);
+    }
+  }
+
+  const count = oldIndex ? oldIndex.count : pos.count;
+  const indices = next > 65535 ? new Uint32Array(count) : new Uint16Array(count);
+  for (let i = 0; i < count; i++) {
+    indices[i] = remap[oldIndex ? oldIndex.getX(i) : i];
+  }
+
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  if (uvs) merged.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  merged.setIndex(new THREE.BufferAttribute(indices, 1));
+  merged.computeVertexNormals();
+  return merged;
+}
 
 // Auto-detect property schema from source code by scanning for `params.XXX`
 // patterns. This lets hand-written modules work without an explicit

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/svg+xml" href="../images/favicon-app.svg" />
+  <title>FastShaders — evaluation session</title>
+</head>
+<body>
+  <p style="font-family: sans-serif; padding: 2rem;">Starting the FastShaders evaluation session…</p>
+  <script>
+    // The PROFESSIONAL arm: the ordinary study plus a block of questions about
+    // the participant's working context — role, years, platforms, how often
+    // they author shaders, whether GPU budgets constrain them. Same redirector
+    // as /eval with `pro=on` forced into the stored query, so every other
+    // launch parameter (?task=…&budget=…&costbar=off) still works here.
+    //
+    // A separate ENTRY rather than a flag the researcher must remember: which
+    // questionnaire a participant gets must not depend on typing a query
+    // string correctly, and "/evalpro" is one word to hand someone.
+    try {
+      sessionStorage.setItem('fs:evalArm', '1');
+      sessionStorage.removeItem('fs:evalSession');
+      var q = location.search && location.search.length > 1
+        ? location.search + '&pro=on'
+        : '?pro=on';
+      if (q.length < 2048) sessionStorage.setItem('fs:evalTaskQuery', q);
+    } catch (e) { /* storage blocked — the app just boots normally */ }
+    location.replace('../');
+  </script>
+  <noscript>
+    <p style="font-family: sans-serif; padding: 0 2rem;">
+      JavaScript is required. Open the app at <a href="../">the main page</a>.
+    </p>
+  </noscript>
+</body>
+</html>
