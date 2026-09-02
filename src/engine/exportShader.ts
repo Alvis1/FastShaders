@@ -1,10 +1,12 @@
 import { useAppStore } from '@/store/useAppStore';
+import { drivingSdfOutput } from '@/utils/sdfPartition';
+import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { findDefaultOutput } from '@/utils/outputMaterials';
 import { tslToShaderModule, type PropertyInfo } from './tslToShaderModule';
 import { embedProjectState, type FastShadersProject } from './fastShadersProject';
 import { inlineImageAssetsFromNodes } from './imageAssets';
 import { getNodeValues } from '@/types';
-import type { AppNode, OutputNodeData } from '@/types';
+import type { AppNode, AppEdge, MaterialSettings, OutputNodeData } from '@/types';
 import { toKebabCase } from '@/utils/nameUtils';
 import { collectImageFiles } from '@/utils/imageNode';
 import { buildExportBundle, type ExportBundle } from '@/utils/exportBundle';
@@ -108,7 +110,11 @@ export function shaderBaseName(shaderName: string): string {
 export function buildShaderBundle(): ExportBundle {
   const state = useAppStore.getState();
   const outputNode = findDefaultOutput(state.nodes);
-  const materialSettings = (outputNode?.data as OutputNodeData | undefined)?.materialSettings;
+  const materialSettings = sdfMaterialSettings(
+    state.nodes,
+    state.edges,
+    (outputNode?.data as OutputNodeData | undefined)?.materialSettings,
+  );
 
   let script: string;
   try {
@@ -149,4 +155,20 @@ export function downloadShader(): void {
   a.download = bundle.fileName;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * The material settings the module is built with. When an SDF Output drives,
+ * the window must render its BACK faces too — the march starts at the camera
+ * for a back-face fragment, which is what lets the viewer zoom inside the box
+ * and still see the shape — so `side` is forced to double; everything else is
+ * the Output node's own settings, or nothing.
+ */
+export function sdfMaterialSettings(
+  nodes: AppNode[],
+  edges: AppEdge[],
+  settings: MaterialSettings | undefined,
+): MaterialSettings | undefined {
+  if (!drivingSdfOutput(nodes, unwrapCollapsedGroupEdges(nodes, edges))) return settings;
+  return { ...settings, side: 'double' };
 }

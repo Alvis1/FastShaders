@@ -12,6 +12,8 @@ import {
 } from '@/utils/outputMaterials';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { MODULE_HELPERS } from './moduleHelpers';
+import { sdfPartition, sdfOutputNodes, MARCH_ROOT_TYPES, SDF_OUTPUT_TYPE } from '@/utils/sdfPartition';
 import { effectiveExposedPorts, OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { isUnsignedNoise } from '@/utils/noiseRange';
@@ -632,6 +634,16 @@ export function graphToCode(
 
     // Nodes with no tslFunction (custom emission) need an explicit base name
     // instead of the empty-string fallback below.
+    if (def.type === SDF_OUTPUT_TYPE) {
+      // The march IIFE plus its four companions share one base (`sdfOut1`,
+      // `sdfOut1Field`, `sdfOut1Color`, `sdfOut1Hit`, `sdfOut1N`) — reserved
+      // together, so a user property cannot land on one of them. codeToGraph
+      // recognises them by name AND declarator shape, never by name alone.
+      varNames.set(node.id, claimName('sdfOut', {
+        aliases: (n) => [`${n}Field`, `${n}Color`, `${n}Hit`, `${n}N`],
+      }));
+      continue;
+    }
     if (CUSTOM_EMISSION_BASENAMES[def.type]) {
       varNames.set(node.id, claimName(CUSTOM_EMISSION_BASENAMES[def.type]));
       continue;
@@ -669,23 +681,21 @@ export function graphToCode(
     if (isOrphanedProperty(node)) continue;
     // UV import is handled in body generation (with channel parameter)
     if (def.type === 'uv') continue;
-    // hsl/toHsl are local helpers, not TSL exports — never try to import them.
-    if (def.type === 'hsl' || def.type === 'toHsl') continue;
+    // Module-scope helpers (hsl/toHsl, the distance-field family) are not TSL
+    // exports — never try to import them.
+    if (MODULE_HELPERS.has(def.type)) continue;
     addImport(def.tslImportModule, def.tslFunction);
   }
 
-  // Collect helper imports for hsl/toHsl if used
-  const usedHsl = sorted.some((n) => n.data.registryType === 'hsl');
-  const usedToHsl = sorted.some((n) => n.data.registryType === 'toHsl');
-  if (usedHsl) {
-    for (const name of ['mul', 'add', 'sub', 'abs', 'mod', 'clamp', 'float', 'vec3']) {
-      addImport('three/tsl', name);
-    }
-  }
-  if (usedToHsl) {
-    for (const name of ['max', 'min', 'sub', 'add', 'mul', 'abs', 'select', 'greaterThan', 'lessThan', 'equal', 'div', 'float', 'vec3']) {
-      addImport('three/tsl', name);
-    }
+  // Module-scope helper Fns (`engine/moduleHelpers.ts`): force-import the
+  // three/tsl names only their BODIES use, and remember which to emit. Walked
+  // in TABLE order so the helper block is deterministic whatever the graph
+  // order — hsl before toHsl before the distance-field family.
+  const usedHelpers: string[] = [];
+  for (const [type, helper] of MODULE_HELPERS) {
+    if (!sorted.some((n) => n.data.registryType === type)) continue;
+    usedHelpers.push(type);
+    for (const name of helper.imports) addImport('three/tsl', name);
   }
 
   /**
@@ -755,15 +765,43 @@ export function graphToCode(
     return `color(${hexLiteral(storedHex ?? fallbackHex)})`;
   };
 
-  // Build body lines
-  const bodyLines: string[] = [];
+  // Build body lines. `bodyLines` is the CURRENT target: the flat shader body
+  // for every node of an ordinary graph, and — when an SDF Output is present —
+  // one of the two per-step function bodies for the nodes its partition puts
+  // there (utils/sdfPartition.ts). A node can appear in the plan twice (field
+  // AND colour), which is why this is a plan rather than a plain loop; for a
+  // graph with no SDF Output the plan IS `sorted`, so emission is unchanged.
+  const mainLines: string[] = [];
+  const fieldLines: string[] = [];
+  const colorLines: string[] = [];
+  let bodyLines: string[] = mainLines;
   // Module-scope setup emitted BEFORE the shader Fn — the Data/Stripes nodes
   // build their `THREE.DataTexture` lookups here (closed over by the Fn body).
   const setupLines: string[] = [];
 
+  const sdfNode = sdfOutputNodes(sorted)[0] ?? null;
+  const part = sdfNode ? sdfPartition(sorted, edges, sdfNode.id) : null;
+  const plan: [AppNode, string[]][] = [];
   for (const node of sorted) {
+    if (!part) { plan.push([node, mainLines]); continue; }
+    const inField = part.field.has(node.id);
+    const inColor = part.color.has(node.id);
+    if (!inField && !inColor) { plan.push([node, mainLines]); continue; }
+    if (part.mainAlso.has(node.id)) plan.push([node, mainLines]);
+    if (inField) plan.push([node, fieldLines]);
+    if (inColor) plan.push([node, colorLines]);
+  }
+
+  for (const [node, target] of plan) {
+    bodyLines = target;
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
+    if (def.type === SDF_OUTPUT_TYPE) continue;
+    // Inside a per-step function the march root IS the parameter.
+    if (bodyLines !== mainLines && MARCH_ROOT_TYPES.has(def.type)) {
+      bodyLines.push(`  const ${varNames.get(node.id)!} = p;`);
+      continue;
+    }
 
     // See isOrphanedProperty. The name is still CLAIMED in the pre-pass above,
     // deliberately: an unemitted property keeps its reservation, so wiring it up
@@ -1502,6 +1540,109 @@ export function graphToCode(
     }
   }
 
+  // ===== SDF Output: the raymarcher =====
+  // Emitted AFTER every ordinary node (it is the sink), so everything the two
+  // per-step functions capture by closure is already declared above them.
+  let sdfEmission: { lines: string[]; discardLine: string; returnLine: string } | null = null;
+  if (sdfNode && part) {
+    const base = varNames.get(sdfNode.id)!;
+    const nv = getNodeValues(sdfNode);
+    const fieldEdge = inEdge(gidx, sdfNode.id, 'field');
+    const fieldRef = fieldEdge ? resolveEdgeRef(fieldEdge, varNames, gidx) : null;
+    if (fieldRef) {
+      const paramExpr = (key: string, dflt: number): string => {
+        const e = inEdge(gidx, sdfNode.id, key);
+        if (e) {
+          const ref = resolveEdgeRef(e, varNames, gidx);
+          if (ref) return ref;
+        }
+        const v = Number(nv[key]);
+        return num(Number.isFinite(v) ? v : dflt);
+      };
+      const steps = paramExpr('steps', 48);
+      const maxDist = paramExpr('maxDist', 4);
+      const eps = paramExpr('epsilon', 0.002);
+      const indent = (l: string) => `  ${l}`;
+      const lines: string[] = [];
+      lines.push(`  const ${base}Field = Fn(([p]) => {`);
+      lines.push(...fieldLines.map(indent));
+      lines.push(`    return ${fieldRef};`);
+      lines.push('  });');
+      // Colour: a position-dependent chain is evaluated once at the hit point
+      // through its own function; anything else is a plain (captured) ref, and
+      // an unwired socket emits no key at all — the __pixel wrapper's own white
+      // fallback stands in, so the unwired form round-trips byte-identically.
+      let colorExpr: string | null = null;
+      const colorEdge = inEdge(gidx, sdfNode.id, 'color');
+      const storedColor = typeof nv.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(nv.color) ? nv.color : null;
+      if (!colorEdge && storedColor) {
+        // The node's own colour swatch — the Output node's stored-channel rule.
+        addImport('three/tsl', 'color');
+        colorExpr = `color(${hexLiteral(storedColor)})`;
+      } else if (colorEdge) {
+        const ref = resolveEdgeRef(colorEdge, varNames, gidx);
+        if (ref) {
+          const widened = shapeOfEdgeSource(colorEdge) === 1 ? `vec3(${ref})` : ref;
+          if (part.color.has(colorEdge.source)) {
+            lines.push(`  const ${base}Color = Fn(([p]) => {`);
+            lines.push(...colorLines.map(indent));
+            lines.push(`    return ${widened};`);
+            lines.push('  });');
+            colorExpr = `${base}Color(${base}Hit)`;
+          } else {
+            colorExpr = widened;
+          }
+        }
+      }
+      // The march, in object space so the field is sampled where the user
+      // built it. The ray heads from the camera through the fragment; it STARTS
+      // on the window's front face — or at the camera itself when this
+      // fragment is a BACK face, i.e. the camera is inside the bounding box
+      // (the material is forced double-sided whenever an SDF Output drives, so
+      // zooming into the window still shows the shape). `hit` stays 0 on a
+      // miss → discarded below.
+      lines.push(`  const ${base} = Fn(() => {`);
+      lines.push('    const cam = modelWorldMatrixInverse.mul(vec4(cameraPosition, 1)).xyz;');
+      lines.push('    const rd = normalize(sub(positionLocal, cam));');
+      lines.push('    const ro = select(frontFacing, positionLocal, cam);');
+      lines.push('    const t = float(0).toVar();');
+      lines.push('    const hit = float(0).toVar();');
+      lines.push(`    Loop(int(${steps}), () => {`);
+      lines.push(`      const d = ${base}Field(add(ro, mul(rd, t)));`);
+      lines.push(`      If(d.lessThan(${eps}), () => { hit.assign(1); Break(); });`);
+      lines.push('      t.addAssign(d);');
+      lines.push(`      If(t.greaterThan(${maxDist}), () => { Break(); });`);
+      lines.push('    });');
+      lines.push('    return vec4(add(ro, mul(rd, t)), hit);');
+      lines.push('  })();');
+      lines.push(`  const ${base}Hit = ${base}.xyz;`);
+      // Gradient normal — tetrahedron technique, four field taps — in VIEW
+      // space, which is what three's normalNode expects.
+      lines.push(`  const ${base}N = Fn(([hp]) => {`);
+      lines.push(`    const e = float(${eps});`);
+      lines.push('    const k1 = vec3(1, -1, -1);');
+      lines.push('    const k2 = vec3(-1, -1, 1);');
+      lines.push('    const k3 = vec3(-1, 1, -1);');
+      lines.push('    const k4 = vec3(1, 1, 1);');
+      lines.push(`    const g = add(add(mul(k1, ${base}Field(add(hp, mul(k1, e)))), mul(k2, ${base}Field(add(hp, mul(k2, e))))), add(mul(k3, ${base}Field(add(hp, mul(k3, e)))), mul(k4, ${base}Field(add(hp, mul(k4, e))))));`);
+      lines.push('    return transformNormalToView(normalize(g));');
+      lines.push(`  })(${base}Hit);`);
+      for (const name of [
+        'Fn', 'Loop', 'If', 'Break', 'int', 'float', 'vec3', 'vec4', 'add', 'mul', 'sub', 'normalize',
+        'cameraPosition', 'modelWorldMatrixInverse', 'positionLocal', 'transformNormalToView', 'Discard',
+        'select', 'frontFacing',
+      ]) addImport('three/tsl', name);
+      sdfEmission = {
+        lines,
+        discardLine: `  Discard(${base}.w.lessThan(0.5));`,
+        returnLine: colorExpr
+          ? `  return { color: ${colorExpr}, normal: ${base}N };`
+          : `  return { normal: ${base}N };`,
+      };
+    }
+  }
+
+
   // Handle output node — resolve all connected channels.
   //
   // Picked from the NODES array, not from `sorted`. `topologicalSort` seeds
@@ -1874,8 +2015,7 @@ export function graphToCode(
   }
 
   const helperLines: string[] = [];
-  if (usedHsl) helperLines.push(...HSL_HELPER_LINES, '');
-  if (usedToHsl) helperLines.push(...TO_HSL_HELPER_LINES, '');
+  for (const type of usedHelpers) helperLines.push(...MODULE_HELPERS.get(type)!.lines, '');
 
   const code = [
     ...importLines,
@@ -1885,10 +2025,11 @@ export function graphToCode(
     // the shader Fn so its body can close over the textures.
     ...(setupLines.length ? [...setupLines, ''] : []),
     'const shader = Fn(() => {',
-    ...bodyLines,
-    ...(discardLine ? [discardLine] : []),
+    ...mainLines,
+    ...(sdfEmission ? sdfEmission.lines : []),
+    ...(sdfEmission ? [sdfEmission.discardLine] : discardLine ? [discardLine] : []),
     '',
-    returnLine,
+    sdfEmission ? sdfEmission.returnLine : returnLine,
     '});',
     '',
     'export default shader;',
@@ -1898,48 +2039,6 @@ export function graphToCode(
   return { code, importStatements: importLines, varNames };
 }
 
-/**
- * HSL → RGB helper emitted at module scope when the graph contains an hsl node.
- * `hsl` is not an export of `three/tsl`, so we ship our own branchless implementation
- * (GLSL-style — no conditionals, suitable for the GPU).
- */
-const HSL_HELPER_LINES = [
-  'const hsl = Fn(([h, s, l]) => {',
-  '  const h6 = mul(h, float(6));',
-  '  const rk = clamp(sub(abs(sub(mod(add(h6, float(0)), float(6)), float(3))), float(1)), float(0), float(1));',
-  '  const gk = clamp(sub(abs(sub(mod(add(h6, float(4)), float(6)), float(3))), float(1)), float(0), float(1));',
-  '  const bk = clamp(sub(abs(sub(mod(add(h6, float(2)), float(6)), float(3))), float(1)), float(0), float(1));',
-  '  const sat = mul(s, sub(float(1), abs(sub(mul(float(2), l), float(1)))));',
-  '  return vec3(',
-  '    add(l, mul(sat, sub(rk, float(0.5)))),',
-  '    add(l, mul(sat, sub(gk, float(0.5)))),',
-  '    add(l, mul(sat, sub(bk, float(0.5)))),',
-  '  );',
-  '});',
-];
-
-/**
- * RGB → HSL helper. Branchless via select/greaterThan/equal so GPU warp divergence
- * stays low. Uses `max(d, 1e-10)` to dodge division-by-zero on neutral/grayscale
- * inputs; the outer `select(d > 0, …, 0)` then zeros hue/saturation cleanly.
- */
-const TO_HSL_HELPER_LINES = [
-  'const toHsl = Fn(([rgb]) => {',
-  '  const maxC = max(max(rgb.x, rgb.y), rgb.z);',
-  '  const minC = min(min(rgb.x, rgb.y), rgb.z);',
-  '  const d = sub(maxC, minC);',
-  '  const L = mul(add(maxC, minC), float(0.5));',
-  '  const satDenom = max(sub(float(1), abs(sub(mul(L, float(2)), float(1)))), float(1e-10));',
-  '  const S = select(greaterThan(d, float(0)), div(d, satDenom), float(0));',
-  '  const dSafe = max(d, float(1e-10));',
-  '  const hR = add(div(sub(rgb.y, rgb.z), dSafe), select(lessThan(rgb.y, rgb.z), float(6), float(0)));',
-  '  const hG = add(div(sub(rgb.z, rgb.x), dSafe), float(2));',
-  '  const hB = add(div(sub(rgb.x, rgb.y), dSafe), float(4));',
-  '  const hueSeg = select(equal(maxC, rgb.x), hR, select(equal(maxC, rgb.y), hG, hB));',
-  '  const H = select(greaterThan(d, float(0)), mul(hueSeg, float(1 / 6)), float(0));',
-  '  return vec3(H, S, L);',
-  '});',
-];
 
 /**
  * Build an append node's vector constructor over ALL its wired operands.

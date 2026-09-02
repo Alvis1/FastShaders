@@ -101,6 +101,13 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       const chrome = 34 + (materials.length - 1) * 8 + (materials.length > 1 ? 20 : 0);
       return { width: 150, height: chrome + rows * 18 };
     }
+    case 'sdfOutput': {
+      // SdfOutputNode: min-width 150 + header, two labelled sections (Ray
+      // march: field + colour; Settings: steps / max distance / epsilon), a
+      // subdivider between them — the Output's 18px row pitch and chrome.
+      const rows = Math.max(5, inDegree);
+      return { width: 150, height: 34 + 28 + rows * 18 };
+    }
     case 'group':
     case 'note': {
       // Containers/annotations carry explicit dimensions (props or data).

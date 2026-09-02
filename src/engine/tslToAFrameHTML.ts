@@ -147,7 +147,7 @@ function safeShaderFile(name: string): string {
  * sibling model file, so they fall back to the sphere.
  */
 function primitiveOf(geometry: GeometryType | undefined): 'a-sphere' | 'a-box' | 'a-plane' {
-  if (geometry === 'cube') return 'a-box';
+  if (geometry === 'cube' || geometry === 'sdfBox') return 'a-box';
   if (geometry === 'plane') return 'a-plane';
   return 'a-sphere';
 }
@@ -220,6 +220,9 @@ export function buildAFrameEmbedHTML(
   const attrCol = ' '.repeat(4 + 1 + tag.length + 1);
   const valueCol = ' '.repeat(attrCol.length + 'shader="'.length);
   const leading = [`position="${OBJECT_POSITION}"`];
+  // The SDF window is a 2-unit box (SDF_WINDOW_GEOMETRY): the field lives in
+  // the ±1 cube, and <a-box> defaults to 1 unit, which would clip it.
+  if (options.geometry === 'sdfBox') leading.push('width="2" height="2" depth="2"');
   if (hasDisplacement(moduleSource)) leading.push(segmentAttributes(tag).join(' '));
 
   if (uniforms.length === 0 && leading.length === 1) {

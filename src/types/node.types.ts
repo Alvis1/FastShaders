@@ -27,6 +27,7 @@ export type NodeCategory =
   | 'interpolation'
   | 'logic'
   | 'vector'
+  | 'sdf'
   | 'noise'
   | 'dataviz'
   | 'texture'

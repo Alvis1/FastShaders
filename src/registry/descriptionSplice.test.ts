@@ -34,9 +34,10 @@ describe('locateRegistryDescriptions', () => {
     // NODE_REGISTRY.size is 3 higher because the hidden defs
     // (unknown/dataNode/imageNode) are separate consts outside the
     // `definitions` array, so they are correctly not located here.
-    // 76 with the Vertex Color node.
-    expect(slots).toHaveLength(76);
-    expect(defs).toHaveLength(76);
+    // 76 with the Vertex Color node; 82 with the six distance-field nodes
+    // (2026-09-02), 83 with SDF Output.
+    expect(slots).toHaveLength(83);
+    expect(defs).toHaveLength(83);
     expect(new Set(slots.map(s => s.key))).toEqual(new Set(defs.map(d => d.type)));
   });
 
@@ -180,7 +181,7 @@ describe('splitAliases / joinAliases', () => {
   const defs = getAllDefinitions();
   const tailed = defs.filter(d => d.description?.includes('Also:'));
 
-  it('36 definitions carry an "Also:" tail', () => {
+  it('43 definitions carry an "Also:" tail', () => {
     // Measured against the live registry; separator is uniformly " Also: ".
     // 33 since positionWorldDirection was renamed 'View Dir (world)' →
     // 'Outward Dir (world)' and grew an alias tail so the old query still
@@ -192,7 +193,7 @@ describe('splitAliases / joinAliases', () => {
     // with Vertex Color, whose tail carries 'COLOR_0' plus the two things
     // people actually come looking for ('mesh id', 'face id') — none of which
     // belong in prose, since that is the ranked search corpus.
-    expect(tailed).toHaveLength(36);
+    expect(tailed).toHaveLength(43);
   });
 
   it('round-trips every tailed description byte-exactly', () => {
@@ -265,7 +266,7 @@ describe('escaped-apostrophe safety', () => {
     // ...and must decode back to exactly the value we asked for.
     const relocated = locateRegistryDescriptions(out);
     expect(relocated.find(s => s.key === 'tangentLocal')!.value).toBe(nasty);
-    expect(relocated).toHaveLength(76);
+    expect(relocated).toHaveLength(83);
 
     // Still a single-line edit.
     const changed = registrySource

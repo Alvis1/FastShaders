@@ -9,6 +9,9 @@ import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { collectShaderProperties, shaderBaseName } from '@/engine/exportShader';
 import { buildAFrameEmbedHTML, readPreviewGeometry } from '@/engine/tslToAFrameHTML';
+import { SDF_WINDOW_GEOMETRY } from '@/engine/tslToPreviewHTML';
+import { sdfOutputDrives } from '@/utils/sdfPartition';
+import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import { evalLog } from '@/eval/telemetry';
 import { parseCostFile, parseCostProfileBundle } from '@/utils/costOverride';
@@ -59,11 +62,19 @@ export function CodeEditor() {
   // notify replaces the node OBJECT but keeps its `.data` — and therefore its
   // materialSettings — reference, so Object.is bails. (ShaderPreview.tsx:264-267
   // holds the identical dependency on that fact.)
-  const materialSettings = useAppStore(
+  const rawMaterialSettings = useAppStore(
     (s) =>
       (findDefaultOutput(s.nodes)?.data as
         | OutputNodeData
         | undefined)?.materialSettings,
+  );
+  // While an SDF Output drives, the module is double-sided (exportShader's
+  // sdfMaterialSettings — the march starts at the camera on a back face) and
+  // the A-Frame page renders through the SDF window box.
+  const sdfDrives = useAppStore((s) => sdfOutputDrives(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)));
+  const materialSettings = useMemo(
+    () => (sdfDrives ? { ...rawMaterialSettings, side: 'double' as const } : rawMaterialSettings),
+    [rawMaterialSettings, sdfDrives],
   );
   const [activeTab, setActiveTab] = useState<CodeTab>('tsl');
   const [copied, setCopied] = useState(false);
@@ -177,14 +188,16 @@ export function CodeEditor() {
       return buildAFrameEmbedHTML(scriptCode, {
         shaderFile: jsFileName,
         title: shaderName,
-        geometry: readPreviewGeometry(),
+        // The SDF window replaces the Model dropdown's primitive while an SDF
+        // Output drives — the same rule the preview applies.
+        geometry: sdfDrives ? SDF_WINDOW_GEOMETRY : readPreviewGeometry(),
       });
     } catch (e) {
       return `<!-- Export error: ${e instanceof Error ? e.message : String(e)} -->`;
     }
     // embedStamp is the deliberate re-read trigger; it feeds nothing else.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scriptCode, jsFileName, shaderName, activeTab, embedStamp]);
+  }, [scriptCode, jsFileName, shaderName, activeTab, embedStamp, sdfDrives]);
 
   const handleCopyEmbed = useCallback(async () => {
     try {

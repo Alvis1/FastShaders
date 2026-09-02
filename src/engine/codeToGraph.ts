@@ -6,6 +6,8 @@ import { setNodeValues } from '@/types';
 import { isUsableMeshName } from '@/utils/meshInventory';
 import { MAX_PARTS, findDefaultOutput, outputNodes, channelHandle } from '@/utils/outputMaterials';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
+import { MODULE_HELPER_NAMES } from './moduleHelpers';
+import { SDF_OUTPUT_TYPE } from '@/utils/sdfPartition';
 import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
@@ -64,6 +66,33 @@ export function codeToGraph(code: string): CodeToGraphResult {
   const splitNodes = new Map<string, string>();
 
   let hasOutput = false;
+  // ===== SDF Output (the raymarcher) =====
+  // graphToCode emits it as `const sdfOut1Field = Fn(([p]) => {…})` (+ an
+  // optional `sdfOut1Color`), the march IIFE `sdfOut1`, `sdfOut1Hit`, the normal
+  // `sdfOut1N`, a `Discard(sdfOut1.w.lessThan(0.5))` and `return { color?, normal }`.
+  // The two per-step functions are graph content: their bodies are walked by
+  // the ordinary visitors with `p` bound to a Local Position node and their
+  // `return` routed to the SDF Output's socket. The IIFE, the hit swizzle and
+  // the normal function are the node ITSELF and are skipped whole (which is
+  // also what keeps their Loop/If from raising the imperative-block warning).
+  let sdfOutputId: string | null = null;
+  let marchPosId: string | null = null;
+  const helperReturnTargets = new Map<t.Node, { nodeId: string; handle: string }>();
+  const ensureSdfOutput = (): string => {
+    if (sdfOutputId) return sdfOutputId;
+    const def = NODE_REGISTRY.get(SDF_OUTPUT_TYPE)!;
+    sdfOutputId = generateId();
+    rawNodes.push(createNode(sdfOutputId, def, 'SDF Output'));
+    hasOutput = true;
+    return sdfOutputId;
+  };
+  const ensureMarchPos = (): string => {
+    if (marchPosId) return marchPosId;
+    const def = NODE_REGISTRY.get('positionLocal')!;
+    marchPosId = generateId();
+    rawNodes.push(createNode(marchPosId, def, 'positionLocal'));
+    return marchPosId;
+  };
   // Discard is a side-effect statement (`Discard(cond);`) that appears in the
   // function body, but its value flows into the Output node's `discard` port —
   // which doesn't exist until the return statement creates the output. Buffer
@@ -341,6 +370,27 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // Shared between `return X` (FastShaders canonical form) and `output = X`
   // (three.js TSL editor compatible form).
   const buildOutputFromExpr = (rawArg: t.Node): void => {
+    // An SDF Output's return carries `normal: sdfOut1N` (the node itself) and an
+    // optional `color` — a captured ref, or the `sdfOut1Color(sdfOut1Hit)` call
+    // whose chain was already wired by the helper's own return.
+    if (sdfOutputId) {
+      if (!t.isObjectExpression(rawArg)) return;
+      for (const rawProp of rawArg.properties) {
+        if (!t.isObjectProperty(rawProp)) continue;
+        if (propKeyName(rawProp) !== 'color') continue;
+        const v = unwrapScalarWiden(rawProp.value);
+        if (t.isCallExpression(v) && /^sdfOut\d+Color$/.test(rootIdentifierOf(v) ?? '')) continue;
+        const storedHex = matchStoredChannelValue('color', v);
+        if (typeof storedHex === 'string') {
+          const sdfNode = rawNodes.find((n) => n.id === sdfOutputId)!;
+          setNodeValues(sdfNode, { color: storedHex });
+          continue;
+        }
+        const ref = resolveReturnSource(v, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
+        if (ref) addEdge(rawEdges, ref.nodeId, ref.handle, sdfOutputId, 'color');
+      }
+      return;
+    }
     if (hasOutput) return;
     const arg = unwrapScalarWiden(rawArg);
 
@@ -387,13 +437,14 @@ export function codeToGraph(code: string): CodeToGraphResult {
         const init = path.node.init;
         if (!init) return;
 
-        // Skip module-local color helpers (`const hsl = Fn(...)`, `const toHsl = Fn(...)`)
-        // that graphToCode emits when the graph contains an hsl/toHsl node.
-        // Their bodies contain raw TSL primitives (mul/sub/clamp/…) which would
+        // Skip the module-local helpers graphToCode emits above the shader
+        // (`const hsl = Fn(...)`, the distance-field family — see
+        // engine/moduleHelpers.ts, the ONE table both engines read). Their
+        // bodies contain raw TSL primitives (mul/sub/clamp/…) which would
         // otherwise be parsed as standalone nodes, polluting the graph on every
         // code→graph round-trip.
         if (
-          (varName === 'hsl' || varName === 'toHsl') &&
+          MODULE_HELPER_NAMES.has(varName) &&
           t.isCallExpression(init) &&
           t.isIdentifier(init.callee) &&
           init.callee.name === 'Fn'
@@ -402,8 +453,68 @@ export function codeToGraph(code: string): CodeToGraphResult {
           return;
         }
 
+        // SDF Output emission (see the state block above).
+        const sdfHelper = /^sdfOut\d+(Field|Color)$/.exec(varName);
+        if (sdfHelper && t.isCallExpression(init) && t.isIdentifier(init.callee) && init.callee.name === 'Fn') {
+          const arrow = init.arguments[0];
+          if (arrow && (t.isArrowFunctionExpression(arrow) || t.isFunctionExpression(arrow))) {
+            const target = ensureSdfOutput();
+            helperReturnTargets.set(arrow, { nodeId: target, handle: sdfHelper[1] === 'Field' ? 'field' : 'color' });
+          }
+          return; // walk INTO the body — it is graph content
+        }
+        // The march IIFE: `const sdfOut1 = Fn(() => {…})();` — name AND shape,
+        // so a user property that happens to be called `sdfOut1` (a plain
+        // `uniform(…)` init) can never be mistaken for it.
+        if (
+          /^sdfOut\d+$/.test(varName) &&
+          t.isCallExpression(init) && t.isCallExpression(init.callee) &&
+          t.isIdentifier(init.callee.callee) && init.callee.callee.name === 'Fn'
+        ) {
+          const target = ensureSdfOutput();
+          const sdfNode = rawNodes.find((n) => n.id === target)!;
+          const values: Record<string, string | number> = {};
+          const wireParam = (handle: string, arg: t.Node | undefined): void => {
+            if (!arg) return;
+            const lit = extractLiteral(arg);
+            if (typeof lit === 'number') { values[handle] = lit; return; }
+            if (t.isIdentifier(arg)) {
+              const src = varToNodeId.get(arg.name) ?? ensureBareInputNode(arg.name, rawNodes, varToNodeId);
+              if (src) addEdge(rawEdges, src, varToHandle.get(arg.name) ?? 'out', target, handle, 'float');
+            }
+          };
+          path.get('init').traverse({
+            CallExpression(inner) {
+              const c = inner.node;
+              if (t.isIdentifier(c.callee) && c.callee.name === 'Loop') {
+                const a0 = c.arguments[0];
+                // `Loop(int(<steps>), …)`
+                wireParam('steps', t.isCallExpression(a0) && t.isIdentifier(a0.callee) && a0.callee.name === 'int' ? a0.arguments[0] : a0);
+              } else if (t.isMemberExpression(c.callee) && t.isIdentifier(c.callee.property)) {
+                if (c.callee.property.name === 'lessThan' && t.isIdentifier(c.callee.object) && c.callee.object.name === 'd') wireParam('epsilon', c.arguments[0]);
+                if (c.callee.property.name === 'greaterThan' && t.isIdentifier(c.callee.object) && c.callee.object.name === 't') wireParam('maxDist', c.arguments[0]);
+              }
+            },
+          });
+          if (Object.keys(values).length) setNodeValues(sdfNode, values);
+          path.skip();
+          return;
+        }
+        if (sdfOutputId && /^sdfOut\d+(Hit|N)$/.test(varName) && (t.isMemberExpression(init) || t.isCallExpression(init))) {
+          path.skip();
+          return;
+        }
+
         // const x = identifier (e.g. positionGeometry, or aliasing another var)
         if (t.isIdentifier(init)) {
+          // `const positionLocal1 = p;` inside an SDF Output per-step function:
+          // the march root. The flat body declared the same name from the real
+          // `positionLocal` just above (roots are always emitted there too), so
+          // the existing node IS the root — rebinding would mint a duplicate.
+          if (init.name === 'p' && helperReturnTargets.size > 0) {
+            if (!varToNodeId.has(varName)) varToNodeId.set(varName, ensureMarchPos());
+            return;
+          }
           const def = TSL_FUNCTION_TO_DEF.get(init.name);
           if (def) {
             const nodeId = generateId();
@@ -450,6 +561,15 @@ export function codeToGraph(code: string): CodeToGraphResult {
       ReturnStatement(path) {
         const arg = path.node.argument;
         if (!arg) return;
+        // A return inside one of the SDF Output's per-step functions feeds the
+        // node's socket, not the shader's output.
+        const fnNode = path.getFunctionParent()?.node;
+        const target = fnNode ? helperReturnTargets.get(fnNode) : undefined;
+        if (target) {
+          const ref = resolveReturnSource(unwrapScalarWiden(arg), rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
+          if (ref) addEdge(rawEdges, ref.nodeId, ref.handle, target.nodeId, target.handle);
+          return;
+        }
         buildOutputFromExpr(arg);
       },
 
@@ -470,7 +590,41 @@ export function codeToGraph(code: string): CodeToGraphResult {
       ExpressionStatement(path) {
         const expr = path.node.expression;
         if (!t.isCallExpression(expr)) return;
+        // Imperative TSL — `Loop(n, () => {…})`, `If(c, () => {…}).Else(…)`,
+        // `Switch(…)` — has no graph equivalent, and this visitor used to say
+        // NOTHING about it: the statement produced no node, Babel then walked
+        // INTO the callback and parsed its `const`s as top-level nodes (a
+        // 96-step raymarch became ~60 flat nodes), and every accumulator
+        // aliased to its initial value, so the re-emitted shader was a
+        // constant. Skip the whole block, and say so. A body statement like
+        // `acc.assign(x)` / `.addAssign` is the same silence one level down.
+        const root = rootCallee(expr);
+        if (root && IMPERATIVE_BLOCKS.has(root)) {
+          warnings.push({
+            message: `${root}(…) has no graph equivalent — the block and everything inside it were dropped. Loops, branches and .assign() live only in a hand-written module (see the shaderloader notes).`,
+            line: expr.loc?.start.line,
+            severity: 'warning',
+          });
+          path.skip();
+          return;
+        }
+        if (
+          t.isMemberExpression(expr.callee) &&
+          t.isIdentifier(expr.callee.property) &&
+          ASSIGN_METHODS.has(expr.callee.property.name)
+        ) {
+          const target = t.isIdentifier(expr.callee.object) ? expr.callee.object.name : 'value';
+          warnings.push({
+            message: `${target}.${expr.callee.property.name}(…) has no graph equivalent — it was dropped, so "${target}" keeps its initial value.`,
+            line: expr.loc?.start.line,
+            severity: 'warning',
+          });
+          return;
+        }
         if (!t.isIdentifier(expr.callee) || expr.callee.name !== 'Discard') return;
+        // `Discard(sdfOut1.w.lessThan(0.5))` is the SDF Output's miss cutout —
+        // the node itself, not a user discard.
+        if (sdfOutputId && expr.arguments[0] && /^sdfOut\d+$/.test(rootIdentifierOf(expr.arguments[0]) ?? '')) return;
         // The graph has ONE discard socket, so an unconditional `Discard()` and
         // a second condition cannot be represented. Both used to disappear in
         // silence — with the graph→code sync then writing the loss back into the
@@ -502,7 +656,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // this parser consumed may still have produced no node — and a graph with no
   // Output is one the user cannot wire. (An existence check, not a "which one
   // is THE output" question, so `outputNodes` rather than a `find`.)
-  if (outputNodes(rawNodes).length === 0) {
+  if (outputNodes(rawNodes).length === 0 && !sdfOutputId) {
     const outputDef = NODE_REGISTRY.get('output');
     if (outputDef) {
       rawNodes.push(createNode(generateId(), outputDef, 'Output'));
@@ -558,6 +712,38 @@ export function codeToGraph(code: string): CodeToGraphResult {
  * `<input type=color>`. Anything outside a 24-bit colour degrades to black —
  * mirroring graphToCode's `hexLiteral` on the emit side.
  */
+/** TSL statement-level constructs that build a control-flow block from a callback. */
+const IMPERATIVE_BLOCKS = new Set(['Loop', 'If', 'Switch']);
+/** The `.assign` family: a write to a `.toVar()` variable, meaningless in a DAG. */
+const ASSIGN_METHODS = new Set([
+  'assign', 'addAssign', 'subAssign', 'mulAssign', 'divAssign', 'modAssign',
+]);
+
+/**
+ * The identifier at the ROOT of a call chain: `If(c, f).Else(g)` is a call on
+ * the member `Else` of a call on `If`, so the plain callee check sees `Else`.
+ */
+function rootCallee(expr: t.CallExpression): string | null {
+  let cur: t.Node = expr;
+  for (let guard = 0; guard < 32; guard++) {
+    if (t.isCallExpression(cur)) { cur = cur.callee; continue; }
+    if (t.isMemberExpression(cur)) { cur = cur.object; continue; }
+    return t.isIdentifier(cur) ? cur.name : null;
+  }
+  return null;
+}
+
+/** The identifier a call/member chain hangs off: `sdfOut1.w.lessThan(0.5)` → `sdfOut1`. */
+function rootIdentifierOf(node: t.Node): string | null {
+  let cur: t.Node = node;
+  for (let guard = 0; guard < 32; guard++) {
+    if (t.isCallExpression(cur)) { cur = cur.callee; continue; }
+    if (t.isMemberExpression(cur)) { cur = cur.object; continue; }
+    return t.isIdentifier(cur) ? cur.name : null;
+  }
+  return null;
+}
+
 function toHex6(lit: number): string {
   const n = Math.round(lit);
   return Number.isFinite(n) && n >= 0 && n <= 0xffffff

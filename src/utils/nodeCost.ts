@@ -3,6 +3,7 @@ import { outputNodes } from '@/utils/outputMaterials';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { getCost } from '@/utils/costTable';
+import { sdfOutputNodes, sdfPartition } from '@/utils/sdfPartition';
 
 /**
  * GPU cost READERS that need the node graph — the per-instance price and the
@@ -77,9 +78,24 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
  * `[nodes, edges]` effect wouldn't otherwise re-fire).
  */
 export function computeReachableCost(nodes: AppNode[], edges: AppEdge[]): number {
-  const outputs = outputNodes(nodes);
+  const outputs = [...outputNodes(nodes), ...sdfOutputNodes(nodes)];
   if (outputs.length === 0) return 0;
-  return sumReachable(nodes, edges, outputs.map((n) => n.id), new Set(outputs.map((n) => n.id)));
+  const outputIds = new Set(outputs.map((n) => n.id));
+  let total = sumReachable(nodes, edges, outputs.map((n) => n.id), outputIds);
+  // An SDF Output evaluates its field body once per ray STEP, plus four taps
+  // for the gradient normal, and pays its own fixed march overhead. The body
+  // was counted once above; add the remaining (steps + 4 − 1) evaluations,
+  // using the SAME partition the emitter uses (utils/sdfPartition.ts).
+  for (const sdf of sdfOutputNodes(nodes)) {
+    const raw = Number(getNodeValues(sdf).steps);
+    const dflt = Number(NODE_REGISTRY.get(sdf.data.registryType)?.defaultValues?.steps ?? 48);
+    const steps = Number.isFinite(raw) ? raw : dflt;
+    const part = sdfPartition(nodes, edges, sdf.id);
+    let body = 0;
+    for (const n of nodes) if (part.field.has(n.id)) body += nodeCostPoints(n, edges);
+    total += body * Math.max(0, steps + 4 - 1) + getCost(sdf.data.registryType);
+  }
+  return total;
 }
 
 /** Reverse-BFS from `seeds`, summing everything reached except the Outputs. */

@@ -883,6 +883,129 @@ const definitions: NodeDefinition[] = [
     description: 'Combine values into a vector. Also: Combine, Join',
   },
 
+  // ===== DISTANCE FIELDS (category: sdf) =====
+  // Signed distance functions: negative inside, zero on the boundary, positive
+  // outside. NOT three/tsl exports — each is a module-scope helper Fn from
+  // engine/moduleHelpers.ts (the hsl/toHsl pattern: emitted when used, skipped
+  // by codeToGraph by name), so `tslImportModule` stays ''. Inigo Quilez's
+  // canonical forms; cpuEvaluator carries the same maths for the on-node labels.
+  // The 2D ones take a CENTRED position — wire `uv` through `sub(0.5)` — and
+  // the box extents are HALF-sizes, as in the reference formulas.
+  {
+    type: 'sdCircle',
+    label: 'Circle (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdCircle',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'any' },
+      { id: 'r', label: 'Radius', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { r: 0.5 },
+    description: 'Signed distance to the edge of a circle (2D position) or a sphere (3D) — negative inside, zero on the edge, positive outside. Feed it to Smoothstep for a shape mask. Also: sphere, sdf, distance field, shape, disc',
+  },
+  {
+    type: 'sdBox2',
+    label: 'Box 2D (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdBox2',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec2' },
+      { id: 'w', label: 'Half width', dataType: 'float' },
+      { id: 'h', label: 'Half height', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { w: 0.5, h: 0.5 },
+    description: 'Signed distance to the edge of a rectangle centred on (0, 0), given its half extents — negative inside. Also: rectangle, square, sdf, shape',
+  },
+  {
+    type: 'sdBox3',
+    label: 'Box 3D (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdBox3',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'w', label: 'Half width', dataType: 'float' },
+      { id: 'h', label: 'Half height', dataType: 'float' },
+      { id: 'd', label: 'Half depth', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { w: 0.5, h: 0.5, d: 0.5 },
+    description: 'Signed distance to the surface of a box centred on the origin, given its half extents — negative inside. Also: cube, cuboid, sdf, shape',
+  },
+  {
+    type: 'sdTorus',
+    label: 'Torus (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdTorus',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'ringR', label: 'Ring radius', dataType: 'float' },
+      { id: 'tubeR', label: 'Tube radius', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { ringR: 0.5, tubeR: 0.15 },
+    description: 'Signed distance to the surface of a torus lying flat around the Y axis — a ring of the given radius with a tube of the given thickness. Also: ring, donut, sdf, shape',
+  },
+  {
+    type: 'smoothUnion',
+    label: 'Smooth union (SDF)',
+    category: 'sdf',
+    tslFunction: 'smoothUnion',
+    tslImportModule: '',
+    inputs: [
+      { id: 'a', label: 'Shape A', dataType: 'float' },
+      { id: 'b', label: 'Shape B', dataType: 'float' },
+      { id: 'k', label: 'Smoothness', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    // k is a divisor — 0 is a hard NaN, so it must never be the unwired default
+    // (unwiredDefaults.test.ts). The evaluator uses the same 0.1.
+    defaultValues: { k: 0.1 },
+    description: 'Merge two distance fields with a soft fillet where they meet, so shapes blend into one blob instead of overlapping. Smoothness is the width of the fillet. Also: smin, blend, merge, union, sdf',
+  },
+  {
+    type: 'sdSubtract',
+    label: 'Cut out (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdSubtract',
+    tslImportModule: '',
+    inputs: [
+      { id: 'a', label: 'Shape', dataType: 'float' },
+      { id: 'b', label: 'Cutter', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    description: 'Carve the second distance field out of the first — a boolean subtraction for shapes. Also: difference, boolean, carve, sdf',
+  },
+
+  {
+    // The raymarcher. Replaces the Output node when present: graphToCode emits
+    // the position-dependent part of the `field` chain as `Fn(([p]) => …)`
+    // (utils/sdfPartition.ts), marches from the bounding mesh's front face
+    // toward the camera's object-space position with `Loop`, discards misses,
+    // shades hits with a gradient normal (four field taps) and the `color`
+    // chain evaluated at the hit point. See the SDF Output convention.
+    type: 'sdfOutput',
+    label: 'SDF Output',
+    category: 'sdf',
+    tslFunction: '',
+    tslImportModule: '',
+    inputs: [
+      { id: 'field', label: 'Field', dataType: 'float' },
+      { id: 'color', label: 'Color', dataType: 'color' },
+      { id: 'steps', label: 'Steps', dataType: 'float' },
+      { id: 'maxDist', label: 'Max distance', dataType: 'float' },
+      { id: 'epsilon', label: 'Epsilon', dataType: 'float' },
+    ],
+    outputs: [],
+    defaultValues: { steps: 48, maxDist: 4, epsilon: 0.002 },
+    description: 'Render a distance field as a real 3D shape by marching rays through it. Wire a field built from Local Position; the preview mesh becomes a window onto the shape, pixels that miss it are cut away. Costs Steps times the field per pixel. Also: raymarch, ray marching, sphere tracing, sdf, volume',
+  },
+
   // ===== NOISE =====
   // All noise nodes share the same `pos` (defaults to positionGeometry) +
   // `scale` (uniform multiplier applied to pos) parameter convention; the
@@ -1483,10 +1606,13 @@ export function categoryEmptiedByHiding(category: NodeCategory): boolean {
 }
 
 /** Map a registry definition to its React Flow node type string. */
-export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'mic' | 'audio' | 'output';
+export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'mic' | 'audio' | 'output' | 'sdfOutput';
 
 export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   if (def.type === 'output') return 'output';
+  // The raymarching output wears the Output node's chrome (SdfOutputNode.tsx),
+  // not the generic rows — same header, sections, labelled rows, value cells.
+  if (def.type === 'sdfOutput') return 'sdfOutput';
   if (def.type === 'time') return 'clock';
   // Places every socket itself (see MicNode.tsx) — ShaderNode's row layout
   // cannot express its arrangement.

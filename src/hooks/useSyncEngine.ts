@@ -5,6 +5,7 @@ import { codeToGraph } from '@/engine/codeToGraph';
 import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { computeReachableCost } from '@/utils/nodeCost';
+import { isSdfOutput } from '@/utils/sdfPartition';
 import { findDefaultOutput } from '@/utils/outputMaterials';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
@@ -424,14 +425,19 @@ export function useSyncEngine() {
     //
     // The Output node's badge is the whole-shader total — it is one node, and
     // every material's chain is reachable from it.
+    // The SDF Output is a sink of the same kind (its badge is the total too).
     const outputNode = findDefaultOutput(nodes);
-    const needsOutputUpdate = !!(outputNode && outputNode.data.cost !== total);
+    const sinkIds = new Set<string>([
+      ...(outputNode ? [outputNode.id] : []),
+      ...nodes.filter(isSdfOutput).map((n) => n.id),
+    ]);
+    const needsOutputUpdate = nodes.some((n) => sinkIds.has(n.id) && n.data.cost !== total);
     useAppStore.setState((state) => ({
       totalCost: total,
       ...(needsOutputUpdate
         ? {
             nodes: state.nodes.map((n) =>
-              n.id === outputNode!.id
+              sinkIds.has(n.id)
                 ? { ...n, data: { ...n.data, cost: total } }
                 : n
             ) as AppNode[],

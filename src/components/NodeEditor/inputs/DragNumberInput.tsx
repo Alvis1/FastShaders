@@ -8,6 +8,11 @@ interface DragNumberInputProps {
   step?: number;
   compact?: boolean;
   className?: string;
+  /** Display precision (default 2). Values that live below 0.01 — an SDF
+   *  Output's epsilon — render as "0" at the default, so a site that needs
+   *  finer numbers asks for them; the drag speed scales down with it so a
+   *  pixel of scrub stays a sensible fraction of the value. */
+  decimals?: number;
 }
 
 const DRAG_THRESHOLD = 3; // px before drag starts
@@ -23,6 +28,7 @@ export function DragNumberInput({
   value,
   onChange,
   step = 0.1,
+  decimals = 2,
   compact = false,
   className = '',
 }: DragNumberInputProps) {
@@ -132,11 +138,11 @@ export function DragNumberInput({
       setDragging(true);
 
       // Accelerating speed: faster the further you drag
-      const speed = BASE_SPEED + Math.abs(dx) * ACCEL_FACTOR;
+      const speed = (BASE_SPEED + Math.abs(dx) * ACCEL_FACTOR) * 10 ** (2 - decimals);
       const newValue = dragRef.current.startValue + dx * speed;
-      onChange(roundTo(newValue, 4));
+      onChange(roundTo(newValue, Math.max(4, decimals)));
     },
-    [onChange, editing],
+    [onChange, editing, decimals],
   );
 
   const onPointerUp = useCallback(
@@ -177,7 +183,7 @@ export function DragNumberInput({
     onChange(roundTo(value - step, 4));
   }, [value, step, onChange]);
 
-  const displayValue = roundTo(value, 2);
+  const displayValue = roundTo(value, decimals);
 
   return (
     <span className={`drag-num nodrag ${compact ? 'drag-num--compact' : ''} ${className}`}>

@@ -92,6 +92,14 @@
     "isolines": 14,
     "imageNode": 2,
 
+    "sdCircle": 8,
+    "sdBox2": 13,
+    "sdBox3": 15,
+    "sdTorus": 16,
+    "smoothUnion": 13,
+    "sdSubtract": 2,
+    "sdfOutput": 12,
+
     "unknown": 25,
     "output": 0
   }

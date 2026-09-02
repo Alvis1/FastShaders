@@ -997,6 +997,56 @@ function evaluate(
       break;
     }
 
+    // ===== DISTANCE FIELDS (engine/moduleHelpers.ts carries the GPU twin) =====
+    case 'sdCircle': {
+      const p = channelInput('p', 0);
+      const r = scalarInput('r', 0.5);
+      result = p ? [Math.hypot(...p) - r] : null;
+      break;
+    }
+    case 'sdBox2': {
+      const p = channelInput('p', 0);
+      const w = scalarInput('w', 0.5), h = scalarInput('h', 0.5);
+      if (p) {
+        const qx = Math.abs(p[0] ?? 0) - w, qy = Math.abs(p[1] ?? 0) - h;
+        result = [Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0)];
+      } else result = null;
+      break;
+    }
+    case 'sdBox3': {
+      const p = channelInput('p', 0);
+      const w = scalarInput('w', 0.5), h = scalarInput('h', 0.5), d = scalarInput('d', 0.5);
+      if (p) {
+        const qx = Math.abs(p[0] ?? 0) - w, qy = Math.abs(p[1] ?? 0) - h, qz = Math.abs(p[2] ?? 0) - d;
+        result = [
+          Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) +
+            Math.min(Math.max(qx, Math.max(qy, qz)), 0),
+        ];
+      } else result = null;
+      break;
+    }
+    case 'sdTorus': {
+      const p = channelInput('p', 0);
+      const ringR = scalarInput('ringR', 0.5), tubeR = scalarInput('tubeR', 0.15);
+      if (p) {
+        const qx = Math.hypot(p[0] ?? 0, p[2] ?? 0) - ringR;
+        result = [Math.hypot(qx, p[1] ?? 0) - tubeR];
+      } else result = null;
+      break;
+    }
+    case 'smoothUnion': {
+      // Polynomial smin — the same expression the helper emits.
+      const a = scalarInput('a', 0), b = scalarInput('b', 0), k = scalarInput('k', 0.1);
+      const hh = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / (k || 1e-9)));
+      result = [b + (a - b) * hh - k * hh * (1 - hh)];
+      break;
+    }
+    case 'sdSubtract': {
+      const a = scalarInput('a', 0), b = scalarInput('b', 0);
+      result = [Math.max(-b, a)];
+      break;
+    }
+
     default:
       result = null;
   }
@@ -1539,6 +1589,38 @@ function computeRange(
       result = { min: [Math.sqrt(lo2)], max: [Math.sqrt(hi2)] };
       break;
     }
+    // ===== DISTANCE FIELDS =====
+    case 'sdCircle': {
+      // |p| over the per-channel intervals (the `length` rule), minus the radius.
+      const p = portRange('p', 0);
+      const r = portRange('r', 0.5);
+      let lo2 = 0, hi2 = 0;
+      for (let i = 0; i < p.min.length; i++) {
+        const lo = p.min[i], hi = p.max[i];
+        const amin = lo <= 0 && hi >= 0 ? 0 : Math.min(Math.abs(lo), Math.abs(hi));
+        const amax = Math.max(Math.abs(lo), Math.abs(hi));
+        lo2 += amin * amin;
+        hi2 += amax * amax;
+      }
+      result = { min: [Math.sqrt(lo2) - r.max[0]], max: [Math.sqrt(hi2) - r.min[0]] };
+      break;
+    }
+    case 'smoothUnion': {
+      // smin(a, b) sits in [min(a, b) − k/4, min(a, b)].
+      const a = portRange('a', 0), b = portRange('b', 0), k = portRange('k', 0.1);
+      const lo = Math.min(a.min[0], b.min[0]) - Math.max(0, k.max[0]) / 4;
+      const hi = Math.min(a.max[0], b.max[0]);
+      result = { min: [lo], max: [hi] };
+      break;
+    }
+    case 'sdSubtract': {
+      // max(−b, a)
+      const a = portRange('a', 0), b = portRange('b', 0);
+      result = { min: [Math.max(-b.max[0], a.min[0])], max: [Math.max(-b.min[0], a.max[0])] };
+      break;
+    }
+    // sdBox2 / sdBox3 / sdTorus: no cheap honest interval — they fall through to
+    // the `…` label rather than reporting a bound that is wrong.
   }
 
   cache.set(nodeId, result);

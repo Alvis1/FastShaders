@@ -19,7 +19,18 @@ import type { PreviewMeshKind } from '@/utils/previewMesh';
 // an env map is attached; ShaderPreview falls back to 'studio' otherwise.
 export type LightingMode = 'studio' | 'moon' | 'laboratory' | 'env';
 
-export type GeometryType = 'sphere' | 'cube' | 'plane' | 'teapot' | 'bunny' | 'custom';
+export type GeometryType = 'sphere' | 'cube' | 'plane' | 'teapot' | 'bunny' | 'custom' | 'sdfBox';
+
+/**
+ * The window an SDF Output renders through: a 2-unit box, so a field built in
+ * the ±1 object-space cube is fully inside it (the preview sphere's radius-1
+ * hull clipped a 0.45 box's corners, and a plane or a bunny as the ray-start
+ * surface made no sense at all). DERIVED — the preview substitutes it whenever
+ * an SDF Output drives (`drivingSdfOutput`) and it is never written to
+ * `fs:previewGeometry`; the Model dropdown keeps the user's choice for when
+ * the plain Output drives again.
+ */
+export const SDF_WINDOW_GEOMETRY: GeometryType = 'sdfBox';
 
 /** Geometry types backed by a BUILT-IN OBJ model file (public/models/). */
 const OBJ_GEOMETRIES: ReadonlySet<GeometryType> = new Set(['teapot', 'bunny']);
@@ -132,13 +143,16 @@ export interface PreviewOptions {
  * initial-HTML and live-update paths can't drift).
  */
 export function buildGeoAttr(
-  geometry: 'sphere' | 'cube' | 'plane',
+  geometry: 'sphere' | 'cube' | 'plane' | 'sdfBox',
   subdivision: number,
 ): string {
   const seg = Math.max(1, Math.min(256, Math.round(subdivision)));
   switch (geometry) {
     case 'cube':
       return `primitive: box; width: 1.4; height: 1.4; depth: 1.4; segmentsWidth: ${seg}; segmentsHeight: ${seg}; segmentsDepth: ${seg}`;
+    case 'sdfBox':
+      // One segment per axis: the box is a window, nothing displaces it.
+      return 'primitive: box; width: 2; height: 2; depth: 2; segmentsWidth: 1; segmentsHeight: 1; segmentsDepth: 1';
     case 'plane':
       return `primitive: plane; width: 2; height: 2; segmentsWidth: ${seg}; segmentsHeight: ${seg}`;
     case 'sphere':
@@ -192,6 +206,7 @@ export function getModelUrl(geometry: 'teapot' | 'bunny'): string {
 export const GEOMETRY_ROTATIONS: Record<GeometryType, string> = {
   sphere: '45 45 0',
   cube: '45 45 0',
+  sdfBox: '45 45 0',
   plane: '0 0 0',
   teapot: '15 35 0',
   bunny: '0 25 0',
@@ -1557,7 +1572,7 @@ export function tslToPreviewHTML(
       entityAttrs = `${fitBoundsAttr} ${animAttr}`;
     }
   } else {
-    const geoAttr = buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane', subdivision);
+    const geoAttr = buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane' | 'sdfBox', subdivision);
     entityAttrs = `geometry="${geoAttr}"`;
   }
 
@@ -2142,7 +2157,7 @@ export function tslToPreviewHTML(
       : {
           o: false,
           m: null,
-          g: buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane', subdivision),
+          g: buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane' | 'sdfBox', subdivision),
           r: rotationAttr,
         },
   ));

@@ -13,6 +13,7 @@ export const CATEGORIES: CategoryInfo[] = [
   { id: 'interpolation', label: 'Interpolation' },
   { id: 'logic', label: 'Logic' },
   { id: 'vector', label: 'Vector' },
+  { id: 'sdf', label: 'Distance fields' },
   { id: 'noise', label: 'Noise' },
   { id: 'dataviz', label: 'DataViz' },
   { id: 'texture', label: 'Textures' },

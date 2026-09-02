@@ -577,6 +577,60 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
 }
 
 /* ============================================================
+ * SdfOutputCardContent — the raymarching output, in the Output's chrome
+ * ============================================================ */
+
+function SdfOutputCardContent({ def, cost, costColor, costTextColor, headerTextColor }: ContentProps) {
+  // Mirrors SdfOutputNode.tsx's markup and reuses OutputNode.css outright (the
+  // Output card's rule): header, two labelled sections, a subdivider, one
+  // labelled row per socket with the same value cell — rendered inert.
+  const defaults = def.defaultValues ?? {};
+  const cell = (portId: string) => {
+    if (portId === 'color') {
+      return <span className="palette-swatch output-node__val" style={{ background: '#ffffff' }} />;
+    }
+    if (portId in defaults) {
+      return (
+        <span className="output-node__val node-preview-card__inert">
+          <DragNumberInput compact value={Number(defaults[portId])} decimals={portId === 'epsilon' ? 3 : 2} onChange={() => {}} />
+        </span>
+      );
+    }
+    return <span className="output-node__val" />;
+  };
+  const rows = (ids: string[]) =>
+    def.inputs.filter((p) => ids.includes(p.id)).map((port) => (
+      <div key={port.id} className="output-node__row">
+        <CardSocket side="left" dataType={port.dataType} />
+        {cell(port.id)}
+        <span className="output-node__port-label">{port.label}</span>
+      </div>
+    ));
+  return (
+    <div className="output-node output-node--sdf node-preview-card__node" style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-sdf)` }}>
+      {cost > 0 && (
+        <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
+      )}
+      <div className="output-node__header" style={{ background: costColor }}>
+        <span className="output-node__title" style={{ color: headerTextColor }}>SDF Output</span>
+      </div>
+      <div className="output-node__material">
+        <span className="output-node__preview-socket" aria-hidden="true" />
+        <div className="output-node__section">
+          <div className="output-node__section-label">Ray march</div>
+          <div className="output-node__ports">{rows(['field', 'color'])}</div>
+        </div>
+        <div className="output-node__subdivider" />
+        <div className="output-node__section">
+          <div className="output-node__section-label">Settings</div>
+          <div className="output-node__ports">{rows(['steps', 'maxDist', 'epsilon'])}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
  * ColorCardContent — color circle with contrast-aware label
  * ============================================================ */
 
@@ -714,6 +768,8 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
         <FitNodeHeading visualScale={shared.costScale} textScale={1}><MicCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'audio' ? (
         <FitNodeHeading visualScale={shared.costScale} textScale={1}><AudioCardContent {...shared} /></FitNodeHeading>
+      ) : flowType === 'sdfOutput' ? (
+        <FitNodeHeading visualScale={shared.costScale} textScale={OUTPUT_TITLE_PX / CARD_TITLE_BASE_PX}><SdfOutputCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'output' ? (
         // textScale carries the Output header's own type size: its heading is
         // `.output-node__title` (10px), not the 9px `.node-base__title` the

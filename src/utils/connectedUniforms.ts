@@ -1,5 +1,6 @@
 import type { AppNode, AppEdge } from '@/types';
 import { outputNodes } from '@/utils/outputMaterials';
+import { sdfOutputNodes } from '@/utils/sdfPartition';
 import { getNodeValues } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -62,7 +63,7 @@ export function connectedUniformNamesKey(
   // material. Missing the latter would leave that slider out of the Uniforms
   // overlay, which is the "scrubbing does nothing" failure this module exists
   // to prevent, one mesh away.
-  const emitting = outputNodes(nodes);
+  const emitting = [...outputNodes(nodes), ...sdfOutputNodes(nodes)];
   /** Nodes that feed an emitting Output, walking edges BACKWARDS from each. */
   const live = new Set<string>();
   if (emitting.length > 0) {
