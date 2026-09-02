@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { findDefaultOutput, outputDormancyFromState } from '@/utils/outputMaterials';
+import { drivingSdfOutput } from '@/utils/sdfPartition';
+import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { useAppStore } from '@/store/useAppStore';
 import { linkPath, rectCenter } from './previewLinkGeometry';
 import './PreviewLink.css';
@@ -35,8 +37,18 @@ export function PreviewLink() {
   // Primitive selectors → re-render only when the Output's identity or its
   // MATERIAL COUNT changes (the count is how many <path> elements React must
   // keep mounted; the per-frame geometry never re-renders anything).
+  // The node that FEEDS the preview: a DRIVING SDF Output (field wired)
+  // replaces the Output node in emission, so the wire leaves it instead — a
+  // wire from an ignored Output would claim the viewer renders what it does
+  // not. An unwired SDF Output is inert and the Output keeps its wire.
+  const sdfDrives = useAppStore(
+    (s) => drivingSdfOutput(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)) !== null,
+  );
   const outputId = useAppStore(
-    (s) => findDefaultOutput(s.nodes)?.id ?? null,
+    (s) =>
+      drivingSdfOutput(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges))?.id
+      ?? findDefaultOutput(s.nodes)?.id
+      ?? null,
   );
   // VISIBLE materials only: the node hides DORMANT sections (their every
   // mesh absent from the loaded model), and each <path> here pairs with a
@@ -49,7 +61,8 @@ export function PreviewLink() {
   const materialCount = useAppStore((s) => outputDormancyFromState(s).visibleCount);
   const outputIdRef = useRef(outputId);
   outputIdRef.current = outputId;
-  const pathCount = Math.max(1, materialCount);
+  // One wire from the SDF Output (it has one section); else one per material.
+  const pathCount = sdfDrives ? 1 : Math.max(1, materialCount);
   const pathCountRef = useRef(pathCount);
   pathCountRef.current = pathCount;
 

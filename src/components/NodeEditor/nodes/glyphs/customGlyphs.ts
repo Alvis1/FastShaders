@@ -594,5 +594,23 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "b": 28,
       "out": 28
     }
+  },
+  "sdCircle": {
+    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"0\" cy=\"0\" r=\"14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></circle><circle cx=\"0\" cy=\"0\" r=\"1.6\" fill=\"#2B2B2B\"></circle><line x1=\"0\" y1=\"0\" x2=\"21\" y2=\"-12\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"21\" cy=\"-12\" r=\"2.4\" fill=\"#F57C00\"></circle></g>"
+  },
+  "sdBox2": {
+    "svg": "<g transform=\"translate(28 28)\"><rect x=\"-15\" y=\"-10\" width=\"26\" height=\"20\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><line x1=\"11\" y1=\"5\" x2=\"21\" y2=\"5\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"21\" cy=\"5\" r=\"2.4\" fill=\"#F57C00\"></circle></g>"
+  },
+  "sdBox3": {
+    "svg": "<g transform=\"translate(28 28)\"><polygon points=\"-15,-4 -15,14 5,14 5,-4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><polygon points=\"-15,-4 -6,-13 14,-13 5,-4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><polygon points=\"5,-4 14,-13 14,5 5,14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><line x1=\"14\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"22\" cy=\"0\" r=\"2.4\" fill=\"#F57C00\"></circle></g>"
+  },
+  "sdTorus": {
+    "svg": "<g transform=\"translate(28 28)\"><ellipse cx=\"0\" cy=\"0\" rx=\"20\" ry=\"11\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></ellipse><ellipse cx=\"0\" cy=\"0\" rx=\"8\" ry=\"4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></ellipse><line x1=\"14\" y1=\"-7\" x2=\"22\" y2=\"-14\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"22\" cy=\"-14\" r=\"2.4\" fill=\"#F57C00\"></circle></g>"
+  },
+  "smoothUnion": {
+    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"-9\" cy=\"0\" r=\"10\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\"></circle><circle cx=\"9\" cy=\"0\" r=\"10\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\"></circle><path d=\"M -19 0 A 10 10 0 0 1 -4.4 -9 Q 0 -5 4.4 -9 A 10 10 0 1 1 4.4 9 Q 0 5 -4.4 9 A 10 10 0 0 1 -19 0 Z\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path></g>"
+  },
+  "sdSubtract": {
+    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"-4\" cy=\"2\" r=\"14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></circle><circle cx=\"11\" cy=\"-8\" r=\"9\" fill=\"#FFFFFF\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></circle></g>"
   }
 };

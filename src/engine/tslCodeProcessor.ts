@@ -485,7 +485,26 @@ function parseBody(
   const defLines: string[] = [];
   const channels: Record<string, string> = {};
 
-  for (const rawLine of processedBody.split('\n')) {
+  // Brace depth, counted on the MASKED body so a `{` inside a string or comment
+  // cannot shift it. Only a `return` at depth 0 is the SHADER's return: a nested
+  // `Fn(() => { … return v; })()` — the one shape that can carry a `Loop`, an
+  // `If` or an `.assign` into a module the loader calls as a plain function —
+  // has a `return` of its own, and the line-based match below used to hijack
+  // it as the colour channel and DELETE it from the body, leaving the inner Fn
+  // void. Measured: the A-Frame bundle then crashed in `getTypeFromLength`
+  // (a SplitNode over a void node) and the unminified build reported "Invalid
+  // generated code, expected a vec3" — for a shader that ran correctly in Node.
+  const maskedLines = maskNonCode(processedBody).split('\n');
+  const bodyLines = processedBody.split('\n');
+  let depth = 0;
+
+  for (let li = 0; li < bodyLines.length; li++) {
+    const rawLine = bodyLines[li];
+    const atTop = depth === 0;
+    for (const ch of maskedLines[li] ?? '') {
+      if (ch === '{') depth++;
+      else if (ch === '}') depth = Math.max(0, depth - 1);
+    }
     // Strip a trailing line comment before matching. Both patterns below are
     // anchored to end-of-line, so a `return …; // note` slipped past BOTH and
     // fell through to defLines — re-emitted verbatim as a body statement that
@@ -497,8 +516,8 @@ function parseBody(
     const trimmed = rawLine.trim().replace(/\s*\/\/[^'"`]*$/, '').trim();
     if (!trimmed) continue;
 
-    const objReturn = trimmed.match(/^return\s*\{(.+)\}\s*;?$/);
-    const simpleReturn = trimmed.match(/^return\s+(.+);$/);
+    const objReturn = atTop ? trimmed.match(/^return\s*\{(.+)\}\s*;?$/) : null;
+    const simpleReturn = atTop ? trimmed.match(/^return\s+(.+);$/) : null;
 
     if (objReturn) {
       // Top-level commas only — `color: vec3(1, 0, 0)` is ONE property, and

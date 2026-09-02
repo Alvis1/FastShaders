@@ -22,6 +22,7 @@ import { ClockNode } from '@/components/NodeEditor/nodes/ClockNode';
 import { MicNode } from '@/components/NodeEditor/nodes/MicNode';
 import { AudioInputNode } from '@/components/NodeEditor/nodes/AudioInputNode';
 import { OutputNode } from '@/components/NodeEditor/nodes/OutputNode';
+import { SdfOutputNode } from '@/components/NodeEditor/nodes/SdfOutputNode';
 import { GroupNode } from '@/components/NodeEditor/nodes/GroupNode';
 import { NoteNode } from '@/components/NodeEditor/nodes/NoteNode';
 import { TypedEdge } from '@/components/NodeEditor/edges/TypedEdge';
@@ -35,6 +36,7 @@ export const nodeTypes = {
   mic: MicNode,
   audio: AudioInputNode,
   output: OutputNode,
+  sdfOutput: SdfOutputNode,
   group: GroupNode,
   note: NoteNode,
 };

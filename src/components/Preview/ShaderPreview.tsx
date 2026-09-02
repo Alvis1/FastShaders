@@ -9,6 +9,7 @@ import type { AppNode, AppEdge } from '@/types';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import {
   GEOMETRY_ROTATIONS,
+  SDF_WINDOW_GEOMETRY,
   LIGHT_PRESETS,
   buildGeoAttr,
   getModelUrl,
@@ -17,6 +18,8 @@ import {
 } from '@/engine/tslToPreviewHTML';
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
+import { sdfOutputDrives } from '@/utils/sdfPartition';
+import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { sanitizeMeshInventory } from '@/utils/meshInventory';
 import { MESH_HIGHLIGHT_EVENT, type MeshHighlightDetail } from '@/utils/meshHighlight';
 import { bootGeometryWasCustom, loadPreviewMeshFromCache } from '@/utils/previewMeshCache';
@@ -397,9 +400,21 @@ export function ShaderPreview() {
   // (and thus materialSettings) reference — Object.is bails, so the whole
   // ~1000-line panel no longer re-renders on every drag pointermove the way
   // the old whole-array nodes/edges subscriptions made it.
-  const materialSettings = useAppStore((s) =>
+  const rawMaterialSettings = useAppStore((s) =>
     (findDefaultOutput(s.nodes)?.data as
       { materialSettings?: PreviewOptions['materialSettings'] } | undefined)?.materialSettings,
+  );
+  // An SDF Output with its field wired REPLACES the Output in emission. While
+  // it drives: the material is double-sided (the march starts at the camera on
+  // a back face, so zooming inside the window still shows the shape), the
+  // preview renders through the SDF WINDOW box instead of the Model dropdown's
+  // choice (a sphere clipped a box's corners, a plane or a bunny as the
+  // ray-start surface meant nothing), and the dropdown is parked. Folded to a
+  // boolean so a position-only notify cannot re-render this panel.
+  const sdfDrives = useAppStore((s) => sdfOutputDrives(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)));
+  const materialSettings = useMemo(
+    () => (sdfDrives ? { ...rawMaterialSettings, side: 'double' as const } : rawMaterialSettings),
+    [rawMaterialSettings, sdfDrives],
   );
 
   // Connected property-uniform names, folded to a primitive key so only a real
@@ -416,6 +431,8 @@ export function ShaderPreview() {
   // carries them, and the overlay + iframe srcDoc inputs must pick up the
   // imported values without a page reload.
   const [geometry, setGeometry] = usePersistedState('fs:previewGeometry', validateGeometry, { reloadOnProjectImport: true });
+  // What the iframe actually renders: the user's choice, or the SDF window.
+  const previewGeometry: GeometryType = sdfDrives ? SDF_WINDOW_GEOMETRY : geometry;
   const [playing, setPlaying] = usePersistedState('fs:previewPlaying', validatePlaying, { reloadOnProjectImport: true });
   const [lighting, setLighting] = usePersistedState('fs:previewLighting', validateLighting, { reloadOnProjectImport: true });
 
@@ -1456,7 +1473,7 @@ export function ShaderPreview() {
   // subdivision slider entirely. Folding the value to a constant in the dep
   // list (instead of the live state) means dragging the slider while a model
   // is selected doesn't rebuild the iframe to produce identical HTML.
-  const effectiveSubdivision = isModelGeometry(geometry) ? 0 : subdivision;
+  const effectiveSubdivision = isModelGeometry(previewGeometry) ? 0 : subdivision;
 
   // Generate the iframe's HTML payload. We pass it via `srcDoc` rather than
   // building a blob URL because the iframe is sandboxed without
@@ -1497,8 +1514,8 @@ export function ShaderPreview() {
   // Dropped meshes key on their id so re-dropping a file (same name, new
   // bytes) still forces a fresh document — the feed only ever applies to the
   // document built for exactly that mesh instance.
-  const geometryRebuildKey = isModelGeometry(geometry)
-    ? (geometry === 'custom' ? `custom:${previewMesh?.id ?? 0}` : geometry)
+  const geometryRebuildKey = isModelGeometry(previewGeometry)
+    ? (previewGeometry === 'custom' ? `custom:${previewMesh?.id ?? 0}` : previewGeometry)
     : '__primitive__';
   // Track it for the message handler, and drop a now-stale inventory the
   // moment the model changes rather than waiting for the new document to
@@ -1514,13 +1531,13 @@ export function ShaderPreview() {
 
   const previewHtml = useMemo(() => {
     const options: PreviewOptions = {
-      geometry,
+      geometry: previewGeometry,
       animate: playing,
       materialSettings,
       bgColor,
       lighting: effLighting,
       subdivision: effectiveSubdivision,
-      customModel: geometry === 'custom' && previewMesh
+      customModel: previewGeometry === 'custom' && previewMesh
         ? { kind: previewMesh.kind, id: previewMesh.id }
         : null,
       // Backend is decided at document boot, so the toggle joins the rebuild
@@ -1623,7 +1640,7 @@ export function ShaderPreview() {
     const rawRot = rotationRef.current ?? { x: 0, y: 0, z: 0 };
     const mod360 = (v: number) => ((v % 360) + 360) % 360;
     const r = { x: mod360(rawRot.x), y: mod360(rawRot.y), z: mod360(rawRot.z) };
-    const isPlane = geometry === 'plane';
+    const isPlane = previewGeometry === 'plane';
     const from = `${r.x} ${r.y} ${r.z}`;
     const to = isPlane
       ? `${r.x} ${r.y} ${r.z + 360}`
@@ -1632,7 +1649,7 @@ export function ShaderPreview() {
       { type: 'fs:playing', playing, from, to },
       '*',
     );
-  }, [playing, geometry]);
+  }, [playing, previewGeometry]);
 
   // Live PRIMITIVE geometry + subdivision hot-swap. Any change that stays
   // entirely within primitives (sphere↔cube↔plane, or just a subdivision tweak)
@@ -1643,24 +1660,24 @@ export function ShaderPreview() {
   // scene is what crashes it. Both sides of the guard matter — a custom→sphere
   // switch with only the current-side checked would post a primitive attr into
   // the live model document.
-  const prevGeometryRef = useRef(geometry);
+  const prevGeometryRef = useRef(previewGeometry);
   useEffect(() => {
     const prevWasModel = isModelGeometry(prevGeometryRef.current);
-    prevGeometryRef.current = geometry;
-    if (isModelGeometry(geometry) || prevWasModel) return;
+    prevGeometryRef.current = previewGeometry;
+    if (isModelGeometry(previewGeometry) || prevWasModel) return;
     iframeRef.current?.contentWindow?.postMessage(
       {
         type: 'fs:geometry',
         isObj: false,
         geometry: buildGeoAttr(
-          geometry as 'sphere' | 'cube' | 'plane',
+          previewGeometry as 'sphere' | 'cube' | 'plane' | 'sdfBox',
           effectiveSubdivision,
         ),
-        rotation: GEOMETRY_ROTATIONS[geometry] ?? '45 45 0',
+        rotation: GEOMETRY_ROTATIONS[previewGeometry] ?? '45 45 0',
       },
       '*',
     );
-  }, [geometry, effectiveSubdivision]);
+  }, [previewGeometry, effectiveSubdivision]);
 
   // OBJ model feed (see objTextCache above). By the iframe's load event its
   // top-level fs:obj-model listener is guaranteed installed (all preview
@@ -1671,8 +1688,8 @@ export function ShaderPreview() {
   // it was built for, so a slow fetch resolving after a rapid teapot→bunny
   // switch can't apply a stale mesh to the newer document.
   const handleIframeLoad = useCallback(() => {
-    if (!isModelGeometry(geometry)) return;
-    if (geometry === 'custom') {
+    if (!isModelGeometry(previewGeometry)) return;
+    if (previewGeometry === 'custom') {
       // Dropped mesh: no fetch — post the stored payload. The exact
       // Uint8Array VIEW is posted (never `.buffer`, whose extent can differ)
       // and structured-cloned, so the store's copy stays live for the zip
@@ -1690,7 +1707,7 @@ export function ShaderPreview() {
       }
       return;
     }
-    const geo = geometry as 'teapot' | 'bunny';
+    const geo = previewGeometry as 'teapot' | 'bunny';
     fetchObjText(geo).then(
       (text) => {
         iframeRef.current?.contentWindow?.postMessage(
@@ -1711,7 +1728,7 @@ export function ShaderPreview() {
         );
       },
     );
-  }, [geometry, previewMesh]);
+  }, [previewGeometry, previewMesh]);
 
   // Immersive VR entry. Immersive WebXR can never start from the sandboxed
   // preview iframe — see the corrected rationale on PreviewOptions.xr in
@@ -1839,7 +1856,10 @@ export function ShaderPreview() {
             className="shader-preview__geo-select"
             value={geometry}
             onChange={(e) => setGeometry(e.target.value as GeometryType)}
-            title={t('Preview geometry — drag the model to orbit, scroll to zoom; drop a 3D model (.obj / .glb / .gltf) on the preview to shade your own mesh', language)}
+            disabled={sdfDrives}
+            title={sdfDrives
+              ? t('An SDF Output is driving the shader: it renders through its own bounding box, so the model is ignored until the field is unwired', language)
+              : t('Preview geometry — drag the model to orbit, scroll to zoom; drop a 3D model (.obj / .glb / .gltf) on the preview to shade your own mesh', language)}
             aria-label={t('Preview geometry', language)}
           >
             <option value="sphere">{t('Sphere', language)}</option>
@@ -1852,7 +1872,7 @@ export function ShaderPreview() {
             )}
           </select>
         </label>
-        {!isModelGeometry(geometry) && (
+        {!isModelGeometry(geometry) && !sdfDrives && (
           <label className="shader-preview__subdivision" title={t('Mesh subdivision', language)}>
             <span className="shader-preview__ctl-label">{t('Subd', language)}</span>
             <input

@@ -40,6 +40,12 @@ const SITES: { file: string; history: 'bracket' | 'none'; count: number; why: st
     why: 'stored channel colour -> setChannelValue -> updateNodeData (pushHistory); it emits color(0x…)',
   },
   {
+    file: 'components/NodeEditor/nodes/SdfOutputNode.tsx',
+    history: 'bracket',
+    count: 1,
+    why: 'the SDF Output colour swatch is a stored channel value that emits color(0x…) — graph content, undoable',
+  },
+  {
     file: 'components/NodeEditor/nodes/ColorNode.tsx',
     history: 'bracket',
     count: 1,
