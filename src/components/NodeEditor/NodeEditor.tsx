@@ -67,7 +67,8 @@ import {
 } from './dragConnect';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
 import { pickSpliceInputPort } from './edgeSplice';
-import { existingOutputId, focusOutputNode } from './outputFocus';
+import { existingOutputId, focusNodes, focusOutputNode, OUTPUT_FOCUS_FIT } from './outputFocus';
+import { selectAllChanges } from './selectAll';
 import {
   readStoredViewport, writeStoredViewport, VIEWPORT_MIN_ZOOM, VIEWPORT_MAX_ZOOM,
   type StoredViewport,
@@ -76,6 +77,7 @@ import { outputDormancyFromState } from '@/utils/outputMaterials';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { getCostScale, getContrastColor } from '@/utils/colorUtils';
+import { nodeCostPoints } from '@/utils/nodeCost';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
@@ -353,11 +355,21 @@ function tileCanSplice(payload: TilePayload): boolean {
  * LARGER than the measured layout box (transform-origin top-left, transform
  * doesn't affect layout), so anything aiming at what the user SEES — target
  * boxes and the dragged node's own center alike — must scale the measured box.
+ * The scale must be the number the CARD scales by: ShaderNode prices itself
+ * live through `nodeCostPoints` (override-aware, and a grown variadic fold
+ * costs base × (N−1)), while PreviewNode/ClockNode/MathPreviewNode read the
+ * creation-time `data.cost` snapshot — so each type is asked the way its own
+ * component asks, or a measured cost profile would leave a band of the card
+ * outside the box the drag-connect gate tests.
  */
-function nodeVisualSize(node: AppNode): { w: number; h: number } {
+function nodeVisualSize(node: AppNode, edges: AppEdge[]): { w: number; h: number } {
   const s = getNodeSize(node);
   const scale = COST_SCALED_TYPES.has(node.type ?? '')
-    ? getCostScale((node.data as { cost?: number }).cost ?? 0)
+    ? getCostScale(
+        node.type === 'shader'
+          ? nodeCostPoints(node, edges)
+          : ((node.data as { cost?: number }).cost ?? 0),
+      )
     : 1;
   return { w: s.w * scale, h: s.h * scale };
 }
@@ -367,20 +379,20 @@ function nodeVisualSize(node: AppNode): { w: number; h: number } {
  * otherwise exactly the expensive nodes users aim at grow a dead band along
  * their right/bottom edges.
  */
-function nodeVisualBox(node: AppNode, allNodes: AppNode[]): NodeBox {
+function nodeVisualBox(node: AppNode, allNodes: AppNode[], edges: AppEdge[]): NodeBox {
   const p = nodeAbsolutePos(node, allNodes);
-  const s = nodeVisualSize(node);
+  const s = nodeVisualSize(node, edges);
   return { id: node.id, x: p.x, y: p.y, w: s.w, h: s.h };
 }
 
 /** Absolute bounding boxes of every legal drag-connect target. */
-function connectTargetBoxes(draggedId: string, allNodes: AppNode[]): NodeBox[] {
+function connectTargetBoxes(draggedId: string, allNodes: AppNode[], edges: AppEdge[]): NodeBox[] {
   const boxes: NodeBox[] = [];
   for (const other of allNodes) {
     if (other.id === draggedId) continue;
     if (other.type === 'group' || other.type === 'note') continue;
     if ((other.className ?? '').includes('fs-collapsed-member')) continue;
-    boxes.push(nodeVisualBox(other, allNodes));
+    boxes.push(nodeVisualBox(other, allNodes, edges));
   }
   return boxes;
 }
@@ -396,12 +408,13 @@ function makeRoomBoxes(
   placedId: string,
   placedAbs: { x: number; y: number },
   peerId: string,
+  edges: AppEdge[],
 ): CascadeBox[] {
   const out: CascadeBox[] = [];
   for (const n of allNodes) {
     if (n.type === 'group' || n.type === 'note') continue;
     if ((n.className ?? '').includes('fs-collapsed-member')) continue;
-    const box = nodeVisualBox(n, allNodes);
+    const box = nodeVisualBox(n, allNodes, edges);
     if (n.id === placedId) {
       box.x = placedAbs.x;
       box.y = placedAbs.y;
@@ -1030,8 +1043,9 @@ export function NodeEditor() {
 
   /** Show (or move) the drag-connect preview for `plan`: ring the hovered node
    *  and the chosen input socket. The socket's OWN name tooltip is activated by
-   *  the `.fs-connect-socket` class (see TypedHandle.css) — no custom tooltip is
-   *  drawn. */
+   *  the `.fs-connect-socket` class (see TypedHandle.css), which also moves it
+   *  to the LEFT of the socket, outside the card, behind a thick arrow
+   *  pointing at the socket — no custom tooltip is drawn. */
   const showConnectPreview = useCallback(
     (plan: DragConnectPlan) => {
       const prev = connectPreviewRef.current;
@@ -1099,7 +1113,7 @@ export function NodeEditor() {
         clearConnectPreview();
         return false;
       }
-      const boxes = connectTargetBoxes(TILE_PHANTOM_ID, store.nodes);
+      const boxes = connectTargetBoxes(TILE_PHANTOM_ID, store.nodes, store.edges);
       const hoverId = pickDropTargetNode(pos.x, pos.y, boxes);
       const hoverBox = hoverId ? boxes.find((b) => b.id === hoverId) : undefined;
       if (!hoverBox) {
@@ -1120,6 +1134,9 @@ export function NodeEditor() {
         hoverId: hoverBox.id,
         draggedCenterX: pos.x,
         hoverCenterX: hoverBox.x + hoverBox.w / 2,
+        draggedCenterY: pos.y,
+        hoverTop: hoverBox.y,
+        hoverHeight: hoverBox.h,
         draggedInputs: phantomPorts(def.inputs),
         draggedOutputs: phantomPorts(def.outputs),
         hoverInputs: mountedHandles(hi, 'target', logicalEdges),
@@ -1161,7 +1178,7 @@ export function NodeEditor() {
           const { dx, dy } = connectSnapOffset(plan, di, hi);
           const abs = nodeAbsolutePos(node, store.nodes);
           const shifts = resolveOverlapCascade(
-            makeRoomBoxes(store.nodes, nodeId, { x: abs.x + dx, y: abs.y + dy }, hoverId),
+            makeRoomBoxes(store.nodes, nodeId, { x: abs.x + dx, y: abs.y + dy }, hoverId, store.edges),
           );
           if (!dx && !dy && shifts.length === 0) return;
           // Same position→membership reconciliation as the node-drag path:
@@ -1299,12 +1316,12 @@ export function NodeEditor() {
       const store = useAppStore.getState();
       // Visible size, not the measured box: cost-scaled cards render bigger,
       // so the tested point must be the center the user actually sees.
-      const { w: nw, h: nh } = nodeVisualSize(draggedNode);
+      const { w: nw, h: nh } = nodeVisualSize(draggedNode, store.edges);
       const absPos = nodeAbsolutePos(draggedNode, store.nodes);
       const cx = absPos.x + nw / 2;
       const cy = absPos.y + nh / 2;
 
-      const boxes = connectTargetBoxes(draggedNode.id, store.nodes);
+      const boxes = connectTargetBoxes(draggedNode.id, store.nodes, store.edges);
       const hoverBox = (() => {
         const id = pickDropTargetNode(cx, cy, boxes);
         return id ? boxes.find((b) => b.id === id) : undefined;
@@ -1328,6 +1345,9 @@ export function NodeEditor() {
                   hoverId,
                   draggedCenterX: cx,
                   hoverCenterX: hoverBox.x + hoverBox.w / 2,
+                  draggedCenterY: cy,
+                  hoverTop: hoverBox.y,
+                  hoverHeight: hoverBox.h,
                   draggedInputs: mountedHandles(di, 'target', logicalEdges, hoverId),
                   draggedOutputs: mountedHandles(di, 'source', logicalEdges),
                   hoverInputs: mountedHandles(hi, 'target', logicalEdges, draggedNode.id),
@@ -1468,7 +1488,7 @@ export function NodeEditor() {
       // and the VISIBLE center (cost-scaled cards render bigger than their
       // measured box) so the drop tests the same point the drag preview did.
       const absPos = nodeAbsolutePos(freshDragged, allNodes);
-      const { w: vw, h: vh } = nodeVisualSize(freshDragged);
+      const { w: vw, h: vh } = nodeVisualSize(freshDragged, useAppStore.getState().edges);
       const cx = absPos.x + vw / 2;
       const cy = absPos.y + vh / 2;
 
@@ -1479,7 +1499,7 @@ export function NodeEditor() {
       const def = NODE_REGISTRY.get(freshDragged.data.registryType);
       const overNodeBody =
         connectPlan != null ||
-        pickDropTargetNode(cx, cy, connectTargetBoxes(freshDragged.id, allNodes)) != null;
+        pickDropTargetNode(cx, cy, connectTargetBoxes(freshDragged.id, allNodes, useAppStore.getState().edges)) != null;
       // (`isNote` is redundant with `def` — a note has no registry entry — but
       // stated explicitly so the rule survives one ever gaining one.)
       if (!isNote && !overNodeBody && def && def.inputs.length > 0 && def.outputs.length > 0) {
@@ -1516,7 +1536,7 @@ export function NodeEditor() {
           y: absPos.y + (posY - freshDragged.position.y),
         };
         cascadeShifts = resolveOverlapCascade(
-          makeRoomBoxes(allNodes, freshDragged.id, placedAbs, hoverId),
+          makeRoomBoxes(allNodes, freshDragged.id, placedAbs, hoverId, useAppStore.getState().edges),
           GAP,
         );
       } else if (!isNote) {
@@ -2055,7 +2075,7 @@ export function NodeEditor() {
           pickDropTargetNode(
             position.x,
             position.y,
-            connectTargetBoxes(newNodeId, useAppStore.getState().nodes),
+            connectTargetBoxes(newNodeId, useAppStore.getState().nodes, useAppStore.getState().edges),
           ) != null;
         if (!overNodeBody) {
           const radius = DROP_ON_EDGE_RADIUS / getViewport().zoom;
@@ -2478,7 +2498,7 @@ export function NodeEditor() {
       if (!n.selected) continue;
       const p = nodeAbsolutePos(n, nodes);
       const m = getNodeSize(n);
-      const v = nodeVisualSize(n);
+      const v = nodeVisualSize(n, edges);
       measuredR = Math.max(measuredR, p.x + m.w);
       measuredB = Math.max(measuredB, p.y + m.h);
       visualR = Math.max(visualR, p.x + v.w);
@@ -2489,7 +2509,7 @@ export function NodeEditor() {
       dr: Math.max(0, visualR - measuredR),
       db: Math.max(0, visualB - measuredB),
     };
-  }, [nodes]);
+  }, [nodes, edges]);
 
   const canvasCssVars = {
     '--node-cost-text': contrastColor,
@@ -2520,12 +2540,48 @@ export function NodeEditor() {
   // wire, so a keyboard user had no way to author a node at all. Shift+A mirrors
   // Blender's Add shortcut and opens the menu at the canvas centre; the menu
   // already autofocuses its search box and handles Arrow/Enter from there.
+  //
+  // F frames the SELECTION — the "view selected" key of every node editor
+  // (Unreal, Unity ShaderGraph, Blender's numpad-period): the same animated,
+  // zoom-capped glide the Output tile and the cost pill use (`focusNodes`), so
+  // every "take me there" gesture lands identically. A selected member of a
+  // collapsed group frames the pill standing in for it. With NOTHING selected
+  // it frames the whole graph — the canvas bar's fit button — because a key
+  // that silently does nothing reads as broken. A bare key, so it must never
+  // fire while the user types: INPUT/TEXTAREA (Monaco's input is a textarea),
+  // a SELECT (the Audio node's picker lives on the canvas) and contentEditable
+  // are all skipped, and any modifier bails so Cmd/Ctrl+F stays the browser's
+  // find.
+  //
+  // A selects every visible node (see selectAll.ts — Blender's key; pressed
+  // again with everything selected it deselects all), dispatched as React
+  // Flow `select` changes through the store's onNodesChange — the marquee's
+  // own path, so it is a selection change and not a graph edit: no history
+  // entry, no autosave, no resync.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      if (e.metaKey || e.ctrlKey || e.altKey || !e.shiftKey) return;
-      if (e.key.toLowerCase() !== 'a') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (tag === 'SELECT' || target?.isContentEditable) return;
+      if (key === 'a' && !e.shiftKey) {
+        e.preventDefault();
+        const changes = selectAllChanges(useAppStore.getState().nodes);
+        if (changes.length) useAppStore.getState().onNodesChange(changes);
+        return;
+      }
+      if (key === 'f' && !e.shiftKey) {
+        e.preventDefault();
+        const nodesNow = useAppStore.getState().nodes;
+        const selected = nodesNow.filter((n) => n.selected).map((n) => n.id);
+        if (!focusNodes(fitView, nodesNow, selected)) {
+          void fitView({ ...FIT_VIEW_OPTIONS, duration: OUTPUT_FOCUS_FIT.duration });
+        }
+        return;
+      }
+      if (!e.shiftKey || key !== 'a') return;
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
       e.preventDefault();
@@ -2535,7 +2591,7 @@ export function NodeEditor() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [fitView]);
 
   // Touch/pen long-press → context menu. We dispatch a synthetic `contextmenu`
   // MouseEvent on the original DOM target so React Flow's existing per-element

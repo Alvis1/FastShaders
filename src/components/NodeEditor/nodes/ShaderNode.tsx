@@ -848,7 +848,6 @@ export const ShaderNode = memo(function ShaderNode({
       {data.registryType === 'colormap' && (
         <div
           className="shader-node__colormap-strip"
-          title={getColormap(data.values?.map).label}
           style={{
             background: colormapGradientCss(
               getColormap(data.values?.map),
