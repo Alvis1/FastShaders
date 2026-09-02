@@ -17,13 +17,32 @@
   transition: none !important;
 }
 
-/* Instant CSS tooltip */
+/* ===== The socket label =====
+   ONE label, ONE place, whatever made it appear. A socket's name (and the
+   TSL type arriving on it) is shown by four different triggers — pointer
+   hover, a touch tap, the drag-reveal while a wire hunts nearby, and the
+   drag-connect preview — and it used to land in two different places
+   depending on which: hover and tap drew it ABOVE the socket, the two drag
+   states drew it BESIDE it. The same label jumping between positions as the
+   gesture changes reads as two different tooltips. So the placement is a
+   property of the SOCKET, not of the trigger: beside the socket on its OUTER
+   side — left of a left-edge input, right of a right-edge output, above or
+   below the Color node's perimeter output when it rides the top or bottom —
+   vertically (or horizontally) centred on the dot, outside the card. The
+   triggers only decide WHEN it shows and how much emphasis it carries; the
+   drag-connect state adds the arrow and the focus border below. React Flow
+   stamps the side on the handle as .react-flow__handle-{left,right,top,bottom},
+   which is what the four placement rules key on. Every label is in FRONT
+   (z-index): a label 6px off the dot never covers the dot, and the wire being
+   dragged lives in React Flow's connection layer, whose order against the
+   nodes layer no z-index inside a handle can change — the old "behind the
+   socket" reveal z-index bought nothing and made the reveal state the one
+   place the label rendered under the card's own chrome. */
 .typed-handle[data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  top: 50%;
+  transform: translateY(-50%);
   background: var(--bg-panel);
   color: var(--text-primary);
   font-size: 10px;
@@ -36,6 +55,29 @@
   z-index: 10;
 }
 
+.typed-handle.react-flow__handle-left[data-tooltip]::after {
+  right: calc(100% + 6px);
+}
+
+.typed-handle.react-flow__handle-right[data-tooltip]::after {
+  left: calc(100% + 6px);
+}
+
+.typed-handle.react-flow__handle-top[data-tooltip]::after,
+.typed-handle.react-flow__handle-bottom[data-tooltip]::after {
+  top: auto;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.typed-handle.react-flow__handle-top[data-tooltip]::after {
+  bottom: calc(100% + 6px);
+}
+
+.typed-handle.react-flow__handle-bottom[data-tooltip]::after {
+  top: calc(100% + 6px);
+}
+
 .typed-handle[data-tooltip]:hover::after {
   opacity: 1;
 }
@@ -43,23 +85,56 @@
 /* Drag-connect: force the highlighted target socket's OWN name tooltip visible
    while a node is dragged onto it. The pointer sits on the dragged node, not
    this socket, so :hover never fires — the .fs-connect-socket class (added by
-   the drag-connect preview) stands in for it. */
+   the drag-connect preview) stands in for it. The label keeps the shared
+   placement (left of the input, outside the card — the side the wire will
+   arrive from), and gains a focus border plus a thick arrow between label and
+   socket pointing AT the socket, so it reads as "the wire lands HERE" rather
+   than as a caption. It sat INSIDE the card first and was flipped by owner
+   request — there it covered the row's own value widget. Every input socket
+   in the app is a left-edge handle, so the arrow only needs the left-side
+   geometry; the label rides the node that owns the socket, which the preview
+   lifts to the front for the gesture's duration, so it draws over whatever
+   node sits there. The arrow is the handle's otherwise-unused ::before, drawn
+   with a clip-path polygon (no image, no font glyph — a block-arrow character
+   renders as emoji on Apple platforms) in the same focus blue as the socket
+   ring and the node outline, so ring, arrow and outline read as one system.
+   The gap clears the 3px ring the .fs-connect-socket box-shadow draws
+   (NodeEditor.css). */
+.typed-handle.fs-connect-socket {
+  --fs-connect-arrow-w: 14px;
+  --fs-connect-arrow-h: 10px;
+  --fs-connect-gap: 5px;
+}
+
 .typed-handle.fs-connect-socket[data-tooltip]::after {
   opacity: 1;
+  border: 1px solid var(--border-focus);
+}
+
+.typed-handle.fs-connect-socket.react-flow__handle-left[data-tooltip]::after {
+  right: calc(100% + var(--fs-connect-gap) + var(--fs-connect-arrow-w));
+}
+
+.typed-handle.fs-connect-socket.react-flow__handle-left::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: calc(100% + var(--fs-connect-gap));
+  width: var(--fs-connect-arrow-w);
+  height: var(--fs-connect-arrow-h);
+  transform: translateY(-50%);
+  background: var(--border-focus);
+  /* Head on the RIGHT (pointing at the socket), shaft running out of the label. */
+  clip-path: polygon(100% 50%, 55% 0, 55% 28%, 0 28%, 0 72%, 55% 72%, 55% 100%);
+  pointer-events: none;
+  z-index: 10;
 }
 
 /* Drag-reveal: while a wire is hunting near the node, every input socket's
-   name-tooltip is forced visible and floats to the LEFT of the socket —
-   outside the card, behind the dot (z-index) — so the socket and the wire
-   endpoint stay unobstructed while the user reads their target. */
+   name label is forced visible (shared placement — beside the socket, outside
+   the card) so the user can read every target while aiming. */
 .typed-handle--reveal[data-tooltip]::after {
   opacity: 1;
-  bottom: auto;
-  left: auto;
-  top: 50%;
-  right: calc(100% + 6px);
-  transform: translateY(-50%);
-  z-index: -1;
 }
 
 /* Touch: no reliable hover, and pinning every label while a node was selected

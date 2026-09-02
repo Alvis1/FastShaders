@@ -85,6 +85,46 @@ export function firstFreeOutputChannel(
   return null;
 }
 
+/**
+ * The nodes fitView should frame for a set of node ids: each mapped through
+ * {@link outputFocusTarget} (a member hidden inside a collapsed group is
+ * represented by the pill), unknown ids dropped, duplicates collapsed —
+ * two selected members of one collapsed group are one pill on screen, and
+ * listing it twice is harmless to fitView but wrong as a description of
+ * what is being framed. Order follows the input.
+ */
+export function focusTargets(nodes: readonly AppNode[], ids: readonly string[]): { id: string }[] {
+  const out: { id: string }[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (!nodes.some((n) => n.id === id)) continue;
+    const target = outputFocusTarget(nodes, id);
+    if (seen.has(target)) continue;
+    seen.add(target);
+    out.push({ id: target });
+  }
+  return out;
+}
+
+/**
+ * Glide the viewport onto a set of nodes — the ONE framing every "take me
+ * there" gesture uses: the Output singleton redirects, the cost pill's total,
+ * and the F key framing the selection. Returns false (and moves nothing) when
+ * none of the ids is a node, so a caller can fall back rather than send
+ * fitView an empty list, which would frame the whole graph and read as the
+ * key doing something unrelated.
+ */
+export function focusNodes(
+  fitView: (options?: FitViewOptions) => Promise<boolean> | void,
+  nodes: readonly AppNode[],
+  ids: readonly string[],
+): boolean {
+  const targets = focusTargets(nodes, ids);
+  if (targets.length === 0) return false;
+  void fitView({ ...OUTPUT_FOCUS_FIT, nodes: targets });
+  return true;
+}
+
 /** Glide the viewport onto the existing Output node (or the collapsed-group
  *  pill standing in for it — see {@link outputFocusTarget}). */
 export function focusOutputNode(
@@ -92,5 +132,5 @@ export function focusOutputNode(
   nodes: readonly AppNode[],
   id: string,
 ): void {
-  void fitView({ ...OUTPUT_FOCUS_FIT, nodes: [{ id: outputFocusTarget(nodes, id) }] });
+  focusNodes(fitView, nodes, [id]);
 }

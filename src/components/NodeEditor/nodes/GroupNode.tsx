@@ -138,7 +138,7 @@ export const GroupNode = memo(function GroupNode({
               label={sock.name}
               style={{ top: 0, transform: 'translateY(-50%)' }}
             />
-            <span className="group-node__socket-label" title={sock.name}>
+            <span className="group-node__socket-label">
               {sock.name ?? ''}
             </span>
           </span>
@@ -152,7 +152,7 @@ export const GroupNode = memo(function GroupNode({
             className="group-node__socket group-node__socket--out"
             style={{ top }}
           >
-            <span className="group-node__socket-label" title={sock.name}>
+            <span className="group-node__socket-label">
               {sock.name ?? ''}
             </span>
             <TypedHandle

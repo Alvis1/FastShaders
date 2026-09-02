@@ -7,7 +7,9 @@ import type { AppNode } from '@/types';
 import {
   existingOutputId,
   firstFreeOutputChannel,
+  focusNodes,
   focusOutputNode,
+  focusTargets,
   outputFocusTarget,
   OUTPUT_FOCUS_FIT,
 } from './outputFocus';
@@ -132,6 +134,68 @@ describe('focusOutputNode', () => {
       calls.push(o!);
     }, [group('g1', true), member], 'out1');
     expect(calls[0].nodes).toEqual([{ id: 'g1' }]);
+  });
+});
+
+describe('focusNodes / focusTargets — the F key and every other "take me there"', () => {
+  it('frames every selected node, in selection order', () => {
+    const nodes = [makeNode('a', 'float'), makeNode('b', 'mul'), makeNode('c', 'output')];
+    expect(focusTargets(nodes, ['c', 'a'])).toEqual([{ id: 'c' }, { id: 'a' }]);
+  });
+
+  it('collapses two selected members of one collapsed group into its pill, once', () => {
+    const m1 = { ...makeNode('m1', 'float'), parentId: 'g1' } as AppNode;
+    const m2 = { ...makeNode('m2', 'mul'), parentId: 'g1' } as AppNode;
+    expect(focusTargets([group('g1', true), m1, m2], ['m1', 'm2'])).toEqual([{ id: 'g1' }]);
+  });
+
+  it('drops ids that are not nodes (a stale selection after an undo)', () => {
+    expect(focusTargets([makeNode('a', 'float')], ['zzz', 'a'])).toEqual([{ id: 'a' }]);
+  });
+
+  it('glides with the Output framing and reports whether anything was framed', () => {
+    const calls: FitViewOptions[] = [];
+    const fit = (o?: FitViewOptions) => {
+      calls.push(o!);
+    };
+    const nodes = [makeNode('a', 'float'), makeNode('b', 'mul')];
+    expect(focusNodes(fit, nodes, ['a', 'b'])).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].nodes).toEqual([{ id: 'a' }, { id: 'b' }]);
+    expect(calls[0].duration).toBe(OUTPUT_FOCUS_FIT.duration);
+    expect(calls[0].maxZoom).toBe(OUTPUT_FOCUS_FIT.maxZoom);
+    // Nothing to frame → nothing sent: an empty `nodes` list would make
+    // fitView frame the WHOLE graph, which is the caller's decision to make.
+    expect(focusNodes(fit, nodes, [])).toBe(false);
+    expect(focusNodes(fit, nodes, ['nope'])).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('focusOutputNode is the single-node case of focusNodes', () => {
+    const calls: FitViewOptions[] = [];
+    focusOutputNode((o) => {
+      calls.push(o!);
+    }, [makeNode('out1', 'output')], 'out1');
+    expect(calls[0].nodes).toEqual([{ id: 'out1' }]);
+  });
+});
+
+describe('the F key (source pins)', () => {
+  const nodeEditor = read('./NodeEditor.tsx');
+
+  it('frames the selection through focusNodes, falling back to fitting the whole graph', () => {
+    // The key must route through the SHARED glide, or F would frame the
+    // selection differently from how the Output tile / cost pill frame the
+    // Output — same node, two framings.
+    expect(nodeEditor).toMatch(/key === 'f' && !e\.shiftKey[\s\S]{0,600}focusNodes\(fitView, nodesNow, selected\)/);
+    expect(nodeEditor).toMatch(/if \(!focusNodes\(fitView, nodesNow, selected\)\) \{\s*void fitView\(\{ \.\.\.FIT_VIEW_OPTIONS, duration: OUTPUT_FOCUS_FIT\.duration \}\)/);
+  });
+
+  it('never fires while typing or with a modifier held (Cmd/Ctrl+F is the browser\'s find)', () => {
+    const handler = nodeEditor.slice(nodeEditor.indexOf('F frames the SELECTION'), nodeEditor.indexOf("key !== 'a'"));
+    expect(handler).toContain("if (tag === 'INPUT' || tag === 'TEXTAREA') return;");
+    expect(handler).toContain('if (e.metaKey || e.ctrlKey || e.altKey) return;');
+    expect(handler).toContain("if (tag === 'SELECT' || target?.isContentEditable) return;");
   });
 });
 
