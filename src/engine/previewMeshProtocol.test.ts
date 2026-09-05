@@ -33,8 +33,14 @@ describe('fs:model-meshes (sandbox → parent)', () => {
   });
 
   it('is emitted for a built-in model, keyed by geometry name', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'bunny' });
+    expect(html).toContain('var __fsMeshKey = "bunny";');
+  });
+
+  it('is NOT emitted for the teapot — tessellated in-document, one mesh, nothing to pick', () => {
     const html = tslToPreviewHTML(TSL, { geometry: 'teapot' });
-    expect(html).toContain('var __fsMeshKey = "teapot";');
+    expect(html).not.toContain('fs:model-meshes');
+    expect(html).not.toContain('__fsMeshKey');
   });
 
   it('is NOT emitted for primitives — there is nothing addressable to report', () => {

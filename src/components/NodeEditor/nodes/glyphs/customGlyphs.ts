@@ -42,7 +42,15 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "vertexColor": {
-    "svg": "<g transform=\"translate(28 28)\"><path d=\"M 0 -16 L 15 10 L -15 10 Z\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.5\" stroke-linejoin=\"round\"></path><circle cx=\"0\" cy=\"-16\" r=\"4.2\" fill=\"#F57C00\"></circle><circle cx=\"15\" cy=\"10\" r=\"4.2\" fill=\"#2E9E5B\"></circle><circle cx=\"-15\" cy=\"10\" r=\"4.2\" fill=\"#2D6CDF\"></circle></g>"
+    "svg": "<g transform=\"translate(28 28)\"><path d=\"M 0 -16 L 15 10 L -15 10 Z\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.5\" stroke-linejoin=\"round\"></path><circle cx=\"0\" cy=\"-16\" r=\"4.2\" fill=\"#F57C00\"></circle><circle cx=\"15\" cy=\"10\" r=\"4.2\" fill=\"#2E9E5B\"></circle><circle cx=\"-15\" cy=\"10\" r=\"4.2\" fill=\"#2D6CDF\"></circle></g>",
+    "scale": 1.15,
+    "dx": -1,
+    "dy": -1.5,
+    "width": 35,
+    "height": 32,
+    "sockets": {
+      "out": 0
+    }
   },
   "normalWorld": {
     "svg": "<g transform=\"translate(28 28)\"><g stroke=\"#8A8F9C\" stroke-width=\".8\" fill=\"none\"><line x1=\"-22\" y1=\"-18\" x2=\"22\" y2=\"-18\" stroke-width=\".8\"></line><circle cx=\"0\" cy=\"-18\" r=\"0.5\" fill=\"#8A8F9C\" stroke=\"none\"></circle><line x1=\"-22\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"-11\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"0\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"11\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"22\" y1=\"20\" x2=\"0\" y2=\"-18\"></line><line x1=\"-22\" y1=\"20\" x2=\"22\" y2=\"20\"></line><line x1=\"-16\" y1=\"10\" x2=\"17\" y2=\"10\"></line><line x1=\"-13\" y1=\"2\" x2=\"13\" y2=\"2\"></line><line x1=\"-8.08\" y1=\"-4\" x2=\"10\" y2=\"-4\"></line></g></g>\n\n<path d=\"M 24.67 49.36 L 31.38 49.36 L 39.16 39.49 L 29.15 30.99 L 23.03 31 L 14 42.56 L 24.67 49.36 Z\" fill=\"#FFFFFF\" stroke=\"none\" stroke-width=\"1.4\"></path>\n\n<path d=\"M 24.67 49.36 L 31.38 49.36 L 39.16 39.49 L 29.15 30.99 L 23.03 31 L 14.91 42.56 L 24.67 49.36 Z\" fill=\"#FFFFFF\" stroke=\"none\" stroke-width=\"1.4\"></path>\n\n<g transform=\"translate(28 28)\"><g fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.4\" stroke-linejoin=\"round\"><rect x=\"0.47\" y=\"4.02\" width=\"13.13\" height=\"12.93\" transform=\"rotate(40.33 -0.88 -3.91)\"></rect><path d=\"M -4.97 2.99 L 1.15 2.53 L 11.16 11.04 L 5.04 11.49 M 11.16 11.04 L 2.8 20.9 L -3.33 21.35\" fill=\"none\" stroke=\"#2B2B2B\"></path></g></g>\n\n\n\n\n\n<line x1=\"10\" y1=\"14\" x2=\"10\" y2=\"22.5\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\"></line><line x1=\"17\" y1=\"22.5\" x2=\"10\" y2=\"22.5\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\"></line><line x1=\"6.5\" y1=\"28.5\" x2=\"10\" y2=\"22.5\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.4\"></line>",
@@ -68,14 +76,15 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   },
   "dataviz": {
     "svg": "<g transform=\"translate(28 28)\"><g stroke=\"#B4B7C0\" stroke-width=\"0.8\"><line x1=\"-18\" y1=\"6\" x2=\"18\" y2=\"6\"/><line x1=\"-18\" y1=\"6\" x2=\"-18\" y2=\"-15\"/></g><polyline points=\"-18,2 -12,-6 -6,-2 0,-12 6,-7 12,-13 18,-9\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.7\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><g stroke=\"none\"><rect x=\"-18\" y=\"11\" width=\"9\" height=\"6\" fill=\"#440154\"/><rect x=\"-9\" y=\"11\" width=\"9\" height=\"6\" fill=\"#277f8e\"/><rect x=\"0\" y=\"11\" width=\"9\" height=\"6\" fill=\"#4ac16d\"/><rect x=\"9\" y=\"11\" width=\"9\" height=\"6\" fill=\"#fde725\"/></g><rect x=\"-18\" y=\"11\" width=\"36\" height=\"6\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1\"/></g>",
-    "scale": 1.4,
-    "dx": -0.5,
-    "dy": 1,
-    "width": 47,
-    "height": 84,
+    "scale": 2,
+    "dy": -7.5,
+    "width": 51,
+    "height": 80,
     "sockets": {
-      "signal": 8,
-      "out": 8
+      "signal": 12,
+      "out": 12,
+      "lowColor": 20,
+      "highColor": 32
     }
   },
   "isolines": {
@@ -83,10 +92,11 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "scale": 1.15,
     "dx": -3,
     "dy": -1,
-    "width": 43,
-    "height": 94,
+    "width": 45,
+    "height": 53,
     "sockets": {
-      "out": -4
+      "out": 16,
+      "value": 16
     }
   },
   "dataRange": {
@@ -166,8 +176,11 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   },
   "positionWorldDirection": {
     "svg": "<g transform=\"translate(28 28)\"><circle cx=\"0\" cy=\"0\" r=\"5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.6\"/><g stroke=\"#8A8F9C\" stroke-width=\"1.2\"><line x1=\"0\" y1=\"-7\" x2=\"0\" y2=\"-15\"/><line x1=\"0\" y1=\"7\" x2=\"0\" y2=\"15\"/><line x1=\"-7\" y1=\"0\" x2=\"-15\" y2=\"0\"/><line x1=\"7\" y1=\"0\" x2=\"15\" y2=\"0\"/><line x1=\"-5\" y1=\"-5\" x2=\"-11\" y2=\"-11\"/><line x1=\"5\" y1=\"5\" x2=\"11\" y2=\"11\"/><line x1=\"5\" y1=\"-5\" x2=\"11\" y2=\"-11\"/><line x1=\"-5\" y1=\"5\" x2=\"-11\" y2=\"11\"/></g><polygon points=\"9,-15 17,-15 13,-21\" fill=\"#F57C00\" transform=\"rotate(45 13 -18)\"/></g>",
-    "width": 58,
-    "height": 33,
+    "scale": 2,
+    "dx": -1,
+    "dy": -3,
+    "width": 41,
+    "height": 49,
     "sockets": {
       "out": 0
     }
@@ -294,6 +307,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "round": {
+    "svg": "<g transform=\"translate(28 28)\" stroke=\"#F57C00\" stroke-width=\"1.4\" stroke-linecap=\"round\">\n\n\n\n<line x1=\"-5\" y1=\"0\" x2=\"-5\" y2=\"-15\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"0.5\" y1=\"-8.52\" x2=\"-5\" y2=\"-15\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-10.72\" y1=\"-8.31\" x2=\"-5\" y2=\"-15\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-5\" y1=\"0\" x2=\"-5\" y2=\"12.96\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"0.5\" y1=\"7\" x2=\"-5\" y2=\"12.96\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n<line x1=\"-10.72\" y1=\"7\" x2=\"-5\" y2=\"12.96\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-20\" y1=\"0\" x2=\"10.04\" y2=\"0\" stroke=\"#000000\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-20\" y1=\"14.46\" x2=\"10.04\" y2=\"14.46\"></line><line x1=\"-20\" y1=\"-16.5\" x2=\"10.04\" y2=\"-16.5\"></line></g>\n\n\n <text x=\"48\" y=\"14.21\" font-family=\"sans-serif\" font-size=\"10\" font-weight=\"bold\" text-anchor=\"middle\">\n    <tspan fill=\"#F57C00\">1</tspan>\n  </text>\n\n<text x=\"48\" y=\"45.14\" font-family=\"sans-serif\" font-size=\"10\" font-weight=\"bold\" text-anchor=\"middle\">\n    <tspan fill=\"#F57C00\">0</tspan>\n  </text>",
     "scale": 1.2,
     "dx": 1,
     "dy": -3.5,
@@ -480,12 +494,12 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "scale": 1.2,
     "dy": 28,
     "width": 45,
-    "height": 64,
+    "height": 57,
     "sockets": {
       "out": -16,
       "t": 16,
-      "b": -8,
-      "a": -24
+      "b": -4,
+      "a": -20
     }
   },
   "smoothstep": {
@@ -564,21 +578,23 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   },
   "stripes": {
     "svg": "<g transform=\"translate(28 28)\"><g fill=\"#2B2B2B\"><rect x=\"-21\" y=\"-8\" width=\"7\" height=\"21\"/><rect x=\"-10\" y=\"-8\" width=\"5.5\" height=\"21\"/><rect x=\"-1\" y=\"-8\" width=\"4\" height=\"21\"/><rect x=\"6\" y=\"-8\" width=\"3\" height=\"21\"/><rect x=\"12\" y=\"-8\" width=\"2.2\" height=\"21\"/><rect x=\"16.8\" y=\"-8\" width=\"1.7\" height=\"21\"/><rect x=\"20.6\" y=\"-8\" width=\"1.3\" height=\"21\"/></g><path d=\"M-21 -13 Q0 -12 21 -18\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-linecap=\"round\"/></g>",
-    "width": 33,
-    "height": 105,
+    "width": 44,
+    "height": 40,
     "sockets": {
-      "signal": -16,
-      "out": -16
+      "signal": 12,
+      "out": 12,
+      "lowColor": 8,
+      "highColor": 16
     }
   },
   "colormap": {
     "dx": 0.5,
-    "dy": 12.5,
-    "width": 107,
+    "dy": 2.5,
+    "width": 63,
     "height": 28,
     "sockets": {
-      "out": 4,
-      "value": 4
+      "out": 0,
+      "value": 0
     }
   },
   "select": {
@@ -596,21 +612,240 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "sdCircle": {
-    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"0\" cy=\"0\" r=\"14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></circle><circle cx=\"0\" cy=\"0\" r=\"1.6\" fill=\"#2B2B2B\"></circle><line x1=\"0\" y1=\"0\" x2=\"21\" y2=\"-12\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"21\" cy=\"-12\" r=\"2.4\" fill=\"#F57C00\"></circle></g>"
+    "svg": "<g transform=\"translate(28 28)\">\n\n\n\n<circle cx=\"0\" cy=\"0\" r=\"10.13\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"18.72\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"23.4\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"5.86\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"1.6\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.8\"></circle>\n\n<circle cx=\"0\" cy=\"0\" r=\"1.6\" fill=\"#2B2B2B\"></circle><line x1=\"0\" y1=\"0\" x2=\"21\" y2=\"-12\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"21\" cy=\"-12\" r=\"2.4\" fill=\"#F57C00\"></circle></g>\n\n<circle cx=\"28\" cy=\"28\" r=\"14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.8\"></circle>",
+    "scale": 1.1,
+    "width": 54,
+    "height": 66,
+    "sockets": {
+      "p": -24,
+      "r": 24,
+      "out": 0
+    }
   },
-  "sdBox2": {
-    "svg": "<g transform=\"translate(28 28)\"><rect x=\"-15\" y=\"-10\" width=\"26\" height=\"20\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><line x1=\"11\" y1=\"5\" x2=\"21\" y2=\"5\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"21\" cy=\"5\" r=\"2.4\" fill=\"#F57C00\"></circle></g>"
-  },
-  "sdBox3": {
-    "svg": "<g transform=\"translate(28 28)\"><polygon points=\"-15,-4 -15,14 5,14 5,-4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><polygon points=\"-15,-4 -6,-13 14,-13 5,-4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><polygon points=\"5,-4 14,-13 14,5 5,14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><line x1=\"14\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"22\" cy=\"0\" r=\"2.4\" fill=\"#F57C00\"></circle></g>"
+  "sdBox": {
+    "svg": "<g transform=\"translate(28 28)\">\n\n\n<path d=\"M -12.08 -2.31 L -4.38 -10.25 L 11.03 -10.25 L 11.03 4.6 L 3.65 11.24 L -12.08 11.24 L -12.08 -2.31 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -8.21 -1.66 L -2.75 -7.41 L 8.18 -7.41 L 8.18 3.35 L 2.95 8.14 L -8.21 8.14 L -8.21 -1.66 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<polygon points=\"-15,-4 -15,14 5,14 5,-4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><polygon points=\"-15,-4 -6,-13 14,-13 5,-4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><polygon points=\"5,-4 14,-13 14,5 5,14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><line x1=\"14\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"22\" cy=\"0\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n<path d=\"M -18.5 -4 L -6.5 -16.5 L 17.5 -16.5 L 17.5 6.86 L 6 17.3 L -18.5 17.3 L -18.5 -4 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -22.1 -5.01 L -7.84 -19.79 L 20.69 -19.79 L 20.69 7.84 L 7.02 20.2 L -22.1 20.2 L -22.1 -5.01 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -25.38 -5.6 L -9 -22.93 L 23.79 -22.93 L 23.79 9.47 L 8.08 23.97 L -25.38 23.97 L -25.38 -5.6 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n</g>",
+    "width": 52,
+    "height": 95,
+    "sockets": {
+      "p": -8,
+      "w": 8,
+      "h": 24,
+      "d": 40,
+      "out": -8
+    }
   },
   "sdTorus": {
-    "svg": "<g transform=\"translate(28 28)\"><ellipse cx=\"0\" cy=\"0\" rx=\"20\" ry=\"11\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></ellipse><ellipse cx=\"0\" cy=\"0\" rx=\"8\" ry=\"4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></ellipse><line x1=\"14\" y1=\"-7\" x2=\"22\" y2=\"-14\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"22\" cy=\"-14\" r=\"2.4\" fill=\"#F57C00\"></circle></g>"
+    "svg": "<g transform=\"translate(28 28)\"><ellipse cx=\"0\" cy=\"0\" rx=\"20\" ry=\"11\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></ellipse><ellipse cx=\"0\" cy=\"0\" rx=\"8\" ry=\"4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></ellipse><line x1=\"14\" y1=\"-7\" x2=\"22\" y2=\"-14\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"22\" cy=\"-14\" r=\"2.4\" fill=\"#F57C00\"></circle></g>",
+    "width": 39,
+    "height": 72
   },
-  "smoothUnion": {
-    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"-9\" cy=\"0\" r=\"10\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\"></circle><circle cx=\"9\" cy=\"0\" r=\"10\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\"></circle><path d=\"M -19 0 A 10 10 0 0 1 -4.4 -9 Q 0 -5 4.4 -9 A 10 10 0 1 1 4.4 9 Q 0 5 -4.4 9 A 10 10 0 0 1 -19 0 Z\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path></g>"
+  "sdCylinder": {
+    "svg": "<g transform=\"translate(28 28)\"><ellipse cx=\"0\" cy=\"-12\" rx=\"14\" ry=\"5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></ellipse><line x1=\"-14\" y1=\"-12\" x2=\"-14\" y2=\"12\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></line><line x1=\"14\" y1=\"-12\" x2=\"14\" y2=\"12\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></line><path d=\"M-14 12 A14 5 0 0 0 14 12\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></path><path d=\"M-14 12 A14 5 0 0 1 14 12\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\" stroke-dasharray=\"2 2\"></path></g>",
+    "width": 39,
+    "height": 90,
+    "sockets": {
+      "p": -4,
+      "r": 8,
+      "h": 24,
+      "round": 40,
+      "out": -4
+    }
   },
-  "sdSubtract": {
-    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"-4\" cy=\"2\" r=\"14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></circle><circle cx=\"11\" cy=\"-8\" r=\"9\" fill=\"#FFFFFF\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></circle></g>"
+  "sdCapsule": {
+    "svg": "<g transform=\"translate(28 28)\"><rect x=\"-9\" y=\"-18\" width=\"18\" height=\"36\" rx=\"9\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></rect><line x1=\"0\" y1=\"-9\" x2=\"0\" y2=\"9\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line></g>",
+    "width": 24,
+    "height": 72,
+    "sockets": {
+      "p": 0,
+      "r": 16,
+      "h": 28,
+      "out": -20
+    }
+  },
+  "sdCone": {
+    "svg": "<g transform=\"translate(28 28)\"><path d=\"M-14 12 L-5 -16 L5 -16 L14 12\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\" stroke-linejoin=\"round\"></path><ellipse cx=\"0\" cy=\"12\" rx=\"14\" ry=\"5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></ellipse><ellipse cx=\"0\" cy=\"-16\" rx=\"5\" ry=\"2\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></ellipse></g>",
+    "scale": 1.2,
+    "width": 42,
+    "height": 88,
+    "sockets": {
+      "p": -4,
+      "r1": 8,
+      "r2": 24,
+      "h": 36,
+      "out": -28
+    }
+  },
+  "sdPlane": {
+    "svg": "<g transform=\"translate(28 28)\"><path d=\"M-20 8 L-4 -6 L22 -6 L6 8 Z\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\" stroke-linejoin=\"round\"></path><line x1=\"1\" y1=\"1\" x2=\"1\" y2=\"-20\" stroke=\"#F57C00\" stroke-width=\"1.8\"></line><path d=\"M-3 -15 L1 -21 L5 -15\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path></g>",
+    "scale": 1.3,
+    "width": 43,
+    "height": 101,
+    "sockets": {
+      "p": -12,
+      "nx": 0,
+      "ny": 16,
+      "nz": 28,
+      "h": 44,
+      "out": -12
+    }
+  },
+  "sdOctahedron": {
+    "svg": "<g transform=\"translate(28 28)\"><path d=\"M0 -20 L18 0 L0 20 L-18 0 Z\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\" stroke-linejoin=\"round\"></path><path d=\"M-18 0 L0 6 L18 0 M0 6 L0 20 M0 -20 L0 6\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path></g>",
+    "scale": 1.25,
+    "width": 32,
+    "height": 61,
+    "sockets": {
+      "p": -24,
+      "s": 24,
+      "out": 0
+    }
+  },
+  "sdStar": {
+    "svg": "<g transform=\"translate(28 28)\"><polygon points=\"0,-20 4.7,-6.47 19.02,-6.18 7.61,2.47 11.76,16.18 0,8 -11.76,16.18 -7.61,2.47 -19.02,-6.18 -4.7,-6.47\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\" stroke-linejoin=\"round\"></polygon></g>"
+  },
+  "sdfTransform": {
+    "svg": "<g transform=\"translate(28 28)\"><line x1=\"-18\" y1=\"14\" x2=\"18\" y2=\"14\" stroke=\"#8A8F9C\" stroke-width=\"1.6\"></line><line x1=\"-18\" y1=\"14\" x2=\"-18\" y2=\"-20\" stroke=\"#8A8F9C\" stroke-width=\"1.6\"></line><path d=\"M14 10 L18 14 L14 18 M-22 -16 L-18 -20 L-14 -16\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.6\"></path><rect x=\"-10\" y=\"-8\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.2\"></rect><path d=\"M6 -14 A12 12 0 0 1 16 -4\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path><path d=\"M12 -5 L16 -4 L17 -8\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path></g>",
+    "scale": 1.3,
+    "width": 50,
+    "height": 160,
+    "sockets": {
+      "p": -40,
+      "tx": -20,
+      "ty": -4,
+      "tz": 8,
+      "rx": 28,
+      "ry": 40,
+      "rz": 56,
+      "s": 76,
+      "out": -60
+    }
+  },
+  "sdfRepeat": {
+    "svg": "<g transform=\"translate(28 28)\"><rect x=\"-18\" y=\"-14\" width=\"8\" height=\"8\" fill=\"#F57C00\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"-4\" y=\"-14\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"10\" y=\"-14\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"-18\" y=\"2\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"-4\" y=\"2\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"10\" y=\"2\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect></g>",
+    "scale": 1.45,
+    "width": 51,
+    "height": 128,
+    "sockets": {
+      "p": -24,
+      "sx": -8,
+      "sy": 4,
+      "sz": 16,
+      "lx": 28,
+      "ly": 44,
+      "lz": 56,
+      "out": -16
+    }
+  },
+  "sdfRepeatPolar": {
+    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"0\" cy=\"0\" r=\"16\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\" stroke-dasharray=\"2 2\"></circle><circle cx=\"16\" cy=\"0\" r=\"3.2\" fill=\"#F57C00\"></circle><circle cx=\"8\" cy=\"13.86\" r=\"3.2\" fill=\"#2B2B2B\"></circle><circle cx=\"-8\" cy=\"13.86\" r=\"3.2\" fill=\"#2B2B2B\"></circle><circle cx=\"-16\" cy=\"0\" r=\"3.2\" fill=\"#2B2B2B\"></circle><circle cx=\"-8\" cy=\"-13.86\" r=\"3.2\" fill=\"#2B2B2B\"></circle><circle cx=\"8\" cy=\"-13.86\" r=\"3.2\" fill=\"#2B2B2B\"></circle></g>",
+    "scale": 2,
+    "width": 25,
+    "height": 78,
+    "sockets": {
+      "p": -32,
+      "n": 32,
+      "out": 0
+    }
+  },
+  "sdfMirror": {
+    "svg": "<g transform=\"translate(28 28)\"><line x1=\"0\" y1=\"-22\" x2=\"0\" y2=\"22\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><path d=\"M-4 -12 L-18 -4 L-6 10 Z\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.2\" stroke-linejoin=\"round\"></path><path d=\"M4 -12 L18 -4 L6 10 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"2.2\" stroke-linejoin=\"round\"></path></g>",
+    "scale": 1.35,
+    "dy": -4.5,
+    "width": 50,
+    "height": 92,
+    "sockets": {
+      "p": -4,
+      "x": 8,
+      "y": 24,
+      "z": 40,
+      "out": -28
+    }
+  },
+  "sdfModify": {
+    "svg": "<g transform=\"translate(28 28)\"><rect x=\"-10\" y=\"-10\" width=\"20\" height=\"20\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.2\"></rect><rect x=\"-18\" y=\"-18\" width=\"36\" height=\"36\" rx=\"8\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></rect></g>",
+    "scale": 1.2,
+    "dx": 0.5,
+    "dy": -2.5,
+    "width": 45,
+    "height": 67,
+    "sockets": {
+      "d": -24,
+      "amount": 20,
+      "out": 0
+    }
+  },
+  "sdfDeform": {
+    "svg": "<g transform=\"translate(28 28)\"><path d=\"M-8 -20 C 12 -10, -12 10, 8 20\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></path><path d=\"M8 -20 C -12 -10, 12 10, -8 20\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"2.4\"></path></g>",
+    "scale": 1.2,
+    "width": 26,
+    "height": 107,
+    "sockets": {
+      "p": -12,
+      "amount": 0,
+      "hx": 16,
+      "hy": 32,
+      "hz": 44,
+      "out": -36
+    }
+  },
+  "sdfExtrude": {
+    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"6\" cy=\"-6\" r=\"12\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></circle><line x1=\"-14.5\" y1=\"-2.5\" x2=\"-2.5\" y2=\"-14.5\" stroke=\"#F57C00\" stroke-width=\"1.6\"></line><line x1=\"2.5\" y1=\"14.5\" x2=\"14.5\" y2=\"2.5\" stroke=\"#F57C00\" stroke-width=\"1.6\"></line><circle cx=\"-6\" cy=\"6\" r=\"12\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></circle></g>",
+    "scale": 1.3,
+    "dx": 0.5,
+    "dy": -7.5,
+    "width": 34,
+    "height": 79,
+    "sockets": {
+      "d": -4,
+      "p": 12,
+      "h": 28,
+      "out": -24
+    }
+  },
+  "sdfRevolve": {
+    "svg": "<g transform=\"translate(28 28)\"><line x1=\"0\" y1=\"-22\" x2=\"0\" y2=\"22\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><path d=\"M4 -16 C 16 -10, 6 4, 14 16\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></path><ellipse cx=\"0\" cy=\"16\" rx=\"14\" ry=\"5\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.6\"></ellipse></g>",
+    "scale": 1.4,
+    "width": 44,
+    "height": 74,
+    "sockets": {
+      "p": -28,
+      "o": 28,
+      "out": 0
+    }
+  },
+  "sdfMask": {
+    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"0\" cy=\"0\" r=\"16\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></circle><path d=\"M0 -16 A16 16 0 0 1 0 16 Z\" fill=\"#2B2B2B\"></path></g>",
+    "scale": 1.3,
+    "width": 46,
+    "height": 63,
+    "sockets": {
+      "d": -24,
+      "w": 24,
+      "out": 0
+    }
+  },
+  "sdCombine": {
+    "svg": "<g transform=\"translate(28 28)\"><circle cx=\"-9\" cy=\"0\" r=\"10\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\"></circle><circle cx=\"9\" cy=\"0\" r=\"10\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\"></circle><path d=\"M -19 0 A 10 10 0 0 1 -4.4 -9 Q 0 -5 4.4 -9 A 10 10 0 1 1 4.4 9 Q 0 5 -4.4 9 A 10 10 0 0 1 -19 0 Z\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path></g>",
+    "scale": 1.35,
+    "dy": -4.5,
+    "width": 39,
+    "height": 79,
+    "sockets": {
+      "a": -4,
+      "b": 12,
+      "k": 28,
+      "out": -24
+    }
+  },
+  "rayDirection": {
+    "svg": "<g transform=\"translate(28 28)\"><path d=\"M -24 0 Q -16 -9 -8 0 Q -16 9 -24 0 Z\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.6\"></path><circle cx=\"-16\" cy=\"0\" r=\"2.6\" fill=\"#2B2B2B\"></circle><line x1=\"-6\" y1=\"0\" x2=\"18\" y2=\"-8\" stroke=\"#F57C00\" stroke-width=\"1.8\"></line><polygon points=\"16,-13 24,-10 18,-4\" fill=\"#F57C00\"></polygon></g>",
+    "scale": 1.2,
+    "dx": 2,
+    "dy": -2.5,
+    "width": 34,
+    "height": 33,
+    "sockets": {
+      "out": 0
+    }
   }
 };

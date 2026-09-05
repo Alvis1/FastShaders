@@ -13,7 +13,8 @@
     "tauri": "tauri",
     "eval:analysis": "node scripts/eval-analysis.mjs",
     "deploy:alvismisjuns": "bash scripts/deploy-alvismisjuns.sh",
-    "deploy:sferas": "bash scripts/deploy-sferas.sh"
+    "deploy:sferas": "bash scripts/deploy-sferas.sh",
+    "gen:teapot": "node --experimental-strip-types scripts/gen-teapot-obj.mjs"
   },
   "dependencies": {
     "@babel/parser": "^7.26.0",

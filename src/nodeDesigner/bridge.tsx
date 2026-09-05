@@ -92,7 +92,6 @@ function NdPreview(p: NdPreviewInput) {
       def={def}
       design={p.design}
       interactive
-      exactWidth
       headerText={p.headerText}
       portStates={p.ins}
       values={p.values}

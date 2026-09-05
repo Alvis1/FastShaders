@@ -26,6 +26,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { FIT_BOUNDS_SCRIPT } from './tslToPreviewHTML';
 
 interface FitComponent {
@@ -85,6 +86,63 @@ function attributeBounds(root: THREE.Object3D): THREE.Box3 {
     if (mesh.geometry.boundingBox) box.union(mesh.geometry.boundingBox);
   });
   return box;
+}
+
+/**
+ * Triangles whose u corners span more than half the range — i.e. that straddle
+ * the atan2 wrap and so interpolate the whole texture backwards across
+ * themselves. That IS the defect, so it is the only honest thing to count.
+ *
+ * Each offender is reported with how polar it is (the largest |y| among its
+ * corners, on the same normalized direction the projection used), because the
+ * SEAM and the POLE are two different singularities: the seam is repairable by
+ * splitting vertices and the pole is not, so a test that lumped them together
+ * could only ever assert a magic number.
+ */
+function uvSeamSpans(g: THREE.BufferGeometry): { span: number; polar: number }[] {
+  const uv = g.attributes.uv;
+  if (!uv) return [];
+  const pos = g.attributes.position;
+  const idx = g.index;
+  const corners = idx
+    ? Array.from({ length: idx.count }, (_, i) => idx.getX(i))
+    : Array.from({ length: uv.count }, (_, i) => i);
+  const out: { span: number; polar: number }[] = [];
+  const v = new THREE.Vector3();
+  for (let t = 0; t + 2 < corners.length; t += 3) {
+    const tri = [corners[t], corners[t + 1], corners[t + 2]];
+    const us = tri.map((i) => uv.getX(i));
+    const span = Math.max(...us) - Math.min(...us);
+    if (span <= 0.5) continue;
+    out.push({
+      span,
+      polar: Math.max(...tri.map((i) => Math.abs(v.fromBufferAttribute(pos, i).normalize().y))),
+    });
+  }
+  return out;
+}
+
+/** Offenders the pole singularity does NOT excuse — this must always be zero. */
+const seamSpansOffPole = (g: THREE.BufferGeometry): number =>
+  uvSeamSpans(g).filter((s) => s.polar < 0.98).length;
+
+/** Strip a three primitive of its authored uv + normals: what a bare OBJ looks like. */
+function bare(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  g.deleteAttribute('uv');
+  g.deleteAttribute('normal');
+  return g;
+}
+
+/** The regenerated built-in teapot as OBJLoader hands it over (non-indexed, v/vt/vn). */
+function loadTeapotObj(): THREE.BufferGeometry {
+  const src = readFileSync(new URL('../../public/models/teapot.obj', import.meta.url), 'utf8');
+  let geo: THREE.BufferGeometry | null = null;
+  new OBJLoader().parse(src).traverse((n) => {
+    const m = n as THREE.Mesh;
+    if (m.isMesh && !geo) geo = m.geometry;
+  });
+  if (!geo) throw new Error('teapot.obj produced no mesh');
+  return geo;
 }
 
 const longestAxis = (b: THREE.Box3): number => {
@@ -212,6 +270,194 @@ describe('fit-bounds normalization', () => {
     expect(mesh.geometry.attributes.normal).toBeTruthy();
     expect(mesh.geometry.attributes.uv).toBeTruthy();
     expect(longestAxis(attributeBounds(root))).toBeCloseTo(1.6, 5);
+  });
+
+  it('splits the spherical-UV SEAM so no triangle spans the wrap', () => {
+    // atan2 steps u from 1 back to 0 across the -X half-plane. Share one vertex
+    // between the two sides and every straddling triangle interpolates u
+    // backwards over the whole range — the entire texture crushed and mirrored
+    // into a band one triangle wide, which is what "the handle-side UVs are
+    // rotated and squashed" looked like on the teapot.
+    // A BARE source — no uv, no normals — so this exercises the projection
+    // path. (A source that ships its own texture coordinates keeps them now;
+    // that is the test further down.)
+    const root = new THREE.Object3D();
+    root.add(new THREE.Mesh(bare(new THREE.SphereGeometry(1, 24, 16)), new THREE.MeshBasicMaterial()));
+
+    runFit(root);
+
+    const g = (root.children[0] as THREE.Mesh).geometry;
+    expect(seamSpansOffPole(g)).toBe(0);
+    // The repair is vertex duplication, so positions and normals must stay
+    // paired with their UVs — a mismatched count renders as scrambled geometry.
+    expect(g.attributes.normal.count).toBe(g.attributes.position.count);
+    expect(g.attributes.uv.count).toBe(g.attributes.position.count);
+    // And the duplicates must be COPIES: a split vertex sits exactly on its
+    // original with the same normal, which is what keeps a displaced surface
+    // welded across the seam instead of tearing open along it.
+    expect(g.index).toBeTruthy();
+    const uv = g.attributes.uv;
+    const posAttr = g.attributes.position;
+    const seen = new Map<string, number[]>();
+    for (let i = 0; i < posAttr.count; i++) {
+      const key = [posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)].map((n) => n.toFixed(5)).join(',');
+      const bucket = seen.get(key) ?? [];
+      bucket.push(i);
+      seen.set(key, bucket);
+    }
+    let raised = 0;
+    for (const bucket of seen.values()) {
+      if (bucket.length < 2) continue;
+      const us = bucket.map((i) => uv.getX(i)).sort((a, b) => a - b);
+      // Co-located vertices exist only because of the split, so their u values
+      // differ by whole periods — never by an arbitrary amount.
+      for (let k = 1; k < us.length; k++) expect(us[k] - us[k - 1]).toBeCloseTo(1, 5);
+      raised += bucket.length - 1;
+    }
+    expect(raised, 'the seam split produced no duplicates at all').toBeGreaterThan(0);
+  });
+
+  it('leaves a seam-free mesh byte-identical (the split is opt-in by defect)', () => {
+    // A cube's spherical UVs happen to straddle the seam, so use the half that
+    // cannot: a mesh whose every triangle already sits inside one u period must
+    // come back with no duplicated vertices at all.
+    const g = bare(new THREE.PlaneGeometry(2, 2));
+    g.rotateY(Math.PI / 2); // face +X, i.e. as far from the -X seam as possible
+    const root = new THREE.Object3D();
+    root.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial()));
+
+    runFit(root);
+
+    const out = (root.children[0] as THREE.Mesh).geometry;
+    expect(seamSpansOffPole(out)).toBe(0);
+    expect(out.attributes.position.count).toBe(4);
+  });
+
+  it('KEEPS an OBJ\'s authored texture coordinates and normals on the regen path', () => {
+    // Until 2026-09-05 the weld discarded both and every OBJ was re-projected,
+    // whatever the file said. The regenerated teapot ships the Utah bijective
+    // atlas and analytic normals, so after the fit every vertex must still
+    // carry a (uv, normal) pair the FILE authored for that position — and the
+    // atlas has no atan2 seam, so nothing may span.
+    const src = loadTeapotObj();
+    // fit-bounds re-bakes even this pre-normalized file by a hair (the spout
+    // tip sits between samples at resolution 16, so the longest axis is a
+    // touch under 1.6), so the authored positions are keyed AFTER the same
+    // centre-and-scale it applies.
+    src.computeBoundingBox();
+    const box = src.boundingBox!;
+    const centre = new THREE.Vector3();
+    box.getCenter(centre);
+    const scale = 1.6 / longestAxis(box);
+    const authored = new Map<string, Set<string>>();
+    const key = (x: number, y: number, z: number) => [x, y, z].map((n) => n.toFixed(3)).join(',');
+    for (let i = 0; i < src.attributes.position.count; i++) {
+      const p = src.attributes.position, u = src.attributes.uv, n = src.attributes.normal;
+      const k = key((p.getX(i) - centre.x) * scale, (p.getY(i) - centre.y) * scale, (p.getZ(i) - centre.z) * scale);
+      const set = authored.get(k) ?? new Set();
+      set.add(`${u.getX(i).toFixed(4)},${u.getY(i).toFixed(4)}|${n.getX(i).toFixed(3)},${n.getY(i).toFixed(3)},${n.getZ(i).toFixed(3)}`);
+      authored.set(k, set);
+    }
+    const root = new THREE.Object3D();
+    root.add(new THREE.Mesh(src, new THREE.MeshBasicMaterial()));
+
+    runFit(root); // regen: true — the built-in path
+
+    const g = (root.children[0] as THREE.Mesh).geometry;
+    const p = g.attributes.position, u = g.attributes.uv, n = g.attributes.normal;
+    expect(u.count).toBe(p.count);
+    expect(n.count).toBe(p.count);
+    // Welded: far fewer vertices than the 3-per-face OBJLoader output, but
+    // more than the tessellator's grid (chart boundaries stay split).
+    expect(p.count).toBeLessThan(src.attributes.position.count / 2);
+    let matched = 0;
+    for (let i = 0; i < p.count; i++) {
+      const set = authored.get(key(p.getX(i), p.getY(i), p.getZ(i)));
+      const tag = `${u.getX(i).toFixed(4)},${u.getY(i).toFixed(4)}|${n.getX(i).toFixed(3)},${n.getY(i).toFixed(3)},${n.getZ(i).toFixed(3)}`;
+      if (set?.has(tag)) matched++;
+      expect(u.getX(i)).toBeGreaterThanOrEqual(0);
+      expect(u.getX(i)).toBeLessThanOrEqual(1);
+      expect(u.getY(i)).toBeGreaterThanOrEqual(0);
+      expect(u.getY(i)).toBeLessThanOrEqual(1);
+    }
+    // Every output vertex is an authored (uv, normal) at its own position —
+    // allow a rounding-boundary handful, never a re-projection.
+    expect(matched / p.count).toBeGreaterThan(0.995);
+    expect(uvSeamSpans(g).length).toBe(0);
+  });
+
+  it('splits the seam on an INTERLEAVED geometry without scrambling it', () => {
+    // The preserve path synthesizes UVs for a GLB that ships none, and a glTF
+    // primitive is free to interleave its attributes — a shape the regen path
+    // never produces, so nothing else here exercises it. Duplicating a vertex
+    // out of an interleaved buffer means reading through the stride/offset
+    // rather than a flat array; get that wrong and the copies are silently
+    // someone else's vertex, which renders as shredded geometry near the seam.
+    // Rotated by HALF a segment on purpose: SphereGeometry's own duplicated
+    // seam column sits exactly where atan2 wraps, so an unrotated one straddles
+    // nothing and the split never runs — the test would pass without executing
+    // a line of the code it exists to cover.
+    const src = new THREE.SphereGeometry(1, 24, 16).rotateY(Math.PI / 24);
+    const pos = src.attributes.position;
+    const nrm = src.attributes.normal;
+    const stride = 6;
+    const packed = new Float32Array(pos.count * stride);
+    for (let i = 0; i < pos.count; i++) {
+      packed.set([pos.getX(i), pos.getY(i), pos.getZ(i), nrm.getX(i), nrm.getY(i), nrm.getZ(i)], i * stride);
+    }
+    const buf = new THREE.InterleavedBuffer(packed, stride);
+    const g = new THREE.BufferGeometry();
+    g.setIndex(src.index);
+    g.setAttribute('position', new THREE.InterleavedBufferAttribute(buf, 3, 0));
+    g.setAttribute('normal', new THREE.InterleavedBufferAttribute(buf, 3, 3));
+    const root = new THREE.Object3D();
+    root.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial()));
+
+    runFit(root, { regen: false });
+
+    const out = (root.children[0] as THREE.Mesh).geometry;
+    expect(seamSpansOffPole(out)).toBe(0);
+    expect(out.attributes.position.count).toBeGreaterThan(pos.count); // it split
+    // Every vertex must still be a unit sphere point carrying its own outward
+    // normal — the exact property a mis-strided copy destroys.
+    const p = out.attributes.position;
+    const n = out.attributes.normal;
+    for (let i = 0; i < p.count; i++) {
+      const r = Math.hypot(p.getX(i), p.getY(i), p.getZ(i));
+      expect(r).toBeCloseTo(0.8, 4); // fit-bounds normalizes the diameter to 1.6
+      const dot = (p.getX(i) * n.getX(i) + p.getY(i) * n.getY(i) + p.getZ(i) * n.getZ(i)) / r;
+      expect(dot).toBeCloseTo(1, 4);
+    }
+  });
+
+  it('repairs the seam on the SHIPPED bunny, and the teapot never has one', () => {
+    // The bunny is the one built-in still PROJECTED (a bare `f a b c` OBJ) — the
+    // seam defect was first reported on the teapot, whose seam plane ran through
+    // its handle, but that file now ships the Utah atlas and takes the
+    // authored-UV path (the test below). Both are pre-normalized, so this is
+    // the real geometry the preview renders.
+    for (const name of ['teapot.obj', 'stanford-bunny.obj']) {
+      const src = readFileSync(new URL(`../../public/models/${name}`, import.meta.url), 'utf8');
+      const obj = new OBJLoader().parse(src);
+      const root = new THREE.Object3D();
+      root.add(obj);
+
+      runFit(root);
+
+      let meshes = 0;
+      root.traverse((n) => {
+        const m = n as THREE.Mesh;
+        if (!m.isMesh) return;
+        meshes++;
+        const spans = uvSeamSpans(m.geometry);
+        expect(seamSpansOffPole(m.geometry), `${name} still has SEAM triangles`).toBe(0);
+        // The pole residue is real but tiny and confined to the axis; a bound
+        // here is what would catch the seam pass silently regressing into it.
+        expect(spans.length, `${name} pole residue grew`).toBeLessThan(10);
+        for (const s of spans) expect(s.polar).toBeGreaterThan(0.98);
+      });
+      expect(meshes, `${name} produced no mesh`).toBeGreaterThan(0);
+    }
   });
 
   it('preserves authored normals on the regen:false path', () => {
@@ -360,7 +606,7 @@ describe('podest fit-bounds twin', () => {
     );
     // Each helper is one `L.push('…');` line; the payloads quote with " so the
     // single-quoted host string needs no unescaping.
-    const wanted = ['function mergeByPosition', 'function sphericalUVs', 'function flipWinding', 'AFRAME.registerComponent("fit-bounds"'];
+    const wanted = ['function mergeByPosition', 'function rawComponent', 'function expandAttribute', 'function splitUVSeam', 'function splitByAuthored', 'function sphericalUVs', 'function flipWinding', 'AFRAME.registerComponent("fit-bounds"'];
     const parts = wanted.map((needle) => {
       const line = html.split('\n').find((l) => l.includes(`L.push('  ${needle}`));
       expect(line, `podest.html is missing its ${needle} push`).toBeTruthy();
@@ -382,6 +628,56 @@ describe('podest fit-bounds twin', () => {
 
   const runPodestFit = (root: THREE.Object3D, regen = true) =>
     loadPodestComponent().fit.call({ el: { getObject3D: () => root }, data: { size: 1.6, regen } });
+
+  it('splits the UV seam exactly like the editor preview does', () => {
+    // A dropped model is textured on both surfaces, so a podest that kept the
+    // shared seam vertex would show the crushed band the editor no longer has —
+    // the same shader rendering differently depending which page opened it.
+    const build = () => {
+      const r = new THREE.Object3D();
+      r.add(new THREE.Mesh(bare(new THREE.SphereGeometry(1, 24, 16)), new THREE.MeshBasicMaterial()));
+      return r;
+    };
+    const editorRoot = build();
+    const podestRoot = build();
+    runFit(editorRoot);
+    runPodestFit(podestRoot);
+
+    const editorGeo = (editorRoot.children[0] as THREE.Mesh).geometry;
+    const podestGeo = (podestRoot.children[0] as THREE.Mesh).geometry;
+    expect(seamSpansOffPole(podestGeo)).toBe(0);
+    // Same vertex count and the same UVs, not merely "also repaired somehow".
+    expect(podestGeo.attributes.position.count).toBe(editorGeo.attributes.position.count);
+    const eu = editorGeo.attributes.uv;
+    const pu = podestGeo.attributes.uv;
+    for (let i = 0; i < eu.count; i++) {
+      expect(pu.getX(i)).toBeCloseTo(eu.getX(i), 6);
+      expect(pu.getY(i)).toBeCloseTo(eu.getY(i), 6);
+    }
+  });
+
+  it('keeps an OBJ\'s authored texture coordinates exactly like the editor preview does', () => {
+    // podest loads public/models/teapot.obj with regen: true, so if its twin
+    // still threw authored UVs away the pedestal would show the spherical
+    // projection while the editor showed the atlas — for the same shader.
+    const editorRoot = new THREE.Object3D();
+    editorRoot.add(new THREE.Mesh(loadTeapotObj(), new THREE.MeshBasicMaterial()));
+    const podestRoot = new THREE.Object3D();
+    podestRoot.add(new THREE.Mesh(loadTeapotObj(), new THREE.MeshBasicMaterial()));
+    runFit(editorRoot);
+    runPodestFit(podestRoot);
+
+    const e = (editorRoot.children[0] as THREE.Mesh).geometry;
+    const p = (podestRoot.children[0] as THREE.Mesh).geometry;
+    expect(p.attributes.position.count).toBe(e.attributes.position.count);
+    expect(p.attributes.uv.count).toBe(e.attributes.uv.count);
+    for (let i = 0; i < e.attributes.uv.count; i++) {
+      expect(p.attributes.uv.getX(i)).toBeCloseTo(e.attributes.uv.getX(i), 6);
+      expect(p.attributes.uv.getY(i)).toBeCloseTo(e.attributes.uv.getY(i), 6);
+      expect(p.attributes.normal.getX(i)).toBeCloseTo(e.attributes.normal.getX(i), 6);
+    }
+    expect(uvSeamSpans(p).length).toBe(0);
+  });
 
   it('bakes into the attributes exactly like the editor preview does', () => {
     const build = () => {

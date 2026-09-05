@@ -40,10 +40,16 @@ const SITES: { file: string; history: 'bracket' | 'none'; count: number; why: st
     why: 'stored channel colour -> setChannelValue -> updateNodeData (pushHistory); it emits color(0x…)',
   },
   {
-    file: 'components/NodeEditor/nodes/SdfOutputNode.tsx',
+    file: 'components/NodeEditor/nodes/RaymarchOutputNode.tsx',
     history: 'bracket',
     count: 1,
-    why: 'the SDF Output colour swatch is a stored channel value that emits color(0x…) — graph content, undoable',
+    why: 'the Raymarch Output colour swatch is a stored channel value that emits color(0x…) — graph content, undoable',
+  },
+  {
+    file: 'components/NodeEditor/menus/RaymarchSettingsMenu.tsx',
+    history: 'bracket',
+    count: 1,
+    why: 'the Raymarch Output colour swatch is a stored channel value that emits color(0x…) — graph content, undoable',
   },
   {
     file: 'components/NodeEditor/nodes/ColorNode.tsx',
@@ -54,7 +60,10 @@ const SITES: { file: string; history: 'bracket' | 'none'; count: number; why: st
   {
     file: 'components/NodeEditor/nodes/ShaderNode.tsx',
     history: 'bracket',
-    count: 1,
+    // Three sites, one rule: the colour ROW, plus the operator-layout and the
+    // detached (designer-moved) colour operands — Data Stripes / Data Viz's
+    // exposed ramp ends, which drew as number boxes until 2026-09-03.
+    count: 3,
     why: 'stripes/dataviz lowColor/highColor -> handleChange -> updateNodeData (pushHistory)',
   },
   {
@@ -78,7 +87,8 @@ const SITES: { file: string; history: 'bracket' | 'none'; count: number; why: st
   {
     file: 'components/NodeEditor/nodes/NodeVisual.tsx',
     history: 'none',
-    count: 1,
+    // Mirrors ShaderNode's three colour sites (row, operator layout, detached).
+    count: 3,
     why: "the static replica's only interactive consumer is the Node Designer, whose onValueChange writes its own session-only preview model",
   },
   {

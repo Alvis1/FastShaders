@@ -39,7 +39,14 @@ import {
 } from '@/utils/costOverride';
 import { makeDataNodeData, sanitizeDataNodes } from '@/utils/dataNode';
 import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
-import { sanitizeOutputMaterials, foldExtraOutputs, findDefaultOutput } from '@/utils/outputMaterials';
+import { sanitizeOutputMaterials, foldExtraOutputs } from '@/utils/outputMaterials';
+import { normalizeActiveOutput, clearActiveOutput, isSinkNode } from '@/utils/sdfPartition';
+import { migrateLegacyNodeTypes } from '@/registry/legacyNodeTypes';
+import {
+  loadOptionalCategories, OPTIONAL_CATEGORY_KEYS,
+  type OptionalCategory, type OptionalCategoryFlags,
+} from '@/registry/optionalCategories';
+import { sinkCosts } from '@/utils/nodeCost';
 import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, type ImageOriginInfo } from '@/utils/imageNode';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
@@ -159,14 +166,18 @@ export function loadSavedGroups(): SavedGroup[] {
       .map((g) => {
         try {
           const shape = sanitizeGraphShape<AppNode, AppEdge>(g.nodes, g.edges);
+          shape.nodes = migrateLegacyNodeTypes(shape.nodes);
           autoExposeConnectedParamPorts(shape.nodes, shape.edges);
           return {
             ...g,
-            nodes: sanitizeOutputMaterials(
+            // A saved group is a FRAGMENT: which sink is active belongs to
+            // the graph it lands in, so a stale flag inside the group is
+            // stripped here and the live graph's choice wins on instantiate.
+            nodes: clearActiveOutput(sanitizeOutputMaterials(
               sanitizeDataRangeNodes(
                 sanitizeDataNodes(sanitizeImageNodes(shape.nodes, false).nodes).nodes,
               ),
-            ),
+            )),
             edges: sanitizeEdgeExtras(shape.edges),
           };
         } catch {
@@ -315,6 +326,7 @@ export type ContextMenuType =
   | 'canvas'
   | 'node'
   | 'shader'
+  | 'raymarch'
   | 'edge'
   | 'group'
   | 'note'
@@ -761,6 +773,8 @@ export function loadGraph(): {
       // keeps rendering (graphs saved before the opt-in change, or hand-edited
       // files, may carry edges without the matching exposedPorts entry). Shared
       // with the project-import path so the two surfaces stay in lockstep.
+      // Folded node types (registry/legacyNodeTypes.ts) — before anything reads the def.
+      data.nodes = migrateLegacyNodeTypes(data.nodes);
       autoExposeConnectedParamPorts(data.nodes, data.edges);
 
       // Bound image payloads from a (possibly tampered) localStorage value.
@@ -784,6 +798,11 @@ export function loadGraph(): {
       // session saved by the multi-Output design, whose extra nodes would
       // otherwise sit inert with their wiring stranded.
       data.nodes = sanitizeOutputMaterials(data.nodes);
+      // Several output nodes may coexist, exactly ONE active — the flag is
+      // node data from the same untrusted payload, so it is normalised here
+      // (first `true` wins, junk stripped) BEFORE the fold reads it to pick
+      // the surviving Output. See utils/sdfPartition.ts `activeSink`.
+      data.nodes = normalizeActiveOutput(data.nodes);
       {
         const folded = foldExtraOutputs(data.nodes, data.edges);
         data.nodes = folded.nodes;
@@ -961,6 +980,18 @@ interface AppState {
    * costing a mouse user their zoom, which has no substitute.
    */
   trackpadScroll: boolean;
+  /**
+   * Which OPTIONAL palette categories are switched on — the ready-made
+   * Textures library and the Distance fields family, both OFF by default and
+   * flipped from the same toolbar right-click list as `trackpadScroll`.
+   * Persisted per category (`fs:showTextures`, `fs:showDistanceFields`).
+   *
+   * An ADD-SURFACE preference only: it decides what the content browser, the
+   * Add-node menu and search OFFER. The registry, codegen, the parser and every
+   * restore path ignore it, so a graph holding those nodes loads and compiles
+   * identically either way. See registry/optionalCategories.ts.
+   */
+  optionalCategories: OptionalCategoryFlags;
   /** Drop-time image conversion (WebP + power-of-two): ask each time, or a
    *  remembered answer. Persisted to `fs:imageConvert`. Conversion is lossy in
    *  ways the app can't judge for the user (a normal map wants "keep", a photo
@@ -1090,6 +1121,15 @@ interface AppState {
   ) => void;
   updateNodeData: (nodeId: string, data: Partial<AppNode['data']>) => void;
   /**
+   * Make an output node THE ACTIVE SINK — the one that drives emission, the
+   * preview wire and window, the cost total, the Uniforms overlay and the
+   * export (utils/sdfPartition.ts `activeSink`). Clicking a node's preview
+   * socket calls this. One history entry: the flag lands on `nodeId` and
+   * leaves every other Output / Raymarch Output in the same write. A no-op
+   * for a non-sink id.
+   */
+  setActiveOutput: (nodeId: string) => void;
+  /**
    * Start a fresh shader: the graph becomes a single Output node and edges +
    * board ink are dropped. One undo entry restores the whole previous document
    * (nodes, edges and drawings are exactly what a history snapshot holds).
@@ -1218,6 +1258,7 @@ interface AppState {
   setIgnoreImageLimits: (v: boolean) => void;
   setHideImageDownscaleWarning: (v: boolean) => void;
   setTrackpadScroll: (v: boolean) => void;
+  setOptionalCategory: (id: OptionalCategory, on: boolean) => void;
   setImageConvertMode: (v: 'ask' | 'always' | 'never') => void;
   setHideImageConvertNotice: (v: boolean) => void;
   setSplitRatio: (ratio: number) => void;
@@ -1317,6 +1358,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
   hideImageDownscaleWarning: loadString('fs:hideImageDownscaleWarning', '0') === '1',
   trackpadScroll: loadString('fs:trackpadScroll', '0') === '1',
+  optionalCategories: loadOptionalCategories((key) => loadString(key, '0')),
   imageConvertMode: (() => {
     const v = loadString('fs:imageConvert', 'ask');
     return v === 'always' || v === 'never' ? v : 'ask';
@@ -1930,6 +1972,24 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // Guarded so an unchanged hover cannot notify: React Flow fires mouse-enter
   // per node crossing, and every edge in the graph runs its selector on each
   // notify.
+  setActiveOutput: (nodeId) => {
+    const target = get().nodes.find((n) => n.id === nodeId);
+    if (!target || !isSinkNode(target)) return;
+    if ((target.data as Record<string, unknown>).activeOutput === true) return;
+    get().pushHistory();
+    evalLog('output-activate', { nodeType: target.data.registryType });
+    set((state) => ({
+      nodes: state.nodes.map((n) => {
+        if (!isSinkNode(n)) return n;
+        const d = n.data as Record<string, unknown>;
+        if (n.id === nodeId) return { ...n, data: { ...d, activeOutput: true } } as AppNode;
+        if (!('activeOutput' in d)) return n;
+        const next = { ...d };
+        delete next.activeOutput;
+        return { ...n, data: next } as AppNode;
+      }) as AppNode[],
+    }));
+  },
   setHoveredNode: (id) => {
     if (get().hoveredNodeId !== id) set({ hoveredNodeId: id });
   },
@@ -2035,6 +2095,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ trackpadScroll: v });
   },
 
+  setOptionalCategory: (id, on) => {
+    try { localStorage.setItem(OPTIONAL_CATEGORY_KEYS[id], on ? '1' : '0'); } catch { /* */ }
+    // A fresh object so every subscriber selecting the whole record re-runs;
+    // consumers that only need one flag select `s.optionalCategories.<id>`.
+    set((state) => ({ optionalCategories: { ...state.optionalCategories, [id]: on } }));
+  },
+
   setHideImageDownscaleWarning: (v) => {
     try { localStorage.setItem('fs:hideImageDownscaleWarning', v ? '1' : '0'); } catch { /* */ }
     set({ hideImageDownscaleWarning: v });
@@ -2104,14 +2171,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!isKnown) return;
     try { localStorage.setItem('fs:headsetId', id); } catch { /* */ }
     setCostOverrides(costProfiles.find((p) => p.id === id)?.costs ?? null);
-    const total = computeReachableCost(nodes, unwrapCollapsedGroupEdges(nodes, edges));
-    const outputNode = findDefaultOutput(nodes);
+    const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
+    const total = computeReachableCost(nodes, unwrapped);
+    // Every sink's own badge, the same rule useSyncEngine's cost effect
+    // applies (a device change reprices without a graph change).
+    const perSink = sinkCosts(nodes, unwrapped);
+    const badgesStale = nodes.some((n) => perSink.has(n.id) && n.data.cost !== perSink.get(n.id));
     set((state) => ({
       selectedHeadsetId: id,
       costVersion: state.costVersion + 1,
       totalCost: total,
-      ...(outputNode && outputNode.data.cost !== total
-        ? { nodes: state.nodes.map((n) => (n.id === outputNode.id ? { ...n, data: { ...n.data, cost: total } } : n)) as AppNode[] }
+      ...(badgesStale
+        ? { nodes: state.nodes.map((n) => (perSink.has(n.id) && n.data.cost !== perSink.get(n.id) ? { ...n, data: { ...n.data, cost: perSink.get(n.id)! } } : n)) as AppNode[] }
         : {}),
     }));
   },
@@ -3043,8 +3114,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // TARGETED copy into it as materials with its feeder edges re-pointed; an
     // UNTARGETED copy is dropped as dead weight (fold's standing rule on every
     // restore path). No-op (same array identities) with at most one Output.
+    // Live graph FIRST, so its active sink keeps the flag and an arriving
+    // Output lands as an ordinary INACTIVE one (`normalizeActiveOutput` keeps
+    // the first `true`; the group's copies were cleared at load anyway).
     const folded = foldExtraOutputs(
-      sanitizeOutputMaterials([group, ...state.nodes, ...members] as AppNode[]),
+      normalizeActiveOutput(sanitizeOutputMaterials([group, ...state.nodes, ...members] as AppNode[])),
       [...state.edges, ...edges] as AppEdge[],
     );
     set({

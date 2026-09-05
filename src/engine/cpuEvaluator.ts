@@ -1004,24 +1004,19 @@ function evaluate(
       result = p ? [Math.hypot(...p) - r] : null;
       break;
     }
-    case 'sdBox2': {
+    case 'sdBox': {
+      // 2D for a two-channel position, 3D otherwise — the width dispatch the
+      // emitter makes (sdBox2 vs sdBox3). Rounding cancels in value except at
+      // the corners, exactly as in the helper.
       const p = channelInput('p', 0);
-      const w = scalarInput('w', 0.5), h = scalarInput('h', 0.5);
+      const w = scalarInput('w', 0.5), h = scalarInput('h', 0.5), d = scalarInput('d', 0.5), r = scalarInput('round', 0);
       if (p) {
-        const qx = Math.abs(p[0] ?? 0) - w, qy = Math.abs(p[1] ?? 0) - h;
-        result = [Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0)];
-      } else result = null;
-      break;
-    }
-    case 'sdBox3': {
-      const p = channelInput('p', 0);
-      const w = scalarInput('w', 0.5), h = scalarInput('h', 0.5), d = scalarInput('d', 0.5);
-      if (p) {
-        const qx = Math.abs(p[0] ?? 0) - w, qy = Math.abs(p[1] ?? 0) - h, qz = Math.abs(p[2] ?? 0) - d;
-        result = [
-          Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) +
-            Math.min(Math.max(qx, Math.max(qy, qz)), 0),
-        ];
+        const q = p.length === 2
+          ? [Math.abs(p[0] ?? 0) - w + r, Math.abs(p[1] ?? 0) - h + r]
+          : [Math.abs(p[0] ?? 0) - w + r, Math.abs(p[1] ?? 0) - h + r, Math.abs(p[2] ?? 0) - d + r];
+        const outside = Math.hypot(...q.map((v) => Math.max(v, 0)));
+        const inside = Math.min(Math.max(...q), 0);
+        result = [outside + inside - r];
       } else result = null;
       break;
     }
@@ -1034,16 +1029,185 @@ function evaluate(
       } else result = null;
       break;
     }
-    case 'smoothUnion': {
-      // Polynomial smin — the same expression the helper emits.
-      const a = scalarInput('a', 0), b = scalarInput('b', 0), k = scalarInput('k', 0.1);
-      const hh = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / (k || 1e-9)));
-      result = [b + (a - b) * hh - k * hh * (1 - hh)];
+    case 'sdCombine': {
+      const a = scalarInput('a', 0), b = scalarInput('b', 0), k = scalarInput('k', 0);
+      result = [sdCombineValue(sdCombineMode(node), a, b, k)];
       break;
     }
-    case 'sdSubtract': {
-      const a = scalarInput('a', 0), b = scalarInput('b', 0);
-      result = [Math.max(-b, a)];
+    case 'sdCylinder': {
+      const p = channelInput('p', 0);
+      const r = scalarInput('r', 0.3), h = scalarInput('h', 0.5), rb = scalarInput('round', 0);
+      if (p) {
+        const dx = Math.hypot(p[0] ?? 0, p[2] ?? 0) - (r - rb);
+        const dy = Math.abs(p[1] ?? 0) - (h - rb);
+        result = [Math.min(Math.max(dx, dy), 0) + Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) - rb];
+      } else result = null;
+      break;
+    }
+    case 'sdCapsule': {
+      const p = channelInput('p', 0);
+      const r = scalarInput('r', 0.2), h = scalarInput('h', 0.3);
+      if (p) {
+        const py = p[1] ?? 0;
+        result = [Math.hypot(p[0] ?? 0, py - Math.min(Math.max(py, -h), h), p[2] ?? 0) - r];
+      } else result = null;
+      break;
+    }
+    case 'sdCone': {
+      const p = channelInput('p', 0);
+      const r1 = scalarInput('r1', 0.4), r2 = scalarInput('r2', 0.1), h = scalarInput('h', 0.4);
+      if (p) {
+        const qx = Math.hypot(p[0] ?? 0, p[2] ?? 0), qy = p[1] ?? 0;
+        const k1 = [r2, h], k2 = [r2 - r1, 2 * h];
+        const ca = [qx - Math.min(qx, qy < 0 ? r1 : r2), Math.abs(qy) - h];
+        const t = Math.min(Math.max(((k1[0] - qx) * k2[0] + (k1[1] - qy) * k2[1]) / (k2[0] * k2[0] + k2[1] * k2[1] || 1e-9), 0), 1);
+        const cb = [qx - k1[0] + k2[0] * t, qy - k1[1] + k2[1] * t];
+        const sgn = cb[0] < 0 && ca[1] < 0 ? -1 : 1;
+        result = [sgn * Math.sqrt(Math.min(ca[0] * ca[0] + ca[1] * ca[1], cb[0] * cb[0] + cb[1] * cb[1]))];
+      } else result = null;
+      break;
+    }
+    case 'sdPlane': {
+      const p = channelInput('p', 0);
+      const nx = scalarInput('nx', 0), ny = scalarInput('ny', 1), nz = scalarInput('nz', 0), h = scalarInput('h', 0);
+      if (p) {
+        const len = Math.hypot(nx, ny, nz) || 1;
+        result = [((p[0] ?? 0) * nx + (p[1] ?? 0) * ny + (p[2] ?? 0) * nz) / len + h];
+      } else result = null;
+      break;
+    }
+    case 'sdOctahedron': {
+      const pIn = channelInput('p', 0);
+      const sz = scalarInput('s', 0.5);
+      if (pIn) {
+        const p = [Math.abs(pIn[0] ?? 0), Math.abs(pIn[1] ?? 0), Math.abs(pIn[2] ?? 0)];
+        const m = p[0] + p[1] + p[2] - sz;
+        let q: number[] | null = null;
+        if (3 * p[0] < m) q = [p[0], p[1], p[2]];
+        else if (3 * p[1] < m) q = [p[1], p[2], p[0]];
+        else if (3 * p[2] < m) q = [p[2], p[0], p[1]];
+        if (!q) result = [m * 0.57735027];
+        else {
+          const k = Math.min(Math.max(0.5 * (q[2] - q[1] + sz), 0), sz);
+          result = [Math.hypot(q[0], q[1] - sz + k, q[2] - k)];
+        }
+      } else result = null;
+      break;
+    }
+    case 'sdStar': {
+      const pIn = channelInput('p', 0);
+      const r = scalarInput('r', 0.4), n = Math.max(scalarInput('n', 5), 1), m = Math.max(scalarInput('m', 3), 1);
+      if (pIn) {
+        const an = Math.PI / n, en = Math.PI / m;
+        const acs = [Math.cos(an), Math.sin(an)], ecs = [Math.cos(en), Math.sin(en)];
+        const x = pIn[0] ?? 0, y = pIn[1] ?? 0;
+        const a = Math.atan2(x, y);
+        const twoAn = 2 * an;
+        const bn = (((a % twoAn) + twoAn) % twoAn) - an;
+        const len = Math.hypot(x, y);
+        let px = len * Math.cos(bn) - r * acs[0];
+        let py = len * Math.abs(Math.sin(bn)) - r * acs[1];
+        const t = Math.min(Math.max(-(px * ecs[0] + py * ecs[1]), 0), (r * acs[1]) / ecs[1]);
+        px += ecs[0] * t;
+        py += ecs[1] * t;
+        result = [Math.hypot(px, py) * Math.sign(px || 1)];
+      } else result = null;
+      break;
+    }
+    case 'sdfTransform': {
+      const p = channelInput('p', 0);
+      const tx = scalarInput('tx', 0), ty = scalarInput('ty', 0), tz = scalarInput('tz', 0);
+      const rx = scalarInput('rx', 0), ry = scalarInput('ry', 0), rz = scalarInput('rz', 0);
+      const sc = Math.max(scalarInput('s', 1), 1e-6);
+      if (p) {
+        const rad = Math.PI / 180;
+        let x = ((p[0] ?? 0) - tx) / sc, y = ((p[1] ?? 0) - ty) / sc, z = ((p[2] ?? 0) - tz) / sc;
+        let c = Math.cos(rz * rad), sn = Math.sin(rz * rad);
+        [x, y] = [c * x + sn * y, c * y - sn * x];
+        c = Math.cos(ry * rad); sn = Math.sin(ry * rad);
+        [x, z] = [c * x - sn * z, c * z + sn * x];
+        c = Math.cos(rx * rad); sn = Math.sin(rx * rad);
+        [y, z] = [c * y + sn * z, c * z - sn * y];
+        result = [x, y, z];
+      } else result = null;
+      break;
+    }
+    case 'sdfRepeat': {
+      const p = channelInput('p', 0);
+      const sp = [scalarInput('sx', 1), scalarInput('sy', 1), scalarInput('sz', 1)];
+      const lim = [scalarInput('lx', 0), scalarInput('ly', 0), scalarInput('lz', 0)];
+      if (p) {
+        result = [0, 1, 2].map((i) => {
+          const v = p[i] ?? 0;
+          if (!(sp[i] > 0)) return v;
+          let id = Math.round(v / sp[i]);
+          if (lim[i] > 0) id = Math.min(Math.max(id, -lim[i]), lim[i]);
+          return v - sp[i] * id;
+        });
+      } else result = null;
+      break;
+    }
+    case 'sdfRepeatPolar': {
+      const p = channelInput('p', 0);
+      const n = Math.max(scalarInput('n', 6), 1);
+      if (p) {
+        const sp = (2 * Math.PI) / n;
+        const an = Math.atan2(p[2] ?? 0, p[0] ?? 0);
+        const a = an - sp * Math.floor(an / sp + 0.5);
+        const r = Math.hypot(p[0] ?? 0, p[2] ?? 0);
+        result = [r * Math.cos(a), p[1] ?? 0, r * Math.sin(a)];
+      } else result = null;
+      break;
+    }
+    case 'sdfMirror': {
+      const p = channelInput('p', 0);
+      const w = [scalarInput('x', 1), scalarInput('y', 0), scalarInput('z', 0)];
+      if (p) result = [0, 1, 2].map((i) => { const v = p[i] ?? 0; return v + (Math.abs(v) - v) * w[i]; });
+      else result = null;
+      break;
+    }
+    case 'sdfModify': {
+      const d = scalarInput('d', 0), a = scalarInput('amount', 0.05);
+      const mode = getNodeValues(node).mode;
+      result = [mode === 'shell' ? Math.abs(d) - a : mode === 'scale' ? d * a : d - a];
+      break;
+    }
+    case 'sdfDeform': {
+      const p = channelInput('p', 0);
+      const k = scalarInput('amount', 1);
+      const mode = getNodeValues(node).mode;
+      if (p) {
+        const x = p[0] ?? 0, y = p[1] ?? 0, z = p[2] ?? 0;
+        if (mode === 'bend') {
+          const c = Math.cos(k * x), sn = Math.sin(k * x);
+          result = [c * x - sn * y, sn * x + c * y, z];
+        } else if (mode === 'elongate') {
+          const hh = [scalarInput('hx', 0), scalarInput('hy', 0), scalarInput('hz', 0)];
+          result = [x, y, z].map((v, i) => v - Math.min(Math.max(v, -hh[i]), hh[i]));
+        } else {
+          const c = Math.cos(k * y), sn = Math.sin(k * y);
+          result = [c * x - sn * z, y, sn * x + c * z];
+        }
+      } else result = null;
+      break;
+    }
+    case 'sdfExtrude': {
+      const d = scalarInput('d', 0), h = scalarInput('h', 0.2);
+      const p = channelInput('p', 0);
+      const wz = Math.abs(p?.[2] ?? 0) - h;
+      result = [Math.min(Math.max(d, wz), 0) + Math.hypot(Math.max(d, 0), Math.max(wz, 0))];
+      break;
+    }
+    case 'sdfRevolve': {
+      const p = channelInput('p', 0);
+      const o = scalarInput('o', 0.5);
+      if (p) result = [Math.hypot(p[0] ?? 0, p[2] ?? 0) - o, p[1] ?? 0];
+      else result = null;
+      break;
+    }
+    case 'sdfMask': {
+      const d = scalarInput('d', 0), w = Math.max(scalarInput('w', 0.02), 1e-6);
+      result = [Math.min(Math.max(1 - d / w, 0), 1)];
       break;
     }
 
@@ -1605,18 +1769,31 @@ function computeRange(
       result = { min: [Math.sqrt(lo2) - r.max[0]], max: [Math.sqrt(hi2) - r.min[0]] };
       break;
     }
-    case 'smoothUnion': {
-      // smin(a, b) sits in [min(a, b) − k/4, min(a, b)].
-      const a = portRange('a', 0), b = portRange('b', 0), k = portRange('k', 0.1);
-      const lo = Math.min(a.min[0], b.min[0]) - Math.max(0, k.max[0]) / 4;
-      const hi = Math.min(a.max[0], b.max[0]);
-      result = { min: [lo], max: [hi] };
+    case 'sdCombine': {
+      // The fillet moves the seam by at most k/4 outward (union) or inward
+      // (intersect/subtract); xor has no cheap honest bound — `…`.
+      const mode = sdCombineMode(node);
+      const a = portRange('a', 0), b = portRange('b', 0), k = portRange('k', 0);
+      const slack = Math.max(0, k.max[0]) / 4;
+      if (mode === 'union') result = { min: [Math.min(a.min[0], b.min[0]) - slack], max: [Math.min(a.max[0], b.max[0])] };
+      else if (mode === 'intersect') result = { min: [Math.max(a.min[0], b.min[0])], max: [Math.max(a.max[0], b.max[0]) + slack] };
+      else if (mode === 'subtract') result = { min: [Math.max(a.min[0], -b.max[0])], max: [Math.max(a.max[0], -b.min[0]) + slack] };
+      else result = null;
       break;
     }
-    case 'sdSubtract': {
-      // max(−b, a)
-      const a = portRange('a', 0), b = portRange('b', 0);
-      result = { min: [Math.max(-b.max[0], a.min[0])], max: [Math.max(-b.min[0], a.max[0])] };
+    case 'sdfMask': {
+      result = { min: [0], max: [1] };
+      break;
+    }
+    case 'sdfModify': {
+      const d = portRange('d', 0), a = portRange('amount', 0.05);
+      const mode = getNodeValues(node).mode;
+      if (mode === 'scale') {
+        const c = [d.min[0] * a.min[0], d.min[0] * a.max[0], d.max[0] * a.min[0], d.max[0] * a.max[0]];
+        result = { min: [Math.min(...c)], max: [Math.max(...c)] };
+      } else if (mode === 'shell') {
+        result = { min: [-a.max[0]], max: [Math.max(Math.abs(d.min[0]), Math.abs(d.max[0])) - a.min[0]] };
+      } else result = { min: [d.min[0] - a.max[0]], max: [d.max[0] - a.min[0]] };
       break;
     }
     // sdBox2 / sdBox3 / sdTorus: no cheap honest interval — they fall through to
@@ -1625,4 +1802,24 @@ function computeRange(
 
   cache.set(nodeId, result);
   return result;
+}
+
+
+/** Combine's mode, validated (utils-free twin of moduleHelpers.modeOf). */
+function sdCombineMode(node: AppNode): string {
+  const v = getNodeValues(node).mode;
+  return v === 'subtract' || v === 'intersect' || v === 'xor' ? v : 'union';
+}
+
+/** IQ's k-normalised quadratic smooth-min family — the GPU helper's twin. */
+function sdCombineValue(mode: string, a: number, b: number, k: number): number {
+  const kk = Math.max(k, 1e-6);
+  const smin = (x: number, y: number) => {
+    const h = Math.max(kk - Math.abs(x - y), 0);
+    return Math.min(x, y) - (h * h) / (4 * kk);
+  };
+  if (mode === 'xor') return Math.max(Math.min(a, b), -Math.max(a, b));
+  if (mode === 'intersect') return -smin(-a, -b);
+  if (mode === 'subtract') return -smin(-a, b);
+  return smin(a, b);
 }

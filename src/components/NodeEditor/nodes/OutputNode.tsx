@@ -21,6 +21,7 @@ import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import type { OutputFlowNode, OutputNodeData } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
+import { isActiveSinkSelector } from './activeSinkSelector';
 import { getCostColor, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 // Also pulls in ShaderNode.css transitively — the shared .shader-node__edge-val
@@ -103,6 +104,11 @@ export const OutputNode = memo(function OutputNode({
 }: NodeProps<OutputFlowNode>) {
   const def = NODE_REGISTRY.get('output')!;
   const language = useAppStore((s) => s.language);
+  // Is THIS node the active sink? A boolean selector, so a graph notify that
+  // does not move the choice re-renders nothing (utils/sdfPartition.ts).
+  const activeSel = useMemo(() => isActiveSinkSelector(id), [id]);
+  const isActive = useAppStore(activeSel);
+  const setActiveOutput = useAppStore((s) => s.setActiveOutput);
   // Every material on this node, material 0 (the default) first. Read from
   // `data` rather than the store so a section re-renders with its node.
   const materials = useMemo(
@@ -532,13 +538,24 @@ export const OutputNode = memo(function OutputNode({
         {/* This SECTION's output socket — one per material, centred on its
             own block, so a multimesh Output visibly feeds the preview once
             per section (each gets its own PreviewLink wire, DOM order =
-            material order). Deliberately a decorative <span>, NOT a React
-            Flow Handle: the Output node has no outputs, and a real handle
-            would invite a drag that can never land. Drawn permanently
-            CONNECTED (solid fill, no hollow state) at twice the normal
-            socket size, in the wire's own colour — the connection is a fact
-            about the shader, not something the user wires up. */}
-        <span className="output-node__preview-socket" aria-hidden="true" />
+            material order) — and the ACTIVATION control: several output
+            nodes may coexist, exactly one drives (utils/sdfPartition.ts
+            `activeSink`), and clicking any section's socket makes this NODE
+            the active one. Solid while active, hollow otherwise. A
+            `<button>` with `nodrag` (React Flow's drag filter) whose
+            pointerdown is stopped, so a press never drags the node or pans
+            the canvas; the click is stopped too, so activating does not
+            also select. NOT a React Flow Handle: the Output has no outputs
+            and a real handle would invite a wire that can never land. */}
+        <button
+          type="button"
+          className={`output-node__preview-socket nodrag${isActive ? '' : ' output-node__preview-socket--inactive'}`}
+          aria-pressed={isActive}
+          aria-label={t(isActive ? 'Rendering this output' : 'Render this output', language)}
+          title={t(isActive ? 'This output drives the preview' : 'Click to render this output instead', language)}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); setActiveOutput(id); }}
+        />
 
         {showMeshRow && (
           <div className="output-node__mesh-row">
@@ -584,7 +601,7 @@ export const OutputNode = memo(function OutputNode({
 
   return (
     <div
-      className={`output-node ${selected ? 'output-node--selected' : ''}`}
+      className={`output-node ${selected ? 'output-node--selected' : ''}${isActive ? '' : ' output-node--inactive'}`}
       style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}
     >
       {/* Bare number, matching every ShaderNode badge — the unit is spelled out

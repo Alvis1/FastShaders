@@ -13,6 +13,7 @@ import { evalLog, initEvalBridge, startEvalSession, type EvalBridge } from './te
 import { evalTask } from './evalTask';
 import { ConsentModal } from './ConsentModal';
 import { VIEWPORT_KEY } from '@/utils/viewportMemory';
+import { DEFAULT_OPTIONAL_CATEGORIES, OPTIONAL_CATEGORY_KEYS } from '@/registry/optionalCategories';
 
 /**
  * Orchestrates eval-mode boot. Mounted by App.tsx ONLY when `isEvalMode()` —
@@ -93,10 +94,19 @@ function cleanSlateForStudy(): void {
     // across participants. Leaving it set meant participant 2 silently
     // inherited a cap someone had typed during participant 1.
     localStorage.removeItem('fs:costBudgets');
+    // The optional palette categories (Textures, Distance fields — OFF by
+    // default, switched on per browser from the toolbar's right-click list).
+    // What the palette OFFERS is part of the condition every participant
+    // must meet identically, so the previous user's switches are dropped
+    // with the rest of their state rather than inherited.
+    for (const key of Object.values(OPTIONAL_CATEGORY_KEYS)) localStorage.removeItem(key);
   } catch {
     /* storage blocked — nothing persisted to leak either */
   }
-  useAppStore.setState({ past: [], future: [], costBudgetOverrides: {} });
+  useAppStore.setState({
+    past: [], future: [], costBudgetOverrides: {},
+    optionalCategories: DEFAULT_OPTIONAL_CATEGORIES,
+  });
 }
 
 export function EvalGate() {

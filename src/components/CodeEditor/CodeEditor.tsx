@@ -9,8 +9,8 @@ import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { collectShaderProperties, shaderBaseName } from '@/engine/exportShader';
 import { buildAFrameEmbedHTML, readPreviewGeometry } from '@/engine/tslToAFrameHTML';
-import { SDF_WINDOW_GEOMETRY } from '@/engine/tslToPreviewHTML';
-import { sdfOutputDrives } from '@/utils/sdfPartition';
+import { MARCH_WINDOW_GEOMETRY } from '@/engine/tslToPreviewHTML';
+import { marchWindowRadius } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
 import { evalLog } from '@/eval/telemetry';
@@ -69,9 +69,10 @@ export function CodeEditor() {
         | undefined)?.materialSettings,
   );
   // While an SDF Output drives, the module is double-sided (exportShader's
-  // sdfMaterialSettings — the march starts at the camera on a back face) and
+  // marchMaterialSettings — the march starts at the camera on a back face) and
   // the A-Frame page renders through the SDF window box.
-  const sdfDrives = useAppStore((s) => sdfOutputDrives(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)));
+  const marchWindow = useAppStore((s) => marchWindowRadius(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)));
+  const sdfDrives = marchWindow !== null;
   const materialSettings = useMemo(
     () => (sdfDrives ? { ...rawMaterialSettings, side: 'double' as const } : rawMaterialSettings),
     [rawMaterialSettings, sdfDrives],
@@ -190,14 +191,15 @@ export function CodeEditor() {
         title: shaderName,
         // The SDF window replaces the Model dropdown's primitive while an SDF
         // Output drives — the same rule the preview applies.
-        geometry: sdfDrives ? SDF_WINDOW_GEOMETRY : readPreviewGeometry(),
+        geometry: marchWindow !== null ? MARCH_WINDOW_GEOMETRY : readPreviewGeometry(),
+        marchWindow: marchWindow ?? 1,
       });
     } catch (e) {
       return `<!-- Export error: ${e instanceof Error ? e.message : String(e)} -->`;
     }
     // embedStamp is the deliberate re-read trigger; it feeds nothing else.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scriptCode, jsFileName, shaderName, activeTab, embedStamp, sdfDrives]);
+  }, [scriptCode, jsFileName, shaderName, activeTab, embedStamp, marchWindow]);
 
   const handleCopyEmbed = useCallback(async () => {
     try {

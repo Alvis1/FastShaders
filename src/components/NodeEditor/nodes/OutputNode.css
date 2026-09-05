@@ -30,42 +30,56 @@
   background: var(--cat-output);
 }
 
-/* The socket a decorative Output -> 3D-preview wire leaves from — ONE PER
-   MATERIAL SECTION (`.output-node__material` is the offset parent, so each
-   socket centres on ITS OWN block and PreviewLink draws one wire per socket).
-   TWICE the normal socket size (`--handle-size`, which coarse pointers already
-   bump from 10 to 12px, so this follows touch too) and drawn permanently
-   CONNECTED — a solid fill, never the hollow "free port" state — because the
-   Output feeding the viewer is a fact about the shader, not something the user
-   plugs in.
+/* The socket the Output -> 3D-preview wire leaves from — ONE PER MATERIAL
+   SECTION (`.output-node__material` is the offset parent, so each socket
+   centres on ITS OWN block and PreviewLink draws one wire per socket) — and,
+   since 2026-09-03, THE ACTIVATION CONTROL: several output nodes may coexist
+   and exactly one is ACTIVE (utils/sdfPartition.ts `activeSink`); clicking
+   any socket on a node makes THAT node the active sink. The active node's
+   sockets are drawn CONNECTED (solid fill, the wire's colour); an inactive
+   node's are HOLLOW — a white disc with a ring in the wire's colour — the
+   ordinary "free port" reading, which is exactly what it is: a socket the
+   preview could be wired to.
 
-   Its colour is the WIRE's colour, not a literal black: `--node-cost-text` is
-   the auto-contrast value NodeEditor publishes from the user-picked canvas
-   background (the same one cost badges and 1-channel edges flip on), so the
-   two match on the default light canvas -- where both are black -- AND on a
-   dark one, where a hardcoded black socket would disappear while the wire went
-   white. That token is read ONLY inside `.react-flow` (the scoped rule below):
-   NodeEditor publishes it on `.node-editor`, which the asset bar ALSO sits
-   inside, so an unscoped read let a dark canvas turn the palette TILE's socket
-   white-on-white. The base rule is the default-canvas black -- a card shows
-   the node's one look, only the live canvas restyles by backdrop (the
-   NodeBase.css cost-badge precedent).
+   TWICE the normal socket size (`--handle-size`, which coarse pointers
+   already bump from 10 to 12px, so this follows touch too).
 
-   `pointer-events: none` is load-bearing: this is NOT a React Flow handle, so a
-   drag started on it would pan the canvas from what looks like a port.
+   Its colour is the WIRE's colour, not a literal black: `--node-cost-text`
+   is the auto-contrast value NodeEditor publishes from the user-picked
+   canvas background (the same one cost badges and 1-channel edges flip on),
+   so the two match on the default light canvas -- where both are black --
+   AND on a dark one, where a hardcoded black socket would disappear while
+   the wire went white. That token is read ONLY inside `.react-flow` (the
+   scoped rules below): NodeEditor publishes it on `.node-editor`, which the
+   asset bar ALSO sits inside, so an unscoped read let a dark canvas turn the
+   palette TILE's socket white-on-white. The base rule is the default-canvas
+   black -- a card shows the node's one look, only the live canvas restyles
+   by backdrop (the NodeBase.css cost-badge precedent).
+
+   The BASE rule keeps `pointer-events: none` and only the `.react-flow`
+   rule opts back in: the palette tiles and the node-editor overview render
+   the same class as an inert `<span>` inside `pointer-events: none` cards,
+   and a control must never be reachable from a static replica. On the
+   canvas the element is a real `<button>` carrying `nodrag` (React Flow's
+   drag filter) and stopping its pointerdown, so a press activates instead
+   of dragging the node or panning the canvas from what looks like a port.
+   It is NOT a React Flow Handle — the Output has no outputs and a real
+   handle would invite a wire that can never land.
 
    It is centred ON the node's right border the way a real handle is (half its
    width outside — a material block's padding box is the node's, so `right`
    resolves identically to the old node-level placement), and vertically on its
    MATERIAL BLOCK, so each section's socket sits at the middle of that section
-   however many rows it grows. PreviewLink anchors a wire on every socket, so
-   moving them in CSS moves the wires with no second rule to keep in step. */
+   however many rows it grows. PreviewLink anchors a wire on every socket of
+   the ACTIVE node, so moving them in CSS moves the wires with no second rule
+   to keep in step. */
 .output-node__preview-socket {
   position: absolute;
   top: 50%;
   right: calc(var(--handle-size) * -1);
   width: calc(var(--handle-size) * 2);
   height: calc(var(--handle-size) * 2);
+  padding: 0;
   transform: translateY(-50%);
   border: var(--handle-border) solid white;
   border-radius: 50%;
@@ -74,9 +88,35 @@
   pointer-events: none;
 }
 
-/* Canvas only: follow the canvas-contrast token (see the block comment above). */
+/* Inactive: hollow. The ring is drawn as an inset shadow rather than a
+   border so the outer white rim and the disc's size stay identical to the
+   active state — only the fill changes. */
+.output-node__preview-socket--inactive {
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15), inset 0 0 0 2px #000;
+}
+
+/* Canvas only: a real control, in the canvas-contrast colour (see above). */
 .react-flow .output-node__preview-socket {
   background: var(--node-cost-text, #000);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.react-flow .output-node__preview-socket--inactive {
+  background: var(--node-bg);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15), inset 0 0 0 2px var(--node-cost-text, #000);
+}
+
+.react-flow .output-node__preview-socket--inactive:hover {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15), inset 0 0 0 4px var(--node-cost-text, #000);
+}
+
+/* An INACTIVE node's badge is what the shader WOULD cost with this node
+   active — muted, so it reads as a comparison figure and not as the total
+   the meter shows. */
+.output-node--inactive .node-base__cost-badge {
+  opacity: 0.45;
 }
 
 /* One material's block. */

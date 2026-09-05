@@ -209,13 +209,16 @@ describe('no add surface reads the unfiltered registry', () => {
   it('the content browser filters the Textures tab', () => {
     const src = codeOnly(readFileSync(srcDir + 'components/NodeEditor/ContentBrowser.tsx', 'utf8'));
     expect(src).toMatch(/isTextureHiddenFromEditor/);
-    expect(src).toMatch(/getEditorDefinitions\(\)/);
+    // `getEditorDefinitions(hidden)` — the call carries the user's optional
+    // category switches (registry/optionalCategories.ts); the regex allows the
+    // argument and optionalCategories.test.ts pins that it is always passed.
+    expect(src).toMatch(/getEditorDefinitions\(/);
   });
 
   it('searchNodes ranks the editor set rather than the raw list', () => {
     const src = codeOnly(readFileSync(registryDir + 'nodeRegistry.ts', 'utf8'));
     const body = src.slice(src.indexOf('export function searchNodes'), src.indexOf('export function getAllDefinitions'));
-    expect(body).toMatch(/getEditorDefinitions\(\)/);
+    expect(body).toMatch(/getEditorDefinitions\(/);
     // `allDefinitions` here would re-open the search box as a way back in.
     expect(body).not.toMatch(/\ballDefinitions\b/);
   });

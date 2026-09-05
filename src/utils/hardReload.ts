@@ -39,21 +39,20 @@
  * autosaved graph, the saved groups, the cost profiles and every preference.
  */
 
-import { TEXTURES_ARM_KEY } from './texturesUnlock';
-
 /** Cache-busting marker. Stripped from the address bar once the page is up. */
 export const HARD_RELOAD_PARAM = 'fsreload';
 
 /**
  * The sessionStorage keys a hard reload drops.
  *
- * Only the textures arm today, and it is DEFENSIVE rather than load-bearing:
- * `texturesUnlock` consumes that key at boot, so by the time this menu can be
- * opened it is normally already gone. It still matters for the one window
- * where it isn't — `/textures` armed the key and the app never got as far as
- * reading it.
+ * EMPTY since 2026-09-04: the only entry was the `/textures` one-load arm,
+ * which the toolbar's right-click switch replaced (registry/optionalCategories
+ * .ts — a persisted preference, which a hard reload must NOT clear: the user
+ * asked for a fresh copy of the app, not for their settings back). The list
+ * and its loop stay, because the shape is the point — an EXPLICIT list that
+ * names no eval key, never a `sessionStorage.clear()` (hardReload.test.ts).
  */
-export const HARD_RELOAD_CLEARED_KEYS: readonly string[] = [TEXTURES_ARM_KEY];
+export const HARD_RELOAD_CLEARED_KEYS: readonly string[] = [];
 
 /**
  * PURE: the cache-busted URL to navigate to. `stamp` is passed in (rather than

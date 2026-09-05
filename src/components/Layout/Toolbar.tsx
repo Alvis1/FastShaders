@@ -10,7 +10,9 @@ import { isEvalMode } from '@/eval/evalMode';
 import { SusModal } from '@/eval/SusModal';
 import { EvalFinishModal } from '@/eval/EvalFinishModal';
 import { WorkFolder } from './WorkFolder';
-import { t } from '@/i18n';
+import { formatCategoryLabel, t } from '@/i18n';
+import { CATEGORIES } from '@/registry/nodeCategories';
+import { OPTIONAL_CATEGORIES, type OptionalCategory } from '@/registry/optionalCategories';
 import { foldOverflow, OVERFLOW_INITIAL } from './toolbarOverflow';
 import './Toolbar.css';
 
@@ -38,8 +40,44 @@ const DESKTOP_DOWNLOADS = [
 ];
 
 /** Width of the right-click preferences popover — kept in step with its CSS
- *  `width` so the on-screen clamp above matches the box actually painted. */
+ *  `width` so the on-screen clamp below matches the box actually painted. */
 const PREFS_W = 200;
+/** Its height, for the same clamp: the CSS padding (2 × `--space-3`) plus one
+ *  checkbox row per setting and a `--space-2` gap between rows. Derived from
+ *  the row count so adding a setting cannot leave the box hanging off the
+ *  bottom of a short window. */
+const PREFS_ROWS = 1 + OPTIONAL_CATEGORIES.length;
+const PREFS_H = 24 + PREFS_ROWS * 20 + (PREFS_ROWS - 1) * 8;
+
+/**
+ * The right-click list's LIBRARY rows — the palette's optional categories
+ * (registry/optionalCategories.ts), labelled exactly as their content-browser
+ * tabs are, so the switch and the thing it shows share a name. Each hint is
+ * the row's `title`, the "one line you scan, the detail on hover" rule.
+ */
+const OPTIONAL_CATEGORY_HINTS: Readonly<Record<OptionalCategory, string>> = {
+  texture: 'Show the Textures tab in the asset browser, and its textures in search.',
+  sdf: 'Show the Distance fields tab, and its nodes in the Add-node menu and search.',
+};
+
+/**
+ * True when a press at `el` must NOT open the preferences list — shared by
+ * the right-click and the touch long-press, so the two gestures can never
+ * disagree about who owns a spot on the bar. The name field needs its native
+ * cut/copy/paste menu (a text input's context menu is the one place users
+ * genuinely rely on the OS one), and EXPORT / the reload button / the ☰ menu
+ * own their gesture for their own popovers — EXPORT's handler preventDefaults
+ * but does NOT stopPropagation, so without this both would open at once.
+ * `.toolbar__reload-wrap` is redundant with `.toolbar__local` (the reload
+ * wrapper carries both) and is named anyway, so the reason it is excluded is
+ * legible from here. APPEND only: trackpadScroll.test.ts pins these strings
+ * with regexes anchored at the opening quote.
+ */
+function prefsClaimedElsewhere(el: HTMLElement | null): boolean {
+  if (!el) return false;
+  if (el.closest('input, textarea, select, [contenteditable="true"]')) return true;
+  return !!el.closest('.toolbar__export-wrap, .toolbar__local, .toolbar__overflow, .toolbar__reload-wrap');
+}
 
 /** Result shape of the desktop bench-server commands (src-tauri/src/bench_server.rs). */
 type BenchServerInfo = { url: string; ip: string; port: number };
@@ -194,23 +232,15 @@ export function Toolbar() {
   const prefsRef = useRef<HTMLDivElement>(null);
   const trackpadScroll = useAppStore((s) => s.trackpadScroll);
   const setTrackpadScroll = useAppStore((s) => s.setTrackpadScroll);
+  const optionalCategories = useAppStore((s) => s.optionalCategories);
+  const setOptionalCategory = useAppStore((s) => s.setOptionalCategory);
   const closePrefs = useCallback(() => setPrefsAt(null), []);
   useDismiss(prefsAt != null, closePrefs, [prefsRef]);
 
   const openPrefs = useCallback((e: React.MouseEvent) => {
-    const el = e.target as HTMLElement | null;
-    // Never steal a right-click that already means something else. The name
-    // field needs its native cut/copy/paste menu (a text input's context menu
-    // is the one place users genuinely rely on the OS one), and EXPORT owns
-    // right-click for its export-settings popover — that handler preventDefaults
-    // but does NOT stopPropagation, so without this guard both would fire and
-    // the two popovers would open on top of each other.
-    if (el?.closest('input, textarea, select, [contenteditable="true"]')) return;
-    // `.toolbar__reload-wrap` is redundant with `.toolbar__local` (the reload
-    // wrapper carries both) and is named anyway, so the reason this control is
-    // excluded is legible from here. APPEND only: trackpadScroll.test.ts pins
-    // this string with a regex anchored at the opening quote.
-    if (el?.closest('.toolbar__export-wrap, .toolbar__local, .toolbar__overflow, .toolbar__reload-wrap')) return;
+    // Never steal a right-click that already means something else (see
+    // prefsClaimedElsewhere for the list and why).
+    if (prefsClaimedElsewhere(e.target as HTMLElement | null)) return;
     e.preventDefault();
     setPrefsAt({ x: e.clientX, y: e.clientY });
   }, []);
@@ -225,6 +255,17 @@ export function Toolbar() {
   // collapsing removes the very overflow that triggered it, so the expand
   // threshold has to be captured while the bar is still expanded.
   const barRef = useRef<HTMLDivElement>(null);
+  // Touch has no second button, and this list is the ONLY way to switch the
+  // optional categories on — so a sustained press anywhere on the bar opens
+  // it, the EXPORT and reload precedents. Same guard as the right-click, so a
+  // hold on the name field or on EXPORT still belongs to them. A plain ref is
+  // fine here (the reload button needs its element in STATE because React
+  // re-parents it into the ☰ menu; the bar itself never moves). Mouse presses
+  // are ignored by the hook, so a desktop left-button hold never opens it.
+  useLongPress(barRef, (target, x, y) => {
+    if (prefsClaimedElsewhere(target)) return;
+    setPrefsAt({ x, y });
+  });
   const [overflow, setOverflow] = useState(OVERFLOW_INITIAL);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -940,7 +981,11 @@ export function Toolbar() {
           ref={prefsRef}
           className="toolbar__prefs-popover"
           role="menu"
-          aria-label={t('Input settings', language)}
+          // "Settings", not the "Input settings" the removed heading said: the
+          // list now holds the two library switches beside the trackpad one,
+          // and an accessible name that only fits its first row misnames the
+          // other two to a screen reader.
+          aria-label={t('Settings', language)}
           // Positioned at the pointer, so it reads as that click's menu. Fixed,
           // not absolute: the toolbar is the containing block and clamping
           // against it would fight the bar's own horizontal scroll-free layout.
@@ -948,17 +993,17 @@ export function Toolbar() {
           // where the right cluster lives.
           style={{
             left: Math.min(prefsAt.x, window.innerWidth - PREFS_W - 8),
-            top: Math.min(prefsAt.y, window.innerHeight - 96),
+            top: Math.min(prefsAt.y, window.innerHeight - PREFS_H - 8),
           }}
         >
-          <div className="toolbar__local-header">
-            <span className="toolbar__contact-label">{t('Input settings', language)}</span>
-          </div>
-          {/* The explanation is the row's `title`, picked up by the app-wide
-              TooltipLayer — the same "one line you scan, the detail arrives on
-              hover" rule the Add-node menu follows. It sits on the LABEL, which
-              wraps both the box and the text, so either half raises it
-              (TooltipLayer resolves its host with closest('[title]')). */}
+          {/* A plain LIST of settings — no heading (it went 2026-09-04: the
+              popover is the toolbar's own context menu, and a title over three
+              checkboxes was a row that did nothing). Each explanation is the
+              row's `title`, picked up by the app-wide TooltipLayer — the same
+              "one line you scan, the detail arrives on hover" rule the Add-node
+              menu follows. It sits on the LABEL, which wraps both the box and
+              the text, so either half raises it (TooltipLayer resolves its
+              host with closest('[title]')). */}
           <label
             className="toolbar__prefs-row"
             title={
@@ -974,6 +1019,29 @@ export function Toolbar() {
             />
             <span className="toolbar__prefs-label">{t('Trackpad scrolling', language)}</span>
           </label>
+          {/* The optional palette categories (Textures, Distance fields) — OFF
+              by default, on for good once ticked. Labelled with the category's
+              own tab name (formatCategoryLabel, Latvian-aware), so the switch
+              and the tab it summons read as one thing. */}
+          {OPTIONAL_CATEGORIES.map((id) => {
+            const cat = CATEGORIES.find((c) => c.id === id)!;
+            return (
+              <label
+                key={id}
+                className="toolbar__prefs-row"
+                title={t(OPTIONAL_CATEGORY_HINTS[id], language)}
+              >
+                <input
+                  type="checkbox"
+                  checked={optionalCategories[id]}
+                  onChange={(e) => setOptionalCategory(id, e.target.checked)}
+                />
+                <span className="toolbar__prefs-label">
+                  {formatCategoryLabel(cat.label, id, language)}
+                </span>
+              </label>
+            );
+          })}
         </div>
       )}
     </div>

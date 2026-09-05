@@ -67,13 +67,13 @@ import {
 } from './dragConnect';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
 import { pickSpliceInputPort } from './edgeSplice';
-import { existingOutputId, focusNodes, focusOutputNode, OUTPUT_FOCUS_FIT } from './outputFocus';
+import { costFocusId, focusNodes, focusOutputNode, OUTPUT_FOCUS_FIT } from './outputFocus';
 import { selectAllChanges } from './selectAll';
 import {
   readStoredViewport, writeStoredViewport, VIEWPORT_MIN_ZOOM, VIEWPORT_MAX_ZOOM,
   type StoredViewport,
 } from '@/utils/viewportMemory';
-import { outputDormancyFromState } from '@/utils/outputMaterials';
+import { anyOutputDormant } from '@/utils/outputMaterials';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { getCostScale, getContrastColor } from '@/utils/colorUtils';
@@ -147,6 +147,7 @@ const IMPORT_FIT_TIMEOUT_MS = 3000;
  */
 const NODE_MENU_TYPES: Record<string, ContextMenuType> = {
   output: 'shader',
+  raymarchOutput: 'raymarch',
   stripes: 'stripes',
   dataviz: 'dataviz',
   colormap: 'colormap',
@@ -732,7 +733,8 @@ export function NodeEditor() {
   useEffect(() => () => document.documentElement.classList.remove('fs-canvas-busy'), []);
   /**
    * The cost pill's total doubles as "take me to the Output" — the number is
-   * this shader's price and the Output node is where it is spent, so the same
+   * this shader's price and the Output node is where it is spent (the DRIVING
+   * Raymarch Output when one drives — `costFocusId`), so the same
    * "take me to it" glide the Output's palette tile and Add-node row already
    * perform (outputFocus.ts, same framing so all three land identically).
    *
@@ -740,14 +742,14 @@ export function NodeEditor() {
    * stays stable across every drag frame and cannot hold a deleted id.
    */
   const focusOutput = useCallback(() => {
-    const nodesNow = useAppStore.getState().nodes;
-    const id = existingOutputId(nodesNow);
+    const { nodes: nodesNow, edges: edgesNow } = useAppStore.getState();
+    const id = costFocusId(nodesNow, edgesNow);
     if (id) focusOutputNode(fitView, nodesNow, id);
   }, [fitView]);
   /** …but only offered while there IS one. The user can delete the Output, and
    *  a visible control that silently does nothing reads as the app being
    *  broken — the lesson the Output tile's own redirect is built around. */
-  const hasOutput = useMemo(() => existingOutputId(nodes) != null, [nodes]);
+  const hasOutput = useMemo(() => costFocusId(nodes, edges) != null, [nodes, edges]);
   const viewportSaveRef = useRef(0);
   /**
    * Record the viewport, trailing-debounced.
@@ -833,21 +835,16 @@ export function NodeEditor() {
       const store = useAppStore.getState();
       const idMap = new Map<string, string>();
 
-      // Outputs are dropped from a paste/duplicate. The Output is a SINGLETON
-      // — per-mesh shading lives INSIDE it as stacked materials (see
-      // outputFocus.ts and the CLAUDE.md per-mesh convention) — so a clone
-      // could never emit: `findDefaultOutput` takes the first, and the copy is
-      // dead weight the next code-panel Apply deletes without a word.
-      // Dropped from the clone set rather than refusing the whole paste: a
-      // selection is usually a working cluster that happens to include the
-      // Output, and losing the rest of it would be the bigger surprise.
-      sourceNodes = sourceNodes.filter((n) => n.data.registryType !== 'output');
       if (sourceNodes.length === 0) return [];
 
       const clones = sourceNodes.map((node) => {
         const newId = generateId();
         idMap.set(node.id, newId);
         const cloned = structuredClone(node);
+        // A pasted output node arrives INACTIVE: the clone must not carry the
+        // active flag off the original (several outputs may coexist, exactly
+        // one active — utils/sdfPartition.ts). The original keeps driving.
+        delete (cloned.data as Record<string, unknown>).activeOutput;
         cloned.id = newId;
         cloned.position = { x: node.position.x + 30, y: node.position.y + 30 };
         cloned.selected = true;
@@ -1106,13 +1103,6 @@ export function NodeEditor() {
       }
       const pos = screenToFlowPosition({ x: clientX, y: clientY });
       const store = useAppStore.getState();
-      // An Output tile's drop is REDIRECTED to the existing node (the singleton
-      // rule — see placeTilePayload), so previewing a connection here would
-      // promise a wire the drop will never commit.
-      if (def.type === 'output' && existingOutputId(store.nodes)) {
-        clearConnectPreview();
-        return false;
-      }
       const boxes = connectTargetBoxes(TILE_PHANTOM_ID, store.nodes, store.edges);
       const hoverId = pickDropTargetNode(pos.x, pos.y, boxes);
       const hoverBox = hoverId ? boxes.find((b) => b.id === hoverId) : undefined;
@@ -1807,7 +1797,10 @@ export function NodeEditor() {
   const onFlowError = useCallback((code: string, message: string) => {
     if (code === '008') {
       const m = /handle id: "m(\d+):/.exec(message);
-      if (m && outputDormancyFromState(useAppStore.getState()).dormant.has(Number(m[1]))) {
+      // Across EVERY Output (several may coexist): the message carries only
+      // the handle id, not the node, so a dormant section on an inactive
+      // Output has to be recognised too.
+      if (m && anyOutputDormant(useAppStore.getState(), Number(m[1]))) {
         return;
       }
     }
@@ -1974,23 +1967,6 @@ export function NodeEditor() {
       clearConnectPreview();
       const position = screenToFlowPosition({ x: clientX, y: clientY });
 
-      // The Output-singleton redirect runs BEFORE the asset-drop telemetry:
-      // once an Output exists the tile is a "take me to it" affordance — the
-      // drop glides the view to the existing node instead of silently doing
-      // nothing, which read as a broken tile — and a redirected drop places
-      // nothing, so an eval session must not count it as an asset placement.
-      if (payload.kind === 'node') {
-        const dropDef = NODE_REGISTRY.get(payload.nodeType);
-        if (dropDef?.type === 'output') {
-          const nodesNow = useAppStore.getState().nodes;
-          const existing = existingOutputId(nodesNow);
-          if (existing) {
-            focusOutputNode(fitView, nodesNow, existing);
-            return;
-          }
-        }
-      }
-
       // Eval telemetry: which ready-made asset (or palette node) was placed.
       // Node-kind drops ALSO produce a node-add via addNode — this event is
       // the "came from the palette" marker, not a duplicate count.
@@ -2020,8 +1996,9 @@ export function NodeEditor() {
 
       let newNodeId: string | undefined;
       if (def.type === 'output') {
-        // Reached only with NO Output present (the user deleted it) — the
-        // singleton redirect above returned before the telemetry otherwise.
+        // A second Output is legal and arrives INACTIVE (utils/sdfPartition.ts
+        // `activeSink`): the graph's first Output drives by the fallback
+        // rule, any later one waits for its preview socket to be clicked.
         const newNode: AppNode = {
           id: generateId(),
           type: 'output',

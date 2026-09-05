@@ -10,6 +10,7 @@
 
 import { buildShaderModule } from './tslCodeProcessor';
 import { LOADER_FILE } from './tslToShaderModule';
+import { TEAPOT_RES_MAX, TEAPOT_RES_MIN, TEAPOT_SCRIPT } from './teapotGeometry.ts';
 import type { MaterialSettings } from '@/types';
 import type { PreviewMeshKind } from '@/utils/previewMesh';
 
@@ -19,21 +20,32 @@ import type { PreviewMeshKind } from '@/utils/previewMesh';
 // an env map is attached; ShaderPreview falls back to 'studio' otherwise.
 export type LightingMode = 'studio' | 'moon' | 'laboratory' | 'env';
 
-export type GeometryType = 'sphere' | 'cube' | 'plane' | 'teapot' | 'bunny' | 'custom' | 'sdfBox';
+export type GeometryType = 'sphere' | 'cube' | 'plane' | 'teapot' | 'bunny' | 'custom' | 'marchSphere';
 
 /**
- * The window an SDF Output renders through: a 2-unit box, so a field built in
- * the ±1 object-space cube is fully inside it (the preview sphere's radius-1
- * hull clipped a 0.45 box's corners, and a plane or a bunny as the ray-start
- * surface made no sense at all). DERIVED — the preview substitutes it whenever
- * an SDF Output drives (`drivingSdfOutput`) and it is never written to
- * `fs:previewGeometry`; the Model dropdown keeps the user's choice for when
- * the plain Output drives again.
+ * The window a driving Raymarch Output renders through: a sphere whose radius
+ * is the node's Window setting (`marchWindowRadius`). A sphere has no box
+ * edges to betray the window, the loop exits at |p| > window·1.05, and a LARGE
+ * window puts the camera inside it — the material is double-sided and the
+ * march starts at the camera on a back face — so the sky fills the view.
+ * DERIVED: the preview substitutes it whenever a Raymarch Output drives and it
+ * is never written to `fs:previewGeometry`; the Model dropdown keeps the
+ * user's choice for when the plain Output drives again.
  */
-export const SDF_WINDOW_GEOMETRY: GeometryType = 'sdfBox';
+export const MARCH_WINDOW_GEOMETRY: GeometryType = 'marchSphere';
 
 /** Geometry types backed by a BUILT-IN OBJ model file (public/models/). */
-const OBJ_GEOMETRIES: ReadonlySet<GeometryType> = new Set(['teapot', 'bunny']);
+const OBJ_GEOMETRIES: ReadonlySet<GeometryType> = new Set(['bunny']);
+
+/**
+ * The Utah teapot is neither a model file nor an A-Frame primitive: it is
+ * tessellated IN the preview document by the `teapot-mesh` component
+ * (`TEAPOT_SCRIPT`) at the slider's resolution, so it hot-swaps like a
+ * primitive, shows the subdivision slider, and needs no model feed.
+ */
+export function isTeapotGeometry(geometry: GeometryType): boolean {
+  return geometry === 'teapot';
+}
 
 function isObjGeometry(geometry: GeometryType): boolean {
   return OBJ_GEOMETRIES.has(geometry);
@@ -57,6 +69,8 @@ export interface CameraPosition {
 
 export interface PreviewOptions {
   geometry?: GeometryType;
+  /** The Raymarch Output's Window radius while it drives (marchSphere only). */
+  marchWindow?: number;
   animate?: boolean;
   materialSettings?: MaterialSettings;
   bgColor?: string;
@@ -143,22 +157,46 @@ export interface PreviewOptions {
  * initial-HTML and live-update paths can't drift).
  */
 export function buildGeoAttr(
-  geometry: 'sphere' | 'cube' | 'plane' | 'sdfBox',
+  geometry: 'sphere' | 'cube' | 'plane' | 'marchSphere',
   subdivision: number,
+  marchWindow = 1,
 ): string {
-  const seg = Math.max(1, Math.min(256, Math.round(subdivision)));
+  const seg = Math.max(1, Math.min(SUBDIVISION_CAP, Math.round(subdivision)));
   switch (geometry) {
     case 'cube':
       return `primitive: box; width: 1.4; height: 1.4; depth: 1.4; segmentsWidth: ${seg}; segmentsHeight: ${seg}; segmentsDepth: ${seg}`;
-    case 'sdfBox':
-      // One segment per axis: the box is a window, nothing displaces it.
-      return 'primitive: box; width: 2; height: 2; depth: 2; segmentsWidth: 1; segmentsHeight: 1; segmentsDepth: 1';
+    case 'marchSphere': {
+      // The march window. Nothing displaces it, so a modest tessellation; the
+      // radius is the Raymarch Output's Window setting.
+      const r = Number.isFinite(marchWindow) && marchWindow > 0 ? Math.min(500, marchWindow) : 1;
+      return `primitive: sphere; radius: ${r}; segmentsWidth: 48; segmentsHeight: 32`;
+    }
     case 'plane':
       return `primitive: plane; width: 2; height: 2; segmentsWidth: ${seg}; segmentsHeight: ${seg}`;
     case 'sphere':
     default:
       return `primitive: sphere; radius: 1; segmentsWidth: ${seg}; segmentsHeight: ${seg}`;
   }
+}
+
+/**
+ * The subdivision ceiling, app-wide: the slider's max (ShaderPreview.tsx pins
+ * its constant to this), the primitives' segment clamp above, and the teapot's
+ * resolution — which is why it is the Utah Teapot page's own limit rather than
+ * a power of two. At 128 the teapot is 917k triangles and a 128-segment sphere
+ * is 33k; the old 256 bought nothing a displacement shader could show and the
+ * teapot could never have honoured it.
+ */
+export const SUBDIVISION_CAP = TEAPOT_RES_MAX;
+
+/**
+ * The teapot entity's own attribute — the slider's subdivision IS the patch
+ * resolution (N×N quads per Bézier patch). One place builds it so the initial
+ * HTML and the hot-swap message cannot disagree.
+ */
+export function buildTeapotAttr(subdivision: number): string {
+  const res = Math.max(TEAPOT_RES_MIN, Math.min(SUBDIVISION_CAP, Math.round(subdivision) || TEAPOT_RES_MIN));
+  return `resolution: ${res}`;
 }
 
 /**
@@ -193,7 +231,10 @@ export function escapeHtml(s: string): string {
  * Exported so ShaderPreview can fetch the model text for the sandboxed
  * preview's postMessage model feed (and for any future direct-URL use).
  */
-export function getModelUrl(geometry: 'teapot' | 'bunny'): string {
+export function getModelUrl(geometry: 'bunny'): string {
+  // Only the bunny is a model FILE now; the teapot is tessellated in-document
+  // (public/models/teapot.obj still exists — podest and the copy-ready pages
+  // load it — but the editor never fetches it).
   const file = geometry === 'bunny' ? 'stanford-bunny.obj' : 'teapot.obj';
   return resolveAssetUrl(`models/${file}`);
 }
@@ -206,7 +247,7 @@ export function getModelUrl(geometry: 'teapot' | 'bunny'): string {
 export const GEOMETRY_ROTATIONS: Record<GeometryType, string> = {
   sphere: '45 45 0',
   cube: '45 45 0',
-  sdfBox: '45 45 0',
+  marchSphere: '45 45 0',
   plane: '0 0 0',
   teapot: '15 35 0',
   bunny: '0 25 0',
@@ -595,9 +636,171 @@ export const FIT_BOUNDS_SCRIPT = `<script>
       idx.needsUpdate = true;
     }
 
+    // Raw component read that works for plain AND interleaved attributes and
+    // skips denormalization, so a duplicated vertex is an exact copy of its
+    // original whatever the source buffer looks like.
+    function rawComponent(a, i, c) {
+      return a.isInterleavedBufferAttribute
+        ? a.data.array[i * a.data.stride + a.offset + c]
+        : a.array[i * a.itemSize + c];
+    }
+
+    // Rebuild one attribute with \`dupOf\` appended — entry d is a copy of vertex
+    // dupOf[d]. Always returns a PLAIN BufferAttribute of the source's own array
+    // type, which is also how an interleaved source gets de-interleaved.
+    function expandAttribute(a, dupOf, count) {
+      var size = a.itemSize;
+      var out = new a.array.constructor((count + dupOf.length) * size);
+      for (var v = 0; v < count; v++) {
+        for (var c = 0; c < size; c++) out[v * size + c] = rawComponent(a, v, c);
+      }
+      for (var d = 0; d < dupOf.length; d++) {
+        for (var c2 = 0; c2 < size; c2++) out[(count + d) * size + c2] = rawComponent(a, dupOf[d], c2);
+      }
+      return new THREE.BufferAttribute(out, size, a.normalized);
+    }
+
+    // A spherical projection has a SEAM: atan2 wraps from +PI to -PI across the
+    // -X half-plane, so u steps 1 -> 0 there. On an INDEXED mesh both sides of
+    // that step share ONE vertex, so every triangle straddling it interpolates u
+    // backwards across the whole range — the entire 0..1 texture crushed, and
+    // mirrored, into a band one triangle wide. MEASURED on the built-in models:
+    // 245 of the teapot's 6320 triangles (u-span up to 0.996) and 584 of the
+    // bunny's 69451, and on the teapot the seam plane runs straight through the
+    // HANDLE — which is exactly where it was reported from the canvas, as the
+    // handle-side UVs being "rotated and squashed".
+    //
+    // Textbook fix: give the seam its own vertices. A triangle whose u-span
+    // exceeds half the range is straddling it, so its LOW-u corners are
+    // duplicated and re-issued at u + 1 — u then runs 0.99, 1.00, 1.01 across
+    // the seam instead of 0.99, 0.00, so a repeat-wrapped texture is continuous
+    // and a shader reading uv() straight gets a hairline just over 1 rather than
+    // a crushed band. A mesh with no straddling triangle is left untouched, so
+    // this costs nothing on geometry that never had the defect.
+    //
+    // The duplicate is a copy of its ORIGINAL, which is what keeps the mesh
+    // WELDED for displacement (the reason mergeByPosition exists at all): two
+    // vertices at one point with one normal, differing by exactly one texture
+    // period in u, move identically under any position- or normal-driven
+    // displacement and by one period under a uv-driven one. Before this they
+    // differed by a FULL period, so a uv-driven displacement tore the surface
+    // open along the seam — the split repairs that too.
+    //
+    // What this does NOT repair is the POLE, which is the projection's other
+    // and genuinely unfixable singularity: near ±Y the horizontal radius goes
+    // to zero, so neighbouring vertices a fraction of a millimetre apart sit at
+    // completely different azimuths and no per-vertex u can make their shared
+    // triangle small. MEASURED after the split, 4 of the teapot's 6320
+    // triangles and 2 of the bunny's 69451 still span — every one of them with
+    // a corner within 8° of an axis (the lid-knob apex and the base centre),
+    // where each covers a few pixels. Escaping it needs a different
+    // parameterization, not a better seam pass, so previewFitBounds.test.ts
+    // pins the honest invariant: zero spanning triangles away from the poles.
+    function splitUVSeam(g) {
+      var uv = g.attributes.uv;
+      if (!uv) return;
+      var idx = g.index;
+      if (!idx) {
+        // Non-indexed: every triangle already owns its corners, so the wrap is
+        // repaired in place with nothing to duplicate.
+        for (var t = 0; t + 2 < uv.count; t += 3) {
+          var a0 = uv.getX(t), a1 = uv.getX(t + 1), a2 = uv.getX(t + 2);
+          var top = Math.max(a0, a1, a2);
+          if (top - Math.min(a0, a1, a2) <= 0.5) continue;
+          for (var k = 0; k < 3; k++) {
+            if (uv.getX(t + k) < top - 0.5) uv.setX(t + k, uv.getX(t + k) + 1);
+          }
+        }
+        uv.needsUpdate = true;
+        return;
+      }
+      var count = uv.count;
+      var dupOf = [];
+      var dupFor = Object.create(null); // source vertex -> its raised duplicate
+      var newIdx = null;
+      for (var tri = 0; tri + 2 < idx.count; tri += 3) {
+        var corner = [idx.getX(tri), idx.getX(tri + 1), idx.getX(tri + 2)];
+        var us = [uv.getX(corner[0]), uv.getX(corner[1]), uv.getX(corner[2])];
+        var hi = Math.max(us[0], us[1], us[2]);
+        if (hi - Math.min(us[0], us[1], us[2]) <= 0.5) continue;
+        if (!newIdx) {
+          newIdx = new Uint32Array(idx.count);
+          for (var q = 0; q < idx.count; q++) newIdx[q] = idx.getX(q);
+        }
+        for (var k2 = 0; k2 < 3; k2++) {
+          if (us[k2] >= hi - 0.5) continue;
+          var src = corner[k2];
+          var dup = dupFor[src];
+          if (dup === undefined) {
+            dup = count + dupOf.length;
+            dupOf.push(src);
+            dupFor[src] = dup;
+          }
+          newIdx[tri + k2] = dup;
+        }
+      }
+      if (!newIdx) return;
+      var names = Object.keys(g.attributes);
+      for (var n = 0; n < names.length; n++) {
+        g.setAttribute(names[n], expandAttribute(g.attributes[names[n]], dupOf, count));
+      }
+      // Morph deltas are indexed by vertex too, so a model carrying them would
+      // read past the end of every target without this.
+      var morphNames = g.morphAttributes ? Object.keys(g.morphAttributes) : [];
+      for (var m = 0; m < morphNames.length; m++) {
+        var targets = g.morphAttributes[morphNames[m]];
+        for (var ti = 0; ti < targets.length; ti++) {
+          targets[ti] = expandAttribute(targets[ti], dupOf, count);
+        }
+      }
+      var raised = g.attributes.uv;
+      for (var d2 = 0; d2 < dupOf.length; d2++) raised.setX(count + d2, raised.getX(count + d2) + 1);
+      var total = count + dupOf.length;
+      g.setIndex(new THREE.BufferAttribute(total < 65535 ? new Uint16Array(newIdx) : newIdx, 1));
+    }
+
+    // Re-split a position-welded mesh by the SOURCE's authored attributes: one
+    // vertex per distinct (welded position, authored uv, authored normal).
+    // Corner j of the welded index is corner j of the source (mergeByPosition
+    // keeps corner order), except that flipWinding swapped corners 1 and 2 of
+    // every triangle, which is mirrored when reading the source. A source with
+    // no normals of its own takes the welded mesh's smooth ones.
+    function splitByAuthored(src, welded, flipped) {
+      var srcUv = src.attributes.uv, srcN = src.attributes.normal;
+      var wN = welded.attributes.normal, wP = welded.attributes.position;
+      var srcIdx = src.index, idx = welded.index, n = idx.count;
+      var keyOf = Object.create(null);
+      var positions = [], normals = [], uvs = [], newIdx = new Uint32Array(n), count = 0;
+      for (var j = 0; j < n; j++) {
+        var jj = j;
+        if (flipped) { var r = j % 3; if (r === 1) jj = j + 1; else if (r === 2) jj = j - 1; }
+        var o = srcIdx ? srcIdx.getX(jj) : jj, w = idx.getX(j);
+        var u = srcUv ? srcUv.getX(o) : 0, v = srcUv ? srcUv.getY(o) : 0;
+        var nx = srcN ? srcN.getX(o) : wN.getX(w);
+        var ny = srcN ? srcN.getY(o) : wN.getY(w);
+        var nz = srcN ? srcN.getZ(o) : wN.getZ(w);
+        var key = w + "|" + Math.round(u * 1e5) + "," + Math.round(v * 1e5) + "|" + Math.round(nx * 1e4) + "," + Math.round(ny * 1e4) + "," + Math.round(nz * 1e4);
+        var id = keyOf[key];
+        if (id === undefined) {
+          id = count++;
+          keyOf[key] = id;
+          positions.push(wP.getX(w), wP.getY(w), wP.getZ(w));
+          normals.push(nx, ny, nz);
+          uvs.push(u, v);
+        }
+        newIdx[j] = id;
+      }
+      var out = new THREE.BufferGeometry();
+      out.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
+      out.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(normals), 3));
+      if (srcUv) out.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(uvs), 2));
+      out.setIndex(new THREE.BufferAttribute(count < 65535 ? new Uint16Array(newIdx) : newIdx, 1));
+      return out;
+    }
+
     // Spherical UVs from each vertex's direction relative to the local center
-    // — shared by the regen path (always) and the preserve path (only when the
-    // source mesh has no UVs at all).
+    // — the regen path's fallback for a source with no texture coordinates of
+    // its own, and the preserve path's when a GLB ships none.
     function sphericalUVs(g, c) {
       var pos = g.attributes.position;
       var uvs = new Float32Array(pos.count * 2);
@@ -611,6 +814,7 @@ export const FIT_BOUNDS_SCRIPT = `<script>
         uvs[i * 2 + 1] = Math.asin(Math.max(-1, Math.min(1, v.y))) / Math.PI + 0.5;
       }
       g.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+      splitUVSeam(g);
     }
 
     AFRAME.registerComponent("fit-bounds", {
@@ -734,7 +938,9 @@ export const FIT_BOUNDS_SCRIPT = `<script>
             // Weld AFTER the bake so the 1e-4 quantization is a fixed fraction
             // of the preview box rather than of the model's authored units (on
             // a centimetre-scale scan it used to weld the mesh into a blob).
-            g = mergeByPosition(g);
+            var src = g;
+            var hadUv = !!src.attributes.uv, hadNormal = !!src.attributes.normal;
+            g = mergeByPosition(src);
             g.computeVertexNormals();
             var pos = g.attributes.position;
             g.computeBoundingBox();
@@ -757,11 +963,23 @@ export const FIT_BOUNDS_SCRIPT = `<script>
               if (dot < 0) inward++;
               sampled++;
             }
+            var flipped = false;
             if (sampled > 0 && inward * 2 > sampled) {
               flipWinding(g);
               g.computeVertexNormals();
+              flipped = true;
             }
-            sphericalUVs(g, c);
+            // An OBJ that carries its own texture coordinates and/or normals
+            // KEEPS them (until 2026-09-05 the weld threw both away and every
+            // OBJ got the spherical projection, whatever the file said — the
+            // regenerated built-in teapot ships the Utah bijective atlas and
+            // analytic normals, so it was the first file to make that visible).
+            // The position weld above is still what produced the smooth normals
+            // and drove the winding check; the result is re-split here so a
+            // chart boundary or an authored crease stays split and everything
+            // else stays welded.
+            if (hadUv || hadNormal) g = splitByAuthored(src, g, flipped);
+            if (!hadUv) sphericalUVs(g, c);
           } else {
             // Preserve path (dropped GLB): keep authored normals/UVs, but a
             // glTF primitive is allowed to ship without a NORMAL accessor and
@@ -1383,6 +1601,7 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       var key = JSON.stringify({
         o: !!payload.isObj,
         m: payload.objModel || null,
+        t: payload.teapot || null,
         g: payload.geometry || null,
         r: payload.rotation || null,
       });
@@ -1391,10 +1610,20 @@ const BRIDGE_SCRIPT_TEMPLATE = `<script>
       if (!entity) return;
       if (payload.isObj) {
         entity.removeAttribute("geometry");
+        entity.removeAttribute("teapot-mesh");
         entity.setAttribute("fit-bounds", payload.fitBounds || "size: 1.6");
         entity.setAttribute("obj-model", payload.objModel);
+      } else if (payload.teapot) {
+        // The runtime teapot: a resolution change re-tessellates in place
+        // (the component's update re-emits model-loaded, so the shader,
+        // fit-bounds and the framing all re-apply as for a swapped model).
+        entity.removeAttribute("geometry");
+        entity.removeAttribute("obj-model");
+        entity.setAttribute("fit-bounds", "size: 1.6; regen: false");
+        entity.setAttribute("teapot-mesh", payload.teapot);
       } else {
         entity.removeAttribute("obj-model");
+        entity.removeAttribute("teapot-mesh");
         entity.removeAttribute("fit-bounds");
         entity.setAttribute("geometry", payload.geometry);
         setTimeout(function() {
@@ -1465,6 +1694,7 @@ export function tslToPreviewHTML(
     initialRotation = null,
     xr = false,
     forceWebGL2 = false,
+    marchWindow = 1,
     title,
   } = options;
   const customModel = options.customModel ?? null;
@@ -1479,6 +1709,7 @@ export function tslToPreviewHTML(
   // byte-identical shader logic (only the export's usage header differs).
   const shaderModule = buildShaderModule(tslCode, { materialSettings });
   const isModel = isModelGeometry(geometry);
+  const isTeapot = isTeapotGeometry(geometry);
   const isCustom = geometry === 'custom';
   // The dropped mesh's feed key: ties every model message to the document
   // built for exactly this mesh instance (see PreviewOptions.customModel.id).
@@ -1537,7 +1768,16 @@ export function tslToPreviewHTML(
   //   and rescales the loaded mesh into a unit-ish bounding box so the camera
   //   framing matches the primitives.
   let entityAttrs: string;
-  if (isModel) {
+  if (isTeapot) {
+    // The runtime teapot: tessellated in-document by teapot-mesh at the
+    // slider's resolution. fit-bounds only BAKES here (regen: false) — the
+    // mesh already carries analytic normals and the atlas texture coordinates
+    // and already sits in the preview frame, so the weld+regen path has
+    // nothing to add and the spherical projection would only overwrite the
+    // atlas. No obj-model, no fs:obj-model feed, no mesh inventory: it is not
+    // a model file, and there is nothing a CORS request could fail on.
+    entityAttrs = `teapot-mesh="${buildTeapotAttr(subdivision)}" fit-bounds="size: 1.6; regen: false"`;
+  } else if (isModel) {
     // regen is ALWAYS explicit — podest.html registers a fit-bounds twin whose
     // schema default is the opposite (false), so relying on either default
     // would flip behavior in a future copy-paste between the two.
@@ -1555,7 +1795,7 @@ export function tslToPreviewHTML(
       // Custom meshes use the parent-minted blob URL (same-origin here too).
       const url = isCustom
         ? customModel?.url ?? ''
-        : getModelUrl(geometry as 'teapot' | 'bunny');
+        : getModelUrl('bunny');
       const modelAttr = isCustom && customModel?.kind !== 'obj'
         ? `gltf-model="url(${url})"`
         : `obj-model="obj: url(${url})"`;
@@ -1572,7 +1812,7 @@ export function tslToPreviewHTML(
       entityAttrs = `${fitBoundsAttr} ${animAttr}`;
     }
   } else {
-    const geoAttr = buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane' | 'sdfBox', subdivision);
+    const geoAttr = buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane' | 'marchSphere', subdivision, marchWindow);
     entityAttrs = `geometry="${geoAttr}"`;
   }
 
@@ -1702,6 +1942,13 @@ export function tslToPreviewHTML(
   // Register the fit-bounds component used by OBJ-backed previews. Inert for
   // primitive geometries — the component is only attached to OBJ entities.
   lines.push(FIT_BOUNDS_SCRIPT);
+  lines.push('');
+
+  // Register the runtime Utah teapot (teapot-mesh). Unconditional, like
+  // fit-bounds: the parent hot-swaps primitive↔teapot without a rebuild, so
+  // every document must be able to become the teapot. ~16 KB, mostly the
+  // control points.
+  lines.push(TEAPOT_SCRIPT);
   lines.push('');
 
   // Register the glTF animation mixer. Only attached (via entityAttrs) to model
@@ -2141,6 +2388,8 @@ export function tslToPreviewHTML(
   const initialBgKey = JSON.stringify(String(bgColor));
   const initialLightingKey = JSON.stringify(JSON.stringify(lights));
   const initialPlayingKey = JSON.stringify(JSON.stringify({ p: !!animate, f: animFrom, t: animTo }));
+  // Mirrors __applyGeometry's key EXACTLY (same fields, same order) — it is
+  // what lets the first hot-swap message tell "already this" from "new".
   const initialGeometryKey = JSON.stringify(JSON.stringify(
     isModel
       ? {
@@ -2150,16 +2399,26 @@ export function tslToPreviewHTML(
           // so the key only needs to be unique per document.
           m: isCustom
             ? customKey
-            : `obj: url(${getModelUrl(geometry as 'teapot' | 'bunny')})`,
+            : `obj: url(${getModelUrl('bunny')})`,
+          t: null,
           g: null,
           r: rotationAttr,
         }
-      : {
-          o: false,
-          m: null,
-          g: buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane' | 'sdfBox', subdivision),
-          r: rotationAttr,
-        },
+      : isTeapot
+        ? {
+            o: false,
+            m: null,
+            t: buildTeapotAttr(subdivision),
+            g: null,
+            r: rotationAttr,
+          }
+        : {
+            o: false,
+            m: null,
+            t: null,
+            g: buildGeoAttr(geometry as 'sphere' | 'cube' | 'plane' | 'marchSphere', subdivision, marchWindow),
+            r: rotationAttr,
+          },
   ));
 
   lines.push(

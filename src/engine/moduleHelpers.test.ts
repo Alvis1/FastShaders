@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
-import { MODULE_HELPERS, MODULE_HELPER_NAMES } from './moduleHelpers';
+import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_ALIASES, helperNameFor, helperCallPorts } from './moduleHelpers';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { graphToCode } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
@@ -18,12 +18,40 @@ const traverse = (typeof (_traverse as unknown as { default?: unknown }).default
  * alone impossible to get wrong silently.
  */
 describe('module-scope helper table', () => {
-  it('every key is a registry type whose tslFunction IS the helper name, with no import module', () => {
-    for (const type of MODULE_HELPERS.keys()) {
-      const def = NODE_REGISTRY.get(type);
-      expect(def, type).toBeTruthy();
-      expect(def!.tslFunction, `${type}.tslFunction`).toBe(type);
-      expect(def!.tslImportModule, `${type}.tslImportModule`).toBe('');
+  it('every key is a registry type\'s tslFunction, or a VARIANT of one (alias.type) — no import module either way', () => {
+    for (const [name, h] of MODULE_HELPERS) {
+      if (h.alias) {
+        const owner = NODE_REGISTRY.get(h.alias.type);
+        expect(owner, `${name} → ${h.alias.type}`).toBeTruthy();
+        expect(owner!.tslImportModule, `${h.alias.type}.tslImportModule`).toBe('');
+        // A variant's port list names real ports of its owner.
+        for (const port of h.alias.ports ?? []) expect(owner!.inputs.some((i) => i.id === port), `${name} port ${port}`).toBe(true);
+        // A mode variant's mode is in the owner's closed vocabulary.
+        const mode = h.alias.values?.mode;
+        if (typeof mode === 'string') expect(owner!.modes?.values, `${name} mode ${mode}`).toContain(mode);
+        continue;
+      }
+      const def = [...NODE_REGISTRY.values()].find((d) => d.tslFunction === name);
+      expect(def, name).toBeTruthy();
+      expect(def!.tslImportModule, `${def!.type}.tslImportModule`).toBe('');
+    }
+  });
+
+  it('every mode of a multi-mode def resolves to a helper, and the default mode to the def\'s own tslFunction', () => {
+    for (const def of NODE_REGISTRY.values()) {
+      if (!def.modes) continue;
+      expect(MODULE_HELPERS.has(def.tslFunction), `${def.type}.tslFunction`).toBe(true);
+      expect(helperNameFor(def, undefined)).toBe(def.tslFunction);
+      expect(helperNameFor(def, { mode: def.modes.default })).toBe(def.tslFunction);
+      expect(helperNameFor(def, { mode: 'junk' })).toBe(def.tslFunction);
+      for (const m of def.modes.values) {
+        const name = helperNameFor(def, { mode: m });
+        expect(MODULE_HELPERS.has(name), `${def.type} mode ${m}`).toBe(true);
+        // Every variant name parses back to this def with this mode stamped
+        // (the default mode's name carries no alias: it IS the tslFunction).
+        if (m !== def.modes.default) expect(HELPER_ALIASES.get(name)).toEqual(expect.objectContaining({ type: def.type, values: { mode: m } }));
+        expect(helperCallPorts(name, def.inputs).length).toBeGreaterThan(0);
+      }
     }
   });
 
@@ -74,10 +102,17 @@ describe('the distance-field helpers round-trip', () => {
     ).code;
   };
 
-  for (const type of ['sdCircle', 'sdBox2', 'sdBox3', 'sdTorus', 'smoothUnion', 'sdSubtract']) {
+  // [registry type, the helper a uv-wired instance emits]
+  for (const [type, helper] of [
+    ['sdCircle', 'sdCircle'], ['sdBox', 'sdBox2'], ['sdTorus', 'sdTorus'], ['sdCombine', 'sdUnion'],
+    ['sdCylinder', 'sdCylinder'], ['sdCapsule', 'sdCapsule'], ['sdCone', 'sdCone'], ['sdPlane', 'sdPlane'],
+    ['sdOctahedron', 'sdOctahedron'], ['sdStar', 'sdStar'], ['sdfTransform', 'sdfTransform'], ['sdfRepeat', 'sdfRepeat'],
+    ['sdfRepeatPolar', 'sdfRepeatPolar'], ['sdfMirror', 'sdfMirror'], ['sdfModify', 'sdRound'], ['sdfDeform', 'sdfTwist'],
+    ['sdfExtrude', 'sdfExtrude'], ['sdfRevolve', 'sdfRevolve'], ['sdfMask', 'sdfMask'],
+  ]) {
     it(`${type}: helper emitted once, parsed back to one node, re-emitted byte-identically`, () => {
       const code = build(type);
-      expect(code.split(`const ${type} = Fn(`)).toHaveLength(2);
+      expect(code.split(`const ${helper} = Fn(`)).toHaveLength(2);
       const r = codeToGraph(code);
       const types = r.nodes.map((n) => n.data.registryType).sort();
       // uv + the node + Output — and NOTHING from the helper body.

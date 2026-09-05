@@ -1,6 +1,5 @@
 import type { AppNode, AppEdge } from '@/types';
-import { outputNodes } from '@/utils/outputMaterials';
-import { sdfOutputNodes } from '@/utils/sdfPartition';
+import { activeSink } from '@/utils/sdfPartition';
 import { getNodeValues } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -58,12 +57,15 @@ export function connectedUniformNamesKey(
   // property inside it unreachable and blank the overlay on collapse.
   const real = unwrapCollapsedGroupEdges(nodes, edges);
 
-  // The Output node — every material's chain hangs off it, so one walk back
-  // from it reaches a slider driving the default AND one driving a per-mesh
-  // material. Missing the latter would leave that slider out of the Uniforms
-  // overlay, which is the "scrubbing does nothing" failure this module exists
-  // to prevent, one mesh away.
-  const emitting = [...outputNodes(nodes), ...sdfOutputNodes(nodes)];
+  // The ACTIVE sink — every material's chain hangs off the one Output, so one
+  // walk back from it reaches a slider driving the default AND one driving a
+  // per-mesh material. Missing the latter would leave that slider out of the
+  // Uniforms overlay, which is the "scrubbing does nothing" failure this
+  // module exists to prevent, one mesh away. An INACTIVE output emits nothing,
+  // so a slider feeding only it must NOT be listed: scrubbing it would change
+  // no pixel — the same failure from the other side.
+  const sink = activeSink(nodes, real);
+  const emitting = sink ? [sink] : [];
   /** Nodes that feed an emitting Output, walking edges BACKWARDS from each. */
   const live = new Set<string>();
   if (emitting.length > 0) {

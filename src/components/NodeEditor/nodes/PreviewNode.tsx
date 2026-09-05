@@ -12,6 +12,7 @@ import { renderNoisePreview, type NoiseType, type TimeInputs } from '@/utils/noi
 import './PreviewNode.css';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
+import { NodeTitle } from './NodeTitle';
 
 const PREVIEW_SIZE = 96;
 /** Registry types this preview node can render — all MaterialX noise variants. */
@@ -251,7 +252,7 @@ export const PreviewNode = memo(function PreviewNode({
 
       {/* Header */}
       <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" title={varName ?? data.label} style={{ color: headerTextColor }}>{varName ?? data.label}</span>
+        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} />
       </div>
 
       {/* Preview canvas */}

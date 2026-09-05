@@ -128,6 +128,15 @@
   position: relative;
   width: fit-content;
   min-width: 40px;
+  /* The card OWNS its font size. Nothing inside sets one on the row/widget
+     containers, so the replica inherited whatever page drew it: the canvas
+     14px (the app body), the overview card 10px, the Node Designer 13px (its
+     own body rule) — and the number widgets, which size from their container,
+     came out 30px on a card and 32px on the designer stage for the SAME node.
+     The canvas is the reference, so this is the app body size (--font-size-md
+     = 14px), stated here so no surface can drift again (node-visual parity
+     test greps for it). */
+  font-size: var(--font-size-md);
   border: none;
   border-radius: var(--border-radius-md);
   /* The fallback is what every NON-React-Flow surface renders at: asset cards,
@@ -283,15 +292,19 @@
      top. Auto-width nodes still size to a single line (fit-content uses the
      max-content width).
      CAPPED AT TWO LINES, and the node WIDENS rather than stacking a third.
-     Two things make that work together. `overflow-wrap: normal` refuses to
-     split a word, so the title's min-content contribution is the whole word —
-     which the node's `min-width: min-content` (set alongside the authored
-     width, see ShaderNode/NodeVisual) then turns into extra width. A generated
-     varName is a single unbreakable run (`cameraPosition1`), so with
-     break-word it used to shatter into "camera/Position/1" and grow a header
-     taller than the node's own body, while the SAME node's asset tile — which
-     already refused to break words — showed it on one line. Same clamp the
-     cards use; the full name is on the element's `title` either way. */
+     Three things make that work together. `overflow-wrap: normal` refuses to
+     split a word, so the title's min-content contribution is the longest
+     unbreakable run — which the node's `min-width: min-content` (set alongside
+     the authored width, see ShaderNode/NodeVisual) then turns into extra
+     width. NodeTitle (the one renderer of this class) gives the name exactly
+     ONE break opportunity at its most balanced seam — a space, or a camelCase
+     boundary, so `cameraPosition1` may wrap as "camera / Position1" — and
+     makes every other space non-breaking, so two rows is the ceiling by
+     construction and the floor is the longer HALF: a 47px design now stays
+     47px wide with a two-row header where the whole name once forced ~95px.
+     With break-word it used to shatter into "camera/Position/1" and grow a
+     header taller than the node's own body. Same clamp on every surface; the
+     full name is on the element's `title` either way. */
   white-space: normal;
   overflow-wrap: normal;
   line-height: 1.3;

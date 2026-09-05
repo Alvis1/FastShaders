@@ -46,6 +46,17 @@ export interface NodeDefinition {
   defaultValues?: Record<string, string | number>;
   description?: string;
   /**
+   * A node with MODES: one definition, several emitted TSL helper variants
+   * (engine/moduleHelpers.ts). The mode lives in `values.mode` — never in
+   * `defaultValues`, which on a ShaderNode is the socket list — and an ABSENT
+   * key means `default`, so a graph saved before a mode existed emits exactly
+   * as before. `tslFunction` is the DEFAULT mode's helper; the others are the
+   * table's variants carrying `alias.values.mode`. Labels are English and go
+   * through `t()` for Latvian. Chosen in the node's settings menu, shown as a
+   * chip on the card.
+   */
+  modes?: { values: readonly string[]; default: string; labels: Record<string, string>; symbols?: Record<string, string> };
+  /**
    * Grows its operand sockets: one extra empty socket appears below the last
    * wired operand. See `effectiveInputs` in the registry for the count rule.
    *
@@ -184,6 +195,16 @@ export interface OutputNodeData {
    * a session or file from that shape does not lose its wiring.
    */
   meshTarget?: { name: string };
+  /**
+   * THE ACTIVE SINK marker (utils/sdfPartition.ts `activeSink`). Several
+   * output nodes — plain Outputs and Raymarch Outputs — may coexist; exactly
+   * one carries `true` and drives everything. ABSENT on every document that
+   * never had a choice made, so such graphs emit byte-identically under the
+   * historical rule. Set by clicking a node's preview socket; normalised
+   * (first `true` wins, junk stripped) on every restore path. The Raymarch
+   * Output carries the same key on its ShaderNodeData.
+   */
+  activeOutput?: true;
   [key: string]: unknown;
 }
 

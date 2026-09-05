@@ -147,11 +147,21 @@ describe('findDefaultOutput', () => {
     expect(findDefaultOutput([makeNode('c1', 'color')])).toBeNull();
   });
 
-  it('follows ARRAY order for the stray-second-node case', () => {
+  it('follows ARRAY order when no Output carries the active flag', () => {
     const a = output('o1');
     const b = output('o2');
     expect(findDefaultOutput([a, b])).toBe(a);
     expect(outputNodes([a, makeNode('c1', 'color'), b]).map((n) => n.id)).toEqual(['o1', 'o2']);
+  });
+
+  it('the Output carrying `activeOutput: true` wins over array order (several may coexist, one active)', () => {
+    const a = output('o1');
+    const b = output('o2');
+    (b.data as Record<string, unknown>).activeOutput = true;
+    expect(findDefaultOutput([a, b])).toBe(b);
+    // Only the literal true counts — node data is untrusted.
+    (b.data as Record<string, unknown>).activeOutput = 'yes';
+    expect(findDefaultOutput([a, b])).toBe(a);
   });
 });
 
@@ -408,14 +418,26 @@ describe('foldExtraOutputs — the multi-Output graph migration', () => {
     expect(moved.id).not.toContain('o2');
   });
 
-  it('drops an extra UNTARGETED Output — it has no material to become', () => {
+  it('KEEPS an extra UNTARGETED Output, wiring and all — it is an ordinary inactive Output now', () => {
+    // Several Outputs may coexist with exactly one active (utils/sdfPartition.ts);
+    // only the LEGACY per-node mesh target still folds. Same arrays back.
     const nodes = [output('o1'), output('o2'), makeNode('c1', 'color')];
     const edges = [makeEdge('c1', 'out', 'o2', 'color')];
     const folded = foldExtraOutputs(nodes, edges);
-    expect(outputNodes(folded.nodes)).toHaveLength(1);
-    // Its edge goes with it rather than dangling at a node that no longer
-    // exists, which React Flow would keep in the store and never draw.
-    expect(folded.edges).toHaveLength(0);
+    expect(folded.nodes).toBe(nodes);
+    expect(folded.edges).toBe(edges);
+  });
+
+  it('keeps the ACTIVE Output as the survivor when folding a legacy targeted extra', () => {
+    const a = output('o1');
+    const b = output('o2');
+    (b.data as Record<string, unknown>).activeOutput = true;
+    const glass = output('o3');
+    (glass.data as Record<string, unknown>).meshTarget = { name: 'Glass' };
+    const folded = foldExtraOutputs([a, b, glass], [makeEdge('c', 'out', 'o3', 'color')]);
+    expect(outputNodes(folded.nodes).map((n) => n.id)).toEqual(['o1', 'o2']);
+    expect((folded.nodes.find((n) => n.id === 'o2')!.data as { materials?: { meshTargets?: string[] }[] }).materials?.map((m) => m.meshTargets)).toEqual([['Glass']]);
+    expect(folded.edges[0].target).toBe('o2');
   });
 
   it('respects the cap when folding, and keeps a duplicate claim', () => {

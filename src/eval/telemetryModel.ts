@@ -32,6 +32,8 @@ export type EvalEventType =
   | 'redo'
   | 'gesture'
   | 'new-graph'
+  // the participant chose which output node drives (several may coexist)
+  | 'output-activate'
   // code / preview / assets
   | 'code-apply'
   | 'preview-rebuild'
@@ -73,6 +75,7 @@ export const ACTIVITY_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'redo',
   'gesture',
   'new-graph',
+  'output-activate',
   'code-apply',
   'asset-drop',
   'import',
@@ -90,6 +93,7 @@ export const STRUCTURAL_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'undo',
   'redo',
   'new-graph',
+  'output-activate',
   'code-apply',
   'import',
 ]);
@@ -312,7 +316,7 @@ export interface QualityCheck {
 /** Events that mean the participant CHANGED THE GRAPH (not merely looked). */
 const EDIT_EVENT_TYPES: ReadonlySet<EvalEventType> = new Set([
   'node-add', 'node-remove', 'edge-connect', 'edge-disconnect',
-  'undo', 'redo', 'gesture', 'new-graph', 'code-apply', 'asset-drop', 'import',
+  'undo', 'redo', 'gesture', 'new-graph', 'output-activate', 'code-apply', 'asset-drop', 'import',
 ]);
 
 /**
@@ -517,7 +521,7 @@ const EVENT_TYPES: ReadonlySet<string> = new Set<string>([
   'session-start', 'session-end', 'recovered', 'truncated',
   'visibility', 'focus', 'activity',
   'node-add', 'node-remove', 'edge-connect', 'edge-disconnect',
-  'undo', 'redo', 'gesture', 'new-graph',
+  'undo', 'redo', 'gesture', 'new-graph', 'output-activate',
   'code-apply', 'preview-rebuild', 'asset-drop', 'import', 'export',
   'snapshot', 'task-start', 'budget-crossed', 'sus-open', 'sus-submit',
 ]);

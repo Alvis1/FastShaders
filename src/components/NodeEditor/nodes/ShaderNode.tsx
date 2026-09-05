@@ -10,6 +10,7 @@ import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
+import { NodeTitle } from './NodeTitle';
 // Imported BEFORE './ShaderNode.css' so the bundler emits PaletteColorPicker.css
 // first: `.shader-node__input-color` and `.palette-swatch` have equal
 // specificity, and the on-node size must win. (The size override below is also
@@ -25,6 +26,7 @@ import { RAMP_COLOR_NODES, effectiveRampDef } from '@/utils/exposedPorts';
 import { displayImageFileName, validImageDataUrl } from '@/utils/imageNode';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { parseFormula, hasCustomFormula } from '@/utils/dataRangeFormula';
+import { modeOf } from '@/engine/moduleHelpers';
 import './ShaderNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 
@@ -542,9 +544,15 @@ export const ShaderNode = memo(function ShaderNode({
     !appendGrowthExhausted(def, connectedHandleList, valuedHandleList, (portId) =>
       graphInfo.inputChannels.get(portId),
     );
-  const opSocketCount = growsOperands(def)
-    ? effectiveInputs(def, connectedHandleList, growSockets, valuedHandleList).length
-    : def.inputs.length;
+  // `effDef`, not `def`: the operator layout must honour the same opt-in
+  // socket filter the rows layout does, or Data Stripes / Data Viz (glyph
+  // nodes, so operator-laid-out) show their two ramp-colour sockets on a
+  // FRESH node while the palette tile and the Node Designer hide them — the
+  // very drift effectiveRampDef exists to prevent. Measured 2026-09-03 before
+  // the fix: a dropped Data Stripes carried signal + lowColor + highColor.
+  const opSocketCount = growsOperands(effDef)
+    ? effectiveInputs(effDef, connectedHandleList, growSockets, valuedHandleList).length
+    : effDef.inputs.length;
   // The Image node's opt-in sockets re-measure on any exposed-set change (the
   // count alone can stay equal while the handle ids differ) — same idiom as
   // PreviewNode's exposedKey. The reveal flag is part of the key: floating
@@ -665,7 +673,7 @@ export const ShaderNode = memo(function ShaderNode({
     // channel; see utils/appendCapacity). At rest it returns just the wired operands, so a fully
     // wired a+b stays the compact 2-op look instead of sprouting a dangling
     // socket. Non-chainable 2-input glyph nodes get their static [a, b] back.
-    const ins = effectiveInputs(def, connectedHandleList, growSockets, valuedHandleList);
+    const ins = effectiveInputs(effDef, connectedHandleList, growSockets, valuedHandleList);
     const N = ins.length;
     const identity = def.chainIdentity ?? 0;
     const scale = nodeScale(data.registryType);
@@ -702,9 +710,7 @@ export const ShaderNode = memo(function ShaderNode({
         {cost > 0 && <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>}
 
         <div className="node-base__header" style={headerStyle}>
-          <span className="node-base__title" title={headerText} style={{ color: headerTextColor }}>
-            {headerText}
-          </span>
+          <NodeTitle text={headerText} style={{ color: headerTextColor }} />
         </div>
 
         <div className="shader-node__op" style={{ height: BODY_H, ...(box.width ? { minWidth: 0 } : null) }}>
@@ -721,6 +727,22 @@ export const ShaderNode = memo(function ShaderNode({
             // Values center via the --center class in both modes.
             const valStyle = { top };
             if (!connectedInputs.has(inp.id)) {
+              // A COLOUR operand (Data Stripes / Data Viz's exposed ramp ends —
+              // the only colour inputs in this layout) shows the swatch the rows
+              // layout gives a colour setting; a number box here printed NaN for
+              // a hex and scrubbed a colour as a float.
+              if (inp.dataType === 'color') {
+                return (
+                  <div key={`v-${inp.id}`} className={cls} style={valStyle}>
+                    <PaletteColorPicker
+                      className="shader-node__input-color"
+                      history="bracket"
+                      value={String(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? '#ff0000')}
+                      onPick={(hex) => handleChange(inp.id, hex)}
+                    />
+                  </div>
+                );
+              }
               // Unconnected operand — including the trailing grow slot — shows the
               // editable identity box (0 add/sub, 1 mul/div). Fill it (type or
               // wire) and the next operand slot appears below.
@@ -799,9 +821,7 @@ export const ShaderNode = memo(function ShaderNode({
 
       {/* Header — colored by performance impact (cost) */}
       <div className="node-base__header" style={headerStyle}>
-        <span className="node-base__title" title={headerText} style={{ color: headerTextColor }}>
-          {headerText}
-        </span>
+        <NodeTitle text={headerText} style={{ color: headerTextColor }} />
       </div>
 
       {/* Data/Image node: source filename under the header (wraps if long).
@@ -874,6 +894,16 @@ export const ShaderNode = memo(function ShaderNode({
           there would be unreachable code, not parity. */}
       {data.registryType === 'dataRange' && hasCustomFormula(data.values?.formula) && (
         <FormulaChip formula={data.values.formula as string} />
+      )}
+      {/* The MODE of a multi-mode node (engine/moduleHelpers.ts), always
+          shown: the header carries the var name and the rows the operands,
+          so without the chip a Combine set to subtract is indistinguishable
+          from one set to union. Its title is the full label; the settings
+          menu is where it changes. */}
+      {def?.modes && (
+        <span className="shader-node__mode-chip" title={def.modes.labels[modeOf(def, data.values)] ?? modeOf(def, data.values)}>
+          {def.modes.symbols?.[modeOf(def, data.values)] ?? modeOf(def, data.values)}
+        </span>
       )}
 
       {/* Below-header region: glyph + rows. Wrapping both lets a designer-moved
@@ -1069,8 +1099,13 @@ export const ShaderNode = memo(function ShaderNode({
           );
         })}
       </div>
-      {/* Detached input sockets + their values (value follows its socket) */}
-      {def.inputs.map((inp) => {
+      {/* Detached input sockets + their values (value follows its socket).
+          `effDef`, not `def`: this loop bypassed the opt-in socket filter the
+          rows above honour, so Data Stripes / Data Viz — whose designer moved
+          every socket — drew their two hidden ramp-colour ports on a FRESH
+          canvas node (as number boxes printing NaN for a hex) while the
+          palette tile and the Node Designer hid them. Measured 2026-09-03. */}
+      {effDef.inputs.map((inp) => {
         const off = sockOv[inp.id];
         if (off == null) return null;
         const top = calcTop(off);
@@ -1083,6 +1118,15 @@ export const ShaderNode = memo(function ShaderNode({
                 info && (
                   <LiveEdgeValue className="shader-node__edge-val" {...info} />
                 )
+              ) : inp.dataType === 'color' ? (
+                // An exposed ramp end is a COLOUR: the same swatch a colour row
+                // gets, never a number box.
+                <PaletteColorPicker
+                  className="shader-node__input-color"
+                  history="bracket"
+                  value={String(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? '#ff0000')}
+                  onPick={(hex) => handleChange(inp.id, hex)}
+                />
               ) : (
                 <DragNumberInput
                   compact

@@ -30,6 +30,7 @@ const HOOKS: { file: string; events: string[] }[] = [
       "evalLog('node-remove'",
       "evalLog('edge-disconnect'",
       "evalLog('new-graph')",
+      "evalLog('output-activate'",
       "evalLog('undo')",
       "evalLog('redo')",
       "evalLog('gesture'",

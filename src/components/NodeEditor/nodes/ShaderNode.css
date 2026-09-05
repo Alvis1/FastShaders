@@ -70,6 +70,11 @@
 .shader-node__slider {
   width: 80px;
   height: 14px;
+  /* The UA sheet gives input[type=range] a 2px margin. The app's reset zeroes
+     it, but the Node Designer page loads no reset, so its Slider replica
+     rendered 4px wider and taller than the canvas node — a node's styling must
+     never depend on which page draws it, hence explicit here. */
+  margin: 0;
   cursor: pointer;
   accent-color: var(--border-focus);
 }
@@ -329,6 +334,19 @@
 
 .shader-node__formula-chip--bad {
   color: #e74c3c;
+}
+
+/* The MODE chip of a multi-mode node (Combine: ∪ − ∩ ⊕) — bottom-left, the
+   formula chip's mirror. Same rule about pointer-events: the chip carries a
+   `title` naming the mode in full, and TooltipLayer needs it hit-testable. */
+.shader-node__mode-chip {
+  position: absolute;
+  left: 3px;
+  bottom: 1px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: #2d7dd2;
 }
 
 /* ── Live level meter ─────────────────────────────────────────────────────

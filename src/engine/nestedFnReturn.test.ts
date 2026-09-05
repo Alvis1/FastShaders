@@ -69,3 +69,28 @@ export default shader;
     expect(mod).toContain('colorNode: c');
   });
 });
+
+describe('extractFnBody picks the SHADER, not a zero-parameter helper above it', () => {
+  it('a `const helper = Fn(() => {…})` declared before `const shader` stays a preamble helper', () => {
+    const code = `import { Fn, vec3, normalize, sub, positionWorld, cameraPosition } from 'three/tsl';
+
+const rayDirection = Fn(() => {
+  return normalize(sub(positionWorld, cameraPosition));
+});
+
+const shader = Fn(() => {
+  const rayDirection1 = rayDirection();
+  const c = vec3(1, 0, 0);
+  return { color: c, emissive: rayDirection1 };
+});
+
+export default shader;
+`;
+    const mod = buildShaderModule(code, {});
+    expect(mod).toContain('const rayDirection = Fn(() => {');
+    expect(mod).toContain('const rayDirection1 = rayDirection();');
+    expect(mod).toContain('colorNode: c');
+    expect(mod).toContain('emissiveNode: rayDirection1');
+    expect(mod).not.toContain('colorNode: normalize(');
+  });
+});

@@ -23,17 +23,47 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
     expect(html).not.toContain('obj-model=');
   });
 
-  it('sandboxed teapot: NO network obj-model (opaque-origin CORS trap), postMessage feed instead', () => {
-    const html = tslToPreviewHTML(TSL, { geometry: 'teapot' });
+  it('sandboxed bunny: NO network obj-model (opaque-origin CORS trap), postMessage feed instead', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'bunny' });
     // The broken deploy path: obj-model="obj: url(https://…)" fetched from the
     // sandbox's opaque origin is a CORS request generic hosts don't answer.
     expect(html).not.toContain(esc('obj-model="obj: url('));
     // regen is explicit (podest's fit-bounds twin defaults the OPPOSITE way).
     expect(html).toContain(esc('fit-bounds="size: 1.6; regen: true"'));
     // Stale-model guard: each rebuilt iframe accepts only its own geometry.
-    expect(html).toContain('var __fsExpectedObj = "teapot";');
+    expect(html).toContain('var __fsExpectedObj = "bunny";');
     expect(html).toContain('msg.type === "fs:obj-model-error"');
     expect(html).toContain('URL.createObjectURL(blob)');
+  });
+
+  it('teapot: tessellated in-document by teapot-mesh at the slider resolution — no model feed at all', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'teapot', subdivision: 24 });
+    expect(html).toContain(esc('teapot-mesh="resolution: 24"'));
+    // fit-bounds only BAKES: the mesh already carries analytic normals and the
+    // Utah atlas, and the regen path's spherical projection would overwrite it.
+    expect(html).toContain(esc('fit-bounds="size: 1.6; regen: false"'));
+    expect(html).toContain('registerComponent("teapot-mesh"');
+    // Attribute-level: the entity carries no model loader (the scripts still
+    // MENTION obj-model, since a hot-swap away from a model removes it).
+    expect(html).not.toContain(esc('obj-model="'));
+    expect(html).not.toContain('fs:obj-model');
+    expect(html).not.toContain('__fsExpectedObj');
+    // The default subdivision is the teapot's default resolution.
+    expect(tslToPreviewHTML(TSL, { geometry: 'teapot' })).toContain(esc('teapot-mesh="resolution: 64"'));
+    // The app-wide ceiling, and the floor, hold for the teapot too.
+    expect(tslToPreviewHTML(TSL, { geometry: 'teapot', subdivision: 300 })).toContain(esc('teapot-mesh="resolution: 128"'));
+    expect(tslToPreviewHTML(TSL, { geometry: 'teapot', subdivision: 0 })).toContain(esc('teapot-mesh="resolution: 1"'));
+  });
+
+  it('the teapot script is in EVERY document, so a primitive can hot-swap into the teapot', () => {
+    for (const geometry of ['sphere', 'cube', 'plane', 'bunny'] as const) {
+      expect(tslToPreviewHTML(TSL, { geometry })).toContain('registerComponent("teapot-mesh"');
+    }
+  });
+
+  it('primitive segments are clamped to the same 128 ceiling as the slider', () => {
+    expect(tslToPreviewHTML(TSL, { geometry: 'sphere', subdivision: 256 })).toContain('segmentsWidth: 128; segmentsHeight: 128');
+    expect(tslToPreviewHTML(TSL, { geometry: 'cube', subdivision: 999 })).toContain('segmentsDepth: 128');
   });
 
   it('sandboxed custom glb: gltf-model feed keyed on the mesh id, regen off, loader URL allowlist on', () => {
@@ -70,7 +100,7 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
     // clips are parsed by gltf-model and then simply never read — the model
     // loads in its rest pose and looks broken rather than static-by-choice.
     for (const opts of [
-      { geometry: 'teapot' as const },
+      { geometry: 'bunny' as const },
       { geometry: 'custom' as const, customModel: { kind: 'glb' as const, id: 7 } },
       { geometry: 'custom' as const, customModel: { kind: 'obj' as const, id: 3 } },
       { geometry: 'custom' as const, customModel: { kind: 'glb' as const, id: 9 }, xr: true, url: '' },
@@ -79,8 +109,9 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
       expect(html).toContain('AFRAME.registerComponent("gltf-anim"');
       expect(html).toContain(esc('gltf-anim'));
     }
-    // Primitives never load a model, so they pay for none of it.
-    for (const geometry of ['sphere', 'cube', 'plane'] as const) {
+    // Primitives never load a model, so they pay for none of it — and neither
+    // does the teapot, which is tessellated in-document and has no clips.
+    for (const geometry of ['sphere', 'cube', 'plane', 'teapot'] as const) {
       const html = tslToPreviewHTML(TSL, { geometry });
       expect(html).not.toContain('gltf-anim');
     }
@@ -101,8 +132,15 @@ describe('tslToPreviewHTML — sandboxed preview vs XR popup emission', () => {
     expect(html).toContain('window.location.origin');
   });
 
-  it('xr teapot: direct obj-model url, backend forced via renderer attribute, xr NOT hidden, VR UI on, escaped title', () => {
-    const html = tslToPreviewHTML(TSL, { geometry: 'teapot', xr: true, title: 'My <"Shader">' });
+  it('xr teapot: the same in-document teapot-mesh the pane shows — the popup renders what the pane renders', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'teapot', xr: true, subdivision: 40 });
+    expect(html).toContain(esc('teapot-mesh="resolution: 40"'));
+    expect(html).toContain('registerComponent("teapot-mesh"');
+    expect(html).not.toContain(esc('obj-model="'));
+  });
+
+  it('xr bunny: direct obj-model url, backend forced via renderer attribute, xr NOT hidden, VR UI on, escaped title', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'bunny', xr: true, title: 'My <"Shader">' });
     expect(html).toContain(esc('obj-model="obj: url('));
     expect(html).toContain(esc('vr-mode-ui="enabled: true"'));
     expect(html).not.toContain('Object.defineProperty(navigator,"xr"');

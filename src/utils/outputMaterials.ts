@@ -290,6 +290,35 @@ export function outputDormancyFromState(state: {
 }
 
 /**
+ * Is material `index` dormant on ANY Output node? React Flow's 008 message
+ * carries only the handle id (`m<n>:`), not the node, and several Outputs may
+ * coexist (one active), so the dormancy swallow in NodeEditor's onFlowError
+ * has to ask across all of them — an inactive Output's sleeping section would
+ * otherwise flood the console at frame rate exactly as the active one used to.
+ */
+export function anyOutputDormant(
+  state: {
+    nodes: readonly AppNode[];
+    edges: readonly AppEdge[];
+    previewMesh: unknown;
+    previewMeshInventory: { meshes?: readonly { name: string }[] } | null;
+  },
+  index: number,
+): boolean {
+  const meshNames = (state.previewMeshInventory?.meshes ?? []).map((m) => m.name);
+  const inventoryKnown = !state.previewMesh || !!state.previewMeshInventory;
+  for (const out of outputNodes(state.nodes)) {
+    const dormant = dormantIndicesForPreview(outputMaterials(out), {
+      meshNames,
+      inventoryKnown,
+      defaultContributes: outputDefaultContributes(out, state.edges),
+    });
+    if (dormant.has(index)) return true;
+  }
+  return false;
+}
+
+/**
  * The FIRST mesh a material shades, or null when it is the default.
  *
  * Kept alongside `materialTargetNames` because several surfaces want ONE name
@@ -377,16 +406,21 @@ export function outputNodes(nodes: readonly AppNode[]): AppNode[] {
 }
 
 /**
- * THE Output node — the one every surface means by "this shader's output".
+ * THE plain Output node — the one every surface means by "this shader's
+ * Output": the Output carrying the ACTIVE flag when one does (several Outputs
+ * may coexist since 2026-09-03, exactly one of them active — see
+ * `activeSink` in utils/sdfPartition.ts), else the first in array order,
+ * which is what every document without a flag has always meant.
  *
- * With materials living inside one node there is only ever one, so this is now
- * a genuine singleton lookup rather than a rule about which of several wins.
- * Kept as a shared function anyway, because the alternative is ten call sites
- * each writing their own `find` and disagreeing the moment the shape changes
- * again — which is exactly what happened last time.
+ * Consumers that must also honour an active RAYMARCH Output layer
+ * `drivingMarchOutput` over this, as they always did. Kept as a shared
+ * function because the alternative is ten call sites each writing their own
+ * `find` and disagreeing the moment the rule changes again — which is exactly
+ * what happened last time.
  */
 export function findDefaultOutput(nodes: readonly AppNode[]): AppNode | null {
-  return outputNodes(nodes)[0] ?? null;
+  const outputs = outputNodes(nodes);
+  return outputs.find((n) => (n.data as Record<string, unknown>).activeOutput === true) ?? outputs[0] ?? null;
 }
 
 /** A `MaterialSettings`-shaped value, or undefined. */
@@ -597,12 +631,14 @@ export function shiftMaterialHandles(
  * shape at all. Without it those extra Outputs would sit on the canvas emitting
  * nothing — silently dropping whatever the user had wired into them.
  *
- * The FIRST Output survives (array order is creation order); each additional
- * one becomes a material, keeping its `meshTarget`, values, ports and settings,
- * and its incoming edges are re-pointed at the surviving node's namespaced
- * handles. An extra UNTARGETED Output has no material to become — material 0 is
- * already the default — so its edges are dropped with the node, which is what
- * emission did with it anyway.
+ * The ACTIVE Output survives (`findDefaultOutput`: the flagged one, else the
+ * first in array order); each additional one that carries the LEGACY per-node
+ * mesh target becomes a material, keeping its `meshTarget`, values, ports and
+ * settings, with its incoming edges re-pointed at the surviving node's
+ * namespaced handles. An UNTARGETED extra is NOT touched: since 2026-09-03
+ * several Outputs may coexist with exactly one active (utils/sdfPartition.ts
+ * `activeSink`), so an untargeted second Output is an ordinary inactive one,
+ * kept together with everything wired into it.
  */
 export function foldExtraOutputs(
   nodes: AppNode[],
@@ -611,8 +647,16 @@ export function foldExtraOutputs(
   const outputs = outputNodes(nodes);
   if (outputs.length <= 1) return { nodes, edges };
 
-  const keep = outputs[0];
-  const extras = outputs.slice(1);
+  const keep = findDefaultOutput(nodes) ?? outputs[0];
+  // Only an extra carrying the LEGACY per-node mesh target is folded — that
+  // is the one-Output-per-mesh shape this migration exists for. An untargeted
+  // extra is an ordinary INACTIVE Output now (several may coexist, one
+  // active — see `activeSink`) and is left exactly as it is, wiring included.
+  const extras = outputs.filter((n) => n.id !== keep.id && materialTargetNames({
+    meshTargets: (n.data as { meshTargets?: string[] }).meshTargets,
+    meshTarget: (n.data as { meshTarget?: { name: string } }).meshTarget,
+  }).length > 0);
+  if (extras.length === 0) return { nodes, edges };
   const materials = [...outputMaterials(keep).slice(1)];
   /** old node id → its new material index on the surviving node. */
   const remap = new Map<string, number>();

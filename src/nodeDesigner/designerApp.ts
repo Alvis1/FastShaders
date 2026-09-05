@@ -2227,7 +2227,11 @@ function previewFor(type) {
   if (previews[type]) return previews[type];
   const n = NODE_BY_TYPE[type];
   const p = { ins: {}, out: { on: true, ch: n.out[0] ? (LINE_COUNT[n.out[0][1]] || 1) : 1 }, vals: {} };
-  n.in.forEach(([id, ty]) => { const dv = n.def && n.def[id] != null ? String(n.def[id]) : '0.1'; p.ins[id] = { mode: 'un', ch: LINE_COUNT[ty] || 1, val: dv }; });
+  // An input with no registry default previews as 0 — what ShaderNode and the
+  // card render for it (`values[id] ?? defaultValues[id] ?? 0`). It was '0.1',
+  // a wider string that made vec2/vec3/vec4 2px wider on this stage than on
+  // every other surface — the only value difference left in the parity sweep.
+  n.in.forEach(([id, ty]) => { const dv = n.def && n.def[id] != null ? String(n.def[id]) : '0'; p.ins[id] = { mode: 'un', ch: LINE_COUNT[ty] || 1, val: dv }; });
   previews[type] = p; return p;
 }
 

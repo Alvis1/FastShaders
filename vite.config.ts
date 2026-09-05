@@ -857,20 +857,22 @@ const nodeDesignerEndpointPlugin = (): Plugin => ({
 
 /**
  * Directory entries under public/ — each a redirector with an index.html that
- * arms a sessionStorage flag and hands over to the app. Two study arms (/eval,
- * /evalp) and the /textures unlock; the list is not "study entries" any more,
- * so do not treat membership here as a study condition.
+ * arms a sessionStorage flag and hands over to the app: the three study arms
+ * (/eval, /evalp, /evalpro). The /textures unlock used to sit here too; it was
+ * replaced on 2026-09-04 by the toolbar's right-click switch (see
+ * registry/optionalCategories.ts), so membership here is once again "a study
+ * entry" — but keep treating that as a coincidence of the list, not a rule.
  */
-const PUBLIC_ENTRY_DIRS = ['eval', 'evalp', 'evalpro', 'textures'];
+const PUBLIC_ENTRY_DIRS = ['eval', 'evalp', 'evalpro'];
 
 /**
- * Serve-only: make `<base>/eval/`, `<base>/evalp/` and `<base>/textures/`
+ * Serve-only: make `<base>/eval/`, `<base>/evalp/` and `<base>/evalpro/`
  * reach their `public/<dir>/index.html` in dev. On the static deploy targets a
  * directory URL serves its index.html, but vite dev's SPA fallback answers the
  * extensionless URL with the APP's index.html — so these redirector entries
  * silently didn't exist in dev. And silently is the word: the request returns
- * 200 with a fully working editor, so the missing unlock/arm looks like a bug
- * in the flag reader rather than in the dev server. Same dev-parity class as
+ * 200 with a fully working editor, so the missing arm looks like a bug in the
+ * flag reader rather than in the dev server. Same dev-parity class as
  * shaderCarouselDevResolvePlugin.
  */
 const publicEntryDevIndexPlugin = (): Plugin => ({
@@ -882,8 +884,8 @@ const publicEntryDevIndexPlugin = (): Plugin => ({
       for (const dir of PUBLIC_ENTRY_DIRS) {
         if (url === `${FS_BASE}${dir}` || url === `${FS_BASE}${dir}/`) {
           // Preserve the query: the eval entries' launch parameters
-          // (?task=…&costbar=off) are exactly what they exist to carry.
-          // /textures ignores it, and losing it here would be silent.
+          // (?task=…&costbar=off) are exactly what they exist to carry, and
+          // losing it here would be silent.
           const qs = (req.url ?? '').slice(url.length);
           req.url = `${FS_BASE}${dir}/index.html${qs}`;
           break;

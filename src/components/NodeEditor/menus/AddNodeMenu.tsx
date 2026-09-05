@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { existingOutputId, firstFreeOutputChannel, focusOutputNode } from '../outputFocus';
 import { useReactFlow } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 import {
@@ -17,6 +16,7 @@ import { makeTypedEdge } from '@/utils/edgeUtils';
 import { getCostTextColor } from '@/utils/colorUtils';
 import { initialNodeValues } from '@/utils/newNodeValues';
 import { getRecentNodeTypes, noteNodeUsed } from './recentNodes';
+import { hiddenOptionalCategories } from '@/registry/optionalCategories';
 import complexityData from '@/registry/complexity.json';
 import { evalTask } from '@/eval/evalTask';
 
@@ -51,19 +51,12 @@ export function AddNodeMenu() {
   const addNote = useAppStore((s) => s.addNote);
   const setEdges = useAppStore((s) => s.setEdges);
   const nodes = useAppStore((s) => s.nodes);
-  // The Output is a SINGLETON: per-mesh shading lives in its materials (the
-  // node's own "+ Add output"), so a second node has nothing to express — only
-  // the first would ever emit, and the copy would be dead weight the next
-  // code-panel Apply deletes without a word. The row is therefore always
-  // OFFERED (browse and search alike) and, once an Output exists, selecting it
-  // glides the view to the existing node instead of silently doing nothing.
-  const existingOutput = existingOutputId(nodes);
   const groupSelection = useAppStore((s) => s.groupSelection);
   const organizeSelection = useAppStore((s) => s.organizeSelection);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const language = useAppStore((s) => s.language);
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition } = useReactFlow();
 
   // Selected nodes eligible for grouping — excludes groups + notes (annotations).
   const selectedGroupable = useMemo(
@@ -86,11 +79,16 @@ export function AddNodeMenu() {
 
   // getEditorDefinitions (and searchNodes, which filters the same way): a node
   // switched off in node-editor.html is not offerable here either — browse or
-  // search. See registry/editorVisibility.ts.
+  // search. See registry/editorVisibility.ts. Both take `hidden`, the optional
+  // categories the user has not switched on (Distance fields is off by
+  // default — registry/optionalCategories.ts): an add surface passes it on
+  // EVERY call, or the search box types the family back into existence.
+  const optional = useAppStore((s) => s.optionalCategories);
+  const hidden = useMemo(() => hiddenOptionalCategories(optional), [optional]);
   const results = useMemo(() => {
-    if (query.trim()) return searchNodes(query);
-    return getEditorDefinitions().filter((d) => d.type !== 'output');
-  }, [query]);
+    if (query.trim()) return searchNodes(query, hidden);
+    return getEditorDefinitions(hidden).filter((d) => d.type !== 'output');
+  }, [query, hidden]);
 
   // Group by category when not searching
   const grouped = useMemo(() => {
@@ -109,7 +107,7 @@ export function AddNodeMenu() {
   // its own add row and is a singleton) and stale/hidden types are dropped.
   const recentDefs = useMemo(() => {
     if (query.trim() || recentTypes.length === 0) return [];
-    const addable = new Set(getEditorDefinitions().map((d) => d.type));
+    const addable = new Set(getEditorDefinitions(hidden).map((d) => d.type));
     const defs: NodeDefinition[] = [];
     for (const type of recentTypes) {
       if (type === 'output' || !addable.has(type)) continue;
@@ -117,7 +115,7 @@ export function AddNodeMenu() {
       if (def) defs.push(def);
     }
     return defs;
-  }, [query, recentTypes]);
+  }, [query, recentTypes, hidden]);
 
   const handleAddNode = useCallback((def: NodeDefinition) => {
     const position = screenToFlowPosition({
@@ -129,32 +127,10 @@ export function AddNodeMenu() {
     let newNodeId: string;
 
     if (def.type === 'output') {
-      // One Output, always. Per-mesh materials are sections INSIDE it, so a
-      // second node would emit nothing and only confuse the canvas — selecting
-      // the row instead takes the user TO the existing node.
-      const existing = existingOutputId(nodes);
-      if (existing) {
-        // This menu can open from a wire dropped on empty canvas (sourceNodeId
-        // set), where "pick Output" means "connect me to the Output" — the same
-        // gesture that auto-connects every other def below. Honour it: land on
-        // the first FREE EXPOSED channel. With none free, only focus — silently
-        // replacing a wire the user can see would be worse than not connecting.
-        if (sourceNodeId && sourceHandleId) {
-          const store = useAppStore.getState();
-          const outNode = store.nodes.find((n) => n.id === existing);
-          const channel = outNode
-            ? firstFreeOutputChannel(outNode, store.edges, def.inputs)
-            : null;
-          if (channel) {
-            store.pushHistory();
-            const newEdge = makeTypedEdge(sourceNodeId, sourceHandleId, existing, channel);
-            setEdges([...store.edges, newEdge] as AppEdge[]);
-          }
-        }
-        focusOutputNode(fitView, nodes, existing);
-        closeContextMenu();
-        return;
-      }
+      // Several Outputs may coexist; exactly one is ACTIVE (utils/sdfPartition.ts
+      // `activeSink`), chosen by clicking a node's preview socket. A new one
+      // arrives INACTIVE unless it is the graph's first, so adding it changes
+      // nothing on screen until the user picks it.
       newNodeId = generateId();
       const newNode: AppNode = {
         id: newNodeId,
@@ -203,7 +179,7 @@ export function AddNodeMenu() {
     }
 
     closeContextMenu();
-  }, [contextMenu.x, contextMenu.y, screenToFlowPosition, fitView, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, setEdges]);
+  }, [contextMenu.x, contextMenu.y, screenToFlowPosition, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, setEdges]);
 
   const handleGroupSelection = useCallback(() => {
     groupSelection(selectedGroupable.map((n) => n.id));
@@ -369,17 +345,11 @@ export function AddNodeMenu() {
     const desc = def.description
       ? nodeDescription(displayDescription(def), def.type, language)
       : undefined;
-    // Searching "output" surfaces the def as an ordinary result row, and
-    // clicking it is redirected to the existing node (the singleton rule) — so
-    // the tooltip must say THAT, not describe an add that will not happen.
-    const goTo = def.type === 'output' && existingOutput
-      ? t('The graph already has its Output — takes you to it', language)
-      : undefined;
     return (
       <button
         key={key}
         className={itemClass(key)}
-        title={goTo ?? desc}
+        title={desc}
         data-add-node-focused={focusedAttr(key)}
         onClick={() => handleAddNode(def)}
         onMouseEnter={() => hoverFocus(key)}
@@ -453,18 +423,19 @@ export function AddNodeMenu() {
           </>
         )}
 
-        {/* Add output node option. Kept OFFERED while an Output exists — the
-            singleton rule turns the row into "take me to it" (see outputFocus).
-            A row that vanishes reads as the node not existing at all. */}
-        {!query.trim() && (
+        {/* The Output row, always offered: a graph may hold several output
+            nodes (one ACTIVE — utils/sdfPartition.ts), so this simply adds
+            one, inactive unless it is the first. A row that vanished would
+            read as the node not existing at all. */}
+                {!query.trim() && (
           <>
             <div className="context-menu__category">
               {formatCategoryLabel('Output', 'output', language, true)}
             </div>
             <button
               className={itemClass('__output__')}
-              title={existingOutput
-                ? t('The graph already has its Output — takes you to it', language)
+              title={NODE_REGISTRY.get('output')?.description
+                ? nodeDescription(displayDescription(NODE_REGISTRY.get('output')!), 'output', language)
                 : undefined}
               data-add-node-focused={focusedAttr('__output__')}
               onClick={() => handleAddNode(NODE_REGISTRY.get('output')!)}

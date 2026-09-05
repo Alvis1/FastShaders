@@ -8,6 +8,7 @@ import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { makeConnectionRevealSelector, REVEAL_TEMP_OPACITY } from './connectionReveal';
 import { MicNodeButton } from './MicNodeButton';
+import { NodeTitle } from './NodeTitle';
 // One label rule for "what is arriving on this input", shared with ShaderNode
 // (whose stylesheet also owns .shader-node__edge-val and the arm light).
 import { edgeValueLabel } from './ShaderNode';
@@ -160,9 +161,7 @@ export const MicNode = memo(function MicNode({ id, data, selected }: NodeProps<S
       )}
 
       <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" title={varName ?? data.label} style={{ color: headerTextColor }}>
-          {varName ?? data.label}
-        </span>
+        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} />
       </div>
 
       <div className="mic-node__body" style={{ width: MIC_BODY_W, height: MIC_BODY_H }}>
