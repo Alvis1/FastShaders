@@ -9,16 +9,19 @@ import type { AppNode, AppEdge } from '@/types';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import {
   GEOMETRY_ROTATIONS,
-  SDF_WINDOW_GEOMETRY,
+  MARCH_WINDOW_GEOMETRY,
   LIGHT_PRESETS,
+  SUBDIVISION_CAP,
   buildGeoAttr,
+  buildTeapotAttr,
   getModelUrl,
   isModelGeometry,
+  isTeapotGeometry,
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
 import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
-import { sdfOutputDrives } from '@/utils/sdfPartition';
+import { marchWindowRadius } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { sanitizeMeshInventory } from '@/utils/meshInventory';
 import { MESH_HIGHLIGHT_EVENT, type MeshHighlightDetail } from '@/utils/meshHighlight';
@@ -178,7 +181,9 @@ function validateBgColor(v: string | null): string {
 }
 
 const SUBDIVISION_MIN = 1;
-const SUBDIVISION_MAX = 256;
+// The app-wide ceiling (128, the Utah Teapot page's own limit): the slider,
+// the primitives' segment clamp and the teapot's patch resolution all share it.
+const SUBDIVISION_MAX = SUBDIVISION_CAP;
 const SUBDIVISION_DEFAULT = 64;
 
 /**
@@ -207,8 +212,11 @@ function useDebounced<T>(value: T, delayMs: number): T {
 
 function validateSubdivision(raw: string | null): number {
   const v = parseInt(raw ?? '', 10);
-  if (!isNaN(v) && v >= SUBDIVISION_MIN && v <= SUBDIVISION_MAX) return v;
-  return SUBDIVISION_DEFAULT;
+  if (isNaN(v)) return SUBDIVISION_DEFAULT;
+  // Clamp rather than reset: a value persisted under the old 256 ceiling (or
+  // imported from a project block) lands on the new maximum, not on the
+  // default — 256 becoming 64 would read as the setting having been lost.
+  return Math.max(SUBDIVISION_MIN, Math.min(SUBDIVISION_MAX, v));
 }
 
 function loadVec3(key: string, reject?: (p: CameraPosition) => boolean): CameraPosition | null {
@@ -302,8 +310,8 @@ function validateUniformValues(raw: string | null): Record<string, number | stri
  * fed to the iframe via postMessage (fs:obj-model). A failed fetch is
  * evicted so a transient network error can retry on the next iframe load.
  */
-const objTextCache = new Map<'teapot' | 'bunny', Promise<string>>();
-function fetchObjText(geometry: 'teapot' | 'bunny'): Promise<string> {
+const objTextCache = new Map<'bunny', Promise<string>>();
+function fetchObjText(geometry: 'bunny'): Promise<string> {
   let p = objTextCache.get(geometry);
   if (!p) {
     p = fetch(getModelUrl(geometry)).then((r) => {
@@ -411,7 +419,10 @@ export function ShaderPreview() {
   // choice (a sphere clipped a box's corners, a plane or a bunny as the
   // ray-start surface meant nothing), and the dropdown is parked. Folded to a
   // boolean so a position-only notify cannot re-render this panel.
-  const sdfDrives = useAppStore((s) => sdfOutputDrives(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)));
+  // The driving Raymarch Output's Window radius, or null when nothing drives —
+  // a NUMBER, so a position-only notify cannot re-render this panel.
+  const marchWindow = useAppStore((s) => marchWindowRadius(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)));
+  const sdfDrives = marchWindow !== null;
   const materialSettings = useMemo(
     () => (sdfDrives ? { ...rawMaterialSettings, side: 'double' as const } : rawMaterialSettings),
     [rawMaterialSettings, sdfDrives],
@@ -432,7 +443,7 @@ export function ShaderPreview() {
   // imported values without a page reload.
   const [geometry, setGeometry] = usePersistedState('fs:previewGeometry', validateGeometry, { reloadOnProjectImport: true });
   // What the iframe actually renders: the user's choice, or the SDF window.
-  const previewGeometry: GeometryType = sdfDrives ? SDF_WINDOW_GEOMETRY : geometry;
+  const previewGeometry: GeometryType = marchWindow !== null ? MARCH_WINDOW_GEOMETRY : geometry;
   const [playing, setPlaying] = usePersistedState('fs:previewPlaying', validatePlaying, { reloadOnProjectImport: true });
   const [lighting, setLighting] = usePersistedState('fs:previewLighting', validateLighting, { reloadOnProjectImport: true });
 
@@ -1532,6 +1543,7 @@ export function ShaderPreview() {
   const previewHtml = useMemo(() => {
     const options: PreviewOptions = {
       geometry: previewGeometry,
+      marchWindow: marchWindow ?? 1,
       animate: playing,
       materialSettings,
       bgColor,
@@ -1560,7 +1572,7 @@ export function ShaderPreview() {
       options,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedPreviewCode, materialSettings, geometryRebuildKey, forceWebGL2]);
+  }, [debouncedPreviewCode, materialSettings, geometryRebuildKey, forceWebGL2, marchWindow]);
 
   // A new srcDoc means a full document reload, so raise the overlay again. Only
   // rebuilds go through here — the postMessage hot-update channels below mutate
@@ -1665,19 +1677,37 @@ export function ShaderPreview() {
     const prevWasModel = isModelGeometry(prevGeometryRef.current);
     prevGeometryRef.current = previewGeometry;
     if (isModelGeometry(previewGeometry) || prevWasModel) return;
-    iframeRef.current?.contentWindow?.postMessage(
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    // The teapot hot-swaps like a primitive — it is tessellated in the
+    // document (teapot-mesh), so a slider tick is a re-tessellation in place,
+    // not a model rebuild. buildGeoAttr would have answered a SPHERE for it.
+    if (isTeapotGeometry(previewGeometry)) {
+      win.postMessage(
+        {
+          type: 'fs:geometry',
+          isObj: false,
+          teapot: buildTeapotAttr(effectiveSubdivision),
+          rotation: GEOMETRY_ROTATIONS.teapot,
+        },
+        '*',
+      );
+      return;
+    }
+    win.postMessage(
       {
         type: 'fs:geometry',
         isObj: false,
         geometry: buildGeoAttr(
-          previewGeometry as 'sphere' | 'cube' | 'plane' | 'sdfBox',
+          previewGeometry as 'sphere' | 'cube' | 'plane' | 'marchSphere',
           effectiveSubdivision,
+          marchWindow ?? 1,
         ),
         rotation: GEOMETRY_ROTATIONS[previewGeometry] ?? '45 45 0',
       },
       '*',
     );
-  }, [previewGeometry, effectiveSubdivision]);
+  }, [previewGeometry, effectiveSubdivision, marchWindow]);
 
   // OBJ model feed (see objTextCache above). By the iframe's load event its
   // top-level fs:obj-model listener is guaranteed installed (all preview
@@ -1707,7 +1737,8 @@ export function ShaderPreview() {
       }
       return;
     }
-    const geo = previewGeometry as 'teapot' | 'bunny';
+    // Only the bunny is still a model FILE (the teapot tessellates in-document).
+    const geo = previewGeometry as 'bunny';
     fetchObjText(geo).then(
       (text) => {
         iframeRef.current?.contentWindow?.postMessage(
@@ -1752,8 +1783,14 @@ export function ShaderPreview() {
       window.alert('The browser blocked the VR window. Allow popups for this site and try again.');
       return;
     }
+    // The popup renders what the PANE renders: `previewGeometry`, not the
+    // persisted Model choice. While a Raymarch Output drives, that choice is
+    // parked and the march window (a sphere of the node's Window radius) is
+    // the geometry — passing `geometry` here projected the black hole onto
+    // the parked teapot in VR (2026-09-03). The custom-mesh blob is minted
+    // only when the popup will actually load it.
     let customModel: PreviewOptions['customModel'] = null;
-    if (geometry === 'custom' && previewMesh) {
+    if (previewGeometry === 'custom' && previewMesh) {
       if (vrModelUrlRef.current) {
         try { URL.revokeObjectURL(vrModelUrlRef.current); } catch { /* */ }
       }
@@ -1764,7 +1801,8 @@ export function ShaderPreview() {
       customModel = { kind: previewMesh.kind, id: previewMesh.id, url: vrModelUrlRef.current };
     }
     const html = tslToPreviewHTML(inlineImageAssetsFromNodes(previewCode, useAppStore.getState().nodes), {
-      geometry,
+      geometry: previewGeometry,
+      marchWindow: marchWindow ?? 1,
       animate: playing,
       materialSettings,
       bgColor,
@@ -1778,7 +1816,7 @@ export function ShaderPreview() {
     });
     w.document.write(html);
     w.document.close();
-  }, [previewCode, geometry, previewMesh, playing, materialSettings, bgColor, effLighting, effectiveSubdivision, shaderName]);
+  }, [previewCode, previewGeometry, marchWindow, previewMesh, playing, materialSettings, bgColor, effLighting, effectiveSubdivision, shaderName]);
 
   return (
     <div

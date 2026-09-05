@@ -12,8 +12,8 @@ import {
 } from '@/utils/outputMaterials';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
-import { MODULE_HELPERS } from './moduleHelpers';
-import { sdfPartition, sdfOutputNodes, MARCH_ROOT_TYPES, SDF_OUTPUT_TYPE } from '@/utils/sdfPartition';
+import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_OWNER_TYPES, helperNameFor, helperCallPorts } from './moduleHelpers';
+import { marchPartition, drivingMarchOutput, isMarchOutput, MARCH_OUTPUT_TYPE, MARCH_SCOPES, type MarchScopeSpec } from '@/utils/sdfPartition';
 import { effectiveExposedPorts, OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { isUnsignedNoise } from '@/utils/noiseRange';
@@ -490,7 +490,11 @@ export function graphToCode(
 
   // Assign unique variable names
   const varNames = new Map<string, string>();
-  const usedNames = new Set<string>();
+  // Seeded with every module-scope helper NAME: a node variable is `<base><n>`
+  // and `sdBox2` / `sdBox3` are helpers, so a second Box node would otherwise
+  // be named after a helper — `const sdBox2 = sdBox2(...)` shadows the Fn it
+  // calls and throws a temporal-dead-zone ReferenceError at runtime (measured).
+  const usedNames = new Set<string>(MODULE_HELPER_NAMES);
 
   // Smallest index whose `<base><i>` is not already in usedNames, memoized per
   // base. usedNames only ever GROWS, so the cursor is monotone: every index
@@ -634,13 +638,14 @@ export function graphToCode(
 
     // Nodes with no tslFunction (custom emission) need an explicit base name
     // instead of the empty-string fallback below.
-    if (def.type === SDF_OUTPUT_TYPE) {
-      // The march IIFE plus its four companions share one base (`sdfOut1`,
-      // `sdfOut1Field`, `sdfOut1Color`, `sdfOut1Hit`, `sdfOut1N`) — reserved
-      // together, so a user property cannot land on one of them. codeToGraph
-      // recognises them by name AND declarator shape, never by name alone.
-      varNames.set(node.id, claimName('sdfOut', {
-        aliases: (n) => [`${n}Field`, `${n}Color`, `${n}Hit`, `${n}N`],
+    if (def.type === MARCH_OUTPUT_TYPE) {
+      // The march IIFE plus its per-channel functions and unpacked outputs
+      // share one base (`rm1`, `rm1Field`, `rm1Density`, `rm1Color`,
+      // `rm1Emissive`, `rm1Glow`, `rm1Background`, `rm1Col`, …) — reserved
+      // together, so a user property cannot land on one. codeToGraph
+      // recognises them by name AND declarator shape.
+      varNames.set(node.id, claimName('rm', {
+        aliases: (n) => [`${n}Field`, `${n}Density`, `${n}Color`, `${n}Emissive`, `${n}Glow`, `${n}Background`, `${n}Col`, `${n}N`],
       }));
       continue;
     }
@@ -649,7 +654,10 @@ export function graphToCode(
       continue;
     }
 
-    let baseName = def.tslFunction;
+    // A def emitting through helper VARIANTS (modes, width dispatch) names its
+    // variable after the DEF, not after whichever helper this node calls —
+    // `sdCombine1` whatever the mode, `sdBox1` whatever the width.
+    let baseName = HELPER_OWNER_TYPES.has(def.type) ? def.type : def.tslFunction;
     // Clean up names for MaterialX functions
     if (baseName.startsWith('mx_')) {
       baseName = baseName.replace('mx_', '').replace(/_float$|_vec[234]$/, '');
@@ -682,21 +690,22 @@ export function graphToCode(
     // UV import is handled in body generation (with channel parameter)
     if (def.type === 'uv') continue;
     // Module-scope helpers (hsl/toHsl, the distance-field family) are not TSL
-    // exports — never try to import them.
-    if (MODULE_HELPERS.has(def.type)) continue;
+    // exports — never try to import them. A def with modes or a width
+    // dispatch names its variants through the same table.
+    if (MODULE_HELPERS.has(def.tslFunction) || HELPER_OWNER_TYPES.has(def.type)) continue;
     addImport(def.tslImportModule, def.tslFunction);
   }
 
-  // Module-scope helper Fns (`engine/moduleHelpers.ts`): force-import the
-  // three/tsl names only their BODIES use, and remember which to emit. Walked
-  // in TABLE order so the helper block is deterministic whatever the graph
-  // order — hsl before toHsl before the distance-field family.
+  // Module-scope helper Fns (`engine/moduleHelpers.ts`): every CALLEE the
+  // body emits is recorded here (the generic branch and the width-dispatched
+  // Box branch), and after the body is built the table is walked in TABLE
+  // order — so the helper block is deterministic whatever the graph order,
+  // hsl before toHsl before the distance-field family — to emit the used
+  // helpers and force-import the three/tsl names only their BODIES use. By
+  // NAME rather than by def type, because a def with modes calls a different
+  // helper per mode and Box calls one per position width.
+  const usedHelperNames = new Set<string>();
   const usedHelpers: string[] = [];
-  for (const [type, helper] of MODULE_HELPERS) {
-    if (!sorted.some((n) => n.data.registryType === type)) continue;
-    usedHelpers.push(type);
-    for (const name of helper.imports) addImport('three/tsl', name);
-  }
 
   /**
    * Channel count of the specific OUTPUT PORT an edge leaves from.
@@ -772,34 +781,41 @@ export function graphToCode(
   // AND colour), which is why this is a plan rather than a plain loop; for a
   // graph with no SDF Output the plan IS `sorted`, so emission is unchanged.
   const mainLines: string[] = [];
-  const fieldLines: string[] = [];
-  const colorLines: string[] = [];
   let bodyLines: string[] = mainLines;
   // Module-scope setup emitted BEFORE the shader Fn — the Data/Stripes nodes
   // build their `THREE.DataTexture` lookups here (closed over by the Fn body).
   const setupLines: string[] = [];
 
-  const sdfNode = sdfOutputNodes(sorted)[0] ?? null;
-  const part = sdfNode ? sdfPartition(sorted, edges, sdfNode.id) : null;
+  // The march output and its per-step scopes: one line array per per-step
+  // socket, each a function of ONE parameter (`p`, the ray position, or
+  // `dir`, the ray direction) that stands in for that scope's root nodes. See
+  // utils/sdfPartition.ts. ONLY THE ACTIVE SINK is partitioned: an inactive
+  // Raymarch Output emits nothing, and its feeders then land in the flat body
+  // as ordinary consts (which is what lets the resync carry the node and its
+  // wiring across an Apply — see useSyncEngine).
+  const marchNode = drivingMarchOutput(sorted, edges);
+  const specs: readonly MarchScopeSpec[] = marchNode ? MARCH_SCOPES : [];
+  const part = marchNode ? marchPartition(sorted, edges, marchNode.id, specs) : null;
+  const scopeLines = new Map<string, string[]>(specs.map((sp) => [sp.handle, []]));
+  const specOfLines = new Map<string[], MarchScopeSpec>(specs.map((sp) => [scopeLines.get(sp.handle)!, sp]));
   const plan: [AppNode, string[]][] = [];
   for (const node of sorted) {
     if (!part) { plan.push([node, mainLines]); continue; }
-    const inField = part.field.has(node.id);
-    const inColor = part.color.has(node.id);
-    if (!inField && !inColor) { plan.push([node, mainLines]); continue; }
+    const inScopes = specs.filter((sp) => part.scopes.get(sp.handle)?.has(node.id));
+    if (inScopes.length === 0) { plan.push([node, mainLines]); continue; }
     if (part.mainAlso.has(node.id)) plan.push([node, mainLines]);
-    if (inField) plan.push([node, fieldLines]);
-    if (inColor) plan.push([node, colorLines]);
+    for (const sp of inScopes) plan.push([node, scopeLines.get(sp.handle)!]);
   }
 
   for (const [node, target] of plan) {
     bodyLines = target;
     const def = registry.get(node.data.registryType);
     if (!def || node.data.registryType === 'output' || node.data.registryType === 'split') continue;
-    if (def.type === SDF_OUTPUT_TYPE) continue;
-    // Inside a per-step function the march root IS the parameter.
-    if (bodyLines !== mainLines && MARCH_ROOT_TYPES.has(def.type)) {
-      bodyLines.push(`  const ${varNames.get(node.id)!} = p;`);
+    if (isMarchOutput(node)) continue;
+    // Inside a per-step function the scope's root IS the parameter.
+    const scopeSpec = bodyLines === mainLines ? undefined : specOfLines.get(bodyLines);
+    if (scopeSpec && scopeSpec.roots.has(def.type)) {
+      bodyLines.push(`  const ${varNames.get(node.id)!} = ${scopeSpec.param};`);
       continue;
     }
 
@@ -1005,6 +1021,14 @@ export function graphToCode(
         setupLines.push(`${texVar}.wrapT = globalThis.THREE.${wrapMode};`);
         setupLines.push(`${texVar}.flipY = true;`);
         setupLines.push(`${texVar}.needsUpdate = true;`);
+        // A wired Direction samples the image as a SKY (equirect) and replaces
+        // the UV path entirely — tile/offset/flip are UV notions.
+        const dirEdge = inEdge(gidx, node.id, 'dir');
+        const dirRef = dirEdge ? resolveEdgeRef(dirEdge, varNames, gidx) : null;
+        if (dirRef) {
+          addImport('three/tsl', 'equirectUV');
+          uvExpr = `equirectUV(${dirRef})`;
+        }
         bodyLines.push(`  const ${varName} = texture(${texVar}, ${uvExpr}).rgb;`);
       }
     } else if (def.type === 'stripes') {
@@ -1364,6 +1388,10 @@ export function graphToCode(
       const { ctor, args } = buildAppendConstructor(raw, channels);
       addImport('three/tsl', ctor);
       bodyLines.push(`  const ${varName} = ${ctor}(${args.join(', ')});`);
+    } else if (def.type === 'rayDirection') {
+      // A module helper call (engine/moduleHelpers.ts), never the bare inline
+      // maths — so codeToGraph reads it back as this one node.
+      bodyLines.push(`  const ${varName} = rayDirection();`);
     } else if (def.type === 'time') {
       // Time node: elapsed seconds, optionally scaled by the `speed` multiplier
       // edited in Node Settings. Handled BEFORE the generic
@@ -1534,24 +1562,68 @@ export function graphToCode(
         ? args.join(', ')
         : (args[0] ?? fallback);
       bodyLines.push(`  const ${varName} = ${call}(${argExpr});`);
+    } else if (def.type === 'sdBox') {
+      // ONE Box def, two helpers: the wired position's WIDTH picks sdBox2
+      // (vec2) or sdBox3 (anything else, incl. unwired). Each helper takes its
+      // own port list (2D has no Half depth), read from the same table the
+      // parser maps the name back through.
+      const pEdge = inEdge(gidx, node.id, 'p');
+      const width = pEdge ? shapeOfEdgeSource(pEdge) : 3;
+      const callee = width === 2 ? 'sdBox2' : 'sdBox3';
+      const boxArgs = resolveArguments(node, varNames, def, gidx, helperCallPorts(callee, def.inputs));
+      usedHelperNames.add(callee);
+      bodyLines.push(`  const ${varName} = ${callee}(${boxArgs.join(', ')});`);
+    } else if (def.modes) {
+      // A def with MODES calls the variant its mode selects (the default mode
+      // is the def's own tslFunction), with that variant's port list — a
+      // variant may take fewer arguments (xor has no smoothness).
+      const callee = helperNameFor(def, getNodeValues(node));
+      const modeArgs = resolveArguments(node, varNames, def, gidx, helperCallPorts(callee, def.inputs));
+      usedHelperNames.add(callee);
+      bodyLines.push(`  const ${varName} = ${callee}(${modeArgs.join(', ')});`);
     } else {
       // Regular function call
+      if (MODULE_HELPERS.has(def.tslFunction)) usedHelperNames.add(def.tslFunction);
       bodyLines.push(`  const ${varName} = ${def.tslFunction}(${args.join(', ')});`);
     }
   }
 
-  // ===== SDF Output: the raymarcher =====
-  // Emitted AFTER every ordinary node (it is the sink), so everything the two
-  // per-step functions capture by closure is already declared above them.
-  let sdfEmission: { lines: string[]; discardLine: string; returnLine: string } | null = null;
-  if (sdfNode && part) {
-    const base = varNames.get(sdfNode.id)!;
-    const nv = getNodeValues(sdfNode);
-    const fieldEdge = inEdge(gidx, sdfNode.id, 'field');
+  // The helper block, in table order (see usedHelperNames above). hsl/toHsl
+  // and the march's rayDirection are called from dedicated branches, so they
+  // are recorded here by def presence rather than by emitted callee.
+  for (const n of sorted) {
+    const d = registry.get(n.data.registryType);
+    if (d && (d.type === 'hsl' || d.type === 'toHsl' || d.type === 'rayDirection')) usedHelperNames.add(d.tslFunction);
+  }
+  for (const [name, helper] of MODULE_HELPERS) {
+    if (!usedHelperNames.has(name)) continue;
+    usedHelpers.push(name);
+    for (const imp of helper.imports) addImport('three/tsl', imp);
+  }
+
+  // ===== Raymarch Output =====
+  // Emitted AFTER every ordinary node (it is the sink): the per-step functions
+  // capture the flat body by closure, so everything they need is declared
+  // above them. The march is ONE IIFE returning a single vec4 (final RGB +
+  // coverage) — surface and volume are shaded INSIDE it, so no struct / outer
+  // variable writes are needed (measured: those are fragile on r184). Wire
+  // Field and it sphere-traces to a lit surface; wire Density and it
+  // integrates a self-lit volume; wire both and the volume sits in front of
+  // the surface. The material is double-sided so the ray starts at the camera
+  // on a back face (inside a large Window), and Background fills what the ray
+  // never hit.
+  let sdfEmission: { lines: string[]; discardLine: string | null; returnLine: string } | null = null;
+  if (marchNode && part) {
+    const node = marchNode;
+    const base = varNames.get(node.id)!;
+    const nv = getNodeValues(node);
+    const fieldEdge = inEdge(gidx, node.id, 'field');
+    const densityEdge = inEdge(gidx, node.id, 'density');
     const fieldRef = fieldEdge ? resolveEdgeRef(fieldEdge, varNames, gidx) : null;
-    if (fieldRef) {
+    const densityRef = densityEdge ? resolveEdgeRef(densityEdge, varNames, gidx) : null;
+    if (fieldRef || densityRef) {
       const paramExpr = (key: string, dflt: number): string => {
-        const e = inEdge(gidx, sdfNode.id, key);
+        const e = inEdge(gidx, node.id, key);
         if (e) {
           const ref = resolveEdgeRef(e, varNames, gidx);
           if (ref) return ref;
@@ -1559,89 +1631,258 @@ export function graphToCode(
         const v = Number(nv[key]);
         return num(Number.isFinite(v) ? v : dflt);
       };
-      const steps = paramExpr('steps', 48);
-      const maxDist = paramExpr('maxDist', 4);
-      const eps = paramExpr('epsilon', 0.002);
       const indent = (l: string) => `  ${l}`;
       const lines: string[] = [];
-      lines.push(`  const ${base}Field = Fn(([p]) => {`);
-      lines.push(...fieldLines.map(indent));
-      lines.push(`    return ${fieldRef};`);
-      lines.push('  });');
-      // Colour: a position-dependent chain is evaluated once at the hit point
-      // through its own function; anything else is a plain (captured) ref, and
-      // an unwired socket emits no key at all — the __pixel wrapper's own white
-      // fallback stands in, so the unwired form round-trips byte-identically.
-      let colorExpr: string | null = null;
-      const colorEdge = inEdge(gidx, sdfNode.id, 'color');
+      // A per-step chain (Field/Density scalar, or Color/Emissive/Glow colour),
+      // a function of the ray POSITION `p`.
+      const posFn = (handle: string, suffix: string, chainLines: string[], set: ReadonlySet<string>): string | null => {
+        const edge = inEdge(gidx, node.id, handle);
+        if (!edge) return null;
+        const ref = resolveEdgeRef(edge, varNames, gidx);
+        if (!ref) return null;
+        const widened = shapeOfEdgeSource(edge) === 1 ? `vec3(${ref})` : ref;
+        if (!set.has(edge.source)) {
+          // Captured (not p-dependent): still its own declarator, so codeToGraph
+          // reads the edge back off `const rm1Color = color1;`.
+          lines.push(`  const ${base}${suffix} = ${widened};`);
+          return `@CAP@${base}${suffix}`;
+        }
+        lines.push(`  const ${base}${suffix} = Fn(([p]) => {`);
+        lines.push(...chainLines.map(indent));
+        lines.push(`    return ${widened};`);
+        lines.push('  });');
+        return `${base}${suffix}`;
+      };
+      // Field: scalar distance.
+      let fieldName: string | null = null;
+      if (fieldRef) {
+        const scoped = part.scopes.get('field')!.has(fieldEdge!.source);
+        const scalarRef = shapeOfEdgeSource(fieldEdge!) === 1 ? fieldRef : `${fieldRef}.x`;
+        if (scoped) {
+          lines.push(`  const ${base}Field = Fn(([p]) => {`);
+          lines.push(...scopeLines.get('field')!.map(indent));
+          lines.push(`    return ${scalarRef};`);
+          lines.push('  });');
+          fieldName = `${base}Field`;
+        } else {
+          // Not p-dependent — a constant field. Wrap so the march can call it.
+          lines.push(`  const ${base}Field = Fn(([p]) => ${scalarRef});`);
+          fieldName = `${base}Field`;
+        }
+      }
+      let densityName: string | null = null;
+      if (densityRef) {
+        const scoped = part.scopes.get('density')!.has(densityEdge!.source);
+        const scalarRef = shapeOfEdgeSource(densityEdge!) === 1 ? densityRef : `${densityRef}.x`;
+        lines.push(`  const ${base}Density = Fn(([p]) => {`);
+        if (scoped) lines.push(...scopeLines.get('density')!.map(indent));
+        lines.push(`    return ${scalarRef};`);
+        lines.push('  });');
+        densityName = `${base}Density`;
+      }
+      // Colour/Emissive/Glow: p-functions, or captured refs (marked @CAP@), or
+      // the Color swatch's stored value, or a literal fallback.
+      const cap = (v: string | null, at: string): string | null =>
+        v == null ? null : v.startsWith('@CAP@') ? v.slice(5) : `${v}(${at})`;
       const storedColor = typeof nv.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(nv.color) ? nv.color : null;
-      if (!colorEdge && storedColor) {
-        // The node's own colour swatch — the Output node's stored-channel rule.
+      let colorName: string | null = posFn('color', 'Color', scopeLines.get('color')!, part.scopes.get('color')!);
+      if (colorName == null && storedColor) {
         addImport('three/tsl', 'color');
-        colorExpr = `color(${hexLiteral(storedColor)})`;
-      } else if (colorEdge) {
-        const ref = resolveEdgeRef(colorEdge, varNames, gidx);
-        if (ref) {
-          const widened = shapeOfEdgeSource(colorEdge) === 1 ? `vec3(${ref})` : ref;
-          if (part.color.has(colorEdge.source)) {
-            lines.push(`  const ${base}Color = Fn(([p]) => {`);
-            lines.push(...colorLines.map(indent));
-            lines.push(`    return ${widened};`);
-            lines.push('  });');
-            colorExpr = `${base}Color(${base}Hit)`;
-          } else {
-            colorExpr = widened;
+        lines.push(`  const ${base}Color = color(${hexLiteral(storedColor)});`);
+        colorName = `@CAP@${base}Color`;
+      }
+      const emissiveName = posFn('emissive', 'Emissive', scopeLines.get('emissive')!, part.scopes.get('emissive')!);
+      const glowName = posFn('glow', 'Glow', scopeLines.get('glow')!, part.scopes.get('glow')!);
+      // Background: a function of the ray's FINAL DIRECTION `dir`.
+      let bgName: string | null = null;
+      {
+        const edge = inEdge(gidx, node.id, 'background');
+        if (edge) {
+          const ref = resolveEdgeRef(edge, varNames, gidx);
+          if (ref) {
+            const widened = shapeOfEdgeSource(edge) === 1 ? `vec3(${ref})` : ref;
+            if (part.scopes.get('background')!.has(edge.source)) {
+              lines.push(`  const ${base}Background = Fn(([dir]) => {`);
+              lines.push(...scopeLines.get('background')!.map(indent));
+              lines.push(`    return ${widened};`);
+              lines.push('  });');
+              bgName = `@FN@${base}Background`;
+            } else {
+              lines.push(`  const ${base}Background = ${widened};`);
+              bgName = `${base}Background`;
+            }
           }
         }
       }
-      // The march, in object space so the field is sampled where the user
-      // built it. The ray heads from the camera through the fragment; it STARTS
-      // on the window's front face — or at the camera itself when this
-      // fragment is a BACK face, i.e. the camera is inside the bounding box
-      // (the material is forced double-sided whenever an SDF Output drives, so
-      // zooming into the window still shows the shape). `hit` stays 0 on a
-      // miss → discarded below.
+      // The march's own light and ambient: a captured chain, the stored
+      // swatch, or NOTHING (the literal default is then inlined below, so an
+      // untouched socket emits no declarator and round-trips as untouched).
+      const capColor = (handle: string, suffix: string): string | null => {
+        const edge = inEdge(gidx, node.id, handle);
+        if (edge) {
+          const ref = resolveEdgeRef(edge, varNames, gidx);
+          if (ref) {
+            const widened = shapeOfEdgeSource(edge) === 1 ? `vec3(${ref})` : ref;
+            lines.push(`  const ${base}${suffix} = ${widened};`);
+            return `${base}${suffix}`;
+          }
+        }
+        const stored = typeof nv[handle] === 'string' && /^#[0-9a-fA-F]{6}$/.test(nv[handle] as string) ? (nv[handle] as string) : null;
+        if (stored) {
+          addImport('three/tsl', 'color');
+          lines.push(`  const ${base}${suffix} = color(${hexLiteral(stored)});`);
+          return `${base}${suffix}`;
+        }
+        return null;
+      };
+      const lightColExpr = capColor('lightColor', 'LightColor') ?? 'vec3(0.85, 0.85, 0.85)';
+      const ambientExpr = capColor('ambient', 'Ambient') ?? 'vec3(0.15, 0.15, 0.15)';
+      const steps = paramExpr('steps', 64);
+      const stepSize = paramExpr('stepSize', 0.03);
+      const eps = paramExpr('epsilon', 0.002);
+      const bend = paramExpr('bend', 0);
+      const horizon = paramExpr('horizon', 0);
+      const win = paramExpr('window', 1);
+      const fieldR = paramExpr('fieldRadius', 1);
+      const lightX = paramExpr('lightX', 0.6);
+      const lightY = paramExpr('lightY', 0.8);
+      const lightZ = paramExpr('lightZ', 0.5);
+      const aoAmt = paramExpr('ao', 0);
+      const shadowAmt = paramExpr('shadow', 0);
+      const stepScale = paramExpr('stepScale', 1);
+      const aoOn = Number(aoAmt) !== 0 || !!inEdge(gidx, node.id, 'ao');
+      const shadowOn = Number(shadowAmt) !== 0 || !!inEdge(gidx, node.id, 'shadow');
+      // ---- the march ----
       lines.push(`  const ${base} = Fn(() => {`);
+      lines.push(`    const stepSize = float(${stepSize});`);
+      lines.push(`    const eps = float(${eps});`);
+      lines.push(`    const bend = float(${bend});`);
+      lines.push(`    const horizon = float(${horizon});`);
+      lines.push(`    const win = float(${win});`);
+      lines.push(`    const fieldR = float(${fieldR});`);
+      lines.push(`    const stepScale = float(${stepScale});`);
+      lines.push(`    const lightX = float(${lightX});`);
+      lines.push(`    const lightY = float(${lightY});`);
+      lines.push(`    const lightZ = float(${lightZ});`);
+      lines.push(`    const ao = float(${aoAmt});`);
+      lines.push(`    const shadow = float(${shadowAmt});`);
       lines.push('    const cam = modelWorldMatrixInverse.mul(vec4(cameraPosition, 1)).xyz;');
-      lines.push('    const rd = normalize(sub(positionLocal, cam));');
-      lines.push('    const ro = select(frontFacing, positionLocal, cam);');
-      lines.push('    const t = float(0).toVar();');
-      lines.push('    const hit = float(0).toVar();');
+      lines.push('    const rd = normalize(sub(positionLocal, cam)).toVar();');
+      lines.push('    const pos = select(frontFacing, positionLocal, cam).toVar();');
+      lines.push('    const col = vec3(0, 0, 0).toVar();');
+      lines.push('    const alpha = float(0).toVar();');
+      lines.push('    const surfHit = float(0).toVar();');
+      lines.push('    const hp = vec3(0, 0, 0).toVar();');
       lines.push(`    Loop(int(${steps}), () => {`);
-      lines.push(`      const d = ${base}Field(add(ro, mul(rd, t)));`);
-      lines.push(`      If(d.lessThan(${eps}), () => { hit.assign(1); Break(); });`);
-      lines.push('      t.addAssign(d);');
-      lines.push(`      If(t.greaterThan(${maxDist}), () => { Break(); });`);
+      lines.push('      const r = length(pos);');
+      lines.push('      If(r.greaterThan(mul(win, 1.05)), () => { Break(); });');
+      if (Number(horizon) !== 0 || inEdge(gidx, node.id, 'horizon')) {
+        lines.push('      If(r.lessThan(horizon), () => { alpha.assign(1); surfHit.assign(0); Break(); });');
+      }
+      // The gap to the field bubble: outside Field radius the ray jumps
+      // straight to it, so a large Window costs nothing on the way in.
+      lines.push('      const gap = max(sub(r, fieldR), float(0));');
+      if (fieldName) {
+        lines.push(`      const d = ${fieldName}(pos);`);
+        lines.push('      If(d.lessThan(eps), () => { surfHit.assign(1); hp.assign(pos); Break(); });');
+      }
+      // Advance: sphere-trace when only Field is wired; a fixed step whenever a
+      // volume integrates (its density is weighted by the step actually taken).
+      // Step scale shrinks the sphere-trace advance for bound-only fields
+      // (deformed, scaled, smooth-combined) that would otherwise show holes;
+      // the jump to the field bubble is never scaled.
+      lines.push(fieldName && !densityName
+        ? '      const adv = max(mul(max(d, eps), stepScale), gap);'
+        : '      const adv = max(stepSize, gap);');
+      if (densityName) {
+        lines.push(`      const dens = clamp(mul(${densityName}(pos), adv), 0, 1);`);
+        lines.push('      const w = mul(sub(1, alpha), dens);');
+        const glowExpr = cap(glowName, 'pos') ?? 'vec3(1, 1, 1)';
+        lines.push(`      col.addAssign(mul(${glowExpr}, w));`);
+        lines.push('      alpha.addAssign(w);');
+      }
+      // Gravity: pull the direction toward the origin (bend / r²) each step.
+      if (Number(bend) !== 0 || inEdge(gidx, node.id, 'bend')) {
+        lines.push('      const steer = mul(normalize(pos), div(mul(bend, adv), max(mul(r, r), 0.01)));');
+        lines.push('      rd.assign(normalize(sub(rd, steer)));');
+      }
+      lines.push('      pos.addAssign(mul(rd, adv));');
+      lines.push('      If(alpha.greaterThan(0.995), () => { Break(); });');
       lines.push('    });');
-      lines.push('    return vec4(add(ro, mul(rd, t)), hit);');
+      // ---- shade the surface, composite volume over it, fill the sky ----
+      if (fieldName) {
+        // Gradient normal (four field taps) → a simple key-plus-ambient lambert.
+        lines.push(`    const nrm = Fn(([q]) => {`);
+        lines.push('      const e = float(0.001);');
+        lines.push('      const k1 = vec3(1, -1, -1); const k2 = vec3(-1, -1, 1); const k3 = vec3(-1, 1, -1); const k4 = vec3(1, 1, 1);');
+        lines.push(`      const g = add(add(mul(k1, ${fieldName}(add(q, mul(k1, e)))), mul(k2, ${fieldName}(add(q, mul(k2, e))))), add(mul(k3, ${fieldName}(add(q, mul(k3, e)))), mul(k4, ${fieldName}(add(q, mul(k4, e))))));`);
+        lines.push('      return normalize(g);');
+        lines.push('    })(hp);');
+        lines.push('    const key = normalize(vec3(lightX, lightY, lightZ));');
+        let aoTerm = '';
+        if (aoOn) {
+          // IQ's 5-tap ambient occlusion along the normal, unrolled: how much
+          // of the space above the hit is inside the field, decaying with
+          // distance. Scales the AMBIENT only, never the key light.
+          const taps = [0.01, 0.04, 0.07, 0.1, 0.13];
+          const terms = taps.map((hr, i) => `mul(sub(float(${hr}), ${fieldName}(add(hp, mul(nrm, float(${hr}))))), float(${(0.95 ** i).toFixed(8).replace(/0+$/, '').replace(/\.$/, '')}))`);
+          lines.push(`    const occ = ${terms.reduce((a, b) => `add(${a}, ${b})`)};`);
+          lines.push('    const aoF = clamp(sub(float(1), mul(occ, mul(float(3), ao))), float(0), float(1));');
+          aoTerm = 'aoF';
+        }
+        let shadowTerm = '';
+        if (shadowOn) {
+          // A second march from the hit toward the light: the closest miss
+          // along the way, divided by the distance travelled times Shadow
+          // softness, is the penumbra. Scales the KEY light only.
+          lines.push('    const sh = float(1).toVar();');
+          lines.push('    const st = float(0.02).toVar();');
+          lines.push('    Loop(int(24), () => {');
+          lines.push(`      const hd = ${fieldName}(add(hp, mul(key, st)));`);
+          lines.push('      If(hd.lessThan(float(0.0005)), () => { sh.assign(0); Break(); });');
+          lines.push('      sh.assign(min(sh, div(hd, mul(shadow, st))));');
+          lines.push('      st.addAssign(clamp(hd, float(0.01), float(0.1)));');
+          lines.push('      If(st.greaterThan(float(3)), () => { Break(); });');
+          lines.push('    });');
+          lines.push('    const shF = clamp(sh, float(0), float(1));');
+          shadowTerm = 'shF';
+        }
+        const keyTerm = shadowTerm ? `mul(max(dot(nrm, key), float(0)), ${shadowTerm})` : 'max(dot(nrm, key), float(0))';
+        const ambTerm = aoTerm ? `mul(${ambientExpr}, ${aoTerm})` : ambientExpr;
+        lines.push(`    const lam = add(mul(${lightColExpr}, ${keyTerm}), ${ambTerm});`);
+        const surfCol = cap(colorName, 'hp') ?? 'vec3(0.8, 0.8, 0.8)';
+        const surfEmis = cap(emissiveName, 'hp');
+        lines.push(`    const surf = ${surfEmis ? `add(mul(${surfCol}, lam), ${surfEmis})` : `mul(${surfCol}, lam)`};`);
+        lines.push('    const surfCov = surfHit;');
+        lines.push('    col.assign(add(col, mul(surf, mul(sub(1, alpha), surfCov))));');
+        lines.push('    alpha.assign(max(alpha, surfCov));');
+      }
+      // Sky: what the (bent) ray left toward, in world space.
+      lines.push('    const rdWorld = transformDirection(rd, modelWorldMatrix);');
+      const bgExpr = bgName ? (bgName.startsWith('@FN@') ? `${bgName.slice(4)}(rdWorld)` : bgName) : null;
+      if (bgExpr) lines.push(`    const bg = ${bgExpr};`);
+      lines.push(`    return vec4(add(col, ${bgExpr ? 'mul(bg, sub(1, alpha))' : 'vec3(0, 0, 0)'}), ${bgExpr ? 'float(1)' : 'alpha'});`);
       lines.push('  })();');
-      lines.push(`  const ${base}Hit = ${base}.xyz;`);
-      // Gradient normal — tetrahedron technique, four field taps — in VIEW
-      // space, which is what three's normalNode expects.
-      lines.push(`  const ${base}N = Fn(([hp]) => {`);
-      lines.push(`    const e = float(${eps});`);
-      lines.push('    const k1 = vec3(1, -1, -1);');
-      lines.push('    const k2 = vec3(-1, -1, 1);');
-      lines.push('    const k3 = vec3(-1, 1, -1);');
-      lines.push('    const k4 = vec3(1, 1, 1);');
-      lines.push(`    const g = add(add(mul(k1, ${base}Field(add(hp, mul(k1, e)))), mul(k2, ${base}Field(add(hp, mul(k2, e))))), add(mul(k3, ${base}Field(add(hp, mul(k3, e)))), mul(k4, ${base}Field(add(hp, mul(k4, e))))));`);
-      lines.push('    return transformNormalToView(normalize(g));');
-      lines.push(`  })(${base}Hit);`);
-      for (const name of [
-        'Fn', 'Loop', 'If', 'Break', 'int', 'float', 'vec3', 'vec4', 'add', 'mul', 'sub', 'normalize',
-        'cameraPosition', 'modelWorldMatrixInverse', 'positionLocal', 'transformNormalToView', 'Discard',
-        'select', 'frontFacing',
-      ]) addImport('three/tsl', name);
+      lines.push(`  const ${base}Col = ${base}.xyz;`);
+      const imports = [
+        'Fn', 'Loop', 'If', 'Break', 'int', 'float', 'vec3', 'vec4', 'add', 'mul', 'sub', 'div', 'max', 'clamp',
+        'length', 'normalize', 'select', 'frontFacing', 'cameraPosition', 'modelWorldMatrixInverse', 'modelWorldMatrix',
+        'transformDirection', 'positionLocal', 'color',
+      ];
+      if (fieldName) imports.push('dot');
+      if (fieldName && shadowOn) imports.push('min');
+      if (!bgExpr) imports.push('Discard');
+      for (const name of imports) addImport('three/tsl', name);
       sdfEmission = {
         lines,
-        discardLine: `  Discard(${base}.w.lessThan(0.5));`,
-        returnLine: colorExpr
-          ? `  return { color: ${colorExpr}, normal: ${base}N };`
-          : `  return { normal: ${base}N };`,
+        // Self-lit: the composited colour is EMISSIVE over a black, rough
+        // surface, so the scene lights add nothing. With a Background the sky
+        // fills the window (alpha 1); otherwise empty rays are cut away.
+        discardLine: bgExpr ? null : `  Discard(${base}.w.lessThan(0.01));`,
+        returnLine: `  return { color: color(0x000000), emissive: ${base}Col, roughness: float(1) };`,
       };
     }
   }
-
 
   // Handle output node — resolve all connected channels.
   //
@@ -1651,11 +1892,13 @@ export function graphToCode(
   // `vec3(1, 0, 0)` fallback, turning a working shader red the instant a second
   // Output existed. Array order is creation order and is stable under wiring.
   //
-  // Per-mesh shading lives in this ONE node's materials now, so there is
-  // normally nothing to choose between; a graph carrying several Outputs is
-  // folded on load (`foldExtraOutputs`). The array-order rule still stands as
-  // the tie-break for anything that reaches emission without passing a restore.
-  const outputNode = findDefaultOutput(nodes);
+  // The ACTIVE plain Output (`findDefaultOutput`: the flagged one, else the
+  // first in array order) — and NONE while a Raymarch Output is the active
+  // sink: then the plain Output's wiring is ignored outright, and an active
+  // Raymarch Output with nothing wired falls through to the "nothing wired"
+  // sentinel below exactly as an empty plain Output does, rather than
+  // silently handing the picture to a node the user did not choose.
+  const outputNode = marchNode ? null : findDefaultOutput(nodes);
   // `metalness` is appended (not slotted in visual order) so the emitted
   // return-object key order for existing graphs stays byte-identical; `env`
   // is deliberately NOT here — it needs the source's TEXTURE, not a sampled
@@ -2027,7 +2270,7 @@ export function graphToCode(
     'const shader = Fn(() => {',
     ...mainLines,
     ...(sdfEmission ? sdfEmission.lines : []),
-    ...(sdfEmission ? [sdfEmission.discardLine] : discardLine ? [discardLine] : []),
+    ...(sdfEmission ? (sdfEmission.discardLine ? [sdfEmission.discardLine] : []) : discardLine ? [discardLine] : []),
     '',
     sdfEmission ? sdfEmission.returnLine : returnLine,
     '});',
@@ -2219,7 +2462,10 @@ function resolveArguments(
   node: AppNode,
   varNames: Map<string, string>,
   def: NodeDefinition,
-  gidx: GraphIndex
+  gidx: GraphIndex,
+  /** An explicit positional port list (a helper VARIANT's), instead of the
+   *  def's effective inputs — see engine/moduleHelpers.ts helperCallPorts. */
+  ports?: readonly string[],
 ): string[] {
   // Chainable arithmetic emits a variadic call over its wired operands (plus any
   // interior gaps filled with the identity) — `includeTrailingEmpty=false` drops
@@ -2229,7 +2475,9 @@ function resolveArguments(
   const connected = inEdges(gidx, node.id)
     .filter((e) => typeof e.targetHandle === 'string')
     .map((e) => e.targetHandle as string);
-  const inputs = effectiveInputs(def, connected, false, Object.keys(nodeVals));
+  const inputs = ports
+    ? ports.map((id) => def.inputs.find((i) => i.id === id) ?? { id, label: id, dataType: 'any' as const })
+    : effectiveInputs(def, connected, false, Object.keys(nodeVals));
   return inputs.map((input) => {
     const edge = inEdge(gidx, node.id, input.id);
     if (edge) {

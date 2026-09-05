@@ -906,35 +906,25 @@ const definitions: NodeDefinition[] = [
     description: 'Signed distance to the edge of a circle (2D position) or a sphere (3D) — negative inside, zero on the edge, positive outside. Feed it to Smoothstep for a shape mask. Also: sphere, sdf, distance field, shape, disc',
   },
   {
-    type: 'sdBox2',
-    label: 'Box 2D (SDF)',
-    category: 'sdf',
-    tslFunction: 'sdBox2',
-    tslImportModule: '',
-    inputs: [
-      { id: 'p', label: 'Position', dataType: 'vec2' },
-      { id: 'w', label: 'Half width', dataType: 'float' },
-      { id: 'h', label: 'Half height', dataType: 'float' },
-    ],
-    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
-    defaultValues: { w: 0.5, h: 0.5 },
-    description: 'Signed distance to the edge of a rectangle centred on (0, 0), given its half extents — negative inside. Also: rectangle, square, sdf, shape',
-  },
-  {
-    type: 'sdBox3',
-    label: 'Box 3D (SDF)',
+    // ONE Box for 2D and 3D: the helper is picked by the wired position's
+    // WIDTH at emission (`sdBox2` for a vec2, `sdBox3` for a vec3 — see
+    // engine/moduleHelpers.ts), so Half depth is read only for a vec3
+    // position. Rounding inflates the corners by that radius (0 = sharp).
+    type: 'sdBox',
+    label: 'Box (SDF)',
     category: 'sdf',
     tslFunction: 'sdBox3',
     tslImportModule: '',
     inputs: [
-      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'p', label: 'Position', dataType: 'any' },
       { id: 'w', label: 'Half width', dataType: 'float' },
       { id: 'h', label: 'Half height', dataType: 'float' },
       { id: 'd', label: 'Half depth', dataType: 'float' },
+      { id: 'round', label: 'Rounding', dataType: 'float' },
     ],
     outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
-    defaultValues: { w: 0.5, h: 0.5, d: 0.5 },
-    description: 'Signed distance to the surface of a box centred on the origin, given its half extents — negative inside. Also: cube, cuboid, sdf, shape',
+    defaultValues: { w: 0.5, h: 0.5, d: 0.5, round: 0 },
+    description: 'Signed distance to a box centred on the origin, given its half extents — a rectangle for a 2D position (Half depth ignored), a cuboid for a 3D one; negative inside. Rounding softens the corners by that radius. Also: rectangle, square, cube, cuboid, rounded box, sdf, shape',
   },
   {
     type: 'sdTorus',
@@ -952,10 +942,16 @@ const definitions: NodeDefinition[] = [
     description: 'Signed distance to the surface of a torus lying flat around the Y axis — a ring of the given radius with a tube of the given thickness. Also: ring, donut, sdf, shape',
   },
   {
-    type: 'smoothUnion',
-    label: 'Smooth union (SDF)',
+    // ONE boolean node with a MODE (values.mode — never defaultValues, which
+    // is the socket list): union / subtract / intersect / xor, each HARD at
+    // k = 0 and smooth for k > 0, where k is the fillet thickness in distance
+    // units (IQ's normalised quadratic smin). One helper per mode is emitted
+    // (engine/moduleHelpers.ts) and the parser stamps the mode back from the
+    // name. Subtract is a MINUS b (a = shape, b = cutter); xor ignores k.
+    type: 'sdCombine',
+    label: 'Combine (SDF)',
     category: 'sdf',
-    tslFunction: 'smoothUnion',
+    tslFunction: 'sdUnion',
     tslImportModule: '',
     inputs: [
       { id: 'a', label: 'Shape A', dataType: 'float' },
@@ -963,47 +959,326 @@ const definitions: NodeDefinition[] = [
       { id: 'k', label: 'Smoothness', dataType: 'float' },
     ],
     outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
-    // k is a divisor — 0 is a hard NaN, so it must never be the unwired default
-    // (unwiredDefaults.test.ts). The evaluator uses the same 0.1.
-    defaultValues: { k: 0.1 },
-    description: 'Merge two distance fields with a soft fillet where they meet, so shapes blend into one blob instead of overlapping. Smoothness is the width of the fillet. Also: smin, blend, merge, union, sdf',
-  },
-  {
-    type: 'sdSubtract',
-    label: 'Cut out (SDF)',
-    category: 'sdf',
-    tslFunction: 'sdSubtract',
-    tslImportModule: '',
-    inputs: [
-      { id: 'a', label: 'Shape', dataType: 'float' },
-      { id: 'b', label: 'Cutter', dataType: 'float' },
-    ],
-    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
-    description: 'Carve the second distance field out of the first — a boolean subtraction for shapes. Also: difference, boolean, carve, sdf',
+    defaultValues: { k: 0 },
+    modes: {
+      values: ['union', 'subtract', 'intersect', 'xor'],
+      default: 'union',
+      labels: { union: 'Union', subtract: 'Subtract (A minus B)', intersect: 'Intersect', xor: 'Exclusive (xor)' },
+      symbols: { union: '\u222A', subtract: '\u2212', intersect: '\u2229', xor: '\u2295' },
+    },
+    description: 'Combine two distance fields: union merges them, subtract carves B out of A, intersect keeps only where both are, xor keeps where exactly one is. Smoothness above 0 blends the seam into a fillet of that width. Choose the mode in the node settings. Also: smin, boolean, blend, merge, difference, carve, cut, intersection, sdf',
   },
 
   {
-    // The raymarcher. Replaces the Output node when present: graphToCode emits
-    // the position-dependent part of the `field` chain as `Fn(([p]) => …)`
-    // (utils/sdfPartition.ts), marches from the bounding mesh's front face
-    // toward the camera's object-space position with `Loop`, discards misses,
-    // shades hits with a gradient normal (four field taps) and the `color`
-    // chain evaluated at the hit point. See the SDF Output convention.
-    type: 'sdfOutput',
-    label: 'SDF Output',
+    type: 'sdCylinder',
+    label: 'Cylinder (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdCylinder',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'r', label: 'Radius', dataType: 'float' },
+      { id: 'h', label: 'Half height', dataType: 'float' },
+      { id: 'round', label: 'Rounding', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { r: 0.3, h: 0.5, round: 0 },
+    description: 'Signed distance to a capped cylinder standing along the Y axis — Radius across, Half height up and down; Rounding softens its rims. Turn or move it with a Transform upstream. Also: tube, can, pillar, rod, sdf, shape',
+  },
+  {
+    type: 'sdCapsule',
+    label: 'Capsule (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdCapsule',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'r', label: 'Radius', dataType: 'float' },
+      { id: 'h', label: 'Half length', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { r: 0.2, h: 0.3 },
+    description: 'Signed distance to a capsule along the Y axis: a segment of the given Half length inflated by Radius, so its ends are hemispheres. Also: pill, stick, bone, segment, line, sdf, shape',
+  },
+  {
+    type: 'sdCone',
+    label: 'Cone (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdCone',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'r1', label: 'Bottom radius', dataType: 'float' },
+      { id: 'r2', label: 'Top radius', dataType: 'float' },
+      { id: 'h', label: 'Half height', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { r1: 0.4, r2: 0.1, h: 0.4 },
+    description: 'Signed distance to a capped cone along the Y axis, from Bottom radius at −Half height to Top radius at +Half height; a Top radius of 0 is a point, equal radii make a cylinder. Also: frustum, funnel, spike, sdf, shape',
+  },
+  {
+    type: 'sdPlane',
+    label: 'Plane (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdPlane',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'nx', label: 'Normal X', dataType: 'float' },
+      { id: 'ny', label: 'Normal Y', dataType: 'float' },
+      { id: 'nz', label: 'Normal Z', dataType: 'float' },
+      { id: 'h', label: 'Offset', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { nx: 0, ny: 1, nz: 0, h: 0 },
+    description: 'Signed distance to an infinite flat surface: everything on the far side of the Normal is inside. Offset slides it along the Normal. The ground for a scene, or a cutter for a Combine in subtract mode. Also: half-space, floor, ground, slab, cut, sdf',
+  },
+  {
+    type: 'sdOctahedron',
+    label: 'Octahedron (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdOctahedron',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 's', label: 'Size', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { s: 0.5 },
+    description: 'Signed distance to an eight-faced diamond with its points on the axes at the given Size. Also: diamond, gem, crystal, bipyramid, sdf, shape',
+  },
+  {
+    type: 'sdStar',
+    label: 'Star (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdStar',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec2' },
+      { id: 'r', label: 'Radius', dataType: 'float' },
+      { id: 'n', label: 'Points', dataType: 'float' },
+      { id: 'm', label: 'Sharpness', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { r: 0.4, n: 5, m: 3 },
+    description: 'Signed distance to a regular star with the given number of Points in a 2D position; Sharpness equal to Points gives a regular polygon, smaller values pull the inner corners inward. Also: polygon, pentagon, hexagon, pentagram, ngon, sdf, shape',
+  },
+  {
+    type: 'sdfTransform',
+    label: 'Transform (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdfTransform',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'tx', label: 'Move X', dataType: 'float' },
+      { id: 'ty', label: 'Move Y', dataType: 'float' },
+      { id: 'tz', label: 'Move Z', dataType: 'float' },
+      { id: 'rx', label: 'Turn X°', dataType: 'float' },
+      { id: 'ry', label: 'Turn Y°', dataType: 'float' },
+      { id: 'rz', label: 'Turn Z°', dataType: 'float' },
+      { id: 's', label: 'Scale', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
+    defaultValues: { tx: 0, ty: 0, tz: 0, rx: 0, ry: 0, rz: 0, s: 1 },
+    description: 'Move, turn and scale the space a shape is built in: wire it between the position and the shape, and the shape moves by Move, turns by the angles in degrees (X, then Y, then Z) and grows by Scale. After scaling, multiply the distance by the same Scale with a Modify node so it stays a true distance. Also: translate, rotate, position, orient, place, sdf',
+  },
+  {
+    type: 'sdfRepeat',
+    label: 'Repeat (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdfRepeat',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'sx', label: 'Spacing X', dataType: 'float' },
+      { id: 'sy', label: 'Spacing Y', dataType: 'float' },
+      { id: 'sz', label: 'Spacing Z', dataType: 'float' },
+      { id: 'lx', label: 'Limit X', dataType: 'float' },
+      { id: 'ly', label: 'Limit Y', dataType: 'float' },
+      { id: 'lz', label: 'Limit Z', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
+    defaultValues: { sx: 1, sy: 1, sz: 1, lx: 0, ly: 0, lz: 0 },
+    description: 'Tile the space so one shape appears on a grid: a copy every Spacing along each axis, a Spacing of 0 leaving that axis alone. A Limit caps the copies to that many on each side of the centre; 0 means endless. Also: tile, array, grid, lattice, instances, copies, sdf',
+  },
+  {
+    type: 'sdfRepeatPolar',
+    label: 'Repeat around (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdfRepeatPolar',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'n', label: 'Count', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
+    defaultValues: { n: 6 },
+    description: 'Copy one shape Count times around the Y axis, evenly spaced like petals. Each copy sees the same slice of space, so a shape that is not symmetric shows a seam between slices. Also: radial, circular array, polar, petals, spokes, sdf',
+  },
+  {
+    type: 'sdfMirror',
+    label: 'Mirror (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdfMirror',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'x', label: 'Mirror X', dataType: 'float' },
+      { id: 'y', label: 'Mirror Y', dataType: 'float' },
+      { id: 'z', label: 'Mirror Z', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
+    defaultValues: { x: 1, y: 0, z: 0 },
+    description: 'Reflect the space across the origin on each axis set to 1, so one shape built on the positive side appears on both — a value between 0 and 1 blends the fold. Also: symmetry, reflect, flip, fold, sdf',
+  },
+  {
+    type: 'sdfModify',
+    label: 'Modify (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdRound',
+    tslImportModule: '',
+    inputs: [
+      { id: 'd', label: 'Distance', dataType: 'float' },
+      { id: 'amount', label: 'Amount', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { amount: 0.05 },
+    modes: {
+      values: ['round', 'shell', 'scale'],
+      default: 'round',
+      labels: { round: 'Round (inflate)', shell: 'Shell (hollow)', scale: 'Scale distance' },
+      symbols: { round: '\u25CB', shell: '\u25CE', scale: '\u00D7' },
+    },
+    description: 'Adjust a finished distance: inflate the shape by Amount so its edges soften, hollow it into a shell of that wall thickness, or multiply the distance by Amount after a scaled Transform. Choose the mode in the node settings. Also: inflate, hollow, onion, offset, thicken, sdf',
+  },
+  {
+    type: 'sdfDeform',
+    label: 'Deform (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdfTwist',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'amount', label: 'Amount', dataType: 'float' },
+      { id: 'hx', label: 'Stretch X', dataType: 'float' },
+      { id: 'hy', label: 'Stretch Y', dataType: 'float' },
+      { id: 'hz', label: 'Stretch Z', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
+    defaultValues: { amount: 1, hx: 0, hy: 0, hz: 0 },
+    modes: {
+      values: ['twist', 'bend', 'elongate'],
+      default: 'twist',
+      labels: { twist: 'Twist (about Y)', bend: 'Bend (about Z)', elongate: 'Elongate' },
+      symbols: { twist: '\u21BB', bend: '\u2312', elongate: '\u2194' },
+    },
+    description: 'Warp the space a shape is built in: twist it around the Y axis by Amount radians per unit of height, bend it around Z by Amount per unit of X, or elongate — stretch the middle of the shape by the Stretch amounts, keeping its ends. Deformed distances are only approximate, so lower the Step scale on the Raymarch Output if the surface shows holes. Choose the mode in the node settings. Also: warp, stretch, curve, spiral, sdf',
+  },
+  {
+    type: 'sdfExtrude',
+    label: 'Extrude (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdfExtrude',
+    tslImportModule: '',
+    inputs: [
+      { id: 'd', label: 'Distance 2D', dataType: 'float' },
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'h', label: 'Half depth', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
+    defaultValues: { h: 0.2 },
+    description: 'Turn a flat 2D shape into a solid: the shape built from the X and Y of the position is pushed along Z to the given Half depth on both sides. Also: prism, thickness, depth, 2d to 3d, sdf',
+  },
+  {
+    type: 'sdfRevolve',
+    label: 'Revolve (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdfRevolve',
+    tslImportModule: '',
+    inputs: [
+      { id: 'p', label: 'Position', dataType: 'vec3' },
+      { id: 'o', label: 'Offset', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Profile', dataType: 'vec2' }],
+    defaultValues: { o: 0.5 },
+    description: 'Spin a flat profile around the Y axis: feed the 2D position it gives to any 2D shape and that shape becomes a ring, a vase or a lathe piece, Offset pushing the profile out from the axis. Also: lathe, spin, revolution, vase, rotational, 2d to 3d, sdf',
+  },
+  {
+    type: 'sdfMask',
+    label: 'Shape mask (SDF)',
+    category: 'sdf',
+    tslFunction: 'sdfMask',
+    tslImportModule: '',
+    inputs: [
+      { id: 'd', label: 'Distance', dataType: 'float' },
+      { id: 'w', label: 'Edge width', dataType: 'float' },
+    ],
+    outputs: [{ id: 'out', label: 'Mask', dataType: 'float' }],
+    defaultValues: { w: 0.02 },
+    description: 'Turn a distance into a 0–1 coverage: 1 inside the shape, 0 outside, with a ramp of Edge width across the boundary. Feed it to a Mix to paint a shape onto a surface, or to Color by shape on a raymarched surface. Also: fill, inside, coverage, cutout, stencil, alpha, sdf',
+  },
+
+  {
+    // THE raymarcher — surface and volume in one node. Wire Field and it
+    // sphere-traces to a hit (gradient normal, shaded by the scene lights
+    // through Color/Emissive); wire Density and it integrates a translucent
+    // volume (front-to-back, Glow accumulated where Density is high); wire
+    // both and the volume stops at the surface. The ray can BEND toward the
+    // origin (Bend ÷ r², gravitational lensing) and is absorbed inside
+    // Horizon; whatever is left is filled from Background, a chain over
+    // `Ray Direction` evaluated with the ray's FINAL direction, so a sky
+    // sampled by it is lensed. Window is the radius of the sphere the preview
+    // renders through — set it large and the camera is INSIDE it, so the sky
+    // fills the view; Field radius is where fine stepping starts, outside it
+    // the ray jumps straight to that bubble. See the Raymarch Output convention.
+    type: 'raymarchOutput',
+    label: 'Raymarch Output',
     category: 'sdf',
     tslFunction: '',
     tslImportModule: '',
     inputs: [
       { id: 'field', label: 'Field', dataType: 'float' },
       { id: 'color', label: 'Color', dataType: 'color' },
+      { id: 'emissive', label: 'Emissive', dataType: 'color' },
+      { id: 'density', label: 'Density', dataType: 'float' },
+      { id: 'glow', label: 'Glow', dataType: 'color' },
+      { id: 'background', label: 'Background', dataType: 'color' },
       { id: 'steps', label: 'Steps', dataType: 'float' },
-      { id: 'maxDist', label: 'Max distance', dataType: 'float' },
+      { id: 'stepSize', label: 'Step size', dataType: 'float' },
       { id: 'epsilon', label: 'Epsilon', dataType: 'float' },
+      { id: 'bend', label: 'Bend', dataType: 'float' },
+      { id: 'horizon', label: 'Horizon', dataType: 'float' },
+      { id: 'window', label: 'Window', dataType: 'float' },
+      { id: 'fieldRadius', label: 'Field radius', dataType: 'float' },
+      { id: 'lightX', label: 'Light X', dataType: 'float' },
+      { id: 'lightY', label: 'Light Y', dataType: 'float' },
+      { id: 'lightZ', label: 'Light Z', dataType: 'float' },
+      { id: 'lightColor', label: 'Light colour', dataType: 'color' },
+      { id: 'ambient', label: 'Ambient', dataType: 'color' },
+      { id: 'ao', label: 'Occlusion', dataType: 'float' },
+      { id: 'shadow', label: 'Shadow softness', dataType: 'float' },
+      { id: 'stepScale', label: 'Step scale', dataType: 'float' },
     ],
     outputs: [],
-    defaultValues: { steps: 48, maxDist: 4, epsilon: 0.002 },
-    description: 'Render a distance field as a real 3D shape by marching rays through it. Wire a field built from Local Position; the preview mesh becomes a window onto the shape, pixels that miss it are cut away. Costs Steps times the field per pixel. Also: raymarch, ray marching, sphere tracing, sdf, volume',
+    defaultValues: { steps: 64, stepSize: 0.03, epsilon: 0.002, bend: 0, horizon: 0, window: 1, fieldRadius: 1, lightX: 0.6, lightY: 0.8, lightZ: 0.5, ao: 0, shadow: 0, stepScale: 1 },
+    description: 'Render a distance field as a solid, a density field as a translucent volume, or both, by marching rays through them. The preview mesh becomes a window onto the result; Bend pulls rays toward the origin like gravity, Horizon swallows them, Background fills what the ray never hit, and a large Window puts the camera inside the sky. Also: raymarch, ray marching, sphere tracing, volumetric, gas, fog, cloud, lensing, black hole, sdf',
+  },
+  {
+    // The direction a fragment's view ray travels, world space, unit length —
+    // `normalize(positionWorld − cameraPosition)`. Inside a Volume Output's
+    // Background chain it is the ray's FINAL direction after bending, which is
+    // what makes an equirect image sampled by it a lensed sky. Emitted as a
+    // module helper (engine/moduleHelpers.ts) so codeToGraph reads the call
+    // back as this node rather than as four separate ones.
+    type: 'rayDirection',
+    label: 'Ray Direction',
+    category: 'input',
+    tslFunction: 'rayDirection',
+    tslImportModule: '',
+    inputs: [],
+    outputs: [{ id: 'out', label: 'Direction', dataType: 'vec3' }],
+    description: 'The direction this pixel\'s view ray travels, world space, unit length. Feed an Image node\'s Direction socket to sample a sky; inside a Volume Output\'s Background it is the bent ray, so the sky is lensed. Also: view ray, eye ray, look direction, sky',
   },
 
   // ===== NOISE =====
@@ -1377,6 +1652,10 @@ const imageNodeDef: NodeDefinition = {
     { id: 'tileY', label: 'Tile Y', dataType: 'float' },
     { id: 'offsetX', label: 'Offset X', dataType: 'float' },
     { id: 'offsetY', label: 'Offset Y', dataType: 'float' },
+    // A 3D direction sampled through equirectUV — the image as a SKY. When
+    // wired it replaces the UV path entirely (tile/offset/flip are UV notions).
+    // LAST, so the splice-on-drop pick order of the UV params is unchanged.
+    { id: 'dir', label: 'Direction (equirect)', dataType: 'vec3' },
   ],
   outputs: [{ id: 'out', label: 'Color', dataType: 'vec3' }],
   defaultValues: { tileX: 1, tileY: 1, offsetX: 0, offsetY: 0 },
@@ -1544,10 +1823,14 @@ export function nodeMatchRank(def: NodeDefinition, q: string): number {
  * so equally-good matches stay in their curated sequence.
  *
  * Searches the EDITOR set, so a node hidden by `editorVisibility.json` cannot be
- * typed back into existence from the Add-node menu's search box.
+ * typed back into existence from the Add-node menu's search box — and, when the
+ * caller passes the categories the user has switched OFF (`hidden`, from
+ * `registry/optionalCategories.ts`), neither can a distance-field node: an add
+ * surface passes that set on EVERY call (optionalCategories.test.ts greps for
+ * it), while the ranking tests omit it and rank the whole editor set.
  */
-export function searchNodes(query: string): NodeDefinition[] {
-  const defs = getEditorDefinitions();
+export function searchNodes(query: string, hidden?: ReadonlySet<NodeCategory>): NodeDefinition[] {
+  const defs = getEditorDefinitions(hidden);
   const q = query.trim().toLowerCase();
   if (!q) return defs;
   return defs
@@ -1583,11 +1866,32 @@ const editorDefinitions: NodeDefinition[] =
     : allDefinitions.filter((d) => !HIDDEN_NODE_TYPES.has(d.type));
 
 /**
+ * `getEditorDefinitions(hidden)` memo: one array per distinct hidden-category
+ * set, keyed by the sorted member list. The identity rule above holds here
+ * too — a consumer that memoizes on the returned array must see the SAME array
+ * for the same set, even though it builds a fresh `Set` per render.
+ */
+const narrowedEditorDefinitions = new Map<string, NodeDefinition[]>();
+
+/**
  * The definitions the editor offers as things to add (see `editorVisibility.ts`
  * for why hiding is an add-surface filter and never a registry one).
+ *
+ * With `hidden` — the optional categories the user has NOT switched on
+ * (`registry/optionalCategories.ts`) — the same list minus every definition in
+ * those categories. Without it, the file's answer alone; that is what the
+ * ranking and findability tests read, so switching a category off cannot
+ * redden them, and it is why an ADD SURFACE must always pass the set.
  */
-export function getEditorDefinitions(): NodeDefinition[] {
-  return editorDefinitions;
+export function getEditorDefinitions(hidden?: ReadonlySet<NodeCategory>): NodeDefinition[] {
+  if (!hidden || hidden.size === 0) return editorDefinitions;
+  const key = [...hidden].sort().join('|');
+  let list = narrowedEditorDefinitions.get(key);
+  if (!list) {
+    list = editorDefinitions.filter((d) => !hidden.has(d.category));
+    narrowedEditorDefinitions.set(key, list);
+  }
+  return list;
 }
 
 /**
@@ -1606,13 +1910,13 @@ export function categoryEmptiedByHiding(category: NodeCategory): boolean {
 }
 
 /** Map a registry definition to its React Flow node type string. */
-export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'mic' | 'audio' | 'output' | 'sdfOutput';
+export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'mic' | 'audio' | 'output' | 'raymarchOutput';
 
 export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   if (def.type === 'output') return 'output';
-  // The raymarching output wears the Output node's chrome (SdfOutputNode.tsx),
+  // The raymarching output wears the Output node's chrome (RaymarchOutputNode.tsx),
   // not the generic rows — same header, sections, labelled rows, value cells.
-  if (def.type === 'sdfOutput') return 'sdfOutput';
+  if (def.type === 'raymarchOutput') return 'raymarchOutput';
   if (def.type === 'time') return 'clock';
   // Places every socket itself (see MicNode.tsx) — ShaderNode's row layout
   // cannot express its arrangement.

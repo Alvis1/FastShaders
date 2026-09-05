@@ -12,6 +12,7 @@ import { appTime } from '@/utils/appClock';
 import { evaluateEdgeSource, getTargetEdges, getTimeUpstreamSet } from '@/engine/cpuEvaluator';
 import './MathPreviewNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
+import { NodeTitle } from './NodeTitle';
 
 /** Map registryType to its math function. */
 const MATH_FUNCTIONS: Record<string, (x: number) => number> = {
@@ -173,7 +174,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
 
       {/* Header */}
       <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" title={varName ?? data.label} style={{ color: headerTextColor }}>{varName ?? data.label}</span>
+        <NodeTitle text={varName ?? data.label} style={{ color: headerTextColor }} />
       </div>
 
       {/* Waveform plot (SVG — crisp under viewport zoom, unlike the old

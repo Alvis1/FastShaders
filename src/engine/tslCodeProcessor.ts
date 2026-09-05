@@ -232,7 +232,15 @@ function extractFnBody(tslCode: string, tslNames: string[]): ExtractedFn {
   // Scan offsets on the masked copy so a `{`/`}` inside a string literal or
   // comment can't derail the match; slice the ORIGINAL at the same offsets.
   const masked = maskNonCode(tslCode);
-  const fnStart = masked.indexOf('Fn(() => {');
+  // The SHADER is `const shader = Fn(() => {` when the editor emitted it — a
+  // zero-parameter helper Fn declared above it (the `rayDirection` module
+  // helper: `const rayDirection = Fn(() => { … })`) would otherwise be taken
+  // for the shader by a plain first-occurrence search, and the whole module
+  // collapsed to that helper's return (measured: `colorNode: normalize(sub(
+  // positionWorld, cameraPosition))`, the ray direction painted as colour).
+  // Hand-written code without the name still falls back to the first match.
+  const named = masked.indexOf('const shader = Fn(() => {');
+  const fnStart = named !== -1 ? masked.indexOf('Fn(() => {', named) : masked.indexOf('Fn(() => {');
   let body = '';
   let head = '';
   if (fnStart !== -1) {

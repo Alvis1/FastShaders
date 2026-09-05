@@ -7,7 +7,7 @@ import {
   NO_MATCH,
 } from '@/registry/nodeRegistry';
 import { isTextureHiddenFromEditor } from '@/registry/editorVisibility';
-import { areTexturesUnlocked } from '@/utils/texturesUnlock';
+import { hiddenOptionalCategories, visibleTabs, effectiveTab } from '@/registry/optionalCategories';
 import { getBuiltinTextures, getBuiltinTextureIds } from '@/registry/builtinTextures';
 import { getBuiltinPresets } from '@/registry/builtinPresets';
 import { NodePreviewCard } from './NodePreviewCard';
@@ -44,20 +44,20 @@ const ASSET_TABS_FIRST: NodeCategory[] = ['presets', 'texture', 'noise', 'datavi
 // — the cheap accessor), never by building them: this runs at module scope and
 // the ~84 ms texture parse is deliberately deferred to first use.
 const allTexturesHidden = getBuiltinTextureIds().every(isTextureHiddenFromEditor);
-// The ready-made textures are OFF by default and unlocked for one page load by
-// arriving through the `/textures` entry (utils/texturesUnlock.ts). Sampled
-// here at MODULE scope, which is where the unlock has to be read: the tab list,
-// BROWSER_TABS and the `fs:assetTab` validator below are all module-scope
-// constants that usePersistedState requires to have stable identities, so a
-// per-render read would both come too late and hand one render two answers.
-const texturesUnlocked = areTexturesUnlocked();
+// Every tab the BUILD allows. The user's own switches (Textures and Distance
+// fields are OFF by default — registry/optionalCategories.ts, flipped from the
+// toolbar's right-click list) are applied per render in `visibleCategories`
+// below, NOT here: this list feeds BROWSER_TABS and the `fs:assetTab` validator,
+// which usePersistedState requires to be module-scope stable, and a stored
+// 'sdf' must stay a VALID value while the family is switched off so that
+// switching it back on returns the user to the tab they left.
 const displayCategories = [
   ...ASSET_TABS_FIRST.map((id) => CATEGORIES.find((c) => c.id === id)!),
   ...CATEGORIES.filter(
     (c) => !ASSET_TABS_FIRST.includes(c.id) && c.id !== 'unknown',
   ),
 ].filter((c) =>
-  c.id === 'texture' ? !allTexturesHidden && texturesUnlocked : !categoryEmptiedByHiding(c.id),
+  c.id === 'texture' ? !allTexturesHidden : !categoryEmptiedByHiding(c.id),
 );
 const costs = complexityData.costs as Record<string, number>;
 
@@ -180,10 +180,19 @@ export const ContentBrowser = memo(function ContentBrowser() {
   // Persisted: reopening the app on the tab you left is the expected behaviour
   // for a palette you return to constantly (same treatment the bar's height,
   // canvas colour and language already get).
-  const [activeCategory, setActiveCategory] = usePersistedState<BrowserCategory>(
+  const [storedCategory, setActiveCategory] = usePersistedState<BrowserCategory>(
     'fs:assetTab',
     validateBrowserTab,
   );
+  // The optional categories the user has switched on (toolbar right-click).
+  // One selector for the whole record: the setter replaces the object, so this
+  // re-renders only when a switch flips, never on graph traffic.
+  const optional = useAppStore((s) => s.optionalCategories);
+  const visibleCategories = useMemo(() => visibleTabs(displayCategories, optional), [optional]);
+  // DERIVED, never written back (see effectiveTab): a stored tab whose category
+  // is currently switched off shows the All strip, and the stored value
+  // survives so the tab comes back the moment the switch does.
+  const activeCategory: BrowserCategory = effectiveTab(storedCategory, optional);
   const [search, setSearch] = useState('');
   // Bar height, persisted — the single source of truth for how big the bar AND
   // its tiles are. Only the read seed goes through the shared helper; the write
@@ -294,12 +303,15 @@ export const ContentBrowser = memo(function ContentBrowser() {
     });
     return () => cancelAnimationFrame(raf);
     // Only when the strip's CONTENTS can have changed — tab, query, library,
-    // language, bar size, or this effect's own committed measurements (the
-    // 1px thresholds make the self-triggered re-run converge). The dep-less
+    // language, bar size, the optional-category switches (a family switched
+    // on lands its tiles in the All strip with no tab change, and the
+    // high-water mark above has to see the tallest of them), or this effect's
+    // own committed measurements (the 1px thresholds make the self-triggered
+    // re-run converge). The dep-less
     // form re-swept getBoundingClientRect over every tile on each of
     // NodeEditor's per-drag-frame re-renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCategory, search, savedGroups, language, barHeight, tabsH, tileH, fontsReady]);
+  }, [activeCategory, search, savedGroups, language, barHeight, tabsH, tileH, fontsReady, optional]);
 
   /**
    * Live gesture state: bounds measured once at pointerdown, plus the latest
@@ -656,7 +668,12 @@ export const ContentBrowser = memo(function ContentBrowser() {
   // "take me to the Output" once one exists (placeTilePayload redirects the
   // drop; see outputFocus.ts), and its cost of 0 plus last-in-registry order
   // parks it at the end of the zero-cost run rather than at the strip's head.
-  const allDefs = useMemo(() => getEditorDefinitions(), []);
+  // Narrowed by the categories switched OFF; the registry memoizes per set, so
+  // the identity every memo below keys on is stable until a switch flips.
+  const allDefs = useMemo(
+    () => getEditorDefinitions(hiddenOptionalCategories(optional)),
+    [optional],
+  );
 
   const q = search.trim().toLowerCase();
 
@@ -740,12 +757,12 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // module warm-up), so don't pay it at first render for a tab that may never
     // open. A live search needs them too — matching textures surface in the
     // generic strip (see `items` below).
-    // Locked: the tab is not drawn, but a live SEARCH surfaces matching assets
-    // on every tab (see `items` below) — so without this the strip would hand
-    // back every TextureCard to anyone who typed "wood". Above the lazy build
-    // as well as the tab test, so a locked session never pays the ~84 ms
-    // texture parse at all.
-    if (!texturesUnlocked) return [];
+    // Switched off: the tab is not drawn, but a live SEARCH surfaces matching
+    // assets on every tab (see `items` below) — so without this the strip
+    // would hand back every TextureCard to anyone who typed "wood". Above the
+    // lazy build as well as the tab test, so a session that never switches the
+    // library on never pays the ~84 ms texture parse at all.
+    if (!optional.texture) return [];
     if (activeCategory !== 'texture' && !q) return [];
     const all = getBuiltinTextures().filter((t) => !isTextureHiddenFromEditor(t.id)).sort(byCost);
     if (!q) return all;
@@ -755,7 +772,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
         t.id.toLowerCase().includes(q) ||
         t.description.toLowerCase().includes(q),
     );
-  }, [q, activeCategory]);
+  }, [q, activeCategory, optional.texture]);
 
   const filteredPresets = useMemo(() => {
     // Lazily built: the first getBuiltinPresets() call parses 24 TSL snippets
@@ -906,7 +923,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
           >
             {t('All', language)}
           </button>
-          {displayCategories.map((cat) => (
+          {visibleCategories.map((cat) => (
             <button
               key={cat.id}
               className={`content-browser__cat-btn ${activeCategory === cat.id ? 'content-browser__cat-btn--active' : ''}`}

@@ -14,6 +14,7 @@ import { MicNodeSettings } from './MicNodeSettings';
 import { NoiseNodeSettings } from './NoiseNodeSettings';
 import { DataNodeStats } from './DataColumnStats';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
+import { modeOf } from '@/engine/moduleHelpers';
 
 const checkLabelStyle = { ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px' } as const;
 const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
@@ -81,6 +82,25 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
           {def ? formatNodeLabel(def.label, node.data.registryType, language) : node.data.registryType}
         </div>
       </div>
+
+      {/* MODE — one def, several emitted helper variants (engine/moduleHelpers.ts).
+          Lives in values.mode, never defaultValues (the socket list); one
+          updateNodeData so a change is one undo entry. */}
+      {def?.modes && (
+        <div style={rowStyle}>
+          <label style={labelStyle}>{t('Mode', language)}</label>
+          <select
+            className="context-menu__select"
+            value={modeOf(def, getNodeValues(node))}
+            onChange={(e) => updateNodeData(nodeId, { values: { ...getNodeValues(node), mode: e.target.value } })}
+            title={t('Which operation this node performs', language)}
+          >
+            {def.modes.values.map((m) => (
+              <option key={m} value={m}>{t(def.modes!.labels[m] ?? m, language)}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Input ports not in defaultValues (tslRef params like position, time) — only show toggles for non-basic categories */}
       {showPortToggles && def?.inputs

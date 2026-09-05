@@ -20,6 +20,12 @@ import {
   nodeArtStyle,
   type GlyphDesign,
 } from './glyphs/NodeGlyph';
+import { NodeTitle } from './NodeTitle';
+import { effectiveRampDef } from '@/utils/exposedPorts';
+
+/** A freshly dropped node has nothing exposed. Module-scope so
+ *  effectiveRampDef's identity-stable fast path holds across renders. */
+const NO_EXPOSED: string[] = [];
 
 /**
  * NodeVisual — THE static replica of the live ShaderNode, shared by every
@@ -69,10 +75,6 @@ export interface NodeVisualProps {
   design?: GlyphDesign;
   /** Header label override (the designer shows the bilingual display label). */
   headerText?: string;
-  /** Canvas semantics: designer width is EXACT (width + minWidth), matching
-   *  the live node. Default (cards): width is a FLOOR so a long name in any
-   *  language can stretch the card instead of wrapping into fragments. */
-  exactWidth?: boolean;
   /** Per-input preview states. Missing key = unconnected. */
   portStates?: Record<string, PortPreviewState>;
   /** Display values overriding def.defaultValues (designer scrubbing). */
@@ -93,7 +95,7 @@ const noop = () => {};
 const STACK_STEP_Y = 3;
 
 export function NodeVisual({
-  def,
+  def: rawDef,
   catColor,
   costColor,
   costTextColor,
@@ -102,7 +104,6 @@ export function NodeVisual({
   headerTextColor,
   design,
   headerText,
-  exactWidth = false,
   portStates,
   values,
   onValueChange,
@@ -112,6 +113,13 @@ export function NodeVisual({
   cardClassName = '',
 }: NodeVisualProps) {
   const language = useAppStore((s) => s.language);
+  // A replica shows the node AS IT LANDS ON THE CANVAS: nothing exposed, so
+  // the opt-in ramp-colour sockets of Data Stripes / Data Viz are hidden here
+  // exactly as ShaderNode hides them on a fresh node. Applied INSIDE the
+  // replica rather than by each caller — the asset card did it and the Node
+  // Designer stage did not, so the designer showed two extra sockets (as
+  // number rows, no less) that the palette tile and the canvas never draw.
+  const def = effectiveRampDef(rawDef, NO_EXPOSED);
   const box = nodeBox(def.type, design);
   const textScale = nodeTextScale(def.type, design);
   const sockets = nodeSockets(def.type, design);
@@ -144,19 +152,15 @@ export function NodeVisual({
     border: `${NODE_BORDER_WIDTH} solid ${catColor}`,
   };
   if (box.width) {
-    if (exactWidth) {
-      // Live-node semantics (designer stage): the authored width is the
-      // PREFERRED width and `min-content` the floor — identical to ShaderNode,
-      // so the stage shows what the canvas will do. The node keeps its designed
-      // width while the content fits and widens only when it cannot.
-      nodeStyle.width = box.width;
-      nodeStyle.minWidth = 'min-content';
-    } else {
-      // Card semantics: floor only, so the card GROWS (fit-content) to keep a
-      // long name like "Vektoriālais reizinājums" on one line — at most two
-      // rows via the CSS clamp — instead of a tall stack of fragments.
-      nodeStyle.minWidth = box.width;
-    }
+    // The authored width is the PREFERRED width and `min-content` the floor —
+    // identical to ShaderNode, on EVERY surface: the node keeps its designed
+    // width while the content fits and widens only when it cannot. Cards used
+    // to take the width as a floor only and GROW to keep a long name on one
+    // line, which is how a 47px design rendered as a ~95px tile beside a 47px
+    // canvas node; with NodeTitle wrapping at one balanced seam the title is
+    // two rows at most, so the floor-only branch had nothing left to protect.
+    nodeStyle.width = box.width;
+    nodeStyle.minWidth = 'min-content';
   }
   if (textScale !== 1) (nodeStyle as Record<string, string | number>)['--node-text-scale'] = textScale;
   // While stacked, the card drops its own shadow — only the deepest layer
@@ -236,12 +240,7 @@ export function NodeVisual({
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
       <div className="node-base__header" style={{ background: costColor }}>
-        {/* `title` mirrors ShaderNode's: the header clamps at two lines
-            (NodeBase.css), so a name long enough to be ellipsized stays
-            readable on hover. */}
-        <span className="node-base__title" title={titleText} style={{ color: headerTextColor }}>
-          {titleText}
-        </span>
+        <NodeTitle text={titleText} style={{ color: headerTextColor }} />
       </div>
     </>
   );
@@ -277,6 +276,24 @@ export function NodeVisual({
                 >
                   {s && s.mode !== 'un' ? (
                     <EdgeVal state={s} />
+                  ) : inp.dataType === 'color' ? (
+                    // A colour operand (an exposed ramp end) mirrors ShaderNode's
+                    // operator-layout swatch — the real picker only on the
+                    // designer's stage, the inert span everywhere else, exactly
+                    // as the colour ROW below does and for the same reasons.
+                    interactive ? (
+                      <PaletteColorPicker
+                        className="shader-node__input-color"
+                        history="none"
+                        value={String(values?.[inp.id] ?? dv[inp.id] ?? '#ff0000')}
+                        onPick={(hex) => change(inp.id, hex)}
+                      />
+                    ) : (
+                      <span
+                        className="palette-swatch shader-node__input-color"
+                        style={{ background: String(values?.[inp.id] ?? dv[inp.id] ?? '#ff0000') }}
+                      />
+                    )
                   ) : (
                     <DragNumberInput
                       compact
@@ -460,6 +477,22 @@ export function NodeVisual({
                 <div className={`shader-node__op-val shader-node__op-val--${justify}`} style={{ top: calcTop(off) }}>
                   {s && s.mode !== 'un' ? (
                     <EdgeVal state={s} />
+                  ) : inp.dataType === 'color' ? (
+                    // Mirrors ShaderNode's detached colour operand (see its
+                    // operator-layout swatch for the interactive/inert split).
+                    interactive ? (
+                      <PaletteColorPicker
+                        className="shader-node__input-color"
+                        history="none"
+                        value={String(values?.[inp.id] ?? dv[inp.id] ?? '#ff0000')}
+                        onPick={(hex) => change(inp.id, hex)}
+                      />
+                    ) : (
+                      <span
+                        className="palette-swatch shader-node__input-color"
+                        style={{ background: String(values?.[inp.id] ?? dv[inp.id] ?? '#ff0000') }}
+                      />
+                    )
                   ) : (
                     <DragNumberInput compact step={inp.dataType === 'int' ? 1 : undefined}
                       value={num(inp.id)}

@@ -6,8 +6,8 @@ import { setNodeValues } from '@/types';
 import { isUsableMeshName } from '@/utils/meshInventory';
 import { MAX_PARTS, findDefaultOutput, outputNodes, channelHandle } from '@/utils/outputMaterials';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
-import { MODULE_HELPER_NAMES } from './moduleHelpers';
-import { SDF_OUTPUT_TYPE } from '@/utils/sdfPartition';
+import { MODULE_HELPER_NAMES, HELPER_ALIASES } from './moduleHelpers';
+import { MARCH_OUTPUT_TYPE } from '@/utils/sdfPartition';
 import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { makeTypedEdge } from '@/utils/edgeUtils';
@@ -66,23 +66,26 @@ export function codeToGraph(code: string): CodeToGraphResult {
   const splitNodes = new Map<string, string>();
 
   let hasOutput = false;
-  // ===== SDF Output (the raymarcher) =====
-  // graphToCode emits it as `const sdfOut1Field = Fn(([p]) => {…})` (+ an
-  // optional `sdfOut1Color`), the march IIFE `sdfOut1`, `sdfOut1Hit`, the normal
-  // `sdfOut1N`, a `Discard(sdfOut1.w.lessThan(0.5))` and `return { color?, normal }`.
-  // The two per-step functions are graph content: their bodies are walked by
-  // the ordinary visitors with `p` bound to a Local Position node and their
-  // `return` routed to the SDF Output's socket. The IIFE, the hit swizzle and
-  // the normal function are the node ITSELF and are skipped whole (which is
-  // also what keeps their Loop/If from raising the imperative-block warning).
+  // ===== Raymarch Output =====
+  // graphToCode emits it as `const rm1<Channel> = …` declarators — a
+  // `Fn(([p]) => {…})` (or `Fn(([dir]) => …)` for Background) when the chain
+  // depends on the scope's root, a captured identifier otherwise, a literal
+  // when unwired — then the march IIFE `rm1` (its numbers as
+  // `const stepSize = float(…)` lines), `rm1Col = rm1.xyz`, an optional
+  // `Discard(rm1…)` and a return that is the node's own. The per-step
+  // functions are graph content: their bodies are walked by the ordinary
+  // visitors with `p`/`dir` bound to the root node and their `return` routed
+  // to the socket; everything else about the node is skipped whole (which is
+  // also what keeps its Loop/If from raising the imperative-block warning).
   let sdfOutputId: string | null = null;
   let marchPosId: string | null = null;
+  let rayDirId: string | null = null;
   const helperReturnTargets = new Map<t.Node, { nodeId: string; handle: string }>();
-  const ensureSdfOutput = (): string => {
+  const ensureMarchOutput = (): string => {
     if (sdfOutputId) return sdfOutputId;
-    const def = NODE_REGISTRY.get(SDF_OUTPUT_TYPE)!;
+    const def = NODE_REGISTRY.get(MARCH_OUTPUT_TYPE)!;
     sdfOutputId = generateId();
-    rawNodes.push(createNode(sdfOutputId, def, 'SDF Output'));
+    rawNodes.push(createNode(sdfOutputId, def, 'Raymarch Output'));
     hasOutput = true;
     return sdfOutputId;
   };
@@ -92,6 +95,21 @@ export function codeToGraph(code: string): CodeToGraphResult {
     marchPosId = generateId();
     rawNodes.push(createNode(marchPosId, def, 'positionLocal'));
     return marchPosId;
+  };
+  const ensureRayDir = (): string => {
+    if (rayDirId) return rayDirId;
+    const def = NODE_REGISTRY.get('rayDirection')!;
+    rayDirId = generateId();
+    rawNodes.push(createNode(rayDirId, def, 'rayDirection'));
+    return rayDirId;
+  };
+  const MARCH_HELPER_HANDLES: Record<string, string> = {
+    Field: 'field', Density: 'density', Color: 'color', Emissive: 'emissive', Glow: 'glow', Background: 'background',
+    LightColor: 'lightColor', Ambient: 'ambient',
+  };
+  const MARCH_PARAM_HANDLES: Record<string, string> = {
+    stepSize: 'stepSize', eps: 'epsilon', bend: 'bend', horizon: 'horizon', win: 'window', fieldR: 'fieldRadius',
+    lightX: 'lightX', lightY: 'lightY', lightZ: 'lightZ', ao: 'ao', shadow: 'shadow', stepScale: 'stepScale',
   };
   // Discard is a side-effect statement (`Discard(cond);`) that appears in the
   // function body, but its value flows into the Output node's `discard` port —
@@ -370,27 +388,12 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // Shared between `return X` (FastShaders canonical form) and `output = X`
   // (three.js TSL editor compatible form).
   const buildOutputFromExpr = (rawArg: t.Node): void => {
-    // An SDF Output's return carries `normal: sdfOut1N` (the node itself) and an
-    // optional `color` — a captured ref, or the `sdfOut1Color(sdfOut1Hit)` call
+    // An SDF Output's return carries `normal: rm1N` (the node itself) and an
+    // optional `color` — a captured ref, or the `rm1Color(rm1Hit)` call
     // whose chain was already wired by the helper's own return.
-    if (sdfOutputId) {
-      if (!t.isObjectExpression(rawArg)) return;
-      for (const rawProp of rawArg.properties) {
-        if (!t.isObjectProperty(rawProp)) continue;
-        if (propKeyName(rawProp) !== 'color') continue;
-        const v = unwrapScalarWiden(rawProp.value);
-        if (t.isCallExpression(v) && /^sdfOut\d+Color$/.test(rootIdentifierOf(v) ?? '')) continue;
-        const storedHex = matchStoredChannelValue('color', v);
-        if (typeof storedHex === 'string') {
-          const sdfNode = rawNodes.find((n) => n.id === sdfOutputId)!;
-          setNodeValues(sdfNode, { color: storedHex });
-          continue;
-        }
-        const ref = resolveReturnSource(v, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
-        if (ref) addEdge(rawEdges, ref.nodeId, ref.handle, sdfOutputId, 'color');
-      }
-      return;
-    }
+    // A Raymarch Output's return is the node itself: every channel was already
+    // read off its own `const rm1<Channel> = …` declarator.
+    if (sdfOutputId) return;
     if (hasOutput) return;
     const arg = unwrapScalarWiden(rawArg);
 
@@ -444,7 +447,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
         // otherwise be parsed as standalone nodes, polluting the graph on every
         // code→graph round-trip.
         if (
-          MODULE_HELPER_NAMES.has(varName) &&
+          (MODULE_HELPER_NAMES.has(varName) || HELPER_ALIASES.has(varName)) &&
           t.isCallExpression(init) &&
           t.isIdentifier(init.callee) &&
           init.callee.name === 'Fn'
@@ -454,26 +457,47 @@ export function codeToGraph(code: string): CodeToGraphResult {
         }
 
         // SDF Output emission (see the state block above).
-        const sdfHelper = /^sdfOut\d+(Field|Color)$/.exec(varName);
-        if (sdfHelper && t.isCallExpression(init) && t.isIdentifier(init.callee) && init.callee.name === 'Fn') {
-          const arrow = init.arguments[0];
-          if (arrow && (t.isArrowFunctionExpression(arrow) || t.isFunctionExpression(arrow))) {
-            const target = ensureSdfOutput();
-            helperReturnTargets.set(arrow, { nodeId: target, handle: sdfHelper[1] === 'Field' ? 'field' : 'color' });
+        const marchChannel = /^rm\d+(Field|Density|Color|Emissive|Glow|Background|LightColor|Ambient)$/.exec(varName);
+        if (marchChannel) {
+          const handle = MARCH_HELPER_HANDLES[marchChannel[1]];
+          // Per-step function: walk INTO the body — it is graph content — and
+          // route its `return` to this socket.
+          if (t.isCallExpression(init) && t.isIdentifier(init.callee) && init.callee.name === 'Fn') {
+            const arrow = init.arguments[0];
+            if (arrow && (t.isArrowFunctionExpression(arrow) || t.isFunctionExpression(arrow))) {
+              helperReturnTargets.set(arrow, { nodeId: ensureMarchOutput(), handle });
+            }
+            return;
           }
-          return; // walk INTO the body — it is graph content
+          // A captured chain (not position-dependent): an edge from its node.
+          if (t.isIdentifier(init)) {
+            const target = ensureMarchOutput();
+            const src = varToNodeId.get(init.name) ?? ensureBareInputNode(init.name, rawNodes, varToNodeId);
+            if (src) addEdge(rawEdges, src, varToHandle.get(init.name) ?? 'out', target, handle);
+            return;
+          }
+          // A colour swatch's stored value (surface Color, Light colour, Ambient).
+          if (handle === 'color' || handle === 'lightColor' || handle === 'ambient') {
+            const storedHex = matchStoredChannelValue('color', init);
+            if (typeof storedHex === 'string') {
+              const target = ensureMarchOutput();
+              setNodeValues(rawNodes.find((n) => n.id === target)!, { [handle]: storedHex });
+              return;
+            }
+          }
+          // A literal fallback (`vec3(1, 1, 1)`): the socket is unwired.
+          path.skip();
+          return;
         }
-        // The march IIFE: `const sdfOut1 = Fn(() => {…})();` — name AND shape,
-        // so a user property that happens to be called `sdfOut1` (a plain
-        // `uniform(…)` init) can never be mistaken for it.
         if (
-          /^sdfOut\d+$/.test(varName) &&
+          /^rm\d+$/.test(varName) &&
           t.isCallExpression(init) && t.isCallExpression(init.callee) &&
           t.isIdentifier(init.callee.callee) && init.callee.callee.name === 'Fn'
         ) {
-          const target = ensureSdfOutput();
+          const target = ensureMarchOutput();
           const sdfNode = rawNodes.find((n) => n.id === target)!;
           const values: Record<string, string | number> = {};
+          let stepsSeen = false;
           const wireParam = (handle: string, arg: t.Node | undefined): void => {
             if (!arg) return;
             const lit = extractLiteral(arg);
@@ -484,15 +508,26 @@ export function codeToGraph(code: string): CodeToGraphResult {
             }
           };
           path.get('init').traverse({
+            // The march's numbers: `const stepSize = float(X)`, eps, bend,
+            // horizon, win, fieldR — literal → value, identifier → edge.
+            VariableDeclarator(inner) {
+              const idn = inner.node.id;
+              const ini = inner.node.init;
+              if (!t.isIdentifier(idn) || !ini) return;
+              const handle = MARCH_PARAM_HANDLES[idn.name];
+              if (!handle) return;
+              const arg = t.isCallExpression(ini) && t.isIdentifier(ini.callee) && ini.callee.name === 'float' ? ini.arguments[0] : ini;
+              wireParam(handle, arg);
+            },
             CallExpression(inner) {
               const c = inner.node;
-              if (t.isIdentifier(c.callee) && c.callee.name === 'Loop') {
+              if (t.isIdentifier(c.callee) && c.callee.name === 'Loop' && !stepsSeen) {
+                // `Loop(int(<steps>), …)` — the FIRST loop is the march; a
+                // soft shadow adds a second `Loop(int(24), …)` after it, which
+                // must not overwrite Steps.
+                stepsSeen = true;
                 const a0 = c.arguments[0];
-                // `Loop(int(<steps>), …)`
                 wireParam('steps', t.isCallExpression(a0) && t.isIdentifier(a0.callee) && a0.callee.name === 'int' ? a0.arguments[0] : a0);
-              } else if (t.isMemberExpression(c.callee) && t.isIdentifier(c.callee.property)) {
-                if (c.callee.property.name === 'lessThan' && t.isIdentifier(c.callee.object) && c.callee.object.name === 'd') wireParam('epsilon', c.arguments[0]);
-                if (c.callee.property.name === 'greaterThan' && t.isIdentifier(c.callee.object) && c.callee.object.name === 't') wireParam('maxDist', c.arguments[0]);
               }
             },
           });
@@ -500,7 +535,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
           path.skip();
           return;
         }
-        if (sdfOutputId && /^sdfOut\d+(Hit|N)$/.test(varName) && (t.isMemberExpression(init) || t.isCallExpression(init))) {
+        if (sdfOutputId && /^rm\d+(Col|N)$/.test(varName) && (t.isMemberExpression(init) || t.isCallExpression(init))) {
           path.skip();
           return;
         }
@@ -511,8 +546,8 @@ export function codeToGraph(code: string): CodeToGraphResult {
           // the march root. The flat body declared the same name from the real
           // `positionLocal` just above (roots are always emitted there too), so
           // the existing node IS the root — rebinding would mint a duplicate.
-          if (init.name === 'p' && helperReturnTargets.size > 0) {
-            if (!varToNodeId.has(varName)) varToNodeId.set(varName, ensureMarchPos());
+          if ((init.name === 'p' || init.name === 'dir') && helperReturnTargets.size > 0) {
+            if (!varToNodeId.has(varName)) varToNodeId.set(varName, init.name === 'p' ? ensureMarchPos() : ensureRayDir());
             return;
           }
           const def = TSL_FUNCTION_TO_DEF.get(init.name);
@@ -622,9 +657,9 @@ export function codeToGraph(code: string): CodeToGraphResult {
           return;
         }
         if (!t.isIdentifier(expr.callee) || expr.callee.name !== 'Discard') return;
-        // `Discard(sdfOut1.w.lessThan(0.5))` is the SDF Output's miss cutout —
+        // `Discard(rm1.w.lessThan(0.5))` is the Raymarch Output's own cutout —
         // the node itself, not a user discard.
-        if (sdfOutputId && expr.arguments[0] && /^sdfOut\d+$/.test(rootIdentifierOf(expr.arguments[0]) ?? '')) return;
+        if (sdfOutputId && expr.arguments[0] && /^rm\d+/.test(rootIdentifierOf(expr.arguments[0]) ?? '')) return;
         // The graph has ONE discard socket, so an unconditional `Discard()` and
         // a second condition cannot be represented. Both used to disappear in
         // silence — with the graph→code sync then writing the loss back into the
@@ -733,7 +768,7 @@ function rootCallee(expr: t.CallExpression): string | null {
   return null;
 }
 
-/** The identifier a call/member chain hangs off: `sdfOut1.w.lessThan(0.5)` → `sdfOut1`. */
+/** The identifier a call/member chain hangs off: `rm1.w.lessThan(0.5)` → `rm1`. */
 function rootIdentifierOf(node: t.Node): string | null {
   let cur: t.Node = node;
   for (let guard = 0; guard < 32; guard++) {
@@ -1062,8 +1097,12 @@ function processCall(
     }
   }
 
-  // Look up definition
-  let def = TSL_FUNCTION_TO_DEF.get(funcName);
+  // Look up definition. A helper VARIANT (a mode's helper, a width-dispatched
+  // Box helper, or a LEGACY name from a folded node) resolves through the
+  // alias table to its owning def, carrying the `values` that select it and,
+  // when it takes fewer arguments, its own positional port list.
+  const alias = HELPER_ALIASES.get(funcName);
+  let def = alias ? NODE_REGISTRY.get(alias.type) : TSL_FUNCTION_TO_DEF.get(funcName);
   // Also try the registry type directly (e.g. for 'noise' mapping to 'mx_noise_float')
   if (!def) def = NODE_REGISTRY.get(funcName);
   if (!def) {
@@ -1088,6 +1127,7 @@ function processCall(
 
   const nodeId = generateId();
   const node = createNode(nodeId, def, varName);
+  if (alias?.values) setNodeValues(node, alias.values);
   nodes.push(node);
   varToNodeId.set(varName, nodeId);
 
@@ -1186,7 +1226,9 @@ function processCall(
       });
       break;
     }
-    const port = def.inputs[portIndex]
+    const aliasPortId = alias?.ports?.[portIndex];
+    const port = (aliasPortId ? def.inputs.find((inp) => inp.id === aliasPortId) : undefined)
+      ?? (alias?.ports ? undefined : def.inputs[portIndex])
       ?? (growsOperands(def)
         ? { id: chainPortId(portIndex), label: chainPortId(portIndex).toUpperCase(), dataType: 'any' as const }
         : undefined);

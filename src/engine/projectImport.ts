@@ -16,7 +16,9 @@ import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
 import { sanitizeDrawings } from '@/utils/drawings';
 import { sanitizePalettes } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
-import { sanitizeOutputMaterials, foldExtraOutputs } from '@/utils/outputMaterials';
+import { sanitizeOutputMaterials, foldExtraOutputs, findDefaultOutput } from '@/utils/outputMaterials';
+import { normalizeActiveOutput } from '@/utils/sdfPartition';
+import { migrateLegacyNodeTypes } from '@/registry/legacyNodeTypes';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { generateId } from '@/utils/idGenerator';
 import { readZip, type ZipReadEntry } from '@/utils/zipReader';
@@ -71,6 +73,8 @@ function applyProjectToStore(project: FastShadersProject): void {
   // arrive with edges (see NODE_DESIGN_REQUIREMENTS.md), so files written
   // before the opt-in change keep their sockets rendering. Shared with the
   // localStorage-load and code-sync paths.
+  // Folded node types (registry/legacyNodeTypes.ts) — before anything reads the def.
+  project.graph.nodes = migrateLegacyNodeTypes(project.graph.nodes);
   autoExposeConnectedParamPorts(project.graph.nodes, project.graph.edges);
 
   // Imported files are adversarial input — bound image payloads before they
@@ -102,6 +106,9 @@ function applyProjectToStore(project: FastShadersProject): void {
   // carries (history clones, the autosave, the next export) and de-dupes two
   // Outputs claiming one mesh.
   dataSanitized.nodes = sanitizeOutputMaterials(dataSanitized.nodes);
+  // Exactly one active sink (utils/sdfPartition.ts) — normalised BEFORE the
+  // fold so the fold keeps the flagged Output.
+  dataSanitized.nodes = normalizeActiveOutput(dataSanitized.nodes);
 
   // Board drawings are adversarial too — bound them before they enter the store.
   const drawings = sanitizeDrawings(project.drawings);
@@ -228,11 +235,13 @@ export function importShaderText(
   // express them, and "the file is silent" is read as "the file says none".
   const converted = scriptToTSLWithSettings(text);
   useAppStore.setState((s) => ({
-    nodes: s.nodes.map((n) =>
-      n.data.registryType === 'output'
+    // The ACTIVE Output only: an inactive one keeps its own settings, exactly
+    // as it keeps its wiring across the resync (useSyncEngine's carry).
+    nodes: ((active) => s.nodes.map((n) =>
+      n.id === active
         ? { ...n, data: { ...n.data, materialSettings: converted.materialSettings } }
         : n,
-    ) as AppNode[],
+    ))(findDefaultOutput(s.nodes)?.id) as AppNode[],
     // A bare script carries no palettes, so the previous shader's must go —
     // the same rule the preview mesh and materialSettings already follow on
     // this branch, and the one `applyProjectToStore` applies to a project

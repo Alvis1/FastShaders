@@ -5,8 +5,9 @@ import { codeToGraph } from '@/engine/codeToGraph';
 import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { computeReachableCost } from '@/utils/nodeCost';
-import { isSdfOutput } from '@/utils/sdfPartition';
-import { findDefaultOutput } from '@/utils/outputMaterials';
+import { activeSink, isSinkNode, hasActiveFlag, normalizeActiveOutput } from '@/utils/sdfPartition';
+import { sinkCosts } from '@/utils/nodeCost';
+import { carryInactiveSinks } from '@/utils/sinkCarry';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
@@ -143,7 +144,16 @@ export function useSyncEngine() {
             `${n.data.registryType}\0${n.data.label}`;
           const oldByExactKey = new Map<string, AppNode[]>();
           const oldByType = new Map<string, AppNode[]>();
+          // Several output nodes may coexist with exactly ONE active
+          // (utils/sdfPartition.ts `activeSink`). Emission writes only the
+          // active one and the parse mints at most one sink, so the parsed
+          // sink may pair ONLY with the old active node: every parsed Output
+          // is labelled "Output", and bucketed by array order an INACTIVE old
+          // Output would absorb the active wiring while the real active node
+          // was dropped as unmatched. Inactive sinks are carried whole below.
+          const oldActive = activeSink(oldNodes, unwrapCollapsedGroupEdges(oldNodes, oldEdges));
           for (const old of oldNodes) {
+            if (isSinkNode(old) && old.id !== oldActive?.id) continue;
             const exactKey = matchKey(old);
             if (!oldByExactKey.has(exactKey)) oldByExactKey.set(exactKey, []);
             oldByExactKey.get(exactKey)!.push(old);
@@ -158,6 +168,13 @@ export function useSyncEngine() {
               id: match.id,
               position: { ...match.position },
             };
+            // The active flag is not in the code, so it can only come from
+            // the old node — and only if it was really there: an implicit
+            // (unflagged) active sink must stay unflagged, or an Apply would
+            // stamp a key onto a document that never had a choice made.
+            if (isSinkNode(match) && hasActiveFlag(match)) {
+              (merged.data as Record<string, unknown>).activeOutput = true;
+            }
             // Preserve exposedPorts from the old node — mostly not
             // reconstructed by codeToGraph. For the OUTPUT node, union in the
             // channels that carry STORED VALUES in the new parse (an inline
@@ -313,6 +330,15 @@ export function useSyncEngine() {
                 !survivingIds.has(n.id),
             );
             if (orphanProps.length > 0) finalNodes = [...finalNodes, ...orphanProps];
+
+            // Preserve INACTIVE OUTPUT NODES the same way — and their incoming
+            // edges with them (utils/sinkCarry.ts, pure and tested). Uses the
+            // UNWRAPPED old edges for the reason `realOldEdges` exists.
+            const inactiveSinks = carryInactiveSinks(oldNodes, realOldEdges, oldActive?.id ?? null, survivingIds);
+            if (inactiveSinks.nodes.length > 0) {
+              finalNodes = [...finalNodes, ...inactiveSinks.nodes];
+              remappedEdges.push(...inactiveSinks.edges);
+            }
           }
 
           // Preserve group nodes from the old graph — codeToGraph doesn't know about
@@ -372,6 +398,8 @@ export function useSyncEngine() {
           // Shared with the load/import paths — one predicate, one union rule
           // (incl. the Output node's implicit default channels).
           autoExposeConnectedParamPorts(finalNodes, remappedEdges);
+          // Exactly one active sink, whatever the carry produced.
+          finalNodes = normalizeActiveOutput(finalNodes);
 
           setNodes(finalNodes, 'code');
           setEdges(remappedEdges, 'code');
@@ -415,7 +443,8 @@ export function useSyncEngine() {
     // though it doesn't change nodes/edges). Reads the override-aware ACTIVE table.
     // Same entry-point unwrap graphToCode and cpuEvaluator do: collapse state
     // must not change the compiled output, and it must not change the budget.
-    const total = computeReachableCost(nodes, unwrapCollapsedGroupEdges(nodes, edges));
+    const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
+    const total = computeReachableCost(nodes, unwrapped);
 
     if (total === lastCostRef.current) return;
     lastCostRef.current = total;
@@ -423,22 +452,19 @@ export function useSyncEngine() {
     // Collapse the `setTotalCost` write and the output-node cost writes into a
     // single setState so we don't re-enter this effect twice for one change.
     //
-    // The Output node's badge is the whole-shader total — it is one node, and
-    // every material's chain is reachable from it.
-    // The SDF Output is a sink of the same kind (its badge is the total too).
-    const outputNode = findDefaultOutput(nodes);
-    const sinkIds = new Set<string>([
-      ...(outputNode ? [outputNode.id] : []),
-      ...nodes.filter(isSdfOutput).map((n) => n.id),
-    ]);
-    const needsOutputUpdate = nodes.some((n) => sinkIds.has(n.id) && n.data.cost !== total);
+    // Every sink carries its OWN price (`sinkCosts`): the active node's badge
+    // is the whole-shader total, an inactive Output's badge is what the shader
+    // would cost with it active — so two candidate outputs can be compared
+    // before one is clicked. The active entry equals `total` by construction.
+    const perSink = sinkCosts(nodes, unwrapped);
+    const needsOutputUpdate = nodes.some((n) => perSink.has(n.id) && n.data.cost !== perSink.get(n.id));
     useAppStore.setState((state) => ({
       totalCost: total,
       ...(needsOutputUpdate
         ? {
             nodes: state.nodes.map((n) =>
-              sinkIds.has(n.id)
-                ? { ...n, data: { ...n.data, cost: total } }
+              perSink.has(n.id) && n.data.cost !== perSink.get(n.id)
+                ? { ...n, data: { ...n.data, cost: perSink.get(n.id)! } }
                 : n
             ) as AppNode[],
           }

@@ -1,5 +1,5 @@
 import { useAppStore } from '@/store/useAppStore';
-import { drivingSdfOutput } from '@/utils/sdfPartition';
+import { drivingMarchOutput } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { findDefaultOutput } from '@/utils/outputMaterials';
 import { tslToShaderModule, type PropertyInfo } from './tslToShaderModule';
@@ -110,7 +110,7 @@ export function shaderBaseName(shaderName: string): string {
 export function buildShaderBundle(): ExportBundle {
   const state = useAppStore.getState();
   const outputNode = findDefaultOutput(state.nodes);
-  const materialSettings = sdfMaterialSettings(
+  const materialSettings = marchMaterialSettings(
     state.nodes,
     state.edges,
     (outputNode?.data as OutputNodeData | undefined)?.materialSettings,
@@ -164,11 +164,11 @@ export function downloadShader(): void {
  * and still see the shape — so `side` is forced to double; everything else is
  * the Output node's own settings, or nothing.
  */
-export function sdfMaterialSettings(
+export function marchMaterialSettings(
   nodes: AppNode[],
   edges: AppEdge[],
   settings: MaterialSettings | undefined,
 ): MaterialSettings | undefined {
-  if (!drivingSdfOutput(nodes, unwrapCollapsedGroupEdges(nodes, edges))) return settings;
+  if (!drivingMarchOutput(nodes, unwrapCollapsedGroupEdges(nodes, edges))) return settings;
   return { ...settings, side: 'double' };
 }

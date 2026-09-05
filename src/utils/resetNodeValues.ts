@@ -29,6 +29,11 @@ import type { NodeDefinition } from '@/types';
 
 /** Per-type keys that survive a reset because they are payload, not settings. */
 const PRESERVED_KEYS: Record<string, readonly string[]> = {
+  // The MODE of a multi-mode node is the operation, not a setting: a reset
+  // restores the numbers, it must not turn a subtract back into a union.
+  sdCombine: ['mode'],
+  sdfModify: ['mode'],
+  sdfDeform: ['mode'],
   // The CSV payload (makeDataNodeData) plus the display filename.
   dataNode: ['columnNames', 'rowCount', 'columnCount', 'dataB64', 'fileName'],
   // The picture, and the pre-snap original behind "Revert to original".

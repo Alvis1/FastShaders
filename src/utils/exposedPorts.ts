@@ -17,6 +17,13 @@ import { removeEdgesForPort } from '@/utils/edgeUtils';
  *  one new channel would hide the defaults. */
 export const OUTPUT_DEFAULT_EXPOSED = ['color', 'roughness', 'position'];
 
+/** The Raymarch Output's MAIN sockets — the chains it marches and shades
+ *  with. Every number and light setting is hidden until ticked in its settings
+ *  menu (where the value is edited whether or not the socket shows), exactly
+ *  the Output's channel rule; unlike the Output a hidden setting KEEPS its
+ *  value, because a setting applies whether or not it is wired. */
+export const MARCH_DEFAULT_EXPOSED = ['field', 'color', 'emissive', 'density', 'glow', 'background'];
+
 /** Nodes whose optional parameter sockets follow the opt-in exposedPorts
  *  rules (everything else always shows its registry ports).
  *
@@ -31,6 +38,7 @@ export function usesExposedPorts(def: NodeDefinition | undefined): boolean {
     !!def &&
     (def.category === 'noise' ||
       def.type === 'output' ||
+      def.type === 'raymarchOutput' ||
       def.type === 'imageNode' ||
       def.type === 'time' ||
       def.type === 'micNode' ||
@@ -80,7 +88,9 @@ export function effectiveRampDef<T extends NodeDefinition>(def: T, exposed: Iter
 export function effectiveExposedPorts(node: AppNode): string[] {
   const raw = (node.data as { exposedPorts?: unknown }).exposedPorts;
   if (Array.isArray(raw)) return raw.filter((s): s is string => typeof s === 'string');
-  return node.data.registryType === 'output' ? OUTPUT_DEFAULT_EXPOSED : [];
+  if (node.data.registryType === 'output') return OUTPUT_DEFAULT_EXPOSED;
+  if (node.data.registryType === 'raymarchOutput') return MARCH_DEFAULT_EXPOSED;
+  return [];
 }
 
 /** Upper bound on stored exposed ports. The widest def in the registry is the

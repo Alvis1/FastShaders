@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { findDefaultOutput, outputDormancyFromState } from '@/utils/outputMaterials';
-import { drivingSdfOutput } from '@/utils/sdfPartition';
+import { drivingMarchOutput } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { useAppStore } from '@/store/useAppStore';
 import { linkPath, rectCenter } from './previewLinkGeometry';
@@ -42,11 +42,11 @@ export function PreviewLink() {
   // wire from an ignored Output would claim the viewer renders what it does
   // not. An unwired SDF Output is inert and the Output keeps its wire.
   const sdfDrives = useAppStore(
-    (s) => drivingSdfOutput(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)) !== null,
+    (s) => drivingMarchOutput(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)) !== null,
   );
   const outputId = useAppStore(
     (s) =>
-      drivingSdfOutput(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges))?.id
+      drivingMarchOutput(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges))?.id
       ?? findDefaultOutput(s.nodes)?.id
       ?? null,
   );

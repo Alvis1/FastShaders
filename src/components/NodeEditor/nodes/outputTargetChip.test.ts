@@ -162,14 +162,34 @@ describe('the Output node\'s preview socket', () => {
     expect(wire).toMatch(/stroke:\s*var\(--node-cost-text/);
   });
 
-  it('cannot be dragged from — it is not a port', () => {
-    // The Output node has no outputs. A real handle would invite a connection
-    // that can never land; without pointer-events:none a drag on it pans the
-    // canvas from something that looks like a socket.
+  it('is the ACTIVATION control on the canvas, inert on the tiles, and never a port', () => {
+    // Several output nodes may coexist with exactly one ACTIVE
+    // (utils/sdfPartition.ts `activeSink`); clicking a node's socket makes it
+    // the active sink. The BASE rule stays `pointer-events: none` so the
+    // palette tiles' inert replicas never become controls; only the canvas
+    // rule opts back in.
     expect(rule).toMatch(/pointer-events:\s*none/);
-    expect(tsx).toMatch(/<span className="output-node__preview-socket" aria-hidden="true" \/>/);
+    expect(css).toMatch(/\.react-flow \.output-node__preview-socket \{[^}]*pointer-events:\s*auto/);
+    // Hollow while inactive — the ordinary "free port" reading.
+    expect(css).toMatch(/\.output-node__preview-socket--inactive \{[^}]*background:\s*#fff/);
+    // A <button> carrying `nodrag` (React Flow's drag filter) with its
+    // pointerdown AND click stopped, so a press activates instead of dragging
+    // the node, panning the canvas, or selecting.
+    for (const [file, src] of [['OutputNode.tsx', tsx], ['RaymarchOutputNode.tsx', readFileSync(path.resolve(__dirname, 'RaymarchOutputNode.tsx'), 'utf8')]] as const) {
+      const at = src.indexOf('output-node__preview-socket nodrag');
+      expect(at, `${file}: the socket must carry nodrag`).toBeGreaterThan(-1);
+      const el = src.slice(src.lastIndexOf('<button', at), src.indexOf('/>', at));
+      expect(el, `${file}: pointerdown must be stopped`).toContain('onPointerDown={(e) => e.stopPropagation()}');
+      expect(el, `${file}: the click must activate and not select`).toContain('e.stopPropagation(); setActiveOutput(id);');
+      expect(el, `${file}: state for assistive tech`).toContain('aria-pressed={isActive}');
+    }
     expect(tsx, 'a Handle here would be draggable')
       .not.toMatch(/preview-socket[\s\S]{0,80}<TypedHandle/);
+    // The tiles keep the inert <span> — a card is `pointer-events: none`, which
+    // stops the pointer but not the keyboard, so a real button there would be a
+    // tab stop that mutates the graph from a static replica.
+    expect(card).toContain('<span className="output-node__preview-socket" aria-hidden="true" />');
+    expect(card).not.toContain('output-node__preview-socket nodrag');
   });
 
   it('is ONE PER MATERIAL, centred on its own section', () => {
@@ -183,12 +203,12 @@ describe('the Output node\'s preview socket', () => {
     // The span is rendered exactly ONCE in OutputNode.tsx — inside
     // renderMaterial's block, never at node level (a node-level twin would
     // draw a stray centre socket on top of the per-section ones).
-    const spans = tsx.match(/className="output-node__preview-socket"/g) ?? [];
+    const spans = tsx.match(/className=\{`output-node__preview-socket nodrag/g) ?? [];
     expect(spans).toHaveLength(1);
     const blockStart = tsx.indexOf('className="output-node__material"');
     expect(blockStart, 'the material block wrapper is gone').toBeGreaterThan(-1);
     expect(
-      tsx.indexOf('className="output-node__preview-socket"'),
+      tsx.indexOf('className={`output-node__preview-socket nodrag'),
       'the socket must render INSIDE the material block',
     ).toBeGreaterThan(blockStart);
   });
@@ -254,7 +274,9 @@ describe('the Output node\'s preview socket', () => {
     // section warns at frame rate on every pan; blanket suppression would
     // hide the real missing-useUpdateNodeInternals class.
     expect(nodeEditor).toContain("onError={onFlowError}");
-    expect(nodeEditor).toContain('outputDormancyFromState(useAppStore.getState()).dormant.has(');
+    // Across EVERY Output: several may coexist, and the message names only
+    // the handle, never the node.
+    expect(nodeEditor).toContain('anyOutputDormant(useAppStore.getState(), Number(m[1]))');
   });
 
   it('is where the preview wires start — one per socket — and the card replicates it', () => {

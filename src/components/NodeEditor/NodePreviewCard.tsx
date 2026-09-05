@@ -3,14 +3,13 @@ import type { NodeDefinition, NodeCategory } from '@/types';
 import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, getContrastColor, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType, displayDescription } from '@/registry/nodeRegistry';
-import { formatNodeLabel, nodeDescription, t } from '@/i18n';
+import { formatNodeLabel, nodeDescription } from '@/i18n';
 import { useAssetTooltip } from './AssetTooltip';
 import { useAppStore } from '@/store/useAppStore';
 import { NodeVisual } from './nodes/NodeVisual';
 import { DragNumberInput } from './inputs/DragNumberInput';
 import { nodeTextScale } from './nodes/glyphs/NodeGlyph';
 import { WaveformSvg } from './nodes/WaveformSvg';
-import { effectiveRampDef } from '@/utils/exposedPorts';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
 import complexityData from '@/registry/complexity.json';
 import {
@@ -32,7 +31,7 @@ import {
 } from './nodes/audioGeometry';
 import { ClockFaceSvg } from './nodes/ClockFaceSvg';
 import { useFitText } from '@/hooks/useFitText';
-import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
+import { OUTPUT_DEFAULT_EXPOSED, MARCH_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import {
   COLOR_NODE_SIZE,
   LABEL_MAX_PX as COLOR_LABEL_MAX_PX,
@@ -50,6 +49,7 @@ import './nodes/ClockNode.css';
 import './nodes/MicNode.css';
 import './nodes/AudioInputNode.css';
 import './nodes/OutputNode.css';
+import { MARCH_NODE_CONFIG } from './nodes/RaymarchOutputNode';
 import './NodePreviewCard.css';
 import { NODE_BORDER_WIDTH } from './nodes/nodeFrame';
 
@@ -154,9 +154,9 @@ function ShaderCardContent(props: ContentProps) {
   // cards, the node-editor.html overview (which renders these same cards) and
   // the Node Designer's stage, so every preview surface draws a node with the
   // same code the spec pins to ShaderNode. Rendered inert here — the card
-  // wrapper has pointer-events: none; width acts as a FLOOR (exactWidth off)
-  // so a long name in any language stretches the card instead of wrapping
-  // into mid-word fragments.
+  // wrapper has pointer-events: none; the authored width is the preferred
+  // width with min-content as the floor, exactly as on the canvas — the title
+  // wraps at one balanced seam (NodeTitle), never into mid-word fragments.
   // A tile shows the node as it will land on the canvas: opt-in parameter
   // sockets (Data Stripes / Data Viz's ramp colours) are hidden on a fresh
   // drop, so the replica must hide them too or the tile advertises a socket
@@ -164,16 +164,13 @@ function ShaderCardContent(props: ContentProps) {
   return (
     <NodeVisual
       {...props}
-      def={effectiveRampDef(props.def, EMPTY_EXPOSED)}
+      def={props.def}
       wrapClassName="node-preview-card__node"
       cardClassName="node-preview-card__node--exact"
     />
   );
 }
 
-/** A freshly dropped node has nothing exposed. Module-scope so the filter's
- *  identity-stable fast path holds across renders. */
-const EMPTY_EXPOSED: string[] = [];
 
 /* ============================================================
  * CardShell — shared card frame (badge, header, output handle)
@@ -577,29 +574,34 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
 }
 
 /* ============================================================
- * SdfOutputCardContent — the raymarching output, in the Output's chrome
+ * MarchOutputCardContent — the Raymarch Output, in the Output's chrome
  * ============================================================ */
 
-function SdfOutputCardContent({ def, cost, costColor, costTextColor, headerTextColor }: ContentProps) {
-  // Mirrors SdfOutputNode.tsx's markup and reuses OutputNode.css outright (the
-  // Output card's rule): header, two labelled sections, a subdivider, one
+function MarchOutputCardContent({ def, cost, costColor, costTextColor, headerTextColor }: ContentProps) {
+  // Mirrors RaymarchOutputNode.tsx's markup and reuses OutputNode.css outright
+  // (the Output card's rule): header, the node's own labelled sections, one
   // labelled row per socket with the same value cell — rendered inert.
+  const config = MARCH_NODE_CONFIG;
   const defaults = def.defaultValues ?? {};
   const cell = (portId: string) => {
-    if (portId === 'color') {
+    if (config.colorPorts.includes(portId)) {
       return <span className="palette-swatch output-node__val" style={{ background: '#ffffff' }} />;
     }
-    if (portId in defaults) {
+    const setting = config.settings[portId];
+    if (setting && portId in defaults) {
       return (
         <span className="output-node__val node-preview-card__inert">
-          <DragNumberInput compact value={Number(defaults[portId])} decimals={portId === 'epsilon' ? 3 : 2} onChange={() => {}} />
+          <DragNumberInput compact value={Number(defaults[portId])} decimals={setting.decimals} onChange={() => {}} />
         </span>
       );
     }
     return <span className="output-node__val" />;
   };
+  // Only the DEFAULT-exposed sockets, like the Output card: the settings live
+  // in the node's right-click menu (MARCH_DEFAULT_EXPOSED, utils/exposedPorts).
+  const exposed = new Set<string>(MARCH_DEFAULT_EXPOSED);
   const rows = (ids: string[]) =>
-    def.inputs.filter((p) => ids.includes(p.id)).map((port) => (
+    def.inputs.filter((p) => ids.includes(p.id) && exposed.has(p.id)).map((port) => (
       <div key={port.id} className="output-node__row">
         <CardSocket side="left" dataType={port.dataType} />
         {cell(port.id)}
@@ -612,19 +614,19 @@ function SdfOutputCardContent({ def, cost, costColor, costTextColor, headerTextC
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
       <div className="output-node__header" style={{ background: costColor }}>
-        <span className="output-node__title" style={{ color: headerTextColor }}>SDF Output</span>
+        <span className="output-node__title" style={{ color: headerTextColor }}>{config.title}</span>
       </div>
       <div className="output-node__material">
         <span className="output-node__preview-socket" aria-hidden="true" />
-        <div className="output-node__section">
-          <div className="output-node__section-label">Ray march</div>
-          <div className="output-node__ports">{rows(['field', 'color'])}</div>
-        </div>
-        <div className="output-node__subdivider" />
-        <div className="output-node__section">
-          <div className="output-node__section-label">Settings</div>
-          <div className="output-node__ports">{rows(['steps', 'maxDist', 'epsilon'])}</div>
-        </div>
+        {config.sections.filter((section) => section.ports.some((p) => exposed.has(p))).map((section, i) => (
+          <div key={section.label}>
+            {i > 0 && <div className="output-node__subdivider" />}
+            <div className="output-node__section">
+              <div className="output-node__section-label">{section.label}</div>
+              <div className="output-node__ports">{rows(section.ports)}</div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -707,15 +709,6 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const language = useAppStore((s) => s.language);
-  // The Output tile's activation REDIRECTS to the existing node once one
-  // exists (the singleton rule — outputFocus.ts, placeTilePayload), so its
-  // accessible name must say so: a label promising an add that will not happen
-  // is the same lie the AddNodeMenu row's title already corrects. The selector
-  // short-circuits to a constant false for every non-output card, so the ~75
-  // other tiles pay O(1) per store notify.
-  const redirectsToOutput = useAppStore(
-    (s) => def.type === 'output' && s.nodes.some((n) => n.data.registryType === 'output'),
-  );
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
   const costColor = getCostColor(cost, costColorLow, costColorHigh);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
@@ -749,9 +742,7 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
       onPointerDown={onPointerDown}
       {...tileActivationProps(
         { kind: 'node', nodeType: def.type },
-        redirectsToOutput
-          ? t('The graph already has its Output — takes you to it', language)
-          : `Add ${def.label} node`,
+        `Add ${def.label} node`,
       )}
       {...tooltipHandlers}
     >
@@ -768,8 +759,8 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
         <FitNodeHeading visualScale={shared.costScale} textScale={1}><MicCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'audio' ? (
         <FitNodeHeading visualScale={shared.costScale} textScale={1}><AudioCardContent {...shared} /></FitNodeHeading>
-      ) : flowType === 'sdfOutput' ? (
-        <FitNodeHeading visualScale={shared.costScale} textScale={OUTPUT_TITLE_PX / CARD_TITLE_BASE_PX}><SdfOutputCardContent {...shared} /></FitNodeHeading>
+      ) : flowType === 'raymarchOutput' ? (
+        <FitNodeHeading visualScale={shared.costScale} textScale={OUTPUT_TITLE_PX / CARD_TITLE_BASE_PX}><MarchOutputCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'output' ? (
         // textScale carries the Output header's own type size: its heading is
         // `.output-node__title` (10px), not the 9px `.node-base__title` the

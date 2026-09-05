@@ -21,9 +21,11 @@
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import {
-  getBaseCosts, getCost, computeReachableCost, nodeCostPoints, setCostOverrides,
+  getBaseCosts, getCost, computeReachableCost,
+  sinkCosts, nodeCostPoints, setCostOverrides,
 } from './nodeCost';
 import { makeNode, makeEdge } from '@/test-utils';
+import type { AppNode } from '@/types';
 
 afterEach(() => setCostOverrides(null));
 
@@ -47,12 +49,11 @@ describe('unknown-node pricing', () => {
   });
 });
 
-describe('every Output seeds the reachable-cost walk', () => {
-  // Per-mesh materials live inside the ONE Output node, so its chains are all
-  // reachable from that single seed. The multi-seed form stays as the
-  // defensive case for a graph reaching here before `foldExtraOutputs` runs —
-  // seeding only "the default" reported 0 for an all-targeted document, i.e.
-  // "0 / 200 pts" of apparent headroom on the device-certification surface.
+describe('the ACTIVE sink seeds the reachable-cost walk', () => {
+  // Several output nodes may coexist with exactly ONE active
+  // (utils/sdfPartition.ts `activeSink`): the total is the price of what the
+  // shader RENDERS, so only the active node's chain is walked; every sink also
+  // gets its own figure (`sinkCosts`) for the badges.
   const targeted = (id: string, name?: string) => {
     const n = makeNode(id, 'output');
     if (name) (n.data as Record<string, unknown>).meshTarget = { name };
@@ -66,24 +67,29 @@ describe('every Output seeds the reachable-cost walk', () => {
     expect(computeReachableCost([out, u], edges)).toBe(BASE.unknown);
   });
 
-  it('an all-targeted document is not free', () => {
-    const a = targeted('o1', 'Glass');
-    const b = targeted('o2', 'Body');
+  it('prices ONLY the active output — an inactive one is not on the meter', () => {
+    const a = targeted('o1');
+    const b = targeted('o2');
     const u1 = makeNode('u1', 'unknown', { functionName: 'f', rawExpression: 'f()' });
     const u2 = makeNode('u2', 'unknown', { functionName: 'g', rawExpression: 'g()' });
     const edges = [makeEdge('u1', 'out', 'o1', 'color'), makeEdge('u2', 'out', 'o2', 'color')];
-    expect(computeReachableCost([a, b, u1, u2], edges)).toBe(BASE.unknown * 2);
+    // No flag: array order, o1 drives.
+    expect(computeReachableCost([a, b, u1, u2], edges)).toBe(BASE.unknown);
+    // Flag o2: its chain is the price now.
+    const b2 = { ...b, data: { ...b.data, activeOutput: true } } as AppNode;
+    expect(computeReachableCost([a, b2, u1, u2], edges)).toBe(BASE.unknown);
+    // Each sink priced on its own for its badge.
+    const per = sinkCosts([a, b2, u1, u2], edges);
+    expect([...per.entries()]).toEqual([['o1', BASE.unknown], ['o2', BASE.unknown]]);
   });
 
-  it('counts a node shared between two materials ONCE', () => {
+  it('a node feeding the active output is counted ONCE however many materials use it', () => {
     // A lower bound, deliberately: the GPU compiles the shared node into both
-    // pipelines, but real per-part pricing needs a calibration entry. Pinned so
-    // the approximation is a decision rather than an accident.
-    const a = targeted('o1', 'Glass');
-    const b = targeted('o2', 'Body');
+    // pipelines, but real per-part pricing needs a calibration entry.
+    const out = targeted('o1');
     const u = makeNode('u', 'unknown', { functionName: 'f', rawExpression: 'f()' });
-    const edges = [makeEdge('u', 'out', 'o1', 'color'), makeEdge('u', 'out', 'o2', 'color')];
-    expect(computeReachableCost([a, b, u], edges)).toBe(BASE.unknown);
+    const edges = [makeEdge('u', 'out', 'o1', 'color'), makeEdge('u', 'out', 'o1', 'm1:color')];
+    expect(computeReachableCost([out, u], edges)).toBe(BASE.unknown);
   });
 
   it('a single-Output document — every document before this feature — is unchanged', () => {
@@ -91,8 +97,6 @@ describe('every Output seeds the reachable-cost walk', () => {
     const u = makeNode('u', 'unknown', { functionName: 'f', rawExpression: 'f()' });
     const dead = makeNode('d', 'unknown', { functionName: 'h', rawExpression: 'h()' });
     const edges = [makeEdge('u', 'out', 'o1', 'color')];
-    // The unreachable node is still excluded — seeding more outputs must not
-    // turn the walk into "price everything on the canvas".
     expect(computeReachableCost([out, u, dead], edges)).toBe(BASE.unknown);
   });
 });

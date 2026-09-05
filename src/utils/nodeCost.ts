@@ -1,9 +1,8 @@
 import type { AppNode, AppEdge } from '@/types';
-import { outputNodes } from '@/utils/outputMaterials';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { getCost } from '@/utils/costTable';
-import { sdfOutputNodes, sdfPartition } from '@/utils/sdfPartition';
+import { activeSink, isSinkNode, isMarchOutput, marchPartition } from '@/utils/sdfPartition';
 
 /**
  * GPU cost READERS that need the node graph — the per-instance price and the
@@ -63,10 +62,12 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
  * itself has no `registryType`, so `nodeCostPoints` prices it at 0 and only the
  * members are counted. Returns 0 when there's no Output node.
  *
- * EVERY Output seeds the walk. Per-mesh materials live inside the one Output
- * now, so its chains — the default's and every added material's — are all
- * reachable from that single seed; the multi-seed form stays as the defensive
- * case for a graph that reaches here before `foldExtraOutputs` has run.
+ * The ACTIVE sink seeds the walk (`activeSink` — the flagged Output or
+ * Raymarch Output, else the historical fallback): the total is the price of
+ * what the shader actually RENDERS, and an inactive output's chain emits
+ * nothing, so pricing it would put points on the meter that no headset ever
+ * pays. `sinkCosts` prices every sink on its own for the badges, so two
+ * alternative outputs can be compared before one is activated.
  *
  * A node feeding two materials is counted ONCE (the `visited` set), so the
  * total is a lower bound on true multi-pipeline cost: the GPU compiles the
@@ -77,25 +78,52 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
  * selection (activating a cost profile changes the table, not the graph, so the
  * `[nodes, edges]` effect wouldn't otherwise re-fire).
  */
-export function computeReachableCost(nodes: AppNode[], edges: AppEdge[]): number {
-  const outputs = [...outputNodes(nodes), ...sdfOutputNodes(nodes)];
-  if (outputs.length === 0) return 0;
-  const outputIds = new Set(outputs.map((n) => n.id));
-  let total = sumReachable(nodes, edges, outputs.map((n) => n.id), outputIds);
-  // An SDF Output evaluates its field body once per ray STEP, plus four taps
-  // for the gradient normal, and pays its own fixed march overhead. The body
-  // was counted once above; add the remaining (steps + 4 − 1) evaluations,
-  // using the SAME partition the emitter uses (utils/sdfPartition.ts).
-  for (const sdf of sdfOutputNodes(nodes)) {
-    const raw = Number(getNodeValues(sdf).steps);
-    const dflt = Number(NODE_REGISTRY.get(sdf.data.registryType)?.defaultValues?.steps ?? 48);
+export function computeReachableCost(nodes: AppNode[], edges: AppEdge[], seed?: AppNode | null): number {
+  const sink = seed === undefined ? activeSink(nodes, edges) : seed;
+  if (!sink) return 0;
+  const sinkIds = new Set(nodes.filter(isSinkNode).map((n) => n.id));
+  let total = sumReachable(nodes, edges, [sink.id], sinkIds);
+  // The Raymarch Output evaluates its per-step bodies once per ray STEP (the
+  // Field also four more times for the gradient normal) and pays its own fixed
+  // march overhead. Each body was counted once above; add the remaining
+  // evaluations, using the SAME partition the emitter uses
+  // (utils/sdfPartition.ts). The hit-shaded and direction scopes run once.
+  if (isMarchOutput(sink)) {
+    const march = sink;
+    const raw = Number(getNodeValues(march).steps);
+    const dflt = Number(NODE_REGISTRY.get(march.data.registryType)?.defaultValues?.steps ?? 64);
     const steps = Number.isFinite(raw) ? raw : dflt;
-    const part = sdfPartition(nodes, edges, sdf.id);
-    let body = 0;
-    for (const n of nodes) if (part.field.has(n.id)) body += nodeCostPoints(n, edges);
-    total += body * Math.max(0, steps + 4 - 1) + getCost(sdf.data.registryType);
+    const part = marchPartition(nodes, edges, march.id);
+    // Occlusion taps the Field 5 more times at the hit, a soft shadow marches
+    // it up to 24 more — both only when switched on (non-zero or wired).
+    const on = (key: string): boolean => {
+      const v = Number(getNodeValues(march)[key]);
+      return (Number.isFinite(v) && v !== 0) || edges.some((e) => e.target === march.id && e.targetHandle === key);
+    };
+    const fieldExtra = steps + 4 - 1 + (on('ao') ? 5 : 0) + (on('shadow') ? 24 : 0);
+    const extraEvals: Record<string, number> = { field: fieldExtra, density: steps - 1, glow: steps - 1 };
+    for (const [handle, extra] of Object.entries(extraEvals)) {
+      const set = part.scopes.get(handle);
+      if (!set) continue;
+      let body = 0;
+      for (const n of nodes) if (set.has(n.id)) body += nodeCostPoints(n, edges);
+      total += body * Math.max(0, extra);
+    }
+    total += getCost(march.data.registryType);
   }
   return total;
+}
+
+/**
+ * Every sink's OWN price — what the shader would cost with THAT node active.
+ * The active sink's entry equals `computeReachableCost(nodes, edges)`; the
+ * badges on inactive outputs show theirs muted, so two candidate outputs can
+ * be compared before clicking one. Keyed by node id.
+ */
+export function sinkCosts(nodes: AppNode[], edges: AppEdge[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const n of nodes) if (isSinkNode(n)) out.set(n.id, computeReachableCost(nodes, edges, n));
+  return out;
 }
 
 /** Reverse-BFS from `seeds`, summing everything reached except the Outputs. */
