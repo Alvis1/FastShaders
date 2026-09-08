@@ -73,7 +73,7 @@ import {
   type NodeBox,
 } from './dragConnect';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
-import { pickSpliceInputPort } from './edgeSplice';
+import { exposeConnectedTarget, spliceNodeIntoEdge } from './edgeInsert';
 import { costFocusId, focusNodes, focusNode, OUTPUT_FOCUS_FIT } from './outputFocus';
 import { selectAllChanges } from './selectAll';
 import {
@@ -96,7 +96,6 @@ import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
 import { makeImageNodeFromEncode, resolveImageDrop, totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/utils/imageNode';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
-import { usesExposedPorts, effectiveExposedPorts } from '@/utils/exposedPorts';
 import { encodeImageFile, isImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
 import { importShaderZip, importShaderText, isZipFile } from '@/engine/projectImport';
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData, NodeDefinition } from '@/types';
@@ -179,31 +178,6 @@ const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'];
 // shared with the drag-reveal system so hidden sockets appear at exactly
 // snapping distance.
 
-/**
- * Landing a connection on a drag-revealed (still hidden) parameter socket
- * makes the exposure permanent — otherwise the temporary handle unmounts when
- * the drag ends and the fresh edge points at nothing. Runs under the caller's
- * pushHistory (connect AND reconnect gestures), so the edge + exposure revert
- * as one undo step.
- */
-function exposeConnectedTarget(targetId: string, targetHandle: string | null | undefined): void {
-  if (!targetHandle) return;
-  const nodes = useAppStore.getState().nodes;
-  const tgt = nodes.find((n) => n.id === targetId);
-  if (!tgt || !usesExposedPorts(NODE_REGISTRY.get(tgt.data.registryType))) return;
-  // The Output node's default-exposed channels are implicit (undefined
-  // exposedPorts) — union from the EFFECTIVE list so exposing one new channel
-  // can't hide the defaults.
-  const current = effectiveExposedPorts(tgt);
-  if (current.includes(targetHandle)) return;
-  useAppStore.getState().setNodes(
-    nodes.map((n) =>
-      n.id === tgt.id
-        ? { ...n, data: { ...n.data, exposedPorts: [...current, targetHandle] } }
-        : n,
-    ) as AppNode[],
-  );
-}
 /** Snap radius for drop-on-edge insertion, in SCREEN px. 1.5× the original 8px
  *  so the node center no longer has to sit almost exactly on the curve. Divided
  *  by the viewport zoom at the call site so the acceptance band is a constant
@@ -643,6 +617,11 @@ function liftChildrenAfterParents(nodes: AppNode[], newParents: Set<string>): vo
  * Try to insert `nodeId` (with registry def `def`) onto the nearest edge at
  * flow-space center (cx, cy) within `radius` (flow px). Returns true if an
  * insertion was made.
+ *
+ * This half is only the SEARCH — which wire is near enough. The splice itself
+ * is `spliceNodeIntoEdge` (edgeInsert.ts), shared with the edge menu's Insert
+ * node, so a wire spliced by pointing at it and one spliced by picking from a
+ * list land on the same port under the same rules.
  */
 function tryInsertOnEdge(
   nodeId: string,
@@ -654,42 +633,7 @@ function tryInsertOnEdge(
   const store = useAppStore.getState();
   const edgeId = findNearestEdge(cx, cy, store.edges, getInternalNode, radius, nodeId);
   if (!edgeId) return false;
-  const edge = store.edges.find((e) => e.id === edgeId);
-  if (!edge) return false;
-
-  // Land on the node's first FREE input, not always its first (edgeSplice.ts):
-  // dragging an already-wired node onto a new edge keeps what it has. Variadic
-  // folds grow a fresh socket for this; a node with every socket taken falls
-  // back to the first port, whose stale edge the filter below then replaces.
-  const node = store.nodes.find((n) => n.id === nodeId);
-  const connected = store.edges.flatMap((e) =>
-    e.target === nodeId && e.targetHandle ? [e.targetHandle] : [],
-  );
-  const inputPortId = pickSpliceInputPort(
-    def,
-    connected,
-    node ? Object.keys(getNodeValues(node)) : [],
-  );
-  if (!inputPortId) return false;
-  const outputPort = def.outputs[0];
-
-  const newEdge1 = makeTypedEdge(edge.source, edge.sourceHandle, nodeId, inputPortId);
-  const newEdge2 = makeTypedEdge(nodeId, outputPort.id, edge.target, edge.targetHandle);
-
-  store.setEdges(
-    store.edges
-      .filter((e) => e.id !== edge.id)
-      // Inputs are single-connection. Only reachable once EVERY socket is taken
-      // (pickSpliceInputPort's fallback) — drop that port's stale edge so it
-      // can't end up double-fed.
-      .filter((e) => !(e.target === nodeId && e.targetHandle === inputPortId))
-      .concat(newEdge1, newEdge2) as AppEdge[],
-  );
-  // The chosen port may be a hidden param socket (Image/Mic): make the exposure
-  // permanent, or the fresh edge points at a handle that never mounts. Same
-  // rule — and the same helper — as a wire dropped on a drag-revealed socket.
-  exposeConnectedTarget(nodeId, inputPortId);
-  return true;
+  return spliceNodeIntoEdge(nodeId, def, edgeId);
 }
 
 export function NodeEditor() {

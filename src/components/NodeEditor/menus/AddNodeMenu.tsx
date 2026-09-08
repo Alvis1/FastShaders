@@ -3,6 +3,7 @@ import { useReactFlow } from '@xyflow/react';
 import { findSingletonNode } from '../singletonNodes';
 import { focusNode } from '../outputFocus';
 import { useAppStore } from '@/store/useAppStore';
+import { spliceNodeIntoEdge } from '../edgeInsert';
 import {
   searchNodes,
   getEditorDefinitions,
@@ -79,6 +80,15 @@ export function AddNodeMenu() {
   // Source pin info for auto-connect when dragged from an output handle
   const sourceNodeId = contextMenu.sourceNodeId;
   const sourceHandleId = contextMenu.sourceHandleId;
+  /**
+   * Set when this menu was opened by an edge's **Insert node** — the chosen
+   * node is spliced into that wire instead of landing loose beside it.
+   *
+   * It reuses the existing `edgeId` field rather than adding a tenth positional
+   * argument to `openContextMenu`; the field already means "the edge this menu
+   * is about", which is exactly what it means here.
+   */
+  const spliceEdgeId = contextMenu.edgeId;
 
   // getEditorDefinitions (and searchNodes, which filters the same way): a node
   // switched off in node-editor.html is not offerable here either — browse or
@@ -204,8 +214,18 @@ export function AddNodeMenu() {
       }
     }
 
+    // …or splice into the edge this menu was opened from (its Insert node row).
+    // Same bracket, so the node and its two wires are ONE undo step, and the
+    // same rules as a node dropped on that wire — `spliceNodeIntoEdge` picks
+    // the first FREE input and refuses a def that cannot pass a signal on
+    // (both sinks declare `outputs: []`), in which case the node is simply
+    // added where the menu was opened.
+    if (spliceEdgeId) {
+      spliceNodeIntoEdge(newNodeId, def, spliceEdgeId);
+    }
+
     closeContextMenu();
-  }), [contextMenu.x, contextMenu.y, screenToFlowPosition, fitView, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, setEdges]);
+  }), [contextMenu.x, contextMenu.y, screenToFlowPosition, fitView, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, spliceEdgeId, setEdges]);
 
   const handleGroupSelection = useCallback(() => {
     groupSelection(selectedGroupable.map((n) => n.id));

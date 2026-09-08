@@ -10,6 +10,7 @@ interface EdgeContextMenuProps {
 export function EdgeContextMenu({ edgeId }: EdgeContextMenuProps) {
   const removeEdge = useAppStore((s) => s.removeEdge);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
+  const openContextMenu = useAppStore((s) => s.openContextMenu);
   const language = useAppStore((s) => s.language);
   const { getInternalNode, screenToFlowPosition } = useReactFlow();
 
@@ -39,8 +40,22 @@ export function EdgeContextMenu({ edgeId }: EdgeContextMenuProps) {
     closeContextMenu();
   };
 
+  /**
+   * Swap this menu for the node search list, remembered as being ABOUT this
+   * edge — AddNodeMenu reads `contextMenu.edgeId` and splices whatever is
+   * chosen into it (edgeInsert.ts). Opened at the SAME point, so the new node
+   * lands on the wire where it was clicked rather than at some default spot.
+   */
+  const handleInsertNode = () => {
+    const { x, y } = useAppStore.getState().contextMenu;
+    openContextMenu(x, y, 'canvas', undefined, edgeId);
+  };
+
   return (
     <div className="context-menu__list">
+      <button className="context-menu__item" onClick={handleInsertNode}>
+        {t('Insert node', language)}
+      </button>
       <button className="context-menu__item" onClick={handleAddPoint}>
         {t('Add routing point', language)}
       </button>
