@@ -2,8 +2,15 @@
  * The "Node graphics" switch in the toolbar's right-click settings list.
  *
  * Off hides the GLYPHS on canvas nodes — the drawn symbol on a node's face —
- * and nothing else. It is a per-browser display preference, so it must never
- * reach a document.
+ * and shortens the body that band was reserving. It is a per-browser display
+ * preference, so it must never reach a document.
+ *
+ * The compaction is not a flourish: hiding alone changes NO node's size
+ * (MEASURED — 67 of the 81 ShaderNode types carry a glyph, and every one keeps
+ * its exact height, because the operator layout draws the glyph absolutely and
+ * the rows layout pins the region to its authored height), so the switch used
+ * to leave an empty reserve that reads as a failed render. The arithmetic lives
+ * in nodeCompact.ts and is pinned there.
  *
  * SCOPE is the thing to hold on to, because it was wrong once already. Every
  * other drawn surface on a node shows that node's own data: the image and noise
@@ -88,14 +95,30 @@ describe('the node-graphics switch', () => {
     }
   });
 
-  it('leaves the node components untouched — this is CSS only', () => {
-    // An earlier cut gated three components on the flag to stop their rAF
-    // loops. That belongs to a performance setting; this one is about looks, so
-    // the components carry no knowledge of it and cannot drift from the sweep.
+  it('leaves the animated node components untouched', () => {
+    // An earlier cut gated these three on the flag to stop their rAF loops.
+    // That belongs to a performance setting; this one is about looks, and what
+    // they draw is the node's own data rather than decoration — so they carry
+    // no knowledge of the flag and cannot drift from it.
     for (const f of ['PreviewNode', 'MathPreviewNode', 'ClockNode']) {
       const src = readFileSync(new URL(`../components/NodeEditor/nodes/${f}.tsx`, import.meta.url), 'utf8');
       expect(src, `${f} reads nodeGraphics`).not.toContain('nodeGraphics');
     }
+  });
+
+  it('reclaims the band in ShaderNode, and nowhere else', () => {
+    // The CSS hides the art; only the component knows the authored height and
+    // the socket offsets, so only it can take the band back. Both layouts must
+    // do it — the operator body and the rows region are separate heights, and
+    // fixing one leaves the other reserving space for art it no longer draws.
+    const shader = readFileSync(new URL('../components/NodeEditor/nodes/ShaderNode.tsx', import.meta.url), 'utf8');
+    expect(shader).toContain('compactOpBodyHeight(');
+    expect(shader).toContain('socketFloor(');
+    // NodeVisual is the replica behind the palette tiles, the node-editor
+    // overview and the Designer stage — all of which KEEP their glyphs, so a
+    // compaction there would shrink a card around art still being drawn.
+    const visual = readFileSync(new URL('../components/NodeEditor/nodes/NodeVisual.tsx', import.meta.url), 'utf8');
+    expect(visual, 'NodeVisual must not compact — it still draws the glyph').not.toContain('nodeGraphics');
   });
 
   it('leaves the palette tiles, the overview and the Designer alone', () => {

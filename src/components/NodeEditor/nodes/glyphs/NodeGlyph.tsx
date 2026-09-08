@@ -449,12 +449,12 @@ export const NodeGlyph = memo(function NodeGlyph({
   return (
     // `node-glyph` is the ONE handle the "node graphics" switch hides the art
     // by (NodeBase.css). It is on the <svg> itself, so hiding removes the art
-    // and nothing around it. The node DOES get shorter — `display: none` takes
-    // the box out of flow, and that is deliberate: the switch is a performance
-    // setting, and `display: none` is what makes the animated surfaces' rAF
-    // ticks bail (they early-out on `offsetParent === null`). Authored WIDTH is
-    // unaffected, since that is a preferred width on the card, not a
-    // contribution from this element.
+    // and nothing around it — and, on its own, NOTHING ELSE: in the operator
+    // layout this element is absolutely positioned over a body with an explicit
+    // height, and in the rows layout the region carries the authored height
+    // exactly, so hiding alone left the band it was drawn in standing empty.
+    // ShaderNode reclaims that band (nodeCompact.ts); the two halves have to
+    // move together, or the switch is either a blank reserve or a gap.
     <svg className="node-glyph" viewBox="0 0 56 56" width={px} height={px} style={{ display: 'block', overflow: 'visible' }} aria-hidden="true">
       {dx !== 0 || dy !== 0 ? <g transform={`translate(${dx} ${dy})`}>{art}</g> : art}
     </svg>

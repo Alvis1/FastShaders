@@ -20,14 +20,17 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "width": 61,
     "height": 50,
     "sockets": {
-      "out": 20
+      "out": 0
     }
   },
   "toHsl": {
     "dx": -2,
     "dy": 95,
+    "width": 45,
+    "height": 60,
     "sockets": {
-      "rgb": 0
+      "rgb": 0,
+      "out": 20
     }
   },
   "tangentLocal": {
@@ -38,7 +41,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "width": 44,
     "height": 41,
     "sockets": {
-      "out": 16
+      "out": 0
     }
   },
   "vertexColor": {
@@ -91,10 +94,11 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "svg": "<g transform=\"translate(28 28)\" fill=\"none\"><g stroke=\"#8A8F9C\" stroke-width=\"1.5\"><line x1=\"-21\" y1=\"-14\" x2=\"21\" y2=\"-14\"></line><line x1=\"-21\" y1=\"0\" x2=\"21\" y2=\"0\"></line><line x1=\"-21\" y1=\"14\" x2=\"21\" y2=\"14\"></line><line x1=\"-14\" y1=\"-21\" x2=\"-14\" y2=\"21\"></line><line x1=\"0\" y1=\"-21\" x2=\"0\" y2=\"21\"></line><line x1=\"14\" y1=\"-21\" x2=\"14\" y2=\"21\"></line></g><rect x=\"0\" y=\"0\" width=\"14\" height=\"14\" stroke=\"#F57C00\" stroke-width=\"2.4\"></rect></g>",
     "scale": 1.1,
     "width": 45,
-    "height": 45,
+    "height": 51,
     "sockets": {
       "out": 0,
-      "uv": 0
+      "uv": 0,
+      "density": 16
     }
   },
   "isolines": {
@@ -145,11 +149,12 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "positionLocal": {
     "svg": "<path d=\"M 18 24 L 24 18 L 42 18 L 42 36 L 36 42 L 18 42 L 18 24 Z\" fill=\"#FFFFFF\" stroke=\"none\" stroke-width=\"1.4\"></path>\n\n<g transform=\"translate(28 28)\"><g fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.4\" stroke-linejoin=\"round\"><rect x=\"-10\" y=\"-4\" width=\"18\" height=\"18\"></rect><path d=\"M-10 -4 L-4 -10 L14 -10 L8 -4 M14 -10 L14 8 L8 14\"></path></g><circle cx=\"-10\" cy=\"14\" r=\"3.5\" fill=\"#F57C00\"></circle></g>\n\n\n\n<g transform=\"translate(28 28)\"><line x1=\"-21.7\" y1=\"3.5\" x2=\"-16.5\" y2=\"3.5\" stroke=\"#F57C00\" stroke-width=\"1.8\" fill=\"none\"></line><polygon points=\"-17.85 0.1 -17.99 7.06 -11.81 3.69\" fill=\"#F57C00\"></polygon></g>",
     "scale": 1.6,
-    "dy": -4,
+    "dx": -1,
+    "dy": -11,
     "width": 48,
-    "height": 48,
+    "height": 34,
     "sockets": {
-      "out": -4
+      "out": 0
     }
   },
   "positionWorld": {
@@ -360,7 +365,8 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "height": 63,
     "sockets": {
       "b": 20,
-      "a": -24
+      "a": -24,
+      "out": -4
     }
   },
   "pow": {
@@ -454,7 +460,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "width": 47,
     "height": 37,
     "sockets": {
-      "out": -8
+      "out": 0
     }
   },
   "distance": {
@@ -506,7 +512,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "width": 45,
     "height": 57,
     "sockets": {
-      "out": -16,
+      "out": -12,
       "t": 16,
       "b": -4,
       "a": -20
@@ -612,13 +618,13 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "scale": 2,
     "dx": 3,
     "dy": -2,
-    "width": 55,
+    "width": 50,
     "height": 77,
     "sockets": {
       "condition": -28,
       "a": 12,
       "b": 28,
-      "out": 28
+      "out": 20
     }
   },
   "sdCircle": {
@@ -634,20 +640,30 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   },
   "sdBox": {
     "svg": "<g transform=\"translate(28 28)\">\n\n\n<path d=\"M -12.08 -2.31 L -4.38 -10.25 L 11.03 -10.25 L 11.03 4.6 L 3.65 11.24 L -12.08 11.24 L -12.08 -2.31 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -8.21 -1.66 L -2.75 -7.41 L 8.18 -7.41 L 8.18 3.35 L 2.95 8.14 L -8.21 8.14 L -8.21 -1.66 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<polygon points=\"-15,-4 -15,14 5,14 5,-4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><polygon points=\"-15,-4 -6,-13 14,-13 5,-4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><polygon points=\"5,-4 14,-13 14,5 5,14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><line x1=\"14\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"22\" cy=\"0\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n<path d=\"M -18.5 -4 L -6.5 -16.5 L 17.5 -16.5 L 17.5 6.86 L 6 17.3 L -18.5 17.3 L -18.5 -4 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -22.1 -5.01 L -7.84 -19.79 L 20.69 -19.79 L 20.69 7.84 L 7.02 20.2 L -22.1 20.2 L -22.1 -5.01 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -25.38 -5.6 L -9 -22.93 L 23.79 -22.93 L 23.79 9.47 L 8.08 23.97 L -25.38 23.97 L -25.38 -5.6 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n</g>",
-    "width": 52,
-    "height": 95,
+    "width": 53,
+    "height": 118,
     "sockets": {
-      "p": -8,
-      "w": 8,
-      "h": 24,
-      "d": 40,
-      "out": -8
+      "p": -20,
+      "w": 16,
+      "h": 32,
+      "d": 48,
+      "out": -20,
+      "round": -4
     }
   },
   "sdTorus": {
     "svg": "<g transform=\"translate(28 28)\"><ellipse cx=\"0\" cy=\"0\" rx=\"20\" ry=\"11\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></ellipse><ellipse cx=\"0\" cy=\"0\" rx=\"8\" ry=\"4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></ellipse><line x1=\"14\" y1=\"-7\" x2=\"22\" y2=\"-14\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"22\" cy=\"-14\" r=\"2.4\" fill=\"#F57C00\"></circle></g>",
-    "width": 39,
-    "height": 72
+    "scale": 1.35,
+    "dx": -0.5,
+    "dy": -3.5,
+    "width": 53,
+    "height": 82,
+    "sockets": {
+      "p": 0,
+      "out": 0,
+      "ringR": 16,
+      "tubeR": 32
+    }
   },
   "sdCylinder": {
     "svg": "<g transform=\"translate(28 28)\"><ellipse cx=\"0\" cy=\"-12\" rx=\"14\" ry=\"5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></ellipse><line x1=\"-14\" y1=\"-12\" x2=\"-14\" y2=\"12\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></line><line x1=\"14\" y1=\"-12\" x2=\"14\" y2=\"12\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></line><path d=\"M-14 12 A14 5 0 0 0 14 12\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></path><path d=\"M-14 12 A14 5 0 0 1 14 12\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\" stroke-dasharray=\"2 2\"></path></g>",
@@ -669,7 +685,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "p": 0,
       "r": 16,
       "h": 28,
-      "out": -20
+      "out": 0
     }
   },
   "sdCone": {
@@ -679,10 +695,10 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "height": 88,
     "sockets": {
       "p": -4,
-      "r1": 8,
+      "r1": 12,
       "r2": 24,
       "h": 36,
-      "out": -28
+      "out": -4
     }
   },
   "sdPlane": {
@@ -711,39 +727,53 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "sdStar": {
-    "svg": "<g transform=\"translate(28 28)\"><polygon points=\"0,-20 4.7,-6.47 19.02,-6.18 7.61,2.47 11.76,16.18 0,8 -11.76,16.18 -7.61,2.47 -19.02,-6.18 -4.7,-6.47\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\" stroke-linejoin=\"round\"></polygon></g>"
+    "svg": "<g transform=\"translate(28 28)\"><polygon points=\"0,-20 4.7,-6.47 19.02,-6.18 7.61,2.47 11.76,16.18 0,8 -11.76,16.18 -7.61,2.47 -19.02,-6.18 -4.7,-6.47\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\" stroke-linejoin=\"round\"></polygon></g>",
+    "scale": 1.2,
+    "dx": -1,
+    "dy": -5,
+    "width": 48,
+    "height": 99,
+    "sockets": {
+      "p": -8,
+      "r": 8,
+      "n": 24,
+      "m": 40,
+      "out": -8
+    }
   },
   "sdfTransform": {
     "svg": "<g transform=\"translate(28 28)\"><line x1=\"-18\" y1=\"14\" x2=\"18\" y2=\"14\" stroke=\"#8A8F9C\" stroke-width=\"1.6\"></line><line x1=\"-18\" y1=\"14\" x2=\"-18\" y2=\"-20\" stroke=\"#8A8F9C\" stroke-width=\"1.6\"></line><path d=\"M14 10 L18 14 L14 18 M-22 -16 L-18 -20 L-14 -16\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.6\"></path><rect x=\"-10\" y=\"-8\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.2\"></rect><path d=\"M6 -14 A12 12 0 0 1 16 -4\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path><path d=\"M12 -5 L16 -4 L17 -8\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path></g>",
     "scale": 1.3,
-    "width": 50,
-    "height": 160,
+    "dx": 2.5,
+    "dy": -1.5,
+    "width": 53,
+    "height": 152,
     "sockets": {
-      "p": -40,
+      "p": -36,
       "tx": -20,
-      "ty": -4,
-      "tz": 8,
-      "rx": 28,
-      "ry": 40,
-      "rz": 56,
-      "s": 76,
-      "out": -60
+      "ty": -8,
+      "tz": 4,
+      "rx": 24,
+      "ry": 36,
+      "rz": 48,
+      "s": 68,
+      "out": -36
     }
   },
   "sdfRepeat": {
     "svg": "<g transform=\"translate(28 28)\"><rect x=\"-18\" y=\"-14\" width=\"8\" height=\"8\" fill=\"#F57C00\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"-4\" y=\"-14\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"10\" y=\"-14\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"-18\" y=\"2\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"-4\" y=\"2\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"10\" y=\"2\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect></g>",
     "scale": 1.45,
-    "width": 51,
-    "height": 128,
+    "width": 52,
+    "height": 136,
     "sockets": {
-      "p": -24,
-      "sx": -8,
-      "sy": 4,
+      "p": -28,
+      "sx": -12,
+      "sy": 0,
       "sz": 16,
       "lx": 28,
-      "ly": 44,
-      "lz": 56,
-      "out": -16
+      "ly": 48,
+      "lz": 60,
+      "out": -28
     }
   },
   "sdfRepeatPolar": {
@@ -761,14 +791,14 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "svg": "<g transform=\"translate(28 28)\"><line x1=\"0\" y1=\"-22\" x2=\"0\" y2=\"22\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><path d=\"M-4 -12 L-18 -4 L-6 10 Z\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.2\" stroke-linejoin=\"round\"></path><path d=\"M4 -12 L18 -4 L6 10 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"2.2\" stroke-linejoin=\"round\"></path></g>",
     "scale": 1.35,
     "dy": -4.5,
-    "width": 50,
-    "height": 92,
+    "width": 51,
+    "height": 108,
     "sockets": {
-      "p": -4,
-      "x": 8,
-      "y": 24,
-      "z": 40,
-      "out": -28
+      "p": -8,
+      "x": 12,
+      "y": 28,
+      "z": 44,
+      "out": -8
     }
   },
   "sdfModify": {
@@ -809,7 +839,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "d": -4,
       "p": 12,
       "h": 28,
-      "out": -24
+      "out": -4
     }
   },
   "sdfRevolve": {
@@ -837,14 +867,15 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "sdCombine": {
     "svg": "<g transform=\"translate(28 28)\"><circle cx=\"-9\" cy=\"0\" r=\"10\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\"></circle><circle cx=\"9\" cy=\"0\" r=\"10\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\"></circle><path d=\"M -19 0 A 10 10 0 0 1 -4.4 -9 Q 0 -5 4.4 -9 A 10 10 0 1 1 4.4 9 Q 0 5 -4.4 9 A 10 10 0 0 1 -19 0 Z\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path></g>",
     "scale": 1.35,
-    "dy": -4.5,
+    "dx": -0.5,
+    "dy": -8,
     "width": 39,
     "height": 79,
     "sockets": {
       "a": -4,
       "b": 12,
       "k": 28,
-      "out": -24
+      "out": -4
     }
   },
   "rayDirection": {

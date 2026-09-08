@@ -408,9 +408,11 @@
    recognise a node you have not placed yet — the opposite of the canvas, where
    you already know what you put down.
 
-   The node gets SHORTER, since `display: none` takes the box out of flow. That
-   is intended; the authored width is a preferred width on the card, so nothing
-   changes across the node's other axis. */
+   Hiding alone changes NO node's size — the glyph is absolutely positioned in
+   the operator layout and the rows region carries its authored height exactly —
+   so ShaderNode shortens the body this band was reserving (nodeCompact.ts).
+   The authored WIDTH is untouched: it is a preferred width on the card, not a
+   contribution from this element. */
 :root[data-fs-node-graphics='off'] .react-flow .node-glyph {
   display: none;
 }
