@@ -23,7 +23,7 @@ import { hiddenOptionalCategories, DEFAULT_OPTIONAL_CATEGORIES } from '@/registr
  *
  * The mark is also monotonic (`Math.max` after the first measurement), so a
  * windowed strip does not merely start wrong — it walks: every scroll that
- * reveals a taller tile grows the mark and rescales all 77 tiles under the
+ * reveals a taller tile grows the mark and rescales all 78 tiles under the
  * pointer.
  *
  * WHAT WOULD SETTLE IT (in rough order of how much it buys per unit of risk):
@@ -48,7 +48,7 @@ import { hiddenOptionalCategories, DEFAULT_OPTIONAL_CATEGORIES } from '@/registr
  *     wrapping at NodeTitle's balanced seam, socket rows, glyph art), which is
  *     browser-only for the 62 `shader` cards. The fixed-geometry modules
  *     (micGeometry, audioGeometry, clockFace) are pure and would give exact
- *     answers, but they cover 2 of 77 tiles.
+ *     answers, but they cover 2 of 78 tiles.
  *
  * None of 1-3 is verifiable in this suite: the vitest env is `node`, so there
  * is no layout, no ResizeObserver and no IntersectionObserver to drive any of
@@ -75,7 +75,10 @@ describe('content browser — the boot cost, stated', () => {
     // whole editor set narrowed by the optional categories (Textures and
     // Distance fields are OFF by default). Presets and textures are lazy and
     // contribute nothing until their tab opens or a query is typed.
-    expect(booted.length).toBe(77);
+    // 78 since the Raymarch Output moved from the optional Distance fields
+    // family into `output` (2026-09-09): it is a SINK, and the family it grew
+    // up in is off by default, which left the only marching sink unreachable.
+    expect(booted.length).toBe(78);
   });
 
   it('mounts one ResizeObserver per replica bar the two colour swatches', () => {
@@ -83,7 +86,7 @@ describe('content browser — the boot cost, stated', () => {
     // FitNodeHeading owns exactly one ResizeObserver. The colour cards need no
     // heading normalization (they have no header), so they escape it.
     const observed = booted.filter((d) => getFlowNodeType(d) !== 'color');
-    expect(observed.length).toBe(75);
+    expect(observed.length).toBe(76);
   });
 
   it('mounts eight CPU noise thumbnails and one clock among them', () => {

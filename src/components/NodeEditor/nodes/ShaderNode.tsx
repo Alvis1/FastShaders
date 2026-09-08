@@ -4,7 +4,6 @@ import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
 import { NODE_REGISTRY, effectiveInputs, growsOperands } from '@/registry/nodeRegistry';
 import { appendGrowthExhausted } from '@/utils/appendCapacity';
 import { useAppStore } from '@/store/useAppStore';
-import { compactOpBodyHeight, socketFloor, VALUE_CELL_PX } from './nodeCompact';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { portLabel } from '@/i18n';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
@@ -509,10 +508,6 @@ export const ShaderNode = memo(function ShaderNode({
       ? String(data.values.name)
       : varName ?? data.label;
   const language = useAppStore((s) => s.language);
-  // The toolbar's "Node graphics" switch. A boolean, so this re-renders the
-  // node only when it is actually flipped. It hides the glyph (NodeBase.css)
-  // and shortens the body the glyph was reserving — see nodeCompact.ts.
-  const nodeGraphics = useAppStore((s) => s.nodeGraphics);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   // A wire being dragged within snapping distance of this node — one shared
@@ -675,22 +670,6 @@ export const ShaderNode = memo(function ShaderNode({
   // Per-node text scale: multiplies header/value/edge-label font sizes via a
   // CSS variable (layout metrics like the 14px header stay fixed).
   const textScale = nodeTextScale(data.registryType);
-  /**
-   * Whether this node draws its glyph — `hasNodeGlyph` AND the toolbar switch.
-   *
-   * The gate is in JS and NOT in CSS, and that is the correction rather than a
-   * preference: `NodeGlyph` renders the `<svg>` with an inline
-   * `style={{ display: 'block' }}`, and an inline declaration beats any
-   * stylesheet rule short of `!important` — so the attribute sweep this switch
-   * shipped with hid nothing at all, on any node, while every test that
-   * asserted on the selector stayed green. Not rendering the element is also
-   * strictly less work than rendering it to hide it.
-   *
-   * `usesOperatorLayout` deliberately still asks `hasNodeGlyph`: the flag
-   * decides whether the art is DRAWN, never which layout the node uses — a
-   * node that changed shape when you hid its glyph would be a different node.
-   */
-  const showGlyph = nodeGraphics && hasNodeGlyph(data.registryType);
   if (textScale !== 1) (nodeStyle as Record<string, string | number>)['--node-text-scale'] = textScale;
   const headerStyle: CSSProperties = { background: costColor };
   // Image node: param sockets follow the SAME opt-in exposedPorts rules as
@@ -905,6 +884,9 @@ export const ShaderNode = memo(function ShaderNode({
     // cap, so operands never spill past the card border).
     // List-mode rows sit 20% tighter than the classic 2-op spacing.
     const PITCH = chainListMode ? 19.2 : 25;
+    const BODY_H = chainListMode
+      ? Math.max((N - 1) * PITCH + 26, box.height ?? 52)
+      : (box.height ?? Math.max(52, glyphPx + 10));
     // Value justification: centered in both modes (designer override may move
     // it on compact nodes) — numbers always sit in the middle of the node.
     const justify = chainListMode ? 'center' : nodeJustify(data.registryType);
@@ -916,21 +898,6 @@ export const ShaderNode = memo(function ShaderNode({
     const offOf = (portId: string, i: number) =>
       sockets[portId] ?? (chainListMode ? -((N - 1) * PITCH) / 2 + i * PITCH : (DEF_OFF_2[i] ?? 0));
     const outOff = chainListMode ? 0 : (sockets['out'] ?? 0);
-    // Natural body height — and, with graphics OFF, the compact one. Everything
-    // in this body is absolutely positioned (glyph included), so there is no
-    // content to fall back on: the compact height is what the sockets need, and
-    // it is capped at the natural height so the switch can only ever SHRINK a
-    // node. List mode draws no glyph, so it has no band to reclaim.
-    const naturalBodyH = chainListMode
-      ? Math.max((N - 1) * PITCH + 26, box.height ?? 52)
-      : (box.height ?? Math.max(52, glyphPx + 10));
-    const BODY_H = nodeGraphics || chainListMode
-      ? naturalBodyH
-      : compactOpBodyHeight(
-          naturalBodyH,
-          [...ins.map((inp, i) => offOf(inp.id, i)), outOff],
-          Math.round(VALUE_CELL_PX * textScale),
-        );
     return (
       <div style={wrapStyle}>
         {stackLayers}
@@ -947,7 +914,7 @@ export const ShaderNode = memo(function ShaderNode({
         <div className="shader-node__op" style={{ height: BODY_H, ...(box.width ? { minWidth: 0 } : null) }}>
           {/* Operator glyph only in the compact 2-operand look; the vertical
               list identifies the op by its header name instead. */}
-          {!chainListMode && showGlyph && (
+          {!chainListMode && hasNodeGlyph(data.registryType) && (
             <div className="shader-node__op-glyph">
               <NodeGlyph type={data.registryType} value={Number(data.values?.value ?? 0)} size={34} />
             </div>
@@ -1019,20 +986,6 @@ export const ShaderNode = memo(function ShaderNode({
   const calcTop = (off: number) => `calc(50% ${off < 0 ? '-' : '+'} ${Math.abs(off)}px)`;
   /** Rows that still draw something — see {@link visiblePortRows}. */
   const visibleRows = visiblePortRows(rows, sockOv, def.outputs);
-  /**
-   * The below-header region's size. With graphics ON the authored height is
-   * applied EXACTLY, as it always has been. With graphics OFF the glyph band is
-   * gone, so the region takes its CONTENT's height instead — capped at the
-   * authored height, so a design deliberately shorter than its rows keeps the
-   * overflow it authored and the switch can never GROW a node. `minHeight`
-   * keeps a designer-moved socket, anchored at `calc(50% ± off)`, on the card.
-   */
-  const regionSize = nodeGraphics
-    ? (box.height ? { height: box.height } : null)
-    : {
-        minHeight: socketFloor(Object.values(sockOv).filter((o) => typeof o === 'number')),
-        ...(box.height ? { maxHeight: box.height } : null),
-      };
 
   return (
     <div style={wrapStyle}>
@@ -1140,10 +1093,10 @@ export const ShaderNode = memo(function ShaderNode({
           Node Designer queries `.shader-node__region` to place its gesture
           overlays, and a hook that exists on only one half of a pair the spec
           says to change together is how the two drift. No CSS targets it. */}
-      <div className="shader-node__region" style={{ position: 'relative', ...regionSize }}>
+      <div className="shader-node__region" style={{ position: 'relative', ...(box.height ? { height: box.height } : null) }}>
       {/* Glyph icon for the node, above the port rows. Values are never drawn on
           top of it — they live in the rows below, aligned with their sockets. */}
-      {showGlyph && (
+      {hasNodeGlyph(data.registryType) && (
         <div className="shader-node__glyph">
           <NodeGlyph type={data.registryType} value={Number(data.values?.value ?? 0)} size={30} />
         </div>

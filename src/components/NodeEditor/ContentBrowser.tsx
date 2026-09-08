@@ -31,9 +31,11 @@ import { ScrollArrow, useScrollArrows } from '@/components/Layout/ScrollArrows';
 import './ContentBrowser.css';
 
 // Exclude 'unknown' (the registry hides unknown defs, so the tab would always
-// be empty). 'output' IS listed: the graph has at most one, but its tile is the
-// way to FIND it — dropping (or clicking) it while an Output exists glides the
-// view to the existing node instead of adding a second (see outputFocus.ts).
+// be empty). 'output' IS listed, and since 2026-09-09 it holds TWO tiles: the
+// Output and the Raymarch Output, which moved here from the optional Distance
+// fields family because a sink belongs with the sinks. Both simply ADD a node —
+// a graph may hold several outputs with exactly one ACTIVE (utils/sdfPartition
+// .ts), so the old "glide to the existing one instead" redirect is gone.
 // The ready-made-asset tabs (Presets, Textures, Noise, DataViz) lead; the
 // building-block categories follow in their canonical CATEGORIES order.
 const ASSET_TABS_FIRST: NodeCategory[] = ['presets', 'texture', 'noise', 'dataviz'];
@@ -702,10 +704,10 @@ export const ContentBrowser = memo(function ContentBrowser() {
 
   // getEditorDefinitions, not getAllDefinitions: nodes switched off in
   // node-editor.html ("In editor") must not have a tile here. See
-  // registry/editorVisibility.ts. `output` is included — its tile doubles as
-  // "take me to the Output" once one exists (placeTilePayload redirects the
-  // drop; see outputFocus.ts), and its cost of 0 plus last-in-registry order
-  // parks it at the end of the zero-cost run rather than at the strip's head.
+  // registry/editorVisibility.ts. `output` is included; its cost of 0 plus
+  // last-in-registry order parks it at the end of the zero-cost run rather than
+  // at the strip's head, and the Raymarch Output beside it sorts by its own
+  // price like every other tile.
   // Narrowed by the categories switched OFF; the registry memoizes per set, so
   // the identity every memo below keys on is stable until a switch flips.
   const allDefs = useMemo(

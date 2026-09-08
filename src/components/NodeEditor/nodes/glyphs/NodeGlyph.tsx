@@ -447,14 +447,8 @@ export const NodeGlyph = memo(function NodeGlyph({
   const dx = typeof design?.dx === 'number' ? design.dx : 0;
   const dy = typeof design?.dy === 'number' ? design.dy : 0;
   return (
-    // `node-glyph` is the ONE handle the "node graphics" switch hides the art
-    // by (NodeBase.css). It is on the <svg> itself, so hiding removes the art
-    // and nothing around it — and, on its own, NOTHING ELSE: in the operator
-    // layout this element is absolutely positioned over a body with an explicit
-    // height, and in the rows layout the region carries the authored height
-    // exactly, so hiding alone left the band it was drawn in standing empty.
-    // ShaderNode reclaims that band (nodeCompact.ts); the two halves have to
-    // move together, or the switch is either a blank reserve or a gap.
+    // `overflow: visible` keeps designer-nudged art (dx/dy) from clipping at
+    // the glyph box; `display: block` drops the inline-baseline gap under it.
     <svg className="node-glyph" viewBox="0 0 56 56" width={px} height={px} style={{ display: 'block', overflow: 'visible' }} aria-hidden="true">
       {dx !== 0 || dy !== 0 ? <g transform={`translate(${dx} ${dy})`}>{art}</g> : art}
     </svg>

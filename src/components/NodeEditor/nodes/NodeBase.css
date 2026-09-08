@@ -392,25 +392,3 @@
   right: calc(var(--handle-size) / -2) !important;
 }
 
-/* ── "Node graphics" off ────────────────────────────────────────────────────
-   The toolbar's right-click settings list turns the GLYPHS off: the drawn
-   symbol on a node's face, and nothing else. Names, sockets, values, cost
-   badges, image and noise thumbnails, the wave plot, the clock face and the
-   colormap ramp all stay — every one of those either shows the node's own data
-   or IS the node's data, where a glyph is a picture of what it does.
-
-   There is deliberately NO rule here, and that is a correction. This shipped as
-   one attribute sweep — `:root[data-fs-node-graphics='off'] .react-flow
-   .node-glyph { display: none }` — which hid NOTHING on any node, because
-   `NodeGlyph` renders its <svg> with an inline `display: block` and an inline
-   declaration beats any stylesheet rule short of `!important`. Every test
-   asserting on the selector stayed green throughout. ShaderNode gates the
-   element itself now (`showGlyph`) and shortens the band it was reserving
-   (nodeCompact.ts) — not rendering it is also less work than rendering it to
-   hide it, and it cannot be defeated by a style the component sets on itself.
-
-   `data-fs-node-graphics` is still stamped on <html>. Keep it for anything that
-   genuinely wants a canvas-scoped sweep — the palette tiles, the node-editor
-   overview and the Designer stage must keep their glyphs, since there the
-   symbol is how you recognise a node you have not placed yet — but give such a
-   rule an element whose display is not set inline. */

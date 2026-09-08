@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { FitViewOptions } from '@xyflow/react';
 import { SINGLETON_NODE_TYPES, isSingletonNodeType } from './singletonNodes';
 import { makeNode, makeEdge } from '@/test-utils';
+import { getAllDefinitions } from '@/registry/nodeRegistry';
 import type { AppNode } from '@/types';
 import {
   costFocusId,
@@ -189,6 +190,25 @@ describe('several outputs, one active (source pins)', () => {
   const addNodeMenu = read('./menus/AddNodeMenu.tsx');
   const contentBrowser = read('./ContentBrowser.tsx');
   const previewCard = read('./NodePreviewCard.tsx');
+
+  it('lists every OTHER sink in the Add menu, not just the hardcoded Output', () => {
+    // The Raymarch Output lives in the `output` category (it is a sink, and
+    // its old home — Distance fields — is an optional family that is off by
+    // default). Both the browse list and the keyboard list skip that category
+    // wholesale because the Output row is hardcoded, so each has to render the
+    // category's remaining defs itself or they are reachable only by typing a
+    // name you would have to already know.
+    const defs = getAllDefinitions().filter((d) => d.category === 'output' && d.type !== 'output');
+    expect(defs.map((d) => d.type)).toContain('raymarchOutput');
+    // Rendered rows…
+    expect(addNodeMenu).toContain("{(grouped?.get('output') ?? []).map((def) => renderDefRow(def))}");
+    // …and the SAME rows in the flat keyboard list, or Arrow/Enter steps over
+    // a row the eye can see.
+    expect(addNodeMenu).toContain("for (const def of grouped?.get('output') ?? []) {");
+    // The grouped loops still skip the category, so nothing renders twice.
+    expect(addNodeMenu).toContain("if (cat.id === 'output' || !grouped.has(cat.id)) continue;");
+    expect(addNodeMenu).toContain("grouped.has(c.id) && c.id !== 'output'");
+  });
 
   it('placeTilePayload ADDS an Output — no redirect, no silent return', () => {
     expect(

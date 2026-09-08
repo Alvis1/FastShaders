@@ -1208,7 +1208,11 @@ const definitions: NodeDefinition[] = [
     // the ray jumps straight to that bubble. See the Raymarch Output convention.
     type: 'raymarchOutput',
     label: 'Raymarch Output',
-    category: 'sdf',
+    // OUTPUT, not sdf: it is a sink — the thing a graph ends at — and the
+    // Distance fields family it grew up in is an OPTIONAL category that is off
+    // by default, which left the only marching sink unreachable unless you had
+    // already found the switch that reveals it.
+    category: 'output',
     tslFunction: '',
     tslImportModule: '',
     inputs: [
