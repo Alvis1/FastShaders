@@ -4,7 +4,6 @@ import { makeConnectionRevealSelector } from './connectionReveal';
 import type { MathPreviewFlowNode, NodeCategory } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { waveLabel } from '@/utils/waveform';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { TypedHandle } from '../handles/TypedHandle';
 import { DragNumberInput } from '../inputs/DragNumberInput';
@@ -42,11 +41,6 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   // below would be `undefined` — never null — and the test would silently
   // never fire.
   const plotRef = useRef<HTMLDivElement>(null);
-  // "Node graphics" (toolbar settings). Mirrored into a ref for the rAF effect,
-  // which keeps narrow deps and would otherwise close over the first value.
-  const nodeGraphics = useAppStore((s) => s.nodeGraphics);
-  const nodeGraphicsRef = useRef(nodeGraphics);
-  nodeGraphicsRef.current = nodeGraphics;
   const curveRef = useRef<SVGPathElement>(null);
   const dropRef = useRef<SVGLineElement>(null);
   const dotRef = useRef<SVGCircleElement>(null);
@@ -145,11 +139,6 @@ export const MathPreviewNode = memo(function MathPreviewNode({
       // ABSOLUTE (utils/appClock), so the first visible frame draws the true
       // current phase rather than resuming a private epoch — see the fuller
       // rationale on PreviewNode's loop.
-      // The flag first: with graphics off the plot is not RENDERED, so the
-      // wrapper this ref is on stays in flow and `offsetParent` never reads
-      // null — the probe alone would leave this loop evaluating the upstream
-      // chain every frame for a plot nobody can see.
-      if (!nodeGraphicsRef.current) return;
       if (plotRef.current?.offsetParent === null) return;
 
       // Shared app clock — every animated surface (this card, the noise
@@ -211,17 +200,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
           Flow viewport, which is the surface WebKit's compositing bug bites).
           Declarative render covers the static branches; the rAF effect above
           overwrites via dynamicRefs when Time is upstream. */}
-      {/* With graphics off the plot goes but the READOUT must not: for a
-          CONNECTED node the value lives inside this svg (WaveformSvg's <text>),
-          and the fallback number below renders only when nothing is wired — so
-          hiding the whole thing would leave a sin node showing no value at all.
-          The compact label row takes its place. */}
       <div className="math-preview-node__canvas-wrap" ref={plotRef}>
-        {!nodeGraphics ? (
-          <span className="math-preview-node__plain-readout">
-            {waveLabel(data.registryType, hasConnection ? 0 : inputX, func(hasConnection ? 0 : inputX))}
-          </span>
-        ) : (
         <WaveformSvg
           func={func}
           funcLabel={data.registryType}
@@ -229,7 +208,6 @@ export const MathPreviewNode = memo(function MathPreviewNode({
           showReadout={hasTime || !hasConnection}
           dynamicRefs={dynamicRefs}
         />
-        )}
       </div>
 
       {/* Input port row at bottom */}

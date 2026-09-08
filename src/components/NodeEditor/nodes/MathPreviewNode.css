@@ -60,17 +60,3 @@
 .math-preview-node > .react-flow__handle-right {
   right: calc(var(--handle-size) / -2) !important;
 }
-
-/* The plain readout that replaces the plot when "node graphics" is off. Sized
-   and spaced like the label inside the svg it stands in for, so the node keeps
-   a body its percent-positioned sockets can spread across. */
-.math-preview-node__plain-readout {
-  display: block;
-  padding: 6px 0;
-  min-height: 34px;
-  font-family: var(--font-mono);
-  font-size: calc(9px * var(--node-text-scale, 1));
-  color: var(--text-secondary);
-  text-align: center;
-  white-space: nowrap;
-}

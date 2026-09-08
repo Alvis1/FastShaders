@@ -632,14 +632,12 @@ function applyLangAttribute(lang: 'en' | 'lv'): void {
  * six node components, and is the same shape as the eval arm's
  * `data-fs-points='off'` price suppression.
  *
- * The attribute covers only the surfaces that are pure decoration (the glyph,
- * the image thumbnail). The three ANIMATED ones — the noise thumbnail, the
- * sin/cos plot, the clock face — read this flag in their own components
- * instead, because CSS could not stop their work: each rAF tick probes
- * `offsetParent` on the WRAPPER while the art is a CHILD, so hiding the child
- * left the probe non-null and the loops ran on unseen. Gating in the component
- * skips rendering the art AND bails the tick, which is what makes this a real
- * setting on a slow machine rather than a cosmetic one.
+ * SCOPE: the glyphs, and only the glyphs. Every other drawn surface on a node
+ * shows that node's own data — the image and noise thumbnails, the wave plot,
+ * the clock face, the colormap ramp — so hiding those would remove information,
+ * where a glyph is a picture of what the node does and its name says the same
+ * thing. This is therefore a LOOK setting, not a performance one: the animated
+ * surfaces keep running, which is honest and is what the toolbar hint says.
  *
  * Mirrors applyThemeAttribute. There is deliberately no inline pre-paint guard
  * in index.html for this one: the canvas paints nothing until React mounts, so
@@ -1175,9 +1173,9 @@ interface AppState {
    */
   trackpadScroll: boolean;
   /**
-   * Draw the artwork on canvas nodes — glyphs, noise thumbnails, the waveform,
-   * the clock face, the colormap ramp. ON by default; off is a plainer, much
-   * cheaper canvas. Per browser (`fs:nodeGraphics`), never part of a document:
+   * Draw the GLYPH on canvas nodes — the symbol on a node's face. ON by
+   * default; off is a plainer, more compact canvas.
+   * Per browser (`fs:nodeGraphics`), never part of a document:
    * it changes how a graph LOOKS to this user, not what it is, so it must not
    * ride the autosave or a shared `.fastshader`.
    */

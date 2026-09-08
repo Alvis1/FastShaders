@@ -1107,7 +1107,7 @@ export function Toolbar() {
               off" could otherwise read as losing information. */}
           <label
             className="toolbar__prefs-row"
-            title={t('Draw the artwork on nodes — glyphs, image and noise thumbnails, the wave plot, the clock face. Turn it off for a plainer, faster canvas; names, sockets, values and the colour ramp stay.', language)}
+            title={t('Draw the glyph on each node — the symbol that pictures what it does. Turn it off for a plainer, more compact canvas; names, sockets, values and every preview stay.', language)}
           >
             <input
               type="checkbox"

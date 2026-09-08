@@ -47,13 +47,6 @@ export const ClockNode = memo(function ClockNode({
   // SVGGElement) would be `undefined` — never null — and the test would
   // silently never fire.
   const faceRef = useRef<HTMLDivElement>(null);
-  // "Node graphics" (toolbar settings). Mirrored into a REF because the rAF
-  // effect below keeps `[]` deps on purpose — a speed scrub must not restart
-  // the hand's integrator — so it closes over the first value and would never
-  // see the switch flip.
-  const nodeGraphics = useAppStore((s) => s.nodeGraphics);
-  const nodeGraphicsRef = useRef(nodeGraphics);
-  nodeGraphicsRef.current = nodeGraphics;
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const language = useAppStore((s) => s.language);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
@@ -140,12 +133,6 @@ export const ClockNode = memo(function ClockNode({
       // hand shows the RATE time flows at, not absolute time, so it simply
       // resumes where it stopped, and an honest dt on the first visible frame
       // is better than one the clamp below has to flatten.
-      // The flag, not `offsetParent`: with graphics off the face is not
-      // RENDERED, so `faceRef.current` is null and `?.` yields undefined —
-      // which `=== null` is false for, so the offsetParent probe alone would
-      // let this loop run forever against refs that are gone. `last = ts` keeps
-      // the integrator from banking the paused time and jumping on resume.
-      if (!nodeGraphicsRef.current) { last = ts; return; }
       if (faceRef.current?.offsetParent === null) { last = ts; return; }
       // Clamp dt: a backgrounded tab hands back a multi-second delta on resume,
       // which at a high multiplier would spin the hand through hundreds of turns.
@@ -183,7 +170,7 @@ export const ClockNode = memo(function ClockNode({
       {/* The sockets live INSIDE this wrapper so they centre on the clock face
           rather than on the whole node — see ClockNode.css. */}
       <div className="clock-node__canvas-wrap" ref={faceRef}>
-        {nodeGraphics && <ClockFaceSvg phase={0} handRef={handRef} />}
+        <ClockFaceSvg phase={0} handRef={handRef} />
 
         {def.outputs[0] && (
           <TypedHandle

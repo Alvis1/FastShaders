@@ -393,30 +393,24 @@
 }
 
 /* ── "Node graphics" off ────────────────────────────────────────────────────
-   The toolbar's right-click settings list can turn the ARTWORK on canvas nodes
-   off. This sweep covers the two surfaces that are purely decorative and carry
-   no state, so hiding them can be done from CSS alone.
+   The toolbar's right-click settings list turns the GLYPHS off: the drawn
+   symbol on a node's face, and nothing else. Names, sockets, values, cost
+   badges, image and noise thumbnails, the wave plot, the clock face and the
+   colormap ramp all stay — every one of those either shows the node's own data
+   or IS the node's data, where a glyph is a picture of what it does.
 
-   The three ANIMATED surfaces (the noise thumbnail, the sin/cos plot, the clock
-   face) are NOT here, deliberately. Hiding them from CSS was tried and was
-   wrong twice over: their rAF ticks probe `offsetParent` on the WRAPPER while
-   the art is a CHILD, so the wrapper stayed in flow, the probe never read null
-   and the loops kept running unseen — the setting would have hidden the cost
-   rather than removed it; and collapsing those bodies bunches their
-   percent-positioned sockets together. They gate on the store flag inside their
-   own components instead, which stops the work and lets each keep a body its
-   sockets can spread across.
-
-   The colormap ramp is not here either, for a different reason: it is not
-   decoration. A colormap picked by NAME is unrecognisable on the canvas — the
-   strip is the only thing on the node that says viridis rather than cool-warm,
-   and the header shows the generated var name. Hiding it would remove
-   information, which is the line this setting does not cross.
+   One attribute sweep rather than a flag threaded through the components, and
+   present only in the OFF state so the default costs no selector match. The
+   same shape as the eval arm's `data-fs-points='off'` price suppression.
 
    Scoped to `.react-flow`: the palette tiles, the node-editor overview and the
-   Designer stage keep their art, because there the picture is how you recognise
-   a node you have not placed yet. */
-:root[data-fs-node-graphics='off'] .react-flow .node-glyph,
-:root[data-fs-node-graphics='off'] .react-flow .shader-node__image-thumb {
+   Designer stage keep their glyphs, because there the symbol is how you
+   recognise a node you have not placed yet — the opposite of the canvas, where
+   you already know what you put down.
+
+   The node gets SHORTER, since `display: none` takes the box out of flow. That
+   is intended; the authored width is a preferred width on the card, so nothing
+   changes across the node's other axis. */
+:root[data-fs-node-graphics='off'] .react-flow .node-glyph {
   display: none;
 }
