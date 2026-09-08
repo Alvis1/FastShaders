@@ -946,6 +946,8 @@
     "Surface": "Virsma",
     "Volume": "Tilpums",
     "Sky": "Debesis",
-    "Tick a socket to wire it on the node; the value applies either way": "Atzīmējiet ligzdu, lai to pievienotu mezglā; vērtība darbojas jebkurā gadījumā"
+    "Tick a socket to wire it on the node; the value applies either way": "Atzīmējiet ligzdu, lai to pievienotu mezglā; vērtība darbojas jebkurā gadījumā",
+    "Node graphics": "Mezglu grafika",
+    "Draw the artwork on nodes — glyphs, image and noise thumbnails, the wave plot, the clock face. Turn it off for a plainer, faster canvas; names, sockets, values and the colour ramp stay.": "Zīmēt mezglu grafiku — simbolus, attēlu un trokšņa sīktēlus, viļņa grafiku, pulksteņa ciparnīcu. Izslēdz to vienkāršākai un ātrākai darbvirsmai; nosaukumi, ligzdas, vērtības un krāsu josla paliek."
   }
 }

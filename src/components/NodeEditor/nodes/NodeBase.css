@@ -391,3 +391,32 @@
 .node-base__row .react-flow__handle-right {
   right: calc(var(--handle-size) / -2) !important;
 }
+
+/* ── "Node graphics" off ────────────────────────────────────────────────────
+   The toolbar's right-click settings list can turn the ARTWORK on canvas nodes
+   off. This sweep covers the two surfaces that are purely decorative and carry
+   no state, so hiding them can be done from CSS alone.
+
+   The three ANIMATED surfaces (the noise thumbnail, the sin/cos plot, the clock
+   face) are NOT here, deliberately. Hiding them from CSS was tried and was
+   wrong twice over: their rAF ticks probe `offsetParent` on the WRAPPER while
+   the art is a CHILD, so the wrapper stayed in flow, the probe never read null
+   and the loops kept running unseen — the setting would have hidden the cost
+   rather than removed it; and collapsing those bodies bunches their
+   percent-positioned sockets together. They gate on the store flag inside their
+   own components instead, which stops the work and lets each keep a body its
+   sockets can spread across.
+
+   The colormap ramp is not here either, for a different reason: it is not
+   decoration. A colormap picked by NAME is unrecognisable on the canvas — the
+   strip is the only thing on the node that says viridis rather than cool-warm,
+   and the header shows the generated var name. Hiding it would remove
+   information, which is the line this setting does not cross.
+
+   Scoped to `.react-flow`: the palette tiles, the node-editor overview and the
+   Designer stage keep their art, because there the picture is how you recognise
+   a node you have not placed yet. */
+:root[data-fs-node-graphics='off'] .react-flow .node-glyph,
+:root[data-fs-node-graphics='off'] .react-flow .shader-node__image-thumb {
+  display: none;
+}

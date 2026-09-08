@@ -99,6 +99,13 @@ export const PreviewNode = memo(function PreviewNode({
   if (!def) return null;
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // "Node graphics" (toolbar settings). OFF skips the <canvas> entirely, which
+  // is what makes both effects below bail on their existing `if (!canvas)` —
+  // the 96x96 CPU noise field stops being shaded on mount and on every value
+  // change, not just per frame. A CSS hide could not do that: the static shade
+  // is a one-shot effect with no visibility probe, and adding one would leave a
+  // blank canvas when the switch came back on.
+  const nodeGraphics = useAppStore((s) => s.nodeGraphics);
   // Scratch pixel buffer for the thumbnail, ONE per card for the life of the
   // component. renderNoisePreview overwrites every byte of it and
   // putImageData copies it into the canvas synchronously, so the same buffer
@@ -333,12 +340,12 @@ export const PreviewNode = memo(function PreviewNode({
 
       {/* Preview canvas */}
       <div className="preview-node__canvas-wrap">
-        <canvas
+        {nodeGraphics && <canvas
           ref={canvasRef}
           width={PREVIEW_SIZE}
           height={PREVIEW_SIZE}
           className="preview-node__canvas"
-        />
+        />}
       </div>
       {/* Marks the SURPRISING state, not the new default: a signed node is the
           one the user did not choose — it arrives from a preset or a file saved

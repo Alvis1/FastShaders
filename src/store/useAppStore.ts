@@ -623,6 +623,36 @@ function applyLangAttribute(lang: 'en' | 'lv'): void {
 }
 
 /**
+ * Stamp `data-fs-node-graphics` on <html> when node graphics are OFF.
+ *
+ * ATTRIBUTE-DRIVEN, and only present in the off state, so the default costs no
+ * selector at all. One CSS sweep then hides every drawn surface on a canvas
+ * node — the glyph art, the noise thumbnails, the waveform, the clock face and
+ * the colormap ramp — which is far less invasive than threading a flag through
+ * six node components, and is the same shape as the eval arm's
+ * `data-fs-points='off'` price suppression.
+ *
+ * The attribute covers only the surfaces that are pure decoration (the glyph,
+ * the image thumbnail). The three ANIMATED ones — the noise thumbnail, the
+ * sin/cos plot, the clock face — read this flag in their own components
+ * instead, because CSS could not stop their work: each rAF tick probes
+ * `offsetParent` on the WRAPPER while the art is a CHILD, so hiding the child
+ * left the probe non-null and the loops ran on unseen. Gating in the component
+ * skips rendering the art AND bails the tick, which is what makes this a real
+ * setting on a slow machine rather than a cosmetic one.
+ *
+ * Mirrors applyThemeAttribute. There is deliberately no inline pre-paint guard
+ * in index.html for this one: the canvas paints nothing until React mounts, so
+ * there is no flash to prevent, and the guard is a copy of the resolution rule
+ * that has drifted from the store's before.
+ */
+function applyNodeGraphicsAttribute(on: boolean): void {
+  if (typeof document === 'undefined') return;
+  if (on) document.documentElement.removeAttribute('data-fs-node-graphics');
+  else document.documentElement.setAttribute('data-fs-node-graphics', 'off');
+}
+
+/**
  * `data.values` keys holding a large IMMUTABLE payload STRING: the Image node's
  * encoded data-URL and the Data node's packed Float32 blob. Everything else on
  * a node is small.
@@ -1145,6 +1175,14 @@ interface AppState {
    */
   trackpadScroll: boolean;
   /**
+   * Draw the artwork on canvas nodes — glyphs, noise thumbnails, the waveform,
+   * the clock face, the colormap ramp. ON by default; off is a plainer, much
+   * cheaper canvas. Per browser (`fs:nodeGraphics`), never part of a document:
+   * it changes how a graph LOOKS to this user, not what it is, so it must not
+   * ride the autosave or a shared `.fastshader`.
+   */
+  nodeGraphics: boolean;
+  /**
    * Which OPTIONAL palette categories are switched on — the ready-made
    * Textures library and the Distance fields family, both OFF by default and
    * flipped from the same toolbar right-click list as `trackpadScroll`.
@@ -1422,6 +1460,7 @@ interface AppState {
   setIgnoreImageLimits: (v: boolean) => void;
   setHideImageDownscaleWarning: (v: boolean) => void;
   setTrackpadScroll: (v: boolean) => void;
+  setNodeGraphics: (v: boolean) => void;
   setOptionalCategory: (id: OptionalCategory, on: boolean) => void;
   setImageConvertMode: (v: 'ask' | 'always' | 'never') => void;
   setHideImageConvertNotice: (v: boolean) => void;
@@ -1522,6 +1561,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
   hideImageDownscaleWarning: loadString('fs:hideImageDownscaleWarning', '0') === '1',
   trackpadScroll: loadString('fs:trackpadScroll', '0') === '1',
+  // Only the exact string '0' turns it off, so a junk value fails SAFE (on) —
+  // the same validate-never-coerce rule the optional categories follow.
+  nodeGraphics: loadString('fs:nodeGraphics', '1') !== '0',
   optionalCategories: loadOptionalCategories((key) => loadString(key, '0')),
   imageConvertMode: (() => {
     const v = loadString('fs:imageConvert', 'ask');
@@ -2317,6 +2359,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setTrackpadScroll: (v) => {
     try { localStorage.setItem('fs:trackpadScroll', v ? '1' : '0'); } catch { /* */ }
     set({ trackpadScroll: v });
+  },
+
+  setNodeGraphics: (v) => {
+    try { localStorage.setItem('fs:nodeGraphics', v ? '1' : '0'); } catch { /* */ }
+    // The ATTRIBUTE is what the CSS sweep reads; the store field is what the
+    // toolbar checkbox reads. Both, or the switch and the canvas disagree.
+    applyNodeGraphicsAttribute(v);
+    set({ nodeGraphics: v });
   },
 
   setOptionalCategory: (id, on) => {
@@ -3373,6 +3423,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
 // simply never matched the UI until the user toggled the language. Two source
 // comments claimed the store re-applied it on init; now it does.
 applyLangAttribute(useAppStore.getState().language);
+
+// …and `data-fs-node-graphics`, for the same reason: the setter is otherwise
+// its only call site, so a browser that turned node graphics off would get
+// them back on every reload — the setting would look like it had not stuck.
+// Module init runs before React mounts, so the canvas never paints art the
+// user has switched off.
+applyNodeGraphicsAttribute(useAppStore.getState().nodeGraphics);
 
 // Auto-save graph to localStorage on changes
 let saveTimer: ReturnType<typeof setTimeout> | null = null;

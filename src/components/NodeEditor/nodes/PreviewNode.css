@@ -47,3 +47,13 @@
   color: #e74c3c;
   pointer-events: none;
 }
+
+/* "Node graphics" off: the canvas is not rendered at all (PreviewNode.tsx), so
+   without this the body collapses to its 3px padding and the node becomes a
+   title bar. Its input handles are placed as PERCENTAGES of the node box
+   (`handleTop`, 25%–75%), so on a collapsed body four sockets land inside a few
+   pixels of each other — overlapping discs that cannot be aimed at. A compact
+   floor keeps them spread while still shedding most of the height. */
+:root[data-fs-node-graphics='off'] .react-flow .preview-node__canvas-wrap {
+  min-height: 56px;
+}

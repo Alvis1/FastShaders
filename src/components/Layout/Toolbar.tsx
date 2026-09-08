@@ -305,6 +305,8 @@ export function Toolbar() {
   const prefsRef = useRef<HTMLDivElement>(null);
   const trackpadScroll = useAppStore((s) => s.trackpadScroll);
   const setTrackpadScroll = useAppStore((s) => s.setTrackpadScroll);
+  const nodeGraphics = useAppStore((s) => s.nodeGraphics);
+  const setNodeGraphics = useAppStore((s) => s.setNodeGraphics);
   const optionalCategories = useAppStore((s) => s.optionalCategories);
   const setOptionalCategory = useAppStore((s) => s.setOptionalCategory);
   const closePrefs = useCallback(() => setPrefsAt(null), []);
@@ -1097,6 +1099,22 @@ export function Toolbar() {
               onChange={(e) => setTrackpadScroll(e.target.checked)}
             />
             <span className="toolbar__prefs-label">{t('Trackpad scrolling', language)}</span>
+          </label>
+          {/* Node graphics. A DISPLAY setting for this browser — it changes how
+              the canvas looks to you, never what the graph is — so it is not
+              part of any document and nothing here reaches the autosave. The
+              hint says what is kept as well as what goes, because "graphics
+              off" could otherwise read as losing information. */}
+          <label
+            className="toolbar__prefs-row"
+            title={t('Draw the artwork on nodes — glyphs, image and noise thumbnails, the wave plot, the clock face. Turn it off for a plainer, faster canvas; names, sockets, values and the colour ramp stay.', language)}
+          >
+            <input
+              type="checkbox"
+              checked={nodeGraphics}
+              onChange={(e) => setNodeGraphics(e.target.checked)}
+            />
+            <span className="toolbar__prefs-label">{t('Node graphics', language)}</span>
           </label>
           {/* The optional palette categories (Textures, Distance fields) — OFF
               by default, on for good once ticked. Labelled with the category's
