@@ -1359,6 +1359,27 @@ function broadcastRange(
   return { min, max };
 }
 
+/**
+ * The Euclidean norm of a per-channel interval: `[lo, hi]` of |v|.
+ *
+ * Shared by `length`/`distance` and by `sdCircle` (whose field IS |p| minus a
+ * radius) because the subtle half is easy to write twice and get wrong once:
+ * |x| over an interval is 0 when the interval STRADDLES zero, not
+ * `min(|lo|, |hi|)` — a channel crossing the origin contributes nothing to the
+ * lower bound.
+ */
+function normRange(d: RangeResult): [number, number] {
+  let lo2 = 0, hi2 = 0;
+  for (let i = 0; i < d.min.length; i++) {
+    const lo = d.min[i], hi = d.max[i];
+    const amin = lo <= 0 && hi >= 0 ? 0 : Math.min(Math.abs(lo), Math.abs(hi));
+    const amax = Math.max(Math.abs(lo), Math.abs(hi));
+    lo2 += amin * amin;
+    hi2 += amax * amax;
+  }
+  return [Math.sqrt(lo2), Math.sqrt(hi2)];
+}
+
 /** Element-wise unary op on ranges. */
 function unaryRange(r: RangeResult, fn: (lo: number, hi: number) => [number, number]): RangeResult {
   const min: number[] = [];
@@ -1725,16 +1746,8 @@ function computeRange(
               amin - bmax,
               amax - bmin,
             ]);
-      let lo2 = 0, hi2 = 0;
-      for (let i = 0; i < d.min.length; i++) {
-        const lo = d.min[i], hi = d.max[i];
-        // |x| over an interval: 0 when it straddles zero, else the nearer end.
-        const amin = lo <= 0 && hi >= 0 ? 0 : Math.min(Math.abs(lo), Math.abs(hi));
-        const amax = Math.max(Math.abs(lo), Math.abs(hi));
-        lo2 += amin * amin;
-        hi2 += amax * amax;
-      }
-      result = { min: [Math.sqrt(lo2)], max: [Math.sqrt(hi2)] };
+      const [dLo, dHi] = normRange(d);
+      result = { min: [dLo], max: [dHi] };
       break;
     }
     // ===== DISTANCE FIELDS =====
@@ -1742,15 +1755,8 @@ function computeRange(
       // |p| over the per-channel intervals (the `length` rule), minus the radius.
       const p = portRange('p', 0);
       const r = portRange('r', 0.5);
-      let lo2 = 0, hi2 = 0;
-      for (let i = 0; i < p.min.length; i++) {
-        const lo = p.min[i], hi = p.max[i];
-        const amin = lo <= 0 && hi >= 0 ? 0 : Math.min(Math.abs(lo), Math.abs(hi));
-        const amax = Math.max(Math.abs(lo), Math.abs(hi));
-        lo2 += amin * amin;
-        hi2 += amax * amax;
-      }
-      result = { min: [Math.sqrt(lo2) - r.max[0]], max: [Math.sqrt(hi2) - r.min[0]] };
+      const [pLo, pHi] = normRange(p);
+      result = { min: [pLo - r.max[0]], max: [pHi - r.min[0]] };
       break;
     }
     case 'sdCombine': {

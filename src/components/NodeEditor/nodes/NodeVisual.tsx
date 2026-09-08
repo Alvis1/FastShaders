@@ -4,7 +4,7 @@ import { getTypeColor } from '@/utils/colorUtils';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { formatNodeLabel } from '@/i18n';
 import { useAppStore } from '@/store/useAppStore';
-import { buildRows, visiblePortRows } from './ShaderNode';
+import { buildRows, visiblePortRows, PortValueCell } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
@@ -202,6 +202,45 @@ export function NodeVisual({
     </span>
   );
 
+  /**
+   * The swatch an UNWIRED colour port shows — the replica's half of what
+   * ShaderNode's `colorSwatch` renders, and the one helper behind all three
+   * colour sites here (operator operand, colour ROW, designer-detached
+   * operand), so the seed chain (stored → registry default → red) cannot drift
+   * between them.
+   *
+   * The REAL picker only under `interactive` (the Node Designer's stage);
+   * everywhere else — asset tiles, the node-editor overview — an inert `<span>`
+   * carrying the SAME `.palette-swatch` classes, which is the
+   * OutputCardContent precedent for a card that must show a real widget
+   * without being one.
+   *
+   * Not "always the picker, made inert by the card's pointer-events: none
+   * wrapper": that wrapper stops the pointer but not the keyboard, so every
+   * colour row on every palette tile would become a tab stop that opens a real
+   * popover from a static replica. Not "keep the old read-only colour input"
+   * either — `readOnly` is not honoured there, and the two elements paint their
+   * fill differently (UA swatch vs `background`), which is exactly the drift
+   * the one-node-one-look rule forbids.
+   *
+   * `history="none"`: the designer's `onValueChange` writes its own
+   * session-only preview model, never the graph, so bracketing here would push
+   * a dead undo entry and wipe the redo stack on every pick.
+   */
+  const colorSwatch = (key: string) => {
+    const hex = String(values?.[key] ?? dv[key] ?? '#ff0000');
+    return interactive ? (
+      <PaletteColorPicker
+        className="shader-node__input-color"
+        history="none"
+        value={hex}
+        onPick={(pick) => change(key, pick)}
+      />
+    ) : (
+      <span className="palette-swatch shader-node__input-color" style={{ background: hex }} />
+    );
+  };
+
   /** Offset card layers behind the node body (channels − 1, so N-ch = N
    *  cards). Deeper layers paint first (z −1, −2, −3) so every layer's bottom
    *  strip stays visible; the deepest carries the single group shadow. */
@@ -266,43 +305,23 @@ export function NodeVisual({
                 <NodeGlyph type={def.type} value={num('value')} size={34} design={design} />
               </div>
             )}
+            {/* ShaderNode's own cell — the wire → colour swatch → number box
+                branch is imported, not mirrored, so the canvas and every
+                preview surface cannot disagree about what a port shows. */}
             {def.inputs.map((inp, i) => {
               const s = stateOf(inp.id);
               return (
-                <div
+                <PortValueCell
                   key={`v-${inp.id}`}
-                  className={`shader-node__op-val shader-node__op-val--${justify}`}
-                  style={{ top: BODY_H / 2 + offOf(inp.id, i) }}
-                >
-                  {s && s.mode !== 'un' ? (
-                    <EdgeVal state={s} />
-                  ) : inp.dataType === 'color' ? (
-                    // A colour operand (an exposed ramp end) mirrors ShaderNode's
-                    // operator-layout swatch — the real picker only on the
-                    // designer's stage, the inert span everywhere else, exactly
-                    // as the colour ROW below does and for the same reasons.
-                    interactive ? (
-                      <PaletteColorPicker
-                        className="shader-node__input-color"
-                        history="none"
-                        value={String(values?.[inp.id] ?? dv[inp.id] ?? '#ff0000')}
-                        onPick={(hex) => change(inp.id, hex)}
-                      />
-                    ) : (
-                      <span
-                        className="palette-swatch shader-node__input-color"
-                        style={{ background: String(values?.[inp.id] ?? dv[inp.id] ?? '#ff0000') }}
-                      />
-                    )
-                  ) : (
-                    <DragNumberInput
-                      compact
-                      step={inp.dataType === 'int' ? 1 : undefined}
-                      value={num(inp.id)}
-                      onChange={(v) => change(inp.id, inp.dataType === 'int' ? Math.round(v) : v)}
-                    />
-                  )}
-                </div>
+                  justify={justify}
+                  top={BODY_H / 2 + offOf(inp.id, i)}
+                  dataType={inp.dataType}
+                  connected={!!s && s.mode !== 'un'}
+                  edge={s && <EdgeVal state={s} />}
+                  swatch={colorSwatch(inp.id)}
+                  value={num(inp.id)}
+                  onNumber={(v) => change(inp.id, v)}
+                />
               );
             })}
             {def.inputs.map((inp, i) => (
@@ -398,42 +417,9 @@ export function NodeVisual({
                     {row.settingKey && row.settingType === 'number' && !isConnected && !(def.type === 'slider' && row.settingKey === 'value') && (
                       <DragNumberInput compact value={num(row.settingKey)} onChange={(v) => change(row.settingKey!, v)} />
                     )}
-                    {/* Colour row. The REAL picker only under `interactive`
-                        (the Node Designer's stage); everywhere else — asset
-                        tiles, the node-editor overview — an inert `<span>`
-                        carrying the SAME `.palette-swatch` classes, which is
-                        the OutputCardContent precedent for a card that must
-                        show a real widget without being one.
-
-                        Not "always the picker, made inert by the card's
-                        pointer-events: none wrapper": that wrapper stops the
-                        pointer but not the keyboard, so every colour row on
-                        every palette tile would become a tab stop that opens a
-                        real popover from a static replica. Not "keep the old
-                        read-only colour input" either — `readOnly` is not
-                        honoured there, and the two elements paint their fill
-                        differently (UA swatch vs `background`), which is
-                        exactly the drift the one-node-one-look rule forbids.
-
-                        `history="none"`: the designer's `onValueChange` writes
-                        its own session-only preview model, never the graph, so
-                        bracketing here would push a dead undo entry and wipe
-                        the redo stack on every pick. */}
-                    {row.settingKey && row.settingType === 'color' && (
-                      interactive ? (
-                        <PaletteColorPicker
-                          className="shader-node__input-color"
-                          history="none"
-                          value={String(values?.[row.settingKey] ?? dv[row.settingKey] ?? '#ff0000')}
-                          onPick={(hex) => change(row.settingKey!, hex)}
-                        />
-                      ) : (
-                        <span
-                          className="palette-swatch shader-node__input-color"
-                          style={{ background: String(values?.[row.settingKey] ?? dv[row.settingKey] ?? '#ff0000') }}
-                        />
-                      )
-                    )}
+                    {/* Colour row — the same swatch a colour OPERAND gets;
+                        see `colorSwatch` for the interactive/inert split. */}
+                    {row.settingKey && row.settingType === 'color' && colorSwatch(row.settingKey)}
                     {row.settingType === 'vec3' && row.vecBaseKey && (
                       <span className="shader-node__vec-group">
                         {['x', 'y', 'z'].map((a) => (
@@ -474,31 +460,17 @@ export function NodeVisual({
             const s = stateOf(inp.id);
             return (
               <div key={`mv-${inp.id}`} style={{ display: 'contents' }}>
-                <div className={`shader-node__op-val shader-node__op-val--${justify}`} style={{ top: calcTop(off) }}>
-                  {s && s.mode !== 'un' ? (
-                    <EdgeVal state={s} />
-                  ) : inp.dataType === 'color' ? (
-                    // Mirrors ShaderNode's detached colour operand (see its
-                    // operator-layout swatch for the interactive/inert split).
-                    interactive ? (
-                      <PaletteColorPicker
-                        className="shader-node__input-color"
-                        history="none"
-                        value={String(values?.[inp.id] ?? dv[inp.id] ?? '#ff0000')}
-                        onPick={(hex) => change(inp.id, hex)}
-                      />
-                    ) : (
-                      <span
-                        className="palette-swatch shader-node__input-color"
-                        style={{ background: String(values?.[inp.id] ?? dv[inp.id] ?? '#ff0000') }}
-                      />
-                    )
-                  ) : (
-                    <DragNumberInput compact step={inp.dataType === 'int' ? 1 : undefined}
-                      value={num(inp.id)}
-                      onChange={(v) => change(inp.id, inp.dataType === 'int' ? Math.round(v) : v)} />
-                  )}
-                </div>
+                {/* Same cell as the operator layout above — ShaderNode's. */}
+                <PortValueCell
+                  justify={justify}
+                  top={calcTop(off)}
+                  dataType={inp.dataType}
+                  connected={!!s && s.mode !== 'un'}
+                  edge={s && <EdgeVal state={s} />}
+                  swatch={colorSwatch(inp.id)}
+                  value={num(inp.id)}
+                  onNumber={(v) => change(inp.id, v)}
+                />
                 <StaticHandle side="left" dataType={inp.dataType} port={inp.id} label={inp.label} style={{ top: calcTop(off) }} />
               </div>
             );

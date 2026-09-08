@@ -57,6 +57,18 @@ export const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
 export const hintStyle = {
   ...labelStyle,
   display: 'block',
+  // BOTH of these, and the min-width is the one that does the work.
+  // ContextMenu.css sets `min-width: max-content` on every direct child of a
+  // settings menu's list — right for a row of controls, which should overflow
+  // into the list's horizontal scroll rather than be squeezed, and exactly
+  // wrong for prose, because max-content on a sentence IS "never wrap". A
+  // min-width beats a max-width, so capping alone did nothing: the hint stayed
+  // on one line and, since the menu is a shrink-to-fit box whose width is its
+  // widest row's max-content contribution, that one sentence was setting the
+  // width of the whole panel (measured past 350px against a 260px minimum).
+  // `.context-menu__construction` opts out the same way, for the same reason,
+  // with a specificity-beating rule; inline wins outright.
+  minWidth: 0,
   maxWidth: '230px',
   whiteSpace: 'normal',
   overflowWrap: 'break-word',

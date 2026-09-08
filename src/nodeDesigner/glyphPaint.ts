@@ -12,9 +12,12 @@
  * blue the second operand, green the result. A free-form picker would let an
  * author put a mid-grey on a node nobody can read in either theme, silently.
  * Hand-typing `fill="#123456"` in the SVG box stays available for the rare case —
- * it is deliberately the slower path, and deliberately not policed by a test
- * (a drift guard there would turn the escape hatch into a release-blocking
- * failure the moment someone used it).
+ * it is deliberately the slower path. What SHIPS is checked, but as an ALLOWANCE
+ * list rather than a ban: `glyphPaint.test.ts`'s `OFF_PALETTE_ALLOWED` names each
+ * off-system hex in `customGlyphs.ts` with the reason it is not a token (today:
+ * the four viridis anchors the Colormap glyph's ramp is MADE of), so using the
+ * escape hatch costs one line there instead of blocking a release — and, unlike
+ * the unfalsifiable regex that stood here before, a stray `#000000` fails.
  *
  * Pure and import-free so the vitest node env can cover it.
  */

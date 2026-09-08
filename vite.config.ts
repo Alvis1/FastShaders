@@ -998,12 +998,42 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
-    // Per-file worker isolation only re-imports the heavy engine graph
-    // (store → builtin textures/presets → codeToGraph → Babel, ~350ms/file ×
-    // 67 files) — these are pure-logic node-env suites with no global
-    // mocking, and every store-mutating suite resets its state in
-    // beforeEach. Disabling isolation halves the suite's wall clock. Keep
-    // new store tests self-resetting or this must be revisited.
+    // Per-file worker isolation would re-import the heavy engine graph
+    // (store → builtin textures/presets → codeToGraph → Babel) once per file,
+    // across ~194 files; disabling it lets a worker import that graph once and
+    // share it, which is where the suite's wall clock goes.
+    //
+    // What that costs, stated honestly — this is NOT a suite of hermetic
+    // pure-logic files, and pretending it is, is how the last regression got
+    // in. Everything a worker owns is SHARED by every suite it runs, in the
+    // order the runner happened to assign them:
+    //   · GLOBALS. 17 files stub one (localStorage mostly, plus fetch,
+    //     requestAnimationFrame and window). Each restores with
+    //     `vi.unstubAllGlobals()` in afterEach/afterAll — vitest is not
+    //     configured to unstub for us (`unstubGlobals` is unset), so a file
+    //     that forgets hands its stub to whichever suite runs next.
+    //   · THE MODULE REGISTRY. `editorVisibility.test.ts` needs a non-empty
+    //     visibility file to prove hiding filters at all (the shipped one is
+    //     empty, so every assertion would be vacuous), so it `vi.doMock`s the
+    //     JSON and `vi.resetModules()` around it — and undoes both in
+    //     afterEach, because a live mock or a reset registry is visible to
+    //     every later file in that worker.
+    //   · TIMERS and MODULE-SCOPE STATE. 3 files run fake clocks (each
+    //     restoring real ones), and the store's 300ms autosave timer outlives
+    //     the file that armed it — `graphPersistence.test.ts` cancels it on the
+    //     way in AND out for exactly that reason.
+    //   · MODULE INITIALISATION ORDER. Shared instances mean whichever file a
+    //     worker reaches first decides who initialises the store's import
+    //     cycle; when that cycle was live, the file→worker assignment alone
+    //     decided which suites threw a TDZ error, and 5–11 of them failed
+    //     DIFFERENTLY every run (see utils/costTable.ts's head comment).
+    //
+    // THE RULE for a new test: leave the worker exactly as you found it. Any
+    // global you stub, clock you fake, module you mock, registry you reset,
+    // store field or timer you touch — restore it in afterEach/afterAll, and
+    // never rely on module-scope state a previous file might have set. If a
+    // suite genuinely cannot be written that way, isolate it rather than
+    // flipping this flag back on for all ~194.
     isolate: false,
   },
 });

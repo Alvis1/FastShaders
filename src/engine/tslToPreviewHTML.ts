@@ -61,6 +61,29 @@ export function isModelGeometry(geometry: GeometryType): boolean {
   return isObjGeometry(geometry) || geometry === 'custom';
 }
 
+/**
+ * The message type of the shader HOT-SWAP channel (parent → sandboxed preview).
+ * Exported so the parent and `SHADER_HOT_SWAP_SCRIPT` name it once.
+ */
+export const SHADER_SWAP_MESSAGE = 'fs:shader';
+
+/**
+ * Build the ES module the preview document runs, for a given TSL body and
+ * material settings.
+ *
+ * A one-line seam over `buildShaderModule`, and the reason it exists is that
+ * TWO surfaces must produce the SAME bytes: the document `tslToPreviewHTML`
+ * bakes at boot, and the string the parent posts down the `fs:shader` hot
+ * channel afterwards. Anything that changes how the preview's module is built
+ * changes both at once from here.
+ */
+export function buildPreviewShaderModule(
+  tslCode: string,
+  materialSettings?: MaterialSettings,
+): string {
+  return buildShaderModule(tslCode, { materialSettings });
+}
+
 export interface CameraPosition {
   x: number;
   y: number;
@@ -144,6 +167,20 @@ export interface PreviewOptions {
    * blob URL, omitted in the sandboxed case).
    */
   customModel?: { kind: PreviewMeshKind; id: number; url?: string } | null;
+  /**
+   * An already-built shader module to bake in, instead of building one from
+   * `tslCode` here.
+   *
+   * The editor preview needs the module text on the PARENT side anyway — it
+   * is what the `fs:shader` hot channel posts (see SHADER_HOT_SWAP_SCRIPT) —
+   * and passing that exact string back in is what makes the document's baked
+   * module BYTE-IDENTICAL to the hot channel's idempotency seed. Without it
+   * the two are only *probably* equal (same inputs, same deterministic
+   * builder), and any drift turns every cold rebuild into one redundant
+   * shader re-apply. Omitted — the XR popup, podest, every test — the module
+   * is built from `tslCode` exactly as before.
+   */
+  shaderModule?: string;
 }
 
 /**
@@ -1388,6 +1425,147 @@ const ERROR_OVERLAY_SCRIPT = `<script>
 <\/script>`;
 
 /**
+ * Shader HOT-SWAP receiver (sandboxed editor preview only).
+ *
+ * WHY: a shader edit used to swap the iframe's `srcDoc`, i.e. build a whole
+ * new opaque-origin document — ~1.65 MB of A-Frame + three re-fetched and
+ * re-executed (cache partitioning treats each opaque origin as a fresh site),
+ * the WebGPU pre-flight re-run with its 2 s adapter timeout, the scene
+ * rebuilt, and on the teapot a full re-tessellation. Everything the user had
+ * built up went with it: camera, spin phase, animation playhead, and `time`
+ * restarted at zero on every keystroke's debounce.
+ *
+ * The shaderloader already reloads a module from a URL at runtime
+ * (`update()` re-applies whenever `data.src` changes), so the module can be
+ * swapped IN PLACE. podest has shipped exactly this since it gained its
+ * drop-a-shader loop (`applyShaderSource`); this is the same move, plus the
+ * acknowledgement the editor needs and podest does not.
+ *
+ * THE ACK IS THE POINT. A hot swap that reaches nothing leaves the PREVIOUS
+ * picture on screen looking perfectly correct, which is the worst failure
+ * available here. So every swap carries a generation number and the parent
+ * treats the gen-tagged reply as the ONLY proof it landed: an untagged
+ * `fs:preview-error` (the overlay's console.error mirror fires for all sorts
+ * of things) is not proof, and no reply at all times out into a real srcDoc
+ * rebuild on the parent side.
+ *
+ * A FAILED compile is unmistakable by construction rather than by convention:
+ * the loader's catch calls `restoreOriginalMaterials`, and
+ * `storeOriginalMaterials` only ever records the FIRST material a mesh wore
+ * (`!(uuid in this.originalMaterials)`) — the boot `material="color: #808080"`,
+ * never the shader it is replacing. So a broken edit drops the mesh to flat
+ * grey under the red error text; it cannot silently keep the last good look.
+ *
+ * Registered at TOP level, like the model feed and for the same reason: the
+ * parent's post can land before the async WebGPU pre-flight has injected the
+ * scene, so the LATEST payload is held and applied via __fsWhenSceneBooted
+ * once the entity exists.
+ *
+ * NB the module text needs none of the `<` → `\u003C` escaping the BAKED copy
+ * gets a few blocks down. That escape exists because the baked copy is inlined
+ * into a real `<script>` element, whose raw text the HTML tokenizer ends at the
+ * first `</script`; a postMessage payload is a structured clone that no parser
+ * ever sees, so the same bytes reach the Blob unaltered and unescapable.
+ */
+const SHADER_HOT_SWAP_SCRIPT = `<script>
+  (function () {
+    // The module bytes this document BOOTED with. The parent skips the
+    // mount-time post because it knows what it baked, but the receiver is the
+    // idempotent one by rule (React StrictMode double-fires mount effects, and
+    // an effect always runs once with the value already in the HTML) — the
+    // same contract every other hot channel in this file states.
+    var applied = window.__shaderCode;
+    // The url of the module currently loaded. Seeded with the BOOT url so the
+    // first swap releases that one too; without the seed every document would
+    // leak exactly one object URL, and without the revoke every keystroke
+    // would.
+    var url = window.__shaderUrl;
+    var gen = 0;
+    var pending = null;
+
+    function post(m) {
+      try { if (window.parent !== window) window.parent.postMessage(m, "*"); } catch (e) {}
+    }
+
+    function swap(code, g) {
+      var entity = document.getElementById("preview-entity");
+      // No entity means the scene never really came up. Deliberately NO ack:
+      // the parent's watchdog then escalates to a full document rebuild, which
+      // is the right answer, where a "failed" ack would only clear the timer
+      // and leave the stale picture standing.
+      if (!entity) return;
+      applied = code;
+      gen = g;
+      // Revoke BEFORE minting the replacement — podest's applyShaderSource does
+      // the same, and it is safe for a reason worth writing down: setAttribute
+      // below runs the loader's update() SYNCHRONOUSLY, and applyTSLShader sets
+      // its \`_currentSrc\` to the new url before its first await. So an earlier
+      // apply still awaiting a fetch of the url we just revoked fails its
+      // staleness check and returns without touching the material, the console
+      // or the error overlay.
+      try { if (url) URL.revokeObjectURL(url); } catch (e) {}
+      url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+      var comp = entity.components && entity.components.shader;
+      // Drop the OUTGOING uniform map so nothing can read or write the
+      // superseded shader's uniforms in the gap: the fs:uniform channel bails
+      // on a null map, and the ack below would otherwise report the old names.
+      // applyTSLShader rebuilds it from the new module's schema.
+      if (comp) comp._propertyUniforms = null;
+      var done = false;
+      function finish(ok, msg) {
+        if (done) return;
+        done = true;
+        entity.removeEventListener("shader-applied", onOk);
+        entity.removeEventListener("shader-error", onBad);
+        // A superseded swap's ack must not answer for the newer one in flight.
+        if (g !== gen) return;
+        if (ok) {
+          var c = entity.components && entity.components.shader;
+          // Same shape as the boot handshake: the parent re-pushes the user's
+          // tuned uniform values on it, which a fresh module schema has just
+          // reset to its own defaults.
+          post({
+            type: "fs:preview-ready",
+            hot: g,
+            uniforms: c && c._propertyUniforms ? Object.keys(c._propertyUniforms) : []
+          });
+        } else {
+          post({ type: "fs:preview-error", hot: g, message: msg || "Shader failed to apply" });
+        }
+      }
+      function onOk() { finish(true); }
+      function onBad(ev) { finish(false, ev && ev.detail && ev.detail.message); }
+      entity.addEventListener("shader-applied", onOk);
+      entity.addEventListener("shader-error", onBad);
+      entity.setAttribute("shader", "src", url);
+    }
+
+    window.addEventListener("message", function (e) {
+      if (e.source !== window.parent) return;
+      var msg = e.data;
+      if (!msg || msg.type !== "fs:shader") return;
+      if (typeof msg.code !== "string") return;
+      var g = typeof msg.gen === "number" ? msg.gen : 0;
+      if (msg.code === applied) {
+        // Already running these bytes. Ack anyway — the parent's watchdog
+        // cannot tell a no-op from a lost message, and escalating a swap that
+        // was redundant would rebuild the document for nothing.
+        post({ type: "fs:preview-ready", hot: g, uniforms: [] });
+        return;
+      }
+      var first = pending === null;
+      pending = { code: msg.code, gen: g };
+      if (!first) return;
+      window.__fsWhenSceneBooted(function () {
+        var p = pending;
+        pending = null;
+        if (p) swap(p.code, p.gen);
+      });
+    });
+  })();
+<\/script>`;
+
+/**
  * Iframe ↔ parent bridge: shader uniform readiness + camera persistence.
  *
  * - Shader uniforms: poll for the shaderloader's `_propertyUniforms` (it's
@@ -1710,7 +1888,9 @@ export function tslToPreviewHTML(
 
   // The preview and the .js export share buildShaderModule, so both emit
   // byte-identical shader logic (only the export's usage header differs).
-  const shaderModule = buildShaderModule(tslCode, { materialSettings });
+  // `options.shaderModule` lets the editor preview hand back the exact string
+  // its hot channel will post — see the option's own comment.
+  const shaderModule = options.shaderModule ?? buildPreviewShaderModule(tslCode, materialSettings);
   const isModel = isModelGeometry(geometry);
   const isTeapot = isTeapotGeometry(geometry);
   const isCustom = geometry === 'custom';
@@ -2444,6 +2624,24 @@ export function tslToPreviewHTML(
   lines.push('  });');
   lines.push(`<${''}/script>`);
   lines.push('');
+
+  // Shader hot-swap receiver. Sandboxed preview only: it needs a parent to ack
+  // to, and the XR popup — a top-level document nobody ever messages — could
+  // only receive its own posts.
+  //
+  // Emitted HERE, after the boot attach above, and the order is load-bearing
+  // rather than tidy. Both register through __fsWhenSceneBooted, which fires
+  // its listeners in registration order; the boot attach registers at PARSE
+  // time while this one registers only when a message arrives (always later,
+  // since a message is an async task). So the boot url is always attached
+  // before a swap replaces it. Were the order reversed, a swap arriving during
+  // document load would revoke the boot url and the boot attach would then set
+  // src to a dead URL — a fetch failure the loader's staleness guard would NOT
+  // swallow, i.e. a red error over a shader that is perfectly fine.
+  if (!xr) {
+    lines.push(SHADER_HOT_SWAP_SCRIPT);
+    lines.push('');
+  }
 
   // Bridge: shader uniform overlay + camera/rotation persistence across iframe rebuilds.
   const savedCamLiteral = initialCameraPosition

@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import type { SavedGroup } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import { getGroupFrameColors } from '@/utils/colorUtils';
 import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
@@ -20,6 +21,7 @@ interface SavedGroupCardProps {
  */
 export function SavedGroupCard({ group }: SavedGroupCardProps) {
   const deleteSavedGroup = useAppStore((s) => s.deleteSavedGroup);
+  const language = useAppStore((s) => s.language);
 
   const onDragStart = useCallback(
     (event: React.DragEvent) => {
@@ -59,8 +61,17 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
 
   // Member count = total saved nodes minus the group container itself.
   const memberCount = Math.max(0, group.nodes.length - 1);
+  // The NUMBER stays outside the key: Latvian inflects the noun with it
+  // ("1 mezgls" / "5 mezgli"), so the singular and plural words are two
+  // separate lv.json entries rather than an "s" appended to one — the same
+  // reason CostBar keeps a whole sentence per plural branch. The tooltip then
+  // interpolates the finished phrase, so one key covers both counts and the
+  // sentence never comes out half-Latvian.
+  const countLabel = `${memberCount} ${t(memberCount === 1 ? 'node' : 'nodes', language)}`;
   const { tooltip, tooltipHandlers } = useAssetTooltip(
-    `Saved group “${group.name}” (${memberCount} ${memberCount === 1 ? 'node' : 'nodes'}) — click, or drag onto the canvas, to add a copy.`,
+    t('Saved group “{name}” ({count}) — click, or drag onto the canvas, to add a copy.', language)
+      .replace('{name}', group.name)
+      .replace('{count}', countLabel),
   );
 
   return (
@@ -85,9 +96,7 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
           <span className="saved-group-card__title">{group.name}</span>
         </div>
         <div className="saved-group-card__body">
-          <span className="saved-group-card__count">
-            {memberCount} {memberCount === 1 ? 'node' : 'nodes'}
-          </span>
+          <span className="saved-group-card__count">{countLabel}</span>
         </div>
       </div>
       <button

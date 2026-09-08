@@ -77,6 +77,30 @@ describe('i18n helpers', () => {
     expect(nodeSearchLV('dot')).toContain('skalārais');
   });
 
+  it('asset tiles use a translated node-count plural, not an appended "s"', () => {
+    // The three tiles (PresetCard / TextureCard / SavedGroupCard) used to render
+    // `${n} ${n === 1 ? 'node' : 'nodes'}` inline, so a Latvian user read an
+    // English word under every preset while lv.json already carried it. Latvian
+    // inflects the noun with the number, so the fix is TWO keys with the digit
+    // outside them ("1 mezgls" / "5 mezgli") — never one key plus an appended
+    // "s". Both halves are pinned here: the words exist, and every card still
+    // routes the word through t() (re-inlining it fails silently, in LV only).
+    expect(t('node', 'lv')).not.toBe('node');
+    expect(t('nodes', 'lv')).not.toBe('nodes');
+    expect(t('node', 'lv')).not.toBe(t('nodes', 'lv'));
+    for (const file of ['PresetCard.tsx', 'TextureCard.tsx', 'SavedGroupCard.tsx']) {
+      const src = readFileSync(
+        fileURLToPath(new URL(`../components/NodeEditor/${file}`, import.meta.url)),
+        'utf8',
+      );
+      // The ternary itself is fine — what must not come back is rendering it
+      // WITHOUT t(), so pin the wrapped form rather than banning the branch.
+      expect(src, `${file} no longer asks t() for the count word`).toContain(
+        "t(memberCount === 1 ? 'node' : 'nodes', language)",
+      );
+    }
+  });
+
   it('the Discard truthiness hint is translated', () => {
     const en = NODE_REGISTRY.get('output')!.inputs.find((p) => p.id === 'discard')!.description!;
     expect(t(en, 'en')).toBe(en);

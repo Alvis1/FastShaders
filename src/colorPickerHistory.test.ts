@@ -60,10 +60,14 @@ const SITES: { file: string; history: 'bracket' | 'none'; count: number; why: st
   {
     file: 'components/NodeEditor/nodes/ShaderNode.tsx',
     history: 'bracket',
-    // Three sites, one rule: the colour ROW, plus the operator-layout and the
+    // ONE picker, three sites: the colour ROW, plus the operator-layout and the
     // detached (designer-moved) colour operands — Data Stripes / Data Viz's
-    // exposed ramp ends, which drew as number boxes until 2026-09-03.
-    count: 3,
+    // exposed ramp ends, which drew as number boxes until 2026-09-03. All three
+    // render the `colorSwatch(key)` helper, so the seed chain (stored value →
+    // registry default → red) and this `history` value are stated once. The
+    // count is 1 BECAUSE of that helper: three again would mean the sites have
+    // been re-inlined and can drift apart.
+    count: 1,
     why: 'stripes/dataviz lowColor/highColor -> handleChange -> updateNodeData (pushHistory)',
   },
   {
@@ -87,8 +91,11 @@ const SITES: { file: string; history: 'bracket' | 'none'; count: number; why: st
   {
     file: 'components/NodeEditor/nodes/NodeVisual.tsx',
     history: 'none',
-    // Mirrors ShaderNode's three colour sites (row, operator layout, detached).
-    count: 3,
+    // Mirrors ShaderNode's three colour sites (row, operator layout, detached)
+    // through the replica's own `colorSwatch(key)` — same name, because it
+    // answers the same question — which also owns the interactive/inert split,
+    // so the picker is written once here too.
+    count: 1,
     why: "the static replica's only interactive consumer is the Node Designer, whose onValueChange writes its own session-only preview model",
   },
   {
@@ -173,6 +180,21 @@ describe('the colour picker declares the right history kind at every call site',
       missing,
       'a new colour-picker call site must declare its history kind in SITES — see the header',
     ).toEqual([]);
+  });
+
+  it('the node pair still reaches its three colour sites through one helper each', () => {
+    // ShaderNode and its NodeVisual replica each draw a colour in three places
+    // (the colour ROW, the operator-layout operand, the designer-detached
+    // operand) and each now writes the picker ONCE, behind a helper. The count
+    // above therefore no longer notices a site that quietly stopped drawing a
+    // swatch — the 2026-09-03 defect, where an exposed ramp end came back as a
+    // number box printing NaN for a hex — so pin the call sites directly.
+    const uses = (file: string, helper: string) =>
+      (readFileSync(path.join(SRC, file), 'utf8').match(new RegExp(`${helper}\\(`, 'g')) ?? []).length;
+    // Call sites only — both helpers are arrow consts, so their declaration
+    // spells `<name> = (` and is not counted here.
+    expect(uses('components/NodeEditor/nodes/ShaderNode.tsx', 'colorSwatch')).toBe(3);
+    expect(uses('components/NodeEditor/nodes/NodeVisual.tsx', 'colorSwatch')).toBe(3);
   });
 
   it('a listed site that lost its picker fails instead of silently passing', () => {

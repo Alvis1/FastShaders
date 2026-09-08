@@ -283,6 +283,16 @@ export const ContentBrowser = memo(function ContentBrowser() {
    * zoom in force recovers the tile's natural 1× height — which makes the
    * measurement independent of the zoom it feeds, and the loop convergent.
    * The 1px threshold stops sub-pixel layout noise from oscillating it.
+   *
+   * This sweep is also what blocks VIRTUALIZING the strip, which has been
+   * proposed and declined three times: the scale every tile renders at is the
+   * maximum over `strip.children`, so mounting a subset returns a smaller
+   * maximum, over-zooms, and clips the genuinely tallest tile against the
+   * strip's own `overflow-y: hidden` — and because the mark is monotonic
+   * below, it then WALKS as scrolling reveals taller tiles. Decoupling it is
+   * the prerequisite; contentBrowserVirtual.test.ts states the boot cost this
+   * buys, the three ways out, and pins the coupling so a future windowing
+   * attempt fails loudly instead of silently shaving a caption off one tile.
    */
   useEffect(() => {
     const strip = scrollRef.current;

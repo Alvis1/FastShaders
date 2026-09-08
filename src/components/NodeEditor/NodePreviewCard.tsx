@@ -7,6 +7,7 @@ import { formatNodeLabel, nodeDescription } from '@/i18n';
 import { useAssetTooltip } from './AssetTooltip';
 import { useAppStore } from '@/store/useAppStore';
 import { NodeVisual } from './nodes/NodeVisual';
+import { NodeTitle } from './nodes/NodeTitle';
 import { DragNumberInput } from './inputs/DragNumberInput';
 import { nodeTextScale } from './nodes/glyphs/NodeGlyph';
 import { WaveformSvg } from './nodes/WaveformSvg';
@@ -211,8 +212,15 @@ function CardShell({ def, catColor, costColor, costTextColor, costScale, cost, h
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
 
+      {/* NodeTitle, not a hand-written span: it is the ONE renderer of
+          `.node-base__title`, so these five hand-written cards (math preview,
+          preview, clock, sound, output) wrap by the same rule as the canvas and
+          as every NodeVisual-drawn tile beside them — at most two lines, broken
+          at the one balanced seam splitTitle picks, with the full name on
+          `title`. Rendering the span here instead gave them mid-word fragments
+          the moment a three-word label or a longer Latvian translation landed. */}
       <div className="node-base__header" style={{ background: costColor }}>
-        <span className="node-base__title" style={{ color: headerTextColor }}>{formatNodeLabel(def.label, def.type, language, false)}</span>
+        <NodeTitle text={formatNodeLabel(def.label, def.type, language, false)} style={{ color: headerTextColor }} />
       </div>
 
       {children}

@@ -44,10 +44,23 @@ describe('the consent text matches what the package actually contains', () => {
     expect(disclosure).toMatch(/file name/i);
   });
 
-  it('the false "Nothing else is recorded" sentence is gone', () => {
+  it('the false "Nothing else is recorded" sentence is gone from BOTH screens', () => {
+    // It used to also assert the retired LV entry for that sentence was still
+    // present in lv.json. That pin was wrong on both counts and is deleted.
+    // The string is DEAD — the consent text was rewritten, so nothing looks the
+    // key up any more (t() keys are the English prose itself) — and the prose it
+    // froze is FALSE twice over: it promises "nothing else is recorded" for a
+    // package that carries a 14-field device block, a rendered preview.png, a
+    // free-text comment and dropped file names, and it calls alvismisjuns.lv
+    // "the university's server", which the very next test forbids because the
+    // host is the researcher's personal one. A pin that keeps a false
+    // translation alive is a hazard, not a guard: the key is one prose edit away
+    // from being looked up again, and it blocked the dead-key sweep besides.
+    // What survives is the assertion with teeth — the sentence must appear on
+    // NEITHER screen, the disclosure included (it is the surface that now spells
+    // the collection out, so it is where the claim would creep back).
     expect(consent).not.toContain('Nothing else is recorded');
-    expect(ui['Nothing else is recorded: no keystroke content, no audio or video, nothing outside this app. The data is packaged into one file only when you submit the questionnaire; that file is then sent to the university’s server (alvismisjuns.lv), where only the researcher can open it, and a copy is saved on this computer.'])
-      .toBeDefined(); // the stale LV entry may remain; it is simply never looked up
+    expect(disclosure).not.toContain('Nothing else is recorded');
   });
 
   it('does not call the researcher’s own host "the university’s server", and names both addresses', () => {

@@ -13,12 +13,12 @@
  * .test.ts — buildProjectState's localStorage reads are individually
  * try/catch'd, so an undefined `localStorage` degrades to "no preview prefs".
  */
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
 import { makeNode, makeEdge } from '@/test-utils';
 import { buildProjectState } from './exportShader';
 import { embedProjectState, extractProjectState, type FastShadersProject } from './fastShadersProject';
-import { importShaderText } from './projectImport';
+import { importShaderText, preloadShaderImport } from './projectImport';
 import { graphToCode } from './graphToCode';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import type { Palette } from '@/utils/palettes';
@@ -342,6 +342,12 @@ describe('project block round trip', () => {
 });
 
 describe('bare-script import clears palettes', () => {
+  // The bare-script branch converts through scriptToTSL, whose @babel front end
+  // is loaded on demand now (it is otherwise pinned into the app's boot
+  // payload). Un-preloaded, that branch settles a tick later; preloading keeps
+  // it synchronous, which is what every real caller on an async boundary does.
+  beforeAll(() => preloadShaderImport());
+
   it('a bare .js carries no palettes, so the previous shader’s must not ride onto it', () => {
     useAppStore.setState({ shaderPalettes: [{ id: 'p1', name: 'Old', colors: ['#ff0000'] }] });
     expect(useAppStore.getState().shaderPalettes).toHaveLength(1);

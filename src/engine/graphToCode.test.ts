@@ -1,7 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { graphToCode } from './graphToCode';
+import { loadUnknownExpressionValidator } from './unknownExpression';
 import { evaluateNodeOutput } from './cpuEvaluator';
 import { makeNode, makeEdge } from '@/test-utils';
+
+
+// The `unknown`-node expression validator parses with @babel/parser, which is
+// now loaded ON DEMAND so it stays off the app's boot payload
+// (engine/unknownExpression). Codegen is synchronous and FAILS CLOSED until
+// that chunk lands, so a suite that asserts on emitted unknown expressions has
+// to wait for it once — otherwise it would be asserting against the inert
+// `float(0)` fallback rather than against the validator.
+beforeAll(() => loadUnknownExpressionValidator());
 
 describe('graphToCode — empty graph', () => {
   it('returns the placeholder comment with no imports', () => {

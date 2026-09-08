@@ -8,10 +8,10 @@
  * and window-guarded CustomEvents. Same shape as projectImportMesh.test.ts,
  * which already drives importShaderText here.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
 import { useAppStore } from '@/store/useAppStore';
 import { makeNode } from '@/test-utils';
-import { importShaderText } from './projectImport';
+import { importShaderText, preloadShaderImport } from './projectImport';
 import { embedProjectState } from './fastShadersProject';
 import type { OutputNodeData } from '@/types';
 
@@ -45,6 +45,12 @@ beforeEach(() => {
 });
 
 describe('importShaderText: a bare script owns its material settings', () => {
+  // The bare-script branch converts through scriptToTSL, whose @babel front end
+  // is loaded on demand now (it is otherwise pinned into the app's boot
+  // payload). Un-preloaded, that branch settles a tick later; preloading keeps
+  // it synchronous, which is what every real caller on an async boundary does.
+  beforeAll(() => preloadShaderImport());
+
   it("replaces the previous graph settings with the file's own", () => {
     expect(importShaderText(moduleWith(', alphaTest: 0.5'))).toBe('script');
     expect(outputSettings()).toEqual({ alphaTest: 0.5 });

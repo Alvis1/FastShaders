@@ -30,12 +30,33 @@
  * Two things that ride along have been measured and left alone — recorded here
  * so the next audit does not re-derive them:
  *
- *   · DIFF-EDITOR CSS. `edcore.main` imports
- *     `browser/widget/diffEditor/diffEditor.contribution.js`, so ~10-15 KB of
- *     the 142 KB monaco stylesheet (≈2 KB gzipped) styles a DiffEditor this app
- *     never mounts — it renders only `<Editor>`. It cannot be dropped by
- *     omitting an import; it would take a build-time CSS filter over the monaco
- *     chunk, which is more machinery than 2 KB is worth.
+ *   · DIFF-EDITOR CSS. `edcore.main` line 4 imports
+ *     `browser/widget/diffEditor/diffEditor.contribution.js`, so the monaco
+ *     stylesheet carries rules for a DiffEditor this app never mounts — it
+ *     renders only `<Editor>`. MEASURED (0.55.1, 2026-09-08) so the next audit
+ *     does not re-derive it: 13,345 raw bytes in exactly two files
+ *     (`diffEditor/style.css` 11,884 + `components/accessibleDiffViewer.css`
+ *     1,461), 2,763 bytes gzipped ALONE — an upper bound, since in the real
+ *     142,383-byte / 22,700-byte-gz stylesheet they share gzip's dictionary
+ *     with everything else. So ~2 KB gz, and NOT on the boot path: the built
+ *     `monaco-*.css` is a separate stylesheet that index.html never preloads,
+ *     injected when `AppLayout`'s `lazy()` CodeEditor mounts (at idle, or the
+ *     2 s ceiling). It costs first paint nothing.
+ *
+ *     Dropping it by omitting an import is impossible for the reason the
+ *     contributions note below gives — that would mean hand-copying
+ *     `edcore.main`'s list, which goes stale silently under `^0.55.1`. The only
+ *     shape that works is a build-time CSS filter (the
+ *     `fs-fontsource-woff2-only` plugin in vite.config.ts is the pattern:
+ *     `enforce: 'pre'`, match the id, return empty). Left undone deliberately —
+ *     2 KB gz off a chunk that is already off the critical path does not earn a
+ *     build plugin. If it is ever attempted, filter by PATH (`/diffEditor/`)
+ *     and never by grepping for "diff": `standalone/browser/standalone-tokens.css`
+ *     names `.monaco-diff-editor` throughout while carrying the SHARED focus
+ *     styles, so a content match takes the real editor's stylesheet with it.
+ *     A path filter is safe because every `.monaco-editor` selector in those
+ *     two files is a descendant rule reaching a `.diff-*` child or the
+ *     `draggingUnchangedRegion` state class, which only the diff editor sets.
  *
  *   · EDITOR CONTRIBUTIONS with no provider. `edcore.main` is a flat list of
  *     ~74 side-effect imports, and the app registers exactly two providers

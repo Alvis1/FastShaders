@@ -1,5 +1,7 @@
 import { useCallback, useRef, useEffect, memo } from 'react';
 import type { BuiltinTexture } from '@/registry/builtinTextures';
+import { useAppStore } from '@/store/useAppStore';
+import { t } from '@/i18n';
 import { perlin2D } from '@/utils/noisePreview';
 import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
@@ -210,6 +212,7 @@ const PREVIEW_RENDERERS: Record<string, (ctx: CanvasRenderingContext2D) => void>
 
 export const TextureCard = memo(function TextureCard({ texture }: TextureCardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const language = useAppStore((s) => s.language);
 
   useEffect(() => {
     const ctx = canvasRef.current?.getContext('2d');
@@ -245,6 +248,11 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
   );
 
   const memberCount = Math.max(0, texture.nodes.length - 1);
+  // The NUMBER stays outside the translation key: Latvian inflects the noun
+  // with it ("1 mezgls" / "5 mezgli"), so the singular and plural words are two
+  // separate lv.json entries rather than an "s" appended to one — the same
+  // reason CostBar keeps a whole sentence per plural branch.
+  const countLabel = `${memberCount} ${t(memberCount === 1 ? 'node' : 'nodes', language)}`;
   const { tooltip, tooltipHandlers } = useAssetTooltip(
     `${texture.description} Click, or drag onto the canvas, to add it.`,
   );
@@ -282,9 +290,7 @@ export const TextureCard = memo(function TextureCard({ texture }: TextureCardPro
             // image, not a small swatch adrift in a large frame.
             style={{ width: '100%', height: 'auto', aspectRatio: '1 / 1', display: 'block', borderRadius: 0, imageRendering: 'auto' }}
           />
-          <span className="saved-group-card__count" style={{ marginTop: 2 }}>
-            {memberCount} {memberCount === 1 ? 'node' : 'nodes'}
-          </span>
+          <span className="saved-group-card__count" style={{ marginTop: 2 }}>{countLabel}</span>
         </div>
       </div>
     </div>

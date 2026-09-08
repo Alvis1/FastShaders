@@ -9,6 +9,7 @@ import { tslToShaderModule, type PropertyInfo } from '@/engine/tslToShaderModule
 import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
 import { collectShaderProperties, shaderBaseName } from '@/engine/exportShader';
 import { buildAFrameEmbedHTML, readPreviewGeometry } from '@/engine/tslToAFrameHTML';
+import { buildThreeEmbedHTML } from '@/engine/tslToThreeHTML';
 import { MARCH_WINDOW_GEOMETRY } from '@/engine/tslToPreviewHTML';
 import { marchWindowRadius } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -19,7 +20,7 @@ import { getNodeValues } from '@/types';
 import type { OutputNodeData } from '@/types';
 import './CodeEditor.css';
 
-type CodeTab = 'tsl' | 'script';
+type CodeTab = 'tsl' | 'script' | 'three';
 
 const BASE_EDITOR_OPTIONS = {
   minimap: { enabled: false },
@@ -206,7 +207,7 @@ export function CodeEditor() {
   // (a duplicate-name rename changes the header with identical TSL) — is a real
   // dep below.
   const scriptCode = useMemo(() => {
-    if (activeTab !== 'script') return '';
+    if (activeTab !== 'script' && activeTab !== 'three') return '';
     try {
       return tslToShaderModule(
         inlineImageAssetsFromNodes(settledCode, useAppStore.getState().nodes),
@@ -248,16 +249,36 @@ export function CodeEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scriptCode, jsFileName, shaderName, activeTab, embedStamp, marchWindow]);
 
+  // The Three.js drop-in page. Same inputs and the same snapshot rule as the
+  // A-Frame page above — it is the same shader on the same primitive, differing
+  // only in what host it is wired into.
+  const threeHtml = useMemo(() => {
+    if (activeTab !== 'three') return '';
+    try {
+      return buildThreeEmbedHTML(scriptCode, {
+        shaderFile: jsFileName,
+        title: shaderName,
+        geometry: marchWindow !== null ? MARCH_WINDOW_GEOMETRY : readPreviewGeometry(),
+        marchWindow: marchWindow ?? 1,
+      });
+    } catch (e) {
+      return `<!-- Export error: ${e instanceof Error ? e.message : String(e)} -->`;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scriptCode, jsFileName, shaderName, activeTab, embedStamp, marchWindow]);
+
+  // Whichever embed tab is open — the button sits in a bar shared by both, so
+  // copying the A-Frame page from the Three.js tab is the bug this guards.
   const handleCopyEmbed = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(embedHtml);
+      await navigator.clipboard.writeText(activeTab === 'three' ? threeHtml : embedHtml);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
       // Clipboard API is unavailable in insecure contexts; the text is still
       // selectable in the editor, so failing quietly is right here.
     }
-  }, [embedHtml]);
+  }, [activeTab, embedHtml, threeHtml]);
 
   const isTSL = activeTab === 'tsl';
 
@@ -426,6 +447,15 @@ export function CodeEditor() {
           >
             A-Frame
           </button>
+          <button
+            className={`code-editor__tab ${activeTab === 'three' ? 'code-editor__tab--active' : ''}`}
+            onClick={() => {
+              setActiveTab('three');
+              setEmbedStamp((n) => n + 1);
+            }}
+          >
+            Three.js
+          </button>
         </div>
         <div className="code-editor__actions">
           {isTSL && codeErrors.length > 0 && (() => {
@@ -469,7 +499,10 @@ export function CodeEditor() {
                   screen). Keep them here if the page stays comment-free. */}
               <span
                 className="code-editor__filename"
-                title={t('A ready-to-run VR page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.', language).replace('{file}', jsFileName)}
+                title={(activeTab === 'three'
+                  ? t('A ready-to-run Three.js page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.', language)
+                  : t('A ready-to-run VR page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.', language)
+                ).replace('{file}', jsFileName)}
               >
                 index.html
               </span>
@@ -530,6 +563,21 @@ export function CodeEditor() {
               path="index.html"
               language="html"
               value={embedHtml}
+              theme={codeEditorTheme}
+              options={READONLY_EDITOR_OPTIONS}
+            />
+          </div>
+        )}
+        {/* The plain-Three.js drop-in page (read-only). Its own Monaco `path`,
+            so it gets a model of its own rather than sharing the A-Frame tab's
+            — two models with one path would show each other's text. */}
+        {activeTab === 'three' && (
+          <div className="code-editor__pane">
+            <Editor
+              height="100%"
+              path="three-index.html"
+              language="html"
+              value={threeHtml}
               theme={codeEditorTheme}
               options={READONLY_EDITOR_OPTIONS}
             />

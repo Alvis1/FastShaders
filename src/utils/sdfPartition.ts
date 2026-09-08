@@ -58,10 +58,6 @@ export function isMarchOutput(node: AppNode): boolean {
   return node.data.registryType === MARCH_OUTPUT_TYPE;
 }
 
-export function marchOutputNodes(nodes: readonly AppNode[]): AppNode[] {
-  return nodes.filter(isMarchOutput);
-}
-
 /** The node-data key that marks the ACTIVE sink. Absent everywhere on a
  *  document that never had a choice made — see `activeSink`. */
 export const ACTIVE_OUTPUT_KEY = 'activeOutput';

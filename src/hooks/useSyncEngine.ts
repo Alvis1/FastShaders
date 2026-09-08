@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { graphToCode } from '@/engine/graphToCode';
+import { onUnknownExpressionValidated, loadUnknownExpressionValidator } from '@/engine/unknownExpression';
 // NB codeToGraph is deliberately NOT imported here — see doCodeSync, which
 // pulls it in on demand so the Babel front end stays off the boot wave.
 import { autoLayout } from '@/engine/layoutEngine';
@@ -58,10 +59,27 @@ export function useSyncEngine() {
   const prevNodesRef = useRef(nodes);
   const prevEdgesRef = useRef(edges);
 
+  // Codegen validates an `unknown` node's stored `rawExpression` with Babel
+  // before emitting it verbatim, and that parser is loaded ON DEMAND so the
+  // ~200 KB gzip of @babel/* stays off the boot wave (engine/unknownExpression).
+  // A pass that runs before it lands FAILS CLOSED — the expression emits as the
+  // inert fallback — so the pass has to run again once the real verdict exists.
+  // Nothing else can trigger it: neither `nodes` nor `edges` changed, so both
+  // the identity guard and sameGraphSemantics below would (correctly) call the
+  // re-run inert. Hence the epoch, which is threaded through both of them.
+  //
+  // It fires at most once per session (the notifier fires once, when the chunk
+  // lands) and only when a graph actually held an unknown node.
+  const [exprEpoch, setExprEpoch] = useState(0);
+  useEffect(() => onUnknownExpressionValidated(() => setExprEpoch((n) => n + 1)), []);
+  const prevExprEpochRef = useRef(exprEpoch);
+
   // Graph → Code
   useEffect(() => {
     if (syncSource !== 'graph' || syncInProgress) return;
-    if (nodes === prevNodesRef.current && edges === prevEdgesRef.current) return;
+    const revalidated = exprEpoch !== prevExprEpochRef.current;
+    prevExprEpochRef.current = exprEpoch;
+    if (!revalidated && nodes === prevNodesRef.current && edges === prevEdgesRef.current) return;
     // Position/selection-only updates (every drag pointermove mints a new
     // array identity) can't change generated code — skip the whole pass, not
     // just the store writes. Never skip while isUndoRedo is set: this effect
@@ -70,6 +88,7 @@ export function useSyncEngine() {
     // so its `data` refs are always fresh and the predicate is false anyway —
     // this guard covers the empty-graph corner where the scan is vacuous).
     const inert =
+      !revalidated &&
       !useAppStore.getState().isUndoRedo &&
       sameGraphSemantics(prevNodesRef.current, nodes, prevEdgesRef.current, edges);
     prevNodesRef.current = nodes;
@@ -128,7 +147,7 @@ export function useSyncEngine() {
         useAppStore.setState({ isUndoRedo: false });
       }
     }
-  }, [nodes, edges, syncSource, syncInProgress, setCode]);
+  }, [nodes, edges, syncSource, syncInProgress, setCode, exprEpoch]);
 
   // Code → Graph (with stable node matching)
   const doCodeSync = useCallback(
@@ -166,6 +185,13 @@ export function useSyncEngine() {
         let codeToGraph: typeof import('@/engine/codeToGraph').codeToGraph;
         try {
           ({ codeToGraph } = await import('@/engine/codeToGraph'));
+          // Warm the `unknown`-expression validator off the SAME chunk, since
+          // this pass can mint unknown nodes and the very next graph→code pass
+          // would otherwise emit their expressions as the fail-closed fallback
+          // and have to redo itself. Not awaited: it resolves from the module
+          // registry Babel now sits in, and a failure here is already handled
+          // (fail closed, retried on the next call).
+          void loadUnknownExpressionValidator();
         } catch {
           setCodeErrors([
             {

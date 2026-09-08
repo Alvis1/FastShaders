@@ -22,18 +22,27 @@
  *
  * `lv.ui`/`lv.ports` are keyed by the ENGLISH TEXT, so a reword at the call site
  * silently ORPHANS its translation — the key stops being asked for, `t()` falls
- * back to English, and the app quietly goes half-Latvian for a default-language
- * user with nothing failing anywhere. That had happened 21 times by 2026-09-05
- * (the tuned-uniform chip, the cost bar's device picker, the Model dropdown's
- * disabled-state tooltip), and 70 retired keys were still shipping beside the
- * live ones, so nobody reading this file could tell which was which. Both
- * directions were swept and closed; the file is now exactly the set of strings
- * the app asks for, minus four the audit deliberately leaves untranslated
- * ("1x"/"2x"/"3x"/"FPS", which are the same in Latvian — an identity entry there
- * is bulk, not a translation). WHEN YOU REWORD A `t('…')` LITERAL, move the
- * lv.json key with it rather than adding a second one. There is deliberately no
- * CI guard for this: a sweep can only run over the whole tree, and a red suite
- * on every in-progress reword would train people to delete the guard.
+ * back to English, and the app quietly goes half-Latvian for a user who has
+ * pressed LV, with nothing failing anywhere. That had happened 21 times by
+ * 2026-09-05 (the tuned-uniform chip, the cost bar's device picker, the Model
+ * dropdown's disabled-state tooltip); those were translated then, and on
+ * 2026-09-08 the other direction was swept too — 79 `ui` and 2 `ports` keys no
+ * `t()`/`portLabel` call could reach were deleted (4.5 KB raw, 1.6 KB gzipped).
+ * Most were reworded call sites; ~40 were the Node Designer's inspector, whose
+ * chrome lives as static English markup in node-designer.html and never passes
+ * through `t()` at all. So lv.json is now exactly the set of strings the app
+ * asks for, minus FOUR it deliberately leaves untranslated: "1x"/"2x"/"3x"/"FPS"
+ * are identical in Latvian, and an identity entry there is bulk, not a
+ * translation.
+ *
+ * WHEN YOU REWORD A `t('…')` LITERAL, move the lv.json key with it rather than
+ * adding a second one. There is deliberately no CI guard for this: a sweep can
+ * only run over the whole tree, and a red suite on every in-progress reword
+ * would train people to delete the guard. A sweep is cheap to redo by hand —
+ * a key is live when its exact text appears as a string literal somewhere in
+ * `src`, which must be measured with a scanner that skips comments and looks
+ * INSIDE `${…}` (both mistakes report live keys as dead), and dozens of `t()`
+ * sites pass a variable, so matching only `t('…')` literals is not enough.
  */
 import nodeI18n from './node-i18n.json';
 import lv from './lv.json';

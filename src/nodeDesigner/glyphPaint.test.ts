@@ -17,26 +17,62 @@ describe('GLYPH_PALETTE', () => {
     GLYPH_PALETTE.forEach((p) => { expect(p.hex).toMatch(/^#[0-9A-F]{6}$/); expect(p.name).toBeTruthy(); expect(p.note).toBeTruthy(); });
   });
 
-  it('covers the colours the shipped glyphs actually use', () => {
+  /**
+   * Off-palette colours the SHIPPED art may use, each with the reason it is not
+   * one of the nine tokens. This is an allowance list, not a ban: adding a line
+   * here is the whole cost of using glyphPaint.ts's hand-typed escape hatch, and
+   * the entry is what stops the next reader having to re-derive whether a stray
+   * hex was a decision or a slip.
+   *
+   * The four viridis anchors ARE the Colormap node's subject — its glyph draws
+   * the ramp, and `#440154`/`#fde725` are the published endpoints that make it
+   * recognisably viridis (`colormaps.test.ts` pins the same pair) — so they are
+   * data, not chrome, and recolouring them to greys would stop the glyph being a
+   * colormap at all.
+   */
+  const OFF_PALETTE_ALLOWED = new Map<string, string>([
+    ['#440154', 'viridis anchor 0.00 — the dataviz glyph draws the colormap ramp itself'],
+    ['#277f8e', 'viridis anchor 0.33'],
+    ['#4ac16d', 'viridis anchor 0.67'],
+    ['#fde725', 'viridis anchor 1.00'],
+  ]);
+
+  const offPaletteUsed = () => {
     const used = new Set([...attrValues('fill'), ...attrValues('stroke')]
       .map((v) => normalizePaintValue(v))
       .filter((v): v is string => !!v && v !== 'none'));
-    // whatever is NOT in the palette is off-system art someone typed by hand —
-    // report it rather than assert it away, so the list stays honest
-    const off = Array.from(used).filter((v) => !isPaletteColor(v));
-    expect(Array.from(used).length).toBeGreaterThan(4);
-    // This line is a SHAPE check, not a policy one, and cannot fail:
-    // normalizePaintValue's return domain is already null | 'none' | a
-    // lowercase #rrggbb, and the filter above drops the first two. It is
-    // deliberately not tightened into an allow-list — glyphPaint.ts's header
-    // keeps hand-typed `fill="#123456"` as the slower escape hatch and says a
-    // drift guard here would turn using it into a release-blocking failure.
-    // MEASURED 2026-09-05, the off-palette set is five values: the four viridis
-    // anchors the colormap glyph legitimately draws (#440154 #277f8e #4ac16d
-    // #fde725) plus #000000, twice — one `<line>` each in the `floor` and
-    // `round` glyphs, where the palette's near-black is #2B2B2B. Cosmetic, and
-    // recorded here rather than asserted so nobody re-derives it from scratch.
-    expect(off.every((v) => /^#[0-9a-f]{6}$/.test(v))).toBe(true);
+    return { used, off: Array.from(used).filter((v) => !isPaletteColor(v)) };
+  };
+
+  it('covers the colours the shipped glyphs actually use', () => {
+    const { used, off } = offPaletteUsed();
+    expect(used.size).toBeGreaterThan(4);
+    /*
+     * This used to assert `off.every(v => /^#[0-9a-f]{6}$/)`, which is a shape
+     * check dressed as a policy one and CANNOT fail: normalizePaintValue's
+     * return domain is already null | 'none' | a lowercase #rrggbb and the
+     * filter drops the first two. So the comment above it forbade off-system
+     * black while `#000000` sat in the shipped `floor` glyph, passing.
+     *
+     * FIXED 2026-09-08 rather than re-explained: floor's baseline `<line>` is
+     * the same element every sibling glyph (`abs`, `round`, `add`, …) draws in
+     * the palette's Ink `#2B2B2B`, so the pure black was a slip and is now Ink.
+     * That leaves the four viridis anchors, which are allowed BY NAME below.
+     */
+    const unexplained = off.filter((v) => !OFF_PALETTE_ALLOWED.has(v));
+    expect(
+      unexplained,
+      `off-palette colour(s) in shipped glyph art: ${unexplained.join(' ')} — recolour to a GLYPH_PALETTE token, or add each to OFF_PALETTE_ALLOWED with the reason it is not one`,
+    ).toEqual([]);
+  });
+
+  it('every off-palette allowance is still drawn', () => {
+    // The glyphCoverage.test.ts idiom: an allowance that outlives its art turns
+    // into a licence nobody granted, so it has to fail when the art moves on.
+    const { off } = offPaletteUsed();
+    for (const [hex, why] of OFF_PALETTE_ALLOWED) {
+      expect(off, `${hex} (${why}) is no longer drawn — drop the allowance`).toContain(hex);
+    }
   });
 });
 

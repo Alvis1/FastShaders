@@ -11,7 +11,9 @@ import {
   GEOMETRY_ROTATIONS,
   MARCH_WINDOW_GEOMETRY,
   LIGHT_PRESETS,
+  SHADER_SWAP_MESSAGE,
   buildGeoAttr,
+  buildPreviewShaderModule,
   buildTeapotAttr,
   getModelUrl,
   isModelGeometry,
@@ -192,11 +194,61 @@ const PREVIEW_REBUILD_DEBOUNCE_MS = 200;
 const COMPILE_OVERLAY_TIMEOUT_MS = 12000;
 
 /**
+ * Master switch for the shader HOT-SWAP path (see the previewHtml memo's
+ * dep classification, and SHADER_HOT_SWAP_SCRIPT in tslToPreviewHTML.ts).
+ *
+ * Flip it to `false` and the module text rejoins the cold rebuild key, i.e.
+ * every shader edit swaps `srcDoc` exactly as it did before this existed.
+ * That is the fallback the whole design is built to be able to fall back TO:
+ * the hot path can only ever be an optimisation over a document rebuild, so
+ * one constant has to be able to take it away.
+ */
+const HOT_SWAP_ENABLED = true;
+
+/**
+ * How long a hot swap may go un-acked before the "Updating shader…" pill
+ * appears. A landed swap acks in tens of milliseconds, so in the ordinary case
+ * nothing is drawn at all — the delay is what keeps a live picture from
+ * strobing a status pill on every debounced keystroke, while still refusing to
+ * stay silent when a swap really is slow or lost.
+ */
+const HOT_SWAP_PILL_DELAY_MS = 500;
+
+/**
+ * How long an un-acked hot swap has before the parent gives up and rebuilds
+ * the document for real.
+ *
+ * This timer is the ONLY thing standing between a lost `fs:shader` message and
+ * the worst failure this feature can produce: the previous picture left on
+ * screen, looking perfectly correct, while the code panel shows something else.
+ * So it must never be cleared by anything short of the gen-tagged ack (see the
+ * message handler) — an untagged fs:preview-error, which the overlay's
+ * console.error mirror fires for all sorts of unrelated noise, is not proof
+ * that the swap landed.
+ */
+const HOT_SWAP_ACK_TIMEOUT_MS = 6000;
+
+/**
  * Minimum gap between two `fs:previewRotation` writes — see `persistRotation`.
  * The stage reports a moved turntable every 200 ms, forever, so this is the
  * only thing bounding a spinning preview's localStorage traffic.
  */
 const ROTATION_PERSIST_MS = 2000;
+
+/**
+ * How long a SLIDER's localStorage write waits for the drag to settle
+ * (`usePersistedState`'s `debounceMs`). Both call sites are range inputs, which
+ * fire `input` per frame: without this, `fs:previewSubdivision` and a whole
+ * `JSON.stringify` of `fs:previewUniformValues` went to disk ~60×/s for the
+ * length of every scrub. The VALUE stays live in state, so the preview, the
+ * sliders and the uniform push are unchanged — only the write is deferred.
+ *
+ * Deliberately short: `exportShader.ts` reads both keys back out of
+ * localStorage when it builds the project block, so an export inside the window
+ * would embed the previous number. The timer starts at the last pointer MOVE,
+ * before the release, and reaching the toolbar costs far more than this.
+ */
+const SLIDER_PERSIST_MS = 300;
 
 /**
  * Trailing-debounce a value: the first value is adopted immediately (so initial
@@ -499,7 +551,8 @@ export function ShaderPreview() {
   useEffect(() => {
     if (lighting === 'env' && !envMapName) setLighting('studio');
   }, [lighting, envMapName, setLighting]);
-  const [subdivision, setSubdivision] = usePersistedState('fs:previewSubdivision', validateSubdivision, { reloadOnProjectImport: true });
+  // debounceMs: the Subd control is a range input — see SLIDER_PERSIST_MS.
+  const [subdivision, setSubdivision] = usePersistedState('fs:previewSubdivision', validateSubdivision, { reloadOnProjectImport: true, debounceMs: SLIDER_PERSIST_MS });
   const [bgColor, setBgColor] = usePersistedState('fs:previewBgColor', validateBgColor, { reloadOnProjectImport: true });
 
   // Restore the previous session's dropped mesh from the IndexedDB cache. The
@@ -740,6 +793,43 @@ export function ShaderPreview() {
   // indistinguishable from a crash. Cleared by fs:preview-ready (success) or
   // fs:preview-error (failure), with a timeout below so it can never stick.
   const [compiling, setCompiling] = useState(true);
+
+  // ── Shader hot-swap bookkeeping ────────────────────────────────────────
+  /**
+   * Monotonic id of the swap currently in flight. Every `fs:shader` post
+   * carries it and the iframe echoes it back; only an ack carrying THIS
+   * number is treated as proof the swap landed (see HOT_SWAP_ACK_TIMEOUT_MS).
+   * A ref, not state, because the mount-once message handler must read it.
+   */
+  const hotGenRef = useRef(0);
+  const hotPillTimerRef = useRef<number | null>(null);
+  const hotAckTimerRef = useRef<number | null>(null);
+  /**
+   * Bumped to force a real `srcDoc` rebuild — by the ack watchdog when a swap
+   * goes unanswered, and available to anything else that ever needs the cold
+   * path. It is a dep of the previewHtml memo and of nothing else.
+   */
+  const [coldGen, setColdGen] = useState(0);
+  /** A swap has been in flight longer than HOT_SWAP_PILL_DELAY_MS. */
+  const [hotSwapSlow, setHotSwapSlow] = useState(false);
+
+  /**
+   * Stop waiting on the in-flight swap. `useCallback([])` so its identity is
+   * stable for the life of the component — the mount-once message handler
+   * closes over it.
+   */
+  const clearHotSwapWait = useCallback(() => {
+    if (hotPillTimerRef.current !== null) {
+      window.clearTimeout(hotPillTimerRef.current);
+      hotPillTimerRef.current = null;
+    }
+    if (hotAckTimerRef.current !== null) {
+      window.clearTimeout(hotAckTimerRef.current);
+      hotAckTimerRef.current = null;
+    }
+    setHotSwapSlow(false);
+  }, []);
+  useEffect(() => clearHotSwapWait, [clearHotSwapWait]);
 
   useEffect(() => {
     const el = bodyRef.current;
@@ -1088,7 +1178,11 @@ export function ShaderPreview() {
    * value, so delete + undo — and re-adding a property with the same name and
    * the same number — restores the user's tuning.
    */
-  const [uniformValues, setUniformValues] = usePersistedState('fs:previewUniformValues', validateUniformValues, { serialize: JSON.stringify, reloadOnProjectImport: true });
+  // debounceMs: every overlay row is a range input, and this map is the
+  // expensive one — a whole JSON.stringify of it per frame of every scrub. The
+  // map itself is untouched, so the fs:uniform push, the override badges and
+  // "Set as default" all still read the live value. See SLIDER_PERSIST_MS.
+  const [uniformValues, setUniformValues] = usePersistedState('fs:previewUniformValues', validateUniformValues, { serialize: JSON.stringify, reloadOnProjectImport: true, debounceMs: SLIDER_PERSIST_MS });
 
   /**
    * Uniforms the preview is running at something OTHER than the graph's number
@@ -1151,9 +1245,20 @@ export function ShaderPreview() {
         on?: boolean; files?: unknown;
         has?: boolean; duration?: number; canInPlace?: boolean;
         name?: unknown; clip?: number; clips?: unknown; time?: number;
-        backend?: unknown; geometry?: unknown; meshes?: unknown;
+        backend?: unknown; geometry?: unknown; meshes?: unknown; hot?: unknown;
       } | null;
       if (!data || typeof data.type !== 'string') return;
+      // A gen-tagged reply is the ONLY acknowledgement of a hot shader swap.
+      // Untagged fs:preview-ready / fs:preview-error still mean what they
+      // always meant (the boot handshake, and the error overlay's
+      // console.error mirror, which fires for plenty of unrelated noise) — and
+      // must NOT clear the watchdog, or a stray console.error would silently
+      // buy a lost swap another six seconds of the previous picture. A stale
+      // gen (a superseded swap answering late) is dropped for the same reason.
+      if (typeof data.hot === 'number') {
+        if (data.hot !== hotGenRef.current) return;
+        clearHotSwapWait();
+      }
       if (data.type === 'fs:model-meshes') {
         // What named sub-meshes the loaded model actually put in the scene.
         // Forgeable like every stage message — the document runs the loaded
@@ -1614,7 +1719,91 @@ export function ShaderPreview() {
     }
   }, [geometryRebuildKey]);
 
-  const previewHtml = useMemo(() => {
+  /**
+   * The ES MODULE the preview runs — the HOT half of the preview.
+   *
+   * Everything that changes only this string is delivered to the LIVE document
+   * over `fs:shader` (SHADER_HOT_SWAP_SCRIPT) instead of rebuilding it, which
+   * is what lets the camera, the spin phase, the animation playhead, the tuned
+   * uniforms and `time` itself survive an edit.
+   *
+   * `materialSettings` is read LIVE while only its debounced KEY is in the dep
+   * list — the same idiom the memo below uses, and for the same reason: the
+   * Alpha Clip slider mints a new settings object per pointermove.
+   *
+   * Image payloads ride the generated code as short `fs-asset:` placeholders
+   * (engine/imageAssets.ts) — expanded here, where the module actually runs.
+   * Nodes are read imperatively because subscribing to `s.nodes` would
+   * re-render this panel on every drag frame; that is safe because the
+   * placeholder embeds a payload hash, so swapping an image always changes
+   * `previewCode` and re-runs this memo.
+   */
+  const inlinedPreviewCode = useMemo(
+    () => inlineImageAssetsFromNodes(debouncedPreviewCode, useAppStore.getState().nodes),
+    [debouncedPreviewCode],
+  );
+  const previewModule = useMemo(
+    () => buildPreviewShaderModule(inlinedPreviewCode, materialSettings),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inlinedPreviewCode, debouncedMaterialSettingsKey],
+  );
+
+  /**
+   * WHAT REBUILDS THE DOCUMENT AND WHAT DOES NOT — the classification this
+   * whole feature rests on. Getting it wrong yields a stale picture that looks
+   * right, which is worse than any crash, so every input to the document is
+   * listed here and labelled.
+   *
+   * HOT (delivered to the live document, never rebuilds it):
+   *   · debouncedPreviewCode        → the module text            → fs:shader
+   *   · debouncedMaterialSettingsKey→ the module text (it is a
+   *                                   buildShaderModule option)  → fs:shader
+   *   · previewGeometry (primitives + marchSphere) → fs:geometry
+   *   · effectiveSubdivision                       → fs:geometry
+   *   · marchWindow (the a-sphere radius)          → fs:geometry
+   *   · bgColor                                    → fs:bg-color
+   *   · effLighting                                → fs:lighting
+   *   · playing                                    → fs:playing
+   *   · uniform values                             → fs:uniform
+   *
+   * COLD (must bake into a fresh document — these are the memo's deps):
+   *   · geometryRebuildKey — obj-model/gltf-model plumbing, the GLTF_ANIM
+   *     script's presence, the model feed's expected key and the mesh
+   *     inventory key are all decided at emit time; and swapping a live scene
+   *     across the OBJ↔primitive boundary is what crashes the r184 WebGPU
+   *     renderer in getAttributes.
+   *   · forceWebGL2 — the backend is chosen by the pre-flight BEFORE the scene
+   *     exists. There is no runtime move that changes it.
+   *   · coldGen — the ack watchdog's escalation, and the manual handle.
+   *   · previewModule, but ONLY while HOT_SWAP_ENABLED is off — that is the
+   *     switch that returns this to its pre-hot-swap behaviour.
+   *
+   * READ AT MEMO TIME, deliberately not deps (each has its own channel above,
+   * or is a restore target rather than an input):
+   *   · previewGeometry / marchWindow / playing / bgColor / effLighting /
+   *     effectiveSubdivision / previewMesh — hot, and listing them would
+   *     rebuild the document to emit HTML the running one already matches.
+   *   · cameraPosRef / rotationRef — restore targets, read at rebuild time;
+   *     listing them would rebuild on every reported camera move, forever.
+   *
+   * `coldDocKey` folds the COLD list into one string, and is the document
+   * memo's ONLY dependency — so the classification above is enforceable:
+   * previewRebuild.test.ts fails if a dep appears that this comment does not
+   * name.
+   */
+  const coldDocKey = `${geometryRebuildKey}|${forceWebGL2 ? 1 : 0}|${coldGen}`
+    + (HOT_SWAP_ENABLED ? '' : `|${previewModule}`);
+
+  /**
+   * The document, plus the module it was BAKED with.
+   *
+   * Returning both from one memo is what makes the hot-swap effect below
+   * correct without a ref written during render: when a cold rebuild and a
+   * code edit land in the same render, `bakedModule === previewModule` and the
+   * effect knows the new document already carries the change; when only the
+   * code moved, `bakedModule` is the previous one and the effect posts.
+   */
+  const [previewHtml, bakedModule] = useMemo(() => {
     const options: PreviewOptions = {
       geometry: previewGeometry,
       marchWindow: marchWindow ?? 1,
@@ -1634,17 +1823,13 @@ export function ShaderPreview() {
       // joining the dep list (which would cause an infinite rebuild loop).
       initialCameraPosition: cameraPosRef.current,
       initialRotation: rotationRef.current,
+      // The exact bytes the hot channel will post, so the document's baked
+      // module and the channel's idempotency seed cannot differ (see
+      // PreviewOptions.shaderModule). It is built from the same code passed
+      // below, so the option only saves the work — it cannot change the result.
+      shaderModule: previewModule,
     };
-    // Image payloads ride the generated code as short `fs-asset:` placeholders
-    // (see engine/imageAssets.ts) — expand them here, where the module actually
-    // runs. Nodes are read imperatively for the same reason as elsewhere in this
-    // file: subscribing to `s.nodes` would re-render on every drag frame. That's
-    // safe because the placeholder embeds a payload hash, so swapping an image
-    // always changes `previewCode` and re-runs this memo.
-    return tslToPreviewHTML(
-      inlineImageAssetsFromNodes(debouncedPreviewCode, useAppStore.getState().nodes),
-      options,
-    );
+    return [tslToPreviewHTML(inlinedPreviewCode, options), previewModule] as const;
     // `marchWindow` is deliberately NOT a dep, even though the options above
     // read it: it is the driving Raymarch Output's Window radius, edited by a
     // DragNumberInput that fires per pointermove, so listing it reloaded the
@@ -1652,22 +1837,79 @@ export function ShaderPreview() {
     // The a-sphere's radius is already hot-swapped by the fs:geometry effect
     // below (whose deps DO include it — `marchSphere` is a primitive, so that
     // effect runs), and graphToCode emits the same number as
-    // `const win = float(…)` inside the march, so a radius change reaches this
-    // memo through `debouncedPreviewCode` anyway — on the debounce, as it
-    // should. The null↔number transitions still rebuild: they flip `sdfDrives`,
-    // which changes `materialSettings` (side: 'double').
+    // `const win = float(…)` inside the march, so a radius change reaches
+    // `previewModule` anyway — on the debounce, as it should. The null↔number
+    // transitions used to rebuild the document, because they flip `sdfDrives`
+    // and so change `materialSettings` (side: 'double'); that now travels down
+    // the hot channel like any other module change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedPreviewCode, debouncedMaterialSettingsKey, geometryRebuildKey, forceWebGL2]);
+  }, [coldDocKey]);
 
   // A new srcDoc means a full document reload, so raise the overlay again. Only
   // rebuilds go through here — the postMessage hot-update channels below mutate
   // the live scene and must NOT flash it.
   useEffect(() => {
     if (!containerReady) return;
+    // A rebuild supersedes anything the hot channel was still waiting on: the
+    // document that would have acked is being thrown away.
+    clearHotSwapWait();
+    hotGenRef.current += 1;
     setCompiling(true);
     const id = setTimeout(() => setCompiling(false), COMPILE_OVERLAY_TIMEOUT_MS);
     return () => clearTimeout(id);
-  }, [previewHtml, containerReady]);
+  }, [previewHtml, containerReady, clearHotSwapWait]);
+
+  /**
+   * Send a module to the LIVE document and start waiting for its ack.
+   *
+   * Two timers. The pill only appears if the swap is still unanswered after
+   * HOT_SWAP_PILL_DELAY_MS, so the ordinary tens-of-milliseconds case draws
+   * nothing at all. The watchdog is the real safety net: no gen-tagged ack
+   * within HOT_SWAP_ACK_TIMEOUT_MS and we stop trusting the live document and
+   * rebuild it, rather than leave the previous picture standing under new code.
+   *
+   * Stable identity (it touches only refs and setters), because the iframe's
+   * load handler calls it too — see the replay there.
+   */
+  const postShaderSwap = useCallback((code: string) => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    clearHotSwapWait();
+    const gen = ++hotGenRef.current;
+    win.postMessage({ type: SHADER_SWAP_MESSAGE, code, gen }, '*');
+
+    hotPillTimerRef.current = window.setTimeout(() => {
+      hotPillTimerRef.current = null;
+      setHotSwapSlow(true);
+    }, HOT_SWAP_PILL_DELAY_MS);
+    hotAckTimerRef.current = window.setTimeout(() => {
+      hotAckTimerRef.current = null;
+      setHotSwapSlow(false);
+      // Escalate. `coldGen` is a dep of the document memo, so this rebuilds
+      // for real — and because the memo re-bakes with the CURRENT module, the
+      // rebuilt document shows the edit that the swap failed to deliver.
+      setColdGen((g) => g + 1);
+    }, HOT_SWAP_ACK_TIMEOUT_MS);
+  }, [clearHotSwapWait]);
+
+  /**
+   * THE HOT SWAP: an edit goes to the LIVE document instead of building a new
+   * one, which is what lets the camera, the spin phase, the animation
+   * playhead, the tuned uniforms and `time` survive it.
+   *
+   * The bail is a VALUE compare against the module the current document was
+   * BAKED with, and that one line covers all three no-op cases: first mount
+   * (the document boots with it), a cold rebuild (the fresh document already
+   * carries it — this effect runs in the same render as the memo that says
+   * so), and React StrictMode's double fire.
+   */
+  useEffect(() => {
+    if (!HOT_SWAP_ENABLED) return;
+    if (!containerReady) return;
+    if (previewModule === bakedModule) return;
+    postShaderSwap(previewModule);
+    return clearHotSwapWait;
+  }, [previewModule, bakedModule, containerReady, postShaderSwap, clearHotSwapWait]);
 
   // A rebuild throws the old document away, so the animation controls must go
   // with it: the new one re-announces via fs:anim (or doesn't, if it has no
@@ -1803,6 +2045,16 @@ export function ShaderPreview() {
   // it was built for, so a slow fetch resolving after a rapid teapot→bunny
   // switch can't apply a stale mesh to the newer document.
   const handleIframeLoad = useCallback(() => {
+    // Re-post a swap the FRESH document may never have heard. The hot-swap
+    // receiver only starts listening when its <script> parses, and that sits
+    // below the ~1.65 MB bundle's blocking script tags — so a module change
+    // landing between the srcDoc swap and the end of that parse is simply
+    // dropped, and the user would stare at the previous shader until the ack
+    // watchdog gave up seconds later. By `load` the listener is guaranteed
+    // installed (the same guarantee the model feed relies on). Idempotent: if
+    // the post DID land, the receiver recognises its own bytes and acks
+    // without re-applying.
+    if (HOT_SWAP_ENABLED && previewModule !== bakedModule) postShaderSwap(previewModule);
     if (!isModelGeometry(previewGeometry)) return;
     if (previewGeometry === 'custom') {
       // Dropped mesh: no fetch — post the stored payload. The exact
@@ -1844,7 +2096,7 @@ export function ShaderPreview() {
         );
       },
     );
-  }, [previewGeometry, previewMesh]);
+  }, [previewGeometry, previewMesh, previewModule, bakedModule, postShaderSwap]);
 
   // Immersive VR entry. Immersive WebXR can never start from the sandboxed
   // preview iframe — see the corrected rationale on PreviewOptions.xr in
@@ -2100,7 +2352,18 @@ export function ShaderPreview() {
         {ctlArrows.canRight && <ScrollArrow direction="right" invert onClick={() => ctlArrows.scrollBy(1)} />}
       </div>
       <div className={`shader-preview__body${showStats ? ' shader-preview__body--stats' : ''}`} ref={bodyRef}>
-        {compiling && (
+        {/* One pill, two causes. `compiling` is a real document rebuild (a
+            blank pane for seconds while the bundle boots). `hotSwapSlow` is a
+            shader swap into the LIVE document that has not been acknowledged
+            yet — drawn only after HOT_SWAP_PILL_DELAY_MS, so a normal edit
+            shows nothing at all and only a slow or lost one speaks up.
+            Deliberately the SAME sentence for both: the user is being told the
+            shader is being rebuilt, which is true either way, and inventing a
+            second string would ship untranslated English in a Latvian-first
+            app. A hot swap that FAILS to compile needs no pill of its own —
+            the loader puts the mesh back on its stored grey original and the
+            iframe's own red error text is what the user reads. */}
+        {(compiling || hotSwapSlow) && (
           <div className="shader-preview__compiling" role="status" aria-live="polite">
             <span className="shader-preview__compiling-dot" />
             {t('Compiling shader…', language)}

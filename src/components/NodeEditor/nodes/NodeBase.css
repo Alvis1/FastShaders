@@ -346,10 +346,30 @@
 
    THE CANONICAL COPY. Every node component that anchors its sockets to
    something other than the whole card restates these three declarations
-   against its own wrapper — MathPreviewNode, ClockNode, PreviewNode, SoundNode,
-   SoundNode and OutputNode all do, because CSS has no way to compose a
-   rule and each anchor is a different selector. Two things must travel with
-   the copy or the sockets land wrong:
+   against its own wrapper, because CSS has no way to compose a rule and each
+   anchor is a different selector. Seven anchors do, across five stylesheets:
+   `.clock-node__canvas-wrap` and `.clock-node__speed-row`,
+   `.math-preview-node__port-row` and `.math-preview-node`, `.preview-node`,
+   `.sound-node__body`, and `.output-node__row`.
+
+   WHY THIS IS STILL COPIED, having twice been looked at: the obvious fix is
+   one shared class the wrappers compose (`.fs-handle-in-row`), which means
+   putting that class in the node's JSX — and the node's JSX is not the only
+   place these wrappers are built. NodePreviewCard.tsx re-renders every one of
+   them for the palette tile (`clock-node__canvas-wrap`, `output-node__row`,
+   `sound-node__body`, …) around a `CardSocket` that emits React Flow's handle
+   classes and NOTHING else, precisely so that THESE rules place it. So a class
+   added to the canvas component alone would place the canvas socket and strand
+   the tile's — the drift assetCardGeometry.test.ts exists to catch, and which
+   it cannot catch here, because it greps source rather than measuring pixels.
+   The dedup is therefore a three-file change (this file, each node component,
+   NodePreviewCard.tsx) and has to land in one commit. Grouping the anchors
+   into one selector list here was considered and rejected: it only relocates
+   the "forgot one of the lists" bug below, and it moves each node's socket
+   geometry out of the node's own stylesheet, which is the premise the card's
+   own comment depends on.
+
+   Two things must travel with the copy or the sockets land wrong:
      1. `transform: translateY(-50%)` REPLACES React Flow's own transform,
         which included `translateX(-50%)` — so the horizontal inset below is no
         longer optional, it is the other half of this rule.

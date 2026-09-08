@@ -7,6 +7,34 @@
    Loaded from main.tsx only: node-editor.html (GraphsPage) has neither a
    splitter nor an asset bar. */
 
+/* ---------- What is deliberately NOT here: the chrome BUTTON ----------
+   Fourteen standalone chrome buttons restate the same box — inline-flex,
+   centred, `--ctl-size` tall, `--font-sans` at `--font-size-sm`, line-height 1,
+   `--border-radius-sm`, a 1px border — across Toolbar, ShaderPreview,
+   GraphsPage, PalettesModal and eval.css, each then differing only in colour
+   and horizontal padding. It looks like the obvious `.fs-btn` primitive, and
+   the reason it is still copied is worth writing down so it is not re-derived:
+
+     · Composing it needs `class="fs-btn …"` in each consumer's JSX; the two
+       CSS-only substitutes are both worse. Listing the fourteen component
+       selectors HERE inverts the dependency (the primitive layer would have to
+       know every consumer, and the list has to be unwound again the day the
+       classNames land). A structural sweep like `.toolbar button` is wrong by
+       construction: the compact in-row widgets — palette swatches, CostBar
+       chips, node-internal controls — are exempt from `--ctl-size` on purpose.
+     · The recipe is also less identical than a byte count suggests. Several
+       sites use `display: flex` rather than inline-flex, the mic and
+       subdivision pills omit `justify-content` because their content is a
+       gapped row, and the eval badge is `cursor: default` because it is not a
+       button at all. Those are deviations to preserve, not drift to flatten.
+     · And `box-sizing: border-box` in those rules is already redundant —
+       reset.css sets it on `*` — so a slice of the duplication is dead weight
+       that needs no primitive to remove.
+
+   If it is extracted: keep it to the properties no consumer overrides, and
+   note that this file is imported BEFORE any component stylesheet (main.tsx),
+   so a component rule of equal specificity still wins. */
+
 /* ---------- Drag-in-flight document state ----------
    Set on <html> by utils/dragChrome.ts for the length of a splitter / asset-bar
    drag. The `* !important` reach is deliberate and load-bearing: a plain

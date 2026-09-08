@@ -40,27 +40,25 @@ describe('splitTitle — one break opportunity, at the most balanced seam', () =
 
 describe('NodeTitle is the ONE renderer of .node-base__title (source pin)', () => {
   /**
-   * Files allowed to render the span by hand, each with the reason. The sweep
-   * asserts an exemption is still USED (the glyphCoverage.test.ts idiom), so a
-   * file that stops needing one fails here instead of silently outliving it.
+   * Files allowed to render the span by hand, each with the reason. EMPTY, and
+   * meant to stay that way — NodePreviewCard's CardShell was the last holder and
+   * now routes through <NodeTitle>. Kept as the escape hatch's shape: the sweep
+   * below asserts an exemption is still USED (the glyphCoverage.test.ts idiom),
+   * so a file that stops needing one fails here instead of silently outliving it.
    */
-  const EXEMPT: Record<string, string> = {
-    // The asset cards' shared frame. Its header is a bare span, so those five
-    // tiles (math preview, preview, clock, mic, audio) get neither splitTitle's
-    // single balanced break nor NodeTitle's `title` hover — today invisible,
-    // because every one of those labels is one or two space-separated words in
-    // both languages, and visible the moment a three-word label or a longer
-    // Latvian translation lands. Route CardShell through <NodeTitle> and delete
-    // this entry.
-    'NodePreviewCard.tsx': 'CardShell renders its own header span',
-  };
+  const EXEMPT: Record<string, string> = {};
+
+  // The sweep used to read `__dirname` NON-recursively, i.e. nodes/ alone — so
+  // NodePreviewCard.tsx, one directory up, was never opened and the guard's
+  // headline claim went unchecked exactly where it was broken. The root is
+  // `src/` now rather than the NodeEditor tree, because nodes are DRAWN on
+  // surfaces outside it too (the node-editor.html overview in components/Graphs,
+  // the Node Designer's stage via nodeDesigner/bridge) and a hand-written header
+  // there would be the same defect one directory further out of sight.
+  const ROOT = path.resolve(__dirname, '../../..');
 
   it('no component that draws a node renders the title span by hand', () => {
-    // The sweep used to read `__dirname` NON-recursively, i.e. nodes/ alone —
-    // so NodePreviewCard.tsx, one directory up, was never opened and the guard's
-    // headline claim went unchecked exactly where it is broken. Walk the whole
-    // NodeEditor tree instead.
-    const root = path.resolve(__dirname, '..');
+    const root = ROOT;
     const offenders: string[] = [];
     let scanned = 0;
     const walk = (dir: string) => {
@@ -83,8 +81,11 @@ describe('NodeTitle is the ONE renderer of .node-base__title (source pin)', () =
   });
 
   it('every exemption is still used', () => {
+    // Nothing to check while EXEMPT is empty, which is the intended steady
+    // state; this only has work to do once someone adds an entry back. Paths are
+    // keyed against the same ROOT the sweep reports them under.
     for (const [file, why] of Object.entries(EXEMPT)) {
-      const src = readFileSync(path.join(__dirname, '..', file), 'utf8');
+      const src = readFileSync(path.join(ROOT, file), 'utf8');
       expect(/className="node-base__title"/.test(src), `${file} no longer renders the title by hand (${why}) — drop the exemption`).toBe(true);
     }
   });

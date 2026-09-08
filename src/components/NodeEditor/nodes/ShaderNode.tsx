@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
 import { NODE_REGISTRY, effectiveInputs, growsOperands } from '@/registry/nodeRegistry';
@@ -247,6 +247,82 @@ export function visiblePortRows(
     (row) =>
       (!!row.input && sockets[row.input.id] == null) ||
       (!!row.output && !(outMoved && row.output === outputs[0])),
+  );
+}
+
+/**
+ * ONE input port's value cell — the small box that sits beside a socket and
+ * shows either what is ARRIVING on the wire or what the port is SET to.
+ *
+ * Three branches, in this order, and the order is the whole point:
+ *
+ *   1. CONNECTED → the edge's value. The stored number is dead once a wire
+ *      overrides it, so offering an editable box there would be a lie.
+ *   2. a `color` port → the swatch. A number box printed NaN for a hex and
+ *      scrubbed a colour as a float.
+ *   3. anything else → the number box.
+ *
+ * Rule 2 lives HERE rather than at the call sites because it has been
+ * forgotten twice: the operator branch and the rows layout's detached-socket
+ * loop each drew Data Stripes / Data Viz's exposed ramp ends as number boxes,
+ * on the canvas, beside asset tiles that got it right (measured 2026-09-03).
+ * Four loops carried a copy of the branch — two here and two in the NodeVisual
+ * replica, which imports this the way it already imports `visiblePortRows`, so
+ * the canvas and every preview surface cannot disagree about what a port shows.
+ *
+ * `edge` and `swatch` stay the CALLER's elements, because the two surfaces
+ * genuinely differ there: the live node animates the arriving value
+ * (LiveEdgeValue) and opens the real history-bracketing colour picker, while
+ * the replica paints a static preview state and — off the Node Designer's
+ * stage — an inert span. Only the number box is identical, so only it is
+ * rendered here.
+ *
+ * Renders NOTHING when there is nothing to show (connected, no derivable
+ * label), so a wired port never leaves an empty positioned strip behind.
+ */
+export function PortValueCell({
+  justify,
+  top,
+  dataType,
+  connected,
+  edge,
+  swatch,
+  value,
+  onNumber,
+}: {
+  /** Designer justification — the `--center`/`--left`/`--right` class suffix. */
+  justify: string;
+  /** Offset down the body: a px string, a `calc()`, or a plain number. */
+  top: string | number;
+  dataType: PortDefinition['dataType'];
+  connected: boolean;
+  /** Shown while connected; null when no value can be derived. */
+  edge: ReactNode;
+  /** Shown for an UNWIRED `color` port. */
+  swatch: ReactNode;
+  /** The unwired number, already resolved stored → registry default. */
+  value: number;
+  /** Commit for the number box — the int rounding happens here, once. */
+  onNumber: (v: number) => void;
+}) {
+  const isInt = dataType === 'int';
+  const content = connected
+    ? edge
+    : dataType === 'color'
+      ? swatch
+      : (
+        <DragNumberInput
+          compact
+          step={isInt ? 1 : undefined}
+          value={value}
+          onChange={(v) => onNumber(isInt ? Math.round(v) : v)}
+        />
+      );
+  if (!content) return null;
+  return (
+    <div className={`shader-node__op-val shader-node__op-val--${justify}`} style={{ top }}>
+      {content}
+    </div>
   );
 }
 
@@ -758,6 +834,27 @@ export const ShaderNode = memo(function ShaderNode({
     [id, data.values, updateNodeData],
   );
 
+  /**
+   * The swatch an UNWIRED colour port shows. One helper for the three places a
+   * colour reaches this node — an operator operand, a rows-layout setting, and
+   * a designer-detached operand — so the seed chain (stored value → registry
+   * default → red) and the picker's own contract cannot drift between them.
+   *
+   * The app-wide picker (palettes + recents + a native custom escape hatch).
+   * `history="bracket"`: this hex reaches the graph through handleChange ->
+   * updateNodeData, which pushHistory's unconditionally, and the picker owns
+   * the coalescing bracket for the per-frame stream its custom input still
+   * produces (these rows used to bracket by hand).
+   */
+  const colorSwatch = (key: string) => (
+    <PaletteColorPicker
+      className="shader-node__input-color"
+      history="bracket"
+      value={String(data.values[key] ?? def.defaultValues?.[key] ?? '#ff0000')}
+      onPick={(hex) => handleChange(key, hex)}
+    />
+  );
+
   // Operator layout for 2-input socket-growing / glyph nodes (usesOperatorLayout
   // — glyph OR grows; `append` is the glyphless member, and gating this on the
   // glyph alone is what kept it two sockets wide forever). COMPACT (the default,
@@ -823,47 +920,27 @@ export const ShaderNode = memo(function ShaderNode({
             </div>
           )}
           {ins.map((inp, i) => {
-            const top = `${BODY_H / 2 + offOf(inp.id, i)}px`;
-            const cls = `shader-node__op-val shader-node__op-val--${justify}`;
-            // Values center via the --center class in both modes.
-            const valStyle = { top };
-            if (!connectedInputs.has(inp.id)) {
-              // A COLOUR operand (Data Stripes / Data Viz's exposed ramp ends —
-              // the only colour inputs in this layout) shows the swatch the rows
-              // layout gives a colour setting; a number box here printed NaN for
-              // a hex and scrubbed a colour as a float.
-              if (inp.dataType === 'color') {
-                return (
-                  <div key={`v-${inp.id}`} className={cls} style={valStyle}>
-                    <PaletteColorPicker
-                      className="shader-node__input-color"
-                      history="bracket"
-                      value={String(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? '#ff0000')}
-                      onPick={(hex) => handleChange(inp.id, hex)}
-                    />
-                  </div>
-                );
-              }
-              // Unconnected operand — including the trailing grow slot — shows the
-              // editable identity box (0 add/sub, 1 mul/div). Fill it (type or
-              // wire) and the next operand slot appears below.
-              return (
-                <div key={`v-${inp.id}`} className={cls} style={valStyle}>
-                  <DragNumberInput
-                    compact
-                    step={inp.dataType === 'int' ? 1 : undefined}
-                    value={Number(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? identity)}
-                    onChange={(v) => handleChange(inp.id, String(inp.dataType === 'int' ? Math.round(v) : v))}
-                  />
-                </div>
-              );
-            }
-            const info = graphInfo.labelByHandle.get(inp.id) ?? null;
-            return info ? (
-              <div key={`r-${inp.id}`} className={cls} style={valStyle}>
-                <LiveEdgeValue className="shader-node__edge-val" {...info} />
-              </div>
-            ) : null;
+            const connected = connectedInputs.has(inp.id);
+            const info = connected ? graphInfo.labelByHandle.get(inp.id) ?? null : null;
+            // PortValueCell owns the three-way branch (wire → colour swatch →
+            // number box); this loop only supplies the two surface-specific
+            // halves. The unwired number is the operator's IDENTITY (0 add/sub,
+            // 1 mul/div) — fill it, by typing or wiring, and the next operand
+            // slot appears below. Values center via the --center class in both
+            // compact and list mode.
+            return (
+              <PortValueCell
+                key={`v-${inp.id}`}
+                justify={justify}
+                top={`${BODY_H / 2 + offOf(inp.id, i)}px`}
+                dataType={inp.dataType}
+                connected={connected}
+                edge={info && <LiveEdgeValue className="shader-node__edge-val" {...info} />}
+                swatch={colorSwatch(inp.id)}
+                value={Number(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? identity)}
+                onNumber={(v) => handleChange(inp.id, String(v))}
+              />
+            );
           })}
           {/* Handles anchor to the body (not the node top) so a wrapped,
               taller header never shifts socket positions. */}
@@ -1124,20 +1201,8 @@ export const ShaderNode = memo(function ShaderNode({
                     onChange={(v) => handleChange(row.settingKey!, String(row.input?.dataType === 'int' ? Math.round(v) : v))}
                   />
                 )}
-                {row.settingKey && row.settingType === 'color' && (
-                  // The app-wide picker (palettes + recents + a native custom
-                  // escape hatch). `history="bracket"`: this hex reaches the
-                  // graph through handleChange -> updateNodeData, which
-                  // pushHistory's unconditionally, and the picker owns the
-                  // coalescing bracket for the per-frame stream its custom
-                  // input still produces (this row used to bracket by hand).
-                  <PaletteColorPicker
-                    className="shader-node__input-color"
-                    history="bracket"
-                    value={String(data.values[row.settingKey] ?? def.defaultValues?.[row.settingKey] ?? '#ff0000')}
-                    onPick={(hex) => handleChange(row.settingKey!, hex)}
-                  />
-                )}
+                {/* The same swatch a colour OPERAND gets — see colorSwatch. */}
+                {row.settingKey && row.settingType === 'color' && colorSwatch(row.settingKey)}
                 {row.settingType === 'vec3' && row.vecBaseKey && (
                   <span className="shader-node__vec-group">
                     {['x', 'y', 'z'].map((axis) => {
@@ -1214,29 +1279,18 @@ export const ShaderNode = memo(function ShaderNode({
         const info = connected ? graphInfo.labelByHandle.get(inp.id) ?? null : null;
         return (
           <div key={`mv-${inp.id}`} style={{ display: 'contents' }}>
-            <div className={`shader-node__op-val shader-node__op-val--${rowsJustify}`} style={{ top }}>
-              {connected ? (
-                info && (
-                  <LiveEdgeValue className="shader-node__edge-val" {...info} />
-                )
-              ) : inp.dataType === 'color' ? (
-                // An exposed ramp end is a COLOUR: the same swatch a colour row
-                // gets, never a number box.
-                <PaletteColorPicker
-                  className="shader-node__input-color"
-                  history="bracket"
-                  value={String(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? '#ff0000')}
-                  onPick={(hex) => handleChange(inp.id, hex)}
-                />
-              ) : (
-                <DragNumberInput
-                  compact
-                  step={inp.dataType === 'int' ? 1 : undefined}
-                  value={Number(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? 0)}
-                  onChange={(v) => handleChange(inp.id, String(inp.dataType === 'int' ? Math.round(v) : v))}
-                />
-              )}
-            </div>
+            {/* Same cell as the operator layout: an exposed ramp end is a
+                COLOUR and gets the swatch, never a number box. */}
+            <PortValueCell
+              justify={rowsJustify}
+              top={top}
+              dataType={inp.dataType}
+              connected={connected}
+              edge={info && <LiveEdgeValue className="shader-node__edge-val" {...info} />}
+              swatch={colorSwatch(inp.id)}
+              value={Number(data.values[inp.id] ?? def.defaultValues?.[inp.id] ?? 0)}
+              onNumber={(v) => handleChange(inp.id, String(v))}
+            />
             <TypedHandle
               type="target"
               position={Position.Left}

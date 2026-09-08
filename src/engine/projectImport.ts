@@ -24,8 +24,7 @@ import { generateId } from '@/utils/idGenerator';
 import { readZip, type ZipReadEntry } from '@/utils/zipReader';
 import { createPreviewMesh, detectMeshKind, type PreviewMesh } from '@/utils/previewMesh';
 import { extractProjectState, type FastShadersProject } from './fastShadersProject';
-import { scriptToTSLWithSettings } from './scriptToTSL';
-import type { AppNode } from '@/types';
+import type { AppNode, MaterialSettings } from '@/types';
 
 /**
  * Apply a FastShaders project snapshot to the store. Graph state is restored
@@ -173,6 +172,44 @@ function announceGraphImport(): void {
 }
 
 /**
+ * `scriptToTSL` is the ONE thing on this path that needs @babel/* (its
+ * `hoistParamUniforms` pass), and this module is imported by four boot-path
+ * components — so a static import pinned the 805 KB / 202 KB gzip vendor-babel
+ * chunk into the entry wave for a conversion that only runs when the user
+ * actually opens a shaderloader `.js`. Loaded on demand instead.
+ *
+ * A failed load clears the in-flight promise so a later import retries rather
+ * than the session being permanently unable to open a script.
+ */
+type ScriptToTSLModule = typeof import('./scriptToTSL');
+let scriptToTSL: ScriptToTSLModule | null = null;
+let scriptToTSLLoad: Promise<ScriptToTSLModule | null> | null = null;
+
+/**
+ * Fetch the converter chunk. Exported so a caller that is ALREADY on an async
+ * boundary — every import surface is — can pay for it up front and keep
+ * importShaderText's bare-script branch fully synchronous; `importShaderZip`
+ * does exactly that. Idempotent, and resolves `null` when the chunk cannot be
+ * fetched at all.
+ */
+export function preloadShaderImport(): Promise<ScriptToTSLModule | null> {
+  if (scriptToTSL) return Promise.resolve(scriptToTSL);
+  if (!scriptToTSLLoad) {
+    scriptToTSLLoad = import('./scriptToTSL')
+      .then((m) => { scriptToTSL = m; return m; })
+      .catch(() => { scriptToTSLLoad = null; return null; });
+  }
+  return scriptToTSLLoad;
+}
+
+/**
+ * Monotonic import token. The converter chunk can be in flight when a SECOND
+ * import starts, and the first one's continuation must not then overwrite the
+ * document the second one produced — last import wins, as it does today.
+ */
+let scriptImportSeq = 0;
+
+/**
  * Import shader source text: a FASTSHADERS_PROJECT_V1 block restores the full
  * project; a bare shaderloader script is parsed back to TSL and re-synced.
  *
@@ -181,6 +218,13 @@ function announceGraphImport(): void {
  * 'custom' geometry pref and get bundled into the next export's zip. The zip
  * path passes `keepPreviewMesh` because it decides mesh presence from the
  * archive itself (and must set the mesh BEFORE the prefs re-read fires).
+ *
+ * SYNCHRONY. Everything up to and including the return value is synchronous:
+ * the project-block parse, the mesh clear, the whole project branch, and the
+ * `fs:graph-imported` announcement on both branches. Only the bare-script
+ * branch's CONVERSION can be deferred, and only on the very first one of a
+ * session, while the on-demand converter chunk is fetched — `await
+ * preloadShaderImport()` first if a caller needs that branch settled on return.
  */
 export function importShaderText(
   text: string,
@@ -194,6 +238,42 @@ export function importShaderText(
     applyProjectToStore(projectResult.project);
     return 'project';
   }
+  // A bare script's graph doesn't exist yet — useSyncEngine's code→graph pass
+  // builds it a commit or two from now. The canvas arms the fit on this event
+  // and fires it on the graph it actually renders next, so announcing early is
+  // correct here.
+  //
+  // It is announced BEFORE the conversion now rather than after it, because the
+  // converter chunk is loaded on demand (preloadShaderImport) and the rest of
+  // this branch may therefore land a tick later. Listeners that read "the graph
+  // is being replaced" inside their own synchronous bracket would miss a
+  // deferred dispatch — the desktop Work folder drops its tracked file exactly
+  // that way, guarded by a loadingRef it clears when its own promise settles.
+  // Nothing here reads store state those listeners write, so the move is inert
+  // on the synchronous path.
+  announceGraphImport();
+  // Last import wins: a second one started while the chunk was in flight owns
+  // the document, and this one's continuation must not overwrite it.
+  const seq = ++scriptImportSeq;
+  if (scriptToTSL) {
+    applyConvertedScript(scriptToTSL.scriptToTSLWithSettings(text));
+  } else {
+    void preloadShaderImport().then((m) => {
+      if (!m || seq !== scriptImportSeq) return;
+      applyConvertedScript(m.scriptToTSLWithSettings(text));
+    });
+  }
+  return 'script';
+}
+
+/**
+ * Commit a converted bare script to the store. Split out of importShaderText
+ * only so it can also run from the converter chunk's continuation; the body is
+ * unchanged.
+ */
+function applyConvertedScript(
+  converted: { code: string; materialSettings?: MaterialSettings },
+): void {
   const store = useAppStore.getState();
   // A bare script carries its OWN material settings (transparency / side /
   // alpha clip) in its return object. scriptToTSL strips them out of the TSL —
@@ -233,7 +313,6 @@ export function importShaderText(
   // normal mode. A raw editor-TSL file (the pass-through branch) carries no
   // settings at all, so importing one likewise clears them: editor TSL cannot
   // express them, and "the file is silent" is read as "the file says none".
-  const converted = scriptToTSLWithSettings(text);
   useAppStore.setState((s) => ({
     // The ACTIVE Output only: an inactive one keeps its own settings, exactly
     // as it keeps its wiring across the resync (useSyncEngine's carry).
@@ -259,12 +338,6 @@ export function importShaderText(
   }));
   store.setCode(converted.code, 'code');
   store.requestCodeSync();
-  // A bare script's graph doesn't exist yet — useSyncEngine's code→graph pass
-  // builds it a commit or two from now. The canvas arms the fit on this event
-  // and fires it on the graph it actually renders next, so announcing early is
-  // correct here.
-  announceGraphImport();
-  return 'script';
 }
 
 export function isZipFile(file: File): boolean {
@@ -328,6 +401,12 @@ export async function importShaderZip(file: File): Promise<'project' | 'script' 
     return 'model';
   }
   const withProject = scripts.find((t) => t.includes('FASTSHADERS_PROJECT_V1'));
+
+  // This path is already async, so pay for the on-demand converter chunk HERE
+  // rather than letting importShaderText defer its bare-script branch: the mesh
+  // handshake below is ordered around that branch having already run. A zip
+  // carrying a project block never reaches the converter, so it never loads it.
+  if (!withProject) await preloadShaderImport();
 
   // Set — or, when the archive has none, CLEAR — the mesh BEFORE the text
   // import: applyProjectToStore dispatches the prefs re-read synchronously,

@@ -1252,7 +1252,7 @@ const definitions: NodeDefinition[] = [
     tslImportModule: '',
     inputs: [],
     outputs: [{ id: 'out', label: 'Direction', dataType: 'vec3' }],
-    description: 'The direction this pixel\'s view ray travels, world space, unit length. Feed an Image node\'s Direction socket to sample a sky; inside a Volume Output\'s Background it is the bent ray, so the sky is lensed. Also: view ray, eye ray, look direction, sky',
+    description: 'The direction this pixel\'s view ray travels, world space, unit length. Feed an Image node\'s Direction socket to sample a sky; inside the Raymarch Output\'s Background it is the bent ray, so the sky is lensed. Also: view ray, eye ray, look direction, sky',
   },
 
   // ===== NOISE =====
