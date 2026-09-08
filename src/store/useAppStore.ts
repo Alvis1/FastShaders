@@ -1555,11 +1555,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
       ? loadHexColor('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK)
       : loadHexColor('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
   codeEditorTheme: (loadString('fs:codeEditorTheme', 'vs') === 'vs-dark' ? 'vs-dark' : 'vs'),
-  // Latvian is the DEFAULT (this is a Latvian research project and the user
-  // study runs in Latvian); English is one click away on the toolbar's EN
-  // button. Only a fresh browser gets the default — a stored `fs:lang` from
-  // before this change keeps whatever the user last chose.
-  language: (loadString('fs:lang', 'lv') === 'en' ? 'en' : 'lv'),
+  // English is the DEFAULT (2026-09-08). It was Latvian from 2026-08-29, on the
+  // reasoning that this is a Latvian research project whose user study runs in
+  // Latvian — but the study arms carry their own language switch on the consent
+  // dialog, so that need is met without making every other visitor start in a
+  // language they may not read. Latvian is one click away on the toolbar's LV
+  // button. Only a FRESH browser gets the default: a stored `fs:lang` keeps
+  // whatever the user last chose, so nobody's existing session flips.
+  language: (loadString('fs:lang', 'en') === 'lv' ? 'lv' : 'en'),
   // Hydrated by App.tsx's mount effect (`loadSavedGroups()`), exactly as
   // `drawings` and `shaderPalettes` below are — NOT at module scope, and that
   // is load-bearing rather than symmetry.

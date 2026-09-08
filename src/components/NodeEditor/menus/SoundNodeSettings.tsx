@@ -3,7 +3,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { listInputDevices, subscribeSound, getSoundStatus, soundSupported } from '@/utils/soundSession';
 import { SoundSourceSelect } from '../nodes/SoundSourceSelect';
-import { rowStyle, labelStyle } from './menuShared';
+import { rowStyle, labelStyle, hintStyle } from './menuShared';
 
 /**
  * The Sound node's settings: WHICH sound it listens to.
@@ -91,7 +91,7 @@ export function SoundNodeSettings() {
         <SoundSourceSelect />
       </div>
       {unnamed && (
-        <div style={{ ...rowStyle, opacity: 0.7, fontSize: '11px', display: 'block' }}>
+        <div style={{ ...rowStyle, ...hintStyle, opacity: 0.7, fontSize: '11px', paddingTop: 0 }}>
           {t('Device names appear after you allow microphone access once.', language)}
         </div>
       )}

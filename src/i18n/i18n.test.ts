@@ -87,30 +87,33 @@ describe('i18n helpers', () => {
 
 /**
  * Latvian is the app's DEFAULT language (a Latvian research project; the user
- * study runs in Latvian), with English one click away on the toolbar's EN
- * button. That is a product decision a refactor of the store's boot-time
- * `loadString` call could silently flip, and nothing would fail — the app
- * would simply come up in the wrong language for every new user.
+ * English is the default (2026-09-08; it was Latvian from 2026-08-29), with
+ * Latvian one click away on the toolbar's LV button — and the eval study arms
+ * carry their own switch on the consent dialog, which is what that earlier
+ * default existed to serve. This is a product decision a refactor of the
+ * store's boot-time `loadString` call could silently flip, and nothing would
+ * fail — the app would simply come up in the wrong language for every new user.
  */
 describe('default UI language', () => {
-  it('is Latvian for a browser with no stored preference', () => {
+  it('is English for a browser with no stored preference', () => {
     const src = readFileSync(fileURLToPath(new URL('../store/useAppStore.ts', import.meta.url)), 'utf8');
     const line = src.split('\n').find((l) => l.includes("loadString('fs:lang'"));
     expect(line, "the store no longer reads fs:lang").toBeTruthy();
-    expect(line, 'the fs:lang fallback must be lv').toContain("'fs:lang', 'lv'");
+    expect(line, 'the fs:lang fallback must be en').toContain("'fs:lang', 'en'");
   });
 
-  it("index.html's pre-paint guard resolves an absent fs:lang to lv, like the store", () => {
+  it("index.html's pre-paint guard resolves an absent fs:lang to en, like the store", () => {
     // The guard is the ONLY writer of <html lang> for a first-time visitor, and it
-    // used to default to 'en' while the store defaulted to 'lv' — so the default
-    // population of a Latvian-first app got a document advertising English (wrong
-    // screen-reader phonetics, a browser translate prompt, an English spellcheck
-    // dictionary over Latvian text input). WCAG 3.1.1 Level A. The two resolutions
-    // must stay mirror images; nothing at runtime fails when they drift.
+    // once defaulted to 'en' while the store defaulted to 'lv', so a first-time
+    // visitor got a document advertising the wrong language: wrong screen-reader
+    // phonetics, a spurious browser translate prompt, and the wrong spellcheck
+    // dictionary over every note and shader-name field. WCAG 3.1.1 Level A. The
+    // two resolutions must stay mirror images WHICHEVER way the default points;
+    // nothing at runtime fails when they drift.
     const html = readFileSync(fileURLToPath(new URL('../../index.html', import.meta.url)), 'utf8');
     const line = html.split('\n').find((l) => l.includes("setAttribute('lang'"));
     expect(line, 'index.html no longer stamps <html lang>').toBeTruthy();
-    expect(line, "an absent fs:lang must resolve to 'lv'").toContain("=== 'en' ? 'en' : 'lv'");
+    expect(line, "an absent fs:lang must resolve to 'en'").toContain("=== 'lv' ? 'lv' : 'en'");
   });
 
   it('the store applies <html lang> at init, not only on toggle', () => {

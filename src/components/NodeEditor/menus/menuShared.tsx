@@ -40,6 +40,30 @@ export const checkLabelStyle = {
 
 export const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
 
+/**
+ * A descriptive row: prose that explains a control rather than being one.
+ *
+ * It WRAPS, and that is the whole point. A settings menu shrink-to-fits to its
+ * widest row (`.context-menu` has a `min-width`, not a width — only the
+ * Add-node menu pins one), so a sentence on one line makes the sentence decide
+ * how wide the panel is. The cap is a plain px value just inside that
+ * `min-width`, so a hint never widens the box at all: it wraps inside the width
+ * the menu was going to have anyway.
+ *
+ * `wordBreak: 'normal'` is explicit because these sentences carry identifiers
+ * and device names, and breaking one mid-token to save a line reads as
+ * corruption rather than as wrapping.
+ */
+export const hintStyle = {
+  ...labelStyle,
+  display: 'block',
+  maxWidth: '230px',
+  whiteSpace: 'normal',
+  overflowWrap: 'break-word',
+  wordBreak: 'normal',
+  lineHeight: 1.4,
+} as const;
+
 export const fieldStyle = {
   width: '70px',
   padding: '2px 4px',
