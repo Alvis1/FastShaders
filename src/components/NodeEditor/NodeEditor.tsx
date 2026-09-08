@@ -20,6 +20,13 @@ import {
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore, resolveDeviceTextureDim, resolveDeviceBudget } from '@/store/useAppStore';
 import type { ContextMenuType } from '@/store/useAppStore';
+import {
+  isDoubleActivation,
+  togglePeek,
+  PEEK_EXEMPT_SELECTOR,
+  PEEK_EXEMPT_NODE_TYPES,
+  type Activation,
+} from './labelPeek';
 import { useLongPress } from '@/hooks/useLongPress';
 import { nodeTypes, edgeTypes } from './flowTypes';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
@@ -729,6 +736,53 @@ export function NodeEditor() {
     // detached by then and removing a class from it is a no-op.
     return () => el?.classList.remove('fs-menu-active');
   }, [menuNodeId]);
+  /**
+   * The node whose socket labels are held open by a double-click / double-tap
+   * (see labelPeek.ts). Local state: nothing outside this component opens it,
+   * and looking at a node's ports is not an edit — it must not reach history,
+   * the autosave or a shared file.
+   */
+  const [peekNodeId, setPeekNodeId] = useState<string | null>(null);
+  const lastActivationRef = useRef<Activation>(null);
+  useEffect(() => {
+    if (!peekNodeId) return;
+    let el: Element | null = null;
+    try {
+      // Node ids come out of .fastshader files — the same reason the
+      // menu-active effect escapes them.
+      el = document.querySelector(`.react-flow__node[data-id="${CSS.escape(peekNodeId)}"]`);
+    } catch {
+      return;
+    }
+    if (!el) return;
+    el.classList.add('fs-labels-shown');
+    return () => el?.classList.remove('fs-labels-shown');
+  }, [peekNodeId]);
+
+  /**
+   * Two clicks on one node inside the double-click window. Built on CLICK
+   * rather than `dblclick` so a double TAP works too — a tap produces a click,
+   * where `dblclick` is not reliably synthesized (the reason the Color node
+   * carries a long-press beside its own double-click handler).
+   */
+  const onNodeClick = useCallback((e: React.MouseEvent, node: AppNode) => {
+    const t = Date.now();
+    const prev = lastActivationRef.current;
+    lastActivationRef.current = { id: node.id, t };
+    if (!isDoubleActivation(prev, node.id, t)) return;
+    // Consumed: a third click starts a fresh pair rather than toggling again.
+    lastActivationRef.current = null;
+    if (PEEK_EXEMPT_NODE_TYPES.has(node.type ?? '')) return;
+    const el = e.target as Element | null;
+    if (el?.closest?.(PEEK_EXEMPT_SELECTOR)) return;
+    setPeekNodeId((cur) => togglePeek(cur, node.id));
+  }, []);
+
+  const onPaneClick = useCallback(() => {
+    closeContextMenu();
+    setPeekNodeId(null);
+  }, [closeContextMenu]);
+
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
   // Canvas-background picker. `ColorPickerPopover` rather than the trigger-
@@ -952,6 +1006,11 @@ export function NodeEditor() {
         useAppStore.getState().setDrawToolActive(false);
         return;
       }
+
+      // …and puts a held-open set of socket labels away. Below draw mode, so
+      // one Escape does one thing; it does not return, because Escape is a
+      // dismissal key and anything else listening for it still gets its turn.
+      if (e.key === 'Escape') setPeekNodeId(null);
 
       const mod = e.metaKey || e.ctrlKey;
       // Normalized so Caps Lock (which reports 'C' rather than 'c') doesn't
@@ -3214,7 +3273,8 @@ export function NodeEditor() {
           onEdgeContextMenu={onEdgeContextMenu}
           onEdgeDoubleClick={onEdgeDoubleClick}
           onSelectionContextMenu={onSelectionContextMenu}
-          onPaneClick={closeContextMenu}
+          onNodeClick={onNodeClick}
+          onPaneClick={onPaneClick}
           onReconnectStart={onReconnectStart}
           onReconnect={onReconnect}
           onReconnectEnd={onReconnectEnd}

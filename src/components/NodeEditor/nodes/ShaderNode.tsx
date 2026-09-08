@@ -675,6 +675,22 @@ export const ShaderNode = memo(function ShaderNode({
   // Per-node text scale: multiplies header/value/edge-label font sizes via a
   // CSS variable (layout metrics like the 14px header stay fixed).
   const textScale = nodeTextScale(data.registryType);
+  /**
+   * Whether this node draws its glyph — `hasNodeGlyph` AND the toolbar switch.
+   *
+   * The gate is in JS and NOT in CSS, and that is the correction rather than a
+   * preference: `NodeGlyph` renders the `<svg>` with an inline
+   * `style={{ display: 'block' }}`, and an inline declaration beats any
+   * stylesheet rule short of `!important` — so the attribute sweep this switch
+   * shipped with hid nothing at all, on any node, while every test that
+   * asserted on the selector stayed green. Not rendering the element is also
+   * strictly less work than rendering it to hide it.
+   *
+   * `usesOperatorLayout` deliberately still asks `hasNodeGlyph`: the flag
+   * decides whether the art is DRAWN, never which layout the node uses — a
+   * node that changed shape when you hid its glyph would be a different node.
+   */
+  const showGlyph = nodeGraphics && hasNodeGlyph(data.registryType);
   if (textScale !== 1) (nodeStyle as Record<string, string | number>)['--node-text-scale'] = textScale;
   const headerStyle: CSSProperties = { background: costColor };
   // Image node: param sockets follow the SAME opt-in exposedPorts rules as
@@ -931,7 +947,7 @@ export const ShaderNode = memo(function ShaderNode({
         <div className="shader-node__op" style={{ height: BODY_H, ...(box.width ? { minWidth: 0 } : null) }}>
           {/* Operator glyph only in the compact 2-operand look; the vertical
               list identifies the op by its header name instead. */}
-          {!chainListMode && hasNodeGlyph(data.registryType) && (
+          {!chainListMode && showGlyph && (
             <div className="shader-node__op-glyph">
               <NodeGlyph type={data.registryType} value={Number(data.values?.value ?? 0)} size={34} />
             </div>
@@ -1127,7 +1143,7 @@ export const ShaderNode = memo(function ShaderNode({
       <div className="shader-node__region" style={{ position: 'relative', ...regionSize }}>
       {/* Glyph icon for the node, above the port rows. Values are never drawn on
           top of it — they live in the rows below, aligned with their sockets. */}
-      {hasNodeGlyph(data.registryType) && (
+      {showGlyph && (
         <div className="shader-node__glyph">
           <NodeGlyph type={data.registryType} value={Number(data.values?.value ?? 0)} size={30} />
         </div>

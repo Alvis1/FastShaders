@@ -137,6 +137,19 @@
   opacity: 1;
 }
 
+/* Double-click / double-tap a node: EVERY one of its socket labels is held
+   open until it is dismissed (labelPeek.ts). Same label, same placement — a
+   fourth trigger, not a second kind of bubble.
+
+   Note what this is NOT: pinning every label while a node is SELECTED was tried
+   and drowned the card in text (see the touch rule below). The difference is
+   that this is asked for and put away — a deliberate gesture, on one node,
+   cleared by Escape, a click on empty canvas, or the same gesture again — where
+   selection happens constantly and as a side effect of dragging. */
+.fs-labels-shown .typed-handle[data-tooltip]::after {
+  opacity: 1;
+}
+
 /* Touch: no reliable hover, and pinning every label while a node was selected
    drowned the card in text — instead a direct tap on a socket shows that
    socket's own tooltip for a beat. The class is added per-gesture by

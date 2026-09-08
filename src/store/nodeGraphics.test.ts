@@ -34,11 +34,9 @@ const storeSrc = readFileSync(new URL('./useAppStore.ts', import.meta.url), 'utf
 const toolbar = readFileSync(new URL('../components/Layout/Toolbar.tsx', import.meta.url), 'utf8');
 const glyph = readFileSync(new URL('../components/NodeEditor/nodes/glyphs/NodeGlyph.tsx', import.meta.url), 'utf8');
 
-/** The block the switch turns on, from `:root[data-fs-node-graphics='off']` to its `}`. */
-const sweep = css.slice(
-  css.indexOf(":root[data-fs-node-graphics='off']"),
-  css.indexOf('}', css.lastIndexOf(":root[data-fs-node-graphics='off']")) + 1,
-);
+/** `css` with every comment stripped — see the sweep test below for why. */
+const cssCode = css.replace(/\/\*[\s\S]*?\*\//g, '');
+const shader = readFileSync(new URL('../components/NodeEditor/nodes/ShaderNode.tsx', import.meta.url), 'utf8');
 
 describe('the node-graphics switch', () => {
   beforeEach(() => {
@@ -70,28 +68,43 @@ describe('the node-graphics switch', () => {
     expect(project).not.toContain('nodeGraphics');
   });
 
-  it('hides the glyph, and the handle it hides by exists', () => {
-    expect(sweep).toContain('.node-glyph');
-    expect(sweep).toContain('display: none');
-    // A selector matching nothing is a silent no-op — the whole failure mode
-    // this file exists for. The class has to be on the real element.
-    expect(glyph).toContain('className="node-glyph"');
+  it('hides the glyph by NOT RENDERING it — a stylesheet cannot win here', () => {
+    // This shipped as a CSS sweep and hid nothing on any node: NodeGlyph sets
+    // an inline `display: block` on its own <svg>, and an inline declaration
+    // beats any stylesheet rule short of `!important`. So the gate is in the
+    // component, where no style the element sets on itself can defeat it.
+    expect(glyph).toContain("display: 'block'");
+    expect(shader).toContain('const showGlyph = nodeGraphics && hasNodeGlyph(');
+    // BOTH layouts draw a glyph, from separate branches. Gating one leaves the
+    // other still drawing art the switch says to hide.
+    expect(shader).toContain('{!chainListMode && showGlyph && (');
+    expect(shader).toContain('{showGlyph && (');
+    expect(shader).not.toContain('{hasNodeGlyph(data.registryType) && (');
   });
 
-  it("hides ONLY the glyph — every other surface shows the node's own data", () => {
-    // Each of these was in the sweep at some point and had to come out. The
-    // image and noise thumbnails ARE the node's content; the colormap ramp is
-    // the only thing saying viridis rather than cool-warm (the header shows a
-    // generated var name); the sin/cos value lives inside the plot's svg, with
-    // the fallback number rendering only when nothing is wired.
-    for (const cls of [
-      'image-thumb',
-      'preview-node__canvas',
-      'math-preview-node__canvas',
-      'clock-node__canvas',
-      'colormap-strip',
-    ]) {
-      expect(sweep, `${cls} is back in the sweep — it is data, not decoration`).not.toContain(cls);
+  it('has no CSS rule left that pretends to do the hiding', () => {
+    // Comments are stripped first, and that is not fussiness: the replacement
+    // comment NAMES the dead selector, and an indexOf over the raw file finds
+    // it there — which is exactly how the previous version of this test passed
+    // for its whole life against a rule that hid nothing.
+    expect(cssCode).not.toContain('data-fs-node-graphics');
+  });
+
+  it('changes what a node DRAWS, never which layout it uses', () => {
+    // usesOperatorLayout asks hasNodeGlyph, not showGlyph: a node that changed
+    // shape when you hid its glyph would be a different node, and its sockets
+    // would move with it.
+    expect(shader).toContain('usesOperatorLayout(def)');
+    expect(shader).not.toContain('usesOperatorLayout(def, showGlyph');
+  });
+
+  it("leaves every other drawn surface alone — they show the node's own data", () => {
+    // Each of these was in scope at some point and had to come out. The image
+    // and noise thumbnails ARE the node's content; the colormap ramp is the
+    // only thing saying viridis rather than cool-warm (the header shows a
+    // generated var name); the sin/cos value lives inside the plot's svg.
+    for (const cls of ['image-thumb', 'preview-node__canvas', 'math-preview-node__canvas', 'clock-node__canvas', 'colormap-strip']) {
+      expect(cssCode, `${cls} is being hidden — it is data, not decoration`).not.toContain(`node-graphics'] .react-flow .${cls}`);
     }
   });
 
@@ -111,7 +124,6 @@ describe('the node-graphics switch', () => {
     // the socket offsets, so only it can take the band back. Both layouts must
     // do it — the operator body and the rows region are separate heights, and
     // fixing one leaves the other reserving space for art it no longer draws.
-    const shader = readFileSync(new URL('../components/NodeEditor/nodes/ShaderNode.tsx', import.meta.url), 'utf8');
     expect(shader).toContain('compactOpBodyHeight(');
     expect(shader).toContain('socketFloor(');
     // NodeVisual is the replica behind the palette tiles, the node-editor
@@ -122,12 +134,13 @@ describe('the node-graphics switch', () => {
   });
 
   it('leaves the palette tiles, the overview and the Designer alone', () => {
-    // Scoped to the canvas. Unscoped, it would strip the glyph from the tiles
-    // too, where the symbol is what identifies a node you have not placed yet.
-    const selectors = sweep.split('{')[0].split(',').map((s) => s.trim()).filter(Boolean);
-    for (const sel of selectors) {
-      expect(sel, `${sel} is not scoped to .react-flow`).toContain('.react-flow');
-    }
+    // ShaderNode draws the canvas node; NodeVisual is the replica behind the
+    // tiles, the node-editor overview and the Designer stage, and there the
+    // symbol is what identifies a node you have not placed yet — the opposite
+    // of the canvas, where you already know what you put down.
+    const visual = readFileSync(new URL('../components/NodeEditor/nodes/NodeVisual.tsx', import.meta.url), 'utf8');
+    expect(visual, 'NodeVisual must keep drawing the glyph').not.toContain('nodeGraphics');
+    expect(visual).toContain('<NodeGlyph');
   });
 
   it('is stamped on <html> at module init, not only by the setter', () => {

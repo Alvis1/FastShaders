@@ -2361,8 +2361,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setNodeGraphics: (v) => {
     try { localStorage.setItem('fs:nodeGraphics', v ? '1' : '0'); } catch { /* */ }
-    // The ATTRIBUTE is what the CSS sweep reads; the store field is what the
-    // toolbar checkbox reads. Both, or the switch and the canvas disagree.
+    // The store field is what BOTH the toolbar checkbox and ShaderNode read —
+    // the canvas gate is in the component, because NodeGlyph sets an inline
+    // `display: block` that no stylesheet rule can beat (NodeBase.css). The
+    // attribute is still stamped for anything that later wants a canvas-scoped
+    // sweep over an element whose display is not set inline.
     applyNodeGraphicsAttribute(v);
     set({ nodeGraphics: v });
   },
