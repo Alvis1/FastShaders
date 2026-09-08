@@ -3,6 +3,7 @@ import { graphToCode } from './graphToCode';
 import { tslToShaderModule } from './tslToShaderModule';
 import { codeToGraph } from './codeToGraph';
 import { makeNode, makeEdge } from '@/test-utils';
+import { effectiveExposedPorts, SOUND_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 
 /**
  * The Sound node's whole design rests on one claim: emitting `uniform(0)` means
@@ -326,5 +327,52 @@ describe('Sound node — smoothing is CPU-only and must not leak into the shader
     ];
     const { code } = graphToCode([f, mic, out], edges);
     expect(code).toContain('const _sound1_bass = sound1_bass.mul(4);');
+  });
+});
+
+describe('Sound node — its params are exposed by DEFAULT', () => {
+  it('a fresh node shows both input sockets without anything stored', () => {
+    // The node has no other inputs, so with these hidden it was four outputs
+    // and no way in but a settings checkbox or a drag-reveal you had to know
+    // about. `exposedPorts` is undefined on a fresh node — the defaults are
+    // IMPLICIT, which is why effectiveExposedPorts answers rather than the
+    // stored value.
+    const node = makeNode('sound1', 'soundNode');
+    expect((node.data as { exposedPorts?: unknown }).exposedPorts).toBeUndefined();
+    expect(effectiveExposedPorts(node)).toEqual(['smoothing', 'gain']);
+    expect(SOUND_DEFAULT_EXPOSED).toEqual(['smoothing', 'gain']);
+  });
+
+  it('an explicit stored list still wins, including an empty one', () => {
+    // Hiding both is a real choice the settings checkboxes can express, and it
+    // must survive: falling back to the defaults on `[]` would make the
+    // checkboxes look broken.
+    const hidden = makeNode('sound1', 'soundNode');
+    (hidden.data as { exposedPorts?: string[] }).exposedPorts = [];
+    expect(effectiveExposedPorts(hidden)).toEqual([]);
+    const one = makeNode('sound2', 'soundNode');
+    (one.data as { exposedPorts?: string[] }).exposedPorts = ['gain'];
+    expect(effectiveExposedPorts(one)).toEqual(['gain']);
+  });
+
+  it('changes NOTHING about the emitted code — the sockets are free when unwired', () => {
+    // This is what makes defaulting them on safe. `gain` at its default with no
+    // edge emits the bare uniform (graphToCode skips the multiply), and
+    // `smoothing` never reaches codegen at all — it configures the AnalyserNode
+    // on the CPU. So every graph saved before this generates identical text.
+    const { nodes, edges } = micGraph(['bass']);
+    const withDefaults = graphToCode(nodes, edges).code;
+
+    const hiddenNodes = nodes.map((n) =>
+      n.data.registryType === 'soundNode'
+        ? { ...n, data: { ...n.data, exposedPorts: [] } }
+        : n,
+    );
+    const withHidden = graphToCode(hiddenNodes as typeof nodes, edges).code;
+
+    expect(withDefaults).toBe(withHidden);
+    expect(withDefaults).toContain('const sound1_bass = uniform(0);');
+    // No gain multiply anywhere: an exposed-but-unwired param is not a wire.
+    expect(withDefaults).not.toContain('_sound1_bass');
   });
 });

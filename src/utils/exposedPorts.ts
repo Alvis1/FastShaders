@@ -24,6 +24,26 @@ export const OUTPUT_DEFAULT_EXPOSED = ['color', 'roughness', 'position'];
  *  value, because a setting applies whether or not it is wired. */
 export const MARCH_DEFAULT_EXPOSED = ['field', 'color', 'emissive', 'density', 'glow', 'background'];
 
+/** The Sound node's two analyser params, visible by DEFAULT.
+ *
+ *  Unlike the other opt-in nodes these are the node's whole input side — it has
+ *  no other sockets at all — so hiding them left a node with four outputs and
+ *  nothing to drive, and the only ways in were a settings checkbox most people
+ *  never look for and a drag-reveal you have to already know about. Wiring
+ *  `gain` to an envelope, or `smoothing` to a slider, is ordinary use of this
+ *  node rather than an advanced case.
+ *
+ *  Costs nothing when unwired, which is what makes defaulting them on safe:
+ *  `gain` at 1 with no edge emits the bare uniform byte-for-byte as before
+ *  (graphToCode skips the multiply), and `smoothing` never reaches codegen at
+ *  all — it configures the AnalyserNode on the CPU. So a graph saved before
+ *  this shows two more sockets and generates identical code.
+ *
+ *  IMPLICIT, like the two above: a fresh Sound node has `exposedPorts:
+ *  undefined`, so any union must start from the effective list rather than
+ *  `[]`, or exposing something new would hide these. */
+export const SOUND_DEFAULT_EXPOSED = ['smoothing', 'gain'];
+
 /** Nodes whose optional parameter sockets follow the opt-in exposedPorts
  *  rules (everything else always shows its registry ports).
  *
@@ -90,6 +110,7 @@ export function effectiveExposedPorts(node: AppNode): string[] {
   if (Array.isArray(raw)) return raw.filter((s): s is string => typeof s === 'string');
   if (node.data.registryType === 'output') return OUTPUT_DEFAULT_EXPOSED;
   if (node.data.registryType === 'raymarchOutput') return MARCH_DEFAULT_EXPOSED;
+  if (node.data.registryType === 'soundNode') return SOUND_DEFAULT_EXPOSED;
   return [];
 }
 
