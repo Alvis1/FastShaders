@@ -32,7 +32,13 @@ describe('updateNodeData → fs:uniform-authored', () => {
         makeNode('f1', 'float', { value: 3 }),
       ] as AppNode[],
       edges: [],
-      nodeVarNames: { p1: 'cutoff', c1: 'tint' },
+      // NULL-PROTOTYPE, like the store's own seed and useSyncEngine's builder.
+      // Not fussiness: the suite runs with `isolate: false`, so this object
+      // outlives the file and is what `nodeVarNamesPrototype.test.ts` reads if
+      // it happens to run later in the same worker — a plain `{}` here failed
+      // that file in CI and nowhere else, because the file-to-worker split
+      // differs by machine.
+      nodeVarNames: Object.assign(Object.create(null), { p1: 'cutoff', c1: 'tint' }),
     });
   });
 

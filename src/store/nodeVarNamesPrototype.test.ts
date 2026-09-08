@@ -15,6 +15,15 @@
  *  - the store's INITIAL seed, which is what components read on the first paint
  *    of a freshly loaded graph — that paint happens before any sync effect has
  *    run, so a safe builder alone does not cover it.
+ *
+ * NOTE FOR OTHER TEST FILES: the seed assertions below read the LIVE store, and
+ * the suite runs with `isolate: false`, so a file that plants a plain-object
+ * `nodeVarNames` via `setState` breaks them from another file entirely — and
+ * only on machines whose file-to-worker split happens to run it first. That is
+ * exactly how this failed in CI while passing on four local runs
+ * (uniformAuthoredEvent.test.ts, 2026-09-09). Any test setting this field must
+ * use `Object.create(null)`, which is what the store holds anyway. The setter
+ * normalizes, but `setState` bypasses it by design.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';

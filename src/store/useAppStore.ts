@@ -2415,7 +2415,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }));
   },
 
-  setNodeVarNames: (names) => set({ nodeVarNames: names }),
+  // Normalized to a NULL PROTOTYPE on the way in, not merely seeded as one.
+  // Node ids arrive verbatim from `.fastshader` files, and seven components
+  // read `s.nodeVarNames[id]` straight into `varName ?? data.label`, where an
+  // id spelling `constructor` on a plain object resolves to a FUNCTION that
+  // `??` then keeps — a throw inside NodeTitle, which the autosave persists.
+  // Today's one caller already builds a safe map; this is what makes that a
+  // property of the STORE rather than of one call site.
+  setNodeVarNames: (names) =>
+    set({
+      nodeVarNames:
+        Object.getPrototypeOf(names) === null
+          ? names
+          : (Object.assign(Object.create(null), names) as Record<string, string>),
+    }),
 
   // The three colour setters REFUSE anything that is not `#rrggbb` and keep the
   // current value — the picker is not their only caller: `projectImport` feeds
