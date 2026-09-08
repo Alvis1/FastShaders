@@ -81,8 +81,14 @@
   #ndNode{position:relative}
   /* cost badge auto-contrast vs the pickable stage bg — the SAME CSS-var
      mechanism NodeBase.css applies inside .react-flow; the vars are set on
-     #nodeWrap from the bg picker (designerApp.applyBg) */
-  #nodeWrap .node-base__cost-badge{color:var(--node-cost-text,#000000) !important;text-shadow:0 1px 2px var(--node-cost-text-shadow,rgba(255,255,255,.6)) !important}
+     #nodeWrap from the bg picker (designerApp.applyBg).
+     The shadow must stay byte-for-byte what `.react-flow .node-base__cost-badge`
+     draws: this stage is #nodeWrap, outside .react-flow, so the app rule never
+     reaches it and this copy wins outright. It held the soft `0 1px 2px` halo
+     the technical restyle removed (NodeBase.css documents why a blurred glow
+     has no place here), so the one surface whose job is previewing a node drew
+     its badge differently from the canvas and every asset tile. */
+  #nodeWrap .node-base__cost-badge{color:var(--node-cost-text,#000000) !important;text-shadow:1px 1px 0 var(--node-cost-text-shadow,rgba(255,255,255,.6)) !important}
   /* (the opaque-white number box used to be mirrored here from a
      `.react-flow .drag-num` rule; it now lives on `.drag-num--compact` itself
      in DragNumberInput.css, so every surface that draws a node gets it and

@@ -25,9 +25,8 @@ import { MARCH_NODE_CONFIG, MARCH_COLOR_DEFAULTS } from '../nodes/RaymarchOutput
 export function RaymarchSettingsMenu({ nodeId }: { nodeId: string }) {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const language = useAppStore((s) => s.language);
-  const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
-  const node = nodes.find((n) => n.id === nodeId) as AppNode | undefined;
+  const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as AppNode | undefined;
   const def = NODE_REGISTRY.get('raymarchOutput');
   if (!node || !def) return null;
 

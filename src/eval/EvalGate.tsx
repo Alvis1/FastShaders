@@ -104,7 +104,16 @@ function cleanSlateForStudy(): void {
     /* storage blocked — nothing persisted to leak either */
   }
   useAppStore.setState({
-    past: [], future: [], costBudgetOverrides: {},
+    past: [], future: [],
+    // `Object.create(null)`, never `{}` — the store's `loadCostBudgets` and
+    // `setCostBudgetOverride` both build this map null-prototype and say why:
+    // the keys are device ids out of localStorage, which anything at this
+    // origin can write, and a plain object resolves `__proto__` /
+    // `constructor` / `toString` to inherited values on a plain property read
+    // (`resolveDeviceBudget` does exactly that). This was the one writer that
+    // handed the slice back a prototype, so a clean slate left the invariant
+    // broken for the rest of the study session.
+    costBudgetOverrides: Object.create(null) as Record<string, number>,
     optionalCategories: DEFAULT_OPTIONAL_CATEGORIES,
   });
 }

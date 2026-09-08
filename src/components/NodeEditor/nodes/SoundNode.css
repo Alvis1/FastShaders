@@ -1,0 +1,74 @@
+/* The shared node shell (NodeBase.css) is imported ONCE, by ShaderNode.css —
+   see the note at the top of that file. It used to be `@import`ed here too,
+   which put a second inlined copy of it in the main entry's CSS chunk. */
+
+/* The Sound node places every element itself — see SoundNode.tsx, geometry in
+   micGeometry.ts. Nothing here is in flow except the header, so mounting or
+   unmounting a socket cannot move anything. Colours are literals: graph nodes
+   must render identically in light and dark — which is also why the `<select>`
+   below cannot reuse the preview chrome's `.shader-preview__geo-select` (that
+   one is built from --bg-panel / --text-primary and flips with the theme).
+
+   The class prefix is `.sound-node`, matching the registry type (`soundNode`) and
+   the React Flow type (`mic`); the node's LABEL is "Sound". The Audio Input
+   node was folded into it on 2026-09-08 and its stylesheet came here — that is
+   where the source picker at the bottom of this file comes from.
+
+   EVERY rule below is scoped to .sound-node__body, NOT .sound-node: the asset tile
+   (SoundCardContent) renders the same body inside CardShell's frame and has no
+   .sound-node ancestor — the arm light used to be scoped to .sound-node, so on the
+   tile it silently fell back to ShaderNode.css's in-flow margins and sat on
+   top of the value chips. The source picker is the one rule below with NO
+   ancestor scope at all, for the same reason and one step further: the tile
+   renders its own disabled twin of it. */
+
+.sound-node__body {
+  position: relative;
+}
+
+/* Sockets — and therefore their name tooltips — sit ABOVE everything else on
+   the card. This has to be stated explicitly because of how stacking contexts
+   trap the tooltip: React Flow positions every handle with a `transform`, and
+   a transform CREATES a stacking context, so the tooltip's own `z-index: 10`
+   (TypedHandle.css) is sealed INSIDE the handle and can only compete with its
+   siblings at the handle's level — which is `auto`. The record button's
+   wrapper is likewise a transform-made stacking context, at `z-index: 1`, so
+   it out-painted every tooltip that reached over it: the lower output sockets
+   showed nothing at all on hover.
+   Descendant, not child: the param handles are nested one level deeper (inside
+   the per-input wrapper in SoundNode.tsx), and their tooltips can likewise be
+   covered by the value chip above them. 2 clears the button's 1. */
+.sound-node__body .react-flow__handle {
+  z-index: 2;
+}
+
+/* Handles are positioned by an inline `top` (px from the body's top edge) and
+   sit ON the card border, like ClockNode's. translateY only — never a hover
+   transform, which would move the socket under the cursor.
+   Child combinator: this pair governs the OUTPUT handles only (the params are
+   nested deeper and keep React Flow's own centring). */
+.sound-node__body > .react-flow__handle {
+  transform: translateY(-50%) !important;
+}
+
+.sound-node__body > .react-flow__handle-left {
+  left: calc(var(--handle-size) / -2) !important;
+}
+
+.sound-node__body > .react-flow__handle-right {
+  right: calc(var(--handle-size) / -2) !important;
+}
+
+/* Parameter chip row + arm-light wrapper: the four blocks that used to sit
+   here (and, byte-identically, in the Audio Input node's stylesheet) now live
+   ONCE in ShaderNode.css as `.shader-node__param-row`,
+   `.shader-node__param-wired` and `.shader-node__arm-wrap` — the documented
+   pattern this node already follows for `.shader-node__sound-btn` and
+   `.shader-node__level-meter`: one definition, with the node supplying only
+   the PLACEMENT inline from its own geometry module (MIC_PARAM_TOPS /
+   MIC_CHIP_H / MIC_PAD_X / SOUND_BTN_TOP). The row's height and horizontal inset
+   therefore still have exactly one source, micGeometry.ts, shared with the
+   level meter beside it. */
+
+
+

@@ -25,6 +25,34 @@
  * 7MB/boot price. Completions come from tslLanguage.ts's registry-fed
  * provider plus Monaco's built-in word-based suggestions; real syntax errors
  * surface through the Apply path's Babel parse.
+ *
+ * The cherry-pick is at LANGUAGE granularity and deliberately stops there.
+ * Two things that ride along have been measured and left alone — recorded here
+ * so the next audit does not re-derive them:
+ *
+ *   · DIFF-EDITOR CSS. `edcore.main` imports
+ *     `browser/widget/diffEditor/diffEditor.contribution.js`, so ~10-15 KB of
+ *     the 142 KB monaco stylesheet (≈2 KB gzipped) styles a DiffEditor this app
+ *     never mounts — it renders only `<Editor>`. It cannot be dropped by
+ *     omitting an import; it would take a build-time CSS filter over the monaco
+ *     chunk, which is more machinery than 2 KB is worth.
+ *
+ *   · EDITOR CONTRIBUTIONS with no provider. `edcore.main` is a flat list of
+ *     ~74 side-effect imports, and the app registers exactly two providers
+ *     (tslLanguage.ts: completion + color), so inlineCompletions, gotoSymbol,
+ *     codeAction, rename and dropOrPasteInto have nothing to serve. Hand-copying
+ *     that list here to drop those five lines was considered and REJECTED: the
+ *     directories are not independently reachable — `contrib/suggest/browser/
+ *     suggestModel.js` and `contrib/hover/browser/contentHoverController.js`
+ *     import `contrib/inlineCompletions/`, `contrib/hover/browser/
+ *     markerHoverParticipant.js` imports `contrib/codeAction/`, and both
+ *     `gotoSymbol/browser/link/goToDefinitionAtPosition.js` and
+ *     `standalone/browser/referenceSearch/standaloneReferenceSearch.js` import
+ *     back into `gotoSymbol/` — so the directory sizes are an upper bound the
+ *     cut would not realise, while a 74-line copy of a monaco-internal entry
+ *     goes stale SILENTLY under the `^0.55.1` caret range (a new contribution
+ *     simply stops being registered, with no error anywhere). All of it rides
+ *     the lazily-imported CodeEditor chunk, off the first-paint path.
  */
 import 'monaco-editor/esm/vs/editor/edcore.main.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';

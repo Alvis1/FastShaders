@@ -10,6 +10,7 @@ import {
   PANES,
   type PaneDef,
 } from './keyboardNav';
+import { isTypingTarget } from '@/utils/isTypingTarget';
 
 /**
  * App-wide keyboard navigation.
@@ -29,20 +30,32 @@ import {
  * existing Cmd+C/V/D/G/Z accelerators in NodeEditor and useSyncEngine.
  */
 
-/** The strict "user is typing" guard — the ContextMenu.tsx form, which is the
- *  only one in the codebase that covers `<select>` (the Audio Input node puts a
- *  real one ON the canvas) and contentEditable. */
+/**
+ * When this hook's keys must stand down. Two independent reasons, and the
+ * second is NOT a typing question at all — which is why it is composed here
+ * rather than pushed into the shared predicate:
+ *
+ *   · The target is a form control (utils/isTypingTarget — the ONE predicate
+ *     every key guard in the app asks, so this hook and the accelerator
+ *     handler beside it cannot disagree; it used to be spelled out here, one
+ *     field wider than the accelerator's copy). `anyInputType` because THIS
+ *     hook owns the bare ARROWS and Tab, which is exactly what a range, a
+ *     radio group or a select consumes natively — a Slider node IS an
+ *     `<input type="range">` sitting inside a `.react-flow__node`, so without
+ *     the option `focusedNodeId()` would resolve, the arrow branch would
+ *     preventDefault, and dragging the slider by keyboard would move the node
+ *     instead. The accelerator handler beside it takes the strict set for the
+ *     mirror-image reason: it owns Delete and Cmd+D, which those controls
+ *     ignore, so there the press belongs to the canvas.
+ *   · The target is inside a MODAL. Every dialog in the app already swallows
+ *     stray keys on a window capture listener, but this hook's own listener is
+ *     also a capture one, so it can run first — and moving the canvas cursor
+ *     or the pane focus out from under an open dialog is never wanted.
+ */
 function isTyping(target: EventTarget | null): boolean {
+  if (isTypingTarget(target, { anyInputType: true })) return true;
   const el = target as HTMLElement | null;
-  if (!el) return false;
-  const tag = el.tagName;
-  return (
-    tag === 'INPUT' ||
-    tag === 'TEXTAREA' ||
-    tag === 'SELECT' ||
-    el.isContentEditable === true ||
-    el.closest?.('[role="dialog"]') != null
-  );
+  return el?.closest?.('[role="dialog"]') != null;
 }
 
 function focusedNodeId(): string | null {

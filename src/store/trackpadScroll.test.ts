@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterAll, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { useAppStore } from './useAppStore';
@@ -18,6 +18,16 @@ import { useAppStore } from './useAppStore';
  * here: CDP's wheel injection hardcodes `wheelDeltaY` to ±120 whatever delta is
  * requested, and a constructed WheelEvent leaves it at 0.
  */
+
+// vite.config.ts runs the suite with `isolate: false`, so a worker's files share
+// one global object and whatever this file leaves stubbed is what the NEXT file
+// sees. The last stub installed below is a localStorage whose reads THROW, and
+// the second describe has no beforeEach to overwrite it — measured leaking into
+// the following file in the same worker. Nothing fails on it today (the suites
+// downstream treat storage as untrusted anyway), which is exactly why it has to
+// be restored here rather than relied upon. File scope, not inside a describe,
+// so a stub added anywhere in the file is covered.
+afterAll(() => vi.unstubAllGlobals());
 
 describe('trackpadScroll — the canvas wheel-mode setting', () => {
   beforeEach(() => {
@@ -98,8 +108,12 @@ describe('trackpadScroll — the consumers that must keep asking', () => {
     // A text input's context menu is the one place users genuinely rely on the
     // OS one, and EXPORT owns right-click for its own popover — its handler
     // preventDefaults but does NOT stopPropagation, so without this guard both
-    // would open at once.
-    expect(tb).toMatch(/closest\('input, textarea, select, \[contenteditable="true"\]'\)/);
+    // would open at once. The form-control half is now the app-wide predicate
+    // (utils/isTypingTarget, whose own test pins the set); `anyInputType` is
+    // load-bearing rather than incidental — the prefs popover is rendered
+    // INSIDE the bar and is a list of checkboxes, so at the default set a
+    // right-click on one of its rows would re-open the menu on itself.
+    expect(tb).toMatch(/isTypingTarget\(el, \{ anyInputType: true \}\)/);
     expect(tb).toMatch(/closest\('\.toolbar__export-wrap/);
   });
 });

@@ -5,9 +5,15 @@
   transition: box-shadow var(--transition-fast), background var(--transition-fast);
 }
 
-/* Drag a benchmark complexity patch over the bar → highlight the drop target. */
+/* Drag a benchmark complexity patch over the bar → highlight the drop target.
+   `color-mix()` is the newest CSS feature in the codebase (Chrome 111 / Safari
+   16.2 / Firefox 113) and an unsupported value drops the WHOLE declaration —
+   so the literal below runs first and older engines keep a tint instead of a
+   bare background. It restates `--border-focus` (#3366CC, tokens.css — fixed
+   in both themes, which is what makes a literal honest here). */
 .cost-bar--drop {
   box-shadow: inset 0 0 0 2px var(--border-focus);
+  background: rgba(51, 102, 204, 0.08);
   background: color-mix(in srgb, var(--border-focus) 8%, transparent);
 }
 
@@ -106,6 +112,8 @@
   font-family: var(--font-sans);
   font-size: var(--font-size-xs);
   color: var(--text-primary);
+  /* Literal first — see .cost-bar--drop for why color-mix needs a fallback. */
+  background: rgba(51, 102, 204, 0.08);
   background: color-mix(in srgb, var(--border-focus) 8%, transparent);
   border: 1px solid var(--border-focus);
   border-radius: var(--border-radius-sm);

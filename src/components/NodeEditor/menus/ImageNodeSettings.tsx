@@ -26,7 +26,6 @@ const valueStyle = {
  *  into two undo steps, with the intermediate one leaving the node half
  *  changed. */
 export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
-  const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const language = useAppStore((s) => s.language);
   const convertMode = useAppStore((s) => s.imageConvertMode);
@@ -34,7 +33,7 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
   const [origin, setOrigin] = useState<ImageOriginPayload | null>(null);
   const [pending, setPending] = useState(false);
 
-  const node = nodes.find((n) => n.id === nodeId);
+  const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId));
   const vals = node ? getNodeValues(node) : {};
   const originId = typeof vals.originId === 'string' ? vals.originId : '';
 

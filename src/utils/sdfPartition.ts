@@ -171,10 +171,6 @@ export function drivingMarchOutput(nodes: readonly AppNode[], edges: readonly Ap
   return s && isMarchOutput(s) ? s : null;
 }
 
-export function marchOutputDrives(nodes: readonly AppNode[], edges: readonly AppEdge[]): boolean {
-  return drivingMarchOutput(nodes, edges) !== null;
-}
-
 /** The driving node's Window radius (the preview sphere), or null when nothing drives. */
 export function marchWindowRadius(nodes: readonly AppNode[], edges: readonly AppEdge[]): number | null {
   const n = drivingMarchOutput(nodes, edges);
@@ -226,7 +222,14 @@ export function marchPartition(
     const anc = closure(feeders, (id) => incoming.get(id) ?? []);
     scopes.set(spec.handle, new Set([...anc].filter((id) => dep.has(id))));
   }
-  const inAny = (id: string): boolean => [...scopes.values()].some((s) => s.has(id));
+  // One union of every scope's members, built once. `inAny` is asked per
+  // OUTGOING EDGE of every scope member in the nested loop below, and spreading
+  // `scopes.values()` inside it allocated a fresh array on each of those
+  // visits — pure churn on the per-edit codegen path of exactly the graphs
+  // (raymarched fields) that are already the most expensive thing to compile.
+  const inAnySet = new Set<string>();
+  for (const s of scopes.values()) for (const id of s) inAnySet.add(id);
+  const inAny = (id: string): boolean => inAnySet.has(id);
   const allRoots = new Set([...specs.flatMap((s) => [...s.roots])]);
   const mainAlso = new Set<string>();
   for (const set of scopes.values()) {

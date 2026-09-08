@@ -1,4 +1,6 @@
-@import './NodeBase.css';
+/* The shared node shell (NodeBase.css) is imported ONCE, by ShaderNode.css —
+   see the note at the top of that file. It used to be `@import`ed here too,
+   which put a second inlined copy of it in the main entry's CSS chunk. */
 
 .math-preview-node {
   position: relative;
@@ -34,7 +36,13 @@
   gap: 2px;
 }
 
-/* Input handle in port row — positioned relative to row */
+/* Input handle in port row — positioned relative to row. This is the
+   row-anchored socket override restated against this node's own wrapper; the
+   pairing rule it has to obey (the transform replaces React Flow's, so the
+   inset is mandatory, and both edges must be overridden wherever both exist)
+   is written out once above `.node-base__row .react-flow__handle` in
+   NodeBase.css. Here the two edges have DIFFERENT anchors — the input rides
+   the port row, the output the node — hence the split below. */
 .math-preview-node__port-row .react-flow__handle {
   top: 50% !important;
   transform: translateY(-50%) !important;

@@ -15,8 +15,15 @@
  * functions MOVED here verbatim and `designerApp.ts` imports them — which also
  * finally puts the path arithmetic under test.
  *
- * Pure and import-free so the vitest node env can cover it.
+ * Pure so the vitest node env can cover it. Its ONE import is the sibling
+ * `glyphGeometry`, which is pure too — and is where the de Casteljau split
+ * below comes from, rather than a second copy of it here: this file's own
+ * header argues against exactly that kind of drift pair, and the exactness of
+ * a subdivision (the whole point of "add a point") is pinned by that module's
+ * tests.
  */
+
+import { splitCubic, splitQuad } from './glyphGeometry';
 
 export interface PathSeg {
   /** the command letter, case preserved — lower case means relative */
@@ -230,19 +237,22 @@ export function insertIntoPath(segs: PathSeg[], si: number, t: number): { segs: 
   const out = segs.slice();
   let replacement: PathSeg[];
 
+  /* The halves come from `glyphGeometry`'s de Casteljau split — the same lerp
+     order the arithmetic used to be written out in here, so the emitted numbers
+     are bit-identical — and each half's [1..] points are exactly this command's
+     arguments: a cubic's two controls plus its end, a quadratic's one control
+     plus its end. */
   if (span.length === 4) {
-    const a = lerp(span[0], span[1], u), b = lerp(span[1], span[2], u), c = lerp(span[2], span[3], u);
-    const d = lerp(a, b, u), e = lerp(b, c, u), f = lerp(d, e, u);
+    const { left, right } = splitCubic(span[0], span[1], span[2], span[3], u);
     replacement = [
-      { cmd: 'C', args: [a.x, a.y, d.x, d.y, f.x, f.y] },
-      { cmd: 'C', args: [e.x, e.y, c.x, c.y, span[3].x, span[3].y] },
+      { cmd: 'C', args: [left[1].x, left[1].y, left[2].x, left[2].y, left[3].x, left[3].y] },
+      { cmd: 'C', args: [right[1].x, right[1].y, right[2].x, right[2].y, right[3].x, right[3].y] },
     ];
   } else if (span.length === 3) {
-    const a = lerp(span[0], span[1], u), b = lerp(span[1], span[2], u);
-    const c = lerp(a, b, u);
+    const { left, right } = splitQuad(span[0], span[1], span[2], u);
     replacement = [
-      { cmd: 'Q', args: [a.x, a.y, c.x, c.y] },
-      { cmd: 'Q', args: [b.x, b.y, span[2].x, span[2].y] },
+      { cmd: 'Q', args: [left[1].x, left[1].y, left[2].x, left[2].y] },
+      { cmd: 'Q', args: [right[1].x, right[1].y, right[2].x, right[2].y] },
     ];
   } else {
     const m = lerp(span[0], span[1], u);

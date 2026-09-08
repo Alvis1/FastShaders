@@ -119,6 +119,11 @@ const BAR_MIN_H = 28;
 /** How long a run of discrete resizes (wheel notches, held arrows) keeps its
  *  origin for the row-seam push — see `discreteStartCross`. */
 const DISCRETE_RESIZE_IDLE_MS = 400;
+/** Quiet period before a typed query is applied to the strip — see the
+ *  `settledSearch` state, which is where the reason lives. Long enough to sit
+ *  outside a fast typist's inter-key gap, short enough that a deliberate pause
+ *  still feels like live search. */
+const SEARCH_DEBOUNCE_MS = 150;
 /**
  * Vertical chrome that shares the strip with a tile but is NOT part of the
  * measured tile box: the strip's own padding-top (--space-1) + padding-bottom
@@ -193,7 +198,23 @@ export const ContentBrowser = memo(function ContentBrowser() {
   // is currently switched off shows the All strip, and the stored value
   // survives so the tab comes back the moment the switch does.
   const activeCategory: BrowserCategory = effectiveTab(storedCategory, optional);
+  // What the box SHOWS (updated on every keystroke, so typing never lags) and
+  // what the strip is FILTERED by (`settledSearch`, adopted after
+  // SEARCH_DEBOUNCE_MS of quiet). They are separate because everything derived
+  // from the query is expensive: the first non-empty query builds all 24
+  // presets — 24 codeToGraph parses plus 24 dagre layouts, measured at ~95 ms
+  // (see filteredPresets) — re-filters and re-renders an unvirtualized strip of
+  // ~77 tiles, and then re-measures every one of them (the effect below).
+  // Undebounced, all of that landed inside the FIRST keystroke's own frame, so
+  // the character appeared late and anything typed on top of it was swallowed —
+  // which reads as the search box being broken, once per session.
   const [search, setSearch] = useState('');
+  const [settledSearch, setSettledSearch] = useState('');
+  useEffect(() => {
+    if (search === settledSearch) return;
+    const id = window.setTimeout(() => setSettledSearch(search), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [search, settledSearch]);
   // Bar height, persisted — the single source of truth for how big the bar AND
   // its tiles are. Only the read seed goes through the shared helper; the write
   // side stays local because it is debounced (see the persist effect below),
@@ -310,8 +331,15 @@ export const ContentBrowser = memo(function ContentBrowser() {
     // re-run converge). The dep-less
     // form re-swept getBoundingClientRect over every tile on each of
     // NodeEditor's per-drag-frame re-renders.
+    //
+    // The query dep is the SETTLED one (the debounced `settledSearch`, not the
+    // box's live value): the strip's contents follow it, so keying on the raw
+    // value would re-sweep 77 getBoundingClientRects per keystroke to measure
+    // tiles that had not changed. It is the state and not the derived `q`
+    // because `q` is declared further down the component body — a dep array is
+    // evaluated where the effect sits, so naming it here is a TDZ throw.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCategory, search, savedGroups, language, barHeight, tabsH, tileH, fontsReady, optional]);
+  }, [activeCategory, settledSearch, savedGroups, language, barHeight, tabsH, tileH, fontsReady, optional]);
 
   /**
    * Live gesture state: bounds measured once at pointerdown, plus the latest
@@ -675,7 +703,10 @@ export const ContentBrowser = memo(function ContentBrowser() {
     [optional],
   );
 
-  const q = search.trim().toLowerCase();
+  // The SETTLED query, never the live box value — every memo below keys on it,
+  // and each one is expensive enough that running it per keystroke is what made
+  // the first character of a search drop its own frame (see `settledSearch`).
+  const q = settledSearch.trim().toLowerCase();
 
   // One shared match+rank rule with the Add-node menu (nodeRegistry.searchNodes),
   // so the same query orders the same way on both surfaces — a node's NAME
@@ -776,9 +807,15 @@ export const ContentBrowser = memo(function ContentBrowser() {
 
   const filteredPresets = useMemo(() => {
     // Lazily built: the first getBuiltinPresets() call parses 24 TSL snippets
-    // and lays them out (~40ms of synchronous work), so don't pay it at first
-    // render for a tab that may never open. A live search needs them too —
-    // matching presets surface in the generic strip (see `items` below).
+    // through codeToGraph and lays them out — MEASURED at ~95 ms of synchronous
+    // Babel + dagre work, not the ~40 ms this comment used to claim — so don't
+    // pay it at first render for a tab that may never open. A live search needs
+    // them too — matching presets surface in the generic strip (see `items`
+    // below) — and unlike the textures above there is no optional-category
+    // escape, so ANY non-empty query on ANY tab pays it once per session. That
+    // is why `q` is debounced (see `settledSearch`): the parse then lands in a
+    // timer callback after the user pauses, instead of inside the keystroke's
+    // own frame where it swallowed the characters typed on top of it.
     if (activeCategory !== 'presets' && !q) return [];
     // Sorted by GPU cost, NOT by the registry's tier order — see byCost.
     const all = [...getBuiltinPresets()].sort(byCost);
@@ -839,15 +876,15 @@ export const ContentBrowser = memo(function ContentBrowser() {
     items = savedGroups.length === 0
       ? empty('Right-click a group on the canvas → Save to Library to store it here.')
       : filteredSavedGroups.length === 0
-        ? empty(`No saved groups match “${search.trim()}”.`)
+        ? empty(`No saved groups match “${settledSearch.trim()}”.`)
         : filteredSavedGroups.map((g) => <SavedGroupCard key={g.id} group={g} />);
   } else if (activeCategory === 'texture') {
     items = filteredTextures.length === 0
-      ? empty(`No textures match “${search.trim()}”.`)
+      ? empty(`No textures match “${settledSearch.trim()}”.`)
       : filteredTextures.map((t) => <TextureCard key={t.id} texture={t} />);
   } else if (activeCategory === 'presets') {
     items = filteredPresets.length === 0
-      ? empty(`No presets match “${search.trim()}”.`)
+      ? empty(`No presets match “${settledSearch.trim()}”.`)
       : filteredPresets.map((p) => <PresetCard key={p.id} preset={p} />);
   } else {
     const defCards = filteredDefs.map((item) => (
@@ -864,7 +901,7 @@ export const ContentBrowser = memo(function ContentBrowser() {
       : [];
     // Show a message rather than a blank strip that reads as a rendering bug.
     items = defCards.length + assetCards.length === 0
-      ? empty(q ? `No matches for “${search.trim()}”.` : 'Nothing here yet.')
+      ? empty(q ? `No matches for “${settledSearch.trim()}”.` : 'Nothing here yet.')
       : [...defCards, ...assetCards];
   }
 

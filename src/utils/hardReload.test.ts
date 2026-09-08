@@ -74,12 +74,32 @@ describe('strippedHardReloadUrl', () => {
   });
 });
 
+/**
+ * NB the declared list is EMPTY today (hardReload.ts documents why the loop is
+ * kept), so any assertion written as a loop OVER it asserts nothing. The pins
+ * below are therefore written to hold in BOTH states: they compare the calls
+ * the function makes against the list, and grep the source for the two shapes
+ * that would destroy a study session.
+ */
 describe('what a hard reload clears', () => {
+  /** Every key `clearHardReloadState` asks the storage to remove, in order. */
+  const removedKeys = (removeItem?: (k: string) => void): string[] => {
+    const calls: string[] = [];
+    clearHardReloadState({
+      removeItem(k: string) { calls.push(k); removeItem?.(k); },
+    });
+    return calls;
+  };
+
   it('is a declared list that names no eval key', () => {
     // The four sessionStorage keys in the codebase are eval's. A blanket
     // clear would drop a participant's telemetry journal and return them to
     // the consent screen mid-study, and the package's SUS-integrity checks
     // would then flag a session that was actually intact.
+    // The loop is dormant while the list is empty; the export-shape assertion
+    // beside it is what keeps the list a LIST, so re-adding a key re-arms the
+    // loop rather than quietly bypassing it.
+    expect(Array.isArray(HARD_RELOAD_CLEARED_KEYS)).toBe(true);
     for (const key of HARD_RELOAD_CLEARED_KEYS) {
       expect(key.startsWith('fs:eval'), key).toBe(false);
     }
@@ -89,15 +109,20 @@ describe('what a hard reload clears', () => {
   });
 
   it('survives a storage that throws', () => {
-    expect(() =>
-      clearHardReloadState({ removeItem() { throw new Error('blocked'); } }),
-    ).not.toThrow();
+    // With no declared keys the throwing storage is never reached, so the
+    // source pin is what carries this today: the removal must sit INSIDE a
+    // try/catch, or the first key added back takes the whole reload handler
+    // down in private mode.
+    expect(() => removedKeys(() => { throw new Error('blocked'); })).not.toThrow();
+    const src = read('src/utils/hardReload.ts');
+    expect(src).toMatch(/storage\.removeItem\(key\);\s*\}\s*catch/);
   });
 
-  it('removes each declared key', () => {
-    const map = new Map(HARD_RELOAD_CLEARED_KEYS.map((k) => [k, '1']));
-    clearHardReloadState({ removeItem: (k: string) => void map.delete(k) });
-    expect(map.size).toBe(0);
+  it('removes exactly the declared keys — no more, no fewer', () => {
+    // Equality, not `map.size === 0`: with an empty list that older form held
+    // whatever the function did, while this one still says something real —
+    // that a hard reload touches NOTHING it has not declared.
+    expect(removedKeys()).toEqual([...HARD_RELOAD_CLEARED_KEYS]);
   });
 });
 

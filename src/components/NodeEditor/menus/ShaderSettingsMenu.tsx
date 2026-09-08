@@ -30,7 +30,6 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   const totalCost = useAppStore((s) => s.totalCost);
   const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
   const costProfiles = useAppStore((s) => s.costProfiles);
-  const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   // The Alpha Clip threshold is a range input: React's onChange on a range is
   // the native `input` event, so it fires per pointermove FRAME and each frame
@@ -41,8 +40,15 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
 
   // The Output the user right-clicked, falling back to THE Output for the
   // paths that open this menu without a node id (the canvas background).
-  const outputNode = (nodeId ? nodes.find((n) => n.id === nodeId) : null)
-    ?? findDefaultOutput(nodes);
+  //
+  // Resolved INSIDE the selector so this menu subscribes to the one node it
+  // draws rather than to the whole array: both branches return an object out
+  // of `s.nodes`, which React Flow's `applyNodeChanges` reuses when it did not
+  // touch that node, so `Object.is` bails on every notification about some
+  // other node — an open menu was otherwise re-rendering its ~15 rows on every
+  // frame of an unrelated drag.
+  const outputNode = useAppStore((s) => (nodeId ? s.nodes.find((n) => n.id === nodeId) : null)
+    ?? findDefaultOutput(s.nodes));
   const outputData = outputNode?.data as OutputNodeData | undefined;
 
   // WHICH MATERIAL this menu edits. Per-mesh materials are sections of the one
@@ -408,6 +414,7 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
           {t('Depth Write', language)}
         </label>
       )}
+
 
       <div className="context-menu__divider" />
       <button className="context-menu__item" onClick={closeContextMenu}>

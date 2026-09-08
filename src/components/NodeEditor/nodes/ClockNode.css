@@ -1,4 +1,6 @@
-@import './NodeBase.css';
+/* The shared node shell (NodeBase.css) is imported ONCE, by ShaderNode.css —
+   see the note at the top of that file. It used to be `@import`ed here too,
+   which put a second inlined copy of it in the main entry's CSS chunk. */
 
 .clock-node {
   position: relative;

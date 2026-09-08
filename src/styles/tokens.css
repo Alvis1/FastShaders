@@ -12,9 +12,16 @@
   --type-color: #E8A317;
   --type-any: #607D8B;
 
-  /* ===== COST GRADIENT (node backgrounds) ===== */
-  --cost-low: #8BC34A;
-  --cost-medium: #FFC107;
+  /* ===== COST GRADIENT =====
+     ONE entry, and that is not an oversight. The gradient's endpoints are a
+     user PREFERENCE (costColorLow/High in useAppStore, persisted to
+     fs:costColorLow/High, mirrored by getCostColor's parameter defaults in
+     colorUtils.ts — which runs under the `node` test env and so can never read
+     a CSS token) and reach the DOM as inline styles, so no token here could be
+     their source. --cost-high stays because CostBar.css and MeshTargetPicker
+     also use it as a plain "over budget / missing" red, with no store value to
+     read. The --cost-low / --cost-medium siblings that used to sit beside it
+     were read by nothing and only invited a third copy of the palette. */
   --cost-high: #FF5722;
 
   /* ===== BACKGROUNDS (Light Theme) ===== */
@@ -60,7 +67,6 @@
   --text-secondary: #555555;
   --text-muted: #999999;
   --text-accent: #3366CC;
-  --text-on-node: #1A1A1A;
 
   /* ===== SHADOWS (hard-edged — zero blur, offset encodes ELEVATION) =====
      Technical style: a shadow is a solid down-right offset with NO blur, and
@@ -145,19 +151,26 @@
   /* ===== TYPOGRAPHY ===== */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  /* The scale STOPS at md, because the app does: chrome button and header text
+     is --font-size-sm and headers differ by weight, never by size, so the
+     14px body size is the largest thing a surface has to name. The lg/xl/2xl
+     rungs that used to sit here were read by nothing — an unread rung is worse
+     than an absent one, because it reads as an approved size and quietly
+     invites a surface to grow out of the system. Anything genuinely bigger is
+     a one-off (a modal title, a glyph) and says so with a literal. */
   --font-size-xs: 10px;
   --font-size-sm: 12px;
   --font-size-md: 14px;
-  --font-size-lg: 16px;
-  --font-size-xl: 20px;
-  --font-size-2xl: 24px;
 
-  /* ===== SPACING ===== */
+  /* ===== SPACING =====
+     Rungs are what is USED, not a complete 4px ladder — --space-5 (20px) was
+     read by nothing and is gone. cssTokens.test.ts fails on a var() naming a
+     property nothing declares, so re-adding a rung the moment a surface wants
+     it is safe: the gap cannot silently swallow a declaration. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
-  --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
 
@@ -192,11 +205,14 @@
      from --handle-size. */
   --ctl-size: 28px;
 
-  /* ===== NODE DIMENSIONS ===== */
-  --node-min-width: 180px;
-  --node-padding: 14px;
-  --node-row-height: 28px;
-  --node-header-height: 30px;
+  /* ===== SOCKET DIMENSIONS =====
+     A node's own box is NOT sized from here: its width/height come from the
+     Node Designer's per-node customGlyphs entry and its border from
+     nodes/nodeFrame.ts, with .node-base itself at `width: fit-content;
+     min-width: 40px`. The --node-min-width/-padding/-row-height/-header-height
+     tokens that used to sit here described the fixed-width design that
+     predates all of that, matched nothing on screen, and were read by no rule
+     — keeping them would have handed the next author a 180px card. */
   --handle-size: 10px;
   --handle-border: 2px;
 
@@ -207,11 +223,12 @@
   /* ===== TRANSITIONS ===== */
   --transition-fast: 100ms ease;
   --transition-normal: 200ms ease;
-  --transition-slow: 300ms ease;
 
-  /* ===== Z-INDEX ===== */
-  --z-nodes: 1;
-  --z-edges: 0;
+  /* ===== Z-INDEX =====
+     Only the CHROME layers are tokens. The graph's own stacking (nodes above
+     edges) belongs to React Flow — its base.css plus the per-node z-index it
+     writes inline — so the --z-nodes/--z-edges pair that used to head this
+     list named a decision this app never makes, and no rule ever read it. */
   --z-controls: 10;
   --z-menu: 100;
   --z-overlay: 1000;
@@ -223,8 +240,8 @@
    UI (toolbar, panels, menus, modals, code-editor wrapper, canvas backdrop).
 
    DELIBERATELY NOT redefined, so graph nodes render identically in both themes:
-     --node-bg, --text-on-node, --shadow-node(-selected), --cost-*, --type-*,
-     --cat-* (published from JS), --border-focus, --text-accent, --node-cost-*.
+     --node-bg, --shadow-node(-selected), --cost-high, --type-*, --cat-*
+     (published from JS), --border-focus, --text-accent, --node-cost-*.
    The one chrome token that also reaches node scope, --text-secondary, is read
    there via a fixed literal instead (ShaderNode.css .shader-node__file-name).
 

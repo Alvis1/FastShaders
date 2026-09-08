@@ -17,16 +17,17 @@ import { marchPartition, drivingMarchOutput, isMarchOutput, MARCH_OUTPUT_TYPE, M
 import { effectiveExposedPorts, OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { isUnsignedNoise } from '@/utils/noiseRange';
+import { isWireframeEdges } from '@/utils/wireframeMode';
 import { decodeDataNode, columnForHandle } from '@/utils/dataNode';
-import { readMicSettings } from '@/utils/micNode';
+import { readSoundSettings } from '@/utils/soundSettings';
 import {
-  MIC_CHANNELS,
-  micUniformName,
+  SOUND_CHANNELS,
+  soundUniformName,
   micChannelForHandle,
-  isLiveAudioNodeType,
-  liveAudioVarBase,
-} from '@/utils/micAnalysis';
-import type { MicChannel } from '@/utils/micAnalysis';
+  isSoundNodeType,
+  soundVarBase,
+} from '@/utils/soundAnalysis';
+import type { SoundChannel } from '@/utils/soundAnalysis';
 import { imageAssetFor } from './imageAssets';
 // Shape inference (1-4 channels) — the same authority the edge/preview layer
 // uses, so codegen and the UI agree on what counts as a scalar.
@@ -115,6 +116,7 @@ const CUSTOM_EMISSION_BASENAMES: Record<string, string> = {
   colormap: 'colormap',
   dataRange: 'dataRange',
   isolines: 'isolines',
+  wireframe: 'wireframe',
 };
 
 /** Emit the setup lines for a 256-texel RGBA colormap LUT. Values are baked in
@@ -158,12 +160,28 @@ function numericParam(
   return num(Number.isFinite(raw) ? raw : fallback);
 }
 
-/** Sampling coordinate in [0, 1]: uv.x (linear) or normalized radius from a
- *  chosen center (radial/concentric). Shared by Stripes and Data Viz. */
-function radialCoordExpr(radial: boolean, cx: number, cy: number, radius: number): string {
-  return radial
-    ? `uv().sub(vec2(${num(cx)}, ${num(cy)})).length().div(${num(radius)}).clamp(0.0, 1.0)`
-    : 'uv().x';
+/**
+ * Sampling coordinate in [0, 1]: uv.x (linear) or normalized radius from a
+ * chosen center (radial/concentric). Shared by Stripes and Data Viz — ONE
+ * reader for the four `values` keys AND the expression they build, because the
+ * two emitter branches used to carry byte-identical copies of both halves and
+ * a change to one would have silently emitted a different picture from the
+ * other. The radius floor keeps the divide finite on a stored 0.
+ *
+ * Returns the flag as well as the expression: `vec2` only needs importing on
+ * the radial path, and that decision belongs to the caller's import collector.
+ */
+function rampCoord(nv: Record<string, string | number>): { radial: boolean; expr: string } {
+  const radial = Number(nv.radial ?? 0) >= 0.5;
+  const cx = Number(nv.center_x ?? 0.5);
+  const cy = Number(nv.center_y ?? 0.5);
+  const radius = Math.max(Number(nv.radius ?? 0.5), 1e-4);
+  return {
+    radial,
+    expr: radial
+      ? `uv().sub(vec2(${num(cx)}, ${num(cy)})).length().div(${num(radius)}).clamp(0.0, 1.0)`
+      : 'uv().x',
+  };
 }
 
 /** Valid swizzle component handles for split node output. */
@@ -619,17 +637,17 @@ export function graphToCode(
     // `const mic1_bass = uniform(0);` then collides with the property's own
     // `const mic1_bass = uniform(...)`. Duplicate declaration = SyntaxError =
     // the whole module fails to load, not just this node.
-    if (isLiveAudioNodeType(def.type)) {
-      const refChannels = new Set<MicChannel>();
+    if (isSoundNodeType(def.type)) {
+      const refChannels = new Set<SoundChannel>();
       for (const e of outEdges(gidx, node.id)) {
         refChannels.add(micChannelForHandle(e.sourceHandle));
       }
-      varNames.set(node.id, claimName(liveAudioVarBase(def.type), {
+      varNames.set(node.id, claimName(soundVarBase(def.type), {
         // Both the uniform AND its gained twin (`_mic1_bass`) share the Fn-body
         // namespace, so both must be reserved or a user property could take one.
         aliases: (name) =>
           [...refChannels].flatMap((ch) => {
-            const u = micUniformName(name, ch);
+            const u = soundUniformName(name, ch);
             return [u, `_${u}`];
           }),
       }));
@@ -763,7 +781,10 @@ export function graphToCode(
    * exactly the `color(0x…)` string this emitter has always produced, so a node
    * with nothing wired stays byte-identical.
    */
-  const colorRefOf = (edge: AppEdge | undefined, storedHex: unknown, fallbackHex: string): string => {
+  // `fallbackHex` is `unknown` so a caller can hand in the node's own REGISTRY
+  // default without coercing it — `hexLiteral` already validates and degrades
+  // to 0x000000 on anything that isn't a #rrggbb string.
+  const colorRefOf = (edge: AppEdge | undefined, storedHex: unknown, fallbackHex: unknown): string => {
     if (edge) {
       const ref = resolveEdgeRef(edge, varNames, gidx);
       if (ref) {
@@ -775,11 +796,12 @@ export function graphToCode(
   };
 
   // Build body lines. `bodyLines` is the CURRENT target: the flat shader body
-  // for every node of an ordinary graph, and — when an SDF Output is present —
-  // one of the two per-step function bodies for the nodes its partition puts
-  // there (utils/sdfPartition.ts). A node can appear in the plan twice (field
-  // AND colour), which is why this is a plan rather than a plain loop; for a
-  // graph with no SDF Output the plan IS `sorted`, so emission is unchanged.
+  // for every node of an ordinary graph, and — when a Raymarch Output DRIVES —
+  // one of the per-step function bodies for the nodes its partition puts there
+  // (utils/sdfPartition.ts, MARCH_SCOPES). A node can appear in the plan twice
+  // (feeding two per-step sockets), which is why this is a plan rather than a
+  // plain loop; with no driving march the plan IS `sorted`, so emission is
+  // byte-identical to what it was before the node existed.
   const mainLines: string[] = [];
   let bodyLines: string[] = mainLines;
   // Module-scope setup emitted BEFORE the shader Fn — the Data/Stripes nodes
@@ -1047,15 +1069,18 @@ export function graphToCode(
       // Color node, and the two endpoints were interpolated in the wrong space.
       // A wired ramp colour wins over the stored swatch (the exposedPorts
       // rule); unwired emits the identical `color(0x…)` as before, so a node
-      // with nothing wired is byte-stable.
-      const lo = colorRefOf(inEdge(gidx, node.id, 'lowColor'), nv.lowColor, '#1b2a4a');
-      const hi = colorRefOf(inEdge(gidx, node.id, 'highColor'), nv.highColor, '#ffd24d');
+      // with nothing wired is byte-stable. The unwired-and-unstored fallback is
+      // the node's OWN registry default rather than a hex copied into this
+      // file: the two literals used to live here as well as in nodeRegistry.ts,
+      // so moving one would have silently changed what a legacy graph (whose
+      // `values` predate the swatch) emits — and the break would have surfaced
+      // as an unexplained builtinByteStability snapshot failure far from the
+      // edit.
+      const lo = colorRefOf(inEdge(gidx, node.id, 'lowColor'), nv.lowColor, def.defaultValues?.lowColor);
+      const hi = colorRefOf(inEdge(gidx, node.id, 'highColor'), nv.highColor, def.defaultValues?.highColor);
       // Radial ("target"/tree-ring) mode: index the data by distance from a
       // choosable center instead of uv.x, so the bands become concentric rings.
-      const radial = Number(nv.radial ?? 0) >= 0.5;
-      const cx = Number(nv.center_x ?? 0.5);
-      const cy = Number(nv.center_y ?? 0.5);
-      const radius = Math.max(Number(nv.radius ?? 0.5), 1e-4);
+      const { radial, expr: coordExpr } = rampCoord(nv);
       // How strongly the stripes darken the value-color. 0 = a clean value
       // heatmap (no stripes, colour alone shows the data); ~0.75 = bold stripes.
       const lineStrength = Math.min(Math.max(Number(nv.lineStrength ?? 0.75), 0), 1);
@@ -1100,7 +1125,7 @@ export function graphToCode(
 
       // Sampling coordinate in [0,1]: horizontal position (linear), or the
       // normalized radius from the chosen center (concentric rings) when radial.
-      bodyLines.push(`  const ${coord} = ${radialCoordExpr(radial, cx, cy, radius)};`);
+      bodyLines.push(`  const ${coord} = ${coordExpr};`);
 
       const phaseExpr = phaseTexVar
         ? `texture(${phaseTexVar}, vec2(${coord}, 0.5)).x.mul(${num(totalCycles)})`
@@ -1142,13 +1167,11 @@ export function graphToCode(
       // branch above.
       // A wired ramp colour wins over the stored swatch (the exposedPorts
       // rule); unwired emits the identical `color(0x…)` as before, so a node
-      // with nothing wired is byte-stable.
-      const lo = colorRefOf(inEdge(gidx, node.id, 'lowColor'), nv.lowColor, '#1b2a4a');
-      const hi = colorRefOf(inEdge(gidx, node.id, 'highColor'), nv.highColor, '#ffd24d');
-      const radial = Number(nv.radial ?? 0) >= 0.5;
-      const cx = Number(nv.center_x ?? 0.5);
-      const cy = Number(nv.center_y ?? 0.5);
-      const radius = Math.max(Number(nv.radius ?? 0.5), 1e-4);
+      // with nothing wired is byte-stable. Fallback = the registry default;
+      // see the Stripes branch above for why it is not a literal here.
+      const lo = colorRefOf(inEdge(gidx, node.id, 'lowColor'), nv.lowColor, def.defaultValues?.lowColor);
+      const hi = colorRefOf(inEdge(gidx, node.id, 'highColor'), nv.highColor, def.defaultValues?.highColor);
+      const { radial, expr: coordExpr } = rampCoord(nv);
       addImport('three/tsl', 'color');
       addImport('three/tsl', 'uv');
       addImport('three/tsl', 'mix');
@@ -1167,7 +1190,7 @@ export function graphToCode(
       }
 
       const coord = `_${varName}_coord`;
-      bodyLines.push(`  const ${coord} = ${radialCoordExpr(radial, cx, cy, radius)};`);
+      bodyLines.push(`  const ${coord} = ${coordExpr};`);
 
       // Raw normalized value in [0,1] at this coord.
       const rawExpr = valueTexVar
@@ -1379,6 +1402,87 @@ export function graphToCode(
       bodyLines.push(
         `  const ${varName} = mix(${ln}, ${avg}, ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`,
       );
+    } else if (def.type === 'wireframe') {
+      // Wireframe: Isolines' construction, run on a VECTOR so one chain covers
+      // every line direction at once and a `max` combines them — two lines
+      // crossing must read as one line, not as a double-bright junction.
+      //
+      // The two modes differ only in what the distance-to-a-line vector IS:
+      //   grid  — 0.5 - |fract(uv * density) - 0.5|, per uv axis  (vec2)
+      //   edges — the barycentric coordinate itself, per triangle edge (vec3),
+      //           which is 0 exactly on an edge and 1 at the opposite corner
+      // Everything after that is byte-identical between them.
+      //
+      // Type safety comes from three's own rule: `MathNode.getInputType`
+      // promotes every operand to the LONGEST one, so `.max(0.00001)`,
+      // `.smoothstep(vecN, hw)` and `mix(vecN, vecN, vecN)` all resolve to the
+      // vector width and the float constants beside them are widened.
+      const edges = isWireframeEdges(getNodeValues(node));
+      addImport('three/tsl', 'dFdx');
+      addImport('three/tsl', 'dFdy');
+      addImport('three/tsl', 'mix');
+
+      const widthExpr = numericParam(node, 'width', 1.5, varNames, gidx);
+
+      const p = `_${varName}_p`;
+      const fw = `_${varName}_fw`;
+      const hw = `_${varName}_hw`;
+      const ln = `_${varName}_ln`;
+      const avg = `_${varName}_avg`;
+      const c = `_${varName}_c`;
+
+      if (edges) {
+        // The attribute the loader injects when it sees `barycentric: true` in
+        // this module's return object. If it is ABSENT — an exported module on
+        // a page whose loader does not inject it — three warns and generates a
+        // CONST of the node type, i.e. vec3(0), which reads as "on all three
+        // edges" and would flood the whole surface. The sum guard below turns
+        // that into "no wireframe at all", which is the failure worth having.
+        addImport('three/tsl', 'attribute');
+        addImport('three/tsl', 'vec3');
+        bodyLines.push(`  const ${p} = attribute('bary', 'vec3');`);
+      } else {
+        addImport('three/tsl', 'vec2');
+        const densityExpr = numericParam(node, 'density', 10, varNames, gidx);
+        addImport('three/tsl', 'uv');
+        bodyLines.push(`  const ${p} = uv().mul(${densityExpr});`);
+      }
+
+      // Distance to the nearest line, per axis (grid) or per edge (edges).
+      // Taken from the CONTINUOUS phase in grid mode — never a derivative of
+      // fract(), whose one-per-cell jump would draw a false line through every
+      // real one. A barycentric is already continuous, so it is used as-is.
+      const dist = edges ? p : `_${varName}_d`;
+      if (!edges) {
+        bodyLines.push(`  const ${dist} = vec2(0.5).sub(${p}.fract().sub(0.5).abs());`);
+      }
+      // Phase change per pixel. Floored away from zero for the reason Isolines
+      // documents: on a face exactly parallel to the screen an axis can have a
+      // zero derivative, and the smoothstep edges would then collapse onto each
+      // other — a divide by zero inside the hardware step.
+      bodyLines.push(
+        `  const ${fw} = dFdx(${dist}).abs().add(dFdy(${dist}).abs()).max(0.00001);`,
+      );
+      bodyLines.push(`  const ${hw} = ${fw}.mul(${widthExpr}).mul(0.5);`);
+      const zero = edges ? 'vec3(0.0)' : 'vec2(0.0)';
+      bodyLines.push(`  const ${ln} = ${dist}.smoothstep(${zero}, ${hw}).oneMinus();`);
+      // Average coverage of one cell — what a region should read as once its
+      // lines are packed tighter than a pixel, instead of aliasing into moire.
+      bodyLines.push(`  const ${avg} = ${fw}.mul(${widthExpr}).clamp(0.0, 1.0);`);
+      bodyLines.push(
+        `  const ${c} = mix(${ln}, ${avg}, ${fw}.mul(2.0).sub(1.0).clamp(0.0, 1.0));`,
+      );
+      if (edges) {
+        // Real barycentrics sum to exactly 1; the missing-attribute const sums
+        // to 0. Clamping that sum gives 1 or 0 with no extra import and no
+        // branch, so a module that lands on geometry without the attribute
+        // draws nothing rather than a solid fill.
+        const g = `_${varName}_g`;
+        bodyLines.push(`  const ${g} = ${p}.x.add(${p}.y).add(${p}.z).clamp(0.0, 1.0);`);
+        bodyLines.push(`  const ${varName} = ${c}.x.max(${c}.y).max(${c}.z).mul(${g});`);
+      } else {
+        bodyLines.push(`  const ${varName} = ${c}.x.max(${c}.y);`);
+      }
     } else if (def.type === 'append') {
       // Append node: concatenate operands into a vector. The constructor follows
       // the TOTAL component count (a vec2 + float must become vec3, not vec2),
@@ -1429,7 +1533,7 @@ export function graphToCode(
             ? `  const ${varName} = ${def.tslFunction};`
             : `  const ${varName} = ${def.tslFunction}.mul(${num(speed)});`,
       );
-    } else if (isLiveAudioNodeType(def.type)) {
+    } else if (isSoundNodeType(def.type)) {
       // Mic / Audio Input: four live 0–1 values emitted as ORDINARY NUMERIC
       // UNIFORMS. Both nodes emit the IDENTICAL shape and differ only in their
       // variable base (`mic1_…` vs `aud1_…`), which is what lets the preview
@@ -1472,9 +1576,9 @@ export function graphToCode(
         // the live preview too. Method chain — no extra import, same
         // convention as the noise `scale` and the Time node's `speed`.
         const gainExpr = micGainExpr(node, varNames, gidx);
-        for (const ch of MIC_CHANNELS) {
+        for (const ch of SOUND_CHANNELS) {
           if (!wanted.has(ch)) continue;
-          const u = micUniformName(varName, ch);
+          const u = soundUniformName(varName, ch);
           bodyLines.push(`  const ${u} = uniform(0);`);
           if (gainExpr) bodyLines.push(`  const _${u} = ${u}.mul(${gainExpr});`);
         }
@@ -1924,7 +2028,7 @@ export function graphToCode(
    * `position` never reach alpha, and widening `position` would actively break
    * the Data Viz `value` → Displacement flow, where the scalar height is meant
    * to stay scalar so normal-mode displacement can scale the normal by it.
-   * `emissive` is included because shaderloader 0.5 copies emissiveNode into
+   * `emissive` is included because the loader copies emissiveNode into
    * colorNode when no colour is wired (line ~283).
    */
   const ALPHA_BEARING_CHANNELS = new Set(['color', 'emissive']);
@@ -2368,7 +2472,7 @@ function appendOperandChannels(
  * Returns null when the gain is exactly 1 and unwired, so the emission stays
  * BYTE-IDENTICAL to the ungained form and no already-exported shader changes.
  *
- * The stored value goes through `readMicSettings` for its clamp — `values` is
+ * The stored value goes through `readSoundSettings` for its clamp — `values` is
  * adversarial (`.fastshader` / localStorage) — and never through
  * `resolveExposedParam`, which is `String()`-only.
  */
@@ -2386,7 +2490,7 @@ function micGainExpr(
     const ref = resolveEdgeRef(edge, varNames, gidx);
     if (ref) return ref;
   }
-  const { gain } = readMicSettings(getNodeValues(node));
+  const { gain } = readSoundSettings(getNodeValues(node));
   return gain === 1 ? null : num(gain);
 }
 
@@ -2415,10 +2519,10 @@ function resolveEdgeRef(
   // handle id. `micChannelForHandle` is the SAME normalization the emitter
   // used, so a hand-edited handle in a `.fastshader` resolves to a variable
   // that exists.
-  if (isLiveAudioNodeType(sourceNode.data.registryType)) {
+  if (isSoundNodeType(sourceNode.data.registryType)) {
     const base = varNames.get(sourceNode.id);
     if (!base) return null;
-    const u = micUniformName(base, micChannelForHandle(edge.sourceHandle));
+    const u = soundUniformName(base, micChannelForHandle(edge.sourceHandle));
     // With gain applied, downstream reads the SCALED variable, not the raw
     // uniform — the uniform line itself must stay a bare `uniform(0)` so
     // buildShaderModule's uniformLineRe still turns it into a schema property.

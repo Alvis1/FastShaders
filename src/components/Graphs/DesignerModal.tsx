@@ -16,7 +16,9 @@
  * the frame runs the same code the top-level page does.
  */
 import { useEffect } from 'react';
-import './DesignerModal.css';
+// The Graphs-page modal chrome, shared with GraphModal — one class set for
+// both (`gm__`), so the two headers cannot drift apart again.
+import './GraphModal.css';
 
 export interface DesignerModalProps {
   /** Registry node type — the designer's `?node=` deep-link target. */
@@ -50,24 +52,24 @@ export function DesignerModal({ type, label, onClose }: DesignerModalProps) {
   }, [onClose]);
 
   return (
-    <div className="dm__backdrop" onClick={onClose}>
-      <div className="dm__panel" onClick={(e) => e.stopPropagation()}>
-        <header className="dm__head">
-          <div className="dm__titles">
-            <h2 className="dm__title">{label}</h2>
-            <span className="dm__sub">{type}</span>
+    <div className="gm__backdrop gm__backdrop--full" onClick={onClose}>
+      <div className="gm__panel gm__panel--full" onClick={(e) => e.stopPropagation()}>
+        <header className="gm__head">
+          <div className="gm__titles">
+            <h2 className="gm__title">{label}</h2>
+            <span className="gm__sub">{type}</span>
           </div>
           {/* Saving a glyph rewrites src/.../glyphs/customGlyphs.ts, which is in
               THIS page's module graph (NodePreviewCard → NodeGlyph → customGlyphs),
               so Vite HMR repaints the row previews behind the modal on save. */}
-          <span className="dm__note">Node Designer · saved glyphs hot-reload the table behind this modal</span>
-          <button className="dm__close" onClick={onClose} title="Close (Esc)">
+          <span className="gm__aside">Node Designer · saved glyphs hot-reload the table behind this modal</span>
+          <button className="gm__close" onClick={onClose} title="Close (Esc)">
             ✕
           </button>
         </header>
 
         <iframe
-          className="dm__frame"
+          className="gm__frame"
           src={designerUrl(type)}
           title={`Node Designer — ${label}`}
         />

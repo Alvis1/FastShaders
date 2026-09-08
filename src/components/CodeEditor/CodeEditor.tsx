@@ -37,6 +37,27 @@ const BASE_EDITOR_OPTIONS = {
 
 const READONLY_EDITOR_OPTIONS = { ...BASE_EDITOR_OPTIONS, readOnly: true };
 
+/**
+ * How long the generated TSL must hold still before it is pushed into Monaco
+ * and re-assembled into the A-Frame page.
+ *
+ * `code` advances once per graph→code pass, and that pass runs on every
+ * DragNumberInput pointermove (useSyncEngine re-runs on any semantically
+ * different nodes/edges identity; a scrub rounds to 4 decimals, so consecutive
+ * frames essentially always differ). Undebounced, one scrub frame costs:
+ * @monaco-editor/react materializing the whole document with `getValue()`,
+ * a full-range `executeEdits`, a re-tokenize and one `pushUndoStop` — leaving
+ * an undo element per sub-pixel frame, each retaining the superseded document,
+ * so Ctrl+Z in the code panel then walks back one scrub frame at a time — plus,
+ * with the A-Frame tab open, a whole `tslToShaderModule` rebuild (measured
+ * 2–7 ms) and a re-tokenize of the regenerated HTML page.
+ *
+ * The 3D preview was debounced for exactly this gesture
+ * (ShaderPreview's PREVIEW_REBUILD_DEBOUNCE_MS); this surface never was. Same
+ * window, so a scrub settles both at once.
+ */
+const CODE_SETTLE_MS = 200;
+
 export function CodeEditor() {
   const code = useAppStore((s) => s.code);
   const language = useAppStore((s) => s.language);
@@ -48,7 +69,28 @@ export function CodeEditor() {
   // shaderBaseName is the SAME stem buildShaderBundle writes, so the page's
   // `src:` and the downloaded file agree without the user renaming anything.
   const shaderName = useAppStore((s) => s.shaderName);
-  const editorRef = useRef<unknown>(null);
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+
+  // The settled copy of `code` — see CODE_SETTLE_MS. Everything expensive reads
+  // THIS one (Monaco's model, the A-Frame module); `code` itself stays live for
+  // Apply, for the store and for the empty-editor hint, which must follow the
+  // user's own typing frame by frame.
+  const [settledCode, setSettledCode] = useState(code);
+  useEffect(() => {
+    if (code === settledCode) {
+      // Nothing to schedule — but the `value` prop can no longer CHANGE from
+      // here, and @monaco-editor/react only pushes on a changed prop, so the
+      // model would silently keep whatever the user typed. Reachable when an
+      // external write (an undo, an import) restores exactly the pre-keystroke
+      // text inside the settle window: rare, self-correcting on the next
+      // differing write, and this closes it outright.
+      const editor = editorRef.current;
+      if (editor && editor.getValue() !== code) editor.setValue(code);
+      return;
+    }
+    const id = window.setTimeout(() => setSettledCode(code), CODE_SETTLE_MS);
+    return () => window.clearTimeout(id);
+  }, [code, settledCode]);
 
   // ── Node-derived inputs, without a whole-array subscription ──────────────
   // `s.nodes` gets a NEW identity on every drag pointermove, so subscribing to
@@ -68,9 +110,10 @@ export function CodeEditor() {
         | OutputNodeData
         | undefined)?.materialSettings,
   );
-  // While an SDF Output drives, the module is double-sided (exportShader's
-  // marchMaterialSettings — the march starts at the camera on a back face) and
-  // the A-Frame page renders through the SDF window box.
+  // While a Raymarch Output drives (Field OR Density wired), the module is
+  // double-sided (exportShader's marchMaterialSettings — the march starts at
+  // the camera on a back face) and the A-Frame page renders through the march
+  // window SPHERE: `<a-sphere radius=…>`, not a box.
   const marchWindow = useAppStore((s) => marchWindowRadius(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)));
   const sdfDrives = marchWindow !== null;
   const materialSettings = useMemo(
@@ -101,7 +144,7 @@ export function CodeEditor() {
       // PRINTABLE. ShaderNode.tsx:297 folds its key with raw \u0000/\u0001
       // separators; that is deliberately NOT copied here, because a raw NUL byte
       // in a source file makes grep/ripgrep classify it as binary and silently
-      // skip the file (MicNode.tsx/OutputNode.tsx trip exactly that today).
+      // skip the file (SoundNode.tsx/OutputNode.tsx trip exactly that today).
       key += rt === 'property_color'
         ? `c${JSON.stringify(String(v.name ?? 'color1'))}${JSON.stringify(String(v.hex ?? '#ff0000'))};`
         : `f${JSON.stringify(String(v.name ?? 'property1'))}${Number(v.value ?? 1.0)};`;
@@ -155,9 +198,10 @@ export function CodeEditor() {
   // ShaderPreview.tsx:1065-1076: the module depends on nodes only through image
   // payloads, and the `fs-asset:<node>-<hash>` placeholder embeds an FNV-1a hash
   // of the stored payload (imageAssets.ts:47-61, emitted at graphToCode.ts:700),
-  // so swapping an image always changes `code` and re-runs this memo. Dimensions
-  // and file name ride the same emitted line; an undecodable payload emits no
-  // placeholder at all. Everything the module reads that `code` does NOT carry —
+  // so swapping an image always changes `code` — and therefore `settledCode` —
+  // and re-runs this memo. Dimensions and file name ride the same emitted line;
+  // an undecodable payload emits no placeholder at all. Everything the module
+  // reads that the generated code does NOT carry —
   // materialSettings (graphToCode never emits it) and the declared property list
   // (a duplicate-name rename changes the header with identical TSL) — is a real
   // dep below.
@@ -165,14 +209,17 @@ export function CodeEditor() {
     if (activeTab !== 'script') return '';
     try {
       return tslToShaderModule(
-        inlineImageAssetsFromNodes(code, useAppStore.getState().nodes),
+        inlineImageAssetsFromNodes(settledCode, useAppStore.getState().nodes),
         materialSettings,
         properties,
       );
     } catch (e) {
       return `// Export error: ${e instanceof Error ? e.message : String(e)}`;
     }
-  }, [code, activeTab, materialSettings, properties]);
+    // settledCode, not `code`: this tab is a read-only snapshot, so it can wait
+    // out a scrub (CODE_SETTLE_MS) instead of rebuilding the whole module per
+    // pointermove.
+  }, [settledCode, activeTab, materialSettings, properties]);
 
   // ── The A-Frame tab: a copy-ready index.html, and nothing else ──────────
   //
@@ -189,8 +236,8 @@ export function CodeEditor() {
       return buildAFrameEmbedHTML(scriptCode, {
         shaderFile: jsFileName,
         title: shaderName,
-        // The SDF window replaces the Model dropdown's primitive while an SDF
-        // Output drives — the same rule the preview applies.
+        // The march window sphere replaces the Model dropdown's primitive while
+        // a Raymarch Output drives — the same rule the preview applies.
         geometry: marchWindow !== null ? MARCH_WINDOW_GEOMETRY : readPreviewGeometry(),
         marchWindow: marchWindow ?? 1,
       });
@@ -462,7 +509,7 @@ export function CodeEditor() {
           <Editor
             height="100%"
             defaultLanguage="javascript"
-            value={code}
+            value={settledCode}
             onChange={handleChange}
             onMount={handleMount}
             theme={codeEditorTheme}

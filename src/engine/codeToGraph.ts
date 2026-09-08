@@ -33,6 +33,40 @@ interface CodeToGraphResult {
   errors: ParseError[];
 }
 
+/**
+ * id → node lookup over the parse's own node array, incremental and keyed BY
+ * THAT ARRAY.
+ *
+ * The walk used to answer this with `nodes.find((n) => n.id === X)` against an
+ * array that grows as it parses, so a swizzle-heavy module cost
+ * O(member-expressions × nodes) to parse — and the hottest caller
+ * (`resolveMemberExpr`) runs once per member expression on every code-panel
+ * Apply and every `buildCodeGroup` at boot.
+ *
+ * A WeakMap keyed on the array rather than a parameter threaded through the
+ * walk's ~30 call sites: the alternative would also mean updating the index at
+ * eight separate `nodes.push(...)` sites, and a FORGOTTEN one is a silent
+ * defect — a missed `toHsl` splices a fresh Split node into the graph on every
+ * Apply (see resolveMemberExpr). Correctness rests on one invariant instead:
+ * the parse's node array is APPEND-ONLY (every producer pushes; nothing
+ * splices, reorders or replaces an element), so bringing the index up to date
+ * means walking only the tail. Entries die with the array, so nothing leaks
+ * between parses.
+ */
+const NODE_INDEX = new WeakMap<AppNode[], { byId: Map<string, AppNode>; scanned: number }>();
+function nodeById(nodes: AppNode[], id: string): AppNode | undefined {
+  let idx = NODE_INDEX.get(nodes);
+  if (!idx) {
+    idx = { byId: new Map<string, AppNode>(), scanned: 0 };
+    NODE_INDEX.set(nodes, idx);
+  }
+  for (; idx.scanned < nodes.length; idx.scanned++) {
+    const n = nodes[idx.scanned];
+    idx.byId.set(n.id, n);
+  }
+  return idx.byId.get(id);
+}
+
 export function codeToGraph(code: string): CodeToGraphResult {
   if (!code.trim()) {
     return { nodes: [], edges: [], errors: [] };
@@ -77,6 +111,11 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // visitors with `p`/`dir` bound to the root node and their `return` routed
   // to the socket; everything else about the node is skipped whole (which is
   // also what keeps its Loop/If from raising the imperative-block warning).
+  // NB `sdfOutputId` holds the RAYMARCH Output's id. The name predates the
+  // 2026-09-03 fold of the one-day SDF Output / Volume Output into that one
+  // node; there is no `sdfOutput` node type any more (`MARCH_OUTPUT_TYPE` is
+  // `raymarchOutput`). Left alone because renaming it is churn across ~9 call
+  // sites in the middle of a parser, not because it is still accurate.
   let sdfOutputId: string | null = null;
   let marchPosId: string | null = null;
   let rayDirId: string | null = null;
@@ -205,7 +244,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
     // A MATERIAL owns its own values and exposed set; only material 0 writes
     // the node's fields (where they have always lived).
     const sink = material
-      ?? (rawNodes.find((n) => n.id === outputId)?.data as Record<string, unknown> | undefined);
+      ?? (nodeById(rawNodes, outputId)?.data as Record<string, unknown> | undefined);
     if (!sink) return;
     (sink as Record<string, unknown>).values = values;
     (sink as Record<string, unknown>).exposedPorts = Array.from(
@@ -378,7 +417,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
       wireOutputChannels(outputId, value, `_part${index}_`, index, material);
     }
     if (materials.length === 0) return;
-    const outputNode = rawNodes.find((n) => n.id === outputId);
+    const outputNode = nodeById(rawNodes, outputId);
     if (outputNode) {
       (outputNode.data as Record<string, unknown>).materials = materials;
     }
@@ -388,11 +427,10 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // Shared between `return X` (FastShaders canonical form) and `output = X`
   // (three.js TSL editor compatible form).
   const buildOutputFromExpr = (rawArg: t.Node): void => {
-    // An SDF Output's return carries `normal: rm1N` (the node itself) and an
-    // optional `color` — a captured ref, or the `rm1Color(rm1Hit)` call
-    // whose chain was already wired by the helper's own return.
     // A Raymarch Output's return is the node itself: every channel was already
-    // read off its own `const rm1<Channel> = …` declarator.
+    // read off its own `const rm1<Channel> = …` declarator, so the return's
+    // keys carry nothing this parse has not already wired and no plain Output
+    // is minted for them.
     if (sdfOutputId) return;
     if (hasOutput) return;
     const arg = unwrapScalarWiden(rawArg);
@@ -456,7 +494,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
           return;
         }
 
-        // SDF Output emission (see the state block above).
+        // Raymarch Output emission (see the state block above).
         const marchChannel = /^rm\d+(Field|Density|Color|Emissive|Glow|Background|LightColor|Ambient)$/.exec(varName);
         if (marchChannel) {
           const handle = MARCH_HELPER_HANDLES[marchChannel[1]];
@@ -481,7 +519,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
             const storedHex = matchStoredChannelValue('color', init);
             if (typeof storedHex === 'string') {
               const target = ensureMarchOutput();
-              setNodeValues(rawNodes.find((n) => n.id === target)!, { [handle]: storedHex });
+              setNodeValues(nodeById(rawNodes, target)!, { [handle]: storedHex });
               return;
             }
           }
@@ -495,7 +533,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
           t.isIdentifier(init.callee.callee) && init.callee.callee.name === 'Fn'
         ) {
           const target = ensureMarchOutput();
-          const sdfNode = rawNodes.find((n) => n.id === target)!;
+          const sdfNode = nodeById(rawNodes, target)!;
           const values: Record<string, string | number> = {};
           let stepsSeen = false;
           const wireParam = (handle: string, arg: t.Node | undefined): void => {
@@ -542,7 +580,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
 
         // const x = identifier (e.g. positionGeometry, or aliasing another var)
         if (t.isIdentifier(init)) {
-          // `const positionLocal1 = p;` inside an SDF Output per-step function:
+          // `const positionLocal1 = p;` inside a Raymarch Output per-step function:
           // the march root. The flat body declared the same name from the real
           // `positionLocal` just above (roots are always emitted there too), so
           // the existing node IS the root — rebinding would mint a duplicate.
@@ -596,7 +634,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
       ReturnStatement(path) {
         const arg = path.node.argument;
         if (!arg) return;
-        // A return inside one of the SDF Output's per-step functions feeds the
+        // A return inside one of the Raymarch Output's per-step functions feeds the
         // node's socket, not the shader's output.
         const fnNode = path.getFunctionParent()?.node;
         const target = fnNode ? helperReturnTargets.get(fnNode) : undefined;
@@ -949,7 +987,7 @@ function processCall(
           nodes, edges, varToNodeId, varToHandle, splitNodesMap, code, errors,
         );
         const id = varToNodeId.get(varName);
-        const created = id ? nodes.find((n) => n.id === id) : undefined;
+        const created = id ? nodeById(nodes, id) : undefined;
         if (created) setNodeValues(created, { signed: 0 });
         return;
       }
@@ -1561,7 +1599,7 @@ function resolveMemberExpr(
   // byte-equality check still passes (a Split re-emits the same swizzle text).
   // `.w` has no HSL counterpart and falls through to the Split path below,
   // as does every other source type.
-  const srcNode = nodes.find((n) => n.id === sourceId);
+  const srcNode = nodeById(nodes, sourceId);
   if (srcNode?.data.registryType === 'toHsl') {
     const handle = TOHSL_COMPONENT_TO_HANDLE.get(component);
     if (handle) return { nodeId: sourceId, handle };

@@ -11,10 +11,10 @@ import { ClockFaceSvg, applyClockFrame } from './ClockFaceSvg';
 import { LiveEdgeValue } from './LiveEdgeValue';
 import { portLabel } from '@/i18n';
 import { NodeTitle } from './NodeTitle';
-// One rule for "what is arriving on this input", shared with ShaderNode/MicNode
+// One rule for "what is arriving on this input", shared with ShaderNode/SoundNode
 // (whose stylesheet also owns .shader-node__edge-val).
 import { edgeValueLabel } from './ShaderNode';
-// getTargetEdges, NOT raw s.edges — same reason as MicNode/OutputNode: the
+// getTargetEdges, NOT raw s.edges — same reason as SoundNode/OutputNode: the
 // unwrapped edge names the REAL producer, so a feeder inside a collapsed group
 // still shows its number instead of a grey ellipsis.
 import { getTargetEdges } from '@/engine/cpuEvaluator';
@@ -42,6 +42,11 @@ export const ClockNode = memo(function ClockNode({
   if (!def) return null;
 
   const handRef = useRef<SVGGElement>(null);
+  // The rAF loop's visibility probe. It has to be an HTML element:
+  // `offsetParent` lives on HTMLElement, so reading it off `handRef` (an
+  // SVGGElement) would be `undefined` — never null — and the test would
+  // silently never fire.
+  const faceRef = useRef<HTMLDivElement>(null);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const language = useAppStore((s) => s.language);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
@@ -75,7 +80,7 @@ export const ClockNode = memo(function ClockNode({
   }, [id, showSpeedPort, updateNodeInternals]);
   // A wired speed overrides the stored number (the codegen rule), so the row
   // must stop offering to edit it and show the value ARRIVING instead — the
-  // same label ShaderNode and MicNode put on a connected input. Cheap string
+  // same label ShaderNode and SoundNode put on a connected input. Cheap string
   // key first so a position-only graph notify bails on Object.is; the map is
   // rebuilt from getState() only when that key actually changes.
   const speedEdgeKey = useAppStore((s) => {
@@ -111,8 +116,24 @@ export const ClockNode = memo(function ClockNode({
     // while the user scrubs speed (a wall-clock × speed lands on an unrelated
     // % 60 residue every pointermove frame — the hand would teleport).
     let last: number | null = null;
+    // Last phase actually WRITTEN to the hand, so a fixed point of the
+    // integrator costs nothing. At speed 0 — a real setting, since the number
+    // is editable on the node — `dt * 0` leaves the phase alone, so the
+    // identical rotate() string was being written 60×/s forever.
+    let drawnPhase: number | null = null;
     const draw = (ts: number) => {
+      // Schedule first, so the visibility early-out below still keeps the loop
+      // alive (deps stay [], so it is never torn down while mounted).
+      rafId = requestAnimationFrame(draw);
       if (last === null) last = ts;
+      // Hidden — a member of a COLLAPSED group is only `display: none`'d (the
+      // store keeps it MOUNTED on purpose) and rAF is per-document, so nothing
+      // else throttles this. `offsetParent` is null exactly under
+      // `display: none`. Keep `last` moving across the invisible span: the
+      // hand shows the RATE time flows at, not absolute time, so it simply
+      // resumes where it stopped, and an honest dt on the first visible frame
+      // is better than one the clamp below has to flatten.
+      if (faceRef.current?.offsetParent === null) { last = ts; return; }
       // Clamp dt: a backgrounded tab hands back a multi-second delta on resume,
       // which at a high multiplier would spin the hand through hundreds of turns.
       const dt = Math.min(Math.max((ts - last) / 1000, 0), 0.1);
@@ -120,9 +141,13 @@ export const ClockNode = memo(function ClockNode({
       phaseRef.current = (phaseRef.current + dt * speedRef.current) % 60;
       // One rotate-transform write per frame — the face itself is the shared
       // ClockFaceSvg (geometry in utils/clockFace), so the asset tile shows
-      // the identical picture.
-      applyClockFrame(handRef, phaseRef.current);
-      rafId = requestAnimationFrame(draw);
+      // the identical picture. Compare the PHASE rather than the formatted
+      // angle: it is the integrator's own state, so speed 0 is an exact
+      // no-op, and it costs one number compare otherwise.
+      if (phaseRef.current !== drawnPhase) {
+        drawnPhase = phaseRef.current;
+        applyClockFrame(handRef, phaseRef.current);
+      }
     };
 
     rafId = requestAnimationFrame(draw);
@@ -144,7 +169,7 @@ export const ClockNode = memo(function ClockNode({
 
       {/* The sockets live INSIDE this wrapper so they centre on the clock face
           rather than on the whole node — see ClockNode.css. */}
-      <div className="clock-node__canvas-wrap">
+      <div className="clock-node__canvas-wrap" ref={faceRef}>
         <ClockFaceSvg phase={0} handRef={handRef} />
 
         {def.outputs[0] && (

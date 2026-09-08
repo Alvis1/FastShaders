@@ -41,7 +41,7 @@ export function usesExposedPorts(def: NodeDefinition | undefined): boolean {
       def.type === 'raymarchOutput' ||
       def.type === 'imageNode' ||
       def.type === 'time' ||
-      def.type === 'micNode' ||
+      def.type === 'soundNode' ||
       RAMP_COLOR_NODES.has(def.type))
   );
 }
@@ -104,7 +104,7 @@ export const MAX_EXPOSED_PORTS = 64;
  *
  * This is the ingestion guard for the field, not a nicety: only three of the
  * thirteen readers go through `effectiveExposedPorts`. OutputNode, ShaderNode,
- * MicNode, PreviewNode and ClockNode read `data.exposedPorts` RAW and do
+ * SoundNode, PreviewNode and ClockNode read `data.exposedPorts` RAW and do
  * `new Set(v)` / `v.includes(...)` on it during RENDER — and the app has no
  * React error boundary, so a tampered `exposedPorts: 5` from a shared
  * `.fastshader` takes the whole tree down to a blank page, is then written to
@@ -148,14 +148,25 @@ export function autoExposeConnectedParamPorts(nodes: AppNode[], edges: AppEdge[]
   // applyProjectToStore, useSyncEngine), so normalising here reaches all of
   // them without adding a call site.
   normalizeExposedPorts(nodes);
+  // Index the edges by target ONCE. This used to rescan the whole edge array
+  // per exposed-port node, and `usesExposedPorts` covers the entire noise
+  // category plus the outputs — so on a noise-heavy graph that was O(N × E) on
+  // three whole-graph ingestion paths (boot's loadGraph, applyProjectToStore,
+  // and every code-panel Apply, already the slowest interaction in the app).
+  // A Map, not a Record: node ids arrive verbatim from `.fastshader` files, and
+  // a plain object resolves `constructor`/`toString` through its prototype.
+  const byTarget = new Map<string, Set<string>>();
+  for (const e of edges) {
+    if (!e.targetHandle) continue;
+    const set = byTarget.get(e.target);
+    if (set) set.add(e.targetHandle);
+    else byTarget.set(e.target, new Set([e.targetHandle]));
+  }
   for (const node of nodes) {
     const def = NODE_REGISTRY.get(node.data.registryType);
     if (!usesExposedPorts(def)) continue;
-    const connected = new Set<string>();
-    for (const e of edges) {
-      if (e.target === node.id && e.targetHandle) connected.add(e.targetHandle);
-    }
-    if (connected.size === 0) continue;
+    const connected = byTarget.get(node.id);
+    if (!connected || connected.size === 0) continue;
     const current = effectiveExposedPorts(node);
     const missing = [...connected].filter((p) => !current.includes(p));
     if (missing.length === 0) continue;

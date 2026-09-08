@@ -19,11 +19,18 @@ import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { autoLayout } from '@/engine/layoutEngine';
-import { getBuiltinTextures } from '@/registry/builtinTextures';
-import { getBuiltinPresets } from '@/registry/builtinPresets';
+// NB the two built-in libraries are deliberately NOT imported here — see
+// instantiateBuiltinTexture, which loads them on demand so that the Babel
+// front end behind `buildCodeGroup` stays out of every page's boot chunk.
 import complexityData from '@/registry/complexity.json';
 import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { safeJsonReviver } from '@/utils/safeJson';
+// colorUtils' only import is type-only, so it is a runtime LEAF and its
+// exports are guaranteed initialised by the time anything can reach them —
+// which matters because `loadHexColor` reads HEX6 from this file's module-scope
+// `create()` body (see costTable.ts's header for what evaluating across the
+// store's import cycle costs).
+import { HEX6 } from '@/utils/colorUtils';
 import { authoredUniformChange } from '@/utils/uniformOverride';
 import { normalizeChainOperands } from '@/utils/chainOperands';
 import { nodeCostPoints, computeReachableCost } from '@/utils/nodeCost';
@@ -47,7 +54,7 @@ import {
   type OptionalCategory, type OptionalCategoryFlags,
 } from '@/registry/optionalCategories';
 import { sinkCosts } from '@/utils/nodeCost';
-import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, type ImageOriginInfo } from '@/utils/imageNode';
+import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, totalImageChars, type ImageOriginInfo } from '@/utils/imageNode';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { selectionOnlyGraphChange } from '@/utils/graphSemantics';
@@ -195,6 +202,27 @@ export function loadSavedGroups(): SavedGroup[] {
 let graphQuotaWarned = false;
 let groupsQuotaWarned = false;
 
+/**
+ * The graph's image-payload size at the last QuotaExceeded write, or null while
+ * saving is working.
+ *
+ * A quota failure is not transient — the payload is still too big on the next
+ * edit — but `saveGraph` retried unconditionally, so every subsequent edit for
+ * the rest of the session paid a full `JSON.stringify` of a multi-megabyte
+ * graph (MEASURED: 3,004,932 chars in ~8 ms, allocated as ~6 MB of UTF-16) plus
+ * the throw, and saved nothing. Backing off until the IMAGE total actually
+ * shrinks is the cheap, honest test: images are the only term that can be
+ * megabytes, they are what pushes the write over the origin budget, and
+ * removing one is the user's only real remedy.
+ *
+ * Deliberately NOT a pre-emptive size threshold. Refusing to write a payload
+ * the browser would have accepted loses work that is currently saved, which is
+ * a worse failure than the wasted stringify; and a graph with NO images never
+ * arms the backoff (`> 0` below), so a quota exhausted by some other origin key
+ * still retries every edit, exactly as it always did.
+ */
+let graphQuotaBlockedAtImageChars: number | null = null;
+
 function persistSavedGroups(groups: SavedGroup[]) {
   try {
     localStorage.setItem(SAVED_GROUPS_KEY, JSON.stringify(groups));
@@ -261,6 +289,36 @@ function cloneGroupSnapshot(
   });
 
   return { group, members, edges };
+}
+
+/**
+ * Drop a BUILT-IN library group (a texture, a preset) onto the canvas at
+ * `position`, as one history entry.
+ *
+ * The two libraries are one pipeline — `codeGroupBuilder.buildCodeGroup` builds
+ * both, and a user experiences the two tiles as the same gesture — so the
+ * placement rules live here once instead of being kept in step in two actions
+ * that differed only in which `find()` fed them: fresh ids via
+ * `cloneGroupSnapshot`, the group container FIRST because React Flow requires a
+ * parent before its children, and one `pushHistory` for the whole drop.
+ *
+ * `instantiateSavedGroup` deliberately does NOT route through here: a
+ * user-saved group may legitimately contain an Output, so it needs the mesh
+ * target / active-sink / fold repairs re-run against the COMBINED node list.
+ */
+function placeLibraryGroup(
+  snapshot: { nodes: AppNode[]; edges: AppEdge[] } | undefined,
+  position: { x: number; y: number },
+): void {
+  if (!snapshot || snapshot.nodes.length === 0) return;
+  const { group, members, edges } = cloneGroupSnapshot(snapshot, position);
+  useAppStore.getState().pushHistory();
+  useAppStore.setState((state) => ({
+    nodes: [group, ...state.nodes, ...members] as AppNode[],
+    edges: [...state.edges, ...edges] as AppEdge[],
+    syncSource: 'graph' as SyncSource,
+    isUndoRedo: false,
+  }));
 }
 
 /** A dropped CSV whose column count exceeds COLUMN_WARN_THRESHOLD, awaiting the
@@ -411,6 +469,29 @@ function loadString(key: string, fallback: string): string {
   try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
 }
 
+/**
+ * `loadString` for a colour: anything that is not exactly `#rrggbb` falls back.
+ *
+ * These strings are not decoration — `getCostColor`/`getCostTextColor` feed
+ * them straight to `hexToRgb`, which does a bare `parseInt` with no leniency,
+ * so a stored `"red"` makes EVERY node header and cost badge render
+ * `#NaNNaNNaN` (invalid, so the declaration is dropped) for the rest of the
+ * session and across reloads. And they are attacker-writable twice over: the
+ * `fs:*` keys are writable by anything at this origin, and `projectImport`
+ * copies `project.ui.costColorLow` / `…High` / the canvas backdrop out of a
+ * shared `.js` straight into the setters below, where `extractProjectState`
+ * never gates them. `drawColor` twenty lines down has always been checked this
+ * way; these four were the gap.
+ *
+ * Uses the `HEX6` PREDICATE rather than `normalizeHex`'s canonicalizer on
+ * purpose: a valid stored value must come back byte-identical (the authored
+ * defaults are upper-case), so this only ever accepts or rejects.
+ */
+function loadHexColor(key: string, fallback: string): string {
+  const raw = loadString(key, fallback);
+  return HEX6.test(raw) ? raw : fallback;
+}
+
 /** The ONE writer of `fs:costProfiles` — every mutation path goes through it. */
 function persistCostProfiles(list: CostProfile[]): void {
   try { localStorage.setItem('fs:costProfiles', JSON.stringify(list)); } catch { /* quota */ }
@@ -420,7 +501,12 @@ function loadCostProfiles(): CostProfile[] {
   try {
     const raw = localStorage.getItem('fs:costProfiles');
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
+    // The shared deny-list reviver, like every other untrusted parse in this
+    // file (fs:graph, fs:savedGroups). Belt and braces here — the rebuild below
+    // names every field it keeps and sanitizeCostMap whitelists keys against
+    // BASE_COSTS — but "this one site happens to be safe" is the reasoning
+    // safeJson.ts exists to stop each parse having to redo.
+    const parsed = JSON.parse(raw, safeJsonReviver) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object' && typeof (p as Record<string, unknown>).id === 'string')
@@ -475,7 +561,10 @@ function loadCostBudgets(): Record<string, number> {
   try {
     const raw = localStorage.getItem('fs:costBudgets');
     if (!raw) return out;
-    const parsed = JSON.parse(raw) as unknown;
+    // Same reviver as every other untrusted parse here; the null-prototype
+    // target above is the control that actually matters, this is the second
+    // layer. No legitimate device id is `__proto__` / `constructor`.
+    const parsed = JSON.parse(raw, safeJsonReviver) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out;
     let n = 0;
     for (const [id, v] of Object.entries(parsed as Record<string, unknown>)) {
@@ -533,6 +622,72 @@ function applyLangAttribute(lang: 'en' | 'lv'): void {
   document.documentElement.setAttribute('lang', lang);
 }
 
+/**
+ * `data.values` keys holding a large IMMUTABLE payload STRING: the Image node's
+ * encoded data-URL and the Data node's packed Float32 blob. Everything else on
+ * a node is small.
+ */
+const SHARED_PAYLOAD_KEYS = ['imageB64', 'dataB64'] as const;
+
+/**
+ * `structuredClone(nodes)` with those payload strings carried BY REFERENCE.
+ *
+ * WHY. History is a 50-entry ring of deep clones, so a plain
+ * `structuredClone` copied every payload into every entry: MEASURED at the
+ * documented 3M-char `MAX_TOTAL_IMAGE_CHARS` cap, 60 pushes retained 146 MB of
+ * duplicated base64 text, and each edit / undo / redo paid a fresh multi-MB
+ * copy even for a colour tweak on an unrelated node. With `ignoreImageLimits`
+ * only the 8M-char per-image ceiling remains, so three big images could reach
+ * ~1.2 GB. `imageNode.ts` and `dataNode.ts` both name this multiplication in
+ * their own cap comments — it was the reason those caps are as low as they are.
+ *
+ * WHY SHARING IS SAFE. JS strings are immutable, so one string reachable from
+ * the live graph and all 50 entries cannot be mutated by any of them — exactly
+ * the argument `HistoryEntry` already makes for `drawings` and
+ * `shaderPalettes`. Nothing rewrites a payload in place either: every edit path
+ * REPLACES `data.values` wholesale (`setNodeValues`, `updateNodeData`), and the
+ * clone below still gives every node object, its `data` and its `values` their
+ * own identity — only the string itself is shared.
+ *
+ * HOW. `structuredClone` has no replacer hook, so the payloads are swapped for
+ * an empty-string placeholder in a shallow COPY of the affected nodes (the live
+ * ones are never touched), cloned, then re-attached. Assigning back into the
+ * key that is already there keeps `values`' key ORDER identical, so the
+ * autosave payload and the exported project block stay byte-for-byte what they
+ * were.
+ */
+function cloneNodesSharingPayloads(nodes: AppNode[]): AppNode[] {
+  let stripped: AppNode[] | null = null;
+  const carried: Array<[index: number, payloads: Record<string, string>]> = [];
+  for (let i = 0; i < nodes.length; i++) {
+    // Read the raw field, not getNodeValues: a tampered `values` of any other
+    // shape simply has no payload key and falls through to the plain clone.
+    const values = (nodes[i].data as { values?: unknown }).values as
+      | Record<string, unknown>
+      | undefined;
+    if (!values || typeof values !== 'object') continue;
+    let payloads: Record<string, string> | null = null;
+    for (const key of SHARED_PAYLOAD_KEYS) {
+      const v = values[key];
+      if (typeof v === 'string' && v.length > 0) (payloads ??= {})[key] = v;
+    }
+    if (!payloads) continue;
+    stripped ??= nodes.slice();
+    const lightValues: Record<string, unknown> = { ...values };
+    for (const key of Object.keys(payloads)) lightValues[key] = '';
+    stripped[i] = {
+      ...nodes[i],
+      data: { ...(nodes[i].data as object), values: lightValues },
+    } as AppNode;
+    carried.push([i, payloads]);
+  }
+  const cloned = structuredClone(stripped ?? nodes);
+  for (const [i, payloads] of carried) {
+    Object.assign((cloned[i].data as { values: Record<string, unknown> }).values, payloads);
+  }
+  return cloned;
+}
+
 function snapshot(
   nodes: AppNode[],
   edges: AppEdge[],
@@ -540,7 +695,7 @@ function snapshot(
   shaderPalettes: Palette[],
 ): HistoryEntry {
   return {
-    nodes: structuredClone(nodes),
+    nodes: cloneNodesSharingPayloads(nodes), // payload strings by reference — see above
     edges: structuredClone(edges),
     drawings, // by reference — see HistoryEntry
     shaderPalettes, // by reference — see HistoryEntry
@@ -623,6 +778,10 @@ function saveGraph(
   // Node env (tests) has no localStorage at all — that's not a quota
   // condition, so bail before the try/catch would surface a bogus notice.
   if (typeof localStorage === 'undefined') return;
+  // Cheap (a .length sum) and above the stringify on purpose: see
+  // graphQuotaBlockedAtImageChars.
+  const imageChars = totalImageChars(nodes);
+  if (graphQuotaBlockedAtImageChars !== null && imageChars >= graphQuotaBlockedAtImageChars) return;
   try {
     // Strip ephemeral per-element UI state: selection/drag/resize flags are
     // meaningless across a reload (and the autosave subscriber deliberately
@@ -641,10 +800,13 @@ function saveGraph(
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     graphQuotaWarned = false;
+    graphQuotaBlockedAtImageChars = null;
   } catch {
     // Quota exceeded or private mode. Once auto-save starts failing, EVERY
     // subsequent edit is silently unsaved until the graph shrinks — surface it
-    // once per failure streak so the user can act before a reload loses work.
+    // once per failure streak so the user can act before a reload loses work,
+    // and stop paying the failing stringify on each of those edits.
+    graphQuotaBlockedAtImageChars = imageChars > 0 ? imageChars : null;
     if (!graphQuotaWarned) {
       graphQuotaWarned = true;
       useAppStore.getState().enqueueLimitNotice({
@@ -693,12 +855,14 @@ export function loadGraph(): {
       // so the graph still loads. Edges that referenced them are also pruned
       // below. Nodes saved with the (now-removed) `texturePreview` flow type
       // or any `tslTex_*` registry type fall into this bucket.
-      // Migrate: micNode moved off ShaderNode onto its own MicNode component
-      // (flow type 'mic'). Graphs saved before that carry type 'shader' and
+      // Migrate: soundNode moved off ShaderNode onto its own SoundNode component
+      // (flow type 'sound'). Graphs saved before that carry type 'shader' — and a
+      // graph saved between the fold and the rename carries 'mic' — and either
+      // would keep rendering through a component that no longer matches, so
       // would keep rendering through the old row layout, which no longer has
-      // any micNode handling at all — so re-derive it.
+      // any soundNode handling at all — so re-derive it.
       for (const node of data.nodes as { type?: string; data?: { registryType?: string } }[]) {
-        if (node?.data?.registryType === 'micNode') node.type = 'mic';
+        if (node?.data?.registryType === 'soundNode') node.type = 'sound';
       }
       const droppedNodeIds = new Set<string>();
       data.nodes = data.nodes.filter((node: { id: string; type?: string; data?: { registryType?: string } }) => {
@@ -1368,26 +1532,55 @@ export const useAppStore = create<AppState>()((set, get) => ({
   rightSplitRatio: loadRightSplitRatio(),
   shaderName: loadString('fs:shaderName', DEFAULT_SHADER_NAME),
   selectedHeadsetId: bootSelectedId,
-  nodeVarNames: {},
-  costColorLow: loadString('fs:costColorLow', '#8BC34A'),
-  costColorHigh: loadString('fs:costColorHigh', '#FF5722'),
+  // NULL-PROTOTYPE, for the reason useSyncEngine's builder documents: node ids
+  // arrive verbatim from `.fastshader` files and the `fs:graph` autosave, and
+  // seven node components read `s.nodeVarNames[id]` straight into
+  // `varName ?? data.label`. On a plain `{}` an id spelling `constructor` or
+  // `toString` resolves to a FUNCTION, which throws inside NodeTitle. The
+  // builder replacing this map is already null-prototype, but components render
+  // BEFORE the first sync effect runs, so a poisoned id would otherwise throw
+  // on the very first paint of a freshly loaded graph — the seed has to be safe
+  // too, not just the value that lands a tick later.
+  nodeVarNames: Object.create(null) as Record<string, string>,
+  costColorLow: loadHexColor('fs:costColorLow', '#8BC34A'),
+  costColorHigh: loadHexColor('fs:costColorHigh', '#FF5722'),
   costProfiles: bootCostProfiles,
   costBudgetOverrides: bootCostBudgets,
   costVersion: 0,
-  nodeEditorBgColorLight: loadString('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
-  nodeEditorBgColorDark: loadString('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK),
+  nodeEditorBgColorLight: loadHexColor('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
+  nodeEditorBgColorDark: loadHexColor('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK),
   // Effective canvas backdrop = the active theme's slot.
   nodeEditorBgColor:
     loadString('fs:codeEditorTheme', 'vs') === 'vs-dark'
-      ? loadString('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK)
-      : loadString('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
+      ? loadHexColor('fs:nodeEditorBgColorDark', DEFAULT_CANVAS_BG_DARK)
+      : loadHexColor('fs:nodeEditorBgColor', DEFAULT_CANVAS_BG_LIGHT),
   codeEditorTheme: (loadString('fs:codeEditorTheme', 'vs') === 'vs-dark' ? 'vs-dark' : 'vs'),
   // Latvian is the DEFAULT (this is a Latvian research project and the user
   // study runs in Latvian); English is one click away on the toolbar's EN
   // button. Only a fresh browser gets the default — a stored `fs:lang` from
   // before this change keeps whatever the user last chose.
   language: (loadString('fs:lang', 'lv') === 'en' ? 'en' : 'lv'),
-  savedGroups: loadSavedGroups(),
+  // Hydrated by App.tsx's mount effect (`loadSavedGroups()`), exactly as
+  // `drawings` and `shaderPalettes` below are — NOT at module scope, and that
+  // is load-bearing rather than symmetry.
+  //
+  // `loadSavedGroups` calls `autoExposeConnectedParamPorts` and
+  // `sanitizeOutputMaterials`, both of which sit inside the 18-module cycle
+  // that runs back through this file (exposedPorts -> edgeUtils ->
+  // useAppStore). Calling them from `create()` meant EVALUATING across that
+  // cycle during module init — the exact failure costTable.ts was extracted to
+  // kill, and its header names this instance verbatim ("entered via
+  // exposedPorts -> Cannot access 'OUTPUT_DEFAULT_EXPOSED' ..."). MEASURED with
+  // two probes differing only in import order: entering through
+  // `@/utils/exposedPorts` first read `OUTPUT_DEFAULT_EXPOSED` in its TDZ, the
+  // per-group `catch { return null }` in loadSavedGroups swallowed the
+  // ReferenceError, and the user's WHOLE library came back empty — after which
+  // the next `saveGroupToLibrary` persists that empty array, destroying it for
+  // good. Today's three entry points all happen to reach the store first, so
+  // nothing shipped broken; a fourth entry, or one added import, would have
+  // been enough. Deferring the call to a mount effect puts it after every
+  // module body has run, where no cycle can catch it half-initialised.
+  savedGroups: [],
   previewMesh: null,
   previewMeshInventory: null,
   exportIncludeMesh: true,
@@ -1682,7 +1875,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
   updatePalette: (id, patch) =>
     set((state) => {
       const idx = state.shaderPalettes.findIndex((p) => p.id === id);
-      if (idx < 0) return {};
+      // Every no-op exit below returns `state` rather than `{}` so zustand's
+      // `Object.is` check short-circuits it — see pushHistory.
+      if (idx < 0) return state;
       const current = state.shaderPalettes[idx];
       const name =
         patch.name === undefined ? current.name : sanitizePaletteName(patch.name, current.name);
@@ -1702,7 +1897,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // A recolour that leaves nothing valid is REFUSED rather than turned into
       // an empty row the user cannot tell from a rendering bug — the same call
       // sanitizePalettes itself makes when it drops a colourless palette.
-      if (!cleaned) return {};
+      if (!cleaned) return state;
       const { colors, names } = cleaned;
       const sameNames =
         (names?.length ?? 0) === (current.names?.length ?? 0) &&
@@ -1714,7 +1909,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         sameNames;
       // No change means no undo entry: a rename dialog that re-commits the same
       // text must not bury the user's real edits under no-op steps.
-      if (unchanged) return {};
+      if (unchanged) return state;
       const next = [...state.shaderPalettes];
       // `names` is spread conditionally so an unlabelled palette keeps NO key
       // at all — the autosave payload and project block then stay byte-identical
@@ -1730,7 +1925,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   deletePalette: (id) =>
     set((state) => {
-      if (!state.shaderPalettes.some((p) => p.id === id)) return {};
+      if (!state.shaderPalettes.some((p) => p.id === id)) return state; // see pushHistory
       return {
         past: [...state.past, snapshotOf(state)].slice(-MAX_HISTORY),
         future: [],
@@ -1742,11 +1937,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
   reorderPalette: (id, toIndex) =>
     set((state) => {
       const from = state.shaderPalettes.findIndex((p) => p.id === id);
-      if (from < 0 || !Number.isFinite(toIndex)) return {};
+      if (from < 0 || !Number.isFinite(toIndex)) return state; // see pushHistory
       // Clamped rather than rejected: a drag past either end of the list means
       // "first" / "last", which is what the user did.
       const to = Math.max(0, Math.min(state.shaderPalettes.length - 1, Math.trunc(toIndex)));
-      if (to === from) return {};
+      if (to === from) return state;
       const next = [...state.shaderPalettes];
       const [moved] = next.splice(from, 1);
       next.splice(to, 0, moved);
@@ -1779,6 +1974,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // the 'code-apply' event is logged at CodeEditor's two Apply gestures.
   requestCodeSync: () => set({ codeSyncRequested: true, previewCode: get().code }),
 
+  // DEAD as of 2026-09-05: nothing invokes this. The cost effect writes
+  // `totalCost` straight through `useAppStore.setState` (useSyncEngine.ts) so
+  // it can collapse with the per-sink cost writes into ONE setState, and
+  // `setSelectedHeadsetId` writes it inside its own `set`. Left in place
+  // because deleting it breaks something a grep for callers cannot see:
+  // evalHooks.test.ts slices this file between `requestCodeSync:` and
+  // `setTotalCost:` to isolate requestCodeSync's body, so removing the name
+  // makes `lastIndexOf` return -1, `slice(start, -1)` swallow the rest of the
+  // file, and the assertion fail with a message blaming requestCodeSync. Move
+  // that fence to a stable neighbour first (e.g. `importCostProfile:`).
   setTotalCost: (cost) => set({ totalCost: cost }),
 
   importCostProfile: (parsed) => { get().importCostProfiles([parsed]); },
@@ -1910,12 +2115,21 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   pushHistory: () =>
     set((state) => {
-      if (state.isUndoRedo) return {};
+      // Return `state`, NOT `{}`. zustand compares with `Object.is(nextState,
+      // state)` and skips both the merge and the notify only on an identity
+      // hit — an empty object is a fresh identity, so a pushHistory that
+      // decided to do NOTHING still allocated a new store object and re-ran
+      // every mounted selector. updateNodeData calls this on every pointermove
+      // of a bracketed scrub, so it doubled the notification cost of every
+      // gesture: MEASURED at exactly 2 notifications per frame (60 scrub frames
+      // → 120), one real write and one no-op, against ~1,400 selectors on a
+      // 100-node graph. `setHoveredNode` already guards the same way.
+      if (state.isUndoRedo) return state;
       // One snapshot per bracketed gesture. A value scrub fires a change per
       // pointermove frame; without this each frame would deep-clone the whole
       // graph (megabytes once images are embedded) AND bury undo under dozens
       // of sub-pixel entries.
-      if (state.coalescingHistory) return {};
+      if (state.coalescingHistory) return state;
       const entry = snapshotOf(state);
       return {
         past: [...state.past, entry].slice(-MAX_HISTORY),
@@ -1929,10 +2143,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (get().past.length > 0) evalLog('undo');
     set((state) => {
       const prev = state.past[state.past.length - 1];
-      if (!prev) return {};
+      // `state`, not `{}` — an identity return is the only one zustand skips
+      // without notifying every selector (see pushHistory).
+      if (!prev) return state;
       const current = snapshotOf(state);
       return {
-        nodes: structuredClone(prev.nodes),
+        // Payload strings ride back out by reference too — see
+        // cloneNodesSharingPayloads; an undo used to cost a full copy of every
+        // embedded image on top of the snapshot it takes first.
+        nodes: cloneNodesSharingPayloads(prev.nodes),
         edges: structuredClone(prev.edges),
         drawings: prev.drawings, // by reference — immutable strokes
         shaderPalettes: prev.shaderPalettes, // by reference — replaced, never mutated
@@ -1948,10 +2167,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (get().future.length > 0) evalLog('redo');
     set((state) => {
       const next = state.future[state.future.length - 1];
-      if (!next) return {};
+      // `state`, not `{}` — see pushHistory.
+      if (!next) return state;
       const current = snapshotOf(state);
       return {
-        nodes: structuredClone(next.nodes),
+        // Payload strings by reference — see cloneNodesSharingPayloads.
+        nodes: cloneNodesSharingPayloads(next.nodes),
         edges: structuredClone(next.edges),
         drawings: next.drawings, // by reference — immutable strokes
         shaderPalettes: next.shaderPalettes, // by reference — replaced, never mutated
@@ -2189,17 +2410,24 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setNodeVarNames: (names) => set({ nodeVarNames: names }),
 
+  // The three colour setters REFUSE anything that is not `#rrggbb` and keep the
+  // current value — the picker is not their only caller: `projectImport` feeds
+  // them verbatim from a shared `.js`'s project block. See loadHexColor for
+  // what an unvalidated string does to every node header on the canvas.
   setCostColorLow: (hex) => {
+    if (!HEX6.test(hex)) return;
     try { localStorage.setItem('fs:costColorLow', hex); } catch { /* */ }
     set({ costColorLow: hex });
   },
 
   setCostColorHigh: (hex) => {
+    if (!HEX6.test(hex)) return;
     try { localStorage.setItem('fs:costColorHigh', hex); } catch { /* */ }
     set({ costColorHigh: hex });
   },
 
   setNodeEditorBgColor: (hex) => {
+    if (!HEX6.test(hex)) return;
     // Remember the pick per theme: the picker edits the ACTIVE theme's canvas
     // only, so switching themes restores the other theme's backdrop.
     const isDark = get().codeEditorTheme === 'vs-dark';
@@ -2869,7 +3097,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           // overwrite the now-restored edges with stale rewired ones.
           const group = s.nodes.find((n) => n.id === groupId);
           if (!group || group.type !== 'group' || !(group.data as GroupNodeData).collapsed) {
-            return {};
+            return s; // identity return: no merge, no notify (see pushHistory)
           }
           return { edges: updatedEdges, syncSource: 'graph', isUndoRedo: false };
         });
@@ -3068,32 +3296,37 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ savedGroups: next });
   },
 
+  // Both libraries share ONE placement path — see placeLibraryGroup.
+  //
+  // They are reached through a dynamic import rather than at module scope, and
+  // the reason is not the ~40 KB of TSL source they carry: building either one
+  // runs every snippet through `codeToGraph`, so a STATIC import from the store
+  // — which every page in the app loads, node-editor.html and the Node Designer
+  // included — pins the Babel front end (@babel/parser + /traverse + /types)
+  // into the boot chunk for a table nothing touches until someone drops a tile.
+  //
+  // The drop is not visibly deferred: by the time either action can fire, the
+  // content browser has already rendered that tile out of the same module, so
+  // the import resolves from an already-loaded chunk in a microtask, well
+  // inside one frame. `.then` rather than an `async` body so the action still
+  // RETURNS undefined, matching the `=> void` it is declared as — nothing can
+  // usefully await a drop — which is also why the failed-fetch case is caught
+  // here instead of escaping as an unhandled rejection. A library that cannot
+  // be loaded places nothing, which is what a missing library means.
   instantiateBuiltinTexture: (textureId, position) => {
-    const texture = getBuiltinTextures().find((t) => t.id === textureId);
-    if (!texture || texture.nodes.length === 0) return;
-    const { group, members, edges } = cloneGroupSnapshot(texture, position);
-    const state = get();
-    get().pushHistory();
-    set({
-      nodes: [group, ...state.nodes, ...members] as AppNode[],
-      edges: [...state.edges, ...edges] as AppEdge[],
-      syncSource: 'graph',
-      isUndoRedo: false,
-    });
+    import('@/registry/builtinTextures')
+      .then(({ getBuiltinTextures }) => {
+        placeLibraryGroup(getBuiltinTextures().find((t) => t.id === textureId), position);
+      })
+      .catch(() => console.warn('[fs] the built-in texture library failed to load'));
   },
 
   instantiateBuiltinPreset: (presetId, position) => {
-    const preset = getBuiltinPresets().find((p) => p.id === presetId);
-    if (!preset || preset.nodes.length === 0) return;
-    const { group, members, edges } = cloneGroupSnapshot(preset, position);
-    const state = get();
-    get().pushHistory();
-    set({
-      nodes: [group, ...state.nodes, ...members] as AppNode[],
-      edges: [...state.edges, ...edges] as AppEdge[],
-      syncSource: 'graph',
-      isUndoRedo: false,
-    });
+    import('@/registry/builtinPresets')
+      .then(({ getBuiltinPresets }) => {
+        placeLibraryGroup(getBuiltinPresets().find((p) => p.id === presetId), position);
+      })
+      .catch(() => console.warn('[fs] the built-in preset library failed to load'));
   },
 
   instantiateSavedGroup: (savedId, position) => {

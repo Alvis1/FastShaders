@@ -18,7 +18,7 @@ import { getAllDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
  *  1. THE CARD RESTYLES THE NODE. `.node-preview-card .node-base:not(--exact)`
  *     carried `min-width: 100px` (plus header/badge/row overrides) to draw the
  *     hand-built cards "larger". On a FIXED-geometry node that is not a size
- *     tweak but a lie: the Mic node is 80px wide, so a 100px card frame left
+ *     tweak but a lie: the Sound node is 80px wide, so a 100px card frame left
  *     its 77px body 20px short of the right edge — all four output sockets
  *     floated INSIDE the card and the arm light sat off centre, while the
  *     canvas node had its sockets on the border. Time and Sine were widened
@@ -64,7 +64,7 @@ const CARD_STYLESHEETS: { file: string; source: string }[] = [
 
 /** Class prefixes owned by a NODE's own stylesheet — off limits to the card. */
 const NODE_INTERNAL =
-  /\.(node-base|shader-node|mic-node|clock-node|preview-node|math-preview-node|color-node|output-node|typed-handle|react-flow__handle|drag-num)/;
+  /\.(node-base|shader-node|sound-node|clock-node|preview-node|math-preview-node|color-node|output-node|typed-handle|react-flow__handle|drag-num)/;
 
 /** Declarations that move or resize something. Colour/cursor/pointer-events
  *  are fine: a card may look inert, it may not look like a different node. */

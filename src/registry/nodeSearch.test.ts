@@ -171,3 +171,85 @@ describe('node descriptions keep UI instructions out of the search corpus', () =
       .toBeLessThan(nodeMatchRank(def('positionWorldDirection'), 'view dir'));
   });
 });
+
+/**
+ * THE AUDIO FOLD's search surface (2026-09-08).
+ *
+ * Two nodes became one: the Audio Input node was absorbed into the Microphone
+ * node, which was renamed **Sound**. Both halves of that move are silent
+ * failures in search, and search is the only place they show:
+ *
+ *   - the RENAME took the node out of the exact-name tier for "microphone",
+ *     the word half its users know it by. Nothing else in the app notices —
+ *     the node renders, emits and arms exactly as before, it simply stops
+ *     being findable by its old name;
+ *   - the DELETION took the absorbed node's vocabulary ("system audio",
+ *     "desktop", "loopback") out of the corpus with it. Those words never
+ *     described the microphone, so nobody would think to check them against a
+ *     node called Sound — but they are what someone types when they want to
+ *     react to a media player, which this node now does.
+ *
+ * Both are carried by the `Also:` tail rather than by prose, which is the rule
+ * this file exists to enforce: the tail is the search vocabulary, prose is the
+ * explanation, and a word in prose can outrank the node actually named it.
+ */
+describe('the audio fold — one node, both vocabularies', () => {
+  it('is named Sound, and "sound" is an exact-name hit', () => {
+    // Pinned as a TIER rather than as a position in the results, so it cannot
+    // be satisfied by the node merely being alone in them: the exact-name tier
+    // has to beat the alias tail the rest of this describe block relies on.
+    // (`nodeMatchRank` takes an already-lowercased query — `searchNodes` is
+    // what trims and lowers — so every literal here is lowercase.)
+    expect(def('soundNode').label).toBe('Sound');
+    expect(nodeMatchRank(def('soundNode'), 'sound'))
+      .toBeLessThan(nodeMatchRank(def('soundNode'), 'loopback'));
+    expect(labels('sound')[0]).toBe('Sound');
+  });
+
+  it('is still found by its old name and by every word the absorbed node owned', () => {
+    // One list, because after the fold there is exactly one right answer for
+    // all of them — which is the whole point of merging the nodes.
+    const queries = [
+      'microphone', 'mic', // what it was called until the rename
+      'audio', 'system audio', 'desktop', 'loopback', 'music', 'speaker', // the absorbed node's
+      'fft', 'spectrum', // shared
+    ];
+    for (const q of queries) {
+      expect(searchNodes(q)[0]?.type, `query "${q}"`).toBe('soundNode');
+    }
+  });
+
+  it('carries that vocabulary in the alias tail, so it outranks prose', () => {
+    // WHERE the words sit decides how they rank, and the tail is the tier
+    // built for them — below a real name, above prose. A word that survived
+    // only because the description happens to mention it would land in the
+    // prose tier, where another node's prose can tie with it; the fold's
+    // vocabulary has to be a deliberate alias, not a coincidence of wording.
+    //
+    // Stated as a tier bound rather than "this word is absent from the prose":
+    // the description legitimately says "from a microphone, another input
+    // device, or the audio already playing on this machine", which is the
+    // sentence that explains the merged node. Prose is only a problem when it
+    // borrows ANOTHER node's name — the prose sweep earlier in this file
+    // ('no definition advertises a right-click…') is what covers that.
+    const d = def('soundNode');
+    const tail = d.description!.split('Also:')[1];
+    expect(tail, 'the Sound node must keep an Also: tail').toBeTruthy();
+    const proseTier = nodeMatchRank(def('mul'), 'mask'); // 'mask' is Multiply prose only
+    for (const w of ['microphone', 'mic', 'system audio', 'desktop', 'loopback']) {
+      expect(tail.toLowerCase(), `"${w}" belongs in the Also: tail`).toContain(w);
+      expect(nodeMatchRank(d, w), `"${w}" must beat the prose tier`).toBeLessThan(proseTier);
+    }
+  });
+
+  it('leaves no second node claiming to be an audio input', () => {
+    // The retired def must be gone from the registry, not merely hidden: a
+    // surviving twin would split every query above between two nodes, one of
+    // which no component draws any more.
+    expect(NODE_REGISTRY.get('audioInput')).toBeUndefined();
+    for (const q of ['audio', 'sound', 'microphone']) {
+      const hits = getAllDefinitions().filter((d) => nodeMatchRank(d, q) !== NO_MATCH);
+      expect(hits.map((d) => d.type), `query "${q}"`).toEqual(['soundNode']);
+    }
+  });
+});

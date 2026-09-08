@@ -55,9 +55,10 @@ export type EvalResult = number[] | null;
  * Shared per-graph evaluation context. Every public entry point routes
  * through it, so ALL consumers evaluating against the SAME (nodes, edges)
  * arrays — every ShaderNode card, every TypedEdge, EdgeInfoCard, codegen's
- * getComponentCount calls — share ONE collapsed-group unwrap, one pair of
- * node/edge indexes, and one result cache per graph version, instead of
- * paying a full recursive re-walk per consumer.
+ * shape lookups (`getNodeOutputShape`/`portShapeForHandle`) — share ONE
+ * collapsed-group unwrap, one pair of node/edge indexes, and one result
+ * cache per graph version, instead of paying a full recursive re-walk per
+ * consumer.
  *
  * Keyed by ARRAY IDENTITY via WeakMap: the zustand store replaces both
  * arrays on every mutation (never mutates in place), so identity IS the
@@ -276,15 +277,6 @@ export function getFieldUpstreamSet(nodes: AppNode[], edges: AppEdge[]): Readonl
   return ctx.fieldUpstream;
 }
 
-/**
- * A node by id through the shared ctx's prebuilt index — the O(1) counterpart
- * to the `nodes.find(...)` linear scans the render layer used to run per
- * connected edge per notify.
- */
-export function getNodeById(nodes: AppNode[], edges: AppEdge[], nodeId: string): AppNode | undefined {
-  return getCtx(nodes, edges).nodeIndex.get(nodeId);
-}
-
 /** Evaluate the output of a specific node, given the current time. */
 export function evaluateNodeOutput(
   nodeId: string,
@@ -302,22 +294,6 @@ export function evaluateNodeOutput(
     cache.clear();
     throw e;
   }
-}
-
-/**
- * Get the number of channel components a node produces (1, 2, 3, or 4).
- * Used by codegen to pick the right vector constructor for shape-dependent
- * nodes like `append`. Falls back to static port-type inference when CPU eval
- * returns null (e.g., when an upstream node is a procedural texture).
- */
-export function getComponentCount(
-  nodeId: string,
-  nodes: AppNode[],
-  edges: AppEdge[],
-): number {
-  const result = evaluateNodeOutput(nodeId, nodes, edges, 0);
-  if (result && result.length > 0) return Math.min(result.length, 4);
-  return getNodeOutputShape(nodeId, nodes, edges);
 }
 
 /** Channel count for a concrete TSL data type (1=float/int, 2=vec2, 3=vec3/color, 4=vec4). */
@@ -700,7 +676,7 @@ function evaluate(
       result = [time * (Number.isFinite(s) ? s : 1)];
       break;
     }
-    case 'micNode':
+    case 'soundNode':
       // Constant silence, never live — and 0 rather than a mid-scale value on
       // purpose. This evaluator drives the node-card thumbnails and also runs
       // inside node-editor.html, which has no preview iframe and no capture at
@@ -1318,6 +1294,14 @@ function analyticalRange(node: AppNode): RangeResult | null {
   ) {
     return { min: [-1, -1, -1], max: [1, 1, 1] };
   }
+
+  // Wireframe coverage: 0 off a line, 1 on one, and every value between at the
+  // antialiased edges. A FIELD like uv/noise rather than a value — it varies
+  // per pixel and depends on screen-space derivatives, which the CPU evaluator
+  // has no equivalent of, so the honest answer is the range and never a sample.
+  // Seeding it here is also what puts everything downstream of a Wireframe on
+  // the interval path instead of collapsing to one arbitrary number.
+  if (type === 'wireframe') return { min: [0], max: [1] };
 
   // Vertex colours are a normalized attribute (glTF permits only normalized
   // byte/short component types for COLOR_0), so every channel is [0, 1] —

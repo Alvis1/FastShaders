@@ -18,7 +18,7 @@
     "tangentLocal": 0,
     "vertexColor": 0,
     "time": 0,
-    "micNode": 0,
+    "soundNode": 0,
     "audioInput": 0,
     "screenUV": 0,
     "property_float": 0,
@@ -90,6 +90,7 @@
     "colormap": 4,
     "dataRange": 7,
     "isolines": 14,
+    "wireframe": 26,
     "imageNode": 2,
 
     "sdCircle": 8,

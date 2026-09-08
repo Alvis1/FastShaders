@@ -15,13 +15,21 @@ import ReactDOM from 'react-dom/client';
 import { GraphsPage } from './components/Graphs/GraphsPage';
 
 // Mirrors main.tsx's CSS bootstrap exactly — without tokens.css the whole page
-// renders token-less (no colors, no spacing, no fonts).
-import '@fontsource/inter/400.css';
-import '@fontsource/inter/500.css';
-import '@fontsource/inter/600.css';
-import '@fontsource/inter/700.css';
-import '@fontsource/jetbrains-mono/400.css';
-import '@fontsource/jetbrains-mono/500.css';
+// renders token-less (no colors, no spacing, no fonts). Latin subsets only, for
+// the reason main.tsx spells out: the bare `400.css` entry declares all seven
+// Google subsets and drags 24 unreachable woff2 files into dist.
+import '@fontsource/inter/latin-400.css';
+import '@fontsource/inter/latin-ext-400.css';
+import '@fontsource/inter/latin-500.css';
+import '@fontsource/inter/latin-ext-500.css';
+import '@fontsource/inter/latin-600.css';
+import '@fontsource/inter/latin-ext-600.css';
+import '@fontsource/inter/latin-700.css';
+import '@fontsource/inter/latin-ext-700.css';
+import '@fontsource/jetbrains-mono/latin-400.css';
+import '@fontsource/jetbrains-mono/latin-ext-400.css';
+import '@fontsource/jetbrains-mono/latin-500.css';
+import '@fontsource/jetbrains-mono/latin-ext-500.css';
 import './styles/tokens.css';
 import './styles/reset.css';
 import '@xyflow/react/dist/style.css';

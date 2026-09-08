@@ -46,6 +46,27 @@ export interface NodeDefinition {
   defaultValues?: Record<string, string | number>;
   description?: string;
   /**
+   * ONE line of the TSL this node expands to, shown READ-ONLY at the foot of
+   * the node's settings menu — unlabelled, since a monospace block under a
+   * divider does not need announcing as code.
+   *
+   * Only meaningful for the hand-emitted nodes (empty `tslFunction`): everything
+   * else emits a call to the function its own name already states, so a sketch
+   * there would restate the label. A hand-emitted node is the opposite — the
+   * whole construction lives in a graphToCode branch the user can only see by
+   * wiring the node and reading the code panel, which is exactly the moment
+   * they are trying to decide whether they need the node at all.
+   *
+   * Deliberately NOT part of the search corpus (`nodeMatchRank` reads
+   * `description`): it is full of TSL identifiers — `fract`, `mix`, `max` — that
+   * are also node names, so indexing it would let a node's IMPLEMENTATION
+   * outrank the nodes it is implemented with.
+   *
+   * A static string can drift from the emitter; the node's own test pins the
+   * operations named here against what graphToCode actually emits.
+   */
+  construction?: string;
+  /**
    * A node with MODES: one definition, several emitted TSL helper variants
    * (engine/moduleHelpers.ts). The mode lives in `values.mode` — never in
    * `defaultValues`, which on a ShaderNode is the socket list — and an ABSENT
@@ -284,13 +305,32 @@ export type ClockFlowNode = Node<ShaderNodeData, 'clock'>;
 export type OutputFlowNode = Node<OutputNodeData, 'output'>;
 export type GroupFlowNode = Node<GroupNodeData, 'group'>;
 export type NoteFlowNode = Node<NoteNodeData, 'note'>;
+/** The Sound node (registry type `soundNode`) — its own component, not a row layout. */
+export type SoundFlowNode = Node<ShaderNodeData, 'sound'>;
+/** The Raymarch Output — the Output node's chrome, its own component. */
+export type RaymarchOutputFlowNode = Node<OutputNodeData, 'raymarchOutput'>;
+
+/**
+ * Every React Flow node type the app registers, so `node.type === 'sound'`
+ * narrows instead of resolving to `never`.
+ *
+ * This union was stale from 2026-09-05 until 2026-09-08: `flowTypes.ts`
+ * registered types this list had no member for, so those comparisons reported
+ * TS2367 ("no overlap") and every creation site forced the node in with
+ * `as AppNode`, which also suppressed genuine data-shape errors there. Keep it
+ * in step with `FlowNodeType` in nodeRegistry.ts and the map in flowTypes.ts —
+ * all three describe the same set, and only this one is checked by the
+ * compiler.
+ */
 export type AppNode =
   | ShaderFlowNode
   | ColorFlowNode
   | PreviewFlowNode
   | MathPreviewFlowNode
   | ClockFlowNode
+  | SoundFlowNode
   | OutputFlowNode
+  | RaymarchOutputFlowNode
   | GroupFlowNode
   | NoteFlowNode;
 
@@ -311,26 +351,49 @@ export interface TypedEdgeData {
 
 export type AppEdge = Edge<TypedEdgeData>;
 
-/** Safely extract values from any AppNode's data. */
-export function getNodeValues(node: AppNode): Record<string, string | number> {
-  if (node.type === 'output' || node.type === 'group' || node.type === 'note') return {};
+/**
+ * The stored `values` object exactly as it sits on the node — shape-guarded,
+ * but NOT filtered by node type.
+ *
+ * `?? {}` guards nullish and NOTHING else, which is not enough for a field that
+ * arrives verbatim from `fs:graph` / a `.fastshader` / `fs:savedGroups`. A
+ * tampered `values: 5` used to reach every caller as a primitive, where
+ * `'originId' in values` THROWS — and that throw, inside `loadGraph`, returns
+ * null and lets the 300 ms autosave overwrite the user's entire saved graph
+ * with the demo one. Closing it here (both public accessors below go through
+ * it, and the codebase already mandates them over `node.data as ...`) covers
+ * every call site at once. Identity is preserved for the normal case, so no
+ * memo is invalidated.
+ */
+function rawNodeValues(node: AppNode): Record<string, string | number> {
   const values = (node.data as ShaderNodeData).values;
-  // `?? {}` guards nullish and NOTHING else, which is not enough for a field
-  // that arrives verbatim from `fs:graph` / a `.fastshader` / `fs:savedGroups`.
-  // A tampered `values: 5` used to reach every caller as a primitive, where
-  // `'originId' in values` THROWS — and that throw, inside `loadGraph`, returns
-  // null and lets the 300 ms autosave overwrite the user's entire saved graph
-  // with the demo one. Closing it at this one accessor (which the codebase
-  // already mandates over `node.data as ...`) covers every call site at once.
-  // Identity is preserved for the normal case, so no memo is invalidated.
   return typeof values === 'object' && values !== null && !Array.isArray(values)
     ? (values as Record<string, string | number>)
     : {};
 }
 
-/** Spread-merge a patch into a node's values (mutates node.data in place). */
+/** Safely extract values from any AppNode's data. */
+export function getNodeValues(node: AppNode): Record<string, string | number> {
+  if (node.type === 'output' || node.type === 'group' || node.type === 'note') return {};
+  return rawNodeValues(node);
+}
+
+/**
+ * Spread-MERGE a patch into a node's values (mutates node.data in place).
+ *
+ * Reads the raw field rather than routing through `getNodeValues`, which hard-
+ * returns `{}` for `output` / `group` / `note`. Routed through it, this was a
+ * silent REPLACE for exactly those three types — and an Output node genuinely
+ * carries values (its per-channel widgets, see OutputNodeData), so
+ * `setNodeValues(outputNode, { roughness: 0.5 })` would have erased color,
+ * emissive, opacity, discard, normal, env and metalness with no error and no
+ * test able to see it. Nothing triggers it today (codeToGraph writes Output
+ * channels through `applyStoredOutputValues`, and the raymarch sink is a
+ * different flow type), but the two halves of a mandated accessor pair must not
+ * disagree about which nodes they cover.
+ */
 export function setNodeValues(node: AppNode, patch: Record<string, string | number>): void {
-  (node.data as ShaderNodeData).values = { ...getNodeValues(node), ...patch };
+  (node.data as ShaderNodeData).values = { ...rawNodeValues(node), ...patch };
 }
 
 /** Safely extract exposedPorts from any AppNode's data. */

@@ -1,3 +1,20 @@
+/* THE one home of the shared node shell. Every node stylesheet used to open
+   with this same `@import`, and postcss-import INLINES the file into each of
+   them. Inside one output chunk that is harmless (rollup emits the shared CSS
+   module once), but this is a multi-entry build: the node stylesheets do not
+   all land in the same chunk — ShaderNode.css is reached by the Node Designer
+   entry too, through NodeVisual → ShaderNode — and index.html loads every
+   chunk it needs. Measured: NodeBase.css appeared verbatim in BOTH of the
+   stylesheets index.html links, ~3 KB parsed twice, with two live copies of
+   the node-shell cascade in one document whose relative order is then decided
+   by <link> order rather than by anything an author can see (NodeBase.css
+   reasons explicitly about source order — see the group-frame exclusion).
+   ShaderNode.css is the safe single owner because nothing renders a node shell
+   without it: React Flow's `nodeTypes` pulls in ShaderNode alongside every
+   other node component, NodePreviewCard reaches it through NodeVisual, and so
+   does the Node Designer's bridge. Do not add this `@import` back to a sibling
+   stylesheet — PreviewNode.css was the last one still carrying a copy, and
+   dropping that line is what finally got NodeBase.css emitted exactly once. */
 @import './NodeBase.css';
 
 /* ShaderNode row uses space-between for left/right sides */
@@ -228,7 +245,7 @@
    Every colour is a LITERAL, not a token: graph nodes must render identically
    in light and dark (see the theme convention), and --node-* tokens are
    deliberately not redefined in the dark block. */
-.shader-node__mic-btn {
+.shader-node__sound-btn {
   display: block;
   /* 40, not the original 64: on both the Mic and Audio Input cards the light
      was the tallest single element, so its size set the node's. Still a large
@@ -249,21 +266,21 @@
   transition: none;
 }
 
-.shader-node__mic-btn:hover:not(:disabled) {
+.shader-node__sound-btn:hover:not(:disabled) {
   border-color: rgba(0, 0, 0, 0.6);
 }
 
 /* Waiting on the permission prompt: amber, steady. Deliberately NOT blinking —
    blinking must mean "the microphone is open", and during the prompt it is
    not yet. */
-.shader-node__mic-btn.is-starting {
+.shader-node__sound-btn.is-starting {
   background: #f0a500;
   cursor: progress;
 }
 
 /* Live. The blink is the whole point: a static red dot reads as decoration,
    and an open microphone should be impossible to miss on a busy graph. */
-.shader-node__mic-btn.is-live {
+.shader-node__sound-btn.is-live {
   background: #e03131;
   border-color: rgba(0, 0, 0, 0.55);
   animation: fs-mic-blink 1s steps(1, end) infinite;
@@ -284,25 +301,25 @@
    the mic is open) and drop only the flashing. Removing the indicator itself
    would trade an accessibility win for a privacy loss. */
 @media (prefers-reduced-motion: reduce) {
-  .shader-node__mic-btn.is-live {
+  .shader-node__sound-btn.is-live {
     animation: none;
     box-shadow: 0 0 10px 3px rgba(224, 49, 49, 0.7);
   }
 }
 
-.shader-node__mic-btn.is-failed {
+.shader-node__sound-btn.is-failed {
   background: #e08a1e;
 }
 
 /* `--inert` is the PREVIEW surfaces' stand-in for `:disabled`. The asset tile
    and the overview table render the light as a plain <div> on purpose (a
-   palette tile must never become a third click path into armMic), and a <div>
+   palette tile must never become a third click path into armSound), and a <div>
    can never match `:disabled` — so the tile was showing the ENABLED green
    while a freshly dropped, unwired Mic node on the canvas is grey. Same state,
    opposite colour, on adjacent surfaces. Grey is the honest one: an unwired
    mic cannot be armed. */
-.shader-node__mic-btn:disabled,
-.shader-node__mic-btn--inert {
+.shader-node__sound-btn:disabled,
+.shader-node__sound-btn--inert {
   background: #b9bec4;
   border-color: rgba(0, 0, 0, 0.25);
   cursor: not-allowed;
@@ -351,9 +368,9 @@
 
 /* ── Live level meter ─────────────────────────────────────────────────────
    Shared by the Mic node, the Audio Input node and both palette tiles, the
-   same way .shader-node__mic-btn above is: ONE definition, with each node
+   same way .shader-node__sound-btn above is: ONE definition, with each node
    supplying only the PLACEMENT inline from its own geometry module. It used
-   to live in AudioInputNode.css as .audio-node__meter, which was fine while
+   to live in the Audio Input node's own stylesheet, which was fine while
    exactly one node had a meter — a second copy for the mic is the drift class
    micGeometry.ts and assetCardGeometry.test.ts already exist to prevent.
 
@@ -361,7 +378,7 @@
 
    The fill is written IMPERATIVELY by each node's rAF loop (transform:
    scaleX) and never through React state — reports land ~60x/s and
-   re-rendering a canvas node at that rate is the trap useMicPump documents.
+   re-rendering a canvas node at that rate is the trap useSoundPump documents.
    transform-only, so the compositor handles it and the node never relayouts. */
 .shader-node__level-meter {
   position: absolute;
@@ -388,4 +405,84 @@
    frozen at its last value. */
 .shader-node__level-meter--idle .shader-node__level-meter-fill {
   background: #b9bfc7;
+}
+
+/* ── Absolutely-placed parameter row ──────────────────────────────────────
+   The full-width chip that holds either the editable number widget or the
+   value ARRIVING on a wired param. Shared by the Mic node, the Audio Input
+   node and both palette tiles, exactly as .shader-node__sound-btn and
+   .shader-node__level-meter above are: ONE definition, with each node
+   supplying only the PLACEMENT inline (top/height/left/right) from its own
+   geometry module — micGeometry.ts / audioGeometry.ts — so the chip height
+   and the socket anchored to the same `top` keep one source each.
+
+   It used to be a byte-identical block in BOTH SoundNode.css and
+   the Audio Input node’s stylesheet: the residue the shared-meter refactor left behind,
+   which would have drifted the first time either node was touched alone.
+
+   These rules carry NO ancestor scope, and that is deliberate rather than
+   sloppy: the palette tiles (SoundCardContent / AudioCardContent) render the
+   same body inside CardShell's frame with no `.sound-node`
+   ancestor at all, so a rule written under either one silently stops applying
+   on the tile — the exact bug SoundNode.css's header documents, where the arm
+   light fell back to its in-flow margins and sat on top of the value chips.
+
+   The `.sound-node__val` selector beside it is an ALIAS
+   for the inert tile replicas in NodePreviewCard.tsx, which still emit the
+   per-node names (it is the third emitter and was not renamed here). Drop
+   them the moment that file moves to the shared class — nothing else in the
+   app uses either name. */
+.shader-node__param-row,
+.sound-node__val {
+  position: absolute;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: stretch;
+}
+
+/* Stretch the number widget to fill the row. The value font stays the shared
+   7.7px node-number size (see DragNumberInput.css's edge-val note). */
+.shader-node__param-row .drag-num--compact,
+.sound-node__val .drag-num--compact {
+  flex: 1;
+  height: 100%;
+}
+
+/* A wired param is driven by its edge, so the stored number is dead — the row
+   shows the VALUE ARRIVING instead (SoundNode.tsx).
+   Read-only, so no plate and no border: on a node a fill means "you can edit
+   this" and plain text means "this is derived" (the .shader-node__op-val rule
+   above). Font and colour come from .shader-node__edge-val, which the element
+   also carries, so every derived number on any node reads at one size; only
+   the row box is here.
+   No tile alias: a palette tile has no edges, so NodePreviewCard never
+   renders this state at all. */
+.shader-node__param-wired {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The arm light's wrapper carries the PLACEMENT (inline `top` from
+   micGeometry's SOUND_BTN_TOP / audioGeometry's AUD_BTN_TOP); the light's own
+   size, colour and blink live in .shader-node__sound-btn above, so the canvas
+   nodes and both tiles share one definition of each half.
+   z-index 1 lifts it over the param rows; the sockets sit above it at 2 so
+   their name tooltips stay readable where they reach over the circle — see
+   the stacking-context note in SoundNode.css. Same tile-alias rule as
+   .shader-node__param-row. */
+.shader-node__arm-wrap,
+.sound-node__btn-wrap {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+}
+
+/* The light is an in-flow child here, so the auto margins that centre it in
+   ShaderNode's own row layout would offset it inside this wrapper. */
+.shader-node__arm-wrap .shader-node__sound-btn,
+.sound-node__btn-wrap .shader-node__sound-btn {
+  margin: 0;
 }

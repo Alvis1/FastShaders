@@ -29,8 +29,9 @@ import { scanGlyphSource, tagsAlign, drawableIndexAtOffset, mergeRanges, formatG
 import { rotatePt, normalizeDeg, snapDeg, rotateTransform, projectOnSegment, nearestOnCurve, simplifyRdp, freehandPathData, shouldCloseStroke, penPathData } from './glyphGeometry';
 import { PATH_ARGC, tokenizePath, fmtN, serializePath, segEnd, segStart, pathSegEnds, degradeCurve, pathSpans, insertIntoPath, insertIntoPoly, canInsertInto } from './glyphPath';
 import { GLYPH_PALETTE, isPaletteColor, normalizePaintValue, normalizePaintNumber, displayPaintNumber, summarizePaint } from './glyphPaint';
+import { isTypingTarget } from '@/utils/isTypingTarget';
 
-/* ---------------- registry data (live imports — see bridge.ts) ---------------- */
+/* ---------------- registry data (live imports — see bridge.tsx) ---------------- */
 const NODES = ND.designerNodes();
 const COSTS = ND.NODE_COSTS;
 /* Object.create(null), not {} — this map is a MEMBERSHIP TEST, and a plain
@@ -3328,9 +3329,17 @@ function labelPatchFor(types) {
 
 /** Splice both files through the LINKED FOLDER (File System Access API). */
 async function writeLabelsToFolder(patch) {
-  // Dynamic import: descriptionSplice pulls in @babel/parser, and nothing else on
-  // this page needs it — deferring keeps that weight out of the designer's initial
-  // load for everyone who never renames through a folder link.
+  // Dynamic import: descriptionSplice pulls in @babel/parser, and nothing else in
+  // this module needs it, so the split keeps it in its own ~4 KB chunk that only
+  // a folder-link rename ever fetches.
+  // It does NOT, on its own, keep Babel off the designer's initial load, and the
+  // built output says so: bridge.tsx imports the store, which statically imports
+  // the built-in texture/preset builders -> codeGroupBuilder -> codeToGraph ->
+  // @babel/*, so Babel is reachable from BOTH entries and Rollup hoists it into
+  // the shared chunk node-designer.html modulepreloads. This deferral is what
+  // makes dropping it POSSIBLE; the drop only happens once that store path is
+  // broken too. Check dist/node-designer.html for the chunks it preloads before
+  // claiming otherwise.
   const splice = await import('@/registry/descriptionSplice');
 
   // Compute BOTH outputs before writing EITHER. The two files must not be able to
@@ -3531,7 +3540,12 @@ el('saveAllBtn').onclick = async () => { if (!devApi && !dirHandle && window.sho
 
 function saveFromKey() { (dirtyTypes().length ? saveAll : save)(); }
 document.addEventListener('keydown', (e) => {
-  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName || '') || (document.activeElement && document.activeElement.isContentEditable);
+  /* The app-wide predicate (utils/isTypingTarget) rather than a fifth hand-rolled
+     tag test. `anyInputType` keeps it byte-for-byte the INPUT|TEXTAREA|SELECT +
+     contentEditable set the regex here always had — this gate only guards `/`
+     (focus the search box) further down, and narrowing it to text-taking inputs
+     would be a behaviour change with no defect behind it. */
+  const typing = isTypingTarget(document.activeElement, { anyInputType: true });
   if (overlay.classList.contains('show')) {
     /* ⌘S is INSIDE the modal gate, and that is the whole fix: mApply is the SOLE
        commit path, so save()/saveAll() serialise currentDesign() from
@@ -3555,7 +3569,7 @@ document.addEventListener('keydown', (e) => {
        gesture preventDefaults the implicit focus change, so the gestures focus
        #mPrevBox (tabindex=0) by hand precisely to get OUT of that state; without
        it Delete would edit the SVG source.
-       `caret`, NOT the outer `typing`: that regex is INPUT|TEXTAREA|SELECT, and
+       `caret`, NOT the outer `typing`: that predicate covers INPUT|TEXTAREA|SELECT, and
        #mSvg is the modal's only text surface — the others are the 56-grid and
        drag-points CHECKBOXES and the load-art SELECT, none of which take a
        character. Gating the keys on `typing` meant ticking "56-grid" to check
@@ -3577,8 +3591,12 @@ document.addEventListener('keydown', (e) => {
     /* Delete / ⌘A / the arrows must also stay out of the OTHER field that takes
        characters (the stroke-width number). A KIND test, not an id list: the
        distinguishing property is "this control consumes the keystroke", and the
-       reason the page-level `typing` regex cannot be reused is that it also
-       matches the two checkboxes and the load <select>, none of which do. */
+       reason the page-level `typing` predicate cannot be reused is that it also
+       matches the two checkboxes and the load <select>, none of which do —
+       nor can utils/isTypingTarget stand in, which drops the checkboxes but
+       KEEPS the <select>, and the arrows have to keep working while #mLoad has
+       focus (see the paragraph above: that select LOADS on change, so arrowing
+       it was never browsing). */
     const a0 = document.activeElement;
     const keysDead = !!a0 && (a0.tagName === 'TEXTAREA'
       || (a0.tagName === 'INPUT' && !/^(checkbox|radio|button|file|range)$/.test(a0.type)));

@@ -62,10 +62,13 @@ describe('marchPartition', () => {
 
 describe('drivingMarchOutput', () => {
   it('a Raymarch Output drives only when Field or Density is wired', async () => {
-    const { drivingMarchOutput, marchOutputDrives } = await import('./sdfPartition');
+    const { drivingMarchOutput } = await import('./sdfPartition');
     const nodes = [makeNode('pos', 'positionLocal'), makeNode('sd', 'sdCircle'), makeNode('sdf', 'raymarchOutput'), makeNode('out', 'output')];
     const unwired = [makeEdge('pos', 'out', 'sd', 'p')];
-    expect(marchOutputDrives(nodes, unwired)).toBe(false);
+    // `drivingMarchOutput` is the ONE predicate every surface asks (CLAUDE.md);
+    // the `!== null` wrapper that used to sit beside it had no caller outside
+    // this line and is gone.
+    expect(drivingMarchOutput(nodes, unwired)).toBeNull();
     const wired = [...unwired, makeEdge('sd', 'out', 'sdf', 'field')];
     expect(drivingMarchOutput(nodes, wired)?.id).toBe('sdf');
   });

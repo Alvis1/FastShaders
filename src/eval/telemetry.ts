@@ -64,7 +64,30 @@ let sessionId = '';
 let seq = 0;
 let events: EvalEvent[] = [];
 let dirty = false;
+/** One-way per page load — nothing ever clears it. `pushEvent` relies on that
+ *  (see `journalEventsJson`), and so does the early return in `flushJournal`. */
 let journalFrozen = false;
+/**
+ * `events` serialized, comma-joined, WITHOUT the enclosing brackets — i.e.
+ * exactly `JSON.stringify(events)` minus its `[` and `]`.
+ *
+ * WHY a running string rather than stringifying the array at flush time: a
+ * flush happens every FLUSH_EVERY_N_EVENTS events AND every FLUSH_INTERVAL_MS,
+ * so re-serializing the whole log each time is O(n) against a list that only
+ * grows — quadratic over a session, and worst exactly where it hurts most. A
+ * long study session walks up to MAX_JOURNAL_CHARS, where each flush is a
+ * multi-millisecond hitch landing inside the interactions the study is timing.
+ * Appending per event makes a flush O(new events); the O(n) that remains is
+ * the sessionStorage write itself, which no scheme avoids.
+ *
+ * THE INVARIANT: this string and `events` must describe the SAME list. `events`
+ * is written in exactly two places — `pushEvent` (which appends here too) and
+ * `startEvalSession` (which rebuilds or clears this alongside it) — and it has
+ * to stay that way, because a desync corrupts the crash-recovery journal
+ * SILENTLY: `sanitizeJournal` would reject the malformed record and a resumed
+ * session would simply start over, losing everything before the reload.
+ */
+let journalEventsJson = '';
 
 /** Wall-clock anchor of the session's t=0 (the FIRST page's timeOrigin). */
 let clockOriginMs = 0;
@@ -103,19 +126,46 @@ export function evalLog(type: EvalEventType, payload?: Record<string, unknown>):
   }
   if (events.length >= MAX_EVENTS && !recordingStopped) {
     recordingStopped = true;
-    events.push({ seq: ++seq, t: now(), type: 'truncated' });
-    dirty = true;
+    pushEvent({ seq: ++seq, t: now(), type: 'truncated' });
     return;
   }
   const e: EvalEvent = { ...payload, seq: ++seq, t: now(), type };
-  events.push(e);
-  dirty = true;
+  pushEvent(e);
   if (STRUCTURAL_EVENT_TYPES.has(type)) scheduleSnapshot();
   if (events.length % FLUSH_EVERY_N_EVENTS === 0) flushJournal();
 }
 
 function now(): number {
   return Math.round(performance.now()) + epochOffsetMs;
+}
+
+/** The ONLY place an event is appended — see `journalEventsJson`'s invariant. */
+function pushEvent(e: EvalEvent): void {
+  events.push(e);
+  dirty = true;
+  // Skipping the append once frozen is safe only because the flag is one-way:
+  // `flushJournal` never reads the string again, so the two are allowed to
+  // diverge from here on and the string stops growing past the cap.
+  if (journalFrozen) return;
+  try {
+    journalEventsJson += (journalEventsJson ? ',' : '') + JSON.stringify(e);
+  } catch {
+    // A payload that will not serialize must never take the session down:
+    // degrade exactly as a quota error does — the in-memory log (which builds
+    // the final package) keeps recording, only crash recovery stops. Before
+    // this the same throw escaped `flushJournal` into whichever chokepoint
+    // happened to log the 20th event.
+    journalFrozen = true;
+  }
+}
+
+/** Rebuild the journal string from `events`. Recovery only. */
+function rebuildJournalJson(): void {
+  try {
+    journalEventsJson = events.map((e) => JSON.stringify(e)).join(',');
+  } catch {
+    journalFrozen = true;
+  }
 }
 
 function scheduleSnapshot(): void {
@@ -138,7 +188,15 @@ function recordSnapshot(): void {
 function flushJournal(): void {
   if (!dirty || journalFrozen) return;
   dirty = false;
-  const payload = JSON.stringify({ v: 1, sessionId, origin: clockOriginMs, events });
+  // Concatenated rather than stringified whole — see `journalEventsJson`. The
+  // bytes are identical to the old `JSON.stringify({ v, sessionId, origin,
+  // events })`: same key order, and an array's serialization IS its elements'
+  // serializations joined by commas. `origin` goes through JSON.stringify so a
+  // non-finite value still lands as `null` rather than the literal `NaN`, which
+  // would make the record unparseable instead of merely unusable.
+  const payload =
+    `{"v":1,"sessionId":${JSON.stringify(sessionId)},` +
+    `"origin":${JSON.stringify(clockOriginMs)},"events":[${journalEventsJson}]}`;
   if (payload.length > MAX_JOURNAL_CHARS) {
     // The in-memory log (which builds the final package) keeps recording;
     // only the crash-recovery mirror stops growing.
@@ -201,6 +259,7 @@ export function startEvalSession(rec: EvalSessionRecord): void {
 
   if (resumable) {
     events = journal.events;
+    rebuildJournalJson();
     seq = events[events.length - 1].seq;
     clockOriginMs = journal.origin as number;
     // Rebase this page's performance.now() onto the session axis. The floor
@@ -216,6 +275,7 @@ export function startEvalSession(rec: EvalSessionRecord): void {
     evalLog('focus', { focused: document.hasFocus() });
   } else {
     events = [];
+    journalEventsJson = '';
     seq = 0;
     clockOriginMs = pageOrigin;
     epochOffsetMs = 0;

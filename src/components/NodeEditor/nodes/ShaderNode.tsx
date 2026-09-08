@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { Position, useStore, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
 import { NODE_REGISTRY, effectiveInputs, growsOperands } from '@/registry/nodeRegistry';
@@ -118,6 +118,77 @@ export function edgeValueLabel(
   // when time-driven: the rAF path evaluates at REAL times, where a chain like
   // `time` itself (no finite static range) produces a perfectly good number.
   return { text: '…', live: false, animated };
+}
+
+/** One connected input's label plus the socket the wire LEFT — the pair
+ *  LiveEdgeValue needs to keep re-evaluating the same channel its first
+ *  render showed. */
+export type WiredLabel = {
+  text: string;
+  live: boolean;
+  animated: boolean;
+  sourceId: string;
+  sourceHandle: string | null;
+};
+
+/**
+ * "What is arriving on each wired input of node `id`", keyed by targetHandle.
+ *
+ * The two-step store subscription every FIXED-LAYOUT node needs, in ONE place.
+ * SoundNode, OutputNode and RaymarchOutputNode each carried a
+ * byte-identical copy of it, and four copies are exactly the shape the drift
+ * rule warns about: a cheap-string key that folds the SOURCE but not the
+ * SOCKET leaves source/target/targetHandle identical when a wire is moved
+ * between two outputs of the same node (RGB to HSL's h/s/l, Split's x/y/z/w),
+ * so Object.is bails and the surface shows the old channel forever. One
+ * implementation cannot half-learn a new key component; four can.
+ *
+ * Step 1 subscribes to a cheap primitive STRING: a position-only graph notify
+ * folds to an identical key and zustand's Object.is bails before any
+ * re-render (returning the Map directly would mint a fresh identity on every
+ * notify, i.e. a re-render per pointermove of any drag anywhere). Step 2
+ * rebuilds the Map from getState(), only when that key actually changed.
+ *
+ * Both steps walk `getTargetEdges`, NOT raw `s.edges`: it returns UNWRAPPED
+ * edges, so a feeder inside a COLLAPSED group reports its real producer. The
+ * raw boundary edge's source is the GROUP id, which has no registry def, so
+ * `edgeValueLabel` would degrade every affected row to a grey ellipsis the
+ * moment the group collapses.
+ *
+ * The separators are unicode ESCAPES, never raw control bytes: a raw NUL
+ * makes the whole FILE binary to grep/rg/sed, so repo-wide searches skip it
+ * silently (sourceControlBytes.test.ts). A plain space would not do either —
+ * an edge label can itself be a range like `0 … 1`.
+ *
+ * ShaderNode's own `edgeKey` stays separate: it additionally folds `e.source`
+ * and the channel COUNT (it drives the multi-channel card stack), so it is a
+ * different key, not a copy of this one.
+ */
+export function useWiredLabels(id: string): Map<string, WiredLabel> {
+  const edgeKey = useAppStore((s) => {
+    let key = '';
+    for (const e of getTargetEdges(s.nodes, s.edges, id)) {
+      if (typeof e.targetHandle !== 'string') continue;
+      const l = edgeValueLabel(e.source, s.nodes, s.edges, e.sourceHandle);
+      key += `${e.targetHandle}\u0000${e.sourceHandle ?? ''}\u0000${l.text}\u0000${l.live ? 1 : 0}${l.animated ? 1 : 0}\u0001`;
+    }
+    return key;
+  });
+  return useMemo(() => {
+    const { nodes, edges } = useAppStore.getState();
+    const m = new Map<string, WiredLabel>();
+    for (const e of getTargetEdges(nodes, edges, id)) {
+      if (typeof e.targetHandle !== 'string') continue;
+      m.set(e.targetHandle, {
+        ...edgeValueLabel(e.source, nodes, edges, e.sourceHandle),
+        sourceId: e.source,
+        sourceHandle: e.sourceHandle ?? null,
+      });
+    }
+    return m;
+    // edgeKey is the change signal; nodes/edges are read imperatively above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, edgeKey]);
 }
 
 export interface PortRow {
@@ -463,9 +534,39 @@ export const ShaderNode = memo(function ShaderNode({
   // `costVersion` re-runs the selector when the table changes. Non-chainable
   // nodes short-circuit inside nodeCostPoints (no edge scan); only variadic
   // arithmetic pays the O(E) operand count. The number result bails re-renders.
+  //
+  // …but the SELECTOR still runs on every store notification, and a node drag
+  // notifies at pointer rate while changing nothing this answer depends on:
+  // `setNodes` rebuilds the nodes array and keeps each node's `data` AND the
+  // whole `edges` array by reference (the same identity contract
+  // `selectionOnlyGraphChange` and the edgeKey selectors above rely on). So a
+  // chainable node re-walked every edge in the graph, per node, per frame, to
+  // return the number it returned last frame. Four inputs decide it — this
+  // node's id and `data`, the edges array, and the cost table's version — so a
+  // one-slot cache keyed on exactly those turns a position-only notify into
+  // four reference compares.
+  //
+  // A cache written from inside a selector is safe here because the selector
+  // stays a pure function of that key: a StrictMode double-invoke, or a
+  // notification arriving outside render, can only ever recompute the same
+  // number for the same key, and `useSyncExternalStore` still sees a stable
+  // snapshot. It must NOT be turned into a useMemo — the value has to be read
+  // through the store subscription, or a cost-table swap (which touches
+  // neither `data` nor `edges`) would never re-render the badge.
+  const costMemo = useRef<
+    { id: string; data: unknown; edges: unknown; version: number; cost: number } | null
+  >(null);
   const cost = useAppStore((s) => {
-    void s.costVersion;
-    return nodeCostPoints({ id, type: 'shader', position: { x: 0, y: 0 }, data } as ShaderFlowNode, s.edges);
+    const m = costMemo.current;
+    if (m && m.id === id && m.data === data && m.edges === s.edges && m.version === s.costVersion) {
+      return m.cost;
+    }
+    const points = nodeCostPoints(
+      { id, type: 'shader', position: { x: 0, y: 0 }, data } as ShaderFlowNode,
+      s.edges,
+    );
+    costMemo.current = { id, data, edges: s.edges, version: s.costVersion, cost: points };
+    return points;
   });
   const costColor = getCostColor(cost, costColorLow, costColorHigh);
   const headerTextColor = getContrastColor(costColor);
@@ -558,7 +659,7 @@ export const ShaderNode = memo(function ShaderNode({
   // PreviewNode's exposedKey. The reveal flag is part of the key: floating
   // RevealSockets mount mid-drag and must enter React Flow's bounds map to
   // be snappable.
-  // The exposed set is part of the key: micNode keeps all its inputs in
+  // The exposed set is part of the key: soundNode keeps all its inputs in
   // effDef, so without this React Flow would never re-measure when a socket
   // is ticked on or off and the new handle would report a stale position.
   const exposedKey =

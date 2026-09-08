@@ -87,6 +87,16 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "highColor": 32
     }
   },
+  "wireframe": {
+    "svg": "<g transform=\"translate(28 28)\" fill=\"none\"><g stroke=\"#8A8F9C\" stroke-width=\"1.5\"><line x1=\"-21\" y1=\"-14\" x2=\"21\" y2=\"-14\"></line><line x1=\"-21\" y1=\"0\" x2=\"21\" y2=\"0\"></line><line x1=\"-21\" y1=\"14\" x2=\"21\" y2=\"14\"></line><line x1=\"-14\" y1=\"-21\" x2=\"-14\" y2=\"21\"></line><line x1=\"0\" y1=\"-21\" x2=\"0\" y2=\"21\"></line><line x1=\"14\" y1=\"-21\" x2=\"14\" y2=\"21\"></line></g><rect x=\"0\" y=\"0\" width=\"14\" height=\"14\" stroke=\"#F57C00\" stroke-width=\"2.4\"></rect></g>",
+    "scale": 1.1,
+    "width": 45,
+    "height": 45,
+    "sockets": {
+      "out": 0,
+      "uv": 0
+    }
+  },
   "isolines": {
     "svg": "<g transform=\"translate(28 28)\" fill=\"none\"><path d=\"M -22.63 5 Q -22.63 -21.91 1 -21.91 Q 25.5 -20 28.98 0 Q 28.98 27.54 1 25.2 Q -20.5 23.5 -22.63 5 Z\" stroke=\"#8A8F9C\" stroke-width=\"2.3\"></path><path d=\"M -15.5 5 Q -15.5 -13.46 0 -13.46 Q 17.28 -15.5 19.2 0 Q 20.78 18.62 1 18.62 Q -15.5 18.62 -15.5 5 Z\" stroke=\"#2B2B2B\" stroke-width=\"2.3\"></path><path d=\"M -7.16 3 Q -7.16 -4.64 1 -4.64 Q 10.43 -7.35 10.43 3 Q 10.43 10.01 1 10.01 Q -7.16 10.01 -7.16 3 Z\" stroke=\"#F57C00\" stroke-width=\"2.6\"></path></g>",
     "scale": 1.15,
@@ -307,7 +317,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "round": {
-    "svg": "<g transform=\"translate(28 28)\" stroke=\"#F57C00\" stroke-width=\"1.4\" stroke-linecap=\"round\">\n\n\n\n<line x1=\"-5\" y1=\"0\" x2=\"-5\" y2=\"-15\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"0.5\" y1=\"-8.52\" x2=\"-5\" y2=\"-15\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-10.72\" y1=\"-8.31\" x2=\"-5\" y2=\"-15\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-5\" y1=\"0\" x2=\"-5\" y2=\"12.96\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"0.5\" y1=\"7\" x2=\"-5\" y2=\"12.96\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n<line x1=\"-10.72\" y1=\"7\" x2=\"-5\" y2=\"12.96\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-20\" y1=\"0\" x2=\"10.04\" y2=\"0\" stroke=\"#000000\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-20\" y1=\"14.46\" x2=\"10.04\" y2=\"14.46\"></line><line x1=\"-20\" y1=\"-16.5\" x2=\"10.04\" y2=\"-16.5\"></line></g>\n\n\n <text x=\"48\" y=\"14.21\" font-family=\"sans-serif\" font-size=\"10\" font-weight=\"bold\" text-anchor=\"middle\">\n    <tspan fill=\"#F57C00\">1</tspan>\n  </text>\n\n<text x=\"48\" y=\"45.14\" font-family=\"sans-serif\" font-size=\"10\" font-weight=\"bold\" text-anchor=\"middle\">\n    <tspan fill=\"#F57C00\">0</tspan>\n  </text>",
+    "svg": "<g transform=\"translate(28 28)\" stroke=\"#F57C00\" stroke-width=\"1.4\" stroke-linecap=\"round\">\n\n\n\n<line x1=\"3.12\" y1=\"-5.96\" x2=\"3.12\" y2=\"-15.51\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"7.5\" y1=\"-11.39\" x2=\"3.12\" y2=\"-15.51\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-1.45\" y1=\"-11.25\" x2=\"3.12\" y2=\"-15.51\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-14.82\" y1=\"4.07\" x2=\"-14.82\" y2=\"12.79\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n<line x1=\"-10.53\" y1=\"8.78\" x2=\"-14.82\" y2=\"12.79\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n<line x1=\"-19.27\" y1=\"8.78\" x2=\"-14.82\" y2=\"12.79\" stroke=\"#B4B7C0\" stroke-width=\"1.5\"></line>\n\n\n\n<line x1=\"-20\" y1=\"14.46\" x2=\"10.04\" y2=\"14.46\"></line><line x1=\"-20\" y1=\"-16.5\" x2=\"10.04\" y2=\"-16.5\"></line></g>\n\n\n <text x=\"48\" y=\"14.21\" font-family=\"sans-serif\" font-size=\"10\" font-weight=\"bold\" text-anchor=\"middle\">\n    <tspan fill=\"#F57C00\">1</tspan>\n  </text>\n\n<text x=\"48\" y=\"45.14\" font-family=\"sans-serif\" font-size=\"10\" font-weight=\"bold\" text-anchor=\"middle\">\n    <tspan fill=\"#F57C00\">0</tspan>\n  </text><path d=\"M 8 31.52 C 27.96 31.52 14.45 23.23 38.04 23.23\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.4\"></path>",
     "scale": 1.2,
     "dx": 1,
     "dy": -3.5,

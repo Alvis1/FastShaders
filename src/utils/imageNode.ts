@@ -27,11 +27,23 @@ import type { AppNode, ShaderNodeData } from '@/types';
 import { getNodeValues } from '@/types';
 import { base64ToBytes } from './binaryCodec';
 
-/** Soft per-image cap on the encoded data-URL length. Undo history keeps up to
- *  ~51 `structuredClone`d copies of the graph, so every payload char is
- *  multiplied — 600K chars ≈ 450 KB binary keeps one image node at ~30-60 MB
- *  worst-case history footprint. A 1024px WebP q0.85 is typically 50-300 KB,
- *  so real images fit with headroom. Bypassable via `ignoreImageLimits`. */
+/** Soft per-image cap on the encoded data-URL length. 600K chars ≈ 450 KB
+ *  binary; a 1024px WebP q0.85 is typically 50-300 KB, so real images fit with
+ *  headroom. Bypassable via `ignoreImageLimits`.
+ *
+ *  This used to read "every payload char is multiplied by ~51 history clones",
+ *  and that is no longer what the cap is holding back: the store's
+ *  `cloneNodesSharingPayloads` carries `values.imageB64` BY REFERENCE into
+ *  every undo entry (JS strings are immutable and every edit path REPLACES
+ *  `values` wholesale, so one string reachable from the live graph and all 50
+ *  entries cannot be mutated by any of them). What the cap still bounds is
+ *  every place the payload is genuinely re-materialized: the 300 ms
+ *  localStorage autosave `JSON.stringify`s it against a ~5-10 MB origin budget
+ *  the graph already shares, the project block re-embeds it in every export,
+ *  clipboard/duplicate mint a real second copy, and `decodeImageNode` runs an
+ *  `atob` over it. Everything on the node OTHER than this key is still deep
+ *  copied per history entry, so keeping the bulk in the one shared string is
+ *  also what makes that clone cheap. */
 export const MAX_IMAGE_ENCODED_CHARS = 600_000;
 
 /** Hard per-image ceiling, enforced even when the user ignores the soft
@@ -39,7 +51,9 @@ export const MAX_IMAGE_ENCODED_CHARS = 600_000;
 export const HARD_MAX_IMAGE_ENCODED_CHARS = 8_000_000;
 
 /** Soft cap on the combined encoded size across ALL image nodes. The per-image
- *  cap alone doesn't bound history RAM because node count is unbounded. */
+ *  cap alone bounds nothing at the document level, because node count is
+ *  unbounded — and it is the document that has to fit the autosave's
+ *  localStorage budget and ride an export. */
 export const MAX_TOTAL_IMAGE_CHARS = 3_000_000;
 
 /** Default longest-side cap for the drop-time re-encode (and the relaxed cap

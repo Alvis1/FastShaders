@@ -26,9 +26,8 @@ import { getCostColor, getCostTextColor, getContrastColor } from '@/utils/colorU
 import { TypedHandle } from '../handles/TypedHandle';
 // Also pulls in ShaderNode.css transitively — the shared .shader-node__edge-val
 // class (one font size for every number on a node) lives there.
-import { edgeValueLabel } from './ShaderNode';
+import { useWiredLabels } from './ShaderNode';
 import { LiveEdgeValue } from './LiveEdgeValue';
-import { getTargetEdges } from '@/engine/cpuEvaluator';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { MeshTargetPicker } from './MeshTargetPicker';
@@ -265,35 +264,12 @@ export const OutputNode = memo(function OutputNode({
   // name-tooltips (its rows already carry permanent labels). Hover tooltips
   // still work.
 
-  // What is arriving on each wired channel — the same two-step cheap-string
-  // subscription ShaderNode/MicNode use: fold the labels into ONE primitive
-  // string so a position-only graph notify bails on Object.is, then rebuild
-  // the map imperatively from getState(). getTargetEdges, NOT raw s.edges:
-  // it returns UNWRAPPED edges, so a feeder inside a collapsed group reports
-  // its REAL producer -- the raw boundary edge's source is the group id,
-  // which has no registry def and would degrade every affected row to a
-  // grey ellipsis the moment the group collapses (the trap documented at
-  // getTargetEdges' definition).
-  const edgeKey = useAppStore((s) => {
-    let key = '';
-    for (const e of getTargetEdges(s.nodes, s.edges, id)) {
-      if (typeof e.targetHandle !== 'string') continue;
-      const l = edgeValueLabel(e.source, s.nodes, s.edges, e.sourceHandle);
-      key += `${e.targetHandle}\u0000${e.sourceHandle ?? ''}\u0000${l.text}\u0000${l.live ? 1 : 0}${l.animated ? 1 : 0}\u0001`;
-    }
-    return key;
-  });
-  const wiredLabels = useMemo(() => {
-    const { nodes, edges } = useAppStore.getState();
-    const m = new Map<string, { text: string; live: boolean; animated: boolean; sourceId: string; sourceHandle: string | null }>();
-    for (const e of getTargetEdges(nodes, edges, id)) {
-      if (typeof e.targetHandle !== 'string') continue;
-      m.set(e.targetHandle, { ...edgeValueLabel(e.source, nodes, edges, e.sourceHandle), sourceId: e.source, sourceHandle: e.sourceHandle ?? null });
-    }
-    return m;
-    // edgeKey is the change signal; nodes/edges are read imperatively above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, edgeKey]);
+  // What is arriving on each wired channel, keyed by the channel HANDLE — so
+  // material N's rows read `m<n>:<channel>` and material 0's the bare ids.
+  // The two-step cheap-string subscription (and the unwrapped-edge rule that
+  // keeps a collapsed feeder from degrading a row to a grey ellipsis) lives in
+  // the hook.
+  const wiredLabels = useWiredLabels(id);
 
   /** True when this Output node contributes no channel at all, i.e. exactly
    *  graphToCode's red-fallback branch. Only then does the unwired Color row

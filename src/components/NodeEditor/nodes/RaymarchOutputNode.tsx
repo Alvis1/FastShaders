@@ -8,9 +8,8 @@ import { t } from '@/i18n';
 import { isActiveSinkSelector } from './activeSinkSelector';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { getCostColor, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
-import { getTargetEdges } from '@/engine/cpuEvaluator';
 import { TypedHandle } from '../handles/TypedHandle';
-import { edgeValueLabel } from './ShaderNode';
+import { useWiredLabels } from './ShaderNode';
 import { LiveEdgeValue } from './LiveEdgeValue';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
@@ -123,31 +122,10 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
   const headerTextColor = getContrastColor(costColor);
   const values = getNodeValues({ id, data } as unknown as ShaderFlowNode);
 
-  // Wired values: the Output node's two-step selector. A cheap string key so
-  // a position-only graph notify bails on Object.is, then the map rebuilt from
-  // getState(). getTargetEdges, not raw s.edges: a feeder inside a collapsed
-  // group must report its real producer. Separators are JS escapes on purpose
-  // (sourceControlBytes.test.ts: a raw NUL makes the file binary to grep).
-  const edgeKey = useAppStore((s) => {
-    let key = '';
-    for (const e of getTargetEdges(s.nodes, s.edges, id)) {
-      if (typeof e.targetHandle !== 'string') continue;
-      const l = edgeValueLabel(e.source, s.nodes, s.edges, e.sourceHandle);
-      key += `${e.targetHandle}\u0000${e.sourceHandle ?? ''}\u0000${l.text}\u0000${l.live ? 1 : 0}${l.animated ? 1 : 0}\u0001`;
-    }
-    return key;
-  });
-  const wiredLabels = useMemo(() => {
-    const { nodes, edges } = useAppStore.getState();
-    const m = new Map<string, { text: string; live: boolean; animated: boolean; sourceId: string; sourceHandle: string | null }>();
-    for (const e of getTargetEdges(nodes, edges, id)) {
-      if (typeof e.targetHandle !== 'string') continue;
-      m.set(e.targetHandle, { ...edgeValueLabel(e.source, nodes, edges, e.sourceHandle), sourceId: e.source, sourceHandle: e.sourceHandle ?? null });
-    }
-    return m;
-    // edgeKey is the change signal; nodes/edges are read imperatively above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, edgeKey]);
+  // What is arriving on each wired socket — the Output node's two-step
+  // subscription, now shared (see useWiredLabels for the cheap-string key, the
+  // unwrapped-edge rule and why the separators are JS escapes).
+  const wiredLabels = useWiredLabels(id);
 
   const setValue = (key: string, v: string | number) => {
     updateNodeData(id, { values: { ...values, [key]: v } });

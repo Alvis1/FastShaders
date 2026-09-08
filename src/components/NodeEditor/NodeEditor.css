@@ -83,7 +83,15 @@
 .node-editor__cost-overlay .cost-bar {
   padding: var(--space-2);
   background: rgba(255, 255, 255, 0.85);
+  /* The `-webkit-` twin is not optional: unprefixed `backdrop-filter` only
+     landed in Safari 18, while `-webkit-backdrop-filter` has worked since
+     Safari 9 — and the macOS desktop build is WKWebView, which follows the
+     host OS Safari version. Without it this pill drew a flat plate on every
+     pre-macOS-15 machine while the preview pane's overlays a few hundred
+     pixels away (ShaderPreview.css, which always paired them) stayed frosted.
+     Keep the two together wherever a backdrop filter is added. */
   backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border-subtle);
   border-radius: var(--border-radius-md);
   box-shadow: var(--shadow-float);

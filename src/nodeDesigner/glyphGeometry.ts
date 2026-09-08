@@ -109,6 +109,10 @@ export function evalQuad(p0: Pt, p1: Pt, p2: Pt, t: number): Pt {
  * where there wasn't one and the picture does not move. A naive split (dropping a
  * point on the curve and straightening either side) would silently reshape the
  * art, which on a 56px glyph is the difference between a smile and a crease.
+ *
+ * `glyphPath.insertIntoPath` is the caller: it writes each half's [1..] points
+ * straight out as the new C/Q arguments. It used to inline this same lerp
+ * chain, which made two copies of the one guarantee above.
  */
 export function splitCubic(p0: Pt, p1: Pt, p2: Pt, p3: Pt, t: number): { left: Pt[]; right: Pt[] } {
   const a = lerp(p0, p1, t), b = lerp(p1, p2, t), c = lerp(p2, p3, t);

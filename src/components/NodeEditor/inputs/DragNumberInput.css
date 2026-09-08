@@ -93,7 +93,7 @@
    on the canvas and washed-out on every surface that draws a node WITHOUT
    React Flow — the asset tiles and the overview table (the Node Designer only
    escaped because node-designer.html hand-mirrored the canvas rule). Same bug
-   shape as the `.mic-node`-scoped arm light: a node's own styling must never
+   shape as the `.sound-node`-scoped arm light: a node's own styling must never
    depend on which page is drawing it.
    On a node card the widget carries the ONLY "you can edit this" signal in the
    row — read-only values beside it are plain text (see .shader-node__op-val in

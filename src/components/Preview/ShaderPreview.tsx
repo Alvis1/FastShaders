@@ -11,7 +11,6 @@ import {
   GEOMETRY_ROTATIONS,
   MARCH_WINDOW_GEOMETRY,
   LIGHT_PRESETS,
-  SUBDIVISION_CAP,
   buildGeoAttr,
   buildTeapotAttr,
   getModelUrl,
@@ -20,23 +19,24 @@ import {
   tslToPreviewHTML,
 } from '@/engine/tslToPreviewHTML';
 import type { CameraPosition, GeometryType, LightingMode, PreviewOptions } from '@/engine/tslToPreviewHTML';
+import {
+  SUBDIVISION_DEFAULT,
+  SUBDIVISION_STEPS,
+  subdivisionAt,
+  subdivisionIndex,
+  validateSubdivision,
+} from './subdivisionSteps';
 import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
 import { marchWindowRadius } from '@/utils/sdfPartition';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { sanitizeMeshInventory } from '@/utils/meshInventory';
 import { MESH_HIGHLIGHT_EVENT, type MeshHighlightDetail } from '@/utils/meshHighlight';
 import { bootGeometryWasCustom, loadPreviewMeshFromCache } from '@/utils/previewMeshCache';
 import { connectedUniformNamesKey, ALL_UNIFORMS } from '@/utils/connectedUniforms';
-import { evaluateEdgeSource, getTargetEdges } from '@/engine/cpuEvaluator';
-import {
-  isLiveAudioUniformName,
-  liveAudioVarBaseOf,
-  MIC_VAR_BASE,
-  AUDIO_VAR_BASE,
-} from '@/utils/micAnalysis';
-import { readMicSettings } from '@/utils/micNode';
-import { useMicPump } from './useMicPump';
-import { MicControl } from './MicControl';
+import { evaluateEdgeSource, getTargetEdges, getUnwrappedEdges } from '@/engine/cpuEvaluator';
+import { isSoundUniformName } from '@/utils/soundAnalysis';
+import { readSoundSettings } from '@/utils/soundSettings';
+import { useSoundPump } from './useSoundPump';
+import { SoundControl } from './SoundControl';
 import { applyUniformDefaults, planUniformDefaults } from '@/utils/uniformDefaults';
 import { safeJsonReviver } from '@/utils/safeJson';
 import { graphToCode } from '@/engine/graphToCode';
@@ -180,11 +180,6 @@ function validateBgColor(v: string | null): string {
   return DEFAULT_BG_COLOR;
 }
 
-const SUBDIVISION_MIN = 1;
-// The app-wide ceiling (128, the Utah Teapot page's own limit): the slider,
-// the primitives' segment clamp and the teapot's patch resolution all share it.
-const SUBDIVISION_MAX = SUBDIVISION_CAP;
-const SUBDIVISION_DEFAULT = 64;
 
 /**
  * How long the generated TSL must hold still before the preview iframe is
@@ -195,6 +190,13 @@ const PREVIEW_REBUILD_DEBOUNCE_MS = 200;
 
 /** Failsafe: never leave the "Compiling…" overlay up longer than this. */
 const COMPILE_OVERLAY_TIMEOUT_MS = 12000;
+
+/**
+ * Minimum gap between two `fs:previewRotation` writes — see `persistRotation`.
+ * The stage reports a moved turntable every 200 ms, forever, so this is the
+ * only thing bounding a spinning preview's localStorage traffic.
+ */
+const ROTATION_PERSIST_MS = 2000;
 
 /**
  * Trailing-debounce a value: the first value is adopted immediately (so initial
@@ -208,15 +210,6 @@ function useDebounced<T>(value: T, delayMs: number): T {
     return () => clearTimeout(id);
   }, [value, settled, delayMs]);
   return settled;
-}
-
-function validateSubdivision(raw: string | null): number {
-  const v = parseInt(raw ?? '', 10);
-  if (isNaN(v)) return SUBDIVISION_DEFAULT;
-  // Clamp rather than reset: a value persisted under the old 256 ceiling (or
-  // imported from a project block) lands on the new maximum, not on the
-  // default — 256 becoming 64 would read as the setting having been lost.
-  return Math.max(SUBDIVISION_MIN, Math.min(SUBDIVISION_MAX, v));
 }
 
 function loadVec3(key: string, reject?: (p: CameraPosition) => boolean): CameraPosition | null {
@@ -325,22 +318,20 @@ function fetchObjText(geometry: 'bunny'): Promise<string> {
 }
 
 /**
- * Analyser settings for ONE live-audio node kind, as a VALUE-stable string —
- * plus, via the empty string, whether the graph contains such a node at all.
+ * The Sound node's analyser settings, as a VALUE-stable string — plus, via the
+ * empty string, whether the graph contains a Sound node at all.
  *
- * Shared by the Mic and Audio Input selectors rather than written twice: the two
- * nodes declare the same `smoothing`/`gain` sockets and resolve them by the same
- * split (gain in the shader, smoothing on the CPU), so a copy here would be two
- * places to fix the next time that split moves.
+ * It took a `registryType` while there were two live-audio nodes declaring the
+ * same `smoothing`/`gain` sockets. The Audio Input node was folded into the
+ * Sound node on 2026-09-08 (`registry/legacyNodeTypes.ts` migrates the type),
+ * so there is one kind to ask about and the parameter would only be a way to
+ * ask for a node that cannot exist.
  *
  * See the call site for why this returns a joined string rather than an object,
  * and why absent keys are spelled `NaN` rather than `''`.
  */
-function liveAudioSettingsKey(
-  s: { nodes: AppNode[]; edges: AppEdge[] },
-  registryType: string,
-): string {
-  const n = s.nodes.find((x) => x.data.registryType === registryType);
+function liveAudioSettingsKey(s: { nodes: AppNode[]; edges: AppEdge[] }): string {
+  const n = s.nodes.find((x) => x.data.registryType === 'soundNode');
   if (!n) return '';
   const v = getNodeValues(n);
   // `smoothing` is an exposed socket, but unlike `gain` it cannot be resolved
@@ -374,6 +365,22 @@ function liveAudioSettingsKey(
 
 export function ShaderPreview() {
   const previewCode = useAppStore((s) => s.previewCode);
+  /**
+   * The settled form of the generated TSL — declared up here because the
+   * uniform extraction below needs it, not just the iframe memo far down the
+   * file (see the rebuild-policy comment there for WHY the rebuild is
+   * debounced at all).
+   *
+   * Everything derived from the module text hangs off THIS rather than off the
+   * raw value, for two reasons. It is the module the iframe is actually
+   * running, so the Uniforms overlay describes the shader on screen instead of
+   * one 200 ms ahead of it; and `previewCode` advances on every graph→code
+   * pass, i.e. per pointermove during a value scrub, so extracting uniforms
+   * from it re-ran two regex sweeps of the whole module at pointer rate for a
+   * list that cannot change mid-scrub — editing a number never adds or removes
+   * a `uniform(…)` declaration.
+   */
+  const debouncedPreviewCode = useDebounced(previewCode, PREVIEW_REBUILD_DEBOUNCE_MS);
   const shaderName = useAppStore((s) => s.shaderName);
   const language = useAppStore((s) => s.language);
   const previewMesh = useAppStore((s) => s.previewMesh);
@@ -412,16 +419,26 @@ export function ShaderPreview() {
     (findDefaultOutput(s.nodes)?.data as
       { materialSettings?: PreviewOptions['materialSettings'] } | undefined)?.materialSettings,
   );
-  // An SDF Output with its field wired REPLACES the Output in emission. While
-  // it drives: the material is double-sided (the march starts at the camera on
-  // a back face, so zooming inside the window still shows the shape), the
-  // preview renders through the SDF WINDOW box instead of the Model dropdown's
-  // choice (a sphere clipped a box's corners, a plane or a bunny as the
-  // ray-start surface meant nothing), and the dropdown is parked. Folded to a
-  // boolean so a position-only notify cannot re-render this panel.
+  // A Raymarch Output with its Field OR Density wired REPLACES the Output in
+  // emission (`drivingMarchOutput`). While it drives: the material is
+  // double-sided (the march starts at the camera on a back face, so zooming
+  // inside the window still shows the shape), the preview renders through the
+  // node's own WINDOW SPHERE (MARCH_WINDOW_GEOMETRY = 'marchSphere', radius =
+  // the node's Window setting) instead of the Model dropdown's choice — a
+  // plane or a bunny as the ray-start surface meant nothing — and the dropdown
+  // is parked. Folded to a boolean so a position-only notify cannot re-render
+  // this panel.
   // The driving Raymarch Output's Window radius, or null when nothing drives —
   // a NUMBER, so a position-only notify cannot re-render this panel.
-  const marchWindow = useAppStore((s) => marchWindowRadius(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)));
+  //
+  // getUnwrappedEdges is the ctx-memoized form of unwrapCollapsedGroupEdges
+  // (PreviewLink and EdgeInfoCard read it the same way): same array, but O(1)
+  // once the shared per-graph ctx exists — which the ShaderNode selectors in
+  // this very notification round build anyway. The raw builder walks the whole
+  // graph and allocates two Sets and two arrays per call the moment any group
+  // is collapsed, and this selector runs on EVERY store notification. Read-only
+  // here — it is the ctx's own array.
+  const marchWindow = useAppStore((s) => marchWindowRadius(s.nodes, getUnwrappedEdges(s.nodes, s.edges)));
   const sdfDrives = marchWindow !== null;
   const materialSettings = useMemo(
     () => (sdfDrives ? { ...rawMaterialSettings, side: 'double' as const } : rawMaterialSettings),
@@ -442,7 +459,8 @@ export function ShaderPreview() {
   // carries them, and the overlay + iframe srcDoc inputs must pick up the
   // imported values without a page reload.
   const [geometry, setGeometry] = usePersistedState('fs:previewGeometry', validateGeometry, { reloadOnProjectImport: true });
-  // What the iframe actually renders: the user's choice, or the SDF window.
+  // What the iframe actually renders: the user's choice, or the march window
+  // sphere while a Raymarch Output drives.
   const previewGeometry: GeometryType = marchWindow !== null ? MARCH_WINDOW_GEOMETRY : geometry;
   const [playing, setPlaying] = usePersistedState('fs:previewPlaying', validatePlaying, { reloadOnProjectImport: true });
   const [lighting, setLighting] = usePersistedState('fs:previewLighting', validateLighting, { reloadOnProjectImport: true });
@@ -452,7 +470,7 @@ export function ShaderPreview() {
   // returns a cheap STRING (the image's honest display name, '' when unwired,
   // 'Environment' for a non-image env source such as a constant colour) so a
   // position-only graph notify bails on Object.is instead of re-rendering the
-  // whole preview — the MicNode/edgeValueLabel subscription pattern.
+  // whole preview — the SoundNode/edgeValueLabel subscription pattern.
   const envMapName = useAppStore((s) => {
     // The DEFAULT output. An env map wired to a TARGETED one lights only that
     // mesh, so naming the Light dropdown after it would misdescribe the scene.
@@ -620,6 +638,16 @@ export function ShaderPreview() {
    */
   const animClipRef = useRef(0);
   const [clipMenuOpen, setClipMenuOpen] = useState(false);
+  /**
+   * Stable identity on purpose: AnimClipMenu keys its dismiss effect on
+   * `onClose`, and that effect registers FOUR document listeners (keydown,
+   * pointerdown, and the two fullscreenchange spellings). Passed as an inline
+   * arrow it was a fresh function every render of this panel, so every
+   * re-render while the menu is open tore all four down and re-added them —
+   * the standard way such an effect quietly degrades into a per-render
+   * subscription.
+   */
+  const closeClipMenu = useCallback(() => setClipMenuOpen(false), []);
   const animPillRef = useRef<HTMLDivElement>(null);
   const animClipsBtnRef = useRef<HTMLButtonElement>(null);
   /** When a long-press opened the menu — the synthesized-contextmenu window. */
@@ -744,6 +772,52 @@ export function ShaderPreview() {
   const modelKeyRef = useRef<string>('');
   const cameraPosRef = useRef<CameraPosition | null>(loadCameraPos());
   const rotationRef = useRef<CameraPosition | null>(loadRotation());
+
+  /**
+   * Persist the turntable angle at most once every ROTATION_PERSIST_MS.
+   *
+   * The stage polls its spin parent every 200 ms and posts `fs:rotation`
+   * whenever the angle moved (tslToPreviewHTML). While PLAYING the turntable
+   * covers 360° in 12 s, i.e. ~6° per poll, so that comparison ALWAYS finds a
+   * change — and the handler below wrote localStorage five times a second for
+   * as long as the preview spun: in the code panel, with the pane at its 41 px
+   * minimum, behind another window, forever. Play persists, so once switched
+   * on every later session boots doing it.
+   *
+   * What the app actually reads is `rotationRef.current`, set eagerly by the
+   * caller and consumed by the next rebuild and by the VR popup; the stored
+   * copy only has to survive a RELOAD. Sampling a 12 s loop every couple of
+   * seconds loses at most a fraction of a turn of a spin that resumes anyway,
+   * and the trailing write means the angle the user finally STOPS on is always
+   * the one persisted.
+   *
+   * Leading+trailing THROTTLE, not the trailing debounce `fs:viewport` uses: a
+   * debounce never settles under a continuous stream, so a spinning preview
+   * would persist nothing at all. The sibling `fs:camera` write needs none —
+   * it only fires while the user is orbiting.
+   */
+  const rotationWriteRef = useRef<{ at: number; timer: ReturnType<typeof setTimeout> | null }>({
+    at: 0,
+    timer: null,
+  });
+  const persistRotation = useCallback(() => {
+    const st = rotationWriteRef.current;
+    if (st.timer) return;
+    const write = () => {
+      st.at = Date.now();
+      st.timer = null;
+      const rot = rotationRef.current;
+      if (!rot) return;
+      try { localStorage.setItem('fs:previewRotation', JSON.stringify(rot)); } catch { /* */ }
+    };
+    const due = ROTATION_PERSIST_MS - (Date.now() - st.at);
+    if (due <= 0) write();
+    else st.timer = setTimeout(write, due);
+  }, []);
+  useEffect(() => () => {
+    const st = rotationWriteRef.current;
+    if (st.timer) clearTimeout(st.timer);
+  }, []);
 
   // ── Model / file drop surface ──────────────────────────────────────────
   // Two regions feed the same handler (podest's exact pattern): the parent-
@@ -888,8 +962,8 @@ export function ShaderPreview() {
   // presence of one float property made the connected-names set float-only and
   // silently filtered every colour picker out of the overlay.
   /**
-   * The Mic node's analyser settings, selected as a VALUE-stable string, plus
-   * (via the empty string) whether the graph contains a Mic node at all.
+   * The Sound node's analyser settings, selected as a VALUE-stable string, plus
+   * (via the empty string) whether the graph contains a Sound node at all.
    *
    * Not the values object: `getNodeValues` falls back to a fresh `{}` when a
    * node has no stored values, so an object-returning selector would mint a new
@@ -898,78 +972,59 @@ export function ShaderPreview() {
    * A joined string compares by value, so Object.is bails until a setting
    * really changes.
    *
-   * Absent keys are joined as the literal `NaN`, NOT `''`: readMicSettings
+   * Absent keys are joined as the literal `NaN`, NOT `''`: readSoundSettings
    * coerces with Number(), and `Number('') === 0` — an empty sentinel would
    * silently turn a missing `smoothing` into 0 (no smoothing at all) instead of
    * the 0.8 default. `Number('NaN')` is NaN, which the clamp maps to the
    * default as intended.
    *
-   * KNOWN LIMITATION: one analyser serves each SESSION, so a second node of the
-   * same kind has its settings ignored. `find` makes that deterministic (first
-   * in node order) rather than arbitrary. Two Mic nodes is a strange thing to
-   * want — they would hear the same room — but the node description says so.
-   * (A Mic node and an Audio Input node are two DIFFERENT sessions and do not
-   * contend: see the header of utils/audioSession.ts.)
+   * KNOWN LIMITATION: there is ONE analyser, so a second Sound node has its
+   * settings ignored; `find` makes that deterministic (first in node order)
+   * rather than arbitrary. It is why the node is a singleton on the canvas
+   * (`components/NodeEditor/singletonNodes.ts`) — but the singleton rule only
+   * governs the ADD surfaces, so a graph can still arrive holding two: a file
+   * saved when Microphone and Audio Input were separate nodes migrates both
+   * onto `soundNode`. Then the first one's smoothing wins and the second's is
+   * inert, which is the honest outcome for a machine with one pair of ears.
    */
-  const micSettingsKey = useAppStore((s) => liveAudioSettingsKey(s, 'micNode'));
-  const hasMicNode = micSettingsKey !== '';
+  const micSettingsKey = useAppStore(liveAudioSettingsKey);
+  const hasSoundNode = micSettingsKey !== '';
   const micSettings = useMemo(() => {
     const [smoothing, gain] = micSettingsKey.split('|');
-    return readMicSettings({ smoothing, gain });
+    return readSoundSettings({ smoothing, gain });
   }, [micSettingsKey]);
 
-  // The Audio Input node resolves its analyser settings by exactly the same
-  // rules — same sockets, same CPU-vs-shader split — so it shares the selector.
-  const audioSettingsKey = useAppStore((s) => liveAudioSettingsKey(s, 'audioInput'));
-  const hasAudioNode = audioSettingsKey !== '';
-  const audioSettings = useMemo(() => {
-    const [smoothing, gain] = audioSettingsKey.split('|');
-    return readMicSettings({ smoothing, gain });
-  }, [audioSettingsKey]);
-
-  const allUniforms = useMemo(() => extractUniforms(previewCode), [previewCode]);
+  const allUniforms = useMemo(() => extractUniforms(debouncedPreviewCode), [debouncedPreviewCode]);
 
   /**
-   * The mic uniforms the CURRENT shader actually reads — the pump's targets.
+   * The live-audio uniforms the CURRENT shader actually reads — the pump's
+   * targets, and the names every other uniform surface below must NOT touch.
    *
-   * Gated on the graph really containing a Mic node, because an emitted
+   * One list, because there is one capture session: the two lists this replaced
+   * existed to route each uniform to its own session by variable base, and the
+   * Sound node absorbed the second one on 2026-09-08.
+   *
+   * Gated on the graph really containing a Sound node, because an emitted
    * `const mic1_bass = uniform(0);` and a user property that happens to be
    * NAMED `mic1_bass` are textually identical — nothing in the code can tell
    * them apart. Without the gate, such a property would vanish from the
-   * Uniforms overlay in a graph with no microphone in it at all. (With a Mic
-   * node present the collision cannot arise: graphToCode claims each
+   * Uniforms overlay in a graph with no Sound node in it at all. (With one
+   * present the collision cannot arise: graphToCode claims each
    * `<var>_<channel>` as a claimName alias, so a property is renamed instead.)
    */
-  const micUniformNames = useMemo(
+  const soundUniformNames = useMemo(
     () =>
-      hasMicNode
-        ? allUniforms
-            .filter((u) => liveAudioVarBaseOf(u.name) === MIC_VAR_BASE)
-            .map((u) => u.name)
+      hasSoundNode
+        ? allUniforms.filter((u) => isSoundUniformName(u.name)).map((u) => u.name)
         : [],
-    [allUniforms, hasMicNode],
+    [allUniforms, hasSoundNode],
   );
 
   /**
-   * The same, for the Audio Input node. Split by the uniform's variable BASE
-   * rather than by a single "is live audio" predicate, because each list is the
-   * driving target of a DIFFERENT capture session — the routing the pump does.
-   */
-  const audioUniformNames = useMemo(
-    () =>
-      hasAudioNode
-        ? allUniforms
-            .filter((u) => liveAudioVarBaseOf(u.name) === AUDIO_VAR_BASE)
-            .map((u) => u.name)
-        : [],
-    [allUniforms, hasAudioNode],
-  );
-
-  /**
-   * Every uniform the shader has, minus the mic's. Connection-agnostic ON
-   * PURPOSE — this is the list the override bookkeeping works from, so a value
-   * tuned on a property that is currently hidden from the overlay still counts
-   * as an override rather than lurking unflagged.
+   * Every uniform the shader has, minus the Sound node's. Connection-agnostic
+   * ON PURPOSE — this is the list the override bookkeeping works from, so a
+   * value tuned on a property that is currently hidden from the overlay still
+   * counts as an override rather than lurking unflagged.
    *
    * NOTE the scope of "connection-agnostic" changed: graphToCode no longer
    * emits a `uniform(...)` for a property whose output feeds nothing, so an
@@ -982,7 +1037,7 @@ export function ShaderPreview() {
    * visible rows.
    */
   const nonMicUniforms = useMemo(() => {
-    // Mic uniforms are split off BEFORE anything else looks at this list, and
+    // Sound uniforms are split off BEFORE anything else looks at this list, and
     // that one move is what keeps every other uniform surface correct:
     //   - the overlay doesn't render four sliders the pump overwrites 60×/s;
     //   - handleReset can't push them, and therefore can't write mic-derived
@@ -992,13 +1047,9 @@ export function ShaderPreview() {
     //     that has no `value` to bake it into.
     // It also covers the ALL_UNIFORMS branch below, where a graph with no
     // property nodes would otherwise fall through to "show everything".
-    //
-    // BOTH live-audio nodes are split off here. Missing the Audio Input half
-    // would reinstate every one of the bullets above for it — including writing
-    // its levels to DISK through the persisted uniformValues.
-    const liveNames = new Set([...micUniformNames, ...audioUniformNames]);
+    const liveNames = new Set(soundUniformNames);
     return allUniforms.filter((u) => !liveNames.has(u.name));
-  }, [allUniforms, micUniformNames, audioUniformNames]);
+  }, [allUniforms, soundUniformNames]);
 
   // The overlay ROWS: only properties whose node has at least one outgoing edge
   // (i.e. is connected). BOTH property kinds must be scanned: with only
@@ -1011,13 +1062,7 @@ export function ShaderPreview() {
     return nonMicUniforms.filter((u) => connectedNames.has(u.name));
   }, [nonMicUniforms, connectedPropNamesKey]);
 
-  const mic = useMicPump({
-    iframeRef,
-    micUniformNames,
-    settings: micSettings,
-    audioUniformNames,
-    audioSettings,
-  });
+  const mic = useSoundPump({ iframeRef, soundUniformNames, settings: micSettings });
 
   // Per-uniform min/max — persisted across reloads, keyed by uniform name
   const [showUniforms, setShowUniforms] = useState(true);
@@ -1272,14 +1317,14 @@ export function ShaderPreview() {
           if (!info) continue;
           if (typeof value !== (info.kind === 'color' ? 'string' : 'number')) continue;
           // The rAF pump is the only thing that may write a live-audio uniform
-          // (mic OR audio input). uniformValues should never contain one (they
+          // (the Sound node's). uniformValues should never contain one (they
           // are filtered out of `uniforms` before anything can store them), but
           // this map is `usePersistedState` with reloadOnProjectImport — an
           // imported project writes it — so an attacker-supplied
           // fs:previewUniformValues could otherwise pin one at a fixed value
           // after every rebuild. Defence in depth, one line; deliberately the
           // BROAD predicate, so it cannot fall behind the split above.
-          if (isLiveAudioUniformName(name)) continue;
+          if (isSoundUniformName(name)) continue;
           win.postMessage({ type: 'fs:uniform', name, value }, '*');
         }
       } else if (data.type === 'fs:camera') {
@@ -1290,9 +1335,12 @@ export function ShaderPreview() {
         }
       } else if (data.type === 'fs:rotation') {
         if (typeof data.x === 'number' && typeof data.y === 'number' && typeof data.z === 'number') {
-          const rot = { x: data.x, y: data.y, z: data.z };
-          rotationRef.current = rot;
-          try { localStorage.setItem('fs:previewRotation', JSON.stringify(rot)); } catch { /* */ }
+          // The ref is updated on EVERY report — it is what the next rebuild
+          // and the VR popup read, and it costs nothing. Only the storage
+          // write is throttled (see persistRotation): while the turntable
+          // spins these arrive five times a second and never stop.
+          rotationRef.current = { x: data.x, y: data.y, z: data.z };
+          persistRotation();
         }
       }
     };
@@ -1387,11 +1435,11 @@ export function ShaderPreview() {
    * setNodes and correctly stay silent.
    *
    * Bounded by uniformInfoRef: it can only ever touch a name the CURRENT
-   * shader has, which excludes mic uniforms structurally while still working
-   * for a user property that happens to be called `mic1_bass` in a graph with
-   * no microphone in it. The hot fs:uniform post is what makes a node scrub
-   * drive the preview at pointer rate instead of waiting out the 200ms rebuild
-   * debounce.
+   * shader has, which excludes the Sound node's uniforms structurally while
+   * still working for a user property that happens to be called `mic1_bass` in
+   * a graph with no Sound node in it. The hot fs:uniform post is what makes a
+   * node scrub drive the preview at pointer rate instead of waiting out the
+   * 200ms rebuild debounce.
    */
   useEffect(() => {
     const onAuthored = (e: Event) => {
@@ -1520,7 +1568,33 @@ export function ShaderPreview() {
   // restarts the rebuild faster than it can ever finish and the pane just
   // flickers until the drag stops. Debouncing collapses a whole scrub into a
   // single rebuild on release. Trailing-only, so first paint isn't delayed.
-  const debouncedPreviewCode = useDebounced(previewCode, PREVIEW_REBUILD_DEBOUNCE_MS);
+  // (`debouncedPreviewCode` itself is declared at the top of the component —
+  // the uniform extraction needs it too.)
+
+  /**
+   * The same debounce for the material settings, and it is needed for exactly
+   * the same reason: `updateSettings` mints a BRAND-NEW settings object per
+   * call (`{ ...settings, ...patch }` in ShaderSettingsMenu), and the Alpha
+   * Clip threshold is an `<input type="range">` whose onChange fires per
+   * pointermove — so scrubbing it was one full document reload per frame, the
+   * precise failure the paragraph above says the debounce exists to prevent.
+   * Material settings reach the module only through `buildShaderModule`'s
+   * option, never through `previewCode`, so `debouncedPreviewCode` could not
+   * cover them.
+   *
+   * Debounced as a KEY, not as the object: the memo below reads the LIVE
+   * `materialSettings` at memo time (the `cameraPosRef`/`rotationRef` idiom
+   * two dozen lines down) and only lists the settled key in its deps, so a
+   * rebuild triggered by something else still bakes the current settings and
+   * nothing has to be reconstructed out of JSON. The key is stringified from
+   * a small flat object; `updateSettings` spreads, so an existing key keeps
+   * its position and only a real change moves the string.
+   */
+  const materialSettingsKey = useMemo(
+    () => JSON.stringify(materialSettings ?? null),
+    [materialSettings],
+  );
+  const debouncedMaterialSettingsKey = useDebounced(materialSettingsKey, PREVIEW_REBUILD_DEBOUNCE_MS);
 
   // Dropped meshes key on their id so re-dropping a file (same name, new
   // bytes) still forces a fresh document — the feed only ever applies to the
@@ -1571,8 +1645,19 @@ export function ShaderPreview() {
       inlineImageAssetsFromNodes(debouncedPreviewCode, useAppStore.getState().nodes),
       options,
     );
+    // `marchWindow` is deliberately NOT a dep, even though the options above
+    // read it: it is the driving Raymarch Output's Window radius, edited by a
+    // DragNumberInput that fires per pointermove, so listing it reloaded the
+    // whole document once per frame of a scrub. It is redundant twice over.
+    // The a-sphere's radius is already hot-swapped by the fs:geometry effect
+    // below (whose deps DO include it — `marchSphere` is a primitive, so that
+    // effect runs), and graphToCode emits the same number as
+    // `const win = float(…)` inside the march, so a radius change reaches this
+    // memo through `debouncedPreviewCode` anyway — on the debounce, as it
+    // should. The null↔number transitions still rebuild: they flip `sdfDrives`,
+    // which changes `materialSettings` (side: 'double').
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedPreviewCode, materialSettings, geometryRebuildKey, forceWebGL2, marchWindow]);
+  }, [debouncedPreviewCode, debouncedMaterialSettingsKey, geometryRebuildKey, forceWebGL2]);
 
   // A new srcDoc means a full document reload, so raise the overlay again. Only
   // rebuilds go through here — the postMessage hot-update channels below mutate
@@ -1773,9 +1858,16 @@ export function ShaderPreview() {
   // the app's real origin. That is acceptable for generated code; never
   // feed raw code-editor text into this path.
   // Blob URL for the custom mesh in the XR popup. The popup is same-origin,
-  // so a parent-minted URL loads directly there. Revoked only when replaced —
-  // an open popup may still be reading it, so leak-until-next-mint (bounded:
-  // one URL) beats revoking under a live loader.
+  // so a parent-minted URL loads directly there. Never revoked while the
+  // popup is OPEN — it may still be reading it, and revoking under a live
+  // loader is the worse failure — so the URL is released at exactly two
+  // moments where nothing can be reading it: the next mint, and the popup's
+  // own `pagehide`. That second one closes the real gap in "bounded: one
+  // URL": the Blob constructor SNAPSHOT-COPIES the bytes, so until then a
+  // closed popup still cost a second full copy of the mesh (up to the 64 MB
+  // MESH_MAX_BYTES cap) for the rest of the session, surviving a geometry
+  // change, a different model, and a project import. Best effort by design —
+  // if `pagehide` never fires we are exactly back to revoke-on-next-mint.
   const vrModelUrlRef = useRef<string | null>(null);
   const handleOpenVR = useCallback(() => {
     const w = window.open('', '_blank');
@@ -1816,6 +1908,20 @@ export function ShaderPreview() {
     });
     w.document.write(html);
     w.document.close();
+    // Release the mesh copy once the popup is gone. `document.write` into an
+    // about:blank popup reuses the same Window, so a listener added after
+    // close() survives; a closed window definitively is not loading anything,
+    // which is what makes this safe where a `load`-timed revoke would not be
+    // (A-Frame fetches the model asynchronously, well after `load`). The url
+    // is captured per gesture and compared before clearing the ref, so a
+    // later mint's URL can never be revoked by an older popup's pagehide.
+    const mintedUrl = customModel ? vrModelUrlRef.current : null;
+    if (mintedUrl) {
+      w.addEventListener('pagehide', () => {
+        try { URL.revokeObjectURL(mintedUrl); } catch { /* */ }
+        if (vrModelUrlRef.current === mintedUrl) vrModelUrlRef.current = null;
+      }, { once: true });
+    }
   }, [previewCode, previewGeometry, marchWindow, previewMesh, playing, materialSettings, bgColor, effLighting, effectiveSubdivision, shaderName]);
 
   return (
@@ -1896,7 +2002,14 @@ export function ShaderPreview() {
             onChange={(e) => setGeometry(e.target.value as GeometryType)}
             disabled={sdfDrives}
             title={sdfDrives
-              ? t('An SDF Output is driving the shader: it renders through its own bounding box, so the model is ignored until the field is unwired', language)
+              // The node this names is the RAYMARCH Output (the SDF Output and the
+              // Volume Output were folded into it), its window is a SPHERE
+              // (MARCH_WINDOW_GEOMETRY = 'marchSphere', not a bounding box), and it
+              // drives on Field OR Density (MARCH_PRIMARY_SOCKETS) — so it stops
+              // driving only once BOTH are unwired. This is the ONE explanation a
+              // user gets for a dropdown that has gone inert, so it has to name a
+              // node that exists in the palette and a shape they can see.
+              ? t('A Raymarch Output is driving the shader: it renders through its own window sphere, so the model is ignored until its Field and Density are unwired', language)
               : t('Preview geometry — drag the model to orbit, scroll to zoom; drop a 3D model (.obj / .glb / .gltf) on the preview to shade your own mesh', language)}
             aria-label={t('Preview geometry', language)}
           >
@@ -1913,13 +2026,20 @@ export function ShaderPreview() {
         {!isModelGeometry(geometry) && !sdfDrives && (
           <label className="shader-preview__subdivision" title={t('Mesh subdivision', language)}>
             <span className="shader-preview__ctl-label">{t('Subd', language)}</span>
+            {/* The slider's value is the STOP INDEX, not the segment count, so
+                the power-of-two ladder is drawn as equal sections and one notch
+                always means one doubling. `aria-valuetext` carries the real
+                number, or a screen reader would announce the index. */}
             <input
               type="range"
-              min={SUBDIVISION_MIN}
-              max={SUBDIVISION_MAX}
+              min={0}
+              max={SUBDIVISION_STEPS.length - 1}
               step={1}
-              value={subdivision}
-              onChange={(e) => setSubdivision(parseInt(e.target.value, 10))}
+              value={subdivisionIndex(subdivision)}
+              onChange={(e) => setSubdivision(subdivisionAt(parseInt(e.target.value, 10)))}
+              aria-valuetext={String(subdivision)}
+              aria-label={t('Mesh subdivision', language)}
+              style={{ '--fs-subd-stops': SUBDIVISION_STEPS.length } as React.CSSProperties}
               className="shader-preview__subdivision-slider"
             />
             <span className="shader-preview__subdivision-value">{subdivision}</span>
@@ -2053,12 +2173,13 @@ export function ShaderPreview() {
               bottom-right (below), so a mis-aimed click on the everyday controls
               can't throw the app into fullscreen or open a VR window. */}
           <div className="shader-preview__bottom-controls">
-            {/* Only while the shader actually reads a mic uniform — the control
-                must never advertise capture for a graph that doesn't listen.
+            {/* Only while the shader actually reads one of the Sound node's
+                uniforms — the control must never advertise capture for a graph
+                that doesn't listen.
                 Leading position keeps it away from the destructive Reset ✕ that
                 ends this cluster. */}
-            {micUniformNames.length > 0 && (
-              <MicControl
+            {soundUniformNames.length > 0 && (
+              <SoundControl
                 status={mic.status}
                 onArm={mic.arm}
                 onDisarm={mic.disarm}
@@ -2177,7 +2298,7 @@ export function ShaderPreview() {
                 clips={animInfo.clips}
                 active={animInfo.clip}
                 onPick={selectClip}
-                onClose={() => setClipMenuOpen(false)}
+                onClose={closeClipMenu}
                 language={language}
               />
             </div>

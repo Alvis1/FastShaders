@@ -1,6 +1,7 @@
 import complexityData from '@/registry/complexity.json';
 import { sanitizeCostMap } from '@/utils/nodeCost';
 import { toKebabCase } from '@/utils/nameUtils';
+import { safeJsonReviver } from '@/utils/safeJson';
 
 /**
  * Provenance for an applied cost override — what benchmark produced it, and
@@ -253,7 +254,12 @@ const PREFIX = /^(noise_|preset_|saved_)/;
  */
 export function parseCostFile(text: string, fileName?: string): ParsedCostFile | null {
   let obj: unknown;
-  try { obj = JSON.parse(text); } catch { return null; }
+  // A user-DROPPED file: the shared deny-list reviver applies here as it does
+  // at every other untrusted boundary (utils/safeJson.ts is the one copy of
+  // that rule). `sanitizeCostMap` already whitelists keys against the authored
+  // table, so nothing is exploitable today — the reviver is what keeps the
+  // next key added to the deny-list from reaching only the sites that opted in.
+  try { obj = JSON.parse(text, safeJsonReviver); } catch { return null; }
   return parseCostObject(obj, fileName);
 }
 
@@ -379,7 +385,8 @@ export function buildProfileBundle(profiles: CostProfile[]): Record<string, unkn
  */
 export function parseCostProfileBundle(text: string, fileName?: string): ParsedCostFile[] | null {
   let obj: unknown;
-  try { obj = JSON.parse(text); } catch { return null; }
+  // Same trust level as `parseCostFile` above — a dropped/imported file.
+  try { obj = JSON.parse(text, safeJsonReviver); } catch { return null; }
   if (!obj || typeof obj !== 'object') return null;
   const o = obj as Record<string, unknown>;
   if (!(PROFILE_BUNDLE_KEY in o) || !Array.isArray(o.profiles)) return null;

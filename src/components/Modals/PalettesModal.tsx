@@ -35,6 +35,7 @@ import {
   type ImportOutcome,
   type PaletteExportKind,
 } from '@/utils/paletteUi';
+import { isTypingTarget } from '@/utils/isTypingTarget';
 import './CsvImportModal.css';
 import './PalettesModal.css';
 
@@ -258,8 +259,24 @@ export function PalettesModal({ open, onClose }: Props) {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
-      const editable =
-        !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+      // The ONE shared predicate (utils/isTypingTarget) rather than a fourth
+      // hand-written tag list — this one was missing SELECT, so a keypress
+      // aimed at a dropdown inside the dialog was swallowed here instead of
+      // reaching its type-to-search.
+      //
+      // Sharing it is what keeps the swallow decision below SOUND, and the
+      // invariant is easy to break by hand: whatever this dialog lets through
+      // reaches the canvas's own window handlers, so this set must never be
+      // WIDER than theirs. It used to be exactly as wide by coincidence (both
+      // spelled "INPUT"); widen it here alone and Delete on a focused colour
+      // swatch would delete nodes in the graph behind the dialog.
+      //
+      // Narrowing it to text-taking inputs costs the two textless controls in
+      // this dialog (the hidden file input and the colour swatches) nothing:
+      // stopPropagation suppresses LISTENERS, not default actions, so Enter /
+      // Space still opens the native picker — and all three of this dialog's
+      // React onKeyDown handlers sit on `type="text"` inputs.
+      const editable = isTypingTarget(el);
       if (e.key === 'Escape') {
         // Escape must not leak: `ContextMenu` listens for it on the BUBBLE
         // phase and `useDismiss` closes the toolbar popovers on it, so a
@@ -280,9 +297,9 @@ export function PalettesModal({ open, onClose }: Props) {
       }
       // Everything else is swallowed while the dialog is up, EXCEPT inside a
       // text field. The canvas binds its shortcuts on `window` (Delete, Ctrl+G,
-      // Shift+A, Cmd+Z…) and skips only INPUT/TEXTAREA targets — so with focus
-      // on the panel div, a keypress meant for this dialog would edit the graph
-      // behind it. Capture phase, so it runs before the canvas's bubble
+      // Shift+A, Cmd+Z…) and skips only what `isTypingTarget` calls typing —
+      // so with focus on the panel div, a keypress meant for this dialog would
+      // edit the graph behind it. Capture phase, so it runs before the canvas's bubble
       // listener; Tab is left alone so focus can still move.
       if (!editable && e.key !== 'Tab') e.stopPropagation();
     };

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useEffect, memo } from 'react';
 import type { BuiltinPreset } from '@/registry/builtinPresets';
 import { perlin2D } from '@/utils/noisePreview';
+import { hexToRgb01 } from '@/utils/colorUtils';
 import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
 import { AssetCostBadge } from './AssetCostBadge';
@@ -429,9 +430,11 @@ const PRESET_SHADES: Record<string, Shade> = {
 
 /** Flat tint fallback for a preset without a shade function (dev safety net). */
 function fallbackShade(hex: string): Shade {
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  // Through colorUtils rather than three inline parseInt lines: that module is
+  // where every hex→channel rule in the app lives, so a future colour-space
+  // correction reaches this tile with the rest of them instead of leaving one
+  // private parser behind.
+  const [r, g, b] = hexToRgb01(hex);
   return () => [clamp01(r), clamp01(g), clamp01(b)];
 }
 

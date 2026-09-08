@@ -7,7 +7,8 @@
  * there are always final, which sidesteps streamed zips whose local headers
  * defer sizes to data descriptors. Deflate uses the native
  * `DecompressionStream('deflate-raw')` — no dependency (same approach as
- * podest.html's reader).
+ * podest.html's reader), at the cost of a browser floor of Safari 16.4 /
+ * Firefox 113 for DEFLATE entries only; see `inflateRaw`.
  *
  * Treat archives as ADVERSARIAL input: every offset is bounds-checked, the
  * entry count is capped, and — critically — each entry is inflated
@@ -41,6 +42,22 @@ function findEocd(dv: DataView): number {
  *  `maxBytes`. Reads chunk-by-chunk instead of `Response.arrayBuffer()` so a
  *  bomb can't fully materialize before the size is known. */
 async function inflateRaw(comp: Uint8Array, maxBytes: number): Promise<Uint8Array> {
+  // The dependency-free deflate path has a browser floor the rest of the app
+  // does not: `DecompressionStream` is Safari 16.4 / Firefox 113. Below it this
+  // constructor throws a bare `ReferenceError`, which says nothing about what
+  // the user actually did — and the split is invisible from our own artefacts,
+  // because `zipWriter` is STORE-only, so a FastShaders export imports fine and
+  // only an archive re-zipped by Finder or Explorer (which emit deflate) trips
+  // it. Name the cause instead. NB the app's one caller (`importShaderZip`)
+  // catches every readZip failure and shows its own generic message, so this
+  // text is for whoever is looking at the console; podest.html's reader is a
+  // separate hand-minified copy with the same floor.
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error(
+      'this browser cannot read compressed archives (needs Safari 16.4+ / Firefox 113+) — ' +
+      're-export the shader from FastShaders, which writes uncompressed zips',
+    );
+  }
   const ds = new DecompressionStream('deflate-raw');
   const blob = new Blob([comp as Uint8Array<ArrayBuffer>]);
   const reader = blob.stream().pipeThrough(ds).getReader();

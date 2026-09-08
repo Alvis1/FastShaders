@@ -231,9 +231,30 @@
 }
 
 .shader-preview__subdivision-slider {
-  width: 75px;
+  /* Wide enough that the power-of-two sections stay distinguishable: the
+     ladder has --fs-subd-stops notches (8 today), so ~11px of travel each. */
+  width: 88px;
   margin: 0;
   cursor: pointer;
+  /* The stops, drawn as equal sections. The slider's value IS the stop index,
+     so the notches are evenly spaced by construction — this only makes that
+     visible. The track is inset by half a thumb at each end (the range input's
+     own geometry), so the ticks are laid out across that inner span rather
+     than across the full width. `background-clip: content-box` plus the
+     vertical padding keeps the marks to a hairline band behind the thumb. */
+  --fs-subd-stops: 8;
+  --fs-subd-thumb: 12px;
+  padding: 5px 0;
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--border-subtle) 0 1px,
+    transparent 1px calc((100% - 1px) / (var(--fs-subd-stops) - 1))
+  );
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: calc(100% - var(--fs-subd-thumb)) 100%;
+  background-origin: content-box;
+  background-clip: content-box;
 }
 
 .shader-preview__subdivision-value {

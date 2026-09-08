@@ -5,10 +5,10 @@
  * That "only" is the same security property `micCapture.ts` states for
  * `getUserMedia`, and it matters for the same reason: in FastShaders a node's
  * presence in a graph IS its execution (`fs:graph` restores on mount with no
- * gesture), so a shared `.fastshader` holding an Audio Input node runs on the
+ * gesture), so a shared `.fastshader` holding a Sound node runs on the
  * next reload with zero interaction. The only thing between that and a live
  * capture of the user's screen audio is that this function is reachable
- * exclusively from a real user CLICK, routed through `audioSession.armAudio`.
+ * exclusively from a real user CLICK, routed through `soundSession.armSound`.
  *
  * Here the platform helps: `getDisplayMedia` REQUIRES transient user activation
  * and always shows the browser's own share picker, so it is strictly harder to
@@ -32,10 +32,10 @@
  *   - Firefox: same as Safari — audio is not implemented.
  */
 
-import type { MicSettings } from './micNode';
+import type { SoundSettings } from './soundSettings';
 import {
+  acquireStream,
   buildAnalyserCapture,
-  classifyAudioError,
   audioContextCtor,
   type AudioStartResult,
 } from './audioCaptureCore';
@@ -84,7 +84,7 @@ export function systemAudioSupported(): boolean {
  * essentially nothing; a torn-down share costs the feature.
  */
 export async function startSystemAudioCapture(
-  settings: MicSettings,
+  settings: SoundSettings,
   opts: { onEnded?: () => void } = {},
 ): Promise<AudioStartResult> {
   // `navigator.mediaDevices` is undefined outside a secure context — the real,
@@ -111,42 +111,23 @@ export async function startSystemAudioCapture(
     surfaceSwitching: 'exclude',
   };
 
-  let timedOut = false;
-  let stream: MediaStream;
-  try {
-    stream = await new Promise<MediaStream>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        timedOut = true;
-        reject(Object.assign(new Error('share picker timeout'), { name: 'FsTimeoutError' }));
-      }, SHARE_PICKER_TIMEOUT_MS);
-      navigator.mediaDevices.getDisplayMedia(options).then(
-        (s) => {
-          clearTimeout(timer);
-          // Lost the race: nobody is going to hold this, so don't leak it — and
-          // don't leave the browser's "sharing" bar up over a capture that no
-          // longer has a reader.
-          if (timedOut) {
-            for (const t of s.getTracks()) t.stop();
-            return;
-          }
-          resolve(s);
-        },
-        (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      );
-    });
-  } catch (err) {
-    return { ok: false, error: timedOut ? 'timeout' : classifyAudioError(err) };
-  }
+  // The timeout race and its lost-race cleanup (a share that arrives after we
+  // gave up is STOPPED, so the browser's "sharing" bar never outlives its
+  // reader) are the microphone path's rules too, so they live once in
+  // `acquireStream`. All this path contributes is the options and its own bound.
+  const got = await acquireStream(
+    () => navigator.mediaDevices.getDisplayMedia(options),
+    SHARE_PICKER_TIMEOUT_MS,
+    'share picker',
+  );
+  if (!got.ok) return got;
 
   // Requested only because the spec demands it. Disable rather than stop — see
   // the doc comment above.
-  for (const v of stream.getVideoTracks()) v.enabled = false;
+  for (const v of got.stream.getVideoTracks()) v.enabled = false;
 
   // buildAnalyserCapture reports `no-audio-track` and stops every track if the
   // share carried no audio — the Safari/Firefox outcome, and the Chromium
   // outcome when the user leaves the audio box unticked.
-  return buildAnalyserCapture(stream, settings, opts);
+  return buildAnalyserCapture(got.stream, settings, opts);
 }

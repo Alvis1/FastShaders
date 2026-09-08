@@ -231,12 +231,15 @@ export function escapeHtml(s: string): string {
  * Exported so ShaderPreview can fetch the model text for the sandboxed
  * preview's postMessage model feed (and for any future direct-URL use).
  */
-export function getModelUrl(geometry: 'bunny'): string {
+export function getModelUrl(_geometry: 'bunny'): string {
   // Only the bunny is a model FILE now; the teapot is tessellated in-document
   // (public/models/teapot.obj still exists — podest and the copy-ready pages
-  // load it — but the editor never fetches it).
-  const file = geometry === 'bunny' ? 'stanford-bunny.obj' : 'teapot.obj';
-  return resolveAssetUrl(`models/${file}`);
+  // load it — but the editor never fetches it). The parameter survives so the
+  // signature still says which model set this resolves, and widens without a
+  // call-site change if a second file ever comes back; the teapot arm of the
+  // old ternary did not, since no value of the declared type could reach it and
+  // a live-looking reference to a 1.2 MB asset misleads an asset audit.
+  return resolveAssetUrl('models/stanford-bunny.obj');
 }
 
 /**
@@ -1946,8 +1949,20 @@ export function tslToPreviewHTML(
 
   // Register the runtime Utah teapot (teapot-mesh). Unconditional, like
   // fit-bounds: the parent hot-swaps primitive↔teapot without a rebuild, so
-  // every document must be able to become the teapot. ~16 KB, mostly the
-  // control points.
+  // every document must be able to become the teapot.
+  //
+  // SIZE, re-measured 2026-09-05 (the old '~16 KB, mostly the control points'
+  // was the stripped figure): TEAPOT_SCRIPT is 19.2 KB, of which 16.1 KB is
+  // code+data and 3.1 KB is comments and indent. FIT_BOUNDS_SCRIPT above is
+  // 22.7 KB / 11.9 KB — i.e. nearly HALF of it is comment — and
+  // GLTF_ANIM_SCRIPT is 11.9 KB / 6.5 KB. A default sphere document is
+  // therefore ~31% comment bytes, and because these are TypeScript template
+  // literals no minifier rewrites them: the same bytes ship in the app
+  // bundle (~7.6 KB gzipped on the boot chunk) and are re-parsed by the
+  // iframe on every rebuild. Both scripts stay UNCONDITIONAL — that is the
+  // hot-swap contract above — and the comments stay in the SOURCE, because
+  // they carry the measurement rationale the fit-bounds and teapot
+  // conventions depend on. Strip them at BUILD time if it ever matters.
   lines.push(TEAPOT_SCRIPT);
   lines.push('');
 
@@ -1996,7 +2011,34 @@ export function tslToPreviewHTML(
   // In xr mode the backend is forced DECLARATIVELY: renderer="backend: webgl"
   // maps onto WebGPURenderer's forceWebGL via the bundle's aframe#5847 carry,
   // so the popup needs neither the gpu-hiding script nor the pre-flight below.
-  sceneLines.push(`<a-scene${xr ? ' renderer="backend: webgl"' : ''} vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ' fs-stats'} loading-screen="enabled: false" background="color: ${bgColor}">`);
+  //
+  // The non-xr scene carries a CEILING on the backing store instead. A-Frame
+  // calls setPixelRatio(window.devicePixelRatio) unconditionally and its own
+  // maxCanvasWidth/Height default to -1, so the preview rendered at whatever
+  // the panel asks for — 4x the fragments of a 1x canvas on any Retina/HiDPI
+  // machine (the Tauri desktop build included), and ~15 Mpix per frame when a
+  // 5K display goes fullscreen, for exactly the expensive fragment shaders
+  // this app exists to author. The number is a SAFETY VALVE, not a quality
+  // policy: A-Frame's clamp is expressed in DEVICE pixels (see iO() in the
+  // bundle) and shrinks only the backing store — `setSize(w, h, false)` leaves
+  // the CSS size alone, so the picture softens rather than the layout moving.
+  // At 4K it never engages on a docked pane, and on a Retina laptop's
+  // fullscreen it costs a few percent; it bites only on the panels where the
+  // uncapped cost was pathological. Deliberately not the tighter cap an
+  // audit suggested (1600, or an effective DPR of 1.5): that trades away
+  // sharpness in the pane the user is judging their shader in, which is a
+  // product decision rather than a bug fix.
+  //
+  // Only the keys spelled here are read — setupRenderer guards every other
+  // renderer option on its own presence in the parsed attribute — so this
+  // changes nothing else about the renderer, and in particular does not spell
+  // `backend:`, which is the only token the aframe#5847 patch acts on.
+  // The xr scene is deliberately excluded: A-Frame skips the clamp in VR mode
+  // anyway, and a headset's framebuffer is the XR session's to size.
+  const rendererAttr = xr
+    ? ' renderer="backend: webgl"'
+    : ' renderer="maxCanvasWidth: 3840; maxCanvasHeight: 2160"';
+  sceneLines.push(`<a-scene${rendererAttr} vr-mode-ui="enabled: ${xr ? 'true' : 'false'}"${xr ? ' fs-xr-stats' : ' fs-stats'} loading-screen="enabled: false" background="color: ${bgColor}">`);
   sceneLines.push('  <a-entity camera="fov: 20; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 8; rotateSpeed: 0.5"></a-entity>');
   // Parent holds the spin (so it tweens cleanly 0→360 on world Y/Z), child
   // holds the static tilt and the shader/geometry. The id stays on the child
@@ -2029,7 +2071,37 @@ export function tslToPreviewHTML(
   lines.push('    window.addEventListener("fs:scene-booted", fn, { once: true });');
   lines.push('  };');
   lines.push('  (function () {');
+  // WebGL2 is a HARD FLOOR for the WebGL path and nothing tested for it. three
+  // dropped WebGL1 in r163, so the vendored r184 bundle only ever asks for a
+  // "webgl2" context and throws on a null one — a machine with WebGL2 absent,
+  // disabled or driver-blocklisted (Safari <15, a locked-down enterprise
+  // profile, a headless VM) got a blank pane for six seconds and then the
+  // watchdog's "the WebGL2 renderer never began rendering. Reload to retry.",
+  // which names a consequence and prescribes an action that can never work.
+  // Probe first and say the real thing. The probe releases its context slot
+  // straight away: browsers cap live contexts (~16) and this document is about
+  // to ask for one more.
+  lines.push('    function __fsHasWebGL2() {');
+  lines.push('      try {');
+  lines.push('        var c = document.createElement("canvas").getContext("webgl2");');
+  lines.push('        if (!c) return false;');
+  lines.push('        var lose = c.getExtension("WEBGL_lose_context");');
+  lines.push('        if (lose) lose.loseContext();');
+  lines.push('        return true;');
+  lines.push('      } catch (e) { return false; }');
+  lines.push('    }');
   lines.push('    function boot() {');
+  // Gated on this document actually running on WebGL2, so a WebGPU-capable
+  // machine is never turned away by a probe it does not need: in the sandbox
+  // every path that reaches boot() on the WebGL2 backend has already hidden (or
+  // never had) navigator.gpu, and the xr popup is forced there by its scene's
+  // renderer="backend: webgl" attribute regardless of what navigator.gpu says.
+  // __fsShowStickyError posts fs:preview-error, so the parent's "Compiling
+  // shader…" overlay drops immediately instead of covering the message.
+  lines.push(`      if (${xr ? '' : '!navigator.gpu && '}!__fsHasWebGL2()) {`);
+  lines.push('        __fsShowStickyError("This browser cannot draw the 3D preview: no WebGL2 context is available. WebGL2 needs Chrome 56+, Firefox 51+ or Safari 15+, and may be switched off or blocked by the graphics driver.");');
+  lines.push('        return;');
+  lines.push('      }');
   lines.push('      document.getElementById("scene-slot").innerHTML = __fsSceneHTML;');
   lines.push('      window.__fsSceneBooted = true;');
   lines.push('      window.dispatchEvent(new Event("fs:scene-booted"));');

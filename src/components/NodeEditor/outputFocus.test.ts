@@ -2,12 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FitViewOptions } from '@xyflow/react';
+import { SINGLETON_NODE_TYPES, isSingletonNodeType } from './singletonNodes';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
 import {
   costFocusId,
   focusNodes,
-  focusOutputNode,
+  focusNode,
   focusTargets,
   outputFocusTarget,
   OUTPUT_FOCUS_FIT,
@@ -62,11 +63,11 @@ describe('outputFocusTarget', () => {
   });
 });
 
-describe('focusOutputNode', () => {
+describe('focusNode', () => {
   it('asks fitView for exactly the Output node, animated, zoom-capped', () => {
     const calls: FitViewOptions[] = [];
     const out = makeNode('out1', 'output');
-    focusOutputNode((o) => {
+    focusNode((o) => {
       calls.push(o!);
     }, [out], 'out1');
     expect(calls).toHaveLength(1);
@@ -82,7 +83,7 @@ describe('focusOutputNode', () => {
   it('fits the collapsed-group pill when the Output is a hidden member', () => {
     const calls: FitViewOptions[] = [];
     const member = { ...makeNode('out1', 'output'), parentId: 'g1' } as AppNode;
-    focusOutputNode((o) => {
+    focusNode((o) => {
       calls.push(o!);
     }, [group('g1', true), member], 'out1');
     expect(calls[0].nodes).toEqual([{ id: 'g1' }]);
@@ -123,9 +124,9 @@ describe('focusNodes / focusTargets — the F key and every other "take me there
     expect(calls).toHaveLength(1);
   });
 
-  it('focusOutputNode is the single-node case of focusNodes', () => {
+  it('focusNode is the single-node case of focusNodes', () => {
     const calls: FitViewOptions[] = [];
-    focusOutputNode((o) => {
+    focusNode((o) => {
       calls.push(o!);
     }, [makeNode('out1', 'output')], 'out1');
     expect(calls[0].nodes).toEqual([{ id: 'out1' }]);
@@ -145,9 +146,41 @@ describe('the F key (source pins)', () => {
 
   it('never fires while typing or with a modifier held (Cmd/Ctrl+F is the browser\'s find)', () => {
     const handler = nodeEditor.slice(nodeEditor.indexOf('F frames the SELECTION'), nodeEditor.indexOf("key !== 'a'"));
-    expect(handler).toContain("if (tag === 'INPUT' || tag === 'TEXTAREA') return;");
+    // The tag list itself now lives in ONE predicate (utils/isTypingTarget),
+    // shared with the accelerator handler that owns Delete and Cmd+D — that
+    // one knew only INPUT/TEXTAREA, so a focused on-canvas `<select>` deleted
+    // the selection while F and A correctly did nothing. Pin the CALL here,
+    // and the SET it covers at the predicate's own unit test
+    // (utils/isTypingTarget.test.ts) — this file used to pin a local copy of
+    // the tag list, which is the very duplication the extraction removed.
+    expect(handler).toContain('if (isTypingTarget(e.target)) return;');
     expect(handler).toContain('if (e.metaKey || e.ctrlKey || e.altKey) return;');
-    expect(handler).toContain("if (tag === 'SELECT' || target?.isContentEditable) return;");
+    expect(nodeEditor).toContain("import { isTypingTarget } from '@/utils/isTypingTarget';");
+  });
+});
+
+describe('the Space key opens the Add-node search (source pins)', () => {
+  const nodeEditor = read('./NodeEditor.tsx');
+
+  it('opens the same menu as Shift+A, through one shared opener', () => {
+    // Both keys must land on the SAME call, or the two entry points drift into
+    // opening the menu at different places — the menu autofocuses its search
+    // box, so "open the search" and "add a node" are one gesture here.
+    expect(nodeEditor).toContain("if (key === ' ' && !e.shiftKey) {");
+    expect(nodeEditor).toMatch(/const openAddMenuAtCentre = \(\) => \{[\s\S]{0,400}openContextMenu\(/);
+    // Shift+A routes through it too, rather than keeping its own copy.
+    expect(nodeEditor).toMatch(/key !== 'a'\) return;\s*openAddMenuAtCentre\(\);/);
+  });
+
+  it('yields to whatever control already owns Space', () => {
+    // Space is the platform's "activate the focused control" key: a palette
+    // tile is a <button> that adds its node on Enter/Space (tileDrag.ts),
+    // React Flow makes every node a tab stop that takes Space as select, and
+    // the canvas bar is a row of buttons. Without this guard, Tab-then-Space
+    // would open a menu instead of doing what the focused control says.
+    expect(nodeEditor).toContain(
+      'if (el?.closest(\'button, [role="button"], a[href], summary, .react-flow__node\')) return;',
+    );
   });
 });
 
@@ -166,8 +199,15 @@ describe('several outputs, one active (source pins)', () => {
       nodeEditor.indexOf('const placeTilePayload'),
       nodeEditor.indexOf('const placeCsvFile'),
     );
-    expect(place.includes('focusOutputNode('), 'the singleton redirect is back').toBe(false);
     expect(place.includes('existingOutputId('), 'the singleton lookup is back').toBe(false);
+    // There IS a glide in this function now — the Sound node is a singleton and
+    // redirects here (singletonNodes.ts) — so the invariant can no longer be
+    // "no glide in this function". What must hold is that the redirect is
+    // driven by the TYPE-AGNOSTIC lookup, never by naming a type: with that
+    // true, whether an Output redirects is decided entirely by
+    // SINGLETON_NODE_TYPES, which the last test in this block pins.
+    expect(place).toContain('findSingletonNode(currentNodes, def.type)');
+    expect(place.includes("existingSingleton = nodes.find"), 'the lookup has been inlined and can drift').toBe(false);
     // The Output branch of the placement still exists and adds a node.
     expect(/if \(def\.type === 'output'\) \{[\s\S]{0,900}?addNode\(newNode\)/.test(place)).toBe(true);
   });
@@ -183,7 +223,9 @@ describe('several outputs, one active (source pins)', () => {
   it("the Add-node menu's Output row is OFFERED and simply adds", () => {
     expect(addNodeMenu.includes('canAddOutput'), 'the Output row must not hide behind a presence gate').toBe(false);
     expect(addNodeMenu.includes('existingOutputId'), 'the singleton lookup is back in the menu').toBe(false);
-    expect(addNodeMenu.includes('focusOutputNode('), 'the singleton redirect is back in the menu').toBe(false);
+    // As in placeTilePayload: the menu carries a generic singleton redirect for
+    // the Sound node, so what is pinned is that it stays type-agnostic.
+    expect(addNodeMenu).toContain('findSingletonNode(nodes, def.type)');
     expect(/if \(def\.type === 'output'\) \{[\s\S]{0,900}?addNode\(newNode\)/.test(addNodeMenu)).toBe(true);
   });
 
@@ -200,6 +242,15 @@ describe('several outputs, one active (source pins)', () => {
 
   it("the Output tile's accessible name promises an add, because it adds", () => {
     expect(previewCard.includes('redirectsToOutput'), 'the go-to wording is back on the tile').toBe(false);
+  });
+
+  it('output is not in the singleton set — that is what keeps the add surfaces adding', () => {
+    // Both add surfaces consult SINGLETON_NODE_TYPES rather than naming a type,
+    // so this one set decides whether an Output add glides instead of adding.
+    // It is the single point where "several Outputs may coexist" could be
+    // undone by accident, which is why the two pins above defer to it.
+    expect(SINGLETON_NODE_TYPES.has('output')).toBe(false);
+    expect(isSingletonNodeType('output')).toBe(false);
   });
 });
 

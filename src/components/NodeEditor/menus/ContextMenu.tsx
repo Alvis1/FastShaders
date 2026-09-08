@@ -12,6 +12,7 @@ import { StripesSettingsMenu } from './StripesSettingsMenu';
 import { DataVizSettingsMenu } from './DataVizSettingsMenu';
 import { ColormapSettingsMenu } from './ColormapSettingsMenu';
 import { DataRangeSettingsMenu } from './DataRangeSettingsMenu';
+import { isTypingTarget } from '@/utils/isTypingTarget';
 import './ContextMenu.css';
 
 /** Gap kept between the menu and the viewport edge when clamping. */
@@ -56,7 +57,7 @@ export function ContextMenu() {
   //
   // SELECT is in the skip list for the same reason as INPUT: Escape already
   // means "dismiss this dropdown" there, and five of the menus this dispatcher
-  // renders contain one — MicNodeSettings, GroupSettingsMenu,
+  // renders contain one — SoundNodeSettings, GroupSettingsMenu,
   // ShaderSettingsMenu, NoteSettingsMenu, ImageNodeSettings. Chromium usually
   // swallows the keydown while a select popup is open; WebKit (Safari and the
   // Tauri WKWebView build) does not reliably, and there a dismissed dropdown
@@ -65,9 +66,13 @@ export function ContextMenu() {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      const el = e.target as HTMLElement | null;
-      const tag = el?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return;
+      // The ONE shared predicate (utils/isTypingTarget), so this dispatcher
+      // and the canvas's own key handlers cannot disagree about what counts as
+      // typing. It skips only the input types that take a CHARACTER, which is
+      // what the paragraph above actually argues for: a checkbox or a colour
+      // swatch has no in-progress edit for Escape to cancel, so Escape there
+      // means "close this menu" like everywhere else on it.
+      if (isTypingTarget(e.target)) return;
       closeContextMenu();
     };
     document.addEventListener('keydown', onKeyDown);

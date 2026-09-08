@@ -60,5 +60,6 @@ exports[`glyph coverage > the set of designer-authored SVGs changes only deliber
   "tangentLocal",
   "uv",
   "vertexColor",
+  "wireframe",
 ]
 `;

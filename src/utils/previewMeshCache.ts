@@ -22,7 +22,7 @@
  */
 
 import { createPreviewMesh, type PreviewMesh } from './previewMesh';
-import { withTimeout, openDb as openDbShared } from './idbSafe';
+import { openDb as openDbShared, idbWrite, idbGet } from './idbSafe';
 
 const DB_NAME = 'fastshaders';
 const DB_VERSION = 1;
@@ -100,29 +100,13 @@ export async function savePreviewMeshToCache(mesh: PreviewMesh | null): Promise<
   const db = await openDb();
   if (!db) return;
   try {
-    await withTimeout(
-      new Promise<void>((resolve) => {
-        let tx: IDBTransaction;
-        try {
-          tx = db.transaction(STORE, 'readwrite');
-        } catch {
-          return resolve();
-        }
-        try {
-          const store = tx.objectStore(STORE);
-          if (record) store.put(record, RECORD_KEY);
-          else store.delete(RECORD_KEY);
-        } catch {
-          return resolve();
-        }
-        // Quota exceeded lands on onerror/onabort — a mesh that can't be cached
-        // must still load for this session, so every path just resolves.
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => resolve();
-        tx.onabort = () => resolve();
-      }),
-      undefined,
-    );
+    // Quota exceeded lands on the transaction's onerror/onabort — a mesh that
+    // can't be cached must still load for this session, so `idbWrite` resolves
+    // on every outcome rather than reporting one.
+    await idbWrite(db, STORE, (store) => {
+      if (record) store.put(record, RECORD_KEY);
+      else store.delete(RECORD_KEY);
+    });
   } finally {
     try { db.close(); } catch { /* */ }
   }
@@ -133,26 +117,9 @@ export async function loadPreviewMeshFromCache(): Promise<PreviewMesh | null> {
   const db = await openDb();
   if (!db) return null;
   try {
-    const rec = await withTimeout(
-      new Promise<unknown>((resolve) => {
-        let tx: IDBTransaction;
-        try {
-          tx = db.transaction(STORE, 'readonly');
-        } catch {
-          return resolve(null);
-        }
-        try {
-          const req = tx.objectStore(STORE).get(RECORD_KEY);
-          req.onsuccess = () => resolve(req.result);
-          req.onerror = () => resolve(null);
-        } catch {
-          return resolve(null);
-        }
-        tx.onabort = () => resolve(null);
-      }),
-      null,
-    );
-    return recordToMesh(rec);
+    // Whatever comes back is untrusted — `recordToMesh` re-runs the full
+    // drop-time validation on it (see its own doc comment).
+    return recordToMesh(await idbGet(db, STORE, RECORD_KEY));
   } finally {
     try { db.close(); } catch { /* */ }
   }

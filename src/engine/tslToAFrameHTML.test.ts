@@ -8,8 +8,8 @@ const TSL_WITH_PROPS = `import { Fn, uniform, color, mix, vec3 } from 'three/tsl
 const shader = Fn(() => {
   const speed = uniform(2.5);
   const tint = uniform(color(0xff8800));
-  const mic1_level = uniform(0);
-  const mix1 = mix(vec3(0, 0, 0), tint, speed.mul(mic1_level));
+  const sound1_level = uniform(0);
+  const mix1 = mix(vec3(0, 0, 0), tint, speed.mul(sound1_level));
 
   return mix1;
 });
@@ -34,7 +34,7 @@ describe('parseShaderModuleSchema', () => {
     expect(parseShaderModuleSchema(mod)).toEqual([
       { name: 'speed', type: 'number', defaultValue: '2.5' },
       { name: 'tint', type: 'color', defaultValue: '#ff8800' },
-      { name: 'mic1_level', type: 'number', defaultValue: '0' },
+      { name: 'sound1_level', type: 'number', defaultValue: '0' },
     ]);
   });
 
@@ -68,7 +68,7 @@ describe('buildAFrameEmbedHTML', () => {
   it('exposes every uniform as an editable attribute row', () => {
     expect(html).toContain('speed: 2.5;');
     expect(html).toContain('tint: #ff8800;');
-    expect(html).toContain('mic1_level: 0"></a-sphere>');
+    expect(html).toContain('sound1_level: 0"></a-sphere>');
   });
 
   it('emits a bare src attribute when the shader has no uniforms', () => {

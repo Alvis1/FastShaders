@@ -2,6 +2,14 @@ import { getNodeValues } from '@/types';
 import type { AppNode } from '@/types';
 import { decodeImageNode } from '@/utils/imageNode';
 import { bytesToBase64 } from '@/utils/binaryCodec';
+// ONE byte formatter, shared with the feedback report. This file carried its
+// own copy with coarser KB rounding (`2 KB` where the other says `2.0 KB`), so
+// the same payload was described two different ways depending on which surface
+// asked. Nothing depended on either spelling — both are comment/prose text —
+// but a formatter that disagrees with itself is a drift pair waiting to be
+// noticed as a bug. Its output must stay ASCII: it lands in the line comment
+// beside every emitted image `.src`, which ships inside exported `.js` files.
+import { formatBytes } from '@/utils/feedbackReport';
 
 /**
  * Image payloads are emitted into generated code as a short placeholder rather
@@ -49,7 +57,8 @@ export interface ImageAsset {
  * that changing an image's BYTES always changes the generated code — consumers
  * (the debounced preview rebuild, the srcDoc memo) key their invalidation on
  * the code string, and without it swapping in a different image of identical
- * dimensions would leave `code` untouched and the preview stale.
+ * dimensions would leave `code` untouched and the preview stale. It also keys
+ * the decode memo below, so the same digest decides both identities.
  */
 function hashPayload(s: string): string {
   let h = 0x811c9dc5;
@@ -80,29 +89,40 @@ function safeFileName(v: unknown): string {
     .slice(0, 48);
 }
 
-/** Human-readable byte size, ASCII only (the comment lands in exported files). */
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 /**
- * Bounded memo for the multi-MB decode + re-encode + hash. graph→code re-runs on
- * every node-identity change — including every drag frame — but an image's
- * payload never changes with node position. Keyed by the stored payload plus the
- * width/height fields (a bad dimension must still degrade to inert), i.e. every
- * input `decodeImageNode` validates. Small LRU cap bounds memory across many
- * distinct images.
+ * Bounded memo for the multi-MB decode + re-encode. graph→code re-runs on every
+ * node-identity change — including every drag frame — but an image's payload
+ * never changes with node position. Keyed by every input `decodeImageNode`
+ * validates: the width/height fields (a bad dimension must still degrade to
+ * inert) plus a DIGEST of the stored payload.
+ *
+ * The digest is what makes the memo bounded in the way its name promises. A Map
+ * retains its KEYS, so keying by the raw payload pinned a full copy of every
+ * cached image — ~600K chars at the per-image soft cap, 8M at the ignore-limits
+ * ceiling — on top of the re-encoded `src` the entry exists to hold, and nothing
+ * clears this map when the nodes are deleted or the whole graph is replaced (NEW,
+ * import). Length rides beside the 32-bit hash so a collision would need two
+ * payloads of identical size AND digest; that is the same identity the emitted
+ * placeholder key already trusts.
+ *
+ * Eviction is bounded by CHARACTERS as well as entries: a count says nothing
+ * about how much is retained, and one payload at the hard ceiling outweighs
+ * twenty ordinary ones.
  */
 const IMAGE_SRC_CACHE_LIMIT = 24;
+const IMAGE_SRC_CACHE_MAX_CHARS = 4_000_000;
 interface DecodedPayload {
   src: string;
-  hash: string;
   bytes: number;
   mime: string;
 }
 const imageSrcCache = new Map<string, DecodedPayload | null>();
+/** Running sum of the cached `src` lengths — the only unbounded term left. */
+let imageSrcCacheChars = 0;
+
+function entryChars(v: DecodedPayload | null | undefined): number {
+  return v ? v.src.length : 0;
+}
 
 function memoPayload(key: string, compute: () => DecodedPayload | null): DecodedPayload | null {
   const hit = imageSrcCache.get(key);
@@ -113,9 +133,18 @@ function memoPayload(key: string, compute: () => DecodedPayload | null): Decoded
   }
   const val = compute();
   imageSrcCache.set(key, val);
-  if (imageSrcCache.size > IMAGE_SRC_CACHE_LIMIT) {
+  imageSrcCacheChars += entryChars(val);
+  // `size > 1` on the byte bound keeps the entry just inserted even when it
+  // alone blows the budget: a single oversized image must still be memoized, or
+  // every graph→code run re-decodes it — the one cost this memo exists to avoid.
+  while (
+    imageSrcCache.size > IMAGE_SRC_CACHE_LIMIT ||
+    (imageSrcCacheChars > IMAGE_SRC_CACHE_MAX_CHARS && imageSrcCache.size > 1)
+  ) {
     const oldest = imageSrcCache.keys().next().value;
-    if (oldest !== undefined) imageSrcCache.delete(oldest);
+    if (oldest === undefined) break;
+    imageSrcCacheChars -= entryChars(imageSrcCache.get(oldest));
+    imageSrcCache.delete(oldest);
   }
   return val;
 }
@@ -130,14 +159,17 @@ export function imageAssetFor(
   values: Record<string, string | number>,
 ): ImageAsset | null {
   const raw = String(values.imageB64 ?? '');
+  // Hashed outside the memo because the digest IS the cache key. No extra pass:
+  // a raw-string key had to be flattened, hashed and compared in full on every
+  // lookup anyway — this replaces that with one hash and a short key.
+  const payloadHash = hashPayload(raw);
   const decoded = memoPayload(
-    `${Number(values.width)}x${Number(values.height)}|${raw}`,
+    `${Number(values.width)}x${Number(values.height)}|${raw.length}|${payloadHash}`,
     () => {
       const d = decodeImageNode(values);
       if (!d) return null;
       return {
         src: `data:image/${d.mime};base64,${bytesToBase64(d.bytes)}`,
-        hash: hashPayload(raw),
         bytes: d.bytes.length,
         mime: d.mime,
       };
@@ -145,7 +177,7 @@ export function imageAssetFor(
   );
   if (!decoded) return null;
 
-  const key = `${safeKeyPart(nodeId)}-${decoded.hash}`;
+  const key = `${safeKeyPart(nodeId)}-${payloadHash}`;
   const name = safeFileName(values.fileName);
   const w = Number(values.width);
   const h = Number(values.height);

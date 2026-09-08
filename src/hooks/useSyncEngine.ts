@@ -1,7 +1,8 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { graphToCode } from '@/engine/graphToCode';
-import { codeToGraph } from '@/engine/codeToGraph';
+// NB codeToGraph is deliberately NOT imported here — see doCodeSync, which
+// pulls it in on demand so the Babel front end stays off the boot wave.
 import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { computeReachableCost } from '@/utils/nodeCost';
@@ -75,26 +76,63 @@ export function useSyncEngine() {
     prevEdgesRef.current = edges;
     if (inert) return;
 
-    setSyncInProgress(true);
+    // NB this pass deliberately does NOT bracket itself with
+    // `setSyncInProgress`. Its body is synchronous, so no other effect and no
+    // render can interleave with it, and the two writes cost two whole store
+    // notification rounds each pass — zustand re-runs EVERY subscribed
+    // selector on every notify, and this pass runs on every frame of a value
+    // scrub. Nothing observes the flag mid-body either: the ONLY readers are
+    // this effect's own guard above and the codeSyncRequested effect below,
+    // and `doCodeSync` (the path that really can overlap a render, since it
+    // replaces the whole graph) still sets it. Re-entrancy here is already
+    // covered by the `prevNodesRef`/`prevEdgesRef` identity check above —
+    // `setCode('graph')` touches neither `nodes` nor `edges`, and re-writes
+    // `syncSource` with the value the guard above already required it to have,
+    // so none of this effect's deps changes value and it cannot re-trigger.
     try {
       const result = graphToCode(nodes, edges, NODE_REGISTRY);
       setCode(result.code, 'graph');
       lastSyncedCodeRef.current = result.code;
-      // Update node variable names for display
-      const names: Record<string, string> = {};
+      // Update node variable names for display.
+      //
+      // NULL-PROTOTYPE map: node ids arrive verbatim from `.fastshader` files
+      // and the `fs:graph` autosave, and seven node components read
+      // `s.nodeVarNames[id]` and feed the answer into `varName ?? data.label`.
+      // On a plain `{}` an id spelling `constructor`/`toString`/`valueOf`
+      // resolves through the prototype chain to a FUNCTION, which is not
+      // nullish, so it wins that `??` and reaches NodeTitle's
+      // `String.prototype.replace` — a render-time TypeError with no error
+      // boundary anywhere, i.e. a blank page that the 300 ms autosave then
+      // makes permanent. Same rule the mesh-name maps follow.
+      const names: Record<string, string> = Object.create(null);
       result.varNames.forEach((v, k) => { names[k] = v; });
-      useAppStore.getState().setNodeVarNames(names);
+      // A value scrub renames nothing, so this map is equal-but-new on every
+      // frame of a drag while `setNodeVarNames` has no equality guard of its
+      // own — writing it would spend a full notification round on an identity
+      // no consumer reads (every one of them indexes it by node id and gets
+      // back a string). The prototype test forces the FIRST write through even
+      // on an empty map: the store seeds this field with a plain `{}`, which is
+      // the hazard described above, so it must be replaced once regardless.
+      const prevNames = useAppStore.getState().nodeVarNames;
+      let namesChanged =
+        Object.getPrototypeOf(prevNames) !== null ||
+        Object.keys(prevNames).length !== result.varNames.size;
+      if (!namesChanged) {
+        for (const [k, v] of result.varNames) {
+          if (prevNames[k] !== v) { namesChanged = true; break; }
+        }
+      }
+      if (namesChanged) useAppStore.getState().setNodeVarNames(names);
     } finally {
-      setSyncInProgress(false);
       if (useAppStore.getState().isUndoRedo) {
         useAppStore.setState({ isUndoRedo: false });
       }
     }
-  }, [nodes, edges, syncSource, syncInProgress, setCode, setSyncInProgress]);
+  }, [nodes, edges, syncSource, syncInProgress, setCode]);
 
   // Code → Graph (with stable node matching)
   const doCodeSync = useCallback(
-    (codeStr: string, skipHistory = false) => {
+    async (codeStr: string, skipHistory = false) => {
       if (isDirectAssignmentCode(codeStr)) {
         setCodeErrors([]);
         return;
@@ -102,6 +140,41 @@ export function useSyncEngine() {
 
       setSyncInProgress(true);
       try {
+        /**
+         * `codeToGraph` is the Babel front end (@babel/parser + /traverse +
+         * /types — one ~800 KB raw / ~200 KB gz `vendor-babel` chunk), and
+         * NOTHING calls it before first paint: a code→graph pass happens only
+         * on a code-panel Apply / Cmd+S or a project import, both of which are
+         * user-initiated moments where a chunk fetch is invisible. Importing it
+         * here rather than at module scope is what keeps it off the boot wave.
+         *
+         * `setSyncInProgress(true)` deliberately stays ABOVE the await. It is
+         * the flag that suppresses the graph→code effect, so arming it first
+         * means a graph edit landing inside the fetch window cannot regenerate
+         * the very code text this pass is about to parse — the same ordering
+         * the synchronous version had, just with a real gap in the middle. The
+         * `finally` below clears it on every exit, including a failed fetch.
+         *
+         * The import is caught SEPARATELY from the parse: a rejected chunk
+         * fetch (connection drop, or a redeploy swapping the hashed assets
+         * mid-session) is a new failure mode this function did not have while
+         * the import was static, and it would otherwise escape as an unhandled
+         * rejection with the Apply silently doing nothing. Reported as a code
+         * error instead, so the panel says why — and the graph is left exactly
+         * as it was, which is the safe direction.
+         */
+        let codeToGraph: typeof import('@/engine/codeToGraph').codeToGraph;
+        try {
+          ({ codeToGraph } = await import('@/engine/codeToGraph'));
+        } catch {
+          setCodeErrors([
+            {
+              message: 'The TSL parser could not be loaded — reload the app and apply again.',
+              severity: 'error',
+            },
+          ]);
+          return;
+        }
         const result = codeToGraph(codeStr);
         const hasBlockingErrors = result.errors.some(e => e.severity !== 'warning');
         if (!hasBlockingErrors) {
@@ -424,7 +497,10 @@ export function useSyncEngine() {
     if (code === lastSyncedCodeRef.current) return;
 
     lastSyncedCodeRef.current = code;
-    doCodeSync(code);
+    // Fire-and-forget: doCodeSync is async only because it fetches the parser
+    // chunk, it owns its own error reporting, and there is nothing here to do
+    // once it lands — `syncInProgress` is what the rest of the hook waits on.
+    void doCodeSync(code);
   }, [codeSyncRequested, syncInProgress, doCodeSync, code]);
 
   // Recalculate complexity (use ref to avoid double-run when updating output node cost)
@@ -444,7 +520,13 @@ export function useSyncEngine() {
     // Same entry-point unwrap graphToCode and cpuEvaluator do: collapse state
     // must not change the compiled output, and it must not change the budget.
     const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
-    const total = computeReachableCost(nodes, unwrapped);
+    // Resolve the active sink HERE rather than letting computeReachableCost do
+    // it internally, so the same node can be handed to `sinkCosts` below as an
+    // already-priced entry — its loop would otherwise redo this exact
+    // reverse-BFS (plus, for a Raymarch Output, a second marchPartition) for a
+    // number the comment there says equals `total` by construction.
+    const active = activeSink(nodes, unwrapped);
+    const total = computeReachableCost(nodes, unwrapped, active);
 
     if (total === lastCostRef.current) return;
     lastCostRef.current = total;
@@ -455,8 +537,9 @@ export function useSyncEngine() {
     // Every sink carries its OWN price (`sinkCosts`): the active node's badge
     // is the whole-shader total, an inactive Output's badge is what the shader
     // would cost with it active — so two candidate outputs can be compared
-    // before one is clicked. The active entry equals `total` by construction.
-    const perSink = sinkCosts(nodes, unwrapped);
+    // before one is clicked. The active entry equals `total` by construction,
+    // so it is passed in rather than recomputed.
+    const perSink = sinkCosts(nodes, unwrapped, active ? new Map([[active.id, total]]) : undefined);
     const needsOutputUpdate = nodes.some((n) => perSink.has(n.id) && n.data.cost !== perSink.get(n.id));
     useAppStore.setState((state) => ({
       totalCost: total,
@@ -470,5 +553,27 @@ export function useSyncEngine() {
           }
         : {}),
     }));
+
+    // The badge write mints a fresh `nodes` array AND a fresh `data` ref on
+    // every sink it touches, and `sameGraphSemantics` treats a changed `data`
+    // ref as a real change — so without this the graph→code effect above would
+    // re-run graphToCode (1-2 ms at a few hundred nodes) plus a setCode round
+    // over a graph whose ONLY difference is a cost badge codegen never reads,
+    // and this effect would re-run its own BFS to reach the `total ===
+    // lastCostRef.current` bail. Stamping both refs with the array we just
+    // wrote makes each of them recognise its own write and bail on the cheap
+    // identity check instead.
+    //
+    // Gated on `prevNodesRef.current === nodes`, which is true exactly when the
+    // graph→code effect has already consumed THIS array (it stamps the ref
+    // before its own inert bail). When it bailed earlier — `syncSource` is
+    // 'code', or a sync is in progress — the ref still points at an older
+    // array, and stamping then would suppress a codegen pass that has yet to
+    // happen.
+    if (needsOutputUpdate && prevNodesRef.current === nodes) {
+      const stamped = useAppStore.getState().nodes;
+      prevNodesRef.current = stamped;
+      prevCostGraphRef.current = { nodes: stamped, edges };
+    }
   }, [nodes, edges]);
 }

@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
  * repo's toolchain (ugrep 7.5.0) an affected file returns "no match" with exit
  * status 1 for EVERY pattern, including patterns on line 1 -- so a repo-wide
  * grep, a sed audit or a codemod skips the whole file silently and
- * successfully. MicNode.tsx and OutputNode.tsx (a NUL/SOH separator inside a
+ * successfully. SoundNode.tsx and OutputNode.tsx (a NUL/SOH separator inside a
  * template literal) and imageCodec.test.ts (a RIFF header in a string literal)
  * were all invisible this way, which is how a search for `getTargetEdges` came
  * back without the one file that uses it correctly.

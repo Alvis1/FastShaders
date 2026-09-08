@@ -29,11 +29,10 @@ interface NoiseNodeSettingsProps {
  * have.
  */
 export function NoiseNodeSettings({ nodeId }: NoiseNodeSettingsProps) {
-  const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const language = useAppStore((s) => s.language);
 
-  const node = nodes.find((n) => n.id === nodeId) as ShaderFlowNode | undefined;
+  const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as ShaderFlowNode | undefined;
   if (!node || !hasNoiseRangeFlag(node.data.registryType)) return null;
 
   const values = getNodeValues(node);

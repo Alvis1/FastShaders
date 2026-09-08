@@ -45,15 +45,28 @@ export function LiveEdgeValue({
     let rafId: number;
     let last: string | null = null;
     const tick = (ts: number) => {
+      // Schedule first, so the visibility early-out below still keeps the loop
+      // alive (it is torn down only when `animated` flips or the span
+      // unmounts).
+      rafId = requestAnimationFrame(tick);
+      const el = ref.current;
+      if (!el) return;
+      // Hidden — a member of a COLLAPSED group is only `display: none`'d (the
+      // store keeps it MOUNTED on purpose) and rAF is per-document, so nothing
+      // else throttles this loop; every wired input of every hidden node was
+      // still paying a cached evaluator call per frame. `offsetParent` is null
+      // exactly under `display: none`. Safe to skip because the clock is
+      // ABSOLUTE (utils/appClock) and the write is idempotent: the first
+      // visible frame finds `next !== last` and repaints the true value.
+      if (el.offsetParent === null) return;
       // Fresh graph read per frame — this component subscribes to nothing,
       // so a mirror ref would never refresh (the PreviewNode pattern).
       const { nodes, edges } = useAppStore.getState();
       const next = liveEdgeText(sourceId, nodes, edges, appTime(ts), sourceHandle);
-      if (next !== null && next !== last && ref.current) {
+      if (next !== null && next !== last) {
         last = next;
-        ref.current.textContent = next;
+        el.textContent = next;
       }
-      rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);

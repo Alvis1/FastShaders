@@ -9,7 +9,17 @@ FastShaders_IEEE_Formatted.pdf
 FastShaders_Third_Draft.docx
 ICVARS_Review_FastShaders.md
 *.tsbuildinfo
+# Deploy staging trees. Both are `rm -rf` + `cp -R dist` snapshots made by
+# scripts/deploy-*.sh, so they are regenerated on every deploy and nothing in
+# the repo reads them. dist-sferas was tracked for its first seven commits
+# (added 2026-08-31 without this line, ~4-5 MiB of pack): content-hashed asset
+# names mean no delta reuse, so every deploy would have added a fresh copy of
+# the whole build forever. The files already committed were untracked
+# alongside this entry with `git rm -r --cached dist-sferas` — an ignore line
+# alone does nothing for a path git already tracks, so the entry would
+# otherwise have been inert.
 dist-alvismisjuns
+dist-sferas
 # SFTP deploy credentials (VS Code sftp extension + scripts/deploy-alvismisjuns.sh)
 .vscode/sftp.json
 vite.config.d.ts

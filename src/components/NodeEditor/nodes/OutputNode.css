@@ -217,6 +217,14 @@
   gap: 2px;
 }
 
+/* The row-anchored socket override, restated against this node's own row (CSS
+   cannot compose a rule, so every node that anchors sockets to something other
+   than the card carries a copy). The pairing rule is spelled out once above
+   `.node-base__row .react-flow__handle` in NodeBase.css: the transform
+   REPLACES React Flow's own, which carried the horizontal centring, so the
+   inset below is the other half of it. Only `-left` appears here because these
+   rows carry no right-edge HANDLE — each material's output socket is a
+   decorative `<span>`, placed by its own rule further down. */
 .output-node__row .react-flow__handle {
   top: 50% !important;
   transform: translateY(-50%) !important;
@@ -270,9 +278,12 @@
   justify-content: center;
 }
 
-/* The SDF Output (SdfOutputNode.tsx) wears this same chrome. Its value cells
-   are wider: "0.002" and "48" do not fit the Output's 20px cell, and every cell
-   on a node keeps ONE width so the label column stays vertical. */
+/* The Raymarch Output (RaymarchOutputNode.tsx) wears this same chrome. Its
+   value cells are wider: "0.002" and "48" do not fit the Output's 20px cell,
+   and every cell on a node keeps ONE width so the label column stays vertical.
+   The `--sdf` modifier is named after the node's CATEGORY (`sdf`, the Distance
+   fields tab), not after the retired sdfOutput node type — RaymarchOutputNode
+   and NodePreviewCard are the two elements that set it. */
 .output-node--sdf .output-node__val {
   width: 32px;
 }

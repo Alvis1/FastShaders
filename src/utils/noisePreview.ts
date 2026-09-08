@@ -125,14 +125,33 @@ function sampleNoise(type: NoiseType, nx: number, ny: number): number {
   }
 }
 
+/**
+ * Render one greyscale noise thumbnail.
+ *
+ * `reuse` is an optional scratch buffer for callers that redraw on a clock —
+ * PreviewNode's animated cards run this at 30 Hz per node, and a fresh
+ * `ImageData` per frame is 4·size² bytes of garbage each time (36 KB at the
+ * 96 px preview size, so four animated cards minted ~4 MB/s for the collector
+ * to sweep). Passing the previous buffer back in reuses it; anything of the
+ * wrong shape (or nothing at all) allocates, so the 5-argument call sites are
+ * untouched.
+ *
+ * Reuse is safe because the loop below writes ALL FOUR bytes of every pixel —
+ * the three channels from the sample and alpha pinned to 255 — so no part of
+ * the previous frame can survive into this one, and `putImageData` copies into
+ * the canvas synchronously, so a caller can never be holding the returned
+ * buffer across a redraw.
+ */
 export function renderNoisePreview(
   type: NoiseType,
   size: number,
   values: Record<string, string | number>,
   time: number,
   timeInputs: TimeInputs,
+  reuse?: ImageData | null,
 ): ImageData {
-  const imageData = new ImageData(size, size);
+  const imageData =
+    reuse && reuse.width === size && reuse.height === size ? reuse : new ImageData(size, size);
   const data = imageData.data;
   const userScale = Number(values.scale ?? 1);
   const scale = 4.0 * userScale;

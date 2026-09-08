@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
+import { findSingletonNode } from '../singletonNodes';
+import { focusNode } from '../outputFocus';
 import { useAppStore } from '@/store/useAppStore';
 import {
   searchNodes,
@@ -13,6 +15,7 @@ import { formatNodeLabel, formatCategoryLabel, nodeDescription, t } from '@/i18n
 import type { NodeDefinition, AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
 import { generateId } from '@/utils/idGenerator';
 import { makeTypedEdge } from '@/utils/edgeUtils';
+import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { getCostTextColor } from '@/utils/colorUtils';
 import { initialNodeValues } from '@/utils/newNodeValues';
 import { getRecentNodeTypes, noteNodeUsed } from './recentNodes';
@@ -56,7 +59,7 @@ export function AddNodeMenu() {
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   const language = useAppStore((s) => s.language);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
 
   // Selected nodes eligible for grouping — excludes groups + notes (annotations).
   const selectedGroupable = useMemo(
@@ -117,12 +120,30 @@ export function AddNodeMenu() {
     return defs;
   }, [query, recentTypes, hidden]);
 
-  const handleAddNode = useCallback((def: NodeDefinition) => {
+  // ONE undo entry for the whole add, including the auto-connect the wire-drop
+  // route performs. `addNode` pushes its own history and the edge add used to
+  // push a second, so one of the five documented placement paths needed two
+  // Cmd+Z to reverse. The bracket snapshots once, up front, and every
+  // pushHistory inside it bails; there is no early return in this body, so
+  // nothing that must stay outside a bracket is caught by it.
+  const handleAddNode = useCallback((def: NodeDefinition) => asOneHistoryEntry(() => {
     const position = screenToFlowPosition({
       x: contextMenu.x,
       y: contextMenu.y,
     });
     const cost = COSTS[def.type] ?? 0;
+
+    // A singleton type already on the canvas is not added twice — the row
+    // becomes "take me to it" (singletonNodes.ts). Before the auto-connect
+    // below on purpose: when this menu was opened by dropping a wire, there is
+    // no new node to connect to, and wiring the drop's source into the
+    // EXISTING node would be a connection the user never aimed at.
+    const existingSingleton = findSingletonNode(nodes, def.type);
+    if (existingSingleton) {
+      focusNode(fitView, nodes, existingSingleton.id);
+      closeContextMenu();
+      return;
+    }
 
     let newNodeId: string;
 
@@ -166,20 +187,25 @@ export function AddNodeMenu() {
       noteNodeUsed(def.type);
     }
 
-    // Auto-connect from source pin if this menu was opened by dragging from an output
+    // Auto-connect from source pin if this menu was opened by dragging from an
+    // output. Deliberately NO pushHistory of its own: `addNode` above already
+    // snapshotted the pre-add state, and a second push made the add and the
+    // wire two undo steps — the first Cmd+Z left the freshly added node
+    // standing unwired, a state the user never authored. The sibling
+    // palette-tile path states the same rule ("add + connect + snap = one undo
+    // step", NodeEditor.tsx), and the whole handler runs inside one bracket.
     if (sourceNodeId && sourceHandleId) {
       const targetDef = NODE_REGISTRY.get(def.type);
       const firstInput = targetDef?.inputs[0];
       if (firstInput) {
         const store = useAppStore.getState();
-        store.pushHistory();
         const newEdge = makeTypedEdge(sourceNodeId, sourceHandleId, newNodeId, firstInput.id);
         setEdges([...store.edges, newEdge] as AppEdge[]);
       }
     }
 
     closeContextMenu();
-  }, [contextMenu.x, contextMenu.y, screenToFlowPosition, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, setEdges]);
+  }), [contextMenu.x, contextMenu.y, screenToFlowPosition, fitView, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, setEdges]);
 
   const handleGroupSelection = useCallback(() => {
     groupSelection(selectedGroupable.map((n) => n.id));

@@ -12,8 +12,8 @@ import { useEffect, useMemo } from 'react';
 import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant } from '@xyflow/react';
 import { useAppStore } from '@/store/useAppStore';
 // The shared registry — see flowTypes.ts for why this is imported rather than
-// mirrored here. Registering the REAL MicNode is safe for the mic convention's
-// "armMic has exactly two click paths" rule: the node's arm light is one of
+// mirrored here. Registering the REAL SoundNode is safe for the mic convention's
+// "armSound has exactly two click paths" rule: the node's arm light is one of
 // those two paths, and it gates itself on the node being wired — every graph
 // this modal shows is either a single edge-less node or a built-in
 // texture/preset (none contain a mic), so the light renders disabled. The same
@@ -66,7 +66,7 @@ export function GraphModal({ title, subtitle, nodes, edges, code, onClose }: Gra
             <h2 className="gm__title">{title}</h2>
             {subtitle && <span className="gm__sub">{subtitle}</span>}
           </div>
-          <span className="gm__counts">
+          <span className="gm__aside">
             {nodeCount} node{nodeCount === 1 ? '' : 's'}
             {groupCount > 0 && ` · ${groupCount} group${groupCount === 1 ? '' : 's'}`}
             {` · ${edges.length} edge${edges.length === 1 ? '' : 's'}`}

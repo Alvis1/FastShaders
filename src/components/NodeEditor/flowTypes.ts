@@ -4,11 +4,17 @@
  * viewer on node-editor.html (Graphs/GraphModal.tsx).
  *
  * It is shared rather than mirrored because the mirror already drifted once:
- * GraphModal was missing `mic`, and an unregistered type falls back to React
- * Flow's DEFAULT node — a bare white box with top/bottom handles — so the Mic
+ * GraphModal was missing `sound`, and an unregistered type falls back to React
+ * Flow's DEFAULT node — a bare white box with top/bottom handles — so the Sound
  * node rendered there as something that looked like a broken node rather than
  * like itself. Nothing failed; it just looked wrong on one page. A second copy
  * is a second chance to forget the next node type.
+ *
+ * `audio` is gone (2026-09-08): the Audio Input node was folded into the Sound
+ * node, which now carries the source picker that used to be its reason to
+ * exist. A saved graph naming it is migrated to `sound` on every restore path —
+ * see `registry/legacyNodeTypes.ts` — so nothing lands here as an unregistered
+ * type.
  *
  * MODULE SCOPE is load-bearing, not tidiness: React Flow memoizes on the
  * identity of these objects, so a map built per render re-registers every type
@@ -19,8 +25,7 @@ import { ColorNode } from '@/components/NodeEditor/nodes/ColorNode';
 import { PreviewNode } from '@/components/NodeEditor/nodes/PreviewNode';
 import { MathPreviewNode } from '@/components/NodeEditor/nodes/MathPreviewNode';
 import { ClockNode } from '@/components/NodeEditor/nodes/ClockNode';
-import { MicNode } from '@/components/NodeEditor/nodes/MicNode';
-import { AudioInputNode } from '@/components/NodeEditor/nodes/AudioInputNode';
+import { SoundNode } from '@/components/NodeEditor/nodes/SoundNode';
 import { OutputNode } from '@/components/NodeEditor/nodes/OutputNode';
 import { RaymarchOutputNode } from '@/components/NodeEditor/nodes/RaymarchOutputNode';
 import { GroupNode } from '@/components/NodeEditor/nodes/GroupNode';
@@ -33,8 +38,7 @@ export const nodeTypes = {
   preview: PreviewNode,
   mathPreview: MathPreviewNode,
   clock: ClockNode,
-  mic: MicNode,
-  audio: AudioInputNode,
+  sound: SoundNode,
   output: OutputNode,
   raymarchOutput: RaymarchOutputNode,
   group: GroupNode,

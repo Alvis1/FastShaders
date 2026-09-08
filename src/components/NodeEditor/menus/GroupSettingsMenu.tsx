@@ -10,7 +10,6 @@ interface GroupSettingsMenuProps {
 }
 
 export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
-  const nodes = useAppStore((s) => s.nodes);
   const language = useAppStore((s) => s.language);
   const updateGroupData = useAppStore((s) => s.updateGroupData);
   const ungroup = useAppStore((s) => s.ungroup);
@@ -21,7 +20,7 @@ export function GroupSettingsMenu({ nodeId }: GroupSettingsMenuProps) {
   // per-picker-frame bursts into one undo entry (see useHistoryBracket).
   const { bracket, closeBracket } = useHistoryBracket();
 
-  const node = nodes.find((n) => n.id === nodeId) as GroupFlowNode | undefined;
+  const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as GroupFlowNode | undefined;
   if (!node || node.type !== 'group') return null;
 
   const { label, color, titleSize } = node.data;

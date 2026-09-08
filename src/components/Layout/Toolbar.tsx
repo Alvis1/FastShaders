@@ -1,19 +1,20 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { ComponentType } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { useDismiss } from '@/hooks/useDismiss';
 import { useLongPress } from '@/hooks/useLongPress';
 import { hardReload } from '@/utils/hardReload';
+import { invokeDesktop, errorText } from '@/utils/tauriBridge';
 import { downloadShader } from '@/engine/exportShader';
 import { FeedbackModal } from '@/components/Modals/FeedbackModal';
 import { PalettesModal } from '@/components/Modals/PalettesModal';
 import { isEvalMode } from '@/eval/evalMode';
-import { SusModal } from '@/eval/SusModal';
-import { EvalFinishModal } from '@/eval/EvalFinishModal';
 import { WorkFolder } from './WorkFolder';
 import { formatCategoryLabel, t } from '@/i18n';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { OPTIONAL_CATEGORIES, type OptionalCategory } from '@/registry/optionalCategories';
 import { foldOverflow, OVERFLOW_INITIAL } from './toolbarOverflow';
+import { isTypingTarget } from '@/utils/isTypingTarget';
 import './Toolbar.css';
 
 const CONTACT = {
@@ -22,6 +23,86 @@ const CONTACT = {
   website: 'alvismisjuns.lv',
   websiteUrl: 'https://alvismisjuns.lv',
 };
+
+/**
+ * Shown in place of a study modal whose chunk failed to arrive. React.lazy
+ * rejects on a failed fetch (a connection drop, or a redeploy swapping the
+ * hashed assets mid-session) and there is no error boundary above the toolbar,
+ * so an uncaught rejection would unmount the whole live app — the trap
+ * AppLayout documents for Monaco. Degrading matters more here than there: the
+ * "!" button IS the study's finish control, so the message names the recovery
+ * rather than leaving a dead button. A reload really does resume — the
+ * telemetry journal lives in sessionStorage (see eval/evalMode.ts).
+ *
+ * The handler props are optional so ONE fallback can stand in for both modals;
+ * it ignores them, because there is nothing left to hand back to.
+ */
+function EvalModalUnavailable({
+  open,
+}: {
+  open: boolean;
+  onClose?: () => void;
+  onContinue?: () => void;
+  onFinish?: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div
+      role="alert"
+      style={{
+        position: 'fixed',
+        inset: 'auto 0 var(--space-4) 0',
+        margin: '0 auto',
+        maxWidth: '32rem',
+        padding: 'var(--space-3)',
+        background: 'var(--bg-panel)',
+        color: 'var(--text-primary)',
+        border: '1px solid var(--border-strong)',
+        boxShadow: 'var(--shadow-lg)',
+        zIndex: 'var(--z-overlay)',
+      }}
+    >
+      The questionnaire could not be loaded. Reload the page and press “!” again — your session is
+      preserved.
+    </div>
+  );
+}
+
+/**
+ * Study-only UI, kept out of every ordinary visitor's boot. `isEvalMode()` is
+ * sampled once at module init (eval/evalMode.ts), so the guards below are plain
+ * synchronous booleans and these elements are never created outside a study
+ * session — which means the chunk is never even requested there. In a session
+ * they are rendered from the first paint (closed), so the fetch starts at boot
+ * and is long finished before anyone presses the button.
+ *
+ * Only the two modals Toolbar owns; the consent screen still rides App.tsx's
+ * eager EvalGate import, and eval.css with it.
+ */
+// The factories are annotated with the component TYPE rather than inferred:
+// without it TS pins the lazy type to the real module's exact return
+// (`ReactPortal | null`, since both modals are portals) and the fallback —
+// which is not a portal — stops being assignable.
+const SusModal = lazy(
+  async (): Promise<{ default: ComponentType<{ open: boolean; onClose: () => void }> }> => {
+    try {
+      return { default: (await import('@/eval/SusModal')).SusModal };
+    } catch {
+      return { default: EvalModalUnavailable };
+    }
+  },
+);
+const EvalFinishModal = lazy(
+  async (): Promise<{
+    default: ComponentType<{ open: boolean; onContinue: () => void; onFinish: () => void }>;
+  }> => {
+    try {
+      return { default: (await import('@/eval/EvalFinishModal')).EvalFinishModal };
+    } catch {
+      return { default: EvalModalUnavailable };
+    }
+  },
+);
 
 /**
  * Desktop-build downloads for the "Download app" dropdown. The `/releases/latest/
@@ -70,33 +151,25 @@ const OPTIONAL_CATEGORY_HINTS: Readonly<Record<OptionalCategory, string>> = {
  * but does NOT stopPropagation, so without this both would open at once.
  * `.toolbar__reload-wrap` is redundant with `.toolbar__local` (the reload
  * wrapper carries both) and is named anyway, so the reason it is excluded is
- * legible from here. APPEND only: trackpadScroll.test.ts pins these strings
- * with regexes anchored at the opening quote.
+ * legible from here. APPEND only: trackpadScroll.test.ts pins the class string
+ * with a regex anchored at the opening quote.
+ *
+ * The form-control half is the app-wide `isTypingTarget` (utils/), which is
+ * the ONE answer to "does this element take the input?" — but at
+ * `anyInputType`, because this guard is not asking whether text is being
+ * ENTERED, it is asking who owns the press. The preferences popover this opens
+ * is rendered INSIDE the bar and is a list of CHECKBOXES, so with the default
+ * (text-taking inputs only) a right-click on one of its own rows would re-open
+ * the menu on top of itself.
  */
 function prefsClaimedElsewhere(el: HTMLElement | null): boolean {
   if (!el) return false;
-  if (el.closest('input, textarea, select, [contenteditable="true"]')) return true;
+  if (isTypingTarget(el, { anyInputType: true })) return true;
   return !!el.closest('.toolbar__export-wrap, .toolbar__local, .toolbar__overflow, .toolbar__reload-wrap');
 }
 
 /** Result shape of the desktop bench-server commands (src-tauri/src/bench_server.rs). */
 type BenchServerInfo = { url: string; ip: string; port: number };
-
-/**
- * Invoke a Tauri command through the `withGlobalTauri` bridge. Only called
- * from `__FS_DESKTOP__` code paths, where the wrapper injects the global;
- * the rejection covers a plain-browser run of a desktop bundle.
- */
-function benchInvoke<T>(cmd: string): Promise<T> {
-  const bridge = window.__TAURI__;
-  if (!bridge) return Promise.reject(new Error('Desktop bridge unavailable'));
-  return bridge.core.invoke<T>(cmd);
-}
-
-/** Tauri command failures reject with a plain string (Result<_, String>). */
-function errorText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 export function Toolbar() {
   const shaderName = useAppStore((s) => s.shaderName);
@@ -188,7 +261,7 @@ export function Toolbar() {
   // Rust side owns the truth (e.g. after a failed start or an app reload).
   useEffect(() => {
     if (!vrOpen || !__FS_DESKTOP__) return;
-    benchInvoke<BenchServerInfo | null>('bench_server_status')
+    invokeDesktop<BenchServerInfo | null>('bench_server_status')
       .then(setVrInfo)
       .catch(() => {
         /* bridge unavailable — keep whatever we last knew */
@@ -198,7 +271,7 @@ export function Toolbar() {
   const startVrServer = useCallback(() => {
     setVrBusy(true);
     setVrError(null);
-    benchInvoke<BenchServerInfo>('bench_server_start')
+    invokeDesktop<BenchServerInfo>('bench_server_start')
       .then(setVrInfo)
       .catch((e) => setVrError(errorText(e)))
       .finally(() => setVrBusy(false));
@@ -207,7 +280,7 @@ export function Toolbar() {
   const stopVrServer = useCallback(() => {
     setVrBusy(true);
     setVrError(null);
-    benchInvoke<void>('bench_server_stop')
+    invokeDesktop<void>('bench_server_stop')
       .then(() => setVrInfo(null))
       .catch((e) => setVrError(errorText(e)))
       .finally(() => setVrBusy(false));
@@ -683,7 +756,7 @@ export function Toolbar() {
             type="button"
             className="toolbar__sc-link"
             onClick={() => {
-              benchInvoke<void>('podest_open').catch((e) =>
+              invokeDesktop<void>('podest_open').catch((e) =>
                 // No toast surface up here, and a silent no-op is exactly the
                 // failure this replaces — the console line is at least a thread
                 // to pull. A second click re-focuses rather than erroring.
@@ -963,15 +1036,21 @@ export function Toolbar() {
           !
         </button>
       </div>
+      {/* Suspense fallback is null on purpose: both are closed modals for as
+          long as the chunk is in flight, so there is nothing to stand in for. */}
       {isEvalMode() && (
-        <EvalFinishModal
-          open={evalFinishOpen}
-          onContinue={closeEvalFinish}
-          onFinish={finishEvalSession}
-        />
+        <Suspense fallback={null}>
+          <EvalFinishModal
+            open={evalFinishOpen}
+            onContinue={closeEvalFinish}
+            onFinish={finishEvalSession}
+          />
+        </Suspense>
       )}
       {isEvalMode() ? (
-        <SusModal open={feedbackOpen} onClose={closeFeedback} />
+        <Suspense fallback={null}>
+          <SusModal open={feedbackOpen} onClose={closeFeedback} />
+        </Suspense>
       ) : (
         <FeedbackModal open={feedbackOpen} onClose={closeFeedback} />
       )}

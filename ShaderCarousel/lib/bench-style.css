@@ -195,10 +195,16 @@ label.field input[type="number"] { width: 56px; text-align: right; }
 #bench-start-gate .gate-go:disabled { opacity: 0.5; }
 
 /* ── Done popup ─────────────────────────────────────────────────────────── */
+/* The `-webkit-` twin is not optional: unprefixed `backdrop-filter` only
+   landed in Safari 18, while `-webkit-backdrop-filter` has worked since
+   Safari 9 — and the bench is run from a headset browser or an iPad as often
+   as from a desktop, both WebKit. Without it this scrim drew a flat plate
+   over the results card. Keep the two together wherever a backdrop filter is
+   added (same rule as the app's NodeEditor.css). */
 #bench-done-popup {
   position: fixed; inset: 0; z-index: 30;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
 }
 #bench-done-popup.hidden { display: none; }
 #bench-done-popup .popup-card {

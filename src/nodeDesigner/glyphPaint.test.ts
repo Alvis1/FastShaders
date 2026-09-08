@@ -25,7 +25,17 @@ describe('GLYPH_PALETTE', () => {
     // report it rather than assert it away, so the list stays honest
     const off = Array.from(used).filter((v) => !isPaletteColor(v));
     expect(Array.from(used).length).toBeGreaterThan(4);
-    // the colormap glyph legitimately draws viridis swatches; nothing else should
+    // This line is a SHAPE check, not a policy one, and cannot fail:
+    // normalizePaintValue's return domain is already null | 'none' | a
+    // lowercase #rrggbb, and the filter above drops the first two. It is
+    // deliberately not tightened into an allow-list — glyphPaint.ts's header
+    // keeps hand-typed `fill="#123456"` as the slower escape hatch and says a
+    // drift guard here would turn using it into a release-blocking failure.
+    // MEASURED 2026-09-05, the off-palette set is five values: the four viridis
+    // anchors the colormap glyph legitimately draws (#440154 #277f8e #4ac16d
+    // #fde725) plus #000000, twice — one `<line>` each in the `floor` and
+    // `round` glyphs, where the palette's near-black is #2B2B2B. Cosmetic, and
+    // recorded here rather than asserted so nobody re-derives it from scratch.
     expect(off.every((v) => /^#[0-9a-f]{6}$/.test(v))).toBe(true);
   });
 });

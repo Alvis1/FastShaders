@@ -115,7 +115,7 @@ describe('every declared default is a finite number codegen can emit', () => {
     // A key that is not an input id is appended by buildRows as an EXTRA row,
     // which is how a typo becomes a phantom widget. The noise family and Time
     // are the documented exceptions: there, defaultValues IS the socket list.
-    const SOCKET_LIST_NODES = new Set(['time', 'micNode']);
+    const SOCKET_LIST_NODES = new Set(['time', 'soundNode']);
     for (const def of getAllDefinitions()) {
       if (def.category === 'noise' || SOCKET_LIST_NODES.has(def.type)) continue;
       const ids = new Set(def.inputs.map((i) => i.id));

@@ -6,12 +6,30 @@ import App from './App';
 // The vendor CSS is used as-is; the fs-fontsource-woff2-only plugin in
 // vite.config.ts strips the legacy .woff fallback src at build so only the
 // woff2 subsets reach dist.
-import '@fontsource/inter/400.css';
-import '@fontsource/inter/500.css';
-import '@fontsource/inter/600.css';
-import '@fontsource/inter/700.css';
-import '@fontsource/jetbrains-mono/400.css';
-import '@fontsource/jetbrains-mono/500.css';
+//
+// LATIN SUBSETS ONLY, and it must stay that way on all three entry points
+// (this file, nodeEditor.tsx, nodeDesigner/main.ts). The bare `@fontsource/
+// inter/400.css` entry point declares all SEVEN Google subsets — cyrillic,
+// cyrillic-ext, greek, greek-ext, latin, latin-ext, vietnamese — which put 24
+// woff2 files / 162 KB into dist that no user ever downloads: every @font-face
+// keeps its unicode-range, and the two shipped UI languages are covered by
+// latin + latin-ext (Latvian ā/ē/ī/ū/ķ/ļ/ņ/ģ/š/ž/č are U+0100-U+017F, inside
+// latin-ext's U+0100-02BA). So the cost was pure deploy weight: uploaded by
+// psftp on every deploy, committed to the gh-pages tree on every release, and
+// bundled into the .dmg and the Windows installer. The trade accepted here is
+// that a Cyrillic or Greek mesh name / note falls back to a system font.
+import '@fontsource/inter/latin-400.css';
+import '@fontsource/inter/latin-ext-400.css';
+import '@fontsource/inter/latin-500.css';
+import '@fontsource/inter/latin-ext-500.css';
+import '@fontsource/inter/latin-600.css';
+import '@fontsource/inter/latin-ext-600.css';
+import '@fontsource/inter/latin-700.css';
+import '@fontsource/inter/latin-ext-700.css';
+import '@fontsource/jetbrains-mono/latin-400.css';
+import '@fontsource/jetbrains-mono/latin-ext-400.css';
+import '@fontsource/jetbrains-mono/latin-500.css';
+import '@fontsource/jetbrains-mono/latin-ext-500.css';
 import './styles/tokens.css';
 import './styles/reset.css';
 import './styles/controls.css';

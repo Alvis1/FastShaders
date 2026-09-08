@@ -228,7 +228,7 @@ describe('authoredUniformChange — the one act that outranks a tuned value', ()
   });
 
   it('is silent for non-property nodes', () => {
-    for (const type of ['float', 'time', 'micNode', 'slider']) {
+    for (const type of ['float', 'time', 'soundNode', 'slider']) {
       expect(authoredUniformChange(
         makeNode('n', type, { value: 1 }),
         makeNode('n', type, { value: 2 }),

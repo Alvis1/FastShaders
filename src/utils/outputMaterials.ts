@@ -135,7 +135,13 @@ export function materialCount(node: AppNode): number {
  *
  * Empty means THE DEFAULT: the material shades every mesh no other material
  * claims. Only material 0 may be in that state — an added material with no
- * usable name means nothing and is dropped by the sanitizer.
+ * usable name means nothing and is dropped by the sanitizer. So "is this the
+ * default" is `materialTargetNames(m).length === 0`, always over the whole
+ * list: a `[0]`-plus-null-check helper existed here until 2026-09-05, called by
+ * nothing (the two surfaces that show one name — the picker's closed label in
+ * OutputNode.tsx and the material line in ShaderSettingsMenu.tsx — each read
+ * `[0]` and append their own ellipsis), and a first-name test is exactly the
+ * assumption-about-the-rest this rule exists to forbid.
  */
 export function materialTargetNames(material: OutputMaterial | undefined): string[] {
   const out: string[] = [];
@@ -319,19 +325,6 @@ export function anyOutputDormant(
 }
 
 /**
- * The FIRST mesh a material shades, or null when it is the default.
- *
- * Kept alongside `materialTargetNames` because several surfaces want ONE name
- * to show (the picker's closed label, the settings menu's material list) and
- * every one of them abbreviates the rest as an ellipsis. "Is this the default"
- * is `materialTargetNames(m).length === 0` — never `materialTargetName(m) ===
- * null` plus an assumption about the rest.
- */
-export function materialTargetName(material: OutputMaterial | undefined): string | null {
-  return materialTargetNames(material)[0] ?? null;
-}
-
-/**
  * Give material `index` exactly `names`, taking each of them away from every
  * OTHER material.
  *
@@ -387,12 +380,6 @@ export function materialExposedPorts(
   const raw = material?.exposedPorts;
   if (Array.isArray(raw)) return raw.filter((s): s is string => typeof s === 'string');
   return [...defaults];
-}
-
-/** Every mesh name claimed by an added material, in order (a material may
- *  claim several). */
-export function claimedMeshNames(node: AppNode): string[] {
-  return addedMaterials(node).flatMap((m) => materialTargetNames(m));
 }
 
 /** Is this node an Output? (Shared so callers stop re-deriving the test.) */

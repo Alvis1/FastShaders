@@ -19,6 +19,21 @@
  * The bilingual "Latviešu (English)" labels live where you PICK and read about a
  * node — the Add-node menu, the content browser, tooltips, the Node-Settings
  * menu, and the node designer.
+ *
+ * `lv.ui`/`lv.ports` are keyed by the ENGLISH TEXT, so a reword at the call site
+ * silently ORPHANS its translation — the key stops being asked for, `t()` falls
+ * back to English, and the app quietly goes half-Latvian for a default-language
+ * user with nothing failing anywhere. That had happened 21 times by 2026-09-05
+ * (the tuned-uniform chip, the cost bar's device picker, the Model dropdown's
+ * disabled-state tooltip), and 70 retired keys were still shipping beside the
+ * live ones, so nobody reading this file could tell which was which. Both
+ * directions were swept and closed; the file is now exactly the set of strings
+ * the app asks for, minus four the audit deliberately leaves untranslated
+ * ("1x"/"2x"/"3x"/"FPS", which are the same in Latvian — an identity entry there
+ * is bulk, not a translation). WHEN YOU REWORD A `t('…')` LITERAL, move the
+ * lv.json key with it rather than adding a second one. There is deliberately no
+ * CI guard for this: a sweep can only run over the whole tree, and a red suite
+ * on every in-progress reword would train people to delete the guard.
  */
 import nodeI18n from './node-i18n.json';
 import lv from './lv.json';

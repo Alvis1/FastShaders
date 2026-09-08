@@ -72,12 +72,11 @@ const ERROR_TEXT: Record<FormulaErrorCode, string> = {
  * numbers they cannot see.
  */
 export function DataRangeSettingsMenu({ nodeId }: DataRangeSettingsMenuProps) {
-  const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const language = useAppStore((s) => s.language);
   const { stats, name } = useUpstreamColumnStats(nodeId, 'value');
 
-  const node = nodes.find((n) => n.id === nodeId) as ShaderFlowNode | undefined;
+  const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as ShaderFlowNode | undefined;
   const v = node ? getNodeValues(node) : {};
   // hasCustomFormula, not a bare typeof: a whitespace-only string parses as
   // `absent`, so the shader is already emitting the plain built-in chain and

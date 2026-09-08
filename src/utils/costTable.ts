@@ -54,8 +54,23 @@ import complexityData from '@/registry/complexity.json';
  * the cost bar → `setCostOverrides`), then it's `BASE` with the override keys
  * layered on top. Kept module-scope (a singleton) so all consumers — the CostBar
  * BFS, node badges, the asset-browser sort — see one table without prop-drilling.
+ *
+ * BOTH ARE NULL-PROTOTYPE BY CONSTRUCTION, and that is a correctness control
+ * rather than hygiene. Every reader indexes them by `node.data.registryType`,
+ * which arrives verbatim from a `.fastshader`, a shared `.js` or a tampered
+ * `fs:graph` — `sanitizeGraphShape` checks id/data/position and nothing
+ * validates the type against the registry on any restore path. On a plain
+ * object `ACTIVE['constructor']` resolves to the `Object` FUNCTION through the
+ * prototype chain, so `?? 0` never fires: MEASURED, one such node turned
+ * `computeReachableCost` into the string "0function Object() { [native code] }",
+ * `getCostColor` into `#NaNNaNNaN` and `getCostScale` into a `scale(NaN)`
+ * transform, with nothing thrown anywhere. This is the Record-vs-Map trap the
+ * codebase documents for every other externally-keyed map; `Object.create(null)`
+ * is the form that keeps this file a LEAF (a real `Map` would change every
+ * reader, and `getBaseCosts()` is consumed as a plain record).
  */
-const BASE_COSTS = complexityData.costs as Record<string, number>;
+const BASE_COSTS: Record<string, number> =
+  Object.assign(Object.create(null), complexityData.costs as Record<string, number>);
 let overrides: Record<string, number> = {};
 let ACTIVE: Record<string, number> = BASE_COSTS;
 
@@ -92,7 +107,12 @@ export function sanitizeCostMap(map: unknown): Record<string, number> {
  */
 export function setCostOverrides(map: Record<string, number> | null | undefined): Record<string, number> {
   overrides = sanitizeCostMap(map);
-  ACTIVE = Object.keys(overrides).length ? { ...BASE_COSTS, ...overrides } : BASE_COSTS;
+  // Null-prototype target for the same reason BASE_COSTS is one — an object
+  // spread would hand the merged table `Object.prototype` back and re-open the
+  // inherited-key lookup above.
+  ACTIVE = Object.keys(overrides).length
+    ? Object.assign(Object.create(null), BASE_COSTS, overrides)
+    : BASE_COSTS;
   return overrides;
 }
 

@@ -203,35 +203,42 @@ export function sanitizePalettes(raw: unknown, cap = MAX_PALETTES_PER_SHADER): P
  * File formats — JSON is canonical, GPL is for interop
  * ============================================================ */
 
-/** Canonical export shape. `format` is a DISCRIMINATOR, not decoration: the
- *  app already accepts other dropped `.json` (cost profiles), so a palette
- *  file must be identifiable without guessing from its keys. */
-export interface PaletteFile {
-  format: 'fastshaders-palette';
-  version: 1;
-  palettes: Palette[];
-}
-
 export const PALETTE_FILE_FORMAT = 'fastshaders-palette';
+
+/**
+ * Canonical export shape. `format` is a DISCRIMINATOR, not decoration: the
+ * app already accepts other dropped `.json` (cost profiles), so a palette
+ * file must be identifiable without guessing from its keys.
+ *
+ * Entries are `Palette` MINUS `id` — ids are local bookkeeping the emitter
+ * deliberately omits (see `emitPaletteJson`), and a reader mints its own.
+ * `emitPaletteJson` annotates its literal with this type so the declared
+ * shape and the bytes actually written cannot drift; the interface used to
+ * be exported and referenced nowhere, which made it a claim rather than a
+ * contract (it said `Palette[]`, i.e. that a file carries ids, which it
+ * never has).
+ */
+export interface PaletteFile {
+  format: typeof PALETTE_FILE_FORMAT;
+  version: 1;
+  palettes: Omit<Palette, 'id'>[];
+}
 
 /** Serialize palettes as the canonical JSON. Ids are omitted — they are local
  *  bookkeeping, and emitting them invites a reader to adopt them. `names` is
  *  omitted for an unlabelled palette, so such a file is byte-identical to one
  *  written before per-colour names existed. */
 export function emitPaletteJson(palettes: readonly Palette[]): string {
-  return JSON.stringify(
-    {
-      format: PALETTE_FILE_FORMAT,
-      version: 1,
-      palettes: palettes.map((p) => {
-        const colors = [...p.colors];
-        const names = p.names?.slice(0, colors.length) ?? [];
-        return names.some((n) => n) ? { name: p.name, colors, names } : { name: p.name, colors };
-      }),
-    },
-    null,
-    2,
-  );
+  const doc: PaletteFile = {
+    format: PALETTE_FILE_FORMAT,
+    version: 1,
+    palettes: palettes.map((p) => {
+      const colors = [...p.colors];
+      const names = p.names?.slice(0, colors.length) ?? [];
+      return names.some((n) => n) ? { name: p.name, colors, names } : { name: p.name, colors };
+    }),
+  };
+  return JSON.stringify(doc, null, 2);
 }
 
 /**

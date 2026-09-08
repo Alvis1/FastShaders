@@ -36,6 +36,11 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   // dereference `def`) — see CLEAN-3.
   if (!def) return null;
 
+  // The animated loop's visibility probe. It has to be an HTML element:
+  // `offsetParent` lives on HTMLElement, so reading it off any of the SVG refs
+  // below would be `undefined` — never null — and the test would silently
+  // never fire.
+  const plotRef = useRef<HTMLDivElement>(null);
   const curveRef = useRef<SVGPathElement>(null);
   const dropRef = useRef<SVGLineElement>(null);
   const dotRef = useRef<SVGCircleElement>(null);
@@ -95,7 +100,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   // used here and not `hasTimeUpstream`, which takes the edge array as an
   // argument and so leaves the trap open at every call site.
   // The flag is a single leading char so the key needs no separator (a raw NUL
-  // would make grep treat this file as binary — see MicNode/OutputNode).
+  // would make grep treat this file as binary — see SoundNode/OutputNode).
   const xKey = useAppStore((s) => {
     const e = getTargetEdges(s.nodes, s.edges, id).find((x) => x.targetHandle === 'x');
     if (!e) return '';
@@ -122,6 +127,20 @@ export const MathPreviewNode = memo(function MathPreviewNode({
     let rafId: number;
 
     const draw = (timestamp: number) => {
+      // Schedule first, so the visibility early-out below still keeps the
+      // loop alive (it is never torn down while the component is mounted).
+      rafId = requestAnimationFrame(draw);
+
+      // Skip the frame entirely while the card is hidden — a member of a
+      // COLLAPSED group is only `display: none`'d (the store keeps it MOUNTED
+      // on purpose so this loop survives the collapse) and rAF is
+      // per-document, so nothing else throttles it. `offsetParent` is null
+      // exactly under `display: none`. Safe to skip because the clock is
+      // ABSOLUTE (utils/appClock), so the first visible frame draws the true
+      // current phase rather than resuming a private epoch — see the fuller
+      // rationale on PreviewNode's loop.
+      if (plotRef.current?.offsetParent === null) return;
+
       // Shared app clock — every animated surface (this card, the noise
       // previews, the edge info chip) evaluates the same t per frame, so
       // their displayed values agree; per-loop epochs made a sin card show
@@ -138,7 +157,6 @@ export const MathPreviewNode = memo(function MathPreviewNode({
         ? evaluateEdgeSource({ source: xSource, sourceHandle: xHandle }, nodes, edges, t)?.[0] ?? null
         : null;
       applyWaveFrame(dynamicRefs, func, data.registryType, evaluated ?? t, lastLabelRef);
-      rafId = requestAnimationFrame(draw);
     };
 
     rafId = requestAnimationFrame(draw);
@@ -182,7 +200,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
           Flow viewport, which is the surface WebKit's compositing bug bites).
           Declarative render covers the static branches; the rAF effect above
           overwrites via dynamicRefs when Time is upstream. */}
-      <div className="math-preview-node__canvas-wrap">
+      <div className="math-preview-node__canvas-wrap" ref={plotRef}>
         <WaveformSvg
           func={func}
           funcLabel={data.registryType}

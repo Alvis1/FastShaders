@@ -10,6 +10,8 @@
  * wrapped — private mode / a full quota just degrades to "no recents", which is
  * a nicety to lose, not a failure.
  */
+import { safeJsonReviver } from '@/utils/safeJson';
+
 const RECENT_KEY = 'fs:recentNodes';
 export const RECENT_MAX = 6;
 
@@ -18,7 +20,12 @@ export function getRecentNodeTypes(): string[] {
   try {
     const raw = localStorage.getItem(RECENT_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    // localStorage is writable by anything at this origin, so this is a trust
+    // boundary like every other JSON.parse in the app — hence the shared
+    // deny-list reviver (utils/safeJson.ts is the one copy of that rule). The
+    // string filter below already contains the damage; the reviver is what
+    // keeps the next deny-list key from reaching only the opted-in sites.
+    const parsed = JSON.parse(raw, safeJsonReviver);
     if (!Array.isArray(parsed)) return [];
     // Adversarial/legacy storage: keep only strings, dedupe, cap.
     const out: string[] = [];

@@ -220,28 +220,6 @@
   outline-offset: 2px;
 }
 
-.eval-consent__note {
-  margin-top: var(--space-2);
-}
-
-/* A real <button>, not an <a>: it opens a dialog, it does not navigate. Styled
-   as a link because inside a sentence that is what "more detail here" looks
-   like, and a chrome button there would break the paragraph. */
-.eval-consent__inline-link {
-  padding: 0;
-  font: inherit;
-  color: var(--border-focus);
-  background: none;
-  border: none;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.eval-consent__inline-link:focus-visible {
-  outline: 1px solid var(--border-focus);
-  outline-offset: 2px;
-}
-
 /* ---- The disclosure dialog ---- */
 
 /* One step above --z-overlay: this opens FROM the consent dialog, which is

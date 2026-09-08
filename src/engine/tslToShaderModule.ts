@@ -22,7 +22,7 @@
 
 import { buildShaderModule } from './tslCodeProcessor';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
-import { liveAudioUniformNamesIn } from '@/utils/micAnalysis';
+import { soundUniformNamesIn } from '@/utils/soundAnalysis';
 import type { MaterialSettings } from '@/types';
 
 export interface PropertyInfo {
@@ -132,7 +132,7 @@ function buildHeader(props: PropertyInfo[], tslCode = ''): string[] {
   // silence. Saying so — and saying exactly how to fix it — is the difference
   // between a documented boundary and a recipient debugging a shader that looks
   // broken with no error anywhere.
-  const micNames = liveAudioUniformNamesIn(tslCode);
+  const micNames = soundUniformNamesIn(tslCode);
   if (micNames.length > 0) {
     header.push('//');
     header.push('// LIVE AUDIO INPUT — this file does NOT capture audio.');

@@ -6,6 +6,7 @@ import {
   effectiveExposedPorts,
   toggleExposedPort,
 } from '@/utils/exposedPorts';
+import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { rowStyle } from './menuShared';
 
 /**
@@ -19,7 +20,7 @@ import { rowStyle } from './menuShared';
  *
  * Only the RAMP ports are offered. `baseFrequency`/`density` are stored numbers
  * with no matching `def.inputs` entry, so ticking them would author a socket
- * that never renders — the documented micNode trap.
+ * that never renders — the documented soundNode trap.
  */
 export function RampColorPorts({ nodeId }: { nodeId: string }) {
   const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId));
@@ -41,12 +42,18 @@ export function RampColorPorts({ nodeId }: { nodeId: string }) {
           <input
             type="checkbox"
             checked={exposed.includes(inp.id)}
-            // toggleExposedPort removes the port's edges when hiding it, and
-            // pushes its own history entry.
+            // toggleExposedPort removes the port's edges when hiding it and
+            // pushes its own history entry, BEFORE the updateNodeData that
+            // commits the new exposedPorts pushes a second one — so unticking a
+            // wired ramp end cost two Cmd+Z presses and the first landed on a
+            // half-state (socket back, wire still gone). One bracket makes the
+            // whole toggle a single entry, as RaymarchSettingsMenu does.
             onChange={() =>
-              updateNodeData(nodeId, {
-                exposedPorts: toggleExposedPort(nodeId, exposed, inp.id),
-              })
+              asOneHistoryEntry(() =>
+                updateNodeData(nodeId, {
+                  exposedPorts: toggleExposedPort(nodeId, exposed, inp.id),
+                }),
+              )
             }
             title={t('Expose as input socket', language)}
           />

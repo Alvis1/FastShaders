@@ -1,4 +1,16 @@
-/* Read-only graph viewer modal for node-editor.html. Tokens only — works in both themes. */
+/* The modal chrome of node-editor.html's Graphs page — ONE class set shared by
+   both modals in this folder: GraphModal (the read-only graph viewer) and
+   DesignerModal (the embedded Node Designer). `gm__` therefore reads "Graphs
+   Modal", not "GraphModal"; DesignerModal.tsx imports this file directly and
+   DesignerModal.css is gone.
+
+   It used to be two stylesheets, ~90 of 96 lines identical under a `dm__`
+   prefix, and they had already drifted: GraphModal clipped its `__sub` with an
+   ellipsis while the designer clipped `__note` instead, so the same header
+   truncated a different element depending on which modal you opened. The two
+   real differences are now MODIFIERS on the shared classes — see `--full`.
+
+   Tokens only, so both modals work in either theme. */
 
 .gm__backdrop {
   position: fixed;
@@ -21,6 +33,20 @@
   border-radius: var(--border-radius-lg);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
+}
+
+/* `--full`: near-fullscreen, for a modal whose content brings its own layout
+   and cannot be squeezed. The Node Designer ships a three-column
+   list / canvas / controls layout that cramps badly below ~1100px, so it takes
+   the viewport and trades the backdrop margin down with it — the two
+   declarations are one decision and must move together. */
+.gm__backdrop--full {
+  padding: var(--space-4);
+}
+
+.gm__panel--full {
+  width: 98vw;
+  height: 96vh;
 }
 
 .gm__head {
@@ -48,6 +74,8 @@
   white-space: nowrap;
 }
 
+/* The secondary line beside the title — a texture/preset name here, the
+   registry type in the designer. */
 .gm__sub {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
@@ -57,11 +85,17 @@
   text-overflow: ellipsis;
 }
 
-.gm__counts {
+/* The right-hand end of the header, pushed there by its own auto margin: node
+   counts in the viewer, the hot-reload note in the designer. It CLIPS rather
+   than wrapping or growing — the header is one row and the ✕ must keep its
+   place at the end of it, whatever text either modal puts here. */
+.gm__aside {
   margin-left: auto;
   font-size: var(--font-size-sm);
   color: var(--text-secondary);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .gm__close {
@@ -85,12 +119,16 @@
   color: var(--text-primary);
 }
 
+/* ── Per-modal bodies ───────────────────────────────────────────────────── */
+
+/* GraphModal: the <ReactFlow> pane. */
 .gm__flow {
   flex: 1 1 auto;
   min-height: 0;
   background: var(--bg-app);
 }
 
+/* GraphModal: the collapsible TSL source under the graph. */
 .gm__code {
   flex: 0 0 auto;
   border-top: 1px solid var(--border-subtle);
@@ -124,4 +162,13 @@
   background: var(--bg-input);
   white-space: pre;
   overflow-x: auto;
+}
+
+/* DesignerModal: the node-designer.html iframe, which fills the panel. */
+.gm__frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: var(--bg-app);
 }

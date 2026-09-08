@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import {
   evaluateNodeOutput,
   evaluateNodeScalar,
-  getComponentCount,
   getNodeOutputShape,
   evaluateNodeRange,
   getTargetEdges,
@@ -368,10 +367,9 @@ describe('evaluateNodeScalar', () => {
   });
 });
 
-describe('getComponentCount / getNodeOutputShape', () => {
+describe('getNodeOutputShape', () => {
   it('uses concrete port types when available', () => {
     const v = makeNode('v', 'vec3', { x: 0, y: 0, z: 0 });
-    expect(getComponentCount('v', [v], [])).toBe(3);
     expect(getNodeOutputShape('v', [v], [])).toBe(3);
   });
 
@@ -503,7 +501,7 @@ describe('non-finite poisoning (noise pos = coordinate-source name)', () => {
   });
 });
 
-describe('getTargetEdges — collapsed-group feeders (MicNode/ClockNode label regression)', () => {
+describe('getTargetEdges — collapsed-group feeders (SoundNode/ClockNode label regression)', () => {
   // toggleGroupCollapsed rewrites an outgoing boundary edge to leave the GROUP
   // (source: groupId, sourceHandle: '__out_<node>_<handle>'). A raw
   // `edges.filter(e => e.target === id)` scan therefore hands edgeValueLabel a
@@ -526,7 +524,7 @@ describe('getTargetEdges — collapsed-group feeders (MicNode/ClockNode label re
     }) as unknown as AppNode;
 
   const feeder = makeNode('float1', 'float', { value: 0.42 });
-  const mic = makeNode('mic1', 'micNode');
+  const mic = makeNode('mic1', 'soundNode');
   const group = collapsedGroup('g1', '__out_float1_out', 'float1');
   const nodes = [feeder, mic, group];
   const edges = [makeEdge('g1', '__out_float1_out', 'mic1', 'gain')];
@@ -557,21 +555,54 @@ describe('getTargetEdges — collapsed-group feeders (MicNode/ClockNode label re
   // `include` is `src/**/*.test.ts`, so a .tsx cannot be rendered here — assert
   // over the source text instead, the same way vendorSync.test.ts and
   // previewFitBounds.test.ts guard their invariants. Without it, reverting
-  // MicNode/ClockNode to a raw `s.edges` scan leaves the whole suite green.
-  it.each(['MicNode.tsx', 'ClockNode.tsx', 'OutputNode.tsx'])(
+  // SoundNode/ClockNode to a raw `s.edges` scan leaves the whole suite green.
+  //
+  // The two-step subscription was IDENTICAL in three of these components, so it
+  // now lives in ONE place — `useWiredLabels`, exported from ShaderNode.tsx —
+  // which SoundNode (the Sound node) / OutputNode / RaymarchOutputNode call
+  // instead of naming `getTargetEdges` themselves; ClockNode still calls it
+  // directly, because it wants ONE port rather than the whole map. So the
+  // positive assertion accepts EITHER spelling: what it is really asking is
+  // "does this component get its labels from the unwrapped edge set". The
+  // negative assertions stay as they are — they ban the raw scan wherever it
+  // is written — and the test right after the loop covers the hook's own body,
+  // which the indirection made the one place a raw scan could now hide.
+  it.each(['SoundNode.tsx', 'ClockNode.tsx', 'OutputNode.tsx'])(
     '%s derives its wired-value labels from getTargetEdges, not a raw edge scan',
     (file) => {
       const src = readFileSync(
         new URL(`../components/NodeEditor/nodes/${file}`, import.meta.url),
         'utf8',
       );
-      expect(src).toContain('getTargetEdges');
+      expect(src).toMatch(/getTargetEdges|useWiredLabels/);
       expect(src).not.toMatch(/for \(const \w+ of s\.edges\)/);
       expect(src).not.toMatch(/for \(const \w+ of edges\)/);
       expect(src).not.toMatch(/\bs\.edges\.find\(/);
       expect(src).not.toMatch(/\bedges\.find\(\(\w+\) => \w+\.target ===/);
     },
   );
+
+  // The other half of the pin above: the delegating components no longer name
+  // getTargetEdges, so the guarantee now rests on the shared hook. BOTH of its
+  // steps must walk the unwrapped set — the cheap-string key AND the useMemo
+  // rebuild from getState(). Losing it on the key step alone would be the
+  // nastier half of the bug: the labels would be right on first render and
+  // then stop updating whenever a collapsed group's feeder changed, since the
+  // key would never notice the change it is there to detect.
+  it('useWiredLabels — the hook they delegate to — walks getTargetEdges in BOTH steps', () => {
+    const src = readFileSync(
+      new URL('../components/NodeEditor/nodes/ShaderNode.tsx', import.meta.url),
+      'utf8',
+    );
+    const from = src.indexOf('export function useWiredLabels');
+    expect(from).toBeGreaterThan(-1);
+    // The function's closing brace is the first one at column 0 after it.
+    const rest = src.slice(from);
+    const hook = rest.slice(0, rest.indexOf('\n}\n') + 2);
+    expect(hook.match(/getTargetEdges\(/g)?.length).toBe(2);
+    expect(hook).not.toMatch(/for \(const \w+ of s\.edges\)/);
+    expect(hook).not.toMatch(/\bs\.edges\.find\(/);
+  });
 });
 
 describe('select — GPU truthiness, not a 0.5 threshold', () => {
@@ -630,7 +661,6 @@ describe('append — grown operands agree with buildAppendConstructor', () => {
     ];
     expect(evaluateNodeOutput('op', nodes, edges, 0)).toEqual([1, 2, 3]);
     expect(getNodeOutputShape('op', nodes, edges)).toBe(3);
-    expect(getComponentCount('op', nodes, edges)).toBe(3);
     // Degenerate on purpose: computeRange takes a fully deterministic eval as
     // the tightest possible range and never reaches its own `append` case. The
     // pin that matters here is the LENGTH — a range two entries short is a card
@@ -651,7 +681,6 @@ describe('append — grown operands agree with buildAppendConstructor', () => {
     const edges = ['a', 'b', 'c', 'd'].map((h) => makeEdge(h, 'out', 'op', h));
     expect(evaluateNodeOutput('op', nodes, edges, 0)).toEqual([1, 2, 3, 4]);
     expect(getNodeOutputShape('op', nodes, edges)).toBe(4);
-    expect(getComponentCount('op', nodes, edges)).toBe(4);
     expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
       min: [1, 2, 3, 4], max: [1, 2, 3, 4],
     });
@@ -702,7 +731,6 @@ describe('append — grown operands agree with buildAppendConstructor', () => {
     // result proves the CPU fold kept an operand the constructor threw away.
     expect(evaluateNodeOutput('op', nodes, edges, 0)).toEqual([0.5, 0.5, 0.5, 0.5]);
     expect(getNodeOutputShape('op', nodes, edges)).toBe(4);
-    expect(getComponentCount('op', nodes, edges)).toBe(4);
     // The RANGE reports uv's real span rather than the centre sample the eval
     // returns: uv is a FIELD, so the deterministic shortcut is gated off for it
     // and every one of these four channels comes from interval arithmetic. Same
@@ -753,7 +781,6 @@ describe('append — grown operands agree with buildAppendConstructor', () => {
     ];
     expect(evaluateNodeOutput('op', nodes, edges, 0)).toEqual([1, 0, 3]);
     expect(getNodeOutputShape('op', nodes, edges)).toBe(3);
-    expect(getComponentCount('op', nodes, edges)).toBe(3);
     expect(evaluateNodeRange('op', nodes, edges, 0)).toEqual({
       min: [1, 0, 3], max: [1, 0, 3],
     });
@@ -776,7 +803,6 @@ describe('append — grown operands agree with buildAppendConstructor', () => {
       makeEdge('f', 'out', 'op', 'b'),
     ];
     expect(getNodeOutputShape('op', nodes, edges)).toBe(2);
-    expect(getComponentCount('op', nodes, edges)).toBe(2);
 
     // The vec3 `out` socket of the SAME node still counts three, so the fix is
     // per-socket rather than a blanket narrowing.

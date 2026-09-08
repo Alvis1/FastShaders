@@ -191,13 +191,24 @@ export const CostBar = memo(function CostBar({ onFocusOutput }: CostBarProps) {
     // outside-pointerdown listener alone leaves the menu open over the largest
     // target on screen. Focus is the only signal that crosses; read on a
     // macrotask because at blur time activeElement is still the old node.
-    const onBlur = () => window.setTimeout(() => {
-      if (document.activeElement instanceof HTMLIFrameElement) closeCapMenu();
-    }, 0);
+    // The handle is TRACKED and cleared with the listeners (PaletteColorPicker
+    // holds the other copy of this probe and does the same): removing the
+    // listener does not cancel a probe it has already scheduled, so a blur in
+    // the same tick the menu closes would still run its callback afterwards.
+    // Harmless today — closeCapMenu is one setState — but the two copies of
+    // one idiom must not diverge, or only one of them is safe to extend.
+    let focusProbe = 0;
+    const onBlur = () => {
+      window.clearTimeout(focusProbe);
+      focusProbe = window.setTimeout(() => {
+        if (document.activeElement instanceof HTMLIFrameElement) closeCapMenu();
+      }, 0);
+    };
     document.addEventListener('pointerdown', onDown, true);
     document.addEventListener('keydown', onKey, true);
     window.addEventListener('blur', onBlur);
     return () => {
+      window.clearTimeout(focusProbe);
       document.removeEventListener('pointerdown', onDown, true);
       document.removeEventListener('keydown', onKey, true);
       window.removeEventListener('blur', onBlur);

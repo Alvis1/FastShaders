@@ -32,7 +32,7 @@
  */
 
 import { validImageDataUrl, HARD_MAX_IMAGE_ENCODED_CHARS, MAX_IMAGE_ENCODED_CHARS } from './imageNode';
-import { withTimeout, openDb as openDbShared } from './idbSafe';
+import { openDb as openDbShared, idbWrite, idbGet } from './idbSafe';
 
 const DB_NAME = 'fastshaders-images';
 const DB_VERSION = 1;
@@ -178,42 +178,26 @@ export async function saveImageOrigin(rec: ImageOriginRecord): Promise<void> {
   const db = await openDb();
   if (!db) return;
   try {
-    await withTimeout(
-      new Promise<void>((resolve) => {
-        let tx: IDBTransaction;
-        try {
-          tx = db.transaction(STORE, 'readwrite');
-        } catch {
-          return resolve();
-        }
-        try {
-          const store = tx.objectStore(STORE);
-          store.put(rec);
-          // LRU trim in the same transaction: read everything back, drop the
-          // oldest until both caps hold.
-          const all = store.getAll();
-          all.onsuccess = () => {
-            const rows = (all.result as ImageOriginRecord[]).filter((r) => r && typeof r.originId === 'string');
-            rows.sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0)); // newest first
-            let chars = 0;
-            rows.forEach((r, i) => {
-              chars += typeof r.dataUrl === 'string' ? r.dataUrl.length : 0;
-              if (i >= MAX_RECORDS || chars > MAX_STORE_CHARS) {
-                try { store.delete(r.originId); } catch { /* */ }
-              }
-            });
-          };
-        } catch {
-          return resolve();
-        }
-        // Quota exceeded lands on onerror/onabort — a payload that can't be
-        // cached must still leave the drop working, so every path resolves.
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => resolve();
-        tx.onabort = () => resolve();
-      }),
-      undefined,
-    );
+    // Quota exceeded lands on the transaction's onerror/onabort — a payload
+    // that can't be cached must still leave the drop working, so `idbWrite`
+    // resolves on every outcome rather than reporting one.
+    await idbWrite(db, STORE, (store) => {
+      store.put(rec);
+      // LRU trim in the same transaction: read everything back, drop the
+      // oldest until both caps hold.
+      const all = store.getAll();
+      all.onsuccess = () => {
+        const rows = (all.result as ImageOriginRecord[]).filter((r) => r && typeof r.originId === 'string');
+        rows.sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0)); // newest first
+        let chars = 0;
+        rows.forEach((r, i) => {
+          chars += typeof r.dataUrl === 'string' ? r.dataUrl.length : 0;
+          if (i >= MAX_RECORDS || chars > MAX_STORE_CHARS) {
+            try { store.delete(r.originId); } catch { /* */ }
+          }
+        });
+      };
+    });
   } finally {
     try { db.close(); } catch { /* */ }
   }
@@ -232,25 +216,9 @@ export async function loadImageOrigin(originId: string): Promise<ImageOriginPayl
   const db = await openDb();
   if (!db) return null;
   try {
-    const rec = await withTimeout(
-      new Promise<unknown>((resolve) => {
-        let tx: IDBTransaction;
-        try {
-          tx = db.transaction(STORE, 'readonly');
-        } catch {
-          return resolve(null);
-        }
-        try {
-          const req = tx.objectStore(STORE).get(originId);
-          req.onsuccess = () => resolve(req.result);
-          req.onerror = () => resolve(null);
-        } catch {
-          return resolve(null);
-        }
-        tx.onabort = () => resolve(null);
-      }),
-      null,
-    );
+    // Whatever comes back is untrusted — `recordToPayload` re-runs the full
+    // validation on it (see its own doc comment).
+    const rec = await idbGet(db, STORE, originId);
     const payload = recordToPayload(rec, originId);
     if (payload) rememberInMemory(rec as ImageOriginRecord);
     return payload;

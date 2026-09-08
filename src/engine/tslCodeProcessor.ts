@@ -19,7 +19,8 @@ const CHANNEL_TO_PROP = new Map<string, string>([
   ['metalness', 'metalnessNode'],
   // envNode: three's MeshPhysicalNodeMaterial wraps a texture-valued env in
   // pmremTexture() (EnvironmentNode) — image-based lighting, not a channel
-  // sampled per fragment. Needs shaderloader 0.5's nodeProps to list it.
+  // sampled per fragment. Needs the loader's nodeProps to list it (added in
+  // 0.5; every export references 0.6).
   ['env', 'envNode'],
 ]);
 
@@ -308,12 +309,21 @@ function fixTDZ(body: string, tslNames: string[]): TDZResult {
   const renames = new Map<string, string>();
 
   // 1. Remove self-referencing bare declarations: const X = X;
-  for (const name of importedNames) {
-    const selfRefRe = new RegExp(
-      `^[ \\t]*const\\s+${name}\\s*=\\s*${name}\\s*;[ \\t]*$`, 'gm'
-    );
-    processedBody = processedBody.replace(selfRefRe, '');
-  }
+  //
+  // ONE pass with a backreference, not one pass per imported name. This used to
+  // compile a fresh RegExp per name and rescan the entire body with it, i.e.
+  // O(names x bodyLength) with a regex compile per iteration — ~40 full-body
+  // scans on a large graph, paid on every path that builds a runnable module
+  // (each debounced preview rebuild, each Download Shader, and — undebounced —
+  // every graph edit while the A-Frame tab is open). The set membership test in
+  // the replacer does exactly the filtering the per-name pattern used to do, and
+  // the `\s`/anchoring is unchanged, so the multi-line `const X =\n  X;` form
+  // still matches. `[\w$]` rather than `\w` because a JS identifier may carry a
+  // `$`; the gate means the wider class can still only ever match imported names.
+  processedBody = processedBody.replace(
+    /^[ \t]*const\s+([\w$]+)\s*=\s*\1\s*;[ \t]*$/gm,
+    (whole, name: string) => (importedNames.has(name) ? '' : whole),
+  );
 
   // 2. Rename local variables that shadow imported function names
   const declRe = /\bconst\s+(\w+)\s*=/g;
@@ -724,13 +734,17 @@ export function buildShaderModule(
   if (hasDiscard && !tslNames.includes('Discard')) tslNames.push('Discard');
 
   // Colour carried through the discard wrapper when no colour channel is wired.
-  // Emissive first: shaderloader 0.5 copies emissiveNode→colorNode only when
-  // colorNode is undefined (a-frame-shaderloader-0.5.js:283), and the wrapper
-  // always defines colorNode — so falling straight to white made adding a
-  // discard wash an emissive-only shader out to lit white. Passing the emissive
-  // ref reproduces exactly what the loader would have done. White remains the
-  // last resort: it is the MeshStandard base colour, so the cutout applies
-  // without changing the look of the surviving fragments.
+  // Emissive first: the loader copies emissiveNode→colorNode only when
+  // colorNode is undefined, and the wrapper always defines colorNode — so
+  // falling straight to white made adding a discard wash an emissive-only
+  // shader out to lit white. Passing the emissive ref reproduces exactly what
+  // the loader would have done. White remains the last resort: it is the
+  // MeshStandard base colour, so the cutout applies without changing the look
+  // of the surviving fragments.
+  // The copy-when-undefined rule arrived in loader 0.5, but cite 0.6 when you
+  // need the line: public/js/a-frame-shaderloader-0.6.js:339-343. 0.5 is frozen
+  // in the submodule and is no longer vendored into public/js at all, so a
+  // `a-frame-shaderloader-0.5.js:NNN` citation can no longer be followed.
   const discardColor = channels.color ?? channels.emissive ?? 'vec3(1, 1, 1)';
   if (hasDiscard && !channels.color && !channels.emissive && !tslNames.includes('vec3')) {
     tslNames.push('vec3');
@@ -888,8 +902,9 @@ export function buildShaderModule(
     returnProps.push(`alphaTest: ${Math.min(alphaTest, 0.99)}`);
   }
   // Emitted only when non-default (true is THREE's default), so existing
-  // exports stay byte-identical. Applied by shaderloader 0.5's material-prop
-  // pass; older CDN loaders ignore the extra key harmlessly.
+  // exports stay byte-identical. Applied by the loader's material-prop pass
+  // (0.5+, and every new export references 0.6); older CDN loaders ignore the
+  // extra key harmlessly.
   //
   // Gated on `transparent` as well: depth-write-off is a transparency sorting
   // control, and on an OPAQUE material it just makes the surface self-occlude
@@ -918,6 +933,23 @@ export function buildShaderModule(
   // only, so it is inert there.
   if (materialSettings?.mergeVertices === false) {
     returnProps.push('mergeVertices: false');
+  }
+
+  // The Wireframe node's EDGES mode reads a per-corner barycentric attribute,
+  // and no mesh carries one by default: there is no way to recover triangle
+  // corners from an indexed geometry in either backend, so the loader has to
+  // build them (toNonIndexed + a `bary` attribute). This key is how the module
+  // asks — the `mergeVertices` precedent: a geometry directive the loader reads
+  // off the return object rather than copying onto the material, and inert on
+  // the frozen 0.4/0.5 CDN loaders.
+  //
+  // Detected from the emitted TEXT rather than passed in, because this function
+  // is handed TSL source and never sees the graph. Narrow on purpose: it is the
+  // exact call graphToCode writes, so a user's own `attribute('bary')` in the
+  // code panel asks for the same injection — which is right, that is the only
+  // way their shader could work either.
+  if (/\battribute\(\s*['"]bary['"]/.test(tslCode)) {
+    returnProps.push('barycentric: true');
   }
 
   // --- The __pixel Fn: conditions + color as explicit params (see rule 2) -

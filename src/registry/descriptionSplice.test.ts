@@ -35,7 +35,13 @@ describe('locateRegistryDescriptions', () => {
     // (unknown/dataNode/imageNode) are separate consts outside the
     // `definitions` array, so they are correctly not located here.
     // 76 with the Vertex Color node; 82 with the six distance-field nodes
-    // (2026-09-02), 83 with SDF Output.
+    // (2026-09-02); 97 once the distance-field family was widened and the
+    // one-day SDF Output / Volume Output pair folded into `raymarchOutput`
+    // (2026-09-03); 98 with the Wireframe node (2026-09-06); back to 97 when
+    // the Audio Input node was folded into the Sound node (2026-09-08 — one
+    // def, one capture session, one analyser). The tally is a breadcrumb, not
+    // a spec — `getAllDefinitions()` is what the assertion below actually
+    // compares against.
     expect(slots).toHaveLength(97);
     expect(defs).toHaveLength(97);
     expect(new Set(slots.map(s => s.key))).toEqual(new Set(defs.map(d => d.type)));
@@ -192,7 +198,16 @@ describe('splitAliases / joinAliases', () => {
     // ('system audio', 'desktop', 'loopback') rather than its own label; 36
     // with Vertex Color, whose tail carries 'COLOR_0' plus the two things
     // people actually come looking for ('mesh id', 'face id') — none of which
-    // belong in prose, since that is the ranked search corpus.
+    // belong in prose, since that is the ranked search corpus; 58 with
+    // Wireframe, whose tail carries 'mesh', 'cage' and 'quads' — the words
+    // people search for, none of which describe what the node computes; back
+    // to 57 when the Audio Input node was folded into the Sound node
+    // (2026-09-08). That fold cost a def but no VOCABULARY: the absorbed
+    // node's search words ('system audio', 'desktop', 'loopback') moved into
+    // the Sound node's own tail, which is what keeps someone typing "desktop
+    // audio" landing on the node that now does it. Worth pinning as a count
+    // because a description edit that drops a tail changes search ranking and
+    // nothing else — it fails no other test and shows on no screen.
     expect(tailed).toHaveLength(57);
   });
 

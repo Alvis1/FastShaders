@@ -258,7 +258,13 @@
   :root.is-fs.is-active #fs-btn { opacity: 0.55; pointer-events: auto; }
 
   /* ── Drop overlay + error ───────────────────────────────────────── */
-  #overlay { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(30, 40, 70, 0.55); backdrop-filter: blur(2px); color: #fff; font-size: 22px; font-weight: 700; pointer-events: none; }
+  /* The `-webkit-` twin is not optional: unprefixed `backdrop-filter` only
+     landed in Safari 18, while `-webkit-backdrop-filter` has worked since
+     Safari 9 — and this page is opened by WKWebView on the macOS desktop
+     shell (podest_open) and by every iPad browser, so without it the drop
+     veil drew a flat plate exactly where a kiosk's only input gesture asks
+     for feedback. Same pairing rule as the app's NodeEditor.css. */
+  #overlay { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(30, 40, 70, 0.55); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); color: #fff; font-size: 22px; font-weight: 700; pointer-events: none; }
   #overlay.show { display: flex; }
   /* max-height + overflow bound the banner — its text is sandbox-controlled
      (fs:error), so it must not be able to grow over the whole page. */
@@ -674,7 +680,7 @@
      no transient activation. So an auto-arm would open the mic silently at
      every boot, for weeks, on a machine nobody is watching. That is the line
      this must not cross. */
-  var MIC_RE = /^mic\d*_(level|bass|mid|treble)$/;
+  var SOUND_RE = /^mic\d*_(level|bass|mid|treble)$/;
   var micNames = [];
   var micStream = null, micCtx = null, micAnalyser = null, micBins = null;
   var micStatus = "off";           // off | starting | live | failed
@@ -697,7 +703,7 @@
     document.body.classList.toggle("has-mic", micNames.length > 0);
   }
 
-  /* Mirrors src/utils/micAnalysis.ts. Both band edges FLOOR so the bands
+  /* Mirrors src/utils/soundAnalysis.ts. Both band edges FLOOR so the bands
      partition the spectrum — flooring the low edge and ceiling the high one
      double-counts the crossover bin and makes a 200 Hz tone light up bass and
      mid equally. Raw 0..1: `gain` is already baked into the shader by codegen
@@ -731,7 +737,7 @@
     // queue with values that are stale by the time the stage boots.
     if (!stageReady) return;
     for (var i = 0; i < micNames.length; i++) {
-      var ch = MIC_RE.exec(micNames[i]);
+      var ch = SOUND_RE.exec(micNames[i]);
       if (ch) post({ type: "fs:uniform", name: micNames[i], value: v[ch[1]] });
     }
   }
@@ -866,7 +872,7 @@
       var uAll = m.uniforms || {}, uRest = {}, mics = [];
       for (var uk in uAll) {
         if (!Object.prototype.hasOwnProperty.call(uAll, uk)) continue;
-        if (MIC_RE.test(uk)) mics.push(uk); else uRest[uk] = uAll[uk];
+        if (SOUND_RE.test(uk)) mics.push(uk); else uRest[uk] = uAll[uk];
       }
       micReset(mics);
       if (!state.showMaterials) onUniforms(uRest);
@@ -1551,10 +1557,22 @@
   // string budget. Every path is throw-safe: private mode, a blocked upgrade,
   // a quota error or a hung open all degrade to today's session-only
   // behaviour.
-  var DB_NAME = "fs-podest", DB_STORE = "session", DB_KEY = "last";
+  // The mirror is TWO records, and the split is what keeps a slider cheap. The
+  // payload (shader source ≤24 MB, model bytes ≤64 MB) changes only on a drop;
+  // the tuning, title and geometry change whenever the exhibitor touches a
+  // control, and each of those calls saveSession(). Held in ONE record, a
+  // slider release structured-cloned up to 88 MB to disk to persist a handful
+  // of floats — on the machine meant to run untouched for weeks. So DB_KEY
+  // carries the payload and is rewritten only when `heavyDirty` says a drop
+  // changed it, while DB_KEY_STATE carries the small stuff and is rewritten on
+  // every save. DB_KEY keeps its old name AND shape, so a record written by an
+  // earlier build still restores in full — its extra fields simply survive the
+  // merge in mergeSession().
+  var DB_NAME = "fs-podest", DB_STORE = "session", DB_KEY = "last", DB_KEY_STATE = "state";
   var MAX_SAVED_SHADER = 24 * 1024 * 1024;  // chars
   var MAX_SAVED_MODEL = 64 * 1024 * 1024;   // bytes — matches the zip inflate cap
   var dbHandle = null, dbWaiters = null, dbSettled = false, restoreDone = false, saveTimer = null;
+  var heavyDirty = false;   // a drop changed the payload and it has not been written yet
 
   function getDb(cb) {
     if (dbSettled) { cb(dbHandle); return; }
@@ -1570,26 +1588,46 @@
       if (!window.indexedDB) { settle(null); return; }
       var req = indexedDB.open(DB_NAME, 1);
       req.onupgradeneeded = function () { try { req.result.createObjectStore(DB_STORE); } catch (e) {} };
-      req.onsuccess = function () { settle(req.result); };
+      // A success that lands AFTER the 5 s settle (or after onblocked gave up)
+      // still hands us a real, OPEN connection. Dropping it on the floor would
+      // leak it — an open connection holds the version lock for the life of the
+      // page — AND leave dbHandle null, so session mirroring stays off for the
+      // whole run, which on a pedestal is weeks. Adopt it instead: dbSettled is
+      // already true, so every later getDb hands out this handle and mirroring
+      // recovers by itself. The early callers keep the null they were given;
+      // they only skipped one write.
+      req.onsuccess = function () {
+        if (dbSettled) { dbHandle = req.result; return; }
+        settle(req.result);
+      };
       req.onerror = function () { settle(null); };
       req.onblocked = function () { settle(null); };
       setTimeout(function () { settle(null); }, 5000);  // never hang a boot on a wedged open
     } catch (e) { settle(null); }
   }
 
-  function saveSession() {
+  // `heavy` marks the saves that really changed the payload — the two drop
+  // paths, plus re-arming auto-restore, where nothing may have been mirrored
+  // yet. Every other caller (sliders, colour pickers, title, geometry,
+  // materials) writes the small record alone.
+  function saveSession(heavy) {
+    if (heavy) heavyDirty = true;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(writeSession, 400);
   }
   function writeSession() {
     saveTimer = null;
     if (!state.autoRestore) return;
-    var rec = {
+    // Building both objects is free — the fields are references. The cost is
+    // the structured clone inside put(), which is why only one of them is put.
+    var payload = {
       shaderSource: (typeof state.shaderSource === "string" && state.shaderSource.length <= MAX_SAVED_SHADER) ? state.shaderSource : null,
       shaderName: state.shaderName || null,
       modelBytes: (state.modelBytes && state.modelBytes.byteLength <= MAX_SAVED_MODEL) ? state.modelBytes : null,
       modelName: state.modelName || null,
       modelKind: state.modelKind || null,
+    };
+    var small = {
       geometry: state.geometry,
       showMaterials: !!state.showMaterials,
       titleText: state.titleText || "",
@@ -1598,21 +1636,38 @@
       // above; onUniforms picks these up as each slider's `current`.
       values: state.values,
     };
+    // Read and cleared HERE, synchronously: a drop landing during the async
+    // getDb gap sets the flag again and schedules its own write, so clearing it
+    // in the callback could swallow that shader.
+    var writePayload = heavyDirty;
+    heavyDirty = false;
     getDb(function (db) {
-      if (!db) return;
+      // No DB ⇒ nothing was written, so the payload is still pending.
+      if (!db) { if (writePayload) heavyDirty = true; return; }
       try {
         var tx = db.transaction(DB_STORE, "readwrite");
         var os = tx.objectStore(DB_STORE);
-        if (!rec.shaderSource && !rec.modelBytes) os.delete(DB_KEY); else os.put(rec, DB_KEY);
+        if (!payload.shaderSource && !payload.modelBytes) {
+          // Nothing to replay ⇒ leave no half-record behind, exactly as the
+          // single-record form did: a stale geometry/tuning must not be applied
+          // to whatever the next visitor drops.
+          os.delete(DB_KEY); os.delete(DB_KEY_STATE);
+        } else {
+          if (writePayload) os.put(payload, DB_KEY);
+          os.put(small, DB_KEY_STATE);
+        }
         tx.onerror = function () {};   // quota / corruption ⇒ session-only, silently
         tx.onabort = function () {};
-      } catch (e) {}
+      } catch (e) { if (writePayload) heavyDirty = true; }
     });
   }
   function clearSession() {
     getDb(function (db) {
       if (!db) return;
-      try { db.transaction(DB_STORE, "readwrite").objectStore(DB_STORE).delete(DB_KEY); } catch (e) {}
+      try {
+        var os = db.transaction(DB_STORE, "readwrite").objectStore(DB_STORE);
+        os.delete(DB_KEY); os.delete(DB_KEY_STATE);
+      } catch (e) {}
     });
   }
 
@@ -1621,10 +1676,32 @@
     getDb(function (db) {
       if (!db) return;
       try {
-        var rq = db.transaction(DB_STORE, "readonly").objectStore(DB_STORE).get(DB_KEY);
-        rq.onsuccess = function () { applyRestored(rq.result); };
-        rq.onerror = function () {};
+        var tx = db.transaction(DB_STORE, "readonly");
+        var os = tx.objectStore(DB_STORE);
+        var rqPayload = os.get(DB_KEY), rqState = os.get(DB_KEY_STATE);
+        // oncomplete rather than two onsuccess handlers: both gets ride the
+        // same transaction and the merge needs whichever of them exists.
+        tx.oncomplete = function () { applyRestored(mergeSession(rqPayload.result, rqState.result)); };
+        tx.onerror = function () {};
       } catch (e) {}
+    });
+  }
+  // The payload record is what makes a session worth replaying — without it
+  // there is nothing to show — so an orphaned small record restores nothing.
+  // A record written before the split carries every field itself, so it merges
+  // with an absent small record and still restores in full.
+  function mergeSession(payload, small) {
+    if (!payload || typeof payload !== "object") return null;
+    var out = {};
+    copyOwnInto(payload, out);
+    if (small && typeof small === "object") copyOwnInto(small, out);
+    return out;
+  }
+  function copyOwnInto(src, dst) {
+    Object.keys(src).forEach(function (k) {
+      // A structured clone can carry an own "__proto__" key, and assigning
+      // that name through brackets walks into the prototype setter instead.
+      if (k !== "__proto__") dst[k] = src[k];
     });
   }
   // Re-validated on the way back in: the record is ours, but it has sat in a
@@ -1741,7 +1818,7 @@
     matToggle.textContent = "Show model materials";
     post({ type: "fs:shader", source: text });
     updateLoaded();
-    saveSession();
+    saveSession(true);   // the payload changed — mirror the source itself
   }
 
   function loadModelBuffer(buf, name) {
@@ -1766,7 +1843,7 @@
     matToggle.hidden = false;
     setGeometry("model");
     updateLoaded();
-    saveSession();
+    saveSession(true);   // the payload changed — mirror the model bytes
   }
 
   // ── Uniform sliders ─────────────────────────────────────────────────
@@ -1959,7 +2036,9 @@
   restoreToggle.addEventListener("change", function () {
     state.autoRestore = restoreToggle.checked;
     writePref("fs:viewerAutoRestore", state.autoRestore ? "1" : "0");
-    if (state.autoRestore) saveSession(); else clearSession();
+    // Re-arming may be the first save of the run, so mirror the payload too:
+    // the small record alone would restore nothing.
+    if (state.autoRestore) saveSession(true); else clearSession();
   });
   viewReturnToggle.checked = state.viewReturn;
   viewReturnToggle.addEventListener("change", function () {
@@ -2207,6 +2286,23 @@
       return Promise.resolve({ name: name, data: comp.slice() });
     }
     if (method !== 8) return Promise.reject(new Error("unsupported compression method " + method));
+    // The dependency-free deflate path has a browser floor the rest of this
+    // page does not: `DecompressionStream` is Safari 16.4 / Firefox 113. Below
+    // it the constructor below throws a bare ReferenceError, which lands in
+    // handleZip's catch as "Could not read zip: DecompressionStream is not
+    // defined" — a sentence that names nothing the visitor did. The split is
+    // invisible from our own artefacts, because FastShaders' zipWriter is
+    // STORE-only, so an exported shader imports fine and only an archive
+    // re-zipped by Finder or Explorer (which emit deflate) trips it — and drag
+    // and drop is this page's ONLY input, so a bare ReferenceError here is a
+    // dead end with no other way in. Name the cause instead. Mirrors the same
+    // guard in src/utils/zipReader.ts; keep the two messages in step.
+    if (typeof DecompressionStream === "undefined") {
+      return Promise.reject(new Error(
+        "this browser cannot read compressed archives (needs Safari 16.4+ / Firefox 113+) — " +
+        "re-export the shader from FastShaders, which writes uncompressed zips"
+      ));
+    }
     // Read the inflate stream in chunks and abort the moment the OUTPUT exceeds
     // the remaining budget — a single bomb entry can't fully materialize first.
     var reader = new Blob([comp]).stream().pipeThrough(new DecompressionStream("deflate-raw")).getReader();
@@ -2739,11 +2835,11 @@
     L.push('(function(){');
     L.push('  var SRC=' + (state.shaderSource && !state.showMaterials ? jsonForScript(state.shaderSource) : "null") + ';');
     L.push('  var VALUES=' + jsonForScript(state.values || {}) + ';');
-    L.push('  var MIC_RE=/^mic\\d*_(level|bass|mid|treble)$/;');
+    L.push('  var SOUND_RE=/^mic\\d*_(level|bass|mid|treble)$/;');
     L.push('  var entity=null;');
     // Poll like the stage's reportUniforms does: _propertyUniforms appears
     // only after the loader finishes its dynamic import.
-    L.push('  function applyValues(){var tries=0;(function poll(){var comp=entity&&entity.components&&entity.components.shader;var u=comp&&comp._propertyUniforms;if(u){for(var k in VALUES){if(!Object.prototype.hasOwnProperty.call(VALUES,k)||MIC_RE.test(k)||!u[k])continue;var v=VALUES[k];if(u[k].value&&u[k].value.isColor){if(typeof v==="string")try{u[k].value.set(v);}catch(e){}}else if(typeof v==="number"&&isFinite(v)){u[k].value=v;}}return;}if(tries++<120)setTimeout(poll,50);})();}');
+    L.push('  function applyValues(){var tries=0;(function poll(){var comp=entity&&entity.components&&entity.components.shader;var u=comp&&comp._propertyUniforms;if(u){for(var k in VALUES){if(!Object.prototype.hasOwnProperty.call(VALUES,k)||SOUND_RE.test(k)||!u[k])continue;var v=VALUES[k];if(u[k].value&&u[k].value.isColor){if(typeof v==="string")try{u[k].value.set(v);}catch(e){}}else if(typeof v==="number"&&isFinite(v)){u[k].value=v;}}return;}if(tries++<120)setTimeout(poll,50);})();}');
     L.push('  window.addEventListener("shader-applied",applyValues);');
     L.push('  function boot(){entity=document.getElementById("preview-entity");entity.addEventListener("model-error",function(){__fsErr("Failed to load the 3D model (corrupt, or a DRACO/meshopt-compressed glTF - not supported).");});if(SRC){var u=URL.createObjectURL(new Blob([SRC],{type:"text/javascript"}));entity.setAttribute("shader","src: "+u);}}');
     // Auto-enter once REAL support is confirmed, but keep an in-document
@@ -3162,6 +3258,26 @@
     // against a hung requestAdapter), hide navigator.gpu when it can't
     // deliver, THEN inject the scene. Scene-dependent code waits via
     // __fsWhenSceneBooted.
+    //
+    // WebGL2 is a HARD FLOOR for the WebGL path and nothing tested for it.
+    // three dropped WebGL1 in r163, so the vendored r184 bundle only ever asks
+    // for a "webgl2" context and throws on a null one — a machine with WebGL2
+    // absent, disabled or driver-blocklisted (Safari <15, a locked-down
+    // enterprise profile, a headless VM, a remote-desktop session onto the
+    // pedestal) got a blank stage, then the 6 s watchdog's "the WebGL2
+    // renderer never began rendering. Reload to retry.", which names a
+    // consequence and prescribes an action that can never work — on a page
+    // whose only input is drag and drop, i.e. with no other way in. So inject()
+    // probes first and says the real thing (same guard as the editor preview,
+    // tslToPreviewHTML.ts). Gated on !navigator.gpu so a WebGPU-capable
+    // machine is never turned away by a probe it does not need: every path
+    // that reaches inject() on the WebGL2 backend has already hidden (or never
+    // had) navigator.gpu. The probe releases its context slot straight away —
+    // browsers cap live contexts (~16) and this document is about to ask for
+    // one more. Bailing leaves __fsSceneBooted false, so boot() never posts
+    // fs:ready and the parent's watchdog restarts the stage (backing off to
+    // one quiet retry every 10 min); each fresh document re-posts this same
+    // sticky message, so the accurate cause is what stays on screen.
     var S = [];
     S.push('<a-scene vr-mode-ui="enabled: false" loading-screen="enabled: false" background="color: ' + bg + '">');
     S.push('  <a-entity camera="fov: 24; active: true" look-controls="enabled: false" orbit-controls="target: 0 0 0; minDistance: 2; maxDistance: 80; initialPosition: 0 0 7; rotateSpeed: 0.5"></a-entity>');
@@ -3174,7 +3290,7 @@
     L.push('<script>');
     L.push('window.__fsSceneHTML=' + JSON.stringify(S.join('\n')) + ';');
     L.push('window.__fsSceneBooted=false;window.__fsWhenSceneBooted=function(fn){if(window.__fsSceneBooted){fn();return;}window.addEventListener("fs:scene-booted",fn,{once:true});};');
-    L.push('(function(){function inject(){document.getElementById("scene-slot").innerHTML=window.__fsSceneHTML;window.__fsSceneBooted=true;window.dispatchEvent(new Event("fs:scene-booted"));setTimeout(function(){var s=document.querySelector("a-scene");if(s&&!s.renderStarted)window.fsPost("3D stage failed to start: the "+(navigator.gpu?"WebGPU":"WebGL2")+" renderer never began rendering. Reload to retry.",true);},6000);}function hideGpu(){try{Object.defineProperty(Navigator.prototype,"gpu",{get:function(){return undefined;},configurable:true});}catch(e){}try{Object.defineProperty(navigator,"gpu",{value:undefined,configurable:true});}catch(e){}}function __fsForceWebGL2(){var ua=navigator.userAgent||"";if(/iPad|iPhone|iPod/.test(ua))return true;if(navigator.platform==="MacIntel"&&(navigator.maxTouchPoints||0)>1)return true;if(/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(ua))return false;return /Safari|AppleWebKit/.test(ua);}if(__fsForceWebGL2()){hideGpu();inject();return;}if(!navigator.gpu){inject();return;}var settled=false;function go(a){if(settled)return;settled=true;if(!a)hideGpu();inject();}try{Promise.resolve(navigator.gpu.requestAdapter()).then(go,function(){go(null);});}catch(e){go(null);}setTimeout(function(){go(null);},2000);})();');
+    L.push('(function(){function hasWebGL2(){try{var c=document.createElement("canvas").getContext("webgl2");if(!c)return false;var l=c.getExtension("WEBGL_lose_context");if(l)l.loseContext();return true;}catch(e){return false;}}function inject(){if(!navigator.gpu&&!hasWebGL2()){window.fsPost("This browser cannot draw the 3D stage: no WebGL2 context is available. WebGL2 needs Chrome 56+, Firefox 51+ or Safari 15+, and may be switched off or blocked by the graphics driver.",true);return;}document.getElementById("scene-slot").innerHTML=window.__fsSceneHTML;window.__fsSceneBooted=true;window.dispatchEvent(new Event("fs:scene-booted"));setTimeout(function(){var s=document.querySelector("a-scene");if(s&&!s.renderStarted)window.fsPost("3D stage failed to start: the "+(navigator.gpu?"WebGPU":"WebGL2")+" renderer never began rendering. Reload to retry.",true);},6000);}function hideGpu(){try{Object.defineProperty(Navigator.prototype,"gpu",{get:function(){return undefined;},configurable:true});}catch(e){}try{Object.defineProperty(navigator,"gpu",{value:undefined,configurable:true});}catch(e){}}function __fsForceWebGL2(){var ua=navigator.userAgent||"";if(/iPad|iPhone|iPod/.test(ua))return true;if(navigator.platform==="MacIntel"&&(navigator.maxTouchPoints||0)>1)return true;if(/Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|Android/.test(ua))return false;return /Safari|AppleWebKit/.test(ua);}if(__fsForceWebGL2()){hideGpu();inject();return;}if(!navigator.gpu){inject();return;}var settled=false;function go(a){if(settled)return;settled=true;if(!a)hideGpu();inject();}try{Promise.resolve(navigator.gpu.requestAdapter()).then(go,function(){go(null);});}catch(e){go(null);}setTimeout(function(){go(null);},2000);})();');
     L.push('<\/script>');
 
     // Bridge: receive shader/model/uniform/geometry commands, report readiness +

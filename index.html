@@ -51,6 +51,63 @@
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      The app is one bare `<script type="module">` into an empty #root, built at
+      `target: 'esnext'` with no polyfills — so a browser that cannot PARSE the
+      entry chunk (monaco's ES2022 class static blocks, the A-Frame bundle's own)
+      or that lacks something the boot path needs shows a page with nothing on it
+      at all, and there is no ErrorBoundary anywhere to say otherwise. A blank
+      page is indistinguishable from a broken deploy, and the user study runs on
+      machines the researcher does not control.
+
+      Two fallbacks, both deliberately unable to take the app away from anyone:
+      <noscript> for JS off, and a watchdog that speaks ONLY when #root is still
+      empty — i.e. exactly when the app really did not start. It never
+      feature-tests, because every candidate test (structuredClone, :has(),
+      color-mix) has browsers where the app boots and stays useful, and blocking
+      those would be a regression; and the note lives OUTSIDE #root, so React
+      owns its container either way.
+    -->
+    <noscript>
+      <p style="font: 16px/1.5 system-ui, sans-serif; padding: 2rem; max-width: 40rem">
+        FastShaders ir vizuāls ēnotāju redaktors — tam nepieciešams JavaScript.<br />
+        FastShaders is a visual shader editor — it needs JavaScript to run.
+      </p>
+    </noscript>
+    <div id="boot-fallback" style="display: none; font: 16px/1.5 system-ui, sans-serif; padding: 2rem; max-width: 40rem">
+      <p>
+        FastShaders nesāka darboties. Parasti tas nozīmē, ka pārlūks ir par vecu —
+        nepieciešams Chrome 111+, Safari 16.4+ vai Firefox 126+.
+      </p>
+      <p>
+        FastShaders did not start. This usually means the browser is too old — it
+        needs Chrome 111+, Safari 16.4+ or Firefox 126+.
+      </p>
+    </div>
+    <script>
+      // A CLASSIC script on purpose: a browser that cannot parse the module
+      // below still runs this one, which is the whole point.
+      (function () {
+        var root = document.getElementById('root');
+        var note = document.getElementById('boot-fallback');
+        if (!root || !note) return;
+        var ticks = 0;
+        // Polled rather than a single timeout: the boot wave is ~650 KB gz, so a
+        // slow link can legitimately take longer than the 15 s grace period — if
+        // the app arrives after the note is shown, the next tick takes it back
+        // down. Polling stops at 2 min either way.
+        var timer = setInterval(function () {
+          if (root.firstChild) {
+            note.style.display = 'none';
+            clearInterval(timer);
+            return;
+          }
+          ticks++;
+          if (ticks >= 15) note.style.display = 'block';
+          if (ticks >= 120) clearInterval(timer);
+        }, 1000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

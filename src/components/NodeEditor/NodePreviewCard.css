@@ -1,3 +1,28 @@
+/* `zoom` — NOT `transform: scale()` — and that carries a browser floor worth
+   knowing about.
+
+   Zoom is the whole sizing mechanism of the asset browser: this 0.67, the same
+   0.67 on `.saved-group-card` (ContentBrowser.css), the DYNAMIC one the bar's
+   grip writes onto `.content-browser__items` (`zoomForHeight`, ContentBrowser
+   .tsx), and node-editor.html's `--gp-preview-zoom` on the wrapper around these
+   cards. It has to be zoom because zoom affects LAYOUT — the strip's flex row,
+   its scrollWidth (which `useScrollArrows` reads) and the tallest-tile
+   measurement all have to see the scaled box. `transform` is visual only, so
+   swapping it in leaves every tile occupying its unscaled footprint.
+
+   The cost is that `zoom` is a non-standard property Firefox did not implement
+   until 126 (May 2024). On anything older the declaration is not parsed at all,
+   so every tile renders at 1/0.67 = 1.49x and is clipped by the strip's
+   `overflow-y: hidden`, and dragging the bar's grip stops resizing tiles
+   (`.content-browser__items`' inline zoom is inert too). No fallback is
+   attempted: every such Firefox is end-of-life, the app stays usable, and a
+   transform-based `@supports not (zoom: 1)` fallback would have to restate the
+   layout of four surfaces in a browser nobody here can test against.
+
+   `CARD_COLOR_SCALE` (NodePreviewCard.tsx) is safe under that failure and must
+   stay that way: it is a RATIO applied INSIDE this zoomed subtree, so it
+   inflates by exactly the same 1/0.67 as its neighbours rather than compounding
+   with them. */
 .node-preview-card {
   flex-shrink: 0;
   cursor: grab;
@@ -58,7 +83,7 @@
    An asset card may SCALE a node (FitNodeHeading + the strip's `zoom`) and
    make it inert. It may never RESTYLE one: nothing here may set a geometry
    property (width/height/padding/margin/font-size/inset/transform) on a
-   node-internal class — `.node-base*`, `.mic-node*`, `.clock-node*`,
+   node-internal class — `.node-base*`, `.sound-node*`, `.clock-node*`,
    `.preview-node*`, `.math-preview-node*`, `.color-node*`, `.output-node*`.
    `assetCardGeometry.test.ts` fails the build if that happens.
 

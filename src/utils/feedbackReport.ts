@@ -113,7 +113,14 @@ function group(n: number): string {
   return n.toLocaleString('en-US');
 }
 
-/** Byte size at a sensible unit; models run from a few KB to tens of MB. */
+/**
+ * Byte size at a sensible unit; models run from a few KB to tens of MB.
+ *
+ * THE app-wide one: `engine/imageAssets.ts` sizes the line comment beside every
+ * emitted image `.src` with it too, so keep the output ASCII — no locale digit
+ * grouping, i.e. never `group()`'s `toLocaleString`: that comment ships inside
+ * exported `.js` files.
+ */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

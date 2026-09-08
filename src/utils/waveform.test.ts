@@ -116,7 +116,19 @@ describe('appTime', () => {
     expect(appTime(4000)).toBe(appTime(4000));
   });
 
-  it('defaults to now and is non-negative after module init', () => {
-    expect(appTime()).toBeGreaterThanOrEqual(0);
+  it('the bare call reads performance.now() on that same timeline', () => {
+    // `expect(appTime()).toBeGreaterThanOrEqual(0)` was all this said, and it
+    // cannot fail: EPOCH is captured at module init and performance.now() is
+    // monotonic. Bracketing the bare call between two explicit ones is
+    // falsifiable — it catches a default argument reading a DIFFERENT clock
+    // (Date.now() lands ~1.7e6 s away), which is the live risk in a module
+    // whose entire point is that every animated surface shares one epoch.
+    const before = appTime(performance.now());
+    const bare = appTime();
+    const after = appTime(performance.now());
+    expect(bare).toBeGreaterThanOrEqual(before);
+    expect(bare).toBeLessThanOrEqual(after);
+    // And the epoch is module init, not some point in the future.
+    expect(before).toBeGreaterThanOrEqual(0);
   });
 });

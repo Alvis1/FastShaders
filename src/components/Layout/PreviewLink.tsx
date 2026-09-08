@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { findDefaultOutput, outputDormancyFromState } from '@/utils/outputMaterials';
 import { drivingMarchOutput } from '@/utils/sdfPartition';
-import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { getUnwrappedEdges } from '@/engine/cpuEvaluator';
 import { useAppStore } from '@/store/useAppStore';
 import { linkPath, rectCenter } from './previewLinkGeometry';
 import './PreviewLink.css';
@@ -33,23 +33,45 @@ import './PreviewLink.css';
  * none` (a collapsed group member). It deliberately does NOT hide when the
  * Output node is merely panned off screen — see the tick loop.
  */
-export function PreviewLink() {
+// memo(): rendered by NodeEditor, which re-renders every drag frame; this
+// component takes no props and reads everything from its own store selectors,
+// so memo is unconditionally effective. It matters more here than for the
+// other canvas panels — a parent re-render NOT caused by nodes/edges
+// (hoveredNodeId, an open context menu, NodeEditor's own local state) re-runs
+// the two whole-graph selectors below, which is work no notification asked for.
+export const PreviewLink = memo(function PreviewLink() {
   // Primitive selectors → re-render only when the Output's identity or its
   // MATERIAL COUNT changes (the count is how many <path> elements React must
   // keep mounted; the per-frame geometry never re-renders anything).
-  // The node that FEEDS the preview: a DRIVING SDF Output (field wired)
-  // replaces the Output node in emission, so the wire leaves it instead — a
-  // wire from an ignored Output would claim the viewer renders what it does
-  // not. An unwired SDF Output is inert and the Output keeps its wire.
-  const sdfDrives = useAppStore(
-    (s) => drivingMarchOutput(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges)) !== null,
+  // The node that FEEDS the preview: a DRIVING Raymarch Output (Field OR
+  // Density wired — `drivingMarchOutput`) replaces the Output node in
+  // emission, so the wire leaves it instead; a wire from an ignored Output
+  // would claim the viewer renders what it does not. A Raymarch Output with
+  // neither wired is inert and the Output keeps its wire.
+  //
+  // ONE selector answers "does a march drive", not two. zustand re-runs every
+  // selector of a subscribed component on every setState, and NodeEditor
+  // notifies at refresh rate through a drag — so asking the same question
+  // twice paid for two whole-graph derivations per notify. The worse half is
+  // consistency: the path COUNT and the anchor NODE were derived from two
+  // independently written copies of "what drives", and if one ever gained a
+  // condition the other lacked the component would mount one wire's worth of
+  // paths while anchoring them on a different node.
+  //
+  // getUnwrappedEdges is the ctx-memoized form of unwrapCollapsedGroupEdges —
+  // same array, but O(1) once the shared per-graph ctx exists, and the
+  // ShaderNode selectors in the same notification round build it anyway. The
+  // raw builder allocates two Sets and two arrays per call the moment any
+  // group is collapsed (measured ~28x on a 150n/294e graph). Read-only here.
+  const marchId = useAppStore(
+    (s) => drivingMarchOutput(s.nodes, getUnwrappedEdges(s.nodes, s.edges))?.id ?? null,
   );
-  const outputId = useAppStore(
-    (s) =>
-      drivingMarchOutput(s.nodes, unwrapCollapsedGroupEdges(s.nodes, s.edges))?.id
-      ?? findDefaultOutput(s.nodes)?.id
-      ?? null,
-  );
+  // Its own narrow selector, so the fallback still re-subscribes: when the
+  // march stops driving, `marchId` alone would re-render the component but
+  // nothing would be watching the plain Output's identity.
+  const defaultOutputId = useAppStore((s) => findDefaultOutput(s.nodes)?.id ?? null);
+  const sdfDrives = marchId !== null;
+  const outputId = marchId ?? defaultOutputId;
   // VISIBLE materials only: the node hides DORMANT sections (their every
   // mesh absent from the loaded model), and each <path> here pairs with a
   // RENDERED socket — counting raw materials would leave the anchor cache
@@ -61,7 +83,7 @@ export function PreviewLink() {
   const materialCount = useAppStore((s) => outputDormancyFromState(s).visibleCount);
   const outputIdRef = useRef(outputId);
   outputIdRef.current = outputId;
-  // One wire from the SDF Output (it has one section); else one per material.
+  // One wire from the Raymarch Output (it has one section); else one per material.
   const pathCount = sdfDrives ? 1 : Math.max(1, materialCount);
   const pathCountRef = useRef(pathCount);
   pathCountRef.current = pathCount;
@@ -213,4 +235,4 @@ export function PreviewLink() {
       ))}
     </svg>
   );
-}
+});

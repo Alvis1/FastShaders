@@ -13,22 +13,8 @@ import { WaveformSvg } from './nodes/WaveformSvg';
 import { renderNoisePreview, type NoiseType } from '@/utils/noisePreview';
 import complexityData from '@/registry/complexity.json';
 import {
-  MIC_BODY_W, MIC_BODY_H, MIC_PARAM_TOPS, MIC_CHIP_H, MIC_METER_TOP, MIC_METER_H,
-  MIC_BTN_TOP, MIC_OUT_TOPS, MIC_PAD_X,
-} from './nodes/micGeometry';
-import {
-  AUD_BODY_W,
-  AUD_BODY_H,
-  AUD_PARAM_TOPS,
-  AUD_CHIP_H,
-  AUD_SOURCE_TOP,
-  AUD_SOURCE_H,
-  AUD_METER_TOP,
-  AUD_METER_H,
-  AUD_BTN_TOP,
-  AUD_OUT_TOPS,
-  AUD_PAD_X,
-} from './nodes/audioGeometry';
+  SOUND_BODY_W, SOUND_BODY_H, MIC_PARAM_TOPS, MIC_CHIP_H,   SOUND_METER_TOP, MIC_METER_H, SOUND_BTN_TOP, MIC_OUT_TOPS, MIC_PAD_X,
+} from './nodes/soundGeometry';
 import { ClockFaceSvg } from './nodes/ClockFaceSvg';
 import { useFitText } from '@/hooks/useFitText';
 import { OUTPUT_DEFAULT_EXPOSED, MARCH_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
@@ -46,8 +32,7 @@ import {
   OUTPUT_EMPTY_COLOR,
 } from './nodes/OutputNode';
 import './nodes/ClockNode.css';
-import './nodes/MicNode.css';
-import './nodes/AudioInputNode.css';
+import './nodes/SoundNode.css';
 import './nodes/OutputNode.css';
 import { MARCH_NODE_CONFIG } from './nodes/RaymarchOutputNode';
 import './NodePreviewCard.css';
@@ -185,7 +170,7 @@ function canvasCtx(canvas: HTMLCanvasElement | null) {
  * React Flow's own handle classes plus `.typed-handle`, and NOTHING else.
  *
  * That class set is what makes the node's own stylesheet position it. Every
- * fixed-geometry node (`.clock-node`, `.mic-node`, `.preview-node`,
+ * fixed-geometry node (`.clock-node`, `.sound-node`, `.preview-node`,
  * `.math-preview-node`, `.output-node`) places its live sockets with rules
  * like `.clock-node__canvas-wrap > .react-flow__handle`, so a card dot that
  * sits in the SAME wrapper element lands in the same place by construction.
@@ -357,22 +342,26 @@ function ClockCardContent(props: ContentProps) {
 
 
 /* ============================================================
- * MicCardContent — inert replica of the MicNode
+ * SoundCardContent — inert replica of the Sound node (SoundNode)
  * ============================================================ */
 
-function MicCardContent(props: ContentProps) {
+function SoundCardContent(props: ContentProps) {
   const { def } = props;
-  // Geometry comes from micGeometry.ts — the SAME constants MicNode.tsx and
+  // Geometry comes from micGeometry.ts — the SAME constants SoundNode.tsx and
   // the auto-layout footprint read, so the tile is a true miniature by
   // construction (the old hand-copied twin of these values is the drift class
   // that let the tile and the node disagree).
+  //
+  // This is the one card the Audio Input node's merge touched: that node's
+  // tile was a byte-for-byte sibling of this one plus the source picker, so
+  // folding the two left exactly this — the mic tile, grown by one row.
   return (
-    <CardShell {...props} nodeClassName="mic-node" hideOutput>
-      <div className="mic-node__body" style={{ width: MIC_BODY_W, height: MIC_BODY_H }}>
+    <CardShell {...props} nodeClassName="sound-node" hideOutput>
+      <div className="sound-node__body" style={{ width: SOUND_BODY_W, height: SOUND_BODY_H }}>
         {def.inputs.map((inp, i) => (
           <div
             key={inp.id}
-            className="mic-node__val"
+            className="shader-node__param-row"
             style={{ top: MIC_PARAM_TOPS[i] ?? 0, height: MIC_CHIP_H, left: MIC_PAD_X, right: MIC_PAD_X }}
           >
             {/* Inert by the card's pointer-events: none — kept a real widget so
@@ -388,87 +377,21 @@ function MicCardContent(props: ContentProps) {
             at some resting level would read as signal. */}
         <div
           className="shader-node__level-meter shader-node__level-meter--idle"
-          style={{ top: MIC_METER_TOP, height: MIC_METER_H, left: MIC_PAD_X, right: MIC_PAD_X }}
+          style={{ top: SOUND_METER_TOP, height: MIC_METER_H, left: MIC_PAD_X, right: MIC_PAD_X }}
         >
           <span className="shader-node__level-meter-fill" />
         </div>
         {/* Inert: a plain div, never a <button>. A palette tile must not become
-            another way to switch the microphone on — armMic has exactly two
-            click paths and this is not one of them. */}
-        <div className="mic-node__btn-wrap" style={{ top: MIC_BTN_TOP }}>
+            another way to open a capture — armSound has exactly two click paths
+            and this is not one of them. */}
+        <div className="shader-node__arm-wrap" style={{ top: SOUND_BTN_TOP }}>
           {/* --inert stands in for :disabled, which a <div> can never match —
-              a tile's mic is never armable, so it must read grey like the
+              a tile's arm light is never armable, so it must read grey like the
               unwired canvas node rather than the enabled green. */}
-          <div className="shader-node__mic-btn shader-node__mic-btn--inert" aria-hidden="true" />
+          <div className="shader-node__sound-btn shader-node__sound-btn--inert" aria-hidden="true" />
         </div>
         {def.outputs.map((out, i) => (
           <CardSocket key={out.id} side="right" dataType={out.dataType} style={{ top: MIC_OUT_TOPS[i] ?? 0 }} />
-        ))}
-      </div>
-    </CardShell>
-  );
-}
-
-/* ============================================================
- * AudioCardContent — inert replica of the AudioInputNode
- * ============================================================ */
-
-function AudioCardContent(props: ContentProps) {
-  const { def } = props;
-  // Geometry comes from audioGeometry.ts — the SAME constants
-  // AudioInputNode.tsx and the auto-layout footprint read, so the tile is a
-  // true miniature by construction.
-  return (
-    <CardShell {...props} nodeClassName="audio-node" hideOutput>
-      <div className="audio-node__body" style={{ width: AUD_BODY_W, height: AUD_BODY_H }}>
-        {def.inputs.map((inp, i) => (
-          <div
-            key={inp.id}
-            className="audio-node__val"
-            style={{ top: AUD_PARAM_TOPS[i] ?? 0, height: AUD_CHIP_H, left: AUD_PAD_X, right: AUD_PAD_X }}
-          >
-            {/* Inert by the card's pointer-events: none — kept a real widget so
-                the tile matches the live node pixel for pixel. */}
-            <DragNumberInput
-              compact
-              value={Number(def.defaultValues?.[inp.id] ?? 0)}
-              onChange={() => {}}
-            />
-          </div>
-        ))}
-        {/* A DISABLED <select>, not the live AudioSourceSelect. The card's
-            pointer-events: none stops the pointer but NOT the keyboard, so a
-            real picker here would make every tile a tab stop that opens a
-            device list from a static replica — and enumerating devices for a
-            palette tile is not something a tile should ever do. `disabled`
-            also gives the greyed look the class already defines, the same way
-            the arm light needs --inert to stand in for :disabled. */}
-        <select
-          className="audio-node__source"
-          style={{ top: AUD_SOURCE_TOP, height: AUD_SOURCE_H, left: AUD_PAD_X, right: AUD_PAD_X }}
-          disabled
-          value="preview"
-          onChange={() => {}}
-          aria-hidden="true"
-          tabIndex={-1}
-        >
-          <option value="preview">Tab / system audio…</option>
-        </select>
-        <div
-          className="shader-node__level-meter shader-node__level-meter--idle"
-          style={{ top: AUD_METER_TOP, height: AUD_METER_H, left: AUD_PAD_X, right: AUD_PAD_X }}
-        >
-          <span className="shader-node__level-meter-fill" />
-        </div>
-        {/* Inert: a plain div, never a <button>. A palette tile must not become
-            another way to open a capture — armAudio has exactly ONE click path
-            and this is not it. */}
-        <div className="audio-node__btn-wrap" style={{ top: AUD_BTN_TOP }}>
-          {/* --inert stands in for :disabled, which a <div> can never match. */}
-          <div className="shader-node__mic-btn shader-node__mic-btn--inert" aria-hidden="true" />
-        </div>
-        {def.outputs.map((out, i) => (
-          <CardSocket key={out.id} side="right" dataType={out.dataType} style={{ top: AUD_OUT_TOPS[i] ?? 0 }} />
         ))}
       </div>
     </CardShell>
@@ -755,10 +678,8 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
         <FitNodeHeading visualScale={shared.costScale} textScale={1}><NoiseCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'clock' ? (
         <FitNodeHeading visualScale={shared.costScale} textScale={1}><ClockCardContent {...shared} /></FitNodeHeading>
-      ) : flowType === 'mic' ? (
-        <FitNodeHeading visualScale={shared.costScale} textScale={1}><MicCardContent {...shared} /></FitNodeHeading>
-      ) : flowType === 'audio' ? (
-        <FitNodeHeading visualScale={shared.costScale} textScale={1}><AudioCardContent {...shared} /></FitNodeHeading>
+      ) : flowType === 'sound' ? (
+        <FitNodeHeading visualScale={shared.costScale} textScale={1}><SoundCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'raymarchOutput' ? (
         <FitNodeHeading visualScale={shared.costScale} textScale={OUTPUT_TITLE_PX / CARD_TITLE_BASE_PX}><MarchOutputCardContent {...shared} /></FitNodeHeading>
       ) : flowType === 'output' ? (

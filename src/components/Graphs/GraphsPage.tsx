@@ -12,7 +12,7 @@
  * makes GraphModal's store writes safe. Never write the store from a path that
  * could run before it.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { getAllDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
 import { getBuiltinTextures } from '@/registry/builtinTextures';
 import { getBuiltinPresets } from '@/registry/builtinPresets';
@@ -279,6 +279,193 @@ const ENABLE_TITLE =
   'The definition itself stays registered, so existing graphs, saved files and code→graph parsing ' +
   'are unaffected, and the Node Designer can still open it.';
 
+/**
+ * ONE table row, MEMOIZED. The description / alias / citation fields are this
+ * page's hot path and the table is every registry node plus every built-in
+ * texture (~105 rows), each ~30 elements deep.
+ *
+ * `patch` rewrites only the edited row's entry (`{ ...prev, [id]: { ... } }`),
+ * so every OTHER row's `edits` object keeps its identity and bails out here —
+ * a keystroke reconciles one row instead of all of them. (The embedded
+ * NodePreviewCard was already memo'd and bailing; the chrome around it was
+ * not, which is what made typing cost grow with the registry.)
+ *
+ * THE MEMO IS ONLY AS GOOD AS ITS PROPS: everything passed in must keep its
+ * identity across a keystroke. `dirty` and `usage` are therefore folded to
+ * primitives by the caller — passing `dirtyIds` (a Set rebuilt per edit) or
+ * the usage Map would defeat the whole thing — and the callbacks are
+ * `useCallback([])` / `useState` setters.
+ */
+const RegistryRow = memo(function RegistryRow({
+  r,
+  e,
+  dirty,
+  usage,
+  patch,
+  patchEnabled,
+  openGraph,
+  openDesigner,
+}: {
+  r: Row;
+  e: Edits;
+  dirty: boolean;
+  /** How many built-in textures/presets are authored with this node (0 for a texture row). */
+  usage: number;
+  patch: (id: string, field: 'description' | 'aliases' | 'ref' | 'url', value: string) => void;
+  patchEnabled: (id: string, value: boolean) => void;
+  openGraph: (row: Row) => void;
+  openDesigner: (row: Row) => void;
+}) {
+  const id = rowId(r);
+  const childCount = r.nodes.filter((n) => n.type !== 'group').length;
+  // Output has no tile and no menu row of its own to remove — the
+  // palette already excludes it and the Add-node menu reaches it
+  // through a hardcoded row — so a checkbox here would look like a
+  // control and do nothing. Locked, with the reason on hover.
+  const locked = r.kind === 'node' && r.key === 'output';
+  return (
+    <tr className={`${dirty ? 'is-dirty' : ''}${e.enabled ? '' : ' is-off'}`.trim() || undefined}>
+      <td className="gp__c-on">
+        <label
+          className={`gp__onlabel${locked ? ' is-locked' : ''}`}
+          title={
+            locked
+              ? 'Always available — every shader needs an Output node, and it is added from its own row in the Add-node menu rather than from the palette, so there is nothing here to hide.'
+              : ENABLE_TITLE
+          }
+        >
+          <input
+            type="checkbox"
+            className="gp__onbox"
+            checked={e.enabled}
+            disabled={locked}
+            onChange={(ev) => patchEnabled(id, ev.target.checked)}
+          />
+          <span className="gp__onword">{locked ? 'always' : e.enabled ? 'shown' : 'hidden'}</span>
+        </label>
+        {/* Hiding a node doesn't rewrite the ready-made assets that
+            were authored with it — say so rather than letting the
+            checkbox imply it did. */}
+        {!e.enabled && usage > 0 && (
+          <span
+            className="gp__onwarn"
+            title={`Dropping one of those assets still places this node on the canvas — hiding only removes its own tile. Rework or hide the ${usage === 1 ? 'asset' : 'assets'} too if it must be unreachable.`}
+          >
+            ⚠ in {usage} built-in{usage === 1 ? '' : 's'}
+          </span>
+        )}
+      </td>
+      <td className="gp__c-kind">
+        <span className={`gp__kind gp__kind--${r.kind}`}>{r.kind}</span>
+      </td>
+      <td className="gp__c-name">
+        <div className="gp__name">{r.name}</div>
+        <div className="gp__type">{r.key}</div>
+      </td>
+      <td className="gp__c-cat">
+        <CategoryChip category={r.category} />
+      </td>
+      <td className="gp__c-graph">
+        {/* Two destinations, one control — so the footer line + the
+            accent frame say which BEFORE the click, and the title
+            says why. Designable → the embedded Node Designer;
+            everything else → the read-only graph viewer. */}
+        {/* A div, not a <button>: NodePreviewCard → NodeVisual renders
+            real DragNumberInputs, whose step arrows are <button>s —
+            <button> inside <button> is invalid HTML and React warns
+            (validateDOMNesting). role+tabIndex+keydown keeps the row
+            keyboard-activatable; .gp__preview already drops pointer
+            events on the widgets (GraphsPage.css). Same shape as
+            tileActivationProps in NodeEditor/tileDrag.ts, which is
+            already how every content-browser tile stays clickable
+            while containing real DragNumberInputs. */}
+        <div
+          role="button"
+          tabIndex={0}
+          className={`gp__graphbtn${r.designable ? ' is-designable' : ''}`}
+          onClick={() => (r.designable ? openDesigner(r) : openGraph(r))}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            if (r.designable) openDesigner(r);
+            else openGraph(r);
+          }}
+          title={
+            r.designable
+              ? `Design the glyph for “${r.name}” — opens the Node Designer here`
+              : r.kind === 'texture'
+                ? `View the graph behind “${r.name}” — a texture is a node graph, not a single node, so there is no glyph to design`
+                : `View graph — “${r.name}” has no glyph to design (live-canvas node, drawn by its own component)`
+          }
+        >
+          {/* `inert` also removes the replica's DragNumberInput
+              arrows / range / color inputs from the TAB ORDER —
+              pointer-events:none (GraphsPage.css) never did, so a
+              role="button" row otherwise contains focusable
+              spinbuttons. Cast because @types/react 18.3.28 has no
+              `inert` prop. */}
+          <span className="gp__preview" {...({ inert: '' } as Record<string, string>)}>
+            {r.def ? (
+              <NodePreviewCard def={r.def} onDragStart={noopDragStart} />
+            ) : r.texture ? (
+              <TextureCard texture={r.texture} />
+            ) : null}
+          </span>
+          <span className="gp__graphcount">
+            {r.designable ? (
+              <>
+                <span className="gp__act">✎ design glyph</span>
+              </>
+            ) : (
+              <>
+                {childCount} node{childCount === 1 ? '' : 's'} · view
+              </>
+            )}
+          </span>
+        </div>
+      </td>
+      <td className="gp__c-desc">
+        <AutoTextarea
+          value={e.description}
+          onChange={(v) => patch(id, 'description', v)}
+          placeholder="Tooltip description…"
+        />
+      </td>
+      <td className="gp__c-alias">
+        <input
+          className="gp__in"
+          value={e.aliases}
+          onChange={(ev) => patch(id, 'aliases', ev.target.value)}
+          placeholder="mix, lerp, blend…"
+        />
+      </td>
+      <td className="gp__c-cite">
+        <input
+          className="gp__in"
+          value={e.ref}
+          onChange={(ev) => patch(id, 'ref', ev.target.value)}
+          placeholder="—"
+        />
+        <input
+          className="gp__in gp__in--url"
+          value={e.url}
+          onChange={(ev) => patch(id, 'url', ev.target.value)}
+          placeholder="url (optional)"
+        />
+      </td>
+      <td className="gp__c-tsl">
+        {r.kind === 'node' ? (
+          <code className="gp__tsl">{r.tsl}</code>
+        ) : (
+          <button className="gp__codebtn" onClick={() => openGraph(r)} title="Open the graph + TSL source">
+            {r.tsl.split('\n').length} lines
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+});
+
 // ─── Page ───────────────────────────────────────────────────────────────────
 
 export function GraphsPage() {
@@ -363,10 +550,27 @@ export function GraphsPage() {
     setEdits((prev) => ({ ...prev, [id]: { ...prev[id], enabled: value } }));
   }, []);
 
-  // ── Filter + sort ─────────────────────────────────────────────────────────
+  // ── Sort ──────────────────────────────────────────────────────────────────
+  // Kept SEPARATE from the filter because the sort never reads `edits`, and the
+  // filter must: a keystroke in any description/alias field mints a new `edits`
+  // map, so a combined memo re-ran a full localeCompare pass over every row per
+  // character. Sorting first is equivalent — filtering preserves order — so the
+  // per-keystroke cost is the O(n) filter alone.
+  const sorted = useMemo(() => {
+    const out = [...rows];
+    out.sort((a, b) => {
+      const dir = sortAsc ? 1 : -1;
+      if (sortKey === 'name') return dir * a.name.localeCompare(b.name);
+      const cat = a.category.localeCompare(b.category);
+      return cat !== 0 ? dir * cat : a.name.localeCompare(b.name);
+    });
+    return out;
+  }, [rows, sortKey, sortAsc]);
+
+  // ── Filter ────────────────────────────────────────────────────────────────
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let out = rows.filter((r) => {
+    return sorted.filter((r) => {
       if (activeCats.size > 0 && !activeCats.has(r.category)) return false;
       if (hiddenOnly && edits[rowId(r)].enabled) return false;
       if (!q) return true;
@@ -378,14 +582,7 @@ export function GraphsPage() {
         e.aliases.toLowerCase().includes(q)
       );
     });
-    out = [...out].sort((a, b) => {
-      const dir = sortAsc ? 1 : -1;
-      if (sortKey === 'name') return dir * a.name.localeCompare(b.name);
-      const cat = a.category.localeCompare(b.category);
-      return cat !== 0 ? dir * cat : a.name.localeCompare(b.name);
-    });
-    return out;
-  }, [rows, query, activeCats, hiddenOnly, sortKey, sortAsc, edits]);
+  }, [sorted, query, activeCats, hiddenOnly, edits]);
 
   // ── Scroll memory ─────────────────────────────────────────────────────────
   // The page's single scrollport is `.gp__tablewrap` (GraphsPage.css), and the
@@ -970,155 +1167,18 @@ export function GraphsPage() {
           <tbody>
             {visible.map((r) => {
               const id = rowId(r);
-              const e = edits[id];
-              const dirty = dirtyIds.has(id);
-              const childCount = r.nodes.filter((n) => n.type !== 'group').length;
-              const usage = r.kind === 'node' ? (builtinUsage.get(r.key) ?? 0) : 0;
-              // Output has no tile and no menu row of its own to remove — the
-              // palette already excludes it and the Add-node menu reaches it
-              // through a hardcoded row — so a checkbox here would look like a
-              // control and do nothing. Locked, with the reason on hover.
-              const locked = r.kind === 'node' && r.key === 'output';
               return (
-                <tr key={id} className={`${dirty ? 'is-dirty' : ''}${e.enabled ? '' : ' is-off'}`.trim() || undefined}>
-                  <td className="gp__c-on">
-                    <label
-                      className={`gp__onlabel${locked ? ' is-locked' : ''}`}
-                      title={
-                        locked
-                          ? 'Always available — every shader needs an Output node, and it is added from its own row in the Add-node menu rather than from the palette, so there is nothing here to hide.'
-                          : ENABLE_TITLE
-                      }
-                    >
-                      <input
-                        type="checkbox"
-                        className="gp__onbox"
-                        checked={e.enabled}
-                        disabled={locked}
-                        onChange={(ev) => patchEnabled(id, ev.target.checked)}
-                      />
-                      <span className="gp__onword">{locked ? 'always' : e.enabled ? 'shown' : 'hidden'}</span>
-                    </label>
-                    {/* Hiding a node doesn't rewrite the ready-made assets that
-                        were authored with it — say so rather than letting the
-                        checkbox imply it did. */}
-                    {!e.enabled && usage > 0 && (
-                      <span
-                        className="gp__onwarn"
-                        title={`Dropping one of those assets still places this node on the canvas — hiding only removes its own tile. Rework or hide the ${usage === 1 ? 'asset' : 'assets'} too if it must be unreachable.`}
-                      >
-                        ⚠ in {usage} built-in{usage === 1 ? '' : 's'}
-                      </span>
-                    )}
-                  </td>
-                  <td className="gp__c-kind">
-                    <span className={`gp__kind gp__kind--${r.kind}`}>{r.kind}</span>
-                  </td>
-                  <td className="gp__c-name">
-                    <div className="gp__name">{r.name}</div>
-                    <div className="gp__type">{r.key}</div>
-                  </td>
-                  <td className="gp__c-cat">
-                    <CategoryChip category={r.category} />
-                  </td>
-                  <td className="gp__c-graph">
-                    {/* Two destinations, one control — so the footer line + the
-                        accent frame say which BEFORE the click, and the title
-                        says why. Designable → the embedded Node Designer;
-                        everything else → the read-only graph viewer. */}
-                    {/* A div, not a <button>: NodePreviewCard → NodeVisual renders
-                        real DragNumberInputs, whose step arrows are <button>s —
-                        <button> inside <button> is invalid HTML and React warns
-                        (validateDOMNesting). role+tabIndex+keydown keeps the row
-                        keyboard-activatable; .gp__preview already drops pointer
-                        events on the widgets (GraphsPage.css). Same shape as
-                        tileActivationProps in NodeEditor/tileDrag.ts, which is
-                        already how every content-browser tile stays clickable
-                        while containing real DragNumberInputs. */}
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      className={`gp__graphbtn${r.designable ? ' is-designable' : ''}`}
-                      onClick={() => (r.designable ? setDesignerRow(r) : setModal(r))}
-                      onKeyDown={(e) => {
-                        if (e.key !== 'Enter' && e.key !== ' ') return;
-                        e.preventDefault();
-                        if (r.designable) setDesignerRow(r);
-                        else setModal(r);
-                      }}
-                      title={
-                        r.designable
-                          ? `Design the glyph for “${r.name}” — opens the Node Designer here`
-                          : r.kind === 'texture'
-                            ? `View the graph behind “${r.name}” — a texture is a node graph, not a single node, so there is no glyph to design`
-                            : `View graph — “${r.name}” has no glyph to design (live-canvas node, drawn by its own component)`
-                      }
-                    >
-                      {/* `inert` also removes the replica's DragNumberInput
-                          arrows / range / color inputs from the TAB ORDER —
-                          pointer-events:none (GraphsPage.css) never did, so a
-                          role="button" row otherwise contains focusable
-                          spinbuttons. Cast because @types/react 18.3.28 has no
-                          `inert` prop. */}
-                      <span className="gp__preview" {...({ inert: '' } as Record<string, string>)}>
-                        {r.def ? (
-                          <NodePreviewCard def={r.def} onDragStart={noopDragStart} />
-                        ) : r.texture ? (
-                          <TextureCard texture={r.texture} />
-                        ) : null}
-                      </span>
-                      <span className="gp__graphcount">
-                        {r.designable ? (
-                          <>
-                            <span className="gp__act">✎ design glyph</span>
-                          </>
-                        ) : (
-                          <>
-                            {childCount} node{childCount === 1 ? '' : 's'} · view
-                          </>
-                        )}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="gp__c-desc">
-                    <AutoTextarea
-                      value={e.description}
-                      onChange={(v) => patch(id, 'description', v)}
-                      placeholder="Tooltip description…"
-                    />
-                  </td>
-                  <td className="gp__c-alias">
-                    <input
-                      className="gp__in"
-                      value={e.aliases}
-                      onChange={(ev) => patch(id, 'aliases', ev.target.value)}
-                      placeholder="mix, lerp, blend…"
-                    />
-                  </td>
-                  <td className="gp__c-cite">
-                    <input
-                      className="gp__in"
-                      value={e.ref}
-                      onChange={(ev) => patch(id, 'ref', ev.target.value)}
-                      placeholder="—"
-                    />
-                    <input
-                      className="gp__in gp__in--url"
-                      value={e.url}
-                      onChange={(ev) => patch(id, 'url', ev.target.value)}
-                      placeholder="url (optional)"
-                    />
-                  </td>
-                  <td className="gp__c-tsl">
-                    {r.kind === 'node' ? (
-                      <code className="gp__tsl">{r.tsl}</code>
-                    ) : (
-                      <button className="gp__codebtn" onClick={() => setModal(r)} title="Open the graph + TSL source">
-                        {r.tsl.split('\n').length} lines
-                      </button>
-                    )}
-                  </td>
-                </tr>
+                <RegistryRow
+                  key={id}
+                  r={r}
+                  e={edits[id]}
+                  dirty={dirtyIds.has(id)}
+                  usage={r.kind === 'node' ? (builtinUsage.get(r.key) ?? 0) : 0}
+                  patch={patch}
+                  patchEnabled={patchEnabled}
+                  openGraph={setModal}
+                  openDesigner={setDesignerRow}
+                />
               );
             })}
           </tbody>

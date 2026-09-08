@@ -1,6 +1,6 @@
 import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
 import { nodeSearchLV, nodeLabelLV } from '@/i18n';
-import { MIC_DEFAULT_VALUES } from '@/utils/micNode';
+import { SOUND_DEFAULT_VALUES } from '@/utils/soundSettings';
 import { HIDDEN_NODE_TYPES } from './editorVisibility';
 
 const definitions: NodeDefinition[] = [
@@ -226,8 +226,12 @@ const definitions: NodeDefinition[] = [
       'Elapsed time in seconds — wire it in to animate values; right-click to set its speed, or expose speed as an input socket. Also: clock, animation, speed',
   },
   {
-    type: 'micNode',
-    label: 'Microphone',
+    type: 'soundNode',
+    // The node is "Sound"; the TYPE stays `soundNode` because it is the key
+    // inside every saved .fastshader and what codeToGraph/loadGraph match on —
+    // renaming it would orphan existing graphs for a cosmetic gain. Same for
+    // the emitted `mic1_*` uniform base (see micAnalysis.SOUND_VAR_BASE).
+    label: 'Sound',
     category: 'input',
     // Emitted BY HAND (four `uniform(0)` lines, one per channel), so the
     // tslFunction is empty. Like `dataNode` — and UNLIKE the dataviz family —
@@ -262,39 +266,9 @@ const definitions: NodeDefinition[] = [
     // SHADER-side by codegen, while `smoothing` configures an AnalyserNode on
     // the CPU and so is resolved by evaluating its upstream chain on the CPU —
     // see the mic convention in CLAUDE.md.
-    defaultValues: MIC_DEFAULT_VALUES,
+    defaultValues: SOUND_DEFAULT_VALUES,
     description:
-      'Live microphone loudness and three frequency bands, 0–1 each. The values only move while capture is armed in the preview; a downloaded shader holds them at 0 unless the embedding page drives them. Also: audio, sound, music, reactive, spectrum, fft',
-  },
-  {
-    type: 'audioInput',
-    label: 'Audio Input',
-    category: 'input',
-    // Same hand-emitted shape as micNode — four `uniform(0)` lines, one per
-    // CONSUMED channel — sharing its alias-claiming branch in graphToCode. It
-    // needs its own variable base (`aud`, see AUDIO_VAR_BASE) because the pump
-    // routes each uniform back to its own capture session by that prefix: a
-    // graph may hold both nodes, and a shared base would drive one node's
-    // uniforms from the other node's sound.
-    tslFunction: '',
-    tslImportModule: '',
-    // Real def.inputs for the same reason micNode declares them — see above.
-    inputs: [
-      { id: 'smoothing', label: 'Smoothing', dataType: 'float' },
-      { id: 'gain', label: 'Gain', dataType: 'float' },
-    ],
-    outputs: [
-      { id: 'level', label: 'Level', dataType: 'float' },
-      { id: 'bass', label: 'Bass', dataType: 'float' },
-      { id: 'mid', label: 'Mid', dataType: 'float' },
-      { id: 'treble', label: 'Treble', dataType: 'float' },
-    ],
-    defaultValues: MIC_DEFAULT_VALUES,
-    // NB the SOURCE (share a tab / pick a device) is deliberately absent from
-    // defaultValues and from `values`: it is session-only, like the Mic node's
-    // device choice. See utils/audioSource.ts for why.
-    description:
-      'Reacts to sound already playing — a media player, a browser tab, or any audio input including a loopback device. Loudness plus three frequency bands, 0–1 each. Pick the source on the node; values only move while capture is armed, and a downloaded shader holds them at 0 unless the embedding page drives them. Also: system audio, music, speaker, tab, desktop, loopback, spectrum, fft',
+      'Live sound loudness and three frequency bands, 0–1 each — from a microphone, another input device, or the audio already playing on this machine. Pick the source on the node. The values only move while capture is armed; a downloaded shader holds them at 0 unless the embedding page drives them. Also: audio, microphone, mic, system audio, music, speaker, tab, desktop, loopback, reactive, spectrum, fft',
   },
   {
     type: 'screenUV',
@@ -1266,7 +1240,7 @@ const definitions: NodeDefinition[] = [
   },
   {
     // The direction a fragment's view ray travels, world space, unit length —
-    // `normalize(positionWorld − cameraPosition)`. Inside a Volume Output's
+    // `normalize(positionWorld − cameraPosition)`. Inside the Raymarch Output's
     // Background chain it is the ray's FINAL direction after bending, which is
     // what makes an equirect image sampled by it a lensed sky. Emitted as a
     // module helper (engine/moduleHelpers.ts) so codeToGraph reads the call
@@ -1451,7 +1425,7 @@ const definitions: NodeDefinition[] = [
     // The two ramp ends are REAL inputs, not just defaultValues keys, so they
     // can be wired: ShaderNode builds sockets from `def.inputs`, so a param
     // living only in defaultValues can be ticked "expose as input socket" and
-    // still render nothing (the documented micNode/imageNode trap). They KEEP
+    // still render nothing (the documented soundNode/imageNode trap). They KEEP
     // their defaultValues entries too, so an unexposed node still shows its
     // inline swatch and emits byte-identically.
     inputs: [
@@ -1563,6 +1537,49 @@ const definitions: NodeDefinition[] = [
     },
     description:
       'Draw antialiased contour lines wherever a value crosses a regular interval — the way a reader gets exact numbers off a curved 3D surface. Also: isoline contour contours iso level lines topographic.',
+  },
+
+  // Wireframe: an antialiased lattice, in either of two modes.
+  //
+  // GRID (default) draws on the surface PARAMETER — patch-aligned lines on the
+  // teapot's atlas, lat/long on a sphere. EDGES draws the model's real triangle
+  // edges, which needs a per-corner barycentric attribute the loader injects on
+  // request (`barycentric: true` in the emitted module) — there is no way to
+  // recover triangle corners from an indexed mesh in either backend, so the
+  // geometry has to carry them.
+  //
+  // Both modes run the SAME construction — continuous phase, derivative
+  // half-width, sub-pixel average fade — which is what buys a line thickness
+  // that stays constant in PIXELS. No derivative node exists in this registry,
+  // so nothing a user can wire by hand reaches the same result.
+  //
+  // `density` is a real INPUT (so the card shows an editable, WIRED-able number
+  // rather than the dead box an input with no default renders) and `width` is
+  // settings-only. The mode is a plain `values.edges` flag, deliberately NOT
+  // the registry `modes` mechanism: that one is for module-helper variants and
+  // `sdfModes.test.ts` requires every moded def to round-trip byte-identically
+  // through codeToGraph, which this hand-emitted node cannot do.
+  {
+    type: 'wireframe',
+    label: 'Wireframe',
+    category: 'dataviz',
+    tslFunction: '',
+    tslImportModule: '',
+    inputs: [{ id: 'density', label: 'Density', dataType: 'float' }],
+    outputs: [{ id: 'out', label: 'Lines', dataType: 'float' }],
+    defaultValues: {
+      density: 10,
+      width: 1.5,
+    },
+    description:
+      'Draw an antialiased lattice over a surface, or the model’s real triangle edges, at a line thickness that stays constant in pixels however far away or steeply angled the surface is. Also: wireframe mesh cage lattice topology quads edges skeleton.',
+    // ONE line, and a literal fusion of the lines the emitter writes. Both modes
+    // share it exactly — they differ only in what `d` is, which is why the
+    // comment names both rather than the block carrying two variants.
+    construction:
+      'd.smoothstep(0.0, fw.mul(width).mul(0.5)).oneMinus()'
+      + '   // grid: d = 0.5 - |fract(uv * density) - 0.5|,  edges: d = bary'
+      + ',  fw = |dFdx(d)| + |dFdy(d)|',
   },
 
   // ===== OUTPUT =====
@@ -1910,7 +1927,7 @@ export function categoryEmptiedByHiding(category: NodeCategory): boolean {
 }
 
 /** Map a registry definition to its React Flow node type string. */
-export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'mic' | 'audio' | 'output' | 'raymarchOutput';
+export type FlowNodeType = 'shader' | 'color' | 'preview' | 'mathPreview' | 'clock' | 'sound' | 'output' | 'raymarchOutput';
 
 export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   if (def.type === 'output') return 'output';
@@ -1918,11 +1935,10 @@ export function getFlowNodeType(def: NodeDefinition): FlowNodeType {
   // not the generic rows — same header, sections, labelled rows, value cells.
   if (def.type === 'raymarchOutput') return 'raymarchOutput';
   if (def.type === 'time') return 'clock';
-  // Places every socket itself (see MicNode.tsx) — ShaderNode's row layout
+  // Places every socket itself (see SoundNode.tsx) — ShaderNode's row layout
   // cannot express its arrangement.
-  if (def.type === 'micNode') return 'mic';
+  if (def.type === 'soundNode') return 'sound';
   // Same reason, plus a source <select> on the card that no row layout offers.
-  if (def.type === 'audioInput') return 'audio';
   // Both swatch nodes render as ColorNode: the constant is a circle, the named
   // uniform a rounded rectangle (ColorNode branches on registryType). The
   // uniform's `name` goes INSIDE the swatch, the way the constant already

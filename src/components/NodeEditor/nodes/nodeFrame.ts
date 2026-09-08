@@ -40,10 +40,29 @@ let cachedRise: number | null = null;
  * mismatched constant. Cached after the first successful read (the value is not
  * theme-dependent); a read that comes back empty is NOT cached, so an early
  * call before the stylesheet lands cannot freeze the fallback in.
+ *
+ * The token is NOT the whole answer, though, and that is the one way this read
+ * could still drift from what the screen does: a CUSTOM PROPERTY always
+ * resolves, whatever the engine can render, while the movement it feeds is the
+ * standalone `translate` property (NodeBase.css / ColorNode / NoteNode /
+ * GroupNode / OutputNode) — Chromium 104, Firefox 72, Safari 14.1. On an engine
+ * below that the card does not move and `--fs-node-rise` still reads -3px, so
+ * every wire on a hovered node would step off its socket alone: exactly the
+ * "looks like a rendering bug" failure this comment warns about, inverted. The
+ * capability probe is therefore part of the read, not a separate concern —
+ * asking the engine whether the CSS half applies is the only thing that keeps
+ * "the CSS is the source of truth" true. (The affected band is narrow — those
+ * Chromium versions also drop the `:has()` grip rules and take CostBar's
+ * `color-mix` fallback — but a wrong answer here is silent, and 0 is right.)
  */
 export function nodeRisePx(): number {
   if (cachedRise !== null) return cachedRise;
   try {
+    // Cacheable permanently: engine support cannot change within a session.
+    if (!CSS.supports('translate', '1px')) {
+      cachedRise = 0;
+      return 0;
+    }
     const raw = getComputedStyle(document.documentElement)
       .getPropertyValue('--fs-node-rise')
       .trim();

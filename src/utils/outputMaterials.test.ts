@@ -22,10 +22,8 @@ import {
   parseChannelHandle,
   outputMaterials,
   materialCount,
-  materialTargetName,
   materialTargetNames,
   materialExposedPorts,
-  claimedMeshNames,
   findDefaultOutput,
   outputNodes,
   sanitizeOutputMaterials,
@@ -85,7 +83,8 @@ describe('reading materials off a node', () => {
     const n = output('o1');
     expect(materialCount(n)).toBe(1);
     expect(outputMaterials(n)).toHaveLength(1);
-    expect(materialTargetName(outputMaterials(n)[0])).toBeNull();
+    // "Is this the default" is the WHOLE list being empty — see materialTargetNames.
+    expect(materialTargetNames(outputMaterials(n)[0])).toEqual([]);
   });
 
   it('material 0 is the node\'s OWN fields, not a copy in the array', () => {
@@ -116,17 +115,8 @@ describe('reading materials off a node', () => {
     expect(materialTargetNames(undefined)).toEqual([]);
   });
 
-  it('claimedMeshNames lists only the ADDED materials, every target of each', () => {
-    const n = output('o1', [
-      { meshTargets: ['Glass', 'Window'] },
-      { meshTargets: ['Body'] },
-    ]);
-    expect(claimedMeshNames(n)).toEqual(['Glass', 'Window', 'Body']);
-  });
-
   it('a non-Output node has no materials at all', () => {
     expect(outputMaterials(makeNode('c1', 'color'))).toEqual([]);
-    expect(claimedMeshNames(makeNode('c1', 'color'))).toEqual([]);
   });
 
   it('an explicit empty exposed list means "every channel hidden"', () => {

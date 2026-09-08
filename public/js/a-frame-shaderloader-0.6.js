@@ -79,7 +79,14 @@ AFRAME.registerComponent("shader", {
     // and its material, so a weld done once at apply time is silently undone.
     // Re-welding on the geometry component's own events is what survives that.
     this._onGeometryEvent = (e) => {
-      if (e.detail && e.detail.name === "geometry") this.syncWeld();
+      if (e.detail && e.detail.name === "geometry") {
+        // Both, in this order: syncWeld drops our bary geometries first (so it
+        // can see the system's own), and the new geometry then needs its
+        // corners rebuilt. Without the second call a subdivision change or a
+        // primitive swap silently loses the attribute and the edges vanish.
+        this.syncWeld();
+        this.syncBary();
+      }
     };
     this.el.addEventListener("componentinitialized", this._onGeometryEvent);
     this.el.addEventListener("componentchanged", this._onGeometryEvent);
@@ -422,6 +429,15 @@ AFRAME.registerComponent("shader", {
       // Read off the SOURCE because the built material cannot be asked.
       this._weldUvDriven = /\buv\s*\(/.test(source);
       this.syncWeld();
+      // Barycentric corners for a wireframe shader's EDGES mode. AFTER the
+      // weld, and that order is the correctness of it: welding makes the
+      // coincident corners share one vertex (so a displacement moves them
+      // together), and toNonIndexed then copies that shared vertex's values
+      // into each corner — identical position, normal and uv — so the surface
+      // still deforms as one skin. Doing it the other way round would split
+      // first and weld nothing.
+      this._baryWanted = !!(shaderResult && shaderResult.barycentric === true);
+      this.syncBary();
       // Announce success so embedding pages (editor preview, viewer) can
       // clear any error overlay. Bubbles like every A-Frame entity event.
       this.el.emit("shader-applied", { src: tslPath });
@@ -434,9 +450,15 @@ AFRAME.registerComponent("shader", {
       }
       console.error(`Failed to load TSL shader from ${tslPath}`, err);
       this.restoreOriginalMaterials(mesh);
-      // A shader that failed to load must not leave the geometry welded on its
-      // behalf — the entity is back on its original materials.
+      // A shader that failed to load must not leave the geometry welded or
+      // expanded on its behalf — the entity is back on its original materials.
+      // unbary FIRST: unweld's identity guard is "is the mesh still wearing the
+      // geometry WE welded", and our expanded one sitting on top makes it
+      // false, which would strand the welded geometry with its source
+      // reference already dropped.
       this._weldWanted = false;
+      this._baryWanted = false;
+      this.unbary();
       this.unweld();
       // Surface the failure as a DOM event — console.error alone leaves
       // embedding pages with a silently-fallback material and no signal.
@@ -703,6 +725,11 @@ AFRAME.registerComponent("shader", {
   syncWeld: function () {
     const mesh = this.el.getObject3D("mesh");
     if (!mesh || !mesh.geometry) return;
+    // Put every geometry we expanded back first. The weld's identity guards
+    // ("is the mesh still wearing OUR geometry?") are written against the
+    // system's geometry and ours, and a bary geometry sitting on top makes
+    // both false — unweld would silently no-op and leak.
+    this.unbary();
     if (!this._weldWanted) {
       this.unweld();
       return;
@@ -733,6 +760,68 @@ AFRAME.registerComponent("shader", {
     this._weldSource = current;
     this._welded = merged;
     mesh.geometry = merged;
+  },
+  /**
+   * Give every mesh in the subtree a per-corner `bary` attribute — (1,0,0),
+   * (0,1,0), (0,0,1) around each triangle — so a shader can measure its
+   * distance to the nearest EDGE. Neither backend exposes barycentrics
+   * (WGSL has none; the GLSL extension is desktop-only), and an indexed mesh
+   * shares corners between triangles, so the geometry has to carry them.
+   *
+   * Runs over the whole subtree, so it covers models as well as primitives —
+   * unlike the weld, which is primitives-only because it REBUILDS with
+   * position/uv/index and would drop skinning and morph targets.
+   * `toNonIndexed` has no such problem: it expands every attribute, every
+   * morph target and the groups, so a skinned or morphing model survives it.
+   */
+  syncBary: function () {
+    const root = this.el.getObject3D("mesh");
+    if (!root) return;
+    if (!this._baryWanted) {
+      this.unbary();
+      return;
+    }
+    const owned = this._baryOwned || (this._baryOwned = []);
+    root.traverse((node) => {
+      if (!node.isMesh || !node.geometry) return;
+      const g = node.geometry;
+      if (g.getAttribute("bary")) return; // already ours, or authored
+      // A geometry with no positions cannot describe a triangle, and asking it
+      // for one throws INSIDE applyShader's try — which surfaces as a "Shader
+      // error" banner over a shader that is otherwise fine. Reachable while a
+      // geometry is being swapped: A-Frame's geometry component puts a shared
+      // EMPTY BufferGeometry on the mesh between remove() and update().
+      const pos = g.getAttribute("position");
+      if (!pos || pos.count < 3) return;
+      const expanded = g.index ? g.toNonIndexed() : g.clone();
+      const count = expanded.getAttribute("position").count;
+      const bary = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) bary[i * 3 + (i % 3)] = 1;
+      expanded.setAttribute("bary", new THREE.BufferAttribute(bary, 3));
+      // The source is remembered on the NODE, not in one component-level slot:
+      // a model is many meshes and each has its own geometry to restore.
+      node.userData.__fsBarySource = g;
+      node.geometry = expanded;
+      owned.push({ node: node, geometry: expanded });
+    });
+  },
+  /* Put each mesh's own geometry back and drop ours. */
+  unbary: function () {
+    const owned = this._baryOwned;
+    if (!owned || owned.length === 0) return;
+    for (const entry of owned) {
+      const node = entry.node;
+      // Identity guard, mirroring unweld's: only restore if the mesh is still
+      // wearing the geometry WE built. A newer apply, a geometry swap or a
+      // model reload may have replaced it, and putting a stale source back
+      // would resurrect a geometry the system has already disposed.
+      if (node.geometry === entry.geometry && node.userData.__fsBarySource) {
+        node.geometry = node.userData.__fsBarySource;
+      }
+      delete node.userData.__fsBarySource;
+      entry.geometry.dispose();
+    }
+    this._baryOwned = [];
   },
   /* Put the system's own geometry back and drop ours. */
   unweld: function () {
@@ -787,9 +876,13 @@ AFRAME.registerComponent("shader", {
     this.el.removeEventListener("componentinitialized", this._onGeometryEvent);
     this.el.removeEventListener("componentchanged", this._onGeometryEvent);
     this._onGeometryEvent = null;
-    // The weld belonged to the shader; the shader is going away.
+    // The weld and the barycentric corners both belonged to the shader; the
+    // shader is going away. unbary FIRST, for the reason syncWeld does it:
+    // unweld's identity guard is false while our geometry is on the mesh.
     this._weldWanted = false;
     this._weldScanned = null;
+    this._baryWanted = false;
+    this.unbary();
     this.unweld();
   },
   restoreOriginalMaterials: function (mesh) {

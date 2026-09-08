@@ -27,11 +27,10 @@ interface ColormapSettingsMenuProps {
  * bare alphabetical list would throw it away.
  */
 export function ColormapSettingsMenu({ nodeId }: ColormapSettingsMenuProps) {
-  const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const language = useAppStore((s) => s.language);
 
-  const node = nodes.find((n) => n.id === nodeId) as ShaderFlowNode | undefined;
+  const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as ShaderFlowNode | undefined;
   if (!node || node.data.registryType !== 'colormap') return null;
 
   const v = getNodeValues(node);

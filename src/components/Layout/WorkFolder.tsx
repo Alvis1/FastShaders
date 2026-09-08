@@ -10,6 +10,7 @@ import {
   sameShaderFile,
   workFolderSaveName,
 } from '@/utils/workFolderFile';
+import { invokeDesktop, errorText } from '@/utils/tauriBridge';
 import { t } from '@/i18n';
 
 /**
@@ -73,17 +74,6 @@ interface WorkFolderEntry {
   displayName: string | null;
   sizeBytes: number;
   modifiedMs: number | null;
-}
-
-/** Invoke a work-folder Tauri command (same bridge rules as Toolbar's benchInvoke). */
-function wfInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  const bridge = window.__TAURI__;
-  if (!bridge) return Promise.reject(new Error('Desktop bridge unavailable'));
-  return bridge.core.invoke<T>(cmd, args);
-}
-
-function errorText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 /**
@@ -189,7 +179,7 @@ export function WorkFolder() {
 
   useEffect(() => {
     let cancelled = false;
-    wfInvoke<WorkFolderInfo | null>('work_folder_status')
+    invokeDesktop<WorkFolderInfo | null>('work_folder_status')
       .then((i) => {
         if (!cancelled) setInfo(i);
       })
@@ -208,7 +198,7 @@ export function WorkFolder() {
   // control falls back to the unlinked pick button instead of a dead Save
   // titled with a folder that no longer exists.
   const resyncStatus = useCallback(() => {
-    wfInvoke<WorkFolderInfo | null>('work_folder_status')
+    invokeDesktop<WorkFolderInfo | null>('work_folder_status')
       .then(setInfo)
       .catch(() => {
         /* keep current state */
@@ -217,7 +207,7 @@ export function WorkFolder() {
 
   const refreshList = useCallback(() => {
     setEntries(null);
-    wfInvoke<WorkFolderEntry[]>('work_folder_list')
+    invokeDesktop<WorkFolderEntry[]>('work_folder_list')
       .then((list) => {
         list.sort((a, b) => (b.modifiedMs ?? 0) - (a.modifiedMs ?? 0));
         setEntries(list);
@@ -233,7 +223,7 @@ export function WorkFolder() {
     if (busy) return;
     setBusy(true);
     setError(null);
-    wfInvoke<WorkFolderInfo | null>('work_folder_pick', {
+    invokeDesktop<WorkFolderInfo | null>('work_folder_pick', {
       title: t('Choose a work folder for shaders', language),
     })
       .then((picked) => {
@@ -261,7 +251,7 @@ export function WorkFolder() {
     setInfo(null);
     originEpoch.current++;
     setOrigin(null);
-    wfInvoke<void>('work_folder_forget').catch(() => {
+    invokeDesktop<void>('work_folder_forget').catch(() => {
       /* worst case the stale path re-validates away next launch */
     });
   }, []);
@@ -292,7 +282,7 @@ export function WorkFolder() {
       const mustCheck = origin !== null && !(from !== null && sameShaderFile(target, from.fileName));
       let writeName = target;
       if (mustCheck) {
-        const list = await wfInvoke<WorkFolderEntry[]>('work_folder_list');
+        const list = await invokeDesktop<WorkFolderEntry[]>('work_folder_list');
         const clash = list.find((e) => sameShaderFile(e.fileName, target));
         if (clash) {
           const ok = window.confirm(
@@ -317,7 +307,7 @@ export function WorkFolder() {
       }
 
       const epoch = originEpoch.current;
-      await wfInvoke<void>('work_folder_write', {
+      await invokeDesktop<void>('work_folder_write', {
         fileName: writeName,
         dataB64: bytesToBase64(bundle.bytes),
       });
@@ -367,7 +357,7 @@ export function WorkFolder() {
       // name equals the previous shader's — hence `entry.displayName` first.
       const nameBefore = useAppStore.getState().shaderName;
       loadingRef.current = true;
-      wfInvoke<unknown>('work_folder_read', { fileName: entry.fileName })
+      invokeDesktop<unknown>('work_folder_read', { fileName: entry.fileName })
         .then(async (data) => {
           const bytes = toBytes(data);
           let result: 'project' | 'script' | 'model' | null;

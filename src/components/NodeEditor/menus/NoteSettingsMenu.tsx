@@ -9,13 +9,12 @@ interface NoteSettingsMenuProps {
 }
 
 export function NoteSettingsMenu({ nodeId }: NoteSettingsMenuProps) {
-  const nodes = useAppStore((s) => s.nodes);
   const language = useAppStore((s) => s.language);
   const updateNoteData = useAppStore((s) => s.updateNoteData);
   const removeNode = useAppStore((s) => s.removeNode);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
 
-  const node = nodes.find((n) => n.id === nodeId) as NoteFlowNode | undefined;
+  const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as NoteFlowNode | undefined;
   if (!node || node.type !== 'note') return null;
 
   const { heading, color, headerColor, scale } = node.data;

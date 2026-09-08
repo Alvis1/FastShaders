@@ -46,9 +46,14 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
   const base = getCost(type);
   const def = NODE_REGISTRY.get(type);
   if (!def?.chainable) return base;
-  const connected = edges
-    .filter((e) => e.target === node.id && typeof e.targetHandle === 'string')
-    .map((e) => e.targetHandle as string);
+  // One pass, one array. This runs inside a store SELECTOR (ShaderNode), i.e.
+  // once per chainable node on every store notification, so the filter+map pair
+  // this replaces allocated two throwaway arrays per node per round on top of
+  // the unavoidable O(E) scan.
+  const connected: string[] = [];
+  for (const e of edges) {
+    if (e.target === node.id && typeof e.targetHandle === 'string') connected.push(e.targetHandle);
+  }
   const operands = effectiveInputs(def, connected, false, Object.keys(getNodeValues(node))).length;
   return base * Math.max(1, operands - 1);
 }
@@ -78,11 +83,19 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
  * selection (activating a cost profile changes the table, not the graph, so the
  * `[nodes, edges]` effect wouldn't otherwise re-fire).
  */
-export function computeReachableCost(nodes: AppNode[], edges: AppEdge[], seed?: AppNode | null): number {
+export function computeReachableCost(
+  nodes: AppNode[],
+  edges: AppEdge[],
+  seed?: AppNode | null,
+  /** Prebuilt incoming-edge adjacency, when the caller prices several sinks
+   *  over the same edge list (`sinkCosts`) and would otherwise rebuild it per
+   *  sink. Omit and it is built here. */
+  incoming?: ReadonlyMap<string, string[]>,
+): number {
   const sink = seed === undefined ? activeSink(nodes, edges) : seed;
   if (!sink) return 0;
   const sinkIds = new Set(nodes.filter(isSinkNode).map((n) => n.id));
-  let total = sumReachable(nodes, edges, [sink.id], sinkIds);
+  let total = sumReachable(nodes, edges, [sink.id], sinkIds, incoming);
   // The Raymarch Output evaluates its per-step bodies once per ray STEP (the
   // Field also four more times for the gradient normal) and pays its own fixed
   // march overhead. Each body was counted once above; add the remaining
@@ -119,11 +132,38 @@ export function computeReachableCost(nodes: AppNode[], edges: AppEdge[], seed?: 
  * The active sink's entry equals `computeReachableCost(nodes, edges)`; the
  * badges on inactive outputs show theirs muted, so two candidate outputs can
  * be compared before clicking one. Keyed by node id.
+ *
+ * `known` lets a caller that has ALREADY priced a sink hand the answer in
+ * instead of paying for it twice: useSyncEngine computes the ACTIVE sink's
+ * total first (it is the CostBar's number and gates the whole write), and that
+ * entry is this map's active row by construction.
  */
-export function sinkCosts(nodes: AppNode[], edges: AppEdge[]): Map<string, number> {
+export function sinkCosts(
+  nodes: AppNode[],
+  edges: AppEdge[],
+  known?: ReadonlyMap<string, number>,
+): Map<string, number> {
   const out = new Map<string, number>();
-  for (const n of nodes) if (isSinkNode(n)) out.set(n.id, computeReachableCost(nodes, edges, n));
+  // One adjacency build for the whole set — a document may hold several sinks
+  // now that outputs coexist, and each walk would otherwise rebuild it.
+  const incoming = buildIncoming(edges);
+  for (const n of nodes) {
+    if (!isSinkNode(n)) continue;
+    const pre = known?.get(n.id);
+    out.set(n.id, pre !== undefined ? pre : computeReachableCost(nodes, edges, n, incoming));
+  }
   return out;
+}
+
+/** Incoming-edge adjacency (target → sources) for the reverse walk. */
+function buildIncoming(edges: AppEdge[]): Map<string, string[]> {
+  const incoming = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = incoming.get(e.target);
+    if (list) list.push(e.source);
+    else incoming.set(e.target, [e.source]);
+  }
+  return incoming;
 }
 
 /** Reverse-BFS from `seeds`, summing everything reached except the Outputs. */
@@ -132,13 +172,9 @@ function sumReachable(
   edges: AppEdge[],
   seeds: string[],
   outputIds: Set<string>,
+  prebuiltIncoming?: ReadonlyMap<string, string[]>,
 ): number {
-  const incoming = new Map<string, string[]>();
-  for (const e of edges) {
-    const list = incoming.get(e.target);
-    if (list) list.push(e.source);
-    else incoming.set(e.target, [e.source]);
-  }
+  const incoming = prebuiltIncoming ?? buildIncoming(edges);
   const visited = new Set<string>();
   const queue = [...seeds];
   for (let head = 0; head < queue.length; head++) {

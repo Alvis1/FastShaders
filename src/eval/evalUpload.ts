@@ -54,9 +54,14 @@ export async function uploadEvalPackage(
 ): Promise<EvalUploadResult> {
   if (!url) return 'disabled';
   if (bytes.length > MAX_UPLOAD_BYTES) return 'failed';
+  // Hoisted ONLY so the `finally` below can reach it — the controller and the
+  // timer are still constructed inside the `try`, because this function's
+  // contract is that it never throws and the caller fires it with
+  // `void uploadEvalPackage(...).then(...)` and no `.catch` (SusModal).
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), UPLOAD_TIMEOUT_MS);
+    timer = setTimeout(() => ctrl.abort(), UPLOAD_TIMEOUT_MS);
     // Copy into a plain ArrayBuffer: satisfies BodyInit regardless of the
     // source view's buffer type, and detaches nothing the caller still holds.
     const body = new Uint8Array(bytes).buffer;
@@ -70,9 +75,17 @@ export async function uploadEvalPackage(
       },
       signal: ctrl.signal,
     });
-    clearTimeout(timer);
     return res.ok ? 'ok' : 'failed';
   } catch {
     return 'failed';
+  } finally {
+    // `finally`, not a line after the await: a REJECTED fetch is the ordinary
+    // case here (offline study machine, DNS/TLS failure, CSP block on GitHub
+    // Pages) and used to skip the clear outright, stranding the timer plus its
+    // closure over the controller for the full 30 s after the caller had
+    // already moved on. Aborting a settled controller is a no-op, so this was
+    // only hygiene — but it is exactly the shape that becomes a real leak the
+    // day a retry loop is added.
+    if (timer !== undefined) clearTimeout(timer);
   }
 }

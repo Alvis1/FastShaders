@@ -171,3 +171,47 @@ describe('ShaderCarousel import maps (the dev resolver reads these)', () => {
     expect(readFileSync(webgpu, 'utf-8')).toContain('WebGPURenderer');
   });
 });
+
+/**
+ * The SAME drift class, for the other vendored family — and the one the
+ * assertions above do NOT cover. `ShaderCarousel/lib/three/*.min.js` are hand
+ * copies of `node_modules/three/build/`, made once (Jul 2026) with no plugin
+ * and no guard: `fs-vendor-sync` copies only the A-Frame family, so nothing
+ * re-copies these and nothing noticed if they fell behind.
+ *
+ * Why that matters more than a stale demo asset would: the carousel benches are
+ * the instrument that PRICES nodes — their exports become `complexity.json` —
+ * so a renderer-version split between the app and its own calibration
+ * instrument would invalidate the cost table with a fully green suite. And
+ * `package.json` pins `three` with a CARET (`^0.184.0`), so a routine
+ * `npm update` moves the app forward and leaves these three files behind
+ * without touching a single tracked byte.
+ *
+ * Skipped when `node_modules/three` is absent (the `srcMissing` pattern above):
+ * nothing to compare against, not a failure.
+ */
+describe('ShaderCarousel three build stays in sync with node_modules/three', () => {
+  const THREE_BUILD = path.join(ROOT, 'node_modules/three/build');
+  const CAROUSEL_THREE = path.join(ROOT, 'ShaderCarousel/lib/three');
+  const FILES = ['three.core.min.js', 'three.tsl.min.js', 'three.webgpu.min.js'];
+  const buildMissing = !existsSync(THREE_BUILD);
+
+  for (const file of FILES) {
+    it.skipIf(buildMissing)(
+      `ShaderCarousel/lib/three/${file} is byte-identical to node_modules/three/build/${file}`,
+      () => {
+        const copy = path.join(CAROUSEL_THREE, file);
+        const src = path.join(THREE_BUILD, file);
+        expect(existsSync(copy), `carousel copy missing: ${copy}`).toBe(true);
+        expect(existsSync(src), `three no longer ships ${file} — re-check the copy list`).toBe(true);
+        expect(
+          readFileSync(copy).equals(readFileSync(src)),
+          `drift: ShaderCarousel/lib/three/${file} is not the installed three build. ` +
+            'Re-copy it from node_modules/three/build (the benches must run the ' +
+            'SAME renderer the app does, or the points they measure price a ' +
+            'different runtime than the one the cost bar reports).',
+        ).toBe(true);
+      },
+    );
+  }
+});

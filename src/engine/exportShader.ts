@@ -11,6 +11,7 @@ import { toKebabCase } from '@/utils/nameUtils';
 import { collectImageFiles } from '@/utils/imageNode';
 import { buildExportBundle, type ExportBundle } from '@/utils/exportBundle';
 import { evalLog } from '@/eval/telemetry';
+import { safeJsonReviver } from '@/utils/safeJson';
 
 /**
  * Shared "Download Shader" path. Lives outside any component so the toolbar
@@ -53,7 +54,13 @@ export function buildProjectState(): FastShadersProject {
   };
   const parseJson = <T,>(raw: string | null): T | undefined => {
     if (!raw) return undefined;
-    try { return JSON.parse(raw) as T; } catch { return undefined; }
+    // These keys are localStorage, i.e. writable by anything at this origin,
+    // AND `projectImport` writes them straight out of an imported file — so
+    // this is a trust boundary and takes the shared deny-list reviver
+    // (utils/safeJson.ts, the one copy of that rule). It matters more here than
+    // at a read-only site: whatever comes back is embedded VERBATIM into the
+    // downloaded `.js` and thus travels to whoever the file is shared with.
+    try { return JSON.parse(raw, safeJsonReviver) as T; } catch { return undefined; }
   };
 
   const state = useAppStore.getState();
@@ -158,11 +165,11 @@ export function downloadShader(): void {
 }
 
 /**
- * The material settings the module is built with. When an SDF Output drives,
- * the window must render its BACK faces too — the march starts at the camera
- * for a back-face fragment, which is what lets the viewer zoom inside the box
- * and still see the shape — so `side` is forced to double; everything else is
- * the Output node's own settings, or nothing.
+ * The material settings the module is built with. When a Raymarch Output
+ * drives, the window SPHERE must render its BACK faces too — the march starts
+ * at the camera for a back-face fragment, which is what lets the viewer zoom
+ * inside the window and still see the shape — so `side` is forced to double;
+ * everything else is the Output node's own settings, or nothing.
  */
 export function marchMaterialSettings(
   nodes: AppNode[],

@@ -67,7 +67,7 @@ import {
 } from './dragConnect';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
 import { pickSpliceInputPort } from './edgeSplice';
-import { costFocusId, focusNodes, focusOutputNode, OUTPUT_FOCUS_FIT } from './outputFocus';
+import { costFocusId, focusNodes, focusNode, OUTPUT_FOCUS_FIT } from './outputFocus';
 import { selectAllChanges } from './selectAll';
 import {
   readStoredViewport, writeStoredViewport, VIEWPORT_MIN_ZOOM, VIEWPORT_MAX_ZOOM,
@@ -80,7 +80,10 @@ import { getCostScale, getContrastColor } from '@/utils/colorUtils';
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
+import { findSingletonNode } from './singletonNodes';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
+import { asOneHistoryEntry } from '@/utils/historyGesture';
+import { isTypingTarget } from '@/utils/isTypingTarget';
 import { bridgeEdgesAcrossDeletedNodes, makeTypedEdge, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
@@ -128,6 +131,7 @@ function setCanvasBusy(busy: boolean): void {
   canvasBusy = Math.max(0, canvasBusy + (busy ? 1 : -1));
   document.documentElement.classList.toggle('fs-canvas-busy', canvasBusy > 0);
 }
+
 const PRO_OPTIONS = { hideAttribution: true } as const;
 const DESKTOP_PAN_ON_DRAG = [1, 2];
 
@@ -502,6 +506,23 @@ function findNearestEdge(
         [c1x, c1y] = cardinalControlPoint(s.position, s.x, s.y, t.x, t.y);
       }
       const [c2x, c2y] = cardinalControlPoint(t.position, t.x, t.y, s.x, s.y);
+      // Reject on the control hull before paying for the solve. A cubic bezier
+      // lies inside the convex hull of its four control points, so a curve
+      // whose control AABB is further than `bestDist` from the probe cannot
+      // contain a closer point — an EXACT test, so it can never change which
+      // edge is picked (the "what highlights is exactly what snaps" contract
+      // holds). Worth it because this runs per edge per drag FRAME and
+      // `distancePointToCubicBezier` is 31 coarse samples plus 3 refine passes
+      // of 13 — 70 curve evaluations, measured at ~50 µs for 294 edges against
+      // ~2 µs with the reject. The waypoint branch above is deliberately NOT
+      // guarded this way: a Catmull-Rom spline can overshoot its own control
+      // polygon, so the same bounds would not be conservative there.
+      const loX = Math.min(s.x, c1x, c2x, t.x);
+      const hiX = Math.max(s.x, c1x, c2x, t.x);
+      const loY = Math.min(s.y, c1y, c2y, t.y);
+      const hiY = Math.max(s.y, c1y, c2y, t.y);
+      if (cx < loX - bestDist || cx > hiX + bestDist
+        || cy < loY - bestDist || cy > hiY + bestDist) continue;
       d = distancePointToCubicBezier(s.x, s.y, c1x, c1y, c2x, c2y, t.x, t.y, cx, cy);
     }
     if (d < bestDist) {
@@ -580,6 +601,35 @@ function reparentedNode(
     position: { x: newLocalX, y: newLocalY },
   } as AppNode;
   return { node, targetGroupId: target?.id, parentChanged };
+}
+
+/**
+ * React Flow requires each parent to come BEFORE its children in the nodes
+ * array. Whenever a drop makes a group ADOPT a node, the child may already sit
+ * ahead of its new parent — so for every newly adopted group, lift any child
+ * sitting before it to the slot immediately after it.
+ *
+ * Mutates `nodes` in place (every caller has just built a fresh array with
+ * `.map`) and is the ONE implementation of this reconciliation: it was written
+ * out three times — the drag-connect cascade commit, `onNodeDragStop` and
+ * `onSelectionDragStop` — and the failure a divergence produces is a node
+ * VANISHING on group collapse, which reads as data loss rather than as an
+ * ordering bug.
+ */
+function liftChildrenAfterParents(nodes: AppNode[], newParents: Set<string>): void {
+  for (const parentId of newParents) {
+    for (;;) {
+      const parentIdx = nodes.findIndex((p) => p.id === parentId);
+      if (parentIdx < 0) break;
+      const childIdx = nodes.findIndex(
+        (n, i) => i < parentIdx
+          && (n as AppNode & { parentId?: string }).parentId === parentId,
+      );
+      if (childIdx < 0) break;
+      const [item] = nodes.splice(childIdx, 1);
+      nodes.splice(parentIdx, 0, item);
+    }
+  }
 }
 
 /**
@@ -729,8 +779,19 @@ export function NodeEditor() {
    */
   const [bootViewport] = useState(readStoredViewport);
   const onMoveStartBusy = useCallback(() => setCanvasBusy(true), []);
-  // A gesture interrupted by unmount must not leave the preview inert.
-  useEffect(() => () => document.documentElement.classList.remove('fs-canvas-busy'), []);
+  // A gesture interrupted by unmount must not leave the preview inert. The
+  // COUNTER has to be reset with the class: `canvasBusy` is module scope, so it
+  // outlives the component, and a residual ≥1 left by an interrupted gesture
+  // would make the next mount's first `setCanvasBusy(true)` push it to 2 —
+  // after which no gesture end could bring it back to 0 and
+  // `:root.fs-canvas-busy .shader-preview__iframe { pointer-events: none }`
+  // would pin the 3D preview permanently unclickable. Unreachable while
+  // AppLayout mounts this component unconditionally (it only unmounts with the
+  // page); this keeps the guarantee true for any layout that stops doing that.
+  useEffect(() => () => {
+    canvasBusy = 0;
+    document.documentElement.classList.remove('fs-canvas-busy');
+  }, []);
   /**
    * The cost pill's total doubles as "take me to the Output" — the number is
    * this shader's price and the Output node is where it is spent (the DRIVING
@@ -744,7 +805,7 @@ export function NodeEditor() {
   const focusOutput = useCallback(() => {
     const { nodes: nodesNow, edges: edgesNow } = useAppStore.getState();
     const id = costFocusId(nodesNow, edgesNow);
-    if (id) focusOutputNode(fitView, nodesNow, id);
+    if (id) focusNode(fitView, nodesNow, id);
   }, [fitView]);
   /** …but only offered while there IS one. The user can delete the Output, and
    *  a visible control that silently does nothing reads as the app being
@@ -876,9 +937,15 @@ export function NodeEditor() {
     }
 
     const handler = (e: KeyboardEvent) => {
-      // Skip if user is typing in an input/textarea
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      // Skip if the user is typing. Both of this file's window-level key
+      // handlers ask the ONE shared predicate (utils/isTypingTarget) so they
+      // cannot answer differently — this one owns Delete and Cmd+D, and while
+      // it knew only INPUT/TEXTAREA a focused on-canvas `<select>` (the Audio
+      // Input node's source picker) deleted the selection. It deliberately
+      // does NOT cover the input types that consume no character: a Slider
+      // node IS an `<input type="range">`, so Delete there means "delete this
+      // node", not "do nothing".
+      if (isTypingTarget(e.target)) return;
 
       // Esc leaves draw mode (before any accelerator).
       if (e.key === 'Escape' && useAppStore.getState().drawToolActive) {
@@ -956,31 +1023,38 @@ export function NodeEditor() {
           });
         }
         for (let i = 0; i < selectedEdges.length; i++) evalLog('edge-disconnect', { how: 'delete-key' });
-        store.pushHistory();
 
-        // Deleting a group should dissolve it, not orphan its children with a
-        // dangling parentId. Lift them out first, then proceed with the normal
-        // deletion path so the rest of the selection is removed too.
-        const deletedGroups = selectedNodes.filter((n) => n.type === 'group');
-        if (deletedGroups.length > 0) {
+        // ONE undo entry for the whole delete, however many groups it
+        // dissolves. `ungroup` pushes its own history, so a bare pushHistory
+        // here recorded N+1 entries for a selection holding N groups: the
+        // first Cmd+Z restored a snapshot byte-identical to the one before it
+        // (an undo that visibly does nothing reads as broken) and the rest
+        // walked back through half-dissolved graphs the user never authored.
+        // The bracket snapshots once up front and every pushHistory inside it
+        // bails. The early-return guards stay OUTSIDE it — beginInteraction
+        // costs an entry and clears `future` even for an empty body.
+        asOneHistoryEntry(() => {
+          // Deleting a group should dissolve it, not orphan its children with
+          // a dangling parentId. Lift them out first, then proceed with the
+          // normal deletion path so the rest of the selection is removed too.
+          const deletedGroups = selectedNodes.filter((n) => n.type === 'group');
           for (const g of deletedGroups) store.ungroup(g.id);
-          // ungroup() pushed history; treat the rest as a single follow-up.
-        }
 
-        // Re-read nodes/edges since ungroup may have mutated them.
-        const { nodes: currentNodes, edges: currentEdges } = useAppStore.getState();
-        if (selectedNodeIds.size > 0) {
-          store.setNodes(currentNodes.filter((n) => !selectedNodeIds.has(n.id)) as AppNode[]);
-        }
-        // Splice-delete: bridge outgoing edges of deleted nodes onto their
-        // first connected input's upstream, then drop the user's explicitly
-        // selected edges. Chain deletes (X→A→B→C with A and B selected)
-        // resolve across the whole deleted run to produce X→C.
-        const afterBridge = bridgeEdgesAcrossDeletedNodes(
-          currentEdges as AppEdge[],
-          selectedNodeIds,
-        );
-        store.setEdges(afterBridge.filter((e) => !selectedEdgeIds.has(e.id)));
+          // Re-read nodes/edges since ungroup may have mutated them.
+          const { nodes: currentNodes, edges: currentEdges } = useAppStore.getState();
+          if (selectedNodeIds.size > 0) {
+            store.setNodes(currentNodes.filter((n) => !selectedNodeIds.has(n.id)) as AppNode[]);
+          }
+          // Splice-delete: bridge outgoing edges of deleted nodes onto their
+          // first connected input's upstream, then drop the user's explicitly
+          // selected edges. Chain deletes (X→A→B→C with A and B selected)
+          // resolve across the whole deleted run to produce X→C.
+          const afterBridge = bridgeEdgesAcrossDeletedNodes(
+            currentEdges as AppEdge[],
+            selectedNodeIds,
+          );
+          store.setEdges(afterBridge.filter((e) => !selectedEdgeIds.has(e.id)));
+        });
       }
     };
 
@@ -1184,19 +1258,7 @@ export function NodeEditor() {
             if (pc && g) newParents.add(g);
             return moved;
           });
-          for (const parentId of newParents) {
-            for (;;) {
-              const parentIdx = next.findIndex((p) => p.id === parentId);
-              if (parentIdx < 0) break;
-              const childIdx = next.findIndex(
-                (n, i) => i < parentIdx
-                  && (n as AppNode & { parentId?: string }).parentId === parentId,
-              );
-              if (childIdx < 0) break;
-              const [item] = next.splice(childIdx, 1);
-              next.splice(parentIdx, 0, item);
-            }
-          }
+          liftChildrenAfterParents(next, newParents);
           store.setNodes(next);
         }),
       );
@@ -1594,21 +1656,7 @@ export function NodeEditor() {
         return shifted;
       });
 
-      // React Flow requires each parent to come BEFORE its children in the
-      // array — lift any child of a newly adopted group above it.
-      for (const parentId of newParents) {
-        for (;;) {
-          const parentIdx = updated.findIndex((p) => p.id === parentId);
-          if (parentIdx < 0) break;
-          const childIdx = updated.findIndex(
-            (n, i) => i < parentIdx
-              && (n as AppNode & { parentId?: string }).parentId === parentId,
-          );
-          if (childIdx < 0) break;
-          const [item] = updated.splice(childIdx, 1);
-          updated.splice(parentIdx, 0, item);
-        }
-      }
+      liftChildrenAfterParents(updated, newParents);
 
       store.setNodes(updated);
     },
@@ -1653,22 +1701,7 @@ export function NodeEditor() {
 
       const updated: AppNode[] = allNodes.map((n) => replacements.get(n.id) ?? n);
 
-      // React Flow requires each parent to come BEFORE its children in the
-      // array. For each newly adopted group, lift any child sitting before it
-      // to the slot immediately after.
-      for (const parentId of newParents) {
-        for (;;) {
-          const parentIdx = updated.findIndex((p) => p.id === parentId);
-          if (parentIdx < 0) break;
-          const childIdx = updated.findIndex(
-            (n, i) => i < parentIdx
-              && (n as AppNode & { parentId?: string }).parentId === parentId,
-          );
-          if (childIdx < 0) break;
-          const [item] = updated.splice(childIdx, 1);
-          updated.splice(parentIdx, 0, item);
-        }
-      }
+      liftChildrenAfterParents(updated, newParents);
 
       store.setNodes(updated);
     },
@@ -1993,6 +2026,19 @@ export function NodeEditor() {
       const costs = complexityData.costs as Record<string, number>;
       const cost = costs[def.type] ?? 0;
       const currentNodes = useAppStore.getState().nodes;
+
+      // A singleton type that is already on the canvas is not added twice —
+      // the gesture becomes "take me to it" (singletonNodes.ts). Deliberately
+      // BEFORE the drag-connect commit below: the plan was previewed against a
+      // phantom id for a node that is not going to exist, so committing it
+      // would wire the previewed socket to nothing. Clearing the preview is
+      // what stops the highlight outliving the gesture.
+      const existingSingleton = findSingletonNode(currentNodes, def.type);
+      if (existingSingleton) {
+        clearConnectPreview();
+        focusNode(fitView, currentNodes, existingSingleton.id);
+        return;
+      }
 
       let newNodeId: string | undefined;
       if (def.type === 'output') {
@@ -2525,24 +2571,37 @@ export function NodeEditor() {
   // collapsed group frames the pill standing in for it. With NOTHING selected
   // it frames the whole graph — the canvas bar's fit button — because a key
   // that silently does nothing reads as broken. A bare key, so it must never
-  // fire while the user types: INPUT/TEXTAREA (Monaco's input is a textarea),
-  // a SELECT (the Audio node's picker lives on the canvas) and contentEditable
-  // are all skipped, and any modifier bails so Cmd/Ctrl+F stays the browser's
-  // find.
+  // fire while the user types: the shared utils/isTypingTarget predicate skips
+  // text-taking INPUTs, TEXTAREA (Monaco's input is one), SELECT (the Audio
+  // node's picker lives on the canvas) and contentEditable, and any modifier
+  // bails so Cmd/Ctrl+F stays the browser's find.
   //
   // A selects every visible node (see selectAll.ts — Blender's key; pressed
   // again with everything selected it deselects all), dispatched as React
   // Flow `select` changes through the store's onNodesChange — the marquee's
   // own path, so it is a selection change and not a graph edit: no history
   // entry, no autosave, no resync.
+  //
+  // SPACE opens the same Add-node menu as Shift+A, i.e. it opens the SEARCH
+  // BOX: the menu autofocuses its search field, so one unmodified key takes
+  // you from an empty canvas to typing a node name. Shift+A stays (it is the
+  // Blender muscle memory), this is the discoverable one.
+  //
+  // Space needs a guard the letter keys do not: it is the platform's "activate
+  // the focused control" key, so it is already spoken for wherever focus
+  // happens to be. A palette tile is a real <button> that adds its node on
+  // Enter/Space (tileDrag.ts), React Flow makes every node a tab stop that
+  // takes Space as select, and the canvas bar is a row of buttons — in all
+  // three the press belongs to the focused thing, and stealing it would make
+  // Tab-then-Space open a menu instead of doing what the control says. So the
+  // binding fires only when the press landed on the PANE itself, which is what
+  // "pressed space on the canvas" means. `isTypingTarget` still covers the
+  // text surfaces, and it runs first.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (isTypingTarget(e.target)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.toLowerCase();
-      if (tag === 'SELECT' || target?.isContentEditable) return;
       if (key === 'a' && !e.shiftKey) {
         e.preventDefault();
         const changes = selectAllChanges(useAppStore.getState().nodes);
@@ -2558,13 +2617,24 @@ export function NodeEditor() {
         }
         return;
       }
+      const openAddMenuAtCentre = () => {
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        e.preventDefault();
+        useAppStore
+          .getState()
+          .openContextMenu(rect.left + rect.width / 2, rect.top + rect.height / 2, 'canvas');
+      };
+      if (key === ' ' && !e.shiftKey) {
+        // Only from the canvas itself — never out from under a control whose
+        // own job Space already is (see the note above).
+        const el = e.target instanceof Element ? e.target : null;
+        if (el?.closest('button, [role="button"], a[href], summary, .react-flow__node')) return;
+        openAddMenuAtCentre();
+        return;
+      }
       if (!e.shiftKey || key !== 'a') return;
-      const rect = canvasRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      e.preventDefault();
-      useAppStore
-        .getState()
-        .openContextMenu(rect.left + rect.width / 2, rect.top + rect.height / 2, 'canvas');
+      openAddMenuAtCentre();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -2893,6 +2963,17 @@ export function NodeEditor() {
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
     return () => {
+      // Close a bracket the erase gesture still holds. `onUp` covers pointerup
+      // AND pointercancel, so the only leak is an unmount (or an effect re-run)
+      // MID-erase — and a leaked bracket is silent and permanent: pushHistory
+      // hard-bails while `coalescingHistory` is true, so every later edit in
+      // the session becomes unrecoverable by undo. Every other bracket owner
+      // closes on unmount too (DragNumberInput, useHistoryBracket,
+      // useKeyboardNav, and asOneHistoryEntry's `finally`).
+      if (erasing) {
+        useAppStore.getState().endInteraction();
+        erasing = false;
+      }
       el.removeEventListener('pointerdown', onDown, true);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);

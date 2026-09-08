@@ -95,12 +95,12 @@
     "colormap": "Krāsu karte",
     "dataRange": "Datu diapazons",
     "isolines": "Izolīnijas",
+    "wireframe": "Karkass",
     "output": "Izvade",
     "unknown": "Nezināms",
     "dataNode": "Dati",
     "imageNode": "Attēls",
-    "micNode": "Mikrofons",
-    "audioInput": "Audio ievade"
+    "soundNode": "Skaņa"
   },
   "categories": {
     "input": "Ievade",

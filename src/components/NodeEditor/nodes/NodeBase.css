@@ -118,7 +118,18 @@
    cannot forget it; it sits AFTER the rule above and ties on specificity
    ((0,2,0) either way — `:not()`/`:has()` take their argument's), so source
    order is what decides, and it must stay below.
-   A COLLAPSED pill stands in for a node and travels like one. */
+   A COLLAPSED pill stands in for a node and travels like one.
+
+   It is BELT AND BRACES, and that is what makes the `:has()` safe: an engine
+   without `:has()` (Chrome <105, Safari <15.4, Firefox <121) treats the whole
+   selector as invalid and drops the rule — and nothing moves anyway, because
+   `.group-node` declares no `translate` (only `.group-node--collapsed` does,
+   GroupNode.css) and React Flow v12 renders child nodes FLAT as siblings in
+   `.react-flow__nodes` rather than nested inside the parent's wrapper, so no
+   member inherits this variable either. The rule exists for the day the
+   expanded frame grows a `translate` of its own. If that day comes, move the
+   test off `:has()` — a functional invariant must not depend on a selector
+   feature with a support floor. */
 .react-flow__node-group:not(:has(.group-node--collapsed)) {
   --fs-node-shift: 0px;
 }
@@ -331,7 +342,23 @@
   gap: 2px;
 }
 
-/* Override React Flow handle positioning to be relative to the row */
+/* Override React Flow handle positioning to be relative to the row.
+
+   THE CANONICAL COPY. Every node component that anchors its sockets to
+   something other than the whole card restates these three declarations
+   against its own wrapper — MathPreviewNode, ClockNode, PreviewNode, SoundNode,
+   SoundNode and OutputNode all do, because CSS has no way to compose a
+   rule and each anchor is a different selector. Two things must travel with
+   the copy or the sockets land wrong:
+     1. `transform: translateY(-50%)` REPLACES React Flow's own transform,
+        which included `translateX(-50%)` — so the horizontal inset below is no
+        longer optional, it is the other half of this rule.
+     2. Wherever an anchor carries handles on BOTH edges, override BOTH insets.
+        Overriding only `-right` is what left the ClockNode speed socket
+        floating ~6px inside the card (see the scar comment in ClockNode.css).
+        An anchor with handles on one edge only — the Output node's rows, whose
+        outputs are a decorative span rather than a handle — needs just that
+        one, which is why these are separate rules and not a shorthand. */
 .node-base__row .react-flow__handle {
   top: 50% !important;
   transform: translateY(-50%) !important;

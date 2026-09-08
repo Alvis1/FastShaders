@@ -6,8 +6,7 @@ import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRegistry';
 import { nodeBox, hasNodeGlyph, usesOperatorLayout, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
-import { MIC_W, MIC_HEADER_H, MIC_BODY_H } from '@/components/NodeEditor/nodes/micGeometry';
-import { AUD_W, AUD_HEADER_H, AUD_BODY_H } from '@/components/NodeEditor/nodes/audioGeometry';
+import { SOUND_W, SOUND_HEADER_H, SOUND_BODY_H } from '@/components/NodeEditor/nodes/soundGeometry';
 
 // ── Node-size estimation ─────────────────────────────────────────────────────
 // autoLayout usually runs BEFORE React Flow measures a node (on import/paste/
@@ -70,10 +69,12 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
       return { width: 87 * scale, height: 121 * scale };
     case 'clock': // time: 56×56 canvas + header + the speed row (ClockNode)
       return { width: 71 * scale, height: 112 * scale };
-    case 'mic': // microphone: fixed footprint from micGeometry (MicNode)
-      return { width: MIC_W * scale, height: (MIC_HEADER_H + MIC_BODY_H) * scale };
-    case 'audio': // audio input: fixed footprint from audioGeometry (AudioInputNode)
-      return { width: AUD_W * scale, height: (AUD_HEADER_H + AUD_BODY_H) * scale };
+    // Sound: fixed footprint from micGeometry (SoundNode). The `audio` case
+    // beside it is gone — the Audio Input node was folded into this one on
+    // 2026-09-08, and the numbers below grew to its (larger) arrangement,
+    // which is what the source picker on the card needs.
+    case 'sound':
+      return { width: SOUND_W * scale, height: (SOUND_HEADER_H + SOUND_BODY_H) * scale };
     case 'color': // borderless square swatch, no header, never cost-scaled
       return { width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE };
     case 'output': {

@@ -485,7 +485,8 @@ function collapseMultilineReturns(scriptCode: string): string {
  */
 /**
  * One schema `default:` literal → its typed value. Numbers stay numbers;
- * a quoted '#rrggbb' string is a COLOUR default (shaderloader 0.5 schema) and
+ * a quoted '#rrggbb' string is a COLOUR default (the loader's typed schema,
+ * since 0.5 — 0.6 is what every export now references) and
  * must survive as a string — parseFloat('#…') is NaN, and dropping it used to
  * silently degrade a re-imported colour property to a float uniform of 1.
  */

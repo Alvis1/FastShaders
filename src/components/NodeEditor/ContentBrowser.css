@@ -204,6 +204,10 @@
 }
 
 /* ===== Saved Group cards ===== */
+/* The `zoom` here is the same mechanism (and the same Firefox-126 floor) as
+   `.node-preview-card`'s — the reasoning lives in NodePreviewCard.css. Keep the
+   two factors equal: a saved-group tile sits in the same strip as a node tile
+   and must scale with it. */
 .saved-group-card {
   position: relative;
   flex-shrink: 0;

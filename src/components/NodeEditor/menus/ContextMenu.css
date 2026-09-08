@@ -240,3 +240,59 @@
     font-size: var(--font-size-md);
   }
 }
+
+/* The read-only line of TSL a hand-emitted node declares as `construction`.
+   One logical line, so it WRAPS rather than scrolling: a horizontal scrollbar
+   in a 280px menu hides the end of the very expression the block exists to
+   show. Three declarations do that together — `pre-wrap` (not `pre`) keeps the
+   intentional double-spaces before the trailing comment while still reflowing;
+   `anywhere` is what actually breaks it, since a method chain is one unbroken
+   token to the line-breaker and `break-word` alone leaves it overflowing; and
+   `min-width: 0` lets the block be narrower than that token, which a flex/grid
+   ancestor would otherwise refuse. Still height-capped, so a longer line can
+   never push NodeActions off the bottom of the menu — the delete/duplicate row
+   has to stay reachable. */
+.context-menu__construction {
+  padding: var(--space-2) var(--space-3);
+  /* = .context-menu's own min-width, so the block can never be what widens the
+     menu. A MAX-width and not just a min-width of 0, because the two do
+     different jobs here: the menu is a shrink-to-fit fixed box, so its width
+     is the max-content CONTRIBUTION of its children, and only a max-width
+     clamps that contribution. Without this the unbroken method chain measured
+     898px and the menu opened at 926px (measured in Chromium). */
+  max-width: 260px;
+}
+
+/* Beats `.context-menu:not(.context-menu--add-node) .context-menu__list > *`,
+   which sets `min-width: max-content` (0,3,0 — it wins over a bare class) so
+   that label+field rows overflow into the list's horizontal scroll instead of
+   being squeezed. That is right for a row of controls and exactly wrong for a
+   block of prose-shaped code: max-content on one long expression IS the
+   no-wrap this is trying to avoid. */
+.context-menu:not(.context-menu--add-node) .context-menu__list > .context-menu__construction {
+  min-width: 0;
+}
+
+.context-menu__construction pre {
+  margin: 0;
+  max-height: 150px;
+  /* Vertical only: horizontal scrolling is what the wrapping replaces. */
+  overflow-y: auto;
+  white-space: pre-wrap;
+  /* `anywhere`, not `break-word`: a method chain is one unbroken token to the
+     line-breaker, and break-word only helps a line that already has somewhere
+     else to break. */
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  /* Below --font-size-sm on purpose: reference material read once, and the
+     smaller it is the fewer wrapped rows one expression costs. */
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  /* --bg-surface is redefined in the dark block, so the plate follows the
+     theme without this rule knowing which one is active. */
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  padding: var(--space-2);
+  user-select: text;
+}

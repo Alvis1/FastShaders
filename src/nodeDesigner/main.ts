@@ -17,12 +17,21 @@ import '../nodeEditorBootstrap';
 // The app's real font + token + component styles — the designer preview must
 // render with the SAME faces and metrics as the editor (the old standalone
 // page silently fell back to system fonts, one more way it was "not precise").
-import '@fontsource/inter/400.css';
-import '@fontsource/inter/500.css';
-import '@fontsource/inter/600.css';
-import '@fontsource/inter/700.css';
-import '@fontsource/jetbrains-mono/400.css';
-import '@fontsource/jetbrains-mono/500.css';
+// Latin subsets only, for the reason main.tsx spells out: the bare `400.css`
+// entry declares all seven Google subsets and drags 24 unreachable woff2 files
+// into dist.
+import '@fontsource/inter/latin-400.css';
+import '@fontsource/inter/latin-ext-400.css';
+import '@fontsource/inter/latin-500.css';
+import '@fontsource/inter/latin-ext-500.css';
+import '@fontsource/inter/latin-600.css';
+import '@fontsource/inter/latin-ext-600.css';
+import '@fontsource/inter/latin-700.css';
+import '@fontsource/inter/latin-ext-700.css';
+import '@fontsource/jetbrains-mono/latin-400.css';
+import '@fontsource/jetbrains-mono/latin-ext-400.css';
+import '@fontsource/jetbrains-mono/latin-500.css';
+import '@fontsource/jetbrains-mono/latin-ext-500.css';
 import '../styles/tokens.css';
 // React Flow's base stylesheet defines .react-flow__handle — the socket
 // geometry the static replica reuses. No ReactFlow instance mounts here.

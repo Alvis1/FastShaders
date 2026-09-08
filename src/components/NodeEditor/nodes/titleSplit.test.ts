@@ -39,15 +39,54 @@ describe('splitTitle — one break opportunity, at the most balanced seam', () =
 });
 
 describe('NodeTitle is the ONE renderer of .node-base__title (source pin)', () => {
-  it('no node component renders the title span by hand', () => {
-    const dir = __dirname;
+  /**
+   * Files allowed to render the span by hand, each with the reason. The sweep
+   * asserts an exemption is still USED (the glyphCoverage.test.ts idiom), so a
+   * file that stops needing one fails here instead of silently outliving it.
+   */
+  const EXEMPT: Record<string, string> = {
+    // The asset cards' shared frame. Its header is a bare span, so those five
+    // tiles (math preview, preview, clock, mic, audio) get neither splitTitle's
+    // single balanced break nor NodeTitle's `title` hover — today invisible,
+    // because every one of those labels is one or two space-separated words in
+    // both languages, and visible the moment a three-word label or a longer
+    // Latvian translation lands. Route CardShell through <NodeTitle> and delete
+    // this entry.
+    'NodePreviewCard.tsx': 'CardShell renders its own header span',
+  };
+
+  it('no component that draws a node renders the title span by hand', () => {
+    // The sweep used to read `__dirname` NON-recursively, i.e. nodes/ alone —
+    // so NodePreviewCard.tsx, one directory up, was never opened and the guard's
+    // headline claim went unchecked exactly where it is broken. Walk the whole
+    // NodeEditor tree instead.
+    const root = path.resolve(__dirname, '..');
     const offenders: string[] = [];
-    for (const f of readdirSync(dir)) {
-      if (!f.endsWith('.tsx') || f === 'NodeTitle.tsx') continue;
-      const src = readFileSync(path.join(dir, f), 'utf8');
-      if (/className="node-base__title"/.test(src)) offenders.push(f);
-    }
+    let scanned = 0;
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) { walk(p); continue; }
+        if (!e.name.endsWith('.tsx') || e.name === 'NodeTitle.tsx') continue;
+        scanned++;
+        const src = readFileSync(p, 'utf8');
+        if (!/className="node-base__title"/.test(src)) continue;
+        const rel = path.relative(root, p);   // keyed by PATH, so one exemption frees one file
+        if (EXEMPT[rel]) continue;
+        offenders.push(rel);
+      }
+    };
+    walk(root);
+    // Positive control: a wrong root must fail rather than pass vacuously.
+    expect(scanned, 'the source walk found almost no components').toBeGreaterThan(10);
     expect(offenders).toEqual([]);
+  });
+
+  it('every exemption is still used', () => {
+    for (const [file, why] of Object.entries(EXEMPT)) {
+      const src = readFileSync(path.join(__dirname, '..', file), 'utf8');
+      expect(/className="node-base__title"/.test(src), `${file} no longer renders the title by hand (${why}) — drop the exemption`).toBe(true);
+    }
   });
 
   it('the title CSS still refuses mid-word breaks and clamps at two lines', () => {

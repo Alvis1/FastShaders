@@ -15,6 +15,34 @@ import { NODE_BORDER_WIDTH } from './nodeFrame';
 import { NodeTitle } from './NodeTitle';
 
 const PREVIEW_SIZE = 96;
+/**
+ * Redraw budget for the ANIMATED thumbnail, in ms between frames.
+ *
+ * Every redraw is a full PREVIEW_SIZE² CPU noise field plus a `resolveValues`
+ * walk of the upstream graph. MEASURED per call at 96 px on an M-series Mac:
+ * cellNoise 0.08 ms, perlin 0.12–0.19, voronoi 0.30–0.35, fBm 0.29–0.40. Four
+ * animated fBm/Voronoi cards — an ordinary state once a Time node feeds a
+ * noise-driven shader — therefore ate ~1.6 ms of every 16.7 ms frame, on a
+ * low-end machine several times that, to animate 96-pixel thumbnails of a
+ * shader the preview iframe is already rendering for real.
+ *
+ * Those numbers were taken while every call ALSO minted a fresh 36 KB
+ * ImageData. It no longer does — the loop hands `noiseBufRef` back to
+ * renderNoisePreview, which reuses one buffer per card — so the garbage is
+ * gone (~4 MB/s across four cards) but the noise field is not, and the budget
+ * below still earns its keep.
+ *
+ * 30 Hz halves that. It is imperceptible here because the field drifts at
+ * `time * 0.4` units against a 4-unit window, i.e. ~1/150 of the picture
+ * between redraws — and it is deliberately NOT lower: these thumbnails ARE the
+ * app's live feedback about a noise field, and below ~24 Hz a smoothly
+ * translating pattern starts to read as stepping rather than flowing.
+ *
+ * The TIME the field is sampled at is untouched (still the shared appClock),
+ * so a throttled card still agrees with every other animated surface on the
+ * frames it does draw.
+ */
+const ANIMATED_FRAME_MS = 1000 / 30;
 /** Registry types this preview node can render — all MaterialX noise variants. */
 const NOISE_TYPES = new Set<string>([
   'perlin', 'perlinVec3',
@@ -71,6 +99,16 @@ export const PreviewNode = memo(function PreviewNode({
   if (!def) return null;
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Scratch pixel buffer for the thumbnail, ONE per card for the life of the
+  // component. renderNoisePreview overwrites every byte of it and
+  // putImageData copies it into the canvas synchronously, so the same buffer
+  // can serve every frame of the animated loop — see the ANIMATED_FRAME_MS
+  // note. It lives in a ref rather than inside either effect so re-arming the
+  // loop (a dependency change: a new registryType, edited values, a fresh
+  // timeInputs identity) reuses the buffer instead of allocating another, and
+  // so the static and animated effects — which are mutually exclusive on
+  // `hasAnyTime` — share the one allocation.
+  const noiseBufRef = useRef<ImageData | null>(null);
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
@@ -199,7 +237,10 @@ export const PreviewNode = memo(function PreviewNode({
     if (!ctx) return;
     const { nodes, edges } = useAppStore.getState();
     const resolved = resolveValues(nodes, edges, 0);
-    const imageData = renderNoisePreview(data.registryType as NoiseType, PREVIEW_SIZE, resolved, 0, {});
+    const imageData = renderNoisePreview(
+      data.registryType as NoiseType, PREVIEW_SIZE, resolved, 0, {}, noiseBufRef.current,
+    );
+    noiseBufRef.current = imageData;
     ctx.putImageData(imageData, 0, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.registryType, data.values, inputsKey, hasAnyTime]);
@@ -217,8 +258,40 @@ export const PreviewNode = memo(function PreviewNode({
     if (!ctx) return;
 
     let rafId: number;
+    let lastDraw = -Infinity;
 
     const draw = (timestamp: number) => {
+      // Schedule FIRST, so every early-out below still keeps the loop alive —
+      // the loop is never torn down while the component is mounted, and the
+      // component deliberately stays mounted inside a collapsed group.
+      rafId = requestAnimationFrame(draw);
+
+      // Nothing culls a node in this editor: React Flow renders every one
+      // (`onlyRenderVisibleElements` is left at its default false), and a
+      // member of a COLLAPSED group is hidden purely in CSS — the store sets
+      // `fs-collapsed-member` → `display: none` and keeps the component
+      // MOUNTED on purpose, so this loop survives the collapse. rAF is
+      // per-document, so nothing throttles a hidden element's callback
+      // either: collapsing a frame full of animated noise cards — the one
+      // gesture that looks like it should reduce cost — used to buy back
+      // exactly zero CPU.
+      //
+      // `offsetParent` is null exactly under `display: none` (one property
+      // read, and it is taken BEFORE this callback's own writes so it cannot
+      // be the read half of a write/read layout thrash). Skipping is safe
+      // because the clock is ABSOLUTE (utils/appClock): the first visible
+      // frame draws the field at the time it really is, not at a resumed
+      // private epoch, so an expanded group is instantly in step with every
+      // other animated surface. NB this must NOT be added to the static
+      // one-shot effect above — that one has no later frame to catch up on,
+      // and a hidden canvas keeps its bitmap, so drawing into it is exactly
+      // what makes the thumbnail correct the moment the group expands.
+      if (canvas.offsetParent === null) return;
+
+      // Redraw budget — see ANIMATED_FRAME_MS.
+      if (timestamp - lastDraw < ANIMATED_FRAME_MS) return;
+      lastDraw = timestamp;
+
       // Shared app clock (utils/appClock) — a private per-loop epoch made
       // every animated surface disagree with every other; one epoch also
       // lets cpuEvaluator's per-time cache buckets be shared across
@@ -233,9 +306,12 @@ export const PreviewNode = memo(function PreviewNode({
         resolved,
         t,
         timeInputs,
+        noiseBufRef.current,
       );
+      // Keep whatever came back: the first call (or one after PREVIEW_SIZE
+      // ever changed) allocates, every later one hands the same buffer back.
+      noiseBufRef.current = imageData;
       ctx.putImageData(imageData, 0, 0);
-      rafId = requestAnimationFrame(draw);
     };
 
     rafId = requestAnimationFrame(draw);

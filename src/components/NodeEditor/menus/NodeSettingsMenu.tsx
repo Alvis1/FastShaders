@@ -5,26 +5,24 @@ import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { toggleExposedPort, usesExposedPorts } from '@/utils/exposedPorts';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
-import { rowStyle, labelStyle, nameFieldStyle, NodeActions } from './menuShared';
+import { rowStyle, labelStyle, checkLabelStyle, checkStyle, nameFieldStyle, NodeActions } from './menuShared';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { uniformTypeFor, constantTypeFor, convertPropertyNode } from '@/utils/propertyConvert';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { ImageNodeSettings } from './ImageNodeSettings';
-import { MicNodeSettings } from './MicNodeSettings';
+import { SoundNodeSettings } from './SoundNodeSettings';
 import { NoiseNodeSettings } from './NoiseNodeSettings';
+import { WireframeNodeSettings } from './WireframeNodeSettings';
 import { DataNodeStats } from './DataColumnStats';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
 import { modeOf } from '@/engine/moduleHelpers';
 
-const checkLabelStyle = { ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px' } as const;
-const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
 
 interface NodeSettingsMenuProps {
   nodeId: string;
 }
 
 export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
-  const nodes = useAppStore((s) => s.nodes);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const language = useAppStore((s) => s.language);
   // Color swatches fire an input event per frame while their picker is
@@ -33,7 +31,14 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
   // burst lands as one undo entry (DragNumberInput brackets its own drags).
   const { bracket, closeBracket } = useHistoryBracket();
 
-  const node = nodes.find((n) => n.id === nodeId);
+  // Subscribe to THIS node, not to the whole array (the idiom every settings
+  // menu here follows, RampColorPorts included). React Flow's
+  // `applyNodeChanges` reuses the node objects it did not touch, so the found
+  // object is a stable reference and `Object.is` bails on every notification
+  // that did not change this node — otherwise an open menu re-renders its
+  // whole row list on every FRAME of an unrelated node drag, and only
+  // `onPaneClick` closes it, so that is an ordinary state to be in.
+  const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId));
   if (!node) return null;
 
   const def = NODE_REGISTRY.get(node.data.registryType);
@@ -186,18 +191,41 @@ export function NodeSettingsMenu({ nodeId }: NodeSettingsMenuProps) {
 
       {/* Mic node: which input device to capture from. Session-only — it never
           reaches node.data.values, so it has no undo entry and never ships in a
-          shared project. See MicNodeSettings. */}
-      {node.data.registryType === 'micNode' && <MicNodeSettings />}
+          shared project. See SoundNodeSettings. */}
+      {node.data.registryType === 'soundNode' && <SoundNodeSettings />}
 
       {/* The noise RANGE mode. Its own component (and its own values key rather
           than a defaultValues entry) because on a noise node defaultValues is
           the socket list — see NoiseNodeSettings. */}
       {hasNoiseRangeFlag(node.data.registryType) && <NoiseNodeSettings nodeId={nodeId} />}
 
+      {/* Wireframe node: the mesh-edge switch. A view of the active Output's
+          material setting, not a value of this node — see WireframeNodeSettings. */}
+      {node.data.registryType === 'wireframe' && <WireframeNodeSettings nodeId={nodeId} />}
+
       {/* Data node: what is actually IN each column. Every downstream tone and
           domain control is expressed in normalized units, so without the real
           ranges here the user is tuning against numbers they cannot see. */}
       {node.data.registryType === 'dataNode' && <DataNodeStats nodeId={nodeId} />}
+
+      {/* The TSL a hand-emitted node expands to, read-only and unlabelled.
+          Only the hand-emitted nodes declare `construction`: everything else
+          emits a call to the function its own label already names, so a line
+          there would restate the title. Here the whole construction lives in a
+          graphToCode branch, and the only other way to see it is to wire the
+          node up and read the code panel — which is after the decision it
+          informs. No heading: the divider above already separates it, and a
+          monospace block under a settings list does not need to be announced
+          as code. Left untranslated for the same reason — it is TSL, not
+          prose. */}
+      {def?.construction && (
+        <>
+          <div className="context-menu__divider" />
+          <div className="context-menu__construction">
+            <pre>{def.construction}</pre>
+          </div>
+        </>
+      )}
 
       {/* Constant ↔ uniform conversion: Float/Color become a named Property
           (uniform) node in place — same id, position and outgoing edges — and

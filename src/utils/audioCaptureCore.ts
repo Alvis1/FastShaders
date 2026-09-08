@@ -5,12 +5,15 @@
  * and `systemAudioCapture.ts` (`getDisplayMedia` — whatever the machine or a
  * browser tab is PLAYING).
  *
- * Split out because the two differ ONLY in how the `MediaStream` is obtained.
- * Everything after that — the AudioContext, the AnalyserNode, the per-frame
- * reduction to four floats, the fftSize realloc rule, and the teardown that
- * clears the OS capture indicator — is identical, and a hand-copied twin of it
- * is precisely the drift class this codebase kills elsewhere (micGeometry,
- * micStatusMessage, the `fit-bounds` twin guard).
+ * Split out because the two differ ONLY in WHICH media call is made and what it
+ * is given. Everything around that call — the timeout race and its lost-race
+ * cleanup (`acquireStream`), then the AudioContext, the AnalyserNode, the
+ * per-frame reduction to four floats, the fftSize realloc rule, and the teardown
+ * that clears the OS capture indicator — is identical, and a hand-copied twin of
+ * it is precisely the drift class this codebase kills elsewhere (micGeometry,
+ * soundStatusMessage, the `fit-bounds` twin guard). The two rules that must never
+ * drift — never leak a stream nobody reads, and always report `ended` — are
+ * therefore each written once, here.
  *
  * The "no PCM ever leaves the audio graph" guarantee lives HERE, so it holds for
  * both sources: the analyser is read synchronously each frame and reduced to
@@ -18,8 +21,8 @@
  * — the latter would also feed a microphone straight back into the speakers.
  */
 
-import { analyseMic, type MicLevels, MIC_LEVELS_ZERO } from './micAnalysis';
-import type { MicSettings } from './micNode';
+import { analyseSound, type SoundLevels, SOUND_LEVELS_ZERO } from './soundAnalysis';
+import type { SoundSettings } from './soundSettings';
 
 /**
  * Everything that can go wrong starting a capture, in terms we can write a
@@ -47,9 +50,9 @@ export type AudioStartError =
 
 export interface AudioCapture {
   /** Read the analyser and reduce it to the four shader values. */
-  readLevels(): MicLevels;
+  readLevels(): SoundLevels;
   /** Re-apply settings without tearing down the stream. */
-  applySettings(settings: MicSettings): void;
+  applySettings(settings: SoundSettings): void;
   /** Stop the tracks and close the AudioContext. Idempotent. */
   stop(): void;
   /** The context's real sample rate — the band maths needs it. */
@@ -81,6 +84,66 @@ export function classifyAudioError(err: unknown): AudioStartError {
   }
 }
 
+/** What `acquireStream` hands back — a live stream, or a nameable cause. */
+export type StreamAcquireResult =
+  | { ok: true; stream: MediaStream }
+  | { ok: false; error: AudioStartError };
+
+/**
+ * Await a `MediaStream` under a hard time bound, and STOP one that arrives after
+ * we have given up on it.
+ *
+ * Both capture surfaces need exactly this, which is why it lives here rather
+ * than in a copy each: `getUserMedia`'s and `getDisplayMedia`'s promises may
+ * never settle at all (the user ignores the permission prompt or the share
+ * picker, or the document is hidden and the prompt stalls), so without a bound
+ * the UI sits on "starting…" forever with no way back.
+ *
+ * The lost-race branch is the load-bearing half, and it is the rule this whole
+ * module exists to keep in one place: once we have reported a timeout, nobody
+ * holds the stream that turns up afterwards, so every track is stopped. Leak it
+ * instead and the OS recording indicator — or the browser's "you are sharing
+ * your screen" bar — stays lit for the life of the tab over a capture with no
+ * reader, which is the one failure this app must never ship.
+ *
+ * @param start   called INSIDE the race, so a synchronous throw from the media
+ *                API rejects like any other failure.
+ * @param what    names the wait in the timeout error (diagnostics only — the
+ *                caller-facing value is the `'timeout'` status).
+ */
+export async function acquireStream(
+  start: () => Promise<MediaStream>,
+  timeoutMs: number,
+  what: string,
+): Promise<StreamAcquireResult> {
+  let timedOut = false;
+  try {
+    const stream = await new Promise<MediaStream>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        timedOut = true;
+        reject(Object.assign(new Error(`${what} timeout`), { name: 'FsTimeoutError' }));
+      }, timeoutMs);
+      start().then(
+        (s) => {
+          clearTimeout(timer);
+          if (timedOut) {
+            for (const t of s.getTracks()) t.stop();
+            return;
+          }
+          resolve(s);
+        },
+        (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      );
+    });
+    return { ok: true, stream };
+  } catch (err) {
+    return { ok: false, error: timedOut ? 'timeout' : classifyAudioError(err) };
+  }
+}
+
 /**
  * The AudioContext constructor, or undefined where there is none.
  *
@@ -109,7 +172,7 @@ export function audioContextCtor(): typeof AudioContext | undefined {
  */
 export async function buildAnalyserCapture(
   stream: MediaStream,
-  settings: MicSettings,
+  settings: SoundSettings,
   opts: { onEnded?: () => void } = {},
 ): Promise<AudioStartResult> {
   const Ctor = audioContextCtor();
@@ -174,7 +237,7 @@ export async function buildAnalyserCapture(
       return ctx.sampleRate;
     },
     readLevels() {
-      if (stopped) return { ...MIC_LEVELS_ZERO };
+      if (stopped) return { ...SOUND_LEVELS_ZERO };
       // fftSize changes reallocate frequencyBinCount, so re-check rather than
       // reading into a stale short buffer (getByteFrequencyData would silently
       // fill only part of the spectrum).
@@ -186,12 +249,12 @@ export async function buildAnalyserCapture(
       // `.mul()` on the uniform) so that it can be driven by a wire — applying
       // it here as well would scale twice, and the level meter would stop
       // agreeing with what the shader actually receives.
-      return analyseMic({ freqBytes: bins, sampleRate: ctx.sampleRate });
+      return analyseSound({ freqBytes: bins, sampleRate: ctx.sampleRate });
     },
     applySettings(s) {
       if (stopped) return;
       // NB `s.gain` is deliberately ignored — see readLevels.
-      // Both setters throw IndexSizeError on out-of-range input; readMicSettings
+      // Both setters throw IndexSizeError on out-of-range input; readSoundSettings
       // is what guarantees these are in range. Guard anyway — a throw here would
       // kill the pump's rAF loop and freeze every band at its last value.
       try {

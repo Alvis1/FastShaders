@@ -961,6 +961,36 @@ export default defineConfig({
           // resurrecting the eager Monaco load the lazy CodeEditor split
           // exists to remove. Pin it to its own tiny shared chunk instead.
           if (id.includes('vite/preload-helper')) return 'preload';
+          // The same argument as Monaco's, applied to the rest of the vendor
+          // tree. Left to Rollup's default, react-dom, @xyflow/react+system,
+          // @babel/*, @dagrejs/* and d3-* all land in ONE content-hashed chunk
+          // TOGETHER WITH the app source that imports them — measured at 1142 KB
+          // raw / 317 KB gz of vendor inside a 1.68 MB chunk misleadingly named
+          // `style`. Releases ship as `npm version patch && git push
+          // --follow-tags` (one tag, one deploy), so ANY app edit rehashes that
+          // chunk and every returning user re-downloads byte-identical vendor
+          // code they already have. Splitting it out lets those chunks survive
+          // a release: the app chunk is what rehashes, the vendor ones do not.
+          //
+          // Buckets are by package prefix and deliberately incomplete — a
+          // transitive dep nobody listed simply stays in the app chunk, i.e.
+          // exactly today's behaviour, so a missing name can't break a build.
+          // Nothing here imports app source, so no chunk cycle is created and
+          // module evaluation order is unchanged.
+          if (/node_modules\/(@babel|@jridgewell)\//.test(id)) return 'vendor-babel';
+          if (/node_modules\/(jsesc|globals|debug|ms|picocolors)\//.test(id)) return 'vendor-babel';
+          // react-dom/server is reachable ONLY from the Node Designer
+          // (nodeDesigner/bridge.tsx's builtinGlyphSvg serializes the built-in
+          // glyph art with renderToStaticMarkup). Bucketing it with the client
+          // renderer would put ~70 KB raw / 22 KB gz of a SECOND React renderer
+          // on the main app's boot wave, since the app loads vendor-react for
+          // react-dom/client — measured, the designer chunk shrank by exactly
+          // that much when it moved. Left unassigned it stays where Rollup puts
+          // it: the designer chunk, i.e. only on the page that calls it.
+          if (id.includes('node_modules/react-dom/') && id.includes('server')) return;
+          if (/node_modules\/(react|react-dom|scheduler|use-sync-external-store)\//.test(id)) return 'vendor-react';
+          if (id.includes('node_modules/@xyflow/') || id.includes('node_modules/d3-')) return 'vendor-xyflow';
+          if (id.includes('node_modules/@dagrejs/')) return 'vendor-dagre';
         },
       },
     },

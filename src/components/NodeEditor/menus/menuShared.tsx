@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
-import { t } from '@/i18n';
+import { t, type Language } from '@/i18n';
 import type { ShaderFlowNode } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
@@ -27,6 +27,18 @@ export const labelStyle = {
   fontSize: 'var(--font-size-xs)',
   color: 'var(--text-secondary)',
 } as const;
+
+/** A checkbox + its text, as used inside a `rowStyle` row. Shared so the
+ *  generic node settings menu and the per-node blocks it delegates to cannot
+ *  drift apart on a checkbox row — the reason this module exists. */
+export const checkLabelStyle = {
+  ...labelStyle,
+  display: 'flex',
+  alignItems: 'center',
+  gap: '4px',
+} as const;
+
+export const checkStyle = { width: '12px', height: '12px', margin: 0 } as const;
 
 export const fieldStyle = {
   width: '70px',
@@ -103,6 +115,77 @@ export function NumberRow({ label, value, onCommit, step = 0.05, min, max }: Num
   );
 }
 
+interface RadialRowsProps {
+  /** The checkbox's i18n key. Data Stripes says "radial (rings)" (its stripes
+   *  become tree rings) and Data Viz just "radial" — two different English
+   *  strings, hence two keys, translated here the way ColormapSettingsMenu
+   *  translates its group labels. */
+  labelKey: string;
+  language: Language;
+  /** The node's stored values, straight from `getNodeValues`. */
+  values: Record<string, string | number>;
+  /** The menu's own value-patch helper — one `updateNodeData` per commit, so
+   *  each row stays one undo entry (NumberRow brackets a typing burst itself). */
+  onChange: (patch: Record<string, number>) => void;
+}
+
+/**
+ * The radial-distribution block shared by the Data Stripes and Data Viz
+ * settings menus: a checkbox switching the node from linear to concentric
+ * ("target" / tree-ring) distribution, plus the circle's centre and radius —
+ * revealed only while it is on, because they mean nothing in linear mode.
+ *
+ * Both menus carried a copy. They did not LOOK like copies, which is why the
+ * duplication survived: each menu wraps NumberRow in its own local `numRow`
+ * helper and the two helpers take different arguments — Stripes' fourth is
+ * `min`, Data Viz's is `step` with `min` fifth — so the identical radius row
+ * was spelled `numRow('radius', …, 0.5, 0.05)` in one file and
+ * `numRow('radius', …, 0.5, 0.05, 0.05)` in the other. Both resolve to the
+ * same NumberRow call, and that is what this renders directly: NumberRow's own
+ * default step (0.05), and a 0.05 floor on the radius so a radial node can
+ * never be given a zero-radius circle, which collapses the whole field into
+ * one hard ring at the centre.
+ *
+ * `radial` is stored as 0/1 rather than a boolean: `values` is typed
+ * Record<string, string | number> and the flag rides codegen as a number.
+ */
+export function RadialRows({ labelKey, language, values, onChange }: RadialRowsProps) {
+  const radial = Number(values.radial ?? 0) >= 0.5;
+  return (
+    <>
+      <label style={{ ...rowStyle, cursor: 'pointer' }}>
+        <span style={labelStyle}>{t(labelKey, language)}</span>
+        <input
+          type="checkbox"
+          checked={radial}
+          onChange={(e) => onChange({ radial: e.target.checked ? 1 : 0 })}
+        />
+      </label>
+
+      {radial && (
+        <>
+          <NumberRow
+            label={t('center X', language)}
+            value={Number(values.center_x ?? 0.5)}
+            onCommit={(n) => onChange({ center_x: n })}
+          />
+          <NumberRow
+            label={t('center Y', language)}
+            value={Number(values.center_y ?? 0.5)}
+            onCommit={(n) => onChange({ center_y: n })}
+          />
+          <NumberRow
+            label={t('radius', language)}
+            value={Number(values.radius ?? 0.5)}
+            onCommit={(n) => onChange({ radius: n })}
+            min={0.05}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
 /**
  * Reset/Duplicate/Delete footer shared by every per-node settings menu, so the
  * specialized menus (Stripes/Data Viz/Colormap/Data Range) keep the same
@@ -110,7 +193,14 @@ export function NumberRow({ label, value, onCommit, step = 0.05, min, max }: Num
  * keyboard shortcuts.
  */
 export function NodeActions({ nodeId }: { nodeId: string }) {
-  const nodes = useAppStore((s) => s.nodes);
+  // The per-id selector every menu in this directory uses, not `s.nodes`.
+  // `s.nodes` is a NEW array on every graph notify — a drag, a scrub, a value
+  // typed into some unrelated node — so subscribing to it re-rendered this
+  // footer (and, through it, the whole open menu) for changes it has nothing
+  // to do with. React Flow's applyNodeChanges REUSES the object of a node it
+  // did not touch, so the identity of THIS node is the honest dependency:
+  // zustand's default Object.is equality then bails on everything else.
+  const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as ShaderFlowNode | undefined;
   const addNode = useAppStore((s) => s.addNode);
   const removeNode = useAppStore((s) => s.removeNode);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
@@ -118,7 +208,6 @@ export function NodeActions({ nodeId }: { nodeId: string }) {
   const language = useAppStore((s) => s.language);
 
   const handleDuplicate = () => {
-    const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
     addNode({
       ...structuredClone(node),
@@ -134,7 +223,6 @@ export function NodeActions({ nodeId }: { nodeId: string }) {
     closeContextMenu();
   };
 
-  const node = nodes.find((n) => n.id === nodeId) as ShaderFlowNode | undefined;
   const def = node ? NODE_REGISTRY.get(node.data.registryType) : undefined;
   const values = node ? getNodeValues(node) : {};
   const showReset = hasResettableValues(def, values);

@@ -40,7 +40,11 @@ describe('selectAllChanges — the A key', () => {
     const src = readFileSync(path.resolve(__dirname, 'NodeEditor.tsx'), 'utf8');
     const handler = src.slice(src.indexOf('F frames the SELECTION'), src.indexOf("key !== 'a'"));
     expect(handler).toMatch(/key === 'a' && !e\.shiftKey[\s\S]{0,400}selectAllChanges\(/);
-    expect(handler).toContain("if (tag === 'INPUT' || tag === 'TEXTAREA') return;");
+    // Both of NodeEditor's window key handlers now ask the SAME predicate
+    // (isTypingTarget: INPUT/TEXTAREA/SELECT/contentEditable) — the guard used
+    // to be spelled out here and one field narrower in the handler that owns
+    // Delete and Cmd+D.
+    expect(handler).toContain('if (isTypingTarget(e.target)) return;');
     expect(handler).toContain('if (e.metaKey || e.ctrlKey || e.altKey) return;');
   });
 });

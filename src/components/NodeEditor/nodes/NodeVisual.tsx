@@ -330,8 +330,8 @@ export function NodeVisual({
   return (
     <div className={`${wrapClassName}`.trim()} style={wrapStyle}>
       {stackLayers}
-      {/* (micNode never reaches NodeVisual — its flow type is 'mic', and every
-          mic surface renders through MicNode/MicCardContent instead.) */}
+      {/* (soundNode never reaches NodeVisual — its flow type is 'sound', and every
+          mic surface renders through SoundNode/SoundCardContent instead.) */}
       <div className={cardClass} style={nodeStyle}>
         {header}
         {/* Colormap: the node's ART is its real ramp — same gradient helper as

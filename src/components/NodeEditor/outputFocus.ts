@@ -92,9 +92,19 @@ export function focusNodes(
   return true;
 }
 
-/** Glide the viewport onto the existing Output node (or the collapsed-group
- *  pill standing in for it — see {@link outputFocusTarget}). */
-export function focusOutputNode(
+/**
+ * Glide the viewport onto ONE node (or the collapsed-group pill standing in for
+ * it — see {@link outputFocusTarget}). The single-node case of
+ * {@link focusNodes}.
+ *
+ * Named `focusOutputNode` until 2026-09-08, from when the Output was a
+ * singleton and this was its redirect. It is type-agnostic and always was:
+ * today the cost pill, the Output tile and the Sound node's singleton redirect
+ * all call it. The old name made an anti-regression pin in outputFocus.test.ts
+ * unreadable — "no focusOutputNode in the add path" looked like it meant "the
+ * Output is not redirected" when it had come to mean "nothing is redirected".
+ */
+export function focusNode(
   fitView: (options?: FitViewOptions) => Promise<boolean> | void,
   nodes: readonly AppNode[],
   id: string,

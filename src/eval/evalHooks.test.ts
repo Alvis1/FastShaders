@@ -118,6 +118,12 @@ describe('eval telemetry hooks', () => {
   it("requestCodeSync carries NO code-apply hook (imports call it too)", () => {
     const store = read('store/useAppStore.ts');
     // lastIndexOf: the first occurrences are the interface declarations.
+    // `setTotalCost:` is only a FENCE here — it is the next action in the create
+    // body, not something this test cares about. It is also a dead action (see
+    // the note beside it in useAppStore.ts), so if you delete it, move this
+    // bound to whatever action then follows requestCodeSync — a missing fence
+    // makes lastIndexOf return -1 and the slice swallow the rest of the file,
+    // failing here with a message that blames requestCodeSync.
     const requestCodeSync = store.slice(store.lastIndexOf('requestCodeSync:'), store.lastIndexOf('setTotalCost:'));
     expect(requestCodeSync, 'code-apply must be logged at the Apply gestures, not in requestCodeSync').not.toContain('evalLog(');
   });

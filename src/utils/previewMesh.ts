@@ -11,6 +11,8 @@
  * the zip export / UI labels.
  */
 
+import { safeJsonReviver } from './safeJson';
+
 export type PreviewMeshKind = 'obj' | 'glb' | 'gltf';
 
 export interface PreviewMesh {
@@ -180,7 +182,13 @@ function extractGlbJsonChunk(bytes: Uint8Array): string | null {
  * declares its own vertex array, so the total is the authored vertex count.
  */
 function countGltfVertices(json: string): number | null {
-  const doc = JSON.parse(json) as {
+  // The one place this module parses model bytes at all, and the bytes are
+  // adversarial — so it takes the shared deny-list reviver like every other
+  // untrusted boundary (utils/safeJson.ts holds the single copy of that rule).
+  // The reads below are already narrow (Array.isArray + typeof number), which
+  // is what makes this exception safe; the reviver is what keeps a future
+  // deny-list key from reaching only the sites that remembered to opt in.
+  const doc = JSON.parse(json, safeJsonReviver) as {
     meshes?: { primitives?: { attributes?: Record<string, number> }[] }[];
     accessors?: { count?: number }[];
   };

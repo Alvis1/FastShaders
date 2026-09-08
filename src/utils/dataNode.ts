@@ -14,6 +14,7 @@ import { getNodeValues } from '@/types';
 import { MAX_COLUMNS, type ParsedCsv } from './csvParser';
 import { float32ToBase64, base64ToFloat32 } from './binaryCodec';
 import { capToWidth, MAX_TEXTURE_WIDTH } from './dataViz';
+import { safeJsonReviver } from './safeJson';
 
 /**
  * Largest `dataB64` a legitimately-constructed Data node can hold — a CAP
@@ -25,9 +26,17 @@ import { capToWidth, MAX_TEXTURE_WIDTH } from './dataViz';
  * storing, so the packed Float32 blob is at most 16 × 8192 × 4 = 524,288 bytes
  * → 4·ceil(524288/3) = 699,052 base64 chars. A longer payload can only come
  * from a tampered file, and it buys nothing on screen: graphToCode re-caps to
- * MAX_TEXTURE_WIDTH before baking. What it does buy is ~51 `structuredClone`
- * history copies, a `JSON.stringify` in every 300 ms autosave, a re-embed in
- * every export, and an `atob` on every graphToCode pass.
+ * MAX_TEXTURE_WIDTH before baking. What it does buy is a `JSON.stringify` in
+ * every 300 ms autosave (against a localStorage budget the whole graph shares),
+ * a re-embed in every export, and an `atob` on every graphToCode pass.
+ *
+ * It used to say "~51 `structuredClone` history copies" first. That is no
+ * longer true of THIS key: the store's `cloneNodesSharingPayloads` carries
+ * `values.dataB64` by reference into every undo entry — safe because JS strings
+ * are immutable and every edit path replaces `values` wholesale — so the blob
+ * exists once however deep the history is. Everything else on the node is still
+ * deep copied per entry, which is precisely why the bulk belongs in this one
+ * shared string.
  */
 export const MAX_DATA_ENCODED_CHARS = 4 * Math.ceil((MAX_COLUMNS * MAX_TEXTURE_WIDTH * 4) / 3);
 
@@ -47,8 +56,10 @@ export function makeDataNodeData(parsed: ParsedCsv, cost: number, fileName = '')
   // Downsample each column to the texture budget BEFORE storing. graphToCode
   // only ever bakes `capToWidth(col, MAX_TEXTURE_WIDTH)`, so storing the full
   // (up to 1M-row) column is pure waste — it inflates the base64 payload that
-  // rides in every localStorage autosave and 50-deep undo snapshot, exhausting
-  // the storage quota far sooner than necessary. Capping here is output-
+  // is re-serialized by every 300 ms localStorage autosave and re-embedded in
+  // every export, exhausting the storage quota far sooner than necessary. (The
+  // undo ring costs nothing extra here any more: history shares this string by
+  // reference — see MAX_DATA_ENCODED_CHARS.) Capping here is output-
   // identical (graphToCode's later capToWidth becomes a no-op copy).
   const cappedCols = columns.map((c) => capToWidth(c, MAX_TEXTURE_WIDTH));
   const storedRows = cappedCols.length > 0 ? cappedCols[0].length : 0;
@@ -145,7 +156,13 @@ export function decodeDataNode(values: Record<string, string | number>): Decoded
 
   let columnNames: string[] = [];
   try {
-    const parsed = JSON.parse(String(values.columnNames ?? '[]'));
+    // `values` came out of a `.fastshader` / localStorage payload, so this is a
+    // trust boundary like every other JSON.parse in the app — hence the shared
+    // deny-list reviver rather than a bare parse. The `Array.isArray` + String()
+    // pass below already contains the damage, but the rule lives in ONE place
+    // (utils/safeJson.ts) precisely so the next key added to the deny-list
+    // reaches every boundary instead of only the sites that opted in.
+    const parsed = JSON.parse(String(values.columnNames ?? '[]'), safeJsonReviver);
     if (Array.isArray(parsed)) columnNames = parsed.map((s) => String(s));
   } catch {
     // Fall back to synthesized names below.

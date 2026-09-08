@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { makeNode, makeEdge } from '@/test-utils';
-import { getTimeUpstreamSet, getNodeById, getTargetEdges } from '@/engine/cpuEvaluator';
+import { getTimeUpstreamSet, getTargetEdges } from '@/engine/cpuEvaluator';
 import { hasTimeUpstream } from '@/utils/graphTraversal';
 import type { AppNode, AppEdge, BoundarySocket } from '@/types';
 
@@ -131,16 +131,6 @@ describe('getTimeUpstreamSet — walks the UNWRAPPED graph', () => {
     const set = getTimeUpstreamSet(nodes, edges);
     for (const id of ['time1', 'sin1']) {
       expect(set.has(id)).toBe(hasTimeUpstream(id, nodes, edges));
-    }
-  });
-});
-
-describe('getNodeById', () => {
-  it('resolves through the shared index and agrees with a linear scan', () => {
-    const nodes = [makeNode('a', 'add'), makeNode('t', 'time'), makeNode('m', 'mul')];
-    const edges: AppEdge[] = [];
-    for (const id of ['a', 't', 'm', 'missing']) {
-      expect(getNodeById(nodes, edges, id)).toBe(nodes.find((n) => n.id === id));
     }
   });
 });
