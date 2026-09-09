@@ -186,18 +186,17 @@
   --fs-sel-pad: 5px;
   content: '';
   position: absolute;
-  /* Top/left: the cards sit --fs-node-rise beyond the rectangle (selected nodes
-     translate toward the light), so the line starts there and steps out by the
-     pad. Right/bottom: the same rise, plus the per-selection cost-scale
+  /* Just the pad on top/left; right/bottom add the per-selection cost-scale
      shortfall NodeEditor publishes as --fs-sel-dr / --fs-sel-db.
-     Reading --fs-node-rise here rather than in the JS is deliberate — the rise
-     is uniform on all four sides, so folding it in at this end keeps the px
-     literal in exactly one place (tokens.css). */
+     The `--fs-node-rise` term that used to be folded in here is gone with the
+     movement itself (2026-09-09, see NodeBase.css): selected cards no longer
+     translate toward the light, so the rectangle has nothing to reach out
+     for. */
   inset:
-    calc(var(--fs-node-rise) - var(--fs-sel-pad))
-    calc(-1 * (var(--fs-sel-dr, 0px) + var(--fs-sel-pad) + var(--fs-node-rise)))
-    calc(-1 * (var(--fs-sel-db, 0px) + var(--fs-sel-pad) + var(--fs-node-rise)))
-    calc(var(--fs-node-rise) - var(--fs-sel-pad));
+    calc(-1 * var(--fs-sel-pad))
+    calc(-1 * (var(--fs-sel-dr, 0px) + var(--fs-sel-pad)))
+    calc(-1 * (var(--fs-sel-db, 0px) + var(--fs-sel-pad)))
+    calc(-1 * var(--fs-sel-pad));
   border: 1px dotted var(--border-focus);
   /* The rectangle under it is the drag target; this is only the drawn line. */
   pointer-events: none;

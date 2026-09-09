@@ -17,7 +17,6 @@
    React Flow's `.selected` class (GraphModal, the Node Designer stage). */
 .react-flow__node {
   --fs-node-lift: var(--shadow-node);
-  --fs-node-shift: 0px;
   --fs-node-border-scale: 1;
 }
 
@@ -52,7 +51,6 @@
 .react-flow__node.fs-menu-active,
 .react-flow__node:focus-visible {
   --fs-node-lift: var(--shadow-node-selected);
-  --fs-node-shift: var(--fs-node-rise);
 }
 
 /* KEYBOARD FOCUS. React Flow already makes every node a tab stop and ships
@@ -108,7 +106,6 @@
    its wires stay put — the exact thing the lift-offset exists to prevent. */
 .node-editor__canvas.fs-connecting .react-flow__node:hover:not(.selected):not(.fs-menu-active) {
   --fs-node-lift: var(--shadow-node);
-  --fs-node-shift: 0px;
 }
 
 /* An EXPANDED group frame is the one node that must NOT move, in any of those
@@ -131,7 +128,6 @@
    test off `:has()` — a functional invariant must not depend on a selector
    feature with a support floor. */
 .react-flow__node-group:not(:has(.group-node--collapsed)) {
-  --fs-node-shift: 0px;
 }
 
 /* ===== Shared node shell ===== */
@@ -155,43 +151,36 @@
      card with no wrapper to inherit from, and a node at rest is what they mean
      to show. */
   box-shadow: var(--fs-node-lift, var(--shadow-node));
-  translate: var(--fs-node-shift, 0px) var(--fs-node-shift, 0px);
-  transition: box-shadow var(--transition-fast), translate var(--transition-fast);
+  transition: box-shadow var(--transition-fast);
   font-family: var(--font-sans);
   overflow: visible;
 }
 
-/* The hover TRIGGER, for the one case the wrapper cannot cover.
+/* A LIFTED NODE NO LONGER MOVES — it changes elevation only (2026-09-09).
  *
- * Moving the shift onto the shells (above) leaves React Flow's node wrapper
- * stationary, which is enough for every node whose painted card fits inside it
- * — MEASURED: `sub` and `mix` go from a jittering 38 flips to a clean 2 (one
- * enter, one leave) along their bottom edge.
+ * It used to travel `--fs-node-rise` (3px up-left) as well, so that a shadow
+ * stepping out did not read as the card merely growing one. That movement is
+ * gone, and the reason is a defect it could not avoid: React Flow computes wire
+ * endpoints from stored positions and knows nothing about a CSS translate, so
+ * every wire had to be offset by the same 3px to stay on its socket — a
+ * PREDICTION that only holds while React Flow measured the sockets with the
+ * card at rest. Selecting a node also thickens its border, which changes the
+ * node's size, which makes React Flow re-measure the handles — at a moment when
+ * the card is already displaced. The displacement is then baked into the stored
+ * bounds AND added again by the wire, so every wire on a selected node sat 3px
+ * above its socket and stayed there after deselecting, because the measurement
+ * that corrected it caught the card mid-transition. Reported from the canvas
+ * ("hover follows correctly, click adds the same offset again"), 2026-09-09.
  *
- * The EXPENSIVE nodes are the exception. `getCostScale` is applied as a
- * `transform`, which does not affect layout, so their card PAINTS well past the
- * wrapper's box — 17.3px on a noise node. Out there the card is the only thing
- * under the pointer, so hover is driven by the very element that moves, and the
- * loop came straight back (47 flips).
+ * The `.node-base::before` hit-area shim went with it. That existed only
+ * because the moved card painted outside React Flow's stationary wrapper, so
+ * hover was driven by the very element that moved and could oscillate — 47
+ * flips across a slow creep along a noise node's edge. Nothing moves now, so
+ * there is nothing to extend the hit area past.
  *
- * This extends the card's hit area to the RIGHT and DOWN by exactly the
- * distance the card travels UP and LEFT, so the union has a boundary that does
- * not move: `--fs-node-shift` is 0 at rest and the negative rise while lifted,
- * and a negative `right`/`bottom` grows the box outward. The top/left edges are
- * left alone on purpose — the card moves TOWARD them, so that side of the hit
- * area only ever grows, which cannot oscillate either.
- *
- * A shim rather than a bigger box: at rest it adds nothing at all, so a node
- * grabs no pointer events it did not grab before. `z-index: -1` keeps it behind
- * the card's own content so it can never intercept a widget or a socket; it is
- * only ever the topmost thing in the sliver outside the moved card, which is
- * precisely where it is needed. */
-.node-base::before {
-  content: '';
-  position: absolute;
-  inset: 0 var(--fs-node-shift, 0px) var(--fs-node-shift, 0px) 0;
-  z-index: -1;
-}
+ * The ASSET TILES keep the movement (`--fs-node-rise` in NodePreviewCard.css /
+ * ContentBrowser.css): they are outside React Flow, carry no wires, and nothing
+ * measures them. */
 
 /* Cost badge positioned above the node, centered */
 .node-base__cost-badge {
@@ -274,12 +263,11 @@
   border: calc(1.5px * var(--fs-node-border-scale, 1)) solid; /* color set inline (category) */
   background: var(--node-bg);
   z-index: -1;
-  translate: var(--fs-node-shift, 0px) var(--fs-node-shift, 0px);
   pointer-events: none;
   /* The deepest layer carries the whole stack's shadow (set inline from
      --fs-node-lift), so it needs the same transition the card has or a stacked
      node would snap between elevations while an unstacked one eases. */
-  transition: box-shadow var(--transition-fast), translate var(--transition-fast);
+  transition: box-shadow var(--transition-fast);
 }
 
 /* ===== Header ===== */

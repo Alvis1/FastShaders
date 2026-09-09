@@ -79,7 +79,6 @@
   border-radius: 0;
   overflow: visible;
   box-shadow: var(--fs-node-lift, var(--shadow-node));
-  translate: var(--fs-node-shift, 0px) var(--fs-node-shift, 0px);
   transition: box-shadow var(--transition-fast), translate var(--transition-fast);
 }
 

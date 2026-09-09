@@ -15,7 +15,6 @@ import { setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { evaluateEdgeSource, getEdgeOutputShape, getUnwrappedEdge } from '@/engine/cpuEvaluator';
 import { bezierControlOffset, radialControlPoint, splinePath } from './bezierGeometry';
 import { EdgeInfoCard } from './EdgeInfoCard';
-import { nodeRisePx } from '../nodes/nodeFrame';
 
 type Waypoint = { x: number; y: number };
 
@@ -214,31 +213,17 @@ export function TypedEdge({
    * reason neither reads the app store's whole `nodes` array — that array's
    * identity changes on every drag frame.)
    */
-  const liftedBySelection = useReactFlowStore(
-    useCallback(
-      (s: ReactFlowState) =>
-        (s.nodeLookup.get(source)?.selected ? 1 : 0) | (s.nodeLookup.get(target)?.selected ? 2 : 0),
-      [source, target],
-    ),
-  );
-  // Hover and "its settings menu is open" both live in the app store; folded
-  // into ONE subscription so an edge carries two, not three.
-  const liftedByPointer = useAppStore(
-    useCallback(
-      (s: { hoveredNodeId: string | null; contextMenu: { open: boolean; nodeId?: string } }) => {
-        const menuId = s.contextMenu.open ? s.contextMenu.nodeId : undefined;
-        const lifted = (id: string) => s.hoveredNodeId === id || menuId === id;
-        return (lifted(source) ? 1 : 0) | (lifted(target) ? 2 : 0);
-      },
-      [source, target],
-    ),
-  );
-  const liftMask = liftedBySelection | liftedByPointer;
-  const rise = liftMask === 0 ? 0 : nodeRisePx();
-  const sourceX = rawSourceX + (liftMask & 1 ? rise : 0);
-  const sourceY = rawSourceY + (liftMask & 1 ? rise : 0);
-  const targetX = rawTargetX + (liftMask & 2 ? rise : 0);
-  const targetY = rawTargetY + (liftMask & 2 ? rise : 0);
+  // NO LIFT COMPENSATION. A lifted node used to travel 3px and every wire on it
+  // had to travel with it, which was a PREDICTION that only held while React
+  // Flow had measured the sockets at rest — selecting a node resizes it (the
+  // border thickens), the re-measure then caught the card mid-move, and the
+  // displacement was both baked into the bounds AND added here. Nodes no longer
+  // move (NodeBase.css), so the endpoints React Flow reports are simply
+  // correct, and the two store subscriptions this needed are gone with it.
+  const sourceX = rawSourceX;
+  const sourceY = rawSourceY;
+  const targetX = rawTargetX;
+  const targetY = rawTargetY;
 
   // Color-circle sources get a radial exit tangent (perpendicular to the
   // circle) instead of a cardinal one — see getRadialBezierPath. The radial
