@@ -214,8 +214,10 @@ const SD_CONE_LINES = [
 // Half-space: everything below the plane through the origin (offset h along
 // the normal) is inside.
 const SD_PLANE_LINES = [
-  'const sdPlane = Fn(([p, nx, ny, nz, h]) => {',
-  '  return add(dot(p, normalize(vec3(nx, ny, nz))), h);',
+  'const sdPlane = Fn(([p, n, h]) => {',
+  '  const n0 = vec3(n);',
+  '  const n3 = select(greaterThan(length(n0), float(1e-6)), n0, vec3(0, 1, 0));',
+  '  return add(dot(p, normalize(n3)), h);',
   '});',
 ];
 
@@ -314,8 +316,8 @@ const SDF_REPEAT_POLAR_LINES = [
 
 // Mirror: fold each ticked axis (a 0..1 weight, so it can be animated).
 const SDF_MIRROR_LINES = [
-  'const sdfMirror = Fn(([p, x, y, z]) => {',
-  '  return mix(p, abs(p), vec3(x, y, z));',
+  'const sdfMirror = Fn(([p, m]) => {',
+  '  return mix(p, abs(p), vec3(m));',
   '});',
 ];
 
@@ -397,7 +399,7 @@ export const MODULE_HELPERS: ReadonlyMap<string, ModuleHelper> = new Map<string,
   ['sdCylinder', { lines: SD_CYLINDER_LINES, imports: ['sub', 'abs', 'vec2', 'length', 'add', 'min', 'max', 'float'] }],
   ['sdCapsule', { lines: SD_CAPSULE_LINES, imports: ['vec3', 'sub', 'clamp', 'mul', 'float', 'length'] }],
   ['sdCone', { lines: SD_CONE_LINES, imports: ['vec2', 'length', 'sub', 'mul', 'float', 'min', 'select', 'lessThan', 'abs', 'add', 'clamp', 'div', 'dot', 'sqrt'] }],
-  ['sdPlane', { lines: SD_PLANE_LINES, imports: ['add', 'dot', 'normalize', 'vec3'] }],
+  ['sdPlane', { lines: SD_PLANE_LINES, imports: ['add', 'dot', 'normalize', 'vec3', 'select', 'greaterThan', 'length', 'float'] }],
   ['sdOctahedron', { lines: SD_OCTAHEDRON_LINES, imports: ['abs', 'sub', 'add', 'select', 'lessThan', 'mul', 'float', 'vec3', 'clamp', 'length', 'or'] }],
   ['sdStar', { lines: SD_STAR_LINES, imports: ['div', 'float', 'max', 'vec2', 'cos', 'sin', 'sub', 'mod', 'atan', 'mul', 'length', 'abs', 'add', 'clamp', 'dot', 'sign'] }],
   ['sdfTransform', { lines: SDF_TRANSFORM_LINES, imports: ['div', 'sub', 'vec3', 'max', 'float', 'radians', 'cos', 'sin', 'add', 'mul'] }],

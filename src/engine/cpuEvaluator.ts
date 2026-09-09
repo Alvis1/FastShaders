@@ -1068,10 +1068,15 @@ function evaluate(
     }
     case 'sdPlane': {
       const p = channelInput('p', 0);
-      const nx = scalarInput('nx', 0), ny = scalarInput('ny', 1), nz = scalarInput('nz', 0), h = scalarInput('h', 0);
+      // Mirrors the helper exactly, degenerate case included: a zero-length
+      // normal reads as "up", which is what carries the old (0,1,0) default
+      // through a socket whose unwired value can only be a broadcast scalar.
+      const n0 = vec3Input('n', 0), h = scalarInput('h', 0);
+      const nlen = Math.hypot(n0[0], n0[1], n0[2]);
+      const n = nlen > 1e-6 ? n0 : [0, 1, 0];
       if (p) {
-        const len = Math.hypot(nx, ny, nz) || 1;
-        result = [((p[0] ?? 0) * nx + (p[1] ?? 0) * ny + (p[2] ?? 0) * nz) / len + h];
+        const len = Math.hypot(n[0], n[1], n[2]) || 1;
+        result = [((p[0] ?? 0) * n[0] + (p[1] ?? 0) * n[1] + (p[2] ?? 0) * n[2]) / len + h];
       } else result = null;
       break;
     }
@@ -1160,7 +1165,7 @@ function evaluate(
     }
     case 'sdfMirror': {
       const p = channelInput('p', 0);
-      const w = [scalarInput('x', 1), scalarInput('y', 0), scalarInput('z', 0)];
+      const w = vec3Input('m', 1);
       if (p) result = [0, 1, 2].map((i) => { const v = p[i] ?? 0; return v + (Math.abs(v) - v) * w[i]; });
       else result = null;
       break;

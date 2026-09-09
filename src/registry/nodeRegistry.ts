@@ -1000,13 +1000,18 @@ const definitions: NodeDefinition[] = [
     tslImportModule: '',
     inputs: [
       { id: 'p', label: 'Position', dataType: 'vec3' },
-      { id: 'nx', label: 'Normal X', dataType: 'float' },
-      { id: 'ny', label: 'Normal Y', dataType: 'float' },
-      { id: 'nz', label: 'Normal Z', dataType: 'float' },
+      // One vec3 socket, like the other SDF groups. Its default is the one
+      // that could NOT be expressed as a broadcast scalar — a normal must point
+      // somewhere, and (0,1,0) is not uniform — so the DEGENERATE case carries
+      // it: an unwired socket emits the bare 0, and the helper reads a
+      // zero-length normal as "up". That keeps an unwired Plane the floor it
+      // has always been, and as a bonus a wired zero vector no longer
+      // normalizes to NaN.
+      { id: 'n', label: 'Normal', dataType: 'vec3' },
       { id: 'h', label: 'Offset', dataType: 'float' },
     ],
     outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
-    defaultValues: { nx: 0, ny: 1, nz: 0, h: 0 },
+    defaultValues: { n: 0, h: 0 },
     description: 'Signed distance to an infinite flat surface: everything on the far side of the Normal is inside. Offset slides it along the Normal. The ground for a scene, or a cutter for a Combine in subtract mode. Also: half-space, floor, ground, slab, cut, sdf',
   },
   {
@@ -1103,12 +1108,17 @@ const definitions: NodeDefinition[] = [
     tslImportModule: '',
     inputs: [
       { id: 'p', label: 'Position', dataType: 'vec3' },
-      { id: 'x', label: 'Mirror X', dataType: 'float' },
-      { id: 'y', label: 'Mirror Y', dataType: 'float' },
-      { id: 'z', label: 'Mirror Z', dataType: 'float' },
+      // One vec3 socket of 0..1 fold weights. NB the unwired DEFAULT changed
+      // with it, from (1,0,0) to (1,1,1): a scalar can only broadcast
+      // uniformly, and unlike Plane there is no degenerate value to hang the
+      // old default on — 0 is a meaningful weight (fold nothing), so it cannot
+      // double as a sentinel. Mirroring all three axes was chosen over
+      // mirroring none because a freshly dropped node that visibly does
+      // nothing reads as broken.
+      { id: 'm', label: 'Mirror', dataType: 'vec3' },
     ],
     outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
-    defaultValues: { x: 1, y: 0, z: 0 },
+    defaultValues: { m: 1 },
     description: 'Reflect the space across the origin on each axis set to 1, so one shape built on the positive side appears on both — a value between 0 and 1 blends the fold. Also: symmetry, reflect, flip, fold, sdf',
   },
   {

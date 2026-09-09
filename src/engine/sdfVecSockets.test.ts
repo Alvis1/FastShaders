@@ -19,6 +19,8 @@ import * as TSL from 'three/tsl';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { graphToCode } from './graphToCode';
 import { makeNode, makeEdge } from '@/test-utils';
+import { evaluateNodeOutput } from './cpuEvaluator';
+import type { AppNode } from '@/types';
 
 describe('the TSL fact the helpers rest on', () => {
   it('vec3() fills from a float and is the identity on a vec3', () => {
@@ -32,6 +34,54 @@ describe('the TSL fact the helpers rest on', () => {
     // …and the components are reachable, which is what the helpers do with it.
     expect(() => TSL.vec3(TSL.vec3(1, 2, 3)).x).not.toThrow();
     expect(() => TSL.vec3(TSL.float(0)).z).not.toThrow();
+  });
+});
+
+describe('Plane and Mirror — the two whose default was NOT uniform', () => {
+  it('Plane keeps its floor default through a DEGENERATE normal, not a literal', () => {
+    // A normal must point somewhere, and (0,1,0) cannot be broadcast from one
+    // scalar. Emitting `vec3(0, 1, 0)` instead would parse back as a real Vec3
+    // node and grow the graph on the first Apply, so the zero vector carries
+    // the default: the helper reads a zero-length normal as "up".
+    expect(NODE_REGISTRY.get('sdPlane')!.inputs.map((i) => i.id)).toEqual(['p', 'n', 'h']);
+    const code = graphToCode(
+      [makeNode('pos', 'positionLocal'), makeNode('pl', 'sdPlane')],
+      [makeEdge('pos', 'out', 'pl', 'p')],
+    ).code;
+    expect(code).toMatch(/sdPlane\(\w+, 0, 0\)/);
+    // Scoped to the CALL: the helper's own body legitimately contains that
+    // literal now — it is the fallback — so a whole-module search would pass
+    // for the wrong reason and fail for the right one.
+    const call = code.split('\n').find((l) => /const sdPlane\d+ = sdPlane\(/.test(l))!;
+    expect(call).not.toContain('vec3(');
+    expect(readFileSyncHelpers()).toContain("select(greaterThan(length(n0), float(1e-6)), n0, vec3(0, 1, 0))");
+  });
+
+  it('an unwired Plane still measures distance to the FLOOR — evaluator included', () => {
+    // The behavioural half: the evaluator carries its own copy of the formula,
+    // so the degenerate fallback has to live in both or the card contradicts
+    // the picture. A point 2 units up is 2 from the y=0 plane.
+    const nodes = [
+      { ...makeNode('v', 'vec3'), data: { ...makeNode('v', 'vec3').data, values: { x: 0, y: 2, z: 0 } } },
+      makeNode('pl', 'sdPlane'),
+    ] as AppNode[];
+    const out = evaluateNodeOutput('pl', nodes, [makeEdge('v', 'out', 'pl', 'p')], 0);
+    expect(out?.[0]).toBeCloseTo(2, 6);
+  });
+
+  it('Mirror folds all three axes by default, which is a CHANGE from X only', () => {
+    // Unlike Plane there is no degenerate value to hang the old (1,0,0) on: 0
+    // is a meaningful weight (fold nothing), so it cannot double as a sentinel.
+    // Mirroring all three beat mirroring none because a freshly dropped node
+    // that visibly does nothing reads as broken.
+    expect(NODE_REGISTRY.get('sdfMirror')!.inputs.map((i) => i.id)).toEqual(['p', 'm']);
+    expect(NODE_REGISTRY.get('sdfMirror')!.defaultValues!.m).toBe(1);
+    const nodes = [
+      { ...makeNode('v', 'vec3'), data: { ...makeNode('v', 'vec3').data, values: { x: -1, y: -2, z: -3 } } },
+      makeNode('mi', 'sdfMirror'),
+    ] as AppNode[];
+    const out = evaluateNodeOutput('mi', nodes, [makeEdge('v', 'out', 'mi', 'p')], 0);
+    expect(out).toEqual([1, 2, 3]);
   });
 });
 

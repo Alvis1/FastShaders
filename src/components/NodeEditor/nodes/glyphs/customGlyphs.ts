@@ -640,15 +640,19 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   },
   "sdBox": {
     "svg": "<g transform=\"translate(28 28)\">\n\n\n<path d=\"M -12.08 -2.31 L -4.38 -10.25 L 11.03 -10.25 L 11.03 4.6 L 3.65 11.24 L -12.08 11.24 L -12.08 -2.31 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -8.21 -1.66 L -2.75 -7.41 L 8.18 -7.41 L 8.18 3.35 L 2.95 8.14 L -8.21 8.14 L -8.21 -1.66 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<polygon points=\"-15,-4 -15,14 5,14 5,-4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><polygon points=\"-15,-4 -6,-13 14,-13 5,-4\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><polygon points=\"5,-4 14,-13 14,5 5,14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></polygon><line x1=\"14\" y1=\"0\" x2=\"22\" y2=\"0\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"22\" cy=\"0\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n<path d=\"M -18.5 -4 L -6.5 -16.5 L 17.5 -16.5 L 17.5 6.86 L 6 17.3 L -18.5 17.3 L -18.5 -4 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -22.1 -5.01 L -7.84 -19.79 L 20.69 -19.79 L 20.69 7.84 L 7.02 20.2 L -22.1 20.2 L -22.1 -5.01 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -25.38 -5.6 L -9 -22.93 L 23.79 -22.93 L 23.79 9.47 L 8.08 23.97 L -25.38 23.97 L -25.38 -5.6 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n</g>",
-    "width": 53,
-    "height": 118,
+    "scale": 1.2,
+    "dx": 0.5,
+    "dy": 21,
+    "width": 55,
+    "height": 81,
     "sockets": {
-      "p": -20,
+      "p": -32,
       "w": 16,
       "h": 32,
       "d": 48,
-      "out": -20,
-      "round": -4
+      "out": -8,
+      "round": 16,
+      "b": 32
     }
   },
   "sdTorus": {
@@ -823,15 +827,16 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "sdfDeform": {
     "svg": "<g transform=\"translate(28 28)\"><path d=\"M-8 -20 C 12 -10, -12 10, 8 20\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></path><path d=\"M8 -20 C -12 -10, 12 10, -8 20\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"2.4\"></path></g>",
     "scale": 1.2,
-    "width": 26,
-    "height": 107,
+    "width": 27,
+    "height": 91,
     "sockets": {
-      "p": -12,
-      "amount": 0,
+      "p": 12,
+      "amount": 28,
       "hx": 16,
       "hy": 32,
       "hz": 44,
-      "out": -36
+      "out": -28,
+      "h": -4
     }
   },
   "sdfExtrude": {
