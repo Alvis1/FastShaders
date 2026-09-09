@@ -55,6 +55,10 @@ export const MathPreviewNode = memo(function MathPreviewNode({
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  // The header mixes into the card, and the card follows the theme
+  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
+  // field keeps its historical name.
+  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
 
   // A wire hunting nearby forces the input socket's name-tooltip visible
   // (floated left of the dot) — same rule as every node with input sockets.
@@ -64,7 +68,7 @@ export const MathPreviewNode = memo(function MathPreviewNode({
 
   const func = MATH_FUNCTIONS[data.registryType] ?? Math.sin;
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const costColor = getCostColor(data.cost, costColorLow, costColorHigh);
+  const costColor = getCostColor(data.cost, costColorLow, costColorHigh, darkTheme);
   const headerTextColor = getContrastColor(costColor);
   const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);

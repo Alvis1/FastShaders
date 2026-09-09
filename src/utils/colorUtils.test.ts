@@ -174,3 +174,50 @@ describe('getGroupFrameColors follows the theme', () => {
     expect(getGroupFrameColors('#6366f1', true, false).borderColor).toBe('#6366f1');
   });
 });
+
+describe('getCostColor follows the card it sits on', () => {
+  const lum = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    return 0.299 * r + 0.587 * g + 0.114 * b;
+  };
+
+  it('darkens the header in dark mode instead of pastelling it', () => {
+    // Blending toward white in BOTH themes made a dark node's header the
+    // brightest thing on it — a pastel band over a near-black card, louder
+    // than the glyph it labels.
+    const light = getCostColor(40);
+    const dark = getCostColor(40, undefined, undefined, true);
+    expect(lum(dark)).toBeLessThan(lum(light));
+  });
+
+  it('keeps the colour STRENGTH — a cheap node still reads green', () => {
+    // The mix ratio is unchanged; only the thing it mixes INTO moves. If the
+    // dark variant washed out, the header would stop carrying cost at all.
+    const cheap = getCostColor(5, undefined, undefined, true);
+    const dear = getCostColor(80, undefined, undefined, true);
+    expect(cheap).not.toBe(dear);
+    const chan = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    // green-dominant when cheap, red-dominant when expensive, in EITHER theme
+    expect(chan(cheap)[1]).toBeGreaterThan(chan(cheap)[0]);
+    expect(chan(dear)[0]).toBeGreaterThan(chan(dear)[1]);
+  });
+
+  it('defaults to light, so nothing that omits the flag changes', () => {
+    expect(getCostColor(40, undefined, undefined, false)).toBe(getCostColor(40));
+    expect(getCostColor(0)).toBe('#EBEBEB');
+  });
+
+  it('gives zero cost a grey on the right side of the card', () => {
+    // No colour to soften — it is the "costs nothing" grey, one step off the
+    // card in whichever direction the card allows.
+    expect(lum(getCostColor(0, undefined, undefined, true)))
+      .toBeLessThan(lum(getCostColor(0)));
+  });
+
+  it('lets the header TEXT flip itself', () => {
+    // Every caller picks it with getContrastColor(costColor), so a darkened
+    // fill turns the label white with no second change.
+    expect(getContrastColor(getCostColor(40, undefined, undefined, true))).toBe('#ffffff');
+    expect(getContrastColor(getCostColor(40))).toBe('#000000');
+  });
+});

@@ -112,6 +112,10 @@ export const PreviewNode = memo(function PreviewNode({
   const varName = useAppStore((s) => s.nodeVarNames[id]);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  // The header mixes into the card, and the card follows the theme
+  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
+  // field keeps its historical name.
+  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const updateNodeInternals = useUpdateNodeInternals();
 
   // An approaching wire reveals ALL param sockets (names on their tooltips)
@@ -193,7 +197,7 @@ export const PreviewNode = memo(function PreviewNode({
   const hasAnyTime = Object.values(timeInputs).some(Boolean);
 
   const catHex = CAT_HEX[def.category as NodeCategory] ?? CAT_HEX.unknown;
-  const costColor = getCostColor(data.cost, costColorLow, costColorHigh);
+  const costColor = getCostColor(data.cost, costColorLow, costColorHigh, darkTheme);
   const headerTextColor = getContrastColor(costColor);
   const costTextColor = getCostTextColor(data.cost, costColorLow, costColorHigh);
   const costScale = getCostScale(data.cost);

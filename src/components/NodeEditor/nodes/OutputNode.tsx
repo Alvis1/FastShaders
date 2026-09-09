@@ -135,9 +135,13 @@ export const OutputNode = memo(function OutputNode({
   const inventoryKnown = useAppStore((s) => !s.previewMesh || !!s.previewMeshInventory);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  // The header mixes into the card, and the card follows the theme
+  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
+  // field keeps its historical name.
+  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const cost = data.cost ?? 0;
-  const costColor = getCostColor(cost, costColorLow, costColorHigh);
+  const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
   const headerTextColor = getContrastColor(costColor);
 

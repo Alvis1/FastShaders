@@ -510,6 +510,10 @@ export const ShaderNode = memo(function ShaderNode({
   const language = useAppStore((s) => s.language);
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  // The header mixes into the card, and the card follows the theme
+  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
+  // field keeps its historical name.
+  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   // A wire being dragged within snapping distance of this node — one shared
   // signal (see connectionReveal.ts) that drives every proximity behavior:
   // rows-layout nodes force their input name-tooltips visible (floated left
@@ -644,7 +648,7 @@ export const ShaderNode = memo(function ShaderNode({
     costMemo.current = { id, data, edges: s.edges, version: s.costVersion, cost: points };
     return points;
   });
-  const costColor = getCostColor(cost, costColorLow, costColorHigh);
+  const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
   const headerTextColor = getContrastColor(costColor);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
   const costScale = getCostScale(cost);

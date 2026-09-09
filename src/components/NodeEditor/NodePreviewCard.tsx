@@ -677,9 +677,13 @@ export const NodePreviewCard = memo(function NodePreviewCard({ def, onDragStart 
   const cost = costs[def.type] ?? 0;
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
+  // The header mixes into the card, and the card follows the theme
+  // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
+  // field keeps its historical name.
+  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
   const language = useAppStore((s) => s.language);
   const catColor = CATEGORY_COLORS[def.category as NodeCategory] ?? 'var(--type-any)';
-  const costColor = getCostColor(cost, costColorLow, costColorHigh);
+  const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
   const headerTextColor = getContrastColor(costColor);
   const costScale = getCostScale(cost);

@@ -108,6 +108,26 @@ export function canvasInkColor(bgHex: string): string {
   return getContrastColor(bgHex) === '#000000' ? '#000000' : '#d9dce0';
 }
 
+/**
+ * The base the group tints mix FROM: `--node-bg` in tokens.css, duplicated here
+ * because the tests run under `node` with no CSSOM to read the variable from.
+ * MUST track that token — a group frame is the backdrop panel BEHIND its member
+ * cards, so mixing from a brighter base than the cards inverts the depth
+ * ordering and the frame reads as floating on top of its own contents.
+ */
+const NODE_WHITE: [number, number, number] = [0xf1, 0xf2, 0xf3];
+/**
+ * The same thing in DARK mode — `--node-bg` under `:root[data-theme="dark"]`.
+ *
+ * Nodes flip with the theme as of 2026-09-09, and a group frame is the backdrop
+ * panel BEHIND its member cards: mixing it from the light base on a dark canvas
+ * puts a pale sheet behind dark cards and inverts the depth ordering the mix
+ * exists to preserve. Duplicated from the token for the reason NODE_WHITE is —
+ * this module is pure and node-tested, with no CSSOM to read it from — so the
+ * two MUST track each other.
+ */
+const NODE_DARK: [number, number, number] = [0x2b, 0x2e, 0x34];
+
 /** Interpolate between low and high color poles based on cost. */
 function costLerp(
   cost: number,
@@ -122,18 +142,36 @@ function costLerp(
   ];
 }
 
-/** Node background color — lightened blend with white. */
+/**
+ * The node HEADER's fill — the cost colour, softened toward the card it sits on.
+ *
+ * 45% colour against 55% of the card, which on a light node lightens toward
+ * white and on a dark one darkens toward the body. Blending toward white in
+ * BOTH themes is what made a dark node's header the brightest thing on it: a
+ * pastel band over a near-black card, louder than the glyph it labels.
+ * Toning it down is not a different rule, it is the SAME rule applied to the
+ * card that is actually there.
+ *
+ * The mix ratio is unchanged, so a header keeps the same colour STRENGTH in
+ * both themes — a cheap node still reads green and an expensive one orange,
+ * which is the whole point of colouring it. Only the thing it is mixed into
+ * moves. Header TEXT needs no parallel change: every caller picks it with
+ * `getContrastColor(costColor)`, which flips on its own once the fill darkens.
+ */
 export function getCostColor(
   cost: number,
   lowHex = '#8BC34A',
   highHex = '#FF5722',
+  dark = false,
 ): string {
-  if (cost <= 0) return '#EBEBEB';
+  // Zero cost has no colour to soften — it is the "costs nothing" grey, one
+  // step off the card in whichever direction the card allows.
+  if (cost <= 0) return dark ? '#3f434a' : '#EBEBEB';
   const low = hexToRgb(lowHex);
   const high = hexToRgb(highHex);
   const [r, g, b] = costLerp(cost, low, high);
-  // Blend with white at 55% to lighten for node backgrounds
-  return rgbToHex(r * 0.45 + 255 * 0.55, g * 0.45 + 255 * 0.55, b * 0.45 + 255 * 0.55);
+  const [br, bg, bb] = dark ? NODE_DARK : [255, 255, 255];
+  return rgbToHex(r * 0.45 + br * 0.55, g * 0.45 + bg * 0.55, b * 0.45 + bb * 0.55);
 }
 
 /** Badge text color — full saturation, no lightening. */
@@ -159,25 +197,7 @@ const GROUP_DEFAULT_COLOR = '#6366f1';
 /** How much group color goes into the body fill / the resting border. */
 const GROUP_FILL_MIX = 0.18;
 const GROUP_BORDER_MIX = 0.45;
-/**
- * The base the group tints mix FROM: `--node-bg` in tokens.css, duplicated here
- * because the tests run under `node` with no CSSOM to read the variable from.
- * MUST track that token — a group frame is the backdrop panel BEHIND its member
- * cards, so mixing from a brighter base than the cards inverts the depth
- * ordering and the frame reads as floating on top of its own contents.
- */
-const NODE_WHITE: [number, number, number] = [0xf1, 0xf2, 0xf3];
-/**
- * The same thing in DARK mode — `--node-bg` under `:root[data-theme="dark"]`.
- *
- * Nodes flip with the theme as of 2026-09-09, and a group frame is the backdrop
- * panel BEHIND its member cards: mixing it from the light base on a dark canvas
- * puts a pale sheet behind dark cards and inverts the depth ordering the mix
- * exists to preserve. Duplicated from the token for the reason NODE_WHITE is —
- * this module is pure and node-tested, with no CSSOM to read it from — so the
- * two MUST track each other.
- */
-const NODE_DARK: [number, number, number] = [0x2b, 0x2e, 0x34];
+
 
 /**
  * Opaque frame colors for a group (canvas frame + Saved Groups tile).
