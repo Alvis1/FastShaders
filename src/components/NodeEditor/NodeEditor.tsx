@@ -2609,6 +2609,25 @@ export function NodeEditor() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
+      // …and the press must have landed ON THE CANVAS, or nowhere in
+      // particular. `isTypingTarget` alone is NOT enough, which is what made
+      // typing in the code panel open the Add-node menu: Monaco holds the
+      // caret in a `<textarea>` but its keydown surfaces from a div in the
+      // same subtree, a SIBLING of that textarea — so the ancestor walk finds
+      // no text control and reports "not typing". Every bare key here then
+      // leaked into the canvas while the user typed code: Space visibly, and
+      // `a`/`f` invisibly (select-all and frame-selection, unnoticed because
+      // you are looking at the other pane).
+      //
+      // An ALLOW-list rather than another entry on the deny-list below,
+      // because the deny-list is the shape that let this through: it can only
+      // exclude surfaces someone thought of, and the app keeps growing them.
+      // The body/documentElement case is what keeps the feature working when a
+      // click on empty canvas leaves focus nowhere.
+      const target = e.target instanceof Element ? e.target : null;
+      const onCanvas = target ? canvasRef.current?.contains(target) === true : true;
+      const unfocused = target === document.body || target === document.documentElement;
+      if (!onCanvas && !unfocused) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key.toLowerCase();
       if (key === 'a' && !e.shiftKey) {

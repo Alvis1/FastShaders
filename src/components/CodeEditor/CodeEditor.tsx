@@ -34,6 +34,16 @@ const BASE_EDITOR_OPTIONS = {
   padding: { top: 12 },
   renderLineHighlight: 'gutter' as const,
   overviewRulerBorder: false,
+  // SUGGESTIONS ARE OFFERED, NEVER APPLIED BEHIND YOUR BACK. Monaco's defaults
+  // accept the highlighted suggestion on Enter AND on a commit character, which
+  // in a panel backed by the TSL type declarations means typing an identifier
+  // the editor does not recognise and pressing Enter silently replaces it with
+  // one it does. This is a shader editor: property names, node variable names
+  // and half-written experiments are all "words Monaco has never heard of", so
+  // the editor must not correct them. Tab still accepts a suggestion, which is
+  // the deliberate gesture; Enter is a newline again.
+  acceptSuggestionOnEnter: 'off' as const,
+  acceptSuggestionOnCommitCharacter: false,
 };
 
 const READONLY_EDITOR_OPTIONS = { ...BASE_EDITOR_OPTIONS, readOnly: true };

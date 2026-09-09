@@ -308,3 +308,40 @@ describe('costFocusId — the node the cost pill glides to', () => {
     expect(pill).toContain('costFocusId(nodes, edges) != null');
   });
 });
+
+describe('the bare canvas keys stay on the canvas', () => {
+  const nodeEditor = read('./NodeEditor.tsx');
+
+  it('requires the press to land on the canvas, not merely outside a text field', () => {
+    // Reported 2026-09-09: typing in the code panel and pressing Space opened
+    // the Add-node menu. `isTypingTarget` was already first in this handler and
+    // still missed it — Monaco keeps the caret in a <textarea> but its keydown
+    // surfaces from a SIBLING div in the same subtree, so the ancestor walk
+    // finds no text control. Space was merely the visible symptom: `a` and `f`
+    // leaked identically, selecting every node and re-framing the view while
+    // the user watched the other pane.
+    expect(nodeEditor).toContain('const onCanvas = target ? canvasRef.current?.contains(target) === true : true;');
+    expect(nodeEditor).toContain('if (!onCanvas && !unfocused) return;');
+    // The no-focus case has to stay allowed or the feature dies: clicking
+    // empty canvas can leave focus on <body>.
+    expect(nodeEditor).toContain('target === document.body || target === document.documentElement');
+  });
+
+  it('keeps the typing guard as the FIRST test, not a replacement for it', () => {
+    const handler = nodeEditor.slice(nodeEditor.indexOf('const onKey = (e: KeyboardEvent) => {'));
+    expect(handler.indexOf('isTypingTarget(e.target)')).toBeLessThan(handler.indexOf('const onCanvas'));
+  });
+});
+
+describe('the code panel does not correct what you type', () => {
+  it('offers suggestions but never applies one on Enter or a commit character', () => {
+    // A shader editor is full of words Monaco has never heard of — property
+    // names, generated variable names, half-written experiments. With the TSL
+    // declarations loaded, Monaco's defaults replace them with something it
+    // does recognise the moment you press Enter. Tab still accepts, which is
+    // the deliberate gesture.
+    const src = readFileSync(path.join(__dirname, '../CodeEditor/CodeEditor.tsx'), 'utf8');
+    expect(src).toContain("acceptSuggestionOnEnter: 'off' as const,");
+    expect(src).toContain('acceptSuggestionOnCommitCharacter: false,');
+  });
+});
