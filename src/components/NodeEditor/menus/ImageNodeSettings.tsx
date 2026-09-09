@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, resolveDeviceTextureDim } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { getNodeValues } from '@/types';
 import { rowStyle, labelStyle, wideFieldStyle } from './menuShared';
 import { totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/utils/imageNode';
+import { resolutionLadder } from '@/utils/imageCodec';
+import { resizeEncodedImage } from '@/utils/imageImport';
 import { loadImageOrigin, type ImageOriginPayload } from '@/utils/imageOriginCache';
 import { generateId } from '@/utils/idGenerator';
 
@@ -32,6 +34,10 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
   const setConvertMode = useAppStore((s) => s.setImageConvertMode);
   const [origin, setOrigin] = useState<ImageOriginPayload | null>(null);
   const [pending, setPending] = useState(false);
+  /** A resolution change is a decode + resample + encode; the row says so. */
+  const [resizing, setResizing] = useState(false);
+  const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
+  const costProfiles = useAppStore((s) => s.costProfiles);
 
   const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId));
   const vals = node ? getNodeValues(node) : {};
@@ -109,6 +115,22 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
   // the row states that instead of failing on click.
   const wasSnapped = Number(vals.srcWidth) > 0 && Number(vals.srcHeight) > 0;
   const restorable = origin !== null && origin.dataUrl !== url;
+
+  /**
+   * The resolution ladder — halvings of the ORIGINAL, so the choice is
+   * reversible (see `resolutionLadder`). It exists only while the original
+   * does: the re-encode reads from that record, never from what is currently
+   * stored, or 2048 → 1024 → 512 would stack three lossy passes.
+   *
+   * Capped by the SELECTED DEVICE's texture size, the same number the drop
+   * path caps at — offering a rung the pipeline would immediately shrink
+   * would be a control that lies.
+   */
+  const deviceMaxDim = resolveDeviceTextureDim(selectedHeadsetId, costProfiles);
+  const ladder = origin ? resolutionLadder(origin.width, origin.height, deviceMaxDim) : [];
+  /** Which rung the stored payload is on — none, after a power-of-two snap,
+   *  whose aspect ratio no halving of the original reproduces. */
+  const currentStep = ladder.find((step) => step.width === w && step.height === h) ?? null;
 
   /** Values that put the original payload back. Drops the pre-snap dimension
    *  record with it, so the node reads as un-snapped afterwards. */
@@ -189,12 +211,121 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
     updateNodeData(nodeId, { values: { ...revertedValues(origin!), colorSpace: next } });
   };
 
+  /**
+   * Re-encode the ORIGINAL at one rung of the ladder.
+   *
+   * Divisor 1 is routed through `revert` rather than re-encoded: the original
+   * payload IS that rung, so re-encoding it would spend a second lossy pass to
+   * arrive at a worse copy of a file we already hold — and it keeps the button
+   * and the dropdown from being able to disagree about what "original" means.
+   *
+   * Unlike Revert and the Data-map flip this genuinely awaits, and that is
+   * fine: those two await a READ and then write TWO things, which is what
+   * would split them into two undo entries. Here the whole await happens
+   * before the single `updateNodeData`, so a resolution change is still one
+   * undo step. The node is re-read after the await for the reason `revert`
+   * documents — the menu can outlive its node.
+   */
+  const applyResolution = async (divisor: number) => {
+    if (!origin || resizing) return;
+    const step = ladder.find((x) => x.divisor === divisor);
+    if (!step) return;
+    if (divisor === 1) {
+      revert();
+      return;
+    }
+    setResizing(true);
+    try {
+      const encoded = await resizeEncodedImage(
+        origin.dataUrl,
+        step.width,
+        step.height,
+        useAppStore.getState().ignoreImageLimits,
+      );
+      // A failed decode/draw/encode leaves the node exactly as it was — a
+      // resolution the user picked and did not get is better than a payload
+      // silently replaced by something else.
+      if (!encoded) return;
+      const store = useAppStore.getState();
+      const live = store.nodes.find((n) => n.id === nodeId);
+      if (!live || live.data.registryType !== 'imageNode') return;
+      const liveVals = getNodeValues(live);
+      const currentUrl = typeof liveVals.imageB64 === 'string' ? liveVals.imageB64 : '';
+      // Going back UP a rung can grow the payload, so the project-wide budget
+      // is re-checked exactly as the revert path checks it.
+      if (!store.ignoreImageLimits) {
+        const total = totalImageChars(store.nodes) - currentUrl.length + encoded.dataUrl.length;
+        if (total > MAX_TOTAL_IMAGE_CHARS) {
+          noticeOverBudget();
+          return;
+        }
+      }
+      store.updateNodeData(nodeId, {
+        values: {
+          ...liveVals,
+          imageB64: encoded.dataUrl,
+          width: encoded.width,
+          height: encoded.height,
+          // The ORIGINAL's dimensions, which is what these two have always
+          // meant ("what the source was, before the app resized it"). They
+          // keep the Original row and the Revert button live, and the card's
+          // thumbnail aspect right — a halving preserves it, so this is a
+          // no-op there rather than a correction.
+          srcWidth: origin.width,
+          srcHeight: origin.height,
+        },
+      });
+    } finally {
+      setResizing(false);
+    }
+  };
+
   return (
     <>
       <div className="context-menu__divider" />
       <div className="context-menu__category">{t('Image', language)}</div>
       {infoRow(t('Format', language), format)}
-      {infoRow(t('Resolution', language), resolution)}
+      {/* Resolution is a CHOICE when the original is still on this device —
+          the one lever that turns "this shader is too expensive" into
+          something actionable, since a 4 K photo on a blurred backdrop costs
+          the same bandwidth as one that matters. It falls back to the
+          read-only reading otherwise, with the row's title saying why. */}
+      {ladder.length > 1 ? (
+        <div style={rowStyle}>
+          <span
+            style={labelStyle}
+            title={t('Re-encode this image from the stored original at a smaller size. Lower resolution costs less GPU bandwidth.', language)}
+          >
+            {t('Resolution', language)}
+          </span>
+          <select
+            style={wideFieldStyle}
+            value={resizing ? 'busy' : (currentStep?.divisor ?? 'current')}
+            disabled={resizing || pending}
+            onChange={(e) => void applyResolution(Number(e.target.value))}
+          >
+            {resizing && <option value="busy">{t('Re-encoding…', language)}</option>}
+            {/* A power-of-two-snapped payload is on no rung of a ladder built
+                by halving the original, so its size is shown as its own entry
+                rather than leaving the box reading someone else's number. */}
+            {!resizing && !currentStep && <option value="current">{resolution}</option>}
+            {!resizing && ladder.map((step) => (
+              <option key={step.divisor} value={step.divisor}>
+                {`${step.width} × ${step.height}`}
+                {step.divisor === 1 ? ` (${t('original', language)})` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : (
+        infoRow(
+          t('Resolution', language),
+          resolution,
+          origin
+            ? undefined
+            : t('Choosing a resolution needs the stored original, which lives on this device only.', language),
+        )
+      )}
       {infoRow(t('Size', language), size)}
       {checkboxRow(t('Repeat (tile the image)', language), 'repeat', true,
         t('On: the image wraps/tiles. Off: edge pixels clamp beyond 0–1 UV.', language))}
@@ -246,7 +377,7 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
                 ? `${origin.width} × ${origin.height} ${fmt(origin.dataUrl)}`
                 : t('not on this device', language),
             origin
-              ? t('The image as imported before the automatic power-of-two step — same EXIF strip and same device texture cap, not the raw source file.', language)
+              ? t('The image as imported, before the automatic power-of-two step or any resolution you have chosen — same EXIF strip and same device texture cap, not the raw source file.', language)
               : t('The pre-conversion copy is kept on this device only, so it is unavailable after sharing a project, in a different browser, or once it ages out of the cache.', language),
           )}
           <button
@@ -255,7 +386,7 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
             disabled={!restorable}
             title={
               restorable
-                ? t('Undo the automatic power-of-two conversion for this image', language)
+                ? t('Put this image back to its original resolution', language)
                 : pending
                   // The stash read is async; a click in this window would do
                   // nothing, so say what the row is waiting for.

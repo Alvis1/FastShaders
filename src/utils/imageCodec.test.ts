@@ -7,6 +7,8 @@ import {
   isLosslessWebpBytes,
   potAxis,
   potTarget,
+  resolutionLadder,
+  RESOLUTION_MIN_DIM,
   shouldSkipPot,
   sourcePrefersLossless,
   type EncodeCaps,
@@ -214,5 +216,60 @@ describe('isLosslessWebpBytes / sourcePrefersLossless', () => {
     expect(sourcePrefersLossless('tile.webp', 'image/webp', riff('VP8L'))).toBe(true);
     expect(sourcePrefersLossless('tile.webp', 'image/webp', riff('VP8 '))).toBe(false);
     expect(sourcePrefersLossless('tile.webp', 'image/webp')).toBe(false); // head unreadable
+  });
+});
+
+describe('resolutionLadder', () => {
+  it('halves the ORIGINAL, preserving the aspect ratio', () => {
+    // Anchored to the original and not to what is stored, which is what makes
+    // the choice reversible — an anchor that moved with each pick could only
+    // ever go down.
+    expect(resolutionLadder(1920, 1080)).toEqual([
+      { divisor: 1, width: 1920, height: 1080 },
+      { divisor: 2, width: 960, height: 540 },
+      { divisor: 4, width: 480, height: 270 },
+      { divisor: 8, width: 240, height: 135 },
+    ]);
+  });
+
+  it('stops on the SHORT side, so a panorama is not cut off early', () => {
+    // 4096x256: the long side has plenty of room left, but /4 puts the short
+    // side at 64 and /8 below the floor.
+    const steps = resolutionLadder(4096, 256);
+    expect(steps.map((s) => s.divisor)).toEqual([1, 2, 4]);
+    expect(steps[steps.length - 1]).toEqual({ divisor: 4, width: 1024, height: 64 });
+  });
+
+  it('offers nothing below the floor', () => {
+    expect(resolutionLadder(RESOLUTION_MIN_DIM - 1, 4096)).toEqual([]);
+    expect(resolutionLadder(64, 64)).toEqual([{ divisor: 1, width: 64, height: 64 }]);
+  });
+
+  it('FILTERS by the device cap rather than clamping to it', () => {
+    // The top rung can exceed the cap when the user switched to a smaller
+    // headset profile after the drop. Clamping would offer a size that is not
+    // a halving of anything; dropping the rung keeps every remaining one true.
+    expect(resolutionLadder(2048, 2048, 1024)).toEqual([
+      { divisor: 2, width: 1024, height: 1024 },
+      { divisor: 4, width: 512, height: 512 },
+      { divisor: 8, width: 256, height: 256 },
+    ]);
+  });
+
+  it('refuses junk dimensions', () => {
+    // width/height come off a node's `values`, i.e. out of a .fastshader file.
+    for (const bad of [0, -1, NaN, Infinity]) {
+      expect(resolutionLadder(bad, 1024)).toEqual([]);
+      expect(resolutionLadder(1024, bad)).toEqual([]);
+    }
+    // A junk cap falls back to the hard texture ceiling rather than emptying
+    // the ladder — a bad profile must not remove the control.
+    expect(resolutionLadder(512, 512, NaN)).toHaveLength(4);
+  });
+
+  it('never repeats a size', () => {
+    // Rounding can collapse two divisors onto one size on a tiny source.
+    const steps = resolutionLadder(65, 65);
+    expect(new Set(steps.map((s) => `${s.width}x${s.height}`)).size).toBe(steps.length);
   });
 });

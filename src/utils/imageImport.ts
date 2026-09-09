@@ -51,6 +51,7 @@ import {
   type EncodeCaps,
   type PixelStats,
 } from './imageCodec';
+import { base64ToBytes } from './binaryCodec';
 
 /** One finished encode: the payload plus the dimensions it was encoded at. */
 export interface EncodedImage {
@@ -533,4 +534,90 @@ export async function encodeImageFile(
   } finally {
     decoded.cleanup();
   }
+}
+
+/**
+ * Re-encode an already-stored payload at `width` x `height`.
+ *
+ * This is the Image node's "Resolution" control: the menu hands it the node's
+ * ORIGINAL payload (`imageOriginCache`) and one rung of `resolutionLadder`,
+ * and gets back a smaller encode of the same picture. Re-encoding always from
+ * the ORIGINAL rather than from what is currently stored is the point — going
+ * 2048 -> 1024 -> 512 through the current payload would stack three lossy
+ * passes, and could never go back UP.
+ *
+ * It repeats `encodeImageFile`'s tail deliberately rather than calling it:
+ * that function's entry point is a `File` and its job is the DROP decision
+ * (source-pixel guard, EXIF orientation, device cap, the power-of-two snap and
+ * the halving retry). None of those apply here — the size is the user's, the
+ * source has already been through all of it once, and a halving retry would
+ * silently hand back a resolution other than the one that was picked. What IS
+ * shared is everything below the decision: the wrapped resample, the format
+ * choice, the quality ladder and the payload budget.
+ *
+ * Returns null when the decode, the draw or every candidate encode fails — the
+ * caller leaves the node exactly as it was.
+ */
+export async function resizeEncodedImage(
+  dataUrl: string,
+  width: number,
+  height: number,
+  ignoreLimits = false,
+): Promise<EncodedImage | null> {
+  if (!validImageDataUrl(dataUrl)) return null;
+  const w = Math.max(1, Math.round(width));
+  const h = Math.max(1, Math.round(height));
+
+  const img = new Image();
+  img.src = dataUrl;
+  try {
+    await img.decode();
+  } catch {
+    return null;
+  }
+  const sw = img.naturalWidth;
+  const sh = img.naturalHeight;
+  if (sw < 1 || sh < 1) return null;
+
+  const caps = await probeEncodeCaps();
+
+  // Whether the picture must stay bit-exact, read the same way the drop path
+  // reads it: the MIME for everything else, and for WebP the container flag in
+  // the file head, since the app's own re-encode produces both kinds.
+  const mime = /^data:(image\/(?:png|jpeg|webp));base64,/.exec(dataUrl)?.[1] ?? '';
+  let head: Uint8Array | undefined;
+  if (mime === 'image/webp') {
+    try {
+      // 88 base64 chars is a whole number of 4-char groups -> 66 bytes, which
+      // covers the RIFF/WEBP/VP8L header `isLosslessWebpBytes` looks at.
+      head = base64ToBytes(dataUrl.slice(dataUrl.indexOf(',') + 1, dataUrl.indexOf(',') + 1 + 88));
+    } catch {
+      /* unreadable head - treated as lossy, the cautious answer */
+    }
+  }
+  const preferLossless = sourcePrefersLossless('', mime, head);
+
+  // Two canvases, as in the drop path: the wrapped resample needs a CANVAS
+  // source, and drawing the decoded image at 1:1 first is what gives it one.
+  const baseCanvas = document.createElement('canvas');
+  if (!drawInto(baseCanvas, img, sw, sh)) return null;
+  const destCanvas = document.createElement('canvas');
+  // Wrapped, not a plain resample: "Repeat (tile the image)" defaults ON, so a
+  // seamless tile resampled against clamped edges comes back with a seam on
+  // every boundary.
+  if (!drawWrappedResize(destCanvas, baseCanvas, w, h)) return null;
+  const ctx = destCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+
+  // Scanned at the TARGET size — cheaper than at source, and the only thing
+  // the format choice needs from it (does this picture have alpha) survives a
+  // resample.
+  const stats = scanPixels(ctx, w, h);
+  const candidates = chooseFormat(caps, {
+    preferLossless,
+    alpha: stats.alpha,
+    allowWebp: true,
+  });
+  const budget = ignoreLimits ? HARD_MAX_IMAGE_ENCODED_CHARS : MAX_IMAGE_ENCODED_CHARS;
+  return encodeWithinBudget(destCanvas, candidates, budget);
 }

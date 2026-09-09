@@ -45,6 +45,64 @@ export const POT_MIN_DIM = 64;
 /** WebGPU's guaranteed maxTextureDimension2D; also the cap ceiling. */
 export const MAX_TEXTURE_DIM = 8192;
 
+/**
+ * The resolution ladder offered by the Image node's settings menu — halvings
+ * of the ORIGINAL source, so a user who dropped a 4 K photo onto a node that
+ * only ever shows a blurred backdrop can spend a tenth of the bandwidth on it.
+ *
+ * Anchored to the ORIGINAL and not to what is currently stored, which is what
+ * makes the choice reversible: an anchor that moved with each pick would only
+ * ever go down, so the way back up would be the Revert button and then a
+ * second pick. Halving preserves the aspect ratio exactly, so the ladder never
+ * re-opens the power-of-two question the drop-time snap answers — an explicit
+ * resolution choice supersedes that snap, and POT buys nothing in three r184
+ * anyway (see `potTarget`'s own note).
+ *
+ * `cap` filters, it does not clamp: the top of the ladder can exceed the
+ * device texture cap when the user has switched to a smaller headset profile
+ * since the drop, and offering a size the pipeline would immediately shrink
+ * would be a control that lies. Everything below the cap still stands.
+ *
+ * The floor is a SHORT-side rule, so a panorama is not cut off two steps early
+ * by its long side still being generous.
+ */
+export const RESOLUTION_MIN_DIM = 64;
+/** Halvings offered. Four is the whole useful range: /8 of a 2048 source is
+ *  256, and below `RESOLUTION_MIN_DIM` an image stops being a texture. */
+export const RESOLUTION_DIVISORS = [1, 2, 4, 8] as const;
+
+export interface ResolutionStep {
+  /** 1 = the original. Also the option's identity in the menu. */
+  divisor: number;
+  width: number;
+  height: number;
+}
+
+export function resolutionLadder(
+  width: number,
+  height: number,
+  cap: number = MAX_TEXTURE_DIM,
+): ResolutionStep[] {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return [];
+  if (width < 1 || height < 1) return [];
+  const limit = Number.isFinite(cap) && cap >= 1 ? cap : MAX_TEXTURE_DIM;
+  const out: ResolutionStep[] = [];
+  const seen = new Set<string>();
+  for (const divisor of RESOLUTION_DIVISORS) {
+    const w = Math.max(1, Math.round(width / divisor));
+    const h = Math.max(1, Math.round(height / divisor));
+    // Below the floor there is nothing useful further down either — stop,
+    // rather than continuing to test smaller divisors.
+    if (Math.min(w, h) < RESOLUTION_MIN_DIM) break;
+    if (Math.max(w, h) > limit) continue;
+    const key = `${w}x${h}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ divisor, width: w, height: h });
+  }
+  return out;
+}
+
 /** Lossy quality steps tried IN ORDER before giving up and halving the
  *  dimensions — one re-encode saves 30-45% of the bytes, halving throws away
  *  75% of the pixels. */
