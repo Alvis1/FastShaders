@@ -4,7 +4,7 @@ import { getTypeColor } from '@/utils/colorUtils';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { formatNodeLabel } from '@/i18n';
 import { useAppStore } from '@/store/useAppStore';
-import { buildRows, visiblePortRows, PortValueCell } from './ShaderNode';
+import { buildRows, visiblePortRows, centersOutputSocket, PortValueCell } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
@@ -341,11 +341,13 @@ export function NodeVisual({
 
   // ── Rows layout (ShaderNode's rows branch) ──
   const rows = buildRows(def);
-  const outMoved = sockets['out'] != null && !!def.outputs[0];
+  /** The Image node's output rides the CARD's centre — see centersOutputSocket. */
+  const centerOut = centersOutputSocket(def.type);
+  const outMoved = (centerOut || sockets['out'] != null) && !!def.outputs[0];
   /** Drop rows that draw nothing — THE SAME function ShaderNode uses, not a
    *  copy of the rule: without it the asset tiles and the Designer stage hang
    *  an empty port row below the card exactly as the canvas did. */
-  const visibleRows = visiblePortRows(rows, sockets, def.outputs);
+  const visibleRows = visiblePortRows(rows, sockets, def.outputs, centerOut);
   return (
     <div className={`${wrapClassName}`.trim()} style={wrapStyle}>
       {stackLayers}
@@ -475,12 +477,20 @@ export function NodeVisual({
               </div>
             );
           })}
-          {outMoved && (
+          {outMoved && !centerOut && (
             <StaticHandle side="right" dataType={def.outputs[0].dataType} port={def.outputs[0].id} label={def.outputs[0].label}
               style={{ top: calcTop(sockets['out']) }} />
           )}
           {snapColEl}
         </div>
+        {/* Centred output: anchored to the CARD, so it lands beside the middle
+            of the thumbnail rather than the middle of the rows region. No style
+            of its own — React Flow's `.react-flow__handle-right` default is
+            already card-centred and straddling the right border (ShaderNode's
+            twin explains it). */}
+        {centerOut && def.outputs[0] && (
+          <StaticHandle side="right" dataType={def.outputs[0].dataType} port={def.outputs[0].id} label={def.outputs[0].label} />
+        )}
       </div>
     </div>
   );

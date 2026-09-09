@@ -96,7 +96,15 @@ export function ContextMenu() {
       )}
       <div
         ref={ref}
-        className={`context-menu${type === 'canvas' ? ' context-menu--add-node' : ''}`}
+        // `nowheel` — React Flow's opt-out, which NodeEditor's own capture-phase
+        // wheel listener honours too. This menu is rendered INSIDE
+        // `.node-editor__canvas`, so without it a wheel aimed at the settings
+        // list panned the graph out from under it (with trackpad scrolling on)
+        // and the list never moved: a capture listener on an ancestor beats the
+        // scroll container it is aimed at. Floating chrome over the canvas must
+        // never move the canvas, scrollable or not — the canvas bar and the
+        // note body carry the same class.
+        className={`context-menu nowheel${type === 'canvas' ? ' context-menu--add-node' : ''}`}
         style={{ left: pos.left, top: pos.top }}
         onClick={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.preventDefault()}

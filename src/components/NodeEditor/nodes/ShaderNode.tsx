@@ -214,6 +214,35 @@ export interface PortRow {
  * - Property nodes hide the `name` key (shown in the header instead)
  */
 /**
+ * Node types whose single output socket is centred on the CARD rather than
+ * anchored to a port row.
+ *
+ * The rows layout pairs `inputs[i]` with `outputs[i]`, so a node with one
+ * output puts it on the FIRST row — which is right for an operator whose rows
+ * are its whole body, and wrong for a node that is mostly picture. The Image
+ * node's card is a filename, a thumbnail up to 120px tall, and then a row
+ * strip that exists only to carry the output: the wire left the bottom-right
+ * corner, well below the thumbnail it comes out of, and the strip itself is a
+ * band of empty card under the image. Centring puts the socket beside the
+ * middle of the picture and lets the row disappear when no parameter is
+ * exposed (the Image node's params are opt-in, so that is the default state).
+ *
+ * Deliberately a TYPE list and not a general rule: for every other rows-layout
+ * node the first row IS the top of the body, so row-anchoring already puts the
+ * output where the node's content starts. The designer's own socket override
+ * (`sockets['out']`) is the authored way to move one, and stays independent —
+ * it positions against the ROWS REGION's centre, while this positions against
+ * the whole card, which for a node with a big thumbnail above the region are
+ * different places.
+ *
+ * Shared with the NodeVisual replica so no preview surface can draw the socket
+ * somewhere else (`imageOutputSocket.test.ts`).
+ */
+export function centersOutputSocket(type: string | undefined): boolean {
+  return type === 'imageNode';
+}
+
+/**
  * The rows of the ROWS layout that still DRAW something.
  *
  * A designer socket override detaches a socket — and the value that follows it —
@@ -241,8 +270,9 @@ export function visiblePortRows(
   rows: readonly PortRow[],
   sockets: Record<string, number | undefined>,
   outputs: readonly PortDefinition[],
+  outCentered = false,
 ): PortRow[] {
-  const outMoved = sockets['out'] != null;
+  const outMoved = outCentered || sockets['out'] != null;
   return rows.filter(
     (row) =>
       (!!row.input && sockets[row.input.id] == null) ||
@@ -986,10 +1016,14 @@ export const ShaderNode = memo(function ShaderNode({
   // override, sockets stay row-anchored (classic behavior).
   const sockOv = nodeSockets(data.registryType);
   const rowsOutOff = sockOv['out'];
+  /** Image node: the output rides the CARD's centre — see centersOutputSocket. */
+  const centerOut = centersOutputSocket(data.registryType);
+  /** Either way the rows stop drawing the first output on their right half. */
+  const outDetached = centerOut || rowsOutOff != null;
   const rowsJustify = nodeJustify(data.registryType);
   const calcTop = (off: number) => `calc(50% ${off < 0 ? '-' : '+'} ${Math.abs(off)}px)`;
   /** Rows that still draw something — see {@link visiblePortRows}. */
-  const visibleRows = visiblePortRows(rows, sockOv, def.outputs);
+  const visibleRows = visiblePortRows(rows, sockOv, def.outputs, centerOut);
 
   return (
     <div style={wrapStyle}>
@@ -1124,7 +1158,7 @@ export const ShaderNode = memo(function ShaderNode({
               <div key={i} className="node-base__row shader-node__row">
                 <div className="shader-node__left" />
                 <div className="shader-node__right">
-                  {row.output && !(rowsOutOff != null && row.output === def.outputs[0]) && (
+                  {row.output && !(outDetached && row.output === def.outputs[0]) && (
                     <TypedHandle
                       type="source"
                       position={Position.Right}
@@ -1255,7 +1289,7 @@ export const ShaderNode = memo(function ShaderNode({
                 {row.output && data.dynamicOutputs && (
                   <span className="shader-node__out-label">{row.output.label}</span>
                 )}
-                {row.output && !(rowsOutOff != null && row.output === def.outputs[0]) && (
+                {row.output && !(outDetached && row.output === def.outputs[0]) && (
                   <TypedHandle
                     type="source"
                     position={Position.Right}
@@ -1318,6 +1352,23 @@ export const ShaderNode = memo(function ShaderNode({
         />
       )}
       </div>
+      {/* The centred output socket (Image node). Anchored to the CARD, not to
+          the rows region — which is what makes it the middle of the thumbnail
+          rather than the middle of the strip below it. It needs no CSS of its
+          own: React Flow's own `.react-flow__handle-right` is already
+          `top: 50%; right: 0; transform: translate(50%, -50%)`, i.e. centred on
+          the card and straddling its right border, exactly what the row rule
+          in NodeBase.css reproduces for a row-anchored one. RevealSockets
+          leans on the same default. */}
+      {centerOut && def.outputs[0] && (
+        <TypedHandle
+          type="source"
+          position={Position.Right}
+          id={def.outputs[0].id}
+          dataType={def.outputs[0].dataType}
+          label={def.outputs[0].label}
+        />
+      )}
       {/* Image node drag-reveal: hidden param sockets float on the left edge
           of the card (anchored to .node-base, NOT the rows region — the card
           layout never changes), named by their forced tooltips. */}
