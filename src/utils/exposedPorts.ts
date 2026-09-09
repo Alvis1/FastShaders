@@ -17,12 +17,21 @@ import { removeEdgesForPort } from '@/utils/edgeUtils';
  *  one new channel would hide the defaults. */
 export const OUTPUT_DEFAULT_EXPOSED = ['color', 'roughness', 'position'];
 
-/** The Raymarch Output's MAIN sockets — the chains it marches and shades
- *  with. Every number and light setting is hidden until ticked in its settings
- *  menu (where the value is edited whether or not the socket shows), exactly
- *  the Output's channel rule; unlike the Output a hidden setting KEEPS its
- *  value, because a setting applies whether or not it is wired. */
-export const MARCH_DEFAULT_EXPOSED = ['field', 'color', 'emissive', 'density', 'glow', 'background'];
+/**
+ * The Raymarch Output's sockets visible by DEFAULT: the four that decide what
+ * the march IS — the surface Field, its Colour, the volume Density and the Sky
+ * Background. Emissive and Glow are the SECOND channel of a surface and of a
+ * volume respectively: you reach for them once the shape is already on screen,
+ * so they start hidden with every number and light setting, one tick away in
+ * the node's own right-click menu (2026-09-09, owner request).
+ *
+ * Hiding a socket here changes only what the NODE SHOWS. Emission reads every
+ * value regardless of exposure, so a graph that already wires Emissive or Glow
+ * keeps working and keeps drawing those wires — `effectiveExposedPorts` returns
+ * this list only for a node with no explicit `exposedPorts`, and a landing wire
+ * exposes its target permanently (autoExposeConnectedParamPorts).
+ */
+export const MARCH_DEFAULT_EXPOSED = ['field', 'color', 'density', 'background'];
 
 /** The Sound node's two analyser params, visible by DEFAULT.
  *

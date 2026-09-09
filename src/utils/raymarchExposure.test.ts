@@ -14,12 +14,21 @@ import { graphToCode } from '@/engine/graphToCode';
 const read = (rel: string) => readFileSync(resolve(__dirname, rel), 'utf8');
 
 describe('Raymarch Output socket exposure', () => {
-  it('exposes the six chain sockets by default and hides every number and light setting', () => {
+  it('exposes the four sockets that decide what the march IS, and hides the rest', () => {
     const def = NODE_REGISTRY.get('raymarchOutput')!;
-    expect(MARCH_DEFAULT_EXPOSED).toEqual(['field', 'color', 'emissive', 'density', 'glow', 'background']);
+    // Emissive and Glow left the default set on 2026-09-09 (owner request):
+    // each is the SECOND channel of a surface and of a volume, reached for once
+    // the shape is already on screen, so they start hidden with the numbers and
+    // the light settings — one tick away in the node's own menu.
+    expect(MARCH_DEFAULT_EXPOSED).toEqual(['field', 'color', 'density', 'background']);
+    // They are still real inputs, still emitted, and a wire still exposes them.
+    for (const p of ['emissive', 'glow']) {
+      expect(def.inputs.some((i) => i.id === p), p).toBe(true);
+      expect(MARCH_DEFAULT_EXPOSED).not.toContain(p);
+    }
     for (const p of MARCH_DEFAULT_EXPOSED) expect(def.inputs.some((i) => i.id === p), p).toBe(true);
     const hidden = def.inputs.map((i) => i.id).filter((id) => !MARCH_DEFAULT_EXPOSED.includes(id));
-    expect(hidden).toEqual(expect.arrayContaining(['steps', 'stepSize', 'epsilon', 'bend', 'horizon', 'window', 'fieldRadius', 'lightX', 'lightY', 'lightZ', 'lightColor', 'ambient', 'ao', 'shadow', 'stepScale']));
+    expect(hidden).toEqual(expect.arrayContaining(['emissive', 'glow', 'steps', 'stepSize', 'epsilon', 'bend', 'horizon', 'window', 'fieldRadius', 'lightX', 'lightY', 'lightZ', 'lightColor', 'ambient', 'ao', 'shadow', 'stepScale']));
     expect(usesExposedPorts(def)).toBe(true);
     expect(effectiveExposedPorts(makeNode('rm', 'raymarchOutput'))).toBe(MARCH_DEFAULT_EXPOSED);
   });
