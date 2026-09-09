@@ -91,3 +91,43 @@ describe('a lifted node', () => {
     expect(edge).toContain('const sourceX = rawSourceX;');
   });
 });
+
+describe('a wire under the pointer', () => {
+  const edgeSrc = read('./edges/TypedEdge.tsx');
+
+  it('thickens on hover, by LESS than selection does', () => {
+    // Hover says "this is the wire under your pointer"; selection says "this is
+    // the one you are working on, and its data is open". Matching them would
+    // make sweeping the canvas look like it was selecting everything it passed
+    // — the same passing-vs-committed distinction the nodes draw.
+    expect(edgeSrc).toContain('const HOVER_EDGE_BOOST = 1.35;');
+    expect(edgeSrc).toContain('const boost = selected ? SELECTED_EDGE_BOOST : hovered ? HOVER_EDGE_BOOST : 1;');
+    const sel = /const SELECTED_EDGE_BOOST = ([\d.]+);/.exec(edgeSrc);
+    const hov = /const HOVER_EDGE_BOOST = ([\d.]+);/.exec(edgeSrc);
+    expect(Number(hov![1])).toBeGreaterThan(1);
+    expect(Number(hov![1])).toBeLessThan(Number(sel![1]));
+  });
+
+  it('scales the whole ribbon, never the stroke alone', () => {
+    // Multi-channel lines sit GAP apart and are already up to 1.2px wide, so
+    // thickening strokes on their own closes those gaps and fuses a 4-channel
+    // ribbon into one band — the highlight would destroy the channel count it
+    // is highlighting. `boost` feeds both widths and offsets.
+    expect(edgeSrc).toContain('const offsets = getOffsets(count).map((d) => d * boost);');
+    // …and no CSS shortcut has grown beside it. The edge rules live in
+    // NodeEditor.css (there is no TypedEdge.css), and a `:hover` stroke-width
+    // there would be exactly the fuse-the-ribbon bug, invisible on the
+    // single-channel wires most graphs are made of.
+    expect(read('./NodeEditor.css')).not.toMatch(/edge[^{]*:hover[^{]*\{[^}]*stroke-width/);
+  });
+
+  it('keeps hover LOCAL to the edge, not a hovered-edge id in the store', () => {
+    // A global one would re-render every edge on every hover to tell all but
+    // one of them nothing.
+    expect(edgeSrc).toContain('const [hovered, setHovered] = useState(false);');
+    expect(edgeSrc).toContain('onPointerLeave={() => setHovered(false)}');
+    // Cleared when the wire is pulled off its port: the hit path it was
+    // hovering is replaced by the connection line mid-gesture.
+    expect(edgeSrc).toMatch(/setHovered\(false\);\s*\n\s*\/\/ Start a new connection/);
+  });
+});

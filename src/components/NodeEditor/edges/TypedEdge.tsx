@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   EdgeLabelRenderer,
   getBezierPath,
@@ -108,6 +108,22 @@ function EdgeWaypointHandles({
 
 const GAP = 3.5 / 3;
 
+/**
+ * How much a HOVERED wire thickens. Less than a selected one, and that gap is
+ * the point: hover says "this is the wire under your pointer", selection says
+ * "this is the wire you are working on and its data is open". If the two
+ * matched, sweeping the canvas would look like it was selecting everything it
+ * passed — the same distinction the nodes draw between a passing state and a
+ * committed one.
+ *
+ * Scales the whole ribbon like the selected boost, never the stroke alone:
+ * multi-channel lines sit GAP apart and are already up to 1.2px wide, so
+ * thickening strokes on their own would close those gaps and fuse a 4-channel
+ * ribbon into one band — the highlight would destroy the channel count it is
+ * highlighting.
+ */
+const HOVER_EDGE_BOOST = 1.35;
+
 /** A selected wire simply gets THICKER — no shadow, no glow, no colour change.
  *
  *  Deliberately NOT the elevation shadow the node cards use: a wire is a line,
@@ -195,6 +211,16 @@ export function TypedEdge({
   data,
 }: EdgeProps<AppEdge>) {
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
+  /**
+   * Is the pointer over THIS wire? Local state rather than a hovered-edge id in
+   * the store: only this component reads it, and a global one would re-render
+   * every edge on every hover to tell all but one of them nothing.
+   *
+   * `pointerleave` and not `pointerout`, so moving between the hit path's own
+   * children could not read as leaving; and it is cleared on pointerdown-driven
+   * disconnects too, because the hit path is replaced mid-gesture there.
+   */
+  const [hovered, setHovered] = useState(false);
 
   // NO LIFT COMPENSATION. A lifted node used to travel 3px and every wire on it
   // had to travel with it, which was a PREDICTION that only held while React
@@ -297,7 +323,7 @@ export function TypedEdge({
   // (widths AND offsets, see SELECTED_EDGE_BOOST) so it reads as the same wire,
   // drawn heavier. Previously only the 1-channel case thickened, which left a
   // selected multi-channel edge marked by nothing but an opacity nudge.
-  const boost = selected ? SELECTED_EDGE_BOOST : 1;
+  const boost = selected ? SELECTED_EDGE_BOOST : hovered ? HOVER_EDGE_BOOST : 1;
   const offsets = getOffsets(count).map((d) => d * boost);
   const strokeWidth = (count >= 4 ? 0.8 : count >= 3 ? 1 : count >= 2 ? 1.2 : 1.5) * boost;
 
@@ -392,6 +418,10 @@ export function TypedEdge({
       // Set flag so NodeEditor won't open AddNodeMenu when this drops on empty space
       setEdgeDisconnecting(true);
 
+      // The wire is being pulled OFF its port: it is no longer a thing the
+      // pointer is resting on, and the hit path it was hovering is about to be
+      // replaced by the connection line.
+      setHovered(false);
       // Start a new connection from the source handle so user can reconnect
       requestAnimationFrame(() => {
         const handleEl = document.querySelector(
@@ -422,6 +452,8 @@ export function TypedEdge({
         onPointerDown={onInteractionDown}
         onPointerMove={onInteractionMove}
         onPointerUp={onInteractionUp}
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
       />
       {paths.map((path, i) => {
         const lineColor = channelColors[i];
