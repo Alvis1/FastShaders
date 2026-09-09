@@ -708,15 +708,18 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "sdPlane": {
     "svg": "<g transform=\"translate(28 28)\"><path d=\"M-20 8 L-4 -6 L22 -6 L6 8 Z\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\" stroke-linejoin=\"round\"></path><line x1=\"1\" y1=\"1\" x2=\"1\" y2=\"-20\" stroke=\"#F57C00\" stroke-width=\"1.8\"></line><path d=\"M-3 -15 L1 -21 L5 -15\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path></g>",
     "scale": 1.3,
-    "width": 43,
-    "height": 101,
+    "dx": -4,
+    "dy": 22,
+    "width": 44,
+    "height": 85,
     "sockets": {
-      "p": -12,
+      "p": -32,
       "nx": 0,
       "ny": 16,
       "nz": 28,
-      "h": 44,
-      "out": -12
+      "h": 28,
+      "out": -12,
+      "n": 12
     }
   },
   "sdOctahedron": {
@@ -800,15 +803,17 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "sdfMirror": {
     "svg": "<g transform=\"translate(28 28)\"><line x1=\"0\" y1=\"-22\" x2=\"0\" y2=\"22\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><path d=\"M-4 -12 L-18 -4 L-6 10 Z\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.2\" stroke-linejoin=\"round\"></path><path d=\"M4 -12 L18 -4 L6 10 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"2.2\" stroke-linejoin=\"round\"></path></g>",
     "scale": 1.35,
-    "dy": -4.5,
-    "width": 51,
-    "height": 108,
+    "dx": -0.5,
+    "dy": -20,
+    "width": 57,
+    "height": 73,
     "sockets": {
-      "p": -8,
+      "p": 12,
       "x": 12,
       "y": 28,
       "z": 44,
-      "out": -8
+      "out": -20,
+      "m": 28
     }
   },
   "sdfModify": {
@@ -827,23 +832,23 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "sdfDeform": {
     "svg": "<g transform=\"translate(28 28)\"><path d=\"M-8 -20 C 12 -10, -12 10, 8 20\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></path><path d=\"M8 -20 C -12 -10, 12 10, -8 20\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"2.4\"></path></g>",
     "scale": 1.2,
-    "width": 27,
-    "height": 91,
+    "dy": -3,
+    "width": 29,
+    "height": 81,
     "sockets": {
-      "p": 12,
-      "amount": 28,
+      "p": 16,
+      "amount": 32,
       "hx": 16,
       "hy": 32,
       "hz": 44,
-      "out": -28,
-      "h": -4
+      "out": -24,
+      "h": 0
     }
   },
   "sdfExtrude": {
     "svg": "<g transform=\"translate(28 28)\"><circle cx=\"6\" cy=\"-6\" r=\"12\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></circle><line x1=\"-14.5\" y1=\"-2.5\" x2=\"-2.5\" y2=\"-14.5\" stroke=\"#F57C00\" stroke-width=\"1.6\"></line><line x1=\"2.5\" y1=\"14.5\" x2=\"14.5\" y2=\"2.5\" stroke=\"#F57C00\" stroke-width=\"1.6\"></line><circle cx=\"-6\" cy=\"6\" r=\"12\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></circle></g>",
     "scale": 1.3,
-    "dx": 0.5,
-    "dy": -7.5,
+    "dy": -8.5,
     "width": 34,
     "height": 79,
     "sockets": {

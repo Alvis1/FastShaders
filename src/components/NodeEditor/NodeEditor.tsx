@@ -137,6 +137,52 @@ function setCanvasBusy(busy: boolean): void {
   document.documentElement.classList.toggle('fs-canvas-busy', canvasBusy > 0);
 }
 
+/**
+ * "No pointer is down, so nothing can be mid-gesture" — the reaper that makes
+ * the refcount above self-healing.
+ *
+ * Every arm/release pair here brackets a POINTER gesture (pan, node drag,
+ * connection drag), and each release depends on React Flow delivering the
+ * matching stop callback. It usually does. When it does not — a node deleted
+ * out from under a drag, a connection cancelled, a gesture interrupted by a
+ * mid-drag mutation — the count never returns to 0, and because
+ * `:root.fs-canvas-busy .shader-preview__iframe { pointer-events: none }` the
+ * 3D view is then INERT FOR THE REST OF THE SESSION: dragging it selects the
+ * chrome behind it instead of orbiting, which reads as the preview being
+ * broken rather than as a stuck flag. Reported from the canvas, 2026-09-09.
+ *
+ * Rather than chase each way a stop can go missing, this closes the class: the
+ * flag protects a gesture that might wander over the iframe, a gesture needs a
+ * held pointer, so once every pointer has lifted there is nothing left to
+ * protect. Tracked by ID because a touch gesture has several and lifting one
+ * finger does not end a two-finger pan.
+ *
+ * The reset runs in a rAF so React Flow's own stop handlers — which also fire
+ * on pointerup — go first and the ordinary path stays exactly as it was; this
+ * only ever collects a residue they left behind.
+ */
+const activePointers = new Set<number>();
+let busyReapFrame = 0;
+
+function trackPointerDown(e: PointerEvent): void {
+  activePointers.add(e.pointerId);
+  if (busyReapFrame) {
+    cancelAnimationFrame(busyReapFrame);
+    busyReapFrame = 0;
+  }
+}
+
+function trackPointerUp(e: PointerEvent): void {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size > 0 || busyReapFrame) return;
+  busyReapFrame = requestAnimationFrame(() => {
+    busyReapFrame = 0;
+    if (activePointers.size > 0 || canvasBusy === 0) return;
+    canvasBusy = 0;
+    document.documentElement.classList.remove('fs-canvas-busy');
+  });
+}
+
 const PRO_OPTIONS = { hideAttribution: true } as const;
 const DESKTOP_PAN_ON_DRAG = [1, 2];
 
@@ -788,6 +834,19 @@ export function NodeEditor() {
   useEffect(() => () => {
     canvasBusy = 0;
     document.documentElement.classList.remove('fs-canvas-busy');
+  }, []);
+  // …and the per-gesture safety net (see trackPointerUp): capture phase, so a
+  // handler that stops propagation cannot hide the release from it.
+  useEffect(() => {
+    window.addEventListener('pointerdown', trackPointerDown, true);
+    window.addEventListener('pointerup', trackPointerUp, true);
+    window.addEventListener('pointercancel', trackPointerUp, true);
+    return () => {
+      window.removeEventListener('pointerdown', trackPointerDown, true);
+      window.removeEventListener('pointerup', trackPointerUp, true);
+      window.removeEventListener('pointercancel', trackPointerUp, true);
+      activePointers.clear();
+    };
   }, []);
   /**
    * The cost pill's total doubles as "take me to the Output" — the number is
