@@ -31,11 +31,18 @@ import { hiddenOptionalCategories, DEFAULT_OPTIONAL_CATEGORIES } from '@/registr
  *  1. Make the per-card cost lazy instead of windowing at all. The expensive
  *     part of a tile is `FitNodeHeading`'s ResizeObserver plus the NodeVisual
  *     replica underneath it, and BOTH live in NodePreviewCard.tsx /
- *     NodeVisual.tsx — not in ContentBrowser. An IntersectionObserver there
- *     could leave an off-screen tile as a box with nothing in it while the
- *     strip keeps every child mounted, so the sweep above still sees a full
- *     set of boxes. This is the smallest change with most of the win, and it
- *     is a NodePreviewCard change, not a ContentBrowser one.
+ *     NodeVisual.tsx — not in ContentBrowser. HALF of this is now DONE and is
+ *     as far as it goes on its own: the 76 observers became one shared
+ *     observer (2026-09-09), which is a session-long saving that touches no
+ *     layout. The REPLICA half does not follow, and the reason is worth
+ *     stating because this entry used to imply it did: an IntersectionObserver
+ *     that leaves an off-screen tile as an empty box keeps the strip's child
+ *     COUNT intact but not its HEIGHTS, and the sweep is a maximum over
+ *     heights — so the genuinely tallest tile, if it has never been on screen,
+ *     is missed exactly as it would be by windowing. Reserving each blanked
+ *     tile's height first requires knowing it, which is option 2. So option 1
+ *     is not a way around the coupling; it is a way to pay less per tile once
+ *     the coupling is broken.
  *  2. Cache the measured natural height PER DEF TYPE, keyed by everything the
  *     measurement depends on (language, fonts-ready, the customGlyphs design
  *     set). With that, a mounted tile is no longer required to know how tall
@@ -81,12 +88,19 @@ describe('content browser — the boot cost, stated', () => {
     expect(booted.length).toBe(78);
   });
 
-  it('mounts one ResizeObserver per replica bar the two colour swatches', () => {
-    // NodePreviewCard wraps every branch except `color` in FitNodeHeading, and
-    // FitNodeHeading owns exactly one ResizeObserver. The colour cards need no
-    // heading normalization (they have no header), so they escape it.
+  it('observes 76 elements through ONE shared ResizeObserver', () => {
+    // NodePreviewCard wraps every branch except `color` in FitNodeHeading; the
+    // colour cards need no heading normalization (they have no header), so they
+    // escape it. The count of OBSERVED ELEMENTS is unchanged — what changed
+    // (2026-09-09) is that they share a single observer instead of registering
+    // 76 of them in the browser's observation loop for the whole session.
     const observed = booted.filter((d) => getFlowNodeType(d) !== 'color');
     expect(observed.length).toBe(76);
+    const card = readFileSync(join(__dirname, 'NodePreviewCard.tsx'), 'utf8');
+    expect((card.match(/new ResizeObserver\(/g) ?? []).length).toBe(1);
+    expect(card).toContain('return observeCardSize(el, measure);');
+    // A per-card `disconnect()` would be the tell that the old shape is back.
+    expect(card).not.toContain('ro.disconnect()');
   });
 
   it('mounts eight CPU noise thumbnails and one clock among them', () => {

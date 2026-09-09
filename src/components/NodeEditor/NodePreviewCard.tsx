@@ -100,6 +100,46 @@ const CARD_NODE_MAX_H = 270;
  * touching this number.
  */
 const CARD_COLOR_SCALE = 1.5;
+/**
+ * ONE ResizeObserver for every asset card, not one per card.
+ *
+ * `FitNodeHeading` wraps every tile but the two colour swatches, so a boot on
+ * the default 'all' tab used to register 76 separate observers — each its own
+ * entry in the browser's observation loop, alive for the whole session. A
+ * single observer can watch any number of elements and hands them back in ONE
+ * batched callback, so the 76 registrations become 1 and the per-frame
+ * bookkeeping goes with them.
+ *
+ * Behaviour is deliberately unchanged: each element keeps its own callback, so
+ * every card still measures and re-renders exactly as before. This does NOT
+ * address the virtualization finding — the replica render is the larger half of
+ * that cost, and it cannot be windowed while the strip's tile scale is a
+ * maximum over every mounted child (see contentBrowserVirtual.test.ts). It
+ * removes the half that can be removed without touching that coupling.
+ *
+ * The observer is never disconnected. Once every card has unobserved it holds
+ * nothing and costs nothing, where tearing it down and rebuilding it on each
+ * tab switch would be pure churn.
+ */
+let cardSizeObserver: ResizeObserver | null = null;
+const cardSizeCallbacks = new Map<Element, () => void>();
+
+function observeCardSize(el: Element, onResize: () => void): () => void {
+  cardSizeCallbacks.set(el, onResize);
+  if (!cardSizeObserver) {
+    cardSizeObserver = new ResizeObserver((entries) => {
+      // `entry.target` is the observed element, so one callback fans out to
+      // exactly the cards that actually changed.
+      for (const entry of entries) cardSizeCallbacks.get(entry.target)?.();
+    });
+  }
+  cardSizeObserver.observe(el);
+  return () => {
+    cardSizeCallbacks.delete(el);
+    cardSizeObserver?.unobserve(el);
+  };
+}
+
 function FitNodeHeading({ visualScale, textScale, children }: { visualScale: number; textScale: number; children: React.ReactNode }) {
   const innerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -111,9 +151,7 @@ function FitNodeHeading({ visualScale, textScale, children }: { visualScale: num
       setSize((s) => (s && s.w === w && s.h === h ? s : { w, h }));
     };
     measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
+    return observeCardSize(el, measure);
   }, []);
   // visual size includes the replica's own cost-scale transform
   const vw = size ? Math.max(1, size.w * visualScale) : 0;
