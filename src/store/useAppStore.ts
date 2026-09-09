@@ -1108,12 +1108,16 @@ interface AppState {
   /**
    * The node the pointer is currently over, or null.
    *
-   * Transient UI state — never persisted, never in history — and it exists for
-   * exactly one reason: a hovered node LIFTS (it moves by --fs-node-rise), and
-   * the wires attached to it have to move with it or they visibly detach from
-   * their sockets. React Flow computes edge endpoints from node POSITIONS and
-   * knows nothing about a CSS translate, so TypedEdge reads this and offsets
-   * the matching endpoint itself.
+   * Transient UI state — never persisted, never in history.
+   *
+   * **It currently has no reader.** It existed for exactly one: a hovered node
+   * used to MOVE, and because React Flow computes edge endpoints from node
+   * positions and knows nothing about a CSS translate, TypedEdge subscribed to
+   * this and offset the matching endpoint itself. Lifted nodes stop moving on
+   * 2026-09-09 (NodeBase.css) and that compensation went with them, leaving
+   * this written on every hover for nobody. Removing it is a small, separate
+   * cleanup — the hover LOOK is pure CSS `:hover` and does not need it, and the
+   * `fs-connecting` suppression that pairs with it is CSS too.
    *
    * Deliberately the node ID and not a boolean-per-edge: every edge subscribes
    * with a selector that folds it to a small number ("is my source and/or my

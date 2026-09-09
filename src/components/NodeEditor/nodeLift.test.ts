@@ -65,6 +65,24 @@ describe('a lifted node', () => {
     expect(rule.slice(0, 120)).toContain('--fs-node-scale: 1;');
   });
 
+  it('gives the ASSET TILES the same lift, not the retired one', () => {
+    // A tile that lifted differently from the node it depicts is the drift
+    // assetCardGeometry.test.ts exists to stop. The scale also suits that
+    // surface better: the strip is drawn through a computed zoom, so a
+    // translate had to be sized to survive being multiplied by it, where a
+    // scale is scale-invariant.
+    const card = read('./NodePreviewCard.css');
+    const browser = read('./ContentBrowser.css');
+    expect(card).toContain('transform: scale(var(--fs-node-grow));');
+    expect(browser).toContain('transform: scale(var(--fs-node-grow));');
+    for (const f of [card, browser]) expect(f).not.toContain('--fs-node-rise');
+  });
+
+  it('has retired the rise token everywhere, not just stopped reading it', () => {
+    // A declared-but-unused token invites the next reader to wire it back up.
+    expect(tokens).not.toMatch(/^\s*--fs-node-rise:/m);
+  });
+
   it('leaves the edges with nothing to compensate for', () => {
     // The prediction, its two per-edge store subscriptions and nodeRisePx are
     // all gone; React Flow's reported endpoints are simply used.

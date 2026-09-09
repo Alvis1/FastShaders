@@ -133,20 +133,12 @@
   --shadow-node: 2px 2px 0 rgba(0, 0, 0, 0.45);
   --shadow-node-selected: 8px 8px 0 rgba(0, 0, 0, 0.45);
 
-  /* How far a lifted node MOVES toward the light, on both axes. The shadow
-     stepping out is only half the effect; the object rising is the other half,
-     and without it a lifted node reads as having grown a shadow rather than as
-     having come forward.
-     3px and not more, because on the canvas this moves a node's SOCKETS while
-     React Flow keeps drawing its wires to the handle positions it measured
-     earlier. A diagonal 3px is 4.24px of displacement against a socket whose
-     radius is 5px (--handle-size / 2), so the wire's endpoint stays inside the
-     disc that paints over it and the wire still reads as landing on the port.
-     Raising this past ~3.5px is what would make hovered nodes look unplugged —
-     and note the bound moves with --handle-size, which coarse pointers already
-     bump to 12px. Zoom is not a factor: the node and its sockets scale
-     together inside the viewport transform, so the ratio holds at any zoom. */
-  --fs-node-rise: -3px;
+  /* RETIRED 2026-09-09: `--fs-node-rise`, the 3px a lifted node used to travel.
+     Its whole comment was a bound — how far a node may move before its sockets
+     slide out from under their wires — and the answer turned out to be "not at
+     all", because React Flow measures socket positions and a CSS translate is
+     invisible to that measurement until something re-measures at the wrong
+     moment. The lift is `--fs-node-grow` below, on every surface. */
 
   /* How much a LIFTED canvas node grows — the "coming forward" cue that
      replaced the 3px translate (see NodeBase.css for why the movement went).

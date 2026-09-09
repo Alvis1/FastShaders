@@ -196,23 +196,6 @@ export function TypedEdge({
 }: EdgeProps<AppEdge>) {
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
 
-  /**
-   * A LIFTED node (hovered, selected, or holding an open settings menu) moves
-   * by --fs-node-rise toward the light — and its SOCKETS move with it, while
-   * React Flow keeps computing this edge's endpoints from the node's POSITION,
-   * which a CSS translate never touches. Left alone, every wire on a lifted
-   * node hangs a few px off its port and reads as unplugged.
-   *
-   * So each endpoint is offset by the same rise when ITS node is lifted — only
-   * that end, because the other node has not moved.
-   *
-   * Both selectors fold to a small NUMBER, which is what keeps this cheap: the
-   * result is 0 for every edge that does not touch the node in question, so a
-   * hover or a selection change re-renders the one or two edges that actually
-   * moved and nothing else. (Same reasoning as `isColorSource` below, and the
-   * reason neither reads the app store's whole `nodes` array — that array's
-   * identity changes on every drag frame.)
-   */
   // NO LIFT COMPENSATION. A lifted node used to travel 3px and every wire on it
   // had to travel with it, which was a PREDICTION that only held while React
   // Flow had measured the sockets at rest — selecting a node resizes it (the

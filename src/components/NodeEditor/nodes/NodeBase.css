@@ -166,7 +166,7 @@
 
 /* A LIFTED NODE NO LONGER MOVES — it changes elevation only (2026-09-09).
  *
- * It used to travel `--fs-node-rise` (3px up-left) as well, so that a shadow
+ * It used to travel 3px up-left as well (the retired `--fs-node-rise`), so that a shadow
  * stepping out did not read as the card merely growing one. That movement is
  * gone, and the reason is a defect it could not avoid: React Flow computes wire
  * endpoints from stored positions and knows nothing about a CSS translate, so
@@ -186,9 +186,14 @@
  * flips across a slow creep along a noise node's edge. Nothing moves now, so
  * there is nothing to extend the hit area past.
  *
- * The ASSET TILES keep the movement (`--fs-node-rise` in NodePreviewCard.css /
- * ContentBrowser.css): they are outside React Flow, carry no wires, and nothing
- * measures them. */
+ * The ASSET TILES take the same lift (NodePreviewCard.css / ContentBrowser.css
+ * publish `--fs-node-lift` and scale by `--fs-node-grow` on hover). They never
+ * had the measurement problem — nothing measures them and they carry no wires —
+ * but a tile that lifted differently from the node it depicts is exactly the
+ * drift `assetCardGeometry.test.ts` exists to stop. The scale also suits that
+ * surface better than the move did: the strip is drawn through a computed
+ * `zoom`, so a translate had to be sized to survive being multiplied by it,
+ * where a scale is scale-invariant. */
 
 /* Cost badge positioned above the node, centered */
 .node-base__cost-badge {

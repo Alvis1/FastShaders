@@ -41,14 +41,22 @@
    handing the replica the same variable the canvas wrapper hands the real node
    means the tile cannot drift into looking like a different node.
 
-   The move is the same `--fs-node-rise` the canvas uses, so the two surfaces
-   travel the same distance — but written as `transform` here and as the
-   standalone `translate` property there. That is not a style choice: on the
-   canvas React Flow owns the wrapper's `transform` (it IS the node's position),
-   so only `translate` can compose with it. A tile's transform is its own. */
+   The lift is the same one the canvas gives a node: a deeper shadow and a
+   slight GROWTH, `--fs-node-grow`. It used to be a 3px MOVE on both surfaces,
+   which the canvas had to abandon (NodeBase.css) because a moved socket is a
+   socket React Flow can measure in the wrong place; the tiles never had that
+   problem — nothing measures them and they carry no wires — but they follow
+   anyway, because a tile that lifted differently from the node it depicts is
+   exactly the drift `assetCardGeometry.test.ts` exists to stop.
+
+   The scale suits this surface better than the move ever did. The strip is
+   drawn through a computed `zoom` (~0.5–0.7x) to fit the asset bar, and a
+   translate had to be sized to survive being multiplied by it — at 0.5x a 1px
+   rise is sub-pixel and the tile "did not animate" as far as anyone could see.
+   A scale is scale-INVARIANT: 2% is 2% at every zoom the bar can produce. */
 .node-preview-card:hover {
   --fs-node-lift: var(--shadow-node-selected);
-  transform: translate(var(--fs-node-rise), var(--fs-node-rise));
+  transform: scale(var(--fs-node-grow));
 }
 
 .node-preview-card {

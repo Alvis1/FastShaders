@@ -2574,9 +2574,10 @@ export function NodeEditor() {
    * published as CSS variables and consumed by the boundary's `inset`
    * (NodeEditor.css) — the rectangle's own geometry is React Flow's and is left
    * exactly as it is, so the element the user drags to move a selection keeps
-   * the size and hit area React Flow gave it. The 5px standoff and the selected
-   * nodes' uniform `--fs-node-rise` are folded in there too, in CSS, so no px
-   * literal from tokens.css has to be duplicated here.
+   * the size and hit area React Flow gave it. The 5px standoff is folded in
+   * there too, in CSS, so no px literal from tokens.css has to be duplicated
+   * here. (It used to add the selected nodes' uniform rise as well; nodes stop
+   * moving when lifted as of 2026-09-09, so that term is gone.)
    *
    * Computed as a difference of UNIONS, never as the largest per-node
    * difference: the node with the right-most measured edge need not be the one

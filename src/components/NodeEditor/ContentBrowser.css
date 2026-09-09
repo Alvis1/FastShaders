@@ -262,7 +262,10 @@
    expressed in units big enough to still read after it. */
 .saved-group-card:hover .saved-group-card__frame {
   box-shadow: var(--shadow-lg);
-  transform: translate(var(--fs-node-rise), var(--fs-node-rise));
+  /* The same lift the canvas nodes and the node tiles take — a growth, not a
+     move. It also answers the note above on its own terms: a scale needs no
+     sizing against the strip's zoom, because 2% is 2% at any of them. */
+  transform: scale(var(--fs-node-grow));
 }
 
 .saved-group-card__header {
