@@ -6,8 +6,11 @@ import type { TSLDataType } from '@/types';
 interface ConnectionStubProps {
   /** Node the released wire came from. */
   sourceNodeId: string;
-  /** Output handle the released wire came from. */
+  /** Handle the released wire came from — either end. */
   sourceHandleId: string;
+  /** Which end: `source` = an output socket, `target` = an input socket. Both
+   *  open the menu, and each measures and colours from its own side. */
+  sourceHandleType: 'source' | 'target';
   /** Menu's resolved (clamped) top-left in screen px — the wire's landing point. */
   to: { left: number; top: number };
 }
@@ -25,7 +28,7 @@ interface ConnectionStubProps {
  * Screen-space and purely decorative: it is not a React Flow edge, never enters
  * the graph, and is not hit-testable.
  */
-export function ConnectionStub({ sourceNodeId, sourceHandleId, to }: ConnectionStubProps) {
+export function ConnectionStub({ sourceNodeId, sourceHandleId, sourceHandleType, to }: ConnectionStubProps) {
   const { getInternalNode, flowToScreenPosition } = useReactFlow();
   // Subscribe to the viewport transform purely to re-render on pan/zoom:
   // flowToScreenPosition reads the live transform, so without this the wire
@@ -33,7 +36,12 @@ export function ConnectionStub({ sourceNodeId, sourceHandleId, to }: ConnectionS
   useStore((s) => s.transform);
 
   const node = getInternalNode(sourceNodeId);
-  const handle = node?.internals.handleBounds?.source?.find((h) => h.id === sourceHandleId);
+  // React Flow keeps the two sides in separate buckets, so looking in the wrong
+  // one finds nothing and the stub silently does not draw — which is what an
+  // input-socket drag got while this only ever read `source`.
+  const bounds = node?.internals.handleBounds;
+  const handle = (sourceHandleType === 'target' ? bounds?.target : bounds?.source)
+    ?.find((h) => h.id === sourceHandleId);
   // An unmeasured handle has no bounds — draw nothing rather than a wire from
   // the canvas origin.
   if (!node || !handle) return null;
@@ -43,15 +51,18 @@ export function ConnectionStub({ sourceNodeId, sourceHandleId, to }: ConnectionS
     y: node.internals.positionAbsolute.y + handle.y + handle.height / 2,
   });
 
+  const def = NODE_REGISTRY.get(node.data.registryType as string);
+  const ports = sourceHandleType === 'target' ? def?.inputs : def?.outputs;
   const dataType =
-    (NODE_REGISTRY.get(node.data.registryType as string)?.outputs.find(
-      (o) => o.id === sourceHandleId,
-    )?.dataType as TSLDataType | undefined) ?? 'any';
+    (ports?.find((p) => p.id === sourceHandleId)?.dataType as TSLDataType | undefined) ?? 'any';
 
   // Cubic with horizontal control points — the same left-to-right shape the
   // graph's edges use. The control offset tracks the span so short stubs don't
   // loop and long ones don't go slack.
-  const dx = Math.max(24, Math.abs(to.left - from.x) * 0.5);
+  // Mirrored for an INPUT pin: every socket's wire leaves it on its own outer
+  // side, so control points that always bulge rightward would make a wire
+  // dropped to the LEFT of an input double back through its own node.
+  const dx = Math.max(24, Math.abs(to.left - from.x) * 0.5) * (sourceHandleType === 'target' ? -1 : 1);
   const path = `M ${from.x},${from.y} C ${from.x + dx},${from.y} ${to.left - dx},${to.top} ${to.left},${to.top}`;
 
   return (

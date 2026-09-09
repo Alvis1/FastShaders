@@ -107,3 +107,71 @@ export function spliceNodeIntoEdge(
   exposeConnectedTarget(nodeId, inputPortId);
   return true;
 }
+
+/**
+ * Wire one connection under the app's connect rules, and nothing else.
+ *
+ * Extracted out of NodeEditor's `applyConnection` so the ADD-MENU path can obey
+ * the same two rules rather than restating them: inputs are single-connection
+ * (a second wire to one target handle replaces the first, it does not stack),
+ * and landing on a hidden parameter socket makes the exposure permanent, or the
+ * fresh edge points at a handle that never mounts and simply does not draw.
+ *
+ * Deliberately NOT the whole of `applyConnection`: the eval telemetry and the
+ * image→normal colour-space flip stay with it, because they need the node scan
+ * and the flip is unreachable from the menu (the Image node is a hidden def you
+ * can only drag in as a file).
+ */
+export function connectNodes(
+  source: string,
+  sourceHandle: string | null,
+  target: string,
+  targetHandle: string | null,
+): void {
+  const store = useAppStore.getState();
+  const filtered = store.edges.filter(
+    (e) => !(e.target === target && e.targetHandle === targetHandle),
+  );
+  store.setEdges([...filtered, makeTypedEdge(source, sourceHandle, target, targetHandle)] as AppEdge[]);
+  exposeConnectedTarget(target, targetHandle);
+}
+
+/** Which end of a wire the add-node menu was opened from. React Flow's own
+ *  vocabulary (`handleType`), carried verbatim so there is nothing to translate:
+ *  `source` = an OUTPUT socket, `target` = an INPUT socket. */
+export interface DroppedPin {
+  nodeId: string;
+  handleId: string;
+  handleType: 'source' | 'target';
+}
+
+/**
+ * Connect a node the add-node menu just created to the socket whose wire opened
+ * that menu — in the direction the drag actually went.
+ *
+ * Dropping a wire on empty canvas opens the menu from EITHER end: pull from an
+ * output and the new node is fed BY the pin, pull from an input and the new node
+ * FEEDS it. Only the first was wired up, and the second was not merely
+ * unimplemented — `onConnectStart` discarded the pin outright for a target
+ * handle, so half the gesture opened a menu and then silently added a loose
+ * node. Reversing the edge is the whole of the fix; getting it backwards
+ * instead would author an edge out of an input, which React Flow renders as
+ * NOTHING while the store keeps it and codegen still reads it.
+ *
+ * Returns false when the chosen node has no port for that direction — a
+ * constant dragged from an output has no input to fill, and a sink dragged from
+ * an input has no output to give. The node is still added where the menu was
+ * opened; it is simply not wired.
+ */
+export function connectDroppedWire(pin: DroppedPin, newNodeId: string, def: NodeDefinition): boolean {
+  if (pin.handleType === 'source') {
+    const input = def.inputs[0];
+    if (!input) return false;
+    connectNodes(pin.nodeId, pin.handleId, newNodeId, input.id);
+    return true;
+  }
+  const output = def.outputs[0];
+  if (!output) return false;
+  connectNodes(newNodeId, output.id, pin.nodeId, pin.handleId);
+  return true;
+}

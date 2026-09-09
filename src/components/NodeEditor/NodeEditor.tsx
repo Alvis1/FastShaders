@@ -3,7 +3,6 @@ import {
   ReactFlow,
   Background,
   Panel,
-  addEdge,
   reconnectEdge,
   useReactFlow,
   useStore,
@@ -73,7 +72,7 @@ import {
   type NodeBox,
 } from './dragConnect';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
-import { exposeConnectedTarget, spliceNodeIntoEdge } from './edgeInsert';
+import { connectNodes, exposeConnectedTarget, spliceNodeIntoEdge, type DroppedPin } from './edgeInsert';
 import { costFocusId, focusNodes, focusNode, OUTPUT_FOCUS_FIT } from './outputFocus';
 import { selectAllChanges } from './selectAll';
 import {
@@ -91,7 +90,7 @@ import { findSingletonNode } from './singletonNodes';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { isTypingTarget } from '@/utils/isTypingTarget';
-import { bridgeEdgesAcrossDeletedNodes, makeTypedEdge, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { bridgeEdgesAcrossDeletedNodes, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
 import { makeImageNodeFromEncode, resolveImageDrop, totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/utils/imageNode';
@@ -1277,23 +1276,16 @@ export function NodeEditor() {
    */
   const applyConnection = useCallback(
     (connection: Connection) => {
-      // Read fresh edges from store to avoid stale closure
-      const currentEdges = useAppStore.getState().edges;
-
-      // Enforce single-input: remove any existing edge to the same target handle
-      const filtered = currentEdges.filter(
-        (e) =>
-          !(e.target === connection.target && e.targetHandle === connection.targetHandle),
-      );
-
-      const newEdge = makeTypedEdge(
+      // Single-input enforcement + the hidden-socket exposure live in
+      // `connectNodes` (edgeInsert.ts), shared with the add-node menu's
+      // wire-drop connect — which used to restate neither and so could
+      // double-feed an input and point an edge at a handle that never mounts.
+      connectNodes(
         connection.source,
         connection.sourceHandle,
         connection.target,
         connection.targetHandle,
       );
-      setEdges(addEdge(newEdge, filtered) as AppEdge[]);
-      exposeConnectedTarget(connection.target, connection.targetHandle);
 
       // Eval telemetry: this is the ONE connect path (wire drops, drag-connect
       // and tile drag-connect all funnel here), so one call covers them all.
@@ -1325,7 +1317,10 @@ export function NodeEditor() {
         const nodes = useAppStore.getState().nodes;
         const src = nodes.find((n) => n.id === connection.source);
         if (src?.data.registryType === 'imageNode') {
-          const feedsSrgb = currentEdges.some(
+          // The live list: the edge just made targets `normal`, so it can never
+          // match the two handles below and reading before or after is the same
+          // answer — but reading fresh cannot go stale.
+          const feedsSrgb = useAppStore.getState().edges.some(
             (e) =>
               e.source === connection.source &&
               (e.targetHandle === 'color' || e.targetHandle === 'emissive'),
@@ -1739,7 +1734,7 @@ export function NodeEditor() {
 
   // Track whether a connection attempt succeeded; if not, open add-node menu
   const connectSucceeded = useRef(false);
-  const pendingSourceRef = useRef<{ nodeId: string; handleId: string } | null>(null);
+  const pendingSourceRef = useRef<DroppedPin | null>(null);
 
   const onConnectStart = useCallback(
     (_event: MouseEvent | TouchEvent, params: { nodeId: string | null; handleId: string | null; handleType: string | null }) => {
@@ -1756,9 +1751,17 @@ export function NodeEditor() {
       // so clearing on connect-start would dismiss the tooltip the tap itself
       // just popped. Stale tap labels during wire drags are handled at the
       // handle level instead: reveal turning on clears the tap (TypedHandle).
-      // Only track source when dragging from an output (source) handle
-      if (params.handleType === 'source' && params.nodeId && params.handleId) {
-        pendingSourceRef.current = { nodeId: params.nodeId, handleId: params.handleId };
+      // BOTH ends of a wire open the add-node menu, so both are tracked. Only
+      // `source` was, which is why pulling from an INPUT socket opened the menu
+      // and then added a loose, unwired node: the pin was discarded here, three
+      // functions before anything could have used it.
+      if ((params.handleType === 'source' || params.handleType === 'target')
+        && params.nodeId && params.handleId) {
+        pendingSourceRef.current = {
+          nodeId: params.nodeId,
+          handleId: params.handleId,
+          handleType: params.handleType,
+        };
       } else {
         pendingSourceRef.current = null;
       }
@@ -1793,7 +1796,10 @@ export function NodeEditor() {
       // Connection dropped on empty space — open add-node menu with source pin info
       const clientX = 'clientX' in event ? event.clientX : event.changedTouches[0].clientX;
       const clientY = 'clientY' in event ? event.clientY : event.changedTouches[0].clientY;
-      openContextMenu(clientX, clientY, 'canvas', undefined, undefined, pending?.nodeId, pending?.handleId);
+      openContextMenu(
+        clientX, clientY, 'canvas', undefined, undefined,
+        pending?.nodeId, pending?.handleId, undefined, pending?.handleType,
+      );
     },
     [openContextMenu],
   );

@@ -400,9 +400,16 @@ interface ContextMenuState {
   type: ContextMenuType;
   nodeId?: string;
   edgeId?: string;
-  /** Source pin info when menu was opened by dragging from an output handle. */
+  /** Source pin info when the menu was opened by dropping a wire on empty
+   *  canvas. `sourceHandleType` is React Flow's own vocabulary, carried
+   *  verbatim: `source` = the wire was pulled from an OUTPUT socket (the new
+   *  node is fed by this pin), `target` = from an INPUT socket (the new node
+   *  feeds it). Without it the menu can only guess a direction, and guessing
+   *  wrong authors an edge out of an input — which draws as nothing while the
+   *  store keeps it and codegen still reads it. */
   sourceNodeId?: string;
   sourceHandleId?: string;
+  sourceHandleType?: 'source' | 'target';
   /** Which Output MATERIAL SECTION was right-clicked (`data-material-index`
    *  on `.output-node__material`) — ShaderSettingsMenu seeds its material
    *  selector from it, so each section opens its own scoped menu. */
@@ -1404,7 +1411,7 @@ interface AppState {
   endInteraction: () => void;
 
   // UI actions
-  openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string, materialIndex?: number) => void;
+  openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string, materialIndex?: number, sourceHandleType?: 'source' | 'target') => void;
   closeContextMenu: () => void;
   setHoveredNode: (id: string | null) => void;
   /** Add a CSV import awaiting a decision to the queue. */
@@ -2190,8 +2197,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     });
   },
 
-  openContextMenu: (x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, materialIndex) =>
-    set({ contextMenu: { open: true, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, materialIndex } }),
+  openContextMenu: (x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, materialIndex, sourceHandleType) =>
+    set({ contextMenu: { open: true, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, materialIndex, sourceHandleType } }),
 
   closeContextMenu: () =>
     set({ contextMenu: { open: false, x: 0, y: 0, type: 'canvas' } }),

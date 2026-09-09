@@ -3,7 +3,7 @@ import { useReactFlow } from '@xyflow/react';
 import { findSingletonNode } from '../singletonNodes';
 import { focusNode } from '../outputFocus';
 import { useAppStore } from '@/store/useAppStore';
-import { spliceNodeIntoEdge } from '../edgeInsert';
+import { connectDroppedWire, spliceNodeIntoEdge } from '../edgeInsert';
 import {
   searchNodes,
   getEditorDefinitions,
@@ -13,9 +13,8 @@ import {
 } from '@/registry/nodeRegistry';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { formatNodeLabel, formatCategoryLabel, nodeDescription, t } from '@/i18n';
-import type { NodeDefinition, AppNode, AppEdge, ShaderNodeData, OutputNodeData } from '@/types';
+import type { NodeDefinition, AppNode, ShaderNodeData, OutputNodeData } from '@/types';
 import { generateId } from '@/utils/idGenerator';
-import { makeTypedEdge } from '@/utils/edgeUtils';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { getCostTextColor } from '@/utils/colorUtils';
 import { initialNodeValues } from '@/utils/newNodeValues';
@@ -53,7 +52,6 @@ export function AddNodeMenu() {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const addNode = useAppStore((s) => s.addNode);
   const addNote = useAppStore((s) => s.addNote);
-  const setEdges = useAppStore((s) => s.setEdges);
   const nodes = useAppStore((s) => s.nodes);
   const groupSelection = useAppStore((s) => s.groupSelection);
   const organizeSelection = useAppStore((s) => s.organizeSelection);
@@ -80,6 +78,10 @@ export function AddNodeMenu() {
   // Source pin info for auto-connect when dragged from an output handle
   const sourceNodeId = contextMenu.sourceNodeId;
   const sourceHandleId = contextMenu.sourceHandleId;
+  /** Which END of the wire opened this menu — see `DroppedPin`. Pulling from an
+   *  output means the new node is FED by that pin; pulling from an input means
+   *  it feeds it. Both open this menu, and only the first used to connect. */
+  const sourceHandleType = contextMenu.sourceHandleType;
   /**
    * Set when this menu was opened by an edge's **Insert node** — the chosen
    * node is spliced into that wire instead of landing loose beside it.
@@ -204,14 +206,12 @@ export function AddNodeMenu() {
     // standing unwired, a state the user never authored. The sibling
     // palette-tile path states the same rule ("add + connect + snap = one undo
     // step", NodeEditor.tsx), and the whole handler runs inside one bracket.
-    if (sourceNodeId && sourceHandleId) {
-      const targetDef = NODE_REGISTRY.get(def.type);
-      const firstInput = targetDef?.inputs[0];
-      if (firstInput) {
-        const store = useAppStore.getState();
-        const newEdge = makeTypedEdge(sourceNodeId, sourceHandleId, newNodeId, firstInput.id);
-        setEdges([...store.edges, newEdge] as AppEdge[]);
-      }
+    if (sourceNodeId && sourceHandleId && sourceHandleType) {
+      connectDroppedWire(
+        { nodeId: sourceNodeId, handleId: sourceHandleId, handleType: sourceHandleType },
+        newNodeId,
+        def,
+      );
     }
 
     // …or splice into the edge this menu was opened from (its Insert node row).
@@ -225,7 +225,7 @@ export function AddNodeMenu() {
     }
 
     closeContextMenu();
-  }), [contextMenu.x, contextMenu.y, screenToFlowPosition, fitView, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, spliceEdgeId, setEdges]);
+  }), [contextMenu.x, contextMenu.y, screenToFlowPosition, fitView, nodes, addNode, closeContextMenu, sourceNodeId, sourceHandleId, sourceHandleType, spliceEdgeId]);
 
   const handleGroupSelection = useCallback(() => {
     groupSelection(selectedGroupable.map((n) => n.id));

@@ -19,7 +19,7 @@ import './ContextMenu.css';
 const EDGE_MARGIN = 8;
 
 export function ContextMenu() {
-  const { open, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId } = useAppStore(
+  const { open, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, sourceHandleType } = useAppStore(
     (s) => s.contextMenu,
   );
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
@@ -86,10 +86,11 @@ export function ContextMenu() {
       {/* A wire dropped on empty canvas opens this menu with its source pin
           pending; redraw that wire to the menu so the pending connection stays
           visible instead of being invisible state. */}
-      {type === 'canvas' && sourceNodeId && sourceHandleId && (
+      {type === 'canvas' && sourceNodeId && sourceHandleId && sourceHandleType && (
         <ConnectionStub
           sourceNodeId={sourceNodeId}
           sourceHandleId={sourceHandleId}
+          sourceHandleType={sourceHandleType}
           to={pos}
         />
       )}
