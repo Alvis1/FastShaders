@@ -88,6 +88,26 @@ export function getContrastColor(bgHex: string): '#000000' | '#ffffff' {
   return luminance > 0.55 ? '#000000' : '#ffffff';
 }
 
+/**
+ * The ink the CANVAS draws in — cost badges and single-channel wires — against
+ * the user's chosen backdrop.
+ *
+ * `getContrastColor`'s binary black/white is right for TEXT ON A SWATCH, where
+ * the ground is a saturated cost or note colour and every bit of contrast
+ * counts. It is too blunt for the canvas: pure white wires on a dark backdrop
+ * glare and read as brighter than the nodes they connect, which are the thing
+ * being looked at. So the white end is eased down, for exactly the reason
+ * `--node-bg` is an off-white rather than #FFF — a few percent off the extreme
+ * keeps it clearly the lightest thing on screen without the hard edge.
+ *
+ * The BLACK end is left alone: on a light canvas the same ink sits on a pale
+ * ground where a softened black just looks washed out, and light backdrops are
+ * the default.
+ */
+export function canvasInkColor(bgHex: string): string {
+  return getContrastColor(bgHex) === '#000000' ? '#000000' : '#d9dce0';
+}
+
 /** Interpolate between low and high color poles based on cost. */
 function costLerp(
   cost: number,

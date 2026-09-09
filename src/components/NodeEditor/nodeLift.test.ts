@@ -131,3 +131,43 @@ describe('a wire under the pointer', () => {
     expect(edgeSrc).toMatch(/setHovered\(false\);\s*\n\s*\/\/ Start a new connection/);
   });
 });
+
+describe('dark mode reaches the node ART and the canvas ink', () => {
+  it('inverts the GLYPH and nothing else drawn on a node', () => {
+    // The glyph is authored art whose ink is #2B2B2B — legible on the off-white
+    // card nodes used to be, nearly invisible on the dark one they became.
+    // One filter beats sweeping ~236 literals across 77 saved designs, which
+    // would also change the file the Node Designer round-trips.
+    expect(base).toMatch(/:root\[data-theme="dark"\] \.node-glyph \{\s*filter: invert\(1\) hue-rotate\(180deg\);/);
+    // hue-rotate is not decoration: without it the family's accents come back
+    // as their opposites — the orange as blue, the green as magenta.
+    // And the filter must reach ONLY the glyph: the colormap strip is real data
+    // colour, the thumbnail is the user's picture, and the previews are
+    // readings. Inverting any of those would be a lie, not a restyle.
+    for (const cls of ['colormap-strip', 'image-thumb', 'preview-node__canvas', 'clock-node__canvas']) {
+      expect(base, `${cls} is being inverted`).not.toMatch(
+        new RegExp(`data-theme="dark"[^{]*\\.${cls}[^{]*\\{[^}]*invert`),
+      );
+    }
+  });
+
+  it('eases the canvas ink at the WHITE end only', () => {
+    // Pure white wires on a dark backdrop glare and read as brighter than the
+    // nodes they connect. The black end is left alone: on a light canvas a
+    // softened black just looks washed out.
+    const utils = read('../../utils/colorUtils.ts');
+    expect(utils).toContain('export function canvasInkColor(');
+    expect(utils).toMatch(/=== '#000000' \? '#000000' : '#[0-9a-f]{6}'/);
+    expect(utils).not.toMatch(/canvasInkColor[\s\S]{0,300}'#ffffff'/);
+    // …and the canvas uses it, rather than the binary swatch-text version.
+    const editor = read('./NodeEditor.tsx');
+    expect(editor).toContain('const contrastColor = canvasInkColor(nodeEditorBgColor);');
+  });
+
+  it('keeps getContrastColor binary for text ON a swatch', () => {
+    // Header text sits on a saturated cost colour and note colour, where every
+    // bit of contrast counts — that caller must not inherit the easing.
+    const shader = read('./nodes/ShaderNode.tsx');
+    expect(shader).toContain('getContrastColor(costColor)');
+  });
+});

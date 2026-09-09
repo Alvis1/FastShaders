@@ -133,6 +133,35 @@
   --fs-node-scale: 1;
 }
 
+/* ===== Glyph art in dark mode =====
+   The drawn symbol on a node's face is authored art: ~236 colour literals
+   across 77 saved designs in customGlyphs.ts, plus the built-in `renderArt`
+   set. Its ink is #2B2B2B, which was legible on the off-white card the node
+   used to be in both themes and is nearly invisible on the dark one it became
+   on 2026-09-09.
+
+   ONE filter rather than a palette sweep, and the trade is deliberate. The
+   sweep would touch every saved design, change the file the Node Designer
+   round-trips, and make each future glyph an exercise in picking two colours
+   instead of one — for art whose whole job is to be a recognisable silhouette.
+   `invert(1) hue-rotate(180deg)` is the standard pairing: the invert flips
+   lightness (the #2B2B2B ink becomes a light grey, a white knockout becomes
+   dark, so figure and ground keep their relationship) and the hue-rotate undoes
+   the invert's hue flip, so the family's accents — the #F57C00 orange, the
+   #2E9E5B green, the #2D6CDF blue — come back as themselves rather than as
+   their opposites. Greys are unaffected by the rotation, which is most of the
+   palette.
+
+   Scoped to `.node-glyph`, so it reaches the glyph and NOTHING else drawn on a
+   node: the colormap strip is real data colour, the image thumbnail is the
+   user's own picture, and the noise previews, waveform and clock face are
+   readings — inverting any of them would be a lie rather than a restyle. It
+   applies on every surface at once (canvas, tiles, the Designer stage), which
+   is what keeps the authoring view showing what the canvas will show. */
+:root[data-theme="dark"] .node-glyph {
+  filter: invert(1) hue-rotate(180deg);
+}
+
 /* ===== Shared node shell ===== */
 .node-base {
   position: relative;

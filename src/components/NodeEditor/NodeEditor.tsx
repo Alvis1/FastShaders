@@ -82,7 +82,7 @@ import {
 import { anyOutputDormant } from '@/utils/outputMaterials';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
-import { getCostScale, getContrastColor } from '@/utils/colorUtils';
+import { getCostScale, canvasInkColor } from '@/utils/colorUtils';
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
@@ -2546,9 +2546,12 @@ export function NodeEditor() {
 
 
   // Pick a contrast color for the canvas-scoped badge text + 1-channel edges
-  // (black on light bg, white on dark bg). Same value drives both, so they
-  // always flip together when the user picks a new background.
-  const contrastColor = getContrastColor(nodeEditorBgColor);
+  // (black on light bg, an eased-down white on dark). Same value drives both,
+  // so they always flip together when the user picks a new background.
+  // `canvasInkColor`, not `getContrastColor`: pure white wires on a dark
+  // backdrop glare and read as brighter than the nodes they connect — see that
+  // function for why only the white end is eased.
+  const contrastColor = canvasInkColor(nodeEditorBgColor);
   const contrastShadow = contrastColor === '#000000'
     ? 'rgba(255, 255, 255, 0.65)'
     : 'rgba(0, 0, 0, 0.65)';
