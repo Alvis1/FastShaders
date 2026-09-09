@@ -28,7 +28,7 @@ export interface TileDropEventDetail {
   clientX: number;
   clientY: number;
   /** True for click/Enter activation (dropTileAtCanvasCenter) — a plain add
-   *  aimed at the canvas centre, with none of the drag-preview semantics. */
+   *  aimed near the canvas centre, with none of the drag-preview semantics. */
   activate?: boolean;
 }
 
@@ -46,6 +46,61 @@ export const TILE_DRAG_MOVE_EVENT = 'fs-tile-drag-move';
 export const TILE_DRAG_END_EVENT = 'fs-tile-drag-end';
 
 const MOVE_THRESHOLD_PX = 6;
+
+/**
+ * Click/Enter adds land at the canvas centre, so pressing a tile twice used to
+ * drop the second node exactly on top of the first — indistinguishable from
+ * nothing having happened, which is how a repeated add reads as broken. Each
+ * activation is therefore scattered a little off the centre.
+ *
+ * SCREEN pixels, applied before `screenToFlowPosition`, so the visible gap is
+ * the same at every zoom — a flow-space offset would be invisible when zoomed
+ * out and a shove when zoomed in, and what matters here is only that the cards
+ * do not sit on each other on screen.
+ *
+ * The ring is deliberately small: this is "so you can see there are two", not
+ * a layout. Its outer radius stays inside a node's own footprint, so a
+ * scattered add is still recognisably aimed at the middle of the view.
+ */
+export const SCATTER_MIN_PX = 24;
+export const SCATTER_MAX_PX = 56;
+
+/**
+ * Turns advanced between consecutive activations — the golden angle (1 − 1/φ).
+ *
+ * A plain random angle repeats: two of a handful of rolls landing within a few
+ * degrees is ordinary, and that is precisely the stacked pair this exists to
+ * prevent. Stepping by the golden angle instead spreads every added node from
+ * every earlier one, not just from the last, and it is still ≥ a quarter turn
+ * from the previous one even after the jitter below — so two consecutive
+ * offsets are always at least `√2 · SCATTER_MIN_PX` apart (~34px).
+ */
+const SCATTER_TURN = 0.3819660112501051;
+/** Random slack on each step, so the ring reads as scattered, not as a dial. */
+const SCATTER_JITTER_TURN = 0.06;
+
+/** Where the last activation landed on the ring, in turns. Module state: this
+ *  is a purely visual sequence, so it belongs nowhere near the graph. */
+let scatterAngle: number | null = null;
+
+/**
+ * The next offset from the canvas centre, in screen px. Exported for tests —
+ * `rand` is injectable, and `resetTileScatter` puts the sequence back to its
+ * unstarted state so one test cannot see the previous one's angle.
+ */
+export function nextTileScatter(rand: () => number = Math.random): { dx: number; dy: number } {
+  const step = SCATTER_TURN + (rand() * 2 - 1) * SCATTER_JITTER_TURN;
+  const turns = scatterAngle === null ? rand() : scatterAngle + step;
+  scatterAngle = turns - Math.floor(turns);
+  const radius = SCATTER_MIN_PX + rand() * (SCATTER_MAX_PX - SCATTER_MIN_PX);
+  const theta = scatterAngle * Math.PI * 2;
+  return { dx: Math.cos(theta) * radius, dy: Math.sin(theta) * radius };
+}
+
+/** Test-only: forget the previous activation's angle. */
+export function resetTileScatter(): void {
+  scatterAngle = null;
+}
 
 /**
  * HTML5 dnd hides the drag payload until drop (`dataTransfer.getData` returns
@@ -77,7 +132,8 @@ function dispatchTileDragEnd(): void {
 }
 
 /**
- * Add a tile's content without dragging, aimed at the centre of the canvas.
+ * Add a tile's content without dragging, aimed NEAR the centre of the canvas
+ * (scattered — see nextTileScatter).
  * Dispatches the same `fs-tile-drop` event the touch path uses, so placement
  * (including drop-on-edge splicing) stays a single implementation.
  * No-ops when the canvas isn't mounted.
@@ -86,10 +142,13 @@ export function dropTileAtCanvasCenter(payload: TilePayload): void {
   const canvas = document.querySelector<HTMLElement>('.node-editor__canvas');
   if (!canvas) return;
   const r = canvas.getBoundingClientRect();
+  // Scattered off the exact centre so repeated presses stack visibly rather
+  // than landing on one another — see nextTileScatter.
+  const { dx, dy } = nextTileScatter();
   const detail: TileDropEventDetail = {
     payload,
-    clientX: r.left + r.width / 2,
-    clientY: r.top + r.height / 2,
+    clientX: r.left + r.width / 2 + dx,
+    clientY: r.top + r.height / 2 + dy,
     activate: true,
   };
   canvas.dispatchEvent(new CustomEvent(TILE_DROP_EVENT, { detail, bubbles: false }));

@@ -2,6 +2,7 @@ import type { AppNode, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
 import { nextPropertyName } from '@/utils/propertyConvert';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
+import { dimColor } from '@/utils/colorUtils';
 
 /**
  * Initial `values` for a node the USER is adding right now.
@@ -30,13 +31,88 @@ export const NEW_COLOR_PALETTE = [
 ] as const;
 
 /**
+ * How far a group's colour is mixed toward mid grey (`dimColor`).
+ *
+ * A group frame is the BACKDROP its member cards sit on, so it has to stay a
+ * step behind them — at full strength the five palette hues are louder than
+ * the nodes they enclose. `getGroupFrameColors` already mixes the stored
+ * colour 0.18 into the node body for the fill, but the SELECTED border is the
+ * stored colour at full strength, so dimming has to happen here, in what is
+ * stored, rather than in the renderer — where it would restyle every group
+ * saved before this.
+ */
+export const GROUP_COLOR_DIM = 0.45;
+
+/**
+ * Group frames use the SAME five hues, dimmed — so a group reads as belonging
+ * to the same palette as the colour nodes without competing with them.
+ *
+ * DERIVED, not a second hand-picked list: "the same palette, dimmer" is the
+ * rule, and a literal table would let the two drift the first time either is
+ * edited. `newNodeValues.test.ts` pins the RELATIONSHIP (same hue, lower
+ * chroma, same count) rather than the hexes, for the same reason.
+ */
+export const GROUP_COLOR_PALETTE = NEW_COLOR_PALETTE.map((c) =>
+  dimColor(c, GROUP_COLOR_DIM),
+) as readonly string[];
+
+/** Uniform pick from a palette; `rand` is injectable so tests can pin it. */
+function pickFrom(list: readonly string[], rand: () => number): string {
+  return list[Math.min(list.length - 1, Math.floor(rand() * list.length))];
+}
+
+/**
+ * Pick from `palette`, PREFERRING an entry `used` does not already contain.
+ *
+ * With only five hues a uniform roll repeats what is already on the canvas
+ * about one time in five, which is exactly the sameness a palette is meant to
+ * avoid — so the spread is the rule and the plain roll is what is left once
+ * every entry is in use. `used` is compared lower-cased; palette entries are
+ * lower-case by construction.
+ *
+ * Shared by the colour nodes and the group frames so the two cannot end up
+ * with different ideas of "pick a fresh one".
+ */
+export function pickSpreadColor(
+  palette: readonly string[],
+  used: ReadonlySet<string>,
+  rand: () => number = Math.random,
+): string {
+  const free = palette.filter((c) => !used.has(c.toLowerCase()));
+  return pickFrom(free.length ? free : palette, rand);
+}
+
+/**
  * A colour for a freshly added colour node, drawn from NEW_COLOR_PALETTE.
  *
  * `rand` is injectable so tests can pin the output.
  */
 export function randomColorHex(rand: () => number = Math.random): string {
-  const i = Math.min(NEW_COLOR_PALETTE.length - 1, Math.floor(rand() * NEW_COLOR_PALETTE.length));
-  return NEW_COLOR_PALETTE[i];
+  return pickFrom(NEW_COLOR_PALETTE, rand);
+}
+
+/**
+ * A colour for a group the user is creating right now, from the dimmed
+ * palette — preferring one no group on the canvas is wearing, so a graph of
+ * frames does not read as one repeated colour (the colour-node rule).
+ *
+ * Deliberately NOT used by the paths that rebuild a group from authored data:
+ * `instantiateSavedGroup` restores the colour the group was saved with, and
+ * `codeGroupBuilder` carries each built-in preset's own. A group with no
+ * colour at all still falls back to `GROUP_DEFAULT_COLOR` in the renderer, so
+ * every group saved before this keeps the indigo it has.
+ */
+export function randomGroupColor(
+  existingNodes: AppNode[],
+  rand: () => number = Math.random,
+): string {
+  const used = new Set<string>();
+  for (const n of existingNodes) {
+    if (n.type !== 'group') continue;
+    const c = (n.data as { color?: unknown } | undefined)?.color;
+    if (typeof c === 'string') used.add(c.toLowerCase());
+  }
+  return pickSpreadColor(GROUP_COLOR_PALETTE, used, rand);
 }
 
 /** True for the defs whose payload is a colour swatch (`values.hex`). */
@@ -77,10 +153,7 @@ export function initialNodeValues(
       const hex = getNodeValues(n)?.hex;
       if (typeof hex === 'string') used.add(hex.toLowerCase());
     }
-    const free = NEW_COLOR_PALETTE.filter((c) => !used.has(c));
-    values.hex = free.length
-      ? free[Math.min(free.length - 1, Math.floor(rand() * free.length))]
-      : randomColorHex(rand);
+    values.hex = pickSpreadColor(NEW_COLOR_PALETTE, used, rand);
   }
   return values;
 }

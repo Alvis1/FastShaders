@@ -192,6 +192,25 @@ export function getCostScale(cost: number): number {
   return 1 + Math.min(cost / 80, 1) * 0.35;
 }
 
+/**
+ * Mix a colour toward mid grey — "the same hue, dimmer".
+ *
+ * Mid grey rather than white or black on purpose: the result has to read the
+ * same way in BOTH themes (a group frame is drawn over a user-picked canvas
+ * and mixed from `--node-bg`, which flips), and only a neutral of middling
+ * lightness leaves the hue recognisable without committing to one ground.
+ * `amount` is how far to go: 0 returns the colour, 1 returns the grey.
+ *
+ * Invalid input returns the string unchanged — callers hand this literals from
+ * their own palettes, and a silent `#NaNNaNNaN` would be worse than a no-op.
+ */
+export function dimColor(hex: string, amount: number): string {
+  if (!HEX6.test(hex)) return hex;
+  const [r, g, b] = hexToRgb(hex);
+  const t = Math.min(1, Math.max(0, amount));
+  return rgbToHex(lerp(r, 0x80, t), lerp(g, 0x80, t), lerp(b, 0x80, t));
+}
+
 /** Default group color — used when a group carries no (or an invalid) color. */
 const GROUP_DEFAULT_COLOR = '#6366f1';
 /** How much group color goes into the body fill / the resting border. */

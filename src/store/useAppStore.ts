@@ -18,6 +18,7 @@ import type {
 import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { randomGroupColor } from '@/utils/newNodeValues';
 import { autoLayout } from '@/engine/layoutEngine';
 // NB the two built-in libraries are deliberately NOT imported here — see
 // instantiateBuiltinTexture, which loads them on demand so that the Babel
@@ -2567,7 +2568,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
       data: {
         registryType: 'group',
         label: 'Group',
-        color: '#6366f1',
+        // From the dimmed twin of the colour-node palette, preferring a hue no
+        // group on the canvas is already wearing — every group used to arrive
+        // the same indigo, so a graph of frames read as one repeated colour
+        // until each was opened and recoloured by hand. Only THIS path rolls a
+        // colour: a saved group restores the one it was saved with, and a
+        // built-in preset carries its own (see randomGroupColor).
+        color: randomGroupColor(state.nodes),
         width: groupW,
         height: groupH,
       } as GroupNodeData,
