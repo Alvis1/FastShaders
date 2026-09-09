@@ -42,7 +42,7 @@ describe('a lifted node', () => {
 
   it('grows instead, by a scale small enough to stay under the old defect', () => {
     expect(base).toContain('--fs-node-scale: var(--fs-node-grow);');
-    expect(base).toContain('transform: scale(var(--fs-node-scale, 1));');
+    expect(base).toContain('scale: var(--fs-node-scale, 1);');
     const m = /--fs-node-grow:\s*([\d.]+);/.exec(tokens);
     expect(m, 'the growth token is gone').toBeTruthy();
     const grow = Number(m![1]);
@@ -55,7 +55,48 @@ describe('a lifted node', () => {
     // They are absolute siblings of the card; left at the resting size, a
     // lifted stacked node visibly comes apart.
     const stack = base.slice(base.indexOf('.node-base__stack {'), base.indexOf('.node-base__stack {') + 700);
-    expect(stack).toContain('transform: scale(var(--fs-node-scale, 1));');
+    expect(stack).toContain('scale: var(--fs-node-scale, 1);');
+  });
+
+  it('uses the standalone `scale` PROPERTY, never transform: scale()', () => {
+    // Load-bearing, not stylistic. `.node-base` is not only ShaderNode's card:
+    // PreviewNode, MathPreviewNode and ClockNode render it too and each sets
+    // `transform: scale(<cost scale>)` INLINE on that same element. An inline
+    // declaration beats any stylesheet rule, so writing the lift as `transform`
+    // left the 8 noise nodes, sin/cos and Time as the only nodes on the canvas
+    // that did not respond to hover — silently, since every other node did.
+    // The used transform is translate → rotate → scale → transform, so the
+    // standalone property composes with the inline one and both apply.
+    const all = [base, read('./nodes/ColorNode.css'), read('./nodes/GroupNode.css'),
+                 read('./nodes/NoteNode.css'), read('./nodes/OutputNode.css'),
+                 read('./NodePreviewCard.css'), read('./ContentBrowser.css')];
+    for (const css of all) {
+      expect(css.replace(/\/\*[\s\S]*?\*\//g, ''))
+        .not.toMatch(/transform: scale\(var\(--fs-node-(scale|grow)/);
+    }
+    // …and the three that made it matter still set their cost scale inline.
+    for (const f of ['PreviewNode', 'MathPreviewNode', 'ClockNode']) {
+      expect(read(`./nodes/${f}.tsx`), `${f} no longer scales inline — re-check the rule above`)
+        .toContain('transform: `scale(${costScale})`');
+    }
+  });
+
+  it('reaches EVERY node type — one shell per type, all of them scaled', () => {
+    // The set that takes the lift SHADOW and the set that takes the lift SCALE
+    // must be the same, or a node deepens its shadow without growing.
+    const shells: Array<[string, string]> = [
+      ['./nodes/NodeBase.css', '.node-base'],          // shader, preview, mathPreview, clock, sound
+      ['./nodes/OutputNode.css', '.output-node'],      // output, raymarchOutput
+      ['./nodes/ColorNode.css', '.color-node'],
+      ['./nodes/NoteNode.css', '.note-node'],
+      ['./nodes/GroupNode.css', '.group-node--collapsed'],
+    ];
+    for (const [file, sel] of shells) {
+      const css = read(file);
+      const block = css.slice(css.indexOf(`${sel} {`), css.indexOf('}', css.indexOf(`${sel} {`)));
+      expect(block, `${sel} takes the shadow but not the scale`).toContain('scale: var(--fs-node-scale, 1);');
+      expect(block, `${sel} lost the lift shadow`).toContain('box-shadow: var(--fs-node-lift');
+    }
   });
 
   it('exempts an expanded group frame, which must not move OR grow', () => {
@@ -73,8 +114,8 @@ describe('a lifted node', () => {
     // scale is scale-invariant.
     const card = read('./NodePreviewCard.css');
     const browser = read('./ContentBrowser.css');
-    expect(card).toContain('transform: scale(var(--fs-node-grow));');
-    expect(browser).toContain('transform: scale(var(--fs-node-grow));');
+    expect(card).toContain('scale: var(--fs-node-grow);');
+    expect(browser).toContain('scale: var(--fs-node-grow);');
     for (const f of [card, browser]) expect(f).not.toContain('--fs-node-rise');
   });
 

@@ -56,11 +56,11 @@
    A scale is scale-INVARIANT: 2% is 2% at every zoom the bar can produce. */
 .node-preview-card:hover {
   --fs-node-lift: var(--shadow-node-selected);
-  transform: scale(var(--fs-node-grow));
+  scale: var(--fs-node-grow);
 }
 
 .node-preview-card {
-  transition: transform var(--transition-fast);
+  transition: scale var(--transition-fast);
 }
 
 .node-preview-card:active {

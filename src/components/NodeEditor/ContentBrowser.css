@@ -265,7 +265,7 @@
   /* The same lift the canvas nodes and the node tiles take — a growth, not a
      move. It also answers the note above on its own terms: a scale needs no
      sizing against the strip's zoom, because 2% is 2% at any of them. */
-  transform: scale(var(--fs-node-grow));
+  scale: var(--fs-node-grow);
 }
 
 .saved-group-card__header {

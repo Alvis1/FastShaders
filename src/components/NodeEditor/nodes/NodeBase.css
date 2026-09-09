@@ -221,11 +221,18 @@
      to show. */
   box-shadow: var(--fs-node-lift, var(--shadow-node));
   /* The lift's second half: a lifted card GROWS slightly rather than moving.
-     Safe on the ONE property because nothing else on this element uses it —
-     the cost scale lives on the WRAPPER (ShaderNode's wrapStyle), which is a
-     different element. */
-  transform: scale(var(--fs-node-scale, 1));
-  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
+     The standalone `scale` PROPERTY, never `transform: scale()`, and that is
+     load-bearing rather than stylistic. `.node-base` is not only ShaderNode's
+     card — PreviewNode, MathPreviewNode and ClockNode render it too, and each
+     sets `transform: scale(<cost scale>)` INLINE on that same element. An
+     inline declaration beats any stylesheet rule, so writing this as
+     `transform` left the 8 noise nodes, sin/cos and Time as the only nodes on
+     the canvas that did not respond to hover at all — silently, since every
+     other node did. The used transform is translate → rotate → scale →
+     transform, so the standalone property COMPOSES with the inline one and
+     both scales apply. Same reason the retired lift used `translate`. */
+  scale: var(--fs-node-scale, 1);
+  transition: box-shadow var(--transition-fast), scale var(--transition-fast);
   font-family: var(--font-sans);
   overflow: visible;
 }
@@ -344,12 +351,12 @@
   z-index: -1;
   /* Grows with the card, or a lifted stacked node's layers stay at the resting
      size and the stack visibly comes apart. */
-  transform: scale(var(--fs-node-scale, 1));
+  scale: var(--fs-node-scale, 1);
   pointer-events: none;
   /* The deepest layer carries the whole stack's shadow (set inline from
      --fs-node-lift), so it needs the same transition the card has or a stacked
      node would snap between elevations while an unstacked one eases. */
-  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
+  transition: box-shadow var(--transition-fast), scale var(--transition-fast);
 }
 
 /* ===== Header ===== */
