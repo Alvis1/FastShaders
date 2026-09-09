@@ -133,20 +133,47 @@ describe('a wire under the pointer', () => {
 });
 
 describe('dark mode reaches the node ART and the canvas ink', () => {
-  it('inverts the GLYPH and nothing else drawn on a node', () => {
-    // The glyph is authored art whose ink is #2B2B2B — legible on the off-white
-    // card nodes used to be, nearly invisible on the dark one they became.
-    // One filter beats sweeping ~236 literals across 77 saved designs, which
-    // would also change the file the Node Designer round-trips.
-    expect(base).toMatch(/:root\[data-theme="dark"\] \.node-glyph \{\s*filter: invert\(1\) hue-rotate\(180deg\);/);
-    // hue-rotate is not decoration: without it the family's accents come back
-    // as their opposites — the orange as blue, the green as magenta.
-    // And the filter must reach ONLY the glyph: the colormap strip is real data
-    // colour, the thumbnail is the user's picture, and the previews are
-    // readings. Inverting any of those would be a lie, not a restyle.
+  it('re-maps each GREYSCALE glyph role, and leaves the accents alone', () => {
+    // This was a `filter: invert(1) hue-rotate(180deg)` for a few hours, and it
+    // was wrong in a way the test should keep stating: an invert maps L to 1-L,
+    // which is right at the extremes and useless in the middle. The palette's
+    // greys are a RAMP — Ink #2B2B2B, Construct #8A8F9C, Axis #B4B7C0 — so
+    // Construct inverted to another mid-grey ("the greys inverted are the
+    // same") and Axis, the lightest of the three, became the darkest thing in
+    // the art. Re-mapping each role fixes the span as well as the order.
+    expect(base, 'the blanket filter is back').not.toMatch(/\.node-glyph \{\s*filter:/);
+    for (const grey of ['#2B2B2B', '#8A8F9C', '#B4B7C0', '#FFFFFF']) {
+      expect(base, `${grey} has no dark mapping`).toContain(`.node-glyph [fill="${grey}" i]`);
+      expect(base, `${grey} has no dark stroke mapping`).toContain(`.node-glyph [stroke="${grey}" i]`);
+    }
+    // The chromatic roles are the art's identity and read on either card.
+    // Comments stripped first: the block above NAMES these hexes to say it
+    // leaves them alone, and a raw search would fail for that reason — the
+    // same false positive the node-graphics sweep hit against its own prose.
+    const code = base.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const accent of ['#F57C00', '#FF9800', '#2D6CDF', '#2E9E5B', '#1796A0']) {
+      expect(code, `${accent} is being re-mapped`).not.toContain(accent);
+    }
+  });
+
+  it('keeps the grey ramp in order, strongest role first', () => {
+    // Ink is the silhouette and must be the lightest on a dark card; Axis is a
+    // faint plot rule and must stay faint, which means DARKER. Getting the
+    // order wrong is exactly what the filter did.
+    const lum = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
+      return 0.299 * r + 0.587 * g + 0.114 * b;
+    };
+    const dark = (src: string) =>
+      /:\s*(#[0-9a-f]{6})/.exec(base.slice(base.indexOf(`[fill="${src}" i]`)))![1];
+    expect(lum(dark('#2B2B2B'))).toBeGreaterThan(lum(dark('#8A8F9C')));
+    expect(lum(dark('#8A8F9C'))).toBeGreaterThan(lum(dark('#B4B7C0')));
+  });
+
+  it("re-maps only the GLYPH — never a reading, never the user's own picture", () => {
     for (const cls of ['colormap-strip', 'image-thumb', 'preview-node__canvas', 'clock-node__canvas']) {
-      expect(base, `${cls} is being inverted`).not.toMatch(
-        new RegExp(`data-theme="dark"[^{]*\\.${cls}[^{]*\\{[^}]*invert`),
+      expect(base, `${cls} is being re-coloured`).not.toMatch(
+        new RegExp(`data-theme="dark"[^{]*\\.${cls}`),
       );
     }
   });

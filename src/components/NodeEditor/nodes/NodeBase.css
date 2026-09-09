@@ -134,33 +134,70 @@
 }
 
 /* ===== Glyph art in dark mode =====
-   The drawn symbol on a node's face is authored art: ~236 colour literals
-   across 77 saved designs in customGlyphs.ts, plus the built-in `renderArt`
-   set. Its ink is #2B2B2B, which was legible on the off-white card the node
-   used to be in both themes and is nearly invisible on the dark one it became
-   on 2026-09-09.
+   The drawn symbol on a node's face is authored art — ~236 colour literals
+   across 77 saved designs plus the built-in `renderArt` set — and its ink is
+   #2B2B2B, which was legible on the off-white card the node used to be and is
+   nearly invisible on the dark one it became on 2026-09-09.
 
-   ONE filter rather than a palette sweep, and the trade is deliberate. The
-   sweep would touch every saved design, change the file the Node Designer
-   round-trips, and make each future glyph an exercise in picking two colours
-   instead of one — for art whose whole job is to be a recognisable silhouette.
-   `invert(1) hue-rotate(180deg)` is the standard pairing: the invert flips
-   lightness (the #2B2B2B ink becomes a light grey, a white knockout becomes
-   dark, so figure and ground keep their relationship) and the hue-rotate undoes
-   the invert's hue flip, so the family's accents — the #F57C00 orange, the
-   #2E9E5B green, the #2D6CDF blue — come back as themselves rather than as
-   their opposites. Greys are unaffected by the rotation, which is most of the
-   palette.
+   This was a `filter: invert(1) hue-rotate(180deg)` for a few hours and that
+   was WRONG, in a way worth recording because the filter looked plausible: an
+   invert maps lightness L to 1-L, which is right at the extremes and useless in
+   the middle. The palette's greys are a RAMP, not two poles — Ink #2B2B2B,
+   Construct #8A8F9C, Axis #B4B7C0 — so Construct inverted to #757063, another
+   mid-grey (reported as "the greys inverted are the same"), and Axis, the
+   LIGHTEST of the three, inverted to #4B4839, the darkest thing in the art.
+   The filter reversed the ramp's order without changing its span.
+
+   So each ROLE is re-mapped instead, which is possible because every glyph
+   colour is a presentation attribute (`fill="…"`, `stroke="…"`) and any CSS
+   rule outranks one — no glyph sets colour through inline `style`, which CSS
+   could not override. The greyscale roles from `GLYPH_PALETTE` are listed
+   below; the CHROMATIC ones (Accent #F57C00, Area #FF9800, Blue #2D6CDF,
+   Green #2E9E5B, Teal #1796A0) are deliberately absent, because they are the
+   art's identity and they read on either card — the filter's hue-rotate was
+   only ever an approximation of leaving them alone.
 
    Scoped to `.node-glyph`, so it reaches the glyph and NOTHING else drawn on a
    node: the colormap strip is real data colour, the image thumbnail is the
    user's own picture, and the noise previews, waveform and clock face are
-   readings — inverting any of them would be a lie rather than a restyle. It
-   applies on every surface at once (canvas, tiles, the Designer stage), which
-   is what keeps the authoring view showing what the canvas will show. */
-:root[data-theme="dark"] .node-glyph {
-  filter: invert(1) hue-rotate(180deg);
-}
+   readings. It applies on every surface at once (canvas, tiles, the Designer
+   stage), which is what keeps the authoring view showing what the canvas
+   will show. */
+  /* Ink — strong strokes and glyph text. The DARKEST role on a light
+     card becomes the lightest here; it is the silhouette. */
+  :root[data-theme="dark"] .node-glyph [fill="#2B2B2B" i] { fill: #e4e6ea; }
+  :root[data-theme="dark"] .node-glyph [stroke="#2B2B2B" i] { stroke: #e4e6ea; }
+
+  /* Construct — construction and reference lines. Mid on both, lifted a
+     little: a plain invert left it at #757063, a dull warm mid-grey that
+     read as unchanged against the card. */
+  :root[data-theme="dark"] .node-glyph [fill="#8A8F9C" i] { fill: #9ba1af; }
+  :root[data-theme="dark"] .node-glyph [stroke="#8A8F9C" i] { stroke: #9ba1af; }
+
+  /* Axis — plot axes. FAINT on a light card, so faint here too, which
+     means darker rather than lighter. A plain invert sent it to #4b4839,
+     effectively invisible. */
+  :root[data-theme="dark"] .node-glyph [fill="#B4B7C0" i] { fill: #6e7480; }
+  :root[data-theme="dark"] .node-glyph [stroke="#B4B7C0" i] { stroke: #6e7480; }
+
+  /* White — a KNOCKOUT. It is meant to read as the card showing through,
+     which is what it does at #FFFFFF on an off-white card, so here it
+     becomes the card colour rather than anything bright. */
+  :root[data-theme="dark"] .node-glyph [fill="#FFFFFF" i] { fill: var(--node-bg); }
+  :root[data-theme="dark"] .node-glyph [stroke="#FFFFFF" i] { stroke: var(--node-bg); }
+
+  /* The dial face (built-in art): #F1F1F1 against a #F1F2F3 card is the
+     card, so it follows the card. */
+  :root[data-theme="dark"] .node-glyph [fill="#F1F1F1" i] { fill: var(--node-bg); }
+  :root[data-theme="dark"] .node-glyph [stroke="#F1F1F1" i] { stroke: var(--node-bg); }
+
+  /* The dial rim — one step off the face, in the direction the theme goes. */
+  :root[data-theme="dark"] .node-glyph [fill="#D5D5D5" i] { fill: #454a53; }
+  :root[data-theme="dark"] .node-glyph [stroke="#D5D5D5" i] { stroke: #454a53; }
+
+  /* Its ticks — one step further, still barely there by design. */
+  :root[data-theme="dark"] .node-glyph [fill="#C2C2C2" i] { fill: #545a65; }
+  :root[data-theme="dark"] .node-glyph [stroke="#C2C2C2" i] { stroke: #545a65; }
 
 /* ===== Shared node shell ===== */
 .node-base {
