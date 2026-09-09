@@ -1045,16 +1045,21 @@ const definitions: NodeDefinition[] = [
     tslImportModule: '',
     inputs: [
       { id: 'p', label: 'Position', dataType: 'vec3' },
-      { id: 'tx', label: 'Move X', dataType: 'float' },
-      { id: 'ty', label: 'Move Y', dataType: 'float' },
-      { id: 'tz', label: 'Move Z', dataType: 'float' },
-      { id: 'rx', label: 'Turn X°', dataType: 'float' },
-      { id: 'ry', label: 'Turn Y°', dataType: 'float' },
-      { id: 'rz', label: 'Turn Z°', dataType: 'float' },
-      { id: 's', label: 'Scale', dataType: 'float' },
+      // One vec3 socket per GROUP (2026-09-09, owner request), where each was
+      // three float sockets. Wire a Vec3 node; an unwired port emits the
+      // registry default BROADCAST — `vec3(0)` for Move and Turn, `vec3(1)` for
+      // Scale — which is exactly the identity each group had before.
+      { id: 't', label: 'Move', dataType: 'vec3' },
+      { id: 'r', label: 'Turn°', dataType: 'vec3' },
+      // NON-UNIFORM since the same change. It divides the position per axis, so
+      // the field it returns is a BOUND rather than a true distance whenever the
+      // three components differ — multiply back with Modify: scale using the
+      // SMALLEST component, and expect to lower the Raymarch node's Step scale
+      // on a strongly anisotropic shape.
+      { id: 's', label: 'Scale', dataType: 'vec3' },
     ],
     outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
-    defaultValues: { tx: 0, ty: 0, tz: 0, rx: 0, ry: 0, rz: 0, s: 1 },
+    defaultValues: { t: 0, r: 0, s: 1 },
     description: 'Move, turn and scale the space a shape is built in: wire it between the position and the shape, and the shape moves by Move, turns by the angles in degrees (X, then Y, then Z) and grows by Scale. After scaling, multiply the distance by the same Scale with a Modify node so it stays a true distance. Also: translate, rotate, position, orient, place, sdf',
   },
   {
@@ -1065,15 +1070,13 @@ const definitions: NodeDefinition[] = [
     tslImportModule: '',
     inputs: [
       { id: 'p', label: 'Position', dataType: 'vec3' },
-      { id: 'sx', label: 'Spacing X', dataType: 'float' },
-      { id: 'sy', label: 'Spacing Y', dataType: 'float' },
-      { id: 'sz', label: 'Spacing Z', dataType: 'float' },
-      { id: 'lx', label: 'Limit X', dataType: 'float' },
-      { id: 'ly', label: 'Limit Y', dataType: 'float' },
-      { id: 'lz', label: 'Limit Z', dataType: 'float' },
+      // One vec3 socket per group, as on Transform. Spacing 0 on an axis still
+      // leaves that axis alone and Limit 0 is still endless, per component.
+      { id: 's', label: 'Spacing', dataType: 'vec3' },
+      { id: 'l', label: 'Limit', dataType: 'vec3' },
     ],
     outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
-    defaultValues: { sx: 1, sy: 1, sz: 1, lx: 0, ly: 0, lz: 0 },
+    defaultValues: { s: 1, l: 0 },
     description: 'Tile the space so one shape appears on a grid: a copy every Spacing along each axis, a Spacing of 0 leaving that axis alone. A Limit caps the copies to that many on each side of the centre; 0 means endless. Also: tile, array, grid, lattice, instances, copies, sdf',
   },
   {

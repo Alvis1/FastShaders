@@ -251,17 +251,26 @@ const SD_STAR_LINES = [
 // consumer computes must then be multiplied by s (Modify: scale) to stay a
 // true distance — division by s inside is what makes the shape bigger.
 const SDF_TRANSFORM_LINES = [
-  'const sdfTransform = Fn(([p, tx, ty, tz, rx, ry, rz, s]) => {',
-  '  const q0 = div(sub(p, vec3(tx, ty, tz)), max(s, float(1e-6)));',
-  '  const az = radians(rz);',
+  'const sdfTransform = Fn(([p, t, r, s]) => {',
+  // An UNWIRED vec3 socket arrives as the port's scalar default (0, 0, 1) —
+  // codegen must keep emitting the bare number, because `vec3(0)` in the call
+  // is a Vec3 CONSTRUCTOR to codeToGraph and the graph would grow a node on
+  // every Apply. So the broadcast happens HERE, where `vec3()` on a vec3 is the
+  // identity and on a float is the fill (pinned against real three/tsl in
+  // sdfVecSockets.test.ts).
+  '  const t3 = vec3(t);',
+  '  const r3 = vec3(r);',
+  '  const s3 = vec3(s);',
+  '  const q0 = div(sub(p, t3), max(s3, vec3(1e-6)));',
+  '  const az = radians(r3.z);',
   '  const cz = cos(az);',
   '  const sz = sin(az);',
   '  const q1 = vec3(add(mul(cz, q0.x), mul(sz, q0.y)), sub(mul(cz, q0.y), mul(sz, q0.x)), q0.z);',
-  '  const ay = radians(ry);',
+  '  const ay = radians(r3.y);',
   '  const cy = cos(ay);',
   '  const sy = sin(ay);',
   '  const q2 = vec3(sub(mul(cy, q1.x), mul(sy, q1.z)), q1.y, add(mul(cy, q1.z), mul(sy, q1.x)));',
-  '  const ax = radians(rx);',
+  '  const ax = radians(r3.x);',
   '  const cx = cos(ax);',
   '  const sx = sin(ax);',
   '  return vec3(q2.x, add(mul(cx, q2.y), mul(sx, q2.z)), sub(mul(cx, q2.z), mul(sx, q2.y)));',
@@ -272,16 +281,19 @@ const SDF_TRANSFORM_LINES = [
 // for negative inputs). Spacing 0 leaves an axis alone; limit 0 is infinite,
 // otherwise the instance index is clamped to ±limit.
 const SDF_REPEAT_LINES = [
-  'const sdfRepeat = Fn(([p, sx, sy, sz, lx, ly, lz]) => {',
-  '  const ix = round(div(p.x, max(sx, float(1e-6))));',
-  '  const iy = round(div(p.y, max(sy, float(1e-6))));',
-  '  const iz = round(div(p.z, max(sz, float(1e-6))));',
-  '  const cx = select(greaterThan(lx, float(0)), clamp(ix, mul(lx, float(-1)), lx), ix);',
-  '  const cy = select(greaterThan(ly, float(0)), clamp(iy, mul(ly, float(-1)), ly), iy);',
-  '  const cz = select(greaterThan(lz, float(0)), clamp(iz, mul(lz, float(-1)), lz), iz);',
-  '  const rx = select(greaterThan(sx, float(0)), sub(p.x, mul(sx, cx)), p.x);',
-  '  const ry = select(greaterThan(sy, float(0)), sub(p.y, mul(sy, cy)), p.y);',
-  '  const rz = select(greaterThan(sz, float(0)), sub(p.z, mul(sz, cz)), p.z);',
+  'const sdfRepeat = Fn(([p, s, l]) => {',
+  // Same broadcast as sdfTransform, for the same reason.
+  '  const s3 = vec3(s);',
+  '  const l3 = vec3(l);',
+  '  const ix = round(div(p.x, max(s3.x, float(1e-6))));',
+  '  const iy = round(div(p.y, max(s3.y, float(1e-6))));',
+  '  const iz = round(div(p.z, max(s3.z, float(1e-6))));',
+  '  const cx = select(greaterThan(l3.x, float(0)), clamp(ix, mul(l3.x, float(-1)), l3.x), ix);',
+  '  const cy = select(greaterThan(l3.y, float(0)), clamp(iy, mul(l3.y, float(-1)), l3.y), iy);',
+  '  const cz = select(greaterThan(l3.z, float(0)), clamp(iz, mul(l3.z, float(-1)), l3.z), iz);',
+  '  const rx = select(greaterThan(s3.x, float(0)), sub(p.x, mul(s3.x, cx)), p.x);',
+  '  const ry = select(greaterThan(s3.y, float(0)), sub(p.y, mul(s3.y, cy)), p.y);',
+  '  const rz = select(greaterThan(s3.z, float(0)), sub(p.z, mul(s3.z, cz)), p.z);',
   '  return vec3(rx, ry, rz);',
   '});',
 ];
