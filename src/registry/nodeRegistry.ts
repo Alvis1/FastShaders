@@ -891,13 +891,15 @@ const definitions: NodeDefinition[] = [
     tslImportModule: '',
     inputs: [
       { id: 'p', label: 'Position', dataType: 'any' },
-      { id: 'w', label: 'Half width', dataType: 'float' },
-      { id: 'h', label: 'Half height', dataType: 'float' },
-      { id: 'd', label: 'Half depth', dataType: 'float' },
+      // One vec3 socket for the half-extents. The 2D/3D dispatch now changes
+      // only WHICH COMPONENTS the helper reads, not the call's arity — the flat
+      // case simply ignores `.z`, where before it had a Half depth socket that
+      // meant nothing.
+      { id: 'b', label: 'Half size', dataType: 'vec3' },
       { id: 'round', label: 'Rounding', dataType: 'float' },
     ],
     outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
-    defaultValues: { w: 0.5, h: 0.5, d: 0.5, round: 0 },
+    defaultValues: { b: 0.5, round: 0 },
     description: 'Signed distance to a box centred on the origin, given its half extents — a rectangle for a 2D position (Half depth ignored), a cuboid for a 3D one; negative inside. Rounding softens the corners by that radius. Also: rectangle, square, cube, cuboid, rounded box, sdf, shape',
   },
   {
@@ -1138,12 +1140,13 @@ const definitions: NodeDefinition[] = [
     inputs: [
       { id: 'p', label: 'Position', dataType: 'vec3' },
       { id: 'amount', label: 'Amount', dataType: 'float' },
-      { id: 'hx', label: 'Stretch X', dataType: 'float' },
-      { id: 'hy', label: 'Stretch Y', dataType: 'float' },
-      { id: 'hz', label: 'Stretch Z', dataType: 'float' },
+      // One vec3 socket, as on Transform/Repeat. Used by the ELONGATE mode
+      // only; twist and bend take `amount` alone (helperCallPorts decides which
+      // arguments each variant is called with).
+      { id: 'h', label: 'Stretch', dataType: 'vec3' },
     ],
     outputs: [{ id: 'out', label: 'Position', dataType: 'vec3' }],
-    defaultValues: { amount: 1, hx: 0, hy: 0, hz: 0 },
+    defaultValues: { amount: 1, h: 0 },
     modes: {
       values: ['twist', 'bend', 'elongate'],
       default: 'twist',

@@ -111,15 +111,17 @@ const SD_CIRCLE_LINES = [
 // Rounded box: q = |p| − b + r; d = |max(q, 0)| + min(max(q), 0) − r. r = 0 is
 // the sharp box byte-for-byte in value (r cancels).
 const SD_BOX2_LINES = [
-  'const sdBox2 = Fn(([p, w, h, r]) => {',
-  '  const q = add(sub(abs(p), vec2(w, h)), r);',
+  'const sdBox2 = Fn(([p, b, r]) => {',
+  '  const b3 = vec3(b);',
+  '  const q = add(sub(abs(p), vec2(b3.x, b3.y)), r);',
   '  return sub(add(length(max(q, float(0))), min(max(q.x, q.y), float(0))), r);',
   '});',
 ];
 
 const SD_BOX3_LINES = [
-  'const sdBox3 = Fn(([p, w, h, d, r]) => {',
-  '  const q = add(sub(abs(p), vec3(w, h, d)), r);',
+  'const sdBox3 = Fn(([p, b, r]) => {',
+  '  const b3 = vec3(b);',
+  '  const q = add(sub(abs(p), b3), r);',
   '  return sub(add(length(max(q, float(0))), min(max(q.x, max(q.y, q.z)), float(0))), r);',
   '});',
 ];
@@ -352,9 +354,9 @@ const SDF_BEND_LINES = [
   '});',
 ];
 const SDF_ELONGATE_LINES = [
-  'const sdfElongate = Fn(([p, hx, hy, hz]) => {',
-  '  const h = vec3(hx, hy, hz);',
-  '  return sub(p, clamp(p, mul(h, float(-1)), h));',
+  'const sdfElongate = Fn(([p, h]) => {',
+  '  const h3 = vec3(h);',
+  '  return sub(p, clamp(p, mul(h3, float(-1)), h3));',
   '});',
 ];
 
@@ -385,8 +387,8 @@ export const MODULE_HELPERS: ReadonlyMap<string, ModuleHelper> = new Map<string,
   ['hsl', { lines: HSL_HELPER_LINES, imports: ['mul', 'add', 'sub', 'abs', 'mod', 'clamp', 'float', 'vec3'] }],
   ['toHsl', { lines: TO_HSL_HELPER_LINES, imports: ['max', 'min', 'sub', 'add', 'mul', 'abs', 'select', 'greaterThan', 'lessThan', 'equal', 'div', 'float', 'vec3'] }],
   ['sdCircle', { lines: SD_CIRCLE_LINES, imports: ['sub', 'length'] }],
-  ['sdBox3', { lines: SD_BOX3_LINES, imports: ['add', 'sub', 'abs', 'vec3', 'length', 'max', 'min', 'float'], alias: { type: 'sdBox', ports: ['p', 'w', 'h', 'd', 'round'] } }],
-  ['sdBox2', { lines: SD_BOX2_LINES, imports: ['add', 'sub', 'abs', 'vec2', 'length', 'max', 'min', 'float'], alias: { type: 'sdBox', ports: ['p', 'w', 'h', 'round'] } }],
+  ['sdBox3', { lines: SD_BOX3_LINES, imports: ['add', 'sub', 'abs', 'vec3', 'length', 'max', 'min', 'float'], alias: { type: 'sdBox', ports: ['p', 'b', 'round'] } }],
+  ['sdBox2', { lines: SD_BOX2_LINES, imports: ['add', 'sub', 'abs', 'vec2', 'vec3', 'length', 'max', 'min', 'float'], alias: { type: 'sdBox', ports: ['p', 'b', 'round'] } }],
   ['sdTorus', { lines: SD_TORUS_LINES, imports: ['vec2', 'sub', 'length'] }],
   ['sdUnion', { lines: SD_UNION_LINES, imports: ['max', 'float', 'sub', 'abs', 'min', 'div', 'mul'] }],
   ['sdSubtract', { lines: SD_SUBTRACT_LINES, imports: ['max', 'float', 'mul', 'sub', 'abs', 'add', 'div'], alias: { type: 'sdCombine', values: { mode: 'subtract' } } }],
@@ -407,7 +409,7 @@ export const MODULE_HELPERS: ReadonlyMap<string, ModuleHelper> = new Map<string,
   ['sdScale', { lines: SD_SCALE_LINES, imports: ['mul'], alias: { type: 'sdfModify', values: { mode: 'scale' } } }],
   ['sdfTwist', { lines: SDF_TWIST_LINES, imports: ['cos', 'mul', 'sin', 'vec3', 'sub', 'add'], alias: { type: 'sdfDeform', ports: ['p', 'amount'], values: { mode: 'twist' } } }],
   ['sdfBend', { lines: SDF_BEND_LINES, imports: ['cos', 'mul', 'sin', 'vec3', 'sub', 'add'], alias: { type: 'sdfDeform', ports: ['p', 'amount'], values: { mode: 'bend' } } }],
-  ['sdfElongate', { lines: SDF_ELONGATE_LINES, imports: ['vec3', 'sub', 'clamp', 'mul', 'float'], alias: { type: 'sdfDeform', ports: ['p', 'hx', 'hy', 'hz'], values: { mode: 'elongate' } } }],
+  ['sdfElongate', { lines: SDF_ELONGATE_LINES, imports: ['vec3', 'sub', 'clamp', 'mul', 'float'], alias: { type: 'sdfDeform', ports: ['p', 'h'], values: { mode: 'elongate' } } }],
   ['sdfExtrude', { lines: SDF_EXTRUDE_LINES, imports: ['vec2', 'sub', 'abs', 'add', 'min', 'max', 'float', 'length'] }],
   ['sdfRevolve', { lines: SDF_REVOLVE_LINES, imports: ['vec2', 'sub', 'length'] }],
   ['sdfMask', { lines: SDF_MASK_LINES, imports: ['clamp', 'sub', 'float', 'div', 'max'] }],

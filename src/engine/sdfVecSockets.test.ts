@@ -49,6 +49,30 @@ describe('the consolidated sockets', () => {
     expect(ids).toEqual(['p', 's', 'l']);
   });
 
+  it('Box takes Position + one Half size + Rounding', () => {
+    const ids = NODE_REGISTRY.get('sdBox')!.inputs.map((i) => i.id);
+    expect(ids).toEqual(['p', 'b', 'round']);
+    expect(NODE_REGISTRY.get('sdBox')!.inputs.find((i) => i.id === 'b')!.dataType).toBe('vec3');
+  });
+
+  it('Deform keeps Amount scalar and folds Stretch into one vec3', () => {
+    // `amount` drives twist and bend and is genuinely one number; only the
+    // elongate mode's three stretch axes were a group.
+    const ids = NODE_REGISTRY.get('sdfDeform')!.inputs.map((i) => i.id);
+    expect(ids).toEqual(['p', 'amount', 'h']);
+    expect(NODE_REGISTRY.get('sdfDeform')!.inputs.find((i) => i.id === 'amount')!.dataType).toBe('float');
+    expect(NODE_REGISTRY.get('sdfDeform')!.inputs.find((i) => i.id === 'h')!.dataType).toBe('vec3');
+  });
+
+  it('the Box width dispatch now changes the CALLEE only, not the arity', () => {
+    // Both variants take (position, half size, rounding). The flat case simply
+    // ignores `.z`, where before it had a Half depth socket that meant nothing.
+    const src = readFileSyncHelpers();
+    expect(src).toContain("'const sdBox2 = Fn(([p, b, r]) => {',");
+    expect(src).toContain("'const sdBox3 = Fn(([p, b, r]) => {',");
+    expect((src.match(/ports: \['p', 'b', 'round'\]/g) ?? []).length).toBe(2);
+  });
+
   it('emits the bare default for an unwired group — never a Vec3 constructor', () => {
     // The identity of each group: Move 0, Turn 0, Scale 1 — broadcast inside
     // the helper. A `vec3(...)` here is the regression that grows the graph.
@@ -58,6 +82,13 @@ describe('the consolidated sockets', () => {
     ).code;
     expect(code).toMatch(/sdfTransform\(\w+, 0, 0, 1\)/);
     expect(code).toMatch(/sdfRepeat\(\w+, 1, 0\)/);
+    // …and the same for the two added later: a 0.5 half-size broadcasts to the
+    // 1x1x1 box the three separate 0.5 sockets used to describe.
+    const box = graphToCode(
+      [makeNode('pos', 'positionLocal'), makeNode('bx', 'sdBox')],
+      [makeEdge('pos', 'out', 'bx', 'p')],
+    ).code;
+    expect(box).toMatch(/sdBox3\(\w+, 0.5, 0\)/);
   });
 
   it('scale is non-uniform now, so the helper divides per axis', () => {

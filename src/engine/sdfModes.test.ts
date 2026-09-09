@@ -104,16 +104,22 @@ describe('Combine — one def, four helpers', () => {
 describe('Box — one def, the position width picks the helper', () => {
   const build = (posType: 'uv' | 'positionLocal', round = 0) => {
     const p = makeNode('p', posType);
-    const b = withValues(makeNode('b', 'sdBox'), { w: 0.4, h: 0.3, d: 0.2, round });
+    // Half-extents are ONE vec3 socket since 2026-09-09, so a STORED value is
+    // necessarily uniform — a 0.4 cube. A non-uniform box wires a Vec3 node,
+    // which is the deliberate trade for losing the three inline boxes.
+    const b = withValues(makeNode('b', 'sdBox'), { b: 0.4, round });
     const edges = [makeEdge('p', 'out', 'b', 'p'), makeEdge('b', 'out', 'out', 'color')];
     return graphToCode([p, b, out()], edges).code;
   };
 
   it('a vec2 position emits sdBox2 without Half depth; a vec3 one emits sdBox3 with it', () => {
-    expect(build('uv')).toContain('const sdBox1 = sdBox2(uv1, 0.4, 0.3, 0);');
+    // The dispatch now changes only WHICH COMPONENTS the helper reads — both
+    // variants take (position, half size, rounding), so the call is the same
+    // shape and only the callee differs.
+    expect(build('uv')).toContain('const sdBox1 = sdBox2(uv1, 0.4, 0);');
     expect(build('uv')).toContain('const sdBox2 = Fn(');
     expect(build('uv')).not.toContain('const sdBox3 = Fn(');
-    expect(build('positionLocal', 0.05)).toContain('const sdBox1 = sdBox3(positionLocal1, 0.4, 0.3, 0.2, 0.05);');
+    expect(build('positionLocal', 0.05)).toContain('const sdBox1 = sdBox3(positionLocal1, 0.4, 0.05);');
   });
 
   it('both helpers parse back to ONE Box def, byte-identically', () => {

@@ -744,10 +744,10 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "sdfTransform": {
     "svg": "<g transform=\"translate(28 28)\"><line x1=\"-18\" y1=\"14\" x2=\"18\" y2=\"14\" stroke=\"#8A8F9C\" stroke-width=\"1.6\"></line><line x1=\"-18\" y1=\"14\" x2=\"-18\" y2=\"-20\" stroke=\"#8A8F9C\" stroke-width=\"1.6\"></line><path d=\"M14 10 L18 14 L14 18 M-22 -16 L-18 -20 L-14 -16\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.6\"></path><rect x=\"-10\" y=\"-8\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.2\"></rect><path d=\"M6 -14 A12 12 0 0 1 16 -4\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path><path d=\"M12 -5 L16 -4 L17 -8\" fill=\"none\" stroke=\"#F57C00\" stroke-width=\"1.8\"></path></g>",
     "scale": 1.3,
-    "dx": 2.5,
-    "dy": -1.5,
-    "width": 53,
-    "height": 152,
+    "dx": 0.5,
+    "dy": 16,
+    "width": 56,
+    "height": 93,
     "sockets": {
       "p": -36,
       "tx": -20,
@@ -756,15 +756,19 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "rx": 24,
       "ry": 36,
       "rz": 48,
-      "s": 68,
-      "out": -36
+      "s": 36,
+      "out": -16,
+      "r": 20,
+      "t": 4
     }
   },
   "sdfRepeat": {
     "svg": "<g transform=\"translate(28 28)\"><rect x=\"-18\" y=\"-14\" width=\"8\" height=\"8\" fill=\"#F57C00\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"-4\" y=\"-14\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"10\" y=\"-14\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"-18\" y=\"2\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"-4\" y=\"2\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect><rect x=\"10\" y=\"2\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.8\"></rect></g>",
     "scale": 1.45,
-    "width": 52,
-    "height": 136,
+    "dx": -0.5,
+    "dy": 9.5,
+    "width": 55,
+    "height": 74,
     "sockets": {
       "p": -28,
       "sx": -12,
@@ -773,7 +777,9 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
       "lx": 28,
       "ly": 48,
       "lz": 60,
-      "out": -28
+      "out": -8,
+      "l": 28,
+      "s": 12
     }
   },
   "sdfRepeatPolar": {

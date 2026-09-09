@@ -618,6 +618,26 @@ function evaluate(
     return [v !== undefined ? Number(v) : fallback];
   };
 
+  /**
+   * A vec3 INPUT SOCKET, read the way the emitted helpers read one.
+   *
+   * The SDF nodes take one vec3 socket per group (Transform's Move/Turn/Scale,
+   * Repeat's Spacing/Limit, Box's Half size, Deform's Stretch), and an unwired
+   * one carries a single scalar — the port's registry default. The helpers
+   * broadcast that with `vec3()`, so this must too, or the card's live numbers
+   * would disagree with the picture for every unwired group: `vec3(0.5)` is a
+   * 1x1x1 box, where reading 0.5 into x alone is a flat sheet.
+   *
+   * A short wired vector fills from its LAST component, matching TSL, so a vec2
+   * into a vec3 socket behaves the same on both sides.
+   */
+  const vec3Input = (portId: string, fallback: number): [number, number, number] => {
+    const v = channelInput(portId, fallback);
+    if (!v || v.length === 0) return [fallback, fallback, fallback];
+    const x = v[0] ?? fallback;
+    return [x, v[1] ?? x, v[2] ?? v[1] ?? x];
+  };
+
   // Apply a unary function component-wise
   const unaryOp = (portId: string, fallback: number, fn: (x: number) => number): EvalResult => {
     const inp = channelInput(portId, fallback);
@@ -985,11 +1005,14 @@ function evaluate(
       // emitter makes (sdBox2 vs sdBox3). Rounding cancels in value except at
       // the corners, exactly as in the helper.
       const p = channelInput('p', 0);
-      const w = scalarInput('w', 0.5), h = scalarInput('h', 0.5), d = scalarInput('d', 0.5), r = scalarInput('round', 0);
+      // Half-extents are ONE vec3 socket: wired, its channels; unwired, the
+      // scalar default broadcast — the same `vec3()` fill the helper applies,
+      // restated here because this evaluator carries its own copy of the maths.
+      const b = vec3Input('b', 0.5), r = scalarInput('round', 0);
       if (p) {
         const q = p.length === 2
-          ? [Math.abs(p[0] ?? 0) - w + r, Math.abs(p[1] ?? 0) - h + r]
-          : [Math.abs(p[0] ?? 0) - w + r, Math.abs(p[1] ?? 0) - h + r, Math.abs(p[2] ?? 0) - d + r];
+          ? [Math.abs(p[0] ?? 0) - b[0] + r, Math.abs(p[1] ?? 0) - b[1] + r]
+          : [Math.abs(p[0] ?? 0) - b[0] + r, Math.abs(p[1] ?? 0) - b[1] + r, Math.abs(p[2] ?? 0) - b[2] + r];
         const outside = Math.hypot(...q.map((v) => Math.max(v, 0)));
         const inside = Math.min(Math.max(...q), 0);
         result = [outside + inside - r];
@@ -1158,7 +1181,7 @@ function evaluate(
           const c = Math.cos(k * x), sn = Math.sin(k * x);
           result = [c * x - sn * y, sn * x + c * y, z];
         } else if (mode === 'elongate') {
-          const hh = [scalarInput('hx', 0), scalarInput('hy', 0), scalarInput('hz', 0)];
+          const hh = vec3Input('h', 0);
           result = [x, y, z].map((v, i) => v - Math.min(Math.max(v, -hh[i]), hh[i]));
         } else {
           const c = Math.cos(k * y), sn = Math.sin(k * y);

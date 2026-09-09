@@ -31,7 +31,7 @@ exports[`the unwired emission of every node is pinned > matches the recorded per
   "pow": "const pow1 = pow(1, 1);",
   "remap": "const remap1 = remap(0, 0, 1, 0, 1);",
   "round": "const round1 = round(0);",
-  "sdBox": "const sdBox1 = sdBox3(0, 0.5, 0.5, 0.5, 0);",
+  "sdBox": "const sdBox1 = sdBox3(0, 0.5, 0);",
   "sdCapsule": "const sdCapsule1 = sdCapsule(0, 0.2, 0.3);",
   "sdCircle": "const sdCircle1 = sdCircle(0, 0.5);",
   "sdCombine": "const sdCombine1 = sdUnion(0, 0, 0);",
