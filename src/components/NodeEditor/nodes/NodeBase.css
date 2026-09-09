@@ -51,6 +51,7 @@
 .react-flow__node.fs-menu-active,
 .react-flow__node:focus-visible {
   --fs-node-lift: var(--shadow-node-selected);
+  --fs-node-scale: var(--fs-node-grow);
 }
 
 /* KEYBOARD FOCUS. React Flow already makes every node a tab stop and ships
@@ -106,6 +107,7 @@
    its wires stay put — the exact thing the lift-offset exists to prevent. */
 .node-editor__canvas.fs-connecting .react-flow__node:hover:not(.selected):not(.fs-menu-active) {
   --fs-node-lift: var(--shadow-node);
+  --fs-node-scale: 1;
 }
 
 /* An EXPANDED group frame is the one node that must NOT move, in any of those
@@ -128,6 +130,7 @@
    test off `:has()` — a functional invariant must not depend on a selector
    feature with a support floor. */
 .react-flow__node-group:not(:has(.group-node--collapsed)) {
+  --fs-node-scale: 1;
 }
 
 /* ===== Shared node shell ===== */
@@ -151,7 +154,12 @@
      card with no wrapper to inherit from, and a node at rest is what they mean
      to show. */
   box-shadow: var(--fs-node-lift, var(--shadow-node));
-  transition: box-shadow var(--transition-fast);
+  /* The lift's second half: a lifted card GROWS slightly rather than moving.
+     Safe on the ONE property because nothing else on this element uses it —
+     the cost scale lives on the WRAPPER (ShaderNode's wrapStyle), which is a
+     different element. */
+  transform: scale(var(--fs-node-scale, 1));
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
   font-family: var(--font-sans);
   overflow: visible;
 }
@@ -263,11 +271,14 @@
   border: calc(1.5px * var(--fs-node-border-scale, 1)) solid; /* color set inline (category) */
   background: var(--node-bg);
   z-index: -1;
+  /* Grows with the card, or a lifted stacked node's layers stay at the resting
+     size and the stack visibly comes apart. */
+  transform: scale(var(--fs-node-scale, 1));
   pointer-events: none;
   /* The deepest layer carries the whole stack's shadow (set inline from
      --fs-node-lift), so it needs the same transition the card has or a stacked
      node would snap between elevations while an unstacked one eases. */
-  transition: box-shadow var(--transition-fast);
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
 /* ===== Header ===== */

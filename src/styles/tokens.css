@@ -148,6 +148,25 @@
      together inside the viewport transform, so the ratio holds at any zoom. */
   --fs-node-rise: -3px;
 
+  /* How much a LIFTED canvas node grows — the "coming forward" cue that
+     replaced the 3px translate (see NodeBase.css for why the movement went).
+     A SCALE, deliberately, and deliberately a small one.
+
+     A transform does not affect layout, so this fires no ResizeObserver and
+     re-measures nothing by itself — but it DOES move the sockets, because
+     `getBoundingClientRect` includes transforms and everything but the card's
+     centre moves under a scale. That is the same physics as the translate, so
+     the size is chosen to make the consequence invisible rather than to be
+     compensated for: at 1.02 on a 50px node the extreme socket moves 0.5px, an
+     order of magnitude under the 3px that was reported as wires hanging off
+     their ports. Nothing predicts it in JS any more, so the worst case is a
+     stale sub-pixel offset if React Flow happens to re-measure while a node is
+     hovered (selecting one thickens its border, which does fire the observer).
+     Raising this materially would bring the old defect back at a size people
+     can see — if a bigger cue is wanted, spend it on the SHADOW, which costs
+     no geometry at all. */
+  --fs-node-grow: 1.02;
+
   /* ===== TYPOGRAPHY ===== */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;

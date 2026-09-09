@@ -8,6 +8,7 @@
   position: relative;
   transition: box-shadow var(--transition-fast), translate var(--transition-fast);
   box-shadow: var(--fs-node-lift, var(--shadow-node));
+  transform: scale(var(--fs-node-scale, 1));
   display: flex;
   align-items: center;
   justify-content: center;

@@ -136,12 +136,12 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     }
   },
   "positionGeometry": {
-    "svg": "<path d=\"M 18 24 L 24 18 L 42 18 L 42 36 L 36 42 L 18 42 L 18 24 Z\" fill=\"#FFFFFF\" stroke=\"none\" stroke-width=\"1.4\"></path>\n\n\n<g transform=\"translate(28 28)\"><g fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.4\" stroke-linejoin=\"round\"><rect x=\"-10\" y=\"-4\" width=\"18\" height=\"18\"/><path d=\"M-10 -4 L-4 -10 L14 -10 L8 -4 M14 -10 L14 8 L8 14\"/></g><circle cx=\"-10\" cy=\"14\" r=\"3.5\" fill=\"#F57C00\"/></g>",
-    "scale": 1.65,
-    "dx": -1.5,
-    "dy": -4.5,
-    "width": 41,
-    "height": 50,
+    "svg": "<path d=\"M 11.3 18.5 L 19.7 10.1 L 44.9 10.1 L 44.9 35.3 L 36.5 43.7 L 11.3 43.7 L 11.3 18.5 Z\" fill=\"#FFFFFF\" stroke=\"none\" stroke-width=\"1.4\"></path>\n\n\n<g transform=\"translate(28 28)\"><g fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"1.4\" stroke-linejoin=\"round\"><rect x=\"-16.7\" y=\"-9.5\" width=\"25.2\" height=\"25.2\"></rect><path d=\"M -16.7 -9.5 L -8.3 -17.9 L 16.9 -17.9 L 8.5 -9.5 M 16.9 -17.9 L 16.9 7.3 L 8.5 15.7\"></path></g><circle cx=\"-16.7\" cy=\"15.7\" r=\"4.9\" fill=\"#F57C00\"></circle></g>",
+    "scale": 1.35,
+    "dx": -1,
+    "dy": -2.5,
+    "width": 24,
+    "height": 39,
     "sockets": {
       "out": 0
     }
