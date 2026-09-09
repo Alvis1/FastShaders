@@ -567,6 +567,9 @@ export const ShaderNode = memo(function ShaderNode({
   // Image node thumbnail: render ONLY the validated data: URL — the stored
   // value comes from adversarial graph JSON and must never reach <img src>
   // raw (a remote URL there is a tracking beacon).
+  /** Image node: does the card draw the picture mirrored? See the thumbnail. */
+  const flipThumbX = Number(data.values?.flipX ?? 0) >= 0.5;
+  const flipThumbY = Number(data.values?.flipY ?? 0) >= 0.5;
   const imageThumbUrl = useMemo(
     () => (data.registryType === 'imageNode' ? validImageDataUrl(data.values?.imageB64) : null),
     [data.registryType, data.values?.imageB64],
@@ -1067,11 +1070,22 @@ export const ShaderNode = memo(function ShaderNode({
           // maps any texture across [0,1] — so the CARD must not be the one
           // place that shows a stretched picture. When the pre-snap
           // dimensions are recorded, the thumbnail is drawn at THEM.
-          style={
-            Number(data.values.srcWidth) > 0 && Number(data.values.srcHeight) > 0
-              ? { aspectRatio: `${Number(data.values.srcWidth)} / ${Number(data.values.srcHeight)}`, objectFit: 'fill' }
-              : undefined
-          }
+          style={{
+            ...(Number(data.values.srcWidth) > 0 && Number(data.values.srcHeight) > 0
+              ? { aspectRatio: `${Number(data.values.srcWidth)} / ${Number(data.values.srcHeight)}`, objectFit: 'fill' as const }
+              : null),
+            // Flip X / Flip Y are shown, not just stored — a checkbox in a
+            // menu you have to close to see the result of is a guess. The
+            // sign convention comes straight from graphToCode: the DEFAULT
+            // (both unchecked) is the corrected, file-matching orientation
+            // (`mirrorX = flipX < 0.5` bakes the 1-u fix in), so each ticked
+            // box mirrors the picture on that axis relative to what is drawn
+            // here. `transform` is safe on this element — the card's own
+            // hover lift is a `scale:` on `.node-base`, not on the image.
+            ...(flipThumbX || flipThumbY
+              ? { transform: `scale(${flipThumbX ? -1 : 1}, ${flipThumbY ? -1 : 1})` }
+              : null),
+          }}
         />
       )}
 

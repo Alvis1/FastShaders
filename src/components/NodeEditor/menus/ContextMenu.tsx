@@ -18,6 +18,19 @@ import './ContextMenu.css';
 /** Gap kept between the menu and the viewport edge when clamping. */
 const EDGE_MARGIN = 8;
 
+/**
+ * Surfaces an outside-press must NOT dismiss the menu for: the popovers a
+ * settings menu itself opens, which portal to `document.body` (or to the
+ * fullscreen element) and are therefore OUTSIDE the menu's own subtree.
+ *
+ * Without this, picking a colour from a swatch row closes the menu the swatch
+ * belongs to — the press lands in `.palette-pop`, which `ref.current.contains`
+ * cannot see. The mesh picker is the same shape and is listed for the same
+ * reason. Both already dismiss themselves on an outside press, so nothing is
+ * left stranded by exempting them.
+ */
+const DISMISS_EXEMPT = '.palette-pop, .mesh-picker__pop';
+
 export function ContextMenu() {
   const { open, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, sourceHandleType } = useAppStore(
     (s) => s.contextMenu,
@@ -44,10 +57,11 @@ export function ContextMenu() {
   // Escape closes the menu — every OTHER overlay in the app already does this
   // (the modals, GraphModal, DesignerModal, PaletteColorPicker, and the toolbar
   // popovers via useDismiss); the context-menu family was the only one without
-  // it. Lives on the DISPATCHER so all menu types get it at once. Mirrors
-  // useDismiss's keydown half only, NOT its capture-phase outside-click closer,
-  // which would race the existing closeContextMenu path from NodeEditor's pane
-  // handlers.
+  // it. Lives on the DISPATCHER so all menu types get it at once, beside the
+  // outside-press closer below — this used to be the only half of useDismiss
+  // the menu adopted, on the reasoning that an outside-click closer would race
+  // NodeEditor's pane handler. It does not: closing is idempotent, and the
+  // pane handler was covering only bare canvas.
   //
   // The editable-target skip is load-bearing, not tidiness: DragNumberInput
   // (inputs/DragNumberInput.tsx) cancels an in-progress number edit on Escape,
@@ -77,6 +91,41 @@ export function ContextMenu() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open, closeContextMenu]);
+
+  // A press ANYWHERE else closes the menu.
+  //
+  // Until now the only closer was NodeEditor's `onPaneClick`, so the menu shut
+  // when you clicked bare canvas and stayed open for everything else — most
+  // obviously a click on a NODE (its header, its body, another node entirely),
+  // which is where a hand goes straight after opening a node's settings.
+  //
+  // POINTERDOWN, in the CAPTURE phase, for two independent reasons: React
+  // Flow's node handlers stop `click` propagation for their own gestures, so a
+  // bubble-phase click listener never hears about the press that matters; and
+  // a press that becomes a DRAG (grabbing a node, starting a marquee) never
+  // produces a click at all, yet is unambiguously "I am doing something else
+  // now". Capture also means nothing downstream can swallow it.
+  //
+  // It cannot close the menu that is being OPENED: this effect is registered
+  // only while `open`, and a right-click's pointerdown precedes the
+  // `contextmenu` that opens it. A right-click on a DIFFERENT node while one
+  // is open closes then reopens, which is the same end state as the "a second
+  // right-click MOVES the menu" path and costs one extra render.
+  //
+  // `onPaneClick` stays: closing twice is idempotent, and it also clears the
+  // label peek, which this must not touch.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (!target) return;
+      if (ref.current?.contains(target)) return;
+      if (target.closest?.(DISMISS_EXEMPT)) return;
+      closeContextMenu();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
   }, [open, closeContextMenu]);
 
   if (!open) return null;

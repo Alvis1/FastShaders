@@ -139,9 +139,16 @@
 /* Source CSV filename shown under the Data node's header (wraps if long). */
 .shader-node__file-name {
   font: 500 calc(8px * var(--node-text-scale, 1)) var(--font-mono);
-  /* Literal (not --text-secondary) so it stays a dark-gray on the always-light
-     node body in dark mode — the node must render identically in both themes. */
-  color: #555555;
+  /* Node INK, so it follows the card. It was the literal `#555555`, on the
+     reasoning — true until 2026-09-09 — that a node body is always light and
+     must render identically in both themes. Once `--node-bg` learned to flip
+     that literal became a dark grey on a near-black card: MEASURED at 1.82:1,
+     i.e. the filename was effectively invisible in dark mode.
+
+     The alpha reproduces the old colour closely on the light body (0.65 is
+     `#555` exactly) and is nudged up because the DARK side is what was
+     reported: 0.7 reads 8.2:1 light (was 6.7) and 6.6:1 dark (was 1.8). */
+  color: rgba(var(--node-ink-rgb), 0.7);
   padding: 2px 6px 0;
   line-height: 1.25;
   white-space: normal;
