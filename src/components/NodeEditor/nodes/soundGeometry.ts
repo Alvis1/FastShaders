@@ -23,13 +23,18 @@
  *
  * Layout: header, then the two parameter chips stacked full-width at the top
  * of the body — param sockets on the LEFT edge aligned with them — then the
- * SOURCE dropdown, then the live level meter, then the arm light centred below
- * it, with the four output sockets spread down the RIGHT edge beside the light.
+ * live level meter, then the arm light centred below it, with the four output
+ * sockets spread down the RIGHT edge beside the light.
  *
- * The meter and the source picker are both on the card rather than in the
- * settings menu because both answer "what is this node hearing?", and a node
- * whose answer is only visible after a right-click is the problem this layout
- * exists to fix.
+ * The METER is on the card rather than in the settings menu because it answers
+ * "is this node hearing anything?", and an answer only visible after a
+ * right-click is the problem this layout exists to fix. The SOURCE picker was
+ * on the card for a day and moved into the settings menu (2026-09-08): it
+ * costs height and width on a control most graphs set once, while the question
+ * that changes minute to minute is answered by the light and the meter.
+ *
+ * Every `*_TOP` below is a CENTRE, not an edge: `.shader-node__param-row` and
+ * `.shader-node__arm-wrap` both carry `transform: translateY(-50%)`.
  *
  * This IS the Audio Input node's arrangement: that node was folded into the
  * Sound node on 2026-09-08, since a microphone is just one of the sources the
@@ -46,44 +51,50 @@
 /**
  * Outer card width, border-box (includes the 1.5px node border each side).
  *
- * Wide enough for the source `<select>` and no wider: the picker is capped to
- * the body by its absolute left/right insets plus `min-width: 0`, so a long
- * device name ellipsises instead of widening the node (`.node-base` is
- * `width: fit-content`, so an unbounded child would let "MacBook Pro
- * Microphone (Built-in)" dictate the node's size — the same cap the image
- * thumbnail and colormap strip carry). Names that ellipsise are still
- * answerable at a glance: SoundSourceSelect names the current source on the
- * first line of its tooltip precisely because this width truncates.
- *
- * It grew from 68 when the source picker arrived; before that the width was
- * sized so the arm light nearly filled it, because the light WAS the node's
- * whole face. The light is still centred, but it is no longer the only control.
+ * Sized so the 40px arm light nearly fills it — the light is the node's face,
+ * the thing a glance is asking about. It grew to 88 for the day the source
+ * `<select>` sat here and came back when that moved to the settings menu.
  */
 export const SOUND_W = 68;
 /** Inner body width — SOUND_W minus the two 1.5px borders. */
 export const SOUND_BODY_W = SOUND_W - 3;
-/** Body height. Everything below is placed inside it. */
-export const SOUND_BODY_H = 118;
+/**
+ * Body height. Everything below is placed inside it.
+ *
+ * 103, down from 118 (2026-09-09, owner request: "make the sound node
+ * shorter"). The 15px came from slimmer value chips (18 → 14, which is still
+ * comfortably over the 12px compact `DragNumberInput` inside them) and from
+ * closing the gap above the arm light, 10.5px → 4.5px.
+ *
+ * It cannot go much below this, and the floor is the SOCKET COLUMN rather than
+ * anything visual: four outputs 18px apart span 54px, and the last one needs
+ * ~8px of body beneath its centre so its disc stays inside the card at the
+ * 12px coarse-pointer size. 95 + 8 is the 103.
+ */
+export const SOUND_BODY_H = 103;
 /** Header strip height (node-base__header, single line) — layout footprint. */
 export const SOUND_HEADER_H = 18;
 /** Row CENTRES of the two parameter chips (socket + full-width value box). */
-export const MIC_PARAM_TOPS = [13, 33];
+export const MIC_PARAM_TOPS = [11, 27];
 /** Height of a parameter chip (the value box the row centres on). */
-export const MIC_CHIP_H = 18;
+export const MIC_CHIP_H = 14;
 /** Centre of the live level meter. */
-export const SOUND_METER_TOP = 50;
+export const SOUND_METER_TOP = 41;
 /** Height of the level meter bar. */
 export const MIC_METER_H = 5;
 /** Centre of the arm light (the circle itself is sized in ShaderNode.css). */
-export const SOUND_BTN_TOP = 83;
+export const SOUND_BTN_TOP = 68;
 /**
  * The four outputs, spread down the right edge beside the arm light — 18px
  * apart, which keeps a 6px gap between sockets even at the 12px touch size.
+ * Centred on the light (68), so they read as belonging to it; the first now
+ * shares a centre with the level meter, which is a happy accident worth
+ * keeping — the meter shows `level` and the socket beside it emits it.
  */
-export const MIC_OUT_TOPS = [56, 74, 92, 110];
+export const MIC_OUT_TOPS = [41, 59, 77, 95];
 /**
- * Horizontal inset of the full-width rows from the body edge. The chip rows,
- * the source picker and the meter all read it inline, so the inset has ONE
- * source rather than a CSS literal that drifts from its neighbours.
+ * Horizontal inset of the full-width rows from the body edge. The chip rows
+ * and the meter both read it inline, so the inset has ONE source rather than a
+ * CSS literal that drifts from its neighbour.
  */
 export const MIC_PAD_X = 8;
