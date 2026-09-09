@@ -18,7 +18,7 @@
   width: 72px;
   height: 72px;
   border-radius: var(--border-radius-sm);
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(var(--node-ink-rgb), 0.1);
 }
 
 .math-preview-node__port-row {

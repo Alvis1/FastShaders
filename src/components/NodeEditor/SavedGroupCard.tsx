@@ -22,6 +22,9 @@ interface SavedGroupCardProps {
 export function SavedGroupCard({ group }: SavedGroupCardProps) {
   const deleteSavedGroup = useAppStore((s) => s.deleteSavedGroup);
   const language = useAppStore((s) => s.language);
+  // The tile depicts a group frame, which mixes from the node body — and node
+  // bodies flip with the theme (getGroupFrameColors).
+  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
 
   const onDragStart = useCallback(
     (event: React.DragEvent) => {
@@ -87,7 +90,7 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
       <div
         className="saved-group-card__frame"
         // Same opaque frame colors as the in-canvas group (see GroupNode).
-        style={getGroupFrameColors(group.color)}
+        style={getGroupFrameColors(group.color, false, darkTheme)}
       >
         <div
           className="saved-group-card__header"

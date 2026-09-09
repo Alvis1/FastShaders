@@ -78,7 +78,7 @@
 
 .clock-node__speed-x {
   font: 700 calc(8px * var(--node-text-scale, 1)) var(--font-mono);
-  color: rgba(0, 0, 0, 0.55);
+  color: rgba(var(--node-ink-rgb), 0.55);
   line-height: 1;
 }
 

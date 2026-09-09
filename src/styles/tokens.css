@@ -50,6 +50,19 @@
      without the hard edge. */
   --node-bg: #F1F2F3;
 
+  /* Everything DRAWN ON a node body — its text, its hairlines, its inner
+     plates — as an `r, g, b` triple rather than a colour, so the ~39 sites that
+     each pick their own alpha (`rgba(var(--node-ink-rgb), 0.55)`) keep those
+     alphas exactly and only the base flips with the theme. Writing them as
+     finished colours would have meant a second literal per site and a second
+     chance to miss one; a missed site is unreadable text on a dark card rather
+     than anything that fails loudly. */
+  --node-ink-rgb: 0, 0, 0;
+  /* Inner plates ON a node that were white: the number box's fill, the mesh
+     picker's field. Not `--bg-panel` — that is chrome, and a node is not
+     chrome; this tracks --node-bg instead. */
+  --node-plate: #ffffff;
+
   /* ===== BORDERS ===== */
   --border-subtle: #E0E0E0;
   --border-default: #CCCCCC;
@@ -250,8 +263,18 @@
    `data-theme="dark"` on <html>. Only CHROME tokens flip here — the surrounding
    UI (toolbar, panels, menus, modals, code-editor wrapper, canvas backdrop).
 
-   DELIBERATELY NOT redefined, so graph nodes render identically in both themes:
-     --node-bg, --shadow-node(-selected), --cost-high, --type-*, --cat-*
+   GRAPH NODES FLIP TOO, as of 2026-09-09 (owner request). They did NOT until
+   then, and the reasoning that kept them fixed is worth keeping in view: a node
+   carries category colour, cost colour and live shader values, none of which
+   have a dark counterpart, so holding the body invariant guaranteed those read
+   the same for everyone. What replaced it is narrower and checkable — the body
+   (`--node-bg`), everything drawn ON it (`--node-ink-rgb`) and its inner plates
+   (`--node-plate`) flip; the MEANINGFUL colours do not. `--type-*`, `--cost-*`
+   and `--cat-*` are still absent from this block, so a socket's data type, a
+   node's price and its category are the same colour in both themes.
+
+   Still deliberately NOT redefined here:
+     --shadow-node(-selected), --cost-high, --type-*, --cat-*
      (published from JS), --border-focus, --text-accent, --node-cost-*.
    The one chrome token that also reaches node scope, --text-secondary, is read
    there via a fixed literal instead (ShaderNode.css .shader-node__file-name).
@@ -262,19 +285,31 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  /* A mid-GREY ramp, deliberately not near-black. The graph nodes are a fixed
-     off-white (--node-bg) in both themes, so the old #17-#23 chrome put a card
-     at 16.5:1 against the canvas — every node read as a cut-out glaring off the
-     page. Lifting the chrome into the greys (and easing --node-bg down off pure
-     white) brings that to ~9.6:1: the nodes still clearly float above the
-     chrome, but the two now look like one interface. Ordering matches light
-     mode — app (recessed) < surface < panel (raised) — just inverted in
-     lightness, and text still clears 7:1 on panel / 5:1 for secondary. */
+  /* A mid-GREY ramp, deliberately not near-black. Its ORIGINAL reason is now
+     history — nodes used to stay a fixed off-white in both themes, so a
+     near-black chrome put a card at 16.5:1 against it and every node read as a
+     cut-out glaring off the page; lifting the chrome into the greys brought
+     that to ~9.6:1. Nodes flip with the theme as of 2026-09-09, so that
+     pressure is gone, but the ramp is kept: it is what the rest of the app was
+     tuned against (text clears 7:1 on panel, 5:1 for secondary) and re-darkening
+     it is a separate judgement about the whole interface, not a consequence of
+     this change. Ordering matches light mode — app (recessed) < surface <
+     panel (raised) — just inverted in lightness. */
   --bg-app: #33363b;
   --bg-panel: #464a51;
   --bg-surface: #3c4046;
   --bg-surface-hover: #51565d;
   --bg-input: #2e3136;
+
+  /* GRAPH NODES. Darker than the dark canvas default (#41454d) and than the
+     chrome panels, so a card still separates from what it sits on — the same
+     relationship light mode has, where a near-white node sits on a mid-grey
+     canvas, just inverted. The PLATE stays a step lighter than the body for the
+     same reason it is a step lighter (white on off-white) in light mode: a
+     number box has to read as a field you can type in. */
+  --node-bg: #2b2e34;
+  --node-ink-rgb: 236, 238, 240;
+  --node-plate: #3a3e45;
   --bg-overlay: rgba(0, 0, 0, 0.5);
 
   /* A step above the panel ramp — see the light-mode declaration. */

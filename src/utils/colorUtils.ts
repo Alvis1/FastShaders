@@ -147,24 +147,41 @@ const GROUP_BORDER_MIX = 0.45;
  * ordering and the frame reads as floating on top of its own contents.
  */
 const NODE_WHITE: [number, number, number] = [0xf1, 0xf2, 0xf3];
+/**
+ * The same thing in DARK mode — `--node-bg` under `:root[data-theme="dark"]`.
+ *
+ * Nodes flip with the theme as of 2026-09-09, and a group frame is the backdrop
+ * panel BEHIND its member cards: mixing it from the light base on a dark canvas
+ * puts a pale sheet behind dark cards and inverts the depth ordering the mix
+ * exists to preserve. Duplicated from the token for the reason NODE_WHITE is —
+ * this module is pure and node-tested, with no CSSOM to read it from — so the
+ * two MUST track each other.
+ */
+const NODE_DARK: [number, number, number] = [0x2b, 0x2e, 0x34];
 
 /**
  * Opaque frame colors for a group (canvas frame + Saved Groups tile).
  *
  * Group frames are FILLED, never translucent: the canvas background is
  * user-pickable, so an alpha tint would drag every group's color along with it
- * — washing out to near-nothing on a dark canvas. Mixing into white instead
- * keeps a group's color identical on any backdrop and in either theme, the
- * same rule the node cards it holds already follow (`--node-bg`). A selected
+ * — washing out to near-nothing on a dark canvas. Mixing into the NODE BODY
+ * instead keeps a group's colour identical on any backdrop the user picks, the
+ * same rule the cards it holds follow (`--node-bg`). It does now follow the
+ * THEME, because the cards do: `dark` swaps the base so the frame stays a step
+ * behind its members rather than becoming a pale sheet under them. A selected
  * frame keeps the full-strength border.
  */
 export function getGroupFrameColors(
   hex: string,
   selected = false,
+  dark = false,
 ): { background: string; borderColor: string } {
   const base = HEX6.test(hex) ? hex : GROUP_DEFAULT_COLOR;
   const [r, g, b] = hexToRgb(base);
-  const [wr, wg, wb] = NODE_WHITE;
+  // Mixes FROM the node body of the current theme, so the frame stays a step
+  // behind the cards it encloses either way. Defaulting to light keeps every
+  // existing caller and every stored colour unchanged.
+  const [wr, wg, wb] = dark ? NODE_DARK : NODE_WHITE;
   const mix = (t: number) => rgbToHex(lerp(wr, r, t), lerp(wg, g, t), lerp(wb, b, t));
   return {
     background: mix(GROUP_FILL_MIX),

@@ -52,7 +52,7 @@
   font-weight: 700;
   line-height: 1;
   color: #ffffff;
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(var(--node-ink-rgb), 0.18);
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 0;
   cursor: pointer;
@@ -60,7 +60,7 @@
 }
 
 .group-node__toggle:hover {
-  background: rgba(0, 0, 0, 0.32);
+  background: rgba(var(--node-ink-rgb), 0.32);
 }
 
 @media (pointer: coarse) {
@@ -129,7 +129,7 @@
 .group-node__socket-label {
   font-size: 9px;
   font-weight: 600;
-  color: rgba(0, 0, 0, 0.7);
+  color: rgba(var(--node-ink-rgb), 0.7);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

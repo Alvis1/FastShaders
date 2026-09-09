@@ -144,3 +144,33 @@ describe('getGroupFrameColors', () => {
     }
   });
 });
+
+describe('getGroupFrameColors follows the theme', () => {
+  it('mixes from the DARK node body when asked, so the frame stays behind its cards', () => {
+    // A group frame is the backdrop panel behind its member cards. Mixing it
+    // from the light base on a dark canvas puts a pale sheet under dark cards
+    // and inverts the depth ordering the mix exists to preserve.
+    const light = getGroupFrameColors('#6366f1');
+    const dark = getGroupFrameColors('#6366f1', false, true);
+    expect(dark.background).not.toBe(light.background);
+    const lum = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+      return 0.299 * r + 0.587 * g + 0.114 * b;
+    };
+    expect(lum(dark.background)).toBeLessThan(lum(light.background));
+  });
+
+  it('defaults to light, so every existing caller and stored colour is unchanged', () => {
+    expect(getGroupFrameColors('#6366f1', false, false)).toEqual(getGroupFrameColors('#6366f1'));
+    expect(getGroupFrameColors('#f1f2f3').background).toBe('#f1f2f3');
+    // …and the dark base is the identity for a group coloured like a dark node.
+    expect(getGroupFrameColors('#2b2e34', false, true).background).toBe('#2b2e34');
+  });
+
+  it('keeps a SELECTED frame at full strength in either theme', () => {
+    // Selection is the group's own colour, not a mix, so the theme cannot
+    // touch it — that is what makes selection legible on any backdrop.
+    expect(getGroupFrameColors('#6366f1', true, true).borderColor).toBe('#6366f1');
+    expect(getGroupFrameColors('#6366f1', true, false).borderColor).toBe('#6366f1');
+  });
+});

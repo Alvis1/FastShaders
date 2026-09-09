@@ -31,6 +31,10 @@ export const GroupNode = memo(function GroupNode({
   const color = data.color ?? '#6366f1';
   const collapsed = !!data.collapsed;
   const toggleGroupCollapsed = useAppStore((s) => s.toggleGroupCollapsed);
+  // The frame mixes from the node body, which flips with the theme — see
+  // getGroupFrameColors. (`codeEditorTheme` is the app-wide dark switch; the
+  // store field keeps its historical name.)
+  const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
 
   // Tell React Flow to re-measure handle positions when boundary sockets
   // change. Without this, dynamically mounted synthetic handles (__in_*,
@@ -71,7 +75,7 @@ export const GroupNode = memo(function GroupNode({
         // OPAQUE fill in the group color (full color on the header). Never an
         // alpha tint: the canvas backdrop is user-pickable, so a translucent
         // body would take its color from whatever is behind it.
-        ...getGroupFrameColors(color, !!selected),
+        ...getGroupFrameColors(color, !!selected, darkTheme),
         width: '100%',
         height: '100%',
       }}

@@ -17,7 +17,7 @@
   width: 96px;
   height: 96px;
   border-radius: var(--border-radius-sm);
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(var(--node-ink-rgb), 0.1);
   image-rendering: pixelated;
 }
 

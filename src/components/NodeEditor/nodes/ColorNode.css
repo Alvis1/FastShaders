@@ -3,7 +3,7 @@
    source of truth rather than a CSS value the socket math has to mirror. */
 .color-node {
   border-radius: 50%;
-  border: calc(1.5px * var(--fs-node-border-scale, 1)) solid rgba(0, 0, 0, 0.12);
+  border: calc(1.5px * var(--fs-node-border-scale, 1)) solid rgba(var(--node-ink-rgb), 0.12);
   cursor: grab;
   position: relative;
   transition: box-shadow var(--transition-fast), translate var(--transition-fast);

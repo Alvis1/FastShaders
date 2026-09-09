@@ -145,7 +145,7 @@ describe('the Output node\'s preview socket', () => {
     expect(rule).toMatch(/height:\s*calc\(var\(--handle-size\) \* 2\)/);
   });
 
-  it("is painted in the WIRE's colour on the canvas, plain black on cards", () => {
+  it("is painted in the WIRE's colour on the canvas, the node's ink on cards", () => {
     // `--node-cost-text` is the auto-contrast value NodeEditor publishes from
     // the user-picked canvas background — the same one the wire's stroke uses.
     // Hardcode black on the CANVAS and the socket disappears on a dark canvas
@@ -155,7 +155,10 @@ describe('the Output node\'s preview socket', () => {
     // palette TILE's socket white-on-white, while the base rule keeps the
     // card on the node's one default-canvas look (the NodeBase.css
     // cost-badge precedent).
-    expect(rule).toMatch(/background:\s*#000/);
+    // Off the canvas it takes the NODE'S OWN ink (black in light, near-white in
+    // dark) rather than a literal black, since nodes flip with the theme as of
+    // 2026-09-09 and a black disc on a dark card is invisible.
+    expect(rule).toMatch(/background:\s*rgb\(var\(--node-ink-rgb\)\)/);
     expect(rule).not.toMatch(/var\(--node-cost-text/);
     expect(css).toMatch(/\.react-flow \.output-node__preview-socket \{[^}]*var\(--node-cost-text/);
     const wire = readFileSync(path.resolve(__dirname, '../../Layout/PreviewLink.css'), 'utf8');
@@ -171,7 +174,10 @@ describe('the Output node\'s preview socket', () => {
     expect(rule).toMatch(/pointer-events:\s*none/);
     expect(css).toMatch(/\.react-flow \.output-node__preview-socket \{[^}]*pointer-events:\s*auto/);
     // Hollow while inactive — the ordinary "free port" reading.
-    expect(css).toMatch(/\.output-node__preview-socket--inactive \{[^}]*background:\s*#fff/);
+    // Hollow when inactive: the node's PLATE colour, which tracks the body the
+    // same way the number boxes do, so the disc reads as unfilled in either
+    // theme rather than as a white dot on a dark card.
+    expect(css).toMatch(/\.output-node__preview-socket--inactive \{[^}]*background:\s*var\(--node-plate\)/);
     // A <button> carrying `nodrag` (React Flow's drag filter) with its
     // pointerdown AND click stopped, so a press activates instead of dragging
     // the node, panning the canvas, or selecting.

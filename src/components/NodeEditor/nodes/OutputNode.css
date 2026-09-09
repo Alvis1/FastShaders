@@ -25,7 +25,7 @@
   display: flex;
   align-items: center;
   padding: 3px 8px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  border-bottom: 1px solid rgba(var(--node-ink-rgb), 0.1);
   border-radius: var(--border-radius-md) var(--border-radius-md) 0 0;
   background: var(--cat-output);
 }
@@ -83,7 +83,7 @@
   transform: translateY(-50%);
   border: var(--handle-border) solid white;
   border-radius: 50%;
-  background: #000;
+  background: rgb(var(--node-ink-rgb));
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
   pointer-events: none;
 }
@@ -92,8 +92,8 @@
    border so the outer white rim and the disc's size stay identical to the
    active state — only the fill changes. */
 .output-node__preview-socket--inactive {
-  background: #fff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15), inset 0 0 0 2px #000;
+  background: var(--node-plate);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15), inset 0 0 0 2px rgb(var(--node-ink-rgb));
 }
 
 /* Canvas only: a real control, in the canvas-contrast colour (see above). */
@@ -146,7 +146,7 @@
   border: 1px dashed var(--border-subtle);
   border-radius: 0;
   font-size: 8px;
-  color: rgba(0, 0, 0, 0.45);
+  color: rgba(var(--node-ink-rgb), 0.45);
   text-align: center;
 }
 
@@ -162,7 +162,7 @@
   border: 1px dashed var(--border-subtle);
   border-radius: 0;
   background: transparent;
-  color: rgba(0, 0, 0, 0.55);
+  color: rgba(var(--node-ink-rgb), 0.55);
   font-family: var(--font-sans);
   font-size: 9px;
   font-weight: 600;
@@ -171,8 +171,8 @@
 
 .output-node__add:hover {
   border-color: var(--cat-output);
-  color: rgba(0, 0, 0, 0.85);
-  background: rgba(0, 0, 0, 0.04);
+  color: rgba(var(--node-ink-rgb), 0.85);
+  background: rgba(var(--node-ink-rgb), 0.04);
 }
 
 .output-node__title {
@@ -192,7 +192,7 @@
 .output-node__section-label {
   font-size: 8px;
   font-weight: 600;
-  color: rgba(0, 0, 0, 0.4);
+  color: rgba(var(--node-ink-rgb), 0.4);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   padding: 3px 8px 1px;
@@ -236,7 +236,7 @@
 
 .output-node__port-label {
   font-size: 9px;
-  color: rgba(0, 0, 0, 0.6);
+  color: rgba(var(--node-ink-rgb), 0.6);
   white-space: nowrap;
   padding-left: 4px;
 }
@@ -306,5 +306,5 @@
 .output-node__subdivider {
   height: 1px;
   margin: 2px 10px;
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(var(--node-ink-rgb), 0.06);
 }

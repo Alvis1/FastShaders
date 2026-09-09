@@ -32,12 +32,12 @@
 }
 
 .drag-num__arrow:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: rgba(var(--node-ink-rgb), 0.08);
   color: var(--text-primary);
 }
 
 .drag-num__arrow:active {
-  background: rgba(0, 0, 0, 0.14);
+  background: rgba(var(--node-ink-rgb), 0.14);
 }
 
 /* Value area: draggable + clickable */
@@ -58,7 +58,7 @@
 
 .drag-num__value--dragging {
   cursor: ew-resize;
-  background: rgba(0, 0, 0, 0.04);
+  background: rgba(var(--node-ink-rgb), 0.04);
 }
 
 /* Edit mode: real text input */
@@ -106,22 +106,22 @@
 .drag-num--compact {
   width: auto;
   height: calc(12px * var(--node-text-scale, 1));
-  border-color: rgba(0, 0, 0, 0.15);
-  background: #ffffff;
+  border-color: rgba(var(--node-ink-rgb), 0.15);
+  background: var(--node-plate);
 }
 
 .drag-num--compact:hover {
-  border-color: rgba(0, 0, 0, 0.3);
+  border-color: rgba(var(--node-ink-rgb), 0.3);
 }
 
 .drag-num--compact .drag-num__arrow {
   width: 6px;
   font-size: calc(5px * var(--node-text-scale, 1));
-  color: rgba(0, 0, 0, 0.4);
+  color: rgba(var(--node-ink-rgb), 0.4);
 }
 
 .drag-num--compact .drag-num__arrow:hover {
-  color: rgba(0, 0, 0, 0.7);
+  color: rgba(var(--node-ink-rgb), 0.7);
 }
 
 .drag-num--compact .drag-num__value,
@@ -130,7 +130,7 @@
      node reads at one size. */
   font-size: calc(7.7px * var(--node-text-scale, 1));
   min-width: calc(16px * var(--node-text-scale, 1));
-  color: rgba(0, 0, 0, 0.7);
+  color: rgba(var(--node-ink-rgb), 0.7);
 }
 
 /* Touch devices: shrink-to-6px arrows are unhittable and the 24px value pad is

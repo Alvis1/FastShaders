@@ -74,7 +74,7 @@
   width: 44px;
   height: calc(12px * var(--node-text-scale, 1));
   padding: 0;
-  border: 1px solid rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(var(--node-ink-rgb), 0.15);
   border-radius: var(--border-radius-sm);
   cursor: pointer;
   /* A `<span>` is inline by default; `.shader-node__left` is a flex container
@@ -120,7 +120,7 @@
    number on a node — editable box or live edge value — reads at ONE size. */
 .shader-node__edge-val {
   font: 600 calc(7.7px * var(--node-text-scale, 1)) var(--font-mono);
-  color: rgba(0, 0, 0, 0.6);
+  color: rgba(var(--node-ink-rgb), 0.6);
   white-space: nowrap;
 }
 
@@ -128,7 +128,7 @@
    socket. Wraps so long column headers stay inside the node. */
 .shader-node__out-label {
   font: 600 calc(9px * var(--node-text-scale, 1)) var(--font-mono);
-  color: rgba(0, 0, 0, 0.6);
+  color: rgba(var(--node-ink-rgb), 0.6);
   white-space: normal;
   overflow-wrap: anywhere;
   text-align: right;
@@ -154,7 +154,7 @@
    context menu only. */
 .shader-node__in-label {
   font: 600 calc(9px * var(--node-text-scale, 1)) var(--font-mono);
-  color: rgba(0, 0, 0, 0.6);
+  color: rgba(var(--node-ink-rgb), 0.6);
   white-space: nowrap;
   margin-left: 2px;
 }
@@ -185,7 +185,7 @@
   height: 12px;
   margin: 4px 6px 2px;
   border-radius: 0;
-  border: 1px solid rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(var(--node-ink-rgb), 0.28);
   pointer-events: none;
 }
 
@@ -257,7 +257,7 @@
   height: 40px;
   margin: 8px auto 6px;
   padding: 0;
-  border: 2px solid rgba(0, 0, 0, 0.35);
+  border: 2px solid rgba(var(--node-ink-rgb), 0.35);
   border-radius: 50%;
   background: #35c759;
   cursor: pointer;
@@ -267,7 +267,7 @@
 }
 
 .shader-node__sound-btn:hover:not(:disabled) {
-  border-color: rgba(0, 0, 0, 0.6);
+  border-color: rgba(var(--node-ink-rgb), 0.6);
 }
 
 /* Waiting on the permission prompt: amber, steady. Deliberately NOT blinking —
@@ -282,7 +282,7 @@
    and an open microphone should be impossible to miss on a busy graph. */
 .shader-node__sound-btn.is-live {
   background: #e03131;
-  border-color: rgba(0, 0, 0, 0.55);
+  border-color: rgba(var(--node-ink-rgb), 0.55);
   animation: fs-mic-blink 1s steps(1, end) infinite;
 }
 
@@ -321,7 +321,7 @@
 .shader-node__sound-btn:disabled,
 .shader-node__sound-btn--inert {
   background: #b9bec4;
-  border-color: rgba(0, 0, 0, 0.25);
+  border-color: rgba(var(--node-ink-rgb), 0.25);
   cursor: not-allowed;
 }
 

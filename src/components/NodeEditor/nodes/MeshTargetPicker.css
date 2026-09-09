@@ -18,15 +18,15 @@
   border-radius: 0;
   /* WHITE, not --node-bg: this is an input, and the node's own off-white body
      behind it read as a disabled plate rather than a field. */
-  background: #ffffff;
+  background: var(--node-plate);
   font-family: var(--font-sans);
-  color: rgba(0, 0, 0, 0.85);
+  color: rgba(var(--node-ink-rgb), 0.85);
   cursor: pointer;
   text-align: left;
 }
 
 .mesh-picker:hover {
-  border-color: rgba(0, 0, 0, 0.35);
+  border-color: rgba(var(--node-ink-rgb), 0.35);
 }
 
 /* The mesh NAME, on the node and in the list alike: bold, and 1.3x the 9px the
@@ -65,7 +65,7 @@
   margin-left: 1px;
   border-left: 3px solid transparent;
   border-right: 3px solid transparent;
-  border-top: 4px solid rgba(0, 0, 0, 0.45);
+  border-top: 4px solid rgba(var(--node-ink-rgb), 0.45);
 }
 
 /* A mesh the loaded model does not contain — MARKED, not an error colour: it is
