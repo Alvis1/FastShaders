@@ -18,7 +18,7 @@ import type {
 import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { randomGroupColor } from '@/utils/newNodeValues';
+import { randomGroupColor, nextGroupLabel } from '@/utils/newNodeValues';
 import { autoLayout } from '@/engine/layoutEngine';
 // NB the two built-in libraries are deliberately NOT imported here — see
 // instantiateBuiltinTexture, which loads them on demand so that the Babel
@@ -2567,7 +2567,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // child clicks pass through, so we leave selectable on but draggable too.
       data: {
         registryType: 'group',
-        label: 'Group',
+        // Numbered, so a canvas of frames is not a wall of things all called
+        // "Group" — see nextGroupLabel. Renaming replaces it outright; the
+        // number is only ever the DEFAULT name.
+        label: nextGroupLabel(state.nodes),
         // From the dimmed twin of the colour-node palette, preferring a hue no
         // group on the canvas is already wearing — every group used to arrive
         // the same indigo, so a graph of frames read as one repeated colour

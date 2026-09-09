@@ -115,6 +115,32 @@ export function randomGroupColor(
   return pickSpreadColor(GROUP_COLOR_PALETTE, used, rand);
 }
 
+/**
+ * The default NAME for a group the user is creating right now — `Group 1`,
+ * `Group 2`, … rather than a canvas of things all called "Group".
+ *
+ * `max + 1` over the groups already named that way, the `nextPropertyName`
+ * convention: the number is a label, not an identity, so a gap left by a
+ * deleted group is not worth reusing and a name that jumps back to one the
+ * user has seen before is worse than a gap. Only groups the user has NOT
+ * renamed are scanned, which falls out of the exact `Group <n>` match — a
+ * group called "Fresnel" contributes nothing and blocks nothing.
+ *
+ * Deliberately NOT retroactive: a group already on the canvas keeps the bare
+ * "Group" it was created with, since renaming it would be an edit the user did
+ * not ask for. `GroupNode` still falls back to "Group" for an empty label.
+ */
+export function nextGroupLabel(existingNodes: AppNode[]): string {
+  let max = 0;
+  for (const n of existingNodes) {
+    if (n.type !== 'group') continue;
+    const label = (n.data as { label?: unknown } | undefined)?.label;
+    const m = typeof label === 'string' ? /^Group (\d+)$/.exec(label) : null;
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `Group ${max + 1}`;
+}
+
 /** True for the defs whose payload is a colour swatch (`values.hex`). */
 function isColorDef(type: string): boolean {
   return type === 'color' || type === 'property_color';

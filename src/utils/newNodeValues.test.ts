@@ -3,6 +3,7 @@ import {
   initialNodeValues,
   randomColorHex,
   randomGroupColor,
+  nextGroupLabel,
   NEW_COLOR_PALETTE,
   GROUP_COLOR_PALETTE,
   GROUP_COLOR_DIM,
@@ -244,5 +245,42 @@ describe('randomGroupColor', () => {
       groupNode(`g${i}`, c.toUpperCase()),
     );
     expect(randomGroupColor(nodes)).toBe(GROUP_COLOR_PALETTE[4]);
+  });
+});
+
+describe('nextGroupLabel', () => {
+  const g = (id: string, label?: string): AppNode =>
+    ({ id, type: 'group', position: { x: 0, y: 0 }, data: { registryType: 'group', ...(label !== undefined ? { label } : {}) } } as unknown as AppNode);
+
+  it('starts at 1 on a canvas with no groups', () => {
+    expect(nextGroupLabel([])).toBe('Group 1');
+  });
+
+  it('counts up past the numbered groups already there', () => {
+    expect(nextGroupLabel([g('a', 'Group 1'), g('b', 'Group 2')])).toBe('Group 3');
+  });
+
+  it('takes MAX + 1, so a deleted number is not handed out again', () => {
+    // The number is a label, not an identity: reusing "Group 2" for something
+    // unrelated is worse than a gap in the sequence.
+    expect(nextGroupLabel([g('a', 'Group 1'), g('b', 'Group 5')])).toBe('Group 6');
+  });
+
+  it('ignores a RENAMED group — it neither counts nor blocks', () => {
+    expect(nextGroupLabel([g('a', 'Fresnel'), g('b', 'Group 1')])).toBe('Group 2');
+    expect(nextGroupLabel([g('a', 'Group 7 rim light')])).toBe('Group 1');
+  });
+
+  it('ignores the bare "Group" left by every group made before numbering', () => {
+    expect(nextGroupLabel([g('a', 'Group'), g('b', 'Group')])).toBe('Group 1');
+  });
+
+  it('ignores non-group nodes and a missing/!string label', () => {
+    const nodes: AppNode[] = [
+      makeNode('n1', 'float', { value: 1 }),
+      g('a'),
+      ({ id: 'b', type: 'group', position: { x: 0, y: 0 }, data: { registryType: 'group', label: 9 } } as unknown as AppNode),
+    ];
+    expect(nextGroupLabel(nodes)).toBe('Group 1');
   });
 });

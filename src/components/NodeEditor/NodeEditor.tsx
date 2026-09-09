@@ -6,6 +6,7 @@ import {
   reconnectEdge,
   useReactFlow,
   useStore,
+  useStoreApi,
   type ReactFlowState,
   Position,
   type OnConnect,
@@ -71,6 +72,7 @@ import {
   type DragConnectPlan,
   type NodeBox,
 } from './dragConnect';
+import { applyGroupMarqueeRule } from './groupMarqueeSelection';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
 import { connectNodes, exposeConnectedTarget, spliceNodeIntoEdge, type DroppedPin } from './edgeInsert';
 import { costFocusId, focusNodes, focusNode, OUTPUT_FOCUS_FIT } from './outputFocus';
@@ -684,7 +686,7 @@ function tryInsertOnEdge(
 export function NodeEditor() {
   const nodes = useAppStore((s) => s.nodes);
   const edges = useAppStore((s) => s.edges);
-  const onNodesChange = useAppStore((s) => s.onNodesChange);
+  const storeOnNodesChange = useAppStore((s) => s.onNodesChange);
   const onEdgesChange = useAppStore((s) => s.onEdgesChange);
   const setEdges = useAppStore((s) => s.setEdges);
   const addNode = useAppStore((s) => s.addNode);
@@ -811,6 +813,37 @@ export function NodeEditor() {
   const livePathRef = useRef<SVGPathElement | null>(null);
   const { screenToFlowPosition, getViewport, setViewport, getInternalNode, zoomIn, zoomOut, fitView } =
     useReactFlow();
+  const flowStore = useStoreApi();
+
+  /**
+   * Node changes, with ONE correction: while a MARQUEE is in progress, an
+   * expanded group frame follows its members instead of being grabbed by any
+   * band that merely touches it (`groupMarqueeSelection.ts` explains why).
+   *
+   * `userSelectionRect` is the marquee gate rather than `userSelectionActive`:
+   * the rect is set on the pane pointerdown, while `userSelectionActive` is
+   * only set AFTER the first batch of select changes has already been
+   * dispatched — so gating on the latter would let the very first sweep
+   * through. Read imperatively, since subscribing would re-render this whole
+   * component at pointer rate for a flag only this callback looks at.
+   *
+   * Deliberately NOT in the store's own `onNodesChange`: the marquee lives in
+   * React Flow's store, which the app store cannot see. `selectAll` dispatches
+   * straight to the store action and so is untouched here, which is what keeps
+   * the A key selecting frames along with everything else.
+   */
+  const onNodesChange = useCallback(
+    (changes: Parameters<typeof storeOnNodesChange>[0]) => {
+      if (flowStore.getState().userSelectionRect) {
+        storeOnNodesChange(
+          applyGroupMarqueeRule(useAppStore.getState().nodes, changes),
+        );
+        return;
+      }
+      storeOnNodesChange(changes);
+    },
+    [flowStore, storeOnNodesChange],
+  );
   /**
    * Where the canvas was left last time, or null to fit the graph instead.
    *
