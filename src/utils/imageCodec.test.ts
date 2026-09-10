@@ -261,7 +261,21 @@ describe('resolutionLadder', () => {
       { key: '1024x512', width: 1024, height: 512, original: false },
       { key: '512x256', width: 512, height: 256, original: false },
       { key: '256x128', width: 256, height: 128, original: false },
+      { key: '128x64', width: 128, height: 64, original: false },
+      { key: '64x32', width: 64, height: 32, original: false },
+      { key: '32x16', width: 32, height: 16, original: false },
+      { key: '16x8', width: 16, height: 8, original: false },
     ]);
+  });
+
+  it('goes down to an 8 px short side and no further', () => {
+    // Owner, 2026-09-10: "allow to go as low as 8px".
+    expect(RESOLUTION_MIN_DIM).toBe(8);
+    for (const [w, h] of [[1920, 1080], [1024, 1024], [4096, 256], [100, 5000]]) {
+      const steps = resolutionLadder(w, h, 2048);
+      const last = steps[steps.length - 1];
+      expect(Math.min(last.width, last.height), `${w}x${h}`).toBe(8);
+    }
   });
 
   it('marks the rung that IS the source when the source is already POT', () => {
@@ -280,17 +294,18 @@ describe('resolutionLadder', () => {
   });
 
   it('stops on the SHORT side, so a panorama is not cut off early', () => {
-    // 4096×256: the long side has room left, but /4 puts the short side at 64
-    // and /8 below the floor.
+    // 4096×256: the long side still has room when the short side reaches 8.
     const steps = resolutionLadder(4096, 256);
-    expect(steps.map((s) => s.key)).toEqual(['4096x256', '2048x128', '1024x64']);
+    expect(steps.map((s) => s.key)).toEqual([
+      '4096x256', '2048x128', '1024x64', '512x32', '256x16', '128x8',
+    ]);
   });
 
   it('offers nothing below the floor', () => {
-    // 40 rounds down to 32 (40 < 80 % of 64), which is under the 64 floor.
-    expect(resolutionLadder(40, 4096)).toEqual([]);
+    // 5 rounds down to 4 (5 < 80 % of 8), which is under the 8 floor.
+    expect(resolutionLadder(5, 4096)).toEqual([]);
     expect(resolutionLadder(RESOLUTION_MIN_DIM, RESOLUTION_MIN_DIM)).toEqual([
-      { key: '64x64', width: 64, height: 64, original: true },
+      { key: '8x8', width: 8, height: 8, original: true },
     ]);
   });
 
@@ -298,7 +313,7 @@ describe('resolutionLadder', () => {
     // The top of the ladder can exceed the cap when the user switched to a
     // smaller headset profile after the drop; the anchor lands ON the cap.
     expect(resolutionLadder(2048, 2048, 1024).map((s) => s.key)).toEqual([
-      '1024x1024', '512x512', '256x256', '128x128',
+      '1024x1024', '512x512', '256x256', '128x128', '64x64', '32x32', '16x16', '8x8',
     ]);
   });
 
@@ -310,7 +325,7 @@ describe('resolutionLadder', () => {
     }
     // A junk cap falls back to the hard texture ceiling rather than emptying
     // the ladder — a bad profile must not remove the control.
-    expect(resolutionLadder(512, 512, NaN)).toHaveLength(4);
+    expect(resolutionLadder(512, 512, NaN)).toHaveLength(7);
   });
 
   it('never repeats a size', () => {

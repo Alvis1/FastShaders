@@ -121,7 +121,17 @@ describe('resizeEncodedImage', () => {
   it('resamples THROUGH a wrapped border', () => {
     // "Repeat (tile the image)" defaults ON, so a seamless tile resampled
     // against clamped edges comes back with a seam on every boundary.
-    expect(IMPORT).toMatch(/drawWrappedResize\(destCanvas, baseCanvas, w, h\)/);
+    expect(IMPORT).toMatch(/drawWrappedResize\(destCanvas, pyramid, w, h\)/);
+  });
+
+  it('steps down through a 2:1 pyramid before the final resample', () => {
+    // The ladder reaches 8 px. MEASURED 2026-09-10 on a period-3 stripe
+    // pattern (true mean red 170): one drawImage straight to 8 px gave pixels
+    // anywhere from 128 to 255 in Chrome 152, WebKit 26.5 and Firefox 153;
+    // through the pyramid, 169-171 in all three.
+    const body = /export async function resizeEncodedImage\([\s\S]*$/.exec(IMPORT)?.[0] ?? '';
+    expect(body).toMatch(/while \(pyramid\.width >= w \* 2 && pyramid\.height >= h \* 2\)/);
+    expect(body).toMatch(/Math\.floor\(pyramid\.width \/ 2\), Math\.floor\(pyramid\.height \/ 2\)/);
   });
 
   it('does not inherit the drop path’s halving retry', () => {

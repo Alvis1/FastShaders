@@ -570,6 +570,9 @@ export const ShaderNode = memo(function ShaderNode({
   /** Image node: does the card draw the picture mirrored? See the thumbnail. */
   const flipThumbX = Number(data.values?.flipX ?? 0) >= 0.5;
   const flipThumbY = Number(data.values?.flipY ?? 0) >= 0.5;
+  // Nearest filtering is shown too: the browser would otherwise smooth a small
+  // stored image (an 8 px rung) into a blur the shader never draws.
+  const nearestThumb = data.values?.filter === 'nearest';
   const imageThumbUrl = useMemo(
     () => (data.registryType === 'imageNode' ? validImageDataUrl(data.values?.imageB64) : null),
     [data.registryType, data.values?.imageB64],
@@ -1085,6 +1088,7 @@ export const ShaderNode = memo(function ShaderNode({
             ...(flipThumbX || flipThumbY
               ? { transform: `scale(${flipThumbX ? -1 : 1}, ${flipThumbY ? -1 : 1})` }
               : null),
+            ...(nearestThumb ? { imageRendering: 'pixelated' as const } : null),
           }}
         />
       )}

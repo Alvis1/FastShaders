@@ -887,6 +887,12 @@ export function graphToCode(
         if (offsetX !== '0' || offsetY !== '0') uvExpr = `${uvExpr}.add(vec2(${offsetX}, ${offsetY}))`;
         if (uvExpr !== (uvRef ?? 'uv()')) addImport('three/tsl', 'vec2');
         const isData = String(nv.colorSpace ?? 'color') === 'data';
+        // Filtering: 'nearest' takes the closest texel (hard pixel edges);
+        // anything else, absent included, is three's default LINEAR and emits
+        // nothing new, so every image saved before the option existed is
+        // byte-identical. An exact compare: the value comes out of a
+        // .fastshader and never reaches the emitted text.
+        const nearest = nv.filter === 'nearest';
         const imgVar = `_${varName}_img`;
         const okVar = `_${varName}_ok`;
         const texVar = `_${varName}_tex`;
@@ -900,9 +906,17 @@ export function graphToCode(
         setupLines.push(`${texVar}.colorSpace = globalThis.THREE.${isData ? 'NoColorSpace' : 'SRGBColorSpace'};`);
         if (isData) {
           // Data maps (normal/height): linear values, no mip pre-filtering.
+          const filter = nearest ? 'NearestFilter' : 'LinearFilter';
           setupLines.push(`${texVar}.generateMipmaps = false;`);
-          setupLines.push(`${texVar}.minFilter = globalThis.THREE.LinearFilter;`);
-          setupLines.push(`${texVar}.magFilter = globalThis.THREE.LinearFilter;`);
+          setupLines.push(`${texVar}.minFilter = globalThis.THREE.${filter};`);
+          setupLines.push(`${texVar}.magFilter = globalThis.THREE.${filter};`);
+        } else if (nearest) {
+          // A colour image keeps its mipmaps, so minification takes the
+          // nearest texel of the nearest mip level: crisp at every distance,
+          // without the shimmer plain nearest sampling of a far-away texture
+          // gives. Magnification is the pixel-art look itself.
+          setupLines.push(`${texVar}.minFilter = globalThis.THREE.NearestMipmapNearestFilter;`);
+          setupLines.push(`${texVar}.magFilter = globalThis.THREE.NearestFilter;`);
         }
         // Repeat (default) so tiling — via the settings above or the uv node's
         // tilingU/tilingV — wraps instead of smearing the edge pixels; the

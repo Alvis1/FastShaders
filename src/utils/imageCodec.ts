@@ -59,13 +59,14 @@ export const MAX_TEXTURE_DIM = 8192;
  * "Revert to original" is the way back to it.
  *
  * The floor is a SHORT-side rule, so a panorama is not cut off early by its
- * long side still being generous.
+ * long side still being generous. It is 8 px (owner, 2026-09-10: "allow to go
+ * as low as 8px") — it was 64 behind a fixed list of four rungs, but a tiny
+ * texture is a legitimate thing to want: a palette strip, a pixel-art source,
+ * a deliberately blocky look with Nearest filtering. So the ladder halves until
+ * the short side would drop below the floor, and a 2048×1024 original offers
+ * eight rungs down to 16×8.
  */
-export const RESOLUTION_MIN_DIM = 64;
-/** Rungs offered: the snapped original and three halvings of it. /8 of a 2048
- *  anchor is 256, and below `RESOLUTION_MIN_DIM` an image stops being a
- *  texture. */
-export const RESOLUTION_DIVISORS = [1, 2, 4, 8] as const;
+export const RESOLUTION_MIN_DIM = 8;
 
 export interface ResolutionStep {
   /** `${width}x${height}` — the option's identity in the menu. */
@@ -88,14 +89,14 @@ export function resolutionLadder(
   const srcH = Math.round(height);
   const anchor = potTarget(srcW, srcH, limit);
   const out: ResolutionStep[] = [];
-  for (const divisor of RESOLUTION_DIVISORS) {
-    // Halving a power of two is a power of two, so every rung stays one.
-    const w = anchor.width / divisor;
-    const h = anchor.height / divisor;
-    if (!Number.isInteger(w) || !Number.isInteger(h)) break;
-    // Below the floor there is nothing useful further down either.
-    if (Math.min(w, h) < RESOLUTION_MIN_DIM) break;
+  let w = anchor.width;
+  let h = anchor.height;
+  // Halving a power of two is a power of two, so every rung stays one; below
+  // the floor there is nothing further down either.
+  while (Number.isInteger(w) && Number.isInteger(h) && Math.min(w, h) >= RESOLUTION_MIN_DIM) {
     out.push({ key: `${w}x${h}`, width: w, height: h, original: w === srcW && h === srcH });
+    w /= 2;
+    h /= 2;
   }
   return out;
 }

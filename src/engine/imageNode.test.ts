@@ -58,6 +58,38 @@ describe('graphToCode — imageNode emission', () => {
     expect(code).toContain('_image1_tex.minFilter = globalThis.THREE.LinearFilter;');
   });
 
+  it('Nearest filtering → nearest magnification, mipmapped nearest minification', () => {
+    const { nodes, edges } = imageGraph({ ...valid, filter: 'nearest' });
+    const { code } = graphToCode(nodes, edges);
+    expect(code).toContain('_image1_tex.magFilter = globalThis.THREE.NearestFilter;');
+    expect(code).toContain('_image1_tex.minFilter = globalThis.THREE.NearestMipmapNearestFilter;');
+    // A colour image keeps its mipmaps — that is what the minFilter samples.
+    expect(code).not.toContain('generateMipmaps');
+  });
+
+  it('Nearest on a data map → nearest both ways, still no mipmaps', () => {
+    const { nodes, edges } = imageGraph({ ...valid, colorSpace: 'data', filter: 'nearest' });
+    const { code } = graphToCode(nodes, edges);
+    expect(code).toContain('_image1_tex.generateMipmaps = false;');
+    expect(code).toContain('_image1_tex.minFilter = globalThis.THREE.NearestFilter;');
+    expect(code).toContain('_image1_tex.magFilter = globalThis.THREE.NearestFilter;');
+  });
+
+  it('linear — absent, explicit or junk — emits byte-identically to before the option', () => {
+    const base = graphToCode(imageGraph(valid).nodes, imageGraph(valid).edges).code;
+    expect(base).not.toMatch(/minFilter|magFilter/);
+    const baseData = graphToCode(
+      imageGraph({ ...valid, colorSpace: 'data' }).nodes,
+      imageGraph({ ...valid, colorSpace: 'data' }).edges,
+    ).code;
+    for (const filter of ['linear', 'Nearest', 'nearest ', 'NearestFilter; alert(1)', '', 1, 0]) {
+      const g = imageGraph({ ...valid, filter });
+      expect(graphToCode(g.nodes, g.edges).code, String(filter)).toBe(base);
+      const d = imageGraph({ ...valid, colorSpace: 'data', filter });
+      expect(graphToCode(d.nodes, d.edges).code, `data ${String(filter)}`).toBe(baseData);
+    }
+  });
+
   it('connected uv input replaces the uv() fallback (flip still applies)', () => {
     const image = makeNode('img1', 'imageNode', valid);
     const v2 = makeNode('v1', 'vec2', { x: 0.5, y: 0.5 });

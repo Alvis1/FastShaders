@@ -145,6 +145,11 @@
      both themes. */
   --shadow-node: 2px 2px 0 rgba(0, 0, 0, 0.45);
   --shadow-node-selected: 8px 8px 0 rgba(0, 0, 0, 0.45);
+  /* A CONTROL on a node lifting under the pointer (the Sound node's arm light):
+     HALF a lifted node's shadow (owner, 2026-09-10: "make the shadow fall closer
+     2x"). The light sits on a card that is already raised off the canvas, so the
+     full 8px read as it floating far above that card. */
+  --shadow-node-control-hover: 4px 4px 0 rgba(0, 0, 0, 0.45);
 
   /* RETIRED 2026-09-09: `--fs-node-rise`, the 3px a lifted node used to travel.
      Its whole comment was a bound — how far a node may move before its sockets

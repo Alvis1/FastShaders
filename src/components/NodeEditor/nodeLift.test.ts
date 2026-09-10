@@ -165,9 +165,9 @@ describe("the Sound node's arm light", () => {
     expect(btn).toContain('scale: var(--fs-node-scale, 1);');
   });
 
-  it("lifts on its own hover by exactly what a hovered node takes", () => {
+  it('lifts on its own hover: a node\'s growth, HALF a node\'s shadow', () => {
     const lift = rules(shader).filter(
-      (r) => r.sel.includes('sound-btn') && r.body.includes('--fs-node-lift: var(--shadow-node-selected)'),
+      (r) => r.sel.includes('sound-btn') && r.body.includes('--fs-node-lift: var(--shadow-node-control-hover)'),
     );
     expect(lift.length, 'one rule raises the light').toBe(1);
     const { sel, body } = lift[0];
@@ -176,6 +176,15 @@ describe("the Sound node's arm light", () => {
     // A grey light cannot be armed, and the tile's <div> cannot be pressed.
     expect(sel.split(',')[0], 'a disabled light invites a press it refuses').toContain(':not(:disabled)');
     expect(sel.split(',')[0], "the tile's inert replica lifts").toContain(':not(.shader-node__sound-btn--inert)');
+  });
+
+  it('casts its hover shadow at exactly half the distance a lifted node does', () => {
+    // Owner, 2026-09-10: "make the shadow fall closer 2x". The light is on a
+    // card that is already raised; the full 8px read as it floating off it.
+    const offset = (name: string) =>
+      Number(new RegExp(`${name}:\\s*(\\d+)px`).exec(tokens)![1]);
+    expect(offset('--shadow-node-control-hover') * 2).toBe(offset('--shadow-node-selected'));
+    expect(offset('--shadow-node-control-hover')).toBeGreaterThan(offset('--shadow-node'));
   });
 
   it('stays flat while a wire is being dragged, as a node does', () => {

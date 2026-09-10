@@ -24,6 +24,16 @@ describe('the Image node card shows its flips', () => {
   });
 });
 
+describe('the Image node card shows Nearest filtering', () => {
+  it('draws the thumbnail pixelated exactly when codegen samples nearest', () => {
+    // Otherwise the browser smooths a small stored image (an 8 px rung) into
+    // a blur the shader never draws. Both sides read the same exact string.
+    expect(SHADER_NODE).toMatch(/const nearestThumb = data\.values\?\.filter === 'nearest';/);
+    expect(SHADER_NODE).toMatch(/nearestThumb \? \{ imageRendering: 'pixelated' as const \}/);
+    expect(GRAPH_TO_CODE).toMatch(/const nearest = nv\.filter === 'nearest';/);
+  });
+});
+
 describe('the source filename follows the card into dark mode', () => {
   it('is node INK, not a literal grey', () => {
     // It was `#555555`, correct while a node body was always light and

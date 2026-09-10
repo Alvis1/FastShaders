@@ -410,6 +410,27 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
           {t('Data map (linear, no mipmaps)', language)}
         </label>
       </div>
+      {/* Filtering: how the texture fills in between its pixels. Nearest (the
+          API's own term — three's NearestFilter, WebGL GL_NEAREST, WebGPU
+          'nearest') keeps hard pixel edges; Linear is the default. Stored as
+          the string graphToCode compares against, and an absent key reads as
+          linear, so a node never ticked here emits what it always did. */}
+      <div style={rowStyle}>
+        <span
+          style={labelStyle}
+          title={t('How the image fills in between its pixels. Linear blends neighbouring pixels for a smooth look; Nearest takes the closest pixel and keeps hard edges, for pixel art or a deliberately blocky look.', language)}
+        >
+          {t('Filtering', language)}
+        </span>
+        <select
+          style={wideFieldStyle}
+          value={vals.filter === 'nearest' ? 'nearest' : 'linear'}
+          onChange={(e) => setVal('filter', e.target.value === 'nearest' ? 'nearest' : 'linear')}
+        >
+          <option value="linear">{t('Linear (smooth)', language)}</option>
+          <option value="nearest">{t('Nearest (sharp pixels)', language)}</option>
+        </select>
+      </div>
 
       {/* The drop-time optimization preference, surfaced HERE because it is
           otherwise a one-way door: "Don't ask again" on the import dialog

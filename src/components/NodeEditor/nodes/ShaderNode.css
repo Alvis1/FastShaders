@@ -311,13 +311,15 @@
   border-color: rgba(var(--node-ink-rgb), 0.6);
 }
 
-/* The light's own lift — the same two values a hovered node takes. Not while
+/* The light's own lift: it grows as a hovered node grows, but its shadow falls
+   at HALF the distance (--shadow-node-control-hover, 4px against a node's 8px)
+   — it is a control on a card that is already raised. Not while
    it is disabled (grey: unwired, it cannot be armed, and a lift says "press
    me") and never on the preview surfaces' inert <div>, which cannot be pressed
    at all. Keyboard focus lifts it too, as focus lifts a node. */
 .shader-node__sound-btn:hover:not(:disabled):not(.shader-node__sound-btn--inert),
 .shader-node__sound-btn:focus-visible:not(:disabled) {
-  --fs-node-lift: var(--shadow-node-selected);
+  --fs-node-lift: var(--shadow-node-control-hover);
   --fs-node-scale: var(--fs-node-grow);
 }
 
