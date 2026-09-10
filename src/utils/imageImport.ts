@@ -41,11 +41,11 @@ import {
 } from './imageNode';
 import {
   QUALITY_LADDER,
-  POT_MIN_DISTINCT_COLORS,
   POT_WRAP_MARGIN,
   base64CharsForBytes,
   chooseFormat,
   potTarget,
+  potFloorTarget,
   sourcePrefersLossless,
   type EncodeCandidate,
   type EncodeCaps,
@@ -159,40 +159,23 @@ async function decodeSource(file: File): Promise<DecodedSource | null> {
 }
 
 /**
- * ONE pass over the decoded pixels, answering everything the later decisions
- * need: does it have alpha (codec choice), is that alpha a hard cutout, and
- * is it a low-colour image (both POT skip rules).
- *
- * Measured at 2-7 ms on the sizes that reach it — the encoder is the cost in
- * this pipeline, not this scan, so it stays eager and exact rather than being
- * sampled. The colour count saturates at the threshold that uses it; a photo
- * crosses it within the first few thousand pixels.
+ * ONE pass over the decoded pixels, answering what the codec choice needs:
+ * does the picture have alpha (it must then never become a JPEG). It also
+ * counted colours and classified the alpha for the power-of-two skip rules
+ * until the snap became unconditional (2026-09-10).
  */
 function scanPixels(ctx: CanvasRenderingContext2D, w: number, h: number): PixelStats {
-  let alpha = false;
-  let softAlpha = false;
-  const colors = new Set<number>();
-  let counting = true;
   try {
     const data = ctx.getImageData(0, 0, w, h).data;
-    for (let i = 0; i < data.length; i += 4) {
-      const a = data[i + 3];
-      if (a < 255) {
-        alpha = true;
-        if (a > 0) softAlpha = true;
-      }
-      if (counting) {
-        colors.add((data[i] << 16) | (data[i + 1] << 8) | data[i + 2]);
-        if (colors.size >= POT_MIN_DISTINCT_COLORS) counting = false;
-      }
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] < 255) return { alpha: true };
     }
+    return { alpha: false };
   } catch {
     // Tainted canvas can't happen here (same-origin blob/bitmap only), but a
-    // failed read must not kill the import: assume the cautious answer —
-    // alpha present, and too few colours to resample.
-    return { alpha: true, binaryAlpha: false, distinctColors: 0 };
+    // failed read must not kill the import: assume the cautious answer.
+    return { alpha: true };
   }
-  return { alpha, binaryAlpha: alpha && !softAlpha, distinctColors: colors.size };
 }
 
 /** Encode a canvas to a Blob. Resolves null when the encoder refused. */
@@ -497,16 +480,22 @@ export async function encodeImageFile(
       }
 
       // The power-of-two snap is part of "convert" — declining conversion
-      // keeps the pixels exactly as the capped 1:1 blit produced them.
-      const pot =
-        mode === 'convert'
-          ? potTarget(w, h, dimCap, stats)
-          : { width: w, height: h, applied: false };
-      if (pot.applied && drawWrappedResize(potCanvas, baseCanvas, pot.width, pot.height)) {
-        const snapped = await encodeWithinBudget(potCanvas, candidates, budget);
-        // A snap that doesn't fit the budget is simply declined — never a
-        // reason to throw away half the resolution.
-        if (snapped) {
+      // keeps the pixels exactly as the capped 1:1 blit produced them. Under
+      // "convert" it is UNCONDITIONAL (imageCodec's module note): the 80 %
+      // rule's target first, and if that encode blows the budget — a round-UP
+      // grows the image — the rounded-DOWN target, which is never larger than
+      // the base that already fit. The NPOT base ships only if even that
+      // fails, which in practice it cannot.
+      if (mode === 'convert') {
+        const first = potTarget(w, h, dimCap);
+        const fallback = potFloorTarget(w, h, dimCap);
+        const targets = [first];
+        if (fallback.width !== first.width || fallback.height !== first.height) targets.push(fallback);
+        for (const pot of targets) {
+          if (!pot.applied) continue;
+          if (!drawWrappedResize(potCanvas, baseCanvas, pot.width, pot.height)) continue;
+          const snapped = await encodeWithinBudget(potCanvas, candidates, budget);
+          if (!snapped) continue;
           return {
             ok: true,
             dataUrl: snapped.dataUrl,

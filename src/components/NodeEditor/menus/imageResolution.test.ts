@@ -21,13 +21,15 @@ describe('re-encoding at a chosen resolution', () => {
     expect(MENU).toMatch(/resizeEncodedImage\(\s*ladderSource\.dataUrl,/);
   });
 
-  it('routes the top rung through Revert instead of re-encoding it', () => {
-    // The original IS that rung: re-encoding would spend a lossy pass to
-    // arrive at a worse copy of a file already in hand, and would let the
-    // button and the dropdown disagree about what "original" means.
-    // With a stored original it is put back; without one the payload already
-    // is it, and there is nothing to do.
-    expect(MENU).toMatch(/if \(divisor === 1\) \{[\s\S]{0,260}?if \(origin\) revert\(\);/);
+  it('routes the rung that IS the original through Revert instead of re-encoding it', () => {
+    // Rungs are power-of-two sizes; one is `original` only when the source was
+    // already POT. With a stored original it is put back; without one the
+    // payload already is it, and there is nothing to do.
+    expect(MENU).toMatch(/if \(step\.original\) \{[\s\S]{0,320}?if \(origin\) revert\(\);/);
+    // Keyed by size, not by divisor — a POT anchor makes "divisor 1" mean the
+    // snapped original, which is usually NOT the original.
+    expect(MENU).toMatch(/ladder\.find\(\(x\) => x\.key === key\)/);
+    expect(MENU).not.toMatch(/divisor === 1/);
   });
 
   it('re-reads the node after the await, and writes ONCE', () => {

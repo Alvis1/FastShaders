@@ -1,51 +1,70 @@
 import { describe, it, expect } from 'vitest';
 import {
-  POT_MIN_DISTINCT_COLORS,
+  POT_ROUND_UP_RATIO,
   base64CharsForBytes,
   chooseFormat,
   clampPotCap,
   isLosslessWebpBytes,
   potAxis,
+  potFloorAxis,
+  potFloorTarget,
   potTarget,
   resolutionLadder,
   RESOLUTION_MIN_DIM,
-  shouldSkipPot,
   sourcePrefersLossless,
   type EncodeCaps,
-  type PixelStats,
 } from './imageCodec';
 
-const stats = (over: Partial<PixelStats> = {}): PixelStats => ({
-  alpha: false,
-  binaryAlpha: false,
-  distinctColors: POT_MIN_DISTINCT_COLORS,
-  ...over,
-});
+const isPot = (n: number) => Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0;
 
-describe('potAxis', () => {
-  // The whole point of the guards: a snap that is nearly free is taken, an
-  // expensive one is declined. `nearest` (not ceil) is what keeps 1920 from
-  // becoming 2048×2048 — measured at +102% pixels, which blows the payload
-  // budget and gets the image halved by the caller's retry.
+describe('potAxis — power of two ALWAYS, round up at 80 %', () => {
+  // Owner rule (2026-09-10): "use power of two always; jump up if it is near
+  // 80 percent". An axis at or above 80 % of the NEXT power of two rounds up
+  // to it; anything else rounds down. No axis is ever left NPOT.
   it.each([
     // [n, cap, expected, why]
-    [1920, 2048, 2048, 'cheap round-up (+6.7%)'],
-    [1080, 2048, 1024, 'round-up is +90% so declined; round-down is −5% so taken'],
-    [1000, 2048, 1024, 'cheap round-up (+2.4%)'],
-    [500, 2048, 512, 'cheap round-up (+2.4%)'],
-    [1280, 2048, 1280, 'both directions too expensive — stays NPOT'],
-    [720, 2048, 720, 'both directions too expensive — stays NPOT'],
+    [1920, 2048, 2048, '94 % of 2048 → up'],
+    [1700, 2048, 2048, '83 % of 2048 → up'],
+    [1600, 2048, 1024, '78 % of 2048 → down'],
+    [1080, 2048, 1024, '53 % of 2048 → down'],
+    [1280, 2048, 1024, '63 % of 2048 → down (the old rule left it NPOT)'],
+    [820, 2048, 1024, '80.1 % of 1024 → up'],
+    [819, 2048, 512, '79.98 % of 1024 → down'],
+    [720, 2048, 512, '70 % of 1024 → down'],
+    [500, 2048, 512, '98 % of 512 → up'],
+    [400, 2048, 256, '78 % of 512 → down'],
+    [103, 2048, 128, '80.5 % of 128 → up'],
+    [100, 2048, 64, '78 % of 128 → down'],
     [2048, 2048, 2048, 'already POT'],
     [1, 2048, 1, 'already POT'],
-    [1100, 2048, 1024, 'cheap round-down (−7%)'],
   ])('potAxis(%i, cap %i) = %i (%s)', (n, cap, expected) => {
     expect(potAxis(n, cap)).toBe(expected);
   });
 
-  it('never rounds an axis UP past the device cap', () => {
-    // 1920 would snap to 2048, but a 1024-cap device must not be handed one.
-    expect(potAxis(1920, 1024)).toBe(1920);
+  it('is the 0.8 threshold the owner named', () => {
+    expect(POT_ROUND_UP_RATIO).toBe(0.8);
+  });
+
+  it('never rounds an axis UP past the device cap — it rounds down instead', () => {
+    // 1920 would snap to 2048, but a 1024-cap device must not be handed one;
+    // "always" means the result is still a power of two, so it goes DOWN.
+    expect(potAxis(1920, 1024)).toBe(1024);
     expect(potAxis(1000, 1024)).toBe(1024);
+    // An axis already beyond the cap lands ON the cap, never above it.
+    expect(potAxis(5000, 2048)).toBe(2048);
+    expect(potAxis(4096, 2048)).toBe(2048);
+  });
+
+  it('returns a power of two ≤ the cap for EVERY size', () => {
+    for (let n = 1; n <= 5000; n += 7) {
+      for (const cap of [1024, 2048, 3000]) {
+        const p = potAxis(n, cap);
+        expect(isPot(p)).toBe(true);
+        expect(p).toBeLessThanOrEqual(clampPotCap(cap));
+        // ...and the growth never exceeds the 80 % rule's 1.25×.
+        expect(p / n).toBeLessThanOrEqual(1 / POT_ROUND_UP_RATIO + 1e-9);
+      }
+    }
   });
 
   it('tolerates a hostile cap — an imported cost profile can carry anything', () => {
@@ -60,6 +79,15 @@ describe('potAxis', () => {
   });
 });
 
+describe('potFloorAxis — the budget fallback', () => {
+  it('rounds DOWN, never above the cap', () => {
+    expect(potFloorAxis(1920, 2048)).toBe(1024);
+    expect(potFloorAxis(2048, 2048)).toBe(2048);
+    expect(potFloorAxis(5000, 2048)).toBe(2048);
+    expect(potFloorAxis(1, 2048)).toBe(1);
+  });
+});
+
 describe('potTarget', () => {
   it('decides each axis independently (1920×1080 → 2048×1024, never a square)', () => {
     // +1% pixels in total. A ceil rule would give 2048×2048 — +102%, which
@@ -67,28 +95,33 @@ describe('potTarget', () => {
     expect(potTarget(1920, 1080, 2048)).toEqual({ width: 2048, height: 1024, applied: true });
   });
 
-  it('reports applied:false when both axes decline, so the caller keeps the 1:1 blit', () => {
-    expect(potTarget(1280, 720, 2048)).toEqual({ width: 1280, height: 720, applied: false });
+  it('snaps what the old conservative rule declined', () => {
+    // 1280×720 stayed NPOT under the nearest-within-1.25×/1.15× rule.
+    expect(potTarget(1280, 720, 2048)).toEqual({ width: 1024, height: 512, applied: true });
+  });
+
+  it('reports applied:false only when the size is ALREADY a power of two', () => {
     expect(potTarget(512, 256, 2048)).toEqual({ width: 512, height: 256, applied: false });
+    expect(potTarget(512, 300, 2048).applied).toBe(true);
   });
 
-  it('skips binary-alpha cutouts — bilinear resampling frays every edge', () => {
-    expect(potTarget(1000, 1000, 2048, stats({ alpha: true, binaryAlpha: true })).applied).toBe(false);
+  it('no longer skips pixel art or cutouts — "always" means always', () => {
+    // The skip rules took a PixelStats argument; there is no such parameter
+    // now, so a 100×100 two-colour tile snaps like anything else (→ 64×64).
+    expect(potTarget.length).toBe(3);
+    expect(potTarget(100, 100, 2048)).toEqual({ width: 64, height: 64, applied: true });
   });
+});
 
-  it('skips low-colour sources — pixel art / UI / masks get destroyed AND grow', () => {
-    expect(potTarget(100, 100, 2048, stats({ distinctColors: 2 })).applied).toBe(false);
-    expect(potTarget(1000, 1000, 2048, stats({ distinctColors: 12 })).applied).toBe(false);
-    // A photograph sails through.
-    expect(potTarget(1000, 1000, 2048, stats({ distinctColors: 4096 })).applied).toBe(true);
-  });
-
-  it('shouldSkipPot is the shared rule', () => {
-    expect(shouldSkipPot(stats({ alpha: true, binaryAlpha: true }))).toBe(true);
-    expect(shouldSkipPot(stats({ distinctColors: POT_MIN_DISTINCT_COLORS - 1 }))).toBe(true);
-    expect(shouldSkipPot(stats())).toBe(false);
-    // Soft (anti-aliased) alpha is NOT a cutout and must not block the snap.
-    expect(shouldSkipPot(stats({ alpha: true, binaryAlpha: false }))).toBe(false);
+describe('potFloorTarget', () => {
+  it('is never larger than its input, so it fits any budget the input fit', () => {
+    expect(potFloorTarget(1920, 1080, 2048)).toEqual({ width: 1024, height: 1024, applied: true });
+    for (const [w, h] of [[1920, 1080], [1700, 900], [3000, 2000], [512, 512]]) {
+      const t = potFloorTarget(w, h, 2048);
+      expect(t.width).toBeLessThanOrEqual(Math.max(w, 1));
+      expect(t.height).toBeLessThanOrEqual(Math.max(h, 1));
+      expect(isPot(t.width) && isPot(t.height)).toBe(true);
+    }
   });
 });
 
@@ -220,39 +253,52 @@ describe('isLosslessWebpBytes / sourcePrefersLossless', () => {
 });
 
 describe('resolutionLadder', () => {
-  it('halves the ORIGINAL, preserving the aspect ratio', () => {
-    // Anchored to the original and not to what is stored, which is what makes
-    // the choice reversible — an anchor that moved with each pick could only
-    // ever go down.
-    expect(resolutionLadder(1920, 1080)).toEqual([
-      { divisor: 1, width: 1920, height: 1080 },
-      { divisor: 2, width: 960, height: 540 },
-      { divisor: 4, width: 480, height: 270 },
-      { divisor: 8, width: 240, height: 135 },
+  it('offers POWER-OF-TWO rungs: the snapped original, then halvings of it', () => {
+    // Anchored to the original through the drop's own rule, so a freshly
+    // converted 1920×1080 photo (stored as 2048×1024) sits on the top rung.
+    expect(resolutionLadder(1920, 1080, 2048)).toEqual([
+      { key: '2048x1024', width: 2048, height: 1024, original: false },
+      { key: '1024x512', width: 1024, height: 512, original: false },
+      { key: '512x256', width: 512, height: 256, original: false },
+      { key: '256x128', width: 256, height: 128, original: false },
     ]);
   });
 
+  it('marks the rung that IS the source when the source is already POT', () => {
+    const steps = resolutionLadder(1024, 1024, 2048);
+    expect(steps[0]).toEqual({ key: '1024x1024', width: 1024, height: 1024, original: true });
+    expect(steps.slice(1).every((s) => !s.original)).toBe(true);
+  });
+
+  it('every rung is a power of two on both axes, for any source', () => {
+    for (const [w, h] of [[1920, 1080], [1280, 720], [3000, 2000], [777, 333], [4096, 256], [100, 5000]]) {
+      for (const s of resolutionLadder(w, h, 2048)) {
+        expect(isPot(s.width) && isPot(s.height)).toBe(true);
+        expect(Math.max(s.width, s.height)).toBeLessThanOrEqual(2048);
+      }
+    }
+  });
+
   it('stops on the SHORT side, so a panorama is not cut off early', () => {
-    // 4096x256: the long side has plenty of room left, but /4 puts the short
-    // side at 64 and /8 below the floor.
+    // 4096×256: the long side has room left, but /4 puts the short side at 64
+    // and /8 below the floor.
     const steps = resolutionLadder(4096, 256);
-    expect(steps.map((s) => s.divisor)).toEqual([1, 2, 4]);
-    expect(steps[steps.length - 1]).toEqual({ divisor: 4, width: 1024, height: 64 });
+    expect(steps.map((s) => s.key)).toEqual(['4096x256', '2048x128', '1024x64']);
   });
 
   it('offers nothing below the floor', () => {
-    expect(resolutionLadder(RESOLUTION_MIN_DIM - 1, 4096)).toEqual([]);
-    expect(resolutionLadder(64, 64)).toEqual([{ divisor: 1, width: 64, height: 64 }]);
+    // 40 rounds down to 32 (40 < 80 % of 64), which is under the 64 floor.
+    expect(resolutionLadder(40, 4096)).toEqual([]);
+    expect(resolutionLadder(RESOLUTION_MIN_DIM, RESOLUTION_MIN_DIM)).toEqual([
+      { key: '64x64', width: 64, height: 64, original: true },
+    ]);
   });
 
-  it('FILTERS by the device cap rather than clamping to it', () => {
-    // The top rung can exceed the cap when the user switched to a smaller
-    // headset profile after the drop. Clamping would offer a size that is not
-    // a halving of anything; dropping the rung keeps every remaining one true.
-    expect(resolutionLadder(2048, 2048, 1024)).toEqual([
-      { divisor: 2, width: 1024, height: 1024 },
-      { divisor: 4, width: 512, height: 512 },
-      { divisor: 8, width: 256, height: 256 },
+  it('never offers a rung above the device cap', () => {
+    // The top of the ladder can exceed the cap when the user switched to a
+    // smaller headset profile after the drop; the anchor lands ON the cap.
+    expect(resolutionLadder(2048, 2048, 1024).map((s) => s.key)).toEqual([
+      '1024x1024', '512x512', '256x256', '128x128',
     ]);
   });
 
@@ -268,8 +314,7 @@ describe('resolutionLadder', () => {
   });
 
   it('never repeats a size', () => {
-    // Rounding can collapse two divisors onto one size on a tiny source.
-    const steps = resolutionLadder(65, 65);
-    expect(new Set(steps.map((s) => `${s.width}x${s.height}`)).size).toBe(steps.length);
+    const steps = resolutionLadder(1920, 1080, 2048);
+    expect(new Set(steps.map((s) => s.key)).size).toBe(steps.length);
   });
 });

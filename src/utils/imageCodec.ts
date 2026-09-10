@@ -6,76 +6,74 @@
  * every rule that can be reasoned about without a canvas is node-testable.
  *
  * ── Power of two ──────────────────────────────────────────────────────────
- * POT is NOT required by anything in this stack. three r184 has no
- * `makePowerOfTwo` / `textureNeedsPowerOfTwo` path left (that was WebGL1/ES2);
- * WebGL2 and WebGPU both sample NPOT textures with RepeatWrapping and full
- * mipmap chains. So the snap is a hygiene convenience, and since it buys no
- * correctness it must cost close to nothing:
+ * ALWAYS, under "convert" (owner rule, 2026-09-10: "use power of two always;
+ * jump up if it is near 80 percent"). Per axis, INDEPENDENTLY:
  *
- *   - NEAREST power of two per axis, never ceil. ceil inflates 1920×1080 by
- *     +102% pixels, which blows the payload budget and makes the caller's
- *     halving retry silently quarter the image; nearest costs +1%.
- *   - Declined outright when the move is expensive: more than
- *     POT_MAX_UPSCALE growth or POT_MAX_DOWNSCALE shrink on that axis. So
- *     1280×720 stays 1280×720 rather than losing 43% of its pixels.
- *   - Skipped for images the resample would visibly damage: binary-alpha
- *     cutouts (bilinear frays every edge and interacts with alphaTest) and
- *     low-colour-count sources — pixel art, UI sprites, masks, flat vector
- *     exports, where a 100×100 two-colour tile comes back with 60+ colours
- *     and a several-times-larger payload. There is no nearest-neighbour
- *     escape hatch downstream (graphToCode sets LinearFilter only for data
- *     maps), so the only safe move is not to resample them.
+ *   - already a power of two → unchanged;
+ *   - at or above POT_ROUND_UP_RATIO (80 %) of the next power of two → round
+ *     UP to it (1920 → 2048, 1700 → 2048), unless that exceeds the device cap;
+ *   - otherwise → round DOWN (1080 → 1024, 1600 → 1024, 1280 → 1024).
  *
- * Everything the snap DOES damage is recoverable: the caller keeps the
- * pre-POT encode as the Image node's "original" (see imageOriginCache), and
- * POT is skipped whenever that stash can't be produced.
+ * So the largest growth on an axis is 1/0.8 = 1.25× and the largest shrink
+ * just under 1.6×; 1920×1080 lands on 2048×1024 (+1 % pixels), never on a
+ * square. Nothing in three r184 REQUIRES POT — WebGL2 and WebGPU both sample
+ * NPOT textures with RepeatWrapping and full mips — so this is a deliberate
+ * texture-hygiene choice, and it is what makes the resolution ladder a clean
+ * 2048 / 1024 / 512 / 256 sequence.
+ *
+ * What it replaced: a conservative snap that took the NEAREST power of two
+ * only when the move was within 1.25× up / 1.15× down (so 1280×720 stayed
+ * NPOT), and skipped binary-alpha cutouts and low-colour sources entirely
+ * because a bilinear resample frays a cutout's edge and blurs pixel art.
+ * Those skips are GONE with "always" — such images are now resampled too, and
+ * that damage is real. The escape hatch is unchanged: the caller keeps the
+ * pre-POT encode as the node's "original" (see imageOriginCache), "Revert to
+ * original" restores it exactly, and declining conversion at drop time ("No"
+ * in the import dialog) still stores the image untouched.
  */
 
-/** Nearest-POT is taken only when it costs at most this much growth on an
- *  axis (1920 → 2048 is 1.067; 1080 → 2048 would be 1.90 and is declined). */
-export const POT_MAX_UPSCALE = 1.25;
-/** …and at most this much shrink (1000 → 1024 rounds up; 1280 → 1024 would
- *  throw away 20% of the axis and is declined). */
-export const POT_MAX_DOWNSCALE = 1.15;
-/** Below this many distinct colours an image reads as pixel art / UI / a mask
- *  — resampling it is destructive and usually makes it BIGGER. */
-export const POT_MIN_DISTINCT_COLORS = 256;
-/** Never snap an axis below this — the caller's own floor for retries. */
+/** An axis at or above this fraction of the NEXT power of two rounds UP to it;
+ *  below it rounds DOWN (owner rule: "jump up if it is near 80 percent"). */
+export const POT_ROUND_UP_RATIO = 0.8;
+/** The floor `clampPotCap` bounds a device cap to. */
 export const POT_MIN_DIM = 64;
 /** WebGPU's guaranteed maxTextureDimension2D; also the cap ceiling. */
 export const MAX_TEXTURE_DIM = 8192;
 
 /**
- * The resolution ladder offered by the Image node's settings menu — halvings
- * of the ORIGINAL source, so a user who dropped a 4 K photo onto a node that
- * only ever shows a blurred backdrop can spend a tenth of the bandwidth on it.
+ * The resolution ladder offered by the Image node's settings menu — POWER-OF-
+ * TWO sizes derived from the ORIGINAL source, so a user who dropped a 4 K photo
+ * onto a node that only ever shows a blurred backdrop can spend a tenth of the
+ * bandwidth on it.
  *
- * Anchored to the ORIGINAL and not to what is currently stored, which is what
- * makes the choice reversible: an anchor that moved with each pick would only
- * ever go down, so the way back up would be the Revert button and then a
- * second pick. Halving preserves the aspect ratio exactly, so the ladder never
- * re-opens the power-of-two question the drop-time snap answers — an explicit
- * resolution choice supersedes that snap, and POT buys nothing in three r184
- * anyway (see `potTarget`'s own note).
+ * The top rung is the original snapped by the SAME rule the drop applies
+ * (`potTarget`, 80 % round-up, capped at the device) — so a freshly converted
+ * image is ON the ladder at its top rung — and each further rung halves both
+ * axes, which keeps every rung a power of two. Anchored to the ORIGINAL rather
+ * than to what is currently stored, which is what makes the choice reversible:
+ * an anchor that moved with each pick could only ever descend.
  *
- * `cap` filters, it does not clamp: the top of the ladder can exceed the
- * device texture cap when the user has switched to a smaller headset profile
- * since the drop, and offering a size the pipeline would immediately shrink
- * would be a control that lies. Everything below the cap still stands.
+ * `original` marks a rung whose size IS the source's (a source that was
+ * already a power of two within the cap); picking it restores the original
+ * rather than re-encoding it. Any other source's exact size is not a rung —
+ * "Revert to original" is the way back to it.
  *
- * The floor is a SHORT-side rule, so a panorama is not cut off two steps early
- * by its long side still being generous.
+ * The floor is a SHORT-side rule, so a panorama is not cut off early by its
+ * long side still being generous.
  */
 export const RESOLUTION_MIN_DIM = 64;
-/** Halvings offered. Four is the whole useful range: /8 of a 2048 source is
- *  256, and below `RESOLUTION_MIN_DIM` an image stops being a texture. */
+/** Rungs offered: the snapped original and three halvings of it. /8 of a 2048
+ *  anchor is 256, and below `RESOLUTION_MIN_DIM` an image stops being a
+ *  texture. */
 export const RESOLUTION_DIVISORS = [1, 2, 4, 8] as const;
 
 export interface ResolutionStep {
-  /** 1 = the original. Also the option's identity in the menu. */
-  divisor: number;
+  /** `${width}x${height}` — the option's identity in the menu. */
+  key: string;
   width: number;
   height: number;
+  /** This rung is exactly the source's own size. */
+  original: boolean;
 }
 
 export function resolutionLadder(
@@ -86,19 +84,18 @@ export function resolutionLadder(
   if (!Number.isFinite(width) || !Number.isFinite(height)) return [];
   if (width < 1 || height < 1) return [];
   const limit = Number.isFinite(cap) && cap >= 1 ? cap : MAX_TEXTURE_DIM;
+  const srcW = Math.round(width);
+  const srcH = Math.round(height);
+  const anchor = potTarget(srcW, srcH, limit);
   const out: ResolutionStep[] = [];
-  const seen = new Set<string>();
   for (const divisor of RESOLUTION_DIVISORS) {
-    const w = Math.max(1, Math.round(width / divisor));
-    const h = Math.max(1, Math.round(height / divisor));
-    // Below the floor there is nothing useful further down either — stop,
-    // rather than continuing to test smaller divisors.
+    // Halving a power of two is a power of two, so every rung stays one.
+    const w = anchor.width / divisor;
+    const h = anchor.height / divisor;
+    if (!Number.isInteger(w) || !Number.isInteger(h)) break;
+    // Below the floor there is nothing useful further down either.
     if (Math.min(w, h) < RESOLUTION_MIN_DIM) break;
-    if (Math.max(w, h) > limit) continue;
-    const key = `${w}x${h}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ divisor, width: w, height: h });
+    out.push({ key: `${w}x${h}`, width: w, height: h, original: w === srcW && h === srcH });
   }
   return out;
 }
@@ -129,16 +126,13 @@ export interface EncodeCaps {
   webpLossless: boolean;
 }
 
-/** One pass over the decoded pixels; drives both the codec choice and the
- *  POT skip rules. `distinctColors` saturates (see POT_MIN_DISTINCT_COLORS) —
- *  it answers "few or many", not "how many". */
+/** One pass over the decoded pixels; drives the codec choice (an image with
+ *  alpha never becomes a JPEG). It also carried a binary-alpha flag and a
+ *  distinct-colour count for the POT skip rules until 2026-09-10, when the
+ *  snap became unconditional and nothing read them any more. */
 export interface PixelStats {
   /** Any pixel with alpha < 255. */
   alpha: boolean;
-  /** Alpha is present and only ever 0 or 255 — a hard cutout mask. */
-  binaryAlpha: boolean;
-  /** Distinct RGB values, counted up to POT_MIN_DISTINCT_COLORS then capped. */
-  distinctColors: number;
 }
 
 export interface EncodeCandidate {
@@ -162,40 +156,51 @@ export function clampPotCap(cap: number): number {
   return 2 ** Math.floor(Math.log2(bounded));
 }
 
-/** Nearest power of two for one axis, or `n` unchanged when the move is too
- *  expensive in either direction. */
+/** The power of two an axis snaps to: unchanged if it already is one, the
+ *  NEXT one when the axis is at least POT_ROUND_UP_RATIO of it and it fits the
+ *  cap, the previous one otherwise. Never above the (POT-floored) cap. */
 export function potAxis(n: number, cap: number): number {
   const v = Math.max(1, Math.round(n));
   const safeCap = clampPotCap(cap);
   const lo = 2 ** Math.floor(Math.log2(v));
-  if (v === lo) return v; // already POT
+  if (v === lo) return Math.min(v, safeCap);
   const hi = lo * 2;
-  if (hi <= safeCap && hi / v <= POT_MAX_UPSCALE) return hi;
-  if (lo >= POT_MIN_DIM && v / lo <= POT_MAX_DOWNSCALE) return lo;
-  return v;
+  if (hi <= safeCap && v >= POT_ROUND_UP_RATIO * hi) return hi;
+  return Math.min(lo, safeCap);
 }
 
-/** True when the resample itself would be the damage — see the module note. */
-export function shouldSkipPot(stats: PixelStats): boolean {
-  return stats.binaryAlpha || stats.distinctColors < POT_MIN_DISTINCT_COLORS;
+/** Round an axis DOWN to a power of two (never above the cap) — the drop's
+ *  fallback when a rounded-UP target will not encode within the budget. */
+export function potFloorAxis(n: number, cap: number): number {
+  const v = Math.max(1, Math.round(n));
+  return Math.min(2 ** Math.floor(Math.log2(v)), clampPotCap(cap));
 }
 
 export interface PotTarget {
   width: number;
   height: number;
-  /** False when both axes declined (or the image was skipped) — the caller
+  /** False when the size is already a power of two on both axes — the caller
    *  must then keep the 1:1 blit rather than resampling to the same size. */
   applied: boolean;
 }
 
 /** POT target for an already-capped size. Axes are decided INDEPENDENTLY:
  *  1920×1080 → 2048×1024 rather than a square. */
-export function potTarget(width: number, height: number, cap: number, stats?: PixelStats): PotTarget {
+export function potTarget(width: number, height: number, cap: number): PotTarget {
   const w = Math.max(1, Math.round(width));
   const h = Math.max(1, Math.round(height));
-  if (stats && shouldSkipPot(stats)) return { width: w, height: h, applied: false };
   const pw = potAxis(w, cap);
   const ph = potAxis(h, cap);
+  return { width: pw, height: ph, applied: pw !== w || ph !== h };
+}
+
+/** The same, rounding both axes DOWN — always ≤ the input, so it fits any
+ *  budget the input fit. */
+export function potFloorTarget(width: number, height: number, cap: number): PotTarget {
+  const w = Math.max(1, Math.round(width));
+  const h = Math.max(1, Math.round(height));
+  const pw = potFloorAxis(w, cap);
+  const ph = potFloorAxis(h, cap);
   return { width: pw, height: ph, applied: pw !== w || ph !== h };
 }
 

@@ -142,10 +142,11 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
   const canKeepOriginal = origin !== null || (ladderSource !== null && canStashPayload(ladderSource.dataUrl));
 
   /**
-   * The resolution ladder — halvings of the ORIGINAL, so the choice is
-   * reversible (see `resolutionLadder`): the re-encode always reads from the
-   * original, never from a smaller payload, or 2048 → 1024 → 512 would stack
-   * three lossy passes and could never go back up.
+   * The resolution ladder — POWER-OF-TWO rungs derived from the ORIGINAL (see
+   * `resolutionLadder`): the top rung is the original snapped by the drop's
+   * own 80 % rule, each further rung halves it. The re-encode always reads
+   * from the original, never from a smaller payload, or 2048 → 1024 → 512
+   * would stack three lossy passes and could never go back up.
    *
    * Capped by the SELECTED DEVICE's texture size, the same number the drop
    * path caps at — offering a rung the pipeline would immediately shrink
@@ -156,8 +157,9 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
     ladderSource && canKeepOriginal
       ? resolutionLadder(ladderSource.width, ladderSource.height, deviceMaxDim)
       : [];
-  /** Which rung the stored payload is on — none, after a power-of-two snap,
-   *  whose aspect ratio no halving of the original reproduces. */
+  /** Which rung the stored payload is on — none for a payload stored before
+   *  the snap became unconditional, or one declined at drop ("No" in the
+   *  import dialog), whose NPOT size is on no power-of-two rung. */
   const currentStep = ladder.find((step) => step.width === w && step.height === h) ?? null;
 
   /**
@@ -267,13 +269,14 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
    * undo step. The node is re-read after the await for the reason `revert`
    * documents — the menu can outlive its node.
    */
-  const applyResolution = async (divisor: number) => {
+  const applyResolution = async (key: string) => {
     if (!ladderSource || !canKeepOriginal || resizing) return;
-    const step = ladder.find((x) => x.divisor === divisor);
+    const step = ladder.find((x) => x.key === key);
     if (!step) return;
-    if (divisor === 1) {
-      // The original IS this rung. With a stored one, put it back; without
-      // one the payload already is it and there is nothing to do.
+    if (step.original) {
+      // The original IS this rung (a source that was already a power of
+      // two). With a stored one, put it back; without one the payload already
+      // is it and there is nothing to do.
       if (origin) revert();
       return;
     }
@@ -353,19 +356,20 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
           </span>
           <select
             style={wideFieldStyle}
-            value={resizing ? 'busy' : (currentStep?.divisor ?? 'current')}
+            value={resizing ? 'busy' : (currentStep?.key ?? 'current')}
             disabled={resizing || pending}
-            onChange={(e) => void applyResolution(Number(e.target.value))}
+            onChange={(e) => void applyResolution(e.target.value)}
           >
             {resizing && <option value="busy">{t('Re-encoding…', language)}</option>}
-            {/* A power-of-two-snapped payload is on no rung of a ladder built
-                by halving the original, so its size is shown as its own entry
-                rather than leaving the box reading someone else's number. */}
+            {/* An NPOT payload (stored before the snap became unconditional,
+                or declined at drop) is on no power-of-two rung, so its size is
+                shown as its own entry rather than leaving the box reading
+                someone else's number. */}
             {!resizing && !currentStep && <option value="current">{resolution}</option>}
             {!resizing && ladder.map((step) => (
-              <option key={step.divisor} value={step.divisor}>
+              <option key={step.key} value={step.key}>
                 {`${step.width} × ${step.height}`}
-                {step.divisor === 1 ? ` (${t('original', language)})` : ''}
+                {step.original ? ` (${t('original', language)})` : ''}
               </option>
             ))}
           </select>

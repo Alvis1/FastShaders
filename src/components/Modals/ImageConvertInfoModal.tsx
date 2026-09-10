@@ -61,7 +61,7 @@ export function ImageConvertInfoModal({ open, onClose }: Props) {
           {t('About image optimization', language)}
         </div>
         <div className="csv-import-modal__message">
-          {t('“Optimized” means WebP: typically 2–3× smaller than PNG for the same pixels, and completely lossless where the browser supports it. Sizes are also snapped to a power of two when that costs almost nothing.', language)}
+          {t('“Optimized” means WebP: typically 2–3× smaller than PNG for the same pixels, and completely lossless where the browser supports it. Sizes are also snapped to a power of two — each side rounds up when it is within 80 % of the next one, otherwise down.', language)}
         </div>
         <div className="csv-import-modal__message">
           {t('Some browsers can DISPLAY WebP but cannot CREATE it. Safari — and anything built on WebKit, including the FastShaders desktop app on macOS — quietly returns a PNG when asked for WebP. When that happens the image is stored in its own format instead (PNG, or JPEG for photos), which is why a large .png can end up as a .jpg.', language)}
