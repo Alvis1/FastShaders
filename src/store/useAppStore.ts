@@ -34,7 +34,7 @@ import { safeJsonReviver } from '@/utils/safeJson';
 import { HEX6 } from '@/utils/colorUtils';
 import { authoredUniformChange } from '@/utils/uniformOverride';
 import { normalizeChainOperands } from '@/utils/chainOperands';
-import { nodeCostPoints, computeReachableCost } from '@/utils/nodeCost';
+import { nodeCostPoints, computeReachableCost, imageNodeCost, getCost } from '@/utils/nodeCost';
 // From the LEAF cost table, not from nodeCost: both of these are called at
 // MODULE SCOPE below (loadCostProfiles + the boot setCostOverrides), and
 // nodeCost sits in an import cycle that runs back through this file — so
@@ -2280,7 +2280,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
     if (action !== 'proceed' || !head.file || !head.position) return;
     const { file, position, encoded } = head;
-    const cost = (complexityData.costs as Record<string, number>).imageNode ?? 2;
     // Same construction path as the canvas drop (makeImageNodeFromEncode), so
     // an "Add anyway" image is indistinguishable from a normal one — provenance
     // included. Dropping it here is what would leave every override-placed
@@ -2293,7 +2292,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         id: generateId(),
         type: 'shader',
         position,
-        data: makeImageNodeFromEncode(enc, cost, file.name, origin),
+        // The size-aware price (nodeCost.imageNodeCost), as the canvas drop.
+        data: makeImageNodeFromEncode(enc, imageNodeCost(getCost('imageNode'), enc.width, enc.height), file.name, origin),
       } as AppNode);
 
     if (encoded) {

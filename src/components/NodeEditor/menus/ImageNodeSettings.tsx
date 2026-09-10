@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppStore, resolveDeviceTextureDim } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { getNodeValues } from '@/types';
@@ -6,7 +6,7 @@ import { rowStyle, labelStyle, wideFieldStyle } from './menuShared';
 import { totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/utils/imageNode';
 import { resolutionLadder } from '@/utils/imageCodec';
 import { resizeEncodedImage } from '@/utils/imageImport';
-import { loadImageOrigin, type ImageOriginPayload } from '@/utils/imageOriginCache';
+import { loadImageOrigin, stashImageOrigin, canStashPayload, type ImageOriginPayload } from '@/utils/imageOriginCache';
 import { generateId } from '@/utils/idGenerator';
 
 const checkLabelStyle = { ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px' } as const;
@@ -109,28 +109,69 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
     </div>
   );
 
-  // The node was snapped to a power of two at drop time iff it carries the
-  // pre-snap dimensions. `origin` is what makes the snap undoable — when the
+  // The stored payload is NOT the original iff the node carries the original's
+  // dimensions — written by the drop-time power-of-two snap, or by a
+  // Resolution pick below (both set the pair; a revert deletes it). `origin` is
+  // the stored original itself, which is what makes either undoable — when the
   // record is gone (another machine, cleared storage, aged out of the cache)
-  // the row states that instead of failing on click.
-  const wasSnapped = Number(vals.srcWidth) > 0 && Number(vals.srcHeight) > 0;
+  // the rows state that instead of failing on click.
+  const resized = Number(vals.srcWidth) > 0 && Number(vals.srcHeight) > 0;
   const restorable = origin !== null && origin.dataUrl !== url;
 
   /**
+   * The source the Resolution ladder re-encodes from: the stashed original
+   * when there is one, else — while the payload has never been resized — the
+   * payload ITSELF, which then IS the original. That second branch is what
+   * puts the control on every image node: the cache is written only by a snap
+   * or a resize, so for the ordinary unsnapped drop there is no record and
+   * nothing needs one until the first pick, which stashes this exact payload
+   * before replacing it (`applyResolution`). Reading the source off the node
+   * also means the ladder needs no IndexedDB round trip to appear.
+   *
+   * `canKeepOriginal` is the gate on that first pick: a payload the cache
+   * would REFUSE (over the 600 K per-image cap, i.e. placed under
+   * ignore-limits) must not be resized, or the resize ships with no way back —
+   * the rule the whole revert design rests on. The read-only row then says
+   * exactly why.
+   */
+  const ladderSource: ImageOriginPayload | null =
+    origin ??
+    (!resized && url && w > 0 && h > 0
+      ? { dataUrl: url, width: w, height: h, fileName: String(vals.fileName ?? '') }
+      : null);
+  const canKeepOriginal = origin !== null || (ladderSource !== null && canStashPayload(ladderSource.dataUrl));
+
+  /**
    * The resolution ladder — halvings of the ORIGINAL, so the choice is
-   * reversible (see `resolutionLadder`). It exists only while the original
-   * does: the re-encode reads from that record, never from what is currently
-   * stored, or 2048 → 1024 → 512 would stack three lossy passes.
+   * reversible (see `resolutionLadder`): the re-encode always reads from the
+   * original, never from a smaller payload, or 2048 → 1024 → 512 would stack
+   * three lossy passes and could never go back up.
    *
    * Capped by the SELECTED DEVICE's texture size, the same number the drop
    * path caps at — offering a rung the pipeline would immediately shrink
    * would be a control that lies.
    */
   const deviceMaxDim = resolveDeviceTextureDim(selectedHeadsetId, costProfiles);
-  const ladder = origin ? resolutionLadder(origin.width, origin.height, deviceMaxDim) : [];
+  const ladder =
+    ladderSource && canKeepOriginal
+      ? resolutionLadder(ladderSource.width, ladderSource.height, deviceMaxDim)
+      : [];
   /** Which rung the stored payload is on — none, after a power-of-two snap,
    *  whose aspect ratio no halving of the original reproduces. */
   const currentStep = ladder.find((step) => step.width === w && step.height === h) ?? null;
+
+  /**
+   * Once the Original row + Revert button have shown for THIS node, they stay
+   * for the rest of the menu session. Their gate is "the payload differs from
+   * the original", and a successful revert makes that false on the very frame
+   * it lands — so without the latch the block unmounted under the cursor, and
+   * the documented receipt (the button dropping to "already the original")
+   * could never render. Keyed on the node id, since a second right-click MOVES
+   * this menu to another node without remounting it.
+   */
+  const receiptRef = useRef<string | null>(null);
+  if (resized || restorable) receiptRef.current = nodeId;
+  const showOriginal = resized || restorable || receiptRef.current === nodeId;
 
   /** Values that put the original payload back. Drops the pre-snap dimension
    *  record with it, so the node reads as un-snapped afterwards. */
@@ -227,17 +268,19 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
    * documents — the menu can outlive its node.
    */
   const applyResolution = async (divisor: number) => {
-    if (!origin || resizing) return;
+    if (!ladderSource || !canKeepOriginal || resizing) return;
     const step = ladder.find((x) => x.divisor === divisor);
     if (!step) return;
     if (divisor === 1) {
-      revert();
+      // The original IS this rung. With a stored one, put it back; without
+      // one the payload already is it and there is nothing to do.
+      if (origin) revert();
       return;
     }
     setResizing(true);
     try {
       const encoded = await resizeEncodedImage(
-        origin.dataUrl,
+        ladderSource.dataUrl,
         step.width,
         step.height,
         useAppStore.getState().ignoreImageLimits,
@@ -260,19 +303,29 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
           return;
         }
       }
+      // The FIRST resize of an unsnapped image is the moment its payload stops
+      // being the original — so this is where it is stashed, from the exact
+      // payload about to be replaced. `canKeepOriginal` already vouched that
+      // the cache will take it; a refusal here anyway means the resize ships
+      // with no way back, and the destructive step does not ship.
+      const originId =
+        (typeof liveVals.originId === 'string' && liveVals.originId) ||
+        stashImageOrigin(ladderSource, Date.now());
+      if (!originId) return;
       store.updateNodeData(nodeId, {
         values: {
           ...liveVals,
           imageB64: encoded.dataUrl,
           width: encoded.width,
           height: encoded.height,
+          originId,
           // The ORIGINAL's dimensions, which is what these two have always
           // meant ("what the source was, before the app resized it"). They
           // keep the Original row and the Revert button live, and the card's
           // thumbnail aspect right — a halving preserves it, so this is a
           // no-op there rather than a correction.
-          srcWidth: origin.width,
-          srcHeight: origin.height,
+          srcWidth: ladderSource.width,
+          srcHeight: ladderSource.height,
         },
       });
     } finally {
@@ -321,9 +374,17 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
         infoRow(
           t('Resolution', language),
           resolution,
-          origin
+          // Three different reasons the ladder is absent, each named: the
+          // resized image whose original has left this device; the untouched
+          // payload the cache would refuse to keep a copy of (placed under
+          // ignore-limits); and, rarely, a source too small to halve at all.
+          ladder.length === 1
             ? undefined
-            : t('Choosing a resolution needs the stored original, which lives on this device only.', language),
+            : resized && !origin
+              ? t('Choosing a resolution needs the stored original, which lives on this device only.', language)
+              : !canKeepOriginal
+                ? t('This image is too large for a copy of the original to be kept on this device, so its resolution cannot be changed without losing the way back.', language)
+                : undefined,
         )
       )}
       {infoRow(t('Size', language), size)}
@@ -366,8 +427,12 @@ export function ImageNodeSettings({ nodeId }: { nodeId: string }) {
         </select>
       </div>
 
-      {/* Provenance + the way back from the drop-time power-of-two snap. */}
-      {(wasSnapped || originId) && (
+      {/* Provenance + the way back. Gated on the payload actually DIFFERING
+          from the original (`resized`, `restorable`) plus the per-session
+          receipt latch — never on `originId` alone, or an untouched image
+          would show an Original row repeating its own size beside a
+          permanently disabled "already original" button. */}
+      {showOriginal && (
         <>
           {infoRow(
             t('Original', language),

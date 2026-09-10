@@ -268,9 +268,48 @@
   border-radius: 50%;
   background: #35c759;
   cursor: pointer;
-  /* Not a socket — the socket-static rule does not apply here — but keep the
-     transition off colour so the live blink is the only motion on the card. */
-  transition: none;
+  /* THE LIGHT IS A RAISED CONTROL, so it casts a shadow and takes the node's
+     own lift — both halves of it (2026-09-09, owner request: "make the sound
+     node's button drop a shadow. Make the button react the same way when a
+     node is hovered over (shadow and size)").
+
+     It reads the SAME two published properties every node shell reads
+     (NodeBase.css) rather than restating the state list: it rests at
+     --shadow-node (2px) and rises to --shadow-node-selected (8px) whenever the
+     node is hovered, selected, focused or holding an open menu, growing by
+     --fs-node-grow at the same moment. Restating those states here would be a
+     second copy of the rule the lift system exists to have exactly one of, and
+     it would silently miss the drag-connect suppression, which flattens a node
+     the pointer merely sweeps past while a wire is in flight.
+
+     This is the FIRST non-shell to read them, and it earns it: the light is
+     the node's face, a 40px button on a 65px body, and a control that stays
+     flat while the card under it lifts reads as painted on rather than
+     pressable. The shadow lands on the CARD, not the canvas, which is also
+     what gives the flat circle a depth it never had at rest.
+
+     NO OSCILLATION, unlike the 3px translate this system retired: GROWING an
+     element cannot move it out from under the pointer, and the trigger is the
+     node WRAPPER, which neither grows nor moves. The button's own :hover rule
+     below changes colour only, so it cannot feed back into the size either.
+
+     The standalone `scale` PROPERTY, never `transform: scale()` — the shells'
+     rule, and it bites here for a second reason: `.shader-node__arm-wrap`
+     around this button carries `transform: translate(-50%, -50%)`, and the
+     used transform is translate then rotate then scale then transform, so the
+     two compose instead of one destroying the other.
+
+     The transition replaces a `transition: none` whose comment read "keep the
+     transition off colour so the live blink is the only motion on the card".
+     That intent survives intact: only box-shadow and scale ease here, and the
+     blink is a `steps(1, end)` animation on BACKGROUND, which is neither.
+     One consequence: while the blink RUNS its keyframes own box-shadow
+     outright (see them below), and a running animation on a property beats a
+     transition on it, so a LIVE light eases only its scale on hover — accepted,
+     the blink is a step function anyway. */
+  box-shadow: var(--fs-node-lift, var(--shadow-node));
+  scale: var(--fs-node-scale, 1);
+  transition: box-shadow var(--transition-fast), scale var(--transition-fast);
 }
 
 .shader-node__sound-btn:hover:not(:disabled) {
@@ -293,14 +332,23 @@
   animation: fs-mic-blink 1s steps(1, end) infinite;
 }
 
+/* BOTH keyframes carry the lift as well as the glow, and that is correctness
+   rather than polish. An animation's declarations sit in the ANIMATION origin,
+   which outranks the author-origin `box-shadow` above for the whole time the
+   animation runs — so a keyframe that names box-shadow at all REPLACES the drop
+   shadow. Left as it was, the dark half's `box-shadow: none` would have made a
+   LIVE light — the one state that most needs to read as a physical button being
+   held down — the only state on the card with no shadow, and would have taken
+   it away again every 500ms. The var() re-resolves per element per frame, so a
+   blinking light still deepens along with its node. */
 @keyframes fs-mic-blink {
   0%, 49% {
     background: #e03131;
-    box-shadow: 0 0 10px 3px rgba(224, 49, 49, 0.7);
+    box-shadow: 0 0 10px 3px rgba(224, 49, 49, 0.7), var(--fs-node-lift, var(--shadow-node));
   }
   50%, 100% {
     background: #7a1c1c;
-    box-shadow: none;
+    box-shadow: var(--fs-node-lift, var(--shadow-node));
   }
 }
 
@@ -310,7 +358,10 @@
 @media (prefers-reduced-motion: reduce) {
   .shader-node__sound-btn.is-live {
     animation: none;
-    box-shadow: 0 0 10px 3px rgba(224, 49, 49, 0.7);
+    /* Composed for the same reason the keyframes above are: this declaration
+       replaces the base box-shadow, so the drop shadow has to be restated
+       beside the glow or a live light goes flat on this path alone. */
+    box-shadow: 0 0 10px 3px rgba(224, 49, 49, 0.7), var(--fs-node-lift, var(--shadow-node));
   }
 }
 

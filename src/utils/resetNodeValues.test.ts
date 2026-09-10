@@ -57,6 +57,8 @@ describe('resetNodeValues', () => {
   it('keeps an Image node\'s picture but resets its UV settings', () => {
     const out = resetNodeValues(def('imageNode'), {
       imageB64: 'data:image/webp;base64,AAAA',
+      width: 1024,
+      height: 512,
       fileName: 'map.png',
       originId: 'abc123',
       srcWidth: 1920,
@@ -68,6 +70,11 @@ describe('resetNodeValues', () => {
       flipX: 1,
     });
     expect(out.imageB64).toBe('data:image/webp;base64,AAAA');
+    // Payload METADATA, not settings: without them decodeImageNode returns
+    // null (the image renders black) and the size-aware price falls back to
+    // the flat table value — both silently, from one right-click.
+    expect(out.width).toBe(1024);
+    expect(out.height).toBe(512);
     expect(out.originId).toBe('abc123');
     expect(out.srcWidth).toBe(1920);
     expect(out.tileX).toBe(1);

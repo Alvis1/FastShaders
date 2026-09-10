@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { clearImageOrigins } from '@/utils/imageOriginCache';
 import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
 import { countProject } from '@/utils/feedbackReport';
 import {
@@ -81,6 +82,12 @@ function cleanSlateForStudy(): void {
   const store = useAppStore.getState();
   store.newGraph();
   store.setPreviewMesh(null);
+  // Every device-local store a drop can WRITE is dropped: the preview mesh
+  // above (store + its IndexedDB mirror) and the image-origin cache — a
+  // participant's dropped source images would otherwise stay recoverable from
+  // the study machine's browser after their session, which neither the
+  // consent text nor the disclosure covers. Fire-and-forget, like the mesh.
+  void clearImageOrigins();
   try {
     localStorage.removeItem('fs:previewUniformValues');
     localStorage.removeItem('fs:previewUniformBounds');

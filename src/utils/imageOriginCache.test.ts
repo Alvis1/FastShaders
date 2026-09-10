@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { originIdFor, payloadToRecord, recordToPayload } from './imageOriginCache';
+import { originIdFor, payloadToRecord, recordToPayload, canStashPayload } from './imageOriginCache';
+import { MAX_IMAGE_ENCODED_CHARS } from './imageNode';
 
 /**
  * Only the PURE codec is exercised here (the node env has no IndexedDB).
@@ -112,5 +113,26 @@ describe('recordToPayload', () => {
     const out = recordToPayload(rec({ fileName: 'y'.repeat(1000) }), id);
     expect(out!.fileName).toHaveLength(64);
     expect(recordToPayload(rec({ fileName: 42 }), id)!.fileName).toBe('');
+  });
+});
+
+describe('canStashPayload', () => {
+  it('is the SAME rule payloadToRecord applies, asked up front', () => {
+    // The settings menu gates the Resolution ladder on it before the first
+    // resize stashes the payload it replaces — a refusal there would ship a
+    // resize with no way back.
+    for (const url of [URL_PNG, URL_WEBP]) {
+      expect(canStashPayload(url)).toBe(payloadToRecord({ dataUrl: url, width: 1, height: 1, fileName: '' }, 1) !== null);
+    }
+    const big = `data:image/png;base64,${'A'.repeat(MAX_IMAGE_ENCODED_CHARS)}`;
+    expect(canStashPayload(big)).toBe(false);
+    expect(payloadToRecord({ dataUrl: big, width: 1, height: 1, fileName: '' }, 1)).toBeNull();
+  });
+
+  it('refuses what the whitelist refuses', () => {
+    expect(canStashPayload('https://evil.example/a.png')).toBe(false);
+    expect(canStashPayload('')).toBe(false);
+    expect(canStashPayload(undefined)).toBe(false);
+    expect(canStashPayload(42)).toBe(false);
   });
 });

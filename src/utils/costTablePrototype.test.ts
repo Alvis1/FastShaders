@@ -53,4 +53,20 @@ describe('cost table is null-prototype, so an adversarial node type prices as 0'
     expect(Number.isFinite(total)).toBe(true);
     expect(typeof nodeCostPoints(bad, [])).toBe('number');
   });
+
+  it('keeps the total finite when an image node carries junk dimensions', () => {
+    // width/height come straight out of a .fastshader and NO restore path
+    // validates them. `Math.max(0, NaN)` is NaN, so a clamp alone would let
+    // sqrt(-1 x 4) reach the badge as #NaNNaNNaN and the CostBar as NaN.
+    const out = makeNode('out', 'output');
+    for (const dims of [
+      { width: -1, height: 4 }, { width: Infinity, height: 0 }, { width: NaN, height: 4 },
+      { width: 'abc', height: 4 }, { width: {}, height: 4 }, {},
+    ]) {
+      const img = makeNode('img', 'imageNode', { imageB64: 'data:image/png;base64,AAAA', ...(dims as Record<string, unknown>) });
+      const total = computeReachableCost([img, out], [makeEdge('img', 'out', 'out', 'color')]);
+      expect(Number.isFinite(total)).toBe(true);
+      expect(Number.isFinite(nodeCostPoints(img, []))).toBe(true);
+    }
+  });
 });

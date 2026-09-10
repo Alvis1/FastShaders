@@ -84,12 +84,16 @@ export type EncodeImageResult =
        *  the device cap to decide whether to warn about downscaling. */
       sourceWidth: number;
       sourceHeight: number;
-      /** True when the payload was snapped to a power of two. Only then is
-       *  `original` populated, and only then does the node need a revert. */
+      /** True when the payload was snapped to a power of two — i.e. the stored
+       *  payload is NOT what a plain encode would have produced, so the node
+       *  needs a way back. Only then is `original` populated. */
       potApplied: boolean;
       /** The same image encoded WITHOUT the power-of-two snap — what the
        *  import would have produced otherwise. Stashed by the caller so the
-       *  node can be reverted. Absent when no snap was applied. */
+       *  node can be reverted. Absent when no snap was applied: the payload
+       *  then IS the original, and the settings menu's Resolution ladder reads
+       *  it straight off the node (stashing it lazily at the first resize —
+       *  see ImageNodeSettings), so there is nothing to stash at drop time. */
       original?: EncodedImage;
     }
   | {

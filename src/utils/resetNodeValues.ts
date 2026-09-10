@@ -36,8 +36,11 @@ const PRESERVED_KEYS: Record<string, readonly string[]> = {
   sdfDeform: ['mode'],
   // The CSV payload (makeDataNodeData) plus the display filename.
   dataNode: ['columnNames', 'rowCount', 'columnCount', 'dataB64', 'fileName'],
-  // The picture, and the pre-snap original behind "Revert to original".
-  imageNode: ['imageB64', 'fileName', 'originId', 'srcWidth', 'srcHeight'],
+  // The picture, its encoded dimensions (payload METADATA — without them
+  // decodeImageNode returns null and the image renders black, and the
+  // size-aware price falls back to the flat table value), and the original
+  // behind "Revert to original".
+  imageNode: ['imageB64', 'width', 'height', 'fileName', 'originId', 'srcWidth', 'srcHeight'],
   // The verbatim TSL this node exists to round-trip.
   unknown: ['functionName', 'rawExpression'],
   // The noise range mode. Unlike a settings number, dropping this key does not

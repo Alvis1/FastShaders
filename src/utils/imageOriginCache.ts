@@ -1,6 +1,15 @@
 /**
- * Device-local stash of the PRE-OPTIMIZATION image payload, so an Image node
- * can be reverted after the drop-time power-of-two snap.
+ * Device-local stash of an Image node's ORIGINAL payload — the pre-snap encode
+ * behind "Revert to original", and (since 2026-09-09) the source the settings
+ * menu's Resolution ladder re-encodes from.
+ *
+ * WHEN IT IS WRITTEN: only when the stored payload stops being the original —
+ * at drop time when the power-of-two snap fired, and at the FIRST resize the
+ * user picks (ImageNodeSettings stashes the payload it is about to replace).
+ * An untouched, unsnapped image is never stashed: its payload IS the original
+ * and the ladder reads it off the node. Stashing on every drop was tried and
+ * reverted the same day — every drop then competed for the slots below, so an
+ * ordinary drop could evict the one record that undoes a destructive snap.
  *
  * WHY NOT ON THE NODE: `values` is the one surface every cap and validator
  * watches. `totalImageChars` and `sanitizeImageNodes` inspect ONLY
@@ -23,7 +32,8 @@
  * both mint fresh ids while cloning `data` unchanged, so an id-keyed record
  * would be lost by Ctrl+D. Hashing the stashed payload also makes the key
  * self-consistent with the encode parameters that produced it — the same file
- * dropped under a different headset texture cap yields different bytes, hence
+ * dropped under a different headset texture cap, or once in "convert" and once
+ * in "keep" mode where the browser encodes WebP, yields different bytes, hence
  * a different record, instead of one silently overwriting the other.
  *
  * Every entry point is throw-safe and resolves rather than rejects: private
@@ -38,8 +48,13 @@ const DB_NAME = 'fastshaders-images';
 const DB_VERSION = 1;
 const STORE = 'imageOrigins';
 
-/** Store-wide caps. A record can't exceed the per-image payload cap, so 32
- *  records is ~19 MB worst case; the byte cap binds first for big ones. */
+/** Store-wide caps. `payloadToRecord` caps each record this module WRITES at
+ *  the per-image payload cap, so 32 of them is 19.2 M chars — under the byte
+ *  cap, which therefore never binds for the app's own records: the COUNT is
+ *  the bound (headroom to 40 before the bytes could). The byte cap stays as a
+ *  guard against records this module did not write — a foreign, older or
+ *  tampered record on this origin may carry up to the 8 M hard ceiling
+ *  `recordToPayload` tolerates on read. */
 const MAX_RECORDS = 32;
 const MAX_STORE_CHARS = 24 * 1024 * 1024;
 
@@ -93,6 +108,19 @@ export function originIdFor(dataUrl: string): string {
   let out = '';
   for (let k = 0; k < 4; k++) out += lanes[k].toString(16).padStart(8, '0');
   return out;
+}
+
+/**
+ * Whether a payload is one this cache will hold — the SAME rule
+ * `payloadToRecord` applies, asked up front. The settings menu asks it before
+ * offering the Resolution ladder for an unsnapped image: the ladder's first
+ * pick stashes the payload it is about to replace, and a stash that would be
+ * refused (a >600 K payload placed under ignore-limits) must disable the
+ * control with the reason rather than let a resize ship with no way back.
+ */
+export function canStashPayload(dataUrl: unknown): boolean {
+  const url = validImageDataUrl(dataUrl);
+  return url !== null && url.length <= MAX_IMAGE_ENCODED_CHARS;
 }
 
 /** Shape a payload for storage. Pure. */
@@ -222,6 +250,26 @@ export async function loadImageOrigin(originId: string): Promise<ImageOriginPayl
     const payload = recordToPayload(rec, originId);
     if (payload) rememberInMemory(rec as ImageOriginRecord);
     return payload;
+  } finally {
+    try { db.close(); } catch { /* */ }
+  }
+}
+
+/**
+ * Drop every stashed original — the study clean slate (`cleanSlateForStudy`)
+ * calls this beside `setPreviewMesh(null)`: a participant's dropped source
+ * images must not stay recoverable from the study machine's browser after
+ * their session ends, and the consent text covers only the submitted package
+ * and the event journal. Throw-safe, resolves on every outcome.
+ */
+export async function clearImageOrigins(): Promise<void> {
+  memory.clear();
+  const db = await openDb();
+  if (!db) return;
+  try {
+    await idbWrite(db, STORE, (store) => {
+      try { store.clear(); } catch { /* */ }
+    });
   } finally {
     try { db.close(); } catch { /* */ }
   }

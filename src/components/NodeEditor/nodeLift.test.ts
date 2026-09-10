@@ -133,6 +133,100 @@ describe('a lifted node', () => {
   });
 });
 
+/**
+ * The Sound node's ARM LIGHT is the first control that is not a node SHELL to
+ * take the node lift (2026-09-09, owner request: "make the sound node's button
+ * drop a shadow. Make the button react the same way when a node is hovered
+ * over (shadow and size)").
+ *
+ * Everything here is invisible to a typecheck and to every other test: each
+ * assertion below has a failure mode that renders perfectly and is simply
+ * wrong — a light that goes flat exactly while it is recording, a light that
+ * deepens its shadow without growing, a light that stops responding on one
+ * surface. MEASURED in Chromium after the change: rest 2px, hovered 8px, the
+ * button's own box 60 -> 62.42px (its card's 1.02 and then its own), and the
+ * blinking light alternating glow+drop / drop with the lift still tracking the
+ * node.
+ */
+describe("the Sound node's arm light", () => {
+  const shader = read('./nodes/ShaderNode.css');
+  const btn = shader.slice(
+    shader.indexOf('.shader-node__sound-btn {'),
+    shader.indexOf('}', shader.indexOf('.shader-node__sound-btn {')),
+  );
+
+  it('takes BOTH halves of the lift, like every shell', () => {
+    // Half of it is the bug: a control that deepens its shadow without growing
+    // reads as the light staying put while its card comes forward.
+    expect(btn, 'the arm light lost the lift shadow').toContain('box-shadow: var(--fs-node-lift');
+    expect(btn, 'the arm light takes the shadow but not the scale').toContain('scale: var(--fs-node-scale, 1);');
+  });
+
+  it('rests on the shadow every node rests on, rather than a shadow of its own', () => {
+    // The fallback is what NON-React-Flow surfaces render at (the asset tile's
+    // inert replica, the node-editor.html overview), so it must be the resting
+    // node shadow and not a literal that could drift from the token.
+    expect(btn).toContain('var(--fs-node-lift, var(--shadow-node))');
+  });
+
+  it('uses the standalone `scale` PROPERTY — the arm-wrap is already transformed', () => {
+    // `.shader-node__arm-wrap` carries `transform: translate(-50%, -50%)` for
+    // its placement. Written as `transform: scale()` on the button this would
+    // be fine, but the button is also drawn inside cards whose own transform is
+    // set inline; the shells' rule applies for the same reason and keeps one
+    // spelling across the file.
+    expect(shader.replace(/\/\*[\s\S]*?\*\//g, ''))
+      .not.toMatch(/transform: scale\(var\(--fs-node-(scale|grow)/);
+  });
+
+  it('carries the lift through the LIVE blink, whose keyframes own box-shadow', () => {
+    // An animation's declarations sit in the ANIMATION origin, which outranks
+    // the author-origin rule for as long as it runs — so a keyframe naming
+    // box-shadow REPLACES the drop shadow. The dark half used to say
+    // `box-shadow: none`, which would have left a RECORDING light as the only
+    // thing on the card with no shadow, blinking it away twice a second.
+    const kf = shader.slice(
+      shader.indexOf('@keyframes fs-mic-blink'),
+      shader.indexOf('}\n}', shader.indexOf('@keyframes fs-mic-blink')),
+    );
+    expect(kf).not.toContain('box-shadow: none');
+    const shadows = kf.match(/box-shadow:[^;]+;/g) ?? [];
+    expect(shadows.length, 'the blink no longer sets box-shadow at all').toBe(2);
+    for (const decl of shadows) {
+      expect(decl, `a blink keyframe drops the lift: ${decl}`).toContain('var(--fs-node-lift');
+    }
+    // The glow is still there on the bright half — it is the privacy signal,
+    // and one of the two deliberate blur exceptions in the whole app.
+    expect(shadows.filter((d) => d.includes('rgba(224, 49, 49, 0.7)')).length).toBe(1);
+  });
+
+  it('keeps the same composition on the reduced-motion path', () => {
+    // That rule also replaces the base box-shadow, so it needs the drop shadow
+    // restated beside the glow or a live light goes flat there alone — a
+    // failure only a user with the preference set would ever see.
+    const rm = shader.slice(shader.indexOf('@media (prefers-reduced-motion: reduce)'));
+    const decl = /box-shadow:[^;]+;/.exec(rm)![0];
+    expect(decl).toContain('rgba(224, 49, 49, 0.7)');
+    expect(decl).toContain('var(--fs-node-lift');
+  });
+
+  it('grows on the asset TILE too, by a publish scoped to the light alone', () => {
+    // The card hands the replica `--fs-node-lift` (so the shadow half already
+    // reached the tile) but scales the tile as one object by its own `scale`,
+    // so the light grew WITH the card and not also on its own as it does on the
+    // canvas. The second property closes that — scoped, because `.node-base`
+    // reads `--fs-node-scale` as well and CardShell's inline transform composes
+    // with it: an unscoped publish would double-scale the whole replica.
+    const card = read('./NodePreviewCard.css');
+    const rules = card.replace(/\/\*[\s\S]*?\*\//g, '');
+    const scoped = /\.node-preview-card:hover \.shader-node__sound-btn \{([^}]*)\}/.exec(rules);
+    expect(scoped, 'the tile no longer hands the light the size half of the lift').not.toBeNull();
+    expect(scoped![1]).toContain('--fs-node-scale: var(--fs-node-grow);');
+    const bare = /\.node-preview-card:hover \{([^}]*)\}/.exec(rules);
+    expect(bare![1], 'publishing --fs-node-scale on the card double-scales the replica').not.toContain('--fs-node-scale');
+  });
+});
+
 describe('a wire under the pointer', () => {
   const edgeSrc = read('./edges/TypedEdge.tsx');
 

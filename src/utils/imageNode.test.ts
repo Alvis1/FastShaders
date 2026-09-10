@@ -98,6 +98,33 @@ describe('makeImageNodeData', () => {
     expect(d.values.colorSpace).toBe('color');
     expect(d.dynamicOutputs).toBeUndefined();
   });
+
+  // The NODE shapes, not the plan that produces them: every downstream reader
+  // (`resized`, `restorable`, the card's thumbnail aspect, sanitizeOriginKeys'
+  // pair rule) keys off which of these three keys are OWN keys.
+  it('writes no provenance key at all for a plain 1:1 drop', () => {
+    const v = makeImageNodeData(URL_PNG, 64, 32, 2, 'cat.png').values;
+    expect('originId' in v).toBe(false);
+    expect('srcWidth' in v).toBe(false);
+    expect('srcHeight' in v).toBe(false);
+  });
+
+  it('writes the whole trio for a snapped drop', () => {
+    const v = makeImageNodeData(URL_PNG, 64, 32, 2, 'cat.png', {
+      originId: 'abc123', srcWidth: 60, srcHeight: 30,
+    }).values;
+    expect(v.originId).toBe('abc123');
+    expect(v.srcWidth).toBe(60);
+    expect(v.srcHeight).toBe(30);
+  });
+
+  it('never writes half a dimension pair', () => {
+    // srcWidth/srcHeight are paired with each other and with nothing else.
+    const v = makeImageNodeData(URL_PNG, 64, 32, 2, 'cat.png', { originId: 'abc123', srcWidth: 60 }).values;
+    expect(v.originId).toBe('abc123');
+    expect('srcWidth' in v).toBe(false);
+    expect('srcHeight' in v).toBe(false);
+  });
 });
 
 describe('displayImageFileName', () => {
@@ -151,13 +178,23 @@ describe('resolveImageDrop', () => {
     expect(r.origin).toBeUndefined();
   });
 
-  it('never claims a snap that did not happen', () => {
+  // An UNSNAPPED drop never stashes, whether or not the pair happens to carry
+  // an `original` (encodeImageFile omits it, a hand-built pair may not): the
+  // payload IS the original, so the settings menu's Resolution ladder reads it
+  // off the node and stashes it lazily at the first resize. Stashing here as
+  // well was tried on 2026-09-09 and reverted the same day — every drop then
+  // competed for the origin cache's slots, and an ordinary drop could evict
+  // the ONE record that undoes a destructive snap.
+  it('never claims a snap that did not happen, and never stashes for one', () => {
     const plain = { dataUrl: snapped.dataUrl, width: 512, height: 512, potApplied: false };
-    const stash = vi.fn(() => 'unused');
-    const r = resolveImageDrop(plain, 'cat.png', stash);
-    expect(r.payload).toBe(plain);
-    expect(r.origin).toBeUndefined();
-    expect(stash).not.toHaveBeenCalled();
+    const withOriginal = { ...plain, original: { dataUrl: plain.dataUrl, width: 512, height: 512 } };
+    for (const pair of [plain, withOriginal]) {
+      const stash = vi.fn(() => 'unused');
+      const r = resolveImageDrop(pair, 'cat.png', stash);
+      expect(r.payload).toBe(pair);
+      expect(r.origin).toBeUndefined();
+      expect(stash).not.toHaveBeenCalled();
+    }
   });
 
   it('passes the file name through to the stash for the Original row', () => {
@@ -240,6 +277,23 @@ describe('totalImageChars / sanitizeImageNodes', () => {
       const v = valuesOf(sanitizeImageNodes([withOrigin({ srcWidth: 1920 })], true));
       expect(v.srcWidth).toBeUndefined();
       expect(v.srcHeight).toBeUndefined();
+    });
+
+    it('keeps an originId that stands ALONE, and returns the same array', () => {
+      // The shape a node has after a Resolution pick landed and was then
+      // reverted... no — after a resize the trio is written; the lone id is
+      // the shape a resized-then-reverted node keeps, and the shape a saved
+      // graph may carry. srcWidth/srcHeight are paired with EACH OTHER and
+      // with nothing else; `originId` stands alone by design, and a future
+      // hardening pass must not read it as half a pair — that would strip the
+      // way back from every such node on the next reload with no symptom.
+      const nodes = [withOrigin({ originId: 'abcdef0123456789' })];
+      const r = sanitizeImageNodes(nodes, true);
+      expect(r.nodes).toBe(nodes);
+      const v = valuesOf(r);
+      expect(v.originId).toBe('abcdef0123456789');
+      expect('srcWidth' in v).toBe(false);
+      expect('srcHeight' in v).toBe(false);
     });
 
     it('still strips a hostile payload on a node carrying provenance', () => {

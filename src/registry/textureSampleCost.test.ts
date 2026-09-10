@@ -18,6 +18,13 @@ const BENCH = readFileSync(
  * These assertions are therefore about the ORDERING the table must not get
  * wrong, not about the values, which are authored and expected to move once
  * someone runs a texture atom on a headset.
+ *
+ * They bound the JSON entry, which since 2026-09-10 is the ANCHOR of the
+ * Image node's price rather than the price itself: `imageNodeCost` (utils/
+ * nodeCost.ts) charges it in full at 2048 px and discounts smaller images, so
+ * the number a badge shows is pinned over `nodeCostPoints` in
+ * utils/imageNodeCost.test.ts — including that the DISCOUNTED floor still sits
+ * above colormap and sin, the ordering this file was written to protect.
  */
 describe('the texture-sampling family', () => {
   it('prices an IMAGE fetch above a LUT fetch', () => {

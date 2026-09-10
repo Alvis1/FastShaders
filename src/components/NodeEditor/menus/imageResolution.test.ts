@@ -16,14 +16,18 @@ describe('re-encoding at a chosen resolution', () => {
     // 2048 → 1024 → 512 through the current payload stacks three lossy passes
     // and can never go back up. The original is the only source that makes the
     // ladder reversible.
-    expect(MENU).toMatch(/resizeEncodedImage\(\s*origin\.dataUrl,/);
+    // `ladderSource` is the stashed original, or the payload itself while it
+    // has never been resized — either way the ORIGINAL bytes, never a rung.
+    expect(MENU).toMatch(/resizeEncodedImage\(\s*ladderSource\.dataUrl,/);
   });
 
   it('routes the top rung through Revert instead of re-encoding it', () => {
     // The original IS that rung: re-encoding would spend a lossy pass to
     // arrive at a worse copy of a file already in hand, and would let the
     // button and the dropdown disagree about what "original" means.
-    expect(MENU).toMatch(/if \(divisor === 1\) \{\s*revert\(\);/);
+    // With a stored original it is put back; without one the payload already
+    // is it, and there is nothing to do.
+    expect(MENU).toMatch(/if \(divisor === 1\) \{[\s\S]{0,260}?if \(origin\) revert\(\);/);
   });
 
   it('re-reads the node after the await, and writes ONCE', () => {
@@ -50,7 +54,7 @@ describe('re-encoding at a chosen resolution', () => {
     // Offering a rung the drop pipeline would immediately shrink is a control
     // that lies.
     expect(MENU).toMatch(/resolveDeviceTextureDim\(selectedHeadsetId, costProfiles\)/);
-    expect(MENU).toMatch(/resolutionLadder\(origin\.width, origin\.height, deviceMaxDim\)/);
+    expect(MENU).toMatch(/resolutionLadder\(ladderSource\.width, ladderSource\.height, deviceMaxDim\)/);
   });
 
   it('shows an off-ladder size as its own entry', () => {
@@ -66,6 +70,48 @@ describe('re-encoding at a chosen resolution', () => {
     // from — the same limit the Revert button already states.
     expect(MENU).toMatch(/ladder\.length > 1 \? \(/);
     expect(MENU).toMatch(/needs the stored original, which lives on this device only/);
+  });
+});
+
+describe('the ladder reads the node when the payload IS the original', () => {
+  const IMAGE_NODE = readFileSync(new URL('../../../utils/imageNode.ts', import.meta.url), 'utf8');
+
+  it('falls back to the payload itself while nothing has resized it', () => {
+    // The cache is written only by a snap or a resize, so for the ordinary
+    // unsnapped drop there is no record — and none is needed until the first
+    // pick: the payload IS the original. This is what puts the control on
+    // every image node without a stash per drop.
+    expect(MENU).toMatch(/const ladderSource[\s\S]{0,120}origin \?\?[\s\S]{0,200}!resized && url/);
+  });
+
+  it('stashes LAZILY, at the first resize, from the payload it replaces', () => {
+    expect(MENU).toMatch(/stashImageOrigin\(ladderSource, Date\.now\(\)\)/);
+    // ...and refuses the resize outright if the cache would not take it.
+    expect(MENU).toMatch(/if \(!originId\) return;/);
+  });
+
+  it('gates the ladder on the cache being WILLING to hold the original', () => {
+    // A >600 K payload placed under ignore-limits cannot be stashed, so
+    // resizing it would ship with no way back; the read-only row then names
+    // that reason rather than blaming device-local storage.
+    expect(MENU).toMatch(/canKeepOriginal = origin !== null \|\| \(ladderSource !== null && canStashPayload\(ladderSource\.dataUrl\)\)/);
+    expect(MENU).toMatch(/too large for a copy of the original to be kept on this device/);
+  });
+
+  it('the drop path stashes ONLY a snapped image — always-stash was reverted', () => {
+    // Stashing every drop (tried 2026-09-09) let an ordinary drop evict the
+    // one record that undoes a destructive snap, and made the study clean
+    // slate responsible for bytes it never had to hold.
+    expect(IMAGE_NODE).toMatch(/if \(!res\.potApplied \|\| !res\.original\) return \{ payload: res \};/);
+    expect((IMPORT.match(/original: base,/g) ?? []).length).toBe(1);
+  });
+
+  it('latches the Original row for the menu session so the revert receipt survives', () => {
+    // "differs from the original" is false on the very frame a revert lands,
+    // so without the latch the block unmounted under the cursor and the
+    // documented "already the original" receipt could never render.
+    expect(MENU).toMatch(/receiptRef\.current === nodeId/);
+    expect(MENU).toMatch(/\{showOriginal && \(/);
   });
 });
 

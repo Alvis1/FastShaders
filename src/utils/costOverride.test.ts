@@ -160,6 +160,24 @@ describe('setCostOverrides reprices the live table', () => {
     setCostOverrides(null);
     expect(getCost('voronoi')).toBe(BASE.voronoi);
   });
+
+  it('moves the IMAGE node too — its size curve is a multiplier on the table entry', () => {
+    // `imageNode` is a real key a hand-authored profile can retype
+    // (blankProfileCosts seeds the whole table), so a curve built on literals
+    // would leave the CostBar badge counting an edit that changed nothing.
+    const full = makeNode('i1', 'imageNode', { imageB64: 'data:image/png;base64,AAAA', width: 2048, height: 2048 });
+    const half = makeNode('i2', 'imageNode', { imageB64: 'data:image/png;base64,AAAA', width: 1024, height: 1024 });
+    const bare = makeNode('i3', 'imageNode', { imageB64: 'data:image/png;base64,AAAA' });
+    expect(nodeCostPoints(full, [])).toBe(BASE.imageNode);
+    setCostOverrides({ imageNode: BASE.imageNode * 2 });
+    expect(nodeCostPoints(full, [])).toBe(BASE.imageNode * 2);
+    expect(nodeCostPoints(half, [])).toBeGreaterThan(nodeCostPoints(makeNode('x', 'imageNode', { width: 1024, height: 1024 }), []) / 2);
+    // The dimension-less fallback follows the override as well — both
+    // branches anchor on the SAME table entry.
+    expect(nodeCostPoints(bare, [])).toBe(BASE.imageNode * 2);
+    setCostOverrides(null);
+    expect(nodeCostPoints(full, [])).toBe(BASE.imageNode);
+  });
 });
 
 describe('computeReachableCost respects overrides', () => {

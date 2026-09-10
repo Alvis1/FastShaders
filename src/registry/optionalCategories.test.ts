@@ -355,6 +355,12 @@ describe('the flag is an add-surface preference and nothing more', () => {
     expect(body).toMatch(/OPTIONAL_CATEGORY_KEYS/);
     expect(body).toMatch(/removeItem\(/);
     expect(body).toMatch(/optionalCategories:\s*DEFAULT_OPTIONAL_CATEGORIES/);
+    // Every device-local store a drop can WRITE is dropped: the preview mesh
+    // (store + IndexedDB) and the image-origin cache. A participant's dropped
+    // source images must not stay recoverable from the study machine after
+    // their session, and the consent text covers neither.
+    expect(body).toMatch(/setPreviewMesh\(null\)/);
+    expect(body).toMatch(/clearImageOrigins\(\)/);
   });
 });
 

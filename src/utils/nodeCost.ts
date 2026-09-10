@@ -28,6 +28,74 @@ export {
 } from '@/utils/costTable';
 
 /**
+ * The Image node's price scales with its stored RESOLUTION — as a DISCOUNT from
+ * the table value, never a surcharge above it.
+ *
+ * The table value (`getCost('imageNode')`, authored 10 in complexity.json) is
+ * the price of the LARGEST image the app produces: its own meta derives it
+ * for "a mipmapped texture of up to ~16 MB", i.e. the 2048² the shipped Quest
+ * 3 profile caps drops at. So a full-size image pays exactly the table, an
+ * existing graph is never repriced UPWARD by this, and a cost profile that
+ * overrides `imageNode` still moves every image node — the whole curve is a
+ * multiplier on the table entry, never a literal.
+ *
+ * Smaller textures pay less because their compulsory traffic is less and more
+ * of it stays in cache: a 256² RGBA8 with mips is ~350 KB, a 2048² ~22 MB.
+ * The discount is LOG-LINEAR in the geometric-mean side between
+ * `IMAGE_COST_FLOOR_SIDE` (256, ×0.5) and `IMAGE_COST_REF_SIDE` (2048, ×1), so
+ * every halving the settings menu's Resolution ladder offers steps the price
+ * down by the same amount — the control is CONSEQUENTIAL, which is the point.
+ * That shape is a judgement between two physical bounds, not a measurement:
+ * compulsory (coherent) DRAM traffic is LINEAR in area — a shallower discount
+ * than this at the small end — while an INCOHERENT access pattern (a
+ * noise-warped uv, an unmipped data map) makes size matter more than area
+ * alone. Log-linear sits between them, on the side that prices small textures
+ * higher rather than lower, since underpricing is the dangerous direction for
+ * a budget. The floor (×0.5 → 5 at the authored 10) stays strictly above the
+ * table's LUT sampler `colormap` (4) and its SFU ops (`sin` 4): a 2D fetch with
+ * mip selection is never cheaper than a 1 KB ramp lookup.
+ *
+ * NOT re-purposed here: complexity.json's "~4 … ~26" band. That band sweeps
+ * CACHE BEHAVIOUR for one fetch (texture-unit throughput vs. every tap
+ * missing) and is size-free at both ends — an audit on 2026-09-09 caught a
+ * first cut of this function mapping 256 px → 4 and 2048 px → 26 onto it,
+ * which priced a small image at exactly colormap's 4 and repriced every 2048²
+ * image to 13 % of the Quest 3 budget. The coherence axis is a different
+ * lever (the `data` colour space turns mipmaps off) and is not priced yet.
+ *
+ * `width`/`height` come off `values`, i.e. out of a `.fastshader` file, and
+ * NOTHING validates them on the restore paths (`sanitizeImageNodes` inspects
+ * only the payload and the provenance keys). So the gate here is strict and
+ * mirrors `decodeImageNode`'s: a REAL positive integer no larger than the
+ * texture field cap. Anything else — absent, null, a string, a boolean, an
+ * array, 0, negative, NaN, Infinity, oversized — prices at the flat table
+ * value. Not `Number()`-coerced: `Number(null)`, `Number('')` and
+ * `Number([])` are all 0 and `Number(true)` is 1, which a finiteness check
+ * would pass and then price at the FLOOR — a 50 % silent underprice on junk;
+ * and `Math.max(0, NaN)` is NaN, so a clamp alone would let `sqrt(-1 × 4)`
+ * reach the badge as `#NaNNaNNaN`. The result is rounded: every other price
+ * in the table is an integer and every surface renders the number raw.
+ */
+export const IMAGE_COST_REF_SIDE = 2048;
+export const IMAGE_COST_FLOOR_SIDE = 256;
+export const IMAGE_COST_MIN_SCALE = 0.5;
+/** The texture FIELD cap `decodeImageNode` enforces — beyond it a stored
+ *  dimension is junk, not a big image. */
+export const IMAGE_COST_MAX_DIM = 8192;
+
+function validImageDim(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v > 0 && v <= IMAGE_COST_MAX_DIM;
+}
+
+export function imageNodeCost(base: number, width: unknown, height: unknown): number {
+  if (!validImageDim(width) || !validImageDim(height)) return base;
+  const side = Math.sqrt(width * height);
+  const span = Math.log2(IMAGE_COST_REF_SIDE / IMAGE_COST_FLOOR_SIDE);
+  const t = Math.min(1, Math.max(0, Math.log2(side / IMAGE_COST_FLOOR_SIDE) / span));
+  return Math.round(base * (IMAGE_COST_MIN_SCALE + (1 - IMAGE_COST_MIN_SCALE) * t));
+}
+
+/**
  * GPU cost points for a node instance.
  *
  * A `chainable` (variadic) arithmetic node scales with its operand count: an
@@ -44,6 +112,10 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
   const type = node.data.registryType;
   if (!type) return 0;
   const base = getCost(type);
+  if (type === 'imageNode') {
+    const v = getNodeValues(node);
+    return imageNodeCost(base, v.width, v.height);
+  }
   const def = NODE_REGISTRY.get(type);
   if (!def?.chainable) return base;
   // One pass, one array. This runs inside a store SELECTOR (ShaderNode), i.e.

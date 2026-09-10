@@ -85,7 +85,7 @@ import { anyOutputDormant } from '@/utils/outputMaterials';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { getCostScale, canvasInkColor } from '@/utils/colorUtils';
-import { nodeCostPoints } from '@/utils/nodeCost';
+import { nodeCostPoints, imageNodeCost, getCost } from '@/utils/nodeCost';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
 import { NODE_REGISTRY, getFlowNodeType } from '@/registry/nodeRegistry';
 import { findSingletonNode } from './singletonNodes';
@@ -2357,7 +2357,10 @@ export function NodeEditor() {
           });
           return;
         }
-        const cost = (complexityData.costs as Record<string, number>).imageNode ?? 2;
+        // The creation-time snapshot (`data.cost`, read by layoutEngine's
+        // footprint); the live badge prices through nodeCostPoints, which
+        // applies the same size rule.
+        const cost = imageNodeCost(getCost('imageNode'), payload.width, payload.height);
         addNode({
           id: generateId(),
           type: 'shader',

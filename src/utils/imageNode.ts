@@ -90,15 +90,21 @@ export interface DecodedImageNode {
   height: number;
 }
 
-/** Extra provenance written only when the drop-time power-of-two snap
- *  actually changed the image (see `imageCodec.ts`). Absent on every node
- *  that was stored 1:1 — including every node authored before the snap
- *  existed — so both shapes have to be tolerated everywhere. */
+/** Extra provenance written only when the stored payload is NOT the original
+ *  — the drop-time power-of-two snap changed it (see `imageCodec.ts`), or the
+ *  user chose a Resolution in the settings menu. Absent on every node stored
+ *  1:1 — including every node authored before either existed — so both
+ *  shapes have to be tolerated everywhere. */
 export interface ImageOriginInfo {
-  /** Key of the pre-snap payload in `imageOriginCache` (device-local). */
+  /** Key of the ORIGINAL payload in `imageOriginCache` (device-local): the
+   *  pre-snap encode for a drop the power-of-two snap fired on, or the
+   *  pre-resize payload once the user picks a Resolution in the settings
+   *  menu (which stashes lazily, at the first resize). */
   originId?: string;
-  /** Dimensions BEFORE the snap, so the card can show the shape the user
-   *  actually dropped rather than the snapped one. */
+  /** The ORIGINAL's dimensions, present exactly when the stored payload is
+   *  NOT the original — a drop-time snap, or a resolution the user chose.
+   *  They gate the settings menu's Original row + Revert button and keep the
+   *  card's thumbnail at the source aspect. Always written as a pair. */
   srcWidth?: number;
   srcHeight?: number;
 }
@@ -294,9 +300,19 @@ export function resolveImageDrop(
   fileName: string,
   stash: (payload: { dataUrl: string; width: number; height: number; fileName: string }) => string | null,
 ): ResolvedImageDrop {
+  // Only a SNAPPED drop stashes. An unsnapped payload IS the original, so the
+  // settings menu's Resolution ladder reads it straight off the node and
+  // stashes it lazily at the first resize (ImageNodeSettings) — stashing it
+  // here as well was tried on 2026-09-09 and reverted the same day: every
+  // drop then competed for the origin cache's slots, so an ordinary drop
+  // could evict the ONE record that undoes a destructive snap, and the study
+  // clean slate learned about bytes it never had to.
   if (!res.potApplied || !res.original) return { payload: res };
 
   const originId = stash({ ...res.original, fileName });
+  // A refused stash means the snap would ship with no way back — so the
+  // un-snapped encode is shipped instead (the whole POT design rests on "a
+  // destructive step never ships without its escape hatch").
   if (!originId) return { payload: res.original };
 
   return {
