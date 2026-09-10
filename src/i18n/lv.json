@@ -461,6 +461,7 @@
     "Starting a new shader replaces the current nodes, connections and board drawings with an empty Output node. Undo (Ctrl+Z / ⌘Z) brings them back while this tab stays open — but the browser auto-save is overwritten right away, so export now if you want a file to come back to.": "Sākot jaunu ēnotāju, pašreizējie mezgli, savienojumi un zīmējumi tiek aizstāti ar tukšu Output mezglu. Atsaukšana (Ctrl+Z / ⌘Z) tos atgriež, kamēr šī cilne ir atvērta, taču pārlūka automātiskā saglabāšana tiek pārrakstīta uzreiz — tāpēc eksportējiet tagad, ja vēlaties failu, pie kura atgriezties.",
     "Don’t save": "Nesaglabāt",
     "Export, then start new": "Eksportēt un sākt jaunu",
+    "The imported 3D model is removed too, and undo does not bring it back.": "Arī importētais 3D modelis tiks noņemts, un atsaukšana to neatjaunos.",
     "Fit view": "Ietilpināt skatu",
     "Light": "Gaisma",
     "Model": "Modelis",

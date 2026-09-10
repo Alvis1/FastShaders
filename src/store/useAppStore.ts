@@ -1801,6 +1801,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
       syncSource: 'graph',
       isUndoRedo: false,
     }));
+    // The imported preview MODEL goes too (owner, 2026-09-10: "when pressed
+    // new, delete also the imported model"). `setPreviewMesh(null)` clears the
+    // store AND the inventory AND deletes the IndexedDB copy, so a reload does
+    // not bring it back; ShaderPreview drops a 'custom' geometry to the sphere
+    // the moment the mesh is gone. NOT undoable, like the name reset: the mesh
+    // is session-only by design (never in HistoryEntry — it can be tens of MB),
+    // so Cmd+Z restores the graph without it. The NEW dialog says so whenever a
+    // model is loaded, and its "Export, then start new" still carries the model
+    // in the zip when the export includes it.
+    get().setPreviewMesh(null);
     // The blank document has no file behind it. The name reset above cannot say
     // that on its own — a document already AT the default kebabs to the same
     // file name, so the desktop Work folder would keep treating the shader it

@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { useAppStore, cancelPendingGraphSave, DEFAULT_SHADER_NAME } from '@/store/useAppStore';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { DrawStroke } from '@/utils/drawings';
+import type { PreviewMesh } from '@/utils/previewMesh';
+import type { MeshInventory } from '@/utils/meshInventory';
 
 // isolate: false shares this worker's globals with later files — leave no
 // armed autosave timer or leftover graph behind.
@@ -9,6 +11,7 @@ afterAll(() => {
   cancelPendingGraphSave();
   useAppStore.setState({
     nodes: [], edges: [], drawings: [], shaderPalettes: [], past: [], future: [],
+    previewMesh: null, previewMeshInventory: null,
   });
 });
 
@@ -127,6 +130,24 @@ describe('newGraph', () => {
       // isolate: false — never leave a stubbed global behind.
       vi.unstubAllGlobals();
     }
+  });
+
+  it('removes the imported preview model — and undo does not bring it back', () => {
+    // Owner, 2026-09-10: "when pressed new, delete also the imported model".
+    // setPreviewMesh(null) also deletes the IndexedDB copy (a no-op in the
+    // node env, where the cache degrades to session-only).
+    useAppStore.setState({
+      previewMesh: { id: 7, name: 'statue.glb', kind: 'glb' } as unknown as PreviewMesh,
+      previewMeshInventory: { key: 'custom:7', meshes: [] } as unknown as MeshInventory,
+    });
+    useAppStore.getState().newGraph();
+    expect(useAppStore.getState().previewMesh).toBeNull();
+    expect(useAppStore.getState().previewMeshInventory).toBeNull();
+    // The mesh is session-only by design (never in HistoryEntry), so Cmd+Z
+    // restores the graph without it — the NEW dialog says so.
+    useAppStore.getState().undo();
+    expect(useAppStore.getState().nodes.map((n) => n.id)).toEqual(['a', 'b']);
+    expect(useAppStore.getState().previewMesh).toBeNull();
   });
 
   it('drops the redo stack — the reset is a new branch of history', () => {

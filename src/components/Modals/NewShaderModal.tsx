@@ -21,9 +21,14 @@ interface Props {
  * unrecoverable. That is what the save offer is for: "Export first" runs the
  * same Download Shader path as the toolbar button, whose `.js`/`.zip` embeds
  * the whole project and can be dragged back in.
+ *
+ * NEW also removes the imported preview MODEL, and that part is NOT undoable
+ * (the mesh is session-only, never in history), so a line says so — only when
+ * a model is actually loaded, since otherwise it would be noise.
  */
 export function NewShaderModal({ open, onCancel, onConfirm }: Props) {
   const language = useAppStore((s) => s.language);
+  const hasModel = useAppStore((s) => s.previewMesh !== null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -69,6 +74,11 @@ export function NewShaderModal({ open, onCancel, onConfirm }: Props) {
         <div className="csv-import-modal__message">
           {t('Starting a new shader replaces the current nodes, connections and board drawings with an empty Output node. Undo (Ctrl+Z / ⌘Z) brings them back while this tab stays open — but the browser auto-save is overwritten right away, so export now if you want a file to come back to.', language)}
         </div>
+        {hasModel && (
+          <div className="csv-import-modal__message">
+            {t('The imported 3D model is removed too, and undo does not bring it back.', language)}
+          </div>
+        )}
         <div className="csv-import-modal__buttons">
           <button className="csv-import-modal__button" onClick={onCancel}>
             {t('Cancel', language)}
