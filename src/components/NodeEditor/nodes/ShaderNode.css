@@ -268,30 +268,26 @@
   border-radius: 50%;
   background: #35c759;
   cursor: pointer;
-  /* THE LIGHT IS A RAISED CONTROL, so it casts a shadow and takes the node's
-     own lift — both halves of it (2026-09-09, owner request: "make the sound
-     node's button drop a shadow. Make the button react the same way when a
-     node is hovered over (shadow and size)").
+  /* THE LIGHT IS A RAISED CONTROL, and it lifts under ITS OWN pointer — the
+     way a node lifts under the pointer, but triggered by the light alone
+     (owner, 2026-09-10: "the shadow and the size only when the mouse is over
+     the button, not the node").
 
-     It reads the SAME two published properties every node shell reads
-     (NodeBase.css) rather than restating the state list: it rests at
-     --shadow-node (2px) and rises to --shadow-node-selected (8px) whenever the
-     node is hovered, selected, focused or holding an open menu, growing by
-     --fs-node-grow at the same moment. Restating those states here would be a
-     second copy of the rule the lift system exists to have exactly one of, and
-     it would silently miss the drag-connect suppression, which flattens a node
-     the pointer merely sweeps past while a wire is in flight.
+     The first cut (2026-09-09) read `--fs-node-lift`/`--fs-node-scale` off the
+     node WRAPPER, so hovering ANYWHERE on the node deepened the light's shadow
+     to 8px and grew it 1.02 on top of the card's own 1.02. On the canvas that
+     reads as the light sticking out of the card: the card rises off the canvas
+     and the light rises off the card by the same distance again, a double
+     elevation over a 40px circle. It was the wrong reading of the request.
 
-     This is the FIRST non-shell to read them, and it earns it: the light is
-     the node's face, a 40px button on a 65px body, and a control that stays
-     flat while the card under it lifts reads as painted on rather than
-     pressable. The shadow lands on the CARD, not the canvas, which is also
-     what gives the flat circle a depth it never had at rest.
-
-     NO OSCILLATION, unlike the 3px translate this system retired: GROWING an
-     element cannot move it out from under the pointer, and the trigger is the
-     node WRAPPER, which neither grows nor moves. The button's own :hover rule
-     below changes colour only, so it cannot feed back into the size either.
+     So the light RE-PUBLISHES the same two properties on itself. That one move
+     cuts the inheritance from the wrapper (a custom property declared on an
+     element beats the value its parent would hand down), leaves the node's
+     own lift untouched, and keeps every rule that reads them unchanged — the
+     blink keyframes and the reduced-motion rule below compose `--fs-node-lift`
+     and now pick up the light's value instead of the node's. At rest the light
+     casts the resting node shadow and grows by nothing of its own; it still
+     grows WITH its card when the node is hovered, since it is inside it.
 
      The standalone `scale` PROPERTY, never `transform: scale()` — the shells'
      rule, and it bites here for a second reason: `.shader-node__arm-wrap`
@@ -299,14 +295,13 @@
      used transform is translate then rotate then scale then transform, so the
      two compose instead of one destroying the other.
 
-     The transition replaces a `transition: none` whose comment read "keep the
-     transition off colour so the live blink is the only motion on the card".
-     That intent survives intact: only box-shadow and scale ease here, and the
-     blink is a `steps(1, end)` animation on BACKGROUND, which is neither.
-     One consequence: while the blink RUNS its keyframes own box-shadow
-     outright (see them below), and a running animation on a property beats a
-     transition on it, so a LIVE light eases only its scale on hover — accepted,
-     the blink is a step function anyway. */
+     Only box-shadow and scale ease. The blink is a `steps(1, end)` animation
+     on BACKGROUND, so it stays the only colour motion on the card; while it
+     RUNS its keyframes own box-shadow outright, and a running animation beats
+     a transition on the same property, so a LIVE light eases only its scale on
+     hover — accepted, the blink is a step function anyway. */
+  --fs-node-lift: var(--shadow-node);
+  --fs-node-scale: 1;
   box-shadow: var(--fs-node-lift, var(--shadow-node));
   scale: var(--fs-node-scale, 1);
   transition: box-shadow var(--transition-fast), scale var(--transition-fast);
@@ -314,6 +309,24 @@
 
 .shader-node__sound-btn:hover:not(:disabled) {
   border-color: rgba(var(--node-ink-rgb), 0.6);
+}
+
+/* The light's own lift — the same two values a hovered node takes. Not while
+   it is disabled (grey: unwired, it cannot be armed, and a lift says "press
+   me") and never on the preview surfaces' inert <div>, which cannot be pressed
+   at all. Keyboard focus lifts it too, as focus lifts a node. */
+.shader-node__sound-btn:hover:not(:disabled):not(.shader-node__sound-btn--inert),
+.shader-node__sound-btn:focus-visible:not(:disabled) {
+  --fs-node-lift: var(--shadow-node-selected);
+  --fs-node-scale: var(--fs-node-grow);
+}
+
+/* …and not while a WIRE is being dragged, for the reason the node rule gives
+   in NodeBase.css: the pointer sweeps across whatever lies between the socket
+   and the target, and the light is the biggest thing on this card. */
+.node-editor__canvas.fs-connecting .shader-node__sound-btn:hover {
+  --fs-node-lift: var(--shadow-node);
+  --fs-node-scale: 1;
 }
 
 /* Waiting on the permission prompt: amber, steady. Deliberately NOT blinking —
@@ -339,8 +352,8 @@
    shadow. Left as it was, the dark half's `box-shadow: none` would have made a
    LIVE light — the one state that most needs to read as a physical button being
    held down — the only state on the card with no shadow, and would have taken
-   it away again every 500ms. The var() re-resolves per element per frame, so a
-   blinking light still deepens along with its node. */
+   it away again every 500ms. The var() reads the light's OWN lift, so a blinking
+   light still deepens when the pointer is on it. */
 @keyframes fs-mic-blink {
   0%, 49% {
     background: #e03131;

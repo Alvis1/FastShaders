@@ -134,49 +134,74 @@ describe('a lifted node', () => {
 });
 
 /**
- * The Sound node's ARM LIGHT is the first control that is not a node SHELL to
- * take the node lift (2026-09-09, owner request: "make the sound node's button
- * drop a shadow. Make the button react the same way when a node is hovered
- * over (shadow and size)").
+ * The Sound node's ARM LIGHT lifts under its OWN pointer — the way a node lifts
+ * under the pointer, but triggered by the light alone (owner, 2026-09-09
+ * "make the button react the same way when a node is hovered over (shadow and
+ * size)", clarified 2026-09-10: "the shadow and the size only when the mouse
+ * is over the button, not the node").
  *
- * Everything here is invisible to a typecheck and to every other test: each
- * assertion below has a failure mode that renders perfectly and is simply
- * wrong — a light that goes flat exactly while it is recording, a light that
- * deepens its shadow without growing, a light that stops responding on one
- * surface. MEASURED in Chromium after the change: rest 2px, hovered 8px, the
- * button's own box 60 -> 62.42px (its card's 1.02 and then its own), and the
- * blinking light alternating glow+drop / drop with the lift still tracking the
- * node.
+ * The first cut read the lift off the node WRAPPER, so hovering anywhere on the
+ * node raised the light by the same distance the card rose off the canvas — a
+ * double elevation that read as the light sticking out. Every assertion below
+ * has a failure mode that renders perfectly and is simply wrong: a light that
+ * lifts with its node again, a light that goes flat exactly while it is
+ * recording, a grey light that invites a press it will refuse.
  */
 describe("the Sound node's arm light", () => {
+  const strip = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '');
   const shader = read('./nodes/ShaderNode.css');
-  const btn = shader.slice(
-    shader.indexOf('.shader-node__sound-btn {'),
-    shader.indexOf('}', shader.indexOf('.shader-node__sound-btn {')),
-  );
+  const rules = (css: string) =>
+    [...strip(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+  const btn = rules(shader).find((r) => r.sel === '.shader-node__sound-btn')!.body;
 
-  it('takes BOTH halves of the lift, like every shell', () => {
-    // Half of it is the bug: a control that deepens its shadow without growing
-    // reads as the light staying put while its card comes forward.
-    expect(btn, 'the arm light lost the lift shadow').toContain('box-shadow: var(--fs-node-lift');
-    expect(btn, 'the arm light takes the shadow but not the scale').toContain('scale: var(--fs-node-scale, 1);');
+  it('re-publishes the lift on ITSELF, which cuts the inheritance from the node', () => {
+    // A custom property declared on the element beats the value its parent
+    // hands down. Without these two lines the light reads the WRAPPER's value
+    // and rises whenever any part of the node is hovered.
+    expect(btn, 'the light inherits the node lift again').toContain('--fs-node-lift: var(--shadow-node);');
+    expect(btn, 'the light grows with the node hover again').toContain('--fs-node-scale: 1;');
+    // …and still APPLIES both, so its own hover has something to drive.
+    expect(btn).toContain('box-shadow: var(--fs-node-lift, var(--shadow-node));');
+    expect(btn).toContain('scale: var(--fs-node-scale, 1);');
   });
 
-  it('rests on the shadow every node rests on, rather than a shadow of its own', () => {
-    // The fallback is what NON-React-Flow surfaces render at (the asset tile's
-    // inert replica, the node-editor.html overview), so it must be the resting
-    // node shadow and not a literal that could drift from the token.
-    expect(btn).toContain('var(--fs-node-lift, var(--shadow-node))');
+  it("lifts on its own hover by exactly what a hovered node takes", () => {
+    const lift = rules(shader).filter(
+      (r) => r.sel.includes('sound-btn') && r.body.includes('--fs-node-lift: var(--shadow-node-selected)'),
+    );
+    expect(lift.length, 'one rule raises the light').toBe(1);
+    const { sel, body } = lift[0];
+    expect(sel).toContain('.shader-node__sound-btn:hover');
+    expect(body).toContain('--fs-node-scale: var(--fs-node-grow);');
+    // A grey light cannot be armed, and the tile's <div> cannot be pressed.
+    expect(sel.split(',')[0], 'a disabled light invites a press it refuses').toContain(':not(:disabled)');
+    expect(sel.split(',')[0], "the tile's inert replica lifts").toContain(':not(.shader-node__sound-btn--inert)');
+  });
+
+  it('stays flat while a wire is being dragged, as a node does', () => {
+    const flat = rules(shader).find((r) => r.sel.includes('.fs-connecting') && r.sel.includes('sound-btn'));
+    expect(flat, 'the wire-drag suppression for the light is gone').toBeDefined();
+    expect(flat!.body).toContain('--fs-node-lift: var(--shadow-node);');
+    expect(flat!.body).toContain('--fs-node-scale: 1;');
+  });
+
+  it('is never handed a NODE-level hover by any surface', () => {
+    // The regression this file exists for: a rule keyed on the node or the tile
+    // being hovered that reaches into the light.
+    const sheets = ['./nodes/ShaderNode.css', './nodes/NodeBase.css', './nodes/SoundNode.css', './NodePreviewCard.css'];
+    for (const sheet of sheets) {
+      for (const { sel } of rules(read(sheet))) {
+        if (!sel.includes('sound-btn')) continue;
+        expect(sel, `${sheet} lifts the light with its node`).not.toMatch(/react-flow__node[^\s,]*:hover|node-preview-card:hover|\.selected/);
+      }
+    }
   });
 
   it('uses the standalone `scale` PROPERTY — the arm-wrap is already transformed', () => {
     // `.shader-node__arm-wrap` carries `transform: translate(-50%, -50%)` for
-    // its placement. Written as `transform: scale()` on the button this would
-    // be fine, but the button is also drawn inside cards whose own transform is
-    // set inline; the shells' rule applies for the same reason and keeps one
+    // its placement; the shells' rule applies for the same reason and keeps one
     // spelling across the file.
-    expect(shader.replace(/\/\*[\s\S]*?\*\//g, ''))
-      .not.toMatch(/transform: scale\(var\(--fs-node-(scale|grow)/);
+    expect(strip(shader)).not.toMatch(/transform: scale\(var\(--fs-node-(scale|grow)/);
   });
 
   it('carries the lift through the LIVE blink, whose keyframes own box-shadow', () => {
@@ -208,22 +233,6 @@ describe("the Sound node's arm light", () => {
     const decl = /box-shadow:[^;]+;/.exec(rm)![0];
     expect(decl).toContain('rgba(224, 49, 49, 0.7)');
     expect(decl).toContain('var(--fs-node-lift');
-  });
-
-  it('grows on the asset TILE too, by a publish scoped to the light alone', () => {
-    // The card hands the replica `--fs-node-lift` (so the shadow half already
-    // reached the tile) but scales the tile as one object by its own `scale`,
-    // so the light grew WITH the card and not also on its own as it does on the
-    // canvas. The second property closes that — scoped, because `.node-base`
-    // reads `--fs-node-scale` as well and CardShell's inline transform composes
-    // with it: an unscoped publish would double-scale the whole replica.
-    const card = read('./NodePreviewCard.css');
-    const rules = card.replace(/\/\*[\s\S]*?\*\//g, '');
-    const scoped = /\.node-preview-card:hover \.shader-node__sound-btn \{([^}]*)\}/.exec(rules);
-    expect(scoped, 'the tile no longer hands the light the size half of the lift').not.toBeNull();
-    expect(scoped![1]).toContain('--fs-node-scale: var(--fs-node-grow);');
-    const bare = /\.node-preview-card:hover \{([^}]*)\}/.exec(rules);
-    expect(bare![1], 'publishing --fs-node-scale on the card double-scales the replica').not.toContain('--fs-node-scale');
   });
 });
 

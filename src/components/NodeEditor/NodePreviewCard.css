@@ -59,37 +59,6 @@
   scale: var(--fs-node-grow);
 }
 
-/* THE SOUND TILE'S ARM LIGHT GROWS TOO — the one node-internal element the
-   card hands a second property to (2026-09-10, the tail of the owner's "make
-   the button react the same way when a node is hovered over (shadow and
-   size)").
-
-   On the canvas the light reads both halves of the lift off the node WRAPPER
-   (ShaderNode.css): its shadow from `--fs-node-lift`, its size from
-   `--fs-node-scale`. The card above publishes only the first. The SHADOW half
-   therefore already reached the tile's inert replica by inheritance, while the
-   SIZE half did not — the tile grew as one object by the card's own `scale`,
-   but the light inside it grew with the card and not ALSO on its own, the way
-   it does on the canvas (card x1.02, light x1.02 on top of that). A tile that
-   lifts differently from the node it depicts is the drift this file's hover
-   rule exists to prevent, so the light gets the same second property here.
-
-   SCOPED to the light, never published on the card: `.node-base` reads
-   `--fs-node-scale` as well (NodeBase.css), and `CardShell` renders the replica
-   card with an inline `transform: scale(<cost scale>)` — the standalone `scale`
-   composes with that, so an unscoped publish would grow the replica a second
-   time on top of the card's growth and put every socket a hair off the tile's
-   frame. The light is the only descendant meant to take it.
-
-   This is a CUSTOM PROPERTY, not a geometry declaration, which is what keeps
-   it on the right side of `assetCardGeometry.test.ts`: the card is not sizing
-   the light, it is handing it the same variable the canvas wrapper hands it,
-   and the light's own stylesheet decides what to do with it — exactly the
-   mechanism the `--fs-node-lift` publish above already uses. */
-.node-preview-card:hover .shader-node__sound-btn {
-  --fs-node-scale: var(--fs-node-grow);
-}
-
 .node-preview-card {
   transition: scale var(--transition-fast);
 }
