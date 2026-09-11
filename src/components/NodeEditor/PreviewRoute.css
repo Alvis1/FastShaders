@@ -1,0 +1,31 @@
+/* Preview mode's straight route line (PreviewRoute.tsx). A child of
+   `.react-flow`, absolutely positioned over the whole pane, ABOVE the node
+   layer: React Flow's renderer is z 4 and its panels z 5, and this is
+   mounted before the panels in DOM order, so the canvas bar and the cost pill
+   still paint over it. `pointer-events: none` keeps the canvas interactive. */
+.preview-route {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 5;
+  transition: opacity 160ms ease;
+}
+
+/* Solid, in the app's focus blue — the colour of every "this is the thing you
+   are acting on" indicator on the canvas (drag-connect's socket ring, the
+   keyboard focus ring). A STRAIGHT line, deliberately unlike every wire, so it
+   reads as a route the preview takes rather than a connection that exists.
+   Hard offset shadow, no blur: the app-wide idiom. */
+.preview-route__line {
+  stroke: var(--border-focus);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  filter: drop-shadow(1px 1px 0 var(--node-cost-text-shadow, rgba(0, 0, 0, 0.35)));
+}
+
+.preview-route__dot {
+  fill: var(--border-focus);
+}

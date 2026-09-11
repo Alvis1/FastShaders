@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CONSENT_TEXT_VERSION, EVAL_SERVER_HOSTS } from './evalMode';
+import { BACKGROUND_ITEMS, EXPERIENCE_LEVELS } from './background';
+import { PRO_ITEMS } from './proQuestions';
 import lv from '@/i18n/lv.json';
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
@@ -64,11 +66,14 @@ describe('the consent text matches what the package actually contains', () => {
   });
 
   it('does not call the researcher’s own host "the university’s server", and names both addresses', () => {
+    // The contrast "not by the university" was dropped on 2026-09-10 (owner
+    // decision) — the positive claim is what has to stay.
     expect(consent).not.toMatch(/university.s server/);
     for (const host of EVAL_SERVER_HOSTS) {
       expect(consent, `${host} is not named in the consent text`).toContain(host);
     }
-    expect(consent).toMatch(/operated by the researcher personally, not by the university/);
+    expect(consent).toMatch(/operated by the researcher/);
+    expect(disclosure).toMatch(/operated by the researcher/);
   });
 
   it('promises a DPO route only when one is configured', () => {
@@ -97,8 +102,22 @@ describe('the consent and disclosure are fully translated', () => {
   it.each([
     ['ConsentModal', consent],
     ['DataDisclosureModal', disclosure],
+    ['EvalFinishModal', read('./EvalFinishModal.tsx')],
+    ['SusModal', read('./SusModal.tsx')],
   ])('%s has a Latvian entry for every string', (_name, src) => {
     const missing = keys(src).filter((k) => !(k in ui));
+    expect(missing, `untranslated: ${missing.join(' | ')}`).toEqual([]);
+  });
+
+  it('every questionnaire question, option label and follow-up is translated', () => {
+    // These reach the screen as t(it.question) / t(label) — data, not literals,
+    // so the t('…') sweep above cannot see them.
+    const keys = [
+      ...BACKGROUND_ITEMS.flatMap((it) => [it.question, it.followUp ?? '']),
+      ...EXPERIENCE_LEVELS,
+      ...PRO_ITEMS.flatMap((q) => [q.question, ...(q.kind === 'scale' ? q.levels : [])]),
+    ].filter(Boolean);
+    const missing = keys.filter((k) => !(k in ui));
     expect(missing, `untranslated: ${missing.join(' | ')}`).toEqual([]);
   });
 

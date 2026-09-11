@@ -28,6 +28,8 @@ import {
   type Activation,
 } from './labelPeek';
 import { useLongPress } from '@/hooks/useLongPress';
+import { PreviewRoute } from './PreviewRoute';
+import { previewableOutputs, PREVIEW_KEEP_SELECTOR } from '@/utils/nodePreview';
 import { nodeTypes, edgeTypes } from './flowTypes';
 import { CONNECTION_RADIUS } from './nodes/connectionReveal';
 import { clearSocketTapTooltip } from './handles/TypedHandle';
@@ -81,7 +83,7 @@ import {
   readStoredViewport, writeStoredViewport, VIEWPORT_MIN_ZOOM, VIEWPORT_MAX_ZOOM,
   type StoredViewport,
 } from '@/utils/viewportMemory';
-import { anyOutputDormant } from '@/utils/outputMaterials';
+import { anyOutputDormant, findDefaultOutput } from '@/utils/outputMaterials';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
 import { getCostScale, canvasInkColor } from '@/utils/colorUtils';
@@ -212,14 +214,17 @@ const NODE_MENU_TYPES: Record<string, ContextMenuType> = {
 };
 /**
  * Modifiers that make a click ADD to the selection instead of replacing it.
- * Shift is the one users reach for; Cmd/Ctrl (React Flow's platform default)
- * stays in so existing habits keep working. An ARRAY means "any of these", not
- * a combination — a '+' inside one entry would be the combination form.
- * Module-scope so the array identity is stable: useKeyPress memoizes on it, so
- * a fresh array per render would re-bind its key listeners every frame of a
- * drag (the same reason the objects above are hoisted).
+ * Shift ONLY. Cmd/Ctrl (React Flow's platform default) were in this list until
+ * 2026-09-10, when ⌘/Ctrl+click became PREVIEW MODE (see onNodeClick): one
+ * modifier cannot both extend the selection and route a node to the 3D view,
+ * and Shift+click still adds to the selection, so nothing is lost. An ARRAY
+ * means "any of these", not a combination — a '+' inside one entry would be
+ * the combination form. Module-scope so the array identity is stable:
+ * useKeyPress memoizes on it, so a fresh array per render would re-bind its
+ * key listeners every frame of a drag (the same reason the objects above are
+ * hoisted).
  */
-const MULTI_SELECT_KEYS = ['Shift', 'Meta', 'Control'];
+const MULTI_SELECT_KEYS = ['Shift'];
 
 // The edge-snap radius (CONNECTION_RADIUS) lives in connectionReveal.ts —
 // shared with the drag-reveal system so hidden sockets appear at exactly
@@ -727,6 +732,103 @@ export function NodeEditor() {
     // detached by then and removing a class from it is a no-op.
     return () => el?.classList.remove('fs-menu-active');
   }, [menuNodeId]);
+
+  /**
+   * PREVIEW MODE (utils/nodePreview.ts): one node's output stands in for the
+   * Output's Color channel on the 3D view. Entered from the node's right-click
+   * menu (menuShared's NodeActions) or by ⌘/Ctrl+click (onNodeClick below);
+   * left by a press anywhere else, by Escape, by ⌘/Ctrl+clicking the node
+   * again, or by the graph being replaced. The mode is STORE state because the
+   * sync engine must emit the rerouted `previewCode`; everything visual here
+   * is imperative — the `fs-menu-active` idiom above — because looking at a
+   * node is not an edit and must not push through history or the autosave.
+   * The canvas carries `fs-previewing` (everything else dims, NodeBase.css),
+   * the two ends carry `data-fs-preview="src"` / `"dst"`, and PreviewRoute
+   * draws the straight line between them.
+   *
+   * The marks are ATTRIBUTES, not classes — the one way this differs from
+   * `fs-menu-active` above, and it is measured, not taste. React Flow's node
+   * wrapper renders its `className` from props (`selected`, `dragging`, …),
+   * and React writes the whole string whenever that prop changes, which
+   * erases anything added by hand: a ⌘/Ctrl+click both selects the node and
+   * starts the preview, and the `selected` write landed AFTER this effect's
+   * `classList.add` (MutationObserver, old value carrying the class, new
+   * value without it) — so the previewed node dimmed with the rest. A drag
+   * of the previewed node would do the same on `dragging`. An attribute the
+   * wrapper never renders is left alone by every re-render.
+   */
+  const previewSrcId = useAppStore((s) => s.nodePreview?.nodeId ?? null);
+  // The plain Output the route lands on — the same node the rerouted module
+  // feeds (findDefaultOutput inside previewGraph). Null while not previewing,
+  // so the scan runs only for the mode's own notifications.
+  const previewDstId = useAppStore((s) =>
+    s.nodePreview ? findDefaultOutput(s.nodes)?.id ?? null : null,
+  );
+  useEffect(() => {
+    if (!previewSrcId) return;
+    const mark = (id: string | null, role: 'src' | 'dst'): (() => void) => {
+      if (!id) return () => {};
+      let el: Element | null = null;
+      try {
+        // Node ids come out of .fastshader files — escaped for the reason the
+        // menu-active effect gives.
+        el = document.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
+      } catch {
+        return () => {};
+      }
+      el?.setAttribute('data-fs-preview', role);
+      return () => el?.removeAttribute('data-fs-preview');
+    };
+    const unmarkSrc = mark(previewSrcId, 'src');
+    const unmarkDst = mark(previewDstId, 'dst');
+    return () => {
+      unmarkSrc();
+      unmarkDst();
+    };
+  }, [previewSrcId, previewDstId]);
+  // A press ANYWHERE but the previewed node ends the mode. POINTERDOWN in the
+  // CAPTURE phase, for the reasons ContextMenu's outside-press closer gives:
+  // React Flow stops click propagation for its own gestures, and a press that
+  // becomes a drag never produces a click while being unambiguously "I am
+  // doing something else now". Exempt: the node itself (scrubbing its own
+  // number boxes is part of looking at it), the menus a right-click on it
+  // opens (portalled popovers included) and the 3D pane — orbiting the model
+  // IS looking at the preview — all via PREVIEW_KEEP_SELECTOR; and the MIDDLE
+  // button, since panning around the canvas is not a click. A press on
+  // ANOTHER node ends this preview first, so ⌘/Ctrl+click and a Preview row
+  // on that node then start theirs from a clean state.
+  useEffect(() => {
+    if (!previewSrcId) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button === 1) return;
+      const target = e.target as Element | null;
+      if (!target) return;
+      if (target.closest?.(PREVIEW_KEEP_SELECTOR)) return;
+      let srcEl: Element | null = null;
+      try {
+        srcEl = document.querySelector(`.react-flow__node[data-id="${CSS.escape(previewSrcId)}"]`);
+      } catch {
+        srcEl = null;
+      }
+      if (srcEl?.contains(target)) return;
+      useAppStore.getState().setNodePreview(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [previewSrcId]);
+  // The graph being REPLACED ends it outright — an import or NEW. The sync
+  // engine also drops a target whose node is gone, but a re-import of the
+  // same file keeps the same ids, and a preview surviving "load this shader"
+  // would show the loaded document through the previous one's routing.
+  useEffect(() => {
+    const clear = () => useAppStore.getState().setNodePreview(null);
+    window.addEventListener('fs:graph-imported', clear);
+    window.addEventListener('fs:graph-new', clear);
+    return () => {
+      window.removeEventListener('fs:graph-imported', clear);
+      window.removeEventListener('fs:graph-new', clear);
+    };
+  }, []);
   /**
    * The node whose socket labels are held open by a double-click / double-tap
    * (see labelPeek.ts). Local state: nothing outside this component opens it,
@@ -757,6 +859,26 @@ export function NodeEditor() {
    * carries a long-press beside its own double-click handler).
    */
   const onNodeClick = useCallback((e: React.MouseEvent, node: AppNode) => {
+    // ⌘/Ctrl+click → PREVIEW MODE, toggling off on the node already previewed
+    // (the outside-press closer has already ended any OTHER node's preview by
+    // the time this click lands). Above the double-click pairing, so a
+    // modified click never counts toward a label peek. A node's own widgets
+    // keep their click (PEEK_EXEMPT_SELECTOR — the Sound node's arm light is
+    // a real button), and a node with no output has nothing to route, so
+    // there the click falls through to ordinary selection. Ctrl+click is the
+    // right-click on macOS and opens the menu instead — the Preview row
+    // covers it there; ⌘ is the key on that platform.
+    if (e.metaKey || e.ctrlKey) {
+      lastActivationRef.current = null;
+      const el = e.target as Element | null;
+      if (el?.closest?.(PEEK_EXEMPT_SELECTOR)) return;
+      const outs = previewableOutputs(node);
+      if (outs.length === 0) return;
+      const store = useAppStore.getState();
+      const same = store.nodePreview?.nodeId === node.id;
+      store.setNodePreview(same ? null : { nodeId: node.id, handleId: outs[0].id });
+      return;
+    }
     const t = Date.now();
     const prev = lastActivationRef.current;
     lastActivationRef.current = { id: node.id, t };
@@ -1045,7 +1167,12 @@ export function NodeEditor() {
       // …and puts a held-open set of socket labels away. Below draw mode, so
       // one Escape does one thing; it does not return, because Escape is a
       // dismissal key and anything else listening for it still gets its turn.
-      if (e.key === 'Escape') setPeekNodeId(null);
+      if (e.key === 'Escape') {
+        setPeekNodeId(null);
+        // …and leaves Preview mode, for the same reason and with the same
+        // no-return: a dismissal key does every dismissal it can.
+        useAppStore.getState().setNodePreview(null);
+      }
 
       const mod = e.metaKey || e.ctrlKey;
       // Normalized so Caps Lock (which reports 'C' rather than 'c') doesn't
@@ -3281,7 +3408,7 @@ export function NodeEditor() {
   return (
     <div className="node-editor" style={canvasCssVars}>
       <div
-        className={`node-editor__canvas${drawToolActive ? ' fs-draw-active' : ''}${drawToolActive && drawEraser ? ' fs-erase-active' : ''}${connecting ? ' fs-connecting' : ''}`}
+        className={`node-editor__canvas${drawToolActive ? ' fs-draw-active' : ''}${drawToolActive && drawEraser ? ' fs-erase-active' : ''}${connecting ? ' fs-connecting' : ''}${previewSrcId ? ' fs-previewing' : ''}`}
         ref={canvasRef}
         // HTML5 drag wandering off the canvas (into the code editor / assets
         // bar) must tear down the live previews — dragover stops firing here,
@@ -3378,7 +3505,7 @@ export function NodeEditor() {
           nodesDraggable={!drawToolActive}
           elementsSelectable={!drawToolActive}
           selectionMode={SelectionMode.Partial}
-          // Shift+click adds to the selection (Cmd/Ctrl still do too).
+          // Shift+click adds to the selection (⌘/Ctrl+click is Preview mode).
           multiSelectionKeyCode={MULTI_SELECT_KEYS}
           // Shift MUST be released from its DEFAULT job (hold-to-marquee) for
           // the line above to work at all: while selectionKeyCode is held, the
@@ -3433,6 +3560,9 @@ export function NodeEditor() {
               cards, above the canvas bg) and is clipped by the pane, so it
               tucks behind the code/preview frames. */}
           <PreviewLink />
+          {/* Preview mode's straight route line — ABOVE the nodes (z 5, before
+              the panels in DOM order so the canvas bar still wins). */}
+          <PreviewRoute />
           <DrawingLayer livePathRef={livePathRef} />
           {/* Bottom-LEFT canvas bar: undo/redo + draw tools + view controls
               in one pill (replaces the old toolbar history group, the RF

@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
-import { t, type Language } from '@/i18n';
+import { t, portLabel, type Language } from '@/i18n';
 import type { ShaderFlowNode } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { generateId } from '@/utils/idGenerator';
 import { resetNodeValues, isAtDefaultValues, hasResettableValues } from '@/utils/resetNodeValues';
+import { previewableOutputs } from '@/utils/nodePreview';
 
 /**
  * Shared building blocks for the per-node right-click settings menus
@@ -242,6 +243,13 @@ export function NodeActions({ nodeId }: { nodeId: string }) {
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
   const language = useAppStore((s) => s.language);
+  // PREVIEW MODE (utils/nodePreview.ts). Lives in this shared footer rather
+  // than in NodeSettingsMenu so every per-node menu — Stripes, Data Viz,
+  // Colormap, Data Range, the generic one — offers it from one place; the
+  // sinks render this footer too and get no row, since they have no output.
+  const nodePreview = useAppStore((s) => s.nodePreview);
+  const setNodePreview = useAppStore((s) => s.setNodePreview);
+  const previewPorts = node ? previewableOutputs(node) : [];
 
   const handleDuplicate = () => {
     if (!node) return;
@@ -274,6 +282,35 @@ export function NodeActions({ nodeId }: { nodeId: string }) {
 
   return (
     <>
+      {previewPorts.length > 0 && (
+        <>
+          <div className="context-menu__divider" />
+          {previewPorts.map((port) => {
+            const active = nodePreview?.nodeId === nodeId && nodePreview.handleId === port.id;
+            // One plain "Preview" row for the ordinary one-output node; a
+            // row per socket when there are several (toHsl's h/s/l, a Data
+            // node's columns, Split's x/y/z/w), named by the socket.
+            const label = active
+              ? t('Stop preview', language)
+              : previewPorts.length > 1
+                ? `${t('Preview', language)} ${portLabel(port.label, language)}`
+                : t('Preview', language);
+            return (
+              <button
+                key={port.id}
+                className={`context-menu__item${active ? ' context-menu__item--focused' : ''}`}
+                title={t('Show this output on the 3D preview in place of the Output’s wiring — ⌘/Ctrl+click the node does the same; a click anywhere else stops it', language)}
+                onClick={() => {
+                  setNodePreview(active ? null : { nodeId, handleId: port.id });
+                  closeContextMenu();
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </>
+      )}
       <div className="context-menu__divider" />
       {showReset && (
         <button

@@ -550,7 +550,7 @@ export function Toolbar() {
             }}
             title={
               isEvalMode()
-                ? t('Finish the session — answer a short questionnaire, then submit your shader and session data to the researcher', language)
+                ? t('Finish the session: a short questionnaire, then your shader and session data are submitted', language)
                 : `${t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}. ${
                     previewMesh && !exportIncludeMesh
                       ? t('The 3D model is currently excluded from the export — right-click to change.', language)
@@ -1005,7 +1005,7 @@ export function Toolbar() {
         {isEvalMode() && (
           <span
             className="toolbar__eval-badge"
-            title={t('Evaluation session — interactions are being recorded for the study', language)}
+            title={t('Study session — your actions in the editor are being recorded', language)}
           >
             EVAL
           </span>

@@ -218,6 +218,15 @@ describe('insertIntoPath', () => {
   });
 
   it('leaves every shipped path drawing exactly the same after a mid-segment insert', () => {
+    // The REFERENCE polyline is sampled denser than the default: point-to-polyline
+    // still carries that polyline's own chord sag, and a long, tightly bent
+    // shipped segment (sdfDeform's S-curve, ~50 units across one cubic) sags
+    // enough at 60 chords to fail a correct split. MEASURED on it: 0.011–0.013 at
+    // 60, 0.0034–0.0045 at 150, 0.0030–0.0040 at 1000 — so 150 is within ~0.0005
+    // of the true deviation, which is the 2-decimal quantization (≤0.007) and
+    // nothing else. The probe POINTS stay at the default: they lie on the curve
+    // exactly, so densifying them buys nothing but time.
+    const REF = 150;
     shippedPaths.forEach(([type, d]) => {
       const segs = tokenizePath(d);
       segs.forEach((s, si) => {
@@ -225,11 +234,11 @@ describe('insertIntoPath', () => {
         const r = insertIntoPath(segs, si, 0.4);
         expect(r, type + ' seg ' + si).not.toBeNull();
         const out = serializePath(r!.segs);
-        const dev = Math.max(deviation(samplePath(d), samplePath(out)), deviation(samplePath(out), samplePath(d)));
+        const dev = Math.max(deviation(samplePath(d), samplePath(out, REF)), deviation(samplePath(out), samplePath(d, REF)));
         expect(dev, type + ' seg ' + si + ' → ' + out).toBeLessThan(GRID_EPS);
       });
     });
-  });
+  }, 30_000); // a sweep over every shipped path × segment, run beside 215 other files
 });
 
 describe('insertIntoPoly', () => {

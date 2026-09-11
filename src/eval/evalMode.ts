@@ -44,9 +44,14 @@ export const EVAL_SCHEMA = 'fs-eval-1';
  * work, a free-text comment box, and a shader bundle carrying note text, typed
  * property names and any dropped image or 3D model INCLUDING its file name.
  * consent-3 also stopped calling the researcher's own host "the university's
- * server" and made the outgoing email opt-in instead of automatic.
+ * server" and made the outgoing email opt-in instead of automatic. consent-7
+ * (2026-09-10) tightened every sentence, aligned the Latvian on the app's own
+ * term (ēnotājs, not šeideris) and dropped two things from the consent SUMMARY
+ * by owner decision: the "not by the university" contrast and the sentence
+ * about the optional email revealing the sender address (the disclosure and
+ * the thank-you screen still state the latter, once each, beside the button).
  */
-export const CONSENT_TEXT_VERSION = 'consent-6';
+export const CONSENT_TEXT_VERSION = 'consent-7';
 
 /**
  * The two addresses the study app is served from. The upload target is a

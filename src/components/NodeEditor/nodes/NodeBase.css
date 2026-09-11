@@ -49,6 +49,7 @@
 .react-flow__node:hover,
 .react-flow__node.selected,
 .react-flow__node.fs-menu-active,
+.react-flow__node[data-fs-preview="src"],
 .react-flow__node:focus-visible {
   --fs-node-lift: var(--shadow-node-selected);
   --fs-node-scale: var(--fs-node-grow);
@@ -89,8 +90,32 @@
    every node snapping to one number — the swatch is 1.5px, a note 1px, a group
    frame 2px, and they should all stay in proportion (nodeFrame.ts). */
 .react-flow__node.selected,
-.react-flow__node.fs-menu-active {
+.react-flow__node.fs-menu-active,
+.react-flow__node[data-fs-preview="src"] {
   --fs-node-border-scale: 1.5;
+}
+
+/* PREVIEW MODE (utils/nodePreview.ts). NodeEditor puts `fs-previewing` on the
+   canvas and `data-fs-preview="src"` / `"dst"` on the two node wrappers the
+   route joins — ATTRIBUTES rather than classes, because React rewrites the
+   wrapper's whole `className` whenever `selected`/`dragging` change and a
+   hand-added class went with it (measured; see NodeEditor's mark effect).
+   Everything else DIMS — nodes, wires, frames and notes
+   alike — so the straight line PreviewRoute draws is the only wiring that
+   reads as live; the Output's own wires are among the dimmed, which is what
+   "its other inputs are disabled" looks like on the canvas. Opacity goes on
+   the WRAPPER so a multi-channel stack dims as one object, and every wrapper
+   carries the transition so entering and leaving both ease. The symbolic
+   Output→3D-view link (PreviewLink) is deliberately NOT dimmed: the Output
+   still feeds the view. The previewed node takes the selected lift and
+   border above — it is the committed state on this canvas for the length of
+   the mode, whether or not it is also selected. */
+.node-editor .react-flow__node {
+  transition: opacity var(--transition-fast);
+}
+.node-editor__canvas.fs-previewing .react-flow__node:not([data-fs-preview]),
+.node-editor__canvas.fs-previewing .react-flow__edge {
+  opacity: 0.25;
 }
 
 /* While a WIRE is being dragged, nothing highlights on hover. Pulling a
@@ -105,7 +130,7 @@
    NodeEditor keeps the JS half in step (it stops publishing `hoveredNodeId`
    for the length of the drag); if these two ever disagree, the card lifts while
    its wires stay put — the exact thing the lift-offset exists to prevent. */
-.node-editor__canvas.fs-connecting .react-flow__node:hover:not(.selected):not(.fs-menu-active) {
+.node-editor__canvas.fs-connecting .react-flow__node:hover:not(.selected):not(.fs-menu-active):not([data-fs-preview="src"]) {
   --fs-node-lift: var(--shadow-node);
   --fs-node-scale: 1;
 }

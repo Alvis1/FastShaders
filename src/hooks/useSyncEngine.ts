@@ -16,6 +16,7 @@ import { sameGraphSemantics } from '@/utils/graphSemantics';
 import type { AppNode } from '@/types';
 import { generateEdgeId } from '@/utils/idGenerator';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { previewGraph, resolveNodePreview } from '@/utils/nodePreview';
 
 
 export function useSyncEngine() {
@@ -30,6 +31,9 @@ export function useSyncEngine() {
   const setCodeErrors = useAppStore((s) => s.setCodeErrors);
   const setSyncInProgress = useAppStore((s) => s.setSyncInProgress);
   const codeSyncRequested = useAppStore((s) => s.codeSyncRequested);
+  // PREVIEW MODE (utils/nodePreview.ts) — see the graph→code pass below.
+  const nodePreview = useAppStore((s) => s.nodePreview);
+  const prevPreviewRef = useRef(nodePreview);
 
   // Track last synced code to prevent sync loops
   const lastSyncedCodeRef = useRef('');
@@ -79,7 +83,13 @@ export function useSyncEngine() {
     if (syncSource !== 'graph' || syncInProgress) return;
     const revalidated = exprEpoch !== prevExprEpochRef.current;
     prevExprEpochRef.current = exprEpoch;
-    if (!revalidated && nodes === prevNodesRef.current && edges === prevEdgesRef.current) return;
+    // Entering or leaving Preview mode (or switching node) changes what the
+    // 3D view must render while `nodes`/`edges` stay exactly as they were —
+    // the same shape as `revalidated`, threaded through both guards the same
+    // way.
+    const previewChanged = nodePreview !== prevPreviewRef.current;
+    prevPreviewRef.current = nodePreview;
+    if (!revalidated && !previewChanged && nodes === prevNodesRef.current && edges === prevEdgesRef.current) return;
     // Position/selection-only updates (every drag pointermove mints a new
     // array identity) can't change generated code — skip the whole pass, not
     // just the store writes. Never skip while isUndoRedo is set: this effect
@@ -89,6 +99,7 @@ export function useSyncEngine() {
     // this guard covers the empty-graph corner where the scan is vacuous).
     const inert =
       !revalidated &&
+      !previewChanged &&
       !useAppStore.getState().isUndoRedo &&
       sameGraphSemantics(prevNodesRef.current, nodes, prevEdgesRef.current, edges);
     prevNodesRef.current = nodes;
@@ -110,7 +121,23 @@ export function useSyncEngine() {
     // so none of this effect's deps changes value and it cannot re-trigger.
     try {
       const result = graphToCode(nodes, edges, NODE_REGISTRY);
-      setCode(result.code, 'graph');
+      // PREVIEW MODE: the 3D view renders the DERIVED graph — the previewed
+      // socket routed to the Output's Color, every other sink input dropped
+      // (utils/nodePreview.ts) — while `code` stays the real graph's, so the
+      // panel, the export and the undo history never see the reroute. A
+      // second codegen pass per edit for as long as the mode lasts, which is
+      // milliseconds against a rebuild the preview debounces anyway. A target
+      // whose node (or socket) is gone — deleted, undone, re-dropped — is
+      // reconciled away HERE rather than at each of the paths that can
+      // remove a node; the write re-runs this effect once with no preview.
+      const live = resolveNodePreview(nodes, nodePreview);
+      if (nodePreview && !live) useAppStore.getState().setNodePreview(null);
+      let previewText: string | undefined;
+      if (live) {
+        const derived = previewGraph(nodes, edges, live);
+        previewText = graphToCode(derived.nodes, derived.edges, NODE_REGISTRY).code;
+      }
+      setCode(result.code, 'graph', previewText);
       lastSyncedCodeRef.current = result.code;
       // Update node variable names for display.
       //
@@ -147,11 +174,20 @@ export function useSyncEngine() {
         useAppStore.setState({ isUndoRedo: false });
       }
     }
-  }, [nodes, edges, syncSource, syncInProgress, setCode, exprEpoch]);
+  }, [nodes, edges, syncSource, syncInProgress, setCode, exprEpoch, nodePreview]);
 
   // Code → Graph (with stable node matching)
   const doCodeSync = useCallback(
     async (codeStr: string, skipHistory = false) => {
+      // A code→graph pass ends Preview mode: `requestCodeSync` has already
+      // put the panel's text on the preview, and with `syncSource` at 'code'
+      // the graph→code effect above — the only thing that emits the
+      // rerouted module — stays silent until the next graph edit. Left set,
+      // the mode would read as on while the view showed the applied code,
+      // then snap back to the reroute on the first scrub. Cleared before the
+      // direct-assignment early return, since that path leaves the panel's
+      // text on the preview too.
+      useAppStore.getState().setNodePreview(null);
       if (isDirectAssignmentCode(codeStr)) {
         setCodeErrors([]);
         return;

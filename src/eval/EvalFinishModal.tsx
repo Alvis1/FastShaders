@@ -54,10 +54,10 @@ export function EvalFinishModal({ open, onContinue, onFinish }: Props) {
           {t('Are you finished?', language)}
         </div>
         <div className="csv-import-modal__message">
-          {t('If you are finished, you will first answer a short questionnaire (10 statements). Your shader and everything recorded during this session are then packaged into one file and sent to the researcher by email.', language)}
+          {t('Submit opens a short questionnaire. Your shader and the session data are then packed into one file and uploaded to the study server.', language)}
         </div>
         <div className="csv-import-modal__message">
-          {t('If you would like to keep working, choose “Continue working” — nothing is saved or sent yet.', language)}
+          {t('“Continue working” returns to the editor; nothing is saved or sent.', language)}
         </div>
 
         <div className="csv-import-modal__buttons">

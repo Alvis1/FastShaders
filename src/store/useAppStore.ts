@@ -17,6 +17,7 @@ import type {
 } from '@/types';
 import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
+import type { NodePreviewTarget } from '@/utils/nodePreview';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { randomGroupColor, nextGroupLabel } from '@/utils/newNodeValues';
 import { autoLayout } from '@/engine/layoutEngine';
@@ -1126,6 +1127,16 @@ interface AppState {
    * that touch it — so a hover re-renders those and nothing else.
    */
   hoveredNodeId: string | null;
+  /**
+   * PREVIEW MODE — the node whose output is routed to the Output's Color
+   * channel for the 3D preview ONLY (utils/nodePreview.ts): the sync engine
+   * emits `previewCode` from that rerouted graph while `code`, the export and
+   * the canvas keep the real wiring. Session-only like `hoveredNodeId`: never
+   * persisted, never in history, never in a shared file — looking at a node
+   * is not an edit. A target whose node is gone is reconciled away by the
+   * sync engine on its next pass, so a stale entry cannot outlive its node.
+   */
+  nodePreview: NodePreviewTarget | null;
   /** Queue of over-wide CSV drops awaiting a user decision (shown one at a time). */
   pendingCsvImports: PendingCsvImport[];
   /** Queue of limit/storage notices awaiting acknowledgement (LimitModal). */
@@ -1363,7 +1374,7 @@ interface AppState {
   setShaderPalettes: (palettes: Palette[]) => void;
 
   // Code actions
-  setCode: (code: string, source?: SyncSource) => void;
+  setCode: (code: string, source?: SyncSource, previewCode?: string) => void;
   setCodeErrors: (errors: ParseError[]) => void;
   codeSyncRequested: boolean;
   requestCodeSync: () => void;
@@ -1419,6 +1430,7 @@ interface AppState {
   openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string, materialIndex?: number, sourceHandleType?: 'source' | 'target') => void;
   closeContextMenu: () => void;
   setHoveredNode: (id: string | null) => void;
+  setNodePreview: (target: NodePreviewTarget | null) => void;
   /** Add a CSV import awaiting a decision to the queue. */
   enqueueCsvImport: (item: PendingCsvImport) => void;
   /** Resolve the head of the CSV-import queue and advance to the next. */
@@ -1530,6 +1542,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   isUndoRedo: false,
   contextMenu: { open: false, x: 0, y: 0, type: 'canvas' },
   hoveredNodeId: null,
+  nodePreview: null,
   pendingCsvImports: [],
   pendingLimitNotices: [],
   ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
@@ -1983,15 +1996,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setShaderPalettes: (palettes) => set({ shaderPalettes: palettes }),
 
-  setCode: (code, source = 'code') => {
+  setCode: (code, source = 'code', previewCode) => {
     // Skip no-op: prevents Monaco onChange from flipping syncSource after programmatic updates
     if (code === get().code && source === 'code') return;
     if (source === 'code') {
       // User typing — just store the code, don't update preview yet
       set({ code });
     } else {
-      // Graph or initial sync — update preview immediately
-      set({ code, previewCode: code, syncSource: source });
+      // Graph or initial sync — update preview immediately. `previewCode` is
+      // the ONE divergence the two are allowed: while a node is PREVIEWED
+      // (utils/nodePreview.ts) the sync engine hands the rerouted module
+      // here, so the 3D view renders that node while the code panel keeps
+      // the real graph — one write, one notification, no window in which a
+      // subscriber sees the panel's text on the preview.
+      set({ code, previewCode: previewCode ?? code, syncSource: source });
     }
   },
 
@@ -2241,6 +2259,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
   setHoveredNode: (id) => {
     if (get().hoveredNodeId !== id) set({ hoveredNodeId: id });
+  },
+  setNodePreview: (target) => {
+    // Value-equal targets are a no-op: the outside-press closer and a
+    // ⌘/Ctrl+click can both write in one gesture, and a second notification
+    // for the same target would re-run the sync engine's preview pass for
+    // nothing.
+    const cur = get().nodePreview;
+    if (cur === target) return;
+    if (cur && target && cur.nodeId === target.nodeId && cur.handleId === target.handleId) return;
+    set({ nodePreview: target });
   },
 
   enqueueCsvImport: (item) =>

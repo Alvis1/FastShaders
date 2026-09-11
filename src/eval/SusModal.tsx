@@ -310,34 +310,37 @@ export function SusModal({ open, onClose }: Props) {
             {t('Thank you!', language)}
           </div>
           <div className="csv-import-modal__message">
-            {t('Your answers, the shader you made, and the session data were packaged into one file, which has just been downloaded:', language)}
+            {t('Your answers, your shader and the session data are packed into one file, saved in your Downloads folder:', language)}
           </div>
           <div className="eval-done__file">{done.fileName}</div>
           {done.failedChecks.length > 0 && (
             <div className="eval-done__warn">
-              {t('Some data-quality checks did not pass — please tell the researcher before leaving:', language)}{' '}
+              {t('Some data-quality checks failed. Tell the researcher before you leave:', language)}{' '}
               {done.failedChecks.map((q) => q.id).join(', ')}
             </div>
           )}
           {done.upload === 'ok' ? (
             <div className="csv-import-modal__message">
-              {t('The package was sent to the researcher automatically.', language)}
+              {t('The file was uploaded to the study server.', language)}{' '}
+              {t('Nothing more is needed. If the researcher also asks for it by email, use “Email to researcher”; that shows them your sender address.', language)}
             </div>
           ) : done.upload === 'pending' ? (
-            <div className="csv-import-modal__message">{t('Sending to the researcher…', language)}</div>
-          ) : done.upload === 'failed' ? (
+            <div className="csv-import-modal__message">{t('Uploading…', language)}</div>
+          ) : (
             // The automatic transfer is the only step that can fail silently
             // (offline room, server down), so it says so plainly and points at
-            // the copy that always exists: the file downloaded at submit.
-            <div className="eval-done__warn">
-              {t('The package could not be sent automatically. Please make sure the researcher receives the file — it is already in your Downloads folder, and the “Download” button below gives you another copy.', language)}
-            </div>
-          ) : null}
-          <div className="csv-import-modal__message">
-            {done.upload === 'ok'
-              ? t('Nothing more is needed. If the researcher asks you to send the file by email as well, use the button below — note that this shows them the address you send from.', language)
-              : t('Please make sure the researcher receives the file: it is in your Downloads folder, and “Download” below gives you another copy. You can also email it with the button below — note that this shows the researcher the address you send from.', language)}
-          </div>
+            // the copy that always exists: the file downloaded at submit. The
+            // no-endpoint configuration lands here too, minus the failure line.
+            <>
+              <div className={done.upload === 'failed' ? 'eval-done__warn' : 'csv-import-modal__message'}>
+                {done.upload === 'failed' && <>{t('Upload failed.', language)} </>}
+                {t('Give the file to the researcher: it is in your Downloads folder, and “Download” saves another copy.', language)}
+              </div>
+              <div className="csv-import-modal__message">
+                {t('You can also email it with “Email to researcher”; that shows the researcher your sender address.', language)}
+              </div>
+            </>
+          )}
           <div className="csv-import-modal__buttons">
             <button
               type="button"
@@ -371,10 +374,10 @@ export function SusModal({ open, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="csv-import-modal__title" id="sus-modal-title">
-          {t('Before you finish — 10 quick statements', language)}
+          {t('Before you finish: a short questionnaire', language)}
         </div>
         <div className="csv-import-modal__message">
-          {t('For each statement, mark how much you agree or disagree. Record your immediate response rather than thinking about it for long; if you cannot respond to one, mark the centre point (3).', language)}
+          {t('Every scale question is required; the text boxes are optional.', language)}
         </div>
 
         <div className="sus-modal__meta">
@@ -397,7 +400,7 @@ export function SusModal({ open, onClose }: Props) {
         {/* Experience questions — BEFORE the SUS. Same radio-strip shape as
             the SUS items so the questionnaire reads as one instrument, but on
             its own none→expert scale, with its own anchors. */}
-        <div className="sus-modal__section-head">{t('First, a little about your experience', language)}</div>
+        <div className="sus-modal__section-head">{t('Your experience', language)}</div>
         <div className="sus-modal__anchors" aria-hidden="true">
           <span>{t(EXPERIENCE_LEVELS[0], language)}</span>
           <span>{t(EXPERIENCE_LEVELS[EXPERIENCE_LEVELS.length - 1], language)}</span>
@@ -428,7 +431,7 @@ export function SusModal({ open, onClose }: Props) {
         {/* The one question that asks WHICH software. Optional: a participant
             with no such experience has nothing to name. */}
         <label className="sus-modal__followup" htmlFor="bg-other-text">
-          {t('Please state the software and your skill level', language)}
+          {t('Which software? (optional)', language)}
         </label>
         <input
           id="bg-other-text"
@@ -441,7 +444,7 @@ export function SusModal({ open, onClose }: Props) {
 
         {proAsked && (
           <>
-            <div className="sus-modal__section-head">{t('About your professional work', language)}</div>
+            <div className="sus-modal__section-head">{t('Your professional work', language)}</div>
             {PRO_ITEMS.map((q) =>
               q.kind === 'text' ? (
                 <label className="sus-modal__followup" key={q.id} htmlFor={`pro-${q.id}`}>
@@ -484,7 +487,13 @@ export function SusModal({ open, onClose }: Props) {
           </>
         )}
 
-        <div className="sus-modal__section-head">{t('Now the statements about FastShaders', language)}</div>
+        <div className="sus-modal__section-head">{t('Statements about FastShaders', language)}</div>
+        {/* Brooke's own instruction, placed on the SUS block it applies to: the
+            experience strip above runs none→expert, where "centre point"
+            would be meaningless. */}
+        <div className="csv-import-modal__message">
+          {t('Mark your immediate response to each statement without thinking long. If you cannot respond to one, mark the centre point (3).', language)}
+        </div>
         <div className="sus-modal__anchors" aria-hidden="true">
           <span>1 — {anchorLow}</span>
           <span>5 — {anchorHigh}</span>
@@ -525,7 +534,7 @@ export function SusModal({ open, onClose }: Props) {
         </div>
 
         <label className="csv-import-modal__message" htmlFor="sus-comment">
-          {t('Anything else you want to say? (optional)', language)}
+          {t('Comments (optional)', language)}
         </label>
         <textarea
           id="sus-comment"
@@ -543,7 +552,7 @@ export function SusModal({ open, onClose }: Props) {
             type="button"
             className="csv-import-modal__button csv-import-modal__button--yes"
             disabled={!complete}
-            title={complete ? undefined : t('Please answer all 10 statements first', language)}
+            title={complete ? undefined : t('Answer every scale question first', language)}
             onClick={handleSubmit}
           >
             {t('Submit', language)}

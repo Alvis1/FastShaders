@@ -41,7 +41,7 @@ export const BACKGROUND_ITEMS: readonly BackgroundItem[] = [
   {
     id: 'otherNodeEditors',
     question: 'Experience with other node-based editors',
-    followUp: 'Please state the software and your skill level',
+    followUp: 'Which software? (optional)',
   },
   { id: 'shaderCode', question: 'Technical knowledge of shader programming (e.g. GLSL, HLSL)' },
 ];

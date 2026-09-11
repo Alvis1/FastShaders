@@ -41,11 +41,11 @@ export const SUS_ITEMS_EN: readonly string[] = [
 ];
 
 export const SUS_ITEMS_LV: readonly string[] = [
-  'Es domāju, ka es vēlētos šo sistēmu izmantot bieži',
+  'Es domāju, ka vēlētos šo sistēmu lietot bieži',
   'Sistēma man šķita nevajadzīgi sarežģīta',
   'Man šķita, ka sistēmu ir viegli lietot',
   'Es domāju, ka man būtu vajadzīgs tehniskā speciālista atbalsts, lai spētu šo sistēmu lietot',
-  'Man šķita, ka dažādās sistēmas funkcijas ir labi integrētas',
+  'Man šķita, ka sistēmas dažādās funkcijas ir labi integrētas',
   'Man šķita, ka sistēmā ir pārāk daudz nekonsekvences',
   'Es domāju, ka lielākā daļa cilvēku iemācītos lietot šo sistēmu ļoti ātri',
   'Sistēma man šķita ļoti neērta lietošanā',

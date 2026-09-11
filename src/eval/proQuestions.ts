@@ -38,7 +38,7 @@ export const PRO_ITEMS: readonly ProQuestion[] = [
   {
     kind: 'text',
     id: 'role',
-    question: 'Your role (for example: technical artist, game developer, lecturer)',
+    question: 'Your role (e.g. technical artist, game developer, lecturer)',
   },
   {
     kind: 'scale',
@@ -61,12 +61,12 @@ export const PRO_ITEMS: readonly ProQuestion[] = [
   {
     kind: 'text',
     id: 'platforms',
-    question: 'Which platforms do you target? (for example: VR headsets, mobile, desktop, web)',
+    question: 'Which platforms do you target? (e.g. VR headsets, mobile, desktop, web)',
   },
   {
     kind: 'scale',
     id: 'wouldUse',
-    question: 'Could you see a tool like this being useful in your own work?',
+    question: 'Would a tool like this be useful in your work?',
     levels: ['Definitely not', 'Probably not', 'Maybe', 'Probably yes', 'Definitely yes'],
   },
 ];

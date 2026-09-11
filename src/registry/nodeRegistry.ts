@@ -268,7 +268,7 @@ const definitions: NodeDefinition[] = [
     // see the mic convention in CLAUDE.md.
     defaultValues: SOUND_DEFAULT_VALUES,
     description:
-      'Live sound loudness and three frequency bands, 0–1 each — from a microphone, another input device, or the audio already playing on this machine. Pick the source on the node. The values only move while capture is armed; a downloaded shader holds them at 0 unless the embedding page drives them. Also: audio, microphone, mic, system audio, music, speaker, tab, desktop, loopback, reactive, spectrum, fft',
+      'Live sound loudness and three frequency bands, 0–1 each — from a microphone, another input device, or the audio already playing on this machine. Pick the source in the node settings. The values only move while capture is armed; a downloaded shader holds them at 0 unless the embedding page drives them. Also: audio, microphone, mic, system audio, music, speaker, tab, desktop, loopback, reactive, spectrum, fft',
   },
   {
     type: 'screenUV',
@@ -900,7 +900,7 @@ const definitions: NodeDefinition[] = [
     ],
     outputs: [{ id: 'out', label: 'Distance', dataType: 'float' }],
     defaultValues: { b: 0.5, round: 0 },
-    description: 'Signed distance to a box centred on the origin, given its half extents — a rectangle for a 2D position (Half depth ignored), a cuboid for a 3D one; negative inside. Rounding softens the corners by that radius. Also: rectangle, square, cube, cuboid, rounded box, sdf, shape',
+    description: 'Signed distance to a box centred on the origin, given its half extents — a rectangle for a 2D position (the Z of Half size is ignored), a cuboid for a 3D one; negative inside. Rounding softens the corners by that radius. Also: rectangle, square, cube, cuboid, rounded box, sdf, shape',
   },
   {
     type: 'sdTorus',
@@ -947,7 +947,7 @@ const definitions: NodeDefinition[] = [
 
   {
     type: 'sdCylinder',
-    label: 'Cylinder (SDF)',
+    label: 'Cylinder SDF',
     category: 'sdf',
     tslFunction: 'sdCylinder',
     tslImportModule: '',
