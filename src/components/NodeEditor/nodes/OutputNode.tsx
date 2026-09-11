@@ -15,7 +15,7 @@ import {
 } from '@/utils/outputMaterials';
 import { removeEdgesForPort } from '@/utils/edgeUtils';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
-import { t } from '@/i18n';
+import { t, portLabel, formatNodeLabel } from '@/i18n';
 import type { AppNode } from '@/types';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import type { OutputFlowNode, OutputNodeData } from '@/types';
@@ -467,7 +467,7 @@ export const OutputNode = memo(function OutputNode({
           label={port.label}
         />
         {rowWidget(index, port.id)}
-        <span className="output-node__port-label">{port.label}</span>
+        <span className="output-node__port-label">{portLabel(port.label, language)}</span>
       </div>
     );
   };
@@ -562,7 +562,7 @@ export const OutputNode = memo(function OutputNode({
         )}
 
         <div className="output-node__section">
-          <div className="output-node__section-label">Pixel Shader</div>
+          <div className="output-node__section-label">{t('Pixel Shader', language)}</div>
           <div className="output-node__ports">{pixel.map(renderRow(index))}</div>
         </div>
 
@@ -570,7 +570,7 @@ export const OutputNode = memo(function OutputNode({
           <>
             <div className="output-node__subdivider" />
             <div className="output-node__section">
-              <div className="output-node__section-label">Vertex Shader</div>
+              <div className="output-node__section-label">{t('Vertex Shader', language)}</div>
               <div className="output-node__ports">{vertex.map(renderRow(index))}</div>
             </div>
           </>
@@ -598,7 +598,7 @@ export const OutputNode = memo(function OutputNode({
           added material's the first row under its divider — and so does the
           preview SOCKET, one per section (see renderMaterial). */}
       <div className="output-node__header" style={{ background: costColor }}>
-        <span className="output-node__title" style={{ color: headerTextColor }}>Output</span>
+        <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(def.label, 'output', language, false)}</span>
       </div>
 
       {materials.map((_, index) => (dormant.has(index) ? null : renderMaterial(index)))}

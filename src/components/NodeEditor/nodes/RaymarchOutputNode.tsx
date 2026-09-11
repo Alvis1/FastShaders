@@ -4,7 +4,7 @@ import type { ShaderFlowNode } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
-import { t } from '@/i18n';
+import { t, portLabel, formatNodeLabel } from '@/i18n';
 import { isActiveSinkSelector } from './activeSinkSelector';
 import { effectiveExposedPorts } from '@/utils/exposedPorts';
 import { getCostColor, getCostTextColor, getContrastColor } from '@/utils/colorUtils';
@@ -186,7 +186,7 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
       <div key={port.id} className="output-node__row">
         <TypedHandle type="target" position={Position.Left} id={port.id} dataType={port.dataType} label={port.label} />
         {cell(port.id)}
-        <span className="output-node__port-label">{port.label}</span>
+        <span className="output-node__port-label">{portLabel(port.label, language)}</span>
       </div>
     ));
 
@@ -201,7 +201,7 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
         </span>
       )}
       <div className="output-node__header" style={{ background: costColor }}>
-        <span className="output-node__title" style={{ color: headerTextColor }}>{config.title}</span>
+        <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(config.title, 'raymarchOutput', language, false)}</span>
       </div>
       <div className="output-node__material">
         {/* The activation control, exactly the Output's: solid while this node
@@ -222,7 +222,7 @@ export const RaymarchOutputNode = memo(function RaymarchOutputNode({ id, data, s
           <div key={section.label}>
             {i > 0 && <div className="output-node__subdivider" />}
             <div className="output-node__section">
-              <div className="output-node__section-label">{section.label}</div>
+              <div className="output-node__section-label">{t(section.label, language)}</div>
               <div className="output-node__ports">{rows(section.ports)}</div>
             </div>
           </div>

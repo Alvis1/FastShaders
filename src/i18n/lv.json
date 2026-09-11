@@ -950,6 +950,8 @@
     "Which operation this node performs": "Kuru darbību šis mezgls veic",
     "Raymarch Settings": "Staru izsekošanas iestatījumi",
     "Show socket": "Rādīt ligzdu",
+    "Pixel Shader": "Pikseļu ēnotājs",
+    "Vertex Shader": "Virsotņu ēnotājs",
     "Surface": "Virsma",
     "Volume": "Tilpums",
     "Sky": "Debesis",

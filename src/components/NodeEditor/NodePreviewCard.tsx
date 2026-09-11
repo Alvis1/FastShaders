@@ -3,7 +3,7 @@ import type { NodeDefinition, NodeCategory } from '@/types';
 import { startTileDrag, tileGhostZoom, tileActivationProps } from './tileDrag';
 import { getTypeColor, getCostColor, getCostTextColor, getCostScale, CATEGORY_COLORS, getContrastColor, hexToRgb01 } from '@/utils/colorUtils';
 import { getFlowNodeType, displayDescription } from '@/registry/nodeRegistry';
-import { formatNodeLabel, nodeDescription } from '@/i18n';
+import { formatNodeLabel, nodeDescription, portLabel, t } from '@/i18n';
 import { useAssetTooltip } from './AssetTooltip';
 import { useAppStore } from '@/store/useAppStore';
 import { NodeVisual } from './nodes/NodeVisual';
@@ -456,6 +456,8 @@ function SoundCardContent(props: ContentProps) {
  * ============================================================ */
 
 function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColor }: ContentProps) {
+  // The labels follow the UI language like the canvas node's do (OutputNode.tsx).
+  const language = useAppStore((s) => s.language);
   // The Output node is the one flow type with NO branch in this dispatch, so it
   // used to fall through to the generic ShaderCardContent — which, from a def
   // with 7 inputs and no defaultValues, drew SEVEN editable number boxes,
@@ -504,7 +506,7 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
             vertical centring, so the tile can't restate either. */}
         <CardSocket side="left" dataType={port.dataType} />
         {valueCell(port.id)}
-        <span className="output-node__port-label">{port.label}</span>
+        <span className="output-node__port-label">{portLabel(port.label, language)}</span>
       </div>
     ));
 
@@ -514,7 +516,7 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
       <div className="output-node__header" style={{ background: costColor }}>
-        <span className="output-node__title" style={{ color: headerTextColor }}>Output</span>
+        <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(def.label, def.type, language, false)}</span>
       </div>
       {/* The card shows ONE material, wrapped in the canvas node's own
           `.output-node__material` block so the permanently-connected preview
@@ -526,7 +528,7 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
       <div className="output-node__material">
         <span className="output-node__preview-socket" aria-hidden="true" />
         <div className="output-node__section">
-          <div className="output-node__section-label">Pixel Shader</div>
+          <div className="output-node__section-label">{t('Pixel Shader', language)}</div>
           <div className="output-node__ports">{rows(section(OUTPUT_PIXEL_PORTS))}</div>
         </div>
         {/* SUB-divider: this separates the two halves of ONE material, which is
@@ -534,7 +536,7 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
             is the node's red frame colour). The card shows one material. */}
         <div className="output-node__subdivider" />
         <div className="output-node__section">
-          <div className="output-node__section-label">Vertex Shader</div>
+          <div className="output-node__section-label">{t('Vertex Shader', language)}</div>
           <div className="output-node__ports">{rows(section(OUTPUT_VERTEX_PORTS))}</div>
         </div>
       </div>
@@ -547,6 +549,7 @@ function OutputCardContent({ def, cost, costColor, costTextColor, headerTextColo
  * ============================================================ */
 
 function MarchOutputCardContent({ def, cost, costColor, costTextColor, headerTextColor }: ContentProps) {
+  const language = useAppStore((s) => s.language);
   // Mirrors RaymarchOutputNode.tsx's markup and reuses OutputNode.css outright
   // (the Output card's rule): header, the node's own labelled sections, one
   // labelled row per socket with the same value cell — rendered inert.
@@ -574,7 +577,7 @@ function MarchOutputCardContent({ def, cost, costColor, costTextColor, headerTex
       <div key={port.id} className="output-node__row">
         <CardSocket side="left" dataType={port.dataType} />
         {cell(port.id)}
-        <span className="output-node__port-label">{port.label}</span>
+        <span className="output-node__port-label">{portLabel(port.label, language)}</span>
       </div>
     ));
   return (
@@ -583,7 +586,7 @@ function MarchOutputCardContent({ def, cost, costColor, costTextColor, headerTex
         <span className="node-base__cost-badge" style={{ color: costTextColor }}>{cost}</span>
       )}
       <div className="output-node__header" style={{ background: costColor }}>
-        <span className="output-node__title" style={{ color: headerTextColor }}>{config.title}</span>
+        <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(config.title, def.type, language, false)}</span>
       </div>
       <div className="output-node__material">
         <span className="output-node__preview-socket" aria-hidden="true" />
@@ -591,7 +594,7 @@ function MarchOutputCardContent({ def, cost, costColor, costTextColor, headerTex
           <div key={section.label}>
             {i > 0 && <div className="output-node__subdivider" />}
             <div className="output-node__section">
-              <div className="output-node__section-label">{section.label}</div>
+              <div className="output-node__section-label">{t(section.label, language)}</div>
               <div className="output-node__ports">{rows(section.ports)}</div>
             </div>
           </div>
