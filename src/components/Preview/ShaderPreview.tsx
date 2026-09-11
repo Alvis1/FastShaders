@@ -805,6 +805,18 @@ export function ShaderPreview() {
   const hotPillTimerRef = useRef<number | null>(null);
   const hotAckTimerRef = useRef<number | null>(null);
   /**
+   * The module the LIVE document is actually RUNNING: the one it was built
+   * with until a swap lands, then whatever was last posted. The swap's no-op
+   * bail compares against THIS, never against `bakedModule` — a document is
+   * baked once and then swapped many times, so "equal to what it was baked
+   * with" does not mean "on screen". The boot document is baked while the
+   * graph is still the empty red-sentinel shader and the real graph arrives by
+   * swap, so NEW (whose module is that same sentinel) was skipped as already
+   * there and the preview kept the previous shader (2026-09-11); any edit that
+   * returned to the boot shader, an undo included, did the same.
+   */
+  const runningModuleRef = useRef<string | null>(null);
+  /**
    * Bumped to force a real `srcDoc` rebuild — by the ack watchdog when a swap
    * goes unanswered, and available to anything else that ever needs the cold
    * path. It is a dep of the previewHtml memo and of nothing else.
@@ -1850,6 +1862,10 @@ export function ShaderPreview() {
   // the live scene and must NOT flash it.
   useEffect(() => {
     if (!containerReady) return;
+    // The fresh document runs the module it was baked with. Declared ABOVE the
+    // hot-swap effect, so in a render that both rebuilds and edits, the swap's
+    // bail already sees the new document's module and posts nothing.
+    runningModuleRef.current = bakedModule;
     // A rebuild supersedes anything the hot channel was still waiting on: the
     // document that would have acked is being thrown away.
     clearHotSwapWait();
@@ -1857,7 +1873,7 @@ export function ShaderPreview() {
     setCompiling(true);
     const id = setTimeout(() => setCompiling(false), COMPILE_OVERLAY_TIMEOUT_MS);
     return () => clearTimeout(id);
-  }, [previewHtml, containerReady, clearHotSwapWait]);
+  }, [previewHtml, bakedModule, containerReady, clearHotSwapWait]);
 
   /**
    * Send a module to the LIVE document and start waiting for its ack.
@@ -1877,6 +1893,7 @@ export function ShaderPreview() {
     clearHotSwapWait();
     const gen = ++hotGenRef.current;
     win.postMessage({ type: SHADER_SWAP_MESSAGE, code, gen }, '*');
+    runningModuleRef.current = code;
 
     hotPillTimerRef.current = window.setTimeout(() => {
       hotPillTimerRef.current = null;
@@ -1897,16 +1914,17 @@ export function ShaderPreview() {
    * one, which is what lets the camera, the spin phase, the animation
    * playhead, the tuned uniforms and `time` survive it.
    *
-   * The bail is a VALUE compare against the module the current document was
-   * BAKED with, and that one line covers all three no-op cases: first mount
-   * (the document boots with it), a cold rebuild (the fresh document already
-   * carries it — this effect runs in the same render as the memo that says
-   * so), and React StrictMode's double fire.
+   * The bail is a VALUE compare against the module the live document is
+   * RUNNING (`runningModuleRef`), and that one line covers the no-op cases:
+   * first mount and a cold rebuild (the rebuild effect above has just seeded
+   * the ref with the module the fresh document boots with), and React
+   * StrictMode's double fire (the first fire advanced the ref). Comparing
+   * against `bakedModule` instead was the NEW bug — see the ref.
    */
   useEffect(() => {
     if (!HOT_SWAP_ENABLED) return;
     if (!containerReady) return;
-    if (previewModule === bakedModule) return;
+    if (previewModule === runningModuleRef.current) return;
     postShaderSwap(previewModule);
     return clearHotSwapWait;
   }, [previewModule, bakedModule, containerReady, postShaderSwap, clearHotSwapWait]);

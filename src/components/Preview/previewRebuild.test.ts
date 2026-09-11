@@ -107,8 +107,30 @@ describe('preview rebuild policy: a lost swap must not leave the old picture', (
     expect(SRC).toContain('const gen = ++hotGenRef.current;');
   });
 
-  it('skips the post when the document was just baked with these bytes', () => {
-    expect(SRC).toContain('if (previewModule === bakedModule) return;');
+  it('skips the post only when the LIVE document is already running these bytes', () => {
+    // NOT "the document was baked with these bytes": the boot document is baked
+    // with the empty red-sentinel shader and the real graph arrives by swap, so
+    // a baked-compare skipped NEW (whose module is that sentinel) and left the
+    // previous shader on screen — as did any undo back to the boot shader
+    // (2026-09-11).
+    expect(SRC).toContain('if (previewModule === runningModuleRef.current) return;');
+    expect(SRC).not.toContain('if (previewModule === bakedModule) return;');
+  });
+
+  it('tracks what the live document runs: seeded on rebuild, advanced on every post', () => {
+    expect(SRC).toContain('const runningModuleRef = useRef<string | null>(null);');
+    const post = SRC.slice(SRC.indexOf('const postShaderSwap = useCallback('));
+    expect(post.slice(0, post.indexOf('}, [clearHotSwapWait]);'))).toContain('runningModuleRef.current = code;');
+    const rebuild = SRC.slice(SRC.indexOf('A new srcDoc means a full document reload'));
+    expect(rebuild.slice(0, rebuild.indexOf('}, [previewHtml, bakedModule, containerReady'))).toContain(
+      'runningModuleRef.current = bakedModule;',
+    );
+    // The seed must run BEFORE the swap effect in the same commit, or a render
+    // that both rebuilds and edits would post a module the fresh document
+    // already boots with.
+    expect(SRC.indexOf('runningModuleRef.current = bakedModule;')).toBeLessThan(
+      SRC.indexOf('if (previewModule === runningModuleRef.current) return;'),
+    );
   });
 
   it('treats only a gen-matched reply as proof the swap landed', () => {
@@ -139,7 +161,7 @@ describe('preview rebuild policy: a lost swap must not leave the old picture', (
   it('gives up on the in-flight swap when a rebuild supersedes it', () => {
     const at = SRC.indexOf('A new srcDoc means a full document reload');
     expect(at).toBeGreaterThan(-1);
-    const body = SRC.slice(at, SRC.indexOf('}, [previewHtml, containerReady', at));
+    const body = SRC.slice(at, SRC.indexOf('}, [previewHtml, bakedModule, containerReady', at));
     expect(body).toContain('clearHotSwapWait();');
     expect(body).toContain('hotGenRef.current += 1;');
   });
