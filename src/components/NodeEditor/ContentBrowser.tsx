@@ -15,6 +15,7 @@ import { SavedGroupCard } from './SavedGroupCard';
 import { TextureCard } from './TextureCard';
 import { PresetCard } from './PresetCard';
 import { setHtml5TileDrag, endHtml5TileDrag } from './tileDrag';
+import { applyTileSilhouettes } from './tileSilhouette';
 import { useAppStore } from '@/store/useAppStore';
 import { readPersisted, usePersistedState } from '@/hooks/usePersistedState';
 import { beginDragChrome } from '@/utils/dragChrome';
@@ -300,6 +301,10 @@ export const ContentBrowser = memo(function ContentBrowser() {
     const strip = scrollRef.current;
     if (!strip) return;
     const raf = requestAnimationFrame(() => {
+      // Space tiles by what they DRAW, sockets included (tileSilhouette.ts).
+      // Above the mid-drag bail: the overhangs are in each tile's own px, so
+      // the in-flight zoom cannot skew them, and newly mounted tiles need them.
+      applyTileSilhouettes(strip);
       // Mid-drag: the DOM zoom is paintHeight's imperative value while
       // metricsRef.zoom is still the committed state, so dividing one by the
       // other would bake a bogus (inflated) high-water tileH. The gesture

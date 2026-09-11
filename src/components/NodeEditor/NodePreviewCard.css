@@ -27,7 +27,11 @@
   flex-shrink: 0;
   cursor: grab;
   user-select: none;
-  padding: 20px 8px 6px;
+  /* The horizontal padding absorbs how far this tile's sockets reach past its
+     frame (--fs-sock-l / -r, published by tileSilhouette.ts), so tiles sit an
+     even distance apart by what is actually DRAWN — sockets included — rather
+     than by their frames alone. */
+  padding: 20px calc(8px + var(--fs-sock-r, 0px)) 6px calc(8px + var(--fs-sock-l, 0px));
   zoom: 0.67;
 }
 
