@@ -18,7 +18,13 @@ import {
   SelectionMode,
 } from '@xyflow/react';
 import { useShallow } from 'zustand/react/shallow';
-import { useAppStore, resolveDeviceTextureDim, resolveDeviceBudget } from '@/store/useAppStore';
+import {
+  useAppStore,
+  resolveDeviceTextureDim,
+  resolveDeviceBudget,
+  cloneNodeSharingPayloads,
+  cloneNodesSharingPayloads,
+} from '@/store/useAppStore';
 import type { ContextMenuType } from '@/store/useAppStore';
 import {
   isDoubleActivation,
@@ -48,9 +54,10 @@ import { ContentBrowser } from './ContentBrowser';
 import { useKeyboardNav } from './useKeyboardNav';
 import { ColorPickerPopover } from '@/components/inputs/PaletteColorPicker';
 import { NewShaderModal } from '@/components/Modals/NewShaderModal';
+import { useExportPreflight } from '@/components/Modals/ExportPreflightModal';
 import { ImageImportModal, type ImageImportChoice } from '@/components/Modals/ImageImportModal';
 import { ImageConvertInfoModal } from '@/components/Modals/ImageConvertInfoModal';
-import { downloadShader } from '@/engine/exportShader';
+import { buildShaderExportChecked, downloadShader } from '@/engine/exportShader';
 import { evalLog, isEvalSessionActive } from '@/eval/telemetry';
 import { evalTask } from '@/eval/evalTask';
 import { SAVED_GROUP_DRAG_TYPE } from './SavedGroupCard';
@@ -77,7 +84,10 @@ import {
 import { applyGroupMarqueeRule } from './groupMarqueeSelection';
 import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './overlapCascade';
 import { connectNodes, exposeConnectedTarget, spliceNodeIntoEdge, type DroppedPin } from './edgeInsert';
-import { costFocusId, focusNodes, focusNode, OUTPUT_FOCUS_FIT } from './outputFocus';
+import {
+  costFocusId, focusNodes, focusNode, glideFitAll, zoomStepTarget, VIEW_GLIDE_MS,
+  type ZoomGlide,
+} from './outputFocus';
 import { selectAllChanges } from './selectAll';
 import {
   readStoredViewport, writeStoredViewport, VIEWPORT_MIN_ZOOM, VIEWPORT_MAX_ZOOM,
@@ -94,13 +104,30 @@ import { findSingletonNode } from './singletonNodes';
 import { isEdgeDisconnecting, setEdgeDisconnecting } from '@/utils/edgeDisconnectFlag';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { isTypingTarget } from '@/utils/isTypingTarget';
+import { beginDragChrome } from '@/utils/dragChrome';
 import { bridgeEdgesAcrossDeletedNodes, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { parseCsv, COLUMN_WARN_THRESHOLD } from '@/utils/csvParser';
 import { makeDataNodeData } from '@/utils/dataNode';
-import { makeImageNodeFromEncode, resolveImageDrop, totalImageChars, MAX_TOTAL_IMAGE_CHARS } from '@/utils/imageNode';
+import {
+  exceedsImageBudget,
+  exceedsImageBudgetAdding,
+  imageNodesForNotice,
+  makeImageNodeFromEncode,
+  resolveImageDrop,
+} from '@/utils/imageNode';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
+import { isImageChannelHandle } from '@/utils/imageChannels';
+import { importNoteLineText, importNoteHasConvertLine, importNoteLifetimeMs } from '@/utils/importNote';
+import { fillTemplate } from '@/utils/fillTemplate';
+import {
+  imageDropReport,
+  type ConvertNoteReason,
+  type ImageDropReport,
+} from '@/utils/imageImportNote';
 import { encodeImageFile, isImageFile, isSvgFile, type ImageConvertMode } from '@/utils/imageImport';
-import { importShaderZip, importShaderText, isZipFile } from '@/engine/projectImport';
+import { importShaderZip, importShaderText, isZipFile, reportZipImportError } from '@/engine/projectImport';
+import { detectMeshKind } from '@/utils/previewMesh';
+import { requestPreviewModelLoad } from '@/utils/previewModelDrop';
 import type { AppNode, AppEdge, ShaderNodeData, OutputNodeData, NodeDefinition } from '@/types';
 import { getNodeValues } from '@/types';
 import { t } from '@/i18n';
@@ -139,6 +166,37 @@ let canvasBusy = 0;
 function setCanvasBusy(busy: boolean): void {
   canvasBusy = Math.max(0, canvasBusy + (busy ? 1 : -1));
   document.documentElement.classList.toggle('fs-canvas-busy', canvasBusy > 0);
+}
+
+/**
+ * The same gesture ALSO suppresses the browser's own text selection, through
+ * the app-wide `.fs-dragging` chrome the seam grips already use
+ * (utils/dragChrome.ts). A connection drag is a pointer sweep across the whole
+ * window, and the engines disagree about whether the pressed element's
+ * `user-select: none` stops a selection being seeded there: MEASURED
+ * 2026-09-18 against this build, one wire dragged off a socket painted 38
+ * selection rectangles over the nodes and chrome in WebKit 26.5 and none in
+ * Chrome 152, while a grip drag — which arms this — painted none in either.
+ * That was the owner's report, from macOS.
+ *
+ * Cursor-less (`beginDragChrome(null)`): React Flow owns the pointer's look
+ * during a connect, and pinning `move` over it would fight the connection line.
+ *
+ * Module scope beside `canvasBusy`, and for the same reason: the end call has
+ * to be reachable from the pointer reaper below AND from unmount, neither of
+ * which can see a component ref. One connection drag runs at a time (React Flow
+ * captures the pointer), so one token is enough; `beginDragChrome` refcounts
+ * across gestures anyway, so an overlapping grip drag keeps its own.
+ */
+let endConnectChrome: (() => void) | null = null;
+function setConnectChrome(on: boolean): void {
+  if (on) {
+    endConnectChrome?.();
+    endConnectChrome = beginDragChrome(null);
+    return;
+  }
+  endConnectChrome?.();
+  endConnectChrome = null;
 }
 
 /**
@@ -181,7 +239,14 @@ function trackPointerUp(e: PointerEvent): void {
   if (activePointers.size > 0 || busyReapFrame) return;
   busyReapFrame = requestAnimationFrame(() => {
     busyReapFrame = 0;
-    if (activePointers.size > 0 || canvasBusy === 0) return;
+    if (activePointers.size > 0) return;
+    // ABOVE the `canvasBusy === 0` return: the two flags are released by
+    // different handlers, so a connect whose `onConnectEnd` went missing can
+    // leave this one set while the count is already back at 0 — and a stranded
+    // `.fs-dragging` makes the whole app unselectable. Idempotent, so the
+    // ordinary path (where onConnectEnd already ran) costs nothing.
+    setConnectChrome(false);
+    if (canvasBusy === 0) return;
     canvasBusy = 0;
     document.documentElement.classList.remove('fs-canvas-busy');
   });
@@ -914,6 +979,8 @@ export function NodeEditor() {
   // NEW button → save-first confirmation. Local state like the toolbar's
   // feedback dialog: nothing outside this component opens it.
   const [newShaderOpen, setNewShaderOpen] = useState(false);
+  // The export pre-flight's dialog (N1) for NEW's save-first download.
+  const { ask: askExportPreflight, glb: glbExportUi, modal: exportPreflightModal } = useExportPreflight();
   // In-flight image imports, one ghost per file at its drop point (see
   // placeImageFile). Screen coords: these are chrome, not graph content, so
   // they deliberately do NOT pan/zoom with the canvas during the import.
@@ -924,16 +991,15 @@ export function NodeEditor() {
   // a ref so the async drop loop can await a decision the user makes in React.
   const [convertAsk, setConvertAsk] = useState<{ count: number; fileName: string } | null>(null);
   const convertResolver = useRef<((choice: ImageImportChoice) => void) | null>(null);
-  // One-liner shown when a requested optimization didn't happen. Structured
-  // rather than a pre-rendered string so it re-renders in the active language.
-  const [importNote, setImportNote] = useState<
-    { id: string; reason: 'no-webp' | 'preference'; storedAs: string } | null
-  >(null);
+  // The import one-liner (utils/importNote.ts). STORE state, so any surface
+  // can post to it; structured LINES rather than a pre-rendered string, so it
+  // re-renders in the active language.
+  const importNote = useAppStore((s) => s.importNote);
   const [convertInfoOpen, setConvertInfoOpen] = useState(false);
   // Live in-progress stroke path, written imperatively by the draw-capture
   // handler (below) and rendered inside DrawingLayer's live opacity group.
   const livePathRef = useRef<SVGPathElement | null>(null);
-  const { screenToFlowPosition, getViewport, setViewport, getInternalNode, zoomIn, zoomOut, fitView } =
+  const { screenToFlowPosition, getViewport, setViewport, getInternalNode, getZoom, zoomTo, fitView } =
     useReactFlow();
   const flowStore = useStoreApi();
 
@@ -976,7 +1042,30 @@ export function NodeEditor() {
    * many renders.
    */
   const [bootViewport] = useState(readStoredViewport);
-  const onMoveStartBusy = useCallback(() => setCanvasBusy(true), []);
+  /**
+   * The zoom the canvas bar's −/+ glide is heading for (outputFocus.ts,
+   * `zoomStepTarget`): the next press steps from here rather than from the
+   * half-finished zoom, so quick presses accumulate exactly. Dropped the
+   * moment the user takes the view themselves — React Flow's own wheel and
+   * drag through onMoveStart, and the three custom paths that drive the view
+   * with `setViewport` (trackpad wheel pan, double-tap drag, two-finger touch)
+   * by hand — so a press after that steps from where the canvas actually is.
+   */
+  const zoomGlideRef = useRef<ZoomGlide | null>(null);
+  const glideZoom = useCallback((direction: 1 | -1) => {
+    const now = performance.now();
+    const target = zoomStepTarget(
+      getZoom(), zoomGlideRef.current, now, direction, VIEWPORT_MIN_ZOOM, VIEWPORT_MAX_ZOOM,
+    );
+    zoomGlideRef.current = { target, until: now + VIEW_GLIDE_MS };
+    void zoomTo(target, { duration: VIEW_GLIDE_MS });
+  }, [getZoom, zoomTo]);
+  // `event` is null for a programmatic move (every glide) and the input event
+  // for a user one — the only case that should abandon a pending zoom target.
+  const onMoveStartBusy = useCallback((event: MouseEvent | TouchEvent | null) => {
+    if (event) zoomGlideRef.current = null;
+    setCanvasBusy(true);
+  }, []);
   // A gesture interrupted by unmount must not leave the preview inert. The
   // COUNTER has to be reset with the class: `canvasBusy` is module scope, so it
   // outlives the component, and a residual ≥1 left by an interrupted gesture
@@ -989,6 +1078,9 @@ export function NodeEditor() {
   useEffect(() => () => {
     canvasBusy = 0;
     document.documentElement.classList.remove('fs-canvas-busy');
+    // Same guarantee for the selection chrome: unmounting mid-connect would
+    // otherwise leave `.fs-dragging` on <html> for the life of the page.
+    setConnectChrome(false);
   }, []);
   // …and the per-gesture safety net (see trackPointerUp): capture phase, so a
   // handler that stops propagation cannot hide the release from it.
@@ -1102,17 +1194,21 @@ export function NodeEditor() {
   const clipboardRef = useRef<AppNode[]>([]);
 
   useEffect(() => {
-    /** Clone nodes + their internal edges, deselect originals, select clones. */
-    function pasteNodes(sourceNodes: AppNode[]) {
+    /**
+     * Clone nodes + their internal edges, deselect originals, select clones.
+     * `onPasted` runs once the clones actually LAND, which may be later (the
+     * image-budget notice's "Add anyway") or never (Cancel).
+     */
+    function pasteNodes(sourceNodes: AppNode[], onPasted?: (clones: AppNode[]) => void): void {
       const store = useAppStore.getState();
       const idMap = new Map<string, string>();
 
-      if (sourceNodes.length === 0) return [];
+      if (sourceNodes.length === 0) return;
 
       const clones = sourceNodes.map((node) => {
         const newId = generateId();
         idMap.set(node.id, newId);
-        const cloned = structuredClone(node);
+        const cloned = cloneNodeSharingPayloads(node);
         // A pasted output node arrives INACTIVE: the clone must not carry the
         // active flag off the original (several outputs may coexist, exactly
         // one active — utils/sdfPartition.ts). The original keeps driving.
@@ -1139,12 +1235,32 @@ export function NodeEditor() {
           return cloned;
         });
 
-      store.pushHistory();
-      const deselected = store.nodes.map((n) => ({ ...n, selected: false }));
-      store.setNodes([...deselected, ...clones] as AppNode[]);
-      store.setEdges([...store.edges, ...edgeClones] as AppEdge[]);
+      // Reads LIVE state: `proceed` may run after the graph has moved on. The
+      // clones are independent copies, so they still land if their sources
+      // were deleted while the notice was open.
+      const commit = () => {
+        const live = useAppStore.getState();
+        live.pushHistory();
+        live.setNodes([...live.nodes.map((n) => ({ ...n, selected: false })), ...clones] as AppNode[]);
+        live.setEdges([...live.edges, ...edgeClones] as AppEdge[]);
+        onPasted?.(clones);
+      };
 
-      return clones;
+      // The project image budget, counted on every path that ADDS a payload
+      // (utils/imageNode.ts exceedsImageBudget). A paste with no images is
+      // never refused, and a refusal pushes no undo entry.
+      if (exceedsImageBudget(store.nodes, clones, store.ignoreImageLimits)) {
+        const who = imageNodesForNotice(clones);
+        store.enqueueLimitNotice({
+          id: generateId(),
+          kind: 'image-total-cap',
+          ...(who.count === 1 && who.fileName ? { fileName: who.fileName } : {}),
+          ...(who.count > 1 ? { nameFallback: 'these-images' as const } : {}),
+          proceed: commit,
+        });
+        return;
+      }
+      commit();
     }
 
     const handler = (e: KeyboardEvent) => {
@@ -1183,7 +1299,7 @@ export function NodeEditor() {
       if (mod && key === 'c') {
         const selected = useAppStore.getState().nodes.filter((n) => n.selected);
         if (selected.length > 0) {
-          clipboardRef.current = structuredClone(selected);
+          clipboardRef.current = cloneNodesSharingPayloads(selected);
         }
       }
 
@@ -1191,9 +1307,11 @@ export function NodeEditor() {
       if (mod && key === 'v') {
         if (clipboardRef.current.length === 0) return;
         e.preventDefault();
-        const clones = pasteNodes(clipboardRef.current);
-        // Shift clipboard for cascading pastes
-        clipboardRef.current = clones.map((n) => structuredClone(n));
+        // Shift the clipboard for cascading pastes, but only once the paste
+        // has landed: a paste refused by the image budget keeps its clipboard.
+        pasteNodes(clipboardRef.current, (clones) => {
+          clipboardRef.current = clones.map((n) => cloneNodeSharingPayloads(n));
+        });
       }
 
       // Ctrl+G — group selected nodes (Ctrl+Shift+G ungroups the selected group)
@@ -1221,7 +1339,7 @@ export function NodeEditor() {
         const selected = useAppStore.getState().nodes.filter((n) => n.selected);
         if (selected.length === 0) return;
         e.preventDefault();
-        clipboardRef.current = structuredClone(selected);
+        clipboardRef.current = cloneNodesSharingPayloads(selected);
         pasteNodes(selected);
       }
 
@@ -1532,10 +1650,16 @@ export function NodeEditor() {
       // Mutating via setNodes here (mirroring updateNodeData's shape, but not
       // calling it) keeps the connect + colorSpace flip under the caller's
       // single pushHistory() → one undo step reverses the whole gesture.
+      // Only the image's Color (`out`) socket is decoded as a normal map, so
+      // only it needs linear sampling: a channel wire (Alpha/R/G/B) into Normal
+      // is a raw scalar, and flipping the texture's colour space for it would
+      // silently change every other consumer of the image. The `feedsSrgb`
+      // scan stays handle-blind — any edge from the image into color/emissive
+      // is the conservative answer.
       if (connection.targetHandle === 'normal') {
         const nodes = useAppStore.getState().nodes;
         const src = nodes.find((n) => n.id === connection.source);
-        if (src?.data.registryType === 'imageNode') {
+        if (src?.data.registryType === 'imageNode' && !isImageChannelHandle(connection.sourceHandle)) {
           // The live list: the edge just made targets `normal`, so it can never
           // match the two handles below and reading before or after is the same
           // answer — but reading fresh cannot go stale.
@@ -1958,6 +2082,9 @@ export function NodeEditor() {
   const onConnectStart = useCallback(
     (_event: MouseEvent | TouchEvent, params: { nodeId: string | null; handleId: string | null; handleType: string | null }) => {
       setCanvasBusy(true);
+      // The wire is about to sweep the pointer across the whole window; see
+      // setConnectChrome for what WebKit paints without this.
+      setConnectChrome(true);
       connectSucceeded.current = false;
       // A node already lifted under the pointer must drop back BEFORE the wire
       // starts moving, or it stays raised for the whole drag with no pointer on
@@ -1992,8 +2119,10 @@ export function NodeEditor() {
     (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
       // Cleared up front, above every early return below: this function has
       // several, and a missed reset would leave the canvas permanently unable
-      // to highlight a node again — and would strand the 3D preview inert.
+      // to highlight a node again — and would strand the 3D preview inert, or
+      // (the chrome) the whole app unselectable.
       setCanvasBusy(false);
+      setConnectChrome(false);
       connectingRef.current = false;
       setConnecting(false);
       const pending = pendingSourceRef.current;
@@ -2355,7 +2484,13 @@ export function NodeEditor() {
       reader.onload = () => {
         const res = parseCsv(String(reader.result ?? ''));
         if (!res.ok) {
-          window.alert(`Could not load "${file.name}":\n${res.error}`);
+          // `{error}` stays the CSV parser's own English message.
+          window.alert(
+            fillTemplate(t('Could not load {name}:\n{error}', useAppStore.getState().language), {
+              name: `“${file.name}”`,
+              error: res.error,
+            }),
+          );
           return;
         }
         const position = screenToFlowPosition({ x: clientX, y: clientY });
@@ -2380,7 +2515,9 @@ export function NodeEditor() {
           data: makeDataNodeData(res.data, cost, file.name),
         } as AppNode);
       };
-      reader.onerror = () => window.alert(`Could not read "${file.name}".`);
+      reader.onerror = () => window.alert(
+        t('Could not read {name}.', useAppStore.getState().language).replace('{name}', () => `“${file.name}”`),
+      );
       reader.readAsText(file);
     },
     [screenToFlowPosition, addNode],
@@ -2425,14 +2562,22 @@ export function NodeEditor() {
   }, []);
 
   const placeImageFile = useCallback(
-    async (file: File, clientX: number, clientY: number, ghostId: string, mode: ImageConvertMode) => {
+    async (
+      file: File,
+      clientX: number,
+      clientY: number,
+      ghostId: string,
+      mode: ImageConvertMode,
+      dropId: string,
+    ): Promise<ImageDropReport | null> => {
       const position = screenToFlowPosition({ x: clientX, y: clientY });
       if (isSvgFile(file)) {
         setImportGhosts((g) => g.filter((x) => x.id !== ghostId));
         window.alert(
-          `Could not load "${file.name}":\nSVG images can't be imported — export it as PNG or WebP first.`,
+          t('Could not load {name}:\nSVG images can\'t be imported — export it as PNG or WebP first.', useAppStore.getState().language)
+            .replace('{name}', () => `“${file.name}”`),
         );
-        return;
+        return null;
       }
       try {
         const store = useAppStore.getState();
@@ -2450,11 +2595,15 @@ export function NodeEditor() {
               file,
               position,
               convert: mode === 'convert',
+              dropId,
             });
           } else {
-            window.alert(`Could not load "${file.name}" as an image.`);
+            window.alert(
+              t('Could not load {name} as an image.', useAppStore.getState().language)
+                .replace('{name}', () => `“${file.name}”`),
+            );
           }
-          return;
+          return null;
         }
 
         // Stash the pre-snap payload BEFORE anything can bail out: the record
@@ -2467,9 +2616,26 @@ export function NodeEditor() {
           stashImageOrigin(p, Date.now()),
         );
 
-        // Per-image budget met — now check the whole-project image budget
-        // (every payload is multiplied through auto-save + undo history).
-        if (!ignore && totalImageChars(useAppStore.getState().nodes) + payload.dataUrl.length > MAX_TOTAL_IMAGE_CHARS) {
+        // What this image tells the drop's one note (utils/imageImportNote.ts).
+        // The WebP line: the user asked to optimize and it didn't happen — a
+        // WebP request on WebKit comes back as PNG, so a dropped .png can land
+        // as .jpg and look like nothing occurred — or a REMEMBERED "no", which
+        // is invisible by construction and would otherwise look like the
+        // feature being broken. `hideImageConvertNotice` silences only that
+        // line; the budget lines (N5) are caps, and caps announce themselves.
+        const convertNote: ConvertNoteReason | null = store.hideImageConvertNotice
+          ? null
+          : mode === 'convert' && !res.webpAvailable
+            ? 'no-webp'
+            : mode === 'keep' && store.imageConvertMode === 'never'
+              ? 'preference'
+              : null;
+        const report = imageDropReport(res, payload, convertNote);
+
+        // Per-image budget met — now check the whole-project image budget,
+        // per instance (PROJECT_IMAGE_BUDGET_COUNT: every export still carries
+        // one copy per node).
+        if (exceedsImageBudgetAdding(useAppStore.getState().nodes, [payload.dataUrl], ignore)) {
           store.enqueueLimitNotice({
             id: generateId(),
             kind: 'image-total-cap',
@@ -2480,9 +2646,12 @@ export function NodeEditor() {
             // Carry the finished encode so "Add anyway" places exactly this
             // payload instead of re-encoding at the relaxed dimension cap —
             // provenance included, or the override would drop the revert.
-            encoded: { ...payload, origin },
+            // The report rides along too, so "Add anyway" can post this
+            // image's N5 lines once it is really placed.
+            encoded: { ...payload, origin, report },
+            dropId,
           });
-          return;
+          return null;
         }
         // The creation-time snapshot (`data.cost`, read by layoutEngine's
         // footprint); the live badge prices through nodeCostPoints, which
@@ -2494,25 +2663,6 @@ export function NodeEditor() {
           position,
           data: makeImageNodeFromEncode(payload, cost, file.name, origin),
         } as AppNode);
-        // The user asked to optimize and it didn't happen — a WebP request on
-        // WebKit comes back as PNG, so a dropped .png can land as .jpg and
-        // look like nothing occurred. Reported as ONE line (with the detail
-        // behind its "?"), not a modal: it is information about the browser,
-        // not a decision the user has to make, and it must not stand between
-        // a drag and the canvas.
-        const storedAs =
-          res.mime === 'image/jpeg' ? 'JPEG' : res.mime === 'image/png' ? 'PNG' : res.mime === 'image/webp' ? 'WebP' : res.mime;
-        if (!store.hideImageConvertNotice) {
-          if (mode === 'convert' && !res.webpAvailable) {
-            setImportNote({ id: generateId(), reason: 'no-webp', storedAs });
-          } else if (mode === 'keep' && store.imageConvertMode === 'never') {
-            // A REMEMBERED "no" is invisible by construction — no dialog, no
-            // change, nothing to see. Without this line the feature simply
-            // looks broken, and the preference that caused it has no other
-            // way of announcing itself.
-            setImportNote({ id: generateId(), reason: 'preference', storedAs });
-          }
-        }
         // Device-aware downscale notice (informational; the node is already
         // placed). Only when the source exceeded the target headset's texture
         // cap, the user hasn't opted out of size limits, and hasn't hidden it.
@@ -2543,6 +2693,7 @@ export function NodeEditor() {
             },
           });
         }
+        return report;
       } finally {
         setImportGhosts((g) => g.filter((x) => x.id !== ghostId));
       }
@@ -2556,7 +2707,9 @@ export function NodeEditor() {
       clearEdgeHighlight();
 
       // OS file drop (a real file from disk) — each `.csv` becomes a Data
-      // node, each image an Image node. Checked first because
+      // node, each image an Image node, and a 3D model (.obj/.glb/.gltf) is
+      // not placed on the canvas at all but handed to the 3D preview's own
+      // model path (utils/previewModelDrop.ts). Checked first because
       // dataTransfer.files is only populated for genuine file drops, never
       // for the app's internal tile drags. Partitioned ONCE and mutually
       // exclusively (csv test wins) so a mixed drop places everything and no
@@ -2573,13 +2726,16 @@ export function NodeEditor() {
         // A benchmark complexity .json isn't a graph file — the canvas doesn't
         // import it (drops are restricted to the cost bar + code panel). Point
         // the user at the right target instead of silently ignoring it.
+        // Read here rather than subscribed, so the drop handler's deps don't move.
+        const lang = useAppStore.getState().language;
         if (files.length === 1 && /\.json$/i.test(files[0].name)) {
-          window.alert('Drop a benchmark complexity.json on the cost bar (top-left) or the code panel to reprice nodes.');
+          window.alert(t('Drop a benchmark complexity.json on the cost bar (top-right) or the code panel to reprice nodes.', lang));
           return;
         }
 
         const csvs: File[] = [];
         const images: File[] = [];
+        const models: File[] = [];
         // A `.zip` export or a shader script (.js/.mjs/.tsl) is a *project* —
         // importing it REPLACES the whole graph, so it can't be combined with
         // the loose data-file appends below (they would race the replace and
@@ -2589,6 +2745,9 @@ export function NodeEditor() {
           const lower = f.name.toLowerCase();
           if (lower.endsWith('.csv') || f.type === 'text/csv') csvs.push(f);
           else if (isZipFile(f) || /\.(js|mjs|tsl)$/.test(lower)) projects.push(f);
+          // Before images: a model is never an image, but test the specific
+          // rule first so a MIME-typed oddity cannot be mistaken for one.
+          else if (detectMeshKind(f.name) !== null) models.push(f);
           else if (isImageFile(f)) images.push(f);
         }
 
@@ -2601,7 +2760,10 @@ export function NodeEditor() {
           const done = isZipFile(proj)
             ? importShaderZip(proj).then((result) => {
                 if (result === null) {
-                  window.alert(`"${proj.name}" doesn't contain a FastShaders shader (.js).`);
+                  window.alert(
+                    t('{name} does not contain a shader script (.js / .mjs / .tsl).', lang)
+                      .replace('{name}', () => `“${proj.name}”`),
+                  );
                   return false;
                 }
                 return true;
@@ -2612,20 +2774,37 @@ export function NodeEditor() {
               });
           void done
             .catch((e) => {
+              // A zip the reader refused (or a model-only zip whose model was
+              // skipped) is announced by the shared mapping, and says why.
+              if (reportZipImportError(e, proj.name)) return false;
               // Imported files are adversarial input — a crash inside the
-              // import must surface, not silently no-op the drop.
+              // import must surface, not silently no-op the drop. `{reason}`
+              // is the engine's own English message.
               window.alert(
-                `Could not import "${proj.name}": ${e instanceof Error ? e.message : String(e)}`,
+                fillTemplate(t('Could not import {name}: {reason}', lang), {
+                  name: `“${proj.name}”`,
+                  reason: e instanceof Error ? e.message : String(e),
+                }),
               );
               return false;
             })
             .then((ok) => {
+              // A model dropped WITH the project follows the import, as on the
+              // preview (ShaderPreview.handleDroppedFiles): the import clears or
+              // overwrites the mesh first, so the dropped model deterministically
+              // wins. Routed, not ignored — hence not counted in `ignored`.
+              // PAIRED with the shader just imported, so the preview never
+              // offers to build a shader from it (the GLB-import convention).
+              if (models.length > 0) requestPreviewModelLoad(models[0], { pairedWithShader: true });
               // The "ignored companions" notice may only follow an import that
               // actually succeeded — alerting 'Loaded "x"' before (or despite)
               // a failure gave contradictory feedback.
               if (ok && ignored > 0) {
                 window.alert(
-                  `Loaded "${proj.name}". ${ignored} other dropped file(s) were ignored — drop a project on its own.`,
+                  fillTemplate(t('Loaded {name}. {n} other dropped file(s) were ignored — drop a project on its own.', lang), {
+                    name: `“${proj.name}”`,
+                    n: ignored,
+                  }),
                 );
               }
             });
@@ -2636,6 +2815,8 @@ export function NodeEditor() {
         // functional update). Shared cascade so multi-file drops don't overlap.
         const STEP = 34;
         let slot = 0;
+        // As on the preview, only the first model is used.
+        if (models.length > 0) requestPreviewModelLoad(models[0]);
         for (const csv of csvs) {
           const off = STEP * slot++;
           placeCsvFile(csv, event.clientX + off, event.clientY + off);
@@ -2668,9 +2849,19 @@ export function NodeEditor() {
               ...g,
               ...queued.map((q) => ({ id: q.ghostId, x: q.x, y: q.y, name: q.img.name })),
             ]);
+            // ONE note per drop: each image reports into `reports` and the
+            // lines are composed after the loop, so a batch reports once with
+            // count-neutral lines instead of each image replacing the last.
+            // An image refused by the budget and placed with "Add anyway"
+            // reports under the same `dropId`, merging into this note rather
+            // than replacing it — in either order.
+            const dropId = generateId();
+            const reports: ImageDropReport[] = [];
             for (const q of queued) {
-              await placeImageFile(q.img, q.x, q.y, q.ghostId, choice);
+              const r = await placeImageFile(q.img, q.x, q.y, q.ghostId, choice, dropId);
+              if (r) reports.push(r);
             }
+            useAppStore.getState().showImageDropReports(dropId, reports);
           })();
         }
         // A real file drop never doubles as a tile drag — swallow it even when
@@ -2866,9 +3057,7 @@ export function NodeEditor() {
         e.preventDefault();
         const nodesNow = useAppStore.getState().nodes;
         const selected = nodesNow.filter((n) => n.selected).map((n) => n.id);
-        if (!focusNodes(fitView, nodesNow, selected)) {
-          void fitView({ ...FIT_VIEW_OPTIONS, duration: OUTPUT_FOCUS_FIT.duration });
-        }
+        if (!focusNodes(fitView, nodesNow, selected)) glideFitAll(fitView);
         return;
       }
       const openAddMenuAtCentre = () => {
@@ -3019,6 +3208,10 @@ export function NodeEditor() {
       if (!panVertically && e.deltaX === 0) return; // → React Flow zooms
       e.preventDefault();
       e.stopImmediatePropagation();
+      // This pan is a programmatic setViewport, so onMoveStart cannot tell it
+      // from a glide — drop any pending zoom-button target here instead (the
+      // double-tap drag and the two-finger touch path below do the same).
+      zoomGlideRef.current = null;
       const vp = getViewport();
       setViewport({
         x: vp.x - e.deltaX,
@@ -3084,6 +3277,7 @@ export function NodeEditor() {
 
     const onMove = (e: PointerEvent) => {
       if (!panning || e.pointerId !== activePointerId) return;
+      zoomGlideRef.current = null; // a user pan — see zoomGlideRef
       setViewport({
         x: vpStart.x + (e.clientX - panStart.x),
         y: vpStart.y + (e.clientY - panStart.y),
@@ -3286,6 +3480,7 @@ export function NodeEditor() {
       // screen = flow*zoom + viewport (+ container origin). Holding the flow
       // point (fx,fy) under the moving centroid gives pan+zoom without needing
       // the container origin: vp = vp0 + (centreΔ) + flowPt*(z0 − z).
+      zoomGlideRef.current = null; // a user pinch/pan — see zoomGlideRef
       setViewport({
         x: vpx0 + (c.x - cx0) + fx * (z0 - z),
         y: vpy0 + (c.y - cy0) + fy * (z0 - z),
@@ -3319,9 +3514,11 @@ export function NodeEditor() {
   useEffect(() => {
     if (!importNote) return;
     const id = importNote.id;
+    // A GLB build's report is several lines and the only place the build
+    // says what it did, so it stays up longer (importNoteLifetimeMs).
     const timer = window.setTimeout(() => {
-      setImportNote((n) => (n?.id === id ? null : n));
-    }, 12000);
+      useAppStore.getState().dismissImportNote(id);
+    }, importNoteLifetimeMs(importNote));
     return () => window.clearTimeout(timer);
   }, [importNote]);
 
@@ -3388,10 +3585,23 @@ export function NodeEditor() {
   // NEW: optionally export the current shader, then reset the graph to a bare
   // Output node (one undo entry) and frame it. The export runs FIRST — it
   // reads the store imperatively at call time, so it must see the old graph.
+  // That includes the export pre-flight (N1): it must finish before newGraph(),
+  // which REMOVES the preview model, and its "without the 3D model" rebuild
+  // reads the store too. Cancel in the size dialog ABANDONS NEW, because the
+  // user asked to save first; the graph stays, and NEW can be reopened with
+  // "Don't save".
   const startNewShader = useCallback(
-    (save: boolean) => {
+    async (save: boolean) => {
       setNewShaderOpen(false);
-      if (save) downloadShader();
+      if (save) {
+        const bundle = await buildShaderExportChecked({
+          preflight: askExportPreflight,
+          glb: glbExportUi,
+          delivery: 'download',
+        });
+        if (!bundle) return;
+        downloadShader(bundle);
+      }
       useAppStore.getState().newGraph();
       // The viewport is unchanged by the reset, so the lone Output node at the
       // origin can land off-screen. Two frames, like the tile-drop snap: the
@@ -3402,7 +3612,7 @@ export function NodeEditor() {
         requestAnimationFrame(() => fitView(FIT_VIEW_OPTIONS)),
       );
     },
-    [fitView],
+    [fitView, askExportPreflight, glbExportUi],
   );
 
   return (
@@ -3606,7 +3816,7 @@ export function NodeEditor() {
               <button
                 type="button"
                 className="fs-canvas-bar__btn"
-                onClick={() => zoomOut()}
+                onClick={() => glideZoom(-1)}
                 disabled={minZoomReached}
                 title={t('Zoom out', language)}
                 aria-label={t('Zoom out', language)}
@@ -3616,7 +3826,7 @@ export function NodeEditor() {
               <button
                 type="button"
                 className="fs-canvas-bar__btn"
-                onClick={() => zoomIn()}
+                onClick={() => glideZoom(1)}
                 disabled={maxZoomReached}
                 title={t('Zoom in', language)}
                 aria-label={t('Zoom in', language)}
@@ -3626,7 +3836,7 @@ export function NodeEditor() {
               <button
                 type="button"
                 className="fs-canvas-bar__btn"
-                onClick={() => fitView()}
+                onClick={() => glideFitAll(fitView)}
                 title={t('Fit view', language)}
                 aria-label={t('Fit view', language)}
               >
@@ -3682,25 +3892,26 @@ export function NodeEditor() {
             the cost pill top-right, the tool bar bottom-left). */}
         {importNote && (
           <div className="node-editor__import-note" role="status">
-            <span>
-              {(importNote.reason === 'preference'
-                ? t('Not optimized (set to “Never”) — stored as {fmt}', language)
-                : t('Not optimized — stored as {fmt}', language)
-              ).replace('{fmt}', () => importNote.storedAs)}
+            <span className="node-editor__import-note-lines">
+              {importNote.lines.map((line, i) => (
+                <span key={i}>{importNoteLineText(line, language)}</span>
+              ))}
             </span>
+            {importNoteHasConvertLine(importNote) && (
+              <button
+                type="button"
+                className="node-editor__import-note-btn"
+                onClick={() => setConvertInfoOpen(true)}
+                title={t('Why?', language)}
+                aria-label={t('Why?', language)}
+              >
+                ?
+              </button>
+            )}
             <button
               type="button"
               className="node-editor__import-note-btn"
-              onClick={() => setConvertInfoOpen(true)}
-              title={t('Why?', language)}
-              aria-label={t('Why?', language)}
-            >
-              ?
-            </button>
-            <button
-              type="button"
-              className="node-editor__import-note-btn"
-              onClick={() => setImportNote(null)}
+              onClick={() => useAppStore.getState().dismissImportNote(importNote.id)}
               title={t('Dismiss', language)}
               aria-label={t('Dismiss', language)}
             >
@@ -3717,6 +3928,7 @@ export function NodeEditor() {
           onCancel={() => setNewShaderOpen(false)}
           onConfirm={startNewShader}
         />
+        {exportPreflightModal}
       </div>
       <ContentBrowser />
     </div>

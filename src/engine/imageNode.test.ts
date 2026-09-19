@@ -277,3 +277,153 @@ describe('graphToCode — imageNode emission', () => {
     expect(r.edges).toEqual([]);
   });
 });
+
+describe('graphToCode — imageNode glTF mapping (orientation, UV set, green flip, texture transform)', () => {
+  const valid = { imageB64: URL_WEBP, width: 2, height: 2, fileName: 'x.webp', colorSpace: 'color' };
+  const sample = (code: string) => code.split('\n').find((l) => l.includes('const image1 = texture(')) ?? '';
+  const importLine = (code: string) => code.split('\n').find((l) => l.includes("from 'three/tsl'")) ?? '';
+  const normalGraph = (values: Record<string, string | number>) => ({
+    nodes: [makeNode('img1', 'imageNode', { ...valid, colorSpace: 'data', ...values }), makeNode('out1', 'output')],
+    edges: [makeEdge('img1', 'out', 'out1', 'normal')],
+  });
+  const code = (g: { nodes: ReturnType<typeof makeNode>[]; edges: ReturnType<typeof makeEdge>[] }) =>
+    graphToCode(g.nodes, g.edges).code;
+
+  const KEYS = ['orientation', 'normalGreen', 'uvSet', 'xfOffsetX', 'xfOffsetY', 'xfRotation', 'xfScaleX', 'xfScaleY'];
+  const JUNK: unknown[] = [
+    null, '', [], {}, true, false, NaN, Infinity, -Infinity, 1e7, '1', ' 2', 'GLTF', 'gltf ', 'flip ', '1); alert(1',
+  ];
+  /** Each key at its DEFAULT value: stored, and still meaning nothing. */
+  const AT_DEFAULT: Record<string, unknown> = {
+    orientation: 'app', normalGreen: '', uvSet: 0, xfOffsetX: 0, xfOffsetY: 0, xfRotation: 0, xfScaleX: 1, xfScaleY: 1,
+  };
+
+  it('(a) junk and default values under every key emit exactly the flagless code, wired to Color and to Normal', () => {
+    const baseColor = code(imageGraph(valid));
+    const baseNormal = code(normalGraph({}));
+    const moved: string[] = [];
+    for (const key of KEYS) {
+      for (const v of [...JUNK, AT_DEFAULT[key]]) {
+        const extra = { [key]: v } as Record<string, string | number>;
+        if (code(imageGraph({ ...valid, ...extra })) !== baseColor) moved.push(`color ${key}=${String(v)}`);
+        if (code(normalGraph(extra)) !== baseNormal) moved.push(`normal ${key}=${String(v)}`);
+      }
+    }
+    expect(moved).toEqual([]);
+  });
+
+  it('(b) the glTF orientation uploads unflipped and drops the 1-u correction', () => {
+    const c = code(imageGraph({ ...valid, orientation: 'gltf' }));
+    expect(c).toContain('_image1_tex.flipY = false;');
+    expect(c).not.toContain('_image1_tex.flipY = true;');
+    expect(sample(c)).toBe('  const image1 = texture(_image1_tex, uv()).rgb;');
+  });
+
+  it('(c) under glTF each ticked Flip box mirrors; under the app orientation Flip X still cancels the correction', () => {
+    expect(sample(code(imageGraph({ ...valid, orientation: 'gltf', flipX: 1 }))))
+      .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;');
+    expect(sample(code(imageGraph({ ...valid, orientation: 'gltf', flipY: 1 }))))
+      .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(1, -1)).add(vec2(0, 1))).rgb;');
+    const app = code(imageGraph({ ...valid, flipX: 1 }));
+    expect(sample(app)).toBe('  const image1 = texture(_image1_tex, uv()).rgb;');
+    expect(app).toContain('_image1_tex.flipY = true;');
+  });
+
+  it('(d) a UV set samples uv(n); a wired uv input beats it', () => {
+    const c = code(imageGraph({ ...valid, uvSet: 2 }));
+    expect(sample(c)).toBe('  const image1 = texture(_image1_tex, uv(2).mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;');
+    expect(importLine(c)).toMatch(/\buv\b/);
+    const wired = graphToCode(
+      [makeNode('img1', 'imageNode', { ...valid, uvSet: 2 }), makeNode('v1', 'vec2', { x: 0.5, y: 0.5 }), makeNode('out1', 'output')],
+      [makeEdge('v1', 'out', 'img1', 'uv'), makeEdge('img1', 'out', 'out1', 'color')],
+    ).code;
+    expect(sample(wired)).toBe('  const image1 = texture(_image1_tex, vec21.mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;');
+    expect(wired).not.toContain('uv(2)');
+  });
+
+  it('(e) the transform comes BEFORE the mirror, tile and offset', () => {
+    expect(sample(code(imageGraph({ ...valid, xfScaleX: 2, xfScaleY: 3 }))))
+      .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(2, 3)).mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;');
+    expect(sample(code(imageGraph({ ...valid, xfScaleX: 2, xfScaleY: 3, tileX: 4, tileY: 4, offsetX: 0.5 }))))
+      .toBe('  const image1 = texture(_image1_tex, uv().mul(vec2(2, 3)).mul(vec2(-1, 1)).add(vec2(1, 0)).mul(vec2(4, 4)).add(vec2(0.5, 0))).rgb;');
+  });
+
+  it('(f) a rotation is ONE mat2 of clean constants, row-major, and imports mat2 (and no unused vec2)', () => {
+    // All-number mat2 arguments build a THREE.Matrix2, which is ROW-major: a
+    // quarter turn's rows (0, 1), (−1, 0) are written in reading order. The
+    // string was `mat2(0, -1, 1, 0)` until the review caught that TSL read
+    // it as the TRANSPOSE (the opposite turn); imageUvTransformTsl.test.ts
+    // runs the emitted text through real three to pin the meaning.
+    const c = code(imageGraph({ ...valid, orientation: 'gltf', xfRotation: Math.PI / 2 }));
+    expect(sample(c)).toBe('  const image1 = texture(_image1_tex, mat2(0, 1, -1, 0).mul(uv())).rgb;');
+    expect(importLine(c)).toMatch(/\bmat2\b/);
+    expect(importLine(c)).not.toMatch(/\bvec2\b/);
+    // Under the app orientation the mirror follows it.
+    expect(code(imageGraph({ ...valid, xfRotation: Math.PI / 2 }))).toContain('mat2(0, 1, -1, 0).mul(uv()).mul(vec2(-1, 1))');
+  });
+
+  it('(g) an offset alone adds straight after the base', () => {
+    expect(sample(code(imageGraph({ ...valid, orientation: 'gltf', xfOffsetX: 0.25, xfOffsetY: 0.5 }))))
+      .toBe('  const image1 = texture(_image1_tex, uv().add(vec2(0.25, 0.5))).rgb;');
+  });
+
+  it('(h) the green flip scales the normal-map decode, and only there', () => {
+    const c = code(normalGraph({ normalGreen: 'flip' }));
+    expect(c).toContain('return { normal: normalMap(image1, vec2(1, -1)) };');
+    expect(importLine(c)).toMatch(/\bvec2\b/);
+    expect(code(imageGraph({ ...valid, normalGreen: 'flip' }))).toBe(code(imageGraph(valid)));
+    // A channel socket is a scalar: never decoded, flipped or not.
+    const alpha = graphToCode(
+      [makeNode('img1', 'imageNode', { ...valid, normalGreen: 'flip' }), makeNode('out1', 'output')],
+      [makeEdge('img1', 'alpha', 'out1', 'normal')],
+    ).code;
+    expect(alpha).not.toContain('normalMap(');
+  });
+
+  it('(i) a wired Direction replaces the UV set and the transform', () => {
+    const c = graphToCode(
+      [
+        makeNode('img1', 'imageNode', { ...valid, uvSet: 2, xfScaleX: 2, xfOffsetX: 0.5 }),
+        makeNode('d1', 'vec3', { x: 0, y: 1, z: 0 }),
+        makeNode('out1', 'output'),
+      ],
+      [makeEdge('d1', 'out', 'img1', 'dir'), makeEdge('img1', 'out', 'out1', 'color')],
+    ).code;
+    expect(sample(c)).toMatch(/^ {2}const image1 = texture\(_image1_tex, equirectUV\(\w+\)\)\.rgb;$/);
+  });
+
+  it('(j) nothing stored reaches the code: string transform values are junk', () => {
+    const base = code(imageGraph(valid));
+    for (const key of ['xfOffsetX', 'xfOffsetY', 'xfRotation', 'xfScaleX', 'xfScaleY', 'uvSet', 'orientation', 'normalGreen']) {
+      const c = code(imageGraph({ ...valid, [key]: '1); alert(1' }));
+      expect(c, key).toBe(base);
+      expect(c).not.toContain('alert');
+    }
+  });
+
+  it('(k) buildShaderModule keeps the mat2 import at module scope', () => {
+    const { nodes, edges } = imageGraph({ ...valid, orientation: 'gltf', xfRotation: Math.PI / 2 });
+    const { code: c } = graphToCode(nodes, edges);
+    const mod = buildShaderModule(inlineImageAssetsFromNodes(c, nodes), {});
+    expect(mod).toMatch(/import \{[^}]*\bmat2\b[^}]*\} from 'three\/tsl'/);
+    // Row-major literal arguments (see (f)): rows (0, 1), (−1, 0).
+    expect(mod).toContain('mat2(0, 1, -1, 0).mul(uv())');
+    expect(mod).toContain('_image1_tex.flipY = false;');
+  });
+
+  it('only the orientation splits a shared texture', () => {
+    const two = (b: Record<string, string | number>) => graphToCode(
+      [makeNode('img1', 'imageNode', valid), makeNode('img2', 'imageNode', { ...valid, ...b }), makeNode('m1', 'mul'), makeNode('out1', 'output')],
+      [makeEdge('img1', 'out', 'm1', 'a'), makeEdge('img2', 'out', 'm1', 'b'), makeEdge('m1', 'out', 'out1', 'color')],
+    ).code;
+    const count = (s: string) => s.split('new globalThis.THREE.Texture(').length - 1;
+    expect(count(two({}))).toBe(1);
+    expect(count(two({ uvSet: 2, normalGreen: 'flip', xfScaleX: 2, xfRotation: 0.5 }))).toBe(1);
+    const split = two({ orientation: 'gltf' });
+    expect(count(split)).toBe(2);
+    expect(split).toContain('_image1_tex.flipY = true;');
+    expect(split).toContain('_image2_tex.flipY = false;');
+    // …over ONE decoded element: one inlined payload.
+    expect(split.split('new Image()').length - 1).toBe(1);
+  });
+});

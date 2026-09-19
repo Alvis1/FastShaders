@@ -146,10 +146,18 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
  * pays. `sinkCosts` prices every sink on its own for the badges, so two
  * alternative outputs can be compared before one is activated.
  *
- * A node feeding two materials is counted ONCE (the `visited` set), so the
- * total is a lower bound on true multi-pipeline cost: the GPU compiles the
- * shared node into every material that uses it. Real per-part pricing needs a
- * ShaderCarousel calibration entry and is still to come.
+ * A node feeding two materials is counted ONCE (the `visited` set), and every
+ * section's chain is summed into the one total. In POINTS PER PIXEL that is an
+ * UPPER bound: a pixel runs exactly one material, and the union of the
+ * sections' chains is at least any single section's. What it UNDER-counts is
+ * the other currency — compile work, pipelines and memory: each material
+ * compiles its own pipeline, shared nodes included, and texture memory is not
+ * priced in points at all — utils/textureMemory.ts reports it as a separate
+ * figure (bytes). Two Image nodes holding the same image still price twice,
+ * since each is a real sample, although graphToCode builds them ONE texture
+ * (engine/imageTexturePlan.ts), so the upload and its memory are paid once.
+ * Real per-part pricing needs a ShaderCarousel calibration entry and is still
+ * to come.
  *
  * Shared by useSyncEngine (runs per graph change) and the store's device
  * selection (activating a cost profile changes the table, not the graph, so the

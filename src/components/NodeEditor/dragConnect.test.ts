@@ -8,6 +8,7 @@ import {
   type ConnectHandle,
   type DragConnectEndpoints,
 } from './dragConnect';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 
 const h = (id: string, cy: number, occupied?: boolean): ConnectHandle => ({
   id,
@@ -100,6 +101,17 @@ describe('nearestByCy', () => {
 
   it('first handle wins an exact tie (visual top-to-bottom order)', () => {
     expect(nearestByCy(10, [h('a', 0), h('b', 20)])?.id).toBe('a');
+  });
+
+  it('an Image TILE feeds Color: its phantom ports share one cy, and the tie goes to `out`', () => {
+    // A palette tile plans every output at the cursor (phantomPorts), so all
+    // five tie; the strict `<` keeps the first — `out`, i.e. RGB. A REAL Image
+    // node dragged onto another pairs by vertical alignment instead and may
+    // pick Alpha/R/G/B — the Data-node precedent.
+    const outs = NODE_REGISTRY.get('imageNode')!.outputs.map((p) => h(p.id, 12));
+    expect(outs.map((o) => o.id)).toEqual(['out', 'alpha', 'r', 'g', 'b']);
+    expect(nearestByCy(12, outs)?.id).toBe('out');
+    expect(nearestByCy(-500, outs)?.id).toBe('out');
   });
 });
 

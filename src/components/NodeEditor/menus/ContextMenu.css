@@ -296,3 +296,42 @@
   padding: var(--space-2);
   user-select: text;
 }
+
+/* Texture picker (TexturePicker.tsx): an inline thumbnail grid inside the
+   Image node's settings menu. It is a nested scroller like
+   `.context-menu__construction pre`, and it stays in THIS file on purpose: the
+   menu shell carries `nowheel`, so a wheel over the grid scrolls the grid and
+   not the canvas (canvasWheel.test.ts lists the stylesheets allowed to hold a
+   scroller). Fixed 44px columns, so the `min-width: max-content` the list's
+   direct children take is simply the grid's own width. Square and shadowless
+   — the app-wide technical style. */
+.context-menu .context-menu__texture-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 44px);
+  gap: 4px;
+  max-height: 148px;
+  overflow-y: auto;
+  padding: var(--space-1) var(--space-3);
+}
+.context-menu .context-menu__texture-cell {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  background: var(--bg-app);
+  cursor: pointer;
+}
+.context-menu .context-menu__texture-cell[aria-selected='true'] {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+.context-menu .context-menu__texture-cell:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.context-menu .context-menu__texture-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}

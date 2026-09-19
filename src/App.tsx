@@ -1,6 +1,15 @@
-import { Suspense, lazy, useEffect, useRef, type ComponentType } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState, type ComponentType } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
-import { useAppStore, loadGraph, loadSavedGroups } from './store/useAppStore';
+import {
+  useAppStore,
+  loadGraph,
+  loadSavedGroupsReport,
+  persistSavedGroups,
+  reportImagesStrippedOnLoad,
+  reportOutputSectionsTrimmed,
+  type StoredGraph,
+  type StoredGroupsReport,
+} from './store/useAppStore';
 import { AppLayout } from './components/Layout/AppLayout';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import { isEvalMode } from './eval/evalMode';
@@ -9,6 +18,7 @@ import type { AppNode, AppEdge, OutputNodeData, ShaderNodeData } from './types';
 import { generateId } from './utils/idGenerator';
 import { makeTypedEdge } from './utils/edgeUtils';
 import { readStoredViewport } from './utils/viewportMemory';
+import { t } from './i18n';
 /**
  * The study STYLESHEET stays eager even though every module that draws with it
  * is now lazy, and that is not an oversight.
@@ -91,6 +101,32 @@ const EvalGate = lazy(
     }
   },
 );
+
+/**
+ * Covers the app while the desktop room reads its autosave files, so nothing
+ * can be clicked or dropped into a store the seed is about to replace. It
+ * stops the POINTER only: NodeEditor's shortcuts listen on `window`, so a
+ * keystroke still reaches the canvas (an `inert` root would not stop it
+ * either), which is why the desktop seed clears the undo history. Its own
+ * component, so the language subscription never re-renders App.
+ */
+function DesktopBootOverlay() {
+  const language = useAppStore((s) => s.language);
+  return (
+    <div
+      className="app-boot-overlay"
+      role="status"
+      aria-live="polite"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
+      {t('Opening your last session…', language)}
+    </div>
+  );
+}
 
 function SyncController() {
   useSyncEngine();
@@ -191,50 +227,111 @@ function createInitialNodes(): { nodes: AppNode[]; edges: AppEdge[] } {
   return { nodes, edges };
 }
 
+/**
+ * Seed the store from the stored documents: the saved-group library, the graph
+ * (or the demo), their drawings and palettes, the N8 reports, and the boot
+ * framing. The body of App's mount effect, lifted out so the desktop room can
+ * run it AFTER its asynchronous file read (store/desktopAutosaveBoot.ts) with
+ * exactly the statements, in exactly the order, the web runs synchronously.
+ */
+function seedFromStored(saved: StoredGraph | null, groupsReport: StoredGroupsReport): void {
+  useAppStore.setState({ savedGroups: groupsReport.groups });
+  // A library the load had to repair is written back, so the N8 notice below
+  // fires ONCE: nothing else persists the library until its next edit, while
+  // the graph gets the same from its post-seed autosave.
+  // The same holds for Output sections the load had to trim (decision 9).
+  // (On desktop this write is captured while file writes are still off and
+  // dropped by `start()`, which re-persists on the same condition.)
+  if (groupsReport.strippedImages > 0 || groupsReport.outputSectionsTrimmed > 0) persistSavedGroups(groupsReport.groups);
+  const { nodes, edges } = saved ?? createInitialNodes();
+  useAppStore.getState().setNodes(nodes, 'graph');
+  useAppStore.getState().setEdges(edges, 'graph');
+  if (saved?.drawings?.length) useAppStore.getState().setDrawings(saved.drawings);
+  // Palettes ride the same fs:graph payload and are already sanitized by
+  // loadGraph — the same contract setDrawings has.
+  if (saved?.palettes?.length) useAppStore.getState().setShaderPalettes(saved.palettes);
+
+  // N8: images the HARD caps stripped while either slot loaded. HERE, above
+  // the remembered-viewport early return below, or a returning user (the
+  // common case) would never see it. Graph first: it is the document on
+  // screen.
+  reportImagesStrippedOnLoad('graph', saved?.strippedImages ?? 0);
+  reportImagesStrippedOnLoad('savedGroups', groupsReport.strippedImages);
+  // Decision 9: Output sections / mesh assignments either load dropped or
+  // left without a target, announced with the same slot rule.
+  reportOutputSectionsTrimmed('graph', saved?.outputSectionsTrimmed ?? 0);
+  reportOutputSectionsTrimmed('savedGroups', groupsReport.outputSectionsTrimmed);
+
+  // Frame the boot graph. React Flow's `fitView` init prop already ran by
+  // now — child effects run before this parent effect, so it fitted an
+  // EMPTY canvas and the seeded graph landed at the raw default viewport,
+  // with half the demo chain (Output node included) outside the pane on a
+  // first visit. The import-fit arm in NodeEditor solves exactly this
+  // "nodes replaced, viewport not" case, and its listener is attached by
+  // the same effect-ordering guarantee.
+  //
+  // …but NOT when the canvas has a remembered viewport for this very graph.
+  // Framing is the right default for a graph the user has not seen yet; it is
+  // exactly wrong when they left the canvas somewhere deliberate, and this is
+  // the line that decides it — NodeEditor's `defaultViewport` has already put
+  // the viewport back by now, and the arm fits straight over it (measured:
+  // the restore looked like it had simply not been implemented). Gated on
+  // `saved` rather than on the stored viewport alone, so a corrupt or missing
+  // autosave — which lands the DEMO graph on screen instead — is still framed.
+  if (saved && readStoredViewport()) return;
+  window.dispatchEvent(new CustomEvent('fs:graph-imported'));
+}
+
 export default function App() {
   const initialized = useRef(false);
+  // Desktop only: the file-store read runs before the graph is seeded.
+  const [desktopBooting, setDesktopBooting] = useState<boolean>(__FS_DESKTOP__);
 
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
 
     // The saved-group library is hydrated HERE, not in the store's `create()`
-    // body: `loadSavedGroups` reaches `autoExposeConnectedParamPorts` /
+    // body: `loadSavedGroupsReport` reaches `autoExposeConnectedParamPorts` /
     // `sanitizeOutputMaterials`, which sit in the import cycle that runs back
     // through the store, so calling it at module scope could read a `const`
     // still in its TDZ and silently return an EMPTY library (the store's own
     // `savedGroups` comment carries the measurement). A mount effect runs after
     // every module body, where no cycle can catch anything half-initialised.
     // Same reason `drawings` and `shaderPalettes` are seeded from here.
-    useAppStore.setState({ savedGroups: loadSavedGroups() });
+    if (__FS_DESKTOP__) {
+      // The desktop room keeps both documents in files (utils/desktopAutosave.ts),
+      // read asynchronously BEFORE anything is seeded, behind a boot overlay.
+      // Never throws into React: any failure boots from localStorage instead.
+      let seeded = false;
+      const seed = (saved: StoredGraph | null, groups: StoredGroupsReport) => {
+        if (seeded) return;
+        seeded = true;
+        seedFromStored(saved, groups);
+        // The seed is the baseline. A key pressed during the read (Shift+A,
+        // then Enter, adds a node) pushed an undo entry holding the EMPTY
+        // pre-seed store, and the first Cmd+Z would restore it and autosave it.
+        useAppStore.setState({ past: [], future: [] });
+      };
+      void import('./store/desktopAutosaveBoot')
+        .then(async (m) => {
+          m.registerDesktopCloseFlush();
+          const docs = await m.bootDesktopAutosave().catch(() => null);
+          const groups = docs ? docs.groups : loadSavedGroupsReport();
+          seed(docs ? docs.graph : loadGraph(), groups);
+          docs?.start();
+        })
+        .catch((e: unknown) => {
+          if (seeded) console.error(e);
+          else seed(loadGraph(), loadSavedGroupsReport());
+        })
+        .finally(() => setDesktopBooting(false));
+      return;
+    }
 
+    const groupsReport = loadSavedGroupsReport();
     const saved = loadGraph();
-    const { nodes, edges } = saved ?? createInitialNodes();
-    useAppStore.getState().setNodes(nodes, 'graph');
-    useAppStore.getState().setEdges(edges, 'graph');
-    if (saved?.drawings?.length) useAppStore.getState().setDrawings(saved.drawings);
-    // Palettes ride the same fs:graph payload and are already sanitized by
-    // loadGraph — the same contract setDrawings has.
-    if (saved?.palettes?.length) useAppStore.getState().setShaderPalettes(saved.palettes);
-
-    // Frame the boot graph. React Flow's `fitView` init prop already ran by
-    // now — child effects run before this parent effect, so it fitted an
-    // EMPTY canvas and the seeded graph landed at the raw default viewport,
-    // with half the demo chain (Output node included) outside the pane on a
-    // first visit. The import-fit arm in NodeEditor solves exactly this
-    // "nodes replaced, viewport not" case, and its listener is attached by
-    // the same effect-ordering guarantee.
-    //
-    // …but NOT when the canvas has a remembered viewport for this very graph.
-    // Framing is the right default for a graph the user has not seen yet; it is
-    // exactly wrong when they left the canvas somewhere deliberate, and this is
-    // the line that decides it — NodeEditor's `defaultViewport` has already put
-    // the viewport back by now, and the arm fits straight over it (measured:
-    // the restore looked like it had simply not been implemented). Gated on
-    // `saved` rather than on the stored viewport alone, so a corrupt or missing
-    // autosave — which lands the DEMO graph on screen instead — is still framed.
-    if (saved && readStoredViewport()) return;
-    window.dispatchEvent(new CustomEvent('fs:graph-imported'));
+    seedFromStored(saved, groupsReport);
   }, []);
 
   return (
@@ -253,6 +350,7 @@ export default function App() {
         </Suspense>
       )}
       <AppLayout />
+      {desktopBooting && <DesktopBootOverlay />}
     </ReactFlowProvider>
   );
 }

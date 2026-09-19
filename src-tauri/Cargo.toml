@@ -21,11 +21,14 @@ tiny_http = "0.12"
 local-ip-address = "0.6"
 percent-encoding = "2"
 # Work folder (see src/work_folder.rs): native folder picker (Rust-side only —
-# no webview dialog permissions), shader-name extraction from the project
-# block, base64 payloads over IPC.
+# no webview dialog permissions) and shader-name extraction from the project
+# block. Saves cross IPC as a RAW body (percent-encoding above decodes the
+# file-name header), so no base64 crate.
 tauri-plugin-dialog = "2"
 serde_json = "1"
-base64 = "0.22"
+# Desktop autosave (src/autosave.rs): content-addressed image files, named by
+# their SHA-256, which Rust computes and re-verifies on every read.
+sha2 = "0.10"
 
 [profile.release]
 # Small-binary settings: the shell is a thin webview host, favor size.

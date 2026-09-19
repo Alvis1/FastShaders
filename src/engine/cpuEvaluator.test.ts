@@ -388,6 +388,56 @@ describe('getNodeOutputShape', () => {
     const edges = [makeEdge('v', 'out', 'op', 'a'), makeEdge('s', 'out', 'op', 'b')];
     expect(getNodeOutputShape('op', [v, s, op], edges)).toBe(3);
   });
+  // The broadcast reads each operand's width PER SOURCE SOCKET (the append
+  // branch's rule), not the source node's head width. A node-level width made
+  // `toHsl.h → mul` a vec3, so the Output node skipped its vec3() widen and
+  // the float splatted into alpha.
+  it('broadcasts per source SOCKET: toHsl.h + float → 1 (was 3)', () => {
+    const c = makeNode('c', 'color', { hex: '#ff8000' });
+    const h = makeNode('h', 'toHsl');
+    const s = makeNode('s', 'float', { value: 2 });
+    const op = makeNode('op', 'mul');
+    const edges = [
+      makeEdge('c', 'out', 'h', 'rgb'),
+      makeEdge('h', 'h', 'op', 'a'),
+      makeEdge('s', 'out', 'op', 'b'),
+    ];
+    expect(getNodeOutputShape('op', [c, h, s, op], edges)).toBe(1);
+  });
+
+  it('broadcasts per source SOCKET: dataviz.value → 1', () => {
+    const v = makeNode('v', 'dataviz', { lowColor: '#000000', highColor: '#ffffff' });
+    const op = makeNode('op', 'mul');
+    const edges = [makeEdge('v', 'value', 'op', 'a')];
+    expect(getNodeOutputShape('op', [v, op], edges)).toBe(1);
+  });
+
+  it('broadcasts per source SOCKET: toHsl.out stays 3', () => {
+    const c = makeNode('c', 'color', { hex: '#ff8000' });
+    const h = makeNode('h', 'toHsl');
+    const op = makeNode('op', 'mul');
+    const edges = [makeEdge('c', 'out', 'h', 'rgb'), makeEdge('h', 'out', 'op', 'a')];
+    expect(getNodeOutputShape('op', [c, h, op], edges)).toBe(3);
+  });
+
+  it('a null / unknown source handle falls back to whole-node inference', () => {
+    const c = makeNode('c', 'color', { hex: '#ff8000' });
+    const h = makeNode('h', 'toHsl');
+    const op = makeNode('op', 'mul');
+    const nul = { ...makeEdge('h', 'out', 'op', 'a'), sourceHandle: null } as unknown as ReturnType<typeof makeEdge>;
+    expect(getNodeOutputShape('op', [c, h, op], [makeEdge('c', 'out', 'h', 'rgb'), nul])).toBe(3);
+    // A tampered handle names no port (portShapeForHandle → 0) → node-level.
+    const bogus = makeEdge('h', '__proto__', 'op', 'a');
+    expect(getNodeOutputShape('op', [c, h, op], [makeEdge('c', 'out', 'h', 'rgb'), bogus])).toBe(3);
+  });
+
+  it('an `any`-port source (a mul chain) still infers from its own inputs', () => {
+    const v = makeNode('v', 'vec3', { x: 0, y: 0, z: 0 });
+    const m1 = makeNode('m1', 'mul');
+    const m2 = makeNode('m2', 'mul');
+    const edges = [makeEdge('v', 'out', 'm1', 'a'), makeEdge('m1', 'out', 'm2', 'a')];
+    expect(getNodeOutputShape('m2', [v, m1, m2], edges)).toBe(3);
+  });
 });
 
 describe('evaluateNodeRange', () => {

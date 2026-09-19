@@ -2,6 +2,7 @@ import type { NodeDefinition, NodeCategory, PortDefinition } from '@/types';
 import { nodeSearchLV, nodeLabelLV } from '@/i18n';
 import { SOUND_DEFAULT_VALUES } from '@/utils/soundSettings';
 import { HIDDEN_NODE_TYPES } from './editorVisibility';
+import { withheldNodeTypes } from './optionalCategories';
 
 const definitions: NodeDefinition[] = [
   // ===== INPUT NODES =====
@@ -295,6 +296,60 @@ const definitions: NodeDefinition[] = [
     outputs: [{ id: 'out', label: 'UV', dataType: 'vec2' }],
     defaultValues: { channel: 0, tilingU: 1.0, tilingV: 1.0, rotation: 0.0 },
     description: 'Texture coordinates with tiling and rotation. Defaults to geometry UV. Also: texcoord, texture coordinate',
+  },
+  // The Image (Texture) node. Usually created by dropping an image file onto
+  // the canvas (that path is not an add surface and is never gated); since GLB
+  // Phase 4 it is also an ordinary palette/Add-node entry that lands EMPTY —
+  // shipped HIDDEN through editorVisibility.json until it is finished. Category
+  // `input`, not `texture`: `texture` is an OPTIONAL category (off by default),
+  // and a def there would be unofferable until the user found that switch.
+  // It lives INSIDE this literal (not a separate const) because the Node
+  // Designer's label/description splice locators scan only `definitions`.
+  //
+  // The payload (a compressed data: URL) lives on `data.values.imageB64` (see
+  // `src/utils/imageNode.ts` for the validation/limit rules). The optional `uv`
+  // input overrides the sampling coordinate, falling back to `uv()`, and has no
+  // defaultValues entry on purpose (an inline number would be a dead widget —
+  // codegen falls back to uv()). The tile/offset params are OPT-IN sockets:
+  // only their ids in the node's `exposedPorts` draw (`effectiveNodeDef`,
+  // utils/exposedPorts.ts — shared by ShaderNode and every NodeVisual
+  // surface); a wired edge overrides the stored value.
+  //
+  // OUTPUTS: `out` (Color, vec3) stays outputs[0] — every `outputs[0]` reader
+  // (splice, a dropped wire, ⌘-click Preview, the `?? 'out'` defaults, the
+  // designer's `sockets['out']` key) and every saved edge mean it. Alpha, R, G
+  // and B are always mounted float SWIZZLES of the same ONE sample; their ids
+  // must equal utils/imageChannels.ts's IMAGE_CHANNEL_COMPONENTS keys, in that
+  // order (pinned), and none may collide with an input id — TypedEdge's
+  // disconnect selector matches `data-handleid` without a source/target class.
+  // They render as LABELLED rows (NODE_DESIGN_REQUIREMENTS #8b, `outputRowLabel`).
+  {
+    type: 'imageNode',
+    label: 'Image',
+    category: 'input',
+    tslFunction: '',
+    tslImportModule: '',
+    inputs: [
+      { id: 'uv', label: 'UV', dataType: 'vec2' },
+      { id: 'tileX', label: 'Tile X', dataType: 'float' },
+      { id: 'tileY', label: 'Tile Y', dataType: 'float' },
+      { id: 'offsetX', label: 'Offset X', dataType: 'float' },
+      { id: 'offsetY', label: 'Offset Y', dataType: 'float' },
+      // A 3D direction sampled through equirectUV — the image as a SKY. When
+      // wired it replaces the UV path entirely (tile/offset/flip are UV notions).
+      // LAST, so the splice-on-drop pick order of the UV params is unchanged.
+      { id: 'dir', label: 'Direction (equirect)', dataType: 'vec3' },
+    ],
+    outputs: [
+      { id: 'out', label: 'Color', dataType: 'vec3' },
+      { id: 'alpha', label: 'Alpha', dataType: 'float' },
+      { id: 'r', label: 'R', dataType: 'float' },
+      { id: 'g', label: 'G', dataType: 'float' },
+      { id: 'b', label: 'B', dataType: 'float' },
+    ],
+    defaultValues: { tileX: 1, tileY: 1, offsetX: 0, offsetY: 0 },
+    description:
+      'An image sampled as a texture: its color (RGB), plus Alpha, R, G and B as separate outputs; optional UV, tile, offset and direction inputs. Also: texture, sampler, picture, bitmap',
   },
   {
     type: 'property_float',
@@ -1667,42 +1722,10 @@ const dataNodeDef: NodeDefinition = {
   description: 'A dropped CSV dataset; one float output per column, sampled at uv.x.',
 };
 
-// Created exclusively by dropping an image file onto the canvas — hidden from
-// the palette like `unknown`/`dataNode`. The payload (a compressed data: URL)
-// lives on `data.values.imageB64` (see `src/utils/imageNode.ts` for the
-// validation/limit rules). Output is the texture sample's `.rgb` (vec3 — the
-// out dataType drives edge shape inference); the optional `uv` input overrides
-// the sampling coordinate, falling back to `uv()`. The tile/offset params are
-// OPT-IN sockets: ShaderNode hides them unless their ids appear in the node's
-// `exposedPorts` (toggled in Node Settings → "…as input sockets"); a wired
-// edge overrides the stored value. `uv` has no defaultValues entry on purpose
-// (an inline number would be a dead widget — codegen falls back to uv()).
-const imageNodeDef: NodeDefinition = {
-  type: 'imageNode',
-  label: 'Image',
-  category: 'texture',
-  tslFunction: '',
-  tslImportModule: '',
-  inputs: [
-    { id: 'uv', label: 'UV', dataType: 'vec2' },
-    { id: 'tileX', label: 'Tile X', dataType: 'float' },
-    { id: 'tileY', label: 'Tile Y', dataType: 'float' },
-    { id: 'offsetX', label: 'Offset X', dataType: 'float' },
-    { id: 'offsetY', label: 'Offset Y', dataType: 'float' },
-    // A 3D direction sampled through equirectUV — the image as a SKY. When
-    // wired it replaces the UV path entirely (tile/offset/flip are UV notions).
-    // LAST, so the splice-on-drop pick order of the UV params is unchanged.
-    { id: 'dir', label: 'Direction (equirect)', dataType: 'vec3' },
-  ],
-  outputs: [{ id: 'out', label: 'Color', dataType: 'vec3' }],
-  defaultValues: { tileX: 1, tileY: 1, offsetX: 0, offsetY: 0 },
-  description: 'A dropped image sampled as a texture (RGB); optional UV/tile/offset inputs.',
-};
-
 const allDefinitions: NodeDefinition[] = [...definitions];
 
 export const NODE_REGISTRY = new Map<string, NodeDefinition>(
-  [...allDefinitions, unknownNodeDef, dataNodeDef, imageNodeDef].map(d => [d.type, d])
+  [...allDefinitions, unknownNodeDef, dataNodeDef].map(d => [d.type, d])
 );
 
 /**
@@ -1916,16 +1939,19 @@ const narrowedEditorDefinitions = new Map<string, NodeDefinition[]>();
  *
  * With `hidden` — the optional categories the user has NOT switched on
  * (`registry/optionalCategories.ts`) — the same list minus every definition in
- * those categories. Without it, the file's answer alone; that is what the
- * ranking and findability tests read, so switching a category off cannot
- * redden them, and it is why an ADD SURFACE must always pass the set.
+ * those categories AND minus their COMPANIONS (`withheldNodeTypes`: the
+ * Raymarch Output and Ray Direction go with Distance fields although they
+ * live in `output` and `input`). Without it, the file's answer alone; that is
+ * what the ranking and findability tests read, so switching a category off
+ * cannot redden them, and it is why an ADD SURFACE must always pass the set.
  */
 export function getEditorDefinitions(hidden?: ReadonlySet<NodeCategory>): NodeDefinition[] {
   if (!hidden || hidden.size === 0) return editorDefinitions;
   const key = [...hidden].sort().join('|');
   let list = narrowedEditorDefinitions.get(key);
   if (!list) {
-    list = editorDefinitions.filter((d) => !hidden.has(d.category));
+    const withheld = withheldNodeTypes(hidden);
+    list = editorDefinitions.filter((d) => !hidden.has(d.category) && !withheld.has(d.type));
     narrowedEditorDefinitions.set(key, list);
   }
   return list;

@@ -1,0 +1,27 @@
+
+MicroPlane calibration fit  —  fitCalibrationRun.json
+device: synthetic / fixture-gpu   timing: gpu-timestamp   valid: false
+  ⚠ synthetic fixture: not a device run
+  ⚠ second reason line
+scaffold slope (per-copy overhead, subtracted): 0.01000 ms  (R²=1.000)
+
+op         ms/copy(net)  R²     suggested  current  Δ     flag                    
+─────────  ────────────  ─────  ─────────  ───────  ────  ────────────────────────
+div        0.11000       1.000  1          2        -1                            
+exp        -0.00600      1.000  0          3        -3    below-scaffold mispriced
+mul        0.02000       1.000  0          1        -1                            
+normalize  0.07000       1.000  1          6        -5    mispriced               
+perlin     2.29000       1.000  27         27       0                             
+pow        0.49000       1.000  6          —        —                             
+sin        0.19000       1.000  2          2        0                             
+sqrt       0.31024       0.968  4          4        0     nonlinear?              
+voronoi    9.99000       1.000  120        235      -115                          
+
+Additivity (measured ÷ predicted-from-isolation):
+  combo_sin4_sqrt4: measured 2.15000 / predicted 2.08095 = 1.03×  → additive
+  combo_perlin4_voronoi4: measured 30.00000 / predicted 49.20000 = 0.61×  → SUB-additive (whole < parts)
+
+ILP (sqrt×8): chain 2.40000 / parallel 1.60000 = 1.50×  (>1 ⟹ latency-bound; point model counts throughput only)
+
+DCE sentinel: dropped 0.01000 vs kept 1.50000  → compiler DCE ACTIVE (good: accumulation is load-bearing)
+

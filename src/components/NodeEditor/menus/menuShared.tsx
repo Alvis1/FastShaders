@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, cloneNodeSharingPayloads } from '@/store/useAppStore';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import { t, portLabel, type Language } from '@/i18n';
-import type { ShaderFlowNode } from '@/types';
+import type { AppNode, ShaderFlowNode } from '@/types';
 import { getNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { generateId } from '@/utils/idGenerator';
+import { exceedsImageBudget, imageNodesForNotice } from '@/utils/imageNode';
 import { resetNodeValues, isAtDefaultValues, hasResettableValues } from '@/utils/resetNodeValues';
 import { previewableOutputs } from '@/utils/nodePreview';
 
@@ -224,6 +225,39 @@ export function RadialRows({ labelKey, language, values, onChange }: RadialRowsP
 }
 
 /**
+ * Right-click → Duplicate Node. It counts the project image budget exactly as
+ * Ctrl+D does (NodeEditor's pasteNodes, utils/imageNode.ts exceedsImageBudget):
+ * a clone whose image payload would push the project past the 3M total raises
+ * `image-total-cap` instead of landing, and its "Add anyway" adds that clone
+ * through the LIVE store, since it may run long after this menu closed. A node
+ * with no payload is never refused, and a refusal pushes no undo entry.
+ * The clone SHARES the payload string with the original (as Ctrl+D does)
+ * rather than minting a second copy of it. Returns whether the node was
+ * added now.
+ */
+export function duplicateNodeWithinBudget(node: AppNode): boolean {
+  const clone = {
+    ...cloneNodeSharingPayloads(node),
+    id: generateId(),
+    position: { x: node.position.x + 30, y: node.position.y + 30 },
+    selected: false,
+  } as AppNode;
+  const s = useAppStore.getState();
+  if (exceedsImageBudget(s.nodes, [clone], s.ignoreImageLimits)) {
+    const who = imageNodesForNotice([clone]);
+    s.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'image-total-cap',
+      ...(who.fileName ? { fileName: who.fileName } : {}),
+      proceed: () => useAppStore.getState().addNode(clone),
+    });
+    return false;
+  }
+  s.addNode(clone);
+  return true;
+}
+
+/**
  * Reset/Duplicate/Delete footer shared by every per-node settings menu, so the
  * specialized menus (Stripes/Data Viz/Colormap/Data Range) keep the same
  * mouse-only actions the generic NodeSettingsMenu offers — not just the
@@ -238,7 +272,6 @@ export function NodeActions({ nodeId }: { nodeId: string }) {
   // did not touch, so the identity of THIS node is the honest dependency:
   // zustand's default Object.is equality then bails on everything else.
   const node = useAppStore((s) => s.nodes.find((n) => n.id === nodeId)) as ShaderFlowNode | undefined;
-  const addNode = useAppStore((s) => s.addNode);
   const removeNode = useAppStore((s) => s.removeNode);
   const updateNodeData = useAppStore((s) => s.updateNodeData);
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
@@ -253,12 +286,7 @@ export function NodeActions({ nodeId }: { nodeId: string }) {
 
   const handleDuplicate = () => {
     if (!node) return;
-    addNode({
-      ...structuredClone(node),
-      id: generateId(),
-      position: { x: node.position.x + 30, y: node.position.y + 30 },
-      selected: false,
-    });
+    duplicateNodeWithinBudget(node as AppNode);
     closeContextMenu();
   };
 

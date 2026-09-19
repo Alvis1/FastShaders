@@ -33,8 +33,11 @@ one):
   model inside are loaded. If a drop contains a `.zip`, the zip wins and the
   other files in that drop are ignored.
 
-A shader and a model can be dropped together. Nothing prompts on a drop — the
-one confirmation in Podest guards *Enter VR*.
+A shader and a model can be dropped together. Nothing prompts on a drop, with
+one exception: a `.glb` exported by FastShaders that carries its shader asks,
+naming the file, before running it (the model loads either way; a shader
+dropped with it wins, and zips and the work folder never ask). The other
+confirmation guards *Enter VR*.
 
 Loading a **different** shader clears the tuned property values, so a folder of
 unrelated exports whose uniforms all happen to be called `property1` cannot
@@ -227,8 +230,12 @@ The playhead, clip and toggles survive a stage rebuild. The controls are hidden
 in presentation mode — playback chrome over the artwork is exactly what
 presentation mode exists to remove.
 
-DRACO- and meshopt-compressed glTF are not supported (no decoder is bundled);
-such a file reports a parse error rather than failing silently.
+DRACO- and meshopt-compressed glTF are decoded with three's own decoders, which
+Podest loads from `js/decoders/` and hands to the sandboxed stage as bytes. KTX2
+(`KHR_texture_basisu`) textures are transcoded for the GPU with three's Basis
+Universal transcoder, also handed to the stage as bytes; a texture that cannot
+be transcoded falls back to its own image, and the stage's console names the
+format it transcoded for.
 
 ## Microphone
 
@@ -256,19 +263,31 @@ Podest works on any plain static server with no configuration. Copy these files,
 keeping the layout:
 
 ```
-podest.html                          202 KB
+podest.html                          244 KB
 js/a-frame-180-a-01.min.js           1.6 MB
-js/a-frame-shaderloader-0.6.js        36 KB
+js/a-frame-shaderloader-0.8.js       118 KB
 js/aframe-orbit-controls.min.js       25 KB
-models/teapot.obj                    212 KB   ┐ only for the Teapot /
+js/decoders/draco_wasm_wrapper.js     58 KB   ┐ only for Draco- and
+js/decoders/draco_decoder.wasm       192 KB   │ meshopt-compressed
+js/decoders/meshopt_decoder.module.js 29 KB   ┘ glTF models
+js/decoders/basis_transcoder.js       57 KB   ┐ only for models with
+js/decoders/basis_transcoder.wasm    515 KB   ┘ KTX2 textures
+js/decoders/README.md                 14 KB     the Apache-2.0 licence for the Draco and Basis files
+models/teapot.obj                    1.3 MB   ┐ only for the Teapot /
 models/stanford-bunny.obj            2.4 MB   ┘ Bunny geometry options
 images/favicon-podest.svg              2 KB
 ```
 
-4.3 MB in total, or 1.8 MB without the two models — dropping them costs only
-those dropdown entries, which then report a 404 in a dismissible banner.
-Everything resolves relative to wherever `podest.html` sits. Nothing else is
-fetched: no CDN, no web font, no analytics.
+About 6.6 MB in total, or 2.9 MB without the two models — dropping them costs
+only those dropdown entries, which then report a 404 in a dismissible banner.
+The five decoder files are fetched only when a model that needs them is dropped;
+without them a Draco- or meshopt-compressed model fails with "Could not load
+the Draco decoder: HTTP 404" (or the meshopt one), while a model whose KTX2
+textures are OPTIONAL still loads with its fallback images after the same kind
+of banner — only one that REQUIRES `KHR_texture_basisu` fails. Every other model
+is unaffected. Everything resolves relative to
+wherever `podest.html` sits, and nothing outside these files is fetched: no
+CDN, no web font, no analytics.
 
 An `http(s)` server is required (`file://` will not work). Podest ships no
 Content-Security-Policy of its own, so a policy your host sends is the only one
@@ -284,18 +303,24 @@ name buffers and textures by absolute URL, so the stage allowlists `blob:` and
 `data:` and neutralises everything else — a shared file cannot phone home with
 the viewer's IP.
 
+A `.glb` can carry a FastShaders shader. Podest runs it only after you say yes,
+only inside the sandbox (like a dropped `.js`), and strips it out of the model
+before the stage, the session mirror or the VR window see the file. Both of
+those documents also switch the loader's model-shader path off for good, so
+nothing inside a model can run there on its own.
+
 The one deliberate crossing is *Enter VR*, which is why it asks first.
 
 ## Limits
 
 | | |
 | --- | --- |
-| Shader source remembered | 24 MB |
-| Model remembered | 64 MB — a larger model still loads, it just is not restored after a reload |
-| Zip | 512 entries, 64 MB inflated, 256-character names; STORE + deflate only |
+| Shader source remembered | 24 M characters — a larger shader still loads; the panel says it will not be restored |
+| Model remembered | 64 MB — a larger model still loads; the panel says it will not be restored after a reload |
+| Zip | 512 entries, 96 MB inflated, 512-byte names; STORE + deflate only |
 | Work folder | 512 files, 3 levels deep |
 | Title | 120 characters |
-| Not supported | DRACO / meshopt glTF compression |
+| KTX2 textures | 8192 px per side, 4096 whenever the file cannot reach a compressed format — no compressed format on the GPU, an ETC1S file on an ASTC-only GPU, or a raw (never-transcoded) KTX2 |
 
 ## Reference
 
@@ -319,10 +344,9 @@ is why its asset references are relative and why it receives no CSP meta tag.
 Several parts of it are hand-maintained twins of editor modules. `fit-bounds`,
 `gltf-anim` and the VR locomotion layer are pinned by tests under `src/`
 (`previewFitBounds`, `previewGltfAnim`, `podestVrNav`) rather than by any sync
-step. The microphone band analysis and the zip reader's caps are hand-kept
-copies with **no test behind them** — change those by hand, together with their
-originals. (They have already drifted once: the zip name-length cap is 256 here
-and 512 in `src/utils/zipReader.ts`.) On desktop it is opened by a small Rust command
+step. The microphone band analysis and the zip reader are hand-kept copies too,
+each pinned by a test (`soundAnalysis`, and `zipReader` plus `podestLimits`) —
+change them together with their originals. On desktop it is opened by a small Rust command
 that must keep `disable_drag_drop_handler()` — without it the OS swallows every
 HTML5 drop and a drag-drop-first page cannot be given a file at all.
 

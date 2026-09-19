@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getEditorDefinitions, getFlowNodeType } from '@/registry/nodeRegistry';
 import { hiddenOptionalCategories, DEFAULT_OPTIONAL_CATEGORIES } from '@/registry/optionalCategories';
+import { isNodeHiddenFromEditor } from '@/registry/editorVisibility';
 
 /**
  * Why the asset strip is NOT virtualized, stated as a test rather than as a
@@ -76,26 +77,37 @@ describe('content browser — the boot cost, stated', () => {
   // when the library does. These are what an optimization has to beat; re-run
   // this file after any attempt and put the new figures in the commit.
   const booted = getEditorDefinitions(hiddenOptionalCategories(DEFAULT_OPTIONAL_CATEGORIES));
+  // The counts follow editorVisibility.json, never a literal: the Image node
+  // ships HIDDEN there (GLB Phase 4) and is a `shader`-flow card, so ticking
+  // "In editor" for it adds one to each figure below. release.yml runs
+  // `npm test` before it builds, so a count that held only while hidden would
+  // block the unhide (it did: three literals here failed the moment it ran).
+  const img = isNodeHiddenFromEditor('imageNode') ? 0 : 1;
 
   it('mounts one inert replica per default-visible node definition', () => {
     // The default tab is 'all' with an empty query, so `filteredDefs` is the
     // whole editor set narrowed by the optional categories (Textures and
     // Distance fields are OFF by default). Presets and textures are lazy and
     // contribute nothing until their tab opens or a query is typed.
-    // 78 since the Raymarch Output moved from the optional Distance fields
-    // family into `output` (2026-09-09): it is a SINK, and the family it grew
-    // up in is off by default, which left the only marching sink unreachable.
-    expect(booted.length).toBe(78);
+    // 76: the Raymarch Output moved from the optional Distance fields family
+    // into `output` on 2026-09-09 (a sink belongs with the sinks), which made
+    // this 78 — and on 2026-09-16 it and Ray Direction became that family's
+    // COMPANIONS (registry/optionalCategories.ts), withheld with it while the
+    // switch is off, which is the default here. `img` is the Texture node,
+    // which the GLB work unhid (registry/editorVisibility.json), so this count
+    // follows the FILE rather than a literal.
+    expect(booted.length).toBe(76 + img);
   });
 
-  it('observes 76 elements through ONE shared ResizeObserver', () => {
+  it(`observes ${74 + img} elements through ONE shared ResizeObserver`, () => {
     // NodePreviewCard wraps every branch except `color` in FitNodeHeading; the
     // colour cards need no heading normalization (they have no header), so they
     // escape it. The count of OBSERVED ELEMENTS is unchanged — what changed
     // (2026-09-09) is that they share a single observer instead of registering
-    // 76 of them in the browser's observation loop for the whole session.
+    // one per card in the browser's observation loop for the whole session
+    // (74: the boot set minus the two colour cards).
     const observed = booted.filter((d) => getFlowNodeType(d) !== 'color');
-    expect(observed.length).toBe(76);
+    expect(observed.length).toBe(74 + img);
     const card = readFileSync(join(__dirname, 'NodePreviewCard.tsx'), 'utf8');
     expect((card.match(/new ResizeObserver\(/g) ?? []).length).toBe(1);
     expect(card).toContain('return observeCardSize(el, measure);');
@@ -110,7 +122,10 @@ describe('content browser — the boot cost, stated', () => {
     const byFlow = (f: string) => booted.filter((d) => getFlowNodeType(d) === f).length;
     expect(byFlow('preview')).toBe(8);
     expect(byFlow('clock')).toBe(1);
-    expect(byFlow('shader')).toBe(62);
+    // 61: Ray Direction is a ShaderNode-rendered def withheld with Distance
+    // fields (its companion, off by default) — 62 before 2026-09-16. The
+    // Texture node (`img`) is ShaderNode-rendered too, so it lands here.
+    expect(byFlow('shader')).toBe(61 + img);
   });
 });
 

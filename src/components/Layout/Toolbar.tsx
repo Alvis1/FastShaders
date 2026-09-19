@@ -5,16 +5,25 @@ import { useDismiss } from '@/hooks/useDismiss';
 import { useLongPress } from '@/hooks/useLongPress';
 import { hardReload } from '@/utils/hardReload';
 import { invokeDesktop, errorText } from '@/utils/tauriBridge';
-import { downloadShader } from '@/engine/exportShader';
+import { buildShaderExportChecked, downloadShader, shaderBaseName } from '@/engine/exportShader';
+import { effectiveExportFormat, glbExportAvailability } from '@/utils/glbExportAvailability';
+import { GLB_EXPORT_KEYS, glbUnavailableText } from '@/utils/glbExportCopy';
+import { hasKtx2Encoder } from '@/utils/ktx2Encoder';
+import { useExportPreflight } from '@/components/Modals/ExportPreflightModal';
 import { FeedbackModal } from '@/components/Modals/FeedbackModal';
 import { PalettesModal } from '@/components/Modals/PalettesModal';
 import { isEvalMode } from '@/eval/evalMode';
+import { fillTemplate } from '@/utils/fillTemplate';
+import { GLB_IMPORT_MATERIAL_LIMIT } from '@/utils/glbImportLimits';
 import { WorkFolder } from './WorkFolder';
 import { formatCategoryLabel, t } from '@/i18n';
 import { CATEGORIES } from '@/registry/nodeCategories';
 import { OPTIONAL_CATEGORIES, type OptionalCategory } from '@/registry/optionalCategories';
 import { foldOverflow, OVERFLOW_INITIAL } from './toolbarOverflow';
 import { isTypingTarget } from '@/utils/isTypingTarget';
+// The "Download app" dropdown's rows: the ONE list of release assets, pinned to
+// release.yml's upload names by desktopDownloads.test.ts.
+import { DESKTOP_DOWNLOADS, releaseDownloadUrl } from '@/utils/desktopDownloads';
 import './Toolbar.css';
 
 const CONTACT = {
@@ -104,22 +113,6 @@ const EvalFinishModal = lazy(
   },
 );
 
-/**
- * Desktop-build downloads for the "Download app" dropdown. The `/releases/latest/
- * download/` URLs are permanent GitHub redirects to the newest release, so
- * the app always offers the current build with no per-release code change —
- * but that only works because the release workflow uploads the assets under
- * these FIXED names (see .github/workflows/release.yml); keep this list in
- * sync with the workflow's upload names. Plain anchors: GitHub serves release
- * assets with Content-Disposition: attachment, and CSP doesn't gate navigation.
- */
-const RELEASE_DOWNLOAD_BASE = 'https://github.com/Alvis1/FastShaders/releases/latest/download';
-const DESKTOP_DOWNLOADS = [
-  { key: 'win', os: 'Windows', detail: 'installer (.exe)', file: 'FastShaders-Windows-Setup.exe' },
-  { key: 'win-portable', os: 'Windows', detail: 'portable (.zip, no install)', file: 'FastShaders-Windows-Portable.zip' },
-  { key: 'mac', os: 'macOS', detail: 'disk image (.dmg)', file: 'FastShaders-macOS.dmg' },
-];
-
 /** Width of the right-click preferences popover — kept in step with its CSS
  *  `width` so the on-screen clamp below matches the box actually painted. */
 const PREFS_W = 200;
@@ -127,8 +120,18 @@ const PREFS_W = 200;
  *  checkbox row per setting and a `--space-2` gap between rows. Derived from
  *  the row count so adding a setting cannot leave the box hanging off the
  *  bottom of a short window. */
-const PREFS_ROWS = 1 + OPTIONAL_CATEGORIES.length;
-const PREFS_H = 24 + PREFS_ROWS * 20 + (PREFS_ROWS - 1) * 8;
+function prefsHeight(rows: number): number {
+  return 24 + rows * 20 + (rows - 1) * 8;
+}
+
+/**
+ * The GLB import's material-gate override (N11; utils/glbImportLimits.ts):
+ * its OWN constant, not an OPTIONAL_CATEGORY_HINTS entry — that table is
+ * counted by optionalCategories.test.ts. Filled with the limit through
+ * fillTemplate; the same words the dialog's blocked text quotes.
+ */
+const ALLOW_MANY_MATERIALS_HINT =
+  'Lets a dropped model with more than {limit} materials build one Output section per material. Each adds textures and draw calls, and every such import still asks first.';
 
 /**
  * The right-click list's LIBRARY rows — the palette's optional categories
@@ -181,6 +184,17 @@ export function Toolbar() {
   const previewMesh = useAppStore((s) => s.previewMesh);
   const exportIncludeMesh = useAppStore((s) => s.exportIncludeMesh);
   const setExportIncludeMesh = useAppStore((s) => s.setExportIncludeMesh);
+  // The EXPORT popover's Format choice. Never read raw: `effectiveExportFormat`
+  // derives what THIS export will be (the bundle while the loaded model cannot
+  // be packed, and in a study session), and the flag is never written back —
+  // load a packable model again and the .glb comes straight back.
+  const exportAsGlb = useAppStore((s) => s.exportAsGlb);
+  const setExportAsGlb = useAppStore((s) => s.setExportAsGlb);
+  const exportKtx2 = useAppStore((s) => s.exportKtx2);
+  const setExportKtx2 = useAppStore((s) => s.setExportKtx2);
+  const glbAvail = glbExportAvailability(previewMesh);
+  const exportFormat = effectiveExportFormat(exportAsGlb, previewMesh, isEvalMode());
+  const glbFile = `${shaderBaseName(shaderName)}.glb`;
   const isDark = codeEditorTheme === 'vs-dark';
 
   const [contactOpen, setContactOpen] = useState(false);
@@ -199,6 +213,13 @@ export function Toolbar() {
   // finger lift then still fires the button's click — which is the DOWNLOAD —
   // so the long-press latches a flag that swallows exactly that one click.
   const suppressExportClickRef = useRef(false);
+  // The export pre-flight's dialog (N1), hosted per surface.
+  const { ask: askExportPreflight, glb: glbExportUi, modal: exportPreflightModal } = useExportPreflight();
+  // One export at a time: the .glb path awaits its texture encodes, so a
+  // second press during the build would start a second one over the same
+  // store snapshot.
+  const exportBusyRef = useRef(false);
+  const [exportBusy, setExportBusy] = useState(false);
 
   // Feedback composer. Local state rather than a store field: it is transient
   // UI opened from exactly one place, and the modal portals itself to
@@ -307,6 +328,11 @@ export function Toolbar() {
   const setTrackpadScroll = useAppStore((s) => s.setTrackpadScroll);
   const optionalCategories = useAppStore((s) => s.optionalCategories);
   const setOptionalCategory = useAppStore((s) => s.setOptionalCategory);
+  const allowManyMaterials = useAppStore((s) => s.allowManyMaterials);
+  const setAllowManyMaterials = useAppStore((s) => s.setAllowManyMaterials);
+  // One row per setting; the GLB row is absent in a study session (the dialog
+  // is never offered there, and a control that does nothing is not offered).
+  const prefsRows = 1 + OPTIONAL_CATEGORIES.length + (isEvalMode() ? 0 : 1);
   const closePrefs = useCallback(() => setPrefsAt(null), []);
   useDismiss(prefsAt != null, closePrefs, [prefsRef]);
 
@@ -538,24 +564,43 @@ export function Toolbar() {
               // it opens the finish dialog instead of quietly downloading a
               // bare shader — the participant's package is assembled at the
               // end of the questionnaire and carries this shader inside it.
+              // This branch must stay ABOVE the export pre-flight: the study
+              // Submit never shows N1 (N4 covers the upload).
               if (isEvalMode()) {
                 setEvalFinishOpen(true);
                 return;
               }
-              downloadShader();
+              if (exportBusyRef.current) return;
+              exportBusyRef.current = true;
+              setExportBusy(true);
+              void buildShaderExportChecked({
+                preflight: askExportPreflight,
+                glb: glbExportUi,
+                delivery: 'download',
+              })
+                .then((bundle) => {
+                  if (bundle) downloadShader(bundle);
+                })
+                .finally(() => {
+                  exportBusyRef.current = false;
+                  setExportBusy(false);
+                });
             }}
             onContextMenu={(e) => {
               e.preventDefault();
               setExportOpen((o) => !o);
             }}
+            aria-busy={exportBusy || undefined}
             title={
               isEvalMode()
                 ? t('Finish the session: a short questionnaire, then your shader and session data are submitted', language)
-                : `${t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}. ${
-                    previewMesh && !exportIncludeMesh
-                      ? t('The 3D model is currently excluded from the export — right-click to change.', language)
-                      : t('Right-click for export settings.', language)
-                  }`
+                : exportFormat === 'glb'
+                  ? `${fillTemplate(t(GLB_EXPORT_KEYS.exportTitleGlb, language), { file: glbFile })}. ${t('Right-click for export settings.', language)}`
+                  : `${t('Download the shader — .js with the FastShaders project embedded (drag it back in to continue); becomes a .zip with the image and 3D-model files alongside when the graph embeds images or a custom preview mesh is loaded', language)}. ${
+                      previewMesh && !exportIncludeMesh
+                        ? t('The 3D model is currently excluded from the export — right-click to change.', language)
+                        : t('Right-click for export settings.', language)
+                    }`
             }
           >
             {t('Export', language)}
@@ -569,13 +614,54 @@ export function Toolbar() {
               <div className="toolbar__local-header">
                 <span className="toolbar__contact-label">{t('Export settings', language)}</span>
               </div>
+              {/* The Format choice. Not rendered in a study session — the
+                  popover itself IS reachable there by right-click, so the
+                  engine gate in buildShaderExportChecked is the second half of
+                  the same rule. The reason under a disabled row is VISIBLE
+                  text, not a title: WebKit drops the tooltip of a disabled
+                  control. */}
+              {!isEvalMode() && (
+                <div
+                  className="toolbar__export-format"
+                  role="radiogroup"
+                  aria-label={t('Format', language)}
+                >
+                  <div className="toolbar__export-format-label">{t('Format', language)}</div>
+                  <label className="toolbar__export-check">
+                    <input
+                      type="radio"
+                      name="fs-export-format"
+                      checked={exportFormat === 'bundle'}
+                      onChange={() => setExportAsGlb(false)}
+                    />
+                    <span>{t(GLB_EXPORT_KEYS.formatBundle, language)}</span>
+                  </label>
+                  <label
+                    className={`toolbar__export-check${glbAvail.ok ? '' : ' toolbar__export-check--off'}`}
+                  >
+                    <input
+                      type="radio"
+                      name="fs-export-format"
+                      checked={exportFormat === 'glb'}
+                      disabled={!glbAvail.ok}
+                      onChange={() => setExportAsGlb(true)}
+                    />
+                    <span>{t(GLB_EXPORT_KEYS.formatGlb, language)}</span>
+                  </label>
+                  {!glbAvail.ok && (
+                    <div className="toolbar__export-format-reason">
+                      {glbUnavailableText(glbAvail, language)}
+                    </div>
+                  )}
+                </div>
+              )}
               <label
-                className={`toolbar__export-check${previewMesh ? '' : ' toolbar__export-check--off'}`}
+                className={`toolbar__export-check${previewMesh && exportFormat !== 'glb' ? '' : ' toolbar__export-check--off'}`}
               >
                 <input
                   type="checkbox"
                   checked={exportIncludeMesh}
-                  disabled={!previewMesh}
+                  disabled={!previewMesh || exportFormat === 'glb'}
                   onChange={(e) => setExportIncludeMesh(e.target.checked)}
                 />
                 <span>
@@ -583,11 +669,42 @@ export function Toolbar() {
                   {previewMesh ? ` (${previewMesh.name})` : ''}
                 </span>
               </label>
-              <div className="toolbar__local-note">
-                {previewMesh
-                  ? t('The model ships inside the export .zip under models/ — untick to export the shader alone.', language)
-                  : t('No custom 3D model is loaded — drop a .obj/.glb/.gltf onto the 3D preview first.', language)}
-              </div>
+              {/* The KTX2 copies (Phase 8). Rendered only where an ENCODER is
+                  registered — no build ships one yet, so today this row does
+                  not exist — and never in a study session. The format gate is
+                  aria-disabled rather than `disabled`: WebKit drops a disabled
+                  control's title, and the title is the explanation. */}
+              {hasKtx2Encoder() && !isEvalMode() && (
+                <label
+                  className={`toolbar__export-check${exportFormat === 'glb' ? '' : ' toolbar__export-check--off'}`}
+                  title={t(
+                    exportFormat === 'glb' ? GLB_EXPORT_KEYS.ktx2RowNote : GLB_EXPORT_KEYS.ktx2RowGlbOnly,
+                    language,
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={exportKtx2}
+                    aria-disabled={exportFormat !== 'glb'}
+                    onChange={(e) => setExportKtx2(e.target.checked)}
+                  />
+                  <span>{t(GLB_EXPORT_KEYS.ktx2Row, language)}</span>
+                </label>
+              )}
+              {exportFormat === 'glb' ? (
+                <>
+                  <div className="toolbar__local-note">{t(GLB_EXPORT_KEYS.meshNoteGlb, language)}</div>
+                  <div className="toolbar__local-note">
+                    {fillTemplate(t(GLB_EXPORT_KEYS.popoverNoteGlb, language), { file: glbFile })}
+                  </div>
+                </>
+              ) : (
+                <div className="toolbar__local-note">
+                  {previewMesh
+                    ? t('The model ships inside the export .zip under models/ — untick to export the shader alone.', language)
+                    : t('No custom 3D model is loaded — drop a .obj/.glb/.gltf onto the 3D preview first.', language)}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -843,12 +960,12 @@ export function Toolbar() {
                   <a
                     key={d.key}
                     className="toolbar__local-row"
-                    href={`${RELEASE_DOWNLOAD_BASE}/${d.file}`}
+                    href={releaseDownloadUrl(d.file)}
                     role="menuitem"
                     onClick={() => setLocalOpen(false)}
                   >
                     <span className="toolbar__local-os">{d.os}</span>
-                    <span className="toolbar__local-detail">{d.detail}</span>
+                    <span className="toolbar__local-detail">{t(d.detail, language)}</span>
                   </a>
                 ))}
                 <div className="toolbar__local-note">
@@ -1055,6 +1172,7 @@ export function Toolbar() {
         <FeedbackModal open={feedbackOpen} onClose={closeFeedback} />
       )}
       <PalettesModal open={palettesOpen} onClose={closePalettes} />
+      {exportPreflightModal}
       {prefsAt && (
         <div
           ref={prefsRef}
@@ -1072,7 +1190,7 @@ export function Toolbar() {
           // where the right cluster lives.
           style={{
             left: Math.min(prefsAt.x, window.innerWidth - PREFS_W - 8),
-            top: Math.min(prefsAt.y, window.innerHeight - PREFS_H - 8),
+            top: Math.min(prefsAt.y, window.innerHeight - prefsHeight(prefsRows) - 8),
           }}
         >
           {/* A plain LIST of settings — no heading (it went 2026-09-04: the
@@ -1121,6 +1239,23 @@ export function Toolbar() {
               </label>
             );
           })}
+          {/* The GLB import's "Allow more than 10 materials" override (N11).
+              Hidden in a study session: the dialog is never offered there. */}
+          {!isEvalMode() && (
+            <label
+              className="toolbar__prefs-row"
+              title={fillTemplate(t(ALLOW_MANY_MATERIALS_HINT, language), { limit: GLB_IMPORT_MATERIAL_LIMIT })}
+            >
+              <input
+                type="checkbox"
+                checked={allowManyMaterials}
+                onChange={(e) => setAllowManyMaterials(e.target.checked)}
+              />
+              <span className="toolbar__prefs-label">
+                {fillTemplate(t('Allow more than {limit} materials', language), { limit: GLB_IMPORT_MATERIAL_LIMIT })}
+              </span>
+            </label>
+          )}
         </div>
       )}
     </div>

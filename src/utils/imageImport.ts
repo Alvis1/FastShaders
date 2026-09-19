@@ -44,6 +44,8 @@ import {
   POT_WRAP_MARGIN,
   base64CharsForBytes,
   chooseFormat,
+  encodeDimCap,
+  hugeSourceDecodeSize,
   potTarget,
   potFloorTarget,
   sourcePrefersLossless,
@@ -59,12 +61,46 @@ export interface EncodedImage {
   mime: string;
   width: number;
   height: number;
+  /** True for PNG and for WebP produced by a `lossless: true` candidate;
+   *  false for JPEG, lossy WebP and every quality-ladder retry. Read by the
+   *  power-of-two pass (a lossless base never trades down to a lossy snap)
+   *  and by the drop's N5 line ("stored lossy"). */
+  lossless: boolean;
 }
 
 /** What the user chose for this drop. `keep` still re-encodes through the
  *  canvas (EXIF strip, device cap, payload budget are not optional) but makes
  *  no format change and no power-of-two snap. */
 export type ImageConvertMode = 'convert' | 'keep';
+
+/**
+ * The GLB import's extra instructions for one extracted texture (GLB Phase 5).
+ * Every drop passes NONE of them, and with none the encode is exactly what it
+ * was — `imageImportEncode.test.ts` pins that against goldens captured before
+ * the options existed. Each field is read strictly: anything but the stated
+ * type is as if absent.
+ */
+export interface EncodeImageOptions {
+  /** An extra long-side cap (the slot's size), applied after the device /
+   *  ignore-limits cap and NOT lifted by ignore-limits: that override lifts
+   *  budgets, not slot sizes (`encodeDimCap`). */
+  maxDim?: number;
+  /** Replaces the name/type sniff (`sourcePrefersLossless`). The importer
+   *  knows the SLOT, which the file name cannot say: a base colour is stored
+   *  lossy even from a PNG, a normal map from a lossless source is not. */
+  preferLossless?: boolean;
+  /** Only lossless candidates (`chooseFormat`'s `losslessOnly`); when none
+   *  fits the budget the image halves instead of going lossy. Implies
+   *  `preferLossless`. */
+  losslessOnly?: boolean;
+  /** Decode a source past MAX_SOURCE_PIXELS straight to its capped size
+   *  instead of refusing it — needs `sourceDims`, since the decision must be
+   *  made BEFORE a full-size decode (see `hugeSourceDecodeSize`). */
+  allowHugeSource?: boolean;
+  /** The source's dimensions as its HEADER declares them (the GLB reader's
+   *  `readImageDimensions`). Adversarial: only positive integers count. */
+  sourceDims?: { width: number; height: number };
+}
 
 export type EncodeImageResult =
   | {
@@ -95,6 +131,28 @@ export type EncodeImageResult =
        *  it straight off the node (stashing it lazily at the first resize —
        *  see ImageNodeSettings), so there is nothing to stash at drop time. */
       original?: EncodedImage;
+      /** The source asked to stay bit-exact (`sourcePrefersLossless`: PNG, or
+       *  a VP8L `.webp` re-drop). */
+      preferLossless: boolean;
+      /** Whether the RETURNED payload is lossless. */
+      lossless: boolean;
+      /** The halving retry ran at least once: dimensions were thrown away for
+       *  the PER-IMAGE budget. Never set for the device cap, which is its own
+       *  notice. */
+      budgetScaled: boolean;
+      /** `preferLossless && !lossless` for the returned payload: a source that
+       *  wanted to stay exact was stored lossy because no lossless candidate
+       *  fit the per-image budget. */
+      losslessDropped: boolean;
+      /** The per-image budget this encode was held to (MAX_IMAGE_ENCODED_CHARS,
+       *  or HARD_MAX_IMAGE_ENCODED_CHARS under ignore-limits) — the {limit} the
+       *  N5 line prints. */
+      budgetChars: number;
+      /** The source was past the pixel guard and was DECODED at its capped size
+       *  (`allowHugeSource`, the GLB import's N10 line) — never true for a drop.
+       *  `sourceWidth`/`sourceHeight` are then the header's, since the
+       *  full-size picture never existed in memory. */
+      decodeDownscaled: boolean;
     }
   | {
       ok: false;
@@ -123,6 +181,24 @@ interface DecodedSource {
   width: number;
   height: number;
   cleanup: () => void;
+}
+
+/** Decode straight to `size` through `createImageBitmap`'s resize options,
+ *  with no fallback: the `<img>` route has no resize and would hold the
+ *  full-size picture, which is the one thing this path exists to avoid. An
+ *  engine without the options rejects, and the caller reports `pixels`. */
+async function decodeResized(file: File, size: { width: number; height: number }): Promise<DecodedSource | null> {
+  try {
+    const bmp = await createImageBitmap(file, {
+      resizeWidth: size.width,
+      resizeHeight: size.height,
+      resizeQuality: 'high',
+      imageOrientation: 'from-image',
+    });
+    return { source: bmp, width: bmp.width, height: bmp.height, cleanup: () => bmp.close() };
+  } catch {
+    return null;
+  }
 }
 
 /** Decode the file to something drawable. Prefers createImageBitmap with
@@ -164,7 +240,9 @@ async function decodeSource(file: File): Promise<DecodedSource | null> {
  * counted colours and classified the alpha for the power-of-two skip rules
  * until the snap became unconditional (2026-09-10).
  */
-function scanPixels(ctx: CanvasRenderingContext2D, w: number, h: number): PixelStats {
+// Shared with glbFallbackEncode.ts (the single-GLB fallback copy), so the
+// alpha-never-JPEG rule has one copy.
+export function scanPixels(ctx: CanvasRenderingContext2D, w: number, h: number): PixelStats {
   try {
     const data = ctx.getImageData(0, 0, w, h).data;
     for (let i = 3; i < data.length; i += 4) {
@@ -178,8 +256,9 @@ function scanPixels(ctx: CanvasRenderingContext2D, w: number, h: number): PixelS
   }
 }
 
-/** Encode a canvas to a Blob. Resolves null when the encoder refused. */
-function encodeBlob(canvas: HTMLCanvasElement, mime: string, quality?: number): Promise<Blob | null> {
+/** Encode a canvas to a Blob. Resolves null when the encoder refused. Shared
+ *  with glbFallbackEncode.ts, so the refused-encoder handling has one copy. */
+export function encodeBlob(canvas: HTMLCanvasElement, mime: string, quality?: number): Promise<Blob | null> {
   return new Promise((resolve) => {
     try {
       canvas.toBlob((blob) => resolve(blob), mime, quality);
@@ -203,6 +282,14 @@ function blobToDataUrl(blob: Blob): Promise<string | null> {
 }
 
 let capsPromise: Promise<EncodeCaps> | null = null;
+
+/** Forget the measured encode capabilities (tests only). The probe is cached
+ *  at module scope and the suite shares module instances (`isolate: false`),
+ *  so a test that drives the encoder against a fake canvas must drop the
+ *  answer it caused, or the next suite in that worker inherits it. */
+export function __resetEncodeCapsForTests(): void {
+  capsPromise = null;
+}
 
 /**
  * What this browser really does with a WebP request, measured once per
@@ -294,11 +381,11 @@ async function encodeWithinBudget(
    *  whitelist check is the same one every consumer applies — an encoder that
    *  produced an untyped blob would otherwise yield a payload that validates
    *  as garbage downstream and renders as the inert black fallback. */
-  const finish = async (blob: Blob): Promise<EncodedImage | null> => {
+  const finish = async (blob: Blob, lossless: boolean): Promise<EncodedImage | null> => {
     if (base64CharsForBytes(blob.size, blob.type) > budget) return null;
     const dataUrl = await blobToDataUrl(blob);
     if (!dataUrl || dataUrl.length > budget || !validImageDataUrl(dataUrl)) return null;
-    return { dataUrl, mime: blob.type, width: canvas.width, height: canvas.height };
+    return { dataUrl, mime: blob.type, width: canvas.width, height: canvas.height, lossless };
   };
 
   for (const cand of candidates) {
@@ -310,7 +397,7 @@ async function encodeWithinBudget(
     // orders WebP ahead of JPEG, so taking the last would drop a photo to
     // JPEG q0.65 when WebP q0.75 was both smaller and better.
     if (!cand.lossless && lossyMime === null) lossyMime = cand.mime;
-    const done = await finish(blob);
+    const done = await finish(blob, cand.lossless);
     if (done) return done;
   }
 
@@ -319,7 +406,7 @@ async function encodeWithinBudget(
     for (const q of QUALITY_LADDER.slice(1)) {
       const blob = await encodeBlob(canvas, lossyMime, q);
       if (!blob || blob.type !== lossyMime) continue;
-      const done = await finish(blob);
+      const done = await finish(blob, false);
       if (done) return done;
     }
   }
@@ -405,51 +492,85 @@ function drawWrappedResize(
  * over-budget encode walks the quality ladder and then retries at halved
  * dimensions ("more textures at smaller res" beats one huge one) before giving
  * up with `too-large` — the caller then offers the override dialog.
+ *
+ * `opts` is the GLB import's (see `EncodeImageOptions`): a slot size, a
+ * lossless decision made by slot rather than by file name, lossless-only data
+ * maps, and a decode-time downscale for sources past the pixel guard. Every
+ * drop passes nothing, and nothing means today's encode, byte for byte.
  */
 export async function encodeImageFile(
   file: File,
   ignoreLimits: boolean,
   deviceMaxDim: number = MAX_IMAGE_DIM,
   mode: ImageConvertMode = 'convert',
+  opts: EncodeImageOptions = {},
 ): Promise<EncodeImageResult> {
   if (isSvgFile(file)) return { ok: false, reason: 'svg' };
 
-  const decoded = await decodeSource(file);
+  // Normal drops cap the longest side at the selected device's recommended
+  // texture size; ignoring limits relaxes to at least MAX_IMAGE_DIM_RELAXED
+  // (never below the device cap, so a high-end target keeps its headroom).
+  // The slot cap (`opts.maxDim`) then applies on top, and ignore-limits never
+  // lifts it. Decided before decoding, because the huge-source path needs it.
+  const dimCap = encodeDimCap(
+    ignoreLimits ? Math.max(deviceMaxDim, MAX_IMAGE_DIM_RELAXED) : deviceMaxDim,
+    opts.maxDim,
+  );
+
+  // A source past the pixel guard, when the caller allows it and names its
+  // header size, is decoded straight to the capped size (N10) and never held
+  // full-size. Every other source takes the ordinary decode and the guard.
+  const huge = opts.allowHugeSource === true
+    ? hugeSourceDecodeSize(opts.sourceDims, dimCap, MAX_SOURCE_PIXELS)
+    : null;
+  const decoded = huge ? await decodeResized(file, huge) : await decodeSource(file);
   if (!decoded || decoded.width < 1 || decoded.height < 1) {
+    if (huge && opts.sourceDims) {
+      decoded?.cleanup();
+      return { ok: false, reason: 'pixels', width: opts.sourceDims.width, height: opts.sourceDims.height };
+    }
     return { ok: false, reason: 'load' };
   }
+  // The source size a result reports: the header's on the huge path, where
+  // the decoded bitmap is already the downscale.
+  const sourceWidth = huge && opts.sourceDims ? opts.sourceDims.width : decoded.width;
+  const sourceHeight = huge && opts.sourceDims ? opts.sourceDims.height : decoded.height;
+  const decodeDownscaled = huge !== null;
 
   try {
-    if (!ignoreLimits && decoded.width * decoded.height > MAX_SOURCE_PIXELS) {
+    if (!huge && !ignoreLimits && decoded.width * decoded.height > MAX_SOURCE_PIXELS) {
       return { ok: false, reason: 'pixels', width: decoded.width, height: decoded.height };
     }
 
     const caps = await probeEncodeCaps();
 
-    // Whether this source must stay bit-exact. Read from the file HEAD for
-    // WebP (lossy vs lossless container), not from the extension — the app's
-    // own export/re-drop loop hands back `.webp` files of both kinds.
-    let head: Uint8Array | undefined;
-    if (/\.webp$/i.test(file.name) || file.type === 'image/webp') {
-      try {
-        head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
-      } catch {
-        /* unreadable slice — treated as lossy below */
+    const losslessOnly = opts.losslessOnly === true;
+    let preferLossless: boolean;
+    if (typeof opts.preferLossless === 'boolean') {
+      preferLossless = opts.preferLossless || losslessOnly;
+    } else {
+      // Whether this source must stay bit-exact. Read from the file HEAD for
+      // WebP (lossy vs lossless container), not from the extension — the app's
+      // own export/re-drop loop hands back `.webp` files of both kinds.
+      let head: Uint8Array | undefined;
+      if (/\.webp$/i.test(file.name) || file.type === 'image/webp') {
+        try {
+          head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
+        } catch {
+          /* unreadable slice — treated as lossy below */
+        }
       }
+      preferLossless = sourcePrefersLossless(file.name, file.type, head) || losslessOnly;
     }
-    const preferLossless = sourcePrefersLossless(file.name, file.type, head);
 
-    // Normal drops cap the longest side at the selected device's recommended
-    // texture size; ignoring limits relaxes to at least MAX_IMAGE_DIM_RELAXED
-    // (never below the device cap, so a high-end target keeps its headroom).
-    const dimCap = ignoreLimits
-      ? Math.max(deviceMaxDim, MAX_IMAGE_DIM_RELAXED)
-      : deviceMaxDim;
     let scale = Math.min(1, dimCap / Math.max(decoded.width, decoded.height));
     const budget = ignoreLimits ? HARD_MAX_IMAGE_ENCODED_CHARS : MAX_IMAGE_ENCODED_CHARS;
 
     const MIN_DIM = 64;
     let stats: PixelStats | null = null;
+    // Set by the halving retry below — the per-image budget cost pixels, and
+    // the drop says so (N5). The device cap above is not this.
+    let budgetScaled = false;
     // Reused across retry passes — a fresh canvas per pass allocated (and
     // leaked to GC) tens of MB on every halving.
     const baseCanvas = document.createElement('canvas');
@@ -467,6 +588,7 @@ export async function encodeImageFile(
         preferLossless,
         alpha: stats.alpha,
         allowWebp: mode === 'convert',
+        losslessOnly,
       });
 
       // The un-snapped encode first: it is both the fallback payload AND the
@@ -476,6 +598,7 @@ export async function encodeImageFile(
       if (!base) {
         if (Math.max(w, h) <= MIN_DIM) break;
         scale /= 2;
+        budgetScaled = true;
         continue;
       }
 
@@ -484,17 +607,25 @@ export async function encodeImageFile(
       // "convert" it is UNCONDITIONAL (imageCodec's module note): the 80 %
       // rule's target first, and if that encode blows the budget — a round-UP
       // grows the image — the rounded-DOWN target, which is never larger than
-      // the base that already fit. The NPOT base ships only if even that
-      // fails, which in practice it cannot.
+      // the base that already fit. With a lossless base only lossless
+      // candidates are tried, so the NPOT base ships whenever neither
+      // power-of-two target fits losslessly — routine for dithered or
+      // pixel-pattern PNGs, whose resample is incompressible (measured: a
+      // dithered 1700² PNG).
       if (mode === 'convert') {
         const first = potTarget(w, h, dimCap);
         const fallback = potFloorTarget(w, h, dimCap);
         const targets = [first];
         if (fallback.width !== first.width || fallback.height !== first.height) targets.push(fallback);
+        // The snap never trades losslessness for a round-up: with a lossless
+        // base, only the lossless candidates are tried, so a round-up that
+        // fits only lossy falls to the floor target (or the NPOT base) instead
+        // of silently shipping a lossy copy of a PNG.
+        const potCandidates = base.lossless ? candidates.filter((c) => c.lossless) : candidates;
         for (const pot of targets) {
           if (!pot.applied) continue;
           if (!drawWrappedResize(potCanvas, baseCanvas, pot.width, pot.height)) continue;
-          const snapped = await encodeWithinBudget(potCanvas, candidates, budget);
+          const snapped = await encodeWithinBudget(potCanvas, potCandidates, budget);
           if (!snapped) continue;
           return {
             ok: true,
@@ -503,10 +634,16 @@ export async function encodeImageFile(
             webpAvailable: caps.webp,
             width: snapped.width,
             height: snapped.height,
-            sourceWidth: decoded.width,
-            sourceHeight: decoded.height,
+            sourceWidth,
+            sourceHeight,
             potApplied: true,
             original: base,
+            preferLossless,
+            lossless: snapped.lossless,
+            budgetScaled,
+            losslessDropped: preferLossless && !snapped.lossless,
+            budgetChars: budget,
+            decodeDownscaled,
           };
         }
       }
@@ -518,12 +655,18 @@ export async function encodeImageFile(
         webpAvailable: caps.webp,
         width: base.width,
         height: base.height,
-        sourceWidth: decoded.width,
-        sourceHeight: decoded.height,
+        sourceWidth,
+        sourceHeight,
         potApplied: false,
+        preferLossless,
+        lossless: base.lossless,
+        budgetScaled,
+        losslessDropped: preferLossless && !base.lossless,
+        budgetChars: budget,
+        decodeDownscaled,
       };
     }
-    return { ok: false, reason: 'too-large', width: decoded.width, height: decoded.height };
+    return { ok: false, reason: 'too-large', width: sourceWidth, height: sourceHeight };
   } finally {
     decoded.cleanup();
   }

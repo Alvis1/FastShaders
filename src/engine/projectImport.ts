@@ -1,29 +1,59 @@
 /**
  * Shared shader/project import — one code path for every import surface: the
- * Load Script picker, the code panel's drop zone, and the canvas drop.
+ * Load Script picker, the code panel's drop zone, the canvas drop, the 3D
+ * preview drop and the desktop Work folder. `reportZipImportError` is the ONE
+ * catch-side mapping all five call first, so a zip the reader refuses says why
+ * on every surface instead of "no shader".
  *
  * Accepts a shader script — `.js`/`.mjs`/`.tsl`, with or without an embedded
  * FASTSHADERS_PROJECT_V1 block; raw editor-style TSL passes through
  * scriptToTSLWithSettings unchanged — or a FastShaders `.zip` export (the shader `.js` +
  * its images; the images ride inside the .js as data: URLs, so importing the
- * .js restores everything — the loose files exist for reuse/editing).
+ * .js restores everything — the loose files exist for reuse/editing) — or,
+ * restored only from the GLB import dialog, the shader stored inside a
+ * FastShaders single-GLB export (`importShaderGlb`).
  */
 
 import { useAppStore } from '@/store/useAppStore';
 import { sanitizeImageNodes } from '@/utils/imageNode';
+import { resolveImageRefs, newRefBudget } from '@/utils/imagePayloadRefs';
 import { sanitizeDataNodes } from '@/utils/dataNode';
 import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
 import { sanitizeDrawings } from '@/utils/drawings';
 import { sanitizePalettes } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
-import { sanitizeOutputMaterials, foldExtraOutputs, findDefaultOutput } from '@/utils/outputMaterials';
+import {
+  sanitizeOutputMaterialsReport,
+  foldExtraOutputs,
+  findDefaultOutput,
+  pruneOrphanMaterialEdges,
+} from '@/utils/outputMaterials';
 import { normalizeActiveOutput } from '@/utils/sdfPartition';
 import { migrateLegacyNodeTypes } from '@/registry/legacyNodeTypes';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { generateId } from '@/utils/idGenerator';
-import { readZip, type ZipReadEntry } from '@/utils/zipReader';
-import { createPreviewMesh, detectMeshKind, type PreviewMesh } from '@/utils/previewMesh';
+import {
+  readZip,
+  isZipLimitError,
+  ZipLimitError,
+  READ_MAX_ARCHIVE_BYTES,
+  READ_MAX_TOTAL_UNCOMPRESSED,
+  type ZipReadEntry,
+} from '@/utils/zipReader';
+import {
+  createPreviewMesh,
+  detectMeshKind,
+  sanitizeMeshFileName,
+  type MeshRefusal,
+  type PreviewMesh,
+} from '@/utils/previewMesh';
+import { assetLiteralText, readGlbFsExtras } from '@/utils/glbShaderExtras';
+import { readGltfModel } from '@/utils/gltfReader';
+import { planTextureStrip, stripGltfTextures } from '@/utils/gltfStrip';
+import { gltfIndexOf, outputMaterials, sanitizeOutputMaterials } from '@/utils/outputMaterials';
+import type { ImportNoteLine } from '@/utils/importNote';
 import { extractProjectState, type FastShadersProject } from './fastShadersProject';
+import { moduleImageLiterals, resolveProjectImageRefs, splitImageLosses } from './projectImageRefs';
 import type { AppNode, MaterialSettings } from '@/types';
 
 /**
@@ -31,8 +61,12 @@ import type { AppNode, MaterialSettings } from '@/types';
  * reactively; preview/iframe settings are written to localStorage and a
  * `fs:project-imported` event lets ShaderPreview re-read its in-memory state
  * from those keys.
+ *
+ * `moduleText` is the file WITHOUT its block (extractProjectState's
+ * `stripped`): the module whose `data:` literals a block's `imageRefs` may
+ * name. It is only scanned when the block has a ref to resolve.
  */
-function applyProjectToStore(project: FastShadersProject): void {
+function applyProjectToStore(project: FastShadersProject, moduleText = ''): void {
   const store = useAppStore.getState();
   store.pushHistory();
 
@@ -80,12 +114,40 @@ function applyProjectToStore(project: FastShadersProject): void {
   // enter the store (soft caps skipped when the user opted out via the
   // ignore-limits checkbox; hard ceilings always apply). Stripped payloads
   // surface a notice with the re-import path spelled out.
-  const sanitized = sanitizeImageNodes(project.graph.nodes, !store.ignoreImageLimits);
-  if (sanitized.strippedCount > 0) {
+  //
+  // Stored image refs (utils/imagePayloadRefs.ts) resolve first, against the
+  // file's OWN inline copies. An export made by 0.3.33 from a new-format
+  // autosave carries them (0.3.33 keeps `imageRef` in memory and embeds it),
+  // so those pixels come back; a ref can only ever point inside this file. One
+  // that cannot be resolved is counted with the stripped images.
+  //
+  // Before that, a block's top-level `imageRefs` (engine/projectImageRefs.ts)
+  // resolves against the module's own `data:` literals. Nothing writes that
+  // field yet (EXPORT_IMAGE_REFS is off), so this reader lands ahead of the
+  // writer. Both passes share ONE budget per document, so a small file cannot
+  // expand to thousands of copies of one literal. A node left without pixels
+  // is reported ONCE: `images-missing` if it carried a top-level ref,
+  // otherwise `images-stripped`.
+  const budget = newRefBudget();
+  const fileRefs = resolveProjectImageRefs(project, moduleImageLiterals(moduleText), budget);
+  const refs = resolveImageRefs(fileRefs.project.graph.nodes, undefined, budget);
+  const losses = splitImageLosses(fileRefs.project.graph.nodes, refs.nodes, fileRefs.unresolvedIds);
+  // Soft caps follow the platform through imageNode's constants (web 600K/3M,
+  // desktop 6M/32M — utils/platformCaps.ts), so no argument is needed here.
+  const sanitized = sanitizeImageNodes(refs.nodes, !store.ignoreImageLimits);
+  const stripped = sanitized.strippedCount + refs.dangling - losses.alsoDangling;
+  if (stripped > 0) {
     store.enqueueLimitNotice({
       id: generateId(),
       kind: 'images-stripped',
-      detail: String(sanitized.strippedCount),
+      detail: String(stripped),
+    });
+  }
+  if (losses.missing > 0) {
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'images-missing',
+      detail: String(losses.missing),
     });
   }
 
@@ -104,7 +166,11 @@ function applyProjectToStore(project: FastShadersProject): void {
   // origin. Emission re-validates every name, so this bounds what the STORE
   // carries (history clones, the autosave, the next export) and de-dupes two
   // Outputs claiming one mesh.
-  dataSanitized.nodes = sanitizeOutputMaterials(dataSanitized.nodes);
+  // The sanitizer COUNTS what it drops (sections past the caps, invalid
+  // entries, names past a section's cap), announced below as
+  // `output-sections-trimmed` once the graph has landed.
+  const secs = sanitizeOutputMaterialsReport(dataSanitized.nodes);
+  dataSanitized.nodes = secs.nodes;
   // Exactly one active sink (utils/sdfPartition.ts) — normalised BEFORE the
   // fold so the fold keeps the flagged Output.
   dataSanitized.nodes = normalizeActiveOutput(dataSanitized.nodes);
@@ -136,12 +202,23 @@ function applyProjectToStore(project: FastShadersProject): void {
   // whatever was wired into them is silently lost. Runs on the SANITIZED edges,
   // since it re-points and re-ids some of them.
   const folded = foldExtraOutputs(dataSanitized.nodes, edges);
+  // A section the sanitizer dropped must not leave its wires behind (never
+  // drawn, emitting nothing, an unscoped 008 every frame).
+  const prunedEdges = pruneOrphanMaterialEdges(folded.nodes, folded.edges).edges;
+  if (secs.trimmed > 0) {
+    // No slot: the words say "in the opened file".
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'output-sections-trimmed',
+      detail: String(secs.trimmed),
+    });
+  }
 
   // Restore graph last — switching syncSource to 'graph' will trigger
   // graphToCode in useSyncEngine, regenerating the editor code to match.
   useAppStore.setState({
     nodes: folded.nodes,
-    edges: folded.edges,
+    edges: prunedEdges,
     drawings,
     shaderPalettes: palettes,
     syncSource: 'graph',
@@ -149,7 +226,7 @@ function applyProjectToStore(project: FastShadersProject): void {
   });
 
   // typeof guard: this module is also exercised by node-env unit tests — the
-  // same guard announceGraphImport and showMesh already carry. Without it
+  // same guard announceGraphImport and showCustomMesh already carry. Without it
   // applyProjectToStore throws `ReferenceError: window is not defined` and the
   // whole project branch is untestable.
   if (typeof window !== 'undefined') {
@@ -169,6 +246,30 @@ function applyProjectToStore(project: FastShadersProject): void {
 function announceGraphImport(): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('fs:graph-imported'));
+}
+
+/**
+ * Commit a shader BUILT from a dropped model's materials (the GLB import
+ * builder, `engine/gltfImport.ts`; the dialog of Phase 5 Step 9 is its only
+ * caller). ONE undo entry (`applyProjectToStore`'s pushHistory), the same
+ * restore-path sanitizers as any shared file, `fs:project-imported` then
+ * `fs:graph-imported` — each once, since `applyProjectToStore` already ends
+ * with `announceGraphImport` (a second call here would arm the canvas's
+ * import auto-fit twice and log a second eval `import`).
+ *
+ * The texture-stripped mesh is set FIRST (`importShaderZip`'s order), so the
+ * prefs re-read `applyProjectToStore` fires synchronously already describes
+ * the document it is about. The geometry no longer DEPENDS on that order —
+ * `shownGeometry` (components/Preview/previewGeometryPref.ts) derives the
+ * no-mesh fallback from the live mesh at render, rather than the validator
+ * downgrading a stored 'custom' — but the mesh-then-project order stays the
+ * one every import path uses. `preview.geometry` is forced to 'custom'
+ * whatever the builder wrote, so the model the sections were built for is what
+ * the 3D view shows. "Model only" never comes here and fires nothing.
+ */
+export function commitGlbImport(project: FastShadersProject, mesh: PreviewMesh): void {
+  useAppStore.getState().setPreviewMesh(mesh);
+  applyProjectToStore({ ...project, preview: { ...(project.preview ?? {}), geometry: 'custom' } });
 }
 
 /**
@@ -235,7 +336,7 @@ export function importShaderText(
   // throw propagates to the caller's error surface) must not wipe the mesh.
   if (!opts?.keepPreviewMesh) useAppStore.getState().setPreviewMesh(null);
   if (projectResult) {
-    applyProjectToStore(projectResult.project);
+    applyProjectToStore(projectResult.project, projectResult.stripped);
     return 'project';
   }
   // A bare script's graph doesn't exist yet — useSyncEngine's code→graph pass
@@ -349,22 +450,110 @@ export function isZipFile(file: File): boolean {
 }
 
 /**
- * Import a FastShaders `.zip` export: locate the shader script inside
- * (`.js`/`.mjs`/`.tsl`; the one carrying the project block wins, otherwise the
- * first script) and run it through the normal text import. Returns null when
- * the archive is unreadable or holds no script — the caller owns the
- * user-facing message.
+ * A model-ONLY zip whose one model was refused: nothing was imported, and
+ * "no shader" would be the wrong sentence. `refusal` is the same structured
+ * refusal a preview drop of that model gets.
  */
+export class ZipModelSkippedError extends Error {
+  readonly refusal: MeshRefusal;
+  readonly bytes: number;
+  constructor(refusal: MeshRefusal, bytes: number) {
+    super(`3D model skipped: ${refusal.reason}`);
+    this.name = 'ZipModelSkippedError';
+    this.refusal = refusal;
+    this.bytes = bytes;
+  }
+}
+
+const SKIP_REASONS: ReadonlySet<unknown> = new Set(['empty', 'too-large', 'bad-glb', 'compressed', 'unsupported']);
+
+/** Name-based as well as `instanceof`, for the reason `isZipLimitError` gives
+ *  (a second module instance is possible under `isolate: false`). */
+export function isZipModelSkippedError(e: unknown): e is ZipModelSkippedError {
+  if (e instanceof ZipModelSkippedError) return true;
+  if (!(e instanceof Error) || e.name !== 'ZipModelSkippedError') return false;
+  const r = (e as { refusal?: unknown }).refusal;
+  if (!r || typeof r !== 'object') return false;
+  const { reason, key } = r as { reason?: unknown; key?: unknown };
+  return SKIP_REASONS.has(reason) && typeof key === 'string'
+    && Number.isFinite((e as { bytes?: unknown }).bytes);
+}
+
+/**
+ * The ONE mapping every import surface's catch calls FIRST. A typed zip
+ * outcome is announced here — a reader cap as LimitModal's `zip-limit` notice
+ * (a refusal with no checkbox: Ignore-limits cannot lift a reader cap), a
+ * refused model in a model-only zip as the canvas import-note line — and the
+ * function returns true, meaning the caller must show nothing else. Anything
+ * else returns false and touches nothing, so the surface keeps its own text.
+ */
+export function reportZipImportError(e: unknown, fileName: string): boolean {
+  const store = useAppStore.getState();
+  if (isZipLimitError(e)) {
+    store.enqueueLimitNotice({
+      id: generateId(),
+      kind: 'zip-limit',
+      fileName,
+      zipLimit: { kind: e.kind, limit: e.limit, value: e.value },
+    });
+    return true;
+  }
+  if (isZipModelSkippedError(e)) {
+    store.showImportNote([{ kind: 'zip-model-skipped', shaderLoaded: false, fileName, refusal: e.refusal }]);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * A shader import that ships a model always SHOWS it (podest's shader+model
+ * pairing semantics): a script-only import never touches prefs, and an older
+ * project block predating the mesh feature would otherwise leave the model
+ * invisible. Writes the pref and (re-)fires the prefs re-read. Shared by the
+ * zip import and the GLB restore.
+ */
+function showCustomMesh(): void {
+  try { localStorage.setItem('fs:previewGeometry', 'custom'); } catch { /* quota / private mode */ }
+  // typeof guard: this module is also exercised by node-env unit tests.
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('fs:project-imported'));
+  }
+}
+
 /** Zip housekeeping entries that must never win a file-pick (same as podest). */
 function isJunkEntry(name: string): boolean {
   return name.includes('__MACOSX') || (name.split('/').pop() ?? '').startsWith('.');
 }
 
+/**
+ * Import a FastShaders `.zip` export: locate the shader script inside
+ * (`.js`/`.mjs`/`.tsl`; the one carrying the project block wins, otherwise the
+ * first script) and run it through the normal text import.
+ *
+ * - Resolves null when the archive is unreadable/corrupt, or holds neither a
+ *   script nor a model — the caller owns that "no shader" message.
+ * - THROWS `ZipLimitError` when a reader cap is crossed, including this
+ *   function's own pre-read gate (`READ_MAX_ARCHIVE_BYTES` — this build's
+ *   reader cap plus header slack — checked before the
+ *   file is read into memory).
+ * - THROWS `ZipModelSkippedError` for a model-only zip whose model is refused.
+ * Both throws happen before any store write, so "nothing was changed" holds.
+ * A refused model beside a script is not a refusal: the shader loads and the
+ * canvas import note says the model was skipped and why.
+ */
 export async function importShaderZip(file: File): Promise<'project' | 'script' | 'model' | null> {
+  // Before `arrayBuffer()`: a gigabyte drop must not be allocated just to be
+  // refused (the ShaderPreview model gate's pattern).
+  if (file.size > READ_MAX_ARCHIVE_BYTES) {
+    throw new ZipLimitError('total-size', READ_MAX_TOTAL_UNCOMPRESSED, file.size, 'archive too large');
+  }
   let entries: ZipReadEntry[];
   try {
     entries = await readZip(new Uint8Array(await file.arrayBuffer()));
-  } catch {
+  } catch (e) {
+    // A cap is actionable and every surface announces it; corruption keeps
+    // the historical null ("no shader").
+    if (isZipLimitError(e)) throw e;
     return null;
   }
 
@@ -373,31 +562,30 @@ export async function importShaderZip(file: File): Promise<'project' | 'script' 
   // createPreviewMesh validates and sanitizes at this boundary.
   const modelEntry = entries.find((e) => !isJunkEntry(e.name) && detectMeshKind(e.name) !== null);
   let mesh: PreviewMesh | null = null;
+  // A refused model no longer vanishes. 'unsupported' cannot happen here (the
+  // entry was picked BY its extension), so it is not reported.
+  let skipped: { refusal: MeshRefusal; bytes: number } | null = null;
   if (modelEntry) {
     const result = createPreviewMesh(modelEntry.name.split('/').pop() ?? modelEntry.name, modelEntry.data);
     if ('mesh' in result) mesh = result.mesh;
-  }
-
-  const showMesh = () => {
-    // A zip that ships a model always SHOWS it (podest's shader+model pairing
-    // semantics): a script-only zip never touches prefs, and an older project
-    // block predating the mesh feature would otherwise leave the model
-    // invisible. Write the pref and (re-)fire the prefs re-read.
-    try { localStorage.setItem('fs:previewGeometry', 'custom'); } catch { /* quota / private mode */ }
-    // typeof guard: this module is also exercised by node-env unit tests.
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('fs:project-imported'));
+    else if (result.refusal.reason !== 'unsupported') {
+      skipped = { refusal: result.refusal, bytes: modelEntry.data.length };
     }
-  };
+  }
 
   const dec = new TextDecoder();
   const scripts = entries.filter((e) => /\.(js|mjs|tsl)$/i.test(e.name)).map((e) => dec.decode(e.data));
   if (scripts.length === 0) {
     // Model-only zip: still a meaningful drop — load the mesh instead of
     // rejecting the archive outright (the caller treats 'model' as success).
-    if (!mesh) return null;
+    if (!mesh) {
+      // Thrown before any store write: the surface says "the model was
+      // skipped: <why>" rather than "no shader".
+      if (skipped) throw new ZipModelSkippedError(skipped.refusal, skipped.bytes);
+      return null;
+    }
     useAppStore.getState().setPreviewMesh(mesh);
-    showMesh();
+    showCustomMesh();
     return 'model';
   }
   const withProject = scripts.find((t) => t.includes('FASTSHADERS_PROJECT_V1'));
@@ -409,10 +597,114 @@ export async function importShaderZip(file: File): Promise<'project' | 'script' 
   if (!withProject) await preloadShaderImport();
 
   // Set — or, when the archive has none, CLEAR — the mesh BEFORE the text
-  // import: applyProjectToStore dispatches the prefs re-read synchronously,
-  // and validateGeometry's 'custom' gate reads the store at that moment.
+  // import: applyProjectToStore dispatches the prefs re-read synchronously, so
+  // this is what makes that re-read describe the archive's own model. (The
+  // geometry itself is derived from the live mesh now — previewGeometryPref.ts
+  // — so the order is a clarity rule here, not a correctness one.)
   useAppStore.getState().setPreviewMesh(mesh);
   const imported = importShaderText(withProject ?? scripts[0], { keepPreviewMesh: true });
-  if (mesh) showMesh();
+  if (mesh) showCustomMesh();
+  // Only once the shader has loaded — an import that threw above must not
+  // claim "the shader loaded".
+  if (skipped) {
+    useAppStore.getState().showImportNote([
+      { kind: 'zip-model-skipped', shaderLoaded: true, fileName: file.name, refusal: skipped.refusal },
+    ]);
+  }
   return imported;
+}
+
+/* ── the GLB restore (Phase 7) ───────────────────────────────────────────── */
+
+export type GlbRestoreResult =
+  | { ok: true; imported: 'project' | 'script'; notes: ImportNoteLine[] }
+  | { ok: false; reason: 'no-shader' | 'damaged' | 'aborted' }
+  | { ok: false; reason: 'mesh-refused'; refusal: MeshRefusal };
+
+/**
+ * The glTF material indices the restored project's ACTIVE Output claims with
+ * index sections, through the same sanitizers applyProjectToStore runs, so the
+ * texture strip matches what the store will hold. Never throws.
+ */
+function indexSectionMaterialsOf(nodes: AppNode[]): number[] {
+  try {
+    const out = findDefaultOutput(sanitizeOutputMaterials(migrateLegacyNodeTypes([...nodes])));
+    if (!out) return [];
+    const set = new Set<number>();
+    for (const m of outputMaterials(out)) {
+      const i = gltfIndexOf(m);
+      if (i !== null) set.add(i);
+    }
+    return [...set].sort((a, b) => a - b);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * RESTORE the shader a FastShaders single-GLB export stores inside the model —
+ * the ONE restore commit, reached only from the GLB import dialog's Restore
+ * button (never in a study session, never for a model dropped with a shader).
+ *
+ * THE DISAGREEMENT RULE. When the project view parses, the PROJECT wins: its
+ * block goes through extractProjectState and every applyProjectToStore
+ * sanitizer, exactly as a `.js` with a block, and the stored module text is
+ * never parsed (the graph regenerates it). The block's image refs resolve
+ * against the GLB's own images, offered as scan-only `data:` literals
+ * (`assetLiteralText`). With no usable project, the MODULE — its placeholders
+ * inlined to canonical `data:` URLs by the reader — takes the bare-script
+ * path, as a `.js` without a block. Podest, A-Frame pages and plain three run
+ * the module; that asymmetry is the rule.
+ *
+ * THE MESH. The preview copy is the Phase 5 strip of the model for the
+ * materials the restored project's index sections claim, which also reclaims
+ * the payload views and the images only the module used; createPreviewMesh
+ * then refuses anything over the model gate and drops any payload left.
+ *
+ * ORDER. Everything that can refuse runs BEFORE the store is touched, and the
+ * abort signal is checked after every await; the commit is importShaderZip's
+ * model-plus-script tail (mesh, text import, show the model), so it is ONE
+ * undo entry and one `fs:graph-imported`. The mesh swap is not undoable (the
+ * zip and NEW precedent).
+ */
+export async function importShaderGlb(
+  fileName: string,
+  bytes: Uint8Array<ArrayBuffer>,
+  opts?: { signal?: AbortSignal },
+): Promise<GlbRestoreResult> {
+  const read = readGlbFsExtras(bytes);
+  if (read.state !== 'ok') return { ok: false, reason: read.state === 'refused' ? 'damaged' : 'no-shader' };
+  const sh = read.shader;
+  const literals = assetLiteralText(sh.assets);
+  const projectText = sh.projectText !== null ? `${literals}\n${sh.projectText}` : null;
+  const projectResult = projectText !== null ? extractProjectState(projectText) : null;
+  if (!projectResult && sh.moduleText === null) return { ok: false, reason: 'damaged' };
+  const text = projectResult ? (projectText as string) : (sh.moduleText as string);
+
+  if (!projectResult) await preloadShaderImport();
+  if (opts?.signal?.aborted) return { ok: false, reason: 'aborted' };
+
+  let meshBytes: Uint8Array<ArrayBuffer> = bytes;
+  const model = readGltfModel(bytes, 'glb');
+  if (model.ok) {
+    try {
+      const claimed = projectResult ? indexSectionMaterialsOf(projectResult.project.graph.nodes) : [];
+      const plan = planTextureStrip(model.model, claimed);
+      if (plan) meshBytes = stripGltfTextures(model.model, plan).bytes;
+    } catch {
+      // Keep the bytes: createPreviewMesh still drops the payload in place.
+    }
+  }
+  const created = createPreviewMesh(fileName, meshBytes);
+  if ('error' in created) return { ok: false, reason: 'mesh-refused', refusal: created.refusal };
+  if (opts?.signal?.aborted) return { ok: false, reason: 'aborted' };
+
+  useAppStore.getState().setPreviewMesh(created.mesh);
+  const imported = importShaderText(text, { keepPreviewMesh: true });
+  showCustomMesh();
+  return {
+    ok: true,
+    imported,
+    notes: [{ kind: 'glb-restored', fileName: sanitizeMeshFileName(fileName, 'glb'), imported }],
+  };
 }

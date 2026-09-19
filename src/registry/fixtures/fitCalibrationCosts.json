@@ -1,0 +1,14 @@
+{
+ "costs": {
+  "mul": 1,
+  "sin": 2,
+  "sqrt": 4,
+  "perlin": 27,
+  "voronoi": 235,
+  "exp": 3,
+  "div": 2,
+  "normalize": 6,
+  "imageNode": 10,
+  "colormap": 4
+ }
+}

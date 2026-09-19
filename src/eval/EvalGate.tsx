@@ -15,6 +15,7 @@ import { evalTask } from './evalTask';
 import { ConsentModal } from './ConsentModal';
 import { VIEWPORT_KEY } from '@/utils/viewportMemory';
 import { DEFAULT_OPTIONAL_CATEGORIES, OPTIONAL_CATEGORY_KEYS } from '@/registry/optionalCategories';
+import { ALLOW_MANY_MATERIALS_KEY } from '@/utils/glbImportLimits';
 
 /**
  * Orchestrates eval-mode boot. Mounted by App.tsx ONLY when `isEvalMode()` —
@@ -107,6 +108,11 @@ function cleanSlateForStudy(): void {
     // must meet identically, so the previous user's switches are dropped
     // with the rest of their state rather than inherited.
     for (const key of Object.values(OPTIONAL_CATEGORY_KEYS)) localStorage.removeItem(key);
+    // The GLB material-gate override decides what an import BUILDS, so it is
+    // a condition, not a preference; the dialog is not offered in a study
+    // session anyway, but a leaked '1' would reach the next normal-mode
+    // session on this machine.
+    localStorage.removeItem(ALLOW_MANY_MATERIALS_KEY);
   } catch {
     /* storage blocked — nothing persisted to leak either */
   }
@@ -122,6 +128,7 @@ function cleanSlateForStudy(): void {
     // broken for the rest of the study session.
     costBudgetOverrides: Object.create(null) as Record<string, number>,
     optionalCategories: DEFAULT_OPTIONAL_CATEGORIES,
+    allowManyMaterials: false,
   });
 }
 

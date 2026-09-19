@@ -17,12 +17,10 @@
    used to stand `--ctl-size + --space-2` (36px) off the right while keeping a
    12px gap at the top, which read as a misalignment.
 
-   That 36px was clearance for the column seam's grip tab, which is --ctl-size
-   wide and hangs off the divider into this pane. It can only reach the pill on
-   a very short window: the tab's top edge sits at the row split's ratio, which
-   never goes above a quarter of the column (CROSS_MIN_TOP_RATIO), so the two
-   can meet only below roughly 430px of canvas height. `.split-pane__divider`
-   outranks this overlay for exactly that case — see SplitPane.css. */
+   That 36px was clearance for the column seam's grip tab, which hung off the
+   divider into this pane. The tab is gone: the seam's own hit zone reaches
+   only 4px into the pane (--fs-seam-hit), well short of this 12px inset, and
+   `.split-pane__divider` outranks this overlay anyway — see SplitPane.css. */
 .node-editor__cost-overlay {
   position: absolute;
   top: var(--space-3);
@@ -328,9 +326,10 @@
      the corner rather than floating above it.
 
      It used to add `--ctl-size + 8px` to clear the asset bar's resize grip,
-     which hangs --ctl-size above the bar's top edge into the bottom of this
-     pane. That grip sits at 90% (far right) and this bar at the left, so on any
-     ordinary pane width they are hundreds of px apart.
+     which hung --ctl-size above the bar's top edge into the bottom of this
+     pane. That grip sat at 90% (far right) and this bar at the left, so on any
+     ordinary pane width they were hundreds of px apart — and the tab is gone
+     now; the bar's seam reaches only 4px up (--fs-seam-hit).
 
      They can only meet on a very narrow pane — and there the wrap saves it.
      MEASURED at the splitter's minimum (320px pane, draw cluster expanded, the
@@ -367,6 +366,13 @@
   border: 1px solid var(--border-default);
   border-radius: var(--border-radius-sm);
   box-shadow: var(--shadow-float);
+}
+/* The note holds LINES (store `importNote`), one per thing an import did
+   without asking; a single-line note looks exactly as it always did. */
+.node-editor__import-note-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .node-editor__import-note-btn {
   display: inline-flex;

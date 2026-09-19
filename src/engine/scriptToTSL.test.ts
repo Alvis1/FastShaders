@@ -3,6 +3,8 @@ import { parse } from '@babel/parser';
 import { scriptToTSL, scriptToTSLWithSettings } from './scriptToTSL';
 import { codeToGraph } from './codeToGraph';
 import { buildShaderModule } from './tslCodeProcessor';
+import { tslToShaderModule } from './tslToShaderModule';
+import { THREE_REVISION } from './threeRevision';
 import { getNodeValues } from '@/types';
 
 /**
@@ -725,5 +727,70 @@ ${props}  };
     const b = scriptToTSLWithSettings(src).materialSettings;
     expect(a).toEqual(b);
     expect(a).not.toBe(b);
+  });
+});
+
+/**
+ * The module fields the loader switch added (buildShaderModule, module-only):
+ * `export const threeRevision` after the imports, and `import * as THREE from
+ * 'three/webgpu'` for a module that bakes a texture. scriptToTSL needed no
+ * change for either — it drops every module-scope line outside the default
+ * function and passes non-three/tsl imports through — so these pin that it
+ * STAYS that way, and that a re-export can never carry a field twice (a
+ * duplicate export or binding is a SyntaxError that kills the whole module).
+ */
+describe('scriptToTSL — the 0.8 module fields', () => {
+  const DECL = `export const threeRevision = '${THREE_REVISION}';`;
+  const THREE_IMPORT = "import * as THREE from 'three/webgpu';";
+  const count = (text: string, needle: string) => text.split(needle).length - 1;
+  const PROPS = [{ name: 'amount', type: 'float' as const, defaultValue: 2.5 }];
+  const WITH_PROPERTY = `import { Fn, uniform, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  const amount = uniform(2.5);
+  const mul1 = positionGeometry.mul(amount);
+
+  return mul1;
+});
+
+export default shader;
+`;
+  const WITH_TEXTURE = `import { Fn, texture, uv } from 'three/tsl';
+
+const _t_tex = new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+
+const shader = Fn(() => {
+  const t1 = texture(_t_tex, uv()).rgb;
+
+  return t1;
+});
+
+export default shader;
+`;
+
+  it('a new-format export imports to editor TSL with no threeRevision line', () => {
+    const exported = tslToShaderModule(WITH_PROPERTY, undefined, PROPS);
+    expect(count(exported, DECL)).toBe(1);
+    const back = scriptToTSL(exported);
+    expect(back).not.toContain('threeRevision');
+    expectParses(back);
+  });
+
+  it('a non-image module re-exports byte-identically', () => {
+    const exported = tslToShaderModule(WITH_PROPERTY, undefined, PROPS);
+    expect(tslToShaderModule(scriptToTSL(exported), undefined, PROPS)).toBe(exported);
+  });
+
+  it('the THREE namespace import passes through, and a re-export carries each field once', () => {
+    const exported = tslToShaderModule(WITH_TEXTURE);
+    expect(count(exported, THREE_IMPORT)).toBe(1);
+    expect(exported).not.toContain('globalThis.THREE');
+    const back = scriptToTSL(exported);
+    // An "other import", kept verbatim — and it now BINDS THREE, so the
+    // re-export must neither rewrite nor import a second time.
+    expect(count(back, THREE_IMPORT)).toBe(1);
+    const again = tslToShaderModule(back);
+    expect(count(again, THREE_IMPORT)).toBe(1);
+    expect(count(again, DECL)).toBe(1);
   });
 });

@@ -39,8 +39,15 @@ const PRESERVED_KEYS: Record<string, readonly string[]> = {
   // The picture, its encoded dimensions (payload METADATA — without them
   // decodeImageNode returns null and the image renders black, and the
   // size-aware price falls back to the flat table value), and the original
-  // behind "Revert to original".
-  imageNode: ['imageB64', 'width', 'height', 'fileName', 'originId', 'srcWidth', 'srcHeight'],
+  // behind "Revert to original". Then the eight glTF mapping keys
+  // (utils/imageUvMapping.ts): how the picture lands on the MODEL it came with
+  // (set by the GLB importer). A Reset restores tile/offset/flips/filter;
+  // dropping these would silently re-map an imported texture the user cannot
+  // reconstruct without the model file.
+  imageNode: [
+    'imageB64', 'width', 'height', 'fileName', 'originId', 'srcWidth', 'srcHeight',
+    'orientation', 'normalGreen', 'uvSet', 'xfOffsetX', 'xfOffsetY', 'xfRotation', 'xfScaleX', 'xfScaleY',
+  ],
   // The verbatim TSL this node exists to round-trip.
   unknown: ['functionName', 'rawExpression'],
   // The noise range mode. Unlike a settings number, dropping this key does not

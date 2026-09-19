@@ -25,14 +25,13 @@
   max-height: calc(100% - 120px);
 }
 
-/* Anchor for the grip tab, spanning EXACTLY the bar's border-top (the negative
-   `top` reaches from the padding box back over the border). The grip positions
-   flush against its containing block's far edge (see .fs-grip--h in
-   styles/controls.css), so the anchor's box must BE the seam — an anchor below
-   the border would push the grip's side edges visibly past the border line.
-   Both dimensions therefore read --fs-seam, the same token the border does.
-   Not itself a hit target (pointer-events:none), so the canvas underneath stays
-   fully interactive right up to the bar's border. The grip hangs ABOVE it,
+/* The bar's top edge as a DRAG TARGET: a seam-height anchor spanning EXACTLY
+   the bar's border-top (the negative `top` reaches from the padding box back
+   over the border), so its box IS the seam and the shared seam behaviour —
+   the widened hit zone, the hover lens, the cursor — lands on the line
+   (`.fs-seam` in styles/controls.css). Both dimensions read --fs-seam, the same
+   token the border does. Transparent: `.content-browser`'s own border-top
+   paints the line. The hit zone and the lens reach a few px above the bar,
    which is why .content-browser keeps overflow:visible. */
 .content-browser__resizer {
   position: absolute;
@@ -41,30 +40,21 @@
   right: 0;
   height: var(--fs-seam);
   z-index: var(--z-controls);
-  pointer-events: none;
-  /* Transparent: `.content-browser`'s own border-top paints the line, and this
-     is purely the anchor the tab positions against. It briefly also painted the
-     seam so a `filter: drop-shadow` here could cast the line and the tab as one
-     silhouette — dividers cast no shadow now (see SplitPane.css), so the
-     duplicate paint went with it. */
-  /* Inherited by the grip: its outline matches this bar's border-top, and it is
-     the SAME value the SplitPane seams publish. Deliberately a literal equal to
-     --fs-seam's DESKTOP width rather than the token itself, for the reason
-     SplitPane.css documents: the seam bumps on coarse pointers and an outline
-     that thick on a --ctl-size tab would crowd the diamond. */
-  --fs-grip-border: 2px;
 }
 
-.content-browser__resizer .fs-grip {
-  pointer-events: auto;
-}
-
-/* The bar's top edge lights up with its grip — same one-control rule the
-   splitter seams follow. :active covers the drag (the pointer is captured and
-   leaves the grip almost immediately). */
-.content-browser:has(.fs-grip:hover),
-.content-browser:has(.fs-grip:active),
-.content-browser:has(.fs-grip:focus-visible) {
+/* The bar's top edge lights up with its seam — the line, the lens and the
+   grip mark all flip together through the seam's `color` (controls.css), and
+   the border-top follows it here. `fs-seam--dragging` covers the drag (the
+   pointer is captured and leaves the seam almost immediately). */
+.content-browser:has(> .content-browser__resizer:hover),
+.content-browser:has(> .content-browser__resizer:focus-visible),
+.content-browser:has(> .content-browser__resizer.fs-seam--dragging),
+/* …and while the COLUMN seam's junction with this edge is under the pointer or
+   being dragged (SplitPane's `data-fs-junction`): that drag moves the bar's
+   height too, so the edge lights up with the seam it is about to move with.
+   The bar sits in the pane BEFORE the divider, hence `:has()` on the
+   splitter's container rather than a sibling combinator. */
+:has(> .split-pane__divider[data-fs-junction="bar"]) .content-browser {
   border-top-color: var(--border-focus);
 }
 

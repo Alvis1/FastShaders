@@ -102,7 +102,7 @@ const versionHtmlPlugin = (): Plugin => ({
 //                       src-tauri/carousel-dist/ and bundled as a Tauri resource, which the
 //                       in-app LAN bench server (src-tauri/src/bench_server.rs, "VR" toolbar
 //                       popover) serves to headsets on the local network. Also exposed to the
-//                       app as __FS_DESKTOP__ so desktop-irrelevant UI (Local download button,
+//                       app as __FS_DESKTOP__ so desktop-irrelevant UI ("Download app" button,
 //                       SC link) can hide itself.
 // Example self-host build:
 //   FS_BASE=/fastshaders/ FS_PREVIEW_ORIGIN='https://alvismisjuns.lv https://www.alvismisjuns.lv' npm run build
@@ -405,11 +405,27 @@ const syncVendoredFile = (srcPath: string, dstPath: string): void => {
 const VENDOR_SRC = path.resolve(__dirname, 'a-frame-shaderloader/js');
 const VENDOR_TARGETS: { file: string; dests: string[] }[] = [
   { file: 'a-frame-180-a-01.min.js', dests: ['public/js', 'ShaderCarousel/components/three'] },
-  // 0.4 and 0.5 are deliberately NOT vendored — see NOT_VENDORED in
+  // 0.4, 0.5 and 0.6 are deliberately NOT vendored — see NOT_VENDORED in
   // src/vendorSync.test.ts. Nothing resolves them same-origin: every export
-  // and the A-Frame tab reference them on the CDN by URL, and the preview and
-  // podest load 0.6. Shipping them cost 51 KB of dist for zero consumers.
-  { file: 'a-frame-shaderloader-0.6.js', dests: ['public/js'] },
+  // and the A-Frame tab reference them on the CDN by URL. The preview, its XR
+  // popup, podest's stage and podest's VR popup load 0.8. NB this plugin only
+  // ever COPIES, so dropping a row leaves the old file wherever a host keeps
+  // it: GitHub Pages deploys with force_orphan and loses it, the psftp hosts
+  // (alvismisjuns, sferas) never delete and keep it.
+  { file: 'a-frame-shaderloader-0.8.js', dests: ['public/js'] },
+  // The glTF decoders (three r184's glTF Draco build and meshopt 1.1, the Basis
+  // Universal KTX2 transcoder, plus the README carrying their provenance and the
+  // Apache-2.0 text that must travel with Draco and Basis alike) sit beside the
+  // loader, whose FastShaders.decoders section installs them. They ship in EVERY
+  // build (web, both psftp hosts, the desktop app): a surface that decodes a
+  // dropped compressed model — mesh or texture — must work offline, and the
+  // sandboxed preview can fetch nothing, so its parent pushes these bytes in.
+  { file: 'decoders/draco_wasm_wrapper.js', dests: ['public/js'] },
+  { file: 'decoders/draco_decoder.wasm', dests: ['public/js'] },
+  { file: 'decoders/meshopt_decoder.module.js', dests: ['public/js'] },
+  { file: 'decoders/basis_transcoder.js', dests: ['public/js'] },
+  { file: 'decoders/basis_transcoder.wasm', dests: ['public/js'] },
+  { file: 'decoders/README.md', dests: ['public/js'] },
   { file: 'aframe-orbit-controls.min.js', dests: ['public/js'] },
 ];
 const vendorSyncPlugin = (): Plugin => ({
@@ -1012,9 +1028,10 @@ export default defineConfig({
     //     `vi.unstubAllGlobals()` in afterEach/afterAll — vitest is not
     //     configured to unstub for us (`unstubGlobals` is unset), so a file
     //     that forgets hands its stub to whichever suite runs next.
-    //   · THE MODULE REGISTRY. `editorVisibility.test.ts` needs a non-empty
-    //     visibility file to prove hiding filters at all (the shipped one is
-    //     empty, so every assertion would be vacuous), so it `vi.doMock`s the
+    //   · THE MODULE REGISTRY. `editorVisibility.test.ts` needs a known
+    //     non-empty visibility file to prove hiding filters at all (the shipped
+    //     one was empty until GLB Phase 4 hid imageNode, so every direct
+    //     assertion would have been vacuous), so it `vi.doMock`s the
     //     JSON and `vi.resetModules()` around it — and undoes both in
     //     afterEach, because a live mock or a reset registry is visible to
     //     every later file in that worker.

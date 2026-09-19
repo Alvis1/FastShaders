@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { tslToPreviewHTML } from './tslToPreviewHTML';
+import { describe, it, expect, afterEach } from 'vitest';
+import { MARCH_WINDOW_GEOMETRY, decoderAssetUrl, tslToPreviewHTML } from './tslToPreviewHTML';
+import { LOADER_FILE } from './tslToShaderModule';
+import { DECODER_FILES, MAX_DECODER_FILE_BYTES } from '@/utils/meshDecoders';
+import { safeJsonReviver } from '@/utils/safeJson';
+import vm from 'node:vm';
+import { LoadingManager } from 'three/webgpu';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { loaderAvailable, makeLoaderSandbox, runLoaderIn } from '../shaderloaderHarness';
 
 const TSL = `import { Fn, vec3 } from 'three/tsl';
 
@@ -272,5 +279,227 @@ describe('tslToPreviewHTML — the WGSL/GLSL backend toggle', () => {
     // A top-level popup's parent is itself — the report is sandbox-only.
     const xr = tslToPreviewHTML(TSL, { geometry: 'sphere', xr: true });
     expect(xr).not.toContain('fs:backend');
+  });
+});
+
+describe('tslToPreviewHTML — mesh decoders (loader 0.8 FastShaders.decoders)', () => {
+  const customGlb = () => tslToPreviewHTML(TSL, { geometry: 'custom', customModel: { kind: 'glb', id: 7 } });
+  const CONFIGURE = 'FastShaders.decoders.configure(';
+
+  it('a sandboxed model document configures the decoders after the loader and before the scene', () => {
+    for (const html of [customGlb(), tslToPreviewHTML(TSL, { geometry: 'bunny' })]) {
+      const loader = html.indexOf(`${LOADER_FILE}"`);
+      const configure = html.indexOf(CONFIGURE);
+      expect(loader).toBeGreaterThan(-1);
+      expect(configure).toBeGreaterThan(loader);
+      expect(html.indexOf('__fsSceneHTML')).toBeGreaterThan(configure);
+      // The resolver reads a NULL-PROTOTYPE table the model feed fills.
+      expect(html).toContain('window.__fsDecoderUrls=Object.create(null);');
+      expect(html).toContain('return window.__fsDecoderUrls[f]||null;');
+      expect(html.split(CONFIGURE)).toHaveLength(2);
+    }
+  });
+
+  it('primitive, teapot and march documents carry no decoder code at all', () => {
+    for (const html of [
+      tslToPreviewHTML(TSL, { geometry: 'sphere' }),
+      tslToPreviewHTML(TSL, { geometry: 'teapot' }),
+      tslToPreviewHTML(TSL, { geometry: MARCH_WINDOW_GEOMETRY, marchWindow: 2 }),
+      tslToPreviewHTML(TSL, { geometry: 'sphere', xr: true }),
+    ]) {
+      expect(html).not.toContain('FastShaders.decoders');
+      expect(html).not.toContain('__fsDecoderUrls');
+      expect(html).not.toContain('fillDecoders');
+    }
+  });
+
+  it('the feed fills the table from the message BEFORE it sets gltf-model', () => {
+    const html = customGlb();
+    const fill = html.indexOf('if (dec) fillDecoders(dec);');
+    expect(fill).toBeGreaterThan(-1);
+    expect(fill).toBeLessThan(html.indexOf('if (kind === "glb" || kind === "gltf") entity.setAttribute("gltf-model"'));
+    expect(html).toContain('var dec = msg.decoders && typeof msg.decoders === "object" ? msg.decoders : null;');
+    expect(html).toContain('window.__fsWhenSceneBooted(function () { apply(kind, payload, dec); });');
+  });
+
+  it('the feed accepts exactly DECODER_FILES, each with its blob type, under the same cap', () => {
+    const html = customGlb();
+    const m = /var DEC_FILES = (\[.*?\]);/.exec(html);
+    expect(m).toBeTruthy();
+    const slots = JSON.parse(m![1], safeJsonReviver) as Array<[string, string]>;
+    expect(slots.map((s) => s[0])).toEqual(Object.values(DECODER_FILES));
+    expect(Object.fromEntries(slots)).toEqual({
+      [DECODER_FILES.dracoWrapper]: 'text/javascript',
+      [DECODER_FILES.dracoWasm]: 'application/wasm',
+      [DECODER_FILES.meshopt]: 'text/javascript',
+      [DECODER_FILES.basisJs]: 'text/javascript',
+      [DECODER_FILES.basisWasm]: 'application/wasm',
+    });
+    // The type follows the SUFFIX, so a name added to DECODER_FILES cannot
+    // arrive with the wrong one.
+    for (const [name, type] of slots) {
+      expect(type, name).toBe(name.endsWith('.wasm') ? 'application/wasm' : 'text/javascript');
+    }
+    expect(html).toContain(`var DEC_MAX = ${MAX_DECODER_FILE_BYTES};`);
+  });
+
+  it('a model-loaded reports the KTX2 transcode counts, once, clamped, to the parent', () => {
+    const html = customGlb();
+    expect(html).toContain('entity.addEventListener("model-loaded", function () {');
+    expect(html).toContain('var st = window.FastShaders && FastShaders.decoders ? FastShaders.decoders.ktx2Stats : null;');
+    expect(html).toContain('var fb = Math.min(Math.max(st.fallbacks | 0, 0), 1024);');
+    expect(html).toContain('var ms = Math.min(Math.max(st.missing | 0, 0), 1024);');
+    expect(html).toContain('if (fb <= 0 && ms <= 0) return;');
+    expect(html).toContain(
+      'window.parent.postMessage({ type: "fs:model-ktx2", geometry: __fsExpectedObj, fallbacks: fb, missing: ms }, "*");',
+    );
+    // Once per document, and never a throw out of a listener.
+    expect(html).toContain('if (ktx2Reported) return;');
+    expect(html).toContain('ktx2Reported = true;');
+    // Sphere, teapot and march documents have no model feed at all.
+    for (const other of [
+      tslToPreviewHTML(TSL, { geometry: 'sphere' }),
+      tslToPreviewHTML(TSL, { geometry: 'teapot' }),
+      tslToPreviewHTML(TSL, { geometry: MARCH_WINDOW_GEOMETRY, marchWindow: 2 }),
+    ]) {
+      expect(other).not.toContain('fs:model-ktx2');
+    }
+  });
+
+  it('a model-error names the decoder\'s own failure, and no longer calls compression unsupported', () => {
+    const html = customGlb();
+    expect(html).toContain('(decoderError() || "the file could not be parsed (corrupt, or compressed in a way FastShaders cannot decode).")');
+    expect(html).toContain('return d && typeof d.lastError === "string" ? d.lastError : "";');
+    expect(html).not.toContain('not supported).');
+  });
+
+  it('the XR popup configures explicit same-origin decoder URLs', () => {
+    for (const customModel of [{ kind: 'glb' as const, id: 2, url: 'blob:https://example/abc' }, null]) {
+      const html = tslToPreviewHTML(TSL, customModel
+        ? { geometry: 'custom', customModel, xr: true }
+        : { geometry: 'bunny', xr: true });
+      const m = /var __fsDec=(\{.*?\});FastShaders\.decoders\.configure\(/.exec(html);
+      expect(m).toBeTruthy();
+      const urls = JSON.parse(m![1], safeJsonReviver) as Record<string, string>;
+      expect(urls).toEqual(Object.fromEntries(Object.values(DECODER_FILES).map((f) => [f, decoderAssetUrl(f)])));
+      expect(html).toContain('return Object.prototype.hasOwnProperty.call(__fsDec,f)?__fsDec[f]:null;');
+      expect(html).not.toContain('__fsDecoderUrls');
+      expect(html.indexOf(CONFIGURE)).toBeGreaterThan(html.indexOf(`${LOADER_FILE}"`));
+    }
+  });
+
+  describe.skipIf(!loaderAvailable('0.8'))('the configure snippets, run against the real loader 0.8', () => {
+    /** The inline <script> that follows the loader's <script src> in `html`. */
+    function configureScript(html: string): string {
+      const at = html.indexOf(CONFIGURE);
+      const open = html.lastIndexOf('<script>', at);
+      return html.slice(open + '<script>'.length, html.indexOf('</script>', at));
+    }
+    /** A GLTFLoader stand-in: install() only ever calls these two setters. */
+    function fakeGltfLoader() {
+      const l: { dracoLoader?: unknown; meshoptDecoder?: unknown; setDRACOLoader(d: unknown): void; setMeshoptDecoder(m: unknown): void } = {
+        setDRACOLoader(d) { this.dracoLoader = d; },
+        setMeshoptDecoder(m) { this.meshoptDecoder = m; },
+      };
+      return l;
+    }
+    function loaderWith(script: string) {
+      // DRACOLoader lives on AFRAME.THREE only, as with the real bundle.
+      const { sandbox } = makeLoaderSandbox({ aframeThree: { DRACOLoader, LoadingManager } });
+      runLoaderIn('0.8', sandbox);
+      vm.runInContext(script, sandbox);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return sandbox as any;
+    }
+
+    it('sandbox: an empty table installs NO Draco loader (fail fast) and no meshopt', () => {
+      const sb = loaderWith(configureScript(customGlb()));
+      const gl = fakeGltfLoader();
+      sb.FastShaders.decoders.install(gl);
+      expect(gl.dracoLoader).toBeNull();
+      expect(gl.meshoptDecoder).toBeUndefined();
+    });
+
+    it('sandbox: a filled table installs the shared Draco loader and the meshopt shim', () => {
+      const sb = loaderWith(configureScript(customGlb()));
+      for (const f of Object.values(DECODER_FILES)) sb.window.__fsDecoderUrls[f] = `blob:https://app.test/${f}`;
+      const gl = fakeGltfLoader();
+      sb.FastShaders.decoders.install(gl);
+      expect(gl.dracoLoader).toBeInstanceOf(DRACOLoader);
+      expect((gl.meshoptDecoder as { supported?: boolean }).supported).toBe(true);
+      // Only the three names ever resolve: an inherited or unknown key answers nothing.
+      expect(Object.getPrototypeOf(sb.window.__fsDecoderUrls)).toBeNull();
+    });
+
+    it('XR: the baked same-origin map installs both', () => {
+      const sb = loaderWith(configureScript(tslToPreviewHTML(TSL, { geometry: 'bunny', xr: true })));
+      const gl = fakeGltfLoader();
+      sb.FastShaders.decoders.install(gl);
+      expect(gl.dracoLoader).toBeInstanceOf(DRACOLoader);
+      expect((gl.meshoptDecoder as { supported?: boolean }).supported).toBe(true);
+    });
+  });
+
+  describe('the feed\'s fillDecoders, executed', () => {
+    const html = customGlb();
+    const start = html.indexOf('    var DEC_FILES = ');
+    const end = html.indexOf('    function decoderError() {');
+    const minted: string[] = [];
+    afterEach(() => {
+      for (const u of minted.splice(0)) URL.revokeObjectURL(u);
+    });
+    function feed() {
+      const table = Object.create(null) as Record<string, string>;
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const fill = new Function('window', html.slice(start, end) + '\nreturn fillDecoders;')({ __fsDecoderUrls: table }) as (
+        dec: unknown,
+      ) => void;
+      return { table, fill };
+    }
+
+    it('slices out cleanly', () => {
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+    });
+
+    it('mints one blob: URL per valid file', () => {
+      const { table, fill } = feed();
+      fill({
+        [DECODER_FILES.dracoWrapper]: 'self.x = 1;',
+        [DECODER_FILES.dracoWasm]: new Uint8Array([0, 97, 115, 109]).buffer,
+        [DECODER_FILES.meshopt]: 'export {};',
+        [DECODER_FILES.basisJs]: 'self.BASIS = 1;',
+        [DECODER_FILES.basisWasm]: new Uint8Array([0, 97, 115, 109]).buffer,
+      });
+      expect(Object.keys(table).sort()).toEqual(Object.values(DECODER_FILES).sort());
+      minted.push(...Object.values(table));
+      for (const u of Object.values(table)) expect(u).toMatch(/^blob:/);
+    });
+
+    it('refuses wrong types, empty and oversize files, and unknown or inherited keys', () => {
+      const { table, fill } = feed();
+      fill({
+        [DECODER_FILES.dracoWrapper]: new ArrayBuffer(8),
+        [DECODER_FILES.dracoWasm]: 'AGFzbQ==',
+        [DECODER_FILES.meshopt]: 'x'.repeat(MAX_DECODER_FILE_BYTES + 1),
+        // The basis wasm is the largest real file, so its cap matters most.
+        [DECODER_FILES.basisWasm]: new ArrayBuffer(MAX_DECODER_FILE_BYTES + 1),
+        [DECODER_FILES.basisJs]: new ArrayBuffer(8),
+        'evil.js': 'alert(1)',
+      });
+      fill({ [DECODER_FILES.dracoWrapper]: '', [DECODER_FILES.dracoWasm]: new ArrayBuffer(0) });
+      fill(Object.create({ [DECODER_FILES.dracoWrapper]: 'inherited' }));
+      fill(null);
+      expect(Object.keys(table)).toEqual([]);
+    });
+
+    it('keeps a filled slot', () => {
+      const { table, fill } = feed();
+      fill({ [DECODER_FILES.meshopt]: 'export {};' });
+      const first = table[DECODER_FILES.meshopt];
+      fill({ [DECODER_FILES.meshopt]: 'export const x = 1;' });
+      expect(table[DECODER_FILES.meshopt]).toBe(first);
+      minted.push(first);
+    });
   });
 });

@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { buildRows } from './ShaderNode';
+import { NODE_REGISTRY } from '@/registry/nodeRegistry';
+import { effectiveNodeDef } from '@/utils/exposedPorts';
 
 /**
  * The NodeVisual replica must render a node the way the canvas does WHATEVER
@@ -22,15 +25,16 @@ const read = (rel: string) => readFileSync(path.resolve(__dirname, rel), 'utf8')
 describe('node-visual parity across surfaces', () => {
   it('NodeVisual hides the opt-in ramp sockets itself, so no surface can show sockets a fresh node lacks', () => {
     const src = read('./NodeVisual.tsx');
-    expect(src).toMatch(/const def = effectiveRampDef\(rawDef, NO_EXPOSED\);/);
+    expect(src).toMatch(/const def = effectiveNodeDef\(rawDef, NO_EXPOSED\);/);
     // The card used to do it by hand; a second copy would let the two drift.
     expect(read('../NodePreviewCard.tsx')).not.toContain('effectiveRampDef(');
+    expect(read('../NodePreviewCard.tsx')).not.toContain('effectiveNodeDef(');
   });
 
   it('ShaderNode filters the canvas the same way — both branches read effDef, not def', () => {
     const src = read('./ShaderNode.tsx');
     // The filter itself: Data Stripes / Data Viz hide their opt-in ramp ends.
-    expect(src).toMatch(/effectiveRampDef\(def, exposedInputs\)/);
+    expect(src).toMatch(/effectiveNodeDef\(def, exposedInputs\)/);
     // The OPERATOR branch — these two are glyph nodes, so they never reach the
     // rows layout that was already filtering.
     expect(src).toMatch(/effectiveInputs\(effDef,/);
@@ -42,6 +46,19 @@ describe('node-visual parity across surfaces', () => {
     // fails here rather than being noticed by eye months later.
     expect(src, 'the operator branch must not read the unfiltered def')
       .not.toMatch(/effectiveInputs\(def,/);
+  });
+
+  it('the Image node\'s opt-in params are filtered by the SHARED helper, not inline in ShaderNode', () => {
+    // NodeVisual never ran ShaderNode's old inline image filter, so a palette
+    // tile drew six param rows with number boxes beside a canvas node that
+    // showed none (GLB Phase 4). One function now serves both surfaces.
+    expect(read('./ShaderNode.tsx')).not.toContain("registryType !== 'imageNode') return def");
+    const rows = buildRows(effectiveNodeDef(NODE_REGISTRY.get('imageNode')!, []));
+    expect(rows.map((r) => r.output?.id)).toEqual(['out', 'alpha', 'r', 'g', 'b']);
+    for (const r of rows) {
+      expect(r.input).toBeNull();
+      expect(r.settingKey).toBeNull();
+    }
   });
 
   it('the card owns its font size — page bodies differ (app 14px, designer 13px, overview 10px)', () => {

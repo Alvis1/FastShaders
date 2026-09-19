@@ -26,7 +26,8 @@ const SRC = readFileSync(resolve(__dirname, 'ShaderPreview.tsx'), 'utf8');
 
 /** The `useMemo` dep array that decides when a fresh document is built. */
 function documentMemoDeps(): string[] {
-  const at = SRC.indexOf('const [previewHtml, bakedModule] = useMemo(');
+  // The third element is the boot asset-key set (GLB Phase 6 S3, previewAssetFeed).
+  const at = SRC.indexOf('const [previewHtml, bakedModule, bootAssetKeys] = useMemo(');
   expect(at, 'the document memo was renamed').toBeGreaterThan(-1);
   const close = SRC.indexOf('}, [', at);
   expect(close).toBeGreaterThan(at);
@@ -86,18 +87,21 @@ describe('preview rebuild policy: the module is the hot half', () => {
     const decl = SRC.slice(at, SRC.indexOf('\n  );', at));
     // Material settings are a buildShaderModule OPTION, so they are module
     // text and travel down the hot channel with it.
-    expect(decl).toContain('inlinedPreviewCode');
+    expect(decl).toContain('debouncedPreviewCode');
     expect(decl).toContain('debouncedMaterialSettingsKey');
     expect(decl).toContain('buildPreviewShaderModule');
-    // Image payloads must still be expanded before the module runs.
-    const inline = SRC.slice(SRC.indexOf('const inlinedPreviewCode = useMemo('));
-    expect(inline.slice(0, 300)).toContain('inlineImageAssetsFromNodes');
-    expect(inline.slice(0, 300)).toContain('debouncedPreviewCode');
+    // Image payloads are NOT expanded into the module any more (GLB Phase 6
+    // S3): the module stays placeholder-only on this side, the document
+    // resolves the placeholders from the asset feed, and the boot list is
+    // planned in the document memo — previewAssetFeed.test.ts pins the feed.
+    expect(SRC).not.toContain('inlinedPreviewCode');
+    const doc = SRC.slice(SRC.indexOf('const [previewHtml, bakedModule, bootAssetKeys] = useMemo('));
+    expect(doc.slice(0, 500)).toContain('planPreviewAssetFeed(new Set(), collectImageAssets(');
   });
 
   it('is handed to the document so the baked copy and the channel agree byte for byte', () => {
     expect(SRC).toContain('shaderModule: previewModule');
-    expect(SRC).toContain('return [tslToPreviewHTML(inlinedPreviewCode, options), previewModule] as const;');
+    expect(SRC).toContain('return [tslToPreviewHTML(debouncedPreviewCode, options), previewModule, boot.sent] as const;');
   });
 });
 
@@ -122,7 +126,7 @@ describe('preview rebuild policy: a lost swap must not leave the old picture', (
     const post = SRC.slice(SRC.indexOf('const postShaderSwap = useCallback('));
     expect(post.slice(0, post.indexOf('}, [clearHotSwapWait]);'))).toContain('runningModuleRef.current = code;');
     const rebuild = SRC.slice(SRC.indexOf('A new srcDoc means a full document reload'));
-    expect(rebuild.slice(0, rebuild.indexOf('}, [previewHtml, bakedModule, containerReady'))).toContain(
+    expect(rebuild.slice(0, rebuild.indexOf('}, [previewHtml, bakedModule, bootAssetKeys, containerReady'))).toContain(
       'runningModuleRef.current = bakedModule;',
     );
     // The seed must run BEFORE the swap effect in the same commit, or a render
@@ -161,7 +165,7 @@ describe('preview rebuild policy: a lost swap must not leave the old picture', (
   it('gives up on the in-flight swap when a rebuild supersedes it', () => {
     const at = SRC.indexOf('A new srcDoc means a full document reload');
     expect(at).toBeGreaterThan(-1);
-    const body = SRC.slice(at, SRC.indexOf('}, [previewHtml, bakedModule, containerReady', at));
+    const body = SRC.slice(at, SRC.indexOf('}, [previewHtml, bakedModule, bootAssetKeys, containerReady', at));
     expect(body).toContain('clearHotSwapWait();');
     expect(body).toContain('hotGenRef.current += 1;');
   });

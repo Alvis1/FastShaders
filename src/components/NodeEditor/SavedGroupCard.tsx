@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import type { SavedGroup } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { fillTemplate } from '@/utils/fillTemplate';
 import { getGroupFrameColors } from '@/utils/colorUtils';
 import { startTileDrag, tileGhostZoom, tileActivationProps, setHtml5TileDrag } from './tileDrag';
 import { useAssetTooltip } from './AssetTooltip';
@@ -72,9 +73,10 @@ export function SavedGroupCard({ group }: SavedGroupCardProps) {
   // sentence never comes out half-Latvian.
   const countLabel = `${memberCount} ${t(memberCount === 1 ? 'node' : 'nodes', language)}`;
   const { tooltip, tooltipHandlers } = useAssetTooltip(
-    t('Saved group “{name}” ({count}) — click, or drag onto the canvas, to add a copy.', language)
-      .replace('{name}', group.name)
-      .replace('{count}', countLabel),
+    fillTemplate(t('Saved group “{name}” ({count}) — click, or drag onto the canvas, to add a copy.', language), {
+      name: group.name,
+      count: countLabel,
+    }),
   );
 
   return (

@@ -125,7 +125,7 @@ async function initFromAFrame() {
   if (!sphereMesh) throw new Error('sphere mesh not found');
 
   // Park at baseline.
-  registry = buildBenchRegistry(THREE.TSL);
+  registry = buildBenchRegistry(THREE.TSL, THREE);
   applyMaterial(registry[0].build());
 
   // GPU adapter info (best-effort). The index.html guard hides
@@ -314,7 +314,7 @@ async function runBenchmark() {
       }
       const stats = computeStats(frames);
       $('hud-fps').textContent = stats.avgFps;
-      results.push({ id: s.id, label: s.label, category: s.category, stats, frames });
+      results.push({ id: s.id, label: s.label, category: s.category, ...(s.copies > 1 ? { copies: s.copies } : {}), stats, frames });
       log(`  → ${stats.medianFt} ms | ${stats.avgFps} fps | drift ${stats.thermalDrift}`, 'ok');
     }
   } finally {

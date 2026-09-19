@@ -7,9 +7,12 @@
  * alongside as a regular file) and/or a custom preview mesh is loaded (the
  * model file ships under models/ so the shader+mesh pair works in Podest and
  * in a plain A-Frame page). A bare graph stays a single self-contained .js.
+ * Every bundle also carries its size facts (ExportBundleSize), counted from the
+ * SAME entry list the zip is written from, for the export pre-flight
+ * (utils/exportPreflight.ts).
  */
 
-import { buildZip } from './zipWriter';
+import { buildZip, type ZipEntry } from './zipWriter';
 import type { PreviewMesh } from './previewMesh';
 
 export interface ExportImageFile {
@@ -20,9 +23,40 @@ export interface ExportImageFile {
 /** The mesh fields the bundle needs — decoupled from the live store shape. */
 export type ExportMesh = Pick<PreviewMesh, 'name' | 'kind' | 'bytes'>;
 
-export type ExportBundle =
+/**
+ * Size facts every bundle carries, counted the way zipReader counts (read by the
+ * export pre-flight, utils/exportPreflight.ts).
+ */
+export interface ExportBundleSize {
+  /**
+   * Bytes the bundle unpacks to: for a zip, the sum of every entry's data
+   * (buildZip writes STORE only and no directory entries, so this is exactly
+   * readZip's running total); for a bare .js, its UTF-8 length.
+   */
+  unpackedBytes: number;
+  /** The model's own bytes inside the bundle; 0 when none rides along. */
+  meshBytes: number;
+  /**
+   * `unpackedBytes` of the SAME export built with no mesh (which may be a bare
+   * .js). Equals `unpackedBytes` when `meshBytes` is 0.
+   */
+  unpackedBytesWithoutMesh: number;
+  /**
+   * Entries the bundle holds, as readZip counts them against `MAX_ENTRIES`
+   * (buildZip writes no directory entries, so this is the entry list's length);
+   * 1 for a bare .js. One `images/` entry per DISTINCT image (MIME + decoded
+   * bytes), so this — unlike the size — can cross the reader's cap with tiny
+   * images.
+   */
+  entryCount: number;
+  /** `entryCount` of the SAME export built with no mesh. */
+  entryCountWithoutMesh: number;
+}
+
+export type ExportBundle = (
   | { kind: 'js'; fileName: string; mime: 'application/javascript'; bytes: Uint8Array<ArrayBuffer> }
-  | { kind: 'zip'; fileName: string; mime: 'application/zip'; bytes: Uint8Array<ArrayBuffer> };
+  | { kind: 'zip'; fileName: string; mime: 'application/zip'; bytes: Uint8Array<ArrayBuffer> }
+) & ExportBundleSize;
 
 /**
  * The A-Frame pairing snippet for a bundled model (README + docs use it).
@@ -80,22 +114,65 @@ export function buildExportReadme(
   return lines.join('\n');
 }
 
+/** The zip entries in write order, or null when the bundle stays a bare .js. */
+function bundleEntries(
+  baseName: string,
+  scriptBytes: Uint8Array<ArrayBuffer>,
+  images: ExportImageFile[],
+  mesh: ExportMesh | null,
+): ZipEntry[] | null {
+  if (images.length === 0 && !mesh) return null;
+  return [
+    { name: `${baseName}.js`, data: scriptBytes },
+    ...images.map((f) => ({ name: `images/${f.name}`, data: f.bytes })),
+    ...(mesh ? [{ name: `models/${mesh.name}`, data: mesh.bytes }] : []),
+    {
+      name: 'README.txt',
+      data: new TextEncoder().encode(buildExportReadme(baseName, images.length > 0, mesh)),
+    },
+  ];
+}
+
+/** Sum of the entries' data — what readZip counts against its cap. */
+function entryBytes(entries: ZipEntry[]): number {
+  return entries.reduce((s, e) => s + e.data.length, 0);
+}
+
+/** Bytes a bundle with these parts unpacks to (see ExportBundleSize.unpackedBytes). */
+export function unpackedBundleBytes(
+  baseName: string,
+  scriptBytes: Uint8Array<ArrayBuffer>,
+  images: ExportImageFile[],
+  mesh: ExportMesh | null,
+): number {
+  const entries = bundleEntries(baseName, scriptBytes, images, mesh);
+  return entries === null ? scriptBytes.length : entryBytes(entries);
+}
+
 export function buildExportBundle(
   baseName: string,
   embeddedScript: string,
   images: ExportImageFile[],
   mesh: ExportMesh | null,
 ): ExportBundle {
-  const enc = new TextEncoder();
-  const scriptBytes = enc.encode(embeddedScript);
-  if (images.length === 0 && !mesh) {
-    return { kind: 'js', fileName: `${baseName}.js`, mime: 'application/javascript', bytes: scriptBytes };
+  const scriptBytes = new TextEncoder().encode(embeddedScript);
+  const entries = bundleEntries(baseName, scriptBytes, images, mesh);
+  const unpackedBytes = entries === null ? scriptBytes.length : entryBytes(entries);
+  const meshBytes = mesh ? mesh.bytes.length : 0;
+  const entryCount = entries === null ? 1 : entries.length;
+  const size: ExportBundleSize = {
+    unpackedBytes,
+    meshBytes,
+    unpackedBytesWithoutMesh: mesh
+      ? unpackedBundleBytes(baseName, scriptBytes, images, null)
+      : unpackedBytes,
+    entryCount,
+    // Dropping the model removes its one entry; with no images left the
+    // bundle becomes a bare .js (1).
+    entryCountWithoutMesh: mesh ? (images.length === 0 ? 1 : entryCount - 1) : entryCount,
+  };
+  if (entries === null) {
+    return { kind: 'js', fileName: `${baseName}.js`, mime: 'application/javascript', bytes: scriptBytes, ...size };
   }
-  const zip = buildZip([
-    { name: `${baseName}.js`, data: scriptBytes },
-    ...images.map((f) => ({ name: `images/${f.name}`, data: f.bytes })),
-    ...(mesh ? [{ name: `models/${mesh.name}`, data: mesh.bytes }] : []),
-    { name: 'README.txt', data: enc.encode(buildExportReadme(baseName, images.length > 0, mesh)) },
-  ]);
-  return { kind: 'zip', fileName: `${baseName}.zip`, mime: 'application/zip', bytes: zip };
+  return { kind: 'zip', fileName: `${baseName}.zip`, mime: 'application/zip', bytes: buildZip(entries), ...size };
 }

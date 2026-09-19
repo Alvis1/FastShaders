@@ -18,11 +18,27 @@
  * Keeping it in `utils/` (not beside WorkFolder) is deliberate: Toolbar.tsx
  * ships to the web build too, and this module has no desktop-only imports, so
  * nothing here widens what the web bundle pulls in.
+ *
+ * `args` is either the usual JSON object or a RAW body (`Uint8Array` /
+ * `ArrayBuffer`), which Tauri hands the command as `ipc::Request::body()`
+ * untouched — that is how the Work folder saves a 256 MiB zip without the 33%
+ * base64 inflation into one JSON string. A raw body has no room for named
+ * arguments, so anything else the command needs rides `options.headers`
+ * (utils/desktopIpc.ts names them).
  */
-export function invokeDesktop<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export type DesktopInvokeArgs = Record<string, unknown> | Uint8Array | ArrayBuffer;
+export interface DesktopInvokeOptions {
+  headers: Record<string, string>;
+}
+
+export function invokeDesktop<T>(
+  cmd: string,
+  args?: DesktopInvokeArgs,
+  options?: DesktopInvokeOptions,
+): Promise<T> {
   const bridge = window.__TAURI__;
   if (!bridge) return Promise.reject(new Error('Desktop bridge unavailable'));
-  return bridge.core.invoke<T>(cmd, args);
+  return bridge.core.invoke<T>(cmd, args, options);
 }
 
 /** Tauri command failures reject with a plain string (Result<_, String>). */

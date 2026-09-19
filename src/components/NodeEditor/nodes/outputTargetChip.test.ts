@@ -211,7 +211,9 @@ describe('the Output node\'s preview socket', () => {
     // draw a stray centre socket on top of the per-section ones).
     const spans = tsx.match(/className=\{`output-node__preview-socket nodrag/g) ?? [];
     expect(spans).toHaveLength(1);
-    const blockStart = tsx.indexOf('className="output-node__material"');
+    // The wrapper's class list grew a modifier (the unused-default mark), so
+    // the pin is the class NAME opening it, not the whole attribute.
+    const blockStart = tsx.indexOf('`output-node__material${');
     expect(blockStart, 'the material block wrapper is gone').toBeGreaterThan(-1);
     expect(
       tsx.indexOf('className={`output-node__preview-socket nodrag'),
@@ -334,11 +336,13 @@ describe('a mesh belongs to exactly one material', () => {
     expect(tsx).toContain('assignMeshTargets(outputMaterials(node), index, names)');
     // TWO writes, and only two: the single updateNodeData that lands a move,
     // and `addMaterial` seeding a brand-new material — which is safe because it
-    // only ever picks a mesh NOTHING has claimed (`claimedNames` folds every
-    // material's list). A third write is the one to worry about.
+    // only ever picks a mesh no NAME section has claimed (`pickFreeMesh` folds
+    // every material's list; an index-covered mesh is the fallback, and a
+    // name claim on it is the intended override). A third write is the one to
+    // worry about.
     const writes = tsx.match(/meshTargets:/g) ?? [];
     expect(writes.length).toBe(2);
-    expect(tsx).toMatch(/const free = meshNames\.find\(\(n\) => !claimed\.has\(n\)\);/);
+    expect(tsx).toContain('pickFreeMesh(');
   });
 
   it('the move is ONE undo entry', () => {

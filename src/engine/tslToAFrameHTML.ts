@@ -19,7 +19,7 @@
  *     in it — so a page built from it cannot list a uniform the shader doesn't
  *     have, or miss one it does.
  *
- *  3. **A-Frame defaults, nothing else — with TWO exceptions.** No comments, no
+ *  3. **A-Frame defaults, nothing else — with THREE exceptions.** No comments, no
  *     light rig, no background, no camera rig, no orbit-controls: the default
  *     camera (eye height, look/wasd controls), the default lighting and the
  *     default `vr-mode-ui` Enter-VR button are what the page is meant to use,
@@ -48,10 +48,19 @@
  *     BoxGeometry duplicates those positions with per-face normals at ANY
  *     segment count, so each face slid outward along its own normal — and the
  *     fix could not be inlined without costing the page its whole reason to
- *     exist. It is fixed now because shaderloader 0.6 welds those vertices
+ *     exist. It is fixed now because the loader (0.6 and 0.8) welds those vertices
  *     itself, which this page gets for free: it already loads the loader.
  *     Spheres and planes were never affected (their duplicate positions share
  *     normals, so the loader's weld correctly leaves them alone).
+ *
+ *     The THIRD exception is the SINGLE-GLB export (`modelFile`): the page
+ *     hangs `shader="src: model"` on `<a-entity gltf-model="url(<name>.glb)">`
+ *     instead of a primitive, because the export IS the model — so it carries
+ *     no segments and no radius, and everything else (the scene, the backend,
+ *     the two scripts, the uniform rows) is unchanged. It needs loader 0.8:
+ *     0.6 reads `src: model` as a path, logs a shader-error and leaves the
+ *     model on its own materials, which is why the tab's label names the
+ *     version. The Three.js tab stays on the primitive.
  *
  * The page carries NO script of its own. The VR promise rides rule 3's SECOND
  * deliberate exception instead: `<a-scene renderer="backend: webgl">`. The
@@ -72,6 +81,7 @@
 
 import { isModelGeometry, escapeHtml, type GeometryType } from './tslToPreviewHTML';
 import { CDN_BASE, LOADER_FILE, RESERVED_ATTRIBUTE_KEYS } from './tslToShaderModule';
+import { GLB_ENTITY_POSITION, GLB_SRC_MODEL, safeGlbFileName } from './glbUsage';
 
 /** One row of the module's exported `schema` — i.e. one `shader` attribute. */
 export interface EmbedUniform {
@@ -90,6 +100,12 @@ export interface AFrameEmbedOptions {
   geometry?: GeometryType;
   /** The Raymarch Output's Window radius (marchSphere only). */
   marchWindow?: number;
+  /**
+   * The single-GLB export: hang `src: model` on a `gltf-model` entity instead
+   * of a primitive, because the export IS the model. Absent = today's page,
+   * byte for byte.
+   */
+  modelFile?: string;
 }
 
 const SCHEMA_OPEN = 'export const schema = {';
@@ -200,7 +216,15 @@ export function buildAFrameEmbedHTML(
     .filter((u) => !RESERVED_ATTRIBUTE_KEYS.has(u.name));
   const file = safeShaderFile(options.shaderFile);
   const title = escapeHtml(options.title?.trim() || file);
-  const tag = primitiveOf(isModelGeometry(options.geometry ?? 'sphere') ? 'sphere' : options.geometry);
+  // The single-GLB page: one gltf-model entity, and `src: model` in place of
+  // the sibling `.js`. Whitelisted through the SAME rule the header block and
+  // the README snippet use (engine/glbUsage.ts), so one hostile name cannot
+  // spell one thing here and another there.
+  const modelFile = options.modelFile === undefined ? null : safeGlbFileName(options.modelFile);
+  const src = modelFile ? GLB_SRC_MODEL : file;
+  const tag = modelFile
+    ? 'a-entity'
+    : primitiveOf(isModelGeometry(options.geometry ?? 'sphere') ? 'sphere' : options.geometry);
 
   const L: string[] = [];
   L.push('<!DOCTYPE html>');
@@ -221,23 +245,29 @@ export function buildAFrameEmbedHTML(
   // moment the tag changes length (a-sphere / a-box / a-plane).
   const attrCol = ' '.repeat(4 + 1 + tag.length + 1);
   const valueCol = ' '.repeat(attrCol.length + 'shader="'.length);
-  const leading = [`position="${OBJECT_POSITION}"`];
-  // The march window: a sphere of the Raymarch Output's Window radius.
-  if (options.geometry === 'marchSphere') leading.push(`radius="${Number.isFinite(options.marchWindow) && options.marchWindow! > 0 ? options.marchWindow : 1}"`);
-  if (hasDisplacement(moduleSource)) leading.push(segmentAttributes(tag).join(' '));
+  const leading = modelFile
+    ? [`gltf-model="url(${modelFile})"`, `position="${GLB_ENTITY_POSITION}"`]
+    : [`position="${OBJECT_POSITION}"`];
+  // A model brings its own geometry: no segments (the loader welds what a
+  // displacement needs) and no window radius.
+  if (!modelFile) {
+    // The march window: a sphere of the Raymarch Output's Window radius.
+    if (options.geometry === 'marchSphere') leading.push(`radius="${Number.isFinite(options.marchWindow) && options.marchWindow! > 0 ? options.marchWindow : 1}"`);
+    if (hasDisplacement(moduleSource)) leading.push(segmentAttributes(tag).join(' '));
+  }
 
-  if (uniforms.length === 0 && leading.length === 1) {
-    L.push(`    <${tag} ${leading[0]} shader="src: ${file}"></${tag}>`);
+  if (uniforms.length === 0 && (leading.length === 1 || modelFile)) {
+    L.push(`    <${tag} ${leading.join(' ')} shader="src: ${src}"></${tag}>`);
   } else {
     L.push(`    <${tag} ${leading[0]}`);
     for (const attr of leading.slice(1)) L.push(`${attrCol}${attr}`);
     if (uniforms.length === 0) {
-      L.push(`${attrCol}shader="src: ${file}"></${tag}>`);
+      L.push(`${attrCol}shader="src: ${src}"></${tag}>`);
     } else {
       // Every uniform the module declares, on its own line so a value can be
       // edited in place. A-Frame's style parser trims each `;`-separated chunk
       // (utils/styleParser.js), so the newlines and indentation are inert.
-      L.push(`${attrCol}shader="src: ${file};`);
+      L.push(`${attrCol}shader="src: ${src};`);
       uniforms.forEach((u, i) => {
         const last = i === uniforms.length - 1;
         L.push(`${valueCol}${u.name}: ${u.defaultValue}${last ? `"></${tag}>` : ';'}`);

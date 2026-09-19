@@ -282,7 +282,7 @@
 }
 
 /* Right-click settings popover for EXPORT — same popover pattern as the
-   Local dropdown (it reuses .toolbar__local-popover, so the dark-theme
+   "Download app" dropdown (it reuses .toolbar__local-popover, so the dark-theme
    shadow block already covers it), anchored to its own wrapper. */
 .toolbar__export-wrap {
   position: relative;
@@ -324,6 +324,34 @@
 .toolbar__export-check--off {
   color: var(--text-secondary);
   cursor: default;
+}
+
+/* The EXPORT popover's Format radio group — its rows ARE .toolbar__export-check,
+   so only the group's own spacing, heading and reason line live here. Two-class
+   selectors where a rule could tie with .toolbar__local-note (this file's own
+   trap), --text-* tokens so dark mode follows, and no z-index: the popover
+   stays in the toolbar's own stacking context. */
+.toolbar__export-popover .toolbar__export-format {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.toolbar__export-popover .toolbar__export-format-label {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Why one .glb is not on offer — VISIBLE text, because WebKit drops the
+   native tooltip of a disabled control. Indented under the radio's label. */
+.toolbar__export-popover .toolbar__export-format-reason {
+  margin-left: 22px;
+  max-width: 218px;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
 }
 
 /* Work-folder control (desktop builds) — a split button beside EXPORT:

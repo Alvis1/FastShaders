@@ -15,7 +15,9 @@
  *
  * Default corpus = 8 noise atomics + baseline. Presets are available but
  * unchecked by default — they're compositions, more useful in the Static
- * bench. Marginal cost (slope msPerPass − baseline), scaled to the
+ * bench. The texture atoms (bench-registry, built because THREE is passed)
+ * are opt-in too: their groups stay off until a Quest run validates them,
+ * so DEFAULT_GROUPS is still baseline + noise. Marginal cost (slope msPerPass − baseline), scaled to the
  * 2064×2208 reference pixel count, feeds the complexity.json suggestion
  * emitter directly. */
 
@@ -23,6 +25,7 @@ import {
   Scene, OrthographicCamera,
   PlaneGeometry, Mesh, MeshBasicNodeMaterial,
 } from 'three';
+import * as THREE from 'three';
 import * as TSL from 'three/tsl';
 import { buildBenchRegistry } from '../lib/bench-registry.js';
 import { createBenchDriver, $ } from '../lib/bench-driver.js';
@@ -70,7 +73,7 @@ const PICKER_KEY = 'shadercarousel:micro:picker';
 const DEFAULT_GROUPS = new Set(['baseline', 'noise']);
 
 // ── Scene setup ────────────────────────────────────────────────────────────
-const REGISTRY = buildBenchRegistry(TSL);
+const REGISTRY = buildBenchRegistry(TSL, THREE);
 const scene = new Scene();
 const camera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
 

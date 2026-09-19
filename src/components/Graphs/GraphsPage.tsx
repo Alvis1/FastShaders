@@ -955,8 +955,10 @@ export function GraphsPage() {
 
     // Citations: the endpoint rewrites the WHOLE file, so send every entry —
     // not just the dirty ones — or the untouched ones would be dropped. Seed
-    // from CITATIONS first: it may hold keys this table has no row for (the 3
-    // hidden defs — unknown/dataNode/imageNode — aren't in getAllDefinitions()),
+    // from CITATIONS first: it may hold keys this table has no row for (the 2
+    // hidden defs — unknown/dataNode — aren't in getAllDefinitions(); the
+    // Image node joined it in GLB Phase 4 and has a row, whose "In editor"
+    // checkbox is how it gets unhidden),
     // and those must survive a save from this page.
     const citNodes: Record<string, Citation> = { ...CITATIONS.nodes };
     const citTextures: Record<string, Citation> = { ...CITATIONS.textures };

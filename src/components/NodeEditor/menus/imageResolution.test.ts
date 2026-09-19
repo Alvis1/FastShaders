@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { t } from '@/i18n';
 
 const MENU = readFileSync(new URL('./ImageNodeSettings.tsx', import.meta.url), 'utf8');
 const IMPORT = readFileSync(new URL('../../../utils/imageImport.ts', import.meta.url), 'utf8');
@@ -41,9 +42,35 @@ describe('re-encoding at a chosen resolution', () => {
   });
 
   it('re-checks the project-wide image budget', () => {
-    // Going back UP a rung grows the payload, exactly like a revert.
-    expect(MENU).toMatch(/totalImageChars\(store\.nodes\) - currentUrl\.length \+ encoded\.dataUrl\.length/);
-    expect(MENU).toMatch(/> MAX_TOTAL_IMAGE_CHARS[\s\S]{0,80}noticeOverBudget\(\)/);
+    // Going back UP a rung grows the payload, exactly like a revert. The total
+    // REPLACES the live node's payload with the new encode (per instance, the
+    // project count — utils/imageNode.ts imageCharsReplacing).
+    expect(MENU).toMatch(/imageCharsReplacing\(store\.nodes, nodeId, encoded\.dataUrl\)/);
+    expect(MENU).toMatch(/> MAX_TOTAL_IMAGE_CHARS[\s\S]{0,200}noticeResolutionOverBudget\(encoded\.width, encoded\.height, raising\)/);
+    // N6: only a pick that GROWS the payload is checked, so a pick that
+    // shrinks it, in a project already over budget, is never refused.
+    expect(MENU).toMatch(/!store\.ignoreImageLimits && encoded\.dataUrl\.length > currentUrl\.length/);
+  });
+
+  it('says "Raising" only when the pick adds pixels, since the refusal is on bytes', () => {
+    // A step DOWN can grow the bytes (a lossless source that fits the lower
+    // rung only lossy), so the wording follows the pixel count, not the gate.
+    expect(MENU).toMatch(
+      /const raising = encoded\.width \* encoded\.height > Number\(liveVals\.width\) \* Number\(liveVals\.height\);/,
+    );
+    expect(MENU).toContain('resize: { width, height, raising }');
+  });
+
+  it('names the image by its STORED extension, as the card does', () => {
+    // A converted "photo.png" is "photo.webp" on the card; a notice naming the
+    // dropped name asserts a format the node does not hold.
+    const a = MENU.indexOf('const noticeOverBudget = ');
+    const b = MENU.indexOf('const revert = ', a);
+    expect(a).toBeGreaterThan(-1);
+    expect(b).toBeGreaterThan(a);
+    const notices = MENU.slice(a, b);
+    expect((notices.match(/fileName: displayImageFileName\(vals\.fileName, vals\.imageB64\)/g) ?? []).length).toBe(2);
+    expect(notices).not.toContain('String(vals.fileName');
   });
 
   it('leaves the node untouched when the encode fails', () => {
@@ -111,9 +138,76 @@ describe('the ladder reads the node when the payload IS the original', () => {
   it('latches the Original row for the menu session so the revert receipt survives', () => {
     // "differs from the original" is false on the very frame a revert lands,
     // so without the latch the block unmounted under the cursor and the
-    // documented "already the original" receipt could never render.
-    expect(MENU).toMatch(/receiptRef\.current === nodeId/);
+    // documented "already the original" receipt could never render. The
+    // latch is keyed by `nodeId|originId` (imageOriginView.ts — pinned and
+    // executed in imageOriginView.test.ts); the menu reads and writes it
+    // through `deriveOriginView`.
+    expect(MENU).toMatch(/receipt: receiptRef\.current/);
+    expect(MENU).toMatch(/receiptRef\.current = view\.receipt;/);
     expect(MENU).toMatch(/\{showOriginal && \(/);
+  });
+});
+
+/** The source text between two markers (both must exist, in order). */
+function between(src: string, from: string, to: string): string {
+  const a = src.indexOf(from);
+  const b = src.indexOf(to, a + from.length);
+  expect(a, from).toBeGreaterThan(-1);
+  expect(b, to).toBeGreaterThan(a);
+  return src.slice(a, b);
+}
+
+/**
+ * P4-SP-1: a Resolution pick and a "From file…" import are the node's two
+ * async writers. Landing out of order they left one picture's pixels beside
+ * the other's provenance (Revert then swapped in a different picture, or the
+ * file just loaded was overwritten with no notice).
+ */
+describe('a resize never races an import into the same node', () => {
+  const body = between(MENU, 'const applyResolution = async (key: string) => {', 'return (\n');
+
+  it('locks the Resolution select while a resize OR an import runs', () => {
+    expect(MENU).toMatch(/disabled=\{busy \|\| pending\}\s*onChange=\{\(e\) => void applyResolution\(e\.target\.value\)\}/);
+    expect(MENU).not.toMatch(/disabled=\{resizing \|\| pending\}/);
+    expect(MENU).toContain('const busy = resizing || importing;');
+  });
+
+  it('refuses to start while busy', () => {
+    expect(body).toMatch(/if \(!ladderSource \|\| !canKeepOriginal \|\| busy\) return;/);
+  });
+
+  it('drops a result whose node payload changed during the encode, before the stash and the write', () => {
+    const start = body.indexOf('const startUrl = url;');
+    const awaited = body.indexOf('await resizeEncodedImage(');
+    const reread = body.indexOf('const currentUrl = ');
+    const check = body.indexOf('if (currentUrl !== startUrl) return;');
+    const stash = body.indexOf('stashImageOrigin(ladderSource');
+    const write = body.indexOf('store.updateNodeData(nodeId');
+    expect(start).toBeGreaterThan(-1);
+    expect(awaited).toBeGreaterThan(start);
+    expect(reread).toBeGreaterThan(awaited);
+    expect(check).toBeGreaterThan(reread);
+    expect(stash).toBeGreaterThan(check);
+    expect(write).toBeGreaterThan(check);
+  });
+});
+
+/** P4-SP-2: an EMPTY Image node is a first-class state since GLB Phase 4. */
+describe('the read-only Resolution row on an empty node', () => {
+  const KEY = 'This node holds no image yet, so there is no resolution to change.';
+  const chain = between(MENU, "t('Resolution', language),\n          resolution,", "{infoRow(t('Size', language), size)}");
+
+  it('names the missing image FIRST, never "too large" or "not on this device"', () => {
+    const empty = chain.indexOf(`!url\n            ? t('${KEY}', language)`);
+    expect(empty).toBeGreaterThan(-1);
+    expect(chain.indexOf('ladder.length === 1')).toBeGreaterThan(empty);
+    expect(chain.indexOf('needs the stored original')).toBeGreaterThan(empty);
+    expect(chain.indexOf('too large for a copy of the original')).toBeGreaterThan(empty);
+  });
+
+  it('has a Latvian entry', () => {
+    expect(t(KEY, 'lv')).not.toBe(KEY);
+    expect(t(KEY, 'lv')).toContain('attēla');
   });
 });
 

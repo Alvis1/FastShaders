@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { findDefaultOutput } from '@/utils/outputMaterials';
+import { findDefaultOutput, materialPartsMirrorPlan, mirrorPlanKey } from '@/utils/outputMaterials';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { fillTemplate } from '@/utils/fillTemplate';
 import { ScrollArrow, useScrollArrows } from '@/components/Layout/ScrollArrows';
 import { evalLog } from '@/eval/telemetry';
 import { getNodeValues } from '@/types';
@@ -15,6 +16,7 @@ import {
   buildGeoAttr,
   buildPreviewShaderModule,
   buildTeapotAttr,
+  decoderAssetUrl,
   getModelUrl,
   isModelGeometry,
   isTeapotGeometry,
@@ -28,11 +30,29 @@ import {
   subdivisionIndex,
   validateSubdivision,
 } from './subdivisionSteps';
-import { createPreviewMesh, detectMeshKind, MESH_MAX_BYTES } from '@/utils/previewMesh';
+import { shownGeometry, validateGeometry } from './previewGeometryPref';
+import { createPreviewMesh, detectMeshKind, preReadModelGate } from '@/utils/previewMesh';
+import {
+  meshRefusalMessage,
+  decoderLoadMessage,
+  MESH_KTX2_FALLBACK_KEY,
+  MESH_KTX2_MISSING_KEY,
+  MESH_CACHE_FULL_KEY,
+} from '@/utils/previewMeshMessage';
+import { loadDecoderPayload, type DecoderPayload } from '@/utils/meshDecoders';
+import { PREVIEW_MODEL_FILE_EVENT, previewModelDropOf } from '@/utils/previewModelDrop';
+import { isEvalMode } from '@/eval/evalMode';
+import { GLB_IMPORT_KEYS } from '@/utils/glbImportCopy';
+import { useGlbImport } from './useGlbImport';
 import { marchWindowRadius } from '@/utils/sdfPartition';
 import { sanitizeMeshInventory } from '@/utils/meshInventory';
-import { MESH_HIGHLIGHT_EVENT, type MeshHighlightDetail } from '@/utils/meshHighlight';
-import { bootGeometryWasCustom, loadPreviewMeshFromCache } from '@/utils/previewMeshCache';
+import { MESH_HIGHLIGHT_EVENT, sanitizeHighlightNames, type MeshHighlightDetail } from '@/utils/meshHighlight';
+import {
+  bootGeometryWasCustom,
+  loadPreviewMeshFromCache,
+  MESH_CACHE_FULL_EVENT,
+  meshCacheFullIdOf,
+} from '@/utils/previewMeshCache';
 import { connectedUniformNamesKey, ALL_UNIFORMS } from '@/utils/connectedUniforms';
 import { evaluateEdgeSource, getTargetEdges, getUnwrappedEdges } from '@/engine/cpuEvaluator';
 import { isSoundUniformName } from '@/utils/soundAnalysis';
@@ -42,10 +62,12 @@ import { SoundControl } from './SoundControl';
 import { applyUniformDefaults, planUniformDefaults } from '@/utils/uniformDefaults';
 import { safeJsonReviver } from '@/utils/safeJson';
 import { graphToCode } from '@/engine/graphToCode';
-import { inlineImageAssetsFromNodes } from '@/engine/imageAssets';
+import { collectImageAssets, inlineImageAssetsFromNodes } from '@/engine/imageAssets';
+import { PREVIEW_ASSETS_MESSAGE, planPreviewAssetFeed } from '@/engine/previewAssetFeed';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
+import { importShaderText, importShaderZip, isZipFile, reportZipImportError } from '@/engine/projectImport';
 import { displayImageFileName } from '@/utils/imageNode';
+import { isImageChannelHandle } from '@/utils/imageChannels';
 import { platformWebGL2Reason } from '@/utils/feedbackReport';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { AnimClipMenu } from './AnimClipMenu';
@@ -115,17 +137,10 @@ function BoundInput({
   );
 }
 
-function validateGeometry(v: string | null): GeometryType {
-  if (v === 'cube' || v === 'plane' || v === 'sphere' || v === 'teapot' || v === 'bunny') return v;
-  // 'custom' is only valid while a mesh is actually loaded. The store is read
-  // IMPERATIVELY on purpose: this validator must keep a stable module-scope
-  // identity (usePersistedState requirement), yet still see a mesh that a
-  // project import committed synchronously right before dispatching the
-  // fs:project-imported re-read. On a fresh boot previewMesh is always null
-  // (never persisted), so a stale persisted 'custom' degrades to sphere.
-  if (v === 'custom' && useAppStore.getState().previewMesh) return 'custom';
-  return 'sphere';
-}
+// validateGeometry + shownGeometry live in previewGeometryPref.ts: the stored
+// preference is kept VERBATIM and the no-mesh fallback is DERIVED at render,
+// because the mesh is restored asynchronously and writing the downgrade back
+// destroyed the preference for good. See that module's header.
 
 /** Middle-ellipsis so a long dropped-file name can't blow out the controls bar. */
 function truncateMiddle(s: string, max: number): string {
@@ -192,6 +207,11 @@ const PREVIEW_REBUILD_DEBOUNCE_MS = 200;
 
 /** Failsafe: never leave the "Compiling…" overlay up longer than this. */
 const COMPILE_OVERLAY_TIMEOUT_MS = 12000;
+
+/** How long a preview drop notice stays up (it also has a ✕). Matches the
+ *  canvas import one-liner. It was 6 s, which a model-too-large sentence with
+ *  advice in it could not be read in. */
+const DROP_NOTICE_MS = 12000;
 
 /**
  * Master switch for the shader HOT-SWAP path (see the previewHtml memo's
@@ -511,16 +531,29 @@ export function ShaderPreview() {
   // carries them, and the overlay + iframe srcDoc inputs must pick up the
   // imported values without a page reload.
   const [geometry, setGeometry] = usePersistedState('fs:previewGeometry', validateGeometry, { reloadOnProjectImport: true });
-  // What the iframe actually renders: the user's choice, or the march window
+  // The stored preference is kept verbatim — a 'custom' whose mesh has not
+  // arrived yet (the IndexedDB restore is async) must not be written back as
+  // 'sphere', or the preference is lost for good. What the pane SHOWS is
+  // derived, and ONE derivation feeds the document, the `<select>` and the
+  // Subd gate, so the picker and the viewport cannot disagree.
+  const geometryShown = shownGeometry(geometry, previewMesh !== null);
+  // What the iframe actually renders: the shown choice, or the march window
   // sphere while a Raymarch Output drives.
-  const previewGeometry: GeometryType = marchWindow !== null ? MARCH_WINDOW_GEOMETRY : geometry;
+  const previewGeometry: GeometryType = marchWindow !== null ? MARCH_WINDOW_GEOMETRY : geometryShown;
+  // Tell the node editor whether the loaded model is what is SHOWN, so
+  // import-built index sections sleep on a primitive (session-only; emission
+  // never reads it — see shownPreviewMesh).
+  const setPreviewShowsModel = useAppStore((s) => s.setPreviewShowsModel);
+  useEffect(() => setPreviewShowsModel(previewGeometry === 'custom'), [previewGeometry, setPreviewShowsModel]);
   const [playing, setPlaying] = usePersistedState('fs:previewPlaying', validatePlaying, { reloadOnProjectImport: true });
   const [lighting, setLighting] = usePersistedState('fs:previewLighting', validateLighting, { reloadOnProjectImport: true });
 
   // The env-lighting entry in the Light dropdown exists only while an
   // environment map is wired to the Output node's `env` socket. The selector
   // returns a cheap STRING (the image's honest display name, '' when unwired,
-  // 'Environment' for a non-image env source such as a constant colour) so a
+  // 'Environment' for a non-image env source such as a constant colour, and
+  // for an image wired from an Alpha/R/G/B socket, which graphToCode emits as
+  // a scalar `vec3(imageN.a)` ambient rather than IBL) so a
   // position-only graph notify bails on Object.is instead of re-rendering the
   // whole preview — the SoundNode/edgeValueLabel subscription pattern.
   const envMapName = useAppStore((s) => {
@@ -538,7 +571,7 @@ export function ShaderPreview() {
     if (!edge) return '';
     const src = s.nodes.find((n) => n.id === edge.source);
     if (!src) return '';
-    if (src.data.registryType !== 'imageNode') return 'Environment';
+    if (src.data.registryType !== 'imageNode' || isImageChannelHandle(edge.sourceHandle)) return 'Environment';
     const v = getNodeValues(src);
     return displayImageFileName(v.fileName, v.imageB64) || 'Environment';
   });
@@ -556,10 +589,13 @@ export function ShaderPreview() {
   const [bgColor, setBgColor] = usePersistedState('fs:previewBgColor', validateBgColor, { reloadOnProjectImport: true });
 
   // Restore the previous session's dropped mesh from the IndexedDB cache. The
-  // read is async, so `validateGeometry` has already downgraded a stored
-  // 'custom' to 'sphere' by now (no mesh was loaded when it ran) — that's what
-  // bootGeometryWasCustom() remembers, sampled at module init before the
-  // downgrade was written back. Restoring the mesh then re-selects it.
+  // read is async, and the stored 'custom' now SURVIVES that window — the
+  // preference is kept verbatim and `shownGeometry` derives the sphere until
+  // the mesh lands (see previewGeometryPref.ts), so this restore normally has
+  // nothing left to re-select and `setGeometry('custom')` is a no-op write.
+  // It is kept as the belt-and-braces half of the same rule, and it is what
+  // re-selects the model for any path that legitimately moved the preference
+  // off 'custom' while the bytes were still cached.
   //
   // A zip import or a drop can land first (both are synchronous); either wins,
   // and the cache read is discarded rather than overwriting live state.
@@ -817,6 +853,14 @@ export function ShaderPreview() {
    */
   const runningModuleRef = useRef<string | null>(null);
   /**
+   * The image-asset keys the LIVE document already holds (engine/
+   * previewAssetFeed.ts): seeded with the boot list on every rebuild and on the
+   * fresh document's load event, advanced by every `postShaderSwap`. A key is
+   * posted to a document once; the resolver skips a repeat anyway, so a reset
+   * that re-sends is safe where a stale "sent" that skips is not.
+   */
+  const sentAssetKeysRef = useRef<Set<string>>(new Set());
+  /**
    * Bumped to force a real `srcDoc` rebuild — by the ack watchdog when a swap
    * goes unanswered, and available to anything else that ever needs the cold
    * path. It is a dep of the previewHtml memo and of nothing else.
@@ -872,6 +916,10 @@ export function ShaderPreview() {
   // message handler (which mounts once, with [] deps, so it cannot close over
   // it). Kept in sync with geometryRebuildKey below.
   const modelKeyRef = useRef<string>('');
+  // Which model keys have already had their KTX2 transcode report shown. Every
+  // shader edit rebuilds the document, and each fresh one reports again — the
+  // fact is about the MODEL, so it is said once per model.
+  const ktx2ReportedRef = useRef<Set<string>>(new Set());
   const cameraPosRef = useRef<CameraPosition | null>(loadCameraPos());
   const rotationRef = useRef<CameraPosition | null>(loadRotation());
 
@@ -932,7 +980,9 @@ export function ShaderPreview() {
   // the window — no reliable leave event) can never strand it; a live drag
   // keeps re-arming the timeout via the dragover heartbeat.
   const [dropVeil, setDropVeil] = useState(false);
-  const [dropNotice, setDropNotice] = useState<string | null>(null);
+  // `tone`: refusals and the storage-full line are errors; the KTX2-fallback
+  // line reports a successful load, so it is a neutral status.
+  const [dropNotice, setDropNotice] = useState<{ text: string; tone: 'error' | 'info' } | null>(null);
   const dragDepthRef = useRef(0);
   const iframeDragRef = useRef(false);
   const veilTimerRef = useRef<number | null>(null);
@@ -956,13 +1006,22 @@ export function ShaderPreview() {
   }, []);
 
   /** Transient parent-owned notice (invalid drop, unreadable file, …). */
-  const showDropNotice = useCallback((msg: string) => {
-    setDropNotice(msg);
+  const showDropNotice = useCallback((msg: string, tone: 'error' | 'info' = 'error') => {
+    setDropNotice({ text: msg, tone });
     if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = window.setTimeout(() => {
       setDropNotice(null);
       noticeTimerRef.current = null;
-    }, 6000);
+    }, DROP_NOTICE_MS);
+  }, []);
+
+  /** The notice's ✕ — it goes now rather than when its timer runs out. */
+  const dismissDropNotice = useCallback(() => {
+    if (noticeTimerRef.current !== null) {
+      window.clearTimeout(noticeTimerRef.current);
+      noticeTimerRef.current = null;
+    }
+    setDropNotice(null);
   }, []);
 
   useEffect(() => () => {
@@ -970,31 +1029,68 @@ export function ShaderPreview() {
     if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
   }, []);
 
-  const loadMeshFile = useCallback(async (file: File) => {
+  /**
+   * Today's model drop, over bytes already read: the ONE constructor, the
+   * translated refusal, the geometry switch and the KTX2 info line. The GLB
+   * import's "Model only" answer comes back here, and so does every model the
+   * dialog is not offered for.
+   */
+  const applyModelBytes = useCallback((fileName: string, bytes: Uint8Array<ArrayBuffer>) => {
+    // createPreviewMesh sanitizes the name at the store boundary — every
+    // consumer (zip export entry, README text, option label) reads the
+    // stored value, never the raw file name.
+    const result = createPreviewMesh(fileName, bytes);
+    if ('error' in result) {
+      // Refusals are structured (`MeshRefusal`) so they translate WITH their
+      // size / name / compression filled in, in the reader's language.
+      showDropNotice(meshRefusalMessage(result.refusal, language));
+      return;
+    }
+    setPreviewMesh(result.mesh);
+    setGeometry('custom');
+    if (result.ktx2Fallback) showDropNotice(t(MESH_KTX2_FALLBACK_KEY, language), 'info');
+  }, [setPreviewMesh, setGeometry, showDropNotice, language]);
+
+  // The GLB import flow (useGlbImport): the dialog, the build, the commit.
+  const glbFlow = useGlbImport({ applyModelBytes, showDropNotice, anchorRef: rootRef });
+
+  const loadMeshFile = useCallback(async (file: File, opts?: { offerBuild?: boolean; source?: 'dom' | 'iframe' }) => {
     try {
+      const kind = detectMeshKind(file.name);
+      // Whether this drop may be OFFERED as a shader (the GLB import dialog):
+      // never in a study session (the drop stays today's, byte for byte —
+      // the 64 MiB gate included), never for a model dropped WITH a shader
+      // (it pairs with the shader just imported), and only for a glTF.
+      // `offerBuild: false` = the import dialog is not opened at all — build
+      // AND restore (a stored shader never beats a shader dropped with it).
+      // `source` reaches the dialog: a forwarded ('iframe') drop's Restore asks.
+      const offer = opts?.offerBuild !== false && !isEvalMode() && (kind === 'glb' || kind === 'gltf');
+      // EVERY model drop is refused while the dialog is open — an .obj or a
+      // paired model is not offerable, but it would still swap the mesh
+      // under the dialog that is asking about another one.
+      if (glbFlow.busy()) {
+        showDropNotice(t(GLB_IMPORT_KEYS.busy, language));
+        return;
+      }
       // Size gate BEFORE the read — a hostile/oversized drop must not force a
-      // multi-hundred-MB arrayBuffer allocation just to be rejected.
-      if (file.size > MESH_MAX_BYTES) {
-        showDropNotice(`${t('Model too large', language)} (${(file.size / 1024 / 1024).toFixed(1)} MB — max ${MESH_MAX_BYTES / 1024 / 1024} MB).`);
+      // multi-hundred-MB arrayBuffer allocation just to be rejected. The gate
+      // (utils/gltfCompression.ts) is the ONE place that decides how large a
+      // model may be before it is read: only an OFFERED `.glb` gets the larger
+      // build-path cap, so its textures are extracted before the stripped copy
+      // meets the 64 MiB model gate inside createPreviewMesh (modelDropGate.test.ts
+      // pins the call).
+      const preRead = preReadModelGate(detectMeshKind(file.name), file.size, offer);
+      if (preRead) {
+        showDropNotice(meshRefusalMessage(preRead, language));
         return;
       }
       const bytes = new Uint8Array(await file.arrayBuffer());
-      // createPreviewMesh sanitizes the name at the store boundary — every
-      // consumer (zip export entry, README text, option label) reads the
-      // stored value, never the raw file name.
-      const result = createPreviewMesh(file.name, bytes);
-      if ('error' in result) {
-        // The util's fixed error strings double as t() keys (English falls
-        // through for the dynamic ones).
-        showDropNotice(t(result.error, language));
-        return;
-      }
-      setPreviewMesh(result.mesh);
-      setGeometry('custom');
+      if (offer && (kind === 'glb' || kind === 'gltf') && glbFlow.offer(file.name, bytes, kind, opts?.source ?? 'dom') !== 'declined') return;
+      applyModelBytes(file.name, bytes);
     } catch (e) {
       showDropNotice(`${t('Could not read the model file', language)}: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, [setPreviewMesh, setGeometry, showDropNotice, language]);
+  }, [applyModelBytes, glbFlow, showDropNotice, language]);
 
   // One dispatch for every preview drop, wherever it landed. A model file
   // becomes the custom preview mesh; a shader .js/.zip routes through the
@@ -1005,6 +1101,14 @@ export function ShaderPreview() {
     const model = files.find((f) => detectMeshKind(f.name) !== null);
     const zip = files.find((f) => isZipFile(f));
     const script = zip ? null : files.find((f) => /\.(js|mjs|tsl|txt)$/i.test(f.name)) ?? null;
+
+    // The GLB import dialog is open: it is asking about ONE model and "the
+    // current shader", so neither may change under it — a model or a shader
+    // dropped now is refused with the busy notice, before the iframe confirm.
+    if (glbFlow.busy() && (model || zip || script)) {
+      showDropNotice(t(GLB_IMPORT_KEYS.busy, language));
+      return;
+    }
 
     // SECURITY: an iframe-forwarded drop is only as trustworthy as the
     // sandbox that forwarded it — adversarial shader code can forge
@@ -1029,34 +1133,77 @@ export function ShaderPreview() {
     if (shaderFile && zip && shaderFile === zip) {
       shaderP = importShaderZip(zip).then(
         (r) => { if (r === null) showDropNotice(t('The zip holds no shader script', language)); },
-        (e: unknown) => showDropNotice(String(e instanceof Error ? e.message : e)),
+        (e: unknown) => {
+          // A zip the reader refused says why (shared mapping, all surfaces);
+          // anything else keeps the engine's own English message, framed.
+          if (reportZipImportError(e, zip.name)) return;
+          showDropNotice(
+            fillTemplate(t('Could not import {name}: {reason}', language), {
+              name: `“${zip.name}”`,
+              reason: String(e instanceof Error ? e.message : e),
+            }),
+          );
+        },
       );
     } else if (shaderFile) {
+      const readName = shaderFile.name;
       shaderP = shaderFile.text().then(
         (text) => { importShaderText(text); },
-        (e: unknown) => showDropNotice(String(e instanceof Error ? e.message : e)),
+        () => showDropNotice(t('Could not read {name}.', language).replace('{name}', () => `“${readName}”`)),
       );
     }
     if (model) {
-      if (shaderP) void shaderP.finally(() => { void loadMeshFile(model); });
-      else void loadMeshFile(model);
+      // A model dropped WITH a shader pairs with it: never offered as a shader.
+      if (shaderP) void shaderP.finally(() => { void loadMeshFile(model, { offerBuild: false }); });
+      else void loadMeshFile(model, { source });
     }
     if (!model && !zip && !script) {
       showDropNotice(t('Drop a 3D model (.obj / .glb / .gltf) or a shader (.js / .zip)', language));
     }
-  }, [loadMeshFile, showDropNotice, language]);
+  }, [loadMeshFile, glbFlow, showDropNotice, language]);
 
   // Ref mirror so the mount-once message handler below sees the latest
   // dispatch without re-binding (same pattern as uniformValuesRef).
   const handleDroppedFilesRef = useRef(handleDroppedFiles);
   useEffect(() => { handleDroppedFilesRef.current = handleDroppedFiles; }, [handleDroppedFiles]);
 
-  // If the mesh is cleared while 'custom' is selected (a bare .js import
-  // clears stale meshes and — on the script path — fires no prefs re-read),
-  // fall back to a sphere so the select never points at an unmounted option.
+  // A model dropped on the NODE CANVAS takes the same path as one dropped
+  // here (utils/previewModelDrop.ts): one validation, one notice, one
+  // geometry switch. It is a real DOM drop in this document, never a forwarded
+  // iframe message, so it needs no confirm.
   useEffect(() => {
-    if (geometry === 'custom' && !previewMesh) setGeometry('sphere');
-  }, [geometry, previewMesh, setGeometry]);
+    const onModelFile = (ev: Event) => {
+      const d = previewModelDropOf(ev);
+      // A model that arrived beside a shader (the canvas's project branch)
+      // pairs with it and is never offered as a shader.
+      if (d) void loadMeshFile(d.file, { offerBuild: !d.pairedWithShader });
+    };
+    window.addEventListener(PREVIEW_MODEL_FILE_EVENT, onModelFile);
+    return () => window.removeEventListener(PREVIEW_MODEL_FILE_EVENT, onModelFile);
+  }, [loadMeshFile]);
+
+  // The IndexedDB cache hit the quota saving the model on screen: say it will
+  // not come back after a reload. Only for the mesh still loaded — a later
+  // drop has superseded the write, and its own save will speak for itself.
+  useEffect(() => {
+    const onFull = (ev: Event) => {
+      const id = meshCacheFullIdOf(ev);
+      if (id === null || useAppStore.getState().previewMesh?.id !== id) return;
+      showDropNotice(t(MESH_CACHE_FULL_KEY, language));
+    };
+    window.addEventListener(MESH_CACHE_FULL_EVENT, onFull);
+    return () => window.removeEventListener(MESH_CACHE_FULL_EVENT, onFull);
+  }, [showDropNotice, language]);
+
+  // NO "mesh cleared → setGeometry('sphere')" effect here. It existed so the
+  // select could never point at an unmounted option (the custom entry renders
+  // only while a mesh is loaded), and `geometryShown` now does that by
+  // DERIVATION — while the effect ALSO fired on every boot, inside the window
+  // where the IndexedDB restore has not delivered the mesh yet, and wrote
+  // 'sphere' over the stored preference through usePersistedState (MEASURED:
+  // a 'sphere' write at 219 ms between the seed's 'custom' and the restore's).
+  // A reload or a dev full-reload landing in that window lost the model for
+  // good — see previewGeometryPref.ts.
 
   // Property uniforms detected from the generated code, filtered to only those
   // whose property node has at least one outgoing edge (i.e. is connected).
@@ -1258,6 +1405,7 @@ export function ShaderPreview() {
         has?: boolean; duration?: number; canInPlace?: boolean;
         name?: unknown; clip?: number; clips?: unknown; time?: number;
         backend?: unknown; geometry?: unknown; meshes?: unknown; hot?: unknown;
+        fallbacks?: unknown; missing?: unknown;
       } | null;
       if (!data || typeof data.type !== 'string') return;
       // A gen-tagged reply is the ONLY acknowledgement of a hot shader swap.
@@ -1280,6 +1428,34 @@ export function ShaderPreview() {
         const inv = sanitizeMeshInventory(data.geometry, data.meshes);
         if (!inv || inv.key !== modelKeyRef.current) return;
         useAppStore.getState().setPreviewMeshInventory({ key: inv.key, meshes: inv.meshes });
+        return;
+      }
+      if (data.type === 'fs:model-ktx2') {
+        // How the loader's KTX2 plugin fared on THIS model: how many textures
+        // fell back to their PNG/JPEG image, and how many had none and are
+        // missing. Forgeable like every stage message — it only ever raises an
+        // info line — but still keyed to the model this document was built for,
+        // so a late report from a torn-down document cannot speak for the one
+        // on screen. Shown once per mesh, since every shader edit rebuilds the
+        // document and would otherwise repeat the line on each one.
+        const key = modelKeyRef.current;
+        if (data.geometry !== key || ktx2ReportedRef.current.has(key)) return;
+        ktx2ReportedRef.current.add(key);
+        const count = (v: unknown) => Math.min(Math.max(Number(v) | 0, 0), 1024);
+        // This effect binds ONCE (deps []), so the language is read live
+        // rather than closed over — a mount-time copy would write the line in
+        // whichever language the app booted in.
+        const lang = useAppStore.getState().language;
+        // ONE line, assembled before it is shown: `showDropNotice` REPLACES
+        // the notice and re-arms its single timer, so a second call from this
+        // same handler would drop the first sentence unseen — and the key is
+        // already marked reported, so no later document could say it either.
+        // A model can report both counts at once (the loader's plugin counts
+        // a texture with a fallback source apart from one without).
+        const lines: string[] = [];
+        if (count(data.fallbacks) > 0) lines.push(t(MESH_KTX2_FALLBACK_KEY, lang));
+        if (count(data.missing) > 0) lines.push(t(MESH_KTX2_MISSING_KEY, lang));
+        if (lines.length > 0) showDropNotice(lines.join(' '), 'info');
         return;
       }
       if (data.type === 'fs:backend') {
@@ -1475,7 +1651,10 @@ export function ShaderPreview() {
       const win = iframeRef.current?.contentWindow;
       if (!win) return;
       const name = typeof detail?.name === 'string' ? detail.name : null;
-      win.postMessage({ type: 'fs:highlight-mesh', name }, '*');
+      // The list form (an index section's meshes) rides beside the single
+      // name; the sandbox script prefers it when it is non-empty.
+      const names = sanitizeHighlightNames(detail?.names);
+      win.postMessage({ type: 'fs:highlight-mesh', name, names }, '*');
     };
     window.addEventListener(MESH_HIGHLIGHT_EVENT, onHighlight);
     return () => window.removeEventListener(MESH_HIGHLIGHT_EVENT, onHighlight);
@@ -1744,20 +1923,33 @@ export function ShaderPreview() {
    * Alpha Clip slider mints a new settings object per pointermove.
    *
    * Image payloads ride the generated code as short `fs-asset:` placeholders
-   * (engine/imageAssets.ts) — expanded here, where the module actually runs.
-   * Nodes are read imperatively because subscribing to `s.nodes` would
+   * (engine/imageAssets.ts) and are NOT expanded into this module: the module
+   * text stays placeholder-only on the parent side, and the sandboxed
+   * document resolves the placeholders itself, from payloads that cross ONCE
+   * per key per document (engine/previewAssetFeed.ts — the boot list baked in
+   * the document memo below, later keys posted by `postShaderSwap` right
+   * before the `fs:shader` they belong to). A scrub therefore posts the small
+   * placeholder module, not megabytes of `data:` URLs per edit. Nodes are read
+   * imperatively at those two sites because subscribing to `s.nodes` would
    * re-render this panel on every drag frame; that is safe because the
    * placeholder embeds a payload hash, so swapping an image always changes
-   * `previewCode` and re-runs this memo.
+   * `previewCode`, the module and the key. The XR popup still inlines
+   * (`inlineImageAssetsFromNodes` at the gesture): a top-level document has no
+   * parent to feed it.
    */
-  const inlinedPreviewCode = useMemo(
-    () => inlineImageAssetsFromNodes(debouncedPreviewCode, useAppStore.getState().nodes),
-    [debouncedPreviewCode],
-  );
+  // The Output's loader-0.6 MIRROR plan — the index sections' GLTFLoader mesh
+  // names ride node data, not the code (materialPartsContract R7), so they are
+  // a real dep of the module. Two-step: a cheap string key per notify, the plan
+  // rebuilt from getState() only when the key moves.
+  const mirrorKey = useAppStore((s) => mirrorPlanKey(materialPartsMirrorPlan(findDefaultOutput(s.nodes))));
   const previewModule = useMemo(
-    () => buildPreviewShaderModule(inlinedPreviewCode, materialSettings),
+    () => buildPreviewShaderModule(
+      debouncedPreviewCode,
+      materialSettings,
+      materialPartsMirrorPlan(findDefaultOutput(useAppStore.getState().nodes)),
+    ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inlinedPreviewCode, debouncedMaterialSettingsKey],
+    [debouncedPreviewCode, debouncedMaterialSettingsKey, mirrorKey],
   );
 
   /**
@@ -1815,7 +2007,11 @@ export function ShaderPreview() {
    * effect knows the new document already carries the change; when only the
    * code moved, `bakedModule` is the previous one and the effect posts.
    */
-  const [previewHtml, bakedModule] = useMemo(() => {
+  const [previewHtml, bakedModule, bootAssetKeys] = useMemo(() => {
+    // The payloads the boot module references, baked into the document so its
+    // resolver maps them before the boot blob is minted; `boot.sent` seeds
+    // what the hot channel must not re-send to this document.
+    const boot = planPreviewAssetFeed(new Set(), collectImageAssets(useAppStore.getState().nodes), previewModule);
     const options: PreviewOptions = {
       geometry: previewGeometry,
       marchWindow: marchWindow ?? 1,
@@ -1840,8 +2036,9 @@ export function ShaderPreview() {
       // PreviewOptions.shaderModule). It is built from the same code passed
       // below, so the option only saves the work — it cannot change the result.
       shaderModule: previewModule,
+      imageAssets: boot.entries,
     };
-    return [tslToPreviewHTML(inlinedPreviewCode, options), previewModule] as const;
+    return [tslToPreviewHTML(debouncedPreviewCode, options), previewModule, boot.sent] as const;
     // `marchWindow` is deliberately NOT a dep, even though the options above
     // read it: it is the driving Raymarch Output's Window radius, edited by a
     // DragNumberInput that fires per pointermove, so listing it reloaded the
@@ -1866,6 +2063,8 @@ export function ShaderPreview() {
     // hot-swap effect, so in a render that both rebuilds and edits, the swap's
     // bail already sees the new document's module and posts nothing.
     runningModuleRef.current = bakedModule;
+    // …and holds exactly the boot assets (engine/previewAssetFeed.ts).
+    sentAssetKeysRef.current = new Set(bootAssetKeys);
     // A rebuild supersedes anything the hot channel was still waiting on: the
     // document that would have acked is being thrown away.
     clearHotSwapWait();
@@ -1873,7 +2072,7 @@ export function ShaderPreview() {
     setCompiling(true);
     const id = setTimeout(() => setCompiling(false), COMPILE_OVERLAY_TIMEOUT_MS);
     return () => clearTimeout(id);
-  }, [previewHtml, bakedModule, containerReady, clearHotSwapWait]);
+  }, [previewHtml, bakedModule, bootAssetKeys, containerReady, clearHotSwapWait]);
 
   /**
    * Send a module to the LIVE document and start waiting for its ack.
@@ -1892,6 +2091,13 @@ export function ShaderPreview() {
     if (!win) return;
     clearHotSwapWait();
     const gen = ++hotGenRef.current;
+    // The payloads this module references that the document has not received
+    // go FIRST (postMessage is FIFO per target), so the resolver knows every
+    // key by the time the swap mints its blob. Nodes read imperatively — see
+    // the previewModule comment.
+    const feed = planPreviewAssetFeed(sentAssetKeysRef.current, collectImageAssets(useAppStore.getState().nodes), code);
+    if (feed.entries.length > 0) win.postMessage({ type: PREVIEW_ASSETS_MESSAGE, entries: feed.entries }, '*');
+    sentAssetKeysRef.current = feed.sent;
     win.postMessage({ type: SHADER_SWAP_MESSAGE, code, gen }, '*');
     runningModuleRef.current = code;
 
@@ -2072,6 +2278,14 @@ export function ShaderPreview() {
     // installed (the same guarantee the model feed relies on). Idempotent: if
     // the post DID land, the receiver recognises its own bytes and acks
     // without re-applying.
+    //
+    // The asset feed is re-seeded with the boot list FIRST: a feed posted
+    // between the srcDoc swap and this load may have gone to the previous
+    // document or to this one before its resolver parsed, while the ref
+    // already counted it as sent. Re-sending a key the resolver did receive is
+    // a no-op there (it keeps the first URL); skipping one it did not would
+    // leave that image black for the life of the document.
+    sentAssetKeysRef.current = new Set(bootAssetKeys);
     if (HOT_SWAP_ENABLED && previewModule !== bakedModule) postShaderSwap(previewModule);
     if (!isModelGeometry(previewGeometry)) return;
     if (previewGeometry === 'custom') {
@@ -2082,13 +2296,54 @@ export function ShaderPreview() {
       // rebuild (debounced 200ms), which is the price of a fresh document —
       // text formats are pre-decoded at load time (PreviewMesh.text).
       const mesh = previewMesh;
-      const win = iframeRef.current?.contentWindow;
-      if (!mesh || !win) return;
+      if (!mesh || !iframeRef.current?.contentWindow) return;
       const key = `custom:${mesh.id}`;
-      if (mesh.kind === 'glb') {
-        win.postMessage({ type: 'fs:obj-model', geometry: key, kind: 'glb', bytes: mesh.bytes }, '*');
+      // A compressed model needs decoder bytes in the same message (the sandbox
+      // cannot fetch them — see utils/meshDecoders.ts), and that fetch can
+      // outlive this document and this mesh. So the window and the store's mesh
+      // are re-read at post time, never captured here.
+      const liveWindow = () => {
+        const w = iframeRef.current?.contentWindow;
+        return w && useAppStore.getState().previewMesh?.id === mesh.id ? w : null;
+      };
+      // No transfer list: the decoder memo keeps its buffers, and structured
+      // clone copies them into the message.
+      const post = (decoders?: DecoderPayload) => {
+        const w = liveWindow();
+        if (!w) return;
+        const extra = decoders ? { decoders } : {};
+        if (mesh.kind === 'glb') {
+          w.postMessage({ type: 'fs:obj-model', geometry: key, kind: 'glb', bytes: mesh.bytes, ...extra }, '*');
+        } else {
+          w.postMessage({ type: 'fs:obj-model', geometry: key, kind: mesh.kind, text: mesh.text ?? '', ...extra }, '*');
+        }
+      };
+      const needs = mesh.decoders;
+      if (needs) {
+        // A MESH decoder (Draco, meshopt) that cannot be fetched ends in the
+        // overlay's sticky error, never in a model the sandbox waits on: the
+        // PARSE cannot finish without it.
+        //
+        // The KTX2 transcoder is not like that — it decodes TEXTURES, so a
+        // model needing only it parses fine and the loader's own plugin falls
+        // back to each texture's PNG/JPEG source. Suppressing it would hide a
+        // model that renders (and that DID render before the transcoder was
+        // wired in), so the missing transcoder is an info line and the model
+        // goes — podest's parent does the same (showError then send(null)).
+        loadDecoderPayload(needs, decoderAssetUrl).then(post, (err: unknown) => {
+          if (!needs.draco && !needs.meshopt) {
+            if (!liveWindow()) return;
+            showDropNotice(decoderLoadMessage(err, needs, language), 'info');
+            post();
+            return;
+          }
+          liveWindow()?.postMessage(
+            { type: 'fs:obj-model-error', geometry: key, message: decoderLoadMessage(err, needs, language) },
+            '*',
+          );
+        });
       } else {
-        win.postMessage({ type: 'fs:obj-model', geometry: key, kind: mesh.kind, text: mesh.text ?? '' }, '*');
+        post();
       }
       return;
     }
@@ -2114,7 +2369,7 @@ export function ShaderPreview() {
         );
       },
     );
-  }, [previewGeometry, previewMesh, previewModule, bakedModule, postShaderSwap]);
+  }, [previewGeometry, previewMesh, previewModule, bakedModule, bootAssetKeys, postShaderSwap, language, showDropNotice]);
 
   // Immersive VR entry. Immersive WebXR can never start from the sandboxed
   // preview iframe — see the corrected rationale on PreviewOptions.xr in
@@ -2175,6 +2430,9 @@ export function ShaderPreview() {
       initialRotation: rotationRef.current,
       xr: true,
       title: shaderName,
+      // The popup renders what the pane renders, mirrors included (R7): read
+      // at the gesture, like the code it is built from.
+      materialPartsMirror: materialPartsMirrorPlan(findDefaultOutput(useAppStore.getState().nodes)),
     });
     w.document.write(html);
     w.document.close();
@@ -2255,7 +2513,8 @@ export function ShaderPreview() {
             {envMapName !== '' && (
               // Named after the attached environment image (extension
               // stripped) — selecting it turns the analytic lights off so the
-              // map alone lights the model (material.envNode IBL).
+              // map alone lights the model (material.envNode IBL). A channel
+              // socket's scalar ambient reads as the generic 'Environment'.
               <option value="env">
                 {envMapName === 'Environment'
                   ? t('Environment', language)
@@ -2268,7 +2527,12 @@ export function ShaderPreview() {
           <span className="shader-preview__ctl-label">{t('Model', language)}</span>
           <select
             className="shader-preview__geo-select"
-            value={geometry}
+            // The SHOWN geometry, never the raw preference: a stored 'custom'
+            // whose mesh has not arrived (or never will) has no option to
+            // select, so the control would silently display its first entry
+            // while claiming another — the picker must say what the viewport
+            // is doing.
+            value={geometryShown}
             onChange={(e) => setGeometry(e.target.value as GeometryType)}
             disabled={sdfDrives}
             title={sdfDrives
@@ -2293,7 +2557,7 @@ export function ShaderPreview() {
             )}
           </select>
         </label>
-        {!isModelGeometry(geometry) && !sdfDrives && (
+        {!isModelGeometry(geometryShown) && !sdfDrives && (
           <label className="shader-preview__subdivision" title={t('Mesh subdivision', language)}>
             <span className="shader-preview__ctl-label">{t('Subd', language)}</span>
             {/* The slider's value is the STOP INDEX, not the segment count, so
@@ -2393,7 +2657,19 @@ export function ShaderPreview() {
           </div>
         )}
         {dropNotice && (
-          <div className="shader-preview__drop-notice" role="alert">{dropNotice}</div>
+          <div
+            className={'shader-preview__drop-notice' + (dropNotice.tone === 'info' ? ' shader-preview__drop-notice--info' : '')}
+            role={dropNotice.tone === 'info' ? 'status' : 'alert'}
+          >
+            <span className="shader-preview__drop-notice-text">{dropNotice.text}</span>
+            <button
+              type="button"
+              className="shader-preview__drop-notice-close"
+              onClick={dismissDropNotice}
+              title={t('Dismiss', language)}
+              aria-label={t('Dismiss', language)}
+            >✕</button>
+          </div>
         )}
         {/* Always MOUNTED while enabled (never conditionally rendered on the
             number), so the mount-once message handler can write into it via
@@ -2811,6 +3087,9 @@ export function ShaderPreview() {
           </div>
         )}
       </div>
+      {/* The GLB import dialog (useGlbImport) — portalled, so it renders
+          nothing here until a model is offered. */}
+      {glbFlow.modal}
     </div>
   );
 }

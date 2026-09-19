@@ -4,7 +4,7 @@ import { getTypeColor } from '@/utils/colorUtils';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { formatNodeLabel } from '@/i18n';
 import { useAppStore } from '@/store/useAppStore';
-import { buildRows, visiblePortRows, centersOutputSocket, PortValueCell } from './ShaderNode';
+import { buildRows, visiblePortRows, outputRowLabel, ImageThumbEmpty, IMAGE_EMPTY_HINT_EVAL, PortValueCell } from './ShaderNode';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
@@ -21,10 +21,11 @@ import {
   type GlyphDesign,
 } from './glyphs/NodeGlyph';
 import { NodeTitle } from './NodeTitle';
-import { effectiveRampDef } from '@/utils/exposedPorts';
+import { effectiveNodeDef } from '@/utils/exposedPorts';
 
 /** A freshly dropped node has nothing exposed. Module-scope so
- *  effectiveRampDef's identity-stable fast path holds across renders. */
+ *  effectiveNodeDef's identity-stable fast path (every node but the ramp and
+ *  image nodes comes back by identity) holds across renders. */
 const NO_EXPOSED: string[] = [];
 
 /**
@@ -119,7 +120,11 @@ export function NodeVisual({
   // replica rather than by each caller — the asset card did it and the Node
   // Designer stage did not, so the designer showed two extra sockets (as
   // number rows, no less) that the palette tile and the canvas never draw.
-  const def = effectiveRampDef(rawDef, NO_EXPOSED);
+  // The same holds for the Image node's opt-in params (GLB Phase 4): a replica
+  // shows none, exactly like a freshly added canvas node — before the shared
+  // filter a tile drew six param rows with number boxes. Its effective def has
+  // no inputs, so it takes the rows branch: five labelled output rows.
+  const def = effectiveNodeDef(rawDef, NO_EXPOSED);
   const box = nodeBox(def.type, design);
   const textScale = nodeTextScale(def.type, design);
   const sockets = nodeSockets(def.type, design);
@@ -341,13 +346,25 @@ export function NodeVisual({
 
   // ── Rows layout (ShaderNode's rows branch) ──
   const rows = buildRows(def);
-  /** The Image node's output rides the CARD's centre — see centersOutputSocket. */
-  const centerOut = centersOutputSocket(def.type);
-  const outMoved = (centerOut || sockets['out'] != null) && !!def.outputs[0];
+  const outMoved = sockets['out'] != null && !!def.outputs[0];
   /** Drop rows that draw nothing — THE SAME function ShaderNode uses, not a
    *  copy of the rule: without it the asset tiles and the Designer stage hang
    *  an empty port row below the card exactly as the canvas did. */
-  const visibleRows = visiblePortRows(rows, sockets, def.outputs, centerOut);
+  const visibleRows = visiblePortRows(rows, sockets, def.outputs);
+  /** A row's right half — ShaderNode's `rowOutput`: the socket, preceded by
+   *  its label only where {@link outputRowLabel} records a #8 exception, under
+   *  ONE not-moved condition. `dynamic` is false: a replica never carries the
+   *  Data node's per-instance `dynamicOutputs`. */
+  const rowOutput = (output: (typeof def.outputs)[number] | null) => {
+    if (!output || (outMoved && output === def.outputs[0])) return null;
+    const outLabel = outputRowLabel(def.type, output, false, language);
+    return (
+      <>
+        {outLabel != null && <span className="shader-node__out-label">{outLabel}</span>}
+        <StaticHandle side="right" dataType={output.dataType} port={output.id} label={output.label} />
+      </>
+    );
+  };
   return (
     <div className={`${wrapClassName}`.trim()} style={wrapStyle}>
       {stackLayers}
@@ -355,6 +372,13 @@ export function NodeVisual({
           mic surface renders through SoundNode/SoundCardContent instead.) */}
       <div className={cardClass} style={nodeStyle}>
         {header}
+        {/* Image node: a replica never carries a payload, so it draws the ONE
+            empty slot ShaderNode draws for a payload-less node — in the same
+            place (header, thumbnail, rows), with no filename. Its hover text
+            is the PLAIN statement: a replica has no settings menu, and on the
+            Node Designer stage (drawn hit-testable) the canvas hint's
+            "Right-click the node…" would open only the browser's menu. */}
+        {def.type === 'imageNode' && <ImageThumbEmpty language={language} hint={IMAGE_EMPTY_HINT_EVAL} />}
         {/* Colormap: the node's ART is its real ramp — same gradient helper as
             the canvas node, the settings menu and the picker, so no surface
             can show a different map. Designer dx/dy/scale move/grow it as a
@@ -394,11 +418,7 @@ export function NodeVisual({
                 return (
                   <div key={i} className="node-base__row shader-node__row">
                     <div className="shader-node__left" />
-                    <div className="shader-node__right">
-                      {row.output && !(outMoved && row.output === def.outputs[0]) && (
-                        <StaticHandle side="right" dataType={row.output.dataType} port={row.output.id} label={row.output.label} />
-                      )}
-                    </div>
+                    <div className="shader-node__right">{rowOutput(row.output)}</div>
                   </div>
                 );
               }
@@ -445,11 +465,7 @@ export function NodeVisual({
                       />
                     )}
                   </div>
-                  <div className="shader-node__right">
-                    {row.output && !(outMoved && row.output === def.outputs[0]) && (
-                      <StaticHandle side="right" dataType={row.output.dataType} port={row.output.id} label={row.output.label} />
-                    )}
-                  </div>
+                  <div className="shader-node__right">{rowOutput(row.output)}</div>
                 </div>
               );
             })}
@@ -477,20 +493,12 @@ export function NodeVisual({
               </div>
             );
           })}
-          {outMoved && !centerOut && (
+          {outMoved && (
             <StaticHandle side="right" dataType={def.outputs[0].dataType} port={def.outputs[0].id} label={def.outputs[0].label}
               style={{ top: calcTop(sockets['out']) }} />
           )}
           {snapColEl}
         </div>
-        {/* Centred output: anchored to the CARD, so it lands beside the middle
-            of the thumbnail rather than the middle of the rows region. No style
-            of its own — React Flow's `.react-flow__handle-right` default is
-            already card-centred and straddling the right border (ShaderNode's
-            twin explains it). */}
-        {centerOut && def.outputs[0] && (
-          <StaticHandle side="right" dataType={def.outputs[0].dataType} port={def.outputs[0].id} label={def.outputs[0].label} />
-        )}
       </div>
     </div>
   );

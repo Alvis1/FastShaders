@@ -127,7 +127,10 @@ describe('teapot in the preview panel', () => {
     expect(isTeapotGeometry('teapot')).toBe(true);
     expect(isModelGeometry('teapot')).toBe(false);
     expect(isModelGeometry('bunny')).toBe(true);
-    expect(src).toContain('{!isModelGeometry(geometry) && !sdfDrives && (');
+    // `geometryShown`, not the raw preference: the stored value is kept
+    // verbatim and the no-mesh fallback derived (previewGeometryPref.ts), and
+    // the two are identical for the teapot — this gate's own subject.
+    expect(src).toContain('{!isModelGeometry(geometryShown) && !sdfDrives && (');
   });
 
   it('a slider tick on the teapot hot-swaps its resolution instead of posting a primitive', () => {

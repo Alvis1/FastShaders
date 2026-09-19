@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import {
   IMAGE_ASSET_PREFIX,
+  IMAGE_PLACEHOLDER_RE,
   collectImageAssets,
   imageAssetFor,
   inlineImageAssets,
   inlineImageAssetsFromNodes,
 } from './imageAssets';
+import { FS_PLACEHOLDER_RE } from './glbShaderContract';
 import { graphToCode } from './graphToCode';
 import { makeNode, makeEdge } from '../test-utils';
 
@@ -158,5 +162,36 @@ describe('collectImageAssets / round trip through graphToCode', () => {
     // survives into the module and the runtime decode() fallback takes over.
     const orphaned = inlineImageAssetsFromNodes(code, [makeNode('out1', 'output')]);
     expect(orphaned).toBe(code);
+  });
+});
+
+describe('IMAGE_PLACEHOLDER_RE (the one exported copy, GLB Phase 6 S3 / Phase 7)', () => {
+  it('is the global placeholder regex inlineImageAssets scans with, and matchAll leaves it at rest', () => {
+    expect(IMAGE_PLACEHOLDER_RE.global).toBe(true);
+    expect(IMAGE_PLACEHOLDER_RE.source).toBe('"fs-asset:([^"]+)"');
+    const keys = [...'a "fs-asset:x-1" b "fs-asset:y-2"'.matchAll(IMAGE_PLACEHOLDER_RE)].map((m) => m[1]);
+    expect(keys).toEqual(['x-1', 'y-2']);
+    expect(IMAGE_PLACEHOLDER_RE.lastIndex).toBe(0);
+  });
+
+  it('is declared once: no second placeholder literal anywhere under src/', () => {
+    const hits: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir)) {
+        const p = join(dir, e);
+        if (statSync(p).isDirectory()) { walk(p); continue; }
+        if (!/\.tsx?$/.test(p) || /\.test\.tsx?$/.test(p)) continue;
+        const src = readFileSync(p, 'utf8');
+        // The resolver SCRIPT (a string that runs inside the sandbox, where the
+        // module cannot be imported) is the one deliberate restatement.
+        if (p.endsWith('previewAssetFeed.ts')) continue;
+        if (src.includes('/"fs-asset:([^"]+)"/g')) hits.push(p);
+      }
+    };
+    walk(resolve(__dirname, '..'));
+    // The literal's ONE home is the zero-import single-GLB contract leaf
+    // (Phase 7): the reader that may not import this module needs it too.
+    expect(hits.map((h) => h.slice(h.indexOf('src/')))).toEqual(['src/engine/glbShaderContract.ts']);
+    expect(IMAGE_PLACEHOLDER_RE).toBe(FS_PLACEHOLDER_RE);
   });
 });

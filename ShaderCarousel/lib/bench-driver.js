@@ -9,7 +9,10 @@
  *   log             — makeLogger(...) instance. The bench installs the
  *                     error overlay + logger itself, BEFORE building its
  *                     scene, so scene-construction failures still surface.
- *   registry        — buildBenchRegistry(TSL) result
+ *   registry        — buildBenchRegistry(TSL, THREE) result. An entry may
+ *                     carry `copies` (an integer > 1: the per-fetch texture
+ *                     atoms); it is copied onto the result so bench-stats
+ *                     prices ONE instance (marginalPoints ÷ copies).
  *   defaults        — settings defaults (wireSettings)
  *   settingsKey / pickerKey / defaultGroups — persistence namespaces
  *   render(renderer)          — exactly one render pass
@@ -182,7 +185,7 @@ export function createBenchDriver(spec) {
       }
       const stats = statsFromTwoLevelRun(out);
       $('hud-pts').textContent = stats.points;
-      results.push({ id: s.id, label: s.label, category: s.category, stats, frames: out.frames });
+      results.push({ id: s.id, label: s.label, category: s.category, ...(s.copies > 1 ? { copies: s.copies } : {}), stats, frames: out.frames });
       spec.onResult(s, stats, out);
     }
 
@@ -203,12 +206,19 @@ export function createBenchDriver(spec) {
     // marginalMs / marginalMsAtRef / marginalPoints from the slope-based
     // per-pass costs, normalized to the reference pixel count.
     annotateMarginalCost(results, { pixels: res.width * res.height });
-    const rows = results.map(r => ({
-      label: r.label,
-      medianMs: r.stats.msPerPass ?? r.stats.medianFt,
-      marginalMs: r.stats.marginalMsAtRef ?? r.stats.marginalMs,
-      points: r.stats.marginalPoints,
-    }));
+    // Marginal ms is shown PER NODE, like the points beside it: a copies atom
+    // (16 fetches) exports whole-shader marginalMs + `copies` in the CSV, but
+    // its marginalPoints are already ÷ copies, so a whole-shader ms here read
+    // 16× the price it sits next to.
+    const rows = results.map(r => {
+      const marginal = r.stats.marginalMsAtRef ?? r.stats.marginalMs;
+      return {
+        label: r.label,
+        medianMs: r.stats.msPerPass ?? r.stats.medianFt,
+        marginalMs: marginal == null ? marginal : marginal / (r.stats.copies ?? 1),
+        points: r.stats.marginalPoints,
+      };
+    });
 
     const payload = {
       metadata: {

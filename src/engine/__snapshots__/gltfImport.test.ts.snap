@@ -1,0 +1,235 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`emission and the module > AI: the module carries parts mirrors, materialParts, modelSignature and materialPartsMirror; apply∘apply is stable 1`] = `
+"// TSL Shader Module — for use with a-frame-shaderloader
+//
+// HTML setup — these two scripts are all you need (no import map, no shim):
+//   a-frame-180-a-01.min.js = A-Frame 1.8.0 + Three.js r184 (WebGPU) bundle
+//   a-frame-shaderloader-0.8.js rewrites the three/tsl import to that bundle
+//   <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-180-a-01.min.js"></script>
+//   <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-shaderloader-0.8.js"></script>
+//   <a-entity shader="src: shader.js"></a-entity>
+//
+// Plain Three.js r184 (no A-Frame): put the same loader script on the page,
+// then FastShaders.use(THREE) with the three/webgpu namespace and
+// FastShaders.apply(mesh, await FastShaders.load('shader.js')). The loader
+// builds the uniforms and the material, applies \`parts\`, the weld and corners.
+// Without the loader the module still imports THREE and every TSL function it
+// calls, and you redo that material work by hand. Recipe:
+// https://github.com/Alvis1/FastShaders#using-the-shader-module-with-plain-threejs
+//
+// This shader embeds image texture(s) as data: URLs. If the host page sets a
+// Content-Security-Policy, its img-src directive must allow data:.
+
+import * as THREE from 'three/webgpu';
+import { float, mul, normalMap, texture, uv } from 'three/tsl';
+
+export const threeRevision = '184';
+
+const _image1_img = new Image();
+_image1_img.src = "<payload>"; // ai-image-0.jpg, 1024x576 webp, 144.0 KB
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new THREE.Texture(_image1_img) : new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+_image1_tex.colorSpace = THREE.SRGBColorSpace;
+_image1_tex.minFilter = THREE.NearestMipmapNearestFilter;
+_image1_tex.magFilter = THREE.NearestFilter;
+_image1_tex.wrapS = THREE.ClampToEdgeWrapping;
+_image1_tex.wrapT = THREE.ClampToEdgeWrapping;
+_image1_tex.flipY = false;
+_image1_tex.needsUpdate = true;
+const _image2_img = new Image();
+_image2_img.src = "<payload>"; // ai-image-1.png, 4x2 webp, 8 B
+let _image2_ok = true;
+try { await _image2_img.decode(); } catch { _image2_ok = false; }
+const _image2_tex = _image2_ok ? new THREE.Texture(_image2_img) : new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+_image2_tex.colorSpace = THREE.NoColorSpace;
+_image2_tex.generateMipmaps = false;
+_image2_tex.minFilter = THREE.LinearFilter;
+_image2_tex.magFilter = THREE.LinearFilter;
+_image2_tex.wrapS = THREE.RepeatWrapping;
+_image2_tex.wrapT = THREE.RepeatWrapping;
+_image2_tex.flipY = false;
+_image2_tex.needsUpdate = true;
+const _image3_img = new Image();
+_image3_img.src = "<payload>"; // ai-image-2.png, 2x2 webp, 4 B
+let _image3_ok = true;
+try { await _image3_img.decode(); } catch { _image3_ok = false; }
+const _image3_tex = _image3_ok ? new THREE.Texture(_image3_img) : new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+_image3_tex.colorSpace = THREE.NoColorSpace;
+_image3_tex.generateMipmaps = false;
+_image3_tex.minFilter = THREE.LinearFilter;
+_image3_tex.magFilter = THREE.LinearFilter;
+_image3_tex.wrapS = THREE.RepeatWrapping;
+_image3_tex.wrapT = THREE.RepeatWrapping;
+_image3_tex.flipY = false;
+_image3_tex.needsUpdate = true;
+
+export default function() {
+  const image1 = texture(_image1_tex, uv()).rgb;
+  const image2 = texture(_image2_tex, uv(1)).rgba;
+  const float1 = float(0.5);
+  const image3 = texture(_image3_tex, uv()).rgb;
+  const mul1 = mul(image2.b, float1);
+  return { parts: { "mesh_0": { colorNode: image1, normalNode: normalMap(image3), roughnessNode: image2.g, metalnessNode: mul1 } }, materialParts: { "0": { colorNode: image1, normalNode: normalMap(image3), roughnessNode: image2.g, metalnessNode: mul1 } }, modelSignature: { materials: ["", "unused"] }, materialPartsMirror: ["mesh_0"] };
+}
+"
+`;
+
+exports[`emission and the module > BLENDER: the module carries parts mirrors, materialParts, modelSignature and materialPartsMirror; apply∘apply is stable 1`] = `
+"// TSL Shader Module — for use with a-frame-shaderloader
+//
+// HTML setup — these two scripts are all you need (no import map, no shim):
+//   a-frame-180-a-01.min.js = A-Frame 1.8.0 + Three.js r184 (WebGPU) bundle
+//   a-frame-shaderloader-0.8.js rewrites the three/tsl import to that bundle
+//   <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-180-a-01.min.js"></script>
+//   <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-shaderloader-0.8.js"></script>
+//   <a-entity shader="src: shader.js"></a-entity>
+//
+// Plain Three.js r184 (no A-Frame): put the same loader script on the page,
+// then FastShaders.use(THREE) with the three/webgpu namespace and
+// FastShaders.apply(mesh, await FastShaders.load('shader.js')). The loader
+// builds the uniforms and the material, applies \`parts\`, the weld and corners.
+// Without the loader the module still imports THREE and every TSL function it
+// calls, and you redo that material work by hand. Recipe:
+// https://github.com/Alvis1/FastShaders#using-the-shader-module-with-plain-threejs
+//
+// This shader embeds image texture(s) as data: URLs. If the host page sets a
+// Content-Security-Policy, its img-src directive must allow data:.
+
+import * as THREE from 'three/webgpu';
+import { color, float, mul, normalMap, texture, uv, vec2, vec3, vertexColor } from 'three/tsl';
+
+export const threeRevision = '184';
+
+const _image1_img = new Image();
+_image1_img.src = "<payload>"; // BaseColor.png, 4x4 webp, 4 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new THREE.Texture(_image1_img) : new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+_image1_tex.colorSpace = THREE.SRGBColorSpace;
+_image1_tex.wrapS = THREE.RepeatWrapping;
+_image1_tex.wrapT = THREE.RepeatWrapping;
+_image1_tex.flipY = false;
+_image1_tex.needsUpdate = true;
+const _image2_img = new Image();
+_image2_img.src = "<payload>"; // ORM.png, 4x2 webp, 8 B
+let _image2_ok = true;
+try { await _image2_img.decode(); } catch { _image2_ok = false; }
+const _image2_tex = _image2_ok ? new THREE.Texture(_image2_img) : new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+_image2_tex.colorSpace = THREE.NoColorSpace;
+_image2_tex.generateMipmaps = false;
+_image2_tex.minFilter = THREE.LinearFilter;
+_image2_tex.magFilter = THREE.LinearFilter;
+_image2_tex.wrapS = THREE.RepeatWrapping;
+_image2_tex.wrapT = THREE.RepeatWrapping;
+_image2_tex.flipY = false;
+_image2_tex.needsUpdate = true;
+const _image3_img = new Image();
+_image3_img.src = "<payload>"; // Normal.png, 2x2 webp, 4 B
+let _image3_ok = true;
+try { await _image3_img.decode(); } catch { _image3_ok = false; }
+const _image3_tex = _image3_ok ? new THREE.Texture(_image3_img) : new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+_image3_tex.colorSpace = THREE.NoColorSpace;
+_image3_tex.generateMipmaps = false;
+_image3_tex.minFilter = THREE.LinearFilter;
+_image3_tex.magFilter = THREE.LinearFilter;
+_image3_tex.wrapS = THREE.RepeatWrapping;
+_image3_tex.wrapT = THREE.RepeatWrapping;
+_image3_tex.flipY = false;
+_image3_tex.needsUpdate = true;
+
+export default function() {
+  const image1 = texture(_image1_tex, uv().mul(vec2(2, 2)).add(vec2(0.25, 0))).rgb;
+  const image2 = texture(_image2_tex, uv()).rgba;
+  const float1 = float(0.8);
+  const image3 = texture(_image3_tex, uv()).rgb;
+  const vertexColor1 = vertexColor(0);
+  const color1 = color(0xbcbcbc);
+  const float2 = float(0.5);
+  const float3 = float(0);
+  const color2 = color(0xffbc89);
+  const float4 = float(2);
+  const mul1 = mul(image2.g, float1);
+  const mul2 = mul(vertexColor1, color1);
+  const mul3 = mul(image2.b, float3);
+  const mul4 = mul(color2, float4);
+  const mul5 = mul(vertexColor1.w, float2);
+  return { parts: { "Cube_1": { colorNode: image1, normalNode: normalMap(image3, vec2(1, -1)), roughnessNode: mul1, metalnessNode: image2.b, side: 2 }, "Cube_2": { colorNode: vec3(mul2), emissiveNode: mul4, opacityNode: mul5, roughnessNode: image2.g, metalnessNode: mul3, transparent: true, depthWrite: false }, "Plate": { colorNode: color(0x7ccb59), roughnessNode: float(0.4), metalnessNode: float(0.25), alphaTest: 0.99 } }, materialParts: { "0": { colorNode: image1, normalNode: normalMap(image3, vec2(1, -1)), roughnessNode: mul1, metalnessNode: image2.b, side: 2 }, "1": { colorNode: vec3(mul2), emissiveNode: mul4, opacityNode: mul5, roughnessNode: image2.g, metalnessNode: mul3, transparent: true, depthWrite: false }, "2": { colorNode: color(0x7ccb59), roughnessNode: float(0.4), metalnessNode: float(0.25), alphaTest: 0.99 } }, modelSignature: { materials: ["Material.001", "Material.002", "Ķermenis"] }, materialPartsMirror: ["Cube_1", "Cube_2", "Plate"] };
+}
+"
+`;
+
+exports[`emission and the module > SCAN: the module carries parts mirrors, materialParts, modelSignature and materialPartsMirror; apply∘apply is stable 1`] = `
+"// TSL Shader Module — for use with a-frame-shaderloader
+//
+// HTML setup — these two scripts are all you need (no import map, no shim):
+//   a-frame-180-a-01.min.js = A-Frame 1.8.0 + Three.js r184 (WebGPU) bundle
+//   a-frame-shaderloader-0.8.js rewrites the three/tsl import to that bundle
+//   <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-180-a-01.min.js"></script>
+//   <script src="https://cdn.jsdelivr.net/gh/Alvis1/a-frame-shaderloader@master/js/a-frame-shaderloader-0.8.js"></script>
+//   <a-entity shader="src: shader.js"></a-entity>
+//
+// Plain Three.js r184 (no A-Frame): put the same loader script on the page,
+// then FastShaders.use(THREE) with the three/webgpu namespace and
+// FastShaders.apply(mesh, await FastShaders.load('shader.js')). The loader
+// builds the uniforms and the material, applies \`parts\`, the weld and corners.
+// Without the loader the module still imports THREE and every TSL function it
+// calls, and you redo that material work by hand. Recipe:
+// https://github.com/Alvis1/FastShaders#using-the-shader-module-with-plain-threejs
+//
+// This shader embeds image texture(s) as data: URLs. If the host page sets a
+// Content-Security-Policy, its img-src directive must allow data:.
+
+import * as THREE from 'three/webgpu';
+import { float, normalMap, texture, uv } from 'three/tsl';
+
+export const threeRevision = '184';
+
+const _image1_img = new Image();
+_image1_img.src = "<payload>"; // Body_diffuse.jpg, 1024x576 webp, 144.0 KB
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new THREE.Texture(_image1_img) : new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+_image1_tex.colorSpace = THREE.SRGBColorSpace;
+_image1_tex.wrapS = THREE.RepeatWrapping;
+_image1_tex.wrapT = THREE.RepeatWrapping;
+_image1_tex.flipY = false;
+_image1_tex.needsUpdate = true;
+const _image2_img = new Image();
+_image2_img.src = "<payload>"; // Body_orm.png, 4x2 webp, 8 B
+let _image2_ok = true;
+try { await _image2_img.decode(); } catch { _image2_ok = false; }
+const _image2_tex = _image2_ok ? new THREE.Texture(_image2_img) : new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+_image2_tex.colorSpace = THREE.NoColorSpace;
+_image2_tex.generateMipmaps = false;
+_image2_tex.minFilter = THREE.LinearFilter;
+_image2_tex.magFilter = THREE.LinearFilter;
+_image2_tex.wrapS = THREE.RepeatWrapping;
+_image2_tex.wrapT = THREE.RepeatWrapping;
+_image2_tex.flipY = false;
+_image2_tex.needsUpdate = true;
+const _image3_img = new Image();
+_image3_img.src = "<payload>"; // Body_normal.png, 2x2 webp, 4 B
+let _image3_ok = true;
+try { await _image3_img.decode(); } catch { _image3_ok = false; }
+const _image3_tex = _image3_ok ? new THREE.Texture(_image3_img) : new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+_image3_tex.colorSpace = THREE.NoColorSpace;
+_image3_tex.generateMipmaps = false;
+_image3_tex.minFilter = THREE.LinearFilter;
+_image3_tex.magFilter = THREE.LinearFilter;
+_image3_tex.wrapS = THREE.RepeatWrapping;
+_image3_tex.wrapT = THREE.RepeatWrapping;
+_image3_tex.flipY = false;
+_image3_tex.needsUpdate = true;
+
+export default function() {
+  const image1 = texture(_image1_tex, uv()).rgb;
+  const image2 = texture(_image2_tex, uv()).rgba;
+  const image3 = texture(_image3_tex, uv()).rgb;
+  const image4 = texture(_image1_tex, uv()).rgb;
+  const image5 = texture(_image1_tex, uv()).rgb;
+  return { parts: { "Body": { colorNode: image1, normalNode: normalMap(image3), roughnessNode: image2.g, metalnessNode: image2.b }, "Base": { colorNode: image4, metalnessNode: float(1) }, "Trim": { colorNode: image5, roughnessNode: float(0.5), metalnessNode: float(1) } }, materialParts: { "0": { colorNode: image1, normalNode: normalMap(image3), roughnessNode: image2.g, metalnessNode: image2.b }, "1": { colorNode: image4, metalnessNode: float(1) }, "2": { colorNode: image5, roughnessNode: float(0.5), metalnessNode: float(1) } }, modelSignature: { materials: ["Body", "Base", "Trim"] }, materialPartsMirror: ["Body", "Base", "Trim"] };
+}
+"
+`;

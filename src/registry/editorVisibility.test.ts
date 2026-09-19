@@ -28,8 +28,10 @@ import visibilityJson from '@/registry/editorVisibility.json';
  *
  * So this file pins three things:
  *   • the JSON's shape and that every key still names something real;
- *   • that hiding actually filters — proved by mocking a non-empty file, since
- *     the shipped one is empty and would make every assertion vacuous;
+ *   • that hiding actually filters — proved by mocking a known non-empty file
+ *     (the shipped one was empty until GLB Phase 4 hid imageNode, which made
+ *     every direct assertion vacuous; the mock keeps the proof independent of
+ *     what ships);
  *   • that hiding CANNOT reach the registry, the parser or an existing graph.
  *
  * Plus the mechanical guard: no add surface may call `getAllDefinitions()`.
@@ -91,7 +93,7 @@ describe('editorVisibility.json', () => {
 
 describe('the editor accessor', () => {
   it('returns the same array identity as getAllDefinitions when nothing is hidden', () => {
-    // The shipped state. Identity matters: ContentBrowser/AddNodeMenu memoize on
+    // An empty file's state. Identity matters: ContentBrowser/AddNodeMenu memoize on
     // it, so a fresh array every call would make this feature cost a re-render
     // in a build where it does nothing at all.
     if (HIDDEN_NODE_TYPES.size === 0) {
@@ -116,7 +118,7 @@ describe('the editor accessor', () => {
   });
 
   it('reports a category as emptied exactly when the file emptied it', () => {
-    // Derived, not pinned to the empty shipped state: hiding every node of a
+    // Derived, not pinned to whatever the file ships: hiding every node of a
     // category is a SUPPORTED use (it is how an unfinished family stays out of
     // the palette), so an assertion that no category is ever emptied would turn
     // the release workflow's test job red the first time someone used it.
@@ -163,11 +165,11 @@ describe('hiding actually filters (mocked non-empty file)', () => {
     expect(vis.isTextureHiddenFromEditor('marble')).toBe(true);
     expect(vis.isTextureHiddenFromEditor('wood')).toBe(false);
 
-    // Identity must stay stable WHILE HIDING IS ACTIVE, not just in the empty
-    // shipped state. A per-call `allDefinitions.filter(...)` reads as correct,
+    // Identity must stay stable WHILE HIDING IS ACTIVE, not just with an empty
+    // file. A per-call `allDefinitions.filter(...)` reads as correct,
     // passes every content assertion, and silently makes each consumer's
     // `useMemo` recompute — and gives one render two different "the editor set"
-    // arrays. The empty-state test cannot see it: there the filter never runs.
+    // arrays. An empty file cannot show it: there the filter never runs.
     expect(reg.getEditorDefinitions()).toBe(reg.getEditorDefinitions());
     expect(reg.searchNodes('')).toBe(reg.getEditorDefinitions());
   });
@@ -255,5 +257,18 @@ describe('no add surface reads the unfiltered registry', () => {
     const src = codeOnly(readFileSync(srcDir + 'components/Graphs/GraphsPage.tsx', 'utf8'));
     expect(src).toMatch(/getAllDefinitions\(\)/);
     expect(src).not.toMatch(/getEditorDefinitions/);
+  });
+});
+
+describe('comments about the shipped file stay true', () => {
+  it('no source still says the shipped visibility file is empty', () => {
+    // It was, until GLB Phase 4 hid imageNode. Two comments kept the present
+    // tense after that, telling readers the non-empty branch never ran on real
+    // data when CI now runs it. Built by concatenation so it cannot match itself.
+    const stale = new RegExp('shipped one ' + 'is\\s+empty');
+    for (const rel of ['registry/editorVisibility.test.ts', '../vite.config.ts']) {
+      const src = readFileSync(srcDir + rel, 'utf8').replace(/\n\s*(\/\/|\*)\s*/g, ' ');
+      expect(src, rel).not.toMatch(stale);
+    }
   });
 });

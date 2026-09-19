@@ -23,6 +23,7 @@ import {
   SphereGeometry, Mesh, MeshPhysicalNodeMaterial, Color,
   AmbientLight, DirectionalLight,
 } from 'three';
+import * as THREE from 'three';
 import * as TSL from 'three/tsl';
 import { buildBenchRegistry } from '../lib/bench-registry.js';
 import { createBenchDriver } from '../lib/bench-driver.js';
@@ -66,7 +67,7 @@ const PICKER_KEY = 'shadercarousel:static:picker';
 const DEFAULT_GROUPS = new Set(['baseline', 'preset', 'noise']);
 
 // ── Scene setup ────────────────────────────────────────────────────────────
-const REGISTRY = buildBenchRegistry(TSL);
+const REGISTRY = buildBenchRegistry(TSL, THREE);
 const scene = new Scene();
 scene.background = new Color(0x0b0b10);
 const camera = new PerspectiveCamera(30, 1, 0.1, 100);

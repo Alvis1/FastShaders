@@ -19,6 +19,7 @@ import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { hasNoiseRangeFlag, isUnsignedNoise } from '@/utils/noiseRange';
 import { sameGraphSemantics } from '@/utils/graphSemantics';
 import { buildTimeUpstreamSet, buildDownstreamClosure } from '@/utils/graphTraversal';
+import { IMAGE_CHANNEL_INDEX } from '@/utils/imageChannels';
 
 /** Multiplier applied to UV coordinates before sampling noise (matches GPU preview scale). */
 const NOISE_UV_SCALE = 4;
@@ -400,7 +401,16 @@ function computeShape(
   for (const input of def.inputs) {
     const e = targetEdges.find((edge) => edge.targetHandle === input.id);
     if (e) {
-      const s = computeShape(e.source, nodes, edges, visited, nidx, edgeIndex);
+      // Per SOURCE SOCKET, the append branch's rule above: a node-level width
+      // overstates every narrowing socket (toHsl's h/s/l, dataviz's `value`).
+      // `toHsl.h → mul → Color` counted 3, so the Output node skipped its
+      // vec3() widen and the float splatted into alpha. 0 = an `any` port (or
+      // a null/unknown handle) → whole-node inference.
+      const src = nidx.get(e.source);
+      const declared = src && e.sourceHandle ? portShapeForHandle(src, e.sourceHandle) : 0;
+      const s = declared > 0
+        ? declared
+        : computeShape(e.source, nodes, edges, visited, nidx, edgeIndex);
       if (s > maxShape) maxShape = s;
     }
   }
@@ -429,7 +439,9 @@ function computeShape(
  * ──────────────────────────────────────────────────────────────────────────── */
 
 /** Which channel of the source node's vector this output handle carries, or
- *  null for "the whole vector" (`out`, an unknown handle, a tampered id). */
+ *  null for "the whole vector" (`out`, an unknown handle, a tampered id).
+ *  Internal projections go through `handleChannels`, which adds the Texture
+ *  node's RUNS; this stays for single-channel callers. */
 export function handleSlice(
   node: AppNode | undefined,
   handle: string | null | undefined,
@@ -451,19 +463,50 @@ export function handleSlice(
 const TOHSL_HANDLE_INDEX = new Map<string, number>([['h', 0], ['s', 1], ['l', 2]]);
 const SPLIT_HANDLE_INDEX = new Map<string, number>([['x', 0], ['y', 1], ['z', 2], ['w', 3]]);
 
-/** Project one channel out of an evaluated vector. A slice past the end
- *  yields null (unknown) rather than a fabricated 0. */
-function sliceEval(res: EvalResult, i: number | null): EvalResult {
-  if (res === null || i === null) return res;
-  return i < res.length ? [res[i]] : null;
+/** What one output socket carries out of its node's WHOLE vector: one
+ *  channel (an index), a contiguous run [from, to), or null (all of it). A
+ *  run exists for the Texture node, whose whole vector is the rgba SAMPLE
+ *  while `out` is its first three; an index alone would leave EdgeInfoCard
+ *  (count = max(rangeLen, shapeLen)) drawing four channel cards on a vec3 wire. */
+export type HandleChannels = number | { readonly from: number; readonly to: number } | null;
+
+const IMAGE_RGB_RUN = { from: 0, to: 3 } as const;
+
+/** handleSlice, plus the Texture node's runs. The ONE projection every
+ *  internal consumer uses; handleSlice stays for its single-channel callers.
+ *  On an Image node `out`, null and every tampered id carry the RGB run — the
+ *  socket table (`utils/imageChannels.ts`) is a Map, so `__proto__` /
+ *  `constructor` resolve to nothing and fall through to the run. */
+export function handleChannels(
+  node: AppNode | undefined,
+  handle: string | null | undefined,
+): HandleChannels {
+  if (node?.data.registryType === 'imageNode') {
+    return (typeof handle === 'string' ? IMAGE_CHANNEL_INDEX.get(handle) : undefined) ?? IMAGE_RGB_RUN;
+  }
+  return handleSlice(node, handle);
 }
 
-/** Project one channel out of an inferred range. Never re-derives the range —
- *  the signed-noise convention depends on the interval it was given. */
-function sliceRange(r: RangeResult | null, i: number | null): RangeResult | null {
-  if (r === null || i === null) return r;
-  if (i >= r.min.length || i >= r.max.length) return null;
-  return { min: [r.min[i]], max: [r.max[i]] };
+/** Project one channel — or one run — out of an evaluated vector. A slice past
+ *  the end yields null (unknown) rather than a fabricated 0. */
+function sliceEval(res: EvalResult, s: HandleChannels): EvalResult {
+  if (res === null || s === null) return res;
+  if (typeof s === 'number') return s < res.length ? [res[s]] : null;
+  return s.to <= res.length ? res.slice(s.from, s.to) : null;
+}
+
+/** Project one channel — or one run — out of an inferred range. Never
+ *  re-derives the range — the signed-noise convention depends on the interval
+ *  it was given. */
+function sliceRange(r: RangeResult | null, s: HandleChannels): RangeResult | null {
+  if (r === null || s === null) return r;
+  if (typeof s === 'number') {
+    if (s >= r.min.length || s >= r.max.length) return null;
+    return { min: [r.min[s]], max: [r.max[s]] };
+  }
+  return s.to <= r.min.length && s.to <= r.max.length
+    ? { min: r.min.slice(s.from, s.to), max: r.max.slice(s.from, s.to) }
+    : null;
 }
 
 /** The value arriving along `edge` — the source node evaluated, then projected
@@ -476,7 +519,7 @@ export function evaluateEdgeSource(
 ): EvalResult {
   const res = evaluateNodeOutput(edge.source, nodes, edges, time);
   const node = getCtx(nodes, edges).nodeIndex.get(edge.source);
-  return sliceEval(res, handleSlice(node, edge.sourceHandle));
+  return sliceEval(res, handleChannels(node, edge.sourceHandle));
 }
 
 /** Inferred range for the value arriving along `edge` (same projection). */
@@ -488,7 +531,7 @@ export function evaluateEdgeRange(
 ): RangeResult | null {
   const r = evaluateNodeRange(edge.source, nodes, edges, time);
   const node = getCtx(nodes, edges).nodeIndex.get(edge.source);
-  return sliceRange(r, handleSlice(node, edge.sourceHandle));
+  return sliceRange(r, handleChannels(node, edge.sourceHandle));
 }
 
 /**
@@ -591,11 +634,11 @@ function evaluate(
   const scalarInput = (portId: string, fallback: number): number => {
     const edge = nodeEdges.find((e) => e.targetHandle === portId);
     if (edge) {
-      // Projected onto the socket the edge LEAVES (see handleSlice): a wire
+      // Projected onto the socket the edge LEAVES (see handleChannels): a wire
       // from toHsl's Saturation must contribute S, not channel 0's Hue.
       const upstream = sliceEval(
         evaluate(edge.source, nodes, edges, time, cache, idx, nidx),
-        handleSlice(nidx.get(edge.source), edge.sourceHandle),
+        handleChannels(nidx.get(edge.source), edge.sourceHandle),
       );
       if (upstream !== null && upstream.length > 0) return upstream[0];
     }
@@ -611,7 +654,7 @@ function evaluate(
     if (edge) {
       return sliceEval(
         evaluate(edge.source, nodes, edges, time, cache, idx, nidx),
-        handleSlice(nidx.get(edge.source), edge.sourceHandle),
+        handleChannels(nidx.get(edge.source), edge.sourceHandle),
       );
     }
     const v = values[portId];
@@ -1340,8 +1383,19 @@ function analyticalRange(node: AppNode): RangeResult | null {
   // only what the MISSING-attribute fallback emits, and asserting it as the
   // value would be a confident lie the moment a coloured .glb is dropped. Four
   // channels to match portShapeForHandle's shapeOfDataType('vec4'), so
-  // handleSlice / evaluateEdgeRange project consistently.
+  // handleChannels / evaluateEdgeRange project consistently.
   if (type === 'vertexColor') return { min: [0, 0, 0, 0], max: [1, 1, 1, 1] };
+
+  // A sampled image. Every channel of an 8-bit texture lies in [0, 1]: sRGB
+  // decoding maps [0,1]→[0,1], a data map is read raw, and the 1×1 fallback is
+  // opaque black. Four channels because the node's WHOLE vector is the rgba
+  // SAMPLE (the Alpha socket needs a channel to project); `out` projects the
+  // first three (handleChannels). A range, never an `evaluate` case: the pixels
+  // decode asynchronously in the DOM from an adversarial payload, so no CPU
+  // value can be claimed. Seeding it here also makes it a FIELD, so everything
+  // below an image takes the interval path instead of the [0,1]-scalar guess
+  // portRange used for an unknown upstream.
+  if (type === 'imageNode') return { min: [0, 0, 0, 0], max: [1, 1, 1, 1] };
 
   // Model-space positions follow the preview convention: fit-bounds rescales
   // geometry so the longest axis spans 1.6 (matching primitive framing), so
@@ -1450,7 +1504,7 @@ function computeRange(
       const src = nodeIndex ? nodeIndex.get(edge.source) : nodes.find((n) => n.id === edge.source);
       const r = sliceRange(
         computeRange(edge.source, nodes, edges, time, cache, nodeIndex, edgeIndex),
-        handleSlice(src, edge.sourceHandle),
+        handleChannels(src, edge.sourceHandle),
       );
       if (r) return r;
       // Upstream is unknown — assume normalized [0, 1] (typical shader range)

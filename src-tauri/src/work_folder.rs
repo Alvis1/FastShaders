@@ -9,12 +9,23 @@
 //! app_config_dir so it survives restarts), and every file argument crossing
 //! IPC is a bare name vetted by `safe_name` + a canonicalize containment
 //! check — the command surface cannot be steered outside the linked folder.
+//!
+//! Bytes cross IPC RAW in both directions: a read returns a
+//! `tauri::ipc::Response`, and a save (`work_folder_write_bytes`) takes the
+//! file as the request body with its name in a percent-encoded header. The
+//! base64 command this replaced inflated a 256 MiB zip by a third into one
+//! JSON string before the decode even started.
+//!
+//! Structured errors are `E_<CODE>` strings (`E_TOO_LARGE <value> <limit>`,
+//! `E_BAD_BODY`, `E_BAD_NAME`), parsed by `parseDesktopError` in
+//! src/utils/desktopIpc.ts — the frontend acts on TOO_LARGE and words the other
+//! two, everything else is plain English shown verbatim; desktopIpcContract.test.ts
+//! pins the shared literals against this file's text.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use base64::Engine;
 use serde::Serialize;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
@@ -45,8 +56,15 @@ pub struct WorkFolderEntry {
 }
 
 /// Refuse to read files past this size (a work folder is user-chosen and may
-/// hold anything; the app's own exports stay well under it).
-const MAX_READ_BYTES: u64 = 128 * 1024 * 1024;
+/// hold anything). = DESKTOP_MAX_TOTAL_UNCOMPRESSED (256 MiB,
+/// src/utils/zipReader.ts) + 8 MiB of archive overhead — the desktop build's
+/// READ_MAX_ARCHIVE_BYTES, so the largest zip the desktop reader opens can
+/// also be read out of the folder. desktopIpcContract.test.ts pins the pair.
+const MAX_READ_BYTES: u64 = 264 * 1024 * 1024;
+/// The request header `work_folder_write_bytes` takes the file name from,
+/// percent-encoded by the frontend (`FILE_NAME_HEADER` in desktopIpc.ts):
+/// header values must be visible ASCII, file names are Unicode.
+pub const FILE_NAME_HEADER: &str = "x-fs-file-name";
 /// Cap for the display-name scan — image-heavy exports run a few MB; anything
 /// bigger keeps its file-name label instead of being pulled into memory on
 /// every list.
@@ -60,14 +78,17 @@ const BEGIN_MARKER: &str = "/* FASTSHADERS_PROJECT_V1";
 /// Win32 reserves these stems (the part before the FIRST dot) regardless of
 /// extension — `con.js` opens the console device, `nul.js` writes to the void.
 const WINDOWS_RESERVED_STEMS: [&str; 22] = [
-    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
-    "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
 fn lock<'a>(
     state: &'a tauri::State<'a, WorkFolderState>,
 ) -> Result<std::sync::MutexGuard<'a, Option<PathBuf>>, String> {
-    state.0.lock().map_err(|_| "work-folder state poisoned".to_string())
+    state
+        .0
+        .lock()
+        .map_err(|_| "work-folder state poisoned".to_string())
 }
 
 /// Where the picked path is remembered across launches. Plain one-line text
@@ -80,7 +101,7 @@ fn config_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("work-folder.txt"))
 }
 
-fn persist_root(app: &tauri::AppHandle, root: &PathBuf) {
+fn persist_root(app: &tauri::AppHandle, root: &Path) {
     // Best-effort: a failed write only costs the user a re-pick next launch.
     if let Ok(file) = config_file(app) {
         if let Some(parent) = file.parent() {
@@ -96,7 +117,7 @@ fn forget_persisted(app: &tauri::AppHandle) {
     }
 }
 
-fn info_for(root: &PathBuf) -> WorkFolderInfo {
+fn info_for(root: &Path) -> WorkFolderInfo {
     WorkFolderInfo {
         path: root.to_string_lossy().into_owned(),
         name: root
@@ -123,8 +144,12 @@ fn resolve_root(
         forget_persisted(app);
         return Ok(None);
     }
-    let Ok(file) = config_file(app) else { return Ok(None) };
-    let Ok(saved) = fs::read_to_string(&file) else { return Ok(None) };
+    let Ok(file) = config_file(app) else {
+        return Ok(None);
+    };
+    let Ok(saved) = fs::read_to_string(&file) else {
+        return Ok(None);
+    };
     let root = PathBuf::from(saved.trim());
     if root.as_os_str().is_empty() || !root.is_dir() {
         forget_persisted(app);
@@ -135,8 +160,8 @@ fn resolve_root(
 }
 
 /// Bare-name whitelist for everything crossing IPC: no separators, no
-/// traversal, no hidden files, and only the two shader extensions the
-/// feature deals in. The read path additionally canonicalize-checks for
+/// traversal, no hidden files, and only the three shader extensions the
+/// feature deals in (`.js`, `.zip`, and the single-GLB export `.glb`). The read path additionally canonicalize-checks for
 /// symlinks and the write path parent-checks the joined result.
 fn safe_name(name: &str) -> bool {
     if name.is_empty()
@@ -151,7 +176,7 @@ fn safe_name(name: &str) -> bool {
         return false;
     }
     let lower = name.to_ascii_lowercase();
-    if !(lower.ends_with(".js") || lower.ends_with(".zip")) {
+    if !(lower.ends_with(".js") || lower.ends_with(".zip") || lower.ends_with(".glb")) {
         return false;
     }
     let stem = lower.split('.').next().unwrap_or("");
@@ -188,7 +213,11 @@ fn extract_shader_name(text: &str) -> Option<String> {
                 let token = &rest[..=i];
                 let name: String = serde_json::from_str(token).ok()?;
                 let trimmed = name.trim();
-                return if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+                return if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                };
             }
             _ => i += 1,
         }
@@ -219,9 +248,15 @@ pub async fn work_folder_pick(
         .file()
         // Display-only, so accepting it over IPC is harmless — it lets the
         // frontend pass the t()-localized title.
-        .set_title(title.as_deref().unwrap_or("Choose a work folder for shaders"))
+        .set_title(
+            title
+                .as_deref()
+                .unwrap_or("Choose a work folder for shaders"),
+        )
         .blocking_pick_folder();
-    let Some(file_path) = picked else { return Ok(None) }; // user cancelled
+    let Some(file_path) = picked else {
+        return Ok(None); // user cancelled
+    };
     let root = file_path
         .into_path()
         .map_err(|e| format!("unusable folder path: {e}"))?;
@@ -257,7 +292,9 @@ pub async fn work_folder_list(
     let dir = fs::read_dir(&root).map_err(|e| format!("could not read the folder: {e}"))?;
     let mut entries = Vec::new();
     for entry in dir.flatten() {
-        let Ok(name) = entry.file_name().into_string() else { continue };
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
         if !safe_name(&name) {
             continue;
         }
@@ -265,15 +302,14 @@ pub async fn work_folder_list(
         if !meta.is_file() {
             continue;
         }
-        let display_name = if name.to_ascii_lowercase().ends_with(".js")
-            && meta.len() <= MAX_NAME_SCAN_BYTES
-        {
-            fs::read(entry.path())
-                .ok()
-                .and_then(|bytes| extract_shader_name(&String::from_utf8_lossy(&bytes)))
-        } else {
-            None
-        };
+        let display_name =
+            if name.to_ascii_lowercase().ends_with(".js") && meta.len() <= MAX_NAME_SCAN_BYTES {
+                fs::read(entry.path())
+                    .ok()
+                    .and_then(|bytes| extract_shader_name(&String::from_utf8_lossy(&bytes)))
+            } else {
+                None
+            };
         entries.push(WorkFolderEntry {
             file_name: name,
             display_name,
@@ -313,29 +349,61 @@ pub async fn work_folder_read(
     }
     let meta = fs::metadata(&canon).map_err(|e| format!("could not stat: {e}"))?;
     if meta.len() > MAX_READ_BYTES {
-        return Err("file is too large".into());
+        // Structured, so the frontend can say which cap and by how much
+        // (a zip gets the same N2 notice every other import surface shows).
+        return Err(format!("E_TOO_LARGE {} {}", meta.len(), MAX_READ_BYTES));
     }
     let bytes = fs::read(&canon).map_err(|e| format!("could not read: {e}"))?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// Percent-decode the file-name header. None when the decoded bytes are not
+/// UTF-8 — the caller then refuses with `E_BAD_NAME`. Decoding can produce
+/// '/', '\\' or ".." (from `%2F`, `%5C`, …); that is fine, because the result
+/// goes through `safe_name` exactly like the JSON argument it replaced.
+fn decode_header_name(v: &str) -> Option<String> {
+    percent_encoding::percent_decode_str(v)
+        .decode_utf8()
+        .ok()
+        .map(|s| s.into_owned())
+}
+
+/// Save a file into the work folder: the RAW request body is the file, and
+/// the name rides the `x-fs-file-name` header. Extension-agnostic — which
+/// names are allowed is `safe_name`'s call alone.
 #[tauri::command]
-pub async fn work_folder_write(
+pub async fn work_folder_write_bytes(
     app: tauri::AppHandle,
     state: tauri::State<'_, WorkFolderState>,
-    file_name: String,
-    data_b64: String,
+    request: tauri::ipc::Request<'_>,
 ) -> Result<(), String> {
-    let Some(root) = resolve_root(&app, &state)? else {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("E_BAD_BODY".into());
+    };
+    let name = request
+        .headers()
+        .get(FILE_NAME_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(decode_header_name)
+        .ok_or_else(|| "E_BAD_NAME".to_string())?;
+    write_file(&app, &state, &name, bytes)
+}
+
+/// Stage `bytes` beside the target and rename over it. The one writer behind
+/// `work_folder_write_bytes`.
+fn write_file(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, WorkFolderState>,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let Some(root) = resolve_root(app, state)? else {
         return Err(NO_FOLDER.into());
     };
-    if !safe_name(&file_name) {
+    if !safe_name(file_name) {
         return Err("invalid file name".into());
     }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data_b64)
-        .map_err(|e| format!("bad payload: {e}"))?;
-    let dest = root.join(&file_name);
+    let dest = root.join(file_name);
     let tmp = root.join(format!("{file_name}{TMP_SUFFIX}"));
     // Belt over safe_name's braces: both must still be DIRECT children of the
     // root — a name Path::join treated as prefixed/rooted would not be.
@@ -355,7 +423,7 @@ pub async fn work_folder_write(
         .map_err(|e| format!("could not stage: {e}"))?;
     use std::io::Write;
     staged
-        .write_all(&bytes)
+        .write_all(bytes)
         .map_err(|e| format!("could not write: {e}"))?;
     let _ = staged.sync_all();
     drop(staged);
@@ -379,6 +447,9 @@ mod tests {
         assert!(safe_name("my-shader.js"));
         assert!(safe_name("bundle.ZIP"));
         assert!(safe_name("Shader With Spaces.js"));
+        // The single-GLB export (the model with its textures and the shader).
+        assert!(safe_name("model.glb"));
+        assert!(safe_name("Model.GLB"));
     }
 
     #[test]
@@ -391,6 +462,11 @@ mod tests {
         assert!(!safe_name("shader.exe"));
         assert!(!safe_name("shader.js\0"));
         assert!(!safe_name(&format!("{}.js", "x".repeat(300))));
+        assert!(!safe_name("../evil.glb"));
+        assert!(!safe_name(".hidden.glb"));
+        // `.gltf` is a MODEL, never a work-folder document: it keeps its data
+        // in separate files, so one file is not the shader.
+        assert!(!safe_name("shader.gltf"));
     }
 
     #[test]
@@ -401,10 +477,50 @@ mod tests {
         assert!(!safe_name("con.js"));
         assert!(!safe_name("COM1.js"));
         assert!(!safe_name("nul.zip"));
-        assert!(safe_name("console.js")); // exact stem match only, not prefix
+        assert!(!safe_name("nul.glb"));
+        assert!(!safe_name("C:evil.glb"));
+        // Exact stem match only, not a prefix.
+        assert!(safe_name("console.js"));
         // Room for the tmp suffix under the 255-byte component limit.
         assert!(!safe_name(&format!("{}.js", "x".repeat(250))));
         assert!(safe_name(&format!("{}.js", "x".repeat(230))));
+    }
+
+    #[test]
+    fn decode_header_name_round_trips_encode_uri_component() {
+        // What the frontend's encodeHeaderName (encodeURIComponent) sends.
+        assert_eq!(
+            decode_header_name("Z%C4%ABle.zip"),
+            Some("Zīle.zip".to_string())
+        );
+        assert_eq!(
+            decode_header_name("my-shader.js"),
+            Some("my-shader.js".to_string())
+        );
+        assert_eq!(
+            decode_header_name("Shader%20With%20Spaces.js"),
+            Some("Shader With Spaces.js".to_string())
+        );
+        // Not UTF-8 once decoded: refused, not lossily repaired.
+        assert_eq!(decode_header_name("%FF"), None);
+        assert_eq!(decode_header_name("%C4"), None);
+    }
+
+    #[test]
+    fn decoded_header_names_still_go_through_safe_name() {
+        // Encoding a separator gains nothing: the decoded name is vetted like
+        // any other.
+        for encoded in [
+            "..%2Fevil.js",
+            "a%2Fb.js",
+            "a%5Cb.js",
+            "C%3Aevil.js",
+            "%2Ehidden.js",
+        ] {
+            let name = decode_header_name(encoded).expect("valid UTF-8");
+            assert!(!safe_name(&name), "{encoded} decoded to {name}");
+        }
+        assert!(safe_name(&decode_header_name("Z%C4%ABle.zip").unwrap()));
     }
 
     #[test]
@@ -438,9 +554,15 @@ mod tests {
             "{}\n{{\n  \"version\": 1,\n  \"shaderName\": \"Q\\\"uote \\\\ team\",\n}}",
             BEGIN_MARKER
         );
-        assert_eq!(extract_shader_name(&file), Some("Q\"uote \\ team".to_string()));
+        assert_eq!(
+            extract_shader_name(&file),
+            Some("Q\"uote \\ team".to_string())
+        );
         assert_eq!(extract_shader_name("plain script, no block"), None);
-        let empty = format!("{}\n{{ \"version\": 1, \"shaderName\": \"  \" }}", BEGIN_MARKER);
+        let empty = format!(
+            "{}\n{{ \"version\": 1, \"shaderName\": \"  \" }}",
+            BEGIN_MARKER
+        );
         assert_eq!(extract_shader_name(&empty), None);
     }
 }

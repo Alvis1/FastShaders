@@ -1,68 +1,55 @@
-/* The seam itself is INERT — dragging happens only on the .fs-grip tab
-   (styles/controls.css), which is a child of this element and positions
-   against it. No cursor and no pointer handlers here: a press on the bare
-   seam must not move the layout. */
+/* The seam is the control. The whole line is the drag target — its cursor,
+   widened hit zone, hover colour and the hover LENS all come from the shared
+   `.fs-seam` rules in styles/controls.css, which the asset bar's top edge
+   shares — so this file only says what is particular to a SplitPane seam: that
+   it paints the line itself, and that the column seam's corner zone lights
+   the row seam up with it. */
 .split-pane__divider {
-  background: var(--edge-color);
-  /* Inherited by the grip: its outline matches this seam's own thickness
-     (see .fs-grip in styles/controls.css), so the tab and the line are one
-     stroke. The asset bar's seam publishes the same value — one divider
-     thickness app-wide — and it must stay equal to --fs-seam's DESKTOP value;
-     it is a literal only so it does not follow the coarse-pointer bump. */
-  --fs-grip-border: 2px;
+  /* The line is drawn in the seam's `color`, which `.fs-seam` raises to
+     --border-focus on hover / focus / drag — one property flips the line, the
+     lens strokes and the grip mark together. */
+  background: currentColor;
   /* NO shadow — a divider is a drawn LINE, not a raised strip. It was given the
      chip-level hard shadow briefly and dropped again: at --fs-seam's 2px the
      shadow is as wide as the line itself, so it reads as a second, softer seam
-     beside the real one rather than as depth. Neither the seam nor its grip
-     casts anything (see .fs-grip in controls.css). If one is ever wanted again,
-     it must be `filter: drop-shadow` on THIS element and not a `box-shadow`
-     here plus another on the grip: the grip is a flush child, so two box-shadows
-     put its shadow column exactly on the seam's and composite 0.28 into 0.48 —
-     a visibly darker notch where the tab meets the line. */
+     beside the real one rather than as depth. */
   flex-shrink: 0;
-  touch-action: none;
-  transition: background var(--transition-fast);
   position: relative;
-  /* Above the adjacent panes' content so the grip tab isn't clipped or
-     overpainted; well below popovers/menus (z 100+).
+  /* Above the adjacent panes' content so the hit zone and the lens, which
+     both reach a few px into the panes either side, are not overpainted or
+     covered; well below popovers/menus (z 100+).
 
-     `--z-controls` and not the old 5, because the tab hangs INTO the canvas and
-     the canvas's own floating chrome sits at exactly that level. Now that the
-     cost pill is pinned to the corner (its 36px grip-clearance inset is gone —
-     see NodeEditor.css) the two can overlap on a very short window, and the
-     grip has to win: a partly covered pill is cosmetic, a grip that cannot be
-     grabbed is a layout the user can no longer resize. The tie at equal
-     z-index is broken by DOM order, and this divider comes after the pane. */
+     `--z-controls` and not the old 5: the canvas's own floating chrome sits at
+     exactly that level, and where the two meet the seam has to win — a partly
+     covered pill is cosmetic, a seam that cannot be grabbed is a layout the
+     user can no longer resize. The tie at equal z-index is broken by DOM
+     order, and this divider comes after the pane. */
   z-index: var(--z-controls);
 }
 
-/* The whole seam lights up with its grip — they are one control, and seeing
-   the full line highlight is what tells you WHICH edge you are about to move.
-   :active covers the drag itself (the pointer leaves the grip once captured). */
-.split-pane__divider:has(.fs-grip:hover),
-.split-pane__divider:has(.fs-grip:active),
-.split-pane__divider:has(.fs-grip:focus-visible) {
-  background: var(--border-focus);
-}
-
-/* The corner grip drags the row seam nested in the pane beside it too, so that
-   seam joins the highlight — both lines the gesture will move light up. The
-   selector walks the outer splitter's real structure: divider → following
-   sibling (the right pane) → the inner splitter's own divider. */
-.split-pane__divider--h:has(.fs-grip--xy:hover) ~ div .split-pane__divider--v,
-.split-pane__divider--h:has(.fs-grip--xy:active) ~ div .split-pane__divider--v,
-.split-pane__divider--h:has(.fs-grip--xy:focus-visible) ~ div .split-pane__divider--v {
-  background: var(--border-focus);
+/* The junction with the row seam drags that seam too, so it joins the
+   highlight — both lines the gesture will move light up. The selector walks
+   the outer splitter's real structure: divider → following sibling (the right
+   pane) → the inner splitter's own divider. `data-fs-junction` is set by
+   SplitPane while the pointer is on the crossing and for the life of a
+   junction drag; the asset-bar junction's twin lives in ContentBrowser.css,
+   since that bar sits in the pane BEFORE the divider and needs `:has()`. */
+.split-pane__divider--h[data-fs-junction="row"] ~ div .split-pane__divider--v {
+  color: var(--border-focus);
 }
 
 /* Both seams take their thickness from the same token (tokens.css), which also
    bumps them on coarse pointers so a panel boundary stays visible on touch.
-   --fs-grip-border deliberately stays at the desktop 2px rather than tracking
-   that bump: an outline as thick as the touch seam on a --ctl-size tab would
-   crowd the diamond, and .fs-grip--v's ±half-thickness term already centres the
-   thinner outline inside the wider seam. */
+
+   The column seam sits ONE step above the other two, so it WINS the hit test
+   where they meet: the row seam and the asset bar's edge both run up to the
+   column seam, and their hit zones would otherwise cover the crossing (the
+   row seam comes later in DOM order at equal z-index). With the column seam
+   on top, the crossing belongs to it — which is where the junction ring and
+   the two-axis drag live. */
 .split-pane__divider--h {
   width: var(--fs-seam);
+  z-index: calc(var(--z-controls) + 1);
 }
 
 .split-pane__divider--v {

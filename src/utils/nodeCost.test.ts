@@ -3,7 +3,7 @@
  *
  * `unknown` is the load-bearing one. An unrecognised TSL function still RUNS:
  * the shaderloader's `autoInjectTSLImports`
- * (a-frame-shaderloader/js/a-frame-shaderloader-0.6.js) injects any called
+ * (a-frame-shaderloader/js/a-frame-shaderloader-0.8.js) injects any called
  * name that exists in `THREE.TSL`, so a shader pasted from the three.js TSL
  * editor using a function outside the 74-node registry compiles and renders.
  * On top of that, codeToGraph's unknown branch wires no argument edges, so the
@@ -84,12 +84,24 @@ describe('the ACTIVE sink seeds the reachable-cost walk', () => {
   });
 
   it('a node feeding the active output is counted ONCE however many materials use it', () => {
-    // A lower bound, deliberately: the GPU compiles the shared node into both
-    // pipelines, but real per-part pricing needs a calibration entry.
+    // Per pixel the total is an UPPER bound: a pixel runs one material, and the
+    // shared node is counted once across the summed sections. What it
+    // under-counts is compile work, pipelines and memory — each material
+    // compiles the shared node into its own pipeline.
     const out = targeted('o1');
     const u = makeNode('u', 'unknown', { functionName: 'f', rawExpression: 'f()' });
     const edges = [makeEdge('u', 'out', 'o1', 'color'), makeEdge('u', 'out', 'o1', 'm1:color')];
     expect(computeReachableCost([out, u], edges)).toBe(BASE.unknown);
+  });
+
+  it('sections are SUMMED — per pixel the total is an upper bound', () => {
+    // Two materials, each with its own chain: the one total carries both, though
+    // any single pixel runs only one of them.
+    const out = targeted('o1');
+    const u1 = makeNode('u1', 'unknown', { functionName: 'f', rawExpression: 'f()' });
+    const u2 = makeNode('u2', 'unknown', { functionName: 'g', rawExpression: 'g()' });
+    const edges = [makeEdge('u1', 'out', 'o1', 'color'), makeEdge('u2', 'out', 'o1', 'm1:color')];
+    expect(computeReachableCost([out, u1, u2], edges)).toBe(2 * BASE.unknown);
   });
 
   it('a single-Output document — every document before this feature — is unchanged', () => {
@@ -98,6 +110,49 @@ describe('the ACTIVE sink seeds the reachable-cost walk', () => {
     const dead = makeNode('d', 'unknown', { functionName: 'h', rawExpression: 'h()' });
     const edges = [makeEdge('u', 'out', 'o1', 'color')];
     expect(computeReachableCost([out, u, dead], edges)).toBe(BASE.unknown);
+  });
+});
+
+describe('Image nodes: points are per node', () => {
+  // 2048 px on purpose: the 2 px fixtures used elsewhere price at the x0.5
+  // floor (imageNodeCost), which would pin 5s instead of the full entry.
+  const IMG = { imageB64: 'data:image/webp;base64,YWJj', width: 2048, height: 2048, fileName: 'x.webp', colorSpace: 'color' };
+
+  it('precondition: the authored Image price is 10', () => {
+    expect(BASE.imageNode).toBe(10);
+  });
+
+  it('one node wired to two channels is priced once', () => {
+    const out = makeNode('o1', 'output');
+    const img = makeNode('i1', 'imageNode', IMG);
+    const edges = [makeEdge('i1', 'out', 'o1', 'color'), makeEdge('i1', 'out', 'o1', 'emissive')];
+    expect(computeReachableCost([out, img], edges)).toBe(10);
+  });
+
+  it('two nodes holding the SAME image are two samples: 2 x 10 (plus the mul)', () => {
+    const out = makeNode('o1', 'output');
+    const a = makeNode('i1', 'imageNode', IMG);
+    const b = makeNode('i2', 'imageNode', IMG);
+    const m = makeNode('m1', 'mul');
+    const edges = [
+      makeEdge('i1', 'out', 'm1', 'a'),
+      makeEdge('i2', 'out', 'm1', 'b'),
+      makeEdge('m1', 'out', 'o1', 'color'),
+    ];
+    expect(computeReachableCost([out, a, b, m], edges) - BASE.mul).toBe(20);
+  });
+
+  it('the same image sampled through different UVs is still 2 x 10', () => {
+    const out = makeNode('o1', 'output');
+    const a = makeNode('i1', 'imageNode', IMG);
+    const b = makeNode('i2', 'imageNode', { ...IMG, tileX: 2, flipX: 1 });
+    const m = makeNode('m1', 'mul');
+    const edges = [
+      makeEdge('i1', 'out', 'm1', 'a'),
+      makeEdge('i2', 'out', 'm1', 'b'),
+      makeEdge('m1', 'out', 'o1', 'color'),
+    ];
+    expect(computeReachableCost([out, a, b, m], edges) - BASE.mul).toBe(20);
   });
 });
 

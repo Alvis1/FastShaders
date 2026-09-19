@@ -258,10 +258,12 @@ export function AddNodeMenu() {
         key: '__output__',
         run: () => handleAddNode(NODE_REGISTRY.get('output')!),
       });
-      // …and the category's OTHER sinks (the Raymarch Output) directly beneath
-      // it. The grouped loop below skips `output` wholesale, so without this
-      // they are reachable only by typing their name — findable if you already
-      // know they exist, invisible if you do not.
+      // …and the category's OTHER sinks (the Raymarch Output, while Distance
+      // fields is switched on — it is that family's companion and `grouped` is
+      // built from the narrowed editor set) directly beneath it. The grouped
+      // loop below skips `output` wholesale, so without this they are reachable
+      // only by typing their name — findable if you already know they exist,
+      // invisible if you do not.
       for (const def of grouped?.get('output') ?? []) {
         items.push({ kind: 'def', key: def.type, def, run: () => handleAddNode(def) });
       }

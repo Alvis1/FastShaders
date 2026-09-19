@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { toKebabCase } from './nameUtils';
 import {
   MAX_WORK_FOLDER_NAME_BYTES,
@@ -12,7 +14,7 @@ import {
 
 /**
  * These rules decide which FILE the desktop Work folder's Save button replaces,
- * and `work_folder_write` has no undo — so the properties below are the ones
+ * and `work_folder_write_bytes` has no undo — so the properties below are the ones
  * that stop a save landing on the wrong shader. WorkFolder.tsx itself is a
  * Tauri-bridged component the `node` test env cannot mount; this is the whole
  * decision layer pulled out of it.
@@ -170,5 +172,49 @@ describe('workFolderSaveName', () => {
     const wide = `${'ē'.repeat(130)}.js`;
     expect(wide.length).toBeLessThan(MAX_WORK_FOLDER_NAME_BYTES);
     expect(fitsWorkFolderName(wide)).toBe(false);
+  });
+});
+
+/**
+ * The single-GLB export is the THIRD work-folder kind (GLB Phase 7 Step 7).
+ * Its extension has to be accepted on BOTH sides in one commit: `safe_name`
+ * alone would list `.glb` files that `loadEntry` would TextDecode as a script.
+ */
+describe('the .glb kind', () => {
+  it('strips one .glb like any other extension', () => {
+    expect(stripShaderExt('a.glb')).toBe('a');
+    expect(stripShaderExt('a.GLB')).toBe('a');
+    // Single-strip: `a.glb.zip` keeps the ugly-but-distinct stem.
+    expect(stripShaderExt('a.glb.zip')).toBe('a.glb');
+  });
+
+  it('flips a tracked file to .glb and keeps the on-disk spelling when it already is one', () => {
+    expect(workFolderSaveName('Waves.zip', 'waves.glb', 'glb')).toBe('Waves.glb');
+    expect(workFolderSaveName('Waves.glb', 'waves.glb', 'glb')).toBe('Waves.glb');
+    expect(workFolderSaveName('Waves.GLB', 'waves.glb', 'glb')).toBe('Waves.GLB');
+    expect(workFolderSaveName(null, 'x.glb', 'glb')).toBe('x.glb');
+    // …and back, when the Format switches to the shader file again.
+    expect(workFolderSaveName('Waves.glb', 'waves.js', 'js')).toBe('Waves.js');
+  });
+
+  it('a .zip name at the byte limit flips to .glb, which is the same length', () => {
+    const stem = 'x'.repeat(MAX_WORK_FOLDER_NAME_BYTES - 4);
+    expect(fitsWorkFolderName(`${stem}.zip`)).toBe(true);
+    expect(workFolderSaveName(`${stem}.zip`, 'fallback.glb', 'glb')).toBe(`${stem}.glb`);
+  });
+
+  it('accepts exactly the extensions Rust does (work_folder.rs safe_name)', () => {
+    const rust = readFileSync(
+      path.resolve(__dirname, '../../src-tauri/src/work_folder.rs'),
+      'utf8',
+    );
+    const at = rust.indexOf('fn safe_name(');
+    expect(at).toBeGreaterThan(-1);
+    const body = rust.slice(at, rust.indexOf('\n}\n', at));
+    const rustExts = [...body.matchAll(/ends_with\("\.([a-z0-9]+)"\)/g)].map((m) => m[1]).sort();
+    expect(rustExts).toEqual(['glb', 'js', 'zip']);
+    // The TS side's own list, through the one function that reads it.
+    for (const ext of rustExts) expect(stripShaderExt(`a.${ext}`), ext).toBe('a');
+    expect(stripShaderExt('a.gltf')).toBe('a.gltf');
   });
 });

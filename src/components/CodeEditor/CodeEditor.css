@@ -62,10 +62,9 @@
      the actions row's, so the tabs get it too.
 
      Bar height = 4 + --ctl-size (28) + 4 + the 1px bottom border = 37px, and
-     TWO other numbers are derived from that 37 and must move with it:
+     ONE other number is derived from that 37 and must move with it:
      SplitPane's CROSS_MIN_PANE_PX (the collapsed-code floor, 37 + a small
-     margin) and controls.css's --fs-tabbar-h, which is what makes the resize
-     grip's bottom edge land exactly on this bar's bottom edge. */
+     margin). */
   padding: 4px var(--space-2);
   background: var(--bg-surface);
   flex-shrink: 0;

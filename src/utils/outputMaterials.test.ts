@@ -560,7 +560,7 @@ describe('outputDefaultContributes / dormantIndicesForPreview (the context rules
     // very model that is loading.
     expect(
       dormantIndicesForPreview(mats(['Body']), {
-        meshNames: [], inventoryKnown: false, defaultContributes: true,
+        meshNames: [], inventoryKnown: false, defaultContributes: true, indexSectionsAwake: true,
       }),
     ).toEqual(new Set());
   });
@@ -568,7 +568,7 @@ describe('outputDefaultContributes / dormantIndicesForPreview (the context rules
   it("mirrors the 0.6 single-mesh fallback: parts-only + one mesh keeps the FIRST named material visible", () => {
     // That material is actively SHADING the screen — hiding it behind a
     // "for another model" chip would be a lie.
-    const opts = { meshNames: [] as string[], inventoryKnown: true, defaultContributes: false };
+    const opts = { meshNames: [] as string[], inventoryKnown: true, defaultContributes: false, indexSectionsAwake: true };
     expect(dormantIndicesForPreview(mats(['Body'], ['Glass']), opts)).toEqual(new Set([2]));
     // A contributing default disarms the loader fallback, so both sleep.
     expect(

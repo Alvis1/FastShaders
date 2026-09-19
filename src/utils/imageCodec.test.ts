@@ -4,6 +4,8 @@ import {
   base64CharsForBytes,
   chooseFormat,
   clampPotCap,
+  encodeDimCap,
+  hugeSourceDecodeSize,
   isLosslessWebpBytes,
   potAxis,
   potFloorAxis,
@@ -331,5 +333,109 @@ describe('resolutionLadder', () => {
   it('never repeats a size', () => {
     const steps = resolutionLadder(1920, 1080, 2048);
     expect(new Set(steps.map((s) => s.key)).size).toBe(steps.length);
+  });
+});
+
+describe('chooseFormat — losslessOnly (the GLB import\'s data maps)', () => {
+  const CAPS: EncodeCaps[] = [
+    { webp: true, webpLossless: true },
+    { webp: true, webpLossless: false },
+    { webp: false, webpLossless: false },
+    { webp: false, webpLossless: true },
+  ];
+  const combos = () => {
+    const out: { caps: EncodeCaps; alpha: boolean; preferLossless: boolean; allowWebp?: boolean }[] = [];
+    for (const caps of CAPS) {
+      for (const alpha of [false, true]) {
+        for (const preferLossless of [false, true]) {
+          for (const allowWebp of [undefined, true, false]) out.push({ caps, alpha, preferLossless, allowWebp });
+        }
+      }
+    }
+    return out;
+  };
+
+  it('never returns a lossy candidate, never an empty list, never JPEG', () => {
+    for (const { caps, ...o } of combos()) {
+      const list = chooseFormat(caps, { ...o, losslessOnly: true });
+      const label = JSON.stringify({ caps, o });
+      expect(list.length, label).toBeGreaterThan(0);
+      expect(list.every((c) => c.lossless), label).toBe(true);
+      expect(list.some((c) => c.mime === 'image/jpeg'), label).toBe(false);
+      expect(list.some((c) => c.mime === 'image/png'), label).toBe(true);
+    }
+  });
+
+  it('is the preferLossless list with its lossy tail filtered out', () => {
+    for (const { caps, preferLossless: _p, ...o } of combos()) {
+      void _p;
+      const full = chooseFormat(caps, { ...o, preferLossless: true });
+      expect(chooseFormat(caps, { ...o, preferLossless: false, losslessOnly: true })).toEqual(full.filter((c) => c.lossless));
+    }
+  });
+
+  it('absent, false or junk changes nothing — every drop keeps its list', () => {
+    for (const { caps, ...o } of combos()) {
+      const base = chooseFormat(caps, o);
+      for (const lo of [false, undefined, 1, 'true', null] as unknown[]) {
+        expect(chooseFormat(caps, { ...o, losslessOnly: lo as boolean })).toEqual(base);
+      }
+    }
+  });
+});
+
+describe('encodeDimCap — the slot size on top of the device cap', () => {
+  it('lowers the cap to a real maxDim, floored', () => {
+    expect(encodeDimCap(1024, 512)).toBe(512);
+    expect(encodeDimCap(1024, 512.9)).toBe(512);
+    expect(encodeDimCap(2048, 1024)).toBe(1024);
+  });
+
+  it('never RAISES the cap', () => {
+    expect(encodeDimCap(1024, 4096)).toBe(1024);
+    expect(encodeDimCap(256, 1024)).toBe(256);
+  });
+
+  it('ignores anything that is not a finite number of at least 1', () => {
+    for (const junk of [undefined, null, NaN, Infinity, -Infinity, 0, -5, 0.5, '512', {}, [], true]) {
+      expect(encodeDimCap(1024, junk), String(junk)).toBe(1024);
+    }
+  });
+});
+
+describe('hugeSourceDecodeSize — the decode-time downscale (N10)', () => {
+  const MAX = 64_000_000;
+
+  it('fits the long side to the cap and keeps the aspect ratio', () => {
+    expect(hugeSourceDecodeSize({ width: 9000, height: 9000 }, 1024, MAX)).toEqual({ width: 1024, height: 1024 });
+    expect(hugeSourceDecodeSize({ width: 12000, height: 6000 }, 1024, MAX)).toEqual({ width: 1024, height: 512 });
+    expect(hugeSourceDecodeSize({ width: 8193, height: 8193 }, 2048, MAX)).toEqual({ width: 2048, height: 2048 });
+  });
+
+  it('never goes below 1 px on an extreme aspect', () => {
+    expect(hugeSourceDecodeSize({ width: 70_000_000, height: 1 }, 1024, MAX)).toEqual({ width: 1024, height: 1 });
+    expect(hugeSourceDecodeSize({ width: 1, height: 70_000_000 }, 1024, MAX)).toEqual({ width: 1, height: 1024 });
+  });
+
+  it('is null at or under the pixel guard — the ordinary decode applies', () => {
+    expect(hugeSourceDecodeSize({ width: 8000, height: 8000 }, 1024, MAX)).toBeNull();
+    expect(hugeSourceDecodeSize({ width: 1920, height: 1080 }, 1024, MAX)).toBeNull();
+  });
+
+  it('is null for header dimensions that are not positive safe integers', () => {
+    for (const dims of [
+      undefined, null, 5, 'x', [], {},
+      { width: 9000 }, { height: 9000 },
+      { width: 0, height: 9000 }, { width: -9000, height: -9000 },
+      { width: 1.5, height: 9e7 }, { width: '9000', height: 9000 },
+      { width: NaN, height: 9e7 }, { width: Infinity, height: 9000 },
+      { width: 1e20, height: 1e20 },
+    ]) {
+      expect(hugeSourceDecodeSize(dims, 1024, MAX), JSON.stringify(dims)).toBeNull();
+    }
+  });
+
+  it('a junk cap degrades to 1 px rather than NaN', () => {
+    expect(hugeSourceDecodeSize({ width: 9000, height: 9000 }, NaN, MAX)).toEqual({ width: 1, height: 1 });
   });
 });

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { SplitPane } from './SplitPane';
+import { SplitPane, clampPreviewSplit } from './SplitPane';
 import { Toolbar } from './Toolbar';
 import { NodeEditor } from '@/components/NodeEditor/NodeEditor';
 import { ShaderPreview } from '@/components/Preview/ShaderPreview';
@@ -88,9 +88,9 @@ export function AppLayout() {
       <SplitPane
         ratio={splitRatio}
         onRatioChange={setSplitRatio}
-        // One corner control for the whole layout: this seam's grip anchors at
-        // the code/preview seam's height and drags BOTH splits (Shift locks to
-        // an axis) — which is why the inner splitter below renders no grip.
+        // The corner: where this seam meets the preview/code seam a press
+        // drags BOTH splits (Shift locks to an axis) — SplitPane's corner zone.
+        // Everywhere else on the line it moves this seam alone.
         crossRatio={rightSplitRatio}
         onCrossRatioChange={setRightSplitRatio}
         left={
@@ -109,9 +109,9 @@ export function AppLayout() {
               // the one-time migration off the old code-on-top meaning).
               ratio={rightSplitRatio}
               onRatioChange={setRightSplitRatio}
-              // No grip of its own: this seam is dragged (vertically) by the
-              // corner grip on the column seam to the left.
-              grip={false}
+              // The same bounds the corner zone applies to this ratio, so the
+              // seam stops in the same place whichever hand moves it.
+              clamp={clampPreviewSplit}
               left={
                 <div className="app-layout__preview">
                   <ShaderPreview />

@@ -118,6 +118,18 @@ describe('fs:highlight-mesh (parent → sandbox)', () => {
     expect(code).not.toMatch(/(prev|saved|stashed)Material/i);
   });
 
+  it('takes a LIST of names (an index section\'s meshes) as well as one, and matches by own property', () => {
+    const html = tslToPreviewHTML(TSL, { geometry: 'custom', customModel });
+    const block = html.slice(html.indexOf('__fsMeshKey'));
+    expect(block).toContain('highlight(Array.isArray(msg.names) && msg.names.length ? msg.names : msg.name);');
+    expect(block).toContain('var raw = Array.isArray(target) ? target : [target];');
+    expect(block).toContain('k < raw.length && k < 256');
+    // A name out of the file is looked up as an OWN property, never through
+    // the prototype (`constructor`, `__proto__`).
+    expect(block).toContain('Object.prototype.hasOwnProperty.call(wanted, list[i].name)');
+    expect(block).not.toContain('wanted[list[i].name]');
+  });
+
   it('flags the highlight material so the loader cannot adopt it as an original', () => {
     const html = tslToPreviewHTML(TSL, { geometry: 'custom', customModel });
     expect(html).toContain('hlMat.userData.__fsHighlight = true;');
@@ -134,7 +146,7 @@ describe('fs:highlight-mesh (parent → sandbox)', () => {
     // Hovering row after row must not leave earlier rows lit.
     const html = tslToPreviewHTML(TSL, { geometry: 'custom', customModel });
     const block = html.slice(html.indexOf('__fsMeshKey'));
-    const fn = block.slice(block.indexOf('function highlight(name)'));
+    const fn = block.slice(block.indexOf('function highlight(target)'));
     expect(fn.slice(0, 200)).toContain('clearHighlight();');
   });
 });

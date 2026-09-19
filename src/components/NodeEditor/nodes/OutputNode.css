@@ -124,6 +124,18 @@
   position: relative;
 }
 
+/* The DEFAULT section while the sections below cover every mesh of the model on
+   screen (`defaultSectionUnused`): its channels change nothing, which is what
+   made an import-built node read as a second, dead Output. Only the CHANNEL
+   ROWS dim — the mesh picker keeps its own (equal) dim and its explanation, and
+   the section's preview socket stays at full strength because it is the node's
+   activation control, not part of the fallback. Nothing is hidden and nothing
+   is disabled: the block is the fallback for a mesh whose material has no
+   section, and for the next model loaded. */
+.output-node__material--unused .output-node__section {
+  opacity: 0.55;
+}
+
 /* The mesh a material shades: its picker, plus (added materials only) the
    control to drop it. It OPENS every material block — under the header for
    material 0, under the divider for the rest — so the mesh is always the first
@@ -173,6 +185,20 @@
   border-color: var(--cat-output);
   color: rgba(var(--node-ink-rgb), 0.85);
   background: rgba(var(--node-ink-rgb), 0.04);
+}
+
+/* A cap announces itself instead of making the button vanish: at the section
+   cap, or with every mesh already claimed, "+ Add output" stays drawn, dimmed,
+   with the reason in its title. `aria-disabled`, never `disabled` — WebKit
+   drops the native title of a genuinely disabled control, and the reason is
+   the only thing this state has to say. */
+.output-node__add--disabled,
+.output-node__add--disabled:hover {
+  opacity: 0.45;
+  cursor: default;
+  border-color: var(--border-subtle);
+  color: rgba(var(--node-ink-rgb), 0.55);
+  background: transparent;
 }
 
 .output-node__title {

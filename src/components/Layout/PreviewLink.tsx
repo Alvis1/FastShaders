@@ -133,7 +133,7 @@ export const PreviewLink = memo(function PreviewLink() {
       const svg = svgRef.current;
       if (!svg) return;
 
-      // Freeze while a splitter / asset-bar grip drag is in flight. The
+      // Freeze while a splitter / asset-bar seam drag is in flight. The
       // getBoundingClientRect calls below force a SYNCHRONOUS layout, and a
       // resize gesture has already dirtied the document — so this tick would
       // pay for a full layout on every frame of every drag. The wire is

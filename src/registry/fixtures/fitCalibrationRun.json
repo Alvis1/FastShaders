@@ -1,0 +1,254 @@
+{
+ "metadata": {
+  "schemaVersion": 2,
+  "bench": "microplane",
+  "gpu": "synthetic / fixture-gpu",
+  "timingMethod": "gpu-timestamp",
+  "valid": false,
+  "reasons": [
+   "synthetic fixture: not a device run",
+   "second reason line"
+  ],
+  "resolution": {
+   "width": 1024,
+   "height": 1024
+  },
+  "date": "2026-09-12T00:00:00.000Z"
+ },
+ "shaders": [
+  {
+   "id": "ref_baseline",
+   "stats": {
+    "medianFt": 0.5,
+    "msPerPass": 0.5
+   }
+  },
+  {
+   "id": "noise_perlin",
+   "stats": {
+    "marginalMsAtRef": 2.28,
+    "marginalPoints": 27
+   }
+  },
+  {
+   "id": "calib_scaffold_x1",
+   "stats": {
+    "marginalMsAtRef": 0.012
+   }
+  },
+  {
+   "id": "calib_scaffold_x4",
+   "stats": {
+    "marginalMsAtRef": 0.042
+   }
+  },
+  {
+   "id": "calib_scaffold_x16",
+   "stats": {
+    "marginalMsAtRef": 0.162
+   }
+  },
+  {
+   "id": "calib_mul_x1",
+   "stats": {
+    "marginalMsAtRef": 0.035
+   }
+  },
+  {
+   "id": "calib_mul_x4",
+   "stats": {
+    "marginalMsAtRef": 0.125
+   }
+  },
+  {
+   "id": "calib_mul_x16",
+   "stats": {
+    "marginalMsAtRef": 0.485
+   }
+  },
+  {
+   "id": "calib_sin_x1",
+   "stats": {
+    "marginalMsAtRef": 0.21
+   }
+  },
+  {
+   "id": "calib_sin_x4",
+   "stats": {
+    "marginalMsAtRef": 0.81
+   }
+  },
+  {
+   "id": "calib_sin_x16",
+   "stats": {
+    "marginalMsAtRef": 3.21
+   }
+  },
+  {
+   "id": "calib_perlin_x1",
+   "stats": {
+    "marginalMsAtRef": 2.4
+   }
+  },
+  {
+   "id": "calib_perlin_x4",
+   "stats": {
+    "marginalMsAtRef": 9.3
+   }
+  },
+  {
+   "id": "calib_perlin_x16",
+   "stats": {
+    "marginalMsAtRef": 36.9
+   }
+  },
+  {
+   "id": "calib_voronoi_x1",
+   "stats": {
+    "marginalMsAtRef": 10.2
+   }
+  },
+  {
+   "id": "calib_voronoi_x4",
+   "stats": {
+    "marginalMsAtRef": 40.2
+   }
+  },
+  {
+   "id": "calib_voronoi_x16",
+   "stats": {
+    "marginalMsAtRef": 160.2
+   }
+  },
+  {
+   "id": "calib_pow_x1",
+   "stats": {
+    "marginalMsAtRef": 0.52
+   }
+  },
+  {
+   "id": "calib_pow_x4",
+   "stats": {
+    "marginalMsAtRef": 2.02
+   }
+  },
+  {
+   "id": "calib_pow_x16",
+   "stats": {
+    "marginalMsAtRef": 8.02
+   }
+  },
+  {
+   "id": "calib_exp_x1",
+   "stats": {
+    "marginalMs": 0.007
+   }
+  },
+  {
+   "id": "calib_exp_x4",
+   "stats": {
+    "marginalMs": 0.019
+   }
+  },
+  {
+   "id": "calib_exp_x16",
+   "stats": {
+    "marginalMs": 0.067
+   }
+  },
+  {
+   "id": "calib_div_x1",
+   "stats": {
+    "medianFt": 0.124
+   }
+  },
+  {
+   "id": "calib_div_x4",
+   "stats": {
+    "medianFt": 0.484
+   }
+  },
+  {
+   "id": "calib_div_x16",
+   "stats": {
+    "medianFt": 1.924
+   }
+  },
+  {
+   "id": "calib_sqrt_x1",
+   "stats": {
+    "marginalMsAtRef": 0.3
+   }
+  },
+  {
+   "id": "calib_sqrt_x4",
+   "stats": {
+    "marginalMsAtRef": 0.35
+   }
+  },
+  {
+   "id": "calib_sqrt_x16",
+   "stats": {
+    "marginalMsAtRef": 4.8
+   }
+  },
+  {
+   "id": "calib_normalize_x1",
+   "stats": {
+    "marginalMsAtRef": 0.09
+   }
+  },
+  {
+   "id": "calib_normalize_x4",
+   "stats": {}
+  },
+  {
+   "id": "calib_normalize_x16",
+   "stats": {
+    "marginalMsAtRef": 1.29
+   }
+  },
+  {
+   "id": "calib_dot_x4",
+   "stats": {
+    "marginalMsAtRef": 0.2
+   }
+  },
+  {
+   "id": "combo_sin4_sqrt4",
+   "stats": {
+    "marginalMsAtRef": 2.15
+   }
+  },
+  {
+   "id": "combo_perlin4_voronoi4",
+   "stats": {
+    "marginalMsAtRef": 30
+   }
+  },
+  {
+   "id": "combo_sqrt_parallel8",
+   "stats": {
+    "marginalMsAtRef": 1.6
+   }
+  },
+  {
+   "id": "combo_sqrt_chain8",
+   "stats": {
+    "marginalMsAtRef": 2.4
+   }
+  },
+  {
+   "id": "combo_dce_dropped",
+   "stats": {
+    "marginalMsAtRef": 0.01
+   }
+  },
+  {
+   "id": "combo_dce_kept",
+   "stats": {
+    "marginalMsAtRef": 1.5
+   }
+  }
+ ]
+}

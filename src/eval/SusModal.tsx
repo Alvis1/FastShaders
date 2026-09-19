@@ -33,7 +33,9 @@ import { PRO_ITEMS, buildProRecord, proComplete, type ProAnswers } from './proQu
 import { collectDevice, costTableProvenance } from './evalContext';
 import { capturePreviewShot } from './previewShot';
 import { buildEvalPackageEntries, evalZipFileName } from './evalPackage';
-import { EVAL_UPLOAD_URL, uploadEvalPackage, type EvalUploadResult } from './evalUpload';
+import { precheckEvalUpload, uploadEvalPackage, type EvalUploadResult } from './evalUpload';
+import { formatMiB } from '@/utils/formatSize';
+import { fillTemplate } from '@/utils/fillTemplate';
 import {
   SUS_ANCHOR_HIGH_EN,
   SUS_ANCHOR_HIGH_LV,
@@ -56,11 +58,11 @@ import './eval.css';
  * (no pre-debrief anchoring).
  *
  * Submit is the session's end: telemetry stops, the package zip (SUS +
- * telemetry + the shader + session metadata) downloads, and a prefilled
- * mailto opens — `mailto:` cannot carry attachments and the CSP blocks
- * uploads, so the mail body carries the headline numbers and asks the
- * participant to attach the just-downloaded file. The researcher can always
- * collect the downloaded zip from the machine instead.
+ * telemetry + the shader + session metadata) downloads, the package is
+ * uploaded to the study server (evalUpload.ts says from which hosts that
+ * works), and the thank-you screen OFFERS a prefilled mailto — `mailto:`
+ * cannot carry attachments, so the body names the downloaded file. The
+ * researcher can always collect the downloaded zip from the machine instead.
  *
  * Cancel (Close/Escape/backdrop) returns to the session — nothing ends until
  * Submit.
@@ -76,7 +78,7 @@ interface DoneState {
   zipBytes: Uint8Array;
   mailto: string;
   failedChecks: QualityCheck[];
-  /** Delivery option B: 'pending' while in flight; 'disabled' = not configured. */
+  /** Delivery option B: 'pending' while in flight; 'disabled' = not configured; 'too-large' = over MAX_UPLOAD_BYTES, never sent (the size shown is zipBytes.length). */
   upload: EvalUploadResult | 'pending';
 }
 
@@ -270,16 +272,18 @@ export function SusModal({ open, onClose }: Props) {
     // Delivery option B (fire-and-forget): the download above already happened
     // — the upload is IN ADDITION, and every failure mode degrades to the
     // attach-it-yourself instructions the thank-you screen shows anyway. The
-    // disabled state is decided synchronously so "Sending…" never flashes on
-    // the default (no-endpoint) configuration.
+    // disabled and too-large states are decided synchronously
+    // (precheckEvalUpload), so "Uploading…" never flashes for a package that
+    // is not going to be sent.
+    const precheck = precheckEvalUpload(zipBytes.length);
     setDone({
       fileName,
       zipBytes,
       mailto,
       failedChecks: quality.filter((q) => !q.ok),
-      upload: EVAL_UPLOAD_URL ? 'pending' : 'disabled',
+      upload: precheck ?? 'pending',
     });
-    if (EVAL_UPLOAD_URL) {
+    if (precheck === null) {
       void uploadEvalPackage(fileName, zipBytes).then((result) => {
         setDone((d) => (d && d.fileName === fileName ? { ...d, upload: result } : d));
       });
@@ -297,6 +301,7 @@ export function SusModal({ open, onClose }: Props) {
   if (!open) return null;
 
   if (done) {
+    const uploadWarn = done.upload === 'failed' || done.upload === 'too-large';
     return createPortal(
       <div className="csv-import-modal__backdrop" onClick={onClose}>
         <div
@@ -327,13 +332,19 @@ export function SusModal({ open, onClose }: Props) {
           ) : done.upload === 'pending' ? (
             <div className="csv-import-modal__message">{t('Uploading…', language)}</div>
           ) : (
-            // The automatic transfer is the only step that can fail silently
-            // (offline room, server down), so it says so plainly and points at
-            // the copy that always exists: the file downloaded at submit. The
+            // The automatic transfer is the only step that can fail (offline
+            // room, no endpoint on this host, server down, or a package over
+            // the server's cap), so it says so plainly and points at the copy
+            // that always exists: the file downloaded at submit. The
             // no-endpoint configuration lands here too, minus the failure line.
             <>
-              <div className={done.upload === 'failed' ? 'eval-done__warn' : 'csv-import-modal__message'}>
+              <div className={uploadWarn ? 'eval-done__warn' : 'csv-import-modal__message'}>
                 {done.upload === 'failed' && <>{t('Upload failed.', language)} </>}
+                {done.upload === 'too-large' && (
+                  <>
+                    {fillTemplate(t('The file is too large for the study server ({size} MB; it accepts up to 64 MB).', language), { size: formatMiB(done.zipBytes.length, language, 'up') })}{' '}
+                  </>
+                )}
                 {t('Give the file to the researcher: it is in your Downloads folder, and “Download” saves another copy.', language)}
               </div>
               <div className="csv-import-modal__message">
@@ -345,7 +356,7 @@ export function SusModal({ open, onClose }: Props) {
             <button
               type="button"
               className={`csv-import-modal__button${
-                done.upload === 'failed' ? ' csv-import-modal__button--yes' : ''
+                uploadWarn ? ' csv-import-modal__button--yes' : ''
               }`}
               onClick={() => downloadBytes(done.fileName, done.zipBytes)}
             >

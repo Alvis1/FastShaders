@@ -43,6 +43,7 @@
 
 import { validImageDataUrl, HARD_MAX_IMAGE_ENCODED_CHARS, MAX_IMAGE_ENCODED_CHARS } from './imageNode';
 import { openDb as openDbShared, idbWrite, idbGet } from './idbSafe';
+import { PLATFORM_CAPS } from './platformCaps';
 
 const DB_NAME = 'fastshaders-images';
 const DB_VERSION = 1;
@@ -54,9 +55,16 @@ const STORE = 'imageOrigins';
  *  the bound (headroom to 40 before the bytes could). The byte cap stays as a
  *  guard against records this module did not write — a foreign, older or
  *  tampered record on this origin may carry up to the 8 M hard ceiling
- *  `recordToPayload` tolerates on read. */
-const MAX_RECORDS = 32;
-const MAX_STORE_CHARS = 24 * 1024 * 1024;
+ *  `recordToPayload` tolerates on read.
+ *
+ *  Platform-sized (utils/platformCaps.ts): the numbers above are the web's.
+ *  On desktop each record may reach the 6M per-image cap, so there the BYTE
+ *  cap binds (~42 records at 256M chars) before the 64-record count does, and
+ *  the WKWebView/WebView2 IndexedDB quota at that size is unverified (an owner
+ *  check). A quota refusal still degrades to "Revert unavailable", never data
+ *  loss. `canStashPayload` already follows `MAX_IMAGE_ENCODED_CHARS`. */
+const MAX_RECORDS = PLATFORM_CAPS.originRecords;
+const MAX_STORE_CHARS = PLATFORM_CAPS.originStoreChars;
 
 /** Session mirror, so a revert still works in private mode / with IndexedDB
  *  unavailable — the realistic "undo the snap ten seconds later" case. */
@@ -207,8 +215,8 @@ export async function saveImageOrigin(rec: ImageOriginRecord): Promise<void> {
   if (!db) return;
   try {
     // Quota exceeded lands on the transaction's onerror/onabort — a payload
-    // that can't be cached must still leave the drop working, so `idbWrite`
-    // resolves on every outcome rather than reporting one.
+    // that can't be cached must still leave the drop working, so the outcome
+    // `idbWrite` reports is ignored here.
     await idbWrite(db, STORE, (store) => {
       store.put(rec);
       // LRU trim in the same transaction: read everything back, drop the

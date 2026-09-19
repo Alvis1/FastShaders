@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync, readdirSync } from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 
 /**
  * The shared A-Frame preview scripts have a SINGLE source of truth in the
@@ -9,7 +10,7 @@ import path from 'path';
  * (`ShaderCarousel/components/three`) at dev/build start.
  *
  * This suite fails on DRIFT — a consumer copy that differs from the source
- * (e.g. someone hand-edits `public/js/a-frame-shaderloader-0.6.js` instead of
+ * (e.g. someone hand-edits `public/js/a-frame-shaderloader-0.8.js` instead of
  * the submodule source). Fix drift by editing the submodule source and
  * re-running `vite` (dev or build), never by editing a copy.
  *
@@ -24,8 +25,20 @@ const SRC = path.join(ROOT, 'a-frame-shaderloader/js');
 
 const COPIES: Record<string, string[]> = {
   'a-frame-180-a-01.min.js': ['public/js', 'ShaderCarousel/components/three'],
-  'a-frame-shaderloader-0.6.js': ['public/js'],
+  // The loader every surface loads (src/shaderloaderHarness.ts reads this
+  // served copy; the check below is what keeps it the submodule's bytes).
+  'a-frame-shaderloader-0.8.js': ['public/js'],
   'aframe-orbit-controls.min.js': ['public/js'],
+  // The glTF decoders (Draco + meshopt for meshes, the Basis Universal
+  // transcoder for KTX2 textures) and the README carrying their licences. Their
+  // SOURCE is three itself — see the node_modules/three describe at the end of
+  // this file.
+  'decoders/draco_wasm_wrapper.js': ['public/js'],
+  'decoders/draco_decoder.wasm': ['public/js'],
+  'decoders/meshopt_decoder.module.js': ['public/js'],
+  'decoders/basis_transcoder.js': ['public/js'],
+  'decoders/basis_transcoder.wasm': ['public/js'],
+  'decoders/README.md': ['public/js'],
 };
 
 describe('vendored A-Frame scripts stay in sync with the submodule source', () => {
@@ -67,21 +80,33 @@ describe('vendored A-Frame scripts stay in sync with the submodule source', () =
       'functions; the submodule still ships it for its own demos.',
     // 51 KB of dist (17 KB gzipped) that nothing could ever load. Verified by
     // grep: same-origin loader resolution happens only in tslToPreviewHTML
-    // (LOADER_FILE = 0.6) and podest.html (0.6 hardcoded, twice). Shaders
-    // exported against 0.4/0.5 reference them on jsdelivr BY URL — i.e. from
-    // the SUBMODULE, which is why they must stay frozen there and why dropping
-    // the copies cannot break a single already-exported shader.
+    // (LOADER_FILE = 0.8) and podest.html (0.8 hardcoded, twice, pinned to
+    // LOADER_FILE by perMeshMaterials.test.ts). Shaders exported against
+    // 0.4/0.5/0.6 reference them on jsdelivr BY URL — i.e. from the SUBMODULE,
+    // which is why they must stay frozen there (frozenLoaders.test.ts pins
+    // their hashes) and why dropping the copies cannot break a single
+    // already-exported shader.
     'a-frame-shaderloader-0.4.js':
       'frozen for shaders exported before 0.5; they load it from the CDN, ' +
       'never from this app, so the vendored copy had no consumer.',
     'a-frame-shaderloader-0.5.js':
       'frozen for shaders exported before 0.6; same as 0.4 — CDN-only. ' +
       'Tests/index.html loads it from the submodule path, not public/js.',
+    'a-frame-shaderloader-0.6.js':
+      'frozen for shaders exported before 0.8; they load it from the CDN. ' +
+      'Every same-origin consumer (preview, XR popup, podest stage and VR ' +
+      'popup) moved to 0.8, so the copy has no consumer.',
   };
 
   it('lists every script the submodule ships — no unpoliced vendored file', () => {
     if (!existsSync(SRC)) return; // fresh clone without the submodule checked out
-    const shipped = readdirSync(SRC).filter((f) => f.endsWith('.js')).sort();
+    // decoders/ is counted WHOLE, not just its *.js: a .wasm or a README added
+    // there ships to public/js too, so it must be policed like a script.
+    const decodersDir = path.join(SRC, 'decoders');
+    const decoderFiles = existsSync(decodersDir)
+      ? readdirSync(decodersDir).map((f) => `decoders/${f}`)
+      : [];
+    const shipped = [...readdirSync(SRC).filter((f) => f.endsWith('.js')), ...decoderFiles].sort();
     const accounted = new Set([...Object.keys(COPIES), ...Object.keys(NOT_VENDORED)]);
     expect(
       shipped.filter((f) => !accounted.has(f)),
@@ -214,4 +239,69 @@ describe('ShaderCarousel three build stays in sync with node_modules/three', () 
       },
     );
   }
+});
+
+/**
+ * The glTF decoders are the one vendored family whose source of truth is not
+ * the submodule but THREE: `a-frame-shaderloader/js/decoders/` holds byte
+ * copies of `node_modules/three/examples/jsm/libs` (the glTF Draco build,
+ * meshopt, and the Basis Universal transcoder KTX2Loader runs), and loader 0.8
+ * installs them on every GLTFLoader. The first describe above pins the
+ * public/js copies to the submodule; this one pins the submodule to three, so a
+ * three bump FAILS until they are re-copied (or the drift is deliberately
+ * accepted) instead of shipping a decoder built for a different GLTFLoader —
+ * and for the basis pair, a transcoder built for a different KTX2Loader worker
+ * protocol, which would fail inside a Worker where nothing surfaces. The
+ * README's table is pinned too, so the provenance it states (and the licence it
+ * carries) cannot go stale beside the files.
+ *
+ * Skipped when node_modules/three or the submodule's decoders are absent (the
+ * srcMissing pattern above): nothing to compare, not a failure.
+ */
+describe('the glTF decoders are three\'s own files, byte for byte', () => {
+  const LIBS = path.join(ROOT, 'node_modules/three/examples/jsm/libs');
+  const DECODERS = path.join(SRC, 'decoders');
+  const FROM: Record<string, string> = {
+    'draco_wasm_wrapper.js': 'draco/gltf/draco_wasm_wrapper.js',
+    'draco_decoder.wasm': 'draco/gltf/draco_decoder.wasm',
+    'meshopt_decoder.module.js': 'meshopt_decoder.module.js',
+    'basis_transcoder.js': 'basis/basis_transcoder.js',
+    'basis_transcoder.wasm': 'basis/basis_transcoder.wasm',
+  };
+  const skip = !existsSync(LIBS) || !existsSync(DECODERS);
+
+  for (const [file, rel] of Object.entries(FROM)) {
+    it.skipIf(skip)(`js/decoders/${file} is node_modules/three/examples/jsm/libs/${rel}`, () => {
+      const src = path.join(LIBS, rel);
+      expect(existsSync(src), `three no longer ships ${rel} — re-check the decoder list`).toBe(true);
+      expect(
+        readFileSync(path.join(DECODERS, file)).equals(readFileSync(src)),
+        `drift: a-frame-shaderloader/js/decoders/${file} is not the installed three's ${rel}. ` +
+          'Re-copy it (and update js/decoders/README.md), then push the submodule and purge it on jsdelivr.',
+      ).toBe(true);
+    });
+  }
+
+  it.skipIf(skip)('holds exactly those files plus the README', () => {
+    expect(readdirSync(DECODERS).sort()).toEqual([...Object.keys(FROM), 'README.md'].sort());
+  });
+
+  it.skipIf(skip)('the README states the installed three, each file\'s size and sha256, and the Apache-2.0 text', () => {
+    const readme = readFileSync(path.join(DECODERS, 'README.md'), 'utf8');
+    const three = readFileSync(path.join(ROOT, 'node_modules/three/package.json'), 'utf8')
+      .match(/"version":\s*"([^"]+)"/)?.[1];
+    expect(three).toBeTruthy();
+    expect(readme).toContain(`three ${three}`);
+    for (const file of Object.keys(FROM)) {
+      const bytes = readFileSync(path.join(DECODERS, file));
+      const row = readme.split('\n').find((l) => l.startsWith(`| \`${file}\``));
+      expect(row, `README has no row for ${file}`).toBeTruthy();
+      expect(row).toContain(bytes.length.toLocaleString('en-US'));
+      expect(row).toContain(createHash('sha256').update(bytes).digest('hex'));
+    }
+    // The Draco licence must travel with the files, whole.
+    expect(readme).toContain('Apache License');
+    expect(readme).toContain('TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION');
+    expect(readme).toContain('END OF TERMS AND CONDITIONS');
+  });
 });

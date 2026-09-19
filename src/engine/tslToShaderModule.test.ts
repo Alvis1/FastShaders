@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { tslToShaderModule } from './tslToShaderModule';
+import { readFileSync } from 'node:fs';
+import { tslToShaderModule, LOADER_FILE } from './tslToShaderModule';
 import { graphToCode } from './graphToCode';
 import { makeNode, makeEdge } from '@/test-utils';
 import { buildShaderModule } from './tslCodeProcessor';
 import { scriptToTSL } from './scriptToTSL';
+import { glbModuleHeaderLines } from './glbUsage';
+import { ACTIVE_LOADERS, loaderAvailable, transformsOf } from '../shaderloaderHarness';
 
 /** graphToCode-style TSL: color + position + a wired discard. */
 const COLOR_POS_DISCARD = `import { Fn, mix, vec3, greaterThan, Discard } from 'three/tsl';
@@ -138,6 +141,141 @@ describe('preview ↔ export parity (single source of truth)', () => {
     const exportBody = lines.slice(i).join('\n');
     expect(exportBody).toBe(previewModule);
   });
+});
+
+describe('usage header: plain Three.js', () => {
+  // The header replaced an unqualified "also usable with Three.js" claim with
+  // the loader 0.8 core calls, and links the README section that spells them
+  // out. Its words are also read by the loaders' source scans
+  // (autoInjectTSLImports matches an UNANCHORED import brace, comments
+  // included; autoDetectSchema looks for params members), so the header may
+  // spell neither.
+  const README_RECIPE = 'https://github.com/Alvis1/FastShaders#using-the-shader-module-with-plain-threejs';
+  const withProp = `import { Fn, uniform, mul, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  const amount = uniform(2.5);
+  const mul1 = positionGeometry.mul(amount);
+
+  return mul1;
+});
+
+export default shader;
+`;
+  const cases: Array<[string, string]> = [
+    ['no properties', tslToShaderModule(COLOR_POS_DISCARD)],
+    ['a declared property', tslToShaderModule(withProp, undefined, [
+      { name: 'amount', type: 'float', defaultValue: 2.5 },
+    ])],
+  ];
+  for (const [label, out] of cases) {
+    const hdr = out.split('\n').filter((l) => l.startsWith('//')).join('\n');
+
+    it(`${label}: names the loader core calls and links the README recipe`, () => {
+      expect(out).not.toContain('Also usable directly with Three.js');
+      expect(hdr).toContain('FastShaders.use');
+      expect(hdr).toContain('FastShaders.apply');
+      expect(hdr).toContain('FastShaders.load');
+      expect(hdr).toContain(README_RECIPE);
+      // The two statements the loader switch made false must not come back:
+      // the module now imports THREE itself (C2) and every TSL function it
+      // calls (C3).
+      expect(hdr).not.toContain('globalThis.THREE');
+      expect(hdr).not.toMatch(/not in its import line/);
+    });
+
+    it(`${label}: the plain-three block names no loader FILE, so a bump never edits it`, () => {
+      const lines = hdr.split('\n');
+      const from = lines.findIndex((l) => l.includes('Plain Three.js r'));
+      const to = lines.findIndex((l) => l.includes(README_RECIPE));
+      const block = lines.slice(from, to + 1).join('\n');
+      expect(block).not.toContain('a-frame-shaderloader-');
+      expect(block).not.toContain(LOADER_FILE);
+      // …while the A-Frame setup lines above it DO carry the pinned loader.
+      expect(lines.slice(0, from).join('\n')).toContain(LOADER_FILE);
+      // A dead API never ships again: P3d's first draft wrote
+      // `apply(mesh, url, { THREE })`, which 0.8 does not define.
+      expect(block).not.toMatch(/\{\s*THREE\s*\}/);
+    });
+
+    it(`${label}: spells nothing the loader's source scans would act on`, () => {
+      expect(hdr).not.toMatch(/import\s*\{/);
+      expect(hdr).not.toMatch(/params\.\w/);
+      expect(hdr).not.toMatch(/\bconst\s+\w+\s*=\s*uniform\(/);
+      for (const bad of ['*/', 'FASTSHADERS_PROJECT_V1']) {
+        expect(hdr, `header contains ${bad}`).not.toContain(bad);
+      }
+      // The A-Frame setup lines above it legitimately name `<script>` tags, so
+      // the markup rule is scoped to the plain-three block itself.
+      const lines = hdr.split('\n');
+      const from = lines.findIndex((l) => l.includes('Plain Three.js r'));
+      const to = lines.findIndex((l) => l.includes(README_RECIPE));
+      expect(to - from).toBe(6);
+      expect(lines.slice(from, to + 1).join('\n')).not.toContain('</script');
+    });
+  }
+
+  it('the linked README section exists, so the header link cannot 404', () => {
+    const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+    // The WHOLE heading line, not a prefix: a suffix ("… Three.js r184")
+    // changes GitHub's anchor, so a substring match would stay green while
+    // every export header's link lands at the top of the README.
+    const heading = '## Using the shader module with plain Three.js';
+    expect(readme.split(/\r?\n/)).toContain(heading);
+    // GitHub's anchor, DERIVED from that heading (lower-cased, everything but
+    // letters/digits/spaces/hyphens dropped, spaces to hyphens) — never a
+    // second copy of the literal the link was built from.
+    const slug = heading
+      .slice(3)
+      .toLowerCase()
+      .replace(/[^a-z0-9 -]/g, '')
+      .replace(/ /g, '-');
+    expect(README_RECIPE.split('#')[1]).toBe(slug);
+    // README's own in-page link to the section must resolve to it too.
+    expect(readme).toContain(`](#${slug})`);
+  });
+});
+
+describe('usage header: GLB mode (opts.glbFile — the single-GLB export)', () => {
+  const plain = tslToShaderModule(COLOR_POS_DISCARD);
+  const glb = tslToShaderModule(COLOR_POS_DISCARD, undefined, undefined, undefined, { glbFile: 'my-shader.glb' });
+  const headerOf = (out: string) => {
+    const lines = out.split('\n');
+    let i = 0;
+    while (i < lines.length && lines[i].startsWith('//')) i++;
+    return { header: lines.slice(0, i), body: lines.slice(i).join('\n') };
+  };
+
+  it('the GLB block sits directly above the plain-three block, then one `//` separator', () => {
+    const { header } = headerOf(glb);
+    const block = glbModuleHeaderLines('my-shader.glb');
+    const from = header.indexOf(block[0]);
+    expect(from).toBeGreaterThan(0);
+    expect(header.slice(from, from + block.length)).toEqual(block);
+    expect(header[from + block.length]).toBe('//');
+    expect(header[from + block.length + 1]).toMatch(/^\/\/ Plain Three\.js r/);
+    expect(header[from - 1]).toBe('//');
+  });
+
+  it('the body after the header is byte-identical to the .js export, and the .js header is unchanged', () => {
+    expect(headerOf(glb).body).toBe(headerOf(plain).body);
+    const { header: h1 } = headerOf(plain);
+    const { header: h2 } = headerOf(glb);
+    expect(h2).toHaveLength(h1.length + glbModuleHeaderLines('x').length + 1);
+    expect(h2.filter((l) => !glbModuleHeaderLines('my-shader.glb').includes(l) || h1.includes(l))).toHaveLength(h1.length + 1);
+    // An empty opts object is the no-option output, byte for byte.
+    expect(tslToShaderModule(COLOR_POS_DISCARD, undefined, undefined, undefined, {})).toBe(plain);
+  });
+
+  for (const v of ACTIVE_LOADERS) {
+    it.skipIf(!loaderAvailable(v))(`loader ${v}: the GLB block injects no import and declares no property (comment-strip proof)`, () => {
+      const t = transformsOf(v);
+      const importLine = (s: string) => /^import \{[^}]*\} from 'three\/tsl';/m.exec(s)?.[0] ?? null;
+      expect(importLine(t.autoInjectTSLImports(glb))).toBe(importLine(t.autoInjectTSLImports(plain)));
+      expect(t.autoInjectTSLImports(glb)).not.toMatch(/\b(url|gltf|model|a)\b[^\n]*from 'three\/tsl'/);
+      expect(Object.keys(t.autoDetectSchema(glb))).toEqual(Object.keys(t.autoDetectSchema(plain)));
+    });
+  }
 });
 
 describe('round-trip: export → scriptToTSL recovers the original channels', () => {

@@ -6,8 +6,11 @@ import {
   materialTargetNames,
   materialExposedPorts,
   channelHandle,
-  MAX_PARTS,
+  planNamedParts,
+  planIndexParts,
+  readModelSignature,
 } from '@/utils/outputMaterials';
+import { moduleStringLiteral } from './partKeyLiteral';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { MODULE_HELPERS, MODULE_HELPER_NAMES, HELPER_OWNER_TYPES, helperNameFor, helperCallPorts } from './moduleHelpers';
@@ -26,7 +29,8 @@ import {
   soundVarBase,
 } from '@/utils/soundAnalysis';
 import type { SoundChannel } from '@/utils/soundAnalysis';
-import { imageAssetFor } from './imageAssets';
+import { createImageTexturePlanner, imageElementSetupLines, imageTextureSetupLines } from './imageTexturePlan';
+import { materialSettingProps } from './materialSettingsCode';
 // The `unknown`-node expression validator. Its own module because it is the
 // only thing in codegen that needs @babel/parser, which is loaded on demand
 // there rather than pinned into the boot payload — see that file.
@@ -34,6 +38,8 @@ import { isSafeUnknownExpression } from './unknownExpression';
 // Shape inference (1-4 channels) — the same authority the edge/preview layer
 // uses, so codegen and the UI agree on what counts as a scalar.
 import { getNodeOutputShape, portShapeForHandle } from './cpuEvaluator';
+import { IMAGE_CHANNEL_COMPONENTS, isImageChannelHandle } from '@/utils/imageChannels';
+import { readImageUvMapping, gltfUvMatrix } from '@/utils/imageUvMapping';
 import {
   minMax,
   normalize01,
@@ -285,46 +291,30 @@ function inEdge(gidx: GraphIndex, id: string, handle: string): AppEdge | undefin
   return inEdges(gidx, id).find((e) => e.targetHandle === handle);
 }
 
-// A mesh name as a JS string-literal key in the emitted `parts` object.
-//
-// `JSON.stringify` handles the quoting, the backslashes and the control
-// characters. The two extra escapes cover the contexts JSON does not know it
-// is being written into, and BOTH are load-bearing:
-//
-//  - The star-slash: the exported `.js` carries the FASTSHADERS_PROJECT_V1
-//    block as a BLOCK COMMENT, and other tooling wraps generated modules the
-//    same way, so a name containing a comment terminator would end that
-//    comment early. (Line comments here on purpose — the sequence being
-//    escaped cannot be written inside the block comment that describes it.)
-//
-//  - The less-than: the generated module is inlined INTO AN HTML `<script>`
-//    element by `tslToPreviewHTML` (`var __shaderCode = <json>`), and the HTML
-//    tokenizer ends that element at the first `</script...` in the raw text —
-//    it does not know or care that the sequence sits inside a JS string
-//    literal. A mesh name is attacker-chosen (it comes out of a dropped glTF,
-//    and out of the `meshTarget` a shared `.fastshader` carries), so a name
-//    spelling `x</script><img src=x onerror=…>` would close the script early
-//    and run as live markup. In the sandboxed preview that is contained by the
-//    opaque origin, but the XR popup is a TOP-LEVEL document at the app's real
-//    origin, where it would be arbitrary code with the user's storage.
-//    Escaping `<` alone is enough — every breakout sequence (`</script`,
-//    `<!--`, `<script`) starts with one.
-//
-// Both escapes keep the string's VALUE identical: `/` and `<` parse
-// back to `/` and `<`, so the emitted key still matches the mesh exactly.
-// (`tslToPreviewHTML` escapes the whole embedded module the same way — this is
-// the source-side half of a defence written at both ends, because the sink
-// protects every other string in the module and this protects the key wherever
-// else it is written.)
-//
-// Names reaching here have already passed `isUsableMeshName`, which is what
-// keeps `__proto__` and the invisible characters out; this is the encoding
-// step, not the validation step.
-function partKeyLiteral(name: string): string {
-  return JSON.stringify(name)
-    .replace(/\*\//g, '*\\u002F')
-    .replace(/</g, '\\u003C');
+/**
+ * Does any edge leave this Texture (Image) node from a CHANNEL socket
+ * (Alpha/R/G/B, utils/imageChannels.ts)? Then its sample is emitted WIDE
+ * (`.rgba`, a vec4) and every consumer reads a swizzle of it; otherwise it
+ * stays the `.rgb` vec3 it has always been, byte for byte.
+ *
+ * The ONE predicate: the image branch (which sample to emit) and
+ * resolveEdgeRef (which reference to hand out) both ask it, because two copies
+ * could disagree and emit `image1.a` on a vec3 — a vec3 has no `.w`, so the
+ * whole module fails to compile. Reads the UNWRAPPED edges this pass indexed,
+ * so a channel edge crossing a collapsed frame still counts. `out`, a null
+ * handle and every tampered id are not channels, so they never switch modes.
+ */
+function imageSampleIsWide(gidx: GraphIndex, id: string): boolean {
+  for (const e of outEdges(gidx, id)) if (isImageChannelHandle(e.sourceHandle)) return true;
+  return false;
 }
+
+// A mesh name (and a signature name) as a JS string literal safe inside a
+// block comment and an inline <script>: THE encoder (rule R5) now lives in the
+// partKeyLiteral.ts leaf, shared with the module layer and the lazy
+// scriptToTSL chunk, where its full reasoning is written down. Aliased so
+// every call site below reads exactly as before.
+const partKeyLiteral = moduleStringLiteral;
 
 export function graphToCode(
   nodes: AppNode[],
@@ -672,6 +662,13 @@ export function graphToCode(
   // Module-scope setup emitted BEFORE the shader Fn — the Data/Stripes nodes
   // build their `THREE.DataTexture` lookups here (closed over by the Fn body).
   const setupLines: string[] = [];
+  // Image nodes share their module-scope Image element and Texture per
+  // payload x texture spec (engine/imageTexturePlan.ts). Owners are placed on
+  // their first EMITTED visit, so an owner is declared before any sharer reads
+  // it. The Set is also what stops a node planned into two march scopes from
+  // declaring its setup twice (a duplicate module-scope const).
+  const imagePlanner = createImageTexturePlanner();
+  const imageSetupEmitted = new Set<string>();
 
   // The march output and its per-step scopes: one line array per per-step
   // socket, each a function of ONE parameter (`p`, the ray position, or
@@ -827,22 +824,66 @@ export function graphToCode(
       // under thousands of rows. Nothing is lost: image nodes are already
       // one-way through codeToGraph, so the payload here was never read back.
       //
+      // SHARING: nodes holding the same payload (the exact re-encoded `src`,
+      // never the FNV hash) share ONE Image element, declared by the first
+      // node emitted with it; only that owner's placeholder appears in the
+      // code. Those with the same texture-object spec as well (colour space,
+      // filter, wrap, flipY) sample ONE texture; a node whose spec differs (a
+      // colour and a data map of one picture) builds its own Texture over
+      // that shared element, which is pixel-neutral. UV math
+      // (tile, offset, the Flip X/Y checkboxes, a wired uv or Direction) is
+      // per node, in the sample's uv expression, and never enters the key.
+      // The node's `flipY` value is one of those uv mirrors, not
+      // `Texture.flipY`. Points stay per node: each node is a real sample.
+      //
+      // CHANNEL SOCKETS (Alpha/R/G/B, utils/imageChannels.ts): ONE sample,
+      // swizzled at the consumer by resolveEdgeRef — the toHsl shape. Four
+      // `texture()` calls would be four fetches, since TSL never merges
+      // TextureNodes. While no channel socket is wired (imageSampleIsWide)
+      // this branch is byte-identical to what it emitted before the sockets
+      // existed: `.rgb`, and consumers read the bare variable. Once one is,
+      // the sample is `.rgba` and `out` reads its `.rgb`. It must stay the
+      // MEMBER form, never a bare `texture(...)` declarator: codeToGraph drops
+      // a call-object member with a warning, which keeps an Apply inert,
+      // whereas a bare call becomes an `unknown` node that re-emits
+      // `_imageN_tex` after the Apply dropped its declaration — a
+      // ReferenceError that kills the whole module. Channel sockets set
+      // nothing on the Texture OBJECT, so the planner's share key is unmoved.
+      //
+      // glTF MAPPING (utils/imageUvMapping.ts, the ONE reader; every key read
+      // EXACTLY, so an absent, junk or default key emits today's bytes). The
+      // ORIENTATION is the only one that lands on the Texture object — the
+      // spec's `flipY` — so it is the only one in the share key. The UV set
+      // (`uv(n)`), the KHR_texture_transform (applied FIRST, as one mat2 of
+      // precomputed constants plus an offset) and the glTF sense of the Flip
+      // X box are uv math here; the normal-map green flip is channel math in
+      // resolveOutputChannels. Order: base (wired uv ?? uv(n) ?? uv()) →
+      // transform → mirror → tile → offset; a wired Direction replaces all.
+      //
       // SECURITY: the stored payload is NEVER interpolated verbatim — the
-      // graph JSON is adversarial. imageAssetFor strict-validates it via
-      // decodeImageNode and re-encodes the emitted `data:` literal from the
-      // decoded bytes (canonical btoa alphabet, MIME from the regex whitelist
-      // capture); the placeholder and its trailing comment are built from a
+      // graph JSON is adversarial. imageAssetFor (called by the planner)
+      // strict-validates it via decodeImageNode and re-encodes the emitted
+      // `data:` literal from the decoded bytes (canonical btoa alphabet, MIME
+      // from the regex whitelist capture); the placeholder and its trailing comment are built from a
       // character whitelist. So no attacker-controlled character reaches this
       // module's source text on either path. Emitted as FLAT statements (never
       // an async IIFE — codeToGraph's ReturnStatement visitor would mistake its
       // `return` for the shader output).
       const nv = getNodeValues(node);
-      const asset = imageAssetFor(node.id, nv);
-      if (!asset) {
+      const wide = imageSampleIsWide(gidx, node.id);
+      const placed = imagePlanner.place(node.id, nv);
+      if (!placed) {
         // Inert fallback — consumers still reference this var, so it must
         // exist (a missing declaration would be a runtime ReferenceError).
-        addImport('three/tsl', 'vec3');
-        bodyLines.push(`  const ${varName} = vec3(0, 0, 0);`);
+        // WIDE, it has to carry `.a` too, and a vec3 cannot: GLSL rejects
+        // `vec3.w`. Alpha 1 matches the 1×1 fallback texture's opaque black.
+        if (wide) {
+          addImport('three/tsl', 'vec4');
+          bodyLines.push(`  const ${varName} = vec4(0, 0, 0, 1);`);
+        } else {
+          addImport('three/tsl', 'vec3');
+          bodyLines.push(`  const ${varName} = vec3(0, 0, 0);`);
+        }
       } else {
         addImport('three/tsl', 'texture');
         const uvEdge = inEdge(gidx, node.id, 'uv');
@@ -872,61 +913,71 @@ export function graphToCode(
           }
           return num(numVal(key, dflt));
         };
-        const mirrorX = numVal('flipX', 0) < 0.5;
+        const mapping = readImageUvMapping(nv);
+        const gltf = mapping.orientation === 'gltf';
+        // App orientation: the 1-u correction is baked in while Flip X is
+        // UNCHECKED. glTF orientation: the model's own UVs already match the
+        // (unflipped) file, so each ticked box mirrors — the >= 0.5 threshold
+        // the card's thumbnail uses on both axes.
+        const mirrorX = gltf ? numVal('flipX', 0) >= 0.5 : numVal('flipX', 0) < 0.5;
         const mirrorY = numVal('flipY', 0) >= 0.5;
         const tileX = paramExpr('tileX', 1);
         const tileY = paramExpr('tileY', 1);
         const offsetX = paramExpr('offsetX', 0);
         const offsetY = paramExpr('offsetY', 0);
-        const repeat = numVal('repeat', 1) >= 0.5;
-        let uvExpr = uvRef ?? 'uv()';
+        // A wired UV input wins over the UV set; the literal digit comes from
+        // the reader's closed 1..3 table, never from the stored value.
+        let uvExpr = uvRef ?? (mapping.uvSet > 0 ? `uv(${mapping.uvSet})` : 'uv()');
+        // Every step below that writes a `vec2(` sets this, so vec2 is
+        // imported exactly when used (a rotation-only transform needs only
+        // mat2). On the legacy path it is the old `uvExpr !== base` test.
+        let usesVec2 = false;
+        // glTF texture transform (KHR_texture_transform), applied FIRST — mesh
+        // UV → texture UV — so Flip/Tile/Offset below keep acting on the
+        // picture. Constants only (gltfUvMatrix, num()): nothing stored reaches
+        // the text. With ALL-NUMBER arguments TSL's mat2 builds a THREE.Matrix2,
+        // whose constructor is ROW-major, so the rows m00 m01 / m10 m11 go out
+        // in reading order (m00, m01, m10, m11). NODE arguments (RotateNode's)
+        // take the column-major JoinNode path instead — never pass one here.
+        if (mapping.transform) {
+          const m = gltfUvMatrix(mapping.transform);
+          if (m.m01 !== 0 || m.m10 !== 0) {
+            addImport('three/tsl', 'mat2');
+            uvExpr = `mat2(${num(m.m00)}, ${num(m.m01)}, ${num(m.m10)}, ${num(m.m11)}).mul(${uvExpr})`;
+          } else if (m.m00 !== 1 || m.m11 !== 1) {
+            uvExpr = `${uvExpr}.mul(vec2(${num(m.m00)}, ${num(m.m11)}))`;
+            usesVec2 = true;
+          }
+          if (m.tx !== 0 || m.ty !== 0) {
+            uvExpr = `${uvExpr}.add(vec2(${num(m.tx)}, ${num(m.ty)}))`;
+            usesVec2 = true;
+          }
+        }
         if (mirrorX || mirrorY) {
           uvExpr = `${uvExpr}.mul(vec2(${mirrorX ? -1 : 1}, ${mirrorY ? -1 : 1})).add(vec2(${mirrorX ? 1 : 0}, ${mirrorY ? 1 : 0}))`;
+          usesVec2 = true;
         }
-        if (tileX !== '1' || tileY !== '1') uvExpr = `${uvExpr}.mul(vec2(${tileX}, ${tileY}))`;
-        if (offsetX !== '0' || offsetY !== '0') uvExpr = `${uvExpr}.add(vec2(${offsetX}, ${offsetY}))`;
-        if (uvExpr !== (uvRef ?? 'uv()')) addImport('three/tsl', 'vec2');
-        const isData = String(nv.colorSpace ?? 'color') === 'data';
-        // Filtering: 'nearest' takes the closest texel (hard pixel edges);
-        // anything else, absent included, is three's default LINEAR and emits
-        // nothing new, so every image saved before the option existed is
-        // byte-identical. An exact compare: the value comes out of a
-        // .fastshader and never reaches the emitted text.
-        const nearest = nv.filter === 'nearest';
-        const imgVar = `_${varName}_img`;
-        const okVar = `_${varName}_ok`;
-        const texVar = `_${varName}_tex`;
-        setupLines.push(`const ${imgVar} = new Image();`);
-        setupLines.push(`${imgVar}.src = "${asset.placeholder}"; ${asset.comment}`);
-        setupLines.push(`let ${okVar} = true;`);
-        setupLines.push(`try { await ${imgVar}.decode(); } catch { ${okVar} = false; }`);
-        setupLines.push(
-          `const ${texVar} = ${okVar} ? new globalThis.THREE.Texture(${imgVar}) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);`,
-        );
-        setupLines.push(`${texVar}.colorSpace = globalThis.THREE.${isData ? 'NoColorSpace' : 'SRGBColorSpace'};`);
-        if (isData) {
-          // Data maps (normal/height): linear values, no mip pre-filtering.
-          const filter = nearest ? 'NearestFilter' : 'LinearFilter';
-          setupLines.push(`${texVar}.generateMipmaps = false;`);
-          setupLines.push(`${texVar}.minFilter = globalThis.THREE.${filter};`);
-          setupLines.push(`${texVar}.magFilter = globalThis.THREE.${filter};`);
-        } else if (nearest) {
-          // A colour image keeps its mipmaps, so minification takes the
-          // nearest texel of the nearest mip level: crisp at every distance,
-          // without the shimmer plain nearest sampling of a far-away texture
-          // gives. Magnification is the pixel-art look itself.
-          setupLines.push(`${texVar}.minFilter = globalThis.THREE.NearestMipmapNearestFilter;`);
-          setupLines.push(`${texVar}.magFilter = globalThis.THREE.NearestFilter;`);
+        if (tileX !== '1' || tileY !== '1') {
+          uvExpr = `${uvExpr}.mul(vec2(${tileX}, ${tileY}))`;
+          usesVec2 = true;
         }
-        // Repeat (default) so tiling — via the settings above or the uv node's
-        // tilingU/tilingV — wraps instead of smearing the edge pixels; the
-        // settings menu can switch to clamp. flipY pinned explicitly so
-        // orientation never rides on a three.js default.
-        const wrapMode = repeat ? 'RepeatWrapping' : 'ClampToEdgeWrapping';
-        setupLines.push(`${texVar}.wrapS = globalThis.THREE.${wrapMode};`);
-        setupLines.push(`${texVar}.wrapT = globalThis.THREE.${wrapMode};`);
-        setupLines.push(`${texVar}.flipY = true;`);
-        setupLines.push(`${texVar}.needsUpdate = true;`);
+        if (offsetX !== '0' || offsetY !== '0') {
+          uvExpr = `${uvExpr}.add(vec2(${offsetX}, ${offsetY}))`;
+          usesVec2 = true;
+        }
+        if (usesVec2) addImport('three/tsl', 'vec2');
+        // The texture-OBJECT settings (colour space, filter, wrap, flipY) are
+        // the placement's spec (readImageTextureSpec, the ONE normaliser); the
+        // setup lines are built from it alone, in imageTexturePlan.ts.
+        const texVar = `_${varNames.get(placed.textureOwner)!}_tex`;
+        if (!imageSetupEmitted.has(node.id)) {
+          imageSetupEmitted.add(node.id);
+          const owner = varNames.get(placed.imageOwner)!;
+          const imgVar = `_${owner}_img`;
+          const okVar = `_${owner}_ok`;
+          if (placed.ownsImage) setupLines.push(...imageElementSetupLines(imgVar, okVar, placed.asset));
+          if (placed.ownsTexture) setupLines.push(...imageTextureSetupLines(texVar, imgVar, okVar, placed.spec));
+        }
         // A wired Direction samples the image as a SKY (equirect) and replaces
         // the UV path entirely — tile/offset/flip are UV notions.
         const dirEdge = inEdge(gidx, node.id, 'dir');
@@ -935,7 +986,7 @@ export function graphToCode(
           addImport('three/tsl', 'equirectUV');
           uvExpr = `equirectUV(${dirRef})`;
         }
-        bodyLines.push(`  const ${varName} = texture(${texVar}, ${uvExpr}).rgb;`);
+        bodyLines.push(`  const ${varName} = texture(${texVar}, ${uvExpr}).${wide ? 'rgba' : 'rgb'};`);
       }
     } else if (def.type === 'stripes') {
       // Data Stripes: density-modulated bars + sequential color ramp. Stripe
@@ -1921,7 +1972,7 @@ export function graphToCode(
    * Resolve one Output node into its channel expressions plus its discard
    * condition. Declared inside `graphToCode` so it closes over the whole
    * emission context (gidx, varNames, registry, addImport, resolveEdgeRef,
-   * shapeOfEdgeSource, imageAssetFor …) instead of threading a dozen
+   * shapeOfEdgeSource, imagePlanner …) instead of threading a dozen
    * parameters through — the body below is the block that used to run inline
    * for the single output, moved verbatim apart from returning its results.
    */
@@ -2030,7 +2081,17 @@ export function graphToCode(
             // Scoped to the alpha-bearing channels only (see the set above).
             addImport('three/tsl', 'vec3');
             channels[ch] = `vec3(${ref})`;
-          } else if (ch === 'normal' && sourceNode?.data.registryType === 'imageNode') {
+          } else if (
+            ch === 'normal' &&
+            sourceNode?.data.registryType === 'imageNode' &&
+            !isImageChannelHandle(edge.sourceHandle)
+          ) {
+            // Only the Color (`out`) socket carries a packed normal: a channel
+            // socket (Alpha/R/G/B) is a scalar and takes the plain path below,
+            // like any float source. In wide mode the ref is `imageN.rgb`, so
+            // this emits `normalMap(image1.rgb)` — the same value as the bare
+            // vec3 variable.
+            //
             // An image wired into Normal is a tangent-space normal MAP, not a raw
             // normal — its texels are packed unit vectors in [0,1]. Decode with
             // TSL's normalMap() node: it remaps [0,1]→[-1,1], applies the TBN
@@ -2040,7 +2101,18 @@ export function graphToCode(
             // LINEAR input, so the Image node is auto-switched to the 'data'
             // colorSpace when it is connected here (NodeEditor onConnect).
             addImport('three/tsl', 'normalMap');
-            channels[ch] = `normalMap(${ref})`;
+            // glTF on a primitive without TANGENT: GLTFLoader flips
+            // normalScale.y for the derivative tangent frame (GLTFLoader.js
+            // `normalScale.y *= - 1`). The importer records it as
+            // normalGreen:'flip'; NormalMapNode multiplies xy by this scale.
+            // Inside the channel-handle gate above, so a scalar socket is
+            // never decoded, flipped or not.
+            if (readImageUvMapping(getNodeValues(sourceNode)).normalGreenFlip) {
+              addImport('three/tsl', 'vec2');
+              channels[ch] = `normalMap(${ref}, vec2(1, -1))`;
+            } else {
+              channels[ch] = `normalMap(${ref})`;
+            }
           } else {
             channels[ch] = ref;
           }
@@ -2054,10 +2126,15 @@ export function graphToCode(
     // radiance + irradiance IBL, blurred by the roughness channel, reflectivity
     // from metalness). Handing it the image's `texture(tex, uv).rgb` sample
     // instead would bake one fixed texel as a flat ambient — so an image source
-    // is special-cased to reference its module-scope texture var. Guarded on
-    // imageAssetFor (memoized, same call the image branch made): the
+    // is special-cased to reference the texture its share group declared (for
+    // a sharer, ANOTHER node's var). Guarded on the planner having placed the
+    // node, i.e. on a texture var that was actually declared: the
     // invalid-payload fallback path emits NO texture var, and referencing it
-    // would be a ReferenceError that kills the whole module. Any other source
+    // would be a ReferenceError that kills the whole module. And guarded on the
+    // Color (`out`) socket: the texture OBJECT is what that socket means to
+    // Environment, while Alpha/R/G/B are scalars and take the ordinary path
+    // below (`imageN.a`, vec3-widened by its declared width) — otherwise an
+    // Alpha wire would silently become full-colour IBL. Any other source
     // is a legitimate envNode too — three uses the node directly, so e.g. a
     // Color node acts as a uniform ambient environment; non-3-channel shapes
     // are widened to vec3 like the alpha-bearing channels so the lighting
@@ -2071,14 +2148,13 @@ export function graphToCode(
     }
     if (envEdge) {
       const envSrc = gidx.nodeById.get(envEdge.source);
-      const envVar = envSrc ? varNames.get(envSrc.id) : undefined;
-      if (
-        envSrc?.data.registryType === 'imageNode' &&
-        envVar &&
-        imageAssetFor(envSrc.id, getNodeValues(envSrc))
-      ) {
+      const placedEnv =
+        envSrc?.data.registryType === 'imageNode' && !isImageChannelHandle(envEdge.sourceHandle)
+          ? imagePlanner.get(envSrc.id)
+          : undefined;
+      if (placedEnv) {
         addImport('three/tsl', 'texture');
-        channels.env = `texture(_${envVar}_tex)`;
+        channels.env = `texture(_${varNames.get(placedEnv.textureOwner)!}_tex)`;
       } else {
         const ref = resolveEdgeRef(envEdge, varNames, gidx);
         if (ref) {
@@ -2163,35 +2239,98 @@ export function graphToCode(
   // (the node UI writes them, codeToGraph mints them, and the store is mutable
   // from anywhere in the session).
   //
-  // FIRST CLAIM WINS for a duplicate name. The picker deliberately lets two
-  // materials name one mesh (so they can be swapped without deleting one), and
-  // a `parts` map has one slot per mesh — so the later one is shadowed here.
-  // The node marks that section, because a silently inert material is exactly
-  // the kind of thing nobody reports as a bug.
-  const parts: { name: string; channels: Record<string, string>; discardRef: string | null }[] = [];
+  // FIRST CLAIM WINS for a duplicate name, decided by `planNamedParts` — the
+  // ONE first-claim loop, shared with the node's shadowed mark so emission and
+  // the node cannot disagree. A duplicate arrives only from a hand-edited or
+  // foreign file (the picker MOVES a mesh), and a `parts` map has one slot per
+  // mesh — so the later one is shadowed here and the node marks that section,
+  // because a silently inert material is exactly the kind of thing nobody
+  // reports as a bug. The entry cap is `MAX_PART_ENTRIES`, every name the
+  // sanitizer can admit, so it never drops a mesh the node shows.
+  const parts: {
+    name: string;
+    channels: Record<string, string>;
+    discardRef: string | null;
+    /** The material's settings as loader-form entries (`side: 2`) — [] for none. */
+    settings: string[];
+  }[] = [];
   if (outputNode) {
-    const claimed = new Set<string>();
     const materials = outputMaterials(outputNode);
-    for (let i = 0; i < materials.length; i++) {
-      const names = materialTargetNames(materials[i]);
-      if (names.length === 0) continue;
-      // Resolved ONCE per material, not once per mesh: the channels are the
-      // material's, so N meshes emit N entries pointing at the same expressions.
-      let resolved: { channels: Record<string, string>; discardRef: string | null } | null = null;
-      for (const name of names) {
-        if (claimed.has(name) || parts.length >= MAX_PARTS) continue;
-        claimed.add(name);
-        resolved ??= resolveOutputChannels(outputNode, i);
-        parts.push({ name, ...resolved });
+    // Resolved ONCE per material, not once per mesh: the channels are the
+    // material's, so N meshes emit N entries pointing at the same expressions.
+    // A section that emits no entry is never resolved (its imports never land),
+    // and sections resolve in section order, so the import order is unchanged.
+    //
+    // Its Transparent / Side / Alpha clip / Depth write ride the same body,
+    // AFTER the channels and the discard key, in the LOADER's spelling
+    // (`side: 2`), so the code panel, the module and a bare-script import
+    // speak one vocabulary; the loader (0.6 and 0.8) applies all four per
+    // part. Resolved here with the channels, so N meshes carry N byte-identical
+    // bodies — which the parse's merge relies on. Index 0 is the node-level
+    // settings, so a TARGETED material 0 carries its own into its part. And
+    // `materialSettingProps` is the security gate: the restore paths only
+    // check that `materialSettings` is an object. Settings that emit nothing
+    // leave the body exactly as it was.
+    const bySection = new Map<number, {
+      channels: Record<string, string>;
+      discardRef: string | null;
+      settings: string[];
+    }>();
+    for (const { name, section } of planNamedParts(materials).entries) {
+      let resolved = bySection.get(section);
+      if (!resolved) {
+        resolved = {
+          ...resolveOutputChannels(outputNode, section),
+          settings: materialSettingProps(materials[section].materialSettings),
+        };
+        bySection.set(section, resolved);
       }
+      parts.push({ name, ...resolved });
     }
   }
+
+  // Every IMPORT-BUILT index section becomes a `materialParts` entry keyed by
+  // its glTF material index, through `planIndexParts` — the index twin of
+  // `planNamedParts`, shared with the node's shadowed mark and the mirror plan,
+  // so none of the three can disagree about which section a material belongs
+  // to. Nothing is emitted without a VALID signature (the loader applies the
+  // table only against an exactly-equal model, R3), and entries go out in
+  // ascending index order, the canonical order the parse restores. Resolved
+  // after the name sections, so a graph with no index section resolves, and
+  // emits, exactly as before.
+  const signature = outputNode ? readModelSignature(outputNode.data) : null;
+  const indexParts: {
+    index: number;
+    channels: Record<string, string>;
+    discardRef: string | null;
+    settings: string[];
+  }[] = [];
+  if (outputNode && signature) {
+    const materials = outputMaterials(outputNode);
+    for (const { gltfIndex, section } of planIndexParts(materials, signature).entries) {
+      indexParts.push({
+        index: gltfIndex,
+        ...resolveOutputChannels(outputNode, section),
+        settings: materialSettingProps(materials[section].materialSettings),
+      });
+    }
+  }
+
+  /** One part's body — its channels, its `discard` key, then its settings in
+   *  the loader's spelling. Shared by `parts` and `materialParts`, so the two
+   *  bodies cannot drift (a mirror is byte-identical to its index entry only
+   *  because both came from here). */
+  const partBody = (part: { channels: Record<string, string>; discardRef: string | null; settings: string[] }): string => {
+    const entries = Object.entries(part.channels);
+    if (part.discardRef) entries.push(['discard', part.discardRef]);
+    return [...entries.map(([k, v]) => `${k}: ${v}`), ...part.settings].join(', ');
+  };
 
   // Build return line — single value for color-only, object for multiple channels
   let returnLine: string;
   const channelEntries = Object.entries(channels);
 
-  if (parts.length > 0) {
+  if (parts.length > 0 || indexParts.length > 0) {
     // A `parts` key can only ride the OBJECT form, so its presence forces the
     // shape — the bare-node forms below cannot carry it.
     //
@@ -2209,18 +2348,25 @@ export function graphToCode(
     // The lone-Output case is untouched: with no parts at all, an unwired
     // Output still emits `return vec3(1, 0, 0);` in the branch below.
     const defaultProps = channelEntries;
-    const partProps = parts.map((part) => {
-      const entries = Object.entries(part.channels);
-      // A targeted output with nothing wired still emits its entry. It must:
-      // the parse is what re-creates the node, so an omitted entry means the
-      // Output and its edges vanish on the next code-panel Apply.
-      if (part.discardRef) entries.push(['discard', part.discardRef]);
-      const body = entries.map(([k, v]) => `${k}: ${v}`).join(', ');
-      return `${partKeyLiteral(part.name)}: { ${body} }`;
-    });
+    // A targeted output with nothing wired still emits its entry. It must:
+    // the parse is what re-creates the node, so an omitted entry means the
+    // Output and its edges vanish on the next code-panel Apply. The same holds
+    // for an unwired index section (`"3": {  }`).
+    const partProps = parts.map((part) => `${partKeyLiteral(part.name)}: { ${partBody(part)} }`);
     const props = defaultProps.map(([k, v]) => `${k}: ${v}`).join(', ');
     const lead = props ? `${props}, ` : '';
-    returnLine = `  return { ${lead}parts: { ${partProps.join(', ')} } };`;
+    // ONE line, always: `parseBody` reads the return from a single source line,
+    // and a signature name containing `}`, `,`, `:` or `"` survives it because
+    // every name is a string literal the splitters honour.
+    const pieces: string[] = [];
+    if (parts.length > 0) pieces.push(`parts: { ${partProps.join(', ')} }`);
+    if (indexParts.length > 0 && signature) {
+      pieces.push(`materialParts: { ${indexParts
+        .map((part) => `${partKeyLiteral(String(part.index))}: { ${partBody(part)} }`)
+        .join(', ')} }`);
+      pieces.push(`modelSignature: { materials: [${signature.map(partKeyLiteral).join(', ')}] }`);
+    }
+    returnLine = `  return { ${lead}${pieces.join(', ')} };`;
   } else if (channelEntries.length === 0) {
     // No trailing comment: a `//` on a return line used to defeat parseBody's
     // end-anchored regexes in tslCodeProcessor, which then treated this as a
@@ -2433,6 +2579,18 @@ function resolveEdgeRef(
     const comp = TOHSL_HANDLE_TO_COMPONENT.get(edge.sourceHandle);
     const base = varNames.get(sourceNode.id);
     if (comp && base) return `${base}.${comp}`;
+  }
+
+  // Texture (Image) node: Alpha/R/G/B read components of this node's ONE
+  // sample — only in WIDE mode (a channel socket is wired, imageSampleIsWide),
+  // where the variable is the vec4 sample, so `out`, a null handle and any
+  // tampered id read its `.rgb`. Out-only graphs fall through to the bare name
+  // below, which keeps them byte-identical. No codeToGraph inverse map: image
+  // nodes are one-way (see the imageNode branch). The lookup is a Map, so a
+  // `__proto__`/`constructor` handle out of a .fastshader resolves to `.rgb`.
+  if (sourceNode.data.registryType === 'imageNode' && imageSampleIsWide(gidx, sourceNode.id)) {
+    const base = varNames.get(sourceNode.id);
+    if (base) return `${base}.${IMAGE_CHANNEL_COMPONENTS.get(edge.sourceHandle ?? '') ?? 'rgb'}`;
   }
 
   // If source is a split node, inline as inputVar.component

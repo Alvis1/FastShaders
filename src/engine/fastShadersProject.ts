@@ -31,6 +31,16 @@ export interface FastShadersProject {
    * positions, groups and prefs to gain nothing.
    */
   palettes?: Palette[];
+  /**
+   * Payload refs for Image nodes whose `values.imageB64` this block OMITS
+   * (node id → `img1-<fnv>-<len36>`, the utils/imagePayloadRefs.ts format).
+   * `applyProjectToStore` recovers each payload from the module's own `data:`
+   * literals (engine/projectImageRefs.ts). ADDITIVE, no version bump. But an
+   * OLD build (0.3.33 and older) reads pixels only from `imageB64`, so such a
+   * block opens there with those images black. That is why nothing writes it
+   * while EXPORT_IMAGE_REFS is false.
+   */
+  imageRefs?: Record<string, string>;
   preview: {
     geometry?: string;
     lighting?: string;
@@ -50,8 +60,11 @@ export interface FastShadersProject {
   };
 }
 
-const BEGIN_MARKER = '/* FASTSHADERS_PROJECT_V1';
-const END_MARKER = 'END_FASTSHADERS_PROJECT */';
+// Exported for the single-GLB contract's pin only (engine/glbShaderContract.ts
+// restates them as FS_PROJECT_BEGIN/END, and the reader checks a GLB's project
+// view against them); the writer still goes through embedProjectState.
+export const BEGIN_MARKER = '/* FASTSHADERS_PROJECT_V1';
+export const END_MARKER = 'END_FASTSHADERS_PROJECT */';
 
 // Append a FastShaders project snapshot as a trailing block comment.
 //

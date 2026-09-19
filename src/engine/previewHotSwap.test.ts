@@ -47,10 +47,12 @@ interface Listener { (ev: unknown): void }
  * carrying a `shader` component, an object-URL registry that records every
  * mint and revoke, and a parent that records every posted message.
  */
-function makeHarness(html: string, opts: { booted?: boolean } = {}) {
+function makeHarness(html: string, opts: { booted?: boolean; resolve?: (code: string) => string } = {}) {
   const posted: Record<string, unknown>[] = [];
   const minted: string[] = [];
   const revoked: string[] = [];
+  /** The parts of every module Blob the receiver minted, in order. */
+  const blobs: unknown[][] = [];
   let urlSeq = 0;
 
   const entityListeners = new Map<string, Set<Listener>>();
@@ -81,6 +83,9 @@ function makeHarness(html: string, opts: { booted?: boolean } = {}) {
   const win: Record<string, unknown> = {
     __shaderCode: 'BOOT_MODULE',
     __shaderUrl: 'blob:boot',
+    // The image-asset resolver (engine/previewAssetFeed.ts) when a test
+    // installs one; absent by default, as in a document with no images.
+    ...(opts.resolve ? { __fsResolveAssets: opts.resolve } : {}),
     parent,
     addEventListener: (type: string, fn: Listener) => {
       if (type === 'message') messageListeners.push(fn);
@@ -97,7 +102,7 @@ function makeHarness(html: string, opts: { booted?: boolean } = {}) {
     createObjectURL: () => { const u = `blob:u${++urlSeq}`; minted.push(u); return u; },
     revokeObjectURL: (u: string) => { revoked.push(u); },
   };
-  class BlobStub { constructor(public parts: unknown[]) {} }
+  class BlobStub { constructor(public parts: unknown[]) { blobs.push(parts); } }
 
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   new Function('window', 'document', 'URL', 'Blob', extractSwapScript(html))(
@@ -105,7 +110,7 @@ function makeHarness(html: string, opts: { booted?: boolean } = {}) {
   );
 
   return {
-    posted, minted, revoked, setAttrCalls, shaderComp, emit,
+    posted, minted, revoked, blobs, setAttrCalls, shaderComp, emit,
     /** Deliver a message as if it came from the parent window. */
     send(data: unknown, source: unknown = parent) {
       for (const fn of messageListeners) fn({ source, data });
@@ -263,5 +268,29 @@ describe('preview shader hot-swap: arriving before the scene exists', () => {
       ['shader', 'src', 'blob:u1'],
       ['shader', 'src', 'blob:u2'],
     ]);
+  });
+});
+
+describe('preview shader hot-swap: the image-asset resolver is applied at the MINT (S3)', () => {
+  const PLACEHOLDER = 'NEXT "fs-asset:img1-abcd1234"';
+
+  it('mints the RESOLVED text and keeps the placeholder text as `applied`', () => {
+    const h = makeHarness(html, {
+      resolve: (code) => code.replace('"fs-asset:img1-abcd1234"', '"blob:u-img"'),
+    });
+    h.send({ type: SHADER_SWAP_MESSAGE, code: PLACEHOLDER, gen: 1 });
+    expect(h.blobs).toEqual([['NEXT "blob:u-img"']]);
+    expect(h.minted).toEqual(['blob:u1']);
+    // The SAME placeholder text again is the no-op ack, not a second mint: the
+    // receiver compared the unresolved bytes the parent posts.
+    h.send({ type: SHADER_SWAP_MESSAGE, code: PLACEHOLDER, gen: 2 });
+    expect(h.blobs).toHaveLength(1);
+    expect(h.posted[h.posted.length - 1]).toEqual({ type: 'fs:preview-ready', hot: 2, uniforms: [] });
+  });
+
+  it('without a resolver the module bytes are minted as posted (a document with no images)', () => {
+    const h = makeHarness(html);
+    h.send({ type: SHADER_SWAP_MESSAGE, code: PLACEHOLDER, gen: 1 });
+    expect(h.blobs).toEqual([[PLACEHOLDER]]);
   });
 });

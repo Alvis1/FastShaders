@@ -17,7 +17,10 @@ import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
 import { maskNonCode, splitTopLevelArgs, stripComments } from './tslCodeProcessor';
+import { stripMirrorParts } from './partKeyLiteral';
+import { safeJsonReviver } from '@/utils/safeJson';
 import type { MaterialSettings } from '@/types';
+import { materialSettingsFromSource } from './materialSettingsCode';
 
 // Handle babel traverse CJS/ESM interop
 const traverse = (typeof (_traverse as unknown as { default?: unknown }).default === 'function'
@@ -42,64 +45,6 @@ const NODE_PROP_TO_CHANNEL = new Map<string, string>([
 const MATERIAL_KEYS = new Set(['transparent', 'side', 'alphaTest', 'depthWrite', 'mergeVertices']);
 
 /**
- * Reverse of buildShaderModule's SIDE_VALUES (tslCodeProcessor.ts).
- * Quoted spellings are accepted too — hand-authored shaderloader modules write
- * them; a value this can't map (`THREE.DoubleSide`) is DROPPED, never guessed.
- */
-const SIDE_NAMES = new Map<string, 'front' | 'back' | 'double'>([
-  ['0', 'front'], ['1', 'back'], ['2', 'double'],
-  ["'front'", 'front'], ["'back'", 'back'], ["'double'", 'double'],
-  ['"front"', 'front'], ['"back"', 'back'], ['"double"', 'double'],
-]);
-
-/**
- * Turn the RAW source text of the stripped material keys into a validated
- * MaterialSettings. Imported modules are adversarial input, so every value is
- * coerced rather than trusted, and anything unrecognised is dropped instead of
- * carried: an inert setting is always better than a spliced one, because these
- * values are re-emitted into a generated module (buildShaderModule) that the
- * XR popup executes at the app's REAL origin.
- *
- * The rules mirror the emitter's own, so an import → export round trip is
- * byte-stable: alphaTest capped BELOW 1 (three discards on `alpha <= alphaTest`,
- * so exactly 1.0 erases the mesh), and depthWrite:false kept only under
- * transparency (on an opaque material it self-occludes into cutout-looking
- * holes — the exact trap ShaderSettingsMenu's handleTransparentChange closes).
- * Returns undefined for an empty result: absent IS the historical no-settings
- * state, and it is what CLEARS a previous graph's settings on import.
- *
- * ALWAYS returns a FRESH object (or undefined) — never a mutation of an
- * existing one. ShaderPreview, CodeEditor and useSyncEngine's mergeMatch all
- * subscribe to `materialSettings` BY REFERENCE and bail on Object.is, so an
- * in-place update would leave the preview and the A-Frame tab showing the old
- * settings with no error.
- */
-function sanitizeMaterialSettings(
-  raw: Record<string, string>,
-  displacementOffset = false,
-): MaterialSettings | undefined {
-  const out: MaterialSettings = {};
-  if (displacementOffset) out.displacementMode = 'offset';
-  if (raw.transparent?.trim() === 'true') out.transparent = true;
-  // A Map lookup, never a Record index: raw.side is parsed source text, and a
-  // Record would resolve 'constructor' through the prototype chain to a
-  // Function — which structuredClone can't clone, so the next pushHistory
-  // would throw out of a React effect and blank the whole editor.
-  const side = SIDE_NAMES.get(raw.side?.trim() ?? '');
-  if (side) out.side = side;
-  const alphaTest = Number(raw.alphaTest);
-  if (Number.isFinite(alphaTest) && alphaTest > 0) out.alphaTest = Math.min(alphaTest, 0.99);
-  if (out.transparent && raw.depthWrite?.trim() === 'false') out.depthWrite = false;
-  // Only an explicit `false` is meaningful — absent means the default (weld),
-  // which is exactly what a module that never carried the key is saying. This
-  // is what makes the setting survive an export→import round trip, so the
-  // "NOT recoverable from the module text" note in projectImport no longer
-  // applies to it.
-  if (raw.mergeVertices?.trim() === 'false') out.mergeVertices = false;
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
-/**
  * String-only entry point, kept for every caller that doesn't need the
  * module's material settings (the test suites, and any future consumer that
  * only wants editor TSL).
@@ -110,12 +55,27 @@ export function scriptToTSL(scriptCode: string): string {
 
 /**
  * Same conversion, plus the `transparent`/`side`/`alphaTest`/`depthWrite` keys
- * the module carries in its return object. Those keys are NOT representable in
- * editor TSL (graphToCode never emits them — they ride tslToShaderModule), so
- * they were simply deleted here while useSyncEngine's mergeMatch re-applied the
- * PREVIOUS graph's onto the imported one: wrong in both directions. The import
- * path (projectImport.importShaderText) stamps what this returns onto the
- * Output node before the code→graph pass runs.
+ * the module carries at the TOP of its return object — the DEFAULT material's.
+ * Those are NOT representable in editor TSL (graphToCode never emits the
+ * default's settings — they ride tslToShaderModule's options), so they were
+ * simply deleted here while useSyncEngine's mergeMatch re-applied the PREVIOUS
+ * graph's onto the imported one: wrong in both directions. The import path
+ * (projectImport.importShaderText) stamps what this returns onto the Output
+ * node before the code→graph pass runs. The sanitizer is
+ * `materialSettingsFromSource` (engine/materialSettingsCode), shared with
+ * buildShaderModule and codeToGraph.
+ *
+ * An ADDED material's four keys are different: they ARE editor TSL (inside
+ * `parts`, in the loader's own spelling), so they pass through here verbatim
+ * and codeToGraph reads them back. Known gap: the node-prop names inside
+ * `parts` are NOT reversed (`colorNode:` stays `colorNode:` and lands on a
+ * dead `m1:colorNode` handle), so a bare-script import of a parts module keeps
+ * its part settings and loses its part channels. The same gap applies to the
+ * glTF-index table (`materialParts`, GLB Phase 5), which — with its
+ * `modelSignature` — passes through untouched. The loader-0.6 MIRRORS do not:
+ * the `materialPartsMirror` list is dropped and every `parts` entry it names is
+ * removed (rule R6), because a mirror is a module-only copy of an index body,
+ * and read back as a name section it would claim that mesh a second time.
  *
  * Coverage limit (pre-existing, unchanged by this function): a SINGLE-LINE
  * `return { … }; // comment` never reaches the strip site — the objReturn
@@ -349,6 +309,8 @@ export function scriptToTSLWithSettings(
         // Top-level commas only: a plain `.split(',')` tears a nested call apart
         // (`colorNode: mix(a, b, c)` → `mix(a` / `b` / `c)`), and each fragment
         // then looks like an ES6 shorthand property and gets echoed as `x: x`.
+        /** The loader-0.6 mirror names this module lists (R4), stripped below (R6). */
+        let mirror = new Set<string>();
         const entries = splitTopLevelArgs(objReturnMatch[1]).map(entry => {
           const trimmedEntry = entry.trim();
           if (!trimmedEntry) return null;
@@ -361,6 +323,16 @@ export function scriptToTSLWithSettings(
           } else {
             key = trimmedEntry.slice(0, colonIdx).trim();
             val = trimmedEntry.slice(colonIdx + 1).trim();
+          }
+          // The module-only mirror list (R4/R7): dropped, and remembered so the
+          // `parts` entries it names can be removed after this pass. JSON only
+          // (what the emitter writes); anything else lists nothing.
+          if (key === 'materialPartsMirror') {
+            try {
+              const list: unknown = JSON.parse(val, safeJsonReviver);
+              if (Array.isArray(list)) mirror = new Set(list.filter((n): n is string => typeof n === 'string'));
+            } catch { /* not a list the emitter wrote: strip nothing */ }
+            return null;
           }
           // Strip material settings keys — but REMEMBER them (see
           // scriptToTSLWithSettings). Collected here rather than in a second
@@ -380,8 +352,12 @@ export function scriptToTSLWithSettings(
           }
           const channel = NODE_PROP_TO_CHANNEL.get(key);
           return channel ? `${channel}: ${val}` : `${key}: ${val}`;
-        }).filter(Boolean);
-        outLines.push(`${indent}return { ${entries.join(', ')} };`);
+        }).filter((e): e is string => Boolean(e));
+        const kept = mirror.size === 0 ? entries : entries.map((en) => {
+          const parts = /^parts\s*:\s*\{([\s\S]*)\}$/.exec(en);
+          return parts ? `parts: { ${stripMirrorParts(splitTopLevelArgs(parts[1]), mirror).join(', ')} }` : en;
+        });
+        outLines.push(`${indent}return { ${kept.join(', ')} };`);
         continue;
       }
 
@@ -399,7 +375,7 @@ export function scriptToTSLWithSettings(
 
   return {
     code: outLines.join('\n') + '\n',
-    materialSettings: sanitizeMaterialSettings(rawMaterial, displacementOffset),
+    materialSettings: materialSettingsFromSource(rawMaterial, displacementOffset),
   };
 }
 
@@ -460,7 +436,7 @@ function collapseMultilineReturns(scriptCode: string): string {
 
     const body = stripComments(scriptCode.slice(bodyStart, bodyEnd));
     const cleanBody = splitTopLevelArgs(body)
-      .map((e) => e.replace(/\s+/g, ' ').trim())
+      .map(collapseCodeWhitespace)
       .filter(Boolean)
       .join(', ');
 
@@ -476,6 +452,29 @@ function collapseMultilineReturns(scriptCode: string): string {
     out = out.slice(0, e.start) + e.text + out.slice(e.end);
   }
   return out;
+}
+
+/**
+ * Collapse each whitespace run IN CODE to one space and trim. Whitespace inside
+ * a string literal is part of its VALUE and is copied verbatim: a model
+ * signature name admits any string, so `"a  b"` (or an NBSP / U+FEFF, which
+ * `\s` also matches) rewritten to `"a b"` no longer equals the model's name and
+ * the restored index sections sleep on the very model they were built for.
+ * Every whitespace code unit becomes `x` before masking — the scanner reacts
+ * only to quotes, `\`, `/`, `*` and the newline that ends a line comment, and
+ * the caller has already stripped comments — so the mask reads `x` exactly
+ * where the whitespace is code.
+ */
+function collapseCodeWhitespace(entry: string): string {
+  const masked = maskNonCode(entry.replace(/\s/g, 'x'));
+  const isCodeSpace = (i: number) => /\s/.test(entry[i]) && masked[i] === 'x';
+  let out = '';
+  for (let i = 0; i < entry.length; i++) {
+    if (!isCodeSpace(i)) { out += entry[i]; continue; }
+    while (i + 1 < entry.length && isCodeSpace(i + 1)) i++;
+    out += ' ';
+  }
+  return out.trim();
 }
 
 /**

@@ -4,8 +4,11 @@ import type { ShaderFlowNode, PortDefinition, NodeCategory } from '@/types';
 import { NODE_REGISTRY, effectiveInputs, growsOperands } from '@/registry/nodeRegistry';
 import { appendGrowthExhausted } from '@/utils/appendCapacity';
 import { useAppStore } from '@/store/useAppStore';
+// After the store on purpose: the store's own chain (telemetry) already loads
+// evalMode, so this import adds no new module-initialisation order.
+import { isEvalMode } from '@/eval/evalMode';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
-import { portLabel } from '@/i18n';
+import { portLabel, t } from '@/i18n';
 import { getCostColor, getCostScale, getCostTextColor, CAT_HEX, getContrastColor } from '@/utils/colorUtils';
 import { nodeCostPoints } from '@/utils/nodeCost';
 import { TypedHandle } from '../handles/TypedHandle';
@@ -22,7 +25,7 @@ import { edgeRangeText } from '@/utils/edgeValueText';
 import { LiveEdgeValue } from './LiveEdgeValue';
 import { makeConnectionRevealSelector } from './connectionReveal';
 import { RevealSockets } from './RevealSockets';
-import { RAMP_COLOR_NODES, effectiveRampDef } from '@/utils/exposedPorts';
+import { effectiveNodeDef } from '@/utils/exposedPorts';
 import { displayImageFileName, validImageDataUrl } from '@/utils/imageNode';
 import { getColormap, colormapGradientCss } from '@/utils/colormaps';
 import { parseFormula, hasCustomFormula } from '@/utils/dataRangeFormula';
@@ -214,32 +217,86 @@ export interface PortRow {
  * - Property nodes hide the `name` key (shown in the header instead)
  */
 /**
- * Node types whose single output socket is centred on the CARD rather than
- * anchored to a port row.
+ * The node types whose OUTPUT sockets are labelled — the recorded exceptions to
+ * NODE_DESIGN_REQUIREMENTS #8 ("output sockets show no text/label"). Both are
+ * nodes whose outputs are several same-typed sockets told apart only by
+ * meaning:
+ *  - 8a, the Data node: each column carries its CSV header. It has no entry
+ *    here because it is recognised by its per-instance `dynamicOutputs`, and
+ *    its labels are USER DATA — printed verbatim, never translated.
+ *  - 8b, the Image node: Color / Alpha / R / G / B, translated through
+ *    `portLabel`. Four float sockets beside a vec3 are indistinguishable by
+ *    colour, and reading an ORM map (roughness in G, metalness in B) depends on
+ *    picking the right one at a glance.
  *
- * The rows layout pairs `inputs[i]` with `outputs[i]`, so a node with one
- * output puts it on the FIRST row — which is right for an operator whose rows
- * are its whole body, and wrong for a node that is mostly picture. The Image
- * node's card is a filename, a thumbnail up to 120px tall, and then a row
- * strip that exists only to carry the output: the wire left the bottom-right
- * corner, well below the thumbnail it comes out of, and the strip itself is a
- * band of empty card under the image. Centring puts the socket beside the
- * middle of the picture and lets the row disappear when no parameter is
- * exposed (the Image node's params are opt-in, so that is the default state).
- *
- * Deliberately a TYPE list and not a general rule: for every other rows-layout
- * node the first row IS the top of the body, so row-anchoring already puts the
- * output where the node's content starts. The designer's own socket override
- * (`sockets['out']`) is the authored way to move one, and stays independent —
- * it positions against the ROWS REGION's centre, while this positions against
- * the whole card, which for a node with a big thumbnail above the region are
- * different places.
- *
- * Shared with the NodeVisual replica so no preview surface can draw the socket
- * somewhere else (`imageOutputSocket.test.ts`).
+ * `imageOutputRows.test.ts` fails if a third type joins by accident.
  */
-export function centersOutputSocket(type: string | undefined): boolean {
-  return type === 'imageNode';
+export const LABELLED_OUTPUT_TYPES: ReadonlySet<string> = new Set(['imageNode']);
+
+/**
+ * The label a row prints beside its OUTPUT socket, or null — THE predicate
+ * ShaderNode and the NodeVisual replica both call, so the rule holds by
+ * construction on every surface: null for every node #8 does not list.
+ * `dynamicOutputs` is the Data node's CSV header (verbatim); a type in
+ * {@link LABELLED_OUTPUT_TYPES} gets its registry label translated.
+ */
+export function outputRowLabel(
+  type: string | undefined,
+  output: PortDefinition,
+  dynamicOutputs: boolean,
+  language: Parameters<typeof portLabel>[1],
+): string | null {
+  if (dynamicOutputs) return output.label;
+  if (type && LABELLED_OUTPUT_TYPES.has(type)) return portLabel(output.label, language);
+  return null;
+}
+
+/**
+ * The empty slot's hover text. It names the settings menu's Texture row
+ * (menus/TexturePicker.tsx) because that is the ONE control that fills THIS
+ * node — dropping a file on the canvas makes a NEW node, so the hint does not
+ * suggest it. The row's label is the same `'Texture'` key, so the two read as
+ * one thing in either language (imagePicker.test.ts pins that).
+ *
+ * In a study session the picker is hidden (`isEvalMode`), and a hint naming a
+ * control the participant cannot see would be false, so there the slot keeps
+ * the plain statement (`IMAGE_EMPTY_HINT_EVAL`).
+ */
+export const IMAGE_EMPTY_HINT = 'No image yet. Right-click the node and choose one under “Texture”.';
+export const IMAGE_EMPTY_HINT_EVAL = 'No image in this node.';
+
+/** Which of the two hints applies. `study` defaults to the page's eval flag,
+ *  sampled once at module init, so every slot on a page agrees. */
+export function imageEmptyHint(study: boolean = isEvalMode()): string {
+  return study ? IMAGE_EMPTY_HINT_EVAL : IMAGE_EMPTY_HINT;
+}
+
+/**
+ * THE one element drawn where an Image node's thumbnail goes when it has no
+ * valid payload: a node added empty from the palette, one whose payload a
+ * restore path stripped, and every NodeVisual surface (a replica never carries
+ * a payload). Inert — the hint is its `title`, not a control: a `<button>` on
+ * the card would become a keyboard tab stop on every tile (the Sound-picker
+ * lesson). NOT pointer-events: none, or that title is dead (TooltipLayer finds
+ * its host through elementFromPoint).
+ *
+ * `hint` overrides the text for a surface that has no settings menu to name:
+ * NodeVisual passes IMAGE_EMPTY_HINT_EVAL, because the Node Designer stage
+ * draws the replica hit-testable and a right-click there opens only the
+ * browser's own menu.
+ */
+export function ImageThumbEmpty({
+  language,
+  hint = imageEmptyHint(),
+}: {
+  language: Parameters<typeof t>[1];
+  hint?: string;
+}) {
+  return (
+    <div className="shader-node__image-empty" title={t(hint, language)}>
+      {t('No image', language)}
+    </div>
+  );
 }
 
 /**
@@ -270,9 +327,8 @@ export function visiblePortRows(
   rows: readonly PortRow[],
   sockets: Record<string, number | undefined>,
   outputs: readonly PortDefinition[],
-  outCentered = false,
 ): PortRow[] {
-  const outMoved = outCentered || sockets['out'] != null;
+  const outMoved = sockets['out'] != null;
   return rows.filter(
     (row) =>
       (!!row.input && sockets[row.input.id] == null) ||
@@ -722,21 +778,12 @@ export const ShaderNode = memo(function ShaderNode({
     () => new Set(data.exposedPorts ?? []),
     [data.exposedPorts],
   );
-  const effDef = useMemo(() => {
-    // Data Stripes / Data Viz: the two RAMP ports are opt-in, everything else
-    // (notably `signal`) is always on. Shared with every preview surface so a
-    // palette tile cannot show a socket the dropped node lacks. Deliberately
-    // NOT the imageNode treatment below — blanking defaultValues would delete
-    // the inline swatches and filtering ALL inputs would drop `signal`.
-    if (RAMP_COLOR_NODES.has(data.registryType)) return effectiveRampDef(def, exposedInputs);
-    if (data.registryType !== 'imageNode') return def;
-    // The tile/offset params are context-menu-only for the image node — they
-    // never render as inline widgets. Leaving them in defaultValues makes
-    // buildRows emit one empty setting row per param (dead space under the
-    // thumbnail), so drop them; exposed ports still surface via `inputs`.
-    const inputs = def.inputs.filter((inp) => exposedInputs.has(inp.id));
-    return { ...def, inputs, defaultValues: {} };
-  }, [def, data.registryType, exposedInputs]);
+  // THE shared filter (utils/exposedPorts.ts): Data Stripes / Data Viz hide
+  // their unexposed ramp ends, the Image node its unexposed params and its
+  // context-menu-only defaultValues. Every preview surface draws from the same
+  // function (NodeVisual, with nothing exposed), so a palette tile cannot show
+  // a socket or a row the dropped node lacks.
+  const effDef = useMemo(() => effectiveNodeDef(def, exposedInputs), [def, exposedInputs]);
   const rows = useMemo(() => buildRows(effDef, data.dynamicOutputs), [effDef, data.dynamicOutputs]);
 
   // Connected input sockets + the chainable growth list — derived once per
@@ -1022,14 +1069,34 @@ export const ShaderNode = memo(function ShaderNode({
   // override, sockets stay row-anchored (classic behavior).
   const sockOv = nodeSockets(data.registryType);
   const rowsOutOff = sockOv['out'];
-  /** Image node: the output rides the CARD's centre — see centersOutputSocket. */
-  const centerOut = centersOutputSocket(data.registryType);
-  /** Either way the rows stop drawing the first output on their right half. */
-  const outDetached = centerOut || rowsOutOff != null;
+  /** A designer-moved first output leaves its row (drawn region-relative below). */
+  const outDetached = rowsOutOff != null;
   const rowsJustify = nodeJustify(data.registryType);
   const calcTop = (off: number) => `calc(50% ${off < 0 ? '-' : '+'} ${Math.abs(off)}px)`;
   /** Rows that still draw something — see {@link visiblePortRows}. */
-  const visibleRows = visiblePortRows(rows, sockOv, def.outputs, centerOut);
+  const visibleRows = visiblePortRows(rows, sockOv, def.outputs);
+  /**
+   * A row's right half: its output socket, preceded by the socket's label
+   * where NODE_DESIGN_REQUIREMENTS #8 records an exception (8a Data columns,
+   * 8b Image channels — {@link outputRowLabel}). ONE condition covers both, so
+   * a label never sits beside a socket the designer moved out of its row.
+   */
+  const rowOutput = (output: PortDefinition | null) => {
+    if (!output || (outDetached && output === def.outputs[0])) return null;
+    const outLabel = outputRowLabel(data.registryType, output, !!data.dynamicOutputs, language);
+    return (
+      <>
+        {outLabel != null && <span className="shader-node__out-label">{outLabel}</span>}
+        <TypedHandle
+          type="source"
+          position={Position.Right}
+          id={output.id}
+          dataType={output.dataType}
+          label={output.label}
+        />
+      </>
+    );
+  };
 
   return (
     <div style={wrapStyle}>
@@ -1092,6 +1159,9 @@ export const ShaderNode = memo(function ShaderNode({
           }}
         />
       )}
+      {/* No valid payload (added empty, or stripped on restore): the ONE empty
+          slot, the same element every NodeVisual surface draws. */}
+      {!imageThumbUrl && data.registryType === 'imageNode' && <ImageThumbEmpty language={language} />}
 
       {/* Colormap node: the ramp it is currently set to. Reads the same
           gradient helper the settings menu and the picker use, so the card,
@@ -1175,17 +1245,7 @@ export const ShaderNode = memo(function ShaderNode({
             return (
               <div key={i} className="node-base__row shader-node__row">
                 <div className="shader-node__left" />
-                <div className="shader-node__right">
-                  {row.output && !(outDetached && row.output === def.outputs[0]) && (
-                    <TypedHandle
-                      type="source"
-                      position={Position.Right}
-                      id={row.output.id}
-                      dataType={row.output.dataType}
-                      label={row.output.label}
-                    />
-                  )}
-                </div>
+                <div className="shader-node__right">{rowOutput(row.output)}</div>
               </div>
             );
           }
@@ -1300,23 +1360,10 @@ export const ShaderNode = memo(function ShaderNode({
                 )}
               </div>
 
-              {/* Right side: output handle (outputs[0] moves out of its row
-                  when a designer socket override exists). Data nodes also show
-                  each column's name (its CSV header) beside the socket. */}
-              <div className="shader-node__right">
-                {row.output && data.dynamicOutputs && (
-                  <span className="shader-node__out-label">{row.output.label}</span>
-                )}
-                {row.output && !(outDetached && row.output === def.outputs[0]) && (
-                  <TypedHandle
-                    type="source"
-                    position={Position.Right}
-                    id={row.output.id}
-                    dataType={row.output.dataType}
-                    label={row.output.label}
-                  />
-                )}
-              </div>
+              {/* Right side: the output socket (outputs[0] moves out of its row
+                  when a designer socket override exists), labelled only for
+                  the #8 exceptions — Data columns, Image channels. */}
+              <div className="shader-node__right">{rowOutput(row.output)}</div>
             </div>
           );
         })}
@@ -1370,23 +1417,6 @@ export const ShaderNode = memo(function ShaderNode({
         />
       )}
       </div>
-      {/* The centred output socket (Image node). Anchored to the CARD, not to
-          the rows region — which is what makes it the middle of the thumbnail
-          rather than the middle of the strip below it. It needs no CSS of its
-          own: React Flow's own `.react-flow__handle-right` is already
-          `top: 50%; right: 0; transform: translate(50%, -50%)`, i.e. centred on
-          the card and straddling its right border, exactly what the row rule
-          in NodeBase.css reproduces for a row-anchored one. RevealSockets
-          leans on the same default. */}
-      {centerOut && def.outputs[0] && (
-        <TypedHandle
-          type="source"
-          position={Position.Right}
-          id={def.outputs[0].id}
-          dataType={def.outputs[0].dataType}
-          label={def.outputs[0].label}
-        />
-      )}
       {/* Image node drag-reveal: hidden param sockets float on the left edge
           of the card (anchored to .node-base, NOT the rows region — the card
           layout never changes), named by their forced tooltips. */}

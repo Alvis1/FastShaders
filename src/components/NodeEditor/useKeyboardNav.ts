@@ -51,11 +51,18 @@ import { isTypingTarget } from '@/utils/isTypingTarget';
  *     stray keys on a window capture listener, but this hook's own listener is
  *     also a capture one, so it can run first — and moving the canvas cursor
  *     or the pane focus out from under an open dialog is never wanted.
+ *   · The target is inside a settings/context MENU (`.context-menu`, the ONE
+ *     shared shell every menu renders). The menu is drawn INSIDE
+ *     `.node-editor__canvas`, so without this the canvas-scoped Tab branch
+ *     took Tab on any menu button (the Image node's texture grid cells, a
+ *     checkbox, a swatch) and threw focus onto a node, so a menu could not
+ *     be walked by keyboard. The canvas's own Tab order is untouched: focus
+ *     on a node or the pane is never inside a menu.
  */
-function isTyping(target: EventTarget | null): boolean {
+export function isTyping(target: EventTarget | null): boolean {
   if (isTypingTarget(target, { anyInputType: true })) return true;
   const el = target as HTMLElement | null;
-  return el?.closest?.('[role="dialog"]') != null;
+  return el?.closest?.('[role="dialog"]') != null || el?.closest?.('.context-menu') != null;
 }
 
 function focusedNodeId(): string | null {

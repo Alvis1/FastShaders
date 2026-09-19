@@ -4,13 +4,23 @@
  *
  * WHY THE SANDBOX REPORTS IT INSTEAD OF THE PARENT PARSING THE FILE.
  * `utils/previewMesh.ts` states the rule this module obeys: model bytes are
- * never parsed on the trusted side (`countMeshVertices` is its one narrow,
- * bounded exception). Sub-mesh names are also not knowable from the file alone
- * — three's GLTFLoader rewrites them through `PropertyBinding.sanitizeNodeName`
- * and then de-duplicates collisions with a `_N` suffix, so the raw glTF JSON
- * name and the name a material dispatch would have to match are different
- * strings. The only source of truth is the loaded scene graph, which lives in
- * the sandbox. So the sandbox traverses and posts, and everything that arrives
+ * never parsed on the trusted side, with documented exceptions —
+ * `countMeshVertices` and `inspectGltfCompression` read no names, and the glTF
+ * model reader (`utils/gltfReader.ts` + `gltfNaming.ts`) PREDICTS names by
+ * replaying GLTFLoader's naming, for exactly two uses: the index-section vs
+ * name-section double-claim check and the loader-0.6 mirror keys. (Its model
+ * SIGNATURE, carried on `PreviewMesh.gltf` by `createPreviewMesh`, is what
+ * index-section dormancy reads — never this inventory, which is forgeable.) Sub-mesh
+ * names are not simply the names in the file — three's GLTFLoader rewrites
+ * them through `PropertyBinding.sanitizeNodeName` and then de-duplicates
+ * collisions with a `_N` suffix, so the raw glTF JSON name and the name a
+ * material dispatch would have to match are different strings. That
+ * prediction is never a source of TARGETS. What the picker offers still comes
+ * from this inventory, because a prediction can be uncertain (two mesh defs
+ * sharing a base name are suffixed in texture-decode order; measured) and the
+ * sandbox scene is the only ground truth. The only source of truth is the
+ * loaded scene graph, which lives in the sandbox. So the sandbox traverses and
+ * posts, and everything that arrives
  * here is treated as ADVERSARIAL: the preview document runs a loaded
  * `.fastshader`'s shader code, so a hostile shader can forge this message.
  *

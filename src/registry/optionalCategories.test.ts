@@ -10,6 +10,8 @@ import {
   hiddenOptionalCategories,
   visibleTabs,
   effectiveTab,
+  OPTIONAL_CATEGORY_COMPANIONS,
+  withheldNodeTypes,
 } from './optionalCategories';
 import { getAllDefinitions, getEditorDefinitions, searchNodes } from './nodeRegistry';
 import { CATEGORIES } from './nodeCategories';
@@ -111,11 +113,12 @@ describe('the flags', () => {
 });
 
 describe('the registry narrows by the hidden set', () => {
-  it('drops exactly the hidden categories and keeps registry order', () => {
+  it('drops exactly the hidden categories plus their companions, and keeps registry order', () => {
     const all = getEditorDefinitions();
     const narrowed = getEditorDefinitions(hide('sdf'));
     expect(narrowed.some((d) => d.category === 'sdf')).toBe(false);
-    expect(narrowed).toEqual(all.filter((d) => d.category !== 'sdf'));
+    const companions = new Set(OPTIONAL_CATEGORY_COMPANIONS.sdf);
+    expect(narrowed).toEqual(all.filter((d) => d.category !== 'sdf' && !companions.has(d.type)));
     // The family is real and would otherwise be there — an empty family would
     // make every assertion here vacuous.
     expect(all.filter((d) => d.category === 'sdf').length).toBeGreaterThan(10);
@@ -134,6 +137,42 @@ describe('the registry narrows by the hidden set', () => {
     getEditorDefinitions(hide('sdf', 'texture'));
     expect(getAllDefinitions().some((d) => d.category === 'sdf')).toBe(true);
     expect(getEditorDefinitions().some((d) => d.category === 'sdf')).toBe(true);
+  });
+
+  /**
+   * The Raymarch Output is a sink and lives in `output`, so it is not caught
+   * by the category test — yet with Distance fields off it was the second tile
+   * on the Output tab and the one hit for "sd", "distance" or "march": a whole
+   * family hidden with one door into it left open (owner, 2026-09-16). Ray
+   * Direction exists for the marcher's Background scope and goes with it.
+   */
+  it('withholds a family\'s COMPANIONS with it — the Raymarch Output and Ray Direction', () => {
+    expect(OPTIONAL_CATEGORY_COMPANIONS.sdf).toEqual(['raymarchOutput', 'rayDirection']);
+    // They are real, addable, and NOT in the family's own category.
+    for (const type of OPTIONAL_CATEGORY_COMPANIONS.sdf) {
+      const def = getEditorDefinitions().find((d) => d.type === type);
+      expect(def, type).toBeDefined();
+      expect(def!.category).not.toBe('sdf');
+    }
+    expect(withheldNodeTypes(hide('sdf'))).toEqual(new Set(['raymarchOutput', 'rayDirection']));
+    expect(withheldNodeTypes(hide('texture'))).toEqual(new Set());
+    expect(withheldNodeTypes(hide())).toEqual(new Set());
+    const types = (hidden: ReadonlySet<NodeCategory>) => getEditorDefinitions(hidden).map((d) => d.type);
+    expect(types(hide('sdf'))).not.toContain('raymarchOutput');
+    expect(types(hide('sdf'))).not.toContain('rayDirection');
+    // Hiding the OTHER family leaves them alone; switching Distance fields on
+    // brings them back.
+    expect(types(hide('texture'))).toContain('raymarchOutput');
+    expect(types(hide())).toContain('raymarchOutput');
+    // …and the searches: an exact name, and the aliases that used to reach it.
+    for (const q of ['Raymarch Output', 'march', 'sd', 'distance', 'ray direction']) {
+      expect(searchNodes(q, hide('sdf')).map((d) => d.type), q).not.toContain('raymarchOutput');
+      expect(searchNodes(q, hide('sdf')).map((d) => d.type), q).not.toContain('rayDirection');
+    }
+    expect(searchNodes('march', hide()).map((d) => d.type)).toContain('raymarchOutput');
+    // The registry itself is untouched: a loaded graph still resolves both.
+    getEditorDefinitions(hide('sdf'));
+    expect(getAllDefinitions().some((d) => d.type === 'raymarchOutput')).toBe(true);
   });
 
   it('searchNodes cannot type a switched-off family back into existence', () => {

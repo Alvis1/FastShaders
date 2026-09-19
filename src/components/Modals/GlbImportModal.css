@@ -1,0 +1,26 @@
+/* The GLB import dialog's own three rules; everything else is CsvImportModal.css.
+   Token-only, square corners, no blur (the app-wide technical style). */
+
+.glb-import-modal__panel {
+  max-width: 520px;
+}
+
+/* The N9 heading line: a bold row of the same size as the text, never a
+   second title. */
+.glb-import-modal__subtitle {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: var(--space-3) 0 var(--space-1);
+}
+
+.glb-import-modal__warn {
+  color: var(--text-primary);
+}
+
+/* The building phase's progress line — a status, so it is announced. */
+.glb-import-modal__progress {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  margin-top: var(--space-2);
+}

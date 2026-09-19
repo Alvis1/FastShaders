@@ -80,7 +80,7 @@ describe('newGraph', () => {
     // The name is what every export path turns into a FILE name, and the
     // desktop Work folder adopts the opened file's name on load — so keeping
     // it across a NEW would aim the next Save at the shader just opened and
-    // replace it with the blank document. work_folder_write has no undo.
+    // replace it with the blank document. work_folder_write_bytes has no undo.
     useAppStore.setState({ shaderName: 'waves' });
     useAppStore.getState().newGraph();
 

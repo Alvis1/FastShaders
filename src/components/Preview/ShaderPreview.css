@@ -652,8 +652,52 @@
   color: #fff;
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
+  /* The notice stays click-through so an orbit drag over its text still
+     reaches the iframe; only the close button opts back in. */
   pointer-events: none;
   white-space: pre-wrap;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+/* A successful load with a caveat (the KTX2 fallback line) — not an error. */
+.shader-preview__drop-notice--info {
+  background: rgba(28, 30, 34, 0.9);
+}
+
+.shader-preview__drop-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Literal colours on purpose: the notice plate is the same dark/red in both
+   themes, so its button must be too. Square, no blur (technical style). */
+.shader-preview__drop-notice-close {
+  pointer-events: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: #fff;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.shader-preview__drop-notice-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.shader-preview__drop-notice-close:focus-visible {
+  outline: 1px solid #fff;
+  outline-offset: 1px;
 }
 
 /* Guard against a long dropped-model name widening the select (its label is

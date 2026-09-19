@@ -46,6 +46,13 @@ const DELIBERATELY_GLYPHLESS = new Set([
   // nodeArtStyle — which relies on this exemption: art nodes have no glyph,
   // so dx/dy can mean CSS px here without colliding with glyph-space units.
   'colormap',
+  // The Image node draws its THUMBNAIL — or, with no image, the dashed
+  // 'No image' slot every NodeVisual surface draws — which is strictly more
+  // informative than an icon. Unlike the colormap ramp it is PAYLOAD, not
+  // art: nodeArtStyle / ART_NODE_TYPES do not apply, and the designer's
+  // dx/dy/scale never move it. Exempt since it joined allDefinitions
+  // (GLB Phase 4).
+  'imageNode',
 ]);
 
 describe('glyph coverage', () => {

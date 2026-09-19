@@ -8,6 +8,7 @@ import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { computeReachableCost } from '@/utils/nodeCost';
 import { activeSink, isSinkNode, hasActiveFlag, normalizeActiveOutput } from '@/utils/sdfPartition';
+import { carryModelMeshes } from '@/utils/outputMaterials';
 import { sinkCosts } from '@/utils/nodeCost';
 import { carryInactiveSinks } from '@/utils/sinkCarry';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
@@ -363,11 +364,40 @@ export function useSyncEngine() {
               }
               (merged.data as Record<string, unknown>).exposedPorts = next;
             }
-            // Preserve materialSettings on output nodes
+            // Preserve materialSettings on output nodes — MATERIAL 0's only.
+            // This cannot conflict with the parse: the parse writes settings
+            // only onto `materials[k]` (ADDED materials, read back from their
+            // `parts` entries) and never onto the node-level field, because the
+            // default's settings still never appear in editor code. An added
+            // material's four keys are code-authoritative, like its unwired
+            // values: present → kept, deleted from the code → cleared.
+            //
+            // One deliberate overlap: a TARGETED material 0 emits its settings
+            // inside its part, and the Apply normalizes it into "empty default
+            // + material 1" — so material 1 parses the settings AND this carry
+            // leaves them on the now-empty default, exactly as it leaves its
+            // exposedPorts, so the BUILT module is byte-identical across the
+            // Apply. That copy is inert ONLY while the default contributes no
+            // channel: buildShaderModule always writes it as the module's
+            // top-level keys, and loader 0.6 builds a default material only for
+            // a module with a top-level channel. The moment the default section
+            // gets one (a wire, or a stored value that emits), every mesh no part
+            // claims adopts these settings — though the user set them for the
+            // one mesh material 0 used to name — and unticking them on material
+            // 1 leaves this copy in place. It is visible, and editable, in the
+            // default section's settings menu. Known loss, unchanged: an added
+            // material's displacementMode / mergeVertices are not emitted, so
+            // an Apply drops them.
             const oldMatSettings = (match.data as Record<string, unknown>).materialSettings;
             if (oldMatSettings) {
               (merged.data as Record<string, unknown>).materialSettings = oldMatSettings;
             }
+            // The index sections' loader-0.6 mirror source (`modelMeshes`) is
+            // MODULE-ONLY (materialPartsContract R7) and never in the code, so
+            // the parse cannot re-create it. It is carried while the PARSED
+            // signature equals the old one; a signature edited in the code
+            // panel describes a different model, so its mirrors are dropped.
+            if (merged.data.registryType === 'output') carryModelMeshes(merged, match);
             return merged;
           };
 

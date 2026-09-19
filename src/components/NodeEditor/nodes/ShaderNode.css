@@ -181,6 +181,28 @@
   pointer-events: none;
 }
 
+/* Image node with no valid payload — a node added empty from the palette, one
+   whose payload a restore path stripped, and every NodeVisual replica (asset
+   tile, node-editor overview, Node Designer stage). Same margins as the
+   thumbnail so a picked image replaces it in place. Node INK, never a literal
+   grey (the filename's 1.82:1 dark-theme lesson). NOT pointer-events: none —
+   its `title` carries the hint, and TooltipLayer resolves hosts from
+   elementFromPoint, so a none element's title is dead. */
+.shader-node__image-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 72px;
+  height: 48px;
+  margin: 4px 6px 2px;
+  border: 1px dashed rgba(var(--node-ink-rgb), 0.35);
+  border-radius: 0;
+  font: 500 calc(8px * var(--node-text-scale, 1)) var(--font-mono);
+  color: rgba(var(--node-ink-rgb), 0.7);
+  text-align: center;
+}
+
 /* Colormap node: the ramp the node is set to, drawn on the card. A colormap
    picked by NAME is unrecognizable on a canvas — the strip is what tells you at
    a glance that this branch is viridis and that one is cool-warm. Fixed width so

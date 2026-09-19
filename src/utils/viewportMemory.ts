@@ -37,6 +37,16 @@ export const VIEWPORT_KEY = 'fs:viewport';
 /** The graph autosave. Its presence is what makes a stored viewport meaningful. */
 const GRAPH_KEY = 'fs:graph';
 
+/**
+ * Set to `'1'` once the desktop room has written its graph FILE
+ * (utils/desktopAutosave.ts). On desktop the graph lives in
+ * `app_data_dir()/autosave/graph.json` and `fs:graph` is no longer written, so
+ * a fresh desktop install would otherwise never restore a viewport. Defined
+ * here, in the leaf, and re-exported from desktopAutosave.ts, so neither module
+ * imports the other's runtime.
+ */
+export const DESKTOP_AUTOSAVE_MARKER_KEY = 'fs:desktopAutosave';
+
 export interface StoredViewport {
   x: number;
   y: number;
@@ -111,7 +121,13 @@ export function formatViewport(vp: StoredViewport): string {
  */
 export function readStoredViewport(): StoredViewport | null {
   try {
-    if (localStorage.getItem(GRAPH_KEY) == null) return null;
+    // The desktop room stores the graph in a file; the marker says one exists.
+    if (
+      localStorage.getItem(GRAPH_KEY) == null &&
+      localStorage.getItem(DESKTOP_AUTOSAVE_MARKER_KEY) !== '1'
+    ) {
+      return null;
+    }
     return parseViewport(localStorage.getItem(VIEWPORT_KEY));
   } catch {
     return null;

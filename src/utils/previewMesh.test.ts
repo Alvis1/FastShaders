@@ -1,12 +1,33 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   countMeshVertices,
   detectMeshKind,
   validateMeshBytes,
   sanitizeMeshFileName,
+  checkMeshBytes,
+  createPreviewMesh,
+  fillMeshRefusal,
+  inspectGltfCompression,
+  inspectParsedGltf,
+  modelTooLargeRefusal,
+  preReadModelGate,
+  BUNDLED_DECODERS,
+  GLB_READ_MAX_BYTES,
   MESH_MAX_BYTES,
+  MESH_TOO_LARGE_KEY,
+  MESH_COMPRESSED_KEY,
+  MESH_EMPTY_KEY,
+  MESH_BAD_GLB_KEY,
+  MESH_UNSUPPORTED_KEY,
   type PreviewMesh,
 } from './previewMesh';
+import { safeJsonReviver } from './safeJson';
+import { readGlbFsExtras } from './glbShaderExtras';
+import { decodeDataUri } from './glbContainer';
+import { recordToMesh } from './previewMeshCache';
+import { FS_FIXTURE_MODULE_MARKER, makeFastShadersGlb, makeFastShadersGltfJson, type FsGlbFixture } from '@/test-utils';
 
 const GLB_HEADER = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 2, 0, 0, 0, 12, 0, 0, 0]);
 
@@ -191,5 +212,361 @@ describe('previewMesh: countMeshVertices', () => {
   it('counts a large OBJ linearly without blowing up', () => {
     const big = 'v 0 0 0\n'.repeat(200_000) + 'vn 0 0 1\n'.repeat(50_000);
     expect(countMeshVertices(mesh('obj', big))).toBe(200_000);
+  });
+});
+
+describe('previewMesh: structured refusals', () => {
+  it('pins the literal "64" in the too-large sentence to the real cap', () => {
+    expect(MESH_MAX_BYTES).toBe(64 * 2 ** 20);
+    expect(MESH_TOO_LARGE_KEY).toContain('max 64 MB');
+  });
+
+  it('checkMeshBytes carries the reason, key and size', () => {
+    const n = MESH_MAX_BYTES + 1;
+    expect(checkMeshBytes('obj', new Uint8Array(n))).toEqual({ reason: 'too-large', key: MESH_TOO_LARGE_KEY, sizeBytes: n });
+    expect(checkMeshBytes('glb', new Uint8Array(0))).toEqual({ reason: 'empty', key: MESH_EMPTY_KEY });
+    expect(checkMeshBytes('glb', new Uint8Array(12))).toEqual({ reason: 'bad-glb', key: MESH_BAD_GLB_KEY });
+    expect(checkMeshBytes('glb', GLB_HEADER)).toBeNull();
+  });
+
+  it('never prints one byte over the cap as equal to it', () => {
+    expect(validateMeshBytes('obj', new Uint8Array(MESH_MAX_BYTES + 1))).toContain('(64.1 MB — max 64 MB)');
+  });
+
+  it('refuses an unsupported extension with its own reason', () => {
+    const r = createPreviewMesh('a.exe', GLB_HEADER);
+    expect('error' in r && r.refusal).toEqual({ reason: 'unsupported', key: MESH_UNSUPPORTED_KEY });
+  });
+
+  it('fillMeshRefusal inserts a name literally, even one spelling a replacement pattern', () => {
+    const r = { reason: 'compressed' as const, key: MESH_COMPRESSED_KEY, name: "a$&b$'c.glb", ext: 'KTX2' as const };
+    expect(fillMeshRefusal(r, r.key, 'en')).toBe(
+      "“a$&b$'c.glb” uses KTX2 compression, which FastShaders cannot read yet. Re-export it from Blender (or gltf-transform) without KTX2.",
+    );
+  });
+});
+
+describe('previewMesh: inspectGltfCompression', () => {
+  const doc = (d: unknown) => JSON.stringify(d);
+  const DRACO = 'KHR_draco_mesh_compression';
+  /** A surface without decoders: the refusals such a surface must give. */
+  const NONE = { draco: false, meshopt: false, ktx2: false };
+  const NO_NEEDS = { draco: false, meshopt: false, ktx2: false };
+
+  const NO_DECODER_CASES: [string, unknown, string | null][] = [
+    ['Draco used only', { extensionsUsed: [DRACO] }, 'Draco'],
+    ['Draco required only', { extensionsRequired: [DRACO] }, 'Draco'],
+    ['EXT_meshopt used only', { extensionsUsed: ['EXT_meshopt_compression'] }, null],
+    ['EXT_meshopt required', { extensionsRequired: ['EXT_meshopt_compression'] }, 'meshopt'],
+    ['KHR_meshopt required', { extensionsRequired: ['KHR_meshopt_compression'] }, 'meshopt'],
+    ['basisu required', { extensionsRequired: ['KHR_texture_basisu'] }, 'KTX2'],
+    ['Draco beats basisu', { extensionsUsed: [DRACO, 'KHR_texture_basisu'] }, 'Draco'],
+  ];
+
+  it.each(NO_DECODER_CASES)('without decoders: %s', (_why, d, refused) => {
+    const r = inspectGltfCompression(doc(d), NONE);
+    expect(r.refused).toBe(refused);
+    // A surface with no decoders never reports a need it cannot meet.
+    expect(r.needs).toEqual(NO_NEEDS);
+  });
+
+  it('without a transcoder, a basisu-USED model still reports the fallback (the Phase 1 rows)', () => {
+    const used = inspectGltfCompression(doc({ extensionsUsed: ['KHR_texture_basisu'] }), NONE);
+    expect(used).toEqual({ refused: null, ktx2Fallback: true, needs: NO_NEEDS });
+    // A REQUIRED one is refused before the fallback question arises.
+    expect(inspectGltfCompression(doc({ extensionsRequired: ['KHR_texture_basisu'] }), NONE)).toEqual({
+      refused: 'KTX2',
+      ktx2Fallback: false,
+      needs: NO_NEEDS,
+    });
+  });
+
+  it.each(NO_DECODER_CASES)('inspectParsedGltf gives the same answer on the parsed document: %s', (_why, d) => {
+    expect(inspectParsedGltf(JSON.parse(doc(d), safeJsonReviver), NONE)).toEqual(inspectGltfCompression(doc(d), NONE));
+    expect(inspectParsedGltf(JSON.parse(doc(d), safeJsonReviver))).toEqual(inspectGltfCompression(doc(d)));
+  });
+
+  it('defaults to the bundled decoders: Draco, meshopt and the KTX2 transcoder', () => {
+    expect(BUNDLED_DECODERS).toEqual({ draco: true, meshopt: true, ktx2: true });
+    expect(inspectGltfCompression(doc({ extensionsRequired: [DRACO] }))).toEqual(
+      inspectGltfCompression(doc({ extensionsRequired: [DRACO] }), BUNDLED_DECODERS),
+    );
+  });
+
+  it.each([
+    ['Draco used only', { extensionsUsed: [DRACO] }, null, { draco: true, meshopt: false, ktx2: false }],
+    ['Draco required', { extensionsUsed: [DRACO], extensionsRequired: [DRACO] }, null, { draco: true, meshopt: false, ktx2: false }],
+    ['EXT_meshopt used only', { extensionsUsed: ['EXT_meshopt_compression'] }, null, { draco: false, meshopt: true, ktx2: false }],
+    ['EXT_meshopt required', { extensionsRequired: ['EXT_meshopt_compression'] }, null, { draco: false, meshopt: true, ktx2: false }],
+    ['KHR_meshopt required', { extensionsRequired: ['KHR_meshopt_compression'] }, null, { draco: false, meshopt: true, ktx2: false }],
+    ['Draco and meshopt', { extensionsUsed: [DRACO, 'EXT_meshopt_compression'] }, null, { draco: true, meshopt: true, ktx2: false }],
+    ['basisu required', { extensionsRequired: ['KHR_texture_basisu'] }, null, { draco: false, meshopt: false, ktx2: true }],
+    ['basisu used only', { extensionsUsed: ['KHR_texture_basisu'] }, null, { draco: false, meshopt: false, ktx2: true }],
+    ['Draco and basisu', { extensionsUsed: [DRACO, 'KHR_texture_basisu'] }, null, { draco: true, meshopt: false, ktx2: true }],
+    ['nothing compressed', { extensionsUsed: ['KHR_materials_emissive_strength'] }, null, NO_NEEDS],
+  ])('with the bundled decoders: %s', (_why, d, refused, needs) => {
+    const r = inspectGltfCompression(doc(d));
+    expect(r.refused).toBe(refused);
+    expect(r.needs).toEqual(needs);
+    // The transcoder decodes them, so nothing renders through a fallback image.
+    expect(r.ktx2Fallback).toBe(false);
+  });
+
+  it('KTX2 required is transcoded, even beside a Draco model, and refused only without the transcoder', () => {
+    const both = doc({ extensionsUsed: [DRACO], extensionsRequired: ['KHR_texture_basisu'] });
+    expect(inspectGltfCompression(both)).toEqual({
+      refused: null,
+      ktx2Fallback: false,
+      needs: { draco: true, meshopt: false, ktx2: true },
+    });
+    // Draco still comes first when neither can be decoded.
+    expect(inspectGltfCompression(both, NONE).refused).toBe('Draco');
+    expect(inspectGltfCompression(both, { draco: true, meshopt: true, ktx2: false }).refused).toBe('KTX2');
+  });
+
+  it.each([
+    ['null', null],
+    ['empty', ''],
+    ['unparseable', '{ not json'],
+    ['JSON null', 'null'],
+    ['an array', '[]'],
+    ['a string', '"s"'],
+    ['a non-array list', `{"extensionsUsed":"${DRACO}"}`],
+    ['non-string entries', '{"extensionsUsed":[42,null]}'],
+    ['a prototype-smuggled list', `{"__proto__":{"extensionsUsed":["${DRACO}"]}}`],
+    ['a wrong-case name', '{"extensionsUsed":["khr_draco_mesh_compression"]}'],
+  ])('fails open for %s', (_why, json) => {
+    const open = { refused: null, ktx2Fallback: false, needs: NO_NEEDS };
+    expect(inspectGltfCompression(json as string | null)).toEqual(open);
+    expect(inspectGltfCompression(json as string | null, NONE)).toEqual(open);
+  });
+
+  it('fails open on JSON over the 8 MiB parse cap', () => {
+    const big = `{"extensionsUsed":["${DRACO}"]}` + ' '.repeat(8 * 1024 * 1024);
+    expect(inspectGltfCompression(big)).toEqual({ refused: null, ktx2Fallback: false, needs: NO_NEEDS });
+  });
+
+  it('looks at no more than 256 entries of a list', () => {
+    const junk = Array.from({ length: 256 }, (_, i) => `x${i}`);
+    expect(inspectGltfCompression(doc({ extensionsUsed: [...junk, DRACO] }), NONE).refused).toBeNull();
+    expect(inspectGltfCompression(doc({ extensionsUsed: [...junk.slice(1), DRACO] }), NONE).refused).toBe('Draco');
+    expect(inspectGltfCompression(doc({ extensionsUsed: [...junk, DRACO] })).needs.draco).toBe(false);
+    expect(inspectGltfCompression(doc({ extensionsUsed: [...junk.slice(1), DRACO] })).needs.draco).toBe(true);
+  });
+
+  it('hands out a fresh needs object per report, so one caller cannot edit another\'s', () => {
+    const a = inspectGltfCompression(null);
+    const b = inspectGltfCompression(null);
+    expect(a.needs).not.toBe(b.needs);
+  });
+});
+
+describe('previewMesh: createPreviewMesh runs the compression pre-check', () => {
+  const gltfBytes = (d: unknown) => new TextEncoder().encode(JSON.stringify(d));
+
+  it('loads a Draco GLB and records that it needs the Draco decoder', () => {
+    const r = createPreviewMesh('My Robot!.glb', glb(JSON.stringify({ extensionsUsed: ['KHR_draco_mesh_compression'] })));
+    expect('mesh' in r).toBe(true);
+    if (!('mesh' in r)) return;
+    expect(r.mesh.name).toBe('My-Robot.glb');
+    expect(r.mesh.decoders).toEqual({ draco: true, meshopt: false, ktx2: false });
+  });
+
+  it('loads a .gltf that requires meshopt and records that it needs the meshopt decoder', () => {
+    const r = createPreviewMesh('scene.gltf', gltfBytes({ extensionsUsed: ['EXT_meshopt_compression'], extensionsRequired: ['EXT_meshopt_compression'] }));
+    expect('mesh' in r && r.mesh.decoders).toEqual({ draco: false, meshopt: true, ktx2: false });
+  });
+
+  it('loads a KTX2-required GLB and records that it needs the transcoder', () => {
+    const r = createPreviewMesh('My Robot!.glb', glb(JSON.stringify({ extensionsRequired: ['KHR_texture_basisu'] })));
+    expect('mesh' in r).toBe(true);
+    if (!('mesh' in r)) return;
+    expect(r.mesh.name).toBe('My-Robot.glb');
+    expect(r.mesh.decoders).toEqual({ draco: false, meshopt: false, ktx2: true });
+    // Nothing falls back: the transcoder is what renders those textures.
+    expect(r.ktx2Fallback).toBe(false);
+  });
+
+  it('loads the committed quad-uastc-required.glb with mesh.decoders.ktx2', () => {
+    const bytes = new Uint8Array(
+      readFileSync(join(__dirname, '../engine/fixtures/ktx2/quad-uastc-required.glb')),
+    );
+    const r = createPreviewMesh('quad-uastc-required.glb', bytes);
+    expect('mesh' in r).toBe(true);
+    if (!('mesh' in r)) return;
+    expect(r.mesh.decoders?.ktx2).toBe(true);
+    expect(r.ktx2Fallback).toBe(false);
+  });
+
+  it('loads a basisu-USED GLB and needs the transcoder too (no fallback line)', () => {
+    const r = createPreviewMesh('tex.glb', glb(JSON.stringify({ extensionsUsed: ['KHR_texture_basisu'] })));
+    expect('mesh' in r && r.mesh.decoders).toEqual({ draco: false, meshopt: false, ktx2: true });
+    expect('mesh' in r && r.ktx2Fallback).toBe(false);
+  });
+
+  it('loads a plain GLB with no fallback flag and no decoders key', () => {
+    const r = createPreviewMesh('plain.glb', glb(GLTF_DOC));
+    expect('mesh' in r && r.ktx2Fallback).toBe(false);
+    // Absent, not { draco: false, meshopt: false, ktx2: false }: an uncompressed mesh looks
+    // exactly as it did before decoders existed.
+    expect('mesh' in r && 'decoders' in r.mesh).toBe(false);
+  });
+
+  it('fails open to no decoders for a GLB whose JSON cannot be read', () => {
+    const r = createPreviewMesh('junk.glb', glb('{ not json'));
+    expect('mesh' in r && 'decoders' in r.mesh).toBe(false);
+  });
+
+  it('never inspects an OBJ, whatever its text says', () => {
+    const r = createPreviewMesh('a.obj', new TextEncoder().encode('# KHR_draco_mesh_compression\nv 0 0 0\n'));
+    expect('mesh' in r).toBe(true);
+    expect('mesh' in r && 'decoders' in r.mesh).toBe(false);
+  });
+
+  it('mints an id only on success, so a refusal never burns one', () => {
+    const a = createPreviewMesh('a.obj', new TextEncoder().encode('v 0 0 0'));
+    // No compression is refused under the bundled decoders any more, so the
+    // refusal here is a bad container.
+    createPreviewMesh('d.glb', new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+    const b = createPreviewMesh('b.obj', new TextEncoder().encode('v 0 0 0'));
+    if (!('mesh' in a) || !('mesh' in b)) throw new Error('expected meshes');
+    expect(b.mesh.id).toBe(a.mesh.id + 1);
+  });
+});
+
+describe('fillMeshRefusal: a name spelling a placeholder', () => {
+  it('stays text — the old global `{ext}` pass rewrote the name too', () => {
+    const r = { reason: 'compressed' as const, key: MESH_COMPRESSED_KEY, name: '{ext}.glb', ext: 'Draco' as const };
+    expect(fillMeshRefusal(r, r.key, 'en')).toBe(
+      '“{ext}.glb” uses Draco compression, which FastShaders cannot read yet. Re-export it from Blender (or gltf-transform) without Draco.',
+    );
+  });
+});
+
+describe('previewMesh: preReadModelGate (the pre-read size gate)', () => {
+  const OVER_MODEL = MESH_MAX_BYTES + 1;
+
+  it('with the build off it is exactly the model cap, for every kind', () => {
+    for (const kind of ['glb', 'gltf', 'obj', null] as const) {
+      expect(preReadModelGate(kind, OVER_MODEL, false)).toEqual(modelTooLargeRefusal(OVER_MODEL));
+      expect(preReadModelGate(kind, MESH_MAX_BYTES, false)).toBeNull();
+    }
+  });
+
+  it('with the build on, only a .glb gets the larger read cap', () => {
+    expect(preReadModelGate('glb', OVER_MODEL, true)).toBeNull();
+    expect(preReadModelGate('glb', GLB_READ_MAX_BYTES, true)).toBeNull();
+    expect(preReadModelGate('glb', GLB_READ_MAX_BYTES + 1, true)).toEqual({
+      reason: 'too-large',
+      key: MESH_TOO_LARGE_KEY,
+      sizeBytes: GLB_READ_MAX_BYTES + 1,
+    });
+    expect(preReadModelGate('gltf', OVER_MODEL, true)).toEqual(modelTooLargeRefusal(OVER_MODEL));
+    expect(preReadModelGate('obj', OVER_MODEL, true)).toEqual(modelTooLargeRefusal(OVER_MODEL));
+    expect(preReadModelGate(null, OVER_MODEL, true)).toEqual(modelTooLargeRefusal(OVER_MODEL));
+  });
+
+  it('only a literal true enables the build cap', () => {
+    expect(preReadModelGate('glb', OVER_MODEL, 1 as unknown as boolean)).not.toBeNull();
+    expect(preReadModelGate('glb', OVER_MODEL, 'yes' as unknown as boolean)).not.toBeNull();
+  });
+
+  it.each([Number.NaN, -1, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY, '5' as unknown as number])(
+    'refuses a size that cannot be shown to fit: %s',
+    (size) => {
+      expect(preReadModelGate('glb', size, true)?.reason).toBe('too-large');
+    },
+  );
+
+  it('an empty file passes the gate (createPreviewMesh refuses it after the read)', () => {
+    expect(preReadModelGate('glb', 0, false)).toBeNull();
+  });
+});
+
+/* ── GLB Phase 7, L1: no preview copy keeps a FastShaders payload ─────────── */
+
+describe('createPreviewMesh drops a FastShaders payload from every copy', () => {
+  const text = (b: Uint8Array) => new TextDecoder().decode(b);
+  const payloadFree = (b: Uint8Array) => {
+    expect(readGlbFsExtras(b).state).toBe('none');
+    expect(text(b)).not.toContain(FS_FIXTURE_MODULE_MARKER);
+    expect(text(b)).not.toContain('"fastshaders"');
+  };
+  const fsGlb = (o: FsGlbFixture = {}) =>
+    makeFastShadersGlb({ project: '/* FASTSHADERS_PROJECT_V1\n{"version":1}\nEND_FASTSHADERS_PROJECT */', ...o });
+
+  it('a drop: reclaimed (compacted), same signature', () => {
+    const src = fsGlb();
+    const r = createPreviewMesh('m.glb', src);
+    expect('mesh' in r).toBe(true);
+    if (!('mesh' in r)) return;
+    payloadFree(r.mesh.bytes);
+    expect(r.mesh.bytes.length).toBeLessThan(src.length);
+    expect(r.mesh.gltf?.signature).toEqual(['Body', 'Glass']);
+  });
+
+  it('the IndexedDB restore path is stripped too', () => {
+    const mesh = recordToMesh({ name: 'm.glb', bytes: fsGlb().slice().buffer });
+    expect(mesh).not.toBeNull();
+    payloadFree(mesh!.bytes);
+  });
+
+  it("a buffer extension this file cannot see into: 'kept' mode ZEROES the payload in place", () => {
+    const src = fsGlb({
+      json: (doc) => {
+        (doc.buffers as Array<Record<string, unknown>>)[0].extensions = { EXT_unknown_buffer: {} };
+        doc.extensionsUsed = ['EXT_unknown_buffer'];
+      },
+    });
+    const r = createPreviewMesh('m.glb', src);
+    expect('mesh' in r).toBe(true);
+    if ('mesh' in r) payloadFree(r.mesh.bytes);
+  });
+
+  it('a model the reader refuses still loses its payload (the in-place drop)', () => {
+    // A node with two parents: the strict reader refuses, GLTFLoader would not.
+    const src = fsGlb({
+      json: (doc) => {
+        const nodes = doc.nodes as Array<Record<string, unknown>>;
+        nodes[0].children = [1];
+      },
+    });
+    const r = createPreviewMesh('m.glb', src);
+    expect('mesh' in r).toBe(true);
+    if (!('mesh' in r)) return;
+    payloadFree(r.mesh.bytes);
+    expect(r.mesh.bytes.length).toBe(src.length);
+  });
+
+  it('a payload sniffed in a container that will not parse is a bad GLB (fail closed)', () => {
+    const src = fsGlb();
+    src[4] = 3; // GLB version 3
+    const r = createPreviewMesh('m.glb', src);
+    expect('error' in r && r.refusal.reason).toBe('bad-glb');
+  });
+
+  it('an embedded .gltf loses it too', () => {
+    const src = new TextEncoder().encode(makeFastShadersGltfJson({ project: 'x' }));
+    const r = createPreviewMesh('m.gltf', src);
+    expect('mesh' in r).toBe(true);
+    if (!('mesh' in r)) return;
+    expect(r.mesh.text).not.toContain('"fastshaders"');
+    const binOf = (json: string) => {
+      const doc = JSON.parse(json, safeJsonReviver) as { buffers: Array<{ uri: string }> };
+      const d = decodeDataUri(doc.buffers[0].uri, 'buffer', 1 << 20);
+      if (!d.ok) throw new Error('buffer');
+      return text(d.bytes);
+    };
+    expect(binOf(text(src))).toContain(FS_FIXTURE_MODULE_MARKER);
+    expect(binOf(r.mesh.text!)).not.toContain(FS_FIXTURE_MODULE_MARKER);
+  });
+
+  it('a plain GLB (and one that only NAMES fastshaders) is the same bytes, unread', () => {
+    const plain = makeFastShadersGlb({ omitExtras: true, omitSceneExtras: true, module: null });
+    const r = createPreviewMesh('m.glb', plain);
+    expect('mesh' in r && r.mesh.bytes).toEqual(plain);
+    const named = makeFastShadersGlb({ omitExtras: true, omitSceneExtras: true, module: null, materials: ['"fastshaders"', 'B'] });
+    const r2 = createPreviewMesh('m.glb', named);
+    expect('mesh' in r2 && r2.mesh.bytes.length).toBe(named.length);
   });
 });

@@ -226,7 +226,9 @@ describe('store.setActiveOutput', () => {
     const store = readFileSync(resolve(__dirname, '../store/useAppStore.ts'), 'utf8');
     const load = store.slice(store.indexOf('export function loadGraph()'), store.indexOf('const folded = foldExtraOutputs(data.nodes, data.edges)'));
     expect(load, 'loadGraph must normalise BEFORE the fold reads the flag').toContain('data.nodes = normalizeActiveOutput(data.nodes);');
-    expect(store, 'a saved group is a fragment — its flag is cleared at load').toContain('nodes: clearActiveOutput(sanitizeOutputMaterials(');
+    // The saved group's Output sections are sanitized WITH a count (the
+    // output-sections-trimmed notice), then its flag is cleared.
+    expect(store, 'a saved group is a fragment — its flag is cleared at load').toContain('const nodes = clearActiveOutput(secs.nodes);');
     expect(store, 'instantiate normalises the COMBINED list, live graph first').toContain('normalizeActiveOutput(sanitizeOutputMaterials([group, ...state.nodes, ...members] as AppNode[]))');
     const imp = readFileSync(resolve(__dirname, '../engine/projectImport.ts'), 'utf8');
     expect(imp).toContain('dataSanitized.nodes = normalizeActiveOutput(dataSanitized.nodes);');

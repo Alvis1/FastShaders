@@ -93,9 +93,9 @@ export const RAMP_COLOR_PORTS = new Set(['lowColor', 'highColor']);
  * node-editor overview, Node Designer stage), so a tile cannot advertise a
  * socket the freshly dropped node does not have.
  *
- * `defaultValues` is deliberately KEPT (unlike the imageNode filter): those
- * entries are what draw the inline swatches, which is the whole point of the
- * node. Returns the def UNCHANGED when nothing is filtered, so the common case
+ * `defaultValues` is deliberately KEPT (unlike {@link effectiveImageDef}):
+ * those entries are what draw the inline swatches, which is the whole point of
+ * the node — and filtering ALL inputs the image way would drop `signal`. Returns the def UNCHANGED when nothing is filtered, so the common case
  * costs no new object identity for the memos downstream.
  */
 export function effectiveRampDef<T extends NodeDefinition>(def: T, exposed: Iterable<string>): T {
@@ -103,6 +103,39 @@ export function effectiveRampDef<T extends NodeDefinition>(def: T, exposed: Iter
   const on = exposed instanceof Set ? exposed : new Set(exposed);
   const inputs = def.inputs.filter((inp) => !RAMP_COLOR_PORTS.has(inp.id) || on.has(inp.id));
   return inputs.length === def.inputs.length ? def : { ...def, inputs };
+}
+
+/**
+ * The Image node's def with its opt-in parameter sockets filtered to the
+ * EXPOSED set (registry order kept) and `defaultValues` blanked.
+ *
+ * The params (uv, tile, offset, direction) follow the noise nodes' opt-in
+ * exposedPorts rules: hidden until ticked in Node Settings, or auto-exposed
+ * when an edge arrives. `defaultValues` goes because the tile/offset numbers
+ * are context-menu-only on this node — left in, `buildRows` emits one empty
+ * setting row per param (dead space under the thumbnail). Outputs are never
+ * touched: Color/Alpha/R/G/B are always mounted.
+ *
+ * Moved out of ShaderNode so every replica applies it too: NodeVisual never
+ * ran the old inline filter, so a palette tile drew six param rows with number
+ * boxes beside a canvas node that shows none (GLB Phase 4). Returns the def by
+ * IDENTITY for every other node.
+ */
+export function effectiveImageDef<T extends NodeDefinition>(def: T, exposed: Iterable<string>): T {
+  if (def.type !== 'imageNode') return def;
+  const on = exposed instanceof Set ? exposed : new Set(exposed);
+  return { ...def, inputs: def.inputs.filter((inp) => on.has(inp.id)), defaultValues: {} };
+}
+
+/**
+ * THE effective definition a node is DRAWN from — the ramp filter, then the
+ * image filter. ShaderNode (its `effDef` memo, with the node's exposed set) and
+ * NodeVisual (with nothing exposed: a replica is a freshly added node) both
+ * call this and nothing narrower, so no preview surface can show a socket or a
+ * row the live node lacks. Identity for every node neither filter touches.
+ */
+export function effectiveNodeDef<T extends NodeDefinition>(def: T, exposed: Iterable<string>): T {
+  return effectiveImageDef(effectiveRampDef(def, exposed), exposed);
 }
 
 /** The node's effective exposed list, resolving the Output node's implicit

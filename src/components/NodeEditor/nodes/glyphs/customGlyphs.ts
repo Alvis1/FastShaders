@@ -231,7 +231,7 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
     "sockets": {
       "out": -52,
       "channel": -44,
-      "rotation": 36,
+      "rotation": 40,
       "tilingV": 24,
       "tilingU": 12
     }
@@ -672,10 +672,10 @@ export const CUSTOM_GLYPHS: Record<string, { svg?: string; justify?: string; sca
   "sdCylinder": {
     "svg": "<g transform=\"translate(28 28)\">\n<path d=\"M-14 12 A14 5 0 0 1 14 12\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\" stroke-dasharray=\"2 2\"></path>\n<ellipse cx=\"0\" cy=\"-12\" rx=\"14\" ry=\"5\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></ellipse><line x1=\"-14\" y1=\"-12\" x2=\"-14\" y2=\"12\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></line><line x1=\"14\" y1=\"-12\" x2=\"14\" y2=\"12\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></line><path d=\"M-14 12 A14 5 0 0 0 14 12\" fill=\"none\" stroke=\"#2B2B2B\" stroke-width=\"2.4\"></path>\n\n<path d=\"M -18.37 -12 C -18.37 -12 -19.56 -22.04 0 -21.16 C 19.56 -21.16 18.3 -12 18.3 -12 L 18.3 12 C 18.3 12 20.72 21.98 0 21.26 C -20.72 21.26 -18.37 12 -18.37 12 L -18.37 -12 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -21.69 -13.75 C -21.69 -13.75 -23.1 -25.26 0 -24.25 C 23.1 -24.25 21.61 -13.75 21.61 -13.75 L 21.61 13.76 C 21.61 13.76 24.47 25.2 0 24.38 C -24.47 24.38 -21.69 13.76 -21.69 13.76 L -21.69 -13.75 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n<path d=\"M -24.98 -15.74 C -24.98 -15.74 -26.61 -28.92 0 -27.76 C 26.61 -27.76 24.89 -15.74 24.89 -15.74 L 24.89 15.76 C 24.89 15.76 28.19 28.86 0 27.92 C -28.19 27.92 -24.98 15.76 -24.98 15.76 L -24.98 -15.74 Z\" fill=\"none\" stroke=\"#8A8F9C\" stroke-width=\"1.4\"></path>\n\n\n<line x1=\"0\" y1=\"12\" x2=\"13.1\" y2=\"12\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"13.1\" cy=\"12\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n\n<line x1=\"0\" y1=\"12\" x2=\"0\" y2=\"-12\" stroke=\"#F57C00\" stroke-width=\"1.6\" stroke-dasharray=\"3 2\"></line><circle cx=\"0\" cy=\"-12\" r=\"2.4\" fill=\"#F57C00\"></circle>\n\n</g>",
     "dy": 2,
-    "width": 39,
-    "height": 90,
+    "width": 41,
+    "height": 104,
     "sockets": {
-      "p": -4,
+      "p": -8,
       "r": 8,
       "h": 24,
       "round": 40,

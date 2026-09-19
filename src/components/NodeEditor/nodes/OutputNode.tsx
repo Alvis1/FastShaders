@@ -10,9 +10,24 @@ import {
   materialExposedPorts,
   channelHandle,
   shiftMaterialHandles,
+  planNamedParts,
+  planIndexParts,
+  countSections,
+  isIndexSection,
+  readModelSignature,
+  sectionLabel,
+  loadedModelOf,
+  shownPreviewMesh,
+  indexSectionsAwake,
+  indexSectionCoverage,
+  defaultSectionUnused,
+  addedMaterialContributes,
+  pickFreeMesh,
   MAX_ADDED_MATERIALS,
+  MAX_PARTS,
   type OutputMaterial,
 } from '@/utils/outputMaterials';
+import { fillTemplate } from '@/utils/fillTemplate';
 import { removeEdgesForPort } from '@/utils/edgeUtils';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { t, portLabel, formatNodeLabel } from '@/i18n';
@@ -31,6 +46,8 @@ import { LiveEdgeValue } from './LiveEdgeValue';
 import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { MeshTargetPicker } from './MeshTargetPicker';
+import { IndexSectionChip } from './IndexSectionChip';
+import { SECTION_SILENT_KEY, formatSectionLabel, joinCapped } from './sectionLabelText';
 import './OutputNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 
@@ -133,6 +150,16 @@ export const OutputNode = memo(function OutputNode({
   // A custom model that has not REPORTED yet (the swap window) must not put
   // sections to sleep — see dormantIndicesForPreview rule 1.
   const inventoryKnown = useAppStore((s) => !s.previewMesh || !!s.previewMeshInventory);
+  // The loaded model's TRUSTED facts (`previewMesh.gltf`, computed by
+  // createPreviewMesh) — what index sections sleep and mark against. Never
+  // the sandbox's inventory: it is forgeable, and an index section's binding
+  // is to a glTF MATERIAL, which only the trusted reader can see. The mesh
+  // object's identity changes only when a model is loaded or removed. Read
+  // only while the pane SHOWS it: a primitive picked in the Model menu reads
+  // as no model, so index sections sleep rather than claim unshown meshes.
+  const shownMesh = useAppStore(shownPreviewMesh);
+  const loaded = useMemo(() => loadedModelOf(shownMesh), [shownMesh]);
+  const gltfNotShown = useAppStore((s) => s.previewShowsModel === false && !!s.previewMesh && loadedModelOf(s.previewMesh).kind !== 'not-gltf');
   const costColorLow = useAppStore((s) => s.costColorLow);
   const costColorHigh = useAppStore((s) => s.costColorHigh);
   // The header mixes into the card, and the card follows the theme
@@ -167,35 +194,80 @@ export const OutputNode = memo(function OutputNode({
     return Array.isArray(raw) ? [...(raw as OutputMaterial[])] : [];
   }, [id]);
 
+  /** THE first-claim plan emission uses, so the node's shadowed mark and the
+   *  emitted `parts` can never disagree about which section a mesh is in. */
+  const namedPlan = useMemo(() => planNamedParts(materials), [materials]);
+  /** The model signature an import wrote (null without index sections), and
+   *  THE index plan emission uses — its duplicates are the shadowed chips. */
+  const signature = useMemo(() => readModelSignature(data), [data]);
+  const indexPlan = useMemo(() => planIndexParts(materials, signature), [materials, signature]);
+  /** Are this node's index sections awake on the loaded model (the exact
+   *  signature rule; an unreadable glTF hides nothing)? */
+  const indexAwake = indexSectionsAwake(signature, loaded);
+  /** What each index section does on the loaded model — covered, overridden
+   *  by a mesh section (the name claim wins), unused, a duplicate. */
+  const coverage = useMemo(
+    () => indexSectionCoverage(materials, signature, loaded, namedPlan),
+    [materials, signature, loaded, namedPlan],
+  );
+  /** Does material 0 shade nothing of the model on screen — every mesh taken
+   *  by a section below? Marks the block instead of leaving it looking like a
+   *  second Output whose sockets do nothing (see `defaultSectionUnused`). */
+  const defaultUnused = useMemo(
+    () => defaultSectionUnused(meshNames, materials, namedPlan, coverage),
+    [meshNames, materials, namedPlan, coverage],
+  );
+  /** The double claim on the NAME side: mesh → the label of the material
+   *  section that also covers it, for the pickers' row titles. */
+  const indexHints = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const [i, c] of coverage) {
+      if (c.state !== 'covered' && c.state !== 'overridden') continue;
+      const lbl = formatSectionLabel(sectionLabel(materials, i, signature), language);
+      for (const n of c.meshes) if (!m.has(n)) m.set(n, lbl);
+    }
+    return m;
+  }, [coverage, materials, signature, language]);
+
   /**
-   * Add a material for the first mesh nothing has claimed yet.
+   * Add a material for a mesh no section has claimed yet (`pickFreeMesh`):
+   * preferably one no index section covers either; failing that, an
+   * index-covered one, which the new NAME section then OVERRIDES — the
+   * intended way to restyle one mesh of an imported material.
    *
    * Seeded with a real target rather than an empty one: a material with no mesh
-   * means nothing (material 0 is already the default), it would be dropped by
-   * the sanitizer on the next reload, and it cannot emit — so offering one
-   * would be offering a section that silently disappears.
+   * means nothing (material 0 is already the default), and it cannot emit — so
+   * offering one would be offering a section that does nothing.
    *
-   * The "+ Add mesh" button still only ever mints an UNCLAIMED target, even
-   * though the pickers below accept a duplicate: a duplicate is a deliberate
-   * intermediate step in a swap, never a sensible thing to create out of
-   * nothing (emission shadows it, so the new section would arrive inert).
+   * The button still only ever mints an UNCLAIMED name, even though the pickers
+   * below accept a duplicate: a duplicate is a deliberate intermediate step in
+   * a swap, never a sensible thing to create out of nothing (emission shadows
+   * it, so the new section would arrive inert).
    */
-  const claimedNames = useMemo(
-    () => new Set(materials.flatMap((m) => materialTargetNames(m))),
-    [materials],
-  );
-  const canAddMaterial =
-    materials.length - 1 < MAX_ADDED_MATERIALS
-    && meshNames.some((n) => !claimedNames.has(n));
+  // NAMED sections only: an import-built Output's index sections have their
+  // own cap (MAX_INDEX_MATERIALS) and must not block adding a mesh section.
+  const atSectionCap = countSections(materials).named >= MAX_ADDED_MATERIALS;
+  const canAddMaterial = !atSectionCap && pickFreeMesh(meshNames, materials, coverage) !== null;
+  /** Why "+ Add output" is dimmed. The button never vanishes at a cap — a
+   *  control that disappears is a cap that does not announce itself. */
+  const addBlockedReason = atSectionCap
+    ? fillTemplate(t('An Output holds at most {max} mesh sections', language), { max: MAX_ADDED_MATERIALS })
+    : t('Every mesh already has its own section', language);
 
   const addMaterial = useCallback(() => {
     const added = readAdded();
-    if (added.length >= MAX_ADDED_MATERIALS) return;
-    const node = useAppStore.getState().nodes.find((n) => n.id === id);
-    const claimed = new Set(
-      (node ? outputMaterials(node) : added).flatMap((m) => materialTargetNames(m)),
+    const state = useAppStore.getState();
+    const node = state.nodes.find((n) => n.id === id);
+    const all = node ? outputMaterials(node) : [{}, ...added];
+    if (countSections(all).named >= MAX_ADDED_MATERIALS) return;
+    // Re-derived from the CURRENT store, not the render closure: a press can
+    // land after an edit the closure has not seen.
+    const sig = node ? readModelSignature(node.data) : null;
+    const free = pickFreeMesh(
+      meshNames,
+      all,
+      indexSectionCoverage(all, sig, loadedModelOf(shownPreviewMesh(state)), planNamedParts(all)),
     );
-    const free = meshNames.find((n) => !claimed.has(n));
     if (!free) return;
     setAddedMaterials([...added, { meshTargets: [free] }]);
   }, [id, readAdded, meshNames, setAddedMaterials]);
@@ -256,10 +328,20 @@ export const OutputNode = memo(function OutputNode({
         const renamed = shiftMaterialHandles(state.edges, id, index);
         if (renamed !== state.edges) state.setEdges(renamed);
         added.splice(k, 1);
-        setAddedMaterials(added);
+        // Removing the LAST index section drops the node's signature AND its
+        // mirror source in the SAME updateNodeData (one undo entry): both
+        // exist only to serve index sections, and a signature with nothing to
+        // key must not ride on in the graph, the autosave and the export.
+        const d = (useAppStore.getState().nodes.find((n) => n.id === id)?.data ?? {}) as Record<string, unknown>;
+        const dropSignature = !added.some(isIndexSection)
+          && (d.modelSignature !== undefined || d.modelMeshes !== undefined);
+        updateNodeData(id, {
+          materials: added.length > 0 ? added : undefined,
+          ...(dropSignature ? { modelSignature: undefined, modelMeshes: undefined } : {}),
+        } as Partial<OutputNodeData>);
       });
     },
-    [id, def.inputs, readAdded, setAddedMaterials],
+    [id, def.inputs, readAdded, updateNodeData],
   );
 
   // The Output node opts out of ALL drag-proximity behavior: no hidden-channel
@@ -281,10 +363,15 @@ export const OutputNode = memo(function OutputNode({
    *  stored value on a hidden channel does not count. */
   const emitsNothing = useMemo(() => {
     if (wiredLabels.size > 0) return false;
+    // A section that EMITS (a claimed mesh name, or an index section inside
+    // the signature) takes graphToCode's object return, never the red
+    // sentinel — even when every one of its channels is a stored value or
+    // nothing at all. The same two plans emission reads.
+    if (namedPlan.entries.length > 0 || indexPlan.entries.length > 0) return false;
     return !Object.keys(values).some(
       (k) => exposedSet.has(k) && storedValueEmits(k, values[k]),
     );
-  }, [wiredLabels, values, exposedSet]);
+  }, [wiredLabels, values, exposedSet, namedPlan, indexPlan]);
 
   // Sections whose EVERY named mesh is absent from the loaded model are
   // DORMANT — hidden behind the chip below, never deleted: drop a different
@@ -307,8 +394,13 @@ export const OutputNode = memo(function OutputNode({
     );
   }, [wiredLabels, values, exposedSet]);
   const dormant = useMemo(
-    () => dormantIndicesForPreview(materials, { meshNames, inventoryKnown, defaultContributes }),
-    [materials, meshNames, inventoryKnown, defaultContributes],
+    () => dormantIndicesForPreview(materials, {
+      meshNames,
+      inventoryKnown,
+      defaultContributes,
+      indexSectionsAwake: indexAwake,
+    }),
+    [materials, meshNames, inventoryKnown, defaultContributes, indexAwake],
   );
 
   /**
@@ -399,6 +491,27 @@ export const OutputNode = memo(function OutputNode({
   const sectionPorts = (ids: string[], exposed: Set<string>) =>
     def.inputs.filter((p) => ids.includes(p.id) && exposed.has(p.id));
 
+  /**
+   * An ADDED material that sets nothing: no wire on any of its handles and no
+   * emitting stored value on an exposed channel, so `buildShaderModule` drops
+   * its part and the meshes it names keep exactly what they had.
+   *
+   * Every "+ Add output" starts here, which is why the section is MARKED and
+   * never disabled or hidden: the mark is what stops "add a section, pick the
+   * mesh" from reading as an assignment that failed (owner, 2026-09-18). It
+   * clears itself the moment anything in the section emits. Material 0 is
+   * never in this state — an Output with no channels at all emits the red
+   * sentinel, which `emitsNothing` marks instead.
+   */
+  const sectionSilent = (index: number): boolean => {
+    if (index === 0) return false;
+    let wired = false;
+    for (const h of wiredLabels.keys()) {
+      if (parseChannelHandle(h).index === index) { wired = true; break; }
+    }
+    return !addedMaterialContributes(materials[index], wired);
+  };
+
   /** The right-hand cell of a row: the incoming value when wired (read-only,
    *  plain text, blue when live — a fill means "editable", plain text means
    *  "derived"); otherwise the channel's stored-value widget, when it has
@@ -412,6 +525,7 @@ export const OutputNode = memo(function OutputNode({
       );
     }
     const matValues = materials[index]?.values ?? {};
+    const silent = sectionSilent(index);
     if (portId in OUTPUT_COLOR_VALUE_PORTS) {
       const stored = matValues[portId];
       // On a material that emits nothing, the shader's real Color is the red
@@ -426,7 +540,13 @@ export const OutputNode = memo(function OutputNode({
           // A stored channel colour IS the graph — it emits `color(0x…)` — so
           // this site is undoable and takes the bracket.
           history="bracket"
-          value={typeof stored === 'string' ? stored : channelDefault}
+          // A SILENT added section emits no part at all, so its unwired
+          // channels paint nothing — the UNSET swatch (hollow, slashed) says
+          // that, where the channel default promised a white the preview never
+          // paints. The moment anything in the section emits, every row goes
+          // back to showing what the part really renders for an unset channel.
+          value={typeof stored === 'string' ? stored : (silent ? '' : channelDefault)}
+          title={silent ? t(SECTION_SILENT_KEY, language) : undefined}
           clearColor={channelDefault}
           onClear={() => clearChannelValue(index, portId)}
           onPick={(hex) => setChannelValue(index, portId, hex)}
@@ -491,15 +611,16 @@ export const OutputNode = memo(function OutputNode({
     const pixel = sectionPorts(PIXEL_PORTS, exposed);
     const vertex = sectionPorts(VERTEX_PORTS, exposed);
     const targets = materialTargetNames(material);
-    // An EARLIER material already names one of these meshes, so emission's
-    // first-claim rule shadows this one for that mesh. Selecting a duplicate is
-    // allowed on purpose (it is how two materials swap meshes), so the state is
-    // legal -- but a section that looks live and contributes nothing is
-    // precisely what nobody would think to report, hence the mark.
-    const claimedAbove = new Set(
-      materials.slice(0, index).flatMap((m) => materialTargetNames(m)),
-    );
-    const shadowed = targets.length > 0 && targets.every((n) => claimedAbove.has(n));
+    // An EARLIER material already names every one of these meshes, so the
+    // first-claim rule shadows this one entirely. A duplicate only ever ARRIVES
+    // (from a hand-edited or foreign file; the picker moves a mesh), so the
+    // state is legal -- but a section that looks live and contributes nothing is
+    // precisely what nobody would think to report, hence the mark. Read from
+    // `planNamedParts`, the SAME plan emission uses.
+    // An INDEX section (import-built, bound to a glTF material) is shadowed by
+    // the same first-claim rule, over glTF indices: `planIndexParts`.
+    const indexSection = index > 0 && isIndexSection(material);
+    const shadowed = indexSection ? indexPlan.duplicates.has(index) : namedPlan.shadowed.has(index);
 
     // An ADDED material always shows its picker -- it always names a mesh, and
     // hiding the row would hide the fact plus the control to drop it. Material
@@ -507,12 +628,25 @@ export const OutputNode = memo(function OutputNode({
     // if it already names one: reopening a graph without its model must not
     // strand a target the node no longer shows (it still emits).
     const showMeshRow = index > 0 || hasMeshes || targets.length > 0;
+    // The default with nothing left to shade: marked, never hidden — see
+    // `defaultSectionUnused`. Only material 0 can be in this state.
+    const unused = index === 0 && defaultUnused;
+    // An ADDED section that sets nothing: its part is dropped, so the meshes it
+    // names keep what they had. Marked on the picker (and on every unset colour
+    // swatch below) — see `sectionSilent`. An INDEX section is built from the
+    // model's own material and is never in this state before the user empties
+    // it, but the rule is the same one, so it is not special-cased.
+    const silent = sectionSilent(index);
 
     return (
       // data-material-index is the right-click hit test: NodeEditor's
       // onNodeContextMenu walks `closest('[data-material-index]')` so the
       // settings menu opens ALREADY SCOPED to the section under the cursor.
-      <div key={index} className="output-node__material" data-material-index={index}>
+      <div
+        key={index}
+        className={`output-node__material${unused ? ' output-node__material--unused' : ''}`}
+        data-material-index={index}
+      >
         {index > 0 && <div className="output-node__divider" />}
 
         {/* This SECTION's output socket — one per material, centred on its
@@ -539,19 +673,34 @@ export const OutputNode = memo(function OutputNode({
 
         {showMeshRow && (
           <div className="output-node__mesh-row">
-            <MeshTargetPicker
-              meshNames={meshNames}
-              selected={targets}
-              allowDefault={index === 0}
-              shadowed={shadowed}
-              onChange={(next) => setMaterialTargets(index, next)}
-            />
+            {/* An index section has no mesh list to edit — the MODEL decides
+                which meshes wear its material — so it shows a read-only chip
+                (inside the picker's width cap; the name is attacker-supplied). */}
+            {indexSection ? (
+              <IndexSectionChip
+                label={formatSectionLabel(sectionLabel(materials, index, signature), language)}
+                duplicate={shadowed}
+                coverage={coverage.get(index)}
+              />
+            ) : (
+              <MeshTargetPicker
+                meshNames={meshNames}
+                selected={targets}
+                allowDefault={index === 0}
+                shadowed={shadowed}
+                unused={unused}
+                silent={silent}
+                maxNames={MAX_PARTS}
+                indexClaimed={indexHints}
+                onChange={(next) => setMaterialTargets(index, next)}
+              />
+            )}
             {index > 0 && (
               <button
                 type="button"
                 className="output-node__mesh-remove nodrag"
-                title={t('Remove this mesh material', language)}
-                aria-label={t('Remove this mesh material', language)}
+                title={indexSection ? t('Remove this material section', language) : t('Remove this mesh material', language)}
+                aria-label={indexSection ? t('Remove this material section', language) : t('Remove this mesh material', language)}
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => removeMaterial(index)}
               >
@@ -578,6 +727,28 @@ export const OutputNode = memo(function OutputNode({
       </div>
     );
   };
+
+  // The dormant chip speaks about the two kinds separately: a NAME section
+  // sleeps because the loaded model lacks its meshes, an INDEX section because
+  // the loaded model is not the glTF it was built from (or none is loaded).
+  const dormantIdx = [...dormant].filter((i) => isIndexSection(materials[i]));
+  const dormantNamed = [...dormant].filter((i) => !isIndexSection(materials[i]));
+  const dormantTitle = [
+    dormantNamed.length > 0
+      ? `${t('Mesh materials for another model — the loaded model has none of their meshes. They still emit, and their sections return (wiring intact) when a matching model is loaded', language)}: ${dormantNamed
+        .flatMap((i) => materialTargetNames(materials[i]))
+        .join(', ')}`
+      : null,
+    dormantIdx.length > 0
+      ? `${loaded.kind === 'gltf'
+        ? t('Material sections for a model with other materials — the materials of the loaded model differ. They still emit, and return (wiring intact) when that model is loaded', language)
+        : gltfNotShown
+          ? t('Material sections for a glTF model — the preview is showing a different shape. They still emit, and return (wiring intact) when that model is shown', language)
+          : t('Material sections for a glTF model — none is loaded. They still emit, and return (wiring intact) when that model is loaded', language)}: ${joinCapped(
+        dormantIdx.map((i) => formatSectionLabel(sectionLabel(materials, i, signature), language)),
+      )}`
+      : null,
+  ].filter((line): line is string => line !== null).join('\n');
 
   return (
     <div
@@ -607,34 +778,47 @@ export const OutputNode = memo(function OutputNode({
           its title names their meshes, and the sections return — wiring
           intact — the moment a model carrying those names is loaded. */}
       {dormant.size > 0 && (
-        <div
-          className="output-node__dormant"
-          title={`${t('Mesh materials for another model — the loaded model has none of their meshes. They still emit, and their sections return (wiring intact) when a matching model is loaded', language)}: ${[...dormant]
-            .flatMap((i) => materialTargetNames(materials[i]))
-            .join(', ')}`}
-        >
-          {dormant.size}{' '}
-          {t(
-            dormant.size === 1
-              ? 'mesh material for another model'
-              : 'mesh materials for another model',
-            language,
+        <div className="output-node__dormant" title={dormantTitle}>
+          {dormantIdx.length === 0 ? (
+            <>
+              {dormant.size}{' '}
+              {t(
+                dormant.size === 1
+                  ? 'mesh material for another model'
+                  : 'mesh materials for another model',
+                language,
+              )}
+            </>
+          ) : (
+            fillTemplate(
+              t(
+                dormant.size === 1
+                  ? '{n} material section for another model'
+                  : '{n} material sections for another model',
+                language,
+              ),
+              { n: dormant.size },
+            )
           )}
         </div>
       )}
 
-      {/* Add another mesh material. Present only for a MODEL with a mesh left
-          to claim: with none free the button could only mint a material that
-          duplicates a claim, which emission drops and the sanitizer deletes —
-          a control whose press does nothing reads as broken. */}
-      {hasMeshes && materials.length <= MAX_ADDED_MATERIALS && canAddMaterial && (
+      {/* Add another mesh material — for every MODEL, and it never vanishes
+          at a cap (decision 9: a control that disappears is a cap that does
+          not announce itself). At MAX_ADDED_MATERIALS sections, or with every
+          mesh already claimed, it stays drawn and `aria-disabled` (never
+          `disabled`, which drops the title in WebKit) with the reason in its
+          title, and a press does nothing. It never MINTS a duplicate claim:
+          one would arrive inert, since emission shadows it. */}
+      {hasMeshes && (
         <div className="output-node__add-row">
           <button
             type="button"
-            className="output-node__add nodrag"
-            title={t('Shade another mesh with its own material', language)}
+            className={`output-node__add nodrag${canAddMaterial ? '' : ' output-node__add--disabled'}`}
+            aria-disabled={!canAddMaterial || undefined}
+            title={canAddMaterial ? t('Shade another mesh with its own material', language) : addBlockedReason}
             onPointerDown={(e) => e.stopPropagation()}
-            onClick={addMaterial}
+            onClick={canAddMaterial ? addMaterial : undefined}
           >
             {'\u002B'} {t('Add output', language)}
           </button>

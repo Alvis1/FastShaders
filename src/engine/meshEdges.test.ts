@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { buildShaderModule } from './tslCodeProcessor';
+import { ACTIVE_LOADERS, PINS, loaderAvailable, loaderText } from '@/shaderloaderHarness';
 
 /**
  * Mesh edges: how this app draws the model's REAL triangle edges.
@@ -25,39 +26,49 @@ describe('the module asks the loader for barycentric corners', () => {
     expect(buildShaderModule(TSL)).not.toContain('barycentric');
   });
 
-  it('the loader injects the attribute and can put the geometry back', () => {
-    const loader = readFileSync('a-frame-shaderloader/js/a-frame-shaderloader-0.6.js', 'utf8');
-    expect(loader).toContain('shaderResult.barycentric === true');
-    expect(loader).toContain('toNonIndexed()');
-    expect(loader).toContain('__fsBarySource');
-  });
+  // Every ACTIVE loader (src/shaderloaderHarness.ts). The anchors that moved
+  // between 0.6's component and 0.8's core live in PINS; every other literal is
+  // spelled identically in both files.
+  for (const v of ACTIVE_LOADERS) {
+    describe.skipIf(!loaderAvailable(v))(`shaderloader ${v}`, () => {
+      it('the loader injects the attribute and can put the geometry back', () => {
+        const loader = loaderText(v);
+        expect(loader).toContain('shaderResult.barycentric === true');
+        expect(loader).toContain('toNonIndexed()');
+        expect(loader).toContain('__fsBarySource');
+      });
 
-  it('welds BEFORE expanding, or the weld is undone', () => {
-    // Welding makes coincident corners share a vertex; toNonIndexed then copies
-    // that shared vertex's values into each corner, so a displaced surface still
-    // deforms as one skin. The other order welds nothing.
-    const loader = readFileSync('a-frame-shaderloader/js/a-frame-shaderloader-0.6.js', 'utf8');
-    expect(loader.indexOf('this.syncBary();')).toBeGreaterThan(loader.indexOf('this.syncWeld();'));
-    // ...and syncWeld drops ours first, or its identity guards are all false.
-    expect(loader).toMatch(/syncWeld: function \(\)[\s\S]{0,400}this\.unbary\(\);/);
-  });
+      it('welds BEFORE expanding, or the weld is undone', () => {
+        // Welding makes coincident corners share a vertex; toNonIndexed then copies
+        // that shared vertex's values into each corner, so a displaced surface still
+        // deforms as one skin. The other order welds nothing.
+        const loader = loaderText(v);
+        const [scopeStart, weldCall, baryCall] = PINS[v].weldThenBary;
+        expect(loader.indexOf(scopeStart), scopeStart).toBeGreaterThan(-1);
+        const scope = loader.slice(loader.indexOf(scopeStart));
+        expect(scope.indexOf(weldCall), weldCall).toBeGreaterThan(-1);
+        expect(scope.indexOf(baryCall)).toBeGreaterThan(scope.indexOf(weldCall));
+        // ...and syncWeld drops ours first, or its identity guards are all false.
+        expect(loader).toMatch(PINS[v].syncWeldUnbary);
+      });
 
-  it('a failed apply puts every geometry back', () => {
-    // unbary BEFORE unweld: unweld asks "is the mesh still wearing the geometry
-    // WE welded", and our expanded one on top makes that false, stranding the
-    // welded geometry with its source reference already dropped.
-    const loader = readFileSync('a-frame-shaderloader/js/a-frame-shaderloader-0.6.js', 'utf8');
-    const catchBlock = loader.slice(loader.indexOf('} catch (err) {'));
-    expect(catchBlock.indexOf('this.unbary();')).toBeLessThan(catchBlock.indexOf('this.unweld();'));
-  });
+      it('a failed apply puts every geometry back', () => {
+        // unbary BEFORE unweld: unweld asks "is the mesh still wearing the geometry
+        // WE welded", and our expanded one on top makes that false, stranding the
+        // welded geometry with its source reference already dropped.
+        const loader = loaderText(v);
+        const catchBlock = loader.slice(loader.indexOf('} catch (err) {'));
+        expect(catchBlock.indexOf('this.unbary();')).toBeLessThan(catchBlock.indexOf('this.unweld();'));
+      });
 
-  it('never builds from a geometry that cannot describe a triangle', () => {
-    // Reachable while a geometry is being swapped, and it would throw INSIDE
-    // applyShader's try — surfacing as a "Shader error" banner over a shader
-    // that is otherwise fine.
-    const loader = readFileSync('a-frame-shaderloader/js/a-frame-shaderloader-0.6.js', 'utf8');
-    expect(loader).toMatch(/if \(!pos \|\| pos\.count < 3\) return;/);
-  });
+      it('never builds from a geometry that cannot describe a triangle', () => {
+        // Reachable while a geometry is being swapped, and it would throw INSIDE
+        // applyShader's try — surfacing as a "Shader error" banner over a shader
+        // that is otherwise fine.
+        expect(loaderText(v)).toMatch(/if \(!pos \|\| pos\.count < 3\) return;/);
+      });
+    });
+  }
 });
 
 describe('three.material.wireframe is deliberately NOT used', () => {
@@ -91,7 +102,8 @@ describe('three.material.wireframe is deliberately NOT used', () => {
     'the emitter': 'src/engine/tslCodeProcessor.ts',
     'the import parser': 'src/engine/scriptToTSL.ts',
     'Shader Settings': 'src/components/NodeEditor/menus/ShaderSettingsMenu.tsx',
-    'the loader': 'a-frame-shaderloader/js/a-frame-shaderloader-0.6.js',
+    'the 0.6 loader': 'a-frame-shaderloader/js/a-frame-shaderloader-0.6.js',
+    'the 0.8 loader': 'a-frame-shaderloader/js/a-frame-shaderloader-0.8.js',
   };
 
   for (const [what, path] of Object.entries(files)) {

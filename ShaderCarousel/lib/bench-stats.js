@@ -219,6 +219,15 @@ export function detectVsyncClamping(results) {
  * they silently fell back to raw medians, which exported as clean-
  * looking (and wrong) suggestions.
  *
+ * `marginalPoints` is the price of ONE node instance. A registry entry
+ * may carry `copies: <integer > 1>` (the per-fetch texture atoms run 16
+ * fetches, because one sits under MicroPlane's timer floor — the
+ * committed quest3 run read cellNoise as 0 points), and the driver copies
+ * it onto the result; its points are then the whole-shader marginal ÷
+ * copies, and `stats.copies` records the divisor. `marginalMs` and
+ * `marginalMsAtRef` stay WHOLE-SHADER values. A result without `copies`
+ * is priced exactly as before.
+ *
  * Returns { baselineMs, resolutionScale }.
  */
 export function annotateMarginalCost(results, { pixels = null } = {}) {
@@ -226,6 +235,8 @@ export function annotateMarginalCost(results, { pixels = null } = {}) {
   const baselineMs = baseline ? (baseline.stats.msPerPass ?? baseline.stats.medianFt) : null;
   const resolutionScale = pixels > 0 ? REF_PIXELS / pixels : null;
   for (const r of results) {
+    const copies = Number.isInteger(r.copies) && r.copies > 1 ? r.copies : 1;
+    if (copies > 1) r.stats.copies = copies;
     if (baselineMs == null) {
       r.stats.baselineMs = null;
       r.stats.marginalMs = null;
@@ -239,7 +250,7 @@ export function annotateMarginalCost(results, { pixels = null } = {}) {
     r.stats.marginalMs = +marginal.toFixed(4);
     r.stats.marginalMsAtRef = resolutionScale != null ? +(marginal * resolutionScale).toFixed(4) : null;
     const basis = resolutionScale != null ? marginal * resolutionScale : marginal;
-    r.stats.marginalPoints = Math.max(0, Math.round((basis / BUDGET_MS) * 100));
+    r.stats.marginalPoints = Math.max(0, Math.round((basis / copies / BUDGET_MS) * 100));
   }
   return { baselineMs, resolutionScale };
 }
@@ -342,7 +353,8 @@ export function buildSuggestion(data, sourceName) {
         msPerPass: s.stats.msPerPass ?? s.stats.medianFt,
         marginalMs: s.stats.marginalMs,
         marginalMsAtRef: s.stats.marginalMsAtRef,
-        suggestedPoints: s.stats.marginalPoints,
+        suggestedPoints: s.stats.marginalPoints, // already PER COPY (annotateMarginalCost)
+        ...(s.stats.copies > 1 ? { copies: s.stats.copies } : {}),
       })),
   };
 }
@@ -350,7 +362,8 @@ export function buildSuggestion(data, sourceName) {
 /**
  * Reduce a suggestion object into a `complexity.json`-shaped PATCH:
  * `{ meta, costs: { <nodeKey>: <points> } }`. The node key is the suggestion
- * id with its group prefix stripped (`noise_voronoi` → `voronoi`), matching
+ * id with its group prefix stripped (`noise_voronoi` → `voronoi`,
+ * `texture_imageNode` → `imageNode`), matching
  * the keys under `complexity.json`'s `costs`. Only measured nodes appear, so
  * it's inherently partial and merges over the current table. This is the file
  * you drag onto FastShaders' cost bar to reprice live. Pure.
@@ -360,7 +373,10 @@ export function buildComplexityPatch(suggestion) {
   const costs = {};
   for (const s of suggestion.suggestions || []) {
     if (typeof s.suggestedPoints !== 'number' || !Number.isFinite(s.suggestedPoints)) continue;
-    costs[s.id.replace(/^(noise_|preset_|saved_)/, '')] = s.suggestedPoints;
+    // Drift pair with src/utils/costOverride.ts PREFIX: the editor strips the
+    // same prefixes from the raw and suggestion shapes, so all three files of
+    // one run must parse to the same prices (benchTextureProfile.test.ts).
+    costs[s.id.replace(/^(noise_|preset_|saved_|texture_)/, '')] = s.suggestedPoints;
   }
   return {
     meta: {
@@ -452,7 +468,7 @@ export function exportResults(data, prefix) {
       'id', 'label', 'category',
       'medianMs', 'msPerPass', 'meanMs', 'p95Ms', 'p99Ms', 'sdMs', 'cvPct',
       'marginalMs', 'marginalMsAtRef', 'marginalPoints', 'points', 'avgFps', 'thermalDrift',
-      'frameCount', 'outlierCount',
+      'frameCount', 'outlierCount', 'copies',
     ].join(','),
     ...data.shaders.map(s => [
       s.id, `"${s.label}"`, s.category,
@@ -460,7 +476,7 @@ export function exportResults(data, prefix) {
       s.stats.sdFt, s.stats.cvPercent,
       s.stats.marginalMs ?? '', s.stats.marginalMsAtRef ?? '', s.stats.marginalPoints ?? '',
       s.stats.points, s.stats.avgFps, s.stats.thermalDrift,
-      s.stats.frameCount, s.stats.outlierCount,
+      s.stats.frameCount, s.stats.outlierCount, s.stats.copies ?? 1,
     ].join(',')),
   ].join('\n');
   triggerDownload(

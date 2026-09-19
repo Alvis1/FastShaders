@@ -3,8 +3,8 @@ import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
 import { t, portLabel } from '@/i18n';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { OUTPUT_DEFAULT_EXPOSED } from '../nodes/OutputNode';
-import type { MaterialSettings, OutputNodeData } from '@/types';
-import { removeEdgesForPort } from '@/utils/edgeUtils';
+import type { MaterialSettings, OutputNodeData, AppNode, AppEdge } from '@/types';
+import { removeEdgesForPort, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { toggleExposedPort } from '@/utils/exposedPorts';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { useHistoryBracket } from '@/hooks/useHistoryBracket';
@@ -12,17 +12,34 @@ import {
   findDefaultOutput,
   outputMaterials,
   materialExposedPorts,
-  materialTargetNames,
   channelHandle,
+  sectionLabel,
+  readModelSignature,
   type OutputMaterial,
 } from '@/utils/outputMaterials';
+import { formatSectionLabel } from '../nodes/sectionLabelText';
 import { evalTask } from '@/eval/evalTask';
+import { isEvalMode } from '@/eval/evalMode';
+import { graphTextureMemory, textureMemoryLine, TEXTURE_MEMORY_HINT_KEY } from '@/utils/textureMemory';
 
 /** Ports that can be toggled on/off in the output node settings, listed in
  *  the SAME order as the node's socket arrangement (the registry def's
  *  inputs). Color is excluded (always exposed) and Opacity is excluded —
  *  it's auto-managed by transparent/alphaTest. */
 const OPTIONAL_OUTPUT_PORTS = ['emissive', 'roughness', 'metalness', 'discard', 'normal', 'env'];
+
+/** One-entry memo on the RAW store arrays. The selector below runs on every
+ *  store notification (hover writes included), but the figure can only change
+ *  when the graph does; unwrapping inside the selector would mint a new edge
+ *  array each time and defeat an identity memo. */
+let textureMemoryMemo: { nodes: AppNode[]; edges: AppEdge[]; key: string } | null = null;
+function textureMemoryKey(nodes: AppNode[], edges: AppEdge[]): string {
+  if (textureMemoryMemo && textureMemoryMemo.nodes === nodes && textureMemoryMemo.edges === edges) return textureMemoryMemo.key;
+  const m = graphTextureMemory(nodes, unwrapCollapsedGroupEdges(nodes, edges));
+  const key = `${m.bytes}|${m.count}`;
+  textureMemoryMemo = { nodes, edges, key };
+  return key;
+}
 
 export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   const closeContextMenu = useAppStore((s) => s.closeContextMenu);
@@ -37,6 +54,12 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
   // so it lands as one undo entry (ColorNode.tsx:135-154 pattern).
   const { bracket, closeBracket } = useHistoryBracket();
   const device = resolveDeviceBudget(selectedHeadsetId, costProfiles);
+  // The texture-memory line is hidden in every study arm (a new
+  // participant-visible element; if it is ever shown there it must also honour
+  // `evalTask().pointsVisible`, since it is cost feedback).
+  const showTextureMemory = !isEvalMode();
+  const texMemKey = useAppStore((s) => (showTextureMemory ? textureMemoryKey(s.nodes, s.edges) : '0|0'));
+  const [texBytes, texCount] = texMemKey.split('|').map(Number);
 
   // The Output the user right-clicked, falling back to THE Output for the
   // paths that open this menu without a node id (the canvas background).
@@ -262,6 +285,16 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
             </div>
           </>
         )}
+        {/* Texture MEMORY, the currency points do not price: a figure, not a
+            verdict. A plain `title`, so the app-wide TooltipLayer raises it. */}
+        {showTextureMemory && texCount > 0 && (
+          <div
+            title={t(TEXTURE_MEMORY_HINT_KEY, language)}
+            style={{ marginTop: 'var(--space-1)', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}
+          >
+            {textureMemoryLine(texBytes, texCount, language)}
+          </div>
+        )}
       </div>
 
       {/* Output port visibility toggles */}
@@ -333,16 +366,15 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
           (the first one plus an ellipsis, the node picker's own rule), since
           that is how the user thinks of them — "the glass one" — and the
           node's sections are labelled the same way. Shown only when there is
-          more than one, when "which one am I editing" is a real question;
-          `#i` is the last resort for a material whose target the loaded model
-          no longer has. */}
+          more than one, when "which one am I editing" is a real question. ONE
+          label derivation for the menu and the node: `sectionLabel` decides
+          what the label is, `formatSectionLabel` words it, so an empty added
+          section reads "No mesh" here exactly as it does on the node. */}
       {materials.length > 1 && (
         <div style={{ ...labelStyle, cursor: 'default' }}>
           <span>{t('Material', language)}</span>
           <span style={{ fontWeight: 700 }}>
-            {activeMaterial && materialTargetNames(activeMaterial)[0]
-              ? `${materialTargetNames(activeMaterial)[0]}${materialTargetNames(activeMaterial).length > 1 ? ' \u2026' : ''}`
-              : (activeIndex === 0 ? t('All meshes (default)', language) : `#${activeIndex}`)}
+            {formatSectionLabel(sectionLabel(materials, activeIndex, readModelSignature(outputData)), language)}
           </span>
         </div>
       )}

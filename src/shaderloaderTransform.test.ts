@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'fs';
-import path from 'path';
-import vm from 'vm';
 import { parse } from '@babel/parser';
+import { tslToShaderModule } from './engine/tslToShaderModule';
+import { loaderAvailable, transformsOf } from './shaderloaderHarness';
 
 /**
  * Regression guard for the vendored shaderloader's import-rewriting.
@@ -24,46 +23,22 @@ import { parse } from '@babel/parser';
 /**
  * Every ACTIVE loader version, checked identically.
  *
- * 0.6 is a copy of 0.5 plus per-sub-mesh material dispatch, so its transforms
- * are the same code — which is exactly why it needs the same guard rather than
- * an assumption: the two files drift the moment anyone edits one. 0.4 is
- * deliberately absent; it is frozen for shaders exported before 0.5 and is not
- * a maintained target.
+ * 0.6 is a copy of 0.5 plus per-sub-mesh material dispatch, and 0.8 carries
+ * 0.6's transforms verbatim (only autoInjectTSLImports reads TSL off the bound
+ * three instead of window.THREE) — which is exactly why each needs the same
+ * guard rather than an assumption: the files drift the moment anyone edits
+ * one. 0.4 is deliberately absent; it is frozen for shaders exported before 0.5
+ * and is not a maintained target.
  */
-const LOADER_VERSIONS = ['0.5', '0.6'] as const;
+const LOADER_VERSIONS = ['0.5', '0.6', '0.8'] as const;
 
-// The SUBMODULE is the source of truth, and since 2026-08-31 it is also the
-// only place 0.5 exists in this repo: it is frozen and CDN-only, so it is no
-// longer vendored into public/js (see NOT_VENDORED in vendorSync.test.ts).
-// 0.6 is vendored too, and vendorSync pins the copy byte-for-byte, so reading
-// both from here keeps this suite reading ONE file per version.
-const loaderPath = (version: string) =>
-  path.resolve(__dirname, `../a-frame-shaderloader/js/a-frame-shaderloader-${version}.js`);
-
-// Eval the vendored A-Frame component file in a sandbox that stubs the browser
-// globals it touches, then expose the internal transform helpers.
-function loadTransforms(version: string): {
-  globalizeBareImports: (s: string) => string;
-  autoInjectTSLImports: (s: string) => string;
-} {
-  const sandbox: Record<string, unknown> = {
-    console: { log() {}, error() {}, warn() {} },
-    URL,
-    location: { href: 'https://podest.lv/podest.html' },
-    AFRAME: { registerComponent() {}, registerShader() {}, utils: {} },
-    window: { THREE: null },
-  };
-  sandbox.globalThis = sandbox;
-  sandbox.window = sandbox.window;
-  vm.createContext(sandbox);
-  const src = readFileSync(loaderPath(version), 'utf8');
-  vm.runInContext(
-    src +
-      '\n;globalThis.__t = { globalizeBareImports, autoInjectTSLImports };',
-    sandbox,
-  );
-  return (sandbox as { __t: ReturnType<typeof loadTransforms> }).__t;
-}
+// src/shaderloaderHarness.ts picks the file — the frozen loaders from the
+// SUBMODULE (0.5 exists nowhere else in this repo), the current one from its
+// served public/js copy, which vendorSync pins to the submodule — and reaches
+// the transforms: up to 0.6 they are top-level functions of the script, and
+// 0.8, an IIFE, exposes the same functions as FastShaders.transforms.
+const loadTransforms = (version: string) =>
+  transformsOf(version, { href: 'https://podest.lv/podest.html' });
 
 const parsesAsModule = (code: string): boolean => {
   try {
@@ -101,11 +76,37 @@ export default function (params) {
 END_FASTSHADERS_PROJECT */
 `;
 
+// A CURRENT property-bearing export, built by the real generator, so the usage
+// header the app ships TODAY runs through the loader's transforms below.
+// EXPORT_WITH_PROPERTY above stands for already-shipped 0.5-era exports and is
+// deliberately never updated.
+const CURRENT_EXPORT = tslToShaderModule(
+  `import { Fn, uniform, mul, positionGeometry } from 'three/tsl';
+
+const shader = Fn(() => {
+  const amount = uniform(2.5);
+  const mul1 = positionGeometry.mul(amount);
+
+  return mul1;
+});
+
+export default shader;
+`,
+  undefined,
+  [{ name: 'amount', type: 'float', defaultValue: 2.5 }],
+);
+const leadingComments = (code: string): string => {
+  const lines = code.split('\n');
+  let i = 0;
+  while (i < lines.length && lines[i].startsWith('//')) i++;
+  return lines.slice(0, i).join('\n');
+};
+
 for (const version of LOADER_VERSIONS) {
   // Skipped on a NON-RECURSIVE checkout, where the submodule is empty —
   // vendorSync.test.ts guards its own rows the same way. Reading the source
   // rather than a vendored copy is what makes this necessary.
-  const srcMissing = !existsSync(loaderPath(version));
+  const srcMissing = !loaderAvailable(version);
   describe.skipIf(srcMissing)(`shaderloader ${version} globalizeBareImports`, () => {
     it('rewrites a real property-bearing export header into a parseable module', () => {
       const { globalizeBareImports } = loadTransforms(version);
@@ -140,6 +141,13 @@ for (const version of LOADER_VERSIONS) {
         expect(parsesAsModule(globalizeBareImports(c))).toBe(true);
       }
     });
+    it('a CURRENT export header survives the transforms', () => {
+      const { globalizeBareImports } = loadTransforms(version);
+      const out = globalizeBareImports(CURRENT_EXPORT);
+      expect(out).toContain('= globalThis.THREE.TSL;');
+      expect(/^[ \t]*import\b/m.test(out)).toBe(false);
+      expect(parsesAsModule(out)).toBe(true);
+    });
   });
 
   describe.skipIf(srcMissing)(`shaderloader ${version} autoInjectTSLImports`, () => {
@@ -157,6 +165,26 @@ for (const version of LOADER_VERSIONS) {
       ]) {
         expect(importLine).not.toContain(key);
       }
+    });
+    it('a CURRENT export header survives the transforms', () => {
+      const { autoInjectTSLImports, globalizeBareImports } = loadTransforms(version);
+      const out = autoInjectTSLImports(CURRENT_EXPORT);
+      // The regex is unanchored and runs on the raw source, comments included:
+      // an import brace in the header would be the line it rewrites. It must
+      // leave the header byte-identical and land on the module's real import.
+      // The header spells the 0.8 core's calls (`FastShaders.apply(…)`); a call
+      // inside a `//` comment is safe only because autoInjectTSLImports strips
+      // line comments before it scans for calls — which this asserts.
+      const hdr = leadingComments(CURRENT_EXPORT);
+      expect(hdr).toContain('FastShaders');
+      expect(leadingComments(out)).toBe(hdr);
+      const importLine = out.split('\n').find((l) => /^import \{/.test(l)) as string;
+      expect(importLine).toBeDefined();
+      expect(importLine).toContain('positionGeometry');
+      for (const word of ['Plain', 'README', 'FastShaders', 'apply', 'load', 'recipe', 'globalThis', 'NodeMaterial']) {
+        expect(importLine).not.toContain(word);
+      }
+      expect(parsesAsModule(globalizeBareImports(out))).toBe(true);
     });
   });
 }

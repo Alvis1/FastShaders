@@ -1,12 +1,14 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
-import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType, OutputMaterial } from '@/types';
+import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType, OutputMaterial, MaterialSettings } from '@/types';
 import { setNodeValues } from '@/types';
 import { isUsableMeshName } from '@/utils/meshInventory';
-import { MAX_PARTS, findDefaultOutput, outputNodes, channelHandle } from '@/utils/outputMaterials';
+import { MAX_PARTS, MAX_INDEX_MATERIALS, findDefaultOutput, outputNodes, channelHandle } from '@/utils/outputMaterials';
+import { MATERIAL_PART_KEY_RE, sanitizeModelSignature } from './materialPartsContract';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
 import { MODULE_HELPER_NAMES, HELPER_ALIASES } from './moduleHelpers';
+import { PART_SETTING_KEYS, materialSettingsFromSource } from './materialSettingsCode';
 import { MARCH_OUTPUT_TYPE } from '@/utils/sdfPartition';
 import { generateId } from '@/utils/idGenerator';
 import { hasNoiseRangeFlag } from '@/utils/noiseRange';
@@ -265,6 +267,24 @@ export function codeToGraph(code: string): CodeToGraphResult {
   };
 
   /**
+   * A `parts` entry's Transparent / Side / Alpha clip / Depth write, read from
+   * the SOURCE TEXT of its settings keys so the ONE sanitizer serves
+   * scriptToTSL, buildShaderModule and this parse alike (engine/
+   * materialSettingsCode). It accepts `2`, `'double'` and `"double"` for a
+   * side and drops anything else — `THREE.DoubleSide` included, never guessed.
+   */
+  const partSettingsFromObject = (obj: t.ObjectExpression): MaterialSettings | undefined => {
+    const raw: Record<string, string> = {};
+    for (const p of obj.properties) {
+      if (!t.isObjectProperty(p)) continue;
+      const k = propKeyName(p);
+      if (k === null || !PART_SETTING_KEYS.has(k) || p.value.start == null || p.value.end == null) continue;
+      raw[k] = code.slice(p.value.start, p.value.end);
+    }
+    return materialSettingsFromSource(raw);
+  };
+
+  /**
    * Wire one output node's channels from an object expression. Shared by the
    * default output and every `parts` entry, so a per-mesh material parses
    * exactly as well as the top-level one — including stored widget values.
@@ -286,8 +306,28 @@ export function codeToGraph(code: string): CodeToGraphResult {
     if (!t.isObjectProperty(rawProp)) continue;
     const channel = propKeyName(rawProp);
     // `parts` is the per-mesh map, handled by buildPartOutputs — never a
-    // channel of the output it appears on.
-    if (channel === null || channel === 'parts') continue;
+    // channel of the output it appears on. Nor is a material's settings key
+    // (engine/materialSettingsCode): a value that resolves to a graph node
+    // would otherwise be wired as one — `side: color2.x` takes the
+    // member-expression branch below and mints a Split node plus a dead
+    // `m1:side` edge, and `side: color2` wires one straight in. (An
+    // UNRESOLVABLE value — `THREE.DoubleSide`, an undeclared name — wires
+    // nothing either way, which is why the tests use resolvable ones.) Skipped
+    // at the top level too, where the default's settings never appear in
+    // editor code; buildPartMaterials reads a part's.
+    //
+    // The glTF-index table and its companions are not channels either:
+    // `materialParts` is read by buildIndexMaterials, `modelSignature` rides
+    // beside it, and `materialPartsMirror` (module-only, R7) is honoured by
+    // buildPartMaterials — wired as channels they would mint dead `m<k>:` edges.
+    if (
+      channel === null
+      || channel === 'parts'
+      || channel === 'materialParts'
+      || channel === 'modelSignature'
+      || channel === 'materialPartsMirror'
+      || PART_SETTING_KEYS.has(channel)
+    ) continue;
       // Same widening undo as the single-value form above — a multi-channel
       // return carries `{ color: vec3(noise1), opacity: … }`.
       const prop = { ...rawProp, value: unwrapScalarWiden(rawProp.value) } as t.ObjectProperty;
@@ -329,18 +369,123 @@ export function codeToGraph(code: string): CodeToGraphResult {
     applyStoredOutputValues(outputId, storedValues, material);
   };
 
+  /** The LAST top-level property named `name` — what the runtime reads. */
+  const lastProp = (obj: t.ObjectExpression, name: string): t.ObjectProperty | undefined => {
+    let found: t.ObjectProperty | undefined;
+    for (const p of obj.properties) {
+      if (t.isObjectProperty(p) && !p.computed && propKeyName(p) === name) found = p;
+    }
+    return found;
+  };
+
   /**
-   * Mint one Output node per `parts` entry, each bound to its mesh.
+   * Re-create the import-built INDEX sections from a `materialParts` table,
+   * appending them to `materials` (they come FIRST — the canonical order:
+   * index sections ascending, then named ones — so an Apply never reorders
+   * the node's sections). Returns the signature's names when at least one
+   * section was created, else null.
+   *
+   * Every rejection WARNS: the graph→code sync writes the parse's result back
+   * over the user's source, so an entry dropped in silence deletes itself from
+   * the file they are looking at. There is NO body merge (unlike `parts`, a
+   * material index names ONE material), and the table is refused whole
+   * without a valid `modelSignature` (R3: it cannot apply to any model then).
+   * Keys are the canonical decimal index (MATERIAL_PART_KEY_RE) — a string
+   * literal, or a numeric literal spelled exactly so (`1.0` is not) — inside
+   * the signature; the last occurrence of an index wins, as in the JS literal;
+   * ascending; at most MAX_INDEX_MATERIALS, counted apart from the named cap.
+   */
+  const buildIndexMaterials = (
+    outputId: string,
+    arg: t.ObjectExpression,
+    materials: OutputMaterial[],
+  ): string[] | null => {
+    const tableProp = lastProp(arg, 'materialParts');
+    if (!tableProp) return null;
+    const warn = (message: string, node: t.Node) =>
+      warnings.push({ message, line: node.loc?.start.line, severity: 'warning' });
+    if (!t.isObjectExpression(tableProp.value)) {
+      warn('materialParts is not an object — it was dropped.', tableProp);
+      return null;
+    }
+    let signature: string[] | null = null;
+    const sigProp = lastProp(arg, 'modelSignature');
+    if (sigProp && t.isObjectExpression(sigProp.value)) {
+      const list = lastProp(sigProp.value, 'materials');
+      if (list && t.isArrayExpression(list.value) && list.value.elements.every((el) => t.isStringLiteral(el))) {
+        signature = sanitizeModelSignature({
+          materials: list.value.elements.map((el) => (el as t.StringLiteral).value),
+        })?.materials ?? null;
+      }
+    }
+    if (!signature) {
+      warn(
+        'materialParts has no valid modelSignature — its sections were dropped (they cannot apply to any model without one).',
+        tableProp,
+      );
+      return null;
+    }
+    const byIndex = new Map<number, t.ObjectProperty>();
+    for (const raw of tableProp.value.properties) {
+      if (!t.isObjectProperty(raw)) continue;
+      const key = raw.computed
+        ? null
+        : t.isNumericLiteral(raw.key)
+          ? String((raw.key.extra as { raw?: unknown } | undefined)?.raw ?? raw.key.value)
+          : propKeyName(raw);
+      if (key === null || !MATERIAL_PART_KEY_RE.test(key) || Number(key) >= signature.length) {
+        warn(`Material part "${String(key).slice(0, 64)}" is not a material of this model — it was dropped.`, raw);
+        continue;
+      }
+      if (!t.isObjectExpression(raw.value)) {
+        warn(`Material part "${key}" is not a channel object — it was dropped.`, raw);
+        continue;
+      }
+      byIndex.set(Number(key), raw);
+    }
+    let created = 0;
+    for (const index of [...byIndex.keys()].sort((a, b) => a - b)) {
+      const rawPart = byIndex.get(index)!;
+      if (created >= MAX_INDEX_MATERIALS) {
+        warn(`More than ${MAX_INDEX_MATERIALS} material parts — "${index}" and any after it were dropped.`, rawPart);
+        break;
+      }
+      const position = materials.length + 1;
+      const material: OutputMaterial = { gltfMaterialIndex: index };
+      const value = rawPart.value as t.ObjectExpression;
+      const settings = partSettingsFromObject(value);
+      if (settings) material.materialSettings = settings;
+      materials.push(material);
+      created++;
+      wireOutputChannels(outputId, value, `_part${position}_`, position, material);
+    }
+    return created > 0 ? signature : null;
+  };
+
+  /**
+   * Re-create the NAME sections from a `parts` map, appending them to
+   * `materials` (after any index sections — see buildIndexMaterials).
    *
    * Names are validated exactly as the emitter validates them: this parses
    * files other people wrote, and an unusable name is one the loader could
    * never match anyway, so dropping the entry loses nothing real.
    */
-  const buildPartMaterials = (outputId: string, arg: t.ObjectExpression): void => {
+  const buildPartMaterials = (outputId: string, arg: t.ObjectExpression, materials: OutputMaterial[]): void => {
     const partsProp = arg.properties.find(
       (p): p is t.ObjectProperty => t.isObjectProperty(p) && propKeyName(p) === 'parts',
     );
     if (!partsProp || !t.isObjectExpression(partsProp.value)) return;
+
+    // R6: the loader-0.6 MIRRORS are dropped BEFORE the body merge, silently.
+    // A mirror exists only in the module (a copy of a `materialParts` body
+    // under a GLTFLoader mesh name, listed in `materialPartsMirror`), so read
+    // back as a name section it would become a second, independent claim on
+    // that mesh — and merge with the index entry it copies.
+    const mirror = new Set<string>();
+    const mirrorProp = lastProp(arg, 'materialPartsMirror');
+    if (mirrorProp && t.isArrayExpression(mirrorProp.value)) {
+      for (const el of mirrorProp.value.elements) if (t.isStringLiteral(el)) mirror.add(el.value);
+    }
 
     // LAST occurrence wins, because that is what the RUNTIME does: `parts` is a
     // JS object literal, so a repeated key overwrites, and loader 0.6 iterates
@@ -351,7 +496,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
     for (const rawPart of partsProp.value.properties) {
       if (!t.isObjectProperty(rawPart)) continue;
       const name = propKeyName(rawPart);
-      if (name === null) continue;
+      if (name === null || mirror.has(name)) continue;
       if (!isUsableMeshName(name)) {
         // Not tidiness: the graph→code sync writes the parse's result straight
         // back over the user's source, so an entry dropped in silence deletes
@@ -388,12 +533,22 @@ export function codeToGraph(code: string): CodeToGraphResult {
     // EMPTY bodies are deliberately NOT merged: they carry nothing to match on,
     // and two freshly-added mesh materials (the state right before you wire
     // them differently) are exactly the pair that would be collapsed.
-    const materials: OutputMaterial[] = [];
     /** part-body source -> the material it already produced. */
     const byBody = new Map<string, OutputMaterial>();
+    // The NAMED cap counts named sections only; index sections above have
+    // their own (MAX_INDEX_MATERIALS), so an import-built Output never blocks
+    // a hand-added mesh section on an Apply.
+    let named = 0;
     for (const [name, rawPart] of lastByName) {
       const value = rawPart.value as t.ObjectExpression;
-      const body = value.properties.length > 0 && value.start != null && value.end != null
+      // A body carrying ONLY settings keys counts as EMPTY: two freshly added,
+      // still-unwired materials that both have Transparent ticked emit
+      // byte-identical `{ transparent: true }` bodies, and merging them would
+      // collapse exactly the pair the rule above protects.
+      const hasChannel = value.properties.some(
+        (p) => !t.isObjectProperty(p) || !PART_SETTING_KEYS.has(propKeyName(p) ?? ''),
+      );
+      const body = hasChannel && value.start != null && value.end != null
         ? code.slice(value.start, value.end)
         : null;
       const merged = body === null ? undefined : byBody.get(body);
@@ -401,7 +556,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
         (merged.meshTargets as string[]).push(name);
         continue;
       }
-      if (materials.length >= MAX_PARTS) {
+      if (named >= MAX_PARTS) {
         warnings.push({
           message:
             `More than ${MAX_PARTS} targeted meshes — "${name}" and any after it were dropped.`,
@@ -411,15 +566,15 @@ export function codeToGraph(code: string): CodeToGraphResult {
         break;
       }
       const index = materials.length + 1;
+      named++;
       const material: OutputMaterial = { meshTargets: [name] };
+      // Its settings, read back through the sanitizer buildShaderModule uses.
+      // A merged part has a byte-identical body, so it cannot differ in them.
+      const settings = partSettingsFromObject(value);
+      if (settings) material.materialSettings = settings;
       materials.push(material);
       if (body !== null) byBody.set(body, material);
       wireOutputChannels(outputId, value, `_part${index}_`, index, material);
-    }
-    if (materials.length === 0) return;
-    const outputNode = nodeById(rawNodes, outputId);
-    if (outputNode) {
-      (outputNode.data as Record<string, unknown>).materials = materials;
     }
   };
 
@@ -449,7 +604,16 @@ export function codeToGraph(code: string): CodeToGraphResult {
       const outputId = generateId();
       rawNodes.push(createNode(outputId, outputDef, 'Output'));
       wireOutputChannels(outputId, arg, '_return_');
-      buildPartMaterials(outputId, arg);
+      // Index sections FIRST, then named ones: the canonical order the builder
+      // writes and the sanitizer never reorders (handles are positional).
+      const materials: OutputMaterial[] = [];
+      const signature = buildIndexMaterials(outputId, arg, materials);
+      buildPartMaterials(outputId, arg, materials);
+      const outputNode = nodeById(rawNodes, outputId);
+      if (outputNode) {
+        if (materials.length > 0) (outputNode.data as Record<string, unknown>).materials = materials;
+        if (signature) (outputNode.data as Record<string, unknown>).modelSignature = { materials: signature };
+      }
       return;
     }
 

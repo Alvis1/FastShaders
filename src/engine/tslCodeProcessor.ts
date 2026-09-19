@@ -5,6 +5,23 @@
 
 import type { MaterialSettings } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
+import { PART_SETTING_KEYS, materialSettingProps, materialSettingsFromSource } from './materialSettingsCode';
+import { THREE_REVISION } from './threeRevision';
+import { TSL_EXPORT_NAMES } from './tslExportNames';
+import {
+  MAX_INDEX_MATERIALS,
+  MAX_MIRROR_ENTRIES,
+  MATERIAL_PART_KEY_RE,
+  checkLegacyGuard,
+  sanitizeModelSignature,
+  type MaterialPartsMirrorEntry,
+  type ModelSignature,
+} from './materialPartsContract';
+import { moduleStringLiteral, partEntryColon, partEntryKey } from './partKeyLiteral';
+import { safeJsonReviver } from '@/utils/safeJson';
+import { isUsableMeshName } from '@/utils/meshInventory';
+
+export type { MaterialPartsMirrorEntry };
 
 // Map, not Record: channel keys come from parseShaderBody's return-object
 // scan of pasted/imported code, and a Record would resolve 'constructor' to
@@ -20,7 +37,7 @@ const CHANNEL_TO_PROP = new Map<string, string>([
   // envNode: three's MeshPhysicalNodeMaterial wraps a texture-valued env in
   // pmremTexture() (EnvironmentNode) — image-based lighting, not a channel
   // sampled per fragment. Needs the loader's nodeProps to list it (added in
-  // 0.5; every export references 0.6).
+  // 0.5; every export references 0.8).
   ['env', 'envNode'],
 ]);
 
@@ -154,39 +171,9 @@ export function splitTopLevelArgs(s: string): string[] {
   return args;
 }
 
-/**
- * The colon that separates a `parts` entry's KEY from its body.
- *
- * Not `indexOf(':')`: the key is a JSON string literal and a mesh name may
- * legally contain a colon. three's `PropertyBinding.sanitizeNodeName` strips
- * `:` so no glTF name reaches here with one — but OBJ names never pass through
- * that sanitizer, so a Maya-style `g Char:Body` really does land in the scene
- * as `Char:Body`, and `isUsableMeshName` deliberately admits it (refusing it
- * would hide a mesh that is visibly right there). Splitting on the first colon
- * cut INSIDE the literal, the body then failed the `{` check, and the whole
- * part was skipped: the canvas showed the mesh targeted, the code panel showed
- * the part, and the module silently omitted it — the mesh rendered the default
- * material with no error and no warning chip, because the name IS in the
- * inventory. Exactly the "right-looking source, wrong picture, no error"
- * failure the parts block is written to avoid.
- *
- * Walks the leading string literal honouring backslash escapes, then returns
- * the next colon. -1 when the entry does not start with a string literal (the
- * caller's `"` check rejects it anyway) or the literal never closes.
- */
-function partEntryColon(entry: string): number {
-  let i = 0;
-  while (i < entry.length && /\s/.test(entry[i])) i += 1;
-  if (entry[i] !== '"') return entry.indexOf(':');
-  i += 1;
-  for (; i < entry.length; i += 1) {
-    const c = entry[i];
-    if (c === '\\') { i += 1; continue; }
-    if (c === '"') break;
-  }
-  if (i >= entry.length) return -1;
-  return entry.indexOf(':', i + 1);
-}
+// `partEntryColon` (where a `parts` entry's key ends — a mesh name may contain
+// a colon) moved verbatim to the partKeyLiteral.ts leaf, which the lazy
+// scriptToTSL chunk shares.
 
 /** Collect imported names from 'three/tsl'. */
 function collectImports(tslCode: string, excludeFn = false): TSLImports {
@@ -203,6 +190,110 @@ function collectImports(tslCode: string, excludeFn = false): TSLImports {
 
   return { tslNames };
 }
+
+/**
+ * The local names an `import … from '…'` line binds (`* as NS`, a default, the
+ * `{ a, b as c }` list — the name after `as`). Only for the single-line imports
+ * `extractFnBody` preserves; anything else binds nothing.
+ */
+function importBindings(line: string): string[] {
+  const m = /^\s*import\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]/.exec(line);
+  if (!m) return [];
+  let clause = m[1].trim();
+  const out: string[] = [];
+  const brace = clause.indexOf('{');
+  if (brace !== -1) {
+    const inner = clause.slice(brace + 1, clause.lastIndexOf('}'));
+    for (const spec of inner.split(',')) out.push(spec.trim().split(/\s+as\s+/).pop()!.trim());
+    clause = clause.slice(0, brace);
+  }
+  for (const part of clause.split(',')) {
+    const p = part.trim();
+    const ns = /^\*\s+as\s+([A-Za-z_$][\w$]*)$/.exec(p);
+    out.push(ns ? ns[1] : p);
+  }
+  return out.filter((n) => /^[A-Za-z_$][\w$]*$/.test(n));
+}
+
+/**
+ * Every name the (masked) module code DECLARES: `const`/`let`/`var`/`function`/
+ * `class` names, destructuring patterns, and arrow / function parameters — the
+ * `Fn(([p, r]) => …)` helpers included. Deliberately OVER-inclusive (a
+ * destructuring key or a default's identifier counts too): a name wrongly
+ * counted as declared is merely not imported, which is how every module
+ * behaved before the import completion below existed, while a declared name
+ * that WAS imported would be a module-scope redeclaration — a SyntaxError.
+ */
+function declaredNames(masked: string): Set<string> {
+  const out = new Set<string>();
+  const addAll = (text: string) => {
+    for (const m of text.matchAll(/[A-Za-z_$][\w$]*/g)) out.add(m[0]);
+  };
+  for (const m of masked.matchAll(/\b(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g)) out.add(m[1]);
+  for (const m of masked.matchAll(/\b(?:const|let|var)\s*([{[][^=;]*)=/g)) addAll(m[1]);
+  for (const m of masked.matchAll(/\(([^()]*)\)\s*=>/g)) addAll(m[1]);
+  for (const m of masked.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*=>/g)) out.add(m[1]);
+  for (const m of masked.matchAll(/\bfunction\b\s*[\w$]*\s*\(([^)]*)\)/g)) addAll(m[1]);
+  return out;
+}
+
+/** The namespace import a module gets when it builds a texture (see `bindThreeNamespace`). */
+const THREE_NAMESPACE_IMPORT = "import * as THREE from 'three/webgpu';";
+
+/**
+ * Module-only: rewrite every CODE-position `globalThis.THREE` to `THREE`, which
+ * the caller then imports from 'three/webgpu'. graphToCode spells the global for
+ * every baked texture (Image, Data, Colormap, and Stripes / Data Viz fed by a
+ * Data node), and a module imported without the shaderloader — plain three.js
+ * with an import map — has no such global; with the import it runs standalone.
+ * On either loader nothing changes at run time: `globalizeBareImports` turns the
+ * namespace import back into `const THREE = globalThis.THREE;`.
+ *
+ * The scan runs over `maskNonCode`, so a string or comment spelling it is never
+ * touched. Skipped outright — no rewrite AND no import — when the code already
+ * binds `THREE` (a preamble import, e.g. an exported module pasted back through
+ * scriptToTSL, or a declaration), since a second binding is a SyntaxError that
+ * kills the whole module.
+ */
+function bindThreeNamespace(code: string, preambleImports: readonly string[]): { code: string; imported: boolean } {
+  if (preambleImports.some((l) => importBindings(l).includes('THREE'))) return { code, imported: false };
+  const masked = maskNonCode(code);
+  if (declaredNames(masked).has('THREE')) return { code, imported: false };
+  let out = '';
+  let last = 0;
+  let hits = 0;
+  for (const m of masked.matchAll(/(?<![\w$.])globalThis\.THREE(?![\w$])/g)) {
+    out += code.slice(last, m.index) + 'THREE';
+    last = m.index! + m[0].length;
+    hits++;
+  }
+  if (hits === 0) return { code, imported: false };
+  return { code: out + code.slice(last), imported: true };
+}
+
+/**
+ * Module-only: the `three/tsl` names the code CALLS but neither imports nor
+ * declares — an unknown node's function, an unknown argument, pasted code, the
+ * `Fn` a Raymarch Output's IIFE calls — sorted, for appending to the import
+ * line. The shaderloader's `autoInjectTSLImports` recovers such a name at run
+ * time; a bare `import()` of the downloaded `.js` does not. Only names in
+ * `TSL_EXPORT_NAMES` qualify, so a function three/tsl does not export is never
+ * imported (it would be a SyntaxError of its own).
+ */
+function missingTslNames(code: string, tslNames: readonly string[], preambleImports: readonly string[]): string[] {
+  const masked = maskNonCode(code);
+  const known = new Set<string>(declaredNames(masked));
+  for (const n of tslNames) known.add(n.split(/\s+as\s+/).pop()!.trim());
+  for (const line of preambleImports) for (const n of importBindings(line)) known.add(n);
+  const found = new Set<string>();
+  for (const m of masked.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(/g)) {
+    if (TSL_EXPORT_NAMES.has(m[1]) && !known.has(m[1])) found.add(m[1]);
+  }
+  return [...found].sort();
+}
+
+/** The module's declared three revision (the leaf `threeRevision.ts` holds the number). */
+const THREE_REVISION_LINE_RE = /^\s*export\s+const\s+threeRevision\s*=/;
 
 interface ExtractedFn {
   /** The statements inside the main `Fn(() => { ... })` wrapper. */
@@ -268,6 +359,11 @@ function extractFnBody(tslCode: string, tslNames: string[]): ExtractedFn {
     if (/^\s*import\b/.test(rawLine)) {
       // three/tsl imports are regenerated by collectImports; keep any others.
       if (!/from\s*['"]three\/tsl['"]/.test(rawLine)) preambleImports.push(rawLine.trim());
+    } else if (THREE_REVISION_LINE_RE.test(rawLine)) {
+      // Pasted MODULE text carries the revision buildShaderModule declares
+      // itself; keeping this line would export `threeRevision` twice — a
+      // SyntaxError that kills the whole module.
+      continue;
     } else {
       preambleDecls.push(rawLine);
     }
@@ -563,13 +659,6 @@ function parseBody(
   return { defLines, channels };
 }
 
-/** THREE.FrontSide=0, THREE.BackSide=1, THREE.DoubleSide=2 */
-const SIDE_VALUES = new Map<string, number>([
-  ['front', 0],
-  ['back', 1],
-  ['double', 2],
-]);
-
 interface ShaderModuleProperty {
   name: string;
   /** float property → number; colour property → '#rrggbb' hex string. */
@@ -592,6 +681,36 @@ export interface BuildShaderModuleOptions {
    * its code literal `V`, so the exported file matches the preview byte-for-byte.
    */
   properties?: ShaderModuleProperty[];
+  /**
+   * The loader-0.6 MIRROR plan (`materialPartsMirrorPlan` of the Output node):
+   * a `parts` entry per GLTFLoader-given mesh name, its body byte-identical to
+   * the `materialParts` entry for its glTF material (materialPartsContract
+   * R2/R4). MODULE-ONLY (R7): the editor TSL never carries it, so every module
+   * path — preview, XR popup, the A-Frame/Three.js tabs and the export —
+   * passes the SAME plan here. Absent or empty = no mirrors; with no
+   * `materialParts` in the code it is ignored entirely.
+   */
+  materialPartsMirror?: readonly MaterialPartsMirrorEntry[];
+}
+
+/**
+ * A `modelSignature: { materials: [...] }` value's SOURCE TEXT as a signature,
+ * or null. The list is read with JSON.parse (what the emitter writes is JSON:
+ * double-quoted strings, the `/` and `<` escapes JSON decodes), then THE
+ * sanitizer. A single-quoted or otherwise non-JSON list is refused, not guessed
+ * — and with it the whole table (R3).
+ */
+function parseModelSignatureText(src: string | undefined): ModelSignature | null {
+  if (!src) return null;
+  const m = /^\{\s*materials\s*:\s*(\[[\s\S]*\])\s*\}$/.exec(src.trim());
+  if (!m) return null;
+  let list: unknown;
+  try {
+    list = JSON.parse(m[1], safeJsonReviver);
+  } catch {
+    return null;
+  }
+  return sanitizeModelSignature({ materials: list });
 }
 
 /**
@@ -741,10 +860,11 @@ export function buildShaderModule(
   // the loader would have done. White remains the last resort: it is the
   // MeshStandard base colour, so the cutout applies without changing the look
   // of the surviving fragments.
-  // The copy-when-undefined rule arrived in loader 0.5, but cite 0.6 when you
-  // need the line: public/js/a-frame-shaderloader-0.6.js:339-343. 0.5 is frozen
-  // in the submodule and is no longer vendored into public/js at all, so a
-  // `a-frame-shaderloader-0.5.js:NNN` citation can no longer be followed.
+  // The copy-when-undefined rule arrived in loader 0.5, and 0.6 and 0.8 carry
+  // it verbatim; cite the frozen 0.6 in the SUBMODULE when you need the line:
+  // a-frame-shaderloader/js/a-frame-shaderloader-0.6.js:346-350. Neither 0.5
+  // nor 0.6 is vendored into public/js any more, so a `public/js/…` citation of
+  // either can no longer be followed.
   const discardColor = channels.color ?? channels.emissive ?? 'vec3(1, 1, 1)';
   if (hasDiscard && !channels.color && !channels.emissive && !tslNames.includes('vec3')) {
     tslNames.push('vec3');
@@ -783,7 +903,7 @@ export function buildShaderModule(
     returnProps.unshift(`${CHANNEL_TO_PROP.get('color')}: __pixel(${pixelCallArgs.join(', ')})`);
   }
 
-  // --- Per-sub-mesh materials (loader 0.6's `parts`) ----------------------
+  // --- Per-sub-mesh materials (the loader's `parts`, 0.6 and 0.8) ---------
   //
   // The editor speaks CHANNEL names (`color`) and the loader speaks node-prop
   // names (`colorNode`), and that translation is this function's job — so a
@@ -796,11 +916,92 @@ export function buildShaderModule(
   // to the module, not to one mesh), so it becomes that part's own __pixel
   // wrapper. The wrappers are INDEXED because a mesh name is not an
   // identifier — `Body.001` and `my mesh` are both legal names.
+  //
+  // A part's Transparent / Side / Alpha clip / Depth write (the four
+  // PART_SETTING_KEYS the loader's buildMaterial applies per part) are
+  // collected as TEXT, re-validated through the same sanitizer scriptToTSL
+  // and codeToGraph use (which also strips a value's comments, so this raw
+  // colon-to-comma slice reads what Babel's comment-free value node does),
+  // and re-emitted canonically AFTER the channel props — the code panel
+  // is an editing surface, and a `.fastshader`'s settings reach the code via
+  // graphToCode, so neither is trusted verbatim. A part's `mergeVertices` /
+  // `displacementMode` are ignored: welding is module-level and the
+  // displacement mode is the default's (see materialSettingsCode).
   const partWrappers: string[] = [];
+  /**
+   * Translate ONE part body `{ … }` — a `parts` entry's or a `materialParts`
+   * entry's — into node-prop form: the joined props, or null when it carries
+   * no CHANNEL prop (mirroring the loader's own `hasChannels(spec)` skip: a
+   * part carrying nothing but settings is dropped). A cutout pushes that
+   * part's indexed __partPixel wrapper as a side effect. ONE translator for
+   * both tables, so an index body and its 0.6 mirror are byte-identical and
+   * neither can drift from a name part's.
+   */
+  const translatePartBody = (bodySrc: string): string | null => {
+    const props: string[] = [];
+    let partDiscard: string | null = null;
+    /** Raw source text of this part's settings keys (last occurrence wins, as in the JS literal). */
+    const partSettingText: Record<string, string> = {};
+    for (const partProp of splitTopLevelArgs(bodySrc.replace(/^\{/, '').replace(/\}$/, ''))) {
+      const c = partProp.indexOf(':');
+      if (c === -1) continue;
+      // Unquoted, because codeToGraph's `propKeyName` reads a string-literal
+      // key (`"transparent": true`, `'color': x`) as the name it spells: a
+      // quoted key compared raw here was dropped from the module while the
+      // parse kept it, so after an Apply the preview and the node disagreed.
+      const key = partProp.slice(0, c).trim().replace(/^(['"])(.*)\1$/, '$2');
+      const val = partProp.slice(c + 1).trim();
+      if (!key || !val) continue;
+      if (key === 'discard') { partDiscard = val; continue; }
+      if (PART_SETTING_KEYS.has(key)) { partSettingText[key] = val; continue; }
+      const partPropName = CHANNEL_TO_PROP.get(key);
+      if (!partPropName) continue;
+      if (key === 'position') {
+        const displacement = displacementMode === 'normal'
+          ? `normalLocal.mul(${val})`
+          : val;
+        props.push(`${partPropName}: positionLocal.add(${displacement})`);
+      } else {
+        props.push(`${partPropName}: ${val}`);
+      }
+    }
+    if (partDiscard) {
+      const wrapper = `__partPixel${partWrappers.length}`;
+      const existingColor = props.findIndex((s) => s.startsWith('colorNode:'));
+      // Emissive before white, for the reason the DEFAULT path documents
+      // above (`discardColor`): the loader copies emissiveNode→colorNode only
+      // when colorNode is undefined, and this wrapper always defines it — so
+      // falling straight to white washes an emissive-only part out to lit
+      // white. The ordinary glow-cutout wiring (Emissive + Discard, no
+      // Colour) rendered correctly on the default Output and wrong on a
+      // targeted one: the same graph, two pictures, decided only by whether
+      // the Output happened to carry a mesh target.
+      const existingEmissive = props.findIndex((s) => s.startsWith('emissiveNode:'));
+      const colorRef = existingColor !== -1
+        ? props[existingColor].slice('colorNode:'.length).trim()
+        : existingEmissive !== -1
+          ? props[existingEmissive].slice('emissiveNode:'.length).trim()
+          : 'vec3(1, 1, 1)';
+      partWrappers.push(
+        `const ${wrapper} = Fn(([__c, __col]) => { Discard(__c); return __col; });`,
+      );
+      const call = `colorNode: ${wrapper}(${partDiscard}, ${colorRef})`;
+      if (existingColor === -1) props.unshift(call);
+      else props[existingColor] = call;
+    }
+    // Gated on CHANNEL props only: a part carrying nothing but settings is
+    // still dropped, mirroring the loader's own `hasChannels(spec)` skip.
+    if (props.length === 0) return null;
+    const partSettings = materialSettingsFromSource(partSettingText);
+    return [...props, ...materialSettingProps(partSettings)].join(', ');
+  };
+
   const partsSrc = channels.parts;
+  /** The emitted NAME entries, and the names their keys decode to. */
+  const entries: string[] = [];
+  const nameKeys = new Set<string>();
   if (partsSrc) {
     const inner = partsSrc.trim().replace(/^\{/, '').replace(/\}$/, '');
-    const entries: string[] = [];
     for (const entry of splitTopLevelArgs(inner)) {
       const colon = partEntryColon(entry);
       if (colon === -1) continue;
@@ -820,52 +1021,107 @@ export function buildShaderModule(
           ? JSON.stringify(rawKey)
           : '';
       if (!nameLit) continue;
-      const props: string[] = [];
-      let partDiscard: string | null = null;
-      for (const partProp of splitTopLevelArgs(bodySrc.replace(/^\{/, '').replace(/\}$/, ''))) {
-        const c = partProp.indexOf(':');
-        if (c === -1) continue;
-        const key = partProp.slice(0, c).trim();
-        const val = partProp.slice(c + 1).trim();
-        if (!key || !val) continue;
-        if (key === 'discard') { partDiscard = val; continue; }
-        const partPropName = CHANNEL_TO_PROP.get(key);
-        if (!partPropName) continue;
-        if (key === 'position') {
-          const displacement = displacementMode === 'normal'
-            ? `normalLocal.mul(${val})`
-            : val;
-          props.push(`${partPropName}: positionLocal.add(${displacement})`);
-        } else {
-          props.push(`${partPropName}: ${val}`);
-        }
-      }
-      if (partDiscard) {
-        const wrapper = `__partPixel${partWrappers.length}`;
-        const existingColor = props.findIndex((s) => s.startsWith('colorNode:'));
-        // Emissive before white, for the reason the DEFAULT path documents
-        // above (`discardColor`): the loader copies emissiveNode→colorNode only
-        // when colorNode is undefined, and this wrapper always defines it — so
-        // falling straight to white washes an emissive-only part out to lit
-        // white. The ordinary glow-cutout wiring (Emissive + Discard, no
-        // Colour) rendered correctly on the default Output and wrong on a
-        // targeted one: the same graph, two pictures, decided only by whether
-        // the Output happened to carry a mesh target.
-        const existingEmissive = props.findIndex((s) => s.startsWith('emissiveNode:'));
-        const colorRef = existingColor !== -1
-          ? props[existingColor].slice('colorNode:'.length).trim()
-          : existingEmissive !== -1
-            ? props[existingEmissive].slice('emissiveNode:'.length).trim()
-            : 'vec3(1, 1, 1)';
-        partWrappers.push(
-          `const ${wrapper} = Fn(([__c, __col]) => { Discard(__c); return __col; });`,
-        );
-        const call = `colorNode: ${wrapper}(${partDiscard}, ${colorRef})`;
-        if (existingColor === -1) props.unshift(call);
-        else props[existingColor] = call;
-      }
-      if (props.length > 0) entries.push(`${nameLit}: { ${props.join(', ')} }`);
+      const body = translatePartBody(bodySrc);
+      if (body === null) continue;
+      entries.push(`${nameLit}: { ${body} }`);
+      const key = partEntryKey(entry);
+      if (key !== null) nameKeys.add(key);
     }
+  }
+
+  // --- glTF MATERIAL-INDEX parts (loader 0.8's `materialParts`) -----------
+  //
+  // An import-built section is keyed by glTF MATERIAL INDEX, not by mesh name.
+  // Its body goes through the same translator as a `parts` body. The table
+  // travels only beside a VALID `modelSignature` (R3): 0.8 applies it only
+  // against an exactly-equal model, and without one it is dropped whole. Keys
+  // are the canonical decimal index (MATERIAL_PART_KEY_RE, quoted or bare
+  // digits — the parse accepts the same two spellings), inside the signature;
+  // the last occurrence wins, as in the JS literal; ascending, capped at the
+  // editor's MAX_INDEX_MATERIALS.
+  const indexBodies = new Map<number, string>();
+  const signature = channels.materialParts !== undefined
+    ? parseModelSignatureText(channels.modelSignature)
+    : null;
+  if (signature) {
+    const table = channels.materialParts.trim();
+    if (table.startsWith('{') && table.endsWith('}')) {
+      const bySource = new Map<number, string>();
+      for (const entry of splitTopLevelArgs(table.slice(1, -1))) {
+        const colon = partEntryColon(entry);
+        if (colon === -1) continue;
+        const rawKey = entry.slice(0, colon).trim();
+        const bodySrc = entry.slice(colon + 1).trim();
+        if (!bodySrc.startsWith('{')) continue;
+        const key = /^\d+$/.test(rawKey) ? rawKey : rawKey.startsWith('"') ? partEntryKey(entry) : null;
+        if (key === null || !MATERIAL_PART_KEY_RE.test(key)) continue;
+        const index = Number(key);
+        if (index >= signature.materials.length) continue;
+        bySource.set(index, bodySrc);
+      }
+      for (const index of [...bySource.keys()].sort((a, b) => a - b)) {
+        if (indexBodies.size >= MAX_INDEX_MATERIALS) break;
+        const body = translatePartBody(bySource.get(index)!);
+        if (body !== null) indexBodies.set(index, body);
+      }
+    }
+  }
+
+  if (signature && indexBodies.size > 0) {
+    // R2: the loader-0.6 MIRRORS. 0.6 knows nothing of materialParts, so each
+    // GLTFLoader-given mesh name of an emitted index gets a `parts` entry
+    // carrying that index's body VERBATIM — never a name an explicit part
+    // already claims (a name claim wins, as on 0.8), each name once, capped.
+    // Names are re-validated here: this is the gate that decides what becomes
+    // CODE, whatever the caller passed.
+    const mirrorNames: string[] = [];
+    const mirrored = new Set<string>();
+    for (const m of options.materialPartsMirror ?? []) {
+      if (mirrorNames.length >= MAX_MIRROR_ENTRIES) break;
+      const body = typeof m?.index === 'number' ? indexBodies.get(m.index) : undefined;
+      if (body === undefined || !isUsableMeshName(m.name) || nameKeys.has(m.name) || mirrored.has(m.name)) continue;
+      entries.push(`${moduleStringLiteral(m.name)}: { ${body} }`);
+      mirrored.add(m.name);
+      mirrorNames.push(m.name);
+    }
+    // R1: a materialParts module ALWAYS carries a `parts` object — `{}` at
+    // minimum — or frozen 0.6 takes its Simple-API branch and paints every
+    // mesh near-black. R3: the signature beside it. R4: the mirror list, so
+    // 0.8 drops those keys from its name table in every status.
+    const tableProps = [
+      entries.length > 0 ? `parts: { ${entries.join(', ')} }` : 'parts: {}',
+      `materialParts: { ${[...indexBodies].map(([i, b]) => `${moduleStringLiteral(String(i))}: { ${b} }`).join(', ')} }`,
+      `modelSignature: { materials: [${signature.materials.map(moduleStringLiteral).join(', ')}] }`,
+      ...(mirrorNames.length > 0 ? [`materialPartsMirror: [${mirrorNames.map(moduleStringLiteral).join(', ')}]`] : []),
+    ];
+    returnProps.push(...tableProps);
+    if (partWrappers.length > 0) {
+      if (!tslNames.includes('Fn')) tslNames.push('Fn');
+      if (!tslNames.includes('Discard')) tslNames.push('Discard');
+    }
+    const tableText = tableProps.join(', ');
+    if (/\bvec3\(/.test(tableText) && !tslNames.includes('vec3')) tslNames.push('vec3');
+    if (/\bpositionLocal\b/.test(tableText) && !tslNames.includes('positionLocal')) {
+      tslNames.push('positionLocal');
+    }
+    if (/\bnormalLocal\b/.test(tableText) && !tslNames.includes('normalLocal')) {
+      tslNames.push('normalLocal');
+    }
+    // The export guard's module half (materialPartsContract): a dev build
+    // throws on a shape that breaks the frozen 0.6 or confuses 0.8, so the
+    // whole emission corpus is guarded in CI (vitest sets DEV). Never runs in
+    // a production build.
+    if (import.meta.env?.DEV) {
+      const problems = checkLegacyGuard({
+        hasMaterialParts: true,
+        hasParts: true,
+        hasSignature: true,
+        partKeys: [...nameKeys, ...mirrorNames],
+        mirrorKeys: mirrorNames,
+      });
+      if (problems.length > 0) throw new Error(`buildShaderModule: ${problems.join('; ')}`);
+    }
+  } else if (partsSrc) {
     if (entries.length > 0) returnProps.push(`parts: { ${entries.join(', ')} }`);
     // Imports for what the parts block itself emitted. Registered here rather
     // than beside the default's, because `hasDiscard` describes the DEFAULT
@@ -886,37 +1142,13 @@ export function buildShaderModule(
     }
   }
 
-  if (materialSettings?.transparent) returnProps.push('transparent: true');
-  if (materialSettings?.side) {
-    returnProps.push(`side: ${SIDE_VALUES.get(materialSettings.side) ?? 0}`);
-  }
-  // Coerced and clamped, never interpolated raw: materialSettings arrives from
-  // an adversarial FASTSHADERS_PROJECT_V1 block (extractProjectState checks the
-  // node shape, not this field's type), so a string value would be spliced
-  // straight into the generated module's object literal. Capped BELOW 1
-  // because three's test is `diffuseColor.a.lessThanEqual(alphaTest).discard()`
-  // — at exactly 1.0 an untouched alpha of 1.0 discards every fragment and the
-  // whole object silently disappears.
-  const alphaTest = Number(materialSettings?.alphaTest);
-  if (Number.isFinite(alphaTest) && alphaTest > 0) {
-    returnProps.push(`alphaTest: ${Math.min(alphaTest, 0.99)}`);
-  }
-  // Emitted only when non-default (true is THREE's default), so existing
-  // exports stay byte-identical. Applied by the loader's material-prop pass
-  // (0.5+, and every new export references 0.6); older CDN loaders ignore the
-  // extra key harmlessly.
-  //
-  // Gated on `transparent` as well: depth-write-off is a transparency sorting
-  // control, and on an OPAQUE material it just makes the surface self-occlude
-  // into cutout-looking holes. Belt-and-braces with the settings menu, which
-  // now clears the flag when Transparent is switched off — this also disarms
-  // the flag on graphs that already stored it.
-  if (materialSettings?.depthWrite === false && materialSettings?.transparent) {
-    returnProps.push('depthWrite: false');
-  }
+  // The DEFAULT material's Transparent / Side / Alpha clip / Depth write. The
+  // same emitter writes every `parts` entry's keys above, so the per-part
+  // rules cannot drift from these; its comments carry the coercion reasoning.
+  returnProps.push(...materialSettingProps(materialSettings));
 
   // The Output node's "Merge Vertices", carried to every host that runs this
-  // module. shaderloader 0.6 welds a displaced PRIMITIVE's coincident vertices
+  // module. The loader (0.6 and 0.8) welds a displaced PRIMITIVE's coincident vertices
   // so a displaced box does not split into floating faces; this key is how an
   // author who unticked that reaches it.
   //
@@ -925,7 +1157,7 @@ export function buildShaderModule(
   // and a truthiness test would then add the key to a perfectly default node.
   // Absent means weld, matching MaterialSettings.mergeVertices' own
   // `undefined === true` contract, which is what keeps every already-exported
-  // module and all 23 built-in snapshots byte-identical.
+  // module and all 32 built-in snapshots byte-identical.
   //
   // NB this is the first key here that is not a THREE.Material property — it is
   // a geometry directive the loader reads off the module's return object rather
@@ -980,16 +1212,9 @@ export function buildShaderModule(
     schemaLines.push('');
   }
 
-  const imports: string[] = [...preambleImports];
-  if (tslNames.length > 0) {
-    imports.push(`import { ${tslNames.join(', ')} } from 'three/tsl';`);
-  }
-
-  const lines = [
-    ...(header && header.length ? [...header, ''] : []),
-    ...imports,
-    '',
-    ...schemaLines,
+  // Everything below the schema, assembled FIRST: the two module-only passes
+  // that follow read the code the module will actually carry.
+  let code = [
     ...(preambleDecls.length ? [...preambleDecls, ''] : []),
     `export default function(${hasParams ? 'params' : ''}) {`,
     ...nonDiscardLines.map((l) => '  ' + l.trimStart()),
@@ -1000,6 +1225,35 @@ export function buildShaderModule(
     ...partWrappers.map((l) => '  ' + l),
     `  return { ${returnProps.join(', ')} };`,
     '}',
+  ].join('\n');
+
+  // --- Module-only text (graphToCode and the code panel never see it) ------
+  // A baked texture's `globalThis.THREE` becomes an imported namespace, and the
+  // three/tsl import is completed with every TSL function the code calls (the
+  // new names appended SORTED, so an existing import line's order never moves).
+  // Both make the module import standalone on plain three.js; on the loader
+  // neither changes what runs.
+  const three = bindThreeNamespace(code, preambleImports);
+  code = three.code;
+  tslNames.push(...missingTslNames(code, tslNames, preambleImports));
+
+  const imports: string[] = [...preambleImports];
+  if (three.imported) imports.push(THREE_NAMESPACE_IMPORT);
+  if (tslNames.length > 0) {
+    imports.push(`import { ${tslNames.join(', ')} } from 'three/tsl';`);
+  }
+
+  const lines = [
+    ...(header && header.length ? [...header, ''] : []),
+    ...imports,
+    '',
+    // The three release this module was emitted for. Loader 0.8 compares it
+    // with the page's THREE.REVISION and warns (never refuses) on a mismatch;
+    // 0.4–0.6 read only `default` and `schema`, so it is inert there.
+    `export const threeRevision = '${THREE_REVISION}';`,
+    '',
+    ...schemaLines,
+    code,
   ];
 
   return lines.join('\n') + '\n';

@@ -4,6 +4,9 @@ import { placePopover } from '@/components/inputs/colorPickerModel';
 import { highlightMesh } from '@/utils/meshHighlight';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { fillTemplate } from '@/utils/fillTemplate';
+import { MAX_PARTS } from '@/utils/outputMaterials';
+import { SECTION_SILENT_KEY } from './sectionLabelText';
 import './MeshTargetPicker.css';
 
 /**
@@ -38,6 +41,38 @@ export interface MeshTargetPickerProps {
   allowDefault: boolean;
   /** A material above already shades this mesh, so emission shadows this one. */
   shadowed?: boolean;
+  /**
+   * Material 0 only: the sections BELOW cover every mesh of the model on
+   * screen, so "everything else" is nothing (`defaultSectionUnused`). The
+   * label says so instead of promising "All meshes", which is what made an
+   * import-built node's first block read as a second, dead Output. Never a
+   * refusal — the section is still the fallback for a mesh whose material has
+   * no section, and for the next model loaded.
+   */
+  unused?: boolean;
+  /**
+   * Added materials only: this section sets NO channel, so its part is dropped
+   * and the meshes it names keep exactly what they had (`sectionSilent` in
+   * OutputNode). Marked, never refused — it is where every "+ Add output"
+   * starts, and it is what made "add a section, pick the mesh" read as an
+   * assignment that silently failed.
+   */
+  silent?: boolean;
+  /**
+   * Most meshes ONE section may name (`MAX_PARTS`). `materialTargetNames` caps
+   * on read, so a tick past it used to vanish silently; an unticked row past
+   * the cap is now the one row the list refuses, `aria-disabled` with the
+   * reason in its title.
+   */
+  maxNames?: number;
+  /**
+   * The double claim, shown on the NAME side: mesh name → the label of the
+   * awake index (material) section whose glTF material that mesh also wears.
+   * Ticking such a mesh here OVERRIDES it (a name claim wins, loader 0.8's
+   * precedence), so its row says so. Nothing is refused. Built from the
+   * loaded model's trusted facts (`indexSectionCoverage`).
+   */
+  indexClaimed?: ReadonlyMap<string, string>;
   onChange: (next: string[]) => void;
 }
 
@@ -46,6 +81,10 @@ export function MeshTargetPicker({
   selected,
   allowDefault,
   shadowed = false,
+  unused = false,
+  silent = false,
+  maxNames = MAX_PARTS,
+  indexClaimed,
   onChange,
 }: MeshTargetPickerProps) {
   const language = useAppStore((s) => s.language);
@@ -131,14 +170,29 @@ export function MeshTargetPicker({
   // size the longer string clipped to "All meshes (…", which reads as a name
   // that has been cut off rather than as the default state. The list has 260px
   // and can afford to say which one it is.
+  // The DEFAULT with nothing left to shade says so rather than promising "All
+  // meshes": the sections below cover the whole model, and a label that claims
+  // otherwise is what made this block read as a second Output.
   const label = first !== undefined
     ? first
-    : t(allowDefault ? 'All meshes' : 'No mesh', language);
+    : allowDefault
+      ? t(unused ? 'Nothing left' : 'All meshes', language)
+      : t('No mesh', language);
   const isMissing = first !== undefined && meshNames.length > 0 && !meshNames.includes(first);
+  // A section that names a mesh but sets no channel emits nothing either, so
+  // it reads the same way an unassigned one does — same mark, its own sentence
+  // (the cause differs: no mesh vs nothing to paint with).
   const title = unassigned
     ? t('This material shades nothing — tick a mesh, or remove it', language)
+    : silent
+    ? t(SECTION_SILENT_KEY, language)
     : first === undefined
-    ? t('This material shades every mesh the ones below do not', language)
+    ? t(
+        unused
+          ? 'Every mesh of this model has its own section below, so this one shades nothing — wiring it changes nothing. It shades any mesh whose material has no section, and the whole model again when a different one is loaded.'
+          : 'This material shades every mesh the ones below do not',
+        language,
+      )
     : shadowed
       ? `"${first}" is already shaded by a material above — this one does nothing`
       : selected.length > 1
@@ -152,7 +206,7 @@ export function MeshTargetPicker({
       <button
         ref={btnRef}
         type="button"
-        className={`mesh-picker nodrag${isMissing ? ' mesh-picker--missing' : ''}${shadowed ? ' mesh-picker--shadowed' : ''}${unassigned ? ' mesh-picker--unassigned' : ''}`}
+        className={`mesh-picker nodrag${isMissing ? ' mesh-picker--missing' : ''}${shadowed ? ' mesh-picker--shadowed' : ''}${unassigned ? ' mesh-picker--unassigned' : ''}${unused ? ' mesh-picker--unused' : ''}${silent && !unassigned ? ' mesh-picker--silent' : ''}`}
         title={title}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -191,22 +245,45 @@ export function MeshTargetPicker({
               <span className="mesh-picker__name">{t('All meshes (default)', language)}</span>
             </label>
           )}
-          {rows.map((name) => (
-            <label
-              key={name}
-              className={`mesh-picker__row${meshNames.includes(name) ? '' : ' mesh-picker__row--missing'}`}
-              title={meshNames.includes(name) ? name : `${name} — not in the loaded model`}
-              onPointerEnter={() => meshNames.includes(name) && highlightMesh(name)}
-              onPointerLeave={() => highlightMesh(null)}
-            >
-              <input
-                type="checkbox"
-                checked={selectedSet.has(name)}
-                onChange={() => toggle(name)}
-              />
-              <span className="mesh-picker__name">{name}</span>
-            </label>
-          ))}
+          {rows.map((name) => {
+            // Past the per-section cap an UNTICKED row is refused: ticking it
+            // would write a name `materialTargetNames` drops on read, i.e. a
+            // tick that silently does nothing. `aria-disabled`, never
+            // `disabled` (WebKit drops the title, and the title is the reason);
+            // unticking is never refused.
+            const capped = !selectedSet.has(name) && selected.length >= maxNames;
+            const also = indexClaimed?.get(name);
+            const base = meshNames.includes(name) ? name : `${name} — not in the loaded model`;
+            const lines = [base];
+            if (also !== undefined) {
+              lines.push(fillTemplate(t('Also in material section “{material}” — a mesh section wins', language), { material: also }));
+            }
+            if (capped) {
+              lines.push(fillTemplate(t('One section shades at most {max} meshes. Untick one first.', language), { max: maxNames }));
+            }
+            const title = lines.join('\n');
+            return (
+              <label
+                key={name}
+                className={`mesh-picker__row${meshNames.includes(name) ? '' : ' mesh-picker__row--missing'}${capped ? ' mesh-picker__row--capped' : ''}`}
+                title={title}
+                aria-disabled={capped || undefined}
+                onPointerEnter={() => meshNames.includes(name) && highlightMesh(name)}
+                onPointerLeave={() => highlightMesh(null)}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedSet.has(name)}
+                  aria-disabled={capped || undefined}
+                  onChange={() => {
+                    if (capped) return;
+                    toggle(name);
+                  }}
+                />
+                <span className="mesh-picker__name">{name}</span>
+              </label>
+            );
+          })}
         </div>,
         document.body,
       )}

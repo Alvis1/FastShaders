@@ -191,3 +191,35 @@ describe('resetNodeValues — the noise range flag is payload, not a setting', (
     expect(isAtDefaultValues(def('perlin'), { pos: 'positionGeometry', scale: 1 })).toBe(true);
   });
 });
+
+describe('resetNodeValues — the Image node\'s glTF mapping is payload, not a setting', () => {
+  const mapping: Record<string, string | number> = {
+    orientation: 'gltf', normalGreen: 'flip', uvSet: 2,
+    xfOffsetX: 0.25, xfOffsetY: -0.5, xfRotation: 0.3, xfScaleX: 2, xfScaleY: 3,
+  };
+
+  it('keeps all eight mapping keys while the sampling settings still reset', () => {
+    const out = resetNodeValues(def('imageNode'), {
+      imageB64: 'data:image/webp;base64,AAAA', width: 4, height: 4,
+      ...mapping, filter: 'nearest', flipX: 1, colorSpace: 'data', tileX: 3,
+    });
+    for (const [k, v] of Object.entries(mapping)) expect(out[k], k).toBe(v);
+    expect(out.filter).toBeUndefined();
+    expect(out.flipX).toBeUndefined();
+    expect(out.colorSpace).toBeUndefined();
+    expect(out.tileX).toBe(1);
+  });
+
+  it('preserves exactly the keys imageUvMapping defines', async () => {
+    const { UV_MAPPING_KEYS } = await import('./imageUvMapping');
+    for (const k of UV_MAPPING_KEYS) {
+      expect(resetNodeValues(def('imageNode'), { [k]: 'x' })[k], k).toBe('x');
+    }
+    expect(Object.keys(mapping).sort()).toEqual([...UV_MAPPING_KEYS].sort());
+  });
+
+  it('a node carrying a mapping and nothing else is not dirty', () => {
+    const atDefault = { ...resetNodeValues(def('imageNode'), {}), ...mapping };
+    expect(isAtDefaultValues(def('imageNode'), atDefault)).toBe(true);
+  });
+});

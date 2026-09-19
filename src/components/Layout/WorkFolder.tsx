@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { useDismiss } from '@/hooks/useDismiss';
-import { buildShaderBundle, shaderBaseName } from '@/engine/exportShader';
-import { importShaderText, importShaderZip } from '@/engine/projectImport';
-import { bytesToBase64 } from '@/utils/binaryCodec';
+import { announceExportDelivered, buildShaderExportChecked, shaderBaseName } from '@/engine/exportShader';
+import { useExportPreflight } from '@/components/Modals/ExportPreflightModal';
+import {
+  importShaderGlb,
+  importShaderText,
+  importShaderZip,
+  reportZipImportError,
+} from '@/engine/projectImport';
+import { effectiveExportFormat } from '@/utils/glbExportAvailability';
+import { GLB_EXPORT_KEYS } from '@/utils/glbExportCopy';
+import { fsRefusalNotice } from '@/utils/glbImportCopy';
+import { meshRefusalMessage } from '@/utils/previewMeshMessage';
+import { sanitizeMeshFileName } from '@/utils/previewMesh';
+import { isEvalMode } from '@/eval/evalMode';
 import {
   adoptShaderName,
   isShaderRenamed,
@@ -11,6 +22,17 @@ import {
   workFolderSaveName,
 } from '@/utils/workFolderFile';
 import { invokeDesktop, errorText } from '@/utils/tauriBridge';
+import {
+  ARCHIVE_SLACK_BYTES,
+  FILE_NAME_HEADER,
+  WORK_FOLDER_WRITE_BYTES,
+  desktopBytes,
+  encodeHeaderName,
+  parseDesktopError,
+} from '@/utils/desktopIpc';
+import { fillTemplate } from '@/utils/fillTemplate';
+import { formatMiB } from '@/utils/formatSize';
+import { generateId } from '@/utils/idGenerator';
 import { t } from '@/i18n';
 
 /**
@@ -76,24 +98,6 @@ interface WorkFolderEntry {
   modifiedMs: number | null;
 }
 
-/**
- * work_folder_read returns raw bytes via tauri::ipc::Response, which the
- * invoke bridge surfaces as an ArrayBuffer — but normalize defensively, since
- * this path can only be verified on a real desktop run.
- */
-function toBytes(data: unknown): Uint8Array<ArrayBuffer> {
-  if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  if (ArrayBuffer.isView(data)) {
-    // Copy so the result is plain-ArrayBuffer-backed (BlobPart rejects
-    // ArrayBufferLike views under TS's typed-array generics).
-    const copy = new Uint8Array(data.byteLength);
-    copy.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
-    return copy;
-  }
-  if (Array.isArray(data)) return new Uint8Array(data);
-  throw new Error('Unexpected binary payload from the desktop bridge');
-}
-
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -107,12 +111,15 @@ export function WorkFolder() {
   // by building a bundle, because this only feeds the Save tooltip and building
   // one generates the whole module. It can over-predict `zip` for an image node
   // whose payload fails to decode (collectImageFiles drops those); the write
-  // itself always uses the real bundle's kind.
+  // itself always uses the real bundle's kind — and so can a pre-flight answer
+  // ("Export without the 3D model" turns a .zip into a .js) at write time.
   const bundleKind = useAppStore((s) =>
-    s.nodes.some((n) => n.data.registryType === 'imageNode') ||
-    (s.exportIncludeMesh && s.previewMesh !== null)
-      ? 'zip'
-      : 'js',
+    effectiveExportFormat(s.exportAsGlb, s.previewMesh, isEvalMode()) === 'glb'
+      ? 'glb'
+      : s.nodes.some((n) => n.data.registryType === 'imageNode') ||
+          (s.exportIncludeMesh && s.previewMesh !== null)
+        ? 'zip'
+        : 'js',
   );
 
   // null = no folder linked; the Rust side re-validates the persisted path.
@@ -121,6 +128,8 @@ export function WorkFolder() {
   // null = list being read.
   const [entries, setEntries] = useState<WorkFolderEntry[] | null>(null);
   const [busy, setBusy] = useState(false);
+  // The export pre-flight's dialog (N1) for Save.
+  const { ask: askExportPreflight, glb: glbExportUi, modal: exportPreflightModal } = useExportPreflight();
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const [origin, setOrigin] = useState<DocOrigin>(null);
@@ -210,7 +219,9 @@ export function WorkFolder() {
     invokeDesktop<WorkFolderEntry[]>('work_folder_list')
       .then((list) => {
         list.sort((a, b) => (b.modifiedMs ?? 0) - (a.modifiedMs ?? 0));
-        setEntries(list);
+        // The .glb entries are the single-GLB export's, which a study session
+        // never offers — so it never lists them either.
+        setEntries(isEvalMode() ? list.filter((e) => !/\.glb$/i.test(e.fileName)) : list);
       })
       .catch((e) => {
         setEntries([]);
@@ -261,7 +272,20 @@ export function WorkFolder() {
     setBusy(true);
     setError(null);
     try {
-      const bundle = buildShaderBundle();
+      // The pre-flight (N1) runs BEFORE the target is derived: answering
+      // "Export without the 3D model" can turn a .zip into a .js, and so the
+      // file name. Cancelling reports itself like a declined replace does.
+      const bundle = await buildShaderExportChecked({
+        preflight: askExportPreflight,
+        glb: glbExportUi,
+        // An IPC write, so the fresh-click ("ready") step never applies.
+        delivery: 'write',
+      });
+      if (!bundle) {
+        setError(t('Save cancelled — nothing was written.', language));
+        setOpen(true);
+        return;
+      }
       // Read the name imperatively: `saveTarget` above is a render-time
       // prediction, this is the one the bytes are actually written under.
       const liveName = useAppStore.getState().shaderName;
@@ -272,7 +296,7 @@ export function WorkFolder() {
 
       // Writing back to the file this document came from is the point, and stays
       // silent. Everything else that would land on an EXISTING file has to ask —
-      // `work_folder_write` replaces unconditionally and the folder has no undo:
+      // `work_folder_write_bytes` replaces unconditionally and the folder has no undo:
       // a rename (the file names collapse through toKebabCase, so "Zīle" and
       // "Zāle" are one file), a kind flip, and a save after NEW. An origin of
       // null asks nothing: that is a restored session or a foreign import, where
@@ -307,9 +331,10 @@ export function WorkFolder() {
       }
 
       const epoch = originEpoch.current;
-      await invokeDesktop<void>('work_folder_write', {
-        fileName: writeName,
-        dataB64: bytesToBase64(bundle.bytes),
+      // The RAW bytes are the body and the name rides a header: base64 inside
+      // a JSON string inflated a 256 MiB zip by a third before Rust saw it.
+      await invokeDesktop<void>(WORK_FOLDER_WRITE_BYTES, bundle.bytes, {
+        headers: { [FILE_NAME_HEADER]: encodeHeaderName(writeName) },
       });
       // Track ONLY after a write that succeeded, and only if the document is
       // still the one that was written: claiming a file that was never written —
@@ -318,6 +343,9 @@ export function WorkFolder() {
       if (originEpoch.current === epoch) {
         setOrigin({ kind: 'file', fileName: writeName, shaderName: liveName });
       }
+      // N1's desktop variant, only once the write resolved: a bundle between
+      // the web reader's cap and this build's reopens only in the desktop editor.
+      announceExportDelivered(bundle);
       setSavedFlash(true);
       window.clearTimeout(flashTimer.current);
       flashTimer.current = window.setTimeout(() => setSavedFlash(false), 1600);
@@ -325,15 +353,25 @@ export function WorkFolder() {
     } catch (e) {
       // Surface the failure — a silent failed save is worse. The list is
       // refreshed too, so the popover can't open onto a stale "Reading
-      // folder…" placeholder with no fetch in flight.
-      setError(errorText(e));
+      // folder…" placeholder with no fetch in flight. Rust's two structured
+      // refusals of the request itself (`E_BAD_BODY`: the raw body did not
+      // arrive as bytes — Tauri's postMessage fallback re-serialises it as JSON
+      // for the rest of the session once its custom-protocol fetch fails;
+      // `E_BAD_NAME`: the header did not decode to a safe name) get a sentence,
+      // not the literal code; every other command error is plain English.
+      const de = parseDesktopError(e);
+      setError(
+        de?.code === 'BAD_BODY' || de?.code === 'BAD_NAME'
+          ? t('The desktop app could not receive the file. Nothing was written.', language)
+          : errorText(e),
+      );
       setOpen(true);
       refreshList();
       resyncStatus();
     } finally {
       setBusy(false);
     }
-  }, [busy, language, open, origin, refreshList, resyncStatus]);
+  }, [busy, language, open, origin, refreshList, resyncStatus, askExportPreflight, glbExportUi]);
 
   const toggleList = useCallback(() => {
     setOpen((o) => {
@@ -349,6 +387,10 @@ export function WorkFolder() {
   const loadEntry = useCallback(
     (entry: WorkFolderEntry) => {
       if (busy) return;
+      // The single-GLB restore is never offered in a study session (the format
+      // itself is not), so its entries are not listed there either — this is
+      // the guard behind that listing, not a second decision.
+      if (isEvalMode() && /\.glb$/i.test(entry.fileName)) return;
       setBusy(true);
       setError(null);
       // Fallback source for the authored name, used only where the listing has
@@ -359,9 +401,37 @@ export function WorkFolder() {
       loadingRef.current = true;
       invokeDesktop<unknown>('work_folder_read', { fileName: entry.fileName })
         .then(async (data) => {
-          const bytes = toBytes(data);
+          const bytes = desktopBytes(data);
           let result: 'project' | 'script' | 'model' | null;
-          if (/\.zip$/i.test(entry.fileName)) {
+          if (/\.glb$/i.test(entry.fileName)) {
+            // A FastShaders single-GLB export: its shader is RESTORED, the
+            // model becomes the preview mesh. The folder is the user's own, so
+            // this needs no confirm (a forwarded drop does — see the
+            // GLB-restore convention). A .glb that carries no shader changes
+            // nothing and says so.
+            const r = await importShaderGlb(entry.fileName, bytes);
+            if (!r.ok) {
+              const shown = sanitizeMeshFileName(entry.fileName, 'glb');
+              setError(
+                r.reason === 'no-shader'
+                  ? fillTemplate(t(GLB_EXPORT_KEYS.workFolderNoShader, language), { file: `“${shown}”` })
+                  : r.reason === 'mesh-refused'
+                    ? meshRefusalMessage(r.refusal, language)
+                    : fsRefusalNotice(shown, 'damaged', language),
+              );
+              setOpen(true);
+              return;
+            }
+            useAppStore.getState().showImportNote(r.notes);
+            // The opened file's FORMAT is adopted with its name: Save writes
+            // back to the file it was opened from, and without this the
+            // session flag is still the bundle, so `waves.glb` would fork a
+            // `waves.js`/`.zip` sibling and keep the pre-edit shader.
+            // `effectiveExportFormat` still falls back to the bundle if the
+            // restored mesh cannot be packed.
+            useAppStore.getState().setExportAsGlb(true);
+            result = r.imported;
+          } else if (/\.zip$/i.test(entry.fileName)) {
             result = await importShaderZip(new File([bytes], entry.fileName));
             if (result === null) {
               throw new Error(t('No shader found inside the zip.', language));
@@ -384,7 +454,38 @@ export function WorkFolder() {
           setOpen(false);
         })
         .catch((e) => {
-          setError(errorText(e));
+          // Rust refused the file before reading it (`E_TOO_LARGE <size> <limit>`,
+          // work_folder.rs MAX_READ_BYTES). A zip gets the same N2 notice every
+          // other import surface shows — its printed limit is the UNPACKED cap,
+          // so the archive slack comes off; anything else gets the Work-folder
+          // sentence rather than the raw code.
+          const de = parseDesktopError(e);
+          if (de?.code === 'TOO_LARGE' && de.limit !== undefined) {
+            if (/\.zip$/i.test(entry.fileName)) {
+              useAppStore.getState().enqueueLimitNotice({
+                id: generateId(),
+                kind: 'zip-limit',
+                fileName: entry.fileName,
+                zipLimit: {
+                  kind: 'total-size',
+                  limit: Math.max(0, de.limit - ARCHIVE_SLACK_BYTES),
+                  value: de.value ?? 0,
+                },
+              });
+            } else {
+              setError(
+                fillTemplate(
+                  t('{name} is larger than {limit} MB, the most the Work folder opens. Nothing was changed.', language),
+                  { name: `“${entry.fileName}”`, limit: formatMiB(de.limit, language) },
+                ),
+              );
+            }
+            resyncStatus();
+            return;
+          }
+          // A zip the reader refused says why (shared mapping, all surfaces);
+          // it throws before the success path, so name and origin are untouched.
+          if (!reportZipImportError(e, entry.fileName)) setError(errorText(e));
           resyncStatus();
         })
         .finally(() => {
@@ -525,6 +626,7 @@ export function WorkFolder() {
           </button>
         </div>
       )}
+      {exportPreflightModal}
     </div>
   );
 }

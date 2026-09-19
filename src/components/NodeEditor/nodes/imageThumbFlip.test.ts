@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 
 const SHADER_NODE = readFileSync(new URL('./ShaderNode.tsx', import.meta.url), 'utf8');
 const SHADER_CSS = readFileSync(new URL('./ShaderNode.css', import.meta.url), 'utf8');
+const NODE_VISUAL = readFileSync(new URL('./NodeVisual.tsx', import.meta.url), 'utf8');
 const GRAPH_TO_CODE = readFileSync(new URL('../../../engine/graphToCode.ts', import.meta.url), 'utf8');
+const TEXTURE_SPEC = readFileSync(new URL('../../../utils/imageTextureSpec.ts', import.meta.url), 'utf8');
+const IMAGE_PLAN = readFileSync(new URL('../../../engine/imageTexturePlan.ts', import.meta.url), 'utf8');
 
 describe('the Image node card shows its flips', () => {
   it('mirrors the thumbnail per axis', () => {
@@ -19,7 +22,10 @@ describe('the Image node card shows its flips', () => {
     // when flipX is UNCHECKED (`mirrorX = flipX < 0.5`), so the DEFAULT is the
     // file-matching orientation and each ticked box mirrors what the card
     // draws — which is only true if both sides use the same >= 0.5 threshold.
-    expect(GRAPH_TO_CODE).toMatch(/const mirrorX = numVal\('flipX', 0\) < 0\.5;/);
+    // Under the glTF orientation there is no baked correction (the texture is
+    // uploaded unflipped), so each ticked box mirrors: the card and codegen
+    // then use the same >= 0.5 threshold on both axes.
+    expect(GRAPH_TO_CODE).toMatch(/const mirrorX = gltf \? numVal\('flipX', 0\) >= 0\.5 : numVal\('flipX', 0\) < 0\.5;/);
     expect(GRAPH_TO_CODE).toMatch(/const mirrorY = numVal\('flipY', 0\) >= 0\.5;/);
   });
 });
@@ -27,10 +33,15 @@ describe('the Image node card shows its flips', () => {
 describe('the Image node card shows Nearest filtering', () => {
   it('draws the thumbnail pixelated exactly when codegen samples nearest', () => {
     // Otherwise the browser smooths a small stored image (an 8 px rung) into
-    // a blur the shader never draws. Both sides read the same exact string.
+    // a blur the shader never draws. Both sides read the same exact string;
+    // codegen places each image through the texture planner, which reads it
+    // through the ONE texture-spec normaliser.
     expect(SHADER_NODE).toMatch(/const nearestThumb = data\.values\?\.filter === 'nearest';/);
     expect(SHADER_NODE).toMatch(/nearestThumb \? \{ imageRendering: 'pixelated' as const \}/);
-    expect(GRAPH_TO_CODE).toMatch(/const nearest = nv\.filter === 'nearest';/);
+    expect(GRAPH_TO_CODE).toMatch(/imagePlanner\.place\(node\.id, nv\)/);
+    expect(IMAGE_PLAN).toMatch(/const spec = readImageTextureSpec\(values\);/);
+    expect(IMAGE_PLAN).toMatch(/const nearest = spec\.nearest;/);
+    expect(TEXTURE_SPEC).toMatch(/const nearest = values\.filter === 'nearest';/);
   });
 });
 
@@ -43,5 +54,29 @@ describe('the source filename follows the card into dark mode', () => {
     expect(block).not.toBeNull();
     expect(block![1]).toMatch(/color: rgba\(var\(--node-ink-rgb\), 0\.7\)/);
     expect(block![1]).not.toMatch(/#[0-9a-f]{3,6}/i);
+  });
+});
+
+describe('the empty image slot', () => {
+  it('is drawn by the canvas whenever the node has no valid payload', () => {
+    // A node added empty from the palette, or one whose payload a restore path
+    // stripped. A SIBLING of the <img>, never a restructure of it — the flip
+    // and filter pins above read that element's JSX.
+    expect(SHADER_NODE).toMatch(/\{!imageThumbUrl && data\.registryType === 'imageNode' && <ImageThumbEmpty/);
+  });
+
+  it('is drawn by every replica — a replica never carries a payload', () => {
+    expect(NODE_VISUAL).toMatch(/def\.type === 'imageNode' && <ImageThumbEmpty/);
+  });
+
+  it('is node INK, carries no literal colour, and keeps its title live', () => {
+    const css = SHADER_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const block = /\.shader-node__image-empty \{([^}]*)\}/.exec(css);
+    expect(block).not.toBeNull();
+    expect(block![1]).toContain('rgba(var(--node-ink-rgb)');
+    expect(block![1]).not.toMatch(/#[0-9a-f]{3,6}\b/i);
+    // The hint is its `title`; TooltipLayer finds hosts via elementFromPoint,
+    // so a pointer-events: none element's title never fires.
+    expect(block![1]).not.toMatch(/pointer-events:\s*none/);
   });
 });

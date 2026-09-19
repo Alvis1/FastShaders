@@ -4,15 +4,16 @@
 #   git push --follow-tags
 #
 # One tag produces, in lockstep (so the web app's baked __APP_VERSION__ and
-# "Local" download links always match the binaries):
+# "Download app" links always match the binaries):
 #   - the web app deployed to gh-pages (same as the local `npm run deploy`)
 #   - FastShaders-macOS.dmg               (universal: Apple Silicon + Intel)
 #   - FastShaders-Windows-Setup.exe       (NSIS installer)
 #   - FastShaders-Windows-Portable.zip    (portable: exe + ShaderCarousel resources — see the packaging step)
-# uploaded to a GitHub Release under those FIXED names — the Toolbar's
-# "Local" dropdown links to /releases/latest/download/<name>, which only
-# stays stable if these filenames never change (see DESKTOP_DOWNLOADS in
-# src/components/Layout/Toolbar.tsx; keep the two lists in sync).
+# uploaded to a GitHub Release under those FIXED names — the toolbar's
+# "Download app" dropdown and the web build's desktop-app note link to
+# /releases/latest/download/<name>, which only stays stable if these filenames
+# never change (DESKTOP_DOWNLOADS in src/utils/desktopDownloads.ts —
+# desktopDownloads.test.ts fails when the two lists drift).
 #
 # The release is created as a draft and only published once every asset is
 # uploaded, so /releases/latest never points at a half-populated release.
@@ -122,6 +123,15 @@ jobs:
       # (see https://v2.tauri.app/distribute/sign/macos/)
       - name: Build desktop app
         run: npm run tauri build -- ${{ matrix.build-args }}
+      # The crate's own unit tests (safe_name, the project-block name scan, the
+      # bench server's path sanitizer). AFTER the build on purpose:
+      # generate_context! needs ../dist and tauri-build needs carousel-dist/, and
+      # only the build above stages both. A failure stops the upload, so the
+      # release stays a draft and the web job (gated on this one) never deploys.
+      # Tests only, no `clippy -D warnings`: a new stable toolchain's lint must
+      # not be able to block a release.
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Upload assets (fixed names)
         shell: bash
         env:
@@ -148,7 +158,7 @@ jobs:
           fi
 
   # The web deploy rides the same tag so the site's __APP_VERSION__ (shown in
-  # the Local dropdown) always matches the binaries users download from it.
+  # the Download app dropdown) always matches the binaries users download from it.
   # `npm run deploy` still works locally for ad-hoc pushes between releases.
   # Gated on `desktop`, not just `test`: if a desktop leg fails, gh-pages must
   # NOT advertise a version whose binaries never got published — the site

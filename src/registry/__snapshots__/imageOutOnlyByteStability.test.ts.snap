@@ -1,0 +1,288 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`out-only image graphs emit byte-identical code > flagless baselines for the junk-flag sweep 1`] = `
+{
+  "flagless-color": "import { Fn, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+
+  return image1;
+});
+
+export default shader;
+",
+  "flagless-normal": "import { Fn, normalMap, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.NoColorSpace;
+_image1_tex.generateMipmaps = false;
+_image1_tex.minFilter = globalThis.THREE.LinearFilter;
+_image1_tex.magFilter = globalThis.THREE.LinearFilter;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+
+  return { normal: normalMap(image1) };
+});
+
+export default shader;
+",
+  "flagless-share": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const image2 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const mul1 = mul(image1, image2);
+
+  return mul1;
+});
+
+export default shader;
+",
+}
+`;
+
+exports[`out-only image graphs emit byte-identical code > out-only cases 1`] = `
+{
+  "color-normal-env-one-node": "import { Fn, normalMap, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+
+  return { color: image1, normal: normalMap(image1), env: texture(_image1_tex) };
+});
+
+export default shader;
+",
+  "invalid-payload": "import { Fn, vec3 } from 'three/tsl';
+
+const shader = Fn(() => {
+  const image1 = vec3(0, 0, 0);
+
+  return image1;
+});
+
+export default shader;
+",
+  "preview-mode": "import { Fn, color, mul, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const color1 = color(0x112233);
+  const mul1 = mul(image1, 1);
+
+  return image1;
+});
+
+export default shader;
+",
+  "tampered-handle-constructor": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const mul1 = mul(image1, 1);
+
+  return mul1;
+});
+
+export default shader;
+",
+  "tampered-handle-empty": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const mul1 = mul(image1, 1);
+
+  return mul1;
+});
+
+export default shader;
+",
+  "tampered-handle-null": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const mul1 = mul(image1, 1);
+
+  return mul1;
+});
+
+export default shader;
+",
+  "tampered-handle-proto": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const mul1 = mul(image1, 1);
+
+  return mul1;
+});
+
+export default shader;
+",
+  "tampered-handle-x": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const mul1 = mul(image1, 1);
+
+  return mul1;
+});
+
+export default shader;
+",
+  "through-mul": "import { Fn, mul, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const mul1 = mul(image1, 1);
+
+  return mul1;
+});
+
+export default shader;
+",
+  "two-consumers": "import { Fn, add, mul, texture, uv, vec2 } from 'three/tsl';
+
+const _image1_img = new Image();
+_image1_img.src = "fs-asset:imgA-d8959463"; // x.webp, 2x2 webp, 3 B
+let _image1_ok = true;
+try { await _image1_img.decode(); } catch { _image1_ok = false; }
+const _image1_tex = _image1_ok ? new globalThis.THREE.Texture(_image1_img) : new globalThis.THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, globalThis.THREE.RGBAFormat, globalThis.THREE.UnsignedByteType);
+_image1_tex.colorSpace = globalThis.THREE.SRGBColorSpace;
+_image1_tex.wrapS = globalThis.THREE.RepeatWrapping;
+_image1_tex.wrapT = globalThis.THREE.RepeatWrapping;
+_image1_tex.flipY = true;
+_image1_tex.needsUpdate = true;
+
+const shader = Fn(() => {
+  const image1 = texture(_image1_tex, uv().mul(vec2(-1, 1)).add(vec2(1, 0))).rgb;
+  const mul1 = mul(image1, 1);
+  const add1 = add(image1, 0);
+
+  return { color: mul1, emissive: add1 };
+});
+
+export default shader;
+",
+}
+`;

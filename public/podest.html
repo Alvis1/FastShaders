@@ -111,7 +111,7 @@
   and their blob URLs are minted there.
 
   Self-contained: the iframe loads the SAME vendored A-Frame 1.8.0 + Three.js
-  r184 WebGPU bundle and shaderloader 0.5 the app uses (absolute URLs off this
+  r184 WebGPU bundle and shaderloader 0.8 the app uses (absolute URLs off this
   page's origin), so it deploys anywhere the app does (e.g. alvismisjuns.podest.lv).
   Reached from the editor's "P" toolbar button.
 
@@ -598,6 +598,7 @@
     modelBytes: null,      // ArrayBuffer of a dropped model (null = none)
     modelName: null,
     modelKind: null,       // "obj" | "gltf" — set by loadModelBuffer
+    modelDecoderFiles: [], // decoder files the model needs — set by loadModelBuffer
     geometry: "sphere",
     showMaterials: false,  // model-materials mode (shader detached in the iframe)
     spinning: readStr("fs:viewerSpin", "1") !== "0",
@@ -1222,8 +1223,8 @@
   }, true);
 
   /* ── Mesh-material picker ────────────────────────────────────────────────
-     A shader module may return per-sub-mesh materials (shaderloader 0.6's
-     `parts`), dispatched by mesh NAME. Drop a DIFFERENT model and those names
+     A shader module may return per-sub-mesh materials (the shaderloader's
+     `parts`, 0.6 and 0.8 alike), dispatched by mesh NAME. Drop a DIFFERENT model and those names
      stop matching, so the meshes fall back to whatever the loader's rules give
      them — and there was no way to say "this mesh takes that material". This
      menu is that way. The contract, mirroring fs:anim / fs:anim-set:
@@ -1276,7 +1277,8 @@
   function derivedPart(mesh) {
     if (!partsInfo) return null;
     if (partsInfo.parts.indexOf(mesh) >= 0) return mesh;
-    // shaderloader 0.6: a parts-only module on a SINGLE-mesh model puts its
+    // shaderloader 0.6 and 0.8 (same fallback): a parts-only module on a
+    // SINGLE-mesh model puts its
     // FIRST part on that mesh. A multi-mesh model keeps its authored materials
     // instead, which is why the count is part of the test here too.
     if (!partsInfo.hasDefault && partsInfo.meshes.length === 1 && partsInfo.parts.length) {
@@ -1558,7 +1560,7 @@
   // a quota error or a hung open all degrade to today's session-only
   // behaviour.
   // The mirror is TWO records, and the split is what keeps a slider cheap. The
-  // payload (shader source ≤24 MB, model bytes ≤64 MB) changes only on a drop;
+  // payload (shader source ≤24 M chars, model bytes ≤64 MB) changes only on a drop;
   // the tuning, title and geometry change whenever the exhibitor touches a
   // control, and each of those calls saveSession(). Held in ONE record, a
   // slider release structured-cloned up to 88 MB to disk to persist a handful
@@ -1570,7 +1572,19 @@
   // merge in mergeSession().
   var DB_NAME = "fs-podest", DB_STORE = "session", DB_KEY = "last", DB_KEY_STATE = "state";
   var MAX_SAVED_SHADER = 24 * 1024 * 1024;  // chars
-  var MAX_SAVED_MODEL = 64 * 1024 * 1024;   // bytes — matches the zip inflate cap
+  var MAX_SAVED_MODEL = 64 * 1024 * 1024;   // bytes — the editor's MESH_MAX_BYTES, NOT the zip cap (96 MB)
+  // What the mirror silently drops (writeSession stores null for a payload
+  // over these caps) — the same predicates, inverted. "MB" is MiB.
+  function restoreLimitText(modelBytes, shaderSource) {
+    var out = [];
+    if (modelBytes && modelBytes.byteLength > MAX_SAVED_MODEL) {
+      out.push("This model is over " + Math.round(MAX_SAVED_MODEL / 1048576) + " MB and will not be restored after a restart or browser update — keep a copy to drop again.");
+    }
+    if (typeof shaderSource === "string" && shaderSource.length > MAX_SAVED_SHADER) {
+      out.push("This shader is too large to be restored after a restart or browser update — keep a copy to drop again.");
+    }
+    return out.join("\n");
+  }
   var dbHandle = null, dbWaiters = null, dbSettled = false, restoreDone = false, saveTimer = null;
   var heavyDirty = false;   // a drop changed the payload and it has not been written yet
 
@@ -1669,6 +1683,22 @@
         os.delete(DB_KEY); os.delete(DB_KEY_STATE);
       } catch (e) {}
     });
+  }
+  // The mirror drops an over-cap payload SILENTLY, so a restarted pedestal
+  // comes back without it (or empty — writeSession deletes both records when
+  // nothing is left to mirror). Say so while someone is at the panel to act
+  // on it: a user load (drop, file picker, a manual work-folder pick) or
+  // re-ticking auto-restore. Never in presentation mode (nothing over the
+  // artwork), never on a cycle tick (a red banner every stay), never with
+  // auto-restore off (nothing is restored anyway), never from applyRestored
+  // (under the caps by construction). Only what THIS load changed is named,
+  // so a big model loaded earlier does not re-announce itself on every
+  // shader drop. A trusted-page banner: fs:applied cannot clear it, and it
+  // self-dismisses after ERROR_DISMISS_MS like every non-sticky one.
+  function noteRestoreLimits(model, shader) {
+    if (!state.autoRestore || presenting()) return;
+    var text = restoreLimitText(model ? state.modelBytes : null, shader ? state.shaderSource : null);
+    if (text) showError(text);
   }
 
   function restoreSession() {
@@ -1773,11 +1803,98 @@
     }).then(function (buf) { objCache[kind] = buf; return buf; });
   }
 
+  // ── Mesh decoders (Draco, meshopt) and the KTX2 transcoder ──────────
+  // A Draco or meshopt glTF loads only when loader 0.8 can install three's
+  // decoders on its GLTFLoader, and a KTX2 (KHR_texture_basisu) texture only
+  // when it can install the Basis transcoder. The stage is an opaque-origin
+  // sandbox that can fetch nothing of ours, so this page fetches the files
+  // (js/decoders/, beside the loader) and pushes the BYTES with the model; the
+  // stage mints blob: URLs from them. Only a model that needs them pays: the
+  // need is a substring scan of the glTF JSON, never a parse, and a false
+  // positive only costs a fetch. The names must stay the loader's
+  // FastShaders.decoders.FILES (a test pins them to src/utils/meshDecoders.ts).
+  // A file that cannot be fetched is reported, and the model still goes to the
+  // stage without it, where the parse fails fast with model-error instead of
+  // hanging (for KTX2, where the parse succeeds, the textures fall back to
+  // their own images and the loader's console line says so).
+  var DECODER_FILES = ["draco_wasm_wrapper.js", "draco_decoder.wasm", "meshopt_decoder.module.js", "basis_transcoder.js", "basis_transcoder.wasm"];
+  var DECODER_MAX_BYTES = 1048576;
+  function modelDecoderFiles(buf, modelKind) {
+    try {
+      if (modelKind === "obj" || !(buf instanceof ArrayBuffer)) return [];
+      var u8 = new Uint8Array(buf), view = new DataView(buf), json;
+      if (u8.length >= 4 && view.getUint32(0, true) === 0x46546C67) {
+        // GLB: the JSON chunk only, its length clamped to the buffer.
+        if (u8.length < 20 || view.getUint32(16, true) !== 0x4E4F534A) return [];
+        var len = Math.min(view.getUint32(12, true), u8.length - 20);
+        json = new TextDecoder().decode(u8.subarray(20, 20 + len));
+      } else {
+        json = new TextDecoder().decode(u8);
+      }
+      var files = [];
+      if (json.indexOf('"KHR_draco_mesh_compression"') >= 0) files.push(DECODER_FILES[0], DECODER_FILES[1]);
+      if (json.indexOf('"EXT_meshopt_compression"') >= 0 || json.indexOf('"KHR_meshopt_compression"') >= 0) files.push(DECODER_FILES[2]);
+      if (json.indexOf('"KHR_texture_basisu"') >= 0) files.push(DECODER_FILES[3], DECODER_FILES[4]);
+      return files;
+    } catch (e) {
+      return [];
+    }
+  }
+  // Which decoder a failed file belongs to, for the banner. The name decides,
+  // so a file added to DECODER_FILES cannot be mislabelled by an index.
+  function decoderLabel(f) {
+    if (f === DECODER_FILES[2]) return "meshopt";
+    if (f === DECODER_FILES[3] || f === DECODER_FILES[4]) return "KTX2";
+    return "Draco";
+  }
+  // One fetch per file for the page's life; a failed one is forgotten, so the
+  // next model can retry it.
+  var decoderFetches = Object.create(null);
+  function fetchDecoder(f) {
+    var p = decoderFetches[f];
+    if (p) return p;
+    p = fetch(new URL("js/decoders/" + f, window.location.href).href)
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.arrayBuffer();
+      })
+      .then(function (ab) {
+        if (!ab.byteLength) throw new Error("the file is empty");
+        if (ab.byteLength > DECODER_MAX_BYTES) throw new Error("the file is over " + DECODER_MAX_BYTES + " bytes");
+        return f.slice(-5) === ".wasm" ? ab : new TextDecoder().decode(ab);
+      });
+    decoderFetches[f] = p;
+    p.catch(function () { if (decoderFetches[f] === p) delete decoderFetches[f]; });
+    return p;
+  }
+
+  // A newer geometry switch wins over a decoder fetch still in flight.
+  var geometrySeq = 0;
   function setGeometry(kind) {
     state.geometry = kind;
+    var seq = ++geometrySeq;
     if (kind === "model" && state.modelBytes) {
       var mk = state.modelKind === "obj" ? "obj" : "gltf";
-      post({ type: "fs:model", modelType: mk, bytes: state.modelBytes, regen: mk === "obj", rotation: ROTATIONS[kind] });
+      var bytes = state.modelBytes, files = state.modelDecoderFiles || [];
+      var send = function (dec) {
+        var msg = { type: "fs:model", modelType: mk, bytes: bytes, regen: mk === "obj", rotation: ROTATIONS[kind] };
+        if (dec) msg.decoders = dec;
+        post(msg);
+      };
+      if (!files.length) send(null);
+      else Promise.all(files.map(function (f) {
+        return fetchDecoder(f).catch(function (e) { throw { file: f, reason: e && e.message ? e.message : String(e) }; });
+      })).then(function (vals) {
+        if (seq !== geometrySeq) return;
+        // Posted without a transfer list: the fetch memo keeps its buffers.
+        var dec = {};
+        for (var i = 0; i < files.length; i++) dec[files[i]] = vals[i];
+        send(dec);
+      }, function (err) {
+        if (seq !== geometrySeq) return;
+        showError("Could not load the " + decoderLabel(err && err.file) + " decoder: " + (err && err.reason ? err.reason : "unknown error"));
+        send(null);
+      });
     } else if (isObjKey(kind)) {
       ensureObjBytes(kind)
         .then(function (buf) { post({ type: "fs:model", modelType: "obj", bytes: buf, regen: true, rotation: ROTATIONS[kind] }); })
@@ -1821,19 +1938,31 @@
     saveSession(true);   // the payload changed — mirror the source itself
   }
 
+  // → true when the model was taken, false when it was refused (a GLB whose
+  // payload cannot be dropped).
   function loadModelBuffer(buf, name) {
-    // A clip index means nothing across models, and neither does a playhead.
-    state.animClip = 0;
-    animTime = 0;
     // Normalize to a standalone ArrayBuffer so it survives structured-clone
     // messaging regardless of whether the source was a File or a zip slice.
     var ab = buf instanceof ArrayBuffer ? buf : buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    // A FastShaders GLB carries a shader MODULE: the stage, the session mirror
+    // and the VR popup never hold it (fsDropPayload). This one site covers
+    // drops, zip models and the session replay; a shader found inside a model
+    // runs only through handleFiles' confirm, as the text it read.
+    if (extOf(name || "") === "glb") {
+      var clean = fsDropPayload(new Uint8Array(ab));
+      if (!clean) { showError("\u201c" + fsSafeName(name) + "\u201d: not a valid .glb file."); return false; }
+      ab = clean.byteOffset === 0 && clean.buffer.byteLength === clean.byteLength ? clean.buffer : clean.slice().buffer;
+    }
+    // A clip index means nothing across models, and neither does a playhead.
+    state.animClip = 0;
+    animTime = 0;
     state.modelBytes = ab;
     // A dropped OBJ takes the obj-model + regen path (normals/UVs rebuilt —
     // OBJLoader output is non-indexed, same as the built-in teapot/bunny);
     // glb/gltf keep their authored data (regen:false).
     state.modelKind = extOf(name || "") === "obj" ? "obj" : "gltf";
     state.modelName = name || "model.glb";
+    state.modelDecoderFiles = modelDecoderFiles(ab, state.modelKind);
     if (!geoSelect.querySelector('option[value="model"]')) {
       var opt = document.createElement("option");
       opt.value = "model"; opt.textContent = "Loaded model";
@@ -1844,6 +1973,7 @@
     setGeometry("model");
     updateLoaded();
     saveSession(true);   // the payload changed — mirror the model bytes
+    return true;
   }
 
   // ── Uniform sliders ─────────────────────────────────────────────────
@@ -2038,7 +2168,9 @@
     writePref("fs:viewerAutoRestore", state.autoRestore ? "1" : "0");
     // Re-arming may be the first save of the run, so mirror the payload too:
     // the small record alone would restore nothing.
-    if (state.autoRestore) saveSession(true); else clearSession();
+    // Re-arming also makes "will this come back?" a new question for both
+    // parts on screen, so the restore note is raised here too.
+    if (state.autoRestore) { saveSession(true); noteRestoreLimits(true, true); } else clearSession();
   });
   viewReturnToggle.checked = state.viewReturn;
   viewReturnToggle.addEventListener("change", function () {
@@ -2199,6 +2331,336 @@
     loadedEl.hidden = rows.length === 0;
   }
 
+  // ── FastShaders GLB reader (twin of src/utils/glbShaderExtras.ts — podestGlbReader.test.ts runs both) ──
+  // A FastShaders single-GLB export is a .js in a model's clothing: root
+  // extras.fastshaders names a MODULE view (and a project view podest never
+  // reads) beside the images the module uses. This reader only classifies and
+  // slices bytes — it decodes no picture, executes nothing and fetches
+  // nothing — and it must agree with the editor's reader on every fixture,
+  // byte for byte for the drop. GLBs only: the export never writes a .gltf.
+  var FS_EXTRAS_VERSION = 1;
+  var FS_MODULE_MIME = "text/javascript";
+  var FS_MODULE_MAX_BYTES = 16 * 1024 * 1024;
+  var FS_PROJECT_MAX_BYTES = 32 * 1024 * 1024;
+  var FS_ASSETS_MAX = 64;
+  var FS_ASSET_BYTES_MAX = 16 * 1024 * 1024;
+  var FS_ASSETS_TOTAL_MAX = 64 * 1024 * 1024;
+  var FS_ASSET_KEY_RE = /^[A-Za-z0-9_-]{1,80}$/;
+  var FS_FNV1A_RE = /^[0-9a-f]{8}$/;
+  var FS_GLB_JSON_MAX_BYTES = 16 * 1024 * 1024;
+  var FS_GLB_MAX_CHUNKS = 16;
+  var FS_SCENES_SCAN_MAX = 256;
+  var FS_PROJECT_BEGIN = "/* FASTSHADERS_PROJECT_V1";
+  var FS_PROJECT_END = "END_FASTSHADERS_PROJECT */";
+  var FS_JSON_SNIFF = '"fastshaders"';
+  // The ESCAPE sniff beside it. A JSON key is delimited by LITERAL quotes and
+  // the only escape that can spell a letter is \uXXXX, so any escaped
+  // spelling of "fastshaders" (every char U+0061..U+0074) carries \u00: a
+  // JSON holding that is un-sniffable and must fall through to the parse, or
+  // {"fastshaders":…} reads as `none` and its module rides on.
+  var FS_JSON_ESCAPE_SNIFF = "\\u00";
+  // The editor reader's GLTF_READ_CAPS for the arrays the site walk reads.
+  var FS_READ_CAPS = { accessors: 1048576, images: 4096, meshes: 65536, primitives: 262144 };
+  var FS_ASSET_MIMES = ["image/png", "image/jpeg", "image/webp"];
+  var FS_REASON_TEXT = {
+    damaged: "the file is damaged",
+    "too-large": "it is too large",
+    "unsupported-version": "it was saved by a newer FastShaders",
+    inconsistent: "its parts contradict each other"
+  };
+  // The editor's safeJsonReviver: a hostile key never lands on a prototype.
+  function fsJsonReviver(k, v) { return (k === "__proto__" || k === "constructor" || k === "prototype") ? undefined : v; }
+  function fsIsObj(v) { return typeof v === "object" && v !== null && !Array.isArray(v); }
+  function fsSafeNonNeg(v) { return typeof v === "number" && Number.isSafeInteger(v) && v >= 0; }
+  // A file name for a message: control and line-separator characters become spaces.
+  function fsSafeName(n) { return String(n).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").slice(0, 200); }
+  function fsFnv1a(s) {
+    var h = 0x811c9dc5;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return (h >>> 0).toString(16).padStart(8, "0");
+  }
+  function fsB64(u8) {
+    var binary = "";
+    for (var i = 0; i < u8.length; i += 0x8000) binary += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return btoa(binary);
+  }
+  // glbContainer's parseGlbContainer: version exactly 2, chunk bounds, JSON first,
+  // BIN only second, at most 16 chunks, the JSON length checked before a decode.
+  function fsParseGlb(u8) {
+    if (u8.length < 20) return null;
+    var dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    if (dv.getUint32(0, true) !== 0x46546c67 || dv.getUint32(4, true) !== 2) return null;
+    var total = dv.getUint32(8, true);
+    if (total < 20 || total > u8.length) return null;
+    var jsonStart = 0, jsonLength = 0, bin = null, count = 0;
+    for (var at = 12; at < total; ) {
+      if (total - at < 8) return null;
+      var length = dv.getUint32(at, true), type = dv.getUint32(at + 4, true), body = at + 8;
+      if (length > total - body) return null;
+      if (count === FS_GLB_MAX_CHUNKS) return null;
+      if (count === 0) {
+        if (type !== 0x4e4f534a) return null;
+        jsonStart = body; jsonLength = length;
+      } else if (type === 0x4e4f534a) {
+        return null;
+      } else if (type === 0x004e4942) {
+        if (bin || count !== 1) return null;
+        bin = u8.subarray(body, body + length);
+      }
+      count++;
+      at = body + length;
+    }
+    if (jsonLength === 0 || jsonLength > FS_GLB_JSON_MAX_BYTES) return null;
+    return { json: new TextDecoder().decode(u8.subarray(jsonStart, jsonStart + jsonLength)), bin: bin };
+  }
+  // glbContainer's buildGlbContainer: JSON padded with 0x20, BIN with 0x00.
+  function fsBuildGlb(json, bin) {
+    var text = new TextEncoder().encode(json);
+    var jsonLength = (text.length + 3) & ~3, binLength = bin ? (bin.length + 3) & ~3 : 0;
+    var total = 20 + jsonLength + (bin ? 8 + binLength : 0);
+    var out = new Uint8Array(total), dv = new DataView(out.buffer);
+    dv.setUint32(0, 0x46546c67, true); dv.setUint32(4, 2, true); dv.setUint32(8, total, true);
+    dv.setUint32(12, jsonLength, true); dv.setUint32(16, 0x4e4f534a, true);
+    out.fill(0x20, 20, 20 + jsonLength);
+    out.set(text, 20);
+    if (bin) {
+      var at = 20 + jsonLength;
+      dv.setUint32(at, binLength, true); dv.setUint32(at + 4, 0x004e4942, true);
+      out.set(bin, at + 8);
+    }
+    return out;
+  }
+  // Could this JSON text carry the key — literally, or behind an escape?
+  function fsMayCarry(json) {
+    return json.indexOf(FS_JSON_SNIFF) >= 0 || json.indexOf(FS_JSON_ESCAPE_SNIFF) >= 0;
+  }
+  function fsMatchAt(u8, i, pat) {
+    if (i + pat.length > u8.length) return false;
+    for (var j = 1; j < pat.length; j++) if (u8[i + j] !== pat[j]) return false;
+    return true;
+  }
+  // The same question over raw bytes, one pass (a model may be tens of MB).
+  function fsSniff(u8) {
+    var enc = new TextEncoder(), a = enc.encode(FS_JSON_SNIFF), b = enc.encode(FS_JSON_ESCAPE_SNIFF);
+    for (var i = 0; i < u8.length; i++) {
+      if (u8[i] === a[0] && fsMatchAt(u8, i, a)) return true;
+      if (u8[i] === b[0] && fsMatchAt(u8, i, b)) return true;
+    }
+    return false;
+  }
+  function fsHasExtras(doc) {
+    if (!fsIsObj(doc)) return false;
+    if (fsIsObj(doc.extras) && fsIsObj(doc.extras.fastshaders)) return true;
+    if (!Array.isArray(doc.scenes)) return false;
+    for (var i = 0; i < Math.min(doc.scenes.length, FS_SCENES_SCAN_MAX); i++) {
+      var s = doc.scenes[i];
+      if (fsIsObj(s) && fsIsObj(s.extras) && fsIsObj(s.extras.fastshaders)) return true;
+    }
+    return false;
+  }
+  function fsPayloadViews(doc) {
+    var fs = fsIsObj(doc) && fsIsObj(doc.extras) && fsIsObj(doc.extras.fastshaders) ? doc.extras.fastshaders : null;
+    if (!fs) return [];
+    var count = Array.isArray(doc.bufferViews) ? doc.bufferViews.length : 0, out = [];
+    ["module", "project"].forEach(function (k) {
+      var e = fs[k];
+      if (fsIsObj(e) && fsSafeNonNeg(e.bufferView) && e.bufferView < count && out.indexOf(e.bufferView) < 0) out.push(e.bufferView);
+    });
+    return out.sort(function (a, b) { return a - b; });
+  }
+  // Every bufferView a MODEL site reads; "damaged" past the reader's caps.
+  function fsModelSiteViews(doc) {
+    var out = new Set(), add = function (v) { if (fsSafeNonNeg(v)) out.add(v); };
+    var accessors = Array.isArray(doc.accessors) ? doc.accessors : [];
+    if (accessors.length > FS_READ_CAPS.accessors) return "damaged";
+    for (var i = 0; i < accessors.length; i++) {
+      var a = accessors[i];
+      if (!fsIsObj(a)) continue;
+      add(a.bufferView);
+      if (!fsIsObj(a.sparse)) continue;
+      if (fsIsObj(a.sparse.indices)) add(a.sparse.indices.bufferView);
+      if (fsIsObj(a.sparse.values)) add(a.sparse.values.bufferView);
+    }
+    var images = Array.isArray(doc.images) ? doc.images : [];
+    if (images.length > FS_READ_CAPS.images) return "damaged";
+    for (var k = 0; k < images.length; k++) if (fsIsObj(images[k])) add(images[k].bufferView);
+    var meshes = Array.isArray(doc.meshes) ? doc.meshes : [];
+    if (meshes.length > FS_READ_CAPS.meshes) return "damaged";
+    var prims = 0;
+    for (var m = 0; m < meshes.length; m++) {
+      var mesh = meshes[m];
+      if (!fsIsObj(mesh) || !Array.isArray(mesh.primitives)) continue;
+      prims += mesh.primitives.length;
+      if (prims > FS_READ_CAPS.primitives) return "damaged";
+      for (var p = 0; p < mesh.primitives.length; p++) {
+        var prim = mesh.primitives[p];
+        if (!fsIsObj(prim) || !fsIsObj(prim.extensions)) continue;
+        var exts = prim.extensions;
+        Object.keys(exts).forEach(function (key) { var e = exts[key]; if (fsIsObj(e)) add(e.bufferView); });
+      }
+    }
+    return out;
+  }
+  // The module-view rules, applied to every payload and asset view alike.
+  function fsViewSlice(doc, bin, index, max) {
+    var views = doc.bufferViews;
+    if (!Array.isArray(views) || !fsSafeNonNeg(index) || index >= views.length) return { ok: false, reason: "damaged" };
+    var view = views[index];
+    if (!fsIsObj(view) || view.buffer !== 0) return { ok: false, reason: "damaged" };
+    var buffers = doc.buffers;
+    if (!Array.isArray(buffers) || !fsIsObj(buffers[0]) || typeof buffers[0].uri === "string") return { ok: false, reason: "damaged" };
+    if (view.byteStride !== undefined || view.target !== undefined || view.extensions !== undefined) return { ok: false, reason: "damaged" };
+    var start = view.byteOffset === undefined ? 0 : view.byteOffset, length = view.byteLength;
+    if (!fsSafeNonNeg(start) || !fsSafeNonNeg(length) || length === 0) return { ok: false, reason: "damaged" };
+    if (length > max) return { ok: false, reason: "too-large" };
+    if (bin === null || start + length > bin.length) return { ok: false, reason: "damaged" };
+    return { ok: true, bytes: bin.subarray(start, start + length), start: start, end: start + length };
+  }
+  function fsMagic(mime, b) {
+    var has = function (at, sig) {
+      if (b.length < at + sig.length) return false;
+      for (var i = 0; i < sig.length; i++) if (b[at + i] !== sig[i]) return false;
+      return true;
+    };
+    if (mime === "image/png") return has(0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    if (mime === "image/jpeg") return has(0, [0xff, 0xd8, 0xff]);
+    if (mime === "image/webp") return has(0, [0x52, 0x49, 0x46, 0x46]) && has(8, [0x57, 0x45, 0x42, 0x50]);
+    return false;
+  }
+  function fsReadAssets(doc, bin, raw) {
+    var assets = new Map(), refused = 0;
+    if (!fsIsObj(raw)) return { assets: assets, refused: 0 };
+    var images = Array.isArray(doc.images) ? doc.images : [];
+    var keys = Object.keys(raw), n = Math.min(keys.length, FS_ASSETS_MAX), memo = new Map(), total = 0;
+    refused += keys.length - n;
+    for (var i = 0; i < n; i++) {
+      var key = keys[i];
+      if (!FS_ASSET_KEY_RE.test(key)) { refused++; continue; }
+      var idx = raw[key];
+      if (!fsSafeNonNeg(idx) || idx >= images.length) { refused++; continue; }
+      var entry = memo.get(idx);
+      if (entry === undefined) {
+        entry = null;
+        var img = images[idx];
+        if (fsIsObj(img) && typeof img.uri !== "string" && fsSafeNonNeg(img.bufferView) && FS_ASSET_MIMES.indexOf(img.mimeType) >= 0) {
+          var s = fsViewSlice(doc, bin, img.bufferView, FS_ASSET_BYTES_MAX);
+          if (s.ok && fsMagic(img.mimeType, s.bytes)) entry = { src: "data:" + img.mimeType + ";base64," + fsB64(s.bytes), length: s.bytes.length };
+        }
+        memo.set(idx, entry);
+      }
+      if (entry === null || total + entry.length > FS_ASSETS_TOTAL_MAX) { refused++; continue; }
+      total += entry.length;
+      assets.set(key, entry.src);
+    }
+    return { assets: assets, refused: refused };
+  }
+  // imageAssets' placeholder inlining: an unknown key stays verbatim.
+  function fsInline(code, assets) {
+    if (assets.size === 0 || code.indexOf("fs-asset:") < 0) return code;
+    return code.replace(/"fs-asset:([^"]+)"/g, function (whole, key) { var src = assets.get(key); return src === undefined ? whole : '"' + src + '"'; });
+  }
+  function fsReadExtras(doc, bin) {
+    var refused = function (reason) { return { state: "refused", reason: reason }; };
+    if (!fsIsObj(doc) || !fsIsObj(doc.extras) || !fsIsObj(doc.extras.fastshaders)) return { state: "none" };
+    var fs = doc.extras.fastshaders;
+    if (fs.v !== FS_EXTRAS_VERSION) return refused(typeof fs.v === "number" && Number.isSafeInteger(fs.v) && fs.v > FS_EXTRAS_VERSION ? "unsupported-version" : "damaged");
+    var m = fs.module, p = fs.project;
+    if (m !== undefined && !(fsIsObj(m) && fsSafeNonNeg(m.bufferView))) return refused("damaged");
+    if (p !== undefined && !(fsIsObj(p) && fsSafeNonNeg(p.bufferView))) return refused("damaged");
+    if (m === undefined && p === undefined) return { state: "none" };
+    if (m !== undefined && m.mimeType !== FS_MODULE_MIME) return refused("damaged");
+    var sites = fsModelSiteViews(doc);
+    if (sites === "damaged") return refused("damaged");
+    var ms = null, ps = null;
+    if (m !== undefined) {
+      ms = fsViewSlice(doc, bin, m.bufferView, FS_MODULE_MAX_BYTES);
+      if (!ms.ok) return refused(ms.reason);
+      if (sites.has(m.bufferView)) return refused("inconsistent");
+    }
+    if (p !== undefined) {
+      ps = fsViewSlice(doc, bin, p.bufferView, FS_PROJECT_MAX_BYTES);
+      if (!ps.ok) return refused(ps.reason);
+      if (sites.has(p.bufferView)) return refused("inconsistent");
+    }
+    if (ms && ps) {
+      if (m.bufferView === p.bufferView) return refused("inconsistent");
+      if (ms.start < ps.end && ps.start < ms.end) return refused("inconsistent");
+    }
+    var decoder = new TextDecoder("utf-8", { fatal: true }), stored = null, projectText = null;
+    if (ms) {
+      try { stored = decoder.decode(ms.bytes); } catch (e) { return refused("damaged"); }
+      if (stored.length === 0) return refused("damaged");
+    }
+    if (ps) {
+      try { projectText = decoder.decode(ps.bytes).trim(); } catch (e) { return refused("damaged"); }
+      if (projectText.indexOf(FS_PROJECT_BEGIN) !== 0 || projectText.slice(-FS_PROJECT_END.length) !== FS_PROJECT_END) return refused("damaged");
+    }
+    var moduleEdited = stored !== null && m !== undefined && typeof m.fnv1a === "string" && FS_FNV1A_RE.test(m.fnv1a) && fsFnv1a(stored) !== m.fnv1a;
+    var a = fsReadAssets(doc, bin, fs.assets);
+    return {
+      state: "ok",
+      moduleText: stored === null ? null : fsInline(stored, a.assets),
+      projectText: projectText,
+      hasProject: projectText !== null,
+      assetsRefused: a.refused,
+      moduleEdited: moduleEdited
+    };
+  }
+  // → { state: "none" } | { state: "refused", reason } | { state: "ok", moduleText, … }
+  function fsReadGlb(u8) {
+    try {
+      if (u8.length < 4 || new DataView(u8.buffer, u8.byteOffset, u8.byteLength).getUint32(0, true) !== 0x46546c67) return { state: "none" };
+      var c = fsParseGlb(u8);
+      if (!c) return fsSniff(u8) ? { state: "refused", reason: "damaged" } : { state: "none" };
+      if (!fsMayCarry(c.json)) return { state: "none" };
+      var doc;
+      try { doc = JSON.parse(c.json, fsJsonReviver); } catch (e) { return { state: "refused", reason: "damaged" }; }
+      return fsReadExtras(doc, c.bin);
+    } catch (e) {
+      return { state: "refused", reason: "damaged" };
+    }
+  }
+  // The payload drop: extras.fastshaders goes from the root and every scene,
+  // and the module/project bytes no model site reads are ZEROED in place
+  // (offsets and sizes unchanged). The SAME object back when there is nothing
+  // to drop; null when a payload is sniffed in a container that will not parse.
+  function fsDropPayload(u8) {
+    try {
+      if (!fsSniff(u8)) return u8;
+      var c = fsParseGlb(u8);
+      if (!c) return null;
+      if (!fsMayCarry(c.json)) return u8;
+      var doc;
+      try { doc = JSON.parse(c.json, fsJsonReviver); } catch (e) { return null; }
+      if (!fsIsObj(doc) || !fsHasExtras(doc)) return u8;
+      var sites = fsModelSiteViews(doc);
+      if (sites === "damaged") return null;
+      var views = Array.isArray(doc.bufferViews) ? doc.bufferViews : [], ranges = [];
+      fsPayloadViews(doc).forEach(function (v) {
+        if (sites.has(v)) return;
+        var view = views[v];
+        if (!fsIsObj(view) || !fsSafeNonNeg(view.buffer) || !fsSafeNonNeg(view.byteLength)) return;
+        var start = view.byteOffset === undefined ? 0 : view.byteOffset;
+        if (!fsSafeNonNeg(start)) return;
+        ranges.push({ buffer: view.buffer, start: start, end: start + view.byteLength });
+      });
+      var bin = c.bin;
+      if (bin && ranges.length > 0) {
+        var copy = new Uint8Array(bin);
+        ranges.forEach(function (r) { if (r.buffer === 0) copy.fill(0, Math.min(r.start, copy.length), Math.min(r.end, copy.length)); });
+        bin = copy;
+      }
+      var strip = function (o) { if (fsIsObj(o.extras) && Object.prototype.hasOwnProperty.call(o.extras, "fastshaders")) delete o.extras.fastshaders; };
+      strip(doc);
+      (Array.isArray(doc.scenes) ? doc.scenes : []).forEach(function (s) { if (fsIsObj(s)) strip(s); });
+      var json = JSON.stringify(doc);
+      if (json.length < c.json.length) json += " ".repeat(c.json.length - json.length);
+      return fsBuildGlb(json, bin);
+    } catch (e) {
+      return null;
+    }
+  }
+
   // ── File dispatch ───────────────────────────────────────────────────
   function extOf(name) { var i = name.lastIndexOf("."); return i < 0 ? "" : name.slice(i + 1).toLowerCase(); }
   function isShaderName(n) { var e = extOf(n); return e === "js" || e === "mjs" || e === "tsl" || e === "txt"; }
@@ -2220,14 +2682,42 @@
     if (zip) { handleZip(zip); return; }
     var shader = list.find(function (f) { return isShaderName(f.name); });
     var model = list.find(function (f) { return isModelName(f.name); });
-    if (model) model.arrayBuffer().then(function (buf) { loadModelBuffer(buf, model.name); }).catch(function (e) { showError("Could not read file: " + e.message); });
-    if (shader) shader.text().then(function (t) { loadShaderText(t, shader.name); }).catch(function (e) { showError("Could not read file: " + e.message); });
-    if (!shader && !model) showError("Unrecognized file. Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip.");
+    if (!shader && !model) { showError("Unrecognized file. Drop a shader (.js/.tsl), a model (.glb/.gltf/.obj), or a .zip."); return; }
+    var seq = loadSeq, reads = [], glbShader = false;
+    // A dropped FastShaders .glb may carry a shader. It runs only after the
+    // visitor says yes, naming the file, and then exactly like a dropped .js
+    // (inside the sandbox; the accepted text is what the session mirrors, so
+    // the boot replay needs no second yes). A shader dropped WITH the model
+    // wins and nothing is asked; zips and the work folder never ask.
+    if (model) reads.push(model.arrayBuffer().then(function (buf) {
+      var fsr = (!shader && extOf(model.name) === "glb") ? fsReadGlb(new Uint8Array(buf)) : { state: "none" };
+      if (!loadModelBuffer(buf, model.name)) return false;
+      if (fsr.state === "refused") {
+        showError("\u201c" + fsSafeName(model.name) + "\u201d: its stored shader could not be read (" + FS_REASON_TEXT[fsr.reason] + "), so only the model is shown.");
+      } else if (fsr.state === "ok" && fsr.moduleText !== null && seq === loadSeq &&
+          window.confirm("\u201c" + fsSafeName(model.name) + "\u201d contains a FastShaders shader. Run it on this model? It runs inside Podest's sandbox like a dropped .js \u2014 only continue if you trust where this file came from.")) {
+        loadShaderText(fsr.moduleText, model.name);
+        glbShader = true;
+      }
+      return true;
+    })
+      .catch(function (e) { showError("Could not read file: " + e.message); return false; }));
+    if (shader) reads.push(shader.text().then(function (t) { loadShaderText(t, shader.name); return true; })
+      .catch(function (e) { showError("Could not read file: " + e.message); return false; }));
+    // Both halves first: loadShaderText clears the banner, so a note raised
+    // after the model alone would be wiped by the shader landing second. A
+    // failed read keeps its own error; a newer drop supersedes this note.
+    Promise.all(reads).then(function (ok) {
+      if (seq !== loadSeq || ok.indexOf(false) >= 0) return;
+      noteRestoreLimits(!!model, !!shader || glbShader);
+    });
   }
 
   // seq (optional) is a work-folder load's generation — stale inflates bail
   // instead of committing over a newer pick. Drops pass no seq (immediate).
-  function handleZip(file, seq) {
+  // quiet = a cycle-tick load, which must not raise the restore note (a red
+  // banner every stay); drops and manual picks leave it unset.
+  function handleZip(file, seq, quiet) {
     clearError();
     file.arrayBuffer().then(unzip).then(function (entries) {
       if (seq !== undefined && seq !== loadSeq) return;
@@ -2237,14 +2727,37 @@
       if (model) loadModelBuffer(model.data, model.name.split("/").pop());
       if (shader) loadShaderText(new TextDecoder().decode(shader.data), shader.name.split("/").pop());
       if (!shader && !model) showError("Zip contained no shader (.js/.tsl) or model (.glb/.gltf/.obj).");
-    }).catch(function (e) { showError("Could not read zip: " + e.message); });
+      else if (!quiet) noteRestoreLimits(!!model, !!shader);
+    }).catch(function (e) { showError(zipErrorText(e)); });
   }
 
   // Adversarial-input caps — mirror src/utils/zipReader.ts so a shared archive
   // can't balloon memory (decompression bomb) or slip in a blank shader.
+  // The total is the editor's MESH_MAX_BYTES (64 MB, the largest model either
+  // surface accepts) plus 32 MB for the .js and images beside it, so a bundle
+  // the editor exports reopens here. src/utils/zipReader.test.ts pins all
+  // three caps against src/utils/zipReader.ts (it evaluates each value's TEXT,
+  // so keep them plain number expressions). The bomb defence is the streamed
+  // counter in inflateEntry, not the number.
   var MAX_ENTRIES = 512;
-  var MAX_TOTAL_UNCOMPRESSED = 64 * 1024 * 1024; // 64 MB across all entries
+  var MAX_TOTAL_UNCOMPRESSED = 96 * 1024 * 1024; // 96 MiB across all entries — MESH_MAX_BYTES + 32 MiB headroom; mirrors src/utils/zipReader.ts
   var MAX_NAME_LENGTH = 512;
+  // A cap the archive is over — said as a sentence, because the fix is the
+  // visitor's (a smaller file), not the file's. "MB" is MiB, as in the
+  // editor's notices. `zipLimit` lets zipErrorText tell a limit from a
+  // malformed archive.
+  function zipLimitError(kind) {
+    var e = new Error(kind === "entries"
+      ? "it holds more than " + MAX_ENTRIES + " files"
+      : "it unpacks to more than " + Math.round(MAX_TOTAL_UNCOMPRESSED / 1048576) + " MB");
+    e.zipLimit = true;
+    return e;
+  }
+  function zipErrorText(e) {
+    return e && e.zipLimit
+      ? "Could not open the zip: " + e.message + "."
+      : "Could not read zip: " + (e && e.message ? e.message : e);
+  }
 
   // Minimal in-browser unzip: parse the ZIP central directory and inflate
   // deflate entries with the native DecompressionStream (no dependency).
@@ -2256,7 +2769,7 @@
     for (var i = buf.byteLength - 22; i >= 0; i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
     if (eocd < 0) throw new Error("not a zip archive");
     var count = dv.getUint16(eocd + 10, true), p = dv.getUint32(eocd + 16, true);
-    if (count > MAX_ENTRIES) throw new Error("too many entries (" + count + ")");
+    if (count > MAX_ENTRIES) throw zipLimitError("entries");
     var entries = [], totalInflated = 0;
     for (var n = 0; n < count; n++) {
       if (dv.getUint32(p, true) !== 0x02014b50) break;
@@ -2282,7 +2795,7 @@
   }
   function inflateEntry(name, method, comp, maxBytes) {
     if (method === 0) {
-      if (comp.length > maxBytes) return Promise.reject(new Error("archive too large"));
+      if (comp.length > maxBytes) return Promise.reject(zipLimitError("size"));
       return Promise.resolve({ name: name, data: comp.slice() });
     }
     if (method !== 8) return Promise.reject(new Error("unsupported compression method " + method));
@@ -2315,7 +2828,7 @@
           return { name: name, data: out };
         }
         total += r.value.length;
-        if (total > maxBytes) return reader.cancel().then(function () { throw new Error("archive too large"); });
+        if (total > maxBytes) return reader.cancel().then(function () { throw zipLimitError("size"); });
         chunks.push(r.value);
         return pump();
       });
@@ -2519,7 +3032,9 @@
     else showError("No shaders (.js / .zip) found in that folder.");
   }
 
-  function loadWorkEntry(i) {
+  // fromCycle = an automatic Cycle tick: loads the same way, but never raises
+  // the restore note (a manual pick and the first load after a folder pick do).
+  function loadWorkEntry(i, fromCycle) {
     var w = workList[i];
     if (!w) return;
     cycle.idx = i;
@@ -2531,8 +3046,8 @@
     var pre = workPrefetch && workPrefetch.idx === i ? workPrefetch.fileP : null;
     (pre || (w.file ? Promise.resolve(w.file) : w.handle.getFile())).then(function (f) {
       if (seq !== loadSeq) return;
-      if (extOf(f.name) === "zip") { handleZip(f, seq); return; }
-      f.text().then(function (t) { if (seq === loadSeq) loadShaderText(t, f.name); })
+      if (extOf(f.name) === "zip") { handleZip(f, seq, fromCycle); return; }
+      f.text().then(function (t) { if (seq === loadSeq) { loadShaderText(t, f.name); if (!fromCycle) noteRestoreLimits(false, true); } })
         .catch(function (e) { showError("Could not read file: " + e.message); });
     }).catch(function (e) { showError("Could not read " + w.name + ": " + (e && e.message ? e.message : e)); });
   }
@@ -2568,7 +3083,7 @@
     // stage compiles the incoming shader once: the entry's async read lands
     // during the boot and applyStateToStage replays the updated state.
     if (++cycle.swaps % CYCLE_RESTART_EVERY === 0) restartStage("cycle hygiene");
-    loadWorkEntry(n);
+    loadWorkEntry(n, true);
     armPrefetch();
   }
   function cycleTick() {
@@ -2709,7 +3224,7 @@
   function buildXrDoc() {
     var dir = new URL(".", window.location.href).href;
     var iife = dir + "js/a-frame-180-a-01.min.js";
-    var loader = dir + "js/a-frame-shaderloader-0.6.js";
+    var loader = dir + "js/a-frame-shaderloader-0.8.js";
     var orbit = dir + "js/aframe-orbit-controls.min.js";
     var bg = isHex6(state.bgColor) ? state.bgColor : DEFAULT_BG;
     // Same pure-Y turntable as the stage; the per-geometry tilt stays on
@@ -2785,13 +3300,21 @@
     L.push('<script>(function(){var q=null;window.__fsErr=function(m){try{var el=document.getElementById("err");if(!el){q=m;return;}el.textContent=String(m).slice(0,2000);el.style.display="block";}catch(e){}};addEventListener("DOMContentLoaded",function(){if(q!==null)__fsErr(q);});window.onerror=function(msg,u,l,c,err){__fsErr((err&&err.stack)||msg||"Error");};window.onunhandledrejection=function(ev){var r=ev&&ev.reason;__fsErr((r&&r.stack)||r||"Shader load failed");};var ce=console.error;console.error=function(){try{var p=[];for(var i=0;i<arguments.length;i++)p.push(String(arguments[i]));__fsErr(p.join(" "));}catch(e){}return ce.apply(console,arguments);};addEventListener("shader-error",function(ev){var d=ev&&ev.detail;__fsErr("Shader error: "+((d&&d.message)||"failed to apply"));});})();<\/script>');
     L.push('<script src="' + iife + '" onerror="__fsErr(\'Failed to load the A-Frame bundle\')"><\/script>');
     L.push('<script src="' + loader + '" onerror="__fsErr(\'Failed to load the shaderloader\')"><\/script>');
+    // Mesh decoders for a dropped compressed glTF: this popup runs at the real
+    // origin, so it points loader 0.8 at js/decoders/ beside the loader itself.
+    if (kind === "model" && state.modelBytes) {
+      var decUrls = {};
+      DECODER_FILES.forEach(function (f) { decUrls[f] = dir + "js/decoders/" + f; });
+      L.push('<script>try{var __fsDec=' + jsonForScript(decUrls) + ';FastShaders.decoders.configure({resolve:function(f){return Object.prototype.hasOwnProperty.call(__fsDec,f)?__fsDec[f]:null;}});}catch(e){}<\/script>');
+    }
     L.push('<script src="' + orbit + '" onerror="__fsErr(\'Failed to load orbit controls\')"><\/script>');
     // Loader-level exfiltration guard, origin-widened (the popup is
     // real-origin, so its own vendored js/ and models/ load by real URL;
     // about:blank's location can't resolve anything, so the baked origin is
     // the reference). Everything else a hostile .gltf/.js hands THREE's
-    // loaders is neutralized to an inert data: URL.
-    L.push('<script>(function(){var origin=' + jsonForScript(window.location.origin) + ';try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{if(new URL(s).origin===origin)return s;}catch(e){}try{console.warn("[PodestVR] blocked non-origin resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}})();<\/script>');
+    // loaders is neutralized to an inert data: URL. Loader 0.8's one-way
+    // model-module latch closes first: the popup runs the baked shader only.
+    L.push('<script>(function(){try{if(window.FastShaders&&typeof FastShaders.disableModelModules==="function")FastShaders.disableModelModules();}catch(e){}var origin=' + jsonForScript(window.location.origin) + ';try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{if(new URL(s).origin===origin)return s;}catch(e){}try{console.warn("[PodestVR] blocked non-origin resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}})();<\/script>');
     L.push('<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:' + bg + ';font-family:system-ui,sans-serif;}' +
       '#err{position:fixed;top:12px;left:12px;z-index:30;max-width:60vw;max-height:40vh;overflow:auto;display:none;color:#fff;background:rgba(180,40,40,0.92);font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;padding:8px 12px;border-radius: 0;}' +
       '#vr-gate{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:20;padding:14px 30px;font:600 17px/1 system-ui,sans-serif;color:#fff;background:rgba(0,0,0,0.72);border:1px solid rgba(255,255,255,0.35);border-radius: 0;cursor:pointer;}' +
@@ -2841,7 +3364,7 @@
     // only after the loader finishes its dynamic import.
     L.push('  function applyValues(){var tries=0;(function poll(){var comp=entity&&entity.components&&entity.components.shader;var u=comp&&comp._propertyUniforms;if(u){for(var k in VALUES){if(!Object.prototype.hasOwnProperty.call(VALUES,k)||SOUND_RE.test(k)||!u[k])continue;var v=VALUES[k];if(u[k].value&&u[k].value.isColor){if(typeof v==="string")try{u[k].value.set(v);}catch(e){}}else if(typeof v==="number"&&isFinite(v)){u[k].value=v;}}return;}if(tries++<120)setTimeout(poll,50);})();}');
     L.push('  window.addEventListener("shader-applied",applyValues);');
-    L.push('  function boot(){entity=document.getElementById("preview-entity");entity.addEventListener("model-error",function(){__fsErr("Failed to load the 3D model (corrupt, or a DRACO/meshopt-compressed glTF - not supported).");});if(SRC){var u=URL.createObjectURL(new Blob([SRC],{type:"text/javascript"}));entity.setAttribute("shader","src: "+u);}}');
+    L.push('  function boot(){entity=document.getElementById("preview-entity");entity.addEventListener("model-error",function(){var why="";try{var d=window.FastShaders&&FastShaders.decoders;if(d&&typeof d.lastError==="string")why=d.lastError;}catch(e){}__fsErr("Failed to load the 3D model: "+(why||"the file could not be parsed (corrupt, or compressed in a way Podest cannot decode)."));});if(SRC){var u=URL.createObjectURL(new Blob([SRC],{type:"text/javascript"}));entity.setAttribute("shader","src: "+u);}}');
     // Auto-enter once REAL support is confirmed, but keep an in-document
     // button until a session actually starts: a document.write'd popup may
     // not inherit the opening click's transient activation, and an
@@ -2973,7 +3496,14 @@
     L.push('  function splitByAuthored(src,welded,flipped){var srcUv=src.attributes.uv,srcN=src.attributes.normal,wN=welded.attributes.normal,wP=welded.attributes.position,srcIdx=src.index,idx=welded.index,n=idx.count,keyOf=Object.create(null),positions=[],normals=[],uvs=[],newIdx=new Uint32Array(n),count=0;for(var j=0;j<n;j++){var jj=j;if(flipped){var r=j%3;if(r===1)jj=j+1;else if(r===2)jj=j-1;}var o=srcIdx?srcIdx.getX(jj):jj,w=idx.getX(j);var u=srcUv?srcUv.getX(o):0,v=srcUv?srcUv.getY(o):0;var nx=srcN?srcN.getX(o):wN.getX(w),ny=srcN?srcN.getY(o):wN.getY(w),nz=srcN?srcN.getZ(o):wN.getZ(w);var key=w+"|"+Math.round(u*1e5)+","+Math.round(v*1e5)+"|"+Math.round(nx*1e4)+","+Math.round(ny*1e4)+","+Math.round(nz*1e4);var id=keyOf[key];if(id===undefined){id=count++;keyOf[key]=id;positions.push(wP.getX(w),wP.getY(w),wP.getZ(w));normals.push(nx,ny,nz);uvs.push(u,v);}newIdx[j]=id;}var out=new THREE.BufferGeometry();out.setAttribute("position",new THREE.BufferAttribute(new Float32Array(positions),3));out.setAttribute("normal",new THREE.BufferAttribute(new Float32Array(normals),3));if(srcUv)out.setAttribute("uv",new THREE.BufferAttribute(new Float32Array(uvs),2));out.setIndex(new THREE.BufferAttribute(count<65535?new Uint16Array(newIdx):newIdx,1));return out;}');
     L.push('  function sphericalUVs(g,c){var pos=g.attributes.position;var uvs=new Float32Array(pos.count*2);var v=new THREE.Vector3(),TWO_PI=Math.PI*2;for(var i=0;i<pos.count;i++){v.fromBufferAttribute(pos,i).sub(c);var len=v.length();if(len>0)v.multiplyScalar(1/len);uvs[i*2]=Math.atan2(v.z,v.x)/TWO_PI+0.5;uvs[i*2+1]=Math.asin(Math.max(-1,Math.min(1,v.y)))/Math.PI+0.5;}g.setAttribute("uv",new THREE.BufferAttribute(uvs,2));splitUVSeam(g);}');
     L.push('  function flipWinding(g){var idx=g.index;if(!idx){var pos=g.attributes.position;if(!pos)return;var n=pos.count,Arr=n<65535?Uint16Array:Uint32Array,arr=new Arr(n);for(var i=0;i<n;i++)arr[i]=i;for(var t0=0;t0+2<n;t0+=3){var tmp=arr[t0+1];arr[t0+1]=arr[t0+2];arr[t0+2]=tmp;}g.setIndex(new THREE.BufferAttribute(arr,1));return;}for(var t=0;t+2<idx.count;t+=3){var b=idx.getX(t+1);idx.setX(t+1,idx.getX(t+2));idx.setX(t+2,b);}idx.needsUpdate=true;}');
-    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var root=this.el.getObject3D("mesh");if(!root)return;var regen=this.data.regen,target=this.data.size;root.updateMatrixWorld(true);var animated=!!(root.animations&&root.animations.length);var rootInv=new THREE.Matrix4().copy(root.matrixWorld).invert();var pre=new THREE.Matrix4().multiplyMatrices(root.matrix,rootInv);var entries=[],skinned=false;root.traverse(function(node){if(!node.isMesh||!node.geometry)return;if(node.isSkinnedMesh||node.isInstancedMesh){skinned=true;return;}entries.push({node:node,m:new THREE.Matrix4().multiplyMatrices(pre,node.matrixWorld)});});if(skinned||animated){var wbox=new THREE.Box3().setFromObject(root);if(wbox.isEmpty())return;var wsize=new THREE.Vector3(),wcenter=new THREE.Vector3();wbox.getSize(wsize);wbox.getCenter(wcenter);var ws=target/(Math.max(wsize.x,wsize.y,wsize.z)||1);root.position.sub(wcenter.multiplyScalar(ws));root.scale.setScalar(ws);return;}if(!entries.length)return;var box=new THREE.Box3();for(var i=0;i<entries.length;i++){var g0=entries[i].node.geometry;if(!g0.boundingBox)g0.computeBoundingBox();if(g0.boundingBox)box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));}if(box.isEmpty())return;var ext=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(ext);box.getCenter(center);var s=target/(Math.max(ext.x,ext.y,ext.z)||1);var N=new THREE.Matrix4().makeScale(s,s,s).multiply(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));for(var e=0;e<entries.length;e++){var node=entries[e].node;var bake=new THREE.Matrix4().multiplyMatrices(N,entries[e].m);var g=node.geometry.clone();g.applyMatrix4(bake);if(bake.determinant()<0)flipWinding(g);if(regen){var src=g,hadUv=!!src.attributes.uv,hadNormal=!!src.attributes.normal;g=mergeByPosition(src);g.computeVertexNormals();g.computeBoundingBox();var c=new THREE.Vector3();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var sv=0;sv<pos.count;sv+=step){var dot=(pos.getX(sv)-c.x)*nrm.getX(sv)+(pos.getY(sv)-c.y)*nrm.getY(sv)+(pos.getZ(sv)-c.z)*nrm.getZ(sv);if(dot<0)inward++;sampled++;}var flipped=false;if(sampled>0&&inward*2>sampled){flipWinding(g);g.computeVertexNormals();flipped=true;}if(hadUv||hadNormal)g=splitByAuthored(src,g,flipped);if(!hadUv)sphericalUVs(g,c);}else{if(!g.attributes.normal&&g.attributes.position)g.computeVertexNormals();if(!g.attributes.uv&&g.attributes.position){g.computeBoundingBox();var c0=new THREE.Vector3();g.boundingBox.getCenter(c0);sphericalUVs(g,c0);}}node.geometry=g;}root.traverse(function(node){node.position.set(0,0,0);node.quaternion.set(0,0,0,1);node.scale.set(1,1,1);});root.updateMatrixWorld(true);}});');
+    // KHR_mesh_quantization (Int8/Int16 position/normal/tangent, gltfpack's
+    // default alongside meshopt): applyMatrix4 writes into the attribute's own
+    // typed array, so the bake truncated positions to integers and wrapped
+    // normalized values. dequantize widens exactly those three to Float32
+    // first; every other attribute keeps its form. Full rationale on the
+    // editor twin in src/engine/tslToPreviewHTML.ts -- keep the two in step.
+    L.push('  function dequantize(g){var names=["position","normal","tangent"];for(var n=0;n<names.length;n++){var a=g.getAttribute(names[n]);if(!a||a.array instanceof Float32Array)continue;var size=a.itemSize,out=new Float32Array(a.count*size);for(var i=0;i<a.count;i++){out[i*size]=a.getX(i);if(size>1)out[i*size+1]=a.getY(i);if(size>2)out[i*size+2]=a.getZ(i);if(size>3)out[i*size+3]=a.getW(i);}g.setAttribute(names[n],new THREE.BufferAttribute(out,size,false));}}');
+    L.push('  AFRAME.registerComponent("fit-bounds",{schema:{size:{type:"number",default:1.6},regen:{type:"boolean",default:false}},init:function(){this.el.addEventListener("model-loaded",this.fit.bind(this));},fit:function(){var root=this.el.getObject3D("mesh");if(!root)return;var regen=this.data.regen,target=this.data.size;root.updateMatrixWorld(true);var animated=!!(root.animations&&root.animations.length);var rootInv=new THREE.Matrix4().copy(root.matrixWorld).invert();var pre=new THREE.Matrix4().multiplyMatrices(root.matrix,rootInv);var entries=[],skinned=false;root.traverse(function(node){if(!node.isMesh||!node.geometry)return;if(node.isSkinnedMesh||node.isInstancedMesh){skinned=true;return;}entries.push({node:node,m:new THREE.Matrix4().multiplyMatrices(pre,node.matrixWorld)});});if(skinned||animated){var wbox=new THREE.Box3().setFromObject(root);if(wbox.isEmpty())return;var wsize=new THREE.Vector3(),wcenter=new THREE.Vector3();wbox.getSize(wsize);wbox.getCenter(wcenter);var ws=target/(Math.max(wsize.x,wsize.y,wsize.z)||1);root.position.sub(wcenter.multiplyScalar(ws));root.scale.setScalar(ws);return;}if(!entries.length)return;var box=new THREE.Box3();for(var i=0;i<entries.length;i++){var g0=entries[i].node.geometry;if(!g0.boundingBox)g0.computeBoundingBox();if(g0.boundingBox)box.union(g0.boundingBox.clone().applyMatrix4(entries[i].m));}if(box.isEmpty())return;var ext=new THREE.Vector3(),center=new THREE.Vector3();box.getSize(ext);box.getCenter(center);var s=target/(Math.max(ext.x,ext.y,ext.z)||1);var N=new THREE.Matrix4().makeScale(s,s,s).multiply(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));for(var e=0;e<entries.length;e++){var node=entries[e].node;var bake=new THREE.Matrix4().multiplyMatrices(N,entries[e].m);var g=node.geometry.clone();dequantize(g);g.applyMatrix4(bake);if(bake.determinant()<0)flipWinding(g);if(regen){var src=g,hadUv=!!src.attributes.uv,hadNormal=!!src.attributes.normal;g=mergeByPosition(src);g.computeVertexNormals();g.computeBoundingBox();var c=new THREE.Vector3();g.boundingBox.getCenter(c);var nrm=g.attributes.normal,pos=g.attributes.position;var inward=0,sampled=0,step=Math.max(1,Math.floor(pos.count/200));for(var sv=0;sv<pos.count;sv+=step){var dot=(pos.getX(sv)-c.x)*nrm.getX(sv)+(pos.getY(sv)-c.y)*nrm.getY(sv)+(pos.getZ(sv)-c.z)*nrm.getZ(sv);if(dot<0)inward++;sampled++;}var flipped=false;if(sampled>0&&inward*2>sampled){flipWinding(g);g.computeVertexNormals();flipped=true;}if(hadUv||hadNormal)g=splitByAuthored(src,g,flipped);if(!hadUv)sphericalUVs(g,c);}else{if(!g.attributes.normal&&g.attributes.position)g.computeVertexNormals();if(!g.attributes.uv&&g.attributes.position){g.computeBoundingBox();var c0=new THREE.Vector3();g.boundingBox.getCenter(c0);sphericalUVs(g,c0);}}node.geometry=g;}root.traverse(function(node){node.position.set(0,0,0);node.quaternion.set(0,0,0,1);node.scale.set(1,1,1);});root.updateMatrixWorld(true);}});');
     L.push('})();');
     L.push('<\/script>');
   }
@@ -3149,7 +3679,7 @@
   function buildStageDoc() {
     var dir = new URL(".", window.location.href).href; // e.g. https://host/FastShaders/
     var iife = dir + "js/a-frame-180-a-01.min.js";
-    var loader = dir + "js/a-frame-shaderloader-0.6.js";
+    var loader = dir + "js/a-frame-shaderloader-0.8.js";
     var orbit = dir + "js/aframe-orbit-controls.min.js";
     // Bake the persisted background + spin prefs straight into the initial scene
     // so boot matches the saved state without a post-ready restart. bg is
@@ -3232,6 +3762,10 @@
 
     L.push('<script src="' + iife + '" onerror="fsPost(\'Failed to load the A-Frame bundle\', true)"><\/script>');
     L.push('<script src="' + loader + '" onerror="fsPost(\'Failed to load the shaderloader\', true)"><\/script>');
+    // Mesh decoders: the table setModel fills with blob: URLs of the bytes the
+    // parent pushed (see modelDecoderFiles). An empty slot answers null, so a
+    // Draco model without its decoder fails fast with model-error.
+    L.push('<script>window.__fsDecoderUrls=Object.create(null);try{FastShaders.decoders.configure({resolve:function(f){return window.__fsDecoderUrls[f]||null;}});}catch(e){}<\/script>');
     L.push('<script src="' + orbit + '" onerror="fsPost(\'Failed to load orbit controls\', true)"><\/script>');
     // SECURITY: a dropped .gltf/.glb can reference buffers/textures by
     // ABSOLUTE http(s) URL — GLTFLoader would fetch them from inside this
@@ -3240,8 +3774,10 @@
     // legitimately loads through THREE's loading managers is a blob: URL
     // minted here or a data: URI — allowlist exactly those and neutralize the
     // rest to an inert data: URL so the request never leaves the sandbox.
-    // Same guard as the editor preview (tslToPreviewHTML.ts).
-    L.push('<script>try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{console.warn("[Podest] blocked non-blob resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<\/script>');
+    // Same guard as the editor preview (tslToPreviewHTML.ts). It also closes
+    // loader 0.8's one-way model-module latch first: this stage runs the shader
+    // the parent hands it, never a module found inside a dropped model.
+    L.push('<script>try{if(window.FastShaders&&typeof FastShaders.disableModelModules==="function")FastShaders.disableModelModules();}catch(e){}try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{console.warn("[Podest] blocked non-blob resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<\/script>');
     L.push('<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:' + bg + ';}</style>');
     L.push('</head><body>');
 
@@ -3306,7 +3842,7 @@
     // parses longer than the poll window (~6s) would otherwise leave the
     // parent stuck on the empty-uniforms report until a manual re-drop.
     L.push('  window.addEventListener("shader-applied",function(){if(attached)reportUniforms();reportParts();});');
-    // ── Per-mesh materials (shaderloader 0.6 `parts`) ───────────────────
+    // ── Per-mesh materials (shaderloader 0.6 / 0.8 `parts`) ─────────────
     // Reported after the shader applies AND after a model loads, since either
     // changes the answer, and applied by RE-DERIVING the material from the
     // live shader component every time: part material → default → the material
@@ -3326,7 +3862,12 @@
     L.push('  function detachShader(){attached=false;entity.removeAttribute("shader");reportParts();}');
     L.push('  function clearGeo(){var comp=entity.components&&entity.components.shader;if(comp&&attached)comp._propertyUniforms=null;entity.removeAttribute("geometry");entity.removeAttribute("obj-model");entity.removeAttribute("gltf-model");entity.removeAttribute("fit-bounds");entity.removeAttribute("gltf-anim");entity.removeAttribute("material");toParent({type:"fs:anim",has:false,duration:0,canInPlace:false,name:"",clip:0,clips:[]});toParent({type:"fs:parts",meshes:[],parts:[],hasDefault:false});}');
     L.push('  function setPrimitive(attr,rot){clearGeo();entity.setAttribute("material","color: #808080");entity.setAttribute("geometry",attr);entity.setAttribute("rotation",rot||"45 45 0");if(attached){setTimeout(function(){var c=entity.components&&entity.components.shader;if(c&&typeof c.applyShader==="function")c.applyShader();reportUniforms();reportParts();},0);}else setTimeout(reportParts,0);}');
-    L.push('  function setModel(kind,bytes,regen,rot){clearGeo();try{if(modelUrl)URL.revokeObjectURL(modelUrl);}catch(e){}var mime=kind==="obj"?"text/plain":"model/gltf-binary";modelUrl=URL.createObjectURL(new Blob([bytes],{type:mime}));entity.setAttribute("fit-bounds","size: 1.6; regen: "+(regen?"true":"false"));entity.setAttribute("gltf-anim","");if(kind==="obj")entity.setAttribute("obj-model","obj: url("+modelUrl+")");else entity.setAttribute("gltf-model","url("+modelUrl+")");entity.setAttribute("rotation",rot||"0 0 0");if(attached)reportUniforms();}');
+    // The decoder bytes the parent pushed become blob: URLs, only for the three
+    // known names, only as text / ArrayBuffer, at most DEC_MAX each; a filled
+    // slot keeps its URL. Runs BEFORE gltf-model is set.
+    L.push('  var DEC_FILES=' + jsonForScript(DECODER_FILES) + ',DEC_MAX=' + DECODER_MAX_BYTES + ';');
+    L.push('  function fillDec(dec){var t=window.__fsDecoderUrls;if(!t||!dec||typeof dec!=="object")return;for(var i=0;i<DEC_FILES.length;i++){var n=DEC_FILES[i];if(t[n]||!Object.prototype.hasOwnProperty.call(dec,n))continue;var v=dec[n],w=n.slice(-5)===".wasm";if(w?!(v instanceof ArrayBuffer&&v.byteLength>0&&v.byteLength<=DEC_MAX):!(typeof v==="string"&&v.length>0&&v.length<=DEC_MAX))continue;try{t[n]=URL.createObjectURL(new Blob([v],{type:w?"application/wasm":"text/javascript"}));}catch(e){}}}');
+    L.push('  function setModel(kind,bytes,regen,rot,dec){try{if(window.FastShaders&&FastShaders.decoders)FastShaders.decoders.clearError();}catch(e){}clearGeo();fillDec(dec);try{if(modelUrl)URL.revokeObjectURL(modelUrl);}catch(e){}var mime=kind==="obj"?"text/plain":"model/gltf-binary";modelUrl=URL.createObjectURL(new Blob([bytes],{type:mime}));entity.setAttribute("fit-bounds","size: 1.6; regen: "+(regen?"true":"false"));entity.setAttribute("gltf-anim","");if(kind==="obj")entity.setAttribute("obj-model","obj: url("+modelUrl+")");else entity.setAttribute("gltf-model","url("+modelUrl+")");entity.setAttribute("rotation",rot||"0 0 0");if(attached)reportUniforms();}');
     // Colour uniforms mutate in place via .set() — assigning a hex string to
     // .value would replace the THREE.Color object with a string.
     L.push('  function setUniform(name,value){var comp=entity&&entity.components&&entity.components.shader;if(!comp||!comp._propertyUniforms||!comp._propertyUniforms[name])return;var u=comp._propertyUniforms[name];if(u.value&&u.value.isColor){try{u.value.set(value);}catch(e){}}else{u.value=value;}}');
@@ -3341,7 +3882,7 @@
     // idle return in fullscreen restores the framing the exhibitor chose —
     // not the boot camera.
     L.push('  function saveView(){var oc=camEl&&camEl.components&&camEl.components["orbit-controls"];if(oc&&oc.controls&&typeof oc.controls.saveState==="function"){try{oc.controls.saveState();}catch(e){}}}');
-    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:assign-part":assignPart(m.mesh,m.part);break;case"fs:context-hook":ctxHook=!!m.on;break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:stats-on":setStats(m.on);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;case"fs:save-view":saveView();break;}});');
+    L.push('  window.addEventListener("message",function(e){if(e.source!==window.parent)return;var m=e.data;if(!m)return;switch(m.type){case"fs:shader":applyShaderSource(m.source);break;case"fs:detach-shader":detachShader();break;case"fs:geometry":setPrimitive(m.geometryAttr,m.rotation);break;case"fs:model":setModel(m.modelType,m.bytes,m.regen,m.rotation,m.decoders);break;case"fs:uniform":setUniform(m.name,m.value);break;case"fs:assign-part":assignPart(m.mesh,m.part);break;case"fs:context-hook":ctxHook=!!m.on;break;case"fs:spin":setSpin(m.playing,m.dur);break;case"fs:stats-on":setStats(m.on);break;case"fs:background":setBackground(m.color);break;case"fs:reset-camera":resetCamera();break;case"fs:save-view":saveView();break;}});');
     // kickResize: a fresh WebGPU boot can record a stale/zero canvas size,
     // leaving the scene unpainted until renderer.setSize re-runs (the "blank
     // until the window is resized" bug) — re-run A-Frame's resize path a few
@@ -3418,7 +3959,7 @@
     // fit-bounds has baked the geometry and the shaderloader has stored the
     // authored materials — both listen for the same event, and both were
     // registered before this one.
-    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");entity.addEventListener("model-error",function(){fsPost("Failed to load the 3D model: the file could not be parsed (corrupt, or a DRACO/meshopt-compressed glTF - not supported).");});entity.addEventListener("model-loaded",function(){setTimeout(reportParts,0);});toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);if(!beatTimer){beat();beatTimer=setInterval(beat,BEAT_MS);}}');
+    L.push('  function boot(){entity=document.getElementById("preview-entity");spinEl=document.getElementById("spin-parent");camEl=document.querySelector("[camera]");entity.addEventListener("model-error",function(){var why="";try{var d=window.FastShaders&&FastShaders.decoders;if(d&&typeof d.lastError==="string")why=d.lastError;}catch(e){}fsPost("Failed to load the 3D model: "+(why||"the file could not be parsed (corrupt, or compressed in a way Podest cannot decode)."));});entity.addEventListener("model-loaded",function(){setTimeout(reportParts,0);});toParent({type:"fs:ready"});kickResize();setTimeout(kickResize,250);setTimeout(kickResize,1000);setTimeout(kickResize,2500);if(!beatTimer){beat();beatTimer=setInterval(beat,BEAT_MS);}}');
     L.push('  if(!window.AFRAME){toParent({type:"fs:error",message:"A-Frame failed to initialize"});return;}');
     // The scene arrives via the pre-flight injector above — wire boot to it
     // (the helper also handles the already-booted case).

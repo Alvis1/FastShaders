@@ -219,10 +219,18 @@ export function potFloorTarget(width: number, height: number, cap: number): PotT
  * HARD INVARIANT, asserted by test: an image with alpha never yields a JPEG
  * candidate. On Apple engines `webp` is false, and JPEG would flatten every
  * transparent pixel to opaque black.
+ *
+ * `losslessOnly` (the GLB import's data maps, GLB Phase 5) is the one caller
+ * that WANTS the fall-through gone: a normal or ORM map extracted from a
+ * lossless source must never be stored lossy (43° of normal error at q0.85,
+ * see `sourcePrefersLossless`), so when nothing lossless fits the caller
+ * halves the image instead. It implies `preferLossless`, and the list is the
+ * ordinary one filtered to its lossless members — never empty, because PNG is
+ * always among them. Absent (every drop), the list is exactly what it was.
  */
 export function chooseFormat(
   caps: EncodeCaps,
-  opts: { preferLossless: boolean; alpha: boolean; allowWebp?: boolean },
+  opts: { preferLossless: boolean; alpha: boolean; allowWebp?: boolean; losslessOnly?: boolean },
 ): EncodeCandidate[] {
   const png: EncodeCandidate = { mime: 'image/png', lossless: true };
   const list: EncodeCandidate[] = [];
@@ -230,8 +238,9 @@ export function chooseFormat(
   // canvas round-trip still happens (EXIF strip, device cap, payload budget)
   // — only the format CHANGE is off, so the image stays in its own family.
   const webp = caps.webp && opts.allowWebp !== false;
+  const losslessOnly = opts.losslessOnly === true;
 
-  if (opts.preferLossless) {
+  if (opts.preferLossless || losslessOnly) {
     // Lossless WebP first where the browser really delivers it: measured
     // bit-identical to PNG at ~2.1-2.6× smaller.
     if (webp && caps.webpLossless) list.push({ mime: 'image/webp', quality: 1, lossless: true });
@@ -247,7 +256,53 @@ export function chooseFormat(
   } else {
     list.push({ mime: 'image/jpeg', quality: QUALITY_LADDER[0], lossless: false });
   }
-  return list;
+  return losslessOnly ? list.filter((c) => c.lossless) : list;
+}
+
+/**
+ * The longest-side cap an encode is held to, given an OPTIONAL extra cap.
+ *
+ * `maxDim` is the GLB import's per-slot size (1024 for colour, 512 for data
+ * maps). It applies AFTER the device / ignore-limits cap and is deliberately
+ * not relaxed by ignore-limits: that override lifts budgets, not slot sizes.
+ * Only a finite number ≥ 1 counts (floored); anything else — absent, NaN,
+ * Infinity, 0, a string — leaves `baseCap` untouched, so no value can turn a
+ * cap into NaN and no option can RAISE one.
+ */
+export function encodeDimCap(baseCap: number, maxDim: unknown): number {
+  if (typeof maxDim !== 'number' || !Number.isFinite(maxDim) || maxDim < 1) return baseCap;
+  return Math.min(baseCap, Math.floor(maxDim));
+}
+
+/**
+ * The size to DECODE an over-the-pixel-guard source at, or null when the
+ * ordinary full-size decode applies.
+ *
+ * A source past `maxPixels` (MAX_SOURCE_PIXELS, 64 MP) is refused by a drop,
+ * because a full decode of it is hundreds of megabytes of RGBA before the
+ * canvas has done anything. The GLB import cannot refuse an 8K texture its
+ * model was authored with, so it asks the DECODER for a smaller bitmap
+ * (`createImageBitmap`'s resize options) and never holds the full-size one.
+ * That needs the size BEFORE decoding, which is why the caller passes the
+ * header-read `dims`; they are adversarial (a model's own bytes) and must be
+ * positive integers whose product is past the guard, or this answers null and
+ * the ordinary path — pixel guard included — decides. The result fits the
+ * long side to `dimCap` and keeps the aspect ratio, never below 1 px.
+ */
+export function hugeSourceDecodeSize(
+  dims: unknown,
+  dimCap: number,
+  maxPixels: number,
+): { width: number; height: number } | null {
+  if (dims === null || typeof dims !== 'object') return null;
+  const w = (dims as { width?: unknown }).width;
+  const h = (dims as { height?: unknown }).height;
+  if (typeof w !== 'number' || typeof h !== 'number') return null;
+  if (!Number.isSafeInteger(w) || !Number.isSafeInteger(h) || w < 1 || h < 1) return null;
+  if (!(w * h > maxPixels)) return null;
+  const cap = Number.isFinite(dimCap) && dimCap >= 1 ? Math.floor(dimCap) : 1;
+  const s = Math.min(1, cap / Math.max(w, h));
+  return { width: Math.max(1, Math.round(w * s)), height: Math.max(1, Math.round(h * s)) };
 }
 
 /** Exact base64 length of a `data:<mime>;base64,<payload>` URL for a blob of

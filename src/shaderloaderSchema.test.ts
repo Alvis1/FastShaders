@@ -19,30 +19,34 @@
  * The loader states this in a comment beside the call. A comment is not a
  * guard, and neither half is observable from this suite at runtime — driving
  * `extendSchema` needs real A-Frame and a DOM, and the vitest env is `node`. So
- * both halves are pinned as source facts: the loader's single call, and the
+ * both halves are pinned as source facts: each ACTIVE loader's single call
+ * (0.6 and 0.8 spell it identically — src/shaderloaderHarness.ts), and the
  * vendored bundle's own implementation of the semantics it relies on.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { ACTIVE_LOADERS, loaderAvailable, loaderText } from './shaderloaderHarness';
 
-const loader = readFileSync(new URL('../public/js/a-frame-shaderloader-0.6.js', import.meta.url), 'utf8');
 const aframe = readFileSync(new URL('../public/js/a-frame-180-a-01.min.js', import.meta.url), 'utf8');
 
-describe('the loader extends its schema exactly once', () => {
-  it('makes ONE extendSchema call, so no call can drop another call\'s uniforms', () => {
-    const calls = loader.match(/this\.extendSchema\(/g) ?? [];
-    expect(calls).toHaveLength(1);
-    // …and it is handed the whole map, not a slice of it.
-    expect(loader).toContain('this.extendSchema(propSchema);');
-  });
+for (const v of ACTIVE_LOADERS) {
+  describe.skipIf(!loaderAvailable(v))(`shaderloader ${v} extends its schema exactly once`, () => {
+    it('makes ONE extendSchema call, so no call can drop another call\'s uniforms', () => {
+      const loader = loaderText(v);
+      const calls = loader.match(/this\.extendSchema\(/g) ?? [];
+      expect(calls).toHaveLength(1);
+      // …and it is handed the whole map, not a slice of it.
+      expect(loader).toContain('this.extendSchema(propSchema);');
+    });
 
-  it('keeps the reason beside the call', () => {
-    // The next person to grow the property builder reads this line or repeats
-    // the defect; it is the only thing standing between here and a silent
-    // half-registered uniform set.
-    expect(loader).toMatch(/does NOT accumulate across calls/);
+    it('keeps the reason beside the call', () => {
+      // The next person to grow the property builder reads this line or repeats
+      // the defect; it is the only thing standing between here and a silent
+      // half-registered uniform set.
+      expect(loaderText(v)).toMatch(/does NOT accumulate across calls/);
+    });
   });
-});
+}
 
 describe('the A-Frame behaviour that rule depends on', () => {
   /** `extendSchema:function(r){ … }` out of the minified bundle. */

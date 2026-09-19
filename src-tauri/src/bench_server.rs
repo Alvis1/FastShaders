@@ -174,7 +174,10 @@ pub fn bench_server_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, BenchServerState>,
 ) -> Result<BenchServerInfo, String> {
-    let mut guard = state.0.lock().map_err(|_| "server state poisoned".to_string())?;
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| "server state poisoned".to_string())?;
     if let Some(running) = guard.as_ref() {
         return Ok(info_for(running.port));
     }
@@ -208,7 +211,10 @@ pub fn bench_server_stop(state: tauri::State<'_, BenchServerState>) -> Result<()
     // listener socket closes when the last Arc<Server> drops. A restart while
     // an old thread still drains falls back to an ephemeral port.
     let running = {
-        let mut guard = state.0.lock().map_err(|_| "server state poisoned".to_string())?;
+        let mut guard = state
+            .0
+            .lock()
+            .map_err(|_| "server state poisoned".to_string())?;
         guard.take()
     };
     if let Some(running) = running {
@@ -221,7 +227,10 @@ pub fn bench_server_stop(state: tauri::State<'_, BenchServerState>) -> Result<()
 pub fn bench_server_status(
     state: tauri::State<'_, BenchServerState>,
 ) -> Result<Option<BenchServerInfo>, String> {
-    let guard = state.0.lock().map_err(|_| "server state poisoned".to_string())?;
+    let guard = state
+        .0
+        .lock()
+        .map_err(|_| "server state poisoned".to_string())?;
     Ok(guard.as_ref().map(|r| info_for(r.port)))
 }
 
@@ -252,8 +261,14 @@ mod tests {
 
     #[test]
     fn mime_covers_bench_assets() {
-        assert_eq!(mime_for(Path::new("index.html")), "text/html; charset=utf-8");
-        assert_eq!(mime_for(Path::new("bench.js")), "text/javascript; charset=utf-8");
+        assert_eq!(
+            mime_for(Path::new("index.html")),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            mime_for(Path::new("bench.js")),
+            "text/javascript; charset=utf-8"
+        );
         assert_eq!(mime_for(Path::new("x.bin")), "application/octet-stream");
     }
 }

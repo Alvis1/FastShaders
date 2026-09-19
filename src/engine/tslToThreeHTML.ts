@@ -5,46 +5,61 @@
  *
  * It is the A-Frame tab's sibling and shares its rules — the shader is a
  * sibling source file, every uniform is read off the module's own `schema`
- * block, and the page carries no comments — but it differs in one way that is
- * the whole reason this file exists:
+ * block, and the page carries no comments — and since loader 0.8 it shares its
+ * wiring too: the page hands the module to the loader's plain-three core
+ * (`FastShaders.use` / `load` / `apply`, the same call sequence README's
+ * plain-three section documents), which does for a mesh what the A-Frame
+ * component does for an entity.
  *
- * **A-Frame gets the material wiring for free; a plain page does not.** There,
- * the shaderloader component takes the module's return value and assigns each
- * key onto the built NodeMaterial. Here the page has to do it itself, and if it
- * restated the mapping it would drift from `tslCodeProcessor`'s the first time
- * a channel was added. It does not restate it: `buildShaderModule` already
- * emits the return object keyed by MATERIAL PROPERTY name (`colorNode`,
- * `emissiveNode`, …) rather than by channel, because it maps through
- * `CHANNEL_TO_PROP` at emission. So the page can assign the returned object
- * wholesale, and a new channel reaches this page with no change here at all.
+ * That is the whole reason this page no longer wires anything by hand. Its
+ * first version did, and got most of it subtly wrong, each in a way a
+ * standalone page gives no error for: it passed plain VALUES as `params`, so a
+ * colour arrived as a string and nothing could change live; it imported the
+ * module statically before any `globalThis.THREE` existed, so a texture shader
+ * (Image, Data, Colormap) threw at import; it welded with
+ * `BufferGeometryUtils.mergeVertices`, which does not weld a BoxGeometry (its
+ * corner copies differ in normal and UV), so a displaced box still split into
+ * six faces; it built a MeshStandardNodeMaterial with no emissive→colour
+ * fallback; and it assigned `barycentric` as a stray material property. The
+ * loader answers every one of those from the one implementation the preview,
+ * the XR popup, podest and the A-Frame tab already run — uniform nodes from
+ * `schema`, `use()` installing the global before `load()`, the POSITION weld on
+ * a displaced three primitive (honouring `mergeVertices: false`), the
+ * barycentric corners, the emissive fallback, `parts` with the single-mesh
+ * first-part fallback, and the material settings, `side` included (a driving
+ * Raymarch Output's module carries `side: 2`, CodeEditor's
+ * marchMaterialSettings rule, so the march window is double-sided without a
+ * line of its own here).
  *
- * What it must NOT assign wholesale is the two keys in that object which are
- * not THREE.Material properties:
- *   · `parts` — the per-sub-mesh materials of a multimesh Output. They mean
- *     nothing on a primitive, and the loader's own fallback is to paint the
- *     FIRST part when a parts-only module meets a single mesh, so the page does
- *     the same rather than silently rendering the default material.
- *   · `mergeVertices` — the loader's opt-OUT of the vertex weld. A weld only
- *     matters for a displaced primitive whose shared corners would otherwise
- *     separate, so the page welds under exactly the loader's condition and
- *     honours the opt-out.
+ * What the page still owns is what the loader cannot know: the tessellation a
+ * displacing shader needs, the camera inside a march window, and the `values`
+ * — the schema's defaults, restated as a literal so the reader can see and
+ * change every property the shader has. It registers no glTF plugin and no
+ * mesh decoders: the page never loads a model (a model geometry falls back to
+ * the sphere), so there is nothing for either to see.
  *
- * Three r184 comes from jsdelivr, pinned to the version this app is built
- * against: the module is authored against that TSL surface, and a floating
- * `@latest` would let a future rename break a page the user has already saved.
+ * The loader comes from the same CDN path the A-Frame tab and every export
+ * header name (`CDN_BASE`/`LOADER_FILE`), so a copied page shares their
+ * push-and-purge caveat. Three r184 comes from jsdelivr, pinned to the version
+ * this app is built against: the module is authored against that TSL surface,
+ * and a floating `@latest` would let a future rename break a page the user has
+ * already saved.
  */
 import type { GeometryType } from './tslToPreviewHTML.ts';
 import { isModelGeometry } from './tslToPreviewHTML.ts';
 import { parseShaderModuleSchema, readPreviewGeometry, type EmbedUniform } from './tslToAFrameHTML.ts';
+import { THREE_REVISION } from './threeRevision.ts';
+import { CDN_BASE, LOADER_FILE } from './tslToShaderModule.ts';
 
 /**
  * The three version the page loads. Pinned deliberately — see the header.
- * Keep in step with `package.json`'s `three` dependency; `threeEmbed.test.ts`
- * fails when they diverge, because a page built against a different TSL
- * surface than the module was emitted for fails at import time with a name
- * error and no hint as to why.
+ * Derived from `THREE_REVISION` (engine/threeRevision.ts), so it moves with the
+ * revision every module declares; `threeEmbed.test.ts` and `threeRevision.test.ts`
+ * fail when it diverges from `package.json`'s `three`, because a page built
+ * against a different TSL surface than the module was emitted for fails at
+ * import time with a name error and no hint as to why.
  */
-export const THREE_VERSION = '0.184.0';
+export const THREE_VERSION = `0.${THREE_REVISION}.0`;
 
 const CDN = `https://cdn.jsdelivr.net/npm/three@${THREE_VERSION}/build`;
 
@@ -103,7 +118,8 @@ function geometryExpr(geometry: GeometryType | undefined, displaced: boolean, ma
     case 'marchSphere': {
       // The march window: a ray-marched shader renders THROUGH this sphere, so
       // its radius is the Raymarch Output's Window and the camera may be inside
-      // it — which is why the material below goes double-sided for this case.
+      // it — which is why the module itself is double-sided (`side: 2`, which
+      // the loader puts on the material).
       const r = Number.isFinite(marchWindow) && (marchWindow as number) > 0 ? marchWindow : 1;
       return `new THREE.SphereGeometry(${r}, 64, 32)`;
     }
@@ -142,10 +158,14 @@ function uniformLines(uniforms: EmbedUniform[]): string[] {
 /**
  * The page.
  *
- * Deliberately plain: one module script, no build step, no framework, no
- * orbit-controls import (a `pointermove` drag is six lines and keeps the page
- * to a single dependency). What it demonstrates is the part a reader cannot
- * guess — how the exported module becomes a material — and nothing else.
+ * Deliberately plain: the loader's classic script, one module script, no
+ * build step, no framework, no orbit-controls import (a `pointermove` drag is
+ * six lines). What it demonstrates is the part a reader cannot guess — how the
+ * exported module becomes a material — and that part is three calls.
+ *
+ * The loader's `<script>` sits after the import map (an import map must
+ * precede every module script) and before the page's module, which a module
+ * script runs after anyway: `FastShaders` exists by the time the page asks.
  */
 export function buildThreeEmbedHTML(moduleSource: string, options: ThreeEmbedOptions): string {
   const uniforms = parseShaderModuleSchema(moduleSource);
@@ -174,11 +194,14 @@ export function buildThreeEmbedHTML(moduleSource: string, options: ThreeEmbedOpt
   L.push('    }');
   L.push('  }');
   L.push(`  <${''}/script>`);
+  L.push(`  <script src="${CDN_BASE}/${LOADER_FILE}"><${''}/script>`);
   L.push('</head>');
   L.push('<body>');
   L.push('  <script type="module">');
   L.push("    import * as THREE from 'three/webgpu';");
-  L.push(`    import shader from './${file}';`);
+  L.push('');
+  L.push('    FastShaders.use(THREE);');
+  L.push(`    const shader = await FastShaders.load('./${file}');`);
   L.push('');
   L.push(...uniformLines(uniforms).map((l) => `    ${l}`));
   L.push('');
@@ -197,26 +220,10 @@ export function buildThreeEmbedHTML(moduleSource: string, options: ThreeEmbedOpt
   L.push('    key.position.set(2, 3, 2);');
   L.push('    scene.add(key);');
   L.push('');
-  L.push('    const material = new THREE.MeshStandardNodeMaterial();');
-  L.push('    const out = shader(params);');
-  // The two non-material keys, handled rather than assigned. `parts` first, so
-  // a parts-only module still paints something on a single mesh.
-  L.push('    const { parts, mergeVertices, ...nodes } = out;');
-  L.push('    Object.assign(material, nodes);');
-  L.push('    if (parts) Object.assign(material, Object.values(parts)[0] ?? {});');
-  if (march) L.push('    material.side = THREE.DoubleSide;');
-  L.push('');
-  L.push(`    let geometry = ${geometryExpr(geometry, displaced, options.marchWindow)};`);
-  if (displaced) {
-    // The loader welds a displaced primitive so its shared corners move
-    // together; without it a box splits into six floating faces.
-    L.push("    if (mergeVertices !== false) {");
-    L.push("      const { mergeVertices: weld } = await import('three/addons/utils/BufferGeometryUtils.js');");
-    L.push('      geometry = weld(geometry);');
-    L.push('    }');
-  }
-  L.push('    const mesh = new THREE.Mesh(geometry, material);');
+  L.push(`    const geometry = ${geometryExpr(geometry, displaced, options.marchWindow)};`);
+  L.push('    const mesh = new THREE.Mesh(geometry);');
   L.push('    scene.add(mesh);');
+  L.push('    const binding = FastShaders.apply(mesh, shader, { values: params });');
   L.push('');
   L.push('    let down = false, px = 0, py = 0;');
   L.push('    addEventListener(\'pointerdown\', (e) => { down = true; px = e.clientX; py = e.clientY; });');

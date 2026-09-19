@@ -4,18 +4,30 @@ import { activeSink } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 
 /**
- * "Take me there" framing, shared by every glide on the canvas: the cost
- * pill's total (→ the active sink), the F key (→ the selection) and the
- * Output-related focus helpers. One module so every such gesture lands on
- * the same framing; `outputFocus.test.ts` pins the call sites.
+ * Every GLIDE on the canvas: the "take me there" framing — the cost pill's
+ * total (→ the active sink), the F key (→ the selection, or the whole graph
+ * when nothing is selected) — and the canvas bar's view buttons (fit, zoom
+ * in, zoom out). One module so every control that moves the view moves it
+ * the same way: the same duration, and React Flow's one easing (d3's
+ * cubic-in-out, which `fitView`, `zoomTo` and `setViewport` all share once a
+ * duration is given). `outputFocus.test.ts` pins the call sites.
  *
  * (Until 2026-09-03 the Output was a SINGLETON and every add surface
  * redirected here instead of adding a second one. Several output nodes may
  * coexist now, exactly one ACTIVE — utils/sdfPartition.ts `activeSink` — so
  * the add surfaces simply add, and the redirect helpers are gone.)
  */
+/**
+ * How long every view glide takes, in ms. The canvas bar's −/+/fit buttons
+ * used to SNAP (React Flow's defaults take no duration) while the cost pill
+ * and the F key glided, so the same kind of move looked like two different
+ * controls depending on which one you pressed (owner, 2026-09-16: "keep
+ * zooming style consistent").
+ */
+export const VIEW_GLIDE_MS = 500;
+
 export const OUTPUT_FOCUS_FIT = {
-  duration: 500,
+  duration: VIEW_GLIDE_MS,
   padding: 0.4,
   // The app-wide fit ceiling (NodeEditor's FIT_VIEW_OPTIONS): uncapped, fitting
   // a single ~140px node would slam the zoom to its maximum.
@@ -110,6 +122,56 @@ export function focusNode(
   id: string,
 ): void {
   focusNodes(fitView, nodes, [id]);
+}
+
+/**
+ * Glide to the WHOLE graph — the canvas bar's fit button, and the F key when
+ * nothing is selected. No `nodes`, so React Flow frames every node, under the
+ * same zoom ceiling every other fit uses (a two-node graph must not fill the
+ * screen). Padding stays React Flow's default: this frames a graph, not one
+ * node, and `OUTPUT_FOCUS_FIT`'s generous 0.4 is about giving a single card
+ * room to breathe.
+ */
+export function glideFitAll(fitView: (options?: FitViewOptions) => Promise<boolean> | void): void {
+  void fitView({ maxZoom: OUTPUT_FOCUS_FIT.maxZoom, duration: VIEW_GLIDE_MS });
+}
+
+/** One zoom-button press — React Flow's own zoomIn/zoomOut factor. */
+export const ZOOM_STEP = 1.2;
+
+/** The zoom a button glide is heading for, and when it will have arrived. */
+export interface ZoomGlide {
+  target: number;
+  /** `performance.now()` after which the glide is over (or was abandoned). */
+  until: number;
+}
+
+/**
+ * Where one −/+ press should glide to.
+ *
+ * Stepped from the TARGET of a glide still in flight, not from the live zoom.
+ * React Flow's own `zoomIn({ duration })` scales the CURRENT transform, and a
+ * second press mid-glide interrupts the first at whatever zoom it had reached
+ * — so two quick presses landed well short of two steps, and the amount
+ * depended on how fast you clicked. Stepping from the target makes N presses
+ * exactly N steps however quickly they come. (The glide's promise is no help
+ * here: an interrupted d3 transition never resolves it.)
+ *
+ * A glide past its `until` is treated as over, and callers drop the record
+ * when the user takes the view themselves (a wheel, a drag), so a stale
+ * target can never be stepped from. Clamped to the viewport's zoom limits.
+ */
+export function zoomStepTarget(
+  liveZoom: number,
+  glide: ZoomGlide | null,
+  now: number,
+  direction: 1 | -1,
+  minZoom: number,
+  maxZoom: number,
+): number {
+  const base = glide && now < glide.until ? glide.target : liveZoom;
+  const next = direction > 0 ? base * ZOOM_STEP : base / ZOOM_STEP;
+  return Math.min(maxZoom, Math.max(minZoom, next));
 }
 
 /**

@@ -271,3 +271,83 @@ export default shader;
     expect(col('amount:', openAt + 1)).toBe(col('src:', openAt + 1));
   });
 });
+
+/**
+ * The SINGLE-GLB page (rule 3's third exception): the shader rides on the
+ * MODEL, so the entity is a `gltf-model` one and `src:` is the opt-in literal
+ * loader 0.8 answers. Everything else about the page is unchanged, and
+ * WITHOUT `modelFile` every byte is.
+ */
+describe('buildAFrameEmbedHTML: modelFile (the single-GLB export)', () => {
+  const bare = tslToShaderModule(TSL_BARE);
+  const withProps = tslToShaderModule(TSL_WITH_PROPS);
+
+  it('emits one gltf-model entity with src: model, on one line for a uniform-free module', () => {
+    const out = buildAFrameEmbedHTML(bare, { shaderFile: 'my-shader.js', modelFile: 'my-shader.glb' });
+    expect(out).toContain(
+      '    <a-entity gltf-model="url(my-shader.glb)" position="0 1.6 -3" shader="src: model"></a-entity>\n',
+    );
+    // The page is otherwise the same page.
+    expect(out).toContain('<a-scene renderer="backend: webgl">');
+    expect(out).toContain(`<script src="${CDN_BASE}/${LOADER_FILE}">`);
+    expect(out).not.toContain('a-sphere');
+    // The sibling .js is never referenced: the module rides inside the model.
+    expect(out).not.toContain('src: my-shader.js');
+  });
+
+  it('keeps the uniform rows under src:, aligned to the a-entity tag', () => {
+    const out = buildAFrameEmbedHTML(withProps, { shaderFile: 'x.js', modelFile: 'x.glb' });
+    const lines = out.split('\n');
+    const openAt = lines.findIndex((l) => l.includes('<a-entity '));
+    const col = (needle: string, from: number) => {
+      const i = lines.findIndex((l, n) => n >= from && l.includes(needle));
+      return lines[i].indexOf(needle);
+    };
+    expect(lines[openAt]).toBe('    <a-entity gltf-model="url(x.glb)"');
+    expect(col('position=', openAt + 1)).toBe(col('gltf-model=', openAt));
+    expect(col('shader="', openAt + 1)).toBe(col('gltf-model=', openAt));
+    expect(col('speed:', openAt + 1)).toBe(col('src:', openAt + 1));
+    expect(out).toContain('shader="src: model;');
+  });
+
+  it('carries no segments and no radius: a model brings its own geometry', () => {
+    const DISPLACE = `import { Fn, uniform, vec3, sin, positionLocal, normalLocal } from 'three/tsl';
+
+const shader = Fn(() => {
+  const amount = uniform(0.2);
+  const wave = sin(positionLocal.y.mul(8)).mul(amount);
+  return { color: vec3(1, 0.5, 0), position: positionLocal.add(normalLocal.mul(wave)) };
+});
+
+export default shader;
+`;
+    const out = buildAFrameEmbedHTML(tslToShaderModule(DISPLACE), {
+      shaderFile: 'd.js',
+      modelFile: 'd.glb',
+      geometry: 'marchSphere',
+      marchWindow: 4,
+    });
+    expect(out).not.toContain('segments-');
+    expect(out).not.toContain('radius=');
+  });
+
+  it('whitelists a hostile model name, and 0.6 could not run this page anyway', () => {
+    const out = buildAFrameEmbedHTML(bare, { shaderFile: 'x.js', modelFile: '../</script>evil.glb' });
+    expect(out).toContain('gltf-model="url(..scriptevil.glb)"');
+    expect(out).not.toContain('<\/script>evil');
+    expect(buildAFrameEmbedHTML(bare, { shaderFile: 'x.js', modelFile: 'x.gltf' })).toContain(
+      'gltf-model="url(model.glb)"',
+    );
+    // `src: model` is loader 0.8's opt-in; 0.6 reads it as a path.
+    expect(LOADER_FILE).not.toBe('a-frame-shaderloader-0.6.js');
+  });
+
+  it('without modelFile the page is byte-identical to today\'s', () => {
+    for (const geometry of ['sphere', 'plane', 'cube'] as const) {
+      const a = buildAFrameEmbedHTML(withProps, { shaderFile: 'x.js', geometry });
+      const b = buildAFrameEmbedHTML(withProps, { shaderFile: 'x.js', geometry, modelFile: undefined });
+      expect(b, geometry).toBe(a);
+      expect(a, geometry).toContain('shader="src: x.js;');
+    }
+  });
+});

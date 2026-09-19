@@ -42,12 +42,14 @@ const GROUP_LABELS = {
   baseline: 'Baseline',
   preset:   'Presets',
   noise:    'Noises (atomic)',
+  texture:  'Texture atoms (per fetch)',
   calib:    'Calibration (k-sweep)',
+  texcalib: 'Texture calibration (k-sweep)',
   combo:    'Combinations',
   saved:    'Saved Groups',
 };
 
-const GROUP_ORDER = ['baseline', 'preset', 'noise', 'calib', 'combo', 'saved'];
+const GROUP_ORDER = ['baseline', 'preset', 'noise', 'texture', 'calib', 'texcalib', 'combo', 'saved'];
 
 /**
  * Build the picker DOM and wire master/child checkmark sync.

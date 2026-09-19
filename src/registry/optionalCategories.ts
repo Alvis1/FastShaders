@@ -80,6 +80,41 @@ export function hiddenOptionalCategories(flags: OptionalCategoryFlags): Readonly
 }
 
 /**
+ * COMPANIONS: node types that live in ANOTHER category but exist for an
+ * optional family, and are withheld from the add surfaces together with it.
+ *
+ * The Raymarch Output is the case. It is a sink, so it sits in `output` (a
+ * sink belongs with the sinks — it moved out of `sdf` on 2026-09-09), but it
+ * renders distance fields, and with the family switched off it kept turning
+ * up: as the second tile on the Output tab, and in either search for "sd",
+ * "distance" or "march" — a whole family hidden and one door into it still
+ * open (owner, 2026-09-16: "do not show in the search disabled assets group
+ * nodes"). Ray Direction went in with it: it is the view ray the marcher's
+ * Background scope is built on, and was added for that.
+ *
+ * Same standing as the category filter — an ADD-SURFACE rule only. A graph
+ * holding either node still loads, renders, compiles and exports; the family
+ * switch changes what is OFFERED, never what exists.
+ */
+export const OPTIONAL_CATEGORY_COMPANIONS: Readonly<Record<OptionalCategory, readonly string[]>> = {
+  texture: [],
+  sdf: ['raymarchOutput', 'rayDirection'],
+};
+
+/**
+ * The node TYPES to withhold for a hidden-category set — the companions of
+ * every optional category in it. `getEditorDefinitions(hidden)` applies this
+ * beside the category test, so every consumer of the editor set gets both.
+ */
+export function withheldNodeTypes(hidden: ReadonlySet<NodeCategory>): ReadonlySet<string> {
+  const types = new Set<string>();
+  for (const id of OPTIONAL_CATEGORIES) {
+    if (hidden.has(id)) for (const t of OPTIONAL_CATEGORY_COMPANIONS[id]) types.add(t);
+  }
+  return types;
+}
+
+/**
  * The content-browser tabs to DRAW: `tabs` minus every optional category that
  * is switched off. Pure so the decision can be tested by value — the strip's
  * whole visible half is this one filter.

@@ -8,11 +8,13 @@
  * and applied via the shaderloader's `shader` component.
  */
 
-import { buildShaderModule } from './tslCodeProcessor';
+import { buildShaderModule, type MaterialPartsMirrorEntry } from './tslCodeProcessor';
 import { LOADER_FILE } from './tslToShaderModule';
 import { TEAPOT_RES_MAX, TEAPOT_RES_MIN, TEAPOT_SCRIPT } from './teapotGeometry.ts';
+import { PREVIEW_ASSET_RESOLVER_SCRIPT, type PreviewAssetEntry } from './previewAssetFeed';
 import type { MaterialSettings } from '@/types';
 import type { PreviewMeshKind } from '@/utils/previewMesh';
+import { DECODER_DIR, DECODER_FILES, MAX_DECODER_FILE_BYTES, type DecoderFile } from '@/utils/meshDecoders';
 
 // 'env' = environment-map lighting: NO analytic lights — the material's own
 // envNode (an image wired to the Output node's Environment socket) is the
@@ -80,8 +82,13 @@ export const SHADER_SWAP_MESSAGE = 'fs:shader';
 export function buildPreviewShaderModule(
   tslCode: string,
   materialSettings?: MaterialSettings,
+  /** The Output's loader-0.6 mirror plan — see tslToShaderModule. */
+  materialPartsMirror?: readonly MaterialPartsMirrorEntry[],
 ): string {
-  return buildShaderModule(tslCode, { materialSettings });
+  return buildShaderModule(tslCode, {
+    materialSettings,
+    ...(materialPartsMirror && materialPartsMirror.length > 0 ? { materialPartsMirror } : {}),
+  });
 }
 
 export interface CameraPosition {
@@ -181,6 +188,20 @@ export interface PreviewOptions {
    * is built from `tslCode` exactly as before.
    */
   shaderModule?: string;
+  /**
+   * The Output's loader-0.6 mirror plan (`materialPartsMirrorPlan`), used only
+   * when `shaderModule` is absent — the XR popup — so the popup's module carries
+   * the same mirrors the pane's does (materialPartsContract R7).
+   */
+  materialPartsMirror?: readonly MaterialPartsMirrorEntry[];
+  /**
+   * The image payloads the BOOT module references (`planPreviewAssetFeed` over
+   * an empty sent-set), baked as `window.__fsBootAssets` so the document's
+   * resolver maps them before the boot blob is minted. Sandboxed documents
+   * only; an xr document inlines its `data:` URLs into `tslCode` instead and
+   * ignores this. See engine/previewAssetFeed.ts.
+   */
+  imageAssets?: readonly PreviewAssetEntry[];
 }
 
 /**
@@ -251,6 +272,53 @@ function resolveAssetUrl(pathFromBase: string): string {
   if (typeof window === 'undefined') return `${base}${pathFromBase}`;
   return new URL(`${base}${pathFromBase}`, window.location.href).href;
 }
+
+/**
+ * The app-served URL of one mesh decoder file (`public/js/decoders/`). The
+ * PARENT fetches these for the sandboxed preview (its opaque origin cannot),
+ * and the XR popup, which runs at the app's real origin, configures them
+ * directly.
+ */
+export function decoderAssetUrl(file: DecoderFile): string {
+  return resolveAssetUrl(DECODER_DIR + file);
+}
+
+/**
+ * The sandboxed model document's decoder configuration, emitted right after the
+ * loader's <script src>, before any gltf-model can initialise. The resolver
+ * reads a null-prototype table that the model feed fills with blob: URLs of the
+ * bytes the parent pushed, BEFORE it sets `gltf-model`; an empty slot answers
+ * null, so loader 0.8 installs no Draco loader and a Draco model fails fast
+ * with model-error instead of hanging on A-Frame's gstatic one.
+ */
+/**
+ * Loader 0.8's one-way model-module latch, the first statement of both
+ * URL-modifier scripts (sandboxed pane and XR popup). A no-op on a loader
+ * without it. These documents run the module their parent hands them and
+ * never one found inside a model; embeddedModuleNeverRuns.test.ts pins it.
+ */
+export const MODEL_MODULE_LATCH =
+  'try{if(window.FastShaders&&typeof FastShaders.disableModelModules==="function")FastShaders.disableModelModules();}catch(e){}';
+
+const SANDBOX_DECODER_CONFIG =
+  'window.__fsDecoderUrls=Object.create(null);try{FastShaders.decoders.configure({resolve:function(f){return window.__fsDecoderUrls[f]||null;}});}catch(e){}';
+
+/**
+ * The XR popup's decoder configuration: explicit same-origin URLs (the popup
+ * runs at the app's real origin, so it fetches them itself). `<` is escaped so
+ * nothing in the map can end the inline <script>.
+ */
+function xrDecoderConfig(): string {
+  const urls: Record<string, string> = {};
+  for (const f of Object.values(DECODER_FILES)) urls[f] = decoderAssetUrl(f);
+  const map = JSON.stringify(urls).replace(/</g, '\\u003C');
+  return `try{var __fsDec=${map};FastShaders.decoders.configure({resolve:function(f){return Object.prototype.hasOwnProperty.call(__fsDec,f)?__fsDec[f]:null;}});}catch(e){}`;
+}
+
+/** The feed script's decoder slots: each file name with its blob MIME type. */
+const FEED_DECODER_FILES = JSON.stringify(
+  Object.values(DECODER_FILES).map((f) => [f, f.endsWith('.wasm') ? 'application/wasm' : 'text/javascript']),
+);
 
 /**
  * Escape text for safe interpolation into HTML content or a double-quoted
@@ -676,6 +744,35 @@ export const FIT_BOUNDS_SCRIPT = `<script>
       idx.needsUpdate = true;
     }
 
+    // KHR_mesh_quantization lets a glTF store position/normal/tangent as
+    // Int8/Int16, normalized or not (gltfpack's default output alongside
+    // meshopt, with a node scale bringing the integers back to size). The bake
+    // runs applyMatrix4, which writes back into each attribute's OWN typed
+    // array, so it truncated unnormalized positions to integers (a model under
+    // a 0.001 node scale collapsed onto the -1/0/1 lattice) and wrapped
+    // normalized ones (0.5 x 3 came back as -0.5), measured on three r184.
+    // Widen exactly those three to Float32 first. getX..getW denormalize and
+    // read an interleaved or half-float attribute correctly, so the result is a
+    // plain Float32 attribute whatever the source was. Float32 geometry (every
+    // built-in, every OBJ) is left alone, and so is every other attribute: uv
+    // and color are never written by the bake and keep their quantized form.
+    function dequantize(g) {
+      var names = ["position", "normal", "tangent"];
+      for (var n = 0; n < names.length; n++) {
+        var a = g.getAttribute(names[n]);
+        if (!a || a.array instanceof Float32Array) continue;
+        var size = a.itemSize;
+        var out = new Float32Array(a.count * size);
+        for (var i = 0; i < a.count; i++) {
+          out[i * size] = a.getX(i);
+          if (size > 1) out[i * size + 1] = a.getY(i);
+          if (size > 2) out[i * size + 2] = a.getZ(i);
+          if (size > 3) out[i * size + 3] = a.getW(i);
+        }
+        g.setAttribute(names[n], new THREE.BufferAttribute(out, size, false));
+      }
+    }
+
     // Raw component read that works for plain AND interleaved attributes and
     // skips denormalization, so a duplicated vertex is an exact copy of its
     // original whatever the source buffer looks like.
@@ -969,6 +1066,8 @@ export const FIT_BOUNDS_SCRIPT = `<script>
           // Clone rather than mutate: the same geometry may be reachable from
           // more than one node (and from outside this subtree).
           var g = node.geometry.clone();
+          // A quantized glTF is widened first: the bake writes into it.
+          dequantize(g);
           g.applyMatrix4(bake);
           // A mirrored ancestor transform reverses handedness — restore it so
           // the winding heuristic below and back-face culling both stay honest.
@@ -1504,7 +1603,10 @@ const SHADER_HOT_SWAP_SCRIPT = `<script>
       // staleness check and returns without touching the material, the console
       // or the error overlay.
       try { if (url) URL.revokeObjectURL(url); } catch (e) {}
-      url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+      // The placeholders resolve to this document's blob: URLs HERE, at the
+      // mint (engine/previewAssetFeed.ts); \`applied\` above keeps the
+      // placeholder text, which is what the parent compares against.
+      url = URL.createObjectURL(new Blob([window.__fsResolveAssets ? window.__fsResolveAssets(code) : code], { type: "text/javascript" }));
       var comp = entity.components && entity.components.shader;
       // Drop the OUTGOING uniform map so nothing can read or write the
       // superseded shader's uniforms in the gap: the fs:uniform channel bails
@@ -1890,7 +1992,8 @@ export function tslToPreviewHTML(
   // byte-identical shader logic (only the export's usage header differs).
   // `options.shaderModule` lets the editor preview hand back the exact string
   // its hot channel will post — see the option's own comment.
-  const shaderModule = options.shaderModule ?? buildPreviewShaderModule(tslCode, materialSettings);
+  const shaderModule = options.shaderModule
+    ?? buildPreviewShaderModule(tslCode, materialSettings, options.materialPartsMirror);
   const isModel = isModelGeometry(geometry);
   const isTeapot = isTeapotGeometry(geometry);
   const isCustom = geometry === 'custom';
@@ -1903,7 +2006,8 @@ export function tslToPreviewHTML(
   const { iife, shaderloader, orbitControls } = getScriptUrls();
 
   // NB welding coincident primitive vertices (so a displaced box does not split
-  // into floating faces) is NOT done here any more: shaderloader 0.6 owns it,
+  // into floating faces) is NOT done here any more: shaderloader 0.8 owns it
+  // (as the frozen 0.6 did),
   // gated on the same three conditions this file used to express — a primitive,
   // a material carrying a positionNode, and the author's "Merge Vertices"
   // choice, which now travels as `mergeVertices: false` in the emitted module.
@@ -2058,6 +2162,12 @@ export function tslToPreviewHTML(
   // failure stays visible even if a shader later applies successfully.
   lines.push(`  <script src="${iife}" onerror="__fsShowStickyError('Failed to load A-Frame bundle')"><${''}/script>`);
   lines.push(`  <script src="${shaderloader}" onerror="__fsShowStickyError('Failed to load shaderloader')"><${''}/script>`);
+  // Mesh decoders (loader 0.8's FastShaders.decoders), configured before any
+  // gltf-model initialises. Model documents only: a primitive, the teapot and
+  // the march window never load a glTF, so they stay byte-identical.
+  if (isModel) {
+    lines.push(`  <script>${xr ? xrDecoderConfig() : SANDBOX_DECODER_CONFIG}<${''}/script>`);
+  }
   lines.push(`  <script src="${orbitControls}" onerror="__fsShowStickyError('Failed to load orbit controls')"><${''}/script>`);
   // SECURITY: dropped model files are adversarial input. A .gltf/.glb can
   // reference buffers or textures by ABSOLUTE http(s) URL — GLTFLoader
@@ -2066,17 +2176,20 @@ export function tslToPreviewHTML(
   // the control). Neutralized URLs land on an inert data: URL — the request
   // never leaves the page and the loader surfaces a normal parse error; a
   // console.warn records what was blocked. Same guard in podest.html.
+  // These documents get their modules from the parent and must never run a
+  // module found inside a model (the loader's model opt-in); its one-way latch,
+  // first in both scripts, makes that a rule, not a habit.
   if (!xr) {
     // Sandboxed stage: everything it legitimately loads through THREE's
     // loading managers is a blob: URL minted inside the iframe or a data:
     // URI — allowlist exactly those.
-    lines.push(`  <script>try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{console.warn("[FastShaders] blocked non-blob resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<${''}/script>`);
+    lines.push(`  <script>${MODEL_MODULE_LATCH}try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{console.warn("[FastShaders] blocked non-blob resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<${''}/script>`);
   } else {
     // XR popup: same-origin page with REAL network access — and the dropped
     // custom mesh is exactly as adversarial here as in the sandbox. Allowlist
     // blob:/data: PLUS this origin (the built-in teapot/bunny load by real
     // same-origin URL on this page); everything else is neutralized.
-    lines.push(`  <script>try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{if(new URL(s,window.location.href).origin===window.location.origin)return s;}catch(e){}try{console.warn("[FastShaders] blocked non-origin resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<${''}/script>`);
+    lines.push(`  <script>${MODEL_MODULE_LATCH}try{if(window.THREE&&THREE.DefaultLoadingManager&&THREE.DefaultLoadingManager.setURLModifier){THREE.DefaultLoadingManager.setURLModifier(function(u){var s=String(u);if(/^(blob:|data:)/i.test(s))return s;try{if(new URL(s,window.location.href).origin===window.location.origin)return s;}catch(e){}try{console.warn("[FastShaders] blocked non-origin resource URL:",s.slice(0,200));}catch(e){}return "data:application/octet-stream;base64,";});}}catch(e){}<${''}/script>`);
   }
   lines.push('  <style>');
   // Body background matches the scene bg so the gap between document load
@@ -2101,6 +2214,19 @@ export function tslToPreviewHTML(
   }
   lines.push('');
 
+  // The image-asset resolver (engine/previewAssetFeed.ts): sandboxed documents
+  // only. The boot list goes FIRST, because the resolver seeds from it at
+  // parse time; the resolver goes BEFORE the module blob below, which it
+  // resolves. Same `<` escape as the module line: this JSON is inlined into a
+  // real <script>, and a key or a payload is file-supplied.
+  if (!xr) {
+    if (options.imageAssets && options.imageAssets.length > 0) {
+      lines.push(`  <script>window.__fsBootAssets = ${JSON.stringify(options.imageAssets).replace(/</g, '\\u003C')};<${''}/script>`);
+    }
+    lines.push(PREVIEW_ASSET_RESOLVER_SCRIPT);
+    lines.push('');
+  }
+
   // Create shader blob URL before the scene is parsed
   lines.push('<script>');
   // The module is inlined into a real `<script>` element, and the HTML
@@ -2117,7 +2243,14 @@ export function tslToPreviewHTML(
   // close this script early and run markup in the XR popup, which unlike the
   // sandboxed preview is a top-level document at the app's REAL origin.
   lines.push(`  var __shaderCode = ${JSON.stringify(shaderModule).replace(/</g, '\\u003C')};`);
-  lines.push('  var __shaderBlob = new Blob([__shaderCode], { type: "text/javascript" });');
+  // `__shaderCode` stays the UNRESOLVED module (the hot-swap receiver's
+  // idempotency seed, which the parent compares byte for byte); only the blob
+  // gets the placeholders resolved to this document's blob: URLs. The xr
+  // document has no resolver and runs the inlined text exactly as before —
+  // S3 changes the sandboxed documents only.
+  lines.push(xr
+    ? '  var __shaderBlob = new Blob([__shaderCode], { type: "text/javascript" });'
+    : '  var __shaderBlob = new Blob([window.__fsResolveAssets ? window.__fsResolveAssets(__shaderCode) : __shaderCode], { type: "text/javascript" });');
   lines.push('  window.__shaderUrl = URL.createObjectURL(__shaderBlob);');
   lines.push(`<${''}/script>`);
   lines.push('');
@@ -2377,16 +2510,63 @@ export function tslToPreviewHTML(
     lines.push(`  var __fsExpectedLabel = ${JSON.stringify(isCustom ? 'custom model' : geometry)};`);
     lines.push('  (function () {');
     lines.push('    var applied = false;');
-    lines.push('    function apply(kind, payload) {');
+    lines.push('    var ktx2Reported = false;');
+    // The decoder bytes the parent pushed with a compressed model become blob:
+    // URLs in the table the configure script above reads. Only the known names
+    // (generated from DECODER_FILES, never retyped), only the declared types —
+    // an ArrayBuffer for a `.wasm`, a string otherwise — at most
+    // MAX_DECODER_FILE_BYTES each; a slot already filled keeps its URL.
+    lines.push(`    var DEC_FILES = ${FEED_DECODER_FILES};`);
+    lines.push(`    var DEC_MAX = ${MAX_DECODER_FILE_BYTES};`);
+    lines.push('    function fillDecoders(dec) {');
+    lines.push('      var table = window.__fsDecoderUrls;');
+    lines.push('      if (!table || !dec) return;');
+    lines.push('      for (var i = 0; i < DEC_FILES.length; i++) {');
+    lines.push('        var name = DEC_FILES[i][0], type = DEC_FILES[i][1];');
+    lines.push('        if (table[name] || !Object.prototype.hasOwnProperty.call(dec, name)) continue;');
+    lines.push('        var v = dec[name];');
+    lines.push('        var ok = type === "application/wasm"');
+    lines.push('          ? v instanceof ArrayBuffer && v.byteLength > 0 && v.byteLength <= DEC_MAX');
+    lines.push('          : typeof v === "string" && v.length > 0 && v.length <= DEC_MAX;');
+    lines.push('        if (!ok) continue;');
+    lines.push('        try { table[name] = URL.createObjectURL(new Blob([v], { type: type })); } catch (e) {}');
+    lines.push('      }');
+    lines.push('    }');
+    lines.push('    function decoderError() {');
+    lines.push('      try {');
+    lines.push('        var d = typeof FastShaders === "object" && FastShaders ? FastShaders.decoders : null;');
+    lines.push('        return d && typeof d.lastError === "string" ? d.lastError : "";');
+    lines.push('      } catch (e) { return ""; }');
+    lines.push('    }');
+    lines.push('    function apply(kind, payload, dec) {');
     lines.push('      if (applied) return;');
     lines.push('      var entity = document.getElementById("preview-entity");');
     lines.push('      if (!entity) return;');
     lines.push('      applied = true;');
-    lines.push('      // A model that fails to PARSE (corrupt bytes, DRACO/meshopt-compressed');
-    lines.push('      // glTF — no decoder is bundled) must surface, not die in the console.');
+    lines.push('      // A model that fails to PARSE (corrupt bytes, or a compression whose');
+    lines.push('      // decoder is missing or refused it) must surface, not die in the');
+    lines.push('      // console. A decoder cap names itself through lastError.');
     lines.push('      entity.addEventListener("model-error", function () {');
-    lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): the file could not be parsed (corrupt, or a DRACO/meshopt-compressed glTF — not supported).");');
+    lines.push('        __fsShowStickyError("Failed to load 3D model (" + __fsExpectedLabel + "): " + (decoderError() || "the file could not be parsed (corrupt, or compressed in a way FastShaders cannot decode)."));');
     lines.push('      });');
+    // A KTX2 texture that did not transcode is NOT a model error — the model
+    // loads, wearing its fallback image or none at all. The loader counts both
+    // (FastShaders.decoders.ktx2Stats), so the parent is told once per
+    // document and raises an info line. Forgeable like everything posted from
+    // here, which is why it can only ever raise a line.
+    lines.push('      entity.addEventListener("model-loaded", function () {');
+    lines.push('        if (ktx2Reported) return;');
+    lines.push('        ktx2Reported = true;');
+    lines.push('        try {');
+    lines.push('          var st = window.FastShaders && FastShaders.decoders ? FastShaders.decoders.ktx2Stats : null;');
+    lines.push('          if (!st) return;');
+    lines.push('          var fb = Math.min(Math.max(st.fallbacks | 0, 0), 1024);');
+    lines.push('          var ms = Math.min(Math.max(st.missing | 0, 0), 1024);');
+    lines.push('          if (fb <= 0 && ms <= 0) return;');
+    lines.push('          window.parent.postMessage({ type: "fs:model-ktx2", geometry: __fsExpectedObj, fallbacks: fb, missing: ms }, "*");');
+    lines.push('        } catch (e) {}');
+    lines.push('      });');
+    lines.push('      if (dec) fillDecoders(dec);');
     lines.push('      var blob = kind === "glb" ? new Blob([payload], { type: "model/gltf-binary" }) : new Blob([payload]);');
     lines.push('      var url = URL.createObjectURL(blob);');
     lines.push('      if (kind === "glb" || kind === "gltf") entity.setAttribute("gltf-model", "url(" + url + ")");');
@@ -2409,7 +2589,9 @@ export function tslToPreviewHTML(
     lines.push('      if (kind === "glb") {');
     lines.push('        if (!(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) return;');
     lines.push('      } else if (typeof payload !== "string") return;');
-    lines.push('      window.__fsWhenSceneBooted(function () { apply(kind, payload); });');
+    lines.push('      // Decoder bytes ride only with a model that needs them (see fillDecoders).');
+    lines.push('      var dec = msg.decoders && typeof msg.decoders === "object" ? msg.decoders : null;');
+    lines.push('      window.__fsWhenSceneBooted(function () { apply(kind, payload, dec); });');
     lines.push('    });');
     lines.push('  })();');
     lines.push(`<${''}/script>`);
@@ -2501,9 +2683,18 @@ export function tslToPreviewHTML(
     lines.push('      }');
     lines.push('      lit = [];');
     lines.push('    }');
-    lines.push('    function highlight(name) {');
+    lines.push('    // `target` is one mesh name or a LIST of them (an import-built index');
+    lines.push('    // section shades every mesh of a glTF material; hovering its chip lights');
+    lines.push('    // them all). Only non-empty strings count, at most 256.');
+    lines.push('    function highlight(target) {');
     lines.push('      clearHighlight();');
-    lines.push('      if (typeof name !== "string" || !name) return;');
+    lines.push('      var wanted = {};');
+    lines.push('      var any = false;');
+    lines.push('      var raw = Array.isArray(target) ? target : [target];');
+    lines.push('      for (var k = 0; k < raw.length && k < 256; k++) {');
+    lines.push('        if (typeof raw[k] === "string" && raw[k]) { wanted[raw[k]] = true; any = true; }');
+    lines.push('      }');
+    lines.push('      if (!any) return;');
     lines.push('      // One shared flat material for every match, minted once: a highlight is');
     lines.push('      // transient and must not add a pipeline per hovered row.');
     lines.push('      if (!hlMat && window.THREE) {');
@@ -2514,14 +2705,14 @@ export function tslToPreviewHTML(
     lines.push('      if (!hlMat) return;');
     lines.push('      var list = meshList();');
     lines.push('      for (var i = 0; i < list.length; i++) {');
-    lines.push('        if (list[i].name === name) { list[i].material = hlMat; lit.push(list[i]); }');
+    lines.push('        if (Object.prototype.hasOwnProperty.call(wanted, list[i].name)) { list[i].material = hlMat; lit.push(list[i]); }');
     lines.push('      }');
     lines.push('    }');
     lines.push('    window.addEventListener("message", function (e) {');
     lines.push('      if (e.source !== window.parent) return;');
     lines.push('      var msg = e.data;');
     lines.push('      if (!msg || msg.type !== "fs:highlight-mesh") return;');
-    lines.push('      highlight(msg.name);');
+    lines.push('      highlight(Array.isArray(msg.names) && msg.names.length ? msg.names : msg.name);');
     lines.push('    });');
     lines.push('    window.__fsWhenSceneBooted(function () {');
     lines.push('      var e = ent();');

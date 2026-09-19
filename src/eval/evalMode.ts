@@ -54,10 +54,11 @@ export const EVAL_SCHEMA = 'fs-eval-1';
 export const CONSENT_TEXT_VERSION = 'consent-7';
 
 /**
- * The two addresses the study app is served from. The upload target is a
- * SAME-ORIGIN relative path (`evalUpload.ts`), so the host is simply wherever
- * the participant loaded the app — moving between these needs no code change.
- * They are named here for the reader; the consent text spells them literally,
+ * The two addresses the study app is served from. NB the upload target is a
+ * RELATIVE path (`evalUpload.ts`) and only alvismisjuns.lv has the endpoint,
+ * so from fs.sferas.lv the upload 404s today (see evalUpload.ts's header for
+ * the fix it needs). They are named here for the reader; the consent text
+ * spells them literally,
  * because in this codebase the English sentence IS the i18n key and an
  * interpolated constant would never match an entry in lv.json.
  */

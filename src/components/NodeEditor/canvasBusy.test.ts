@@ -47,7 +47,14 @@ describe('the canvas-busy flag', () => {
     // clear a flag they are about to clear anyway — harmless — but running
     // after keeps the normal path byte-for-byte what it was, and leaves this
     // collecting only a residue.
-    const reaper = SRC.slice(SRC.indexOf('function trackPointerUp'), SRC.indexOf('function trackPointerUp') + 600);
+    // Sliced to the function's END, not to a byte offset: the reaper grew a
+    // comment when it learned to release the selection chrome too, and a
+    // fixed `+ 600` window then cut the clear it is asserting off the end.
+    const at = SRC.indexOf('function trackPointerUp');
+    const until = SRC.indexOf('const PRO_OPTIONS', at);
+    expect(at).toBeGreaterThan(0);
+    expect(until).toBeGreaterThan(at);
+    const reaper = SRC.slice(at, until);
     expect(reaper).toContain('requestAnimationFrame(');
     expect(reaper).toContain("document.documentElement.classList.remove('fs-canvas-busy')");
   });

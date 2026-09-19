@@ -228,7 +228,9 @@ function readIdentity(md: Record<string, unknown>): ProfileIdentity | null {
   return { id, label, maxPoints, maxTextureDim };
 }
 
-const PREFIX = /^(noise_|preset_|saved_)/;
+// Drift pair with ShaderCarousel/lib/bench-stats.js `buildComplexityPatch`,
+// which strips the same prefixes when it writes the patch shape.
+const PREFIX = /^(noise_|preset_|saved_|texture_)/;
 
 /**
  * Parse a dropped JSON file into a sanitized cost override, accepting EVERY
@@ -249,7 +251,9 @@ const PREFIX = /^(noise_|preset_|saved_)/;
  *
  * Keys are validated against the authored table (`sanitizeCostMap` drops
  * unknown keys and non-finite/negative values — the file is adversarial), and
- * suggestion ids have their group prefix stripped (`noise_voronoi` → `voronoi`).
+ * suggestion ids have their group prefix stripped (`noise_voronoi` → `voronoi`,
+ * `texture_imageNode` → `imageNode`). A raw row carrying `copies` needs nothing
+ * here: its `stats.marginalPoints` is already per copy.
  * Returns `null` when the text isn't a recognizable, non-empty cost file.
  */
 export function parseCostFile(text: string, fileName?: string): ParsedCostFile | null {

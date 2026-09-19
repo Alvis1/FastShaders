@@ -31,19 +31,20 @@ describe('locateRegistryDescriptions', () => {
   it('finds one slot per definition, keyed by node type', () => {
     // 76 = getAllDefinitions().length (the comment said 74 while the assertion
     // said 75 — it had drifted; corrected here rather than left to rot).
-    // NODE_REGISTRY.size is 3 higher because the hidden defs
-    // (unknown/dataNode/imageNode) are separate consts outside the
-    // `definitions` array, so they are correctly not located here.
+    // NODE_REGISTRY.size is 2 higher because the hidden defs
+    // (unknown/dataNode) are separate consts outside the `definitions`
+    // array, so they are correctly not located here.
     // 76 with the Vertex Color node; 82 with the six distance-field nodes
     // (2026-09-02); 97 once the distance-field family was widened and the
     // one-day SDF Output / Volume Output pair folded into `raymarchOutput`
     // (2026-09-03); 98 with the Wireframe node (2026-09-06); back to 97 when
     // the Audio Input node was folded into the Sound node (2026-09-08 — one
-    // def, one capture session, one analyser). The tally is a breadcrumb, not
+    // def, one capture session, one analyser); 98 when the Image node joined
+    // `definitions` (GLB Phase 4). The tally is a breadcrumb, not
     // a spec — `getAllDefinitions()` is what the assertion below actually
     // compares against.
-    expect(slots).toHaveLength(97);
-    expect(defs).toHaveLength(97);
+    expect(slots).toHaveLength(98);
+    expect(defs).toHaveLength(98);
     expect(new Set(slots.map(s => s.key))).toEqual(new Set(defs.map(d => d.type)));
   });
 
@@ -205,10 +206,13 @@ describe('splitAliases / joinAliases', () => {
     // (2026-09-08). That fold cost a def but no VOCABULARY: the absorbed
     // node's search words ('system audio', 'desktop', 'loopback') moved into
     // the Sound node's own tail, which is what keeps someone typing "desktop
-    // audio" landing on the node that now does it. Worth pinning as a count
+    // audio" landing on the node that now does it; 58 when the Image node
+    // joined `definitions` (GLB Phase 4), whose tail carries 'texture',
+    // 'sampler', 'picture' and 'bitmap' — the words people search for a node
+    // its label calls Image. Worth pinning as a count
     // because a description edit that drops a tail changes search ranking and
     // nothing else — it fails no other test and shows on no screen.
-    expect(tailed).toHaveLength(57);
+    expect(tailed).toHaveLength(58);
   });
 
   it('round-trips every tailed description byte-exactly', () => {
@@ -281,7 +285,7 @@ describe('escaped-apostrophe safety', () => {
     // ...and must decode back to exactly the value we asked for.
     const relocated = locateRegistryDescriptions(out);
     expect(relocated.find(s => s.key === 'tangentLocal')!.value).toBe(nasty);
-    expect(relocated).toHaveLength(97);
+    expect(relocated).toHaveLength(98);
 
     // Still a single-line edit.
     const changed = registrySource

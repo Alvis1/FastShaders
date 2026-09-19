@@ -16,23 +16,133 @@
  *     editor; once the editor learns to persist `tslCode` on SavedGroup
  *     this loader picks it up automatically via the `tslCode` field check.
  *
+ * Two more groups exist only when the caller passes THREE as well as TSL
+ * (all three benches do), because a texture atom needs real texture objects:
+ *   • texture — two PER-FETCH profile atoms (`texture_imageNode`,
+ *     `texture_colormap`). Each runs 16 fetches and carries `copies: 16`;
+ *     bench-stats divides its marginalPoints by that, since one fetch sits
+ *     under MicroPlane's timer floor.
+ *   • texcalib — the `calib_tex_*` k-sweep over its OWN
+ *     `calib_tex_scaffold` (fit-core subtracts it from the tex_ ops, never
+ *     the ALU scaffold): mipmapped sRGB images at 256/1024/2048/4096, a 2048
+ *     data map without mips, quarter-size-object variants of both, and the
+ *     256×1 half-float LUT a Colormap node samples.
+ * Their textures are generated here (no network) and set up the way the
+ * app's Image node sets up its own. Both groups default OFF in every bench's
+ * picker until a headset run has validated them.
+ *
  * The first registry entry is always the baseline (flat color) — both for
  * cycling-start visual consistency and so annotateMarginalCost() can find
  * it via id === 'ref_baseline'. */
+
+// ── Texture atoms (module scope so the tests can read them) ─────────────────
+//
+// uv = fragment px / TEX_SCREEN_SPAN, so a side-T texture is sampled at
+// T/2048 texels per pixel — how it sits on a full-view object at the
+// 2064×2208 reference, the case imageNodeCost's anchor prices. It holds at
+// any render size because screenCoordinate is in pixels; with mip selection,
+// a texture's size matters only through this footprint.
+export const TEX_SCREEN_SPAN = 2048;
+export const TEX_K_LEVELS = [1, 4, 16];
+// Per-copy uv offsets: 16 distinct points in [0,1)², so no two copies sample
+// the same texel and none can be merged.
+export const TEX_OFFSETS = Array.from({ length: 16 }, (_, i) => [(0.1 + i * 0.7919) % 1, (0.3 + i * 1.3313) % 1]);
+export const TEX_CONFIGS = Object.freeze({
+  c256:   { side: 256,  height: 256,  kind: 'colour' },
+  c1024:  { side: 1024, height: 1024, kind: 'colour' },
+  c2048:  { side: 2048, height: 2048, kind: 'colour' },
+  c4096:  { side: 4096, height: 4096, kind: 'colour' },
+  d2048:  { side: 2048, height: 2048, kind: 'data' },
+  lut256: { side: 256,  height: 1,    kind: 'lut' },
+});
+export const TEX_OPS = Object.freeze([ // [op, label, configKey, span]
+  ['tex_c256',   'Image 256² (mips)',                       'c256',   2048],
+  ['tex_c1024',  'Image 1024² (mips)',                      'c1024',  2048],
+  ['tex_c2048',  'Image 2048² (mips)',                      'c2048',  2048],
+  ['tex_c4096',  'Image 4096² (mips)',                      'c4096',  2048],
+  ['tex_d2048',  'Data map 2048² (no mips)',                'd2048',  2048],
+  ['tex_c2048q', 'Image 2048² on a quarter-size object',    'c2048',  512],
+  ['tex_d2048q', 'Data map 2048² on a quarter-size object', 'd2048',  512],
+  ['tex_lut256', 'LUT 256×1 half-float (colormap)',         'lut256', 2048],
+]);
+
+/** Deterministic, hashed RGBA8 texels (alpha 255). Random content is
+ *  INCOMPRESSIBLE on purpose: an upper bound for real images, since
+ *  underpricing is the dangerous direction. */
+export function makeBenchTextureData(width, height, seed = 1) {
+  const d = new Uint8Array(width * height * 4); const s = seed >>> 0;
+  for (let t = 0, i = 0; i < d.length; t++, i += 4) {
+    let h = Math.imul(t ^ s, 0x9E3779B1); h ^= h >>> 15; h = Math.imul(h, 0x85EBCA77); h ^= h >>> 13;
+    d[i] = h & 255; d[i + 1] = (h >>> 8) & 255; d[i + 2] = (h >>> 16) & 255; d[i + 3] = 255;
+  }
+  return d;
+}
+
+/**
+ * One texture for a TEX_CONFIGS key, set up as the app sets up its own:
+ * colour/data mirror src/engine/imageTexturePlan.ts `imageTextureSetupLines`
+ * (colour = sRGB + three's default mips; data = NoColorSpace, no mips,
+ * Linear), the LUT mirrors graphToCode's `bakeColormapTexture` (RGBA
+ * half-float 256×1, Linear). src/registry/benchTextureAtoms.test.ts pins
+ * the mirror. A missing THREE class throws — deliberately.
+ */
+export function makeBenchTexture(THREE, key) {
+  const cfg = TEX_CONFIGS[key];
+  if (!cfg) throw new Error(`[bench-registry] unknown texture config ${key}`);
+  const { side, height, kind } = cfg;
+  if (kind === 'lut') {
+    const bytes = makeBenchTextureData(side, 1, 7);
+    const half = new Uint16Array(side * 4);
+    for (let i = 0; i < half.length; i++) half[i] = THREE.DataUtils.toHalfFloat(bytes[i] / 255);
+    const tex = new THREE.DataTexture(half, side, 1, THREE.RGBAFormat, THREE.HalfFloatType);
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    // A DELIBERATE difference from colormap's ClampToEdge: Repeat lets uv.x
+    // run past 1 with no extra ALU, and the wrap mode is free in hardware.
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    return tex;
+  }
+  const isData = kind === 'data';
+  const tex = new THREE.DataTexture(
+    makeBenchTextureData(side, height, side ^ (isData ? 0x5a5a : 0)),
+    side, height, THREE.RGBAFormat, THREE.UnsignedByteType,
+  );
+  tex.colorSpace = isData ? THREE.NoColorSpace : THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  if (isData) {
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+  } else {
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+  }
+  tex.needsUpdate = true;
+  return tex;
+}
 
 /**
  * Build the corpus against a given TSL namespace.
  *   • bench.js (WebGPU)     passes `import * as TSL from 'three/tsl'`
  *   • bench-aframe variants pass `THREE.TSL`
+ * and THREE (optional) — every bench passes it; without it the texture
+ * groups are absent and the corpus is exactly what it was before them.
  *
- * Returns a flat list of `{ id, label, category, group, build }` entries.
- * `group` is one of 'baseline' | 'noise' | 'preset' | 'saved'.
+ * Returns a flat list of `{ id, label, category, group, build }` entries
+ * (the per-fetch texture atoms also carry `copies`).
+ * `group` is one of 'baseline' | 'noise' | 'preset' | 'texture' | 'calib' |
+ * 'texcalib' | 'combo' | 'saved'.
  */
-export function buildBenchRegistry(TSL) {
+export function buildBenchRegistry(TSL, THREE = null) {
   const {
     abs, add, clamp, color, cos, div, dot, exp, fract, max, min, mix, mul,
     normalize, oneMinus, positionGeometry, pow, round, screenUV, sin,
     smoothstep, sqrt, sub, time, uniform, vec3,
+    texture, screenCoordinate, vec2,
     mx_noise_float, mx_noise_vec3,
     mx_fractal_noise_float, mx_fractal_noise_vec3,
     mx_cell_noise_float,
@@ -403,6 +513,80 @@ export function buildBenchRegistry(TSL) {
     },
   ].map(c => ({ ...c, category: 'combo', group: 'combo' }));
 
+  // ── Texture atoms (only with THREE) ─────────────────────────────────────
+  // NO safeWrap around any of these: its magenta fallback would measure as
+  // a FREE fetch, so a throw must reach the driver's FAIL path instead.
+  const texProfile = [];
+  const texCalib = [];
+  if (THREE) {
+    // One texture per config per registry: the k-levels of one config share
+    // it, and a config nobody selects is never allocated (4096² with mips is
+    // ~85 MB of GPU memory).
+    const texCache = new Map();
+    const texOf = key => {
+      let t = texCache.get(key);
+      if (!t) { t = makeBenchTexture(THREE, key); texCache.set(key, t); }
+      return t;
+    };
+    // fract: the ALU seed()'s non-linear guard, present in the scaffold AND
+    // the atoms, so it cancels in the net.
+    const texUV = (base, i) => fract(add(base, vec2(TEX_OFFSETS[i][0], TEX_OFFSETS[i][1])));
+    const kTex = (k, span, sample) => () => {
+      const base = mul(screenCoordinate.xy, 1 / span);
+      let acc = vec3(0);
+      for (let i = 0; i < k; i++) acc = add(acc, sample(texUV(base, i)));
+      return mul(acc, 1 / k);
+    };
+    const sampler = key => (TEX_CONFIGS[key].kind === 'lut'
+      ? uv => texture(texOf(key), vec2(uv.x, 0.5)).rgb
+      : uv => texture(texOf(key), uv).rgb);
+
+    texProfile.push(
+      {
+        id: 'texture_imageNode', label: 'Image 2048² — per fetch (16 fetches ÷ 16)',
+        category: 'texture', group: 'texture', copies: 16,
+        build: kTex(16, TEX_SCREEN_SPAN, sampler('c2048')),
+      },
+      {
+        id: 'texture_colormap', label: 'Colormap LUT — per fetch (16 fetches ÷ 16)',
+        category: 'texture', group: 'texture', copies: 16,
+        build: kTex(16, TEX_SCREEN_SPAN, sampler('lut256')),
+      },
+    );
+
+    for (const k of TEX_K_LEVELS) {
+      texCalib.push({
+        id: `calib_tex_scaffold_x${k}`, label: `texture scaffold ×${k}`,
+        category: 'texcalib', group: 'texcalib',
+        build: kTex(k, TEX_SCREEN_SPAN, uv => vec3(uv, 0)),
+      });
+    }
+    for (const [op, label, key, span] of TEX_OPS) {
+      for (const k of TEX_K_LEVELS) {
+        texCalib.push({
+          id: `calib_${op}_x${k}`, label: `${label} ×${k}`,
+          category: 'texcalib', group: 'texcalib',
+          build: kTex(k, span, sampler(key)),
+        });
+      }
+    }
+
+    // Texture/ALU overlap: fit-core's ADDITIVITY predicts it as
+    // 4·slope(tex_c2048) + 4·slope(perlin).
+    combos.push({
+      id: 'combo_tex4_perlin4', label: 'Image×4 (2048²) + Perlin×4 (texture/ALU overlap)',
+      category: 'combo', group: 'combo',
+      build: () => {
+        const base = mul(screenCoordinate.xy, 1 / TEX_SCREEN_SPAN);
+        const p0 = positionGeometry;
+        let a = vec3(0), b = vec3(0);
+        for (let i = 0; i < 4; i++) a = add(a, texture(texOf('c2048'), texUV(base, i)).rgb);
+        for (let i = 0; i < 4; i++) b = add(b, vec3(mx_noise_float(seed(p0, i + 4))));
+        return mul(add(a, b), 0.125);
+      },
+    });
+  }
+
   // ── Saved Groups (from editor localStorage) ─────────────────────────────
   // The editor's saveGroupToLibrary persists graph snapshots, not TSL code.
   // Until it also writes a `tslCode: string` field on SavedGroup, the bench
@@ -410,7 +594,7 @@ export function buildBenchRegistry(TSL) {
   // to persist `tslCode`, the bench picks it up here without further changes.
   const saved = loadSavedGroups(TSL);
 
-  return [baseline, ...presets, ...noises, ...calib, ...combos, ...saved];
+  return [baseline, ...presets, ...noises, ...texProfile, ...calib, ...texCalib, ...combos, ...saved];
 }
 
 function loadSavedGroups(TSL) {

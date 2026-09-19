@@ -17,6 +17,10 @@ import type {
 } from '@/types';
 import { getNodeValues } from '@/types';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
+import type { ImportNote, ImportNoteLine } from '@/utils/importNote';
+import type { ZipLimitKind } from '@/utils/zipReader';
+import { t } from '@/i18n';
+import { fillTemplate } from '@/utils/fillTemplate';
 import type { NodePreviewTarget } from '@/utils/nodePreview';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { randomGroupColor, nextGroupLabel } from '@/utils/newNodeValues';
@@ -48,15 +52,40 @@ import {
 } from '@/utils/costOverride';
 import { makeDataNodeData, sanitizeDataNodes } from '@/utils/dataNode';
 import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
-import { sanitizeOutputMaterials, foldExtraOutputs } from '@/utils/outputMaterials';
+import {
+  sanitizeOutputMaterials,
+  sanitizeOutputMaterialsReport,
+  foldExtraOutputs,
+  pruneOrphanMaterialEdges,
+} from '@/utils/outputMaterials';
 import { normalizeActiveOutput, clearActiveOutput, isSinkNode } from '@/utils/sdfPartition';
 import { migrateLegacyNodeTypes } from '@/registry/legacyNodeTypes';
 import {
   loadOptionalCategories, OPTIONAL_CATEGORY_KEYS,
   type OptionalCategory, type OptionalCategoryFlags,
 } from '@/registry/optionalCategories';
+// The import-free leaf, read at MODULE SCOPE below (the costTable TDZ rule):
+// never glbImportGate or glbImportCopy, which reach the store's own cycle.
+import { ALLOW_MANY_MATERIALS_KEY, allowManyMaterialsFrom } from '@/utils/glbImportLimits';
 import { sinkCosts } from '@/utils/nodeCost';
-import { makeImageNodeFromEncode, resolveImageDrop, sanitizeImageNodes, totalImageChars, type ImageOriginInfo } from '@/utils/imageNode';
+import {
+  exceedsImageBudget,
+  makeImageNodeFromEncode,
+  LIBRARY_IMAGE_BUDGET_COUNT,
+  MAX_LIBRARY_IMAGE_CHARS,
+  resolveImageDrop,
+  sanitizeImageNodes,
+  uniqueImageChars,
+  type ImageOriginInfo,
+} from '@/utils/imageNode';
+import {
+  harvestImagePayloads,
+  imagePayloadsForStorage,
+  libraryPayloadsForStorage,
+  newRefBudget,
+  resolveImageRefs,
+} from '@/utils/imagePayloadRefs';
+import { composeImportNoteLines, imageDropReport, type ImageDropReport } from '@/utils/imageImportNote';
 import { stashImageOrigin } from '@/utils/imageOriginCache';
 import { autoExposeConnectedParamPorts } from '@/utils/exposedPorts';
 import { selectionOnlyGraphChange } from '@/utils/graphSemantics';
@@ -70,6 +99,8 @@ import {
 } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
 import { sanitizeGraphShape } from '@/utils/graphShape';
+import { toAsciiStorageJson } from '@/utils/asciiStorage';
+import type { DesktopAutosaveRuntime } from '@/utils/desktopAutosave';
 // Eval-mode telemetry: `evalLog` is a no-op outside a study session, so these
 // calls cost one boolean check in normal use. The chokepoint set is pinned by
 // src/eval/evalHooks.test.ts. telemetry.ts never imports this store (bridge
@@ -77,7 +108,7 @@ import { sanitizeGraphShape } from '@/utils/graphShape';
 import { evalLog } from '@/eval/telemetry';
 import type { PreviewMesh } from '@/utils/previewMesh';
 import type { MeshInventory } from '@/utils/meshInventory';
-import { savePreviewMeshToCache } from '@/utils/previewMeshCache';
+import { savePreviewMeshToCache, announceMeshCacheFull } from '@/utils/previewMeshCache';
 import { encodeImageFile } from '@/utils/imageImport';
 import { transposeCsv, type ParsedCsv } from '@/utils/csvParser';
 
@@ -140,19 +171,64 @@ export function groupFrameSize(node: AppNode): { w: number; h: number } {
   };
 }
 
-// Exported for savedGroupsSanitize.test.ts — module init calls it against the
-// real localStorage, the test re-runs it against a stubbed one.
+// Exported for savedGroupsSanitize.test.ts — App.tsx's mount effect calls it
+// against the real localStorage, the test re-runs it against a stubbed one.
 export function loadSavedGroups(): SavedGroup[] {
+  return loadSavedGroupsReport().groups;
+}
+
+/**
+ * The saved-group library plus how many image payloads the HARD caps stripped
+ * while it loaded (N8) and how many Output sections the load had to trim
+ * (decision 9) — App.tsx (`seedFromStored`) reports both counts and writes the
+ * repaired library back, so each notice fires once rather than on every boot.
+ */
+export interface StoredGroupsReport {
+  groups: SavedGroup[];
+  /** Image payloads the HARD caps stripped while the library loaded (N8). */
+  strippedImages: number;
+  /** Output sections / mesh assignments dropped or emptied (decision 9),
+   *  counted only for groups that survive the load. */
+  outputSectionsTrimmed: number;
+}
+
+const EMPTY_GROUPS_REPORT = (): StoredGroupsReport => ({ groups: [], strippedImages: 0, outputSectionsTrimmed: 0 });
+
+export function loadSavedGroupsReport(): StoredGroupsReport {
   try {
     const raw = localStorage.getItem(SAVED_GROUPS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw, safeJsonReviver);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (g): g is SavedGroup =>
-          g && typeof g.id === 'string' && Array.isArray(g.nodes) && Array.isArray(g.edges),
-      )
+    if (!raw) return EMPTY_GROUPS_REPORT();
+    return parseStoredGroupsReport(JSON.parse(raw, safeJsonReviver));
+  } catch {
+    return EMPTY_GROUPS_REPORT();
+  }
+}
+
+/**
+ * The library restore behind {@link loadSavedGroupsReport}, from an already
+ * PARSED value — split out so the desktop room's file store
+ * (store/desktopAutosaveBoot.ts) runs exactly the same sanitisers on its own
+ * document, so BOTH counts (N8 images, decision-9 sections) exist there too.
+ * Behaviour-free: `loadSavedGroupsReport` is now read + parse + this.
+ */
+export function parseStoredGroupsReport(parsed: unknown): StoredGroupsReport {
+  let strippedImages = 0;
+  let outputSectionsTrimmed = 0;
+  try {
+    if (!Array.isArray(parsed)) return EMPTY_GROUPS_REPORT();
+    const candidates = parsed.filter(
+      (g): g is SavedGroup =>
+        g && typeof g.id === 'string' && Array.isArray(g.nodes) && Array.isArray(g.edges),
+    );
+    // The library stores each image payload ONCE (utils/imagePayloadRefs.ts),
+    // and a ref may point into an EARLIER group. So the inline payloads are
+    // harvested from the RAW groups before the per-group pass: a group its own
+    // catch drops below still vouches for the payloads other groups reference.
+    // ONE budget for the whole document, spent in group order, as the writer
+    // spent it.
+    const index = harvestImagePayloads(candidates.flatMap((g) => g.nodes));
+    const budget = newRefBudget();
+    const groups = candidates
       // This is the THIRD untrusted restore path (same localStorage trust
       // level as fs:graph), and instantiating a group clones these
       // nodes/edges straight into the live graph — so it gets the same
@@ -177,25 +253,36 @@ export function loadSavedGroups(): SavedGroup[] {
           const shape = sanitizeGraphShape<AppNode, AppEdge>(g.nodes, g.edges);
           shape.nodes = migrateLegacyNodeTypes(shape.nodes);
           autoExposeConnectedParamPorts(shape.nodes, shape.edges);
-          return {
+          // Refs resolve BEFORE the hard caps, so the caps judge the real
+          // payload; a ref that cannot be resolved is an image the load could
+          // not restore, and N8 reports it with the rest.
+          const refs = resolveImageRefs(shape.nodes, index, budget);
+          const imgs = sanitizeImageNodes(refs.nodes, false);
+          // The Output sections are sanitized WITH a count (decision 9).
+          const secs = sanitizeOutputMaterialsReport(sanitizeDataRangeNodes(sanitizeDataNodes(imgs.nodes).nodes));
+          // A saved group is a FRAGMENT: which sink is active belongs to
+          // the graph it lands in, so a stale flag inside the group is
+          // stripped here and the live graph's choice wins on instantiate.
+          const nodes = clearActiveOutput(secs.nodes);
+          const group = {
             ...g,
-            // A saved group is a FRAGMENT: which sink is active belongs to
-            // the graph it lands in, so a stale flag inside the group is
-            // stripped here and the live graph's choice wins on instantiate.
-            nodes: clearActiveOutput(sanitizeOutputMaterials(
-              sanitizeDataRangeNodes(
-                sanitizeDataNodes(sanitizeImageNodes(shape.nodes, false).nodes).nodes,
-              ),
-            )),
-            edges: sanitizeEdgeExtras(shape.edges),
+            nodes,
+            // A dropped section leaves no wires behind.
+            edges: pruneOrphanMaterialEdges(nodes, sanitizeEdgeExtras(shape.edges)).edges,
           };
+          // Counted only once the group survives: one the catch drops takes
+          // its images with it and is not what the notice describes.
+          strippedImages += imgs.strippedCount + refs.dangling;
+          outputSectionsTrimmed += secs.trimmed;
+          return group;
         } catch {
           return null;
         }
       })
       .filter((g): g is SavedGroup => g !== null);
+    return { groups, strippedImages, outputSectionsTrimmed };
   } catch {
-    return [];
+    return { groups: [], strippedImages: 0, outputSectionsTrimmed: 0 };
   }
 }
 
@@ -225,9 +312,26 @@ let groupsQuotaWarned = false;
  */
 let graphQuotaBlockedAtImageChars: number | null = null;
 
-function persistSavedGroups(groups: SavedGroup[]) {
+// Exported for App.tsx's boot write-back (a library the load had to repair).
+export function persistSavedGroups(groups: SavedGroup[]) {
+  // Desktop room: the library goes to its file (utils/desktopAutosave.ts), and
+  // `fs:savedGroups` is left as it was — the one-time migration source. Gated
+  // on graphPersistence there, like the graph (node-editor.html's store must
+  // not write either file).
+  if (desktopAutosave) {
+    if (graphPersistence) {
+      desktopAutosave.save('savedGroups', () => ({
+        nodes: groups.flatMap((g) => g.nodes),
+        build: (storeImages) => groups.map((g) => ({ ...g, nodes: storeImages(g.nodes) })),
+      }));
+    }
+    return;
+  }
   try {
-    localStorage.setItem(SAVED_GROUPS_KEY, JSON.stringify(groups));
+    // Pure ASCII, or one Latvian letter doubles the value's cost in WebKit —
+    // see utils/asciiStorage.ts. Each image payload once per library — see
+    // utils/imagePayloadRefs.ts; the value stays a bare array.
+    localStorage.setItem(SAVED_GROUPS_KEY, toAsciiStorageJson(libraryPayloadsForStorage(groups)));
     groupsQuotaWarned = false;
   } catch {
     // Quota exceeded or private mode. The in-memory library stays usable this
@@ -238,7 +342,7 @@ function persistSavedGroups(groups: SavedGroup[]) {
       useAppStore.getState().enqueueLimitNotice({
         id: generateId(),
         kind: 'storage-quota',
-        detail: 'saved groups',
+        slot: 'savedGroups',
       });
     }
   }
@@ -260,7 +364,7 @@ function cloneGroupSnapshot(
   const newGroupId = idMap.get(originalGroup.id)!;
 
   const group: AppNode = {
-    ...structuredClone(originalGroup),
+    ...cloneNodeSharingPayloads(originalGroup),
     id: newGroupId,
     position: { x: position.x, y: position.y },
     parentId: undefined,
@@ -269,7 +373,7 @@ function cloneGroupSnapshot(
 
   const members: AppNode[] = originalMembers.map((m) => {
     const out = {
-      ...structuredClone(m),
+      ...cloneNodeSharingPayloads(m),
       id: idMap.get(m.id)!,
       parentId: newGroupId,
       selected: false,
@@ -340,6 +444,10 @@ interface PendingCsvImport {
  * one at a time). Drop-time image notices carry the original File + drop
  * position so "Add anyway" can re-run the import with limits ignored.
  */
+/** Which localStorage slot a storage notice is about — picks the translated
+ *  wording (N7 accusative / N8 locative), never a free-form English string. */
+export type StorageSlot = 'graph' | 'savedGroups';
+
 export interface LimitNotice {
   id: string;
   kind:
@@ -347,22 +455,67 @@ export interface LimitNotice {
     | 'image-too-many-pixels'// source dimensions exceed the decode guard
     | 'image-total-cap'      // adding it would cross the all-images budget
     | 'image-revert-cap'     // restoring an image's original would cross it
+    | 'image-resolution-cap' // a Resolution pick that GROWS the payload would cross it (N6)
+    | 'image-pick-cap'       // choosing a texture (or a file) that GROWS this node's payload would cross it
+    | 'image-library-cap'    // saving a group would cross the saved-group library's own budget
     | 'image-device-downscaled' // resized to fit the target device's texture cap (informational)
     | 'images-stripped'      // an imported project had payloads over the limits
-    | 'storage-quota';       // a localStorage write actually failed
+    | 'storage-quota'        // a localStorage write actually failed
+    | 'images-stripped-on-load' // fs:graph / fs:savedGroups LOAD stripped payloads failing the hard caps
+    | 'images-missing'       // a project block's imageRefs had no matching image in its own module (the node stays, without pixels)
+    | 'zip-limit'            // an imported .zip crossed a zipReader cap (N2) — nothing was changed
+    | 'output-sections-trimmed' // a restore dropped or emptied Output sections / mesh assignments past the caps or invalid (decision 9)
+    | 'autosave-file-failed' // desktop: writing the autosave file failed (N7 desktop)
+    | 'autosave-file-read-failed'; // desktop: reading it failed; file writes paused this session
   fileName?: string;
+  /** For `zip-limit`: which reader cap and its numbers (zipReader `ZipLimitError`). */
+  zipLimit?: { kind: ZipLimitKind; limit: number; value: number };
   /** Free-form context for the message (count, sink name, dimensions…). */
   detail?: string;
+  /** storage-quota, images-stripped-on-load and output-sections-trimmed: which
+   *  stored slot (output-sections-trimmed: undefined = an opened file). */
+  slot?: StorageSlot;
   file?: File;
   position?: { x: number; y: number };
   /** For `image-total-cap`: the drop already encoded within the per-image
    *  budget — "Add anyway" places THIS payload instead of re-encoding at the
    *  relaxed dimension cap (which would silently produce a heavier image).
    *  `origin` rides along so the override keeps the drop's revert stash. */
-  encoded?: { dataUrl: string; width: number; height: number; origin?: ImageOriginInfo };
+  encoded?: {
+    dataUrl: string;
+    width: number;
+    height: number;
+    lossless?: boolean;
+    origin?: ImageOriginInfo;
+    /** The drop's N5 report, posted once "Add anyway" actually places the
+     *  image — a cancelled image never shows a "Reduced to…" line. */
+    report?: ImageDropReport;
+  };
   /** The drop's convert-or-keep choice, carried so an "Add anyway" re-encode
    *  doesn't silently convert an image the user asked to keep as-is. */
   convert?: boolean;
+  /** For `image-resolution-cap`: the resolution the pick would have set.
+   *  `raising` = it adds pixels. The refusal is on BYTES and a step down can
+   *  grow them too, so this only picks the wording ("Raising" / "Resizing"). */
+  resize?: { width: number; height: number; raising?: boolean };
+  /** For a notice raised by an image DROP: which drop, so an "Add anyway"
+   *  merges its report into that drop's note (`showImageDropReports`) instead
+   *  of replacing the lines the rest of the batch posted. */
+  dropId?: string;
+  /** Several image nodes are being added and no single file name applies:
+   *  the notice says "these images" instead of "this image". */
+  nameFallback?: 'these-images';
+  /**
+   * The one-shot override for a notice raised by a path that places nothing
+   * from a File (paste, duplicate, saved-group instantiate or save):
+   * `resolveLimitNotice` runs it on 'proceed', AFTER committing the checkbox.
+   *
+   * A closure makes the notice NON-SERIALISABLE. `pendingLimitNotices` is
+   * session-only state read by nothing but the store and LimitModal, and it
+   * must stay that way: never persisted, never cloned into history, never
+   * `structuredClone`d (which would throw on the function).
+   */
+  proceed?: () => void;
   /** For `image-device-downscaled`: informational context only — the node is
    *  already placed; this notice just tells the user what was resized and why. */
   downscale?: {
@@ -665,8 +818,12 @@ const SHARED_PAYLOAD_KEYS = ['imageB64', 'dataB64'] as const;
  * key that is already there keeps `values`' key ORDER identical, so the
  * autosave payload and the exported project block stay byte-for-byte what they
  * were.
+ *
+ * Also the clone paste, Ctrl+C/Ctrl+D, the clipboard shift, the menu's
+ * Duplicate Node and the saved-group library use, so a pasted or saved copy
+ * shares the string instead of minting one.
  */
-function cloneNodesSharingPayloads(nodes: AppNode[]): AppNode[] {
+export function cloneNodesSharingPayloads(nodes: AppNode[]): AppNode[] {
   let stripped: AppNode[] | null = null;
   const carried: Array<[index: number, payloads: Record<string, string>]> = [];
   for (let i = 0; i < nodes.length; i++) {
@@ -696,6 +853,11 @@ function cloneNodesSharingPayloads(nodes: AppNode[]): AppNode[] {
     Object.assign((cloned[i].data as { values: Record<string, unknown> }).values, payloads);
   }
   return cloned;
+}
+
+/** `cloneNodesSharingPayloads` for one node. */
+export function cloneNodeSharingPayloads(node: AppNode): AppNode {
+  return cloneNodesSharingPayloads([node])[0];
 }
 
 function snapshot(
@@ -778,6 +940,55 @@ export function setGraphPersistence(enabled: boolean): void {
   graphPersistence = enabled;
 }
 
+/**
+ * The desktop room's file-backed autosave (utils/desktopAutosave.ts), installed
+ * by store/desktopAutosaveBoot.ts in the desktop build and by tests with a fake
+ * bridge. While one is installed, `fs:graph` and `fs:savedGroups` are NOT
+ * written to localStorage. The import above is TYPE-only: the store never
+ * evaluates the runtime's module, so nothing crosses its import cycle at module
+ * scope (the costTable lesson).
+ */
+let desktopAutosave: DesktopAutosaveRuntime | null = null;
+
+export function installDesktopAutosave(rt: DesktopAutosaveRuntime | null): void {
+  desktopAutosave = rt;
+}
+
+/** The installed desktop autosave runtime, or null (web, or before boot). */
+export function installedDesktopAutosave(): DesktopAutosaveRuntime | null {
+  return desktopAutosave;
+}
+
+/**
+ * The `fs:graph` document, shared by the web writer and the desktop file store
+ * so the two cannot drift: selection/drag/resize flags stripped, the image
+ * payloads passed through `storeImages` (the web's img1 de-duplication, or the
+ * desktop's file refs), drawings and palettes only when non-empty.
+ */
+function graphPayload(
+  nodes: AppNode[],
+  edges: AppEdge[],
+  drawings: DrawStroke[],
+  palettes: Palette[],
+  storeImages: (nodes: AppNode[]) => AppNode[],
+) {
+  // Strip ephemeral per-element UI state: selection/drag/resize flags are
+  // meaningless across a reload (and the autosave subscriber deliberately
+  // skips selection-only updates, so persisting them would go stale anyway).
+  const bareNodes = nodes.map(({ selected, dragging, resizing, ...n }) => n);
+  const bareEdges = edges.map(({ selected, ...e }) => e);
+  // Board drawings share the graph slot — visual siblings of nodes/edges,
+  // loaded/saved together. Palettes ride the same slot for the same reason:
+  // they belong to the SHADER, not to the browser profile. Both are omitted
+  // when empty so a shader that has neither writes the payload it always did.
+  return {
+    nodes: storeImages(bareNodes),
+    edges: bareEdges,
+    ...(drawings.length ? { drawings } : {}),
+    ...(palettes.length ? { palettes } : {}),
+  };
+}
+
 function saveGraph(
   nodes: AppNode[],
   edges: AppEdge[],
@@ -785,30 +996,32 @@ function saveGraph(
   palettes: Palette[],
 ) {
   if (!graphPersistence) return;
+  // Desktop room: the graph goes to its file, never to localStorage (whose
+  // ~5M-character origin budget is what the file store exists to escape).
+  if (desktopAutosave) {
+    desktopAutosave.save('graph', () => ({
+      nodes,
+      build: (storeImages) => graphPayload(nodes, edges, drawings, palettes, storeImages),
+    }));
+    return;
+  }
   // Node env (tests) has no localStorage at all — that's not a quota
   // condition, so bail before the try/catch would surface a bogus notice.
   if (typeof localStorage === 'undefined') return;
   // Cheap (a .length sum) and above the stringify on purpose: see
-  // graphQuotaBlockedAtImageChars.
-  const imageChars = totalImageChars(nodes);
+  // graphQuotaBlockedAtImageChars. DISTINCT payloads, because that is what is
+  // written (utils/imagePayloadRefs.ts): removing a duplicate no longer
+  // shrinks the write, so it must not re-arm a save that will fail again.
+  const imageChars = uniqueImageChars(nodes);
   if (graphQuotaBlockedAtImageChars !== null && imageChars >= graphQuotaBlockedAtImageChars) return;
   try {
-    // Strip ephemeral per-element UI state: selection/drag/resize flags are
-    // meaningless across a reload (and the autosave subscriber deliberately
-    // skips selection-only updates, so persisting them would go stale anyway).
-    const bareNodes = nodes.map(({ selected, dragging, resizing, ...n }) => n);
-    const bareEdges = edges.map(({ selected, ...e }) => e);
-    // Board drawings share the graph slot — visual siblings of nodes/edges,
-    // loaded/saved together. Palettes ride the same slot for the same reason:
-    // they belong to the SHADER, not to the browser profile. Both are omitted
-    // when empty so a shader that has neither writes the payload it always did.
-    const payload = {
-      nodes: bareNodes,
-      edges: bareEdges,
-      ...(drawings.length ? { drawings } : {}),
-      ...(palettes.length ? { palettes } : {}),
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    // Each image payload once per document — see utils/imagePayloadRefs.ts.
+    const payload = graphPayload(nodes, edges, drawings, palettes, (bareNodes) =>
+      imagePayloadsForStorage(bareNodes),
+    );
+    // Pure ASCII, or one Latvian letter doubles the value's cost in WebKit —
+    // see utils/asciiStorage.ts.
+    localStorage.setItem(STORAGE_KEY, toAsciiStorageJson(payload));
     graphQuotaWarned = false;
     graphQuotaBlockedAtImageChars = null;
   } catch {
@@ -822,22 +1035,47 @@ function saveGraph(
       useAppStore.getState().enqueueLimitNotice({
         id: generateId(),
         kind: 'storage-quota',
-        detail: 'graph auto-save',
+        slot: 'graph',
       });
     }
   }
 }
 
-export function loadGraph(): {
+/** A restored graph document: what `loadGraph` / `parseStoredGraph` return. */
+export interface StoredGraph {
   nodes: AppNode[];
   edges: AppEdge[];
   drawings: DrawStroke[];
   palettes: Palette[];
-} | null {
+  /** Image payloads the HARD caps stripped on this load (N8). */
+  strippedImages: number;
+  /** Output sections / mesh assignments the load dropped or emptied
+   *  (`sanitizeOutputMaterialsReport`), announced as output-sections-trimmed. */
+  outputSectionsTrimmed: number;
+}
+
+export function loadGraph(): StoredGraph | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const data = JSON.parse(raw, safeJsonReviver);
+    return parseStoredGraph(JSON.parse(raw, safeJsonReviver));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The graph restore behind {@link loadGraph}, from an already PARSED value —
+ * split out so the desktop room's file store (store/desktopAutosaveBoot.ts)
+ * runs exactly the same repairs and sanitisers on its own document.
+ * Behaviour-free: `loadGraph` is now read + parse + this. Null for anything
+ * that is not a graph document.
+ */
+export function parseStoredGraph(input: unknown): StoredGraph | null {
+  try {
+    // JSON.parse's `any`, as before the split: every step below guards what it
+    // reads, and a non-object throws into the catch.
+    const data = input as any;
     if (Array.isArray(data.nodes) && Array.isArray(data.edges)) {
       // Element-shape pass FIRST. Everything below — the migrations, the value
       // sanitizers, React Flow itself — dereferences `node.data` and
@@ -955,7 +1193,14 @@ export function loadGraph(): {
       // Hard violations only — soft caps were already enforced at drop time,
       // and stripping a user-approved oversize payload here would clobber it
       // on the next auto-save.
-      data.nodes = sanitizeImageNodes(data.nodes, false).nodes;
+      //
+      // Stored image refs (utils/imagePayloadRefs.ts) resolve FIRST, so the
+      // caps judge the real payload; a ref whose canonical is missing is an
+      // image this load could not restore, and N8 reports it with the rest.
+      const refs = resolveImageRefs(data.nodes);
+      data.nodes = refs.nodes;
+      const imgs = sanitizeImageNodes(data.nodes, false);
+      data.nodes = imgs.nodes;
 
       // Data-node CSV blobs are adversarial for the same reason. The cap is the
       // construction bound, so no payload this app wrote can be affected.
@@ -971,7 +1216,10 @@ export function loadGraph(): {
       // paths must agree or a reload changes what renders. The fold covers a
       // session saved by the multi-Output design, whose extra nodes would
       // otherwise sit inert with their wiring stranded.
-      data.nodes = sanitizeOutputMaterials(data.nodes);
+      // What it drops is COUNTED and announced by App's mount effect
+      // (`output-sections-trimmed`, decision 9).
+      const secs = sanitizeOutputMaterialsReport(data.nodes);
+      data.nodes = secs.nodes;
       // Several output nodes may coexist, exactly ONE active — the flag is
       // node data from the same untrusted payload, so it is normalised here
       // (first `true` wins, junk stripped) BEFORE the fold reads it to pick
@@ -988,6 +1236,9 @@ export function loadGraph(): {
       // RENDER, with no error boundary anywhere in the app, so `waypoints:
       // [null]` from a tampered value blanks the whole editor on every boot.
       data.edges = sanitizeEdgeExtras(data.edges);
+      // A section the sanitizer dropped must not leave its wires behind
+      // (stranded in the store, never drawn, an unscoped 008 every frame).
+      data.edges = pruneOrphanMaterialEdges(data.nodes, data.edges).edges;
 
       // Board drawings are adversarial too (tampered localStorage) — bound them.
       data.drawings = sanitizeDrawings(data.drawings);
@@ -998,10 +1249,52 @@ export function loadGraph(): {
       // absent key sanitizes to [] — which is exactly the pre-palette payload.
       data.palettes = sanitizePalettes(data.palettes);
 
-      return data;
+      // An explicit object, not `data`: no stray key from the (untrusted)
+      // stored payload rides out, and a stored `strippedImages` cannot fake
+      // the count.
+      return {
+        nodes: data.nodes,
+        edges: data.edges,
+        drawings: data.drawings,
+        palettes: data.palettes,
+        strippedImages: imgs.strippedCount + refs.dangling,
+        outputSectionsTrimmed: secs.trimmed,
+      };
     }
   } catch { /* corrupt data */ }
   return null;
+}
+
+/**
+ * N8: report image payloads the HARD caps stripped while a stored slot LOADED.
+ * Called from App.tsx's mount effect, never from the load functions themselves
+ * — tests call those in a shared module registry.
+ */
+export function reportImagesStrippedOnLoad(slot: StorageSlot, count: number): void {
+  if (!(count > 0)) return;
+  useAppStore.getState().enqueueLimitNotice({
+    id: generateId(),
+    kind: 'images-stripped-on-load',
+    slot,
+    detail: String(count),
+  });
+}
+
+/**
+ * Decision 9: report Output sections / mesh assignments a stored slot's LOAD
+ * dropped or emptied (`sanitizeOutputMaterialsReport`). Called from App.tsx's
+ * mount effect beside the N8 report, never from the load functions themselves
+ * — tests call those in a shared module registry. A file import raises the same
+ * kind directly (applyProjectToStore), with no slot.
+ */
+export function reportOutputSectionsTrimmed(slot: StorageSlot | undefined, count: number): void {
+  if (!(count > 0)) return;
+  useAppStore.getState().enqueueLimitNotice({
+    id: generateId(),
+    kind: 'output-sections-trimmed',
+    ...(slot ? { slot } : {}),
+    detail: String(count),
+  });
 }
 
 export interface VRHeadset {
@@ -1169,6 +1462,14 @@ interface AppState {
    */
   trackpadScroll: boolean;
   /**
+   * The material-gate override for the GLB import dialog (N11): off = a
+   * dropped model with more than GLB_IMPORT_MATERIAL_LIMIT referenced
+   * materials is refused; on = it may build one Output section per material,
+   * each import still confirmed. Persisted to fs:allowManyMaterials (exact
+   * '1'). A study CONDITION: hidden and reset by cleanSlateForStudy.
+   */
+  allowManyMaterials: boolean;
+  /**
    * Which OPTIONAL palette categories are switched on — the ready-made
    * Textures library and the Distance fields family, both OFF by default and
    * flipped from the same toolbar right-click list as `trackpadScroll`.
@@ -1190,6 +1491,10 @@ interface AppState {
    *  fell back (persisted; set from that line's "?" panel). It reports a
    *  browser capability, so once understood it has nothing left to say. */
   hideImageConvertNotice: boolean;
+  /** The canvas import note (top-centre one-liner, utils/importNote.ts): what
+   *  an import did without asking. STORE state so any surface can post to it;
+   *  SESSION-only — never in history, the autosave or localStorage. */
+  importNote: ImportNote | null;
   splitRatio: number;
   rightSplitRatio: number;
 
@@ -1253,6 +1558,21 @@ interface AppState {
   // button's right-click setting). SESSION-ONLY like the mesh it governs — a
   // persisted "off" would silently strip models from exports weeks later.
   exportIncludeMesh: boolean;
+  // The EXPORT popover's Format choice: true = ONE .glb (the model, its
+  // textures and this shader inside — engine/exportSingleGlb.ts). SESSION-ONLY
+  // like exportIncludeMesh, so a persisted choice cannot turn a later
+  // session's exports into .glb files nobody asked for. Never read raw: every
+  // surface asks effectiveExportFormat (utils/glbExportAvailability.ts), which
+  // falls back to the bundle while the loaded model cannot be packed and in a
+  // study session.
+  exportAsGlb: boolean;
+  // The EXPORT popover's KTX2 row: add GPU-compressed copies of the textures
+  // to a single .glb, for other glTF viewers (Phase 8). SESSION-ONLY like
+  // exportIncludeMesh and exportAsGlb beside it, and OFF by default — the
+  // copies cost bytes and encoding time, and the shader itself never samples
+  // them. The row renders only where an encoder is registered, so in a build
+  // with none this flag is unreachable and inert.
+  exportKtx2: boolean;
   // The preview top bar's WGSL/GLSL toggle — true forces the sandboxed 3D
   // preview onto the WebGL2/GLSL backend (what the immersive popup and Safari
   // always run), so backend-dependent shader behavior is checkable without a
@@ -1260,6 +1580,13 @@ interface AppState {
   // leave the preview silently degraded weeks later, which reads as "WebGPU
   // broke" rather than "I left a diagnostic on".
   previewForceWebGL2: boolean;
+  // Whether the 3D pane SHOWS `previewMesh` (its rendered geometry is
+  // 'custom'), written by ShaderPreview. SESSION-ONLY, never persisted, never
+  // in history, and never read by emission: it only lets import-built index
+  // sections sleep while a primitive, a built-in or a march window is showing
+  // (`shownPreviewMesh`, utils/outputMaterials.ts). True until the preview
+  // reports, so a page without one hides nothing.
+  previewShowsModel: boolean;
 
   // Board drawings (freehand ink annotations) — VISUAL-ONLY, like notes /
   // waypoints. Separate slice so graphToCode / cpuEvaluator / the sync engine
@@ -1444,10 +1771,22 @@ interface AppState {
    *  added, so it must not depend on which cancel gesture was used); null is
    *  still honoured as "leave unchanged" for non-UI callers. */
   resolveLimitNotice: (action: 'dismiss' | 'proceed', ignoreFuture: boolean | null) => void;
+  /** Post the canvas import note. REPLACES the current one (a later import
+   *  wins) under a fresh id; an empty list posts nothing. */
+  showImportNote: (lines: ImportNoteLine[]) => void;
+  /** Post an image drop's N5 reports. A still-visible note from the SAME drop
+   *  (`dropId`) is re-composed with them rather than replaced, so a batch
+   *  reports once whichever of the loop and an "Add anyway" lands last. An
+   *  undefined `dropId` never merges. */
+  showImageDropReports: (dropId: string | undefined, reports: readonly ImageDropReport[]) => void;
+  /** Clear the import note — any note when `id` is omitted, else only the note
+   *  carrying that id (so a timer armed for an older note can't clear a newer). */
+  dismissImportNote: (id?: string) => void;
   setIgnoreImageLimits: (v: boolean) => void;
   setHideImageDownscaleWarning: (v: boolean) => void;
   setTrackpadScroll: (v: boolean) => void;
   setOptionalCategory: (id: OptionalCategory, on: boolean) => void;
+  setAllowManyMaterials: (v: boolean) => void;
   setImageConvertMode: (v: 'ask' | 'always' | 'never') => void;
   setHideImageConvertNotice: (v: boolean) => void;
   setSplitRatio: (ratio: number) => void;
@@ -1472,7 +1811,10 @@ interface AppState {
    */
   setPreviewMeshInventory: (inventory: MeshInventory | null) => void;
   setExportIncludeMesh: (include: boolean) => void;
+  setExportAsGlb: (asGlb: boolean) => void;
+  setExportKtx2: (on: boolean) => void;
   setPreviewForceWebGL2: (force: boolean) => void;
+  setPreviewShowsModel: (shows: boolean) => void;
   setSelectedHeadsetId: (id: string) => void;
 
   // Node variable name actions
@@ -1515,12 +1857,20 @@ interface AppState {
   toggleGroupCollapsed: (groupId: string) => void;
 
   // Saved group library actions
-  /** Snapshot a group + its members + internal edges into the savedGroups library. */
-  saveGroupToLibrary: (groupId: string) => void;
+  /** Snapshot a group + its members + internal edges into the savedGroups
+   *  library. Refused with an `image-library-cap` notice when it would cross
+   *  the library's own image budget; `overBudgetOk` is that notice's override. */
+  saveGroupToLibrary: (groupId: string, opts?: { overBudgetOk?: boolean }) => void;
   /** Remove a saved group from the library by id. */
   deleteSavedGroup: (savedId: string) => void;
-  /** Drop a copy of a saved group onto the canvas at `position` (flow coords). */
-  instantiateSavedGroup: (savedId: string, position: { x: number; y: number }) => void;
+  /** Drop a copy of a saved group onto the canvas at `position` (flow coords).
+   *  Refused with an `image-total-cap` notice when its images would cross the
+   *  project budget; `overBudgetOk` is that notice's override. */
+  instantiateSavedGroup: (
+    savedId: string,
+    position: { x: number; y: number },
+    opts?: { overBudgetOk?: boolean },
+  ) => void;
   /** Drop a built-in texture group onto the canvas at `position` (flow coords). */
   instantiateBuiltinTexture: (textureId: string, position: { x: number; y: number }) => void;
   /** Drop a built-in preset group onto the canvas at `position` (flow coords). */
@@ -1548,6 +1898,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   ignoreImageLimits: loadString('fs:ignoreImageLimits', '0') === '1',
   hideImageDownscaleWarning: loadString('fs:hideImageDownscaleWarning', '0') === '1',
   trackpadScroll: loadString('fs:trackpadScroll', '0') === '1',
+  allowManyMaterials: allowManyMaterialsFrom(loadString(ALLOW_MANY_MATERIALS_KEY, '0')),
   // Only the exact string '0' turns it off, so a junk value fails SAFE (on) —
   // the same validate-never-coerce rule the optional categories follow.
   optionalCategories: loadOptionalCategories((key) => loadString(key, '0')),
@@ -1556,6 +1907,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     return v === 'always' || v === 'never' ? v : 'ask';
   })(),
   hideImageConvertNotice: loadString('fs:hideImageConvertNotice', '0') === '1',
+  importNote: null,
   splitRatio: loadRatio('fs:splitRatio', 0.6),
   rightSplitRatio: loadRightSplitRatio(),
   shaderName: loadString('fs:shaderName', DEFAULT_SHADER_NAME),
@@ -1591,7 +1943,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // button. Only a FRESH browser gets the default: a stored `fs:lang` keeps
   // whatever the user last chose, so nobody's existing session flips.
   language: (loadString('fs:lang', 'en') === 'lv' ? 'lv' : 'en'),
-  // Hydrated by App.tsx's mount effect (`loadSavedGroups()`), exactly as
+  // Hydrated by App.tsx's mount effect (`loadSavedGroupsReport()`), exactly as
   // `drawings` and `shaderPalettes` below are — NOT at module scope, and that
   // is load-bearing rather than symmetry.
   //
@@ -1615,7 +1967,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   previewMesh: null,
   previewMeshInventory: null,
   exportIncludeMesh: true,
+  exportAsGlb: false,
+  exportKtx2: false,
   previewForceWebGL2: false,
+  previewShowsModel: true,
 
   // Drawings are hydrated from fs:graph by App.tsx (loadGraph) alongside the
   // graph; tool prefs are their own persisted keys.
@@ -1828,7 +2183,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // that on its own — a document already AT the default kebabs to the same
     // file name, so the desktop Work folder would keep treating the shader it
     // last opened as this one's home and replace it on the next Save, silently
-    // (work_folder_write has no undo). Its own event, not `fs:graph-imported`:
+    // (work_folder_write_bytes has no undo). Its own event, not `fs:graph-imported`:
     // that one arms NodeEditor's import auto-fit, and startNewShader already
     // schedules its own.
     if (typeof window !== 'undefined') {
@@ -2284,15 +2639,21 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
     let parsed = head.parsed;
     if (action === 'transpose') {
-      const t = transposeCsv(head.parsed);
-      if (!t.ok) {
+      const tr = transposeCsv(head.parsed);
+      if (!tr.ok) {
         // Can't transpose (would exceed the column cap) — surface it and skip
-        // rather than placing an invalid node.
-        window.alert(`Could not transpose "${head.fileName}":\n${t.error}`);
+        // rather than placing an invalid node. `{error}` stays the parser's
+        // own English message.
+        window.alert(
+          fillTemplate(t('Could not transpose {name}:\n{error}', get().language), {
+            name: `“${head.fileName}”`,
+            error: tr.error,
+          }),
+        );
         dequeue();
         return;
       }
-      parsed = t.data;
+      parsed = tr.data;
     }
 
     const cost = (complexityData.costs as Record<string, number>).dataNode ?? 2;
@@ -2315,6 +2676,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
       get().setIgnoreImageLimits(ignoreFuture);
     }
     set((state) => ({ pendingLimitNotices: state.pendingLimitNotices.slice(1) }));
+
+    // A path with no File behind it (paste, duplicate, a saved group) carries
+    // its own override; the checkbox above is already committed.
+    if (action === 'proceed' && head.proceed) {
+      head.proceed();
+      return;
+    }
 
     if (action !== 'proceed' || !head.file || !head.position) return;
     const { file, position, encoded } = head;
@@ -2339,6 +2707,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // The stash was written before the notice was raised, so its id is
       // carried here rather than re-derived.
       place(encoded, encoded.origin);
+      // The drop's N5 lines, now that the image is really on the canvas —
+      // merged into the note the rest of its batch posted (same drop).
+      if (encoded.report) get().showImageDropReports(head.dropId, [encoded.report]);
       return;
     }
     // Re-run the import with the soft limits off (hard ceilings still apply).
@@ -2350,7 +2721,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       head.convert === false ? 'keep' : 'convert',
     ).then((res) => {
       if (!res.ok) {
-        window.alert(`Could not load "${file.name}" as an image.`);
+        window.alert(
+          t('Could not load {name} as an image.', get().language).replace('{name}', () => `“${file.name}”`),
+        );
         return;
       }
       // Same rule as the drop path: a power-of-two snap that can't be stashed
@@ -2359,6 +2732,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
         stashImageOrigin(p, Date.now()),
       );
       place(payload, origin);
+      // The budget lines only: "Add anyway" never showed the WebP line, and
+      // this keeps that (convertNote null).
+      get().showImageDropReports(head.dropId, [imageDropReport(res, payload, null)]);
     });
   },
 
@@ -2370,6 +2746,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setTrackpadScroll: (v) => {
     try { localStorage.setItem('fs:trackpadScroll', v ? '1' : '0'); } catch { /* */ }
     set({ trackpadScroll: v });
+  },
+
+  setAllowManyMaterials: (v) => {
+    try { localStorage.setItem(ALLOW_MANY_MATERIALS_KEY, v ? '1' : '0'); } catch { /* */ }
+    set({ allowManyMaterials: v });
   },
 
 
@@ -2393,6 +2774,35 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setHideImageConvertNotice: (v) => {
     try { localStorage.setItem('fs:hideImageConvertNotice', v ? '1' : '0'); } catch { /* */ }
     set({ hideImageConvertNotice: v });
+  },
+
+  showImportNote: (lines) => {
+    if (lines.length === 0) return;
+    set({ importNote: { id: generateId(), lines: lines.slice() } });
+  },
+
+  showImageDropReports: (dropId, reports) => {
+    if (reports.length === 0) return;
+    const cur = get().importNote;
+    const merged =
+      dropId !== undefined && cur?.dropId === dropId && cur.reports
+        ? [...cur.reports, ...reports]
+        : reports.slice();
+    const lines = composeImportNoteLines(merged);
+    if (lines.length === 0) return;
+    set({
+      importNote: {
+        id: generateId(),
+        lines,
+        ...(dropId !== undefined ? { dropId, reports: merged } : {}),
+      },
+    });
+  },
+
+  dismissImportNote: (id) => {
+    const cur = get().importNote;
+    if (!cur || (id !== undefined && cur.id !== id)) return;
+    set({ importNote: null });
   },
 
   setSplitRatio: (ratio) => {
@@ -2426,15 +2836,28 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ previewMesh: mesh, previewMeshInventory: null });
     // Fire-and-forget: the cache is a convenience, so a quota/private-mode
     // failure must never make the drop itself fail. savePreviewMeshToCache
-    // resolves on every error path rather than rejecting.
-    if (opts?.persist !== false) void savePreviewMeshToCache(mesh);
+    // resolves on every error path rather than rejecting. Only a QUOTA failure
+    // on the mesh still on screen is announced (the preview says it will not
+    // come back after a reload) — the identity check drops a slow write a
+    // later drop has superseded. Restores (`persist: false`) and clears (null)
+    // never announce.
+    if (opts?.persist !== false) {
+      void savePreviewMeshToCache(mesh).then((r) => {
+        if (r === 'storage-full' && mesh && get().previewMesh === mesh) announceMeshCacheFull(mesh.id);
+      });
+    }
   },
 
   setPreviewMeshInventory: (inventory) => set({ previewMeshInventory: inventory }),
 
   setExportIncludeMesh: (include) => set({ exportIncludeMesh: include }),
 
+  setExportAsGlb: (asGlb) => set({ exportAsGlb: asGlb === true }),
+  setExportKtx2: (on) => set({ exportKtx2: on === true }),
+
   setPreviewForceWebGL2: (force) => set({ previewForceWebGL2: force }),
+
+  setPreviewShowsModel: (shows) => set({ previewShowsModel: shows }),
 
   setSelectedHeadsetId: (id) => {
     // Selecting a device may be a measured cost profile (its id) or a built-in
@@ -3339,7 +3762,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }));
   },
 
-  saveGroupToLibrary: (groupId) => {
+  saveGroupToLibrary: (groupId, opts) => {
     const state = get();
     const groupNode = state.nodes.find((n) => n.id === groupId);
     if (!groupNode || groupNode.type !== 'group') return;
@@ -3355,12 +3778,40 @@ export const useAppStore = create<AppState>()((set, get) => ({
     );
 
     const groupData = groupNode.data as GroupNodeData;
+    const snapshot = [groupNode, ...members];
+    // Counted against the LIBRARY's own total (MAX_LIBRARY_IMAGE_CHARS), not
+    // the project's: fs:savedGroups is a separate localStorage document that
+    // re-materialises every payload on each write. It stores each payload
+    // ONCE (utils/imagePayloadRefs.ts), so it counts DISTINCT payloads
+    // (LIBRARY_IMAGE_BUDGET_COUNT): a group whose images the library already
+    // holds adds nothing. Nothing is written on a refusal; the override
+    // re-snapshots the LIVE group.
+    if (
+      !opts?.overBudgetOk &&
+      exceedsImageBudget(
+        state.savedGroups.flatMap((g) => g.nodes),
+        snapshot,
+        state.ignoreImageLimits,
+        MAX_LIBRARY_IMAGE_CHARS,
+        LIBRARY_IMAGE_BUDGET_COUNT,
+      )
+    ) {
+      get().enqueueLimitNotice({
+        id: generateId(),
+        kind: 'image-library-cap',
+        fileName: groupData.label || 'Group',
+        proceed: () => get().saveGroupToLibrary(groupId, { overBudgetOk: true }),
+      });
+      return;
+    }
     const saved: SavedGroup = {
       id: generateId(),
       name: groupData.label || 'Group',
       color: groupData.color || '#6366f1',
-      // Deep clone so later edits to the live graph don't mutate the saved copy.
-      nodes: structuredClone([groupNode, ...members]),
+      // Deep clone so later edits to the live graph don't mutate the saved
+      // copy — payload strings by reference (they are immutable, and every
+      // edit path replaces `values` wholesale).
+      nodes: cloneNodesSharingPayloads(snapshot),
       edges: structuredClone(internalEdges),
     };
 
@@ -3408,10 +3859,23 @@ export const useAppStore = create<AppState>()((set, get) => ({
       .catch(() => console.warn('[fs] the built-in preset library failed to load'));
   },
 
-  instantiateSavedGroup: (savedId, position) => {
+  instantiateSavedGroup: (savedId, position, opts) => {
     const state = get();
     const saved = state.savedGroups.find((g) => g.id === savedId);
     if (!saved || saved.nodes.length === 0) return;
+    // The project image budget, counted on every path that ADDS a payload.
+    // Checked before the clone and the history push, so a refusal leaves no
+    // undo entry; the override re-reads the group by id, so a group deleted
+    // while the notice was open places nothing.
+    if (!opts?.overBudgetOk && exceedsImageBudget(state.nodes, saved.nodes, state.ignoreImageLimits)) {
+      get().enqueueLimitNotice({
+        id: generateId(),
+        kind: 'image-total-cap',
+        fileName: saved.name,
+        proceed: () => get().instantiateSavedGroup(savedId, position, { overBudgetOk: true }),
+      });
+      return;
+    }
     const { group, members, edges } = cloneGroupSnapshot(saved, position);
     // React Flow requires the parent container before its children in the array.
     get().pushHistory();
@@ -3435,7 +3899,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     );
     set({
       nodes: folded.nodes,
-      edges: folded.edges,
+      // The group was sanitized (and reported) at load, so no notice here; the
+      // prune still runs over the COMBINED list, the one place a group's
+      // section count meets the graph it lands in.
+      edges: pruneOrphanMaterialEdges(folded.nodes, folded.edges).edges,
       syncSource: 'graph',
       isUndoRedo: false,
     });
@@ -3463,6 +3930,18 @@ export function cancelPendingGraphSave(): void {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
+}
+
+/**
+ * Desktop close/quit flush (store/desktopAutosaveBoot.ts): run a pending 300 ms
+ * autosave NOW, with the current state. A no-op when none is pending.
+ */
+export function flushPendingGraphSave(): void {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  const s = useAppStore.getState();
+  saveGraph(s.nodes, s.edges, s.drawings, s.shaderPalettes);
 }
 useAppStore.subscribe(
   (state, prev) => {

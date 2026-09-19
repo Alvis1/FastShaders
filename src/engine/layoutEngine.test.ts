@@ -3,6 +3,7 @@ import { autoLayout, estimateNodeSize } from './layoutEngine';
 import { makeNode, makeEdge } from '@/test-utils';
 import { COLOR_NODE_SIZE } from '@/components/NodeEditor/nodes/ColorNode';
 import type { AppNode, AppEdge } from '@/types';
+import { getCostScale } from '@/utils/colorUtils';
 
 /** Top edge of a node in the laid-out graph. */
 function topOf(nodes: AppNode[], id: string): number {
@@ -146,5 +147,38 @@ describe('estimateNodeSize', () => {
     expect(sin.height).toBeGreaterThan(100); // 72px canvas + header + port row
     const out = estimateNodeSize(makeNode('o', 'output'));
     expect(out.width).toBeGreaterThanOrEqual(140);
+  });
+});
+
+describe('estimateNodeSize — the Image node', () => {
+  // Restates layoutEngine's private constants on purpose: HEADER_H 20, ROW_H
+  // 16, the thumbnail's 126 and the empty slot's 54 (ShaderNode.css caps).
+  const s = getCostScale(0);
+  const withImage = (id = 'i') =>
+    makeNode(id, 'imageNode', { imageB64: 'data:image/png;base64,AAAA', fileName: 'x.png' });
+  const exposing = (n: AppNode, ports: string[]) => {
+    (n.data as { exposedPorts?: string[] }).exposedPorts = ports;
+    return n;
+  };
+
+  it('counts the thumbnail plus one row per output', () => {
+    expect(estimateNodeSize(withImage()).height).toBeGreaterThanOrEqual((20 + 126 + 5 * 16) * s);
+  });
+
+  it('an empty node counts the empty slot, and is smaller than one with an image', () => {
+    const empty = estimateNodeSize(makeNode('e', 'imageNode')).height;
+    expect(empty).toBeGreaterThanOrEqual((20 + 54 + 5 * 16) * s);
+    expect(empty).toBeLessThan(estimateNodeSize(withImage()).height);
+  });
+
+  it('exposed params share the output rows — three add nothing, all six add one', () => {
+    const base = estimateNodeSize(withImage()).height;
+    expect(estimateNodeSize(exposing(withImage(), ['uv', 'tileX', 'tileY'])).height).toBe(base);
+    const all = ['uv', 'tileX', 'tileY', 'offsetX', 'offsetY', 'dir'];
+    expect(estimateNodeSize(exposing(withImage(), all)).height).toBe(base + 16 * s);
+  });
+
+  it('is at least as wide as the thumbnail it will draw', () => {
+    expect(estimateNodeSize(withImage()).width).toBeGreaterThanOrEqual(192 * s);
   });
 });

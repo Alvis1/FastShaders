@@ -83,11 +83,45 @@
   color: var(--cost-high, #c26a2a);
 }
 
+/* An ADDED material that names a mesh but sets NO channel: emission drops its
+   part, so the meshes it names keep exactly what they had. The same mark as an
+   unassigned one, because it is the same fact — "this material is not doing
+   anything yet" — with a different cause (its own sentence says which). Every
+   "+ Add output" starts here and the mark clears itself the moment a channel
+   is set or wired, so it is never a refusal and never disables anything. */
+.mesh-picker--silent {
+  border-color: var(--cost-high, #c26a2a);
+  color: var(--cost-high, #c26a2a);
+}
+
 /* An earlier material already shades this mesh, so emission's first-claim rule
    leaves this section inert. Dimmed rather than coloured like an error: picking
    a duplicate is a legal step on the way to swapping two materials. */
 .mesh-picker--shadowed {
   opacity: 0.55;
+}
+
+/* The DEFAULT section with nothing left to shade (`defaultSectionUnused`):
+   every mesh of the model on screen belongs to a section below. Dimmed like a
+   shadowed one, and for the same reason — legal, inert right now, and back at
+   work for a mesh whose material has no section or for the next model — never
+   coloured like an error and never disabled. */
+.mesh-picker--unused {
+  opacity: 0.55;
+}
+
+/* An import-built INDEX section's label (IndexSectionChip): the picker's box —
+   so its 104px width cap holds for an attacker-supplied glTF material name —
+   drawn DASHED and unfilled, because a binding to a material is read here, not
+   edited: there is no mesh list behind it and no caret on it. */
+.mesh-picker--material {
+  cursor: default;
+  background: transparent;
+  border-style: dashed;
+}
+
+.mesh-picker--material:hover {
+  border-color: var(--border-subtle);
 }
 
 /* ----- the portalled checkbox list ----- */
@@ -144,4 +178,17 @@
 
 .mesh-picker__row--missing .mesh-picker__name {
   color: var(--cost-high, #c26a2a);
+}
+
+/* An unticked row past the per-section cap (MAX_PARTS names): the one row the
+   list refuses, dimmed with the reason on hover. `aria-disabled` on it, never
+   `disabled`, which would drop the title in WebKit. */
+.mesh-picker__row--capped,
+.mesh-picker__row--capped input {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.mesh-picker__row--capped:hover {
+  background: transparent;
 }

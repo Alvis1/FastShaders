@@ -13,9 +13,9 @@
  * entry point is bounded by `IDB_TIMEOUT_MS`.
  *
  * NB the vitest environment is `node`, which has no IndexedDB, so nothing here
- * can be covered by a test: the throw-safety has to be preserved by
- * inspection. That is exactly why the whole of it lives here and not in a copy
- * per cache — each keeps its own DB_NAME/DB_VERSION/STORE and its own record
+ * but the pure `classifyIdbFailure` can be covered by a test: the throw-safety
+ * has to be preserved by inspection. That is exactly why the whole of it
+ * lives here and not in a copy per cache — each keeps its own DB_NAME/DB_VERSION/STORE and its own record
  * codec, and shares the plumbing: opening (`openDb`), the write transaction
  * (`idbWrite`) and the keyed read (`idbGet`), all of which were byte-identical
  * between the two apart from the store's `keyPath` option and the few lines of
@@ -115,9 +115,34 @@ export function openDb(
 }
 
 /**
- * Run one write transaction, resolving on EVERY outcome — complete, error,
- * abort, a `transaction()` that throws (store missing after a half-written
- * upgrade), and a `work` callback that throws.
+ * How a write transaction ended. `quota` is told apart from every other
+ * failure because the preview-model cache tells the user when it could not keep
+ * the model on screen (`fs:mesh-cache-full`); everything else stays silent.
+ */
+export type IdbWriteResult = 'complete' | 'quota' | 'failed' | 'timeout';
+
+/**
+ * Classify a transaction/request error. Only a real quota error is `quota` —
+ * Chromium/WebKit name it `QuotaExceededError`, Gecko's legacy spelling is
+ * `NS_ERROR_DOM_QUOTA_REACHED`. The name is read only off an object, so a bare
+ * string (or anything else) is simply `failed`.
+ */
+export function classifyIdbFailure(err: unknown): 'quota' | 'failed' {
+  if (!err || typeof err !== 'object') return 'failed';
+  let name: unknown;
+  try {
+    name = (err as { name?: unknown }).name;
+  } catch {
+    return 'failed';
+  }
+  return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED' ? 'quota' : 'failed';
+}
+
+/**
+ * Run one write transaction; it resolves on EVERY outcome and REPORTS which —
+ * complete, error, abort, a `transaction()` that throws (store missing after a
+ * half-written upgrade), a `work` callback that throws, and a hang (`timeout`).
+ * It never rejects.
  *
  * `work` gets the object store and does the caller's own bookkeeping inside the
  * same transaction: previewMeshCache puts or deletes its single record, while
@@ -128,31 +153,43 @@ export function openDb(
  *
  * Resolving on failure is deliberate everywhere: a quota error must still leave
  * the drop (or the boot) working — these are convenience caches, and the
- * session-only behaviour that predates them is the correct degraded state.
+ * session-only behaviour that predates them is the correct degraded state. The
+ * outcome is REPORTED so a caller may tell the user (the model cache does, for
+ * quota only); a caller that does not care simply ignores it.
  */
 export function idbWrite(
   db: IDBDatabase,
   store: string,
   work: (objectStore: IDBObjectStore) => void,
-): Promise<void> {
+): Promise<IdbWriteResult> {
   return withTimeout(
-    new Promise<void>((resolve) => {
+    new Promise<IdbWriteResult>((resolve) => {
       let tx: IDBTransaction;
       try {
         tx = db.transaction(store, 'readwrite');
-      } catch {
-        return resolve();
+      } catch (e) {
+        return resolve(classifyIdbFailure(e));
       }
       try {
         work(tx.objectStore(store));
-      } catch {
-        return resolve();
+      } catch (e) {
+        return resolve(classifyIdbFailure(e));
       }
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
+      tx.oncomplete = () => resolve('complete');
+      tx.onerror = (ev) => {
+        // A quota error lands on the failing REQUEST, which the event targets;
+        // the transaction's own `error` is the fallback.
+        let e: unknown = null;
+        try {
+          e = (ev.target as IDBRequest | null)?.error ?? tx.error;
+        } catch {
+          e = tx.error;
+        }
+        resolve(classifyIdbFailure(e));
+      };
+      tx.onabort = () => resolve(classifyIdbFailure(tx.error));
     }),
-    undefined,
+    'timeout',
   );
 }
 

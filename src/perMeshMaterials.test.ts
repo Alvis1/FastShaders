@@ -24,15 +24,25 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
 import { LOADER_FILE } from '@/engine/tslToShaderModule';
+import { PART_SETTING_KEYS } from '@/engine/materialSettingsCode';
+import {
+  ACTIVE_LOADERS,
+  CURRENT_LOADER,
+  PINS,
+  evalLoader,
+  loaderAvailable,
+  loaderText,
+  sliceBetween,
+  submoduleLoaderPath,
+  type ActiveLoader,
+} from './shaderloaderHarness';
 
 const repoRoot = path.resolve(__dirname, '..');
-const LOADER = path.join(repoRoot, 'public/js/a-frame-shaderloader-0.6.js');
-const LOADER_SRC = path.join(repoRoot, 'a-frame-shaderloader/js/a-frame-shaderloader-0.6.js');
 const PODEST = path.join(repoRoot, 'public/podest.html');
 
-const loaderText = readFileSync(LOADER, 'utf8');
+// The loaders are read per version INSIDE their suites (src/shaderloaderHarness.ts):
+// a top-level read of a copy that stops being vendored throws instead of skipping.
 const podestText = readFileSync(PODEST, 'utf8');
 
 /* ── 1. shaderloader 0.6: applyMaterialToMesh ───────────────────────────── */
@@ -54,25 +64,16 @@ interface ShaderComponent {
   ) => void;
 }
 
-/** Eval the real vendored component file and hand back its definition. */
-function loadShaderComponent(): ShaderComponent {
-  let def: ShaderComponent | null = null;
-  const sandbox: Record<string, unknown> = {
-    console: { log() {}, error() {}, warn() {} },
-    URL,
-    location: { href: 'https://example.test/podest.html' },
-    AFRAME: {
-      registerComponent(_name: string, d: ShaderComponent) { def = d; },
-      registerShader() {},
-      utils: {},
-    },
-    window: { THREE: null },
-  };
-  sandbox.globalThis = sandbox;
-  vm.createContext(sandbox);
-  vm.runInContext(readFileSync(LOADER, 'utf8'), sandbox);
-  if (!def) throw new Error('the shader component never registered');
-  return def;
+/**
+ * Eval a real loader file and hand back its component definition. The sandbox
+ * carries no THREE (window.THREE is null): dispatch must not need one, and
+ * both 0.6 and 0.8 are required to honour that (0.8's core touches THREE only
+ * when it builds something).
+ */
+function loadShaderComponent(v: ActiveLoader): ShaderComponent {
+  const { def } = evalLoader(v, { href: 'https://example.test/podest.html' });
+  if (!def) throw new Error(`shaderloader ${v}: the shader component never registered`);
+  return def as ShaderComponent;
 }
 
 const mesh = (name: string, uuid: string): FakeMesh => ({
@@ -94,13 +95,14 @@ function model(meshes: FakeMesh[]) {
   return root;
 }
 
-/** Run applyMaterialToMesh against a fresh component instance. */
-function dispatch(
+/** Run applyMaterialToMesh against a fresh component instance of loader `v`. */
+function dispatchWith(
+  v: ActiveLoader,
   meshes: FakeMesh[],
   material: FakeMaterial | null,
   parts: Array<[string, FakeMaterial]> | null,
 ): ShaderComponent {
-  const def = loadShaderComponent();
+  const def = loadShaderComponent(v);
   const ctx = Object.create(def) as ShaderComponent;
   ctx.originalMaterials = {};
   meshes.forEach((m) => { ctx.originalMaterials[m.uuid] = m.material; });
@@ -109,7 +111,12 @@ function dispatch(
   return ctx;
 }
 
-describe('shaderloader 0.6 — single-mesh fallback for a parts-only module', () => {
+for (const v of ACTIVE_LOADERS) describe.skipIf(!loaderAvailable(v))(`shaderloader ${v} — single-mesh fallback for a parts-only module`, () => {
+  const dispatch = (
+    meshes: FakeMesh[],
+    material: FakeMaterial | null,
+    parts: Array<[string, FakeMaterial]> | null,
+  ) => dispatchWith(v, meshes, material, parts);
   const body: FakeMaterial = { tag: 'part:Body' };
   const glass: FakeMaterial = { tag: 'part:Glass' };
   const dflt: FakeMaterial = { tag: 'default' };
@@ -172,24 +179,24 @@ describe('shaderloader 0.6 — single-mesh fallback for a parts-only module', ()
 
   it('the fallback is gated on all three conditions in SOURCE too', () => {
     // A behavioural test cannot tell "the gate is written correctly" from "the
-    // gate happens to be unreachable", so pin the shape as well.
-    const fn = loaderText.slice(
-      loaderText.indexOf('applyMaterialToMesh: function'),
-      loaderText.indexOf('disposeShaderMaterial: function'),
-    );
+    // gate happens to be unreachable", so pin the shape as well. The slice's
+    // anchors moved between 0.6's component and 0.8's core (PINS).
+    const fn = sliceBetween(loaderText(v), ...PINS[v].dispatch);
     expect(fn).toContain('partMaterials && !material');
     expect(fn).toMatch(/meshCount\s*===\s*1/);
     expect(fn).toContain('partMaterials.values().next()');
   });
+});
 
+describe('the served loader and the loader version', () => {
   // Skipped on a NON-RECURSIVE checkout, where the submodule directory is
   // empty — vendorSync.test.ts guards its own rows the same way. Without it
   // this throws ENOENT rather than reporting a skip, i.e. a fresh clone looks
   // like a broken test suite.
-  it.skipIf(!existsSync(LOADER_SRC))('the submodule source and the vendored copy carry the same gate', () => {
+  it.skipIf(!existsSync(submoduleLoaderPath(CURRENT_LOADER)))('the submodule source and the vendored copy carry the same gate', () => {
     // vendorSync.test.ts already fails on drift; this states WHY it matters
     // here — the submodule is the single source and public/js/ is a copy.
-    expect(readFileSync(LOADER_SRC, 'utf8')).toBe(loaderText);
+    expect(readFileSync(submoduleLoaderPath(CURRENT_LOADER), 'utf8')).toBe(loaderText(CURRENT_LOADER));
   });
 
   /**
@@ -205,6 +212,43 @@ describe('shaderloader 0.6 — single-mesh fallback for a parts-only module', ()
     const refs = [...podestText.matchAll(/js\/a-frame-shaderloader-\d+\.\d+\.js/g)].map((m) => m[0]);
     expect(refs.length, 'podest.html no longer references the shaderloader by file name').toBeGreaterThan(0);
     for (const ref of refs) expect(ref).toBe(`js/${LOADER_FILE}`);
+  });
+});
+
+/**
+ * The editor's per-part material settings contract rests on the FROZEN 0.6:
+ * graphToCode and buildShaderModule put a material's transparent / side /
+ * alphaTest / depthWrite INSIDE its `parts` entry, and nothing on the app side
+ * applies them — `buildMaterial` does, for the default and every part alike.
+ * In 0.6 `buildMaterial` is a closure inside applyShader (reaching it needs
+ * fetch and a dynamic import), so the vm harness above cannot drive it and its
+ * SOURCE is pinned instead — for every active loader, since 0.8 carries the
+ * same function (shaderloader08Core.test.ts also drives it behaviourally). 0.6
+ * cannot change — already-exported shaders fetch it from the CDN — so a
+ * failure on 0.6 means the file drifted, not that the contract should move.
+ */
+for (const v of ACTIVE_LOADERS) describe.skipIf(!loaderAvailable(v))(`shaderloader ${v} — per-part material settings contract`, () => {
+  it('buildMaterial applies every PART_SETTING_KEYS entry from its spec', () => {
+    const text = loaderText(v);
+    const start = text.indexOf('const buildMaterial = function (spec)');
+    expect(start, 'buildMaterial not found').toBeGreaterThan(-1);
+    const end = text.indexOf('return material;', start);
+    expect(end).toBeGreaterThan(start);
+    const src = text.slice(start, end);
+    expect([...PART_SETTING_KEYS].sort()).toEqual(['alphaTest', 'depthWrite', 'side', 'transparent']);
+    for (const key of PART_SETTING_KEYS) expect(src).toContain(`spec.${key}`);
+  });
+
+  it('every part is built by that same function, and a part needs a channel', () => {
+    // The channel gate is why emission drops a settings-only part: the loader
+    // would skip it anyway, so the module never carries one.
+    const text = loaderText(v);
+    expect(text).toContain('partMaterials.set(names[i], buildMaterial(spec))');
+    const loop = text.slice(
+      text.indexOf('const names = Object.keys(shaderResult.parts);'),
+      text.indexOf('partMaterials.set(names[i], buildMaterial(spec))'),
+    );
+    expect(loop).toContain('if (!hasChannels(spec)) continue;');
   });
 });
 

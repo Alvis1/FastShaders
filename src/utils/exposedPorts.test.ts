@@ -6,6 +6,9 @@ import {
   normalizeExposedPorts,
   OUTPUT_DEFAULT_EXPOSED,
   MAX_EXPOSED_PORTS,
+  effectiveImageDef,
+  effectiveNodeDef,
+  effectiveRampDef,
 } from './exposedPorts';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { makeNode, makeEdge } from '../test-utils';
@@ -124,5 +127,43 @@ describe('adversarial exposedPorts (tampered fs:graph / .fastshader)', () => {
     const huge = [node(Array.from({ length: 500 }, (_, i) => `p${i}`))];
     normalizeExposedPorts(huge);
     expect((huge[0].data as { exposedPorts: string[] }).exposedPorts).toHaveLength(MAX_EXPOSED_PORTS);
+  });
+});
+
+describe('effectiveImageDef / effectiveNodeDef — the ONE def both surfaces draw from', () => {
+  const image = NODE_REGISTRY.get('imageNode')!;
+
+  it('returns every other node by IDENTITY (the memos downstream key on it)', () => {
+    for (const type of ['mul', 'uv', 'perlin', 'output', 'colormap', 'toHsl']) {
+      const d = NODE_REGISTRY.get(type)!;
+      expect(effectiveImageDef(d, []), type).toBe(d);
+      expect(effectiveNodeDef(d, []), type).toBe(d);
+    }
+  });
+
+  it('nothing exposed: no param inputs and no defaultValues (so no setting rows)', () => {
+    const d = effectiveImageDef(image, []);
+    expect(d.inputs).toEqual([]);
+    expect(d.defaultValues).toEqual({});
+  });
+
+  it('keeps the exposed params in REGISTRY order, whatever order they were ticked in', () => {
+    expect(effectiveImageDef(image, ['tileY', 'uv']).inputs.map((i) => i.id)).toEqual(['uv', 'tileY']);
+    expect(effectiveImageDef(image, new Set(['dir', 'offsetX'])).inputs.map((i) => i.id)).toEqual(['offsetX', 'dir']);
+  });
+
+  it('never touches the outputs, and never mutates the registry def', () => {
+    const before = image.inputs.length;
+    expect(effectiveNodeDef(image, ['uv']).outputs).toBe(image.outputs);
+    expect(image.inputs).toHaveLength(before);
+    expect(Object.keys(image.defaultValues ?? {})).toEqual(['tileX', 'tileY', 'offsetX', 'offsetY']);
+  });
+
+  it('still composes the ramp filter for Data Stripes / Data Viz', () => {
+    for (const type of ['stripes', 'dataviz']) {
+      const d = NODE_REGISTRY.get(type)!;
+      expect(effectiveNodeDef(d, [])).toEqual(effectiveRampDef(d, []));
+      expect(effectiveNodeDef(d, ['lowColor'])).toEqual(effectiveRampDef(d, ['lowColor']));
+    }
   });
 });

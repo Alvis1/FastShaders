@@ -19,8 +19,8 @@ import { join } from 'node:path';
  *
  * The check is deliberately whole-repo and not scoped to tokens: a property may
  * legitimately be published by a component (ShaderNode publishes
- * `--node-text-scale`, NodeEditor publishes `--node-cost-text`, SplitPane
- * publishes `--fs-grip-offset`), so "declared ANYWHERE we can see" — in a
+ * `--node-text-scale`, NodeEditor publishes `--node-cost-text`, the seams
+ * publish `--fs-lens-at`), so "declared ANYWHERE we can see" — in a
  * stylesheet, in an inline style, or as a documented fallback — is the honest
  * bar. What it catches is the reference that resolves NOWHERE.
  */

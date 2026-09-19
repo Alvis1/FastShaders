@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildExportBundle, buildExportReadme, meshPairingSnippet, type ExportMesh } from './exportBundle';
 import { readZip } from './zipReader';
+import { buildZip } from './zipWriter';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -71,5 +72,62 @@ describe('exportBundle: README content', () => {
     const readme = buildExportReadme('my-shader', true, null);
     expect(readme).toContain('images/ — the same images as regular files');
     expect(readme).not.toContain('models/');
+  });
+});
+
+describe('exportBundle: size facts the export pre-flight reads', () => {
+  it('a bare .js counts its own length and carries no model', () => {
+    const b = buildExportBundle('s', SCRIPT, [], null);
+    expect(b.unpackedBytes).toBe(b.bytes.length);
+    expect(b.meshBytes).toBe(0);
+    expect(b.unpackedBytesWithoutMesh).toBe(b.unpackedBytes);
+  });
+
+  it('a zip counts exactly what readZip reads back', async () => {
+    const b = buildExportBundle('s', SCRIPT, [IMAGE], GLB_MESH);
+    const entries = await readZip(b.bytes);
+    expect(b.unpackedBytes).toBe(entries.reduce((s, e) => s + e.data.length, 0));
+    expect(b.meshBytes).toBe(GLB_MESH.bytes.length);
+  });
+
+  it('predicts the without-model size exactly, zip to zip and zip to js', () => {
+    const both = buildExportBundle('s', SCRIPT, [IMAGE], GLB_MESH);
+    expect(both.unpackedBytesWithoutMesh).toBe(buildExportBundle('s', SCRIPT, [IMAGE], null).unpackedBytes);
+
+    const meshOnly = buildExportBundle('s', SCRIPT, [], GLB_MESH);
+    const plain = buildExportBundle('s', SCRIPT, [], null);
+    expect(plain.kind).toBe('js');
+    expect(meshOnly.unpackedBytesWithoutMesh).toBe(enc.encode(SCRIPT).length);
+    expect(meshOnly.unpackedBytesWithoutMesh).toBe(plain.unpackedBytes);
+  });
+
+  it('counts the entries readZip counts, with and without the model', async () => {
+    const plain = buildExportBundle('s', SCRIPT, [], null);
+    expect(plain.entryCount).toBe(1);
+    expect(plain.entryCountWithoutMesh).toBe(1);
+
+    const IMAGE2 = { name: 'tex2.png', bytes: enc.encode('png-2') as Uint8Array<ArrayBuffer> };
+    const both = buildExportBundle('s', SCRIPT, [IMAGE, IMAGE2], GLB_MESH);
+    expect(both.entryCount).toBe((await readZip(both.bytes)).length);
+    const noMesh = buildExportBundle('s', SCRIPT, [IMAGE, IMAGE2], null);
+    expect(both.entryCountWithoutMesh).toBe((await readZip(noMesh.bytes)).length);
+    expect(noMesh.entryCountWithoutMesh).toBe(noMesh.entryCount);
+
+    // Mesh only: dropping the model leaves a bare .js.
+    const meshOnly = buildExportBundle('s', SCRIPT, [], GLB_MESH);
+    expect(meshOnly.entryCount).toBe((await readZip(meshOnly.bytes)).length);
+    expect(meshOnly.entryCountWithoutMesh).toBe(1);
+  });
+
+  it('the size refactor did not change a single byte', () => {
+    const b = buildExportBundle('s', SCRIPT, [IMAGE], OBJ_MESH);
+    const expected = buildZip([
+      { name: 's.js', data: enc.encode(SCRIPT) },
+      { name: 'images/tex.png', data: IMAGE.bytes },
+      { name: 'models/rock.obj', data: OBJ_MESH.bytes },
+      { name: 'README.txt', data: enc.encode(buildExportReadme('s', true, OBJ_MESH)) },
+    ]);
+    expect(Array.from(b.bytes)).toEqual(Array.from(expected));
+    expect(Array.from(buildExportBundle('s', SCRIPT, [], null).bytes)).toEqual(Array.from(enc.encode(SCRIPT)));
   });
 });

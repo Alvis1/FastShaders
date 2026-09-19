@@ -21,6 +21,11 @@
  *    360° animation), and a world-axis-aligned box would scale the model by its
  *    ROTATED hull — which is why the teapot rendered ~19% undersized and a
  *    dropped model's centring depended on the spin phase it loaded at.
+ *  - The bake writes back into each attribute's OWN typed array, so a
+ *    KHR_mesh_quantization mesh (Int8/Int16 position/normal/tangent,
+ *    gltfpack's default output alongside meshopt) must be widened to Float32
+ *    first, or unnormalized positions truncate to integers and normalized
+ *    ones wrap.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -150,6 +155,132 @@ const longestAxis = (b: THREE.Box3): number => {
   b.getSize(s);
   return Math.max(s.x, s.y, s.z);
 };
+
+type FitRunner = (root: THREE.Object3D, regen: boolean) => void;
+
+/**
+ * A KHR_mesh_quantization primitive as GLTFLoader hands it over: unnormalized
+ * Int16 positions brought back to size by a 1/1000 node scale, normalized Int8
+ * normals and normalized Int16 tangents. Paired with a Float32 twin holding the
+ * SAME values (read back through three's own denormalizing accessors) and
+ * differing in nothing else: the index and the quantized uv are shared, so any
+ * difference in the output comes from the three attributes the bake writes.
+ */
+function quantizedPair(): { quantized: THREE.Object3D; float: THREE.Object3D } {
+  const src = new THREE.SphereGeometry(1, 12, 8);
+  src.computeTangents();
+  const quantize = (name: string, out: Int8Array | Int16Array | Uint16Array, k: number, normalized: boolean) => {
+    const a = src.getAttribute(name) as THREE.BufferAttribute;
+    for (let i = 0; i < out.length; i++) out[i] = Math.round(a.array[i] * k);
+    return new THREE.BufferAttribute(out, a.itemSize, normalized);
+  };
+  const count = src.attributes.position.count;
+  const uv = quantize('uv', new Uint16Array(count * 2), 65535, true);
+  const q = new THREE.BufferGeometry();
+  q.setIndex(src.index);
+  q.setAttribute('position', quantize('position', new Int16Array(count * 3), 1000, false));
+  q.setAttribute('normal', quantize('normal', new Int8Array(count * 3), 127, true));
+  q.setAttribute('tangent', quantize('tangent', new Int16Array(count * 4), 32767, true));
+  q.setAttribute('uv', uv);
+  const f = new THREE.BufferGeometry();
+  f.setIndex(src.index);
+  for (const name of ['position', 'normal', 'tangent']) {
+    const a = q.getAttribute(name) as THREE.BufferAttribute;
+    const out = new Float32Array(a.count * a.itemSize);
+    for (let i = 0; i < a.count; i++) {
+      for (let c = 0; c < a.itemSize; c++) out[i * a.itemSize + c] = a.getComponent(i, c);
+    }
+    f.setAttribute(name, new THREE.BufferAttribute(out, a.itemSize));
+  }
+  f.setAttribute('uv', uv);
+  const place = (g: THREE.BufferGeometry): THREE.Object3D => {
+    const root = new THREE.Object3D();
+    const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial());
+    mesh.scale.setScalar(1 / 1000);
+    mesh.rotation.set(0.3, 0.7, 0);
+    root.add(mesh);
+    return root;
+  };
+  return { quantized: place(q), float: place(f) };
+}
+
+/** The quantized mesh must bake to exactly what its Float32 twin bakes to, on both paths. */
+function expectQuantizedBakeMatchesFloat(fit: FitRunner): void {
+  for (const regen of [false, true]) {
+    const { quantized, float } = quantizedPair();
+    fit(quantized, regen);
+    fit(float, regen);
+    const q = (quantized.children[0] as THREE.Mesh).geometry;
+    const f = (float.children[0] as THREE.Mesh).geometry;
+    // The regen path rebuilds the mesh from position/normal/uv; it carries no tangent.
+    const names = regen ? ['position', 'normal'] : ['position', 'normal', 'tangent'];
+    for (const name of names) {
+      const qa = q.getAttribute(name);
+      expect(qa.array, `${name} (regen ${regen})`).toBeInstanceOf(Float32Array);
+      expect(qa.normalized, `${name} (regen ${regen})`).toBe(false);
+      expect(Array.from(qa.array), `${name} (regen ${regen})`).toEqual(Array.from(f.getAttribute(name).array));
+    }
+    // Still a sphere, not the -1/0/1 lattice a truncating bake collapses it
+    // onto. (Scale-free on purpose: fit-bounds sizes a ROTATED mesh by its
+    // transformed AABB, which is loose around a sphere, so 1.6 is not the
+    // number here; the Float32 twin's equality above already pins the scale.)
+    const pos = q.getAttribute('position');
+    const radii = Array.from({ length: pos.count }, (_, i) => Math.hypot(pos.getX(i), pos.getY(i), pos.getZ(i)));
+    const mean = radii.reduce((a, b) => a + b, 0) / radii.length;
+    expect(mean).toBeGreaterThan(0.3);
+    for (const r of radii) expect(Math.abs(r - mean)).toBeLessThan(2e-3);
+    if (!regen) {
+      // Nothing in the bake writes uv, so it keeps its quantized form.
+      expect(q.attributes.uv.array).toBeInstanceOf(Uint16Array);
+      expect(q.attributes.uv.normalized).toBe(true);
+    }
+  }
+}
+
+/**
+ * A quantized primitive with NO uv: the preserve path projects UVs and splits
+ * their seam, which rebuilds EVERY attribute through expandAttribute. Only
+ * position/normal/tangent are dequantized, so a quantized COLOR_0 must come out
+ * of the split in its own normalized Uint8 form, each duplicate carrying its
+ * original's colour.
+ */
+function expectQuantizedColourSurvivesSeamSplit(fit: FitRunner): void {
+  // Half a segment off, so a seam really straddles (see the interleaved case).
+  const src = new THREE.SphereGeometry(1, 24, 16).rotateY(Math.PI / 24);
+  const count = src.attributes.position.count;
+  const pos = new Int16Array(count * 3);
+  for (let i = 0; i < pos.length; i++) pos[i] = Math.round(src.attributes.position.array[i] * 1000);
+  const colour = new Uint8Array(count * 3);
+  for (let i = 0; i < count; i++) colour.set([i & 255, (i >> 8) & 255, 200], i * 3);
+  const g = new THREE.BufferGeometry();
+  g.setIndex(src.index);
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(colour, 3, true));
+  const root = new THREE.Object3D();
+  const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial());
+  mesh.scale.setScalar(1 / 1000);
+  root.add(mesh);
+
+  fit(root, false);
+
+  const out = (root.children[0] as THREE.Mesh).geometry;
+  const p = out.attributes.position;
+  const c = out.attributes.color;
+  expect(p.count).toBeGreaterThan(count); // it split
+  expect(seamSpansOffPole(out)).toBe(0);
+  expect(c.array).toBeInstanceOf(Uint8Array);
+  expect(c.normalized).toBe(true);
+  expect(Array.from(c.array.subarray(0, count * 3))).toEqual(Array.from(colour));
+  // A duplicate is a copy of an original: the same point, and a colour found there.
+  const key = (i: number) => [p.getX(i), p.getY(i), p.getZ(i)].join(',');
+  const rgb = (i: number) => [c.getX(i), c.getY(i), c.getZ(i)].join(',');
+  const at = new Map<string, Set<string>>();
+  for (let i = 0; i < count; i++) {
+    if (!at.has(key(i))) at.set(key(i), new Set());
+    at.get(key(i))!.add(rgb(i));
+  }
+  for (let i = count; i < p.count; i++) expect(at.get(key(i))?.has(rgb(i)), `duplicate ${i}`).toBe(true);
+}
 
 describe('fit-bounds normalization', () => {
   it('bakes a huge authored model down into ±size/2 position ATTRIBUTES', () => {
@@ -430,6 +561,10 @@ describe('fit-bounds normalization', () => {
     }
   });
 
+  // Real geometry, so real work: parsing the 1.26 MB teapot OBJ and the 69k-
+  // triangle bunny, then welding and seam-splitting both. ~1-2 s alone, but it
+  // measured 5.6 s twice in the full suite (isolate: false puts it beside the
+  // other heavy engine files), so the default 5 s timeout failed it for load.
   it('repairs the seam on the SHIPPED bunny, and the teapot never has one', () => {
     // The bunny is the one built-in still PROJECTED (a bare `f a b c` OBJ) — the
     // seam defect was first reported on the teapot, whose seam plane ran through
@@ -458,7 +593,7 @@ describe('fit-bounds normalization', () => {
       });
       expect(meshes, `${name} produced no mesh`).toBeGreaterThan(0);
     }
-  });
+  }, 60_000);
 
   it('preserves authored normals on the regen:false path', () => {
     const g = new THREE.BoxGeometry(2, 2, 2);
@@ -579,6 +714,19 @@ describe('fit-bounds normalization', () => {
     expect(longestAxis(attributeBounds(root))).toBeCloseTo(1.6, 5);
   });
 
+  it('dequantizes a KHR_mesh_quantization mesh before baking it', () => {
+    // applyMatrix4 writes back into the attribute's OWN typed array. Without
+    // the widening, unnormalized Int16 positions under a 1/1000 node scale were
+    // truncated to the integers -1/0/1 (the model collapsed onto a lattice) and
+    // normalized ones wrapped (0.5 x 3 came back as -0.5), measured on r184.
+    // gltfpack emits exactly this shape alongside meshopt.
+    expectQuantizedBakeMatchesFloat((root, regen) => runFit(root, { regen }));
+  });
+
+  it('leaves every other quantized attribute quantized, through the seam split too', () => {
+    expectQuantizedColourSurvivesSeamSplit((root, regen) => runFit(root, { regen }));
+  });
+
   it('leaves an empty subtree alone', () => {
     const root = new THREE.Object3D();
     expect(() => runFit(root)).not.toThrow();
@@ -606,7 +754,7 @@ describe('podest fit-bounds twin', () => {
     );
     // Each helper is one `L.push('…');` line; the payloads quote with " so the
     // single-quoted host string needs no unescaping.
-    const wanted = ['function mergeByPosition', 'function rawComponent', 'function expandAttribute', 'function splitUVSeam', 'function splitByAuthored', 'function sphericalUVs', 'function flipWinding', 'AFRAME.registerComponent("fit-bounds"'];
+    const wanted = ['function mergeByPosition', 'function rawComponent', 'function expandAttribute', 'function splitUVSeam', 'function splitByAuthored', 'function sphericalUVs', 'function flipWinding', 'function dequantize', 'AFRAME.registerComponent("fit-bounds"'];
     const parts = wanted.map((needle) => {
       const line = html.split('\n').find((l) => l.includes(`L.push('  ${needle}`));
       expect(line, `podest.html is missing its ${needle} push`).toBeTruthy();
@@ -723,6 +871,24 @@ describe('podest fit-bounds twin', () => {
     expect(podestRoot.scale.x).toBeCloseTo(editorRoot.scale.x, 6);
     expect(podestRoot.scale.x).toBeCloseTo(1.6 / 20, 5);
     expect(longestAxis(attributeBounds(podestRoot))).toBeCloseTo(20, 5);
+  });
+
+  it('dequantizes a KHR_mesh_quantization mesh exactly like the editor preview does', () => {
+    expectQuantizedBakeMatchesFloat(runPodestFit);
+    // And to the same numbers as the editor copy, not merely "also Float32".
+    const editor = quantizedPair().quantized;
+    const podest = quantizedPair().quantized;
+    runFit(editor, { regen: false });
+    runPodestFit(podest, false);
+    const e = (editor.children[0] as THREE.Mesh).geometry;
+    const p = (podest.children[0] as THREE.Mesh).geometry;
+    for (const name of ['position', 'normal', 'tangent']) {
+      expect(Array.from(p.getAttribute(name).array), name).toEqual(Array.from(e.getAttribute(name).array));
+    }
+  });
+
+  it('leaves other quantized attributes quantized exactly like the editor preview does', () => {
+    expectQuantizedColourSurvivesSeamSplit(runPodestFit);
   });
 
   it('is likewise immune to an ancestor rotation', () => {

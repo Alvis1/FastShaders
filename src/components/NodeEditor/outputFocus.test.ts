@@ -13,6 +13,10 @@ import {
   focusTargets,
   outputFocusTarget,
   OUTPUT_FOCUS_FIT,
+  VIEW_GLIDE_MS,
+  ZOOM_STEP,
+  glideFitAll,
+  zoomStepTarget,
 } from './outputFocus';
 
 /**
@@ -142,7 +146,9 @@ describe('the F key (source pins)', () => {
     // selection differently from how the Output tile / cost pill frame the
     // Output — same node, two framings.
     expect(nodeEditor).toMatch(/key === 'f' && !e\.shiftKey[\s\S]{0,600}focusNodes\(fitView, nodesNow, selected\)/);
-    expect(nodeEditor).toMatch(/if \(!focusNodes\(fitView, nodesNow, selected\)\) \{\s*void fitView\(\{ \.\.\.FIT_VIEW_OPTIONS, duration: OUTPUT_FOCUS_FIT\.duration \}\)/);
+    // …and with nothing selected it takes the SAME whole-graph glide as the
+    // canvas bar's fit button, so F on an empty selection and ⤢ cannot differ.
+    expect(nodeEditor).toContain('if (!focusNodes(fitView, nodesNow, selected)) glideFitAll(fitView);');
   });
 
   it('never fires while typing or with a modifier held (Cmd/Ctrl+F is the browser\'s find)', () => {
@@ -343,5 +349,80 @@ describe('the code panel does not correct what you type', () => {
     const src = readFileSync(path.join(__dirname, '../CodeEditor/CodeEditor.tsx'), 'utf8');
     expect(src).toContain("acceptSuggestionOnEnter: 'off' as const,");
     expect(src).toContain('acceptSuggestionOnCommitCharacter: false,');
+  });
+});
+
+/**
+ * One glide for every control that moves the view (owner, 2026-09-16: "keep
+ * zooming style consistent"). The canvas bar's −/+/fit buttons used to SNAP —
+ * React Flow's zoomIn/zoomOut/fitView take no duration by default — while the
+ * cost pill and F glided, so the same kind of move looked like two different
+ * controls.
+ */
+describe('view glides — the canvas bar and F move the view like the cost pill', () => {
+  const nodeEditor = read('./NodeEditor.tsx');
+
+  it('every glide shares one duration', () => {
+    expect(OUTPUT_FOCUS_FIT.duration).toBe(VIEW_GLIDE_MS);
+    expect(VIEW_GLIDE_MS).toBeGreaterThan(0);
+  });
+
+  it('fits the whole graph animated, under the shared zoom ceiling, with no node list', () => {
+    const calls: FitViewOptions[] = [];
+    glideFitAll((o) => { calls.push(o ?? {}); });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].duration).toBe(VIEW_GLIDE_MS);
+    expect(calls[0].maxZoom).toBe(OUTPUT_FOCUS_FIT.maxZoom);
+    expect(calls[0].nodes).toBeUndefined();
+  });
+
+  describe('zoomStepTarget', () => {
+    const MIN = 0.1;
+    const MAX = 3;
+
+    it('steps by React Flow\'s own factor from the live zoom when nothing is gliding', () => {
+      expect(zoomStepTarget(1, null, 0, 1, MIN, MAX)).toBeCloseTo(ZOOM_STEP, 10);
+      expect(zoomStepTarget(1, null, 0, -1, MIN, MAX)).toBeCloseTo(1 / ZOOM_STEP, 10);
+    });
+
+    it('steps from the TARGET of a glide in flight, so quick presses accumulate exactly', () => {
+      // First press: 1 → 1.2. Second press 100ms later, while the live zoom is
+      // still ~1.05 on its way there — it must land on 1.44, not 1.26.
+      const first = zoomStepTarget(1, null, 0, 1, MIN, MAX);
+      const glide = { target: first, until: VIEW_GLIDE_MS };
+      expect(zoomStepTarget(1.05, glide, 100, 1, MIN, MAX)).toBeCloseTo(ZOOM_STEP * ZOOM_STEP, 10);
+      // …and a press the other way mid-glide returns exactly to the start.
+      expect(zoomStepTarget(1.05, glide, 100, -1, MIN, MAX)).toBeCloseTo(1, 10);
+    });
+
+    it('ignores a glide that has already ended', () => {
+      const stale = { target: 2, until: 500 };
+      expect(zoomStepTarget(1, stale, 500, 1, MIN, MAX)).toBeCloseTo(ZOOM_STEP, 10);
+    });
+
+    it('clamps to the viewport limits', () => {
+      expect(zoomStepTarget(2.9, null, 0, 1, MIN, MAX)).toBe(MAX);
+      expect(zoomStepTarget(0.11, null, 0, -1, MIN, MAX)).toBe(MIN);
+    });
+  });
+
+  it('the canvas bar routes all three buttons through the shared glide', () => {
+    expect(nodeEditor).toContain('onClick={() => glideZoom(-1)}');
+    expect(nodeEditor).toContain('onClick={() => glideZoom(1)}');
+    expect(nodeEditor).toContain('onClick={() => glideFitAll(fitView)}');
+    // React Flow's snapping defaults must not come back beside them.
+    expect(nodeEditor).not.toMatch(/\bzoomIn\(\)|\bzoomOut\(\)|onClick=\{\(\) => fitView\(\)\}/);
+    const glide = nodeEditor.slice(nodeEditor.indexOf('const glideZoom = useCallback'));
+    expect(glide).toMatch(/zoomTo\(target, \{ duration: VIEW_GLIDE_MS \}\)/);
+  });
+
+  it('abandons a pending zoom target whenever the user drives the view', () => {
+    // React Flow's own wheel/drag report a non-null event to onMoveStart; the
+    // three custom paths call setViewport by hand and must clear it themselves.
+    expect(nodeEditor).toMatch(/onMoveStartBusy = useCallback\(\(event[^)]*\) => \{\s*if \(event\) zoomGlideRef\.current = null;/);
+    const direct = nodeEditor.split('setViewport({').length - 1;
+    const cleared = nodeEditor.match(/zoomGlideRef\.current = null;[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*(?:const vp = getViewport\(\);\s*)?setViewport\(\{/g) ?? [];
+    expect(direct).toBe(3);
+    expect(cleared).toHaveLength(direct);
   });
 });

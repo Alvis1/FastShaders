@@ -203,28 +203,29 @@
   --space-6: 24px;
   --space-8: 32px;
 
-  /* Panel seams and the resize grips that grow out of them. ONE value so a
-     grip's outline and the edge it attaches to always read as a single
-     continuous line — that shared color is what makes the tab look integrated
-     rather than parked on top. Aliased (not copied) so the dark-theme
-     redefinition of --border-strong below flows through automatically. */
+  /* Panel seams. ONE value so every divider — and the hover lens that opens
+     out of it (`.fs-seam-lens`, controls.css) — reads as a single continuous
+     line. Aliased (not copied) so the dark-theme redefinition of
+     --border-strong below flows through automatically. */
   --edge-color: var(--border-strong);
 
   /* Seam thickness — EVERY window divider in the app: both splitter bars
-     (SplitPane.css) and the asset bar's top edge (ContentBrowser.css), plus the
-     column grip, which centres itself on the row seam it tracks (.fs-grip--v in
-     controls.css). Those live in different subtrees, so a token is the only way
-     they can agree on the number.
-     The grips' OUTLINE must equal this at the desktop value — that is what
-     makes a tab and its seam read as one continuous line — but is published
-     separately as --fs-grip-border by each host, because it deliberately does
-     NOT follow the coarse-pointer bump below. */
+     (SplitPane.css) and the asset bar's top edge (ContentBrowser.css). Those
+     live in different subtrees, so a token is the only way they can agree on
+     the number. The lens's split strokes are drawn at this width too, so the
+     opened line is the same weight as the closed one. */
   --fs-seam: 2px;
+
+  /* The seam's HIT ZONE (the `.fs-seam::before` pseudo-element in
+     controls.css): the whole line drags, and a 2px line is not a target, so
+     the press area is this wide, centred on the seam — 4px into the pane on
+     either side. Bumped for coarse pointers below, where it is the only
+     touch target a seam has. */
+  --fs-seam-hit: 10px;
 
   /* ===== CHROME CONTROLS =====
      One size for every small square control OUTSIDE the graph: canvas-bar
-     buttons, preview buttons, and the shared .fs-grip resize handle
-     (styles/controls.css). It is ALSO the app-wide BUTTON HEIGHT: every
+     buttons and preview buttons. It is ALSO the app-wide BUTTON HEIGHT: every
      standalone chrome button (toolbar chips, EXPORT, modal footers, the code
      panel's Apply/Import, preview text buttons) is exactly --ctl-size tall —
      inline-flex + centred content, padding only horizontal. Compact in-row
@@ -360,10 +361,10 @@
     --handle-size: 12px;
 
     /* Thicker seams so a panel boundary stays visible on a touch screen — 3x
-       the desktop line, the same ratio as before it was halved. The grips are
-       already --ctl-size targets, so they need no matching bump; the column
-       grip's centring nudge tracks this automatically, keeping its (unbumped)
-       outline centred inside the wider seam. */
+       the desktop line, the same ratio as before it was halved. The hit zone
+       grows with it to a finger-sized band (a --ctl-size target, as the old
+       grip tabs were): the seam is the only thing there is to grab. */
     --fs-seam: 6px;
+    --fs-seam-hit: 28px;
   }
 }

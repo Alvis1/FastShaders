@@ -1,5 +1,6 @@
 /* LimitModal reuses the CsvImportModal panel/button styles; only the
-   suggestion list and the ignore-limits checkbox row are its own. */
+   suggestion list, the ignore-limits checkbox row and the desktop-app note
+   (DesktopAppNote, also mounted by the N1 export dialog) are its own. */
 
 .limit-modal__suggestions {
   margin: 0;
@@ -26,4 +27,23 @@
 .limit-modal__ignore input {
   margin: 2px 0 0;
   flex: none;
+}
+
+/* The web build's pointer to the desktop app (DesktopAppNote.tsx). */
+.limit-modal__desktop {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.limit-modal__desktop-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.limit-modal__desktop-links a {
+  color: var(--border-focus);
 }

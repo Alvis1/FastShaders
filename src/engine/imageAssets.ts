@@ -2,6 +2,9 @@ import { getNodeValues } from '@/types';
 import type { AppNode } from '@/types';
 import { decodeImageNode } from '@/utils/imageNode';
 import { bytesToBase64 } from '@/utils/binaryCodec';
+import { fnv1a32Hex } from '@/utils/payloadDigest';
+import { createDigestMemo } from '@/utils/digestMemo';
+import { PLATFORM_CAPS } from '@/utils/platformCaps';
 // ONE byte formatter, shared with the feedback report. This file carried its
 // own copy with coarser KB rounding (`2 KB` where the other says `2.0 KB`), so
 // the same payload was described two different ways depending on which surface
@@ -10,6 +13,7 @@ import { bytesToBase64 } from '@/utils/binaryCodec';
 // noticed as a bug. Its output must stay ASCII: it lands in the line comment
 // beside every emitted image `.src`, which ships inside exported `.js` files.
 import { formatBytes } from '@/utils/feedbackReport';
+import { FS_PLACEHOLDER_RE } from './glbShaderContract';
 
 /**
  * Image payloads are emitted into generated code as a short placeholder rather
@@ -38,8 +42,22 @@ export const IMAGE_ASSET_PREFIX = 'fs-asset:';
  * can never run past the closing quote; an unrecognized key simply isn't in the
  * asset map and is left verbatim (the image then fails `decode()` and hits the
  * existing 1x1 black fallback).
+ *
+ * The LITERAL lives in engine/glbShaderContract.ts (FS_PLACEHOLDER_RE), the
+ * zero-import leaf the single-GLB reader (utils/glbShaderExtras.ts) and
+ * writer share: that reader may not import this module, which reaches the
+ * store. This is the SAME object, not a copy.
  */
-const PLACEHOLDER_RE = /"fs-asset:([^"]+)"/g;
+const PLACEHOLDER_RE = FS_PLACEHOLDER_RE;
+/**
+ * The ONE exported copy of that regex, shared by the sandboxed preview's
+ * asset feed (engine/previewAssetFeed.ts, GLB Phase 6 S3) and the single-GLB
+ * export's asset table (Phase 7) — whichever needs "which keys does this
+ * module reference" iterates it, never a second literal. It is a /g regex:
+ * iterate it with `matchAll` (which clones it) rather than `test`/`exec`,
+ * whose `lastIndex` would carry over between callers.
+ */
+export const IMAGE_PLACEHOLDER_RE = PLACEHOLDER_RE;
 
 export interface ImageAsset {
   /** Map key — `<sanitized node id>-<payload hash>`. */
@@ -58,15 +76,14 @@ export interface ImageAsset {
  * (the debounced preview rebuild, the srcDoc memo) key their invalidation on
  * the code string, and without it swapping in a different image of identical
  * dimensions would leave `code` untouched and the preview stale. It also keys
- * the decode memo below, so the same digest decides both identities.
+ * the decode memo below, so the same digest decides both identities. The
+ * round is `fnv1a32Hex` (utils/payloadDigest.ts), the one FNV-1a copy, moved
+ * there verbatim so these placeholders are byte-identical. It is asked through
+ * `payloadDigests` (below), which only remembers what that round returned, so
+ * the placeholder a memo hit produces is the one a fresh hash would.
  */
 function hashPayload(s: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, '0');
+  return payloadDigests.get(s);
 }
 
 /** Node ids reach us from imported project JSON — reduce to a literal-safe class. */
@@ -108,9 +125,41 @@ function safeFileName(v: unknown): string {
  * Eviction is bounded by CHARACTERS as well as entries: a count says nothing
  * about how much is retained, and one payload at the hard ceiling outweighs
  * twenty ordinary ones.
+ *
+ * Both bounds are platform-sized (utils/platformCaps.ts): web 24 entries / 4M
+ * chars; the desktop room 128 / 40M, which holds a whole desktop project (32M)
+ * plus one image in flight — at the web bound a desktop graph would evict what
+ * the next graph→code pass reuses and re-decode every image on every pass.
  */
-const IMAGE_SRC_CACHE_LIMIT = 24;
-const IMAGE_SRC_CACHE_MAX_CHARS = 4_000_000;
+const IMAGE_SRC_CACHE_LIMIT = PLATFORM_CAPS.imageDecodeCacheEntries;
+const IMAGE_SRC_CACHE_MAX_CHARS = PLATFORM_CAPS.imageDecodeCacheChars;
+
+/** Test hooks, no production callers (the cancelPendingGraphSave precedent). */
+let counters = { digests: 0, decodes: 0 };
+
+/**
+ * The digest in front of the decode memo (utils/digestMemo.ts). Without it every
+ * lookup re-ran the FNV round over the whole payload: once per Image node per
+ * graph→code pass, ~7.6 ms at a 6M-char payload (measured in node), even when no
+ * image had changed. It is keyed by the stored payload itself, so it keeps
+ * payload strings alive, but those are the strings the store already shares
+ * between nodes and history entries (Phase 2). After a NEW or an import, old
+ * ones stay pinned until evicted, as the decode memo's `src` values do.
+ *
+ * Twice the decode memo's bounds, so for ordinary payloads this is not the
+ * tighter of the two: every decode lookup is preceded by a digest lookup of the
+ * same string, so the recency orders match, and a pass whose payloads fit the
+ * decode memo also fits here. (A payload that fails to decode is the exception:
+ * its null entry costs the decode memo nothing, while its key still counts here.)
+ */
+const payloadDigests = createDigestMemo(
+  (s) => {
+    counters.digests++;
+    return fnv1a32Hex(s);
+  },
+  IMAGE_SRC_CACHE_LIMIT * 2,
+  IMAGE_SRC_CACHE_MAX_CHARS * 2,
+);
 interface DecodedPayload {
   src: string;
   bytes: number;
@@ -149,6 +198,23 @@ function memoPayload(key: string, compute: () => DecodedPayload | null): Decoded
   return val;
 }
 
+/** Test hook: how many FNV rounds and decodes ran since the last reset. */
+export function imageAssetCounters(): { digests: number; decodes: number } {
+  return { ...counters };
+}
+
+/**
+ * Test hook: zero the counters and empty BOTH memos, so a count starts cold.
+ * With `isolate: false` another file in the worker may already have decoded the
+ * same payload, which would otherwise read as a decode that never ran.
+ */
+export function resetImageAssetCounters(): void {
+  counters = { digests: 0, decodes: 0 };
+  payloadDigests.clear();
+  imageSrcCache.clear();
+  imageSrcCacheChars = 0;
+}
+
 /**
  * Resolve one Image node's payload into its placeholder + real `data:` URL.
  * Returns null when the stored payload fails strict validation — callers then
@@ -161,11 +227,14 @@ export function imageAssetFor(
   const raw = String(values.imageB64 ?? '');
   // Hashed outside the memo because the digest IS the cache key. No extra pass:
   // a raw-string key had to be flattened, hashed and compared in full on every
-  // lookup anyway — this replaces that with one hash and a short key.
+  // lookup anyway — this replaces that with one hash and a short key. The hash
+  // itself is memoized too (`payloadDigests`), so a pass that changed no
+  // payload runs no FNV round at all.
   const payloadHash = hashPayload(raw);
   const decoded = memoPayload(
     `${Number(values.width)}x${Number(values.height)}|${raw.length}|${payloadHash}`,
     () => {
+      counters.decodes++;
       const d = decodeImageNode(values);
       if (!d) return null;
       return {
@@ -191,6 +260,13 @@ export function imageAssetFor(
  * Every Image payload in the graph, keyed by placeholder key. Pure over the
  * nodes, so any consumer can rebuild it on demand — there is no separate copy
  * to keep in sync with the store.
+ *
+ * graphToCode emits only the OWNER's placeholder of each share group
+ * (engine/imageTexturePlan.ts: nodes holding the same payload share one Image
+ * element, and one texture when their texture settings match too). This map
+ * still carries every node's entry, so the owner's key is
+ * always present. Do not filter it down to the emitted keys here: de-duplicated
+ * hashing is the payload table's job.
  */
 export function collectImageAssets(nodes: AppNode[]): Map<string, string> {
   const out = new Map<string, string>();

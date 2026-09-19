@@ -166,8 +166,21 @@ export interface OutputMaterial {
   /** LEGACY single target, still READ (never written) so a graph or a saved
    *  group from before the list existed keeps what it shaded. */
   meshTarget?: { name: string };
+  /** IMPORT-BUILT INDEX SECTION: the glTF MATERIAL INDEX this added section
+   *  shades — emitted as `materialParts["<i>"]`, not as `parts`. Exclusive with
+   *  `meshTargets`/`meshTarget` (`materialTargetNames` returns [] for it, and
+   *  the sanitizer strips targets off it); never on material 0 (the default
+   *  stays untargeted); valid only below the node's
+   *  `modelSignature.materials.length`. Read through `isIndexSection`
+   *  (utils/outputMaterials.ts), never directly. */
+  gltfMaterialIndex?: number;
   exposedPorts?: string[];
   values?: Record<string, string | number>;
+  /** Only transparent / side / alphaTest / depthWrite are emitted — into each
+   *  of this material's `parts` entries (engine/materialSettingsCode.ts).
+   *  displacementMode / mergeVertices on an ADDED material are inert: its
+   *  part follows the default's displacement mode, and welding is
+   *  module-level. */
   materialSettings?: MaterialSettings;
 }
 
@@ -209,6 +222,26 @@ export interface OutputNodeData {
    * persisted field: validated on every restore path and again at emission.
    */
   materials?: OutputMaterial[];
+  /**
+   * The glTF `materials[].name` list (in order, '' for an unnamed material) of
+   * the model the INDEX sections were built for, read by the trusted-side glTF
+   * reader at import. Present only while at least one index section exists;
+   * emitted beside `materialParts` as the module's `modelSignature`, which
+   * loader 0.8 compares with the loaded model EXACTLY before it applies the
+   * index table. Validated by `sanitizeModelSignature`
+   * (engine/materialPartsContract.ts) on every restore path.
+   */
+  modelSignature?: { materials: string[] };
+  /**
+   * The loaded model's GLTFLoader-named scene meshes → their glTF material
+   * index: the source of the loader-0.6 MIRROR `parts` entries, which
+   * buildShaderModule writes into the MODULE only (never into editor TSL —
+   * rule R7). Only CERTAIN, usable, single-material names ride here
+   * (`mirrorNamesByMaterial`). Valid only beside a valid `modelSignature`, at
+   * most `MAX_MODEL_MESHES` entries; carried across a code-panel Apply by
+   * useSyncEngine's mergeMatch while the parsed signature equals the old one.
+   */
+  modelMeshes?: { name: string; material: number }[];
   /**
    * LEGACY: the mesh a whole Output node targeted, back when each targeted mesh
    * had its own Output node. Never written any more — `foldExtraOutputs` folds

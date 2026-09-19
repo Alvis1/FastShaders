@@ -1,5 +1,5 @@
 import './monacoSetup';
-import { findDefaultOutput } from '@/utils/outputMaterials';
+import { findDefaultOutput, isIndexSection, materialPartsMirrorPlan, mirrorPlanKey, outputMaterials, readModelSignature } from '@/utils/outputMaterials';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { useAppStore } from '@/store/useAppStore';
@@ -13,12 +13,23 @@ import { buildThreeEmbedHTML } from '@/engine/tslToThreeHTML';
 import { MARCH_WINDOW_GEOMETRY } from '@/engine/tslToPreviewHTML';
 import { marchWindowRadius } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
-import { importShaderText, importShaderZip, isZipFile } from '@/engine/projectImport';
+import { importShaderText, importShaderZip, isZipFile, reportZipImportError } from '@/engine/projectImport';
+import { detectMeshKind } from '@/utils/previewMesh';
+import { requestPreviewModelLoad } from '@/utils/previewModelDrop';
 import { evalLog } from '@/eval/telemetry';
+import { isEvalMode } from '@/eval/evalMode';
+import { effectiveExportFormat } from '@/utils/glbExportAvailability';
+import { GLB_EXPORT_KEYS } from '@/utils/glbExportCopy';
+import { fillTemplate } from '@/utils/fillTemplate';
 import { parseCostFile, parseCostProfileBundle } from '@/utils/costOverride';
 import { getNodeValues } from '@/types';
 import type { OutputNodeData } from '@/types';
 import './CodeEditor.css';
+
+/** The tab label's note for a graph with import-built index sections: the
+ *  page shows a primitive, where those sections cannot apply. */
+const INDEX_SECTIONS_TAB_NOTE =
+  "This shader's material sections are built for a glTF model; this page shows a primitive, so they do not apply here.";
 
 type CodeTab = 'tsl' | 'script' | 'three';
 
@@ -213,9 +224,29 @@ export function CodeEditor() {
   // and re-runs this memo. Dimensions and file name ride the same emitted line;
   // an undecodable payload emits no placeholder at all. Everything the module
   // reads that the generated code does NOT carry —
-  // materialSettings (graphToCode never emits it) and the declared property list
+  // materialSettings (graphToCode never emits the DEFAULT material's settings;
+  // an added material's four keys ride inside `parts` in the code itself) and
+  // the declared property list
   // (a duplicate-name rename changes the header with identical TSL) — is a real
   // dep below.
+  // The Output's loader-0.6 MIRROR plan (module-only, R7): the index
+  // sections' GLTFLoader mesh names ride node data, not the code, so the tab
+  // needs them as a real dep. Two-step, like every per-notify read here: a
+  // cheap string key, then the plan rebuilt from getState() when it moves.
+  const mirrorKey = useAppStore((s) => mirrorPlanKey(materialPartsMirrorPlan(findDefaultOutput(s.nodes))));
+  // Import-built INDEX sections target a glTF model's materials, while both
+  // tabs hang the shader on a PRIMITIVE (the model page is Phase 7): the tab
+  // label says so, since the page itself carries no comments. A boolean
+  // selector, so an ordinary edit re-renders nothing.
+  const hasIndexSections = useAppStore((s) => {
+    const out = findDefaultOutput(s.nodes);
+    return !!out && readModelSignature(out.data) !== null && outputMaterials(out).some(isIndexSection);
+  });
+  const materialPartsMirror = useMemo(
+    () => materialPartsMirrorPlan(findDefaultOutput(useAppStore.getState().nodes)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mirrorKey],
+  );
   const scriptCode = useMemo(() => {
     if (activeTab !== 'script' && activeTab !== 'three') return '';
     try {
@@ -223,6 +254,7 @@ export function CodeEditor() {
         inlineImageAssetsFromNodes(settledCode, useAppStore.getState().nodes),
         materialSettings,
         properties,
+        materialPartsMirror,
       );
     } catch (e) {
       return `// Export error: ${e instanceof Error ? e.message : String(e)}`;
@@ -230,7 +262,7 @@ export function CodeEditor() {
     // settledCode, not `code`: this tab is a read-only snapshot, so it can wait
     // out a scrub (CODE_SETTLE_MS) instead of rebuilding the whole module per
     // pointermove.
-  }, [settledCode, activeTab, materialSettings, properties]);
+  }, [settledCode, activeTab, materialSettings, properties, materialPartsMirror]);
 
   // ── The A-Frame tab: a copy-ready index.html, and nothing else ──────────
   //
@@ -240,12 +272,19 @@ export function CodeEditor() {
   const [embedStamp, setEmbedStamp] = useState(0);
 
   const jsFileName = useMemo(() => `${shaderBaseName(shaderName)}.js`, [shaderName]);
+  const glbFileName = useMemo(() => `${shaderBaseName(shaderName)}.glb`, [shaderName]);
+  // Which file EXPORT would write right now (a string selector, so it is
+  // stable): in `.glb` mode the A-Frame page hangs the shader on the MODEL.
+  const exportFormat = useAppStore((s) =>
+    effectiveExportFormat(s.exportAsGlb, s.previewMesh, isEvalMode()),
+  );
 
   const embedHtml = useMemo(() => {
     if (activeTab !== 'script') return '';
     try {
       return buildAFrameEmbedHTML(scriptCode, {
         shaderFile: jsFileName,
+        ...(exportFormat === 'glb' ? { modelFile: glbFileName } : {}),
         title: shaderName,
         // The march window sphere replaces the Model dropdown's primitive while
         // a Raymarch Output drives — the same rule the preview applies.
@@ -257,7 +296,7 @@ export function CodeEditor() {
     }
     // embedStamp is the deliberate re-read trigger; it feeds nothing else.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scriptCode, jsFileName, shaderName, activeTab, embedStamp, marchWindow]);
+  }, [scriptCode, jsFileName, glbFileName, exportFormat, shaderName, activeTab, embedStamp, marchWindow]);
 
   // The Three.js drop-in page. Same inputs and the same snapshot rule as the
   // A-Frame page above — it is the same shader on the same primitive, differing
@@ -301,6 +340,14 @@ export function CodeEditor() {
   // Project/script import logic is shared with the canvas drop —
   // see src/engine/projectImport.ts. This wrapper only adds the tab switch.
   const importScriptFile = useCallback((file: File) => {
+    // A 3D model is not a script: hand it to the 3D preview's own model path
+    // (utils/previewModelDrop.ts), exactly as the canvas does, so every surface
+    // validates and announces a model the same way. Before anything else here,
+    // since the plain-text fallback below would read a .glb as a shader.
+    if (detectMeshKind(file.name) !== null) {
+      requestPreviewModelLoad(file);
+      return;
+    }
     // A benchmark complexity patch / suggestion .json reprices node costs (adds
     // a measured device profile) — it is NOT a shader script, so handle it
     // before the script/zip import path. Adversarial: parseCostFile validates.
@@ -348,15 +395,23 @@ export function CodeEditor() {
       importShaderZip(file)
         .then((result) => {
           if (result === null) {
-            window.alert(`"${file.name}" doesn't contain a shader script (.js / .mjs / .tsl).`);
+            window.alert(
+              t('{name} does not contain a shader script (.js / .mjs / .tsl).', language)
+                .replace('{name}', () => `“${file.name}”`),
+            );
             return;
           }
           setActiveTab('tsl');
         })
-        .catch(() => {
+        .catch((e) => {
+          // A zip the reader refused says why (shared mapping, all surfaces).
+          if (reportZipImportError(e, file.name)) return;
           // Imported files are adversarial input — a crash inside the import
           // must surface, not silently no-op the Load.
-          window.alert(`Could not import "${file.name}" — the file appears corrupted.`);
+          window.alert(
+            t('Could not import {name} — the file appears corrupted.', language)
+              .replace('{name}', () => `“${file.name}”`),
+          );
         });
       return;
     }
@@ -366,7 +421,10 @@ export function CodeEditor() {
         importShaderText(String(reader.result ?? ''));
         setActiveTab('tsl');
       } catch {
-        window.alert(`Could not import "${file.name}" — the file appears corrupted.`);
+        window.alert(
+          t('Could not import {name} — the file appears corrupted.', language)
+            .replace('{name}', () => `“${file.name}”`),
+        );
       }
     };
     reader.readAsText(file);
@@ -410,12 +468,16 @@ export function CodeEditor() {
     setIsDraggingFile(false);
     const file = e.dataTransfer.files[0];
     if (!file) return;
-    if (!/\.(js|mjs|tsl|zip|json)$/i.test(file.name)) {
-      window.alert(`"${file.name}" is not a shader script (.js / .mjs / .tsl), a FastShaders .zip, or a benchmark complexity .json.`);
+    // A 3D model is accepted too: importScriptFile hands it to the 3D preview.
+    if (detectMeshKind(file.name) === null && !/\.(js|mjs|tsl|zip|json)$/i.test(file.name)) {
+      window.alert(
+        t('{name} is not a shader script (.js / .mjs / .tsl), a FastShaders .zip, a 3D model (.obj / .glb / .gltf), or a benchmark complexity .json.', language)
+          .replace('{name}', () => `“${file.name}”`),
+      );
       return;
     }
     importScriptFile(file);
-  }, [importScriptFile]);
+  }, [importScriptFile, language]);
 
   return (
     <div
@@ -501,18 +563,40 @@ export function CodeEditor() {
           {!isTSL && (
             <>
               {/* The tab holds ONE file. This label is the ONLY place the two
-                  install facts are stated — put `jsFileName` beside it, and
-                  serve the folder — because the page itself carries no
-                  comments and the loader `fetch`es the module, which a
-                  double-clicked file:// page silently fails (a plain white
-                  default-material primitive, one console line, nothing on
-                  screen). Keep them here if the page stays comment-free. */}
+                  install facts are stated — put the file beside it, and serve
+                  the folder — because the page itself carries no comments and
+                  the loader `fetch`es the module, which a double-clicked
+                  file:// page silently fails (a plain white default-material
+                  primitive, one console line, nothing on screen). Keep them
+                  here if the page stays comment-free. In `.glb` mode the
+                  A-Frame page loads the MODEL instead (and needs loader 0.8,
+                  which it loads itself), while the Three.js page stays on the
+                  `.js` export — so each names its own file. */}
               <span
                 className="code-editor__filename"
-                title={(activeTab === 'three'
-                  ? t('A ready-to-run Three.js page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.', language)
-                  : t('A ready-to-run VR page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.', language)
-                ).replace('{file}', jsFileName)}
+                title={
+                  (activeTab === 'three'
+                    ? fillTemplate(
+                        t(
+                          exportFormat === 'glb'
+                            ? GLB_EXPORT_KEYS.tabThreeGlb
+                            : 'A ready-to-run Three.js page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.',
+                          language,
+                        ),
+                        { file: jsFileName },
+                      )
+                    : exportFormat === 'glb'
+                      ? fillTemplate(t(GLB_EXPORT_KEYS.tabAFrameGlb, language), { file: glbFileName })
+                      : fillTemplate(
+                          t('A ready-to-run VR page. Put {file} next to it and serve the folder over http(s) — file:// blocks the shader load.', language),
+                          { file: jsFileName },
+                        )) +
+                  // Only for a page that really shows a PRIMITIVE: in .glb mode the
+                  // A-Frame page loads the MODEL, so the index sections do apply.
+                  (hasIndexSections && (activeTab === 'three' || exportFormat !== 'glb')
+                    ? ' ' + t(INDEX_SECTIONS_TAB_NOTE, language)
+                    : '')
+                }
               >
                 index.html
               </span>

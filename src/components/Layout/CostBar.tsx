@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type C
 import { createPortal } from 'react-dom';
 import { useAppStore, VR_HEADSETS, resolveDeviceBudget } from '@/store/useAppStore';
 import { t } from '@/i18n';
+import { fillTemplate } from '@/utils/fillTemplate';
 import {
   parseCostFile, parseCostProfileBundle, buildMergedComplexity, mergedComplexityFileName,
   buildProfileFile, buildProfileBundle, profileFileName, profileBundleFileName, editedCostCount,
@@ -411,9 +412,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput }: CostBarProps) {
       downloadJson(buildProfileBundle(costProfiles), name);
       showNotice(costProfiles.length === 1
         ? t('Saved one profile to {file}.', language).replace('{file}', name)
-        : t('Saved {n} profiles to {file}.', language)
-          .replace('{n}', String(costProfiles.length))
-          .replace('{file}', name));
+        : fillTemplate(t('Saved {n} profiles to {file}.', language), { n: costProfiles.length, file: name }));
     },
     [activeProfile, costProfiles, downloadProfile, language, showNotice],
   );
@@ -636,7 +635,9 @@ export const CostBar = memo(function CostBar({ onFocusOutput }: CostBarProps) {
             </>
           );
           const cls = `cost-bar__value ${over ? 'cost-bar__value--over' : ''}`;
-          const explain = `${t('Estimated GPU cost: {total} of {max} points for {headset}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.', language).replace('{total}', String(totalCost)).replace('{max}', String(maxBudget)).replace('{headset}', deviceLabel)}${over ? t(' You are over budget.', language) : ''}${capOverridden ? `\n${t('Custom cap — {device} measures {n}. Right-click to change or reset it.', language).replace('{device}', deviceLabel).replace('{n}', String(deviceMaxPoints))}` : `\n${t('Right-click to set the point cap.', language)}`}`;
+          // deviceLabel can be an imported profile's label, so every sentence
+          // it goes into is filled in ONE pass (utils/fillTemplate.ts).
+          const explain = `${fillTemplate(t('Estimated GPU cost: {total} of {max} points for {headset}. A point is a rough measure of per-pixel shader work — staying under the budget keeps the frame rate smooth in VR.', language), { total: totalCost, max: maxBudget, headset: deviceLabel })}${over ? t(' You are over budget.', language) : ''}${capOverridden ? `\n${fillTemplate(t('Custom cap — {device} measures {n}. Right-click to change or reset it.', language), { device: deviceLabel, n: deviceMaxPoints })}` : `\n${t('Right-click to set the point cap.', language)}`}`;
           return onFocusOutput ? (
             <button
               type="button"
@@ -762,7 +763,7 @@ export const CostBar = memo(function CostBar({ onFocusOutput }: CostBarProps) {
             onClick={resetCap}
             disabled={!capOverridden}
           >
-            {t('Use {device} budget ({n})', language).replace('{device}', deviceLabel).replace('{n}', String(deviceMaxPoints))}
+            {fillTemplate(t('Use {device} budget ({n})', language), { device: deviceLabel, n: deviceMaxPoints })}
           </button>
         </div>,
         capHost,

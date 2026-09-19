@@ -21,6 +21,12 @@ import { SOUND_W, SOUND_HEADER_H, SOUND_BODY_H } from '@/components/NodeEditor/n
 const HEADER_H = 20; // header bar (title) — sits above the body in both layouts
 const ROW_H = 16; // one input/output row in the rows layout (min-height 14 + pad)
 const GLYPH_H = 34; // glyph block above the rows in a rows-layout node
+// Image node (mirrors ShaderNode.css — a drift pair with no browser to pin it,
+// so kept conservative; it only feeds unmeasured nodes):
+const IMAGE_THUMB_H = 126; // .shader-node__image-thumb max-height 120 + 4/2 margins
+const IMAGE_EMPTY_H = 54; // .shader-node__image-empty 48 + 4/2 margins
+const IMAGE_THUMB_W = 192; // .shader-node__image-thumb max-width 180 + 6/6 margins
+const FILE_NAME_H = 12; // .shader-node__file-name, one line
 const LIST_PITCH = 19.2; // list-mode operand row pitch (matches ShaderNode)
 const CHAR_W = 6.4; // approx px per header character at the 9px title font
 const MIN_W = 72; // floor for an auto-width node
@@ -149,6 +155,23 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
     }
   }
 
+  // The Image node: the raw def's six opt-in params never draw unless EXPOSED
+  // (effectiveNodeDef), the five outputs always do, and the thumbnail — or the
+  // empty "No image" slot — plus the filename sit ABOVE the rows. The generic
+  // estimate above described none of that (six raw inputs, no picture).
+  // Deliberately over-estimates: overlap avoidance prefers too big. In memory
+  // `imageB64` is always the resolved payload (storage refs never reach it).
+  if (type === 'imageNode' && def) {
+    const d = node.data as { values?: Record<string, unknown>; exposedPorts?: unknown };
+    const exposed = Array.isArray(d.exposedPorts) ? d.exposedPorts : [];
+    const nExposed = def.inputs.filter((i) => exposed.includes(i.id)).length;
+    const hasImage = typeof d.values?.imageB64 === 'string' && d.values.imageB64 !== '';
+    const thumb = hasImage ? IMAGE_THUMB_H : IMAGE_EMPTY_H;
+    const fileRow = typeof d.values?.fileName === 'string' && d.values.fileName ? FILE_NAME_H : 0;
+    if (box.height == null) bodyH = fileRow + thumb + Math.max(nExposed, def.outputs.length) * ROW_H + 8;
+    if (box.width == null) width = Math.max(width, hasImage ? IMAGE_THUMB_W : MIN_W);
+  }
+
   // A chainable arithmetic node with ≥3 wired operands folds into list mode and
   // grows vertically with the operand count (ShaderNode: (N−1)·pitch + 26).
   if (def != null && growsOperands(def) && inDegree >= 3) {
@@ -192,12 +215,25 @@ function median(values: number[]): number {
  * crossing-minimised order within each column — but its centre-based vertical
  * placement (which aligns node CENTRES and so leaves the top edges ragged
  * whenever heights differ) is replaced by a top-alignment sweep.
+ *
+ * `rankOrder` (optional) overrides the order WITHIN each rank: a node carrying
+ * a smaller key is placed above one carrying a larger, and above every node
+ * carrying none; dagre's own order breaks every tie, so a graph that supplies
+ * no keys at all is laid out exactly as before. It exists because dagre knows
+ * nothing about HANDLES — every wire into a node is the same wire to it — so a
+ * caller that knows what the vertical order MEANS (the GLB import: each feeder
+ * belongs to one Output socket) can stack the feeders in socket order instead.
+ * It also switches OFF the spine float below: a caller that has stated the
+ * order must not have one node pulled to the top of its rank behind its back.
+ * Since step 5 places each rank strictly downward, the rank's array order IS
+ * its vertical order, so the keys decide what the eye reads.
  */
 export function autoLayout(
   nodes: AppNode[],
   edges: AppEdge[],
   direction: 'LR' | 'TB' = 'LR',
   spacing?: { nodesep?: number; ranksep?: number },
+  rankOrder?: ReadonlyMap<string, number>,
 ): AppNode[] {
   if (nodes.length === 0) return nodes;
 
@@ -255,7 +291,20 @@ export function autoLayout(
 
   const ranks: string[][] = uniqueX.map(() => []);
   for (const id of laidIds) ranks[nodeRank.get(id)!].push(id);
-  for (const rank of ranks) rank.sort((a, b) => dagreY.get(a)! - dagreY.get(b)! || (a < b ? -1 : 1));
+  // A caller-supplied key wins; a node without one sorts after every node with
+  // one (never `ka - kb` on two undefineds, which is NaN). dagre's own order is
+  // the tie-break, so no key means exactly the previous behaviour.
+  const cmpOrder = (a: string, b: string): number => {
+    if (!rankOrder) return 0;
+    const ka = rankOrder.get(a);
+    const kb = rankOrder.get(b);
+    if (ka === undefined) return kb === undefined ? 0 : 1;
+    if (kb === undefined) return -1;
+    return ka - kb;
+  };
+  for (const rank of ranks) {
+    rank.sort((a, b) => cmpOrder(a, b) || dagreY.get(a)! - dagreY.get(b)! || (a < b ? -1 : 1));
+  }
 
   // Forward predecessors only (strictly lower rank) — guards against a back edge
   // referencing a not-yet-placed node and keeps the spine DP acyclic.
@@ -321,11 +370,17 @@ export function autoLayout(
 
   // 4. Float the spine node to the top of every rank it appears in — a proper
   //    layering puts at most one spine node per rank, so this never reorders two.
-  for (const rank of ranks) {
-    const i = rank.findIndex((id) => onSpine.has(id));
-    if (i > 0) {
-      const [s] = rank.splice(i, 1);
-      rank.unshift(s);
+  //    SKIPPED when the caller gave a rank order: pulling one node to the top
+  //    would silently overrule exactly the order it asked for (measured on a
+  //    GLB import — the longest chain is the roughness texture × factor, so
+  //    Roughness landed above Color).
+  if (!rankOrder) {
+    for (const rank of ranks) {
+      const i = rank.findIndex((id) => onSpine.has(id));
+      if (i > 0) {
+        const [s] = rank.splice(i, 1);
+        rank.unshift(s);
+      }
     }
   }
 

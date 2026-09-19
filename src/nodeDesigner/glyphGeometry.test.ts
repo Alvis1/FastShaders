@@ -183,10 +183,17 @@ describe('simplifyRdp', () => {
     // and no kept point may exceed the tolerance against its neighbours' chord
     expect(out.length).toBeGreaterThan(2);
   });
+  // The zigzag is RDP's worst case on purpose: every split lands next to an end,
+  // so a recursive implementation would need ~20k frames — which is the point —
+  // and the iterative one does O(n^2) work (~200M segment projections) to prove
+  // it. The two cannot be separated: fewer samples is a shallower stack and no
+  // longer pins anything. That work takes ~1 s alone but 6-15 s when the whole
+  // suite shares the CPU (isolate: false packs it beside the heavy engine
+  // files), so the default 5 s timeout failed it for load, not for the stack.
   it('does not recurse — a 20k-sample stroke must not blow the stack', () => {
     const pts = Array.from({ length: 20000 }, (_, i) => ({ x: i * 0.001, y: (i % 2) * 0.9 }));
     expect(() => simplifyRdp(pts, 0.1)).not.toThrow();
-  });
+  }, 60_000);
   it('is a no-op on 0/1/2 points', () => {
     expect(simplifyRdp([], 1)).toEqual([]);
     expect(simplifyRdp([{ x: 1, y: 2 }], 1)).toEqual([{ x: 1, y: 2 }]);

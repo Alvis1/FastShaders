@@ -88,8 +88,16 @@ describe('collectImageFiles', () => {
   });
 
   it('dedupes colliding names and falls back for empty ones', () => {
-    const files = collectImageFiles([img('a', 'cat.png'), img('b', 'cat.png'), img('c', '')]);
+    // DIFFERENT bytes per node: identical images are one file (next test).
+    const other = (id: string, fileName: string, text: string) =>
+      makeNode(id, 'imageNode', { imageB64: `data:image/webp;base64,${btoa(text)}`, width: 2, height: 2, fileName });
+    const files = collectImageFiles([img('a', 'cat.png'), other('b', 'cat.png', 'abd'), other('c', '', 'abe')]);
     expect(files.map((f) => f.name)).toEqual(['cat.webp', 'cat-2.webp', 'image3.webp']);
+  });
+
+  it('writes one file per DISTINCT image; the first node names it', () => {
+    const files = collectImageFiles([img('a', 'cat.png'), img('b', 'dog.png'), img('c', '')]);
+    expect(files.map((f) => f.name)).toEqual(['cat.webp']);
   });
 
   it('skips nodes with invalid payloads', () => {

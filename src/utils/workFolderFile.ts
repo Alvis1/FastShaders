@@ -21,9 +21,9 @@ import { toKebabCase } from './nameUtils';
  * file in Finder rewrites the shader's authored name on the next save, and that
  * rewrite is not undoable (`shaderName` is absent from the history snapshot).
  *
- * BOUNDARY: every name returned here is handed to `work_folder_write`, whose
+ * BOUNDARY: every name returned here is handed to `work_folder_write_bytes`, whose
  * `safe_name` gate is the real authority — bare name, no `/ \ : NUL`, no leading
- * dot, `.js`/`.zip` only, no Windows reserved stem, and at most
+ * dot, `.js`/`.zip`/`.glb` only, no Windows reserved stem, and at most
  * `255 - ".tmp-fastshaders".length` BYTES. Rust's `String::len` is bytes, so the
  * budget here is measured with TextEncoder and NEVER `String.length`: a Latvian
  * name runs up to 2 bytes per character, so a `.length` check waves through
@@ -33,13 +33,16 @@ import { toKebabCase } from './nameUtils';
 /** `255 - TMP_SUFFIX.len()` in work_folder.rs — the staging file needs the room. */
 export const MAX_WORK_FOLDER_NAME_BYTES = 239;
 
-/** The two extensions `safe_name` accepts. */
-const SHADER_EXT_RE = /\.(js|zip)$/i;
+/** The three extensions `safe_name` accepts (work_folder.rs; pinned there). */
+const SHADER_EXT_RE = /\.(js|zip|glb)$/i;
+
+/** What one work-folder file is: a shader module, its bundle, or the single-GLB export. */
+export type WorkFolderKind = 'js' | 'zip' | 'glb';
 
 /**
- * Drop ONE trailing `.js`/`.zip`. Single-strip on purpose: `foo.js.zip` becomes
- * the stem `foo.js` (ugly but harmless), where looping would collapse it to
- * `foo` and could re-target an unrelated `foo.js`.
+ * Drop ONE trailing `.js`/`.zip`/`.glb`. Single-strip on purpose: `foo.js.zip`
+ * becomes the stem `foo.js` (ugly but harmless), where looping would collapse
+ * it to `foo` and could re-target an unrelated `foo.js`.
  */
 export function stripShaderExt(fileName: string): string {
   return fileName.replace(SHADER_EXT_RE, '');
@@ -121,22 +124,23 @@ export function isShaderRenamed(openedName: string, liveName: string): boolean {
  * keeping the on-disk casing is what makes the write land on the opened file
  * rather than spawning a lowercase sibling on a case-sensitive volume.
  * Otherwise the stem is re-extended — a graph that gained an image (or a preview
- * model) exports as a zip, so `waves.js` becomes `waves.zip`. NOTE the old
+ * model) exports as a zip, so `waves.js` becomes `waves.zip`, and switching the
+ * EXPORT popover's Format to one `.glb` makes it `waves.glb`. NOTE the old
  * sibling is left behind: there is no delete command in the IPC surface, so a
  * kind flip forks the pair until it flips back.
  */
 export function workFolderSaveName(
   openedFile: string | null,
   bundleFileName: string,
-  kind: 'js' | 'zip',
+  kind: WorkFolderKind,
 ): string {
   if (!openedFile) return bundleFileName;
   const dot = openedFile.lastIndexOf('.');
   const ext = dot < 0 ? '' : openedFile.slice(dot + 1).toLowerCase();
   if (ext === kind) return openedFile;
   const target = `${stripShaderExt(openedFile)}.${kind}`;
-  // `.js` → `.zip` grows the name by one byte, which a name listed at exactly
-  // the limit cannot afford. Falling back to the export name keeps Save working
-  // instead of failing with Rust's opaque "invalid file name".
+  // `.js` → `.zip`/`.glb` grows the name by one byte, which a name listed at
+  // exactly the limit cannot afford. Falling back to the export name keeps Save
+  // working instead of failing with Rust's opaque "invalid file name".
   return fitsWorkFolderName(target) ? target : bundleFileName;
 }
