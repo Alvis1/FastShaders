@@ -59,7 +59,10 @@ export function makeEdge(
  * a test may corrupt its copy freely.
  */
 
-const pad4 = (n: number) => (n + 3) & ~3;
+// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
+// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
+// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
+const pad4 = (n: number) => Math.ceil(n / 4) * 4;
 
 /**
  * A hand-built GLB (the research doc's §11 recipe): the 12-byte header (magic

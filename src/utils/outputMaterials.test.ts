@@ -18,6 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  readModelSignature,
   channelHandle,
   parseChannelHandle,
   outputMaterials,
@@ -28,7 +29,9 @@ import {
   outputNodes,
   sanitizeOutputMaterials,
   shiftMaterialHandles,
-  foldExtraOutputs,
+  unfoldOutputMaterials,
+  contributingOutputs,
+  planNamedPartsAcross,
   dormantMaterialIndices,
   dormantIndicesForPreview,
   outputDefaultContributes,
@@ -354,7 +357,17 @@ describe('sanitizeOutputMaterials', () => {
   });
 });
 
-describe('foldExtraOutputs — the multi-Output graph migration', () => {
+/**
+ * RE-AIMED: `foldExtraOutputs` is RETIRED (the Output-node split, step 6a).
+ *
+ * It collapsed a one-Output-per-mesh graph into one node carrying `materials`,
+ * so nothing wired into an extra was lost. That legacy shape IS the target
+ * shape now — each extra is a targeted Output on BARE channel handles — so
+ * such a document loads natively and `contributingOutputs` emits its part.
+ * The tests below are the same six cases, asserting that outcome instead of
+ * the fold's.
+ */
+describe('the legacy one-Output-per-mesh graph loads natively', () => {
   /** The shape the previous design produced: one Output per targeted mesh. */
   const legacy = () => {
     const base = makeNode('c1', 'color');
@@ -372,65 +385,53 @@ describe('foldExtraOutputs — the multi-Output graph migration', () => {
     };
   };
 
-  it('is a no-op for the ordinary single-Output graph', () => {
+  it('the ordinary single-Output graph is untouched — the same arrays back', () => {
     const nodes = [output('o1'), makeNode('c1', 'color')];
     const edges = [makeEdge('c1', 'out', 'o1', 'color')];
-    const folded = foldExtraOutputs(nodes, edges);
-    expect(folded.nodes).toBe(nodes);
-    expect(folded.edges).toBe(edges);
+    const split = unfoldOutputMaterials(nodes, edges);
+    expect(split.nodes).toBe(nodes);
+    expect(split.edges).toBe(edges);
   });
 
-  it('folds a targeted Output into a material and KEEPS its wiring', () => {
-    // Without the re-pointing, the extra Output sits inert and whatever was
-    // wired into it silently stops emitting.
+  it('a targeted extra KEEPS its node, its bare handles and its wiring', () => {
     const { nodes, edges } = legacy();
-    const folded = foldExtraOutputs(nodes, edges);
-    expect(outputNodes(folded.nodes)).toHaveLength(1);
-    const out = outputNodes(folded.nodes)[0];
-    expect(out.id).toBe('o1');
-    expect((out.data as { materials: object[] }).materials).toEqual([
-      { meshTargets: ['Glass'], values: { roughness: 0.3 } },
-    ]);
-    // The part edge now points at the surviving node's namespaced handle.
-    const handles = folded.edges
-      .filter((e) => e.target === 'o1')
-      .map((e) => e.targetHandle)
-      .sort();
-    expect(handles).toEqual(['color', 'm1:color']);
+    const split = unfoldOutputMaterials(nodes, edges);
+    // Nothing moved: no material to split, so both arrays come back as they were.
+    expect(split.nodes).toBe(nodes);
+    expect(split.edges).toBe(edges);
+    expect(outputNodes(split.nodes).map((n) => n.id)).toEqual(['o1', 'o2']);
+    expect(split.edges.filter((e) => e.target === 'o2').map((e) => e.targetHandle)).toEqual(['color']);
   });
 
-  it('re-derives the moved edge\'s id from its new endpoints', () => {
-    // The id is endpoint-derived, so a stale one collides with the next edge
-    // that really does connect this pair, and any dedupe keyed on it drops one.
-    const { nodes, edges } = legacy();
-    const moved = foldExtraOutputs(nodes, edges).edges.find((e) => e.targetHandle === 'm1:color')!;
-    expect(moved.id).toContain('m1:color');
-    expect(moved.id).not.toContain('o2');
+  it('and it CONTRIBUTES its own part — which is what the fold existed to preserve', () => {
+    const { nodes } = legacy();
+    expect(contributingOutputs(nodes).map((n) => n.id)).toEqual(['o1', 'o2']);
+    expect(planNamedPartsAcross(contributingOutputs(nodes)).entries)
+      .toEqual([{ name: 'Glass', nodeId: 'o2', section: 0 }]);
   });
 
-  it('KEEPS an extra UNTARGETED Output, wiring and all — it is an ordinary inactive Output now', () => {
-    // Several Outputs may coexist with exactly one active (utils/sdfPartition.ts);
-    // only the LEGACY per-node mesh target still folds. Same arrays back.
+  it('an extra UNTARGETED Output is parked: kept, wiring and all, contributing nothing', () => {
     const nodes = [output('o1'), output('o2'), makeNode('c1', 'color')];
     const edges = [makeEdge('c1', 'out', 'o2', 'color')];
-    const folded = foldExtraOutputs(nodes, edges);
-    expect(folded.nodes).toBe(nodes);
-    expect(folded.edges).toBe(edges);
+    const split = unfoldOutputMaterials(nodes, edges);
+    expect(split.nodes).toBe(nodes);
+    expect(split.edges).toBe(edges);
+    // Only the DEFAULT untargeted Output contributes; the second is parked.
+    expect(contributingOutputs(nodes).map((n) => n.id)).toEqual(['o1']);
   });
 
-  it('keeps the ACTIVE Output as the survivor when folding a legacy targeted extra', () => {
+  it('the ACTIVE flag decides only which UNTARGETED Output is the default', () => {
     const a = output('o1');
     const b = output('o2');
     (b.data as Record<string, unknown>).activeOutput = true;
     const glass = output('o3');
     (glass.data as Record<string, unknown>).meshTarget = { name: 'Glass' };
-    const folded = foldExtraOutputs([a, b, glass], [makeEdge('c', 'out', 'o3', 'color')]);
-    expect(outputNodes(folded.nodes).map((n) => n.id)).toEqual(['o1', 'o2']);
-    expect((folded.nodes.find((n) => n.id === 'o2')!.data as { materials?: { meshTargets?: string[] }[] }).materials?.map((m) => m.meshTargets)).toEqual([['Glass']]);
-    expect(folded.edges[0].target).toBe('o2');
+    // `o1` is parked behind `o2`'s flag; `o3` contributes REGARDLESS of it,
+    // because a targeted Output shades the meshes it names and nothing else.
+    expect(contributingOutputs([a, b, glass]).map((n) => n.id)).toEqual(['o2', 'o3']);
   });
 
-  it('respects the cap when folding, and keeps a duplicate claim', () => {
+  it('no load-time cap applies to the extras, and a duplicate claim is kept', () => {
     const nodes: AppNode[] = [output('o1')];
     for (let i = 0; i < MAX_PARTS + 3; i++) {
       const n = output(`x${i}`);
@@ -439,14 +440,16 @@ describe('foldExtraOutputs — the multi-Output graph migration', () => {
       nodes.push(n);
     }
     (nodes[1].data as Record<string, unknown>).meshTarget = { name: 'Glass' };
-    const folded = foldExtraOutputs(nodes, []);
-    const materials = (outputNodes(folded.nodes)[0].data as { materials: object[] }).materials;
-    expect(materials.length).toBeLessThanOrEqual(MAX_PARTS);
-    // The duplicate is FOLDED IN rather than skipped: its wiring is re-pointed
-    // and survives, shadowed at emission, exactly as sanitizeOutputMaterials
-    // treats one that arrives from localStorage.
-    const names = materials.flatMap((m) => materialTargetNames(m));
-    expect(names.filter((n) => n === 'Glass')).toHaveLength(2);
+    // The fold stopped at MAX_PARTS materials and left the rest unfolded; every
+    // extra is now an ordinary node, so all of them contribute and the
+    // cross-node `MAX_PART_ENTRIES` counter is what bounds the module.
+    const outs = contributingOutputs(nodes);
+    expect(outs).toHaveLength(MAX_PARTS + 4);
+    const plan = planNamedPartsAcross(outs);
+    // The duplicate is SHADOWED at emission, not dropped at load: its node and
+    // wiring survive, exactly as a duplicate material did.
+    expect(plan.entries.filter((e) => e.name === 'Glass')).toHaveLength(1);
+    expect(plan.shadowed.get('x1')).toEqual(new Set([0]));
   });
 });
 
@@ -504,14 +507,20 @@ describe('dormantMaterialIndices', () => {
     expect(dormantMaterialIndices(mats(['Body', 'Glass']), ['Glass'])).toEqual(new Set());
   });
 
-  it('never hides material 0 or an EMPTY added material', () => {
-    // Material 0 is the node's own channel state; an empty material names
-    // nothing to be missing — it is a "No mesh" state to resolve, and hiding
-    // it would orphan it forever.
+  it('never hides an EMPTY material, and hides a TARGETED material 0', () => {
+    // An empty material names nothing to be missing — it is a "No mesh" state
+    // to resolve, and hiding it would orphan it forever. That, not position, is
+    // what "material 0 never hides" always rested on: the DEFAULT names nothing,
+    // so the `targets.length > 0` gate already excludes it.
     expect(dormantMaterialIndices(mats(null), [])).toEqual(new Set());
+    // A material 0 that DOES name a mesh sleeps with it. The loop used to start
+    // at 1, which after `unfoldOutputMaterials` — where THE node's binding is
+    // material 0's — meant a split targeted node could never sleep at all, so
+    // dormancy was dead in the shape the app now always runs in.
     expect(dormantMaterialIndices([{ meshTargets: ['Gone'] }, { meshTargets: ['Gone2'] }], [])).toEqual(
-      new Set([1]),
+      new Set([0, 1]),
     );
+    expect(dormantMaterialIndices([{ meshTargets: ['Body'] }], ['Body'])).toEqual(new Set());
   });
 
   it('reads the legacy single meshTarget shape through materialTargetNames', () => {
@@ -609,5 +618,52 @@ describe('outputDefaultContributes / dormantIndicesForPreview (the context rules
     expect(
       outputDormancyFromState({ ...state, previewMesh: {}, previewMeshInventory: null }).dormant,
     ).toEqual(new Set());
+  });
+});
+
+/* ── the signature accessor is memoized on the data OBJECT ───────────────── */
+
+describe('readModelSignature answers once per data object', () => {
+  it('re-reads nothing for the same object, and hands back the SAME array', () => {
+    // It is called TWICE per contributing node inside `previewWireTargets`
+    // alone, which zustand re-runs on every store notification — i.e. every
+    // drag frame. `sanitizeModelSignature` walks every name.
+    let reads = 0;
+    const data: Record<string, unknown> = { registryType: 'output' };
+    Object.defineProperty(data, 'modelSignature', {
+      get() { reads++; return { materials: ['A', 'B'] }; },
+      enumerable: true,
+    });
+    const first = readModelSignature(data);
+    expect(first).toEqual(['A', 'B']);
+    expect(readModelSignature(data)).toBe(first);
+    expect(readModelSignature(data)).toBe(first);
+    expect(reads).toBe(1);
+  });
+
+  it('caches the NULL answer too — `!== undefined` is the hit test', () => {
+    let reads = 0;
+    const data: Record<string, unknown> = { registryType: 'output' };
+    Object.defineProperty(data, 'modelSignature', {
+      get() { reads++; return undefined; },
+      enumerable: true,
+    });
+    expect(readModelSignature(data)).toBeNull();
+    expect(readModelSignature(data)).toBeNull();
+    expect(reads).toBe(1);
+  });
+
+  it('a non-object is never cached and never throws', () => {
+    for (const junk of [null, undefined, 5, 'x', true]) {
+      expect(readModelSignature(junk)).toBeNull();
+    }
+  });
+
+  it('two different data objects get their own answers', () => {
+    const a = { modelSignature: { materials: ['A'] } };
+    const b = { modelSignature: { materials: ['B'] } };
+    expect(readModelSignature(a)).toEqual(['A']);
+    expect(readModelSignature(b)).toEqual(['B']);
+    expect(readModelSignature(a)).toEqual(['A']);
   });
 });

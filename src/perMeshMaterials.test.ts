@@ -235,8 +235,22 @@ for (const v of ACTIVE_LOADERS) describe.skipIf(!loaderAvailable(v))(`shaderload
     const end = text.indexOf('return material;', start);
     expect(end).toBeGreaterThan(start);
     const src = text.slice(start, end);
-    expect([...PART_SETTING_KEYS].sort()).toEqual(['alphaTest', 'depthWrite', 'side', 'transparent']);
-    for (const key of PART_SETTING_KEYS) expect(src).toContain(`spec.${key}`);
+    expect([...PART_SETTING_KEYS].sort())
+      .toEqual(['alphaTest', 'depthWrite', 'flatShading', 'side', 'transparent']);
+    // `flatShading` is 0.8-ONLY, and that asymmetry is the feature's whole
+    // compatibility story: 0.6 is frozen (already-exported shaders fetch it
+    // from the CDN), it reads its known keys BY NAME, and an unknown one is
+    // simply ignored — so a shader authored flat renders SMOOTH on an old
+    // loader instead of failing. Every other key must be in both.
+    const only08 = new Set(['flatShading']);
+    for (const key of PART_SETTING_KEYS) {
+      if (v === '0.6' && only08.has(key)) {
+        expect(src, `${key} must not have been back-ported into the frozen 0.6`)
+          .not.toContain(`spec.${key}`);
+        continue;
+      }
+      expect(src).toContain(`spec.${key}`);
+    }
   });
 
   it('every part is built by that same function, and a part needs a channel', () => {

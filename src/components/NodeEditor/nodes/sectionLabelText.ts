@@ -25,6 +25,25 @@ import type { IndexCoverage, SectionLabel } from '@/utils/outputMaterials';
 export const SECTION_SILENT_KEY =
   'This material sets no channel yet — the meshes it names keep their current look';
 
+/**
+ * What a PARKED Output says — UNTARGETED, so it would be the whole-model
+ * material, but another untargeted Output carries the active flag and among
+ * untargeted Outputs exactly one contributes.
+ *
+ * Newly reachable with the per-material split: while every material lived on
+ * one node, an untargeted material 0 WAS the default by construction. Left
+ * unmarked the node reads as "All meshes" — the one thing it is not doing —
+ * and `emitsNothing` would paint its Color row with the red sentinel, which is
+ * a different lie (the module is not empty; this node is simply not in it).
+ *
+ * Its own sentence rather than the silent one: the cause differs and so does
+ * the fix — click the node's socket to make it the whole-model material, or
+ * give it a mesh. Here beside SECTION_SILENT_KEY for the same reason: both the
+ * node and MeshTargetPicker render it, and OutputNode imports the picker.
+ */
+export const PARKED_KEY =
+  'Another output is rendering the whole model — click this node’s socket to render this one instead';
+
 export function formatSectionLabel(label: SectionLabel, language: Language): string {
   switch (label.kind) {
     case 'default':
@@ -45,6 +64,25 @@ export function formatSectionLabel(label: SectionLabel, language: Language): str
       return never;
     }
   }
+}
+
+/**
+ * What ONE decorative Output→preview wire says on hover: the mesh it shades.
+ *
+ * `formatSectionLabel`'s vocabulary, with exactly one substitution — the
+ * untargeted DEFAULT reads "All meshes" rather than the list row's
+ * disambiguating "All meshes (default)". Both are existing translated keys and
+ * the choice is the mesh picker's own, for the same reason it made it: that
+ * control's CLOSED label drops "(default)" because the parenthesis only earns
+ * its place in a LIST, where the default row has to be told apart from the
+ * mesh rows beside it. A hover chip on a wire has no list.
+ *
+ * So no new string, and the wire, the node's chip and the settings menu's
+ * scope line all name a material the same way — which is the point: the label
+ * exists to say WHICH of several Outputs a wire comes from.
+ */
+export function linkLabelText(label: SectionLabel, language: Language): string {
+  return label.kind === 'default' ? t('All meshes', language) : formatSectionLabel(label, language);
 }
 
 /** A list for a hover title: at most `max` entries, then an ellipsis. The

@@ -41,6 +41,35 @@ describe('gltfCompression: the caps', () => {
   });
 });
 
+describe('gltfCompression: the too-large sentence names the cap it APPLIED', () => {
+  it('the two keys are one sentence — only the limit differs', () => {
+    // Two keys rather than one `{limit}` sentence because previewMesh.ts's
+    // `fillMeshRefusal` fills {name}/{ext}/{size} only (see the key's comment).
+    // They are a drift pair: a reword of one must move the other, and lv.json
+    // carries both.
+    expect(leaf.MESH_TOO_LARGE_LIMIT_KEY).toBe(leaf.MESH_TOO_LARGE_KEY.replace('max 64 MB', 'max {limit} MB'));
+    expect(leaf.MESH_TOO_LARGE_KEY).not.toContain('{limit}');
+  });
+
+  it('modelTooLargeRefusal keeps the historical shape for the model gate, and only then', () => {
+    expect(leaf.modelTooLargeRefusal(7)).toEqual({ reason: 'too-large', key: leaf.MESH_TOO_LARGE_KEY, sizeBytes: 7 });
+    expect(leaf.modelTooLargeRefusal(7, leaf.MESH_MAX_BYTES)).toEqual(leaf.modelTooLargeRefusal(7));
+    expect(leaf.modelTooLargeRefusal(7, leaf.GLB_READ_MAX_BYTES)).toEqual({
+      reason: 'too-large',
+      key: leaf.MESH_TOO_LARGE_LIMIT_KEY,
+      sizeBytes: 7,
+      limitBytes: leaf.GLB_READ_MAX_BYTES,
+    });
+  });
+
+  it('a size that cannot be shown to fit is refused against the cap that was picked', () => {
+    // The unusable-size branch: it still names the larger cap on the build path,
+    // so the sentence cannot contradict the gate that produced it.
+    expect(leaf.preReadModelGate('glb', NaN, true)).toEqual(leaf.modelTooLargeRefusal(0, leaf.GLB_READ_MAX_BYTES));
+    expect(leaf.preReadModelGate('obj', NaN, true)).toEqual(leaf.modelTooLargeRefusal(0));
+  });
+});
+
 describe('gltfCompression: previewMesh re-exports the SAME bindings', () => {
   it.each([
     'MESH_MAX_BYTES',
@@ -49,6 +78,7 @@ describe('gltfCompression: previewMesh re-exports the SAME bindings', () => {
     'inspectGltfCompression',
     'inspectParsedGltf',
     'MESH_TOO_LARGE_KEY',
+    'MESH_TOO_LARGE_LIMIT_KEY',
     'modelTooLargeRefusal',
     'preReadModelGate',
   ] as const)('%s', (name) => {

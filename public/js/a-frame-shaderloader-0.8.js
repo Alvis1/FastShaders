@@ -1069,6 +1069,17 @@ const buildMaterial = function (spec) {
   if (spec.depthWrite !== undefined) {
     material.depthWrite = spec.depthWrite;
   }
+  // FLAT shading (Blender's "Shade Flat"): one normal per face. three's node
+  // materials honour `material.flatShading` — NodeBuilder.isFlatShading() swaps
+  // `normalViewGeometry` for `normalFlat`, a face normal from the DERIVATIVES
+  // of the view position — so it needs no vertex normals and works on welded,
+  // displaced primitives too. Read like every key above: the module omits it
+  // entirely for the default (smooth), so this is inert for every shader that
+  // does not ask. 0.6 has no such branch and ignores the key, which is why a
+  // shader carrying it renders smooth there rather than failing.
+  if (spec.flatShading !== undefined) {
+    material.flatShading = spec.flatShading;
+  }
   return material;
 };
 

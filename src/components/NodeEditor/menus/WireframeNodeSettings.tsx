@@ -17,7 +17,7 @@ import { rowStyle, checkLabelStyle, checkStyle } from './menuShared';
  * cut of this checkbox wrote. That flag replaces the filled surface with line
  * primitives for the WHOLE material, so this node's lattice was then painted
  * onto those lines — reported as "the effect is not correct". The material mode
- * is a real thing and still lives in Shader Settings; this is the one that
+ * is a real thing and still lives in the Output node’s settings; this is the one that
  * belongs to the node, because it changes what the node COMPUTES.
  */
 export function WireframeNodeSettings({ nodeId }: { nodeId: string }) {

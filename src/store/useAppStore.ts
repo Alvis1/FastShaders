@@ -30,6 +30,7 @@ import { autoLayout } from '@/engine/layoutEngine';
 // front end behind `buildCodeGroup` stays out of every page's boot chunk.
 import complexityData from '@/registry/complexity.json';
 import { bridgeEdgesAcrossDeletedNodes, restoreCollapsedEdges, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
+import { MIN_GROUP_W, MIN_GROUP_H, groupFrameSize } from '@/utils/groupFrame';
 import { safeJsonReviver } from '@/utils/safeJson';
 // colorUtils' only import is type-only, so it is a runtime LEAF and its
 // exports are guaranteed initialised by the time anything can reach them —
@@ -55,7 +56,7 @@ import { sanitizeDataRangeNodes } from '@/utils/dataRangeFormula';
 import {
   sanitizeOutputMaterials,
   sanitizeOutputMaterialsReport,
-  foldExtraOutputs,
+  unfoldOutputMaterials,
   pruneOrphanMaterialEdges,
 } from '@/utils/outputMaterials';
 import { normalizeActiveOutput, clearActiveOutput, isSinkNode } from '@/utils/sdfPartition';
@@ -127,49 +128,14 @@ export interface SavedGroup {
 
 const SAVED_GROUPS_KEY = 'fs:savedGroups';
 
-/**
- * The smallest a group frame may be — the bounds GroupNode hands its resize
- * grip, exported so the two cannot drift.
- *
- * They are also the test `toggleGroupCollapsed` uses to decide whether a
- * REMEMBERED expanded size is real: a value below what the grip itself can
- * produce is a lost or half-written one, not a size the user chose, so the
- * expand falls back to fitting the members instead of trusting it.
- */
-export const MIN_GROUP_W = 120;
-export const MIN_GROUP_H = 80;
-
-/**
- * A group frame's authored size, wherever that node happens to carry it.
- *
- * There are two shapes in the wild and React Flow renders BOTH identically
- * (`node.width ?? node.style?.width`), which is exactly why the divergence went
- * unnoticed: `groupSelection` writes top-level `width`/`height` plus a `data`
- * mirror, while `codeGroupBuilder` — every built-in preset and texture — wrote
- * `style: { width, height }` and nothing else. Anything that ASKED the node how
- * big it was got 200x120 for the second kind, and `toggleGroupCollapsed` asks:
- * it recorded that as the remembered expanded size, so expanding a collapsed
- * preset produced a 200x120 stub with the whole graph outside the frame.
- *
- * The builder writes the canonical shape now, but a `style`-only group sits in
- * every graph saved before that — hence reading all of them here rather than
- * migrating on load: one function, no version bump, and a hand-edited file with
- * junk in one field falls through to the next.
- */
-export function groupFrameSize(node: AppNode): { w: number; h: number } {
-  const n = node as AppNode & {
-    width?: unknown; height?: unknown;
-    style?: { width?: unknown; height?: unknown };
-    measured?: { width?: unknown; height?: unknown };
-    data?: { width?: unknown; height?: unknown };
-  };
-  const num = (v: unknown): number | null =>
-    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
-  return {
-    w: num(n.width) ?? num(n.style?.width) ?? num(n.data?.width) ?? num(n.measured?.width) ?? 200,
-    h: num(n.height) ?? num(n.style?.height) ?? num(n.data?.height) ?? num(n.measured?.height) ?? 120,
-  };
-}
+// The frame-size reader and the resize grip's floors live in a zero-import LEAF
+// (`utils/groupFrame.ts`) so `utils/outputMaterials.ts` can read them: that
+// module sits inside THIS store's import cycle
+// (nodeCost → outputMaterials → exposedPorts → edgeUtils → useAppStore), and a
+// second edge back into the store from inside it is the costTable TDZ lesson.
+// RE-EXPORTED here so GroupNode.tsx and store/groupCollapse.test.ts keep their
+// one import site for "how big is that frame".
+export { MIN_GROUP_W, MIN_GROUP_H, groupFrameSize };
 
 // Exported for savedGroupsSanitize.test.ts — App.tsx's mount effect calls it
 // against the real localStorage, the test re-runs it against a stubbed one.
@@ -260,15 +226,20 @@ export function parseStoredGroupsReport(parsed: unknown): StoredGroupsReport {
           const imgs = sanitizeImageNodes(refs.nodes, false);
           // The Output sections are sanitized WITH a count (decision 9).
           const secs = sanitizeOutputMaterialsReport(sanitizeDataRangeNodes(sanitizeDataNodes(imgs.nodes).nodes));
+          // ONE Output NODE per material, on the group's own SANITIZED edges
+          // (the split re-points and re-ids some of them). A group is stored
+          // and instantiated as-is, so a folded Output inside one has to be
+          // split here too or it would arrive folded into a split graph.
+          const split = unfoldOutputMaterials(secs.nodes, sanitizeEdgeExtras(shape.edges));
           // A saved group is a FRAGMENT: which sink is active belongs to
           // the graph it lands in, so a stale flag inside the group is
           // stripped here and the live graph's choice wins on instantiate.
-          const nodes = clearActiveOutput(secs.nodes);
+          const nodes = clearActiveOutput(split.nodes);
           const group = {
             ...g,
             nodes,
             // A dropped section leaves no wires behind.
-            edges: pruneOrphanMaterialEdges(nodes, sanitizeEdgeExtras(shape.edges)).edges,
+            edges: pruneOrphanMaterialEdges(nodes, split.edges).edges,
           };
           // Counted only once the group survives: one the catch drops takes
           // its images with it and is not what the notice describes.
@@ -565,10 +536,25 @@ interface ContextMenuState {
   sourceNodeId?: string;
   sourceHandleId?: string;
   sourceHandleType?: 'source' | 'target';
-  /** Which Output MATERIAL SECTION was right-clicked (`data-material-index`
-   *  on `.output-node__material`) — ShaderSettingsMenu seeds its material
-   *  selector from it, so each section opens its own scoped menu. */
-  materialIndex?: number;
+}
+
+/**
+ * The source pin a wire-drop carries into the menu — the three fields above,
+ * passed as ONE named object rather than three trailing positional arguments.
+ *
+ * They used to be positional, with a fourth (`materialIndex`, retired when an
+ * Output stopped holding several materials) sitting BETWEEN `sourceHandleId`
+ * and `sourceHandleType` — so every call site spelled a run of `undefined`s and
+ * removing the middle one would have shifted `sourceHandleType` into
+ * `materialIndex`'s slot. That failure renders as NOTHING: a wire dropped from
+ * an INPUT socket would connect backwards, React Flow draws no edge for an
+ * edge authored out of an input, and `graphToCode` still emits it. A named
+ * object cannot be shifted.
+ */
+export interface ContextMenuPin {
+  sourceNodeId?: string;
+  sourceHandleId?: string;
+  sourceHandleType?: 'source' | 'target';
 }
 
 interface HistoryEntry {
@@ -1220,24 +1206,32 @@ export function parseStoredGraph(input: unknown): StoredGraph | null {
       // (`output-sections-trimmed`, decision 9).
       const secs = sanitizeOutputMaterialsReport(data.nodes);
       data.nodes = secs.nodes;
-      // Several output nodes may coexist, exactly ONE active — the flag is
-      // node data from the same untrusted payload, so it is normalised here
-      // (first `true` wins, junk stripped) BEFORE the fold reads it to pick
-      // the surviving Output. See utils/sdfPartition.ts `activeSink`.
-      data.nodes = normalizeActiveOutput(data.nodes);
-      {
-        const folded = foldExtraOutputs(data.nodes, data.edges);
-        data.nodes = folded.nodes;
-        data.edges = folded.edges;
-      }
 
       // Edge `data` is adversarial too, and it is the one graph payload nothing
       // validated — TypedEdge maps `waypoints` and dereferences `w.x` during
       // RENDER, with no error boundary anywhere in the app, so `waypoints:
       // [null]` from a tampered value blanks the whole editor on every boot.
+      // BEFORE the split, which walks the edge list and re-points some of it.
       data.edges = sanitizeEdgeExtras(data.edges);
-      // A section the sanitizer dropped must not leave its wires behind
-      // (stranded in the store, never drawn, an unscoped 008 every frame).
+      {
+        // ONE Output NODE per material — see projectImport for the reasoning;
+        // the restore paths must agree or a reload changes what renders. It
+        // REPLACED `foldExtraOutputs`: the one-Output-per-mesh shape that fold
+        // migrated IS the target shape now, so such a session loads natively.
+        const split = unfoldOutputMaterials(data.nodes, data.edges);
+        data.nodes = split.nodes;
+        data.edges = split.edges;
+      }
+      // Several output nodes may coexist, exactly ONE active — the flag is
+      // node data from the same untrusted payload, so it is normalised here
+      // (first `true` wins, junk stripped), AFTER the split so the election
+      // runs over the node set that actually exists. See utils/sdfPartition.ts
+      // `activeSink`.
+      data.nodes = normalizeActiveOutput(data.nodes);
+      // An `m<k>:` handle naming a material a node does not have must not leave
+      // its wires behind (stranded in the store, never drawn, an unscoped 008
+      // every frame). After the split that is every `m<k>:` handle left on an
+      // Output the split did not touch.
       data.edges = pruneOrphanMaterialEdges(data.nodes, data.edges).edges;
 
       // Board drawings are adversarial too (tampered localStorage) — bound them.
@@ -1754,7 +1748,9 @@ interface AppState {
   endInteraction: () => void;
 
   // UI actions
-  openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, sourceNodeId?: string, sourceHandleId?: string, materialIndex?: number, sourceHandleType?: 'source' | 'target') => void;
+  /** Open a context menu. The wire-drop source pin rides ONE named object (see
+   *  `ContextMenuPin`), never trailing positional arguments. */
+  openContextMenu: (x: number, y: number, type: ContextMenuType, nodeId?: string, edgeId?: string, pin?: ContextMenuPin) => void;
   closeContextMenu: () => void;
   setHoveredNode: (id: string | null) => void;
   setNodePreview: (target: NodePreviewTarget | null) => void;
@@ -2585,8 +2581,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     });
   },
 
-  openContextMenu: (x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, materialIndex, sourceHandleType) =>
-    set({ contextMenu: { open: true, x, y, type, nodeId, edgeId, sourceNodeId, sourceHandleId, materialIndex, sourceHandleType } }),
+  openContextMenu: (x, y, type, nodeId, edgeId, pin) =>
+    set({ contextMenu: { open: true, x, y, type, nodeId, edgeId, ...pin } }),
 
   closeContextMenu: () =>
     set({ contextMenu: { open: false, x: 0, y: 0, type: 'canvas' } }),
@@ -2873,6 +2869,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try { localStorage.setItem('fs:headsetId', id); } catch { /* */ }
     setCostOverrides(costProfiles.find((p) => p.id === id)?.costs ?? null);
     const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
+    // The seed is OMITTED on purpose, which means `costSeeds` — the same
+    // resolver useSyncEngine's cost effect goes through. Passing a seed here
+    // instead (the active sink, say) would freeze this site on one Output
+    // while the meter's own pass widened to every contributing one, so a
+    // headset change would silently reprice the shader lower than the graph
+    // change that preceded it did.
     const total = computeReachableCost(nodes, unwrapped);
     // Every sink's own badge, the same rule useSyncEngine's cost effect
     // applies (a device change reprices without a graph change).
@@ -3883,26 +3885,35 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // group's own nodes: a group may contain an Output (groupSelection filters
     // only groups and notes), and its mesh claims are only checkable against
     // the graph it lands in — `loadSavedGroups` validates each group in
-    // isolation. Then FOLD: the Output is a SINGLETON, and this was the one
-    // live path that could still mint a second one at runtime.
-    // `foldExtraOutputs` keeps the FIRST output — the live graph's, since
-    // `state.nodes` precedes the arriving members in this array — and folds a
-    // TARGETED copy into it as materials with its feeder edges re-pointed; an
-    // UNTARGETED copy is dropped as dead weight (fold's standing rule on every
-    // restore path). No-op (same array identities) with at most one Output.
+    // isolation. Then SPLIT, over that same combined list so the sibling ids
+    // it mints avoid every id ALREADY on the canvas.
+    //
+    // The Output is no longer a singleton: `foldExtraOutputs` used to collapse
+    // an arriving TARGETED copy into the live one as a material, and that shape
+    // is exactly what the split undoes — an arriving targeted Output is now an
+    // ordinary sibling that contributes its own `parts` entry, and an arriving
+    // UNTARGETED one an ordinary parked Output, as it already was.
+    //
     // Live graph FIRST, so its active sink keeps the flag and an arriving
     // Output lands as an ordinary INACTIVE one (`normalizeActiveOutput` keeps
     // the first `true`; the group's copies were cleared at load anyway).
-    const folded = foldExtraOutputs(
-      normalizeActiveOutput(sanitizeOutputMaterials([group, ...state.nodes, ...members] as AppNode[])),
+    //
+    // The caps cannot delete a LIVE node here: `sanitizeOutputMaterials` caps
+    // PER NODE (named and index sections within one Output), never across the
+    // list, and the split only ever ADDS nodes. The cross-node caps live in the
+    // emission PLANS, where an entry past the cap is left out of the module
+    // rather than removed from the graph.
+    const split = unfoldOutputMaterials(
+      sanitizeOutputMaterials([group, ...state.nodes, ...members] as AppNode[]),
       [...state.edges, ...edges] as AppEdge[],
     );
+    const nodes = normalizeActiveOutput(split.nodes);
     set({
-      nodes: folded.nodes,
+      nodes,
       // The group was sanitized (and reported) at load, so no notice here; the
       // prune still runs over the COMBINED list, the one place a group's
       // section count meets the graph it lands in.
-      edges: pruneOrphanMaterialEdges(folded.nodes, folded.edges).edges,
+      edges: pruneOrphanMaterialEdges(nodes, split.edges).edges,
       syncSource: 'graph',
       isUndoRedo: false,
     });

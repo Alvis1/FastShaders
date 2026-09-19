@@ -23,7 +23,18 @@ import {
   loadSavedGroupsReport,
 } from './useAppStore';
 import { makeNode, makeEdge } from '@/test-utils';
-import { outputMaterials, outputNodes } from '@/utils/outputMaterials';
+import {
+  contributingOutputs,
+  gltfIndexOf,
+  isIndexSection,
+  materialTargetNames,
+  outputMaterials,
+  outputNodes,
+  outputsInEmitOrder,
+  readModelSignature,
+  sanitizeOutputMaterialsReport,
+  unfoldOutputMaterials,
+} from '@/utils/outputMaterials';
 import { embedProjectState, type FastShadersProject } from '@/engine/fastShadersProject';
 import { importShaderText } from '@/engine/projectImport';
 import { graphToCode } from '@/engine/graphToCode';
@@ -61,6 +72,27 @@ const BAD_INDICES: unknown[] = ['1', 1.5, -1, null, 1e9, 3, {}, true];
 const dataOf = (n: AppNode) => n.data as Record<string, unknown>;
 const outIn = (nodes: readonly AppNode[]) => nodes.find((n) => n.id === 'o1')!;
 const codeOf = (g: { nodes: AppNode[]; edges: AppEdge[] }) => graphToCode(g.nodes, g.edges).code;
+
+/**
+ * The document's SECTION BINDINGS in emit order.
+ *
+ * Every restore path now runs `unfoldOutputMaterials`, so what `data.materials`
+ * used to describe lives across sibling Output NODES — one material each, on
+ * bare channel handles. This reads the same list back out, so each case below
+ * still pins what it always pinned: material 0 first (the untargeted default
+ * reports an empty name list), then one entry per section.
+ */
+const sectionsOf = (nodes: readonly AppNode[]) =>
+  outputsInEmitOrder(nodes.filter((n) => n.data.registryType === 'output'))
+    .map((n) => outputMaterials(n)[0])
+    .map((m) => (isIndexSection(m)
+      ? { gltfMaterialIndex: gltfIndexOf(m) }
+      : { meshTargets: materialTargetNames(m) }));
+
+/** The node emission reads the signature and the mirror list from: the
+ *  lowest-ranked contributing Output carrying an index section. */
+const sigNodeOf = (nodes: readonly AppNode[]) =>
+  contributingOutputs(nodes).find((n) => outputMaterials(n).some(isIndexSection));
 
 let ls: Record<string, string>;
 let savedName = '';
@@ -104,12 +136,50 @@ describe('loadGraph (fs:graph)', () => {
     ls['fs:graph'] = JSON.stringify(g0);
     const g = loadGraph()!;
     expect(g.outputSectionsTrimmed).toBe(0);
-    const out = outIn(g.nodes);
-    expect(dataOf(out).materials).toEqual(VALID.materials);
-    expect(dataOf(out).modelSignature).toEqual(VALID.modelSignature);
-    expect(dataOf(out).modelMeshes).toEqual(MESHES);
+    // One node per material now: the untargeted default plus the two index
+    // siblings, in emit order. The module is what must not move — and it does
+    // not, byte for byte, against the folded document it was stored as.
+    expect(sectionsOf(g.nodes)).toEqual([{ meshTargets: [] }, ...VALID.materials]);
+    expect(readModelSignature(sigNodeOf(g.nodes)?.data)).toEqual(SIG);
+    expect(dataOf(sigNodeOf(g.nodes)!).modelMeshes).toEqual(MESHES);
     expect(codeOf(g)).toBe(codeOf(g0));
     expect(codeOf(g)).toContain('materialParts: { "0": { color: color1 }, "2": { color: color1 } }');
+  });
+
+  /**
+   * THE round trip the split's data half rests on: boot 1 stores the folded
+   * document and splits it, the autosave writes the SPLIT shape, boot 2 reads
+   * that back — and must change nothing.
+   *
+   * The sanitizer used to delete a node-level `gltfMaterialIndex` outright
+   * (material 0 could never be an index section while every material lived on
+   * one node), so without teaching it the split shape this second load would
+   * have dropped every index binding AND its signature, silently, leaving a
+   * document of blank untargeted Outputs — and the module's whole
+   * `materialParts` table with it.
+   */
+  it('the SPLIT shape survives a second load unchanged, arrays included', () => {
+    ls['fs:graph'] = JSON.stringify(graphWith(VALID));
+    const first = loadGraph()!;
+    // What the autosave would write — the split document, through JSON.
+    ls['fs:graph'] = JSON.stringify({ nodes: first.nodes, edges: first.edges });
+    const second = loadGraph()!;
+    expect(second.outputSectionsTrimmed).toBe(0);
+    expect(sectionsOf(second.nodes)).toEqual(sectionsOf(first.nodes));
+    expect(readModelSignature(sigNodeOf(second.nodes)?.data)).toEqual(SIG);
+    expect(dataOf(sigNodeOf(second.nodes)!).modelMeshes).toEqual(MESHES);
+    expect(codeOf(second)).toBe(codeOf(first));
+
+    // And the sanitizer + split leave a CLEAN split document by REFERENCE: the
+    // autosave subscriber and `selectionOnlyGraphChange` compare that way, so a
+    // fresh array here would rewrite `fs:graph` on every boot of every
+    // import-built document.
+    const clean = sanitizeOutputMaterialsReport(second.nodes);
+    expect(clean.nodes).toBe(second.nodes);
+    expect(clean.trimmed).toBe(0);
+    const split = unfoldOutputMaterials(second.nodes, second.edges);
+    expect(split.nodes).toBe(second.nodes);
+    expect(split.edges).toBe(second.edges);
   });
 
   it('every invalid signature: sections detached (wiring kept), signature and mirrors gone, no materialParts', () => {
@@ -118,11 +188,12 @@ describe('loadGraph (fs:graph)', () => {
       const g = loadGraph()!;
       const label = JSON.stringify(bad).slice(0, 40);
       expect(g.outputSectionsTrimmed, label).toBe(2);
-      const out = outIn(g.nodes);
-      expect(dataOf(out).materials, label).toEqual([{ meshTargets: [] }, { meshTargets: [] }]);
-      expect(dataOf(out).modelSignature, label).toBeUndefined();
-      expect(dataOf(out).modelMeshes, label).toBeUndefined();
-      expect(g.edges.filter((e) => e.target === 'o1').map((e) => e.targetHandle).sort(), label).toEqual(['m1:color', 'm2:color']);
+      // Both detached sections become empty NAMED siblings; the wiring moves
+      // onto their bare handles with it.
+      expect(sectionsOf(g.nodes), label).toEqual([{ meshTargets: [] }, { meshTargets: [] }, { meshTargets: [] }]);
+      expect(sigNodeOf(g.nodes), label).toBeUndefined();
+      for (const n of outputNodes(g.nodes)) expect(dataOf(n).modelSignature, label).toBeUndefined();
+      expect(g.edges.filter((e) => e.targetHandle === 'color').length, label).toBe(2);
       expect(codeOf(g), label).not.toContain('materialParts');
     }
   });
@@ -133,14 +204,25 @@ describe('loadGraph (fs:graph)', () => {
       const g = loadGraph()!;
       const label = JSON.stringify(bad);
       expect(g.outputSectionsTrimmed, label).toBe(1);
-      expect(dataOf(outIn(g.nodes)).materials, label).toEqual([{ gltfMaterialIndex: 0 }, { meshTargets: [] }]);
-      expect(dataOf(outIn(g.nodes)).modelSignature, label).toEqual({ materials: SIG });
+      expect(sectionsOf(g.nodes), label)
+        .toEqual([{ meshTargets: [] }, { gltfMaterialIndex: 0 }, { meshTargets: [] }]);
+      expect(readModelSignature(sigNodeOf(g.nodes)?.data), label).toEqual(SIG);
       expect(codeOf(g), label).toContain('materialParts: { "0": ');
       expect(codeOf(g), label).not.toContain('"2":');
     }
   });
 
-  it('names on an index section, a node-level index and hostile mirror entries are all cleaned', () => {
+  /**
+   * RE-AIMED with the Output-node split: this used to pin
+   * `'gltfMaterialIndex' in d === false`, i.e. that a node-level index is
+   * always deleted. Since `unfoldOutputMaterials` gives each material its own
+   * node, that key is where a SPLIT index section's binding lives, so a valid
+   * one survives (an invalid one still does not — the sweep below).
+   *
+   * Everything else the case was about is unchanged: names beside an index
+   * ENTRY are stripped and counted, and a hostile mirror list is cleaned.
+   */
+  it('names on an index section and hostile mirror entries are cleaned; a valid node-level index survives', () => {
     ls['fs:graph'] = JSON.stringify(graphWith({
       ...VALID,
       gltfMaterialIndex: 0,
@@ -148,11 +230,24 @@ describe('loadGraph (fs:graph)', () => {
       modelMeshes: [null, { name: '__proto__', material: 0 }, { name: 'ok', material: 99 }, ...MESHES],
     }));
     const g = loadGraph()!;
-    const d = dataOf(outIn(g.nodes));
     expect(g.outputSectionsTrimmed).toBe(1);
-    expect(d.materials).toEqual(VALID.materials);
-    expect('gltfMaterialIndex' in d).toBe(false);
-    expect(d.modelMeshes).toEqual(MESHES);
+    // Material 0 binds to glTF material 0 at NODE level, so the split leaves it
+    // on `o1` itself and the two ENTRIES become siblings.
+    expect(dataOf(outIn(g.nodes)).gltfMaterialIndex).toBe(0);
+    expect(sectionsOf(g.nodes))
+      .toEqual([{ gltfMaterialIndex: 0 }, ...VALID.materials]);
+    expect(dataOf(sigNodeOf(g.nodes)!).modelMeshes).toEqual(MESHES);
+  });
+
+  it('an INVALID node-level index is still deleted on the restore path', () => {
+    for (const bad of BAD_INDICES) {
+      ls['fs:graph'] = JSON.stringify(graphWith({ ...VALID, gltfMaterialIndex: bad }));
+      const g = loadGraph()!;
+      expect('gltfMaterialIndex' in dataOf(outIn(g.nodes)), JSON.stringify(bad)).toBe(false);
+      // Its `materials` index sections are untouched, so the signature stays
+      // on the siblings they became.
+      expect(readModelSignature(sigNodeOf(g.nodes)?.data), JSON.stringify(bad)).toEqual(SIG);
+    }
   });
 });
 
@@ -164,10 +259,9 @@ describe('applyProjectToStore (an opened file)', () => {
   it('a valid Output lands intact and announces nothing', () => {
     expect(importShaderText(embedProjectState(MODULE, project(graphWith(VALID))))).toBe('project');
     const s = useAppStore.getState();
-    const out = outIn(s.nodes);
-    expect(dataOf(out).materials).toEqual(VALID.materials);
-    expect(dataOf(out).modelSignature).toEqual({ materials: SIG });
-    expect(dataOf(out).modelMeshes).toEqual(MESHES);
+    expect(sectionsOf(s.nodes)).toEqual([{ meshTargets: [] }, ...VALID.materials]);
+    expect(readModelSignature(sigNodeOf(s.nodes)?.data)).toEqual(SIG);
+    expect(dataOf(sigNodeOf(s.nodes)!).modelMeshes).toEqual(MESHES);
     expect(s.pendingLimitNotices.filter((n) => n.kind === 'output-sections-trimmed')).toHaveLength(0);
   });
 
@@ -175,9 +269,8 @@ describe('applyProjectToStore (an opened file)', () => {
     const g = graphWith({ ...VALID, modelSignature: { materials: 'x' } });
     expect(importShaderText(embedProjectState(MODULE, project(g)))).toBe('project');
     const s = useAppStore.getState();
-    const out = outIn(s.nodes);
-    expect(dataOf(out).modelSignature).toBeUndefined();
-    expect(outputMaterials(out).slice(1)).toEqual([{ meshTargets: [] }, { meshTargets: [] }]);
+    expect(sigNodeOf(s.nodes)).toBeUndefined();
+    expect(sectionsOf(s.nodes)).toEqual([{ meshTargets: [] }, { meshTargets: [] }, { meshTargets: [] }]);
     const notices = s.pendingLimitNotices.filter((n) => n.kind === 'output-sections-trimmed');
     expect(notices.map((n) => n.detail)).toEqual(['2']);
     expect(graphToCode(s.nodes, s.edges).code).not.toContain('materialParts');
@@ -194,9 +287,10 @@ describe('loadSavedGroupsReport (fs:savedGroups)', () => {
     ]);
     const report = loadSavedGroupsReport();
     expect(report.outputSectionsTrimmed).toBe(1);
-    expect(dataOf(outIn(report.groups[0].nodes)).materials).toEqual(VALID.materials);
-    expect(dataOf(outIn(report.groups[1].nodes)).materials).toEqual([{ meshTargets: [] }, { gltfMaterialIndex: 2 }]);
-    expect(dataOf(outIn(report.groups[1].nodes)).modelSignature).toEqual({ materials: SIG });
+    expect(sectionsOf(report.groups[0].nodes)).toEqual([{ meshTargets: [] }, ...VALID.materials]);
+    expect(sectionsOf(report.groups[1].nodes))
+      .toEqual([{ meshTargets: [] }, { meshTargets: [] }, { gltfMaterialIndex: 2 }]);
+    expect(readModelSignature(sigNodeOf(report.groups[1].nodes)?.data)).toEqual(SIG);
   });
 });
 
@@ -230,12 +324,23 @@ describe('instantiateSavedGroup (the combined list)', () => {
     useAppStore.getState().instantiateSavedGroup('sg1', { x: 500, y: 500 });
     const state = useAppStore.getState();
     const outs = outputNodes(state.nodes);
-    const arriving = outs.find((n) => n.id !== 'liveOut')!;
-    expect(arriving).toBeDefined();
-    expect(dataOf(arriving).activeOutput).toBeUndefined();
+    const arriving = outs.filter((n) => n.id !== 'liveOut');
+    // The group's Output splits on arrival: its default plus its two index
+    // siblings. None of them may take the live graph's flag.
+    // `cloneGroupSnapshot` mints a fresh id for the arriving Output, and the
+    // siblings are derived from it — deterministic, zero-padded.
+    const base = arriving[0].id;
+    expect(arriving.map((n) => n.id)).toEqual([base, `${base}#m01`, `${base}#m02`]);
+    for (const n of arriving) expect(dataOf(n).activeOutput, n.id).toBeUndefined();
     expect(dataOf(outs.find((n) => n.id === 'liveOut')!).activeOutput).toBe(true);
-    expect(dataOf(arriving).materials).toEqual(VALID.materials);
-    expect(dataOf(arriving).modelSignature).toEqual({ materials: SIG });
-    expect(state.edges.filter((e) => e.target === arriving.id).map((e) => e.targetHandle)).toEqual(['m1:color']);
+    expect(arriving.map((n) => gltfIndexOf(outputMaterials(n)[0]))).toEqual([null, 0, 2]);
+    expect(readModelSignature(dataOf(arriving[1]))).toEqual(SIG);
+    // The feeder's `m1:color` wire moved onto the sibling's bare handle, with a
+    // re-derived id — a stale one would collide with the next edge that really
+    // connects that pair.
+    const moved = state.edges.filter((e) => e.target === `${base}#m01`);
+    expect(moved.map((e) => e.targetHandle)).toEqual(['color']);
+    expect(moved[0].id).toContain(`${base}#m01`);
+    expect(state.edges.filter((e) => e.target === base)).toEqual([]);
   });
 });

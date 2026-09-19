@@ -36,7 +36,8 @@ import {
   FS_PROJECT_MAX_BYTES,
   FS_SCENES_SCAN_MAX,
 } from '@/engine/glbShaderContract';
-import { GLB_JSON_MAX_BYTES, GLB_MAX_CHUNKS } from '@/utils/glbContainer';
+import { GLB_JSON_MAX_BYTES, GLB_MAX_CHUNKS, decodeDataUri, parseGlbContainer } from '@/utils/glbContainer';
+import { GLB_READ_MAX_BYTES } from '@/utils/gltfCompression';
 import { GLTF_READ_CAPS } from '@/utils/gltfReader';
 import { safeJsonReviver } from '@/utils/safeJson';
 import { fakeWebp, makeFastShadersGlb, makeFastShadersGlbEscapedKey, makeGlb, makeRealPng, type FsGlbFixture } from '@/test-utils';
@@ -62,6 +63,7 @@ const twin = new Function(
     ' FS_PROJECT_MAX_BYTES: FS_PROJECT_MAX_BYTES, FS_ASSETS_MAX: FS_ASSETS_MAX, FS_ASSET_BYTES_MAX: FS_ASSET_BYTES_MAX,' +
     ' FS_ASSETS_TOTAL_MAX: FS_ASSETS_TOTAL_MAX, FS_ASSET_KEY_RE: FS_ASSET_KEY_RE, FS_GLB_JSON_MAX_BYTES: FS_GLB_JSON_MAX_BYTES,' +
     ' FS_GLB_MAX_CHUNKS: FS_GLB_MAX_CHUNKS, FS_SCENES_SCAN_MAX: FS_SCENES_SCAN_MAX, FS_PROJECT_BEGIN: FS_PROJECT_BEGIN,' +
+    ' FS_BUFFER_MAX_BYTES: FS_BUFFER_MAX_BYTES, fsDecodeDataUri: fsDecodeDataUri,' +
     ' FS_PROJECT_END: FS_PROJECT_END, FS_JSON_SNIFF: FS_JSON_SNIFF, FS_JSON_ESCAPE_SNIFF: FS_JSON_ESCAPE_SNIFF,' +
     ' FS_READ_CAPS: FS_READ_CAPS, FS_REASON_TEXT: FS_REASON_TEXT };',
 )() as Any;
@@ -146,6 +148,10 @@ describe('podest GLB reader twin — constants', () => {
     expect(twin.FS_ASSET_KEY_RE.source).toBe(FS_ASSET_KEY_RE.source);
     expect(twin.FS_GLB_JSON_MAX_BYTES).toBe(GLB_JSON_MAX_BYTES);
     expect(twin.FS_GLB_MAX_CHUNKS).toBe(GLB_MAX_CHUNKS);
+    // The drop's `data:` buffer decode cap. vitest runs the WEB profile, so
+    // this is the 96 MiB literal podest keeps inside the desktop app too
+    // (zipReader's own convention for its caps).
+    expect(twin.FS_BUFFER_MAX_BYTES).toBe(GLB_READ_MAX_BYTES);
     expect(twin.FS_SCENES_SCAN_MAX).toBe(FS_SCENES_SCAN_MAX);
     expect(twin.FS_PROJECT_BEGIN).toBe(FS_PROJECT_BEGIN);
     expect(twin.FS_PROJECT_END).toBe(FS_PROJECT_END);
@@ -153,6 +159,39 @@ describe('podest GLB reader twin — constants', () => {
     expect(twin.FS_JSON_ESCAPE_SNIFF).toBe(FS_JSON_ESCAPE_SNIFF);
     for (const k of ['accessors', 'images', 'meshes', 'primitives'] as const) expect(twin.FS_READ_CAPS[k], k).toBe(GLTF_READ_CAPS[k]);
     expect(Object.keys(twin.FS_REASON_TEXT).sort()).toEqual(['damaged', 'inconsistent', 'too-large', 'unsupported-version']);
+  });
+
+  it('the `data:` buffer decoder answers exactly what glbContainer\'s does', () => {
+    // The drop's only new dependency, and the twin's is hand-written, so the
+    // fixtures alone would never reach the canonical-base64 rules: an
+    // over-permissive twin would decode a URI the editor refuses, zero it, and
+    // hand back different bytes on a file nothing in FIXTURES spells.
+    const B = 'data:application/octet-stream;base64,';
+    const URIS = [
+      `${B}QQ==`, `${B}QUJD`, B, // ok: one byte, three bytes, empty
+      'data:;base64,QQ==', 'data:application/gltf-buffer;base64,QQ==', // the other two buffer media types
+      'DATA:APPLICATION/OCTET-STREAM;BASE64,QQ==', // the scheme, the type and `;base64` are case-insensitive
+      'data:image/png;base64,QQ==', // an image type is not a buffer type
+      'data:application/octet-stream,QQ==', // no `;base64` at all
+      'data:application/octet-stream;charset=utf-8;base64,QQ==', // a second parameter
+      `${B}QR==`, // non-zero discarded bits: canonical spelling is QQ==
+      `${B}QUI=`, `${B}QUJ=`, // the 1-pad rule, passing then failing
+      `${B}QQ`, `${B}Q===`, `${B}-_==`, `${B}QQ ==`, `${B}Q\nQ==`, // length, padding, URL-safe, whitespace
+      `data:${'x'.repeat(130)};base64,QQ==`, // a header past 128 characters
+      'https://blocked.test/module.bin', 'data:application/octet-stream', '',
+    ];
+    const flat = (r: { ok: true; mime: string; bytes: Uint8Array } | { ok: false }) =>
+      r.ok ? { mime: r.mime, bytes: [...r.bytes] } : null;
+    for (const uri of URIS) {
+      const mine = decodeDataUri(uri, 'buffer', GLB_READ_MAX_BYTES);
+      const theirs = twin.fsDecodeDataUri(uri, GLB_READ_MAX_BYTES);
+      expect(theirs === null ? null : { mime: theirs.mime, bytes: [...theirs.bytes] }, uri).toEqual(flat(mine));
+    }
+    // Not vacuous: the list really does hold accepted AND refused spellings.
+    expect(URIS.filter((u) => decodeDataUri(u, 'buffer', GLB_READ_MAX_BYTES).ok).length).toBe(7);
+    // The size is checked BEFORE a byte is decoded, on both sides.
+    expect(twin.fsDecodeDataUri(`${B}QUJD`, 2)).toBeNull();
+    expect(decodeDataUri(`${B}QUJD`, 'buffer', 2).ok).toBe(false);
   });
 
   it('the reviver drops the same keys as safeJsonReviver', () => {
@@ -187,6 +226,30 @@ describe('podest GLB reader twin — agrees with the editor, fixture for fixture
     expectAgree(evil, 'escaped key');
     const out = twin.fsDropPayload(evil) as Uint8Array;
     expect(new TextDecoder().decode(out)).not.toContain('export default');
+  });
+
+  it('a module in a data: BUFFER is zeroed by BOTH — agreement alone passes while both are blind', () => {
+    // The `data: buffer module` row above goes through expectAgree, and it
+    // agreed for as long as neither side touched a buffer other than the BIN:
+    // two readers blind in the same way are byte-identical. So decode the
+    // buffer and look, the way the escaped-key case does.
+    const src = makeFastShadersGlb({ moduleBuffer: 'data-uri', project: PROJECT });
+    const moduleOf = (bytes: Uint8Array): string => {
+      const c = parseGlbContainer(bytes);
+      if (!c.ok) throw new Error('container: ' + c.error);
+      const doc = JSON.parse(c.chunks.json, safeJsonReviver) as { buffers: Array<{ uri?: unknown }> };
+      const d = decodeDataUri(String(doc.buffers[1].uri), 'buffer', 1 << 24);
+      if (!d.ok) throw new Error('buffers[1]: ' + d.error);
+      return new TextDecoder().decode(d.bytes);
+    };
+    expect(moduleOf(src)).toContain('export default');
+    const mine = dropFastShadersPayload('glb', src);
+    expect(mine.ok).toBe(true);
+    if (!mine.ok) return;
+    const theirs = twin.fsDropPayload(src) as Uint8Array;
+    expect(moduleOf(mine.bytes), 'editor').not.toContain('export default');
+    expect(moduleOf(theirs), 'twin').not.toContain('export default');
+    expectAgree(src, 'data: buffer module');
   });
 
   it('non-GLB bytes, a short file, a broken container after a sniff hit, and JSON that will not parse', () => {

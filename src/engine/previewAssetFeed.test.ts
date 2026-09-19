@@ -254,7 +254,7 @@ describe('ShaderPreview', () => {
     const at = SRC.indexOf('const previewModule = useMemo(');
     const decl = SRC.slice(at, SRC.indexOf('\n  );', at));
     expect(decl).toContain('buildPreviewShaderModule(\n      debouncedPreviewCode,');
-    expect(decl).toContain('materialPartsMirrorPlan(findDefaultOutput(');
+    expect(decl).toContain('materialPartsMirrorPlanAcross(contributingOutputs(');
   });
 
   it('bakes the boot list into the document and seeds the sent set from it', () => {

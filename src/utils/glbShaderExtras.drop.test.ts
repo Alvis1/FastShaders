@@ -10,13 +10,14 @@ import type { Material, Mesh } from 'three';
 import { GLTF_NODE_GLOBALS, parseWith } from '../gltfTestFixtures';
 import { embedProjectState, type FastShadersProject } from '@/engine/fastShadersProject';
 import { FS_PROJECT_BEGIN, hasFsExtras } from '@/engine/glbShaderContract';
-import { parseGlbContainer } from './glbContainer';
+import { decodeDataUri, encodeDataUri, parseGlbContainer } from './glbContainer';
 import { readGltfModel } from './gltfReader';
 import { planTextureStrip, stripGltfTextures } from './gltfStrip';
 import { modelSignatureMatches } from '@/engine/materialPartsContract';
 import { safeJsonReviver } from './safeJson';
 import { FS_JSON_SNIFF, dropFastShadersPayload, readGlbFsExtras } from './glbShaderExtras';
 import {
+  FS_FIXTURE_MODULE,
   FS_FIXTURE_MODULE_MARKER,
   TRIANGLE_POSITIONS,
   makeFastShadersGlb,
@@ -48,6 +49,14 @@ function binOf(bytes: Uint8Array): Uint8Array {
   const c = parseGlbContainer(bytes);
   if (!c.ok || !c.chunks.bin) throw new Error('no BIN');
   return c.chunks.bin;
+}
+/** The DECODED bytes of a `data:` buffer — the module in one is base64, so the
+ *  raw-text assertions the BIN cases use would pass vacuously over it. */
+function dataBufferOf(bytes: Uint8Array, index: number): Uint8Array {
+  const def = (docOf(bytes).buffers as Array<{ uri?: unknown }>)[index];
+  const d = decodeDataUri(String(def.uri), 'buffer', 1 << 24);
+  if (!d.ok) throw new Error(`buffers[${index}]: ${d.error}`);
+  return d.bytes;
 }
 const dropped = (kind: 'obj' | 'glb' | 'gltf', bytes: Uint8Array<ArrayBuffer>) => {
   const r = dropFastShadersPayload(kind, bytes);
@@ -106,6 +115,48 @@ describe('dropFastShadersPayload', () => {
     expect(hasFsExtras(docOf(r.bytes))).toBe(false);
     expect(TEXT(r.bytes)).toContain(FS_FIXTURE_MODULE_MARKER); // view 2 kept: it is real data
     expect(TEXT(r.bytes)).not.toContain(FS_PROJECT_BEGIN); // view 3 zeroed
+  });
+
+  it('a payload in a data: BUFFER is zeroed too, not only one in the BIN', () => {
+    // buffers[0] is the BIN (triangle, PNG, project); buffers[1] a `data:`
+    // buffer holding the module followed by eight bytes of something else, so
+    // the test can tell "the range was zeroed" from "the buffer was wiped".
+    // The reader REFUSES such a file (a module view must be on the BIN), which
+    // is exactly why the drop may not lean on it: `extras` going is not enough
+    // — the bytes ride the IndexedDB mirror, the XR blob at the app's REAL
+    // origin and every zip `models/` entry (integration §5 layer L1).
+    const TAIL = new Uint8Array([9, 8, 7, 6, 5, 4, 3, 2]);
+    const moduleBytes = new TextEncoder().encode(FS_FIXTURE_MODULE);
+    const input = payloadGlb({
+      moduleBuffer: 'data-uri',
+      json: (d) => {
+        const whole = new Uint8Array(moduleBytes.length + TAIL.length);
+        whole.set(moduleBytes);
+        whole.set(TAIL, moduleBytes.length);
+        (d.buffers as Record<string, unknown>[])[1] = {
+          byteLength: whole.length,
+          uri: encodeDataUri('application/octet-stream', whole),
+        };
+      },
+    });
+    expect(readGlbFsExtras(input)).toEqual({ state: 'refused', reason: 'damaged' });
+    const before = dataBufferOf(input, 1);
+    expect(TEXT(before)).toContain(FS_FIXTURE_MODULE_MARKER); // not vacuous: it really is in buffer 1
+    const r = dropped('glb', input);
+    expect(r.dropped).toBe(true);
+    const after = dataBufferOf(r.bytes, 1);
+    expect(after.length).toBe(before.length);
+    expect(TEXT(after)).not.toContain(FS_FIXTURE_MODULE_MARKER);
+    expect(after.subarray(0, moduleBytes.length).every((b) => b === 0)).toBe(true);
+    expect([...after.subarray(moduleBytes.length)]).toEqual([...TAIL]); // only the view's own range
+    // The BIN half is unchanged by the second buffer: the project is zeroed,
+    // the triangle and the asset PNG stand, and the file keeps its length
+    // (the re-encoded URI keeps its media type, so the JSON keeps its width).
+    expect(TEXT(r.bytes)).not.toContain(FS_PROJECT_BEGIN);
+    expect([...binOf(r.bytes).subarray(0, 36)]).toEqual([...TRIANGLE_POSITIONS]);
+    expect(r.bytes.length).toBe(input.length);
+    expect(hasFsExtras(docOf(r.bytes))).toBe(false);
+    expect(docOf(r.bytes).bufferViews).toEqual(docOf(input).bufferViews);
   });
 
   it('an ESCAPED key is not invisible: read and drop answer it as they answer the literal one', () => {

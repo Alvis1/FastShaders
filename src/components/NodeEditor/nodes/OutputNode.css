@@ -30,16 +30,18 @@
   background: var(--cat-output);
 }
 
-/* The socket the Output -> 3D-preview wire leaves from — ONE PER MATERIAL
-   SECTION (`.output-node__material` is the offset parent, so each socket
-   centres on ITS OWN block and PreviewLink draws one wire per socket) — and,
-   since 2026-09-03, THE ACTIVATION CONTROL: several output nodes may coexist
-   and exactly one is ACTIVE (utils/sdfPartition.ts `activeSink`); clicking
-   any socket on a node makes THAT node the active sink. The active node's
-   sockets are drawn CONNECTED (solid fill, the wire's colour); an inactive
-   node's are HOLLOW — a white disc with a ring in the wire's colour — the
+/* The socket the Output -> 3D-preview wire leaves from — ONE PER NODE, since
+   one Output node IS one material (`.output-node__material` is the offset
+   parent and EXCLUDES the header, so the socket centres on the rows rather
+   than half a header lower; PreviewLink draws one wire per CONTRIBUTING
+   node) — and, since 2026-09-03, THE ACTIVATION CONTROL: several output nodes
+   may coexist and exactly one UNTARGETED one is ACTIVE (utils/sdfPartition.ts
+   `activeSink`); clicking the socket makes THAT node the active sink. An
+   active node's socket is drawn CONNECTED (solid fill, the wire's colour); a
+   PARKED one's is HOLLOW — a white disc with a ring in the wire's colour — the
    ordinary "free port" reading, which is exactly what it is: a socket the
-   preview could be wired to.
+   preview could be wired to. A TARGETED node's is solid and inert (D2, see
+   `--fixed` below): it always contributes, so it has nothing to activate.
 
    TWICE the normal socket size (`--handle-size`, which coarse pointers
    already bump from 10 to 12px, so this follows touch too).
@@ -60,19 +62,21 @@
    rule opts back in: the palette tiles and the node-editor overview render
    the same class as an inert `<span>` inside `pointer-events: none` cards,
    and a control must never be reachable from a static replica. On the
-   canvas the element is a real `<button>` carrying `nodrag` (React Flow's
-   drag filter) and stopping its pointerdown, so a press activates instead
-   of dragging the node or panning the canvas from what looks like a port.
-   It is NOT a React Flow Handle — the Output has no outputs and a real
-   handle would invite a wire that can never land.
+   canvas an UNTARGETED node renders a real `<button>` carrying `nodrag`
+   (React Flow's drag filter) and stopping its pointerdown, so a press
+   activates instead of dragging the node or panning the canvas from what
+   looks like a port; a TARGETED node renders an inert `<span>` that keeps
+   `nodrag` and the same pointerdown stop (and real pointer-events, or its
+   `title` would never open). Neither is a React Flow Handle — the Output has
+   no outputs and a real handle would invite a wire that can never land.
 
    It is centred ON the node's right border the way a real handle is (half its
-   width outside — a material block's padding box is the node's, so `right`
-   resolves identically to the old node-level placement), and vertically on its
-   MATERIAL BLOCK, so each section's socket sits at the middle of that section
-   however many rows it grows. PreviewLink anchors a wire on every socket of
-   the ACTIVE node, so moving them in CSS moves the wires with no second rule
-   to keep in step. */
+   width outside — the material block's padding box is the node's, so `right`
+   resolves identically to the old node-level placement), and vertically on
+   that block, which EXCLUDES the header, so the socket sits at the middle of
+   the rows however many the node grows. PreviewLink anchors one wire on each
+   CONTRIBUTING node's socket, so moving them in CSS moves the wires with no
+   second rule to keep in step. */
 .output-node__preview-socket {
   position: absolute;
   top: 50%;
@@ -112,6 +116,52 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15), inset 0 0 0 4px var(--node-cost-text, #000);
 }
 
+/* A TARGETED node's socket is INERT (owner decision D2): it is an anchor, not
+   the activation control, because activation only decides which UNTARGETED
+   Output is the whole-model material — a targeted one contributes whatever the
+   flag says. Solid, like the contributing node it belongs to; never hollow,
+   which means "parked". It keeps real pointer-events so its `title` can open
+   (TooltipLayer resolves its host from `elementFromPoint`, so a title on a
+   `pointer-events: none` element never fires) and a default cursor, so it does
+   not invite the press it would ignore. */
+.react-flow .output-node__preview-socket--fixed {
+  cursor: default;
+}
+
+/* TWICE the usual size (owner request, 2026-09-18: "the points above the
+   output nodes are 2x larger"). An Output's number is not one node's price
+   among fifty — it is what the shader would cost with THAT sink driving, the
+   figure the cost pill's meter shows and the one a multi-Output document is
+   read by — so it outranks the per-node badges around it.
+
+   SCOPED `.react-flow`, the NodeBase.css cost-badge-colour precedent, and here
+   it is load-bearing rather than tidy: `NodePreviewCard` renders this exact
+   markup (`.output-node` wrapping `.node-base__cost-badge`) for the palette
+   tile, which lives OUTSIDE the canvas inside `.content-browser__items`'
+   `overflow-y: hidden` — and that never measures an absolutely-positioned
+   badge, so an unscoped rule would silently clip the tile's number.
+
+   `top` moves with the size: the badge is `line-height: 1`, so at 12px/-14px
+   its bottom sits 2px above the card. 24px keeps that 2px at -26px.
+
+   CHECKED against the GROUP FRAME's badge band, and it FITS — `BADGE_CLEARANCE`
+   (14, in store/useAppStore.ts `createGroupFromSelection` and registry/
+   codeGroupBuilder.ts) is not the whole band, which is the trap in reading it:
+   it is the EXTRA room on top of the frame's own padding, and the header height
+   is accounted for separately in both. A top-row member sits PADDING(24) +
+   BADGE_CLEARANCE(14) = 38px below a user frame's header, and PAD(20) + 14 =
+   34px below a built-in one's, against the 26px this badge reaches — 12px and
+   8px of slack. The Output card also carries no cost SCALE (unlike the
+   Preview/Clock/MathPreview cards, which multiply their own box by up to 1.35
+   and are what the 14 was sized for), so 26px is its real extent; hover's
+   `--fs-node-scale` takes it to ~26.5. Nothing overlaps and `BADGE_CLEARANCE`
+   does not have to move — which matters, because raising it would re-lay-out
+   every built-in group's committed snapshot. */
+.react-flow .output-node .node-base__cost-badge {
+  font-size: 24px;
+  top: -26px;
+}
+
 /* An INACTIVE node's badge is what the shader WOULD cost with this node
    active — muted, so it reads as a comparison figure and not as the total
    the meter shows. */
@@ -124,22 +174,29 @@
   position: relative;
 }
 
-/* The DEFAULT section while the sections below cover every mesh of the model on
-   screen (`defaultSectionUnused`): its channels change nothing, which is what
-   made an import-built node read as a second, dead Output. Only the CHANNEL
-   ROWS dim — the mesh picker keeps its own (equal) dim and its explanation, and
-   the section's preview socket stays at full strength because it is the node's
-   activation control, not part of the fallback. Nothing is hidden and nothing
-   is disabled: the block is the fallback for a mesh whose material has no
-   section, and for the next model loaded. */
-.output-node__material--unused .output-node__section {
+/* Two states in which this node's channels change nothing right now:
+   `--unused`, the DEFAULT while the other Outputs cover every mesh of the model
+   on screen (`defaultSectionUnused`) — what made an import-built document's
+   untargeted node read as a second, dead Output — and `--parked`, an untargeted
+   node that is not the default because another one carries the active flag.
+   Only the CHANNEL ROWS dim: the mesh picker keeps its own (equal) dim and its
+   own explanation, and the preview socket stays at full strength because it is
+   the node's activation control (and, on a parked node, the way back). Nothing
+   is hidden and nothing is disabled — `--unused` is still the fallback for a
+   mesh whose material has no section and for the next model loaded, and
+   `--parked` is one click from being the whole-model material again. */
+.output-node__material--unused .output-node__section,
+.output-node__material--parked .output-node__section {
   opacity: 0.55;
 }
 
-/* The mesh a material shades: its picker, plus (added materials only) the
-   control to drop it. It OPENS every material block — under the header for
-   material 0, under the divider for the rest — so the mesh is always the first
-   thing read about the rows beneath it. */
+/* The mesh this node's material shades: the picker, or an index-bound node's
+   read-only chip. It OPENS the material block, directly under the header, so
+   the mesh is always the first thing read about the rows beneath it. It is
+   rendered only when there is something to say (`showMeshRow`): a model is
+   loaded, or the node names a mesh, or it is index-bound, or it is PARKED —
+   an untargeted node on a modelless document has no binding to show and no
+   mesh list to offer. */
 .output-node__mesh-row {
   display: flex;
   align-items: center;
@@ -147,11 +204,15 @@
   padding: 3px 8px 1px;
 }
 
-/* Sections hidden because the loaded model has NONE of their meshes (dormant
-   — see dormantMaterialIndices). The chip is the "nothing silently vanished"
-   signal: it counts them, its title names their meshes, and the sections
-   return untouched when a matching model is loaded. Muted and dashed so it
-   reads as a note about absent content, not as a control. */
+/* A node asleep because the loaded model has NONE of its meshes — or is not
+   the glTF its material index was built from (dormant, see
+   dormantIndicesForPreview). Since the per-material split that is the WHOLE
+   node: it renders its header plus this chip and unmounts every channel row,
+   so its wires stay invisible exactly as a dormant section's did. The chip is
+   the "nothing silently vanished" signal: its title names the meshes it waits
+   for, and the node comes back untouched — wiring intact — when a matching
+   model is loaded. Muted and dashed so it reads as a note about absent
+   content, not as a control. */
 .output-node__dormant {
   margin: 3px 8px 4px;
   padding: 2px 6px;
@@ -162,44 +223,18 @@
   text-align: center;
 }
 
-/* The bottom row's "+ Add output". Full width so it reads as an action
-   belonging to the whole node rather than to the last material above it. */
-.output-node__add-row {
-  padding: 2px 8px 4px;
+/* A dormant node is a header and a chip, so it has no rows to set its width.
+   The node's own `min-width: 140px` keeps it recognisable as the same card
+   rather than shrinking to the width of the chip's text. */
+.output-node--dormant .output-node__dormant {
+  margin-top: 4px;
 }
 
-.output-node__add {
-  width: 100%;
-  padding: 2px 0;
-  border: 1px dashed var(--border-subtle);
-  border-radius: 0;
-  background: transparent;
-  color: rgba(var(--node-ink-rgb), 0.55);
-  font-family: var(--font-sans);
-  font-size: 9px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.output-node__add:hover {
-  border-color: var(--cat-output);
-  color: rgba(var(--node-ink-rgb), 0.85);
-  background: rgba(var(--node-ink-rgb), 0.04);
-}
-
-/* A cap announces itself instead of making the button vanish: at the section
-   cap, or with every mesh already claimed, "+ Add output" stays drawn, dimmed,
-   with the reason in its title. `aria-disabled`, never `disabled` — WebKit
-   drops the native title of a genuinely disabled control, and the reason is
-   the only thing this state has to say. */
-.output-node__add--disabled,
-.output-node__add--disabled:hover {
-  opacity: 0.45;
-  cursor: default;
-  border-color: var(--border-subtle);
-  color: rgba(var(--node-ink-rgb), 0.55);
-  background: transparent;
-}
+/* NB "+ Add output" is GONE (owner decision D3, 2026-09-18). A material is a
+   NODE now, so the palette tile and Shift+A already add one and the mesh
+   dropdown targets it — and its two cap sentences named `MAX_ADDED_MATERIALS`,
+   which stopped describing anything the moment a node stopped holding a stack.
+   `.output-node__add*` went with it. */
 
 .output-node__title {
   font-size: 10px;
@@ -249,8 +284,9 @@
    `.node-base__row .react-flow__handle` in NodeBase.css: the transform
    REPLACES React Flow's own, which carried the horizontal centring, so the
    inset below is the other half of it. Only `-left` appears here because these
-   rows carry no right-edge HANDLE — each material's output socket is a
-   decorative `<span>`, placed by its own rule further down. */
+   rows carry no right-edge HANDLE at all: the node's one output socket is not
+   a React Flow Handle but a `<button>` (untargeted) or a `<span>` (targeted),
+   anchored to the MATERIAL BLOCK by its own rule further up. */
 .output-node__row .react-flow__handle {
   top: 50% !important;
   transform: translateY(-50%) !important;
@@ -314,21 +350,14 @@
   width: 32px;
 }
 
-/* Divider between one material and the next — the node's own FRAME colour, run
-   edge to edge, so a stack of materials reads as sections of one framed node
-   rather than as a list of faint separators. Deliberately the same red as the
-   1.5px border, and deliberately heavier than `__subdivider`, which separates
-   the two halves of a SINGLE material. */
-.output-node__divider {
-  height: 1.5px;
-  margin: 4px 0;
-  background: var(--cat-output);
-}
+/* NB `.output-node__divider` is GONE. It separated one MATERIAL from the next
+   inside a stacked Output, drawn in the node's own frame colour so the stack
+   read as sections of one framed node; with one material per node there is
+   never a next material to divide from, and the node's own border does that
+   job. `__subdivider` below is the surviving line and now the only one. */
 
-/* Between the Pixel and Vertex sections of ONE material — deliberately fainter
-   than `__divider`, which separates one material from the next: the two lines
-   mean different things and a reader must be able to tell which block they are
-   still inside. */
+/* Between the Pixel and Vertex sections of ONE material — faint, because the
+   two halves belong to the same block. */
 .output-node__subdivider {
   height: 1px;
   margin: 2px 10px;

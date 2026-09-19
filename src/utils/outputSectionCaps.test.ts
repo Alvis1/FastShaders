@@ -17,9 +17,10 @@ import {
   sanitizeOutputMaterials,
   sanitizeOutputMaterialsReport,
   pruneOrphanMaterialEdges,
-  foldExtraOutputs,
+  unfoldOutputMaterials,
+  contributingOutputs,
+  planNamedPartsAcross,
   sectionLabel,
-  outputNodes,
   outputMaterials,
   materialTargetNames,
   MAX_PARTS,
@@ -254,34 +255,44 @@ describe('pruneOrphanMaterialEdges — a dropped section leaves no wires behind'
   });
 });
 
-describe('foldExtraOutputs folds only what FITS and deletes nothing', () => {
-  it('leaves over-cap legacy extras on the canvas as inactive Outputs, wiring intact', () => {
+/**
+ * RE-AIMED: `foldExtraOutputs` is RETIRED (the Output-node split, step 6a).
+ *
+ * The fold's promise here was "deletes nothing": an extra past `MAX_PARTS` was
+ * left on the canvas as an inactive Output with its wiring, because the earlier
+ * code deleted it and silently dropped its edges. With the fold gone that
+ * promise is structural — no extra is ever folded, so no extra can be lost —
+ * and the cap that used to decide moved to EMISSION, where an entry past
+ * `MAX_PART_ENTRIES` is left out of the module rather than out of the graph.
+ */
+describe('legacy extras are never folded, so none can be lost to a cap', () => {
+  it('every extra keeps its node and its wiring, whatever the count', () => {
     const nodes: AppNode[] = [output('o1')];
     const edges: AppEdge[] = [];
     for (let i = 0; i < MAX_PARTS + 3; i++) {
       nodes.push(output(`x${i}`, { meshTarget: { name: `mesh${i}` } }));
       edges.push(makeEdge(`c${i}`, 'out', `x${i}`, 'color'));
     }
-    const folded = foldExtraOutputs(nodes, edges);
-    const keep = folded.nodes.find((n) => n.id === 'o1')!;
-    expect(outputMaterials(keep)).toHaveLength(1 + MAX_PARTS);
-    expect(outputNodes(folded.nodes).map((n) => n.id)).toEqual(['o1', 'x9', 'x10', 'x11']);
-    for (const id of ['x9', 'x10', 'x11']) {
-      const original = edges.find((e) => e.target === id)!;
-      expect(folded.edges, id).toContain(original);
+    const split = unfoldOutputMaterials(nodes, edges);
+    expect(split.nodes).toBe(nodes);
+    expect(split.edges).toBe(edges);
+    // Each still holds exactly one material — its own — on bare handles.
+    for (let i = 0; i < MAX_PARTS + 3; i++) {
+      expect(outputMaterials(nodes.find((n) => n.id === `x${i}`)!), `x${i}`).toHaveLength(1);
     }
-    expect(folded.edges.filter((e) => e.target === 'o1').map((e) => e.targetHandle))
-      .toEqual(Array.from({ length: MAX_PARTS }, (_, k) => `m${k + 1}:color`));
+    // And every one of them emits, which the fold's cap used to prevent.
+    expect(planNamedPartsAcross(contributingOutputs(nodes)).entries).toHaveLength(MAX_PARTS + 3);
   });
 
-  it('returns the SAME arrays when nothing fits', () => {
+  it('the load-time arrays are untouched for a graph of any number of Outputs', () => {
     const keep = output('o1', { materials: names('k', MAX_PARTS).map((n) => ({ meshTargets: [n] })) });
     const extra = output('x', { meshTarget: { name: 'late' } });
     const nodes = [keep, extra];
     const edges = [makeEdge('c', 'out', 'x', 'color')];
-    const folded = foldExtraOutputs(nodes, edges);
-    expect(folded.nodes).toBe(nodes);
-    expect(folded.edges).toBe(edges);
+    const split = unfoldOutputMaterials(nodes, edges);
+    // `o1` DOES carry materials, so it splits; `x` is left exactly as it is.
+    expect(split.nodes.find((n) => n.id === 'x')).toBe(extra);
+    expect(split.edges).toContain(edges[0]);
   });
 });
 

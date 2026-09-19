@@ -134,8 +134,17 @@ export interface SingleGlbTooLarge {
 
 /**
  * null = the default (fallback-mode) file reopens. `<=` fits: the reader's
- * pre-read check is a strict `>`. Non-finite or negative sizes count as 0,
- * the guard formatMiB applies.
+ * pre-read check is a strict `>`.
+ *
+ * Non-finite or negative sizes count as 0 — a DEFENSIVE clamp now, not a load-
+ * bearing one, and it used to be the opposite. The repacker's 4-alignment was
+ * `(n + 3) & ~3`, which coerces through ToInt32 and returns a negative total
+ * from 2**31 up; `n()` then mapped that to 0, `0 <= limitBytes` returned null,
+ * and the one size this dialog exists for was the one size at which it could
+ * not open — the build then threw `Invalid typed array length` instead. The
+ * repacker guards the overflow itself now (glbRepack.ts), so nothing upstream
+ * produces a negative; treating one as 0 stays wrong-direction for a SIZE, so
+ * do not lean on it.
  */
 export function planSingleGlbPreflight(
   sizes: { fallback: GlbRepackSize; required: GlbRepackSize; noKtx2?: GlbRepackSize },

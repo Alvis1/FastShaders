@@ -17,7 +17,15 @@ import { graphToCode } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode, AppEdge, OutputMaterial } from '@/types';
-import { MAX_INDEX_MATERIALS, outputMaterials } from '@/utils/outputMaterials';
+import {
+  MAX_INDEX_MATERIALS,
+  contributingOutputs,
+  gltfIndexOf,
+  isIndexSection,
+  materialTargetNames,
+  outputMaterials,
+  outputsInEmitOrder,
+} from '@/utils/outputMaterials';
 import { previewGraph } from '@/utils/nodePreview';
 
 const SIG = ['Body', 'Glass', 'Trim'];
@@ -34,6 +42,43 @@ function indexOutput(materials: unknown[], extra: Record<string, unknown> = {}):
 const returnLine = (code: string) => code.split('\n').find((l) => l.trimStart().startsWith('return '))!;
 const outOf = (nodes: AppNode[]) => nodes.find((n) => n.data.registryType === 'output')!;
 const dataOf = (n: AppNode) => n.data as Record<string, unknown>;
+const outsOf = (nodes: readonly AppNode[]) =>
+  outputsInEmitOrder(nodes.filter((n) => n.data.registryType === 'output'));
+
+/**
+ * The parse's ADDED sections, in emit order — exactly the list `data.materials`
+ * used to hold on the one Output node.
+ *
+ * `codeToGraph` mints one Output NODE per material now (the default first, then
+ * the index entries ascending, then the named ones), so what these cases pin —
+ * WHICH sections a module parses back to, in WHICH order, carrying WHICH
+ * settings — is read back across the siblings instead of off one node's array.
+ * Nothing is weakened: the binding and the settings are the same facts, and the
+ * order is `emitRank`, which is what emission itself walks.
+ */
+const sectionsOf = (nodes: readonly AppNode[]): OutputMaterial[] =>
+  outsOf(nodes).slice(1).map((n) => {
+    const m = outputMaterials(n)[0];
+    const entry: OutputMaterial = isIndexSection(m)
+      ? { gltfMaterialIndex: gltfIndexOf(m)! }
+      : { meshTargets: materialTargetNames(m) };
+    if (m.materialSettings) entry.materialSettings = m.materialSettings;
+    return entry;
+  });
+
+/** The node emission reads the signature from: the lowest-ranked contributing
+ *  Output carrying an index section. */
+const sigNodeOf = (nodes: readonly AppNode[]) =>
+  contributingOutputs(nodes).find((n) => outputMaterials(n).some(isIndexSection));
+
+/** Every wire into an Output NODE as `<emitRank>:<handle>`, so a case that used
+ *  to name `m<n>:color` on one node still reads as "section n's colour". */
+const sectionWires = (nodes: readonly AppNode[], edges: readonly AppEdge[]) => {
+  const rank = new Map(outsOf(nodes).map((n, i) => [n.id, i]));
+  return edges
+    .filter((e) => rank.has(e.target))
+    .map((e) => `m${rank.get(e.target)}:${e.targetHandle}`);
+};
 
 /** Apply the emitted code and emit again, twice — the graph must not grow. */
 function applyTwice(nodes: AppNode[], edges: AppEdge[]) {
@@ -135,7 +180,7 @@ describe('emission', () => {
     expect(code).toContain('"ls\\u2028x", "ps\\u2029x"');
     const parsed = codeToGraph(code);
     expect(parsed.errors.filter((e) => e.severity !== 'warning')).toEqual([]);
-    expect(dataOf(outOf(parsed.nodes)).modelSignature).toEqual({ materials: names });
+    expect(dataOf(sigNodeOf(parsed.nodes)!).modelSignature).toEqual({ materials: names });
     expect(graphToCode(parsed.nodes, parsed.edges).code).toBe(code);
   });
 
@@ -169,17 +214,14 @@ describe('the parse (codeToGraph)', () => {
     expect(r.second).toBe(r.first);
     expect(r.third).toBe(r.first);
     expect(r.b.nodes).toHaveLength(r.a.nodes.length);
-    const out = outOf(r.a.nodes);
-    const mats = outputMaterials(out).slice(1);
-    expect(mats).toEqual([
+    expect(sectionsOf(r.a.nodes)).toEqual([
       { gltfMaterialIndex: 0, materialSettings: { transparent: true } },
       { gltfMaterialIndex: 2 },
       { meshTargets: ['Named'] },
     ]);
-    expect(dataOf(out).modelSignature).toEqual({ materials: SIG });
-    // Channels are wired through the section's POSITIONAL handles.
-    const handles = r.a.edges.filter((e) => e.target === out.id).map((e) => e.targetHandle).sort();
-    expect(handles).toEqual(['m1:color', 'm2:color', 'm3:color']);
+    expect(dataOf(sigNodeOf(r.a.nodes)!).modelSignature).toEqual({ materials: SIG });
+    // Each section's colour lands on its OWN node's bare `color` handle.
+    expect(sectionWires(r.a.nodes, r.a.edges).sort()).toEqual(['m1:color', 'm2:color', 'm3:color']);
   });
 
   it('a named section authored BEFORE an index one is normalized to the canonical order by an Apply', () => {
@@ -191,11 +233,14 @@ describe('the parse (codeToGraph)', () => {
     const edges = [makeEdge('c1', 'out', 'out1', 'm1:color'), makeEdge('c2', 'out', 'out1', 'm2:color')];
     const r = applyTwice(nodes, edges);
     expect(r.second).toBe(r.first);
-    const out = outOf(r.a.nodes);
-    expect(outputMaterials(out).slice(1)).toEqual([{ gltfMaterialIndex: 1 }, { meshTargets: ['Named'] }]);
-    // The wiring followed its section: the Named colour is now m2.
+    expect(sectionsOf(r.a.nodes)).toEqual([{ gltfMaterialIndex: 1 }, { meshTargets: ['Named'] }]);
+    // The wiring followed its section: the Named colour now feeds the SECOND
+    // added Output (rank 2), the one bound to "Named".
     const c1 = r.a.nodes.find((n) => (n.data as { values?: { hex?: string } }).values?.hex === '#ff0000')!;
-    expect(r.a.edges.find((e) => e.source === c1.id)!.targetHandle).toBe('m2:color');
+    const named = outsOf(r.a.nodes)[2];
+    const wire = r.a.edges.find((e) => e.source === c1.id)!;
+    expect(materialTargetNames(outputMaterials(named)[0])).toEqual(['Named']);
+    expect([wire.target, wire.targetHandle]).toEqual([named.id, 'color']);
   });
 
   it('bare numeric keys parse; identical bodies are NOT merged', () => {
@@ -211,7 +256,7 @@ describe('the parse (codeToGraph)', () => {
     ].join('\n');
     const r = codeToGraph(code);
     expect(r.errors).toEqual([]);
-    expect(outputMaterials(outOf(r.nodes)).slice(1)).toEqual([{ gltfMaterialIndex: 0 }, { gltfMaterialIndex: 1 }]);
+    expect(sectionsOf(r.nodes)).toEqual([{ gltfMaterialIndex: 0 }, { gltfMaterialIndex: 1 }]);
   });
 
   it('refuses a key that is not a canonical in-range index, with a warning each', () => {
@@ -227,7 +272,7 @@ describe('the parse (codeToGraph)', () => {
     const warned = r.errors.filter((e) => /is not a material of this model/.test(e.message));
     expect(warned).toHaveLength(6);
     expect(r.errors.every((e) => e.severity === 'warning')).toBe(true);
-    expect(outputMaterials(outOf(r.nodes)).slice(1)).toEqual([{ gltfMaterialIndex: 0 }]);
+    expect(sectionsOf(r.nodes)).toEqual([{ gltfMaterialIndex: 0 }]);
   });
 
   it('drops the whole table, with a warning, without a valid signature', () => {
@@ -242,9 +287,10 @@ describe('the parse (codeToGraph)', () => {
       ].join('\n');
       const r = codeToGraph(code);
       expect(r.errors.some((e) => /no valid modelSignature/.test(e.message)), sig).toBe(true);
-      const out = outOf(r.nodes);
-      expect(dataOf(out).materials, sig).toBeUndefined();
-      expect(dataOf(out).modelSignature, sig).toBeUndefined();
+      // The table was refused whole: no section node, and no signature anywhere.
+      expect(sectionsOf(r.nodes), sig).toEqual([]);
+      expect(dataOf(outOf(r.nodes)).materials, sig).toBeUndefined();
+      expect(sigNodeOf(r.nodes), sig).toBeUndefined();
     }
   });
 
@@ -279,7 +325,7 @@ describe('the parse (codeToGraph)', () => {
       'export default shader;',
     ].join('\n'));
     expect(r.errors.some((e) => new RegExp(`More than ${MAX_INDEX_MATERIALS} material parts`).test(e.message))).toBe(true);
-    expect(outputMaterials(outOf(r.nodes)).slice(1)).toHaveLength(MAX_INDEX_MATERIALS);
+    expect(sectionsOf(r.nodes)).toHaveLength(MAX_INDEX_MATERIALS);
   });
 
   it('the index cap does not eat the named one: 16 index + 9 named sections all survive', () => {
@@ -294,7 +340,7 @@ describe('the parse (codeToGraph)', () => {
       'export default shader;',
     ].join('\n'));
     expect(r.errors).toEqual([]);
-    expect(outputMaterials(outOf(r.nodes)).slice(1)).toHaveLength(25);
+    expect(sectionsOf(r.nodes)).toHaveLength(25);
   });
 
   it('never turns a materialPartsMirror name into a name section (R6), and wires none of the companions', () => {
@@ -309,10 +355,9 @@ describe('the parse (codeToGraph)', () => {
     ].join('\n');
     const r = codeToGraph(code);
     expect(r.errors).toEqual([]);
-    const out = outOf(r.nodes);
-    expect(outputMaterials(out).slice(1)).toEqual([{ gltfMaterialIndex: 0 }, { meshTargets: ['Named'] }]);
-    const handles = r.edges.filter((e) => e.target === out.id).map((e) => e.targetHandle);
-    for (const h of handles) expect(h).toMatch(/^m[12]:color$/);
+    expect(sectionsOf(r.nodes)).toEqual([{ gltfMaterialIndex: 0 }, { meshTargets: ['Named'] }]);
+    // Both wires land on a SECTION node's bare colour — never on the default's.
+    for (const h of sectionWires(r.nodes, r.edges)) expect(h).toMatch(/^m[12]:color$/);
   });
 });
 
@@ -335,7 +380,10 @@ describe('the other surfaces', () => {
 
   it('graphToCode reads index sections only through planIndexParts', () => {
     const src = readFileSync(resolve(__dirname, 'graphToCode.ts'), 'utf8');
-    expect(src).toContain('planIndexParts(materials, signature).entries');
+    // The CROSS-NODE form since the plans took the Output SET: ONE claim set
+    // and ONE `MAX_INDEX_MATERIALS` counter for the whole `materialParts` map.
+    expect(src).toContain('planIndexPartsAcross(outputs, signature).entries');
+    expect(src).not.toContain('planIndexParts(materials, signature)');
     expect(src).toContain('const partKeyLiteral = moduleStringLiteral;');
   });
 

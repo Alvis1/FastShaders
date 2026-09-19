@@ -28,14 +28,18 @@ import {
   mirrorPlanKey,
   carryModelMeshes,
   assignMeshTargets,
-  foldExtraOutputs,
+  unfoldOutputMaterials,
+  contributingOutputs,
+  countSectionsAcross,
+  planIndexPartsAcross,
+  outputNodes,
   outputMaterials,
   dormantMaterialIndices,
   dormantIndicesForPreview,
   loadedModelOf,
   shownPreviewMesh,
   outputDormancyFromState,
-  anyOutputDormant,
+  outputEdgeIsDormant,
   indexSectionsAwake,
   indexSectionCoverage,
   defaultSectionUnused,
@@ -169,12 +173,65 @@ describe('sanitizeOutputMaterialsReport — index sections', () => {
     expect(r.trimmed).toBe(0);
     expect(dataOf(r.nodes[0]).modelSignature).toBeUndefined();
     expect(dataOf(r.nodes[0]).modelMeshes).toBeUndefined();
-    // …and the same when the node carries no `materials` at all.
-    const bare = output('o2', undefined, { modelSignature: { materials: SIG }, gltfMaterialIndex: 0 });
+    // …and the same when the node carries no `materials` at all and nothing
+    // else binds it to a glTF material.
+    const bare = output('o2', undefined, { modelSignature: { materials: SIG } });
     const r2 = sanitizeOutputMaterialsReport([bare]);
     expect(r2.trimmed).toBe(0);
     expect(Object.keys(dataOf(r2.nodes[0]))).not.toContain('modelSignature');
-    expect(Object.keys(dataOf(r2.nodes[0]))).not.toContain('gltfMaterialIndex');
+  });
+
+  /**
+   * RE-AIMED with the Output-node split. A node-level `gltfMaterialIndex` used
+   * to be deleted unconditionally, because material 0 could never be an index
+   * section while every material lived on one node. `unfoldOutputMaterials`
+   * gives each material its own node, so that key is now where a split index
+   * section's binding LIVES — and deleting it would have destroyed every such
+   * node on the load after the one that split it, silently, leaving a document
+   * of blank untargeted Outputs.
+   *
+   * It is judged by the same rule as an entry's: only a signature the node
+   * carries can vouch for the index, so an invalid one is still dropped (the
+   * section detaches into an empty named one, which is what a node with no
+   * binding at all is).
+   */
+  it('a VALID node-level index survives with its signature; an invalid one is dropped', () => {
+    const nodes = [output('o2', undefined, { modelSignature: { materials: SIG }, gltfMaterialIndex: 0 })];
+    const r = sanitizeOutputMaterialsReport(nodes);
+    expect(r.trimmed).toBe(0);
+    // Clean input comes back BY REFERENCE — the autosave subscriber and
+    // `selectionOnlyGraphChange` compare that way, so a fresh array here would
+    // rewrite `fs:graph` on every boot of every import-built document.
+    expect(r.nodes).toBe(nodes);
+    expect(dataOf(r.nodes[0]).gltfMaterialIndex).toBe(0);
+    expect(dataOf(r.nodes[0]).modelSignature).toEqual({ materials: SIG });
+    // Material 0 IS the section, so `outputMaterials` reports it as one.
+    expect(isIndexSection(outputMaterials(r.nodes[0])[0])).toBe(true);
+
+    // Out of the signature, not an integer, coerced, or no number at all.
+    for (const bad of [3, -1, 1.5, '1', Number.NaN, null, true, {}, GLTF_MATERIAL_INDEX_MAX + 1]) {
+      const node = output('o3', undefined, { modelSignature: { materials: SIG }, gltfMaterialIndex: bad });
+      const d = dataOf(sanitizeOutputMaterialsReport([node]).nodes[0]);
+      expect(Object.keys(d), JSON.stringify(bad)).not.toContain('gltfMaterialIndex');
+      // …and with no index section left, the signature goes with it.
+      expect(Object.keys(d), JSON.stringify(bad)).not.toContain('modelSignature');
+    }
+  });
+
+  it('a split index node keeps its mirror list, and names beside the index are dropped', () => {
+    const node = output('o', undefined, {
+      modelSignature: { materials: SIG },
+      gltfMaterialIndex: 1,
+      modelMeshes: [{ name: 'Hull', material: 1 }],
+      meshTargets: ['Body'],
+    });
+    const r = sanitizeOutputMaterialsReport([node]);
+    // ONE count for the dropped names, exactly as an index ENTRY reports them.
+    expect(r.trimmed).toBe(1);
+    const d = dataOf(r.nodes[0]);
+    expect(d.gltfMaterialIndex).toBe(1);
+    expect(d.modelMeshes).toEqual([{ name: 'Hull', material: 1 }]);
+    expect(Object.keys(d)).not.toContain('meshTargets');
   });
 
   it('the two caps are counted separately: 40 index + 12 named → 16 index + 9 named kept', () => {
@@ -202,14 +259,20 @@ describe('sanitizeOutputMaterialsReport — index sections', () => {
     expect(r.trimmed).toBe(0);
   });
 
-  it('unknown keys on an index entry are stripped; a node-level gltfMaterialIndex is deleted', () => {
+  it('unknown keys on an index entry are stripped; a valid node-level index is KEPT beside it', () => {
     const node = output('o', [{ gltfMaterialIndex: 0, payload: 'x'.repeat(10), constructor: 1 }], {
       modelSignature: { materials: SIG },
       gltfMaterialIndex: 0,
     });
     const r = sanitizeOutputMaterialsReport([node]);
     expect(matsOf(r.nodes[0])).toEqual([{ gltfMaterialIndex: 0 }]);
-    expect(Object.keys(dataOf(r.nodes[0]))).not.toContain('gltfMaterialIndex');
+    // RE-AIMED: the node-level key used to be deleted here. Since the split it
+    // is material 0's own binding, so BOTH sections claim glTF material 0 —
+    // which is the ordinary duplicate the sanitizer keeps and emission resolves
+    // first-claim-wins, not a stray to delete.
+    expect(dataOf(r.nodes[0]).gltfMaterialIndex).toBe(0);
+    expect(planIndexParts(outputMaterials(r.nodes[0]), SIG))
+      .toMatchObject({ entries: [{ gltfIndex: 0, section: 0 }], duplicates: new Set([1]) });
   });
 
   it('a signature carrying another key is rewritten to exactly { materials }', () => {
@@ -259,9 +322,31 @@ describe('planIndexParts', () => {
     expect(plan.overCap).toEqual([]);
   });
 
-  it('no signature emits nothing, and material 0 is never an index section', () => {
+  it('no signature emits nothing', () => {
     expect(planIndexParts([{}, { gltfMaterialIndex: 0 }], null).entries).toEqual([]);
-    expect(planIndexParts([{ gltfMaterialIndex: 0 } as OutputMaterial], SIG).entries).toEqual([]);
+  });
+
+  /**
+   * RE-AIMED with the Output-node split: this used to assert the opposite,
+   * "material 0 is never an index section", which was true only while every
+   * material lived on ONE node (the builder writes indices into `materials`
+   * and the sanitizer deleted a node-level copy). `unfoldOutputMaterials` gives
+   * each material its own node, and an import-built section's glTF binding then
+   * has nowhere to live but the node itself — `outputMaterials` reads it into
+   * material 0. Skipping it dropped the WHOLE `materialParts` table of every
+   * GLB-built shader, with `errors: []`.
+   *
+   * A material 0 with no index is still not one, which is what keeps every
+   * unsplit document emitting byte-identically.
+   */
+  it('material 0 IS an index section when it carries an index, and is not when it does not', () => {
+    expect(planIndexParts([{ gltfMaterialIndex: 0 } as OutputMaterial], SIG).entries)
+      .toEqual([{ gltfIndex: 0, section: 0 }]);
+    expect(planIndexParts([{ meshTargets: ['A'] }, { gltfMaterialIndex: 1 }], SIG).entries)
+      .toEqual([{ gltfIndex: 1, section: 1 }]);
+    // First claim still wins, and material 0 claims first.
+    expect(planIndexParts([{ gltfMaterialIndex: 2 } as OutputMaterial, { gltfMaterialIndex: 2 }], SIG))
+      .toMatchObject({ entries: [{ gltfIndex: 2, section: 0 }], duplicates: new Set([1]) });
   });
 
   it('is capped at MAX_INDEX_MATERIALS', () => {
@@ -290,8 +375,18 @@ describe('the section label', () => {
     expect(formatSectionLabel(sectionLabel(mats, 1, sig), 'en')).toBe('Glass');
     expect(formatSectionLabel(sectionLabel(mats, 2, sig), 'en')).toBe('Material #2');
     expect(formatSectionLabel(sectionLabel(mats, 2, null), 'lv')).toBe('Materiāls #2');
-    // Material 0 is never an index section, whatever it carries.
-    expect(sectionLabel([{ gltfMaterialIndex: 0 } as OutputMaterial], 0, SIG)).toEqual({ kind: 'default' });
+    // MATERIAL 0 CAN be an index section, and the label must say so. Once
+    // `unfoldOutputMaterials` gives each material its own node, an import-built
+    // node's glTF binding IS material 0's (`outputMaterials` reads
+    // `data.gltfMaterialIndex`); the old `index > 0` guard labelled every such
+    // node "All meshes (default)" — the chip and the settings menu's scope line
+    // both claiming it shades the whole model while emission gave it exactly
+    // one glTF material.
+    expect(sectionLabel([{ gltfMaterialIndex: 0 } as OutputMaterial], 0, SIG))
+      .toEqual({ kind: 'index', gltfIndex: 0, name: displayMaterialName(SIG[0]) });
+    // An untargeted material 0 is still the default — the binding decides, not
+    // the position.
+    expect(sectionLabel([{}], 0, SIG)).toEqual({ kind: 'default' });
   });
 
   it('display text replaces control and bidi characters and caps at 64 code points', () => {
@@ -362,9 +457,12 @@ describe('the loaded model (trusted facts only)', () => {
   it('a model the pane is NOT showing reads as none: a primitive in the Model menu sleeps the index sections', () => {
     const out = output('o1', [{ gltfMaterialIndex: 0 }, { gltfMaterialIndex: 1 }], { modelSignature: { materials: SIG } });
     const pm = { kind: 'glb', gltf: facts(SIG, [['Hull', [0]], ['Window', [1]]]) };
+    // A wire into each index section, so the 008 swallow has an edge to resolve.
+    const w1 = makeEdge('feeder', 'out', 'o1', 'm1:color');
+    const w2 = makeEdge('feeder', 'out', 'o1', 'm2:color');
     const state = (shows?: boolean) => ({
       nodes: [out],
-      edges: [],
+      edges: [w1, w2],
       previewMesh: pm,
       previewMeshInventory: null,
       ...(shows === undefined ? {} : { previewShowsModel: shows }),
@@ -374,10 +472,10 @@ describe('the loaded model (trusted facts only)', () => {
     expect(shownPreviewMesh(state(false))).toBeNull();
     // The matching glTF is loaded AND shown: awake.
     expect(outputDormancyFromState(state(true)).dormant).toEqual(new Set());
-    expect(anyOutputDormant(state(true), 1)).toBe(false);
+    expect(outputEdgeIsDormant(state(true), w1.id)).toBe(false);
     // Same model, same facts, a primitive showing: every index section sleeps.
     expect(outputDormancyFromState(state(false))).toEqual({ outputId: 'o1', dormant: new Set([1, 2]), visibleCount: 1 });
-    expect(anyOutputDormant(state(false), 2)).toBe(true);
+    expect(outputEdgeIsDormant(state(false), w2.id)).toBe(true);
     // The node's own route agrees: nothing is covered while nothing is shown.
     const mats = outputMaterials(out);
     const hidden = loadedModelOf(shownPreviewMesh(state(false)));
@@ -509,28 +607,55 @@ describe('the chip and picker wording', () => {
   });
 });
 
-describe('foldExtraOutputs and index sections', () => {
-  it("the keep's index sections are preserved and do not count against the named cap", () => {
+/**
+ * RE-AIMED: `foldExtraOutputs` is RETIRED (the Output-node split, step 6a).
+ *
+ * Both cases were about what the fold must NOT do to an import-built document:
+ * the keep's index sections must survive it, and a modern Output carrying
+ * index sections or a signature must never be folded (folding kept only its
+ * node-level target and silently dropped the sections it was built with).
+ * Nothing is folded any more, so the property is structural — what remains
+ * worth pinning is that the two kinds of section still count apart and that
+ * such a document keeps every node.
+ */
+describe('index sections across several Output nodes', () => {
+  it("an import-built Output's index sections do not count against the named cap", () => {
     const keep = output('keep', Array.from({ length: 12 }, (_, i) => ({ gltfMaterialIndex: i })), {
       modelSignature: { materials: Array.from({ length: 12 }, () => '') },
       activeOutput: true,
     });
     const extra = output('extra', undefined, { meshTargets: ['Glass'] });
-    const r = foldExtraOutputs([keep, extra], [makeEdge('c', 'out', 'extra', 'color')]);
-    expect(r.nodes.map((n) => n.id)).toEqual(['keep']);
-    expect(countSections(outputMaterials(r.nodes[0]))).toEqual({ named: 1, index: 12 });
-    expect(r.edges[0].targetHandle).toBe('m13:color');
+    const nodes = [keep, extra];
+    const edges = [makeEdge('c', 'out', 'extra', 'color')];
+    expect(countSections(outputMaterials(keep))).toEqual({ named: 0, index: 12 });
+    // `countSections` counts ADDED sections (`materials[1..]`), so `extra`'s
+    // own single material is not one — which is exactly why that counter has
+    // nothing left to say once a node IS one material, and why "+ Add output"
+    // (its only reader) retires with the node's UI.
+    expect(countSectionsAcross(nodes)).toEqual({ named: 0, index: 12 });
+    // `keep` splits into its default plus 12 index nodes; `extra` is already
+    // one material, so it keeps its node, its bare handle and the very edge
+    // object it arrived with.
+    const r = unfoldOutputMaterials(nodes, edges);
+    expect(outputNodes(r.nodes)).toHaveLength(1 + 12 + 1);
+    expect(r.nodes.find((n) => n.id === 'extra')).toBe(extra);
+    expect(r.edges[0]).toBe(edges[0]);
   });
 
-  it('an extra carrying index sections (or a signature) is a modern inactive Output: never folded', () => {
+  it('an Output carrying index sections or a signature keeps both across a restore', () => {
     const keep = output('keep', undefined, { activeOutput: true });
-    const extraIdx = output('x1', [{ gltfMaterialIndex: 0 }], { meshTargets: ['A'], modelSignature: { materials: SIG } });
-    const extraSig = output('x2', undefined, { meshTarget: { name: 'B' }, modelSignature: { materials: SIG } });
+    const extraIdx = output('x1', [{ gltfMaterialIndex: 0 }], { modelSignature: { materials: SIG } });
+    const extraSig = output('x2', undefined, { gltfMaterialIndex: 1, modelSignature: { materials: SIG } });
     const nodes = [keep, extraIdx, extraSig];
     const edges = [makeEdge('c', 'out', 'x1', 'color')];
-    const r = foldExtraOutputs(nodes, edges);
-    expect(r.nodes).toBe(nodes);
-    expect(r.edges).toBe(edges);
+    const r = unfoldOutputMaterials(sanitizeOutputMaterials(nodes), edges);
+    expect(outputNodes(r.nodes).map((n) => n.id)).toEqual(['keep', 'x1', 'x1#m01', 'x2']);
+    // `x1`'s ENTRY splits into a sibling; `x2` binds at node level and stays one.
+    expect(gltfIndexOf(outputMaterials(r.nodes.find((n) => n.id === 'x1#m01')!)[0])).toBe(0);
+    expect(gltfIndexOf(outputMaterials(r.nodes.find((n) => n.id === 'x2')!)[0])).toBe(1);
+    // Both index materials reach the module, through ONE signature.
+    expect(planIndexPartsAcross(contributingOutputs(r.nodes), SIG).entries.map((e) => e.gltfIndex))
+      .toEqual([0, 1]);
   });
 });
 

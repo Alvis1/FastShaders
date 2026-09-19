@@ -85,6 +85,11 @@ export function normalizeChainOperands(
       const e = operandEdges.get(src);
       if (e) edgeRemap.set(e.id, dst);
       const vk = chainPortId(src);
+      // `in` is safe HERE, twice over: `values` came from `getNodeValues`, which
+      // coerces a non-object to `{}`, and this loop is gated on
+      // `growsOperands(def)`, which no Output definition satisfies. Elsewhere
+      // the operator throws on a primitive out of a `.fastshader` — see
+      // `outputNodeValues` (types/node.types.ts).
       if (vk in values) newValues[dst] = values[vk];
     });
 

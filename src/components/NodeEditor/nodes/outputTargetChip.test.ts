@@ -136,6 +136,7 @@ describe('the Output node\'s preview socket', () => {
   const tsx = readFileSync(path.resolve(__dirname, 'OutputNode.tsx'), 'utf8');
   const card = readFileSync(path.resolve(__dirname, '../NodePreviewCard.tsx'), 'utf8');
   const link = readFileSync(path.resolve(__dirname, '../../Layout/PreviewLink.tsx'), 'utf8');
+  const wires = readFileSync(path.resolve(__dirname, '../../Layout/previewWires.ts'), 'utf8');
   const rule = block('.output-node__preview-socket {');
 
   it('is TWICE the regular socket, derived from the token', () => {
@@ -181,6 +182,9 @@ describe('the Output node\'s preview socket', () => {
     // A <button> carrying `nodrag` (React Flow's drag filter) with its
     // pointerdown AND click stopped, so a press activates instead of dragging
     // the node, panning the canvas, or selecting.
+    //
+    // On the Output that button is now the UNTARGETED branch only — see the
+    // D2 test below; the file still contains exactly one of them.
     for (const [file, src] of [['OutputNode.tsx', tsx], ['RaymarchOutputNode.tsx', readFileSync(path.resolve(__dirname, 'RaymarchOutputNode.tsx'), 'utf8')]] as const) {
       const at = src.indexOf('output-node__preview-socket nodrag');
       expect(at, `${file}: the socket must carry nodrag`).toBeGreaterThan(-1);
@@ -198,21 +202,23 @@ describe('the Output node\'s preview socket', () => {
     expect(card).not.toContain('output-node__preview-socket nodrag');
   });
 
-  it('is ONE PER MATERIAL, centred on its own section', () => {
-    // `.output-node__material` is the offset parent: each material block
-    // carries its own socket, centred on that block, so a multimesh Output
-    // visibly feeds the preview once per section (the design sketch's
-    // multimesh reading). A single-material node keeps its one socket.
+  it('is ONE PER NODE, centred on the material block and NOT on the header', () => {
+    // `.output-node__material` is the offset parent and it EXCLUDES the header,
+    // so centring on `.output-node` would drop the socket by half a header
+    // height. One Output node is one material since the per-material split, so
+    // there is exactly one of these — and it must still live inside the block,
+    // not at node level.
     expect(block('.output-node__material {')).toMatch(/position:\s*relative/);
     expect(rule).toMatch(/top:\s*50%/);
     expect(rule).toMatch(/transform:\s*translateY\(-50%\)/);
-    // The span is rendered exactly ONCE in OutputNode.tsx — inside
-    // renderMaterial's block, never at node level (a node-level twin would
-    // draw a stray centre socket on top of the per-section ones).
-    const spans = tsx.match(/className=\{`output-node__preview-socket nodrag/g) ?? [];
-    expect(spans).toHaveLength(1);
-    // The wrapper's class list grew a modifier (the unused-default mark), so
-    // the pin is the class NAME opening it, not the whole attribute.
+    const sockets = tsx.match(/output-node__preview-socket/g) ?? [];
+    // Two RENDERED elements, one per branch of D2 (button / inert span), plus
+    // the `--inactive` and `--fixed` modifier spellings inside them.
+    expect((tsx.match(/className=\{`output-node__preview-socket nodrag/g) ?? []), 'the activation button')
+      .toHaveLength(1);
+    expect((tsx.match(/className="output-node__preview-socket output-node__preview-socket--fixed nodrag"/g) ?? []), 'the inert anchor')
+      .toHaveLength(1);
+    expect(sockets.length).toBeGreaterThan(1);
     const blockStart = tsx.indexOf('`output-node__material${');
     expect(blockStart, 'the material block wrapper is gone').toBeGreaterThan(-1);
     expect(
@@ -221,30 +227,66 @@ describe('the Output node\'s preview socket', () => {
     ).toBeGreaterThan(blockStart);
   });
 
-  it('each material block carries the right-click hit test for its scoped menu', () => {
-    // data-material-index → NodeEditor's onNodeContextMenu (closest walk) →
-    // contextMenu.materialIndex → ShaderSettingsMenu seeds its selector, so a
-    // right-click on a SECTION opens the menu already scoped to that material
-    // and channels can be exposed per section. Every link in that chain fails
-    // silently (the menu just opens on material 0).
-    expect(tsx).toContain('data-material-index={index}');
+  it('is INERT on a TARGETED node (owner decision D2)', () => {
+    // Activation decides which UNTARGETED Output is the whole-model material;
+    // a targeted one contributes whatever the flag says. Clicking a targeted
+    // node's socket would write a flag `normalizeActiveOutput` strips — and,
+    // until it did, would silently stop the whole-model material emitting.
+    expect(tsx).toContain('{isUntargetedOutput(selfNode) ? (');
+    const at = tsx.indexOf('output-node__preview-socket--fixed');
+    const el = tsx.slice(tsx.lastIndexOf('<span', at), tsx.indexOf('/>', at));
+    expect(el, 'no activation').not.toContain('setActiveOutput');
+    expect(el, 'no toggle state to announce').not.toContain('aria-pressed');
+    expect(el, 'a press must not drag the node from what looks like a port')
+      .toContain('onPointerDown={(e) => e.stopPropagation()}');
+    // The title is the whole point of the state, and TooltipLayer resolves its
+    // host from `elementFromPoint` — so the element must keep real pointer
+    // events, and only the CURSOR says it is not a button.
+    expect(el).toContain('title={t(FIXED_SOCKET_KEY, language)}');
+    expect(block('.react-flow .output-node__preview-socket--fixed {')).toMatch(/cursor:\s*default/);
+    expect(css).not.toMatch(/\.output-node__preview-socket--fixed \{[^}]*pointer-events:\s*none/);
+    // A contributing node is SOLID; hollow only ever means parked.
+    expect(tsx).not.toMatch(/preview-socket--fixed[^`"]*--inactive/);
+  });
+
+  it('the NODE is the whole right-click scope — the section walk is gone', () => {
+    // `data-material-index` picked a SECTION out of a stack so the settings
+    // menu could open scoped to it. One node is one material now, so there is
+    // nothing to choose between inside a node and the whole chain retires:
+    // the attribute, NodeEditor's `closest()` walk, and the store field it fed.
     const nodeEditor = readFileSync(path.resolve(__dirname, '../NodeEditor.tsx'), 'utf8');
-    expect(nodeEditor).toContain("closest?.('[data-material-index]')");
     const menu = readFileSync(path.resolve(__dirname, '../menus/ShaderSettingsMenu.tsx'), 'utf8');
-    expect(menu).toContain('.materialIndex');
-    // The reseed effect must key on the contextMenu OBJECT (fresh identity per
-    // open), never the index VALUE alone: re-right-clicking the SAME section
-    // after manually switching the selector writes the same number, and a
-    // value-keyed effect never fires — the menu moves but stays mis-scoped.
-    expect(menu).toContain('[menuState, seededIndex]');
-    // Materials are anonymous indices: a count change under an open menu
-    // shifts the selection onto a NEIGHBOUR, so the menu resets visibly.
-    expect(menu).toContain('setMaterialIndex(0)');
-    // The section right-click is the ONE scoping control: the menu shows a
-    // static scope line, never its own material dropdown — a second control
-    // for the same scope is how the two end up disagreeing (the same argument
-    // that keeps the MESH picker off this menu).
+    const store = readFileSync(path.resolve(__dirname, '../../../store/useAppStore.ts'), 'utf8');
+    // The CODE forms — the retirement notes left behind naturally NAME the
+    // attribute, which is what a retirement note is for.
+    expect(tsx).not.toContain('data-material-index={');
+    expect(nodeEditor).not.toContain("closest?.('[data-material-index]')");
+    expect(menu).not.toContain('menuState.materialIndex');
+    expect(menu).not.toContain('setMaterialIndex');
+    expect(store).not.toContain('materialIndex?: number');
+    expect(store).not.toMatch(/openContextMenu[^\n]*materialIndex/);
+    // The node id alone identifies the scope, so the menu opens with it and
+    // nothing else.
+    expect(nodeEditor).toContain("openContextMenu(event.clientX, event.clientY, menuType, node.id);");
+    // And the menu still shows a static scope LINE rather than growing a
+    // dropdown of its own — a second control for a binding the node's own
+    // picker owns is how the two end up disagreeing.
     expect(menu).not.toMatch(/<select[\s\S]{0,200}?setMaterialIndex/);
+  });
+
+  it('the wire-drop source pin rides a NAMED object, never trailing positions', () => {
+    // `materialIndex` was the 8th POSITIONAL argument, immediately before
+    // `sourceHandleType`. Removing it without moving every call site would have
+    // shifted the handle TYPE into its slot, and that failure renders as
+    // NOTHING: a wire dropped from an INPUT would connect backwards, React Flow
+    // draws no edge for one authored out of an input, and graphToCode still
+    // emits it. A named object cannot be shifted.
+    const nodeEditor = readFileSync(path.resolve(__dirname, '../NodeEditor.tsx'), 'utf8');
+    const store = readFileSync(path.resolve(__dirname, '../../../store/useAppStore.ts'), 'utf8');
+    expect(store).toContain('openContextMenu: (x, y, type, nodeId, edgeId, pin) =>');
+    expect(store).toContain('set({ contextMenu: { open: true, x, y, type, nodeId, edgeId, ...pin } })');
+    expect(nodeEditor).toContain('sourceHandleType: pending?.handleType,');
+    expect(nodeEditor).not.toMatch(/openContextMenu\([^)]*undefined,\s*pending/);
   });
 
   it('dormant sections hide, announce themselves, and re-measure on waking', () => {
@@ -255,17 +297,28 @@ describe('the Output node\'s preview socket', () => {
     // 1. the node skips dormant sections and shows the chip (or they vanish
     //    with no signal at all);
     expect(tsx).toContain('dormantIndicesForPreview(materials');
-    expect(tsx).toContain('dormant.has(index) ? null : renderMaterial(index)');
+    // A material is a NODE now, so the node renders COMPACT — header plus the
+    // chip — instead of skipping a section out of a stack.
+    expect(tsx).toContain('const nodeDormant = dormant.has(SELF);');
+    expect(tsx).toContain('{nodeDormant ? (');
     expect(tsx).toContain('output-node__dormant');
-    // 2. the updateNodeInternals key folds dormancy — a hidden section
-    //    unmounts REAL channel handles, and without a key change the waking
-    //    section's handles are never re-measured, so every restored wire
-    //    stays undrawn until a reload;
-    expect(tsx).toMatch(/dormant\.has\(i\)\s*\n?\s*\? '~'/);
-    // 3. PreviewLink counts VISIBLE materials for its wire paths through the
-    //    SAME whole-store derivation, or the anchor cache chases a socket
-    //    count the DOM can never reach, re-querying every frame.
-    expect(link).toContain('outputDormancyFromState(');
+    // 2. the updateNodeInternals key folds dormancy — a sleeping node unmounts
+    //    every REAL channel handle, and without a key change the waking node's
+    //    handles are never re-measured, so every restored wire stays undrawn
+    //    until a reload;
+    expect(tsx).toContain("const exposedKey = nodeDormant ? '~' : exposedPorts.join('|');");
+    // 3. PreviewLink draws only wires whose Output is AWAKE, through a whole-
+    //    store derivation that ends in this same function — a dormant node
+    //    mounts no preview socket at all, so its wire would have no anchor and
+    //    the element cache would re-query every frame for as long as it sleeps.
+    //    (It counted VISIBLE MATERIALS of one node until the per-material
+    //    split; `previewWireTargets` is the node-set form of that question.)
+    // The derivation moved to `previewWires.ts` when the RAILS needed it too —
+    // one list for the wire, the canvas socket it ends on and the preview
+    // socket mirroring it, so the three cannot disagree.
+    expect(wires).toContain('previewWireTargets(');
+    const materials = readFileSync(path.resolve(__dirname, '../../../utils/outputMaterials.ts'), 'utf8');
+    expect(materials).toMatch(/export function previewWireTargets[\s\S]*?dormantIndicesForPreview\(/);
   });
 
   it('an edge into a dormant section is neither hit-testable nor a console flood', () => {
@@ -277,24 +330,43 @@ describe('the Output node\'s preview socket', () => {
     // previewed, into a sleeping material's wiring.
     expect(nodeEditor).toContain('edgeEndpointDrawable(srcNode, edge.sourceHandle');
     expect(nodeEditor).toContain('edgeEndpointDrawable(tgtNode, edge.targetHandle');
-    // And React Flow's 008 stays "always a bug" for everything EXCEPT handles
-    // that parse to a currently-dormant material: unscoped, a sleeping
-    // section warns at frame rate on every pan; blanket suppression would
-    // hide the real missing-useUpdateNodeInternals class.
+    // And React Flow's 008 stays "always a bug" for everything EXCEPT an edge
+    // landing on a currently-dormant material: unscoped, a sleeping section
+    // warns at frame rate on every pan; blanket suppression would hide the
+    // real missing-useUpdateNodeInternals class.
     expect(nodeEditor).toContain("onError={onFlowError}");
-    // Across EVERY Output: several may coexist, and the message names only
-    // the handle, never the node.
-    expect(nodeEditor).toContain('anyOutputDormant(useAppStore.getState(), Number(m[1]))');
+    // The swallow is keyed on the EDGE React Flow names, resolved to the node
+    // the wire lands on. A handle-keyed test cannot be node-scoped (several
+    // Outputs spell their handles identically), and the id is the only part of
+    // the message that identifies one. Both halves must be here: the parse
+    // alone swallows every 008 it can read an id out of, and the predicate
+    // alone has nothing to ask about.
+    expect(nodeEditor).toContain('edgeIdFromError008(message)');
+    expect(nodeEditor).toContain('outputEdgeIsDormant(useAppStore.getState(), edgeId)');
+    // Scoped means CONDITIONAL: a `return` that any 008 reaches is the blanket
+    // suppression this comment exists to refuse.
+    expect(nodeEditor).toContain("if (edgeId !== null && outputEdgeIsDormant(useAppStore.getState(), edgeId)) {");
+    // The retired handle-keyed form asked "is index N dormant on ANY Output",
+    // which excused a real 008 about an awake section whenever some other
+    // node's section with the same number slept.
+    expect(nodeEditor).not.toContain('anyOutputDormant');
   });
 
-  it('is where the preview wires start — one per socket — and the card replicates it', () => {
-    // PreviewLink resolves ALL sockets (plural) and keeps one <path> per
-    // material; a singular querySelector would silently pin every wire to
-    // material 0's socket.
-    expect(link).toContain("querySelectorAll<HTMLElement>('.output-node__preview-socket')");
-    // The path count follows the store's VISIBLE-material derivation (see the
+  it('is where the preview wires start — one per contributing Output — and the card replicates it', () => {
+    // ONE WIRE PER NODE since the per-material split (it was one per material
+    // SECTION of the single stacked Output, resolved with a plural
+    // querySelectorAll on that one node). Each wire's anchor is looked up
+    // INSIDE its own node element, so a document-wide query — which would
+    // return every Output's socket in DOM order and pin wire N to whichever
+    // node happened to come Nth — cannot come back.
+    expect(link).toContain("nodeEls[i]?.querySelector<HTMLElement>('.output-node__preview-socket')");
+    expect(link).not.toContain("document.querySelector<HTMLElement>('.output-node__preview-socket')");
+    // The wire set follows the store's CONTRIBUTING-Output derivation (see the
     // dormancy test above for why it is the shared one).
-    expect(link).toContain('outputDormancyFromState(');
+    // The derivation moved to `previewWires.ts` when the RAILS needed it too —
+    // one list for the wire, the canvas socket it ends on and the preview
+    // socket mirroring it, so the three cannot disagree.
+    expect(wires).toContain('previewWireTargets(');
     // The per-index d-string dedupe cache must be truncated to the live path
     // count: a shrink-then-regrow (remove a material, undo) mounts a FRESH
     // <path d=""> whose recomputed d matches the stale entry byte-for-byte,
@@ -314,13 +386,17 @@ describe('the Output node\'s preview socket', () => {
     ).toBeGreaterThan(cardBlock);
   });
 
-  it('the card uses the SUB-divider — `__divider` now means "next material"', () => {
-    // `.output-node__divider` became the node's red frame colour, edge to edge,
-    // separating one MATERIAL from the next. A card shows one material, so
-    // using it there would paint a red band where the node shows a hairline.
+  it('`__divider` is RETIRED — there is never a next material to divide from', () => {
+    // It separated one MATERIAL from the next inside a stacked Output, in the
+    // node's own frame colour. One node is one material, so the node's own
+    // border does that job and `__subdivider` — the two halves of ONE material
+    // — is the only line left. The stylesheet rule must go with the markup: a
+    // dead rule is how the next reader wires it back up.
     expect(card).toContain('output-node__subdivider');
     expect(card).not.toMatch(/className="output-node__divider"/);
-    expect(block('.output-node__divider {')).toMatch(/background:\s*var\(--cat-output\)/);
+    expect(tsx).not.toMatch(/className="output-node__divider"/);
+    expect(css).not.toMatch(/^\.output-node__divider\s*\{/m);
+    expect(block('.output-node__subdivider {')).toMatch(/height:\s*1px/);
   });
 });
 
@@ -328,30 +404,39 @@ describe('a mesh belongs to exactly one material', () => {
   const tsx = readFileSync(path.resolve(__dirname, 'OutputNode.tsx'), 'utf8');
   const picker = readFileSync(path.resolve(__dirname, 'MeshTargetPicker.tsx'), 'utf8');
 
-  it('the node writes targets ONLY through assignMeshTargets', () => {
-    // That function is what takes the mesh away from whoever held it. A direct
-    // `meshTargets:` write here would leave two materials claiming one mesh —
-    // legal for the store, resolved silently at emission, and invisible on the
-    // node until someone wonders why a section renders nothing.
-    expect(tsx).toContain('assignMeshTargets(outputMaterials(node), index, names)');
-    // TWO writes, and only two: the single updateNodeData that lands a move,
-    // and `addMaterial` seeding a brand-new material — which is safe because it
-    // only ever picks a mesh no NAME section has claimed (`pickFreeMesh` folds
-    // every material's list; an index-covered mesh is the fallback, and a
-    // name claim on it is the intended override). A third write is the one to
-    // worry about.
-    const writes = tsx.match(/meshTargets:/g) ?? [];
-    expect(writes.length).toBe(2);
-    expect(tsx).toContain('pickFreeMesh(');
+  it('the node writes targets ONLY through the CROSS-NODE assignMeshTargets', () => {
+    // That function is what takes the mesh away from whoever held it — and
+    // after the per-material split "whoever" is another NODE, so it has to walk
+    // the whole node list. A direct `meshTargets:` write here would leave two
+    // Outputs claiming one mesh: legal for the store, resolved silently at
+    // emission, and invisible until someone wonders why a node renders nothing.
+    expect(tsx).toContain('assignMeshTargetsAcross(state.nodes, id, names)');
+    expect(tsx).not.toContain('meshTargets:');
   });
 
-  it('the move is ONE undo entry', () => {
-    // Material 0's targets are a node field and the rest ride `materials`;
-    // writing them separately would make Cmd+Z step through a half-assigned
-    // state where two materials briefly hold the same mesh.
-    const body = /const setMaterialTargets = useCallback\(([\s\S]*?)\n  \);/.exec(tsx)?.[1] ?? '';
-    expect(body, 'setMaterialTargets must exist').toBeTruthy();
-    expect((body.match(/updateNodeData\(/g) ?? []).length).toBe(1);
+  it('the cross-node move is ONE undo entry, and a no-op writes nothing', () => {
+    // `updateNodeData` patches ONE node, so the move would be two writes and
+    // Cmd+Z would step through a half-assigned state where both Outputs claim
+    // the mesh. One `setNodes` inside one `asOneHistoryEntry` instead — and the
+    // no-op guard sits OUTSIDE the bracket, because `beginInteraction`
+    // snapshots AND clears `future` up front.
+    const body = /const setMeshTargets = useCallback\(([\s\S]*?)\n    \[id\],/.exec(tsx)?.[1] ?? '';
+    expect(body, 'setMeshTargets must exist').toBeTruthy();
+    expect(body).toContain('if (next === state.nodes) return;');
+    expect(body.indexOf('if (next === state.nodes) return;'))
+      .toBeLessThan(body.indexOf('asOneHistoryEntry('));
+    expect((body.match(/asOneHistoryEntry\(/g) ?? []).length).toBe(1);
+    expect((body.match(/setNodes\(/g) ?? []).length).toBe(1);
+    expect(body).not.toContain('updateNodeData(');
+  });
+
+  it('every plain Output offers the default — unticking is the way back', () => {
+    // `allowDefault` was material-0-only, where a second empty list would have
+    // authored a second default. Among NODES the active flag resolves that
+    // instead, and unticking everything is the ONLY way to turn a targeted
+    // Output back into a whole-model one.
+    expect(tsx).toContain('allowDefault\n');
+    expect(tsx).not.toContain('allowDefault={index === 0}');
   });
 
   it('the picker never refuses a tick', () => {

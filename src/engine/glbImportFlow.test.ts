@@ -17,7 +17,7 @@ import { buildGlbImport } from './gltfImport';
 import { commitGlbImport } from './projectImport';
 import { glbImportReportLines } from '@/utils/glbImportReport';
 import { useAppStore, cancelPendingGraphSave } from '@/store/useAppStore';
-import { outputMaterials, readModelSignature, indexSectionsAwake, loadedModelOf } from '@/utils/outputMaterials';
+import { contributingOutputs, gltfIndexOf, isIndexSection, outputMaterials, readModelSignature, indexSectionsAwake, loadedModelOf } from '@/utils/outputMaterials';
 import { makeGlb, makeRealPng, pngHeaderBytes } from '@/test-utils';
 import { blenderGlb, fakeEncoder, fakeStash, glbOf, manyMaterialsGlb, readOk, scanGlb } from './gltfImportFixtures';
 
@@ -202,9 +202,12 @@ describe('Build: the plan feeds the builder, the builder feeds the commit', () =
     expect(s.shaderName).toBe('scan');
     expect(s.previewMesh).toBe(r.mesh);
     expect(ls['fs:previewGeometry']).toBe('custom');
-    const out = s.nodes.find((n) => n.data.registryType === 'output')!;
-    expect(outputMaterials(out).slice(1).map((m) => m.gltfMaterialIndex)).toEqual([0, 1, 2]);
-    expect(indexSectionsAwake(readModelSignature(out.data), loadedModelOf(s.previewMesh))).toBe(true);
+    // The commit SPLITS the built Output: the untargeted default plus one node
+    // per glTF material, the binding at node level.
+    const outs = contributingOutputs(s.nodes);
+    expect(outs.map((n) => gltfIndexOf(outputMaterials(n)[0]))).toEqual([null, 0, 1, 2]);
+    const sigNode = outs.find((n) => outputMaterials(n).some(isIndexSection))!;
+    expect(indexSectionsAwake(readModelSignature(sigNode.data), loadedModelOf(s.previewMesh))).toBe(true);
     expect(s.importNote?.lines[0]).toEqual({ kind: 'glb-import', materials: 3, textures: 5, shared: 0 });
     expect(s.pendingLimitNotices.filter((n) => n.kind === 'output-sections-trimmed')).toHaveLength(0);
   });

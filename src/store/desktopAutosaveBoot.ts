@@ -54,7 +54,15 @@ import {
   type DesktopSlot,
 } from '@/utils/desktopAutosave';
 
-/** Bound on each bridge call during boot and on the first write's GC. */
+/** Bound on each bridge call during boot, so a hung IPC cannot keep the boot
+ *  overlay up forever — and on the first write's GC, where that rationale does
+ *  NOT apply (`start()` runs after the overlay is down) and the bound is not a
+ *  correctness device either: opening the gate early is a write racing a
+ *  still-running GC, which autosave.rs makes harmless by claiming every digest
+ *  this process stores and checking the claim inside the same critical section
+ *  as its delete (`StoredImages`). Here it only keeps a wedged `gc()` from
+ *  pausing this session's autosave for good — which is why it may not simply
+ *  be dropped. */
 export const BOOT_CALL_TIMEOUT_MS = 10_000;
 
 export interface DesktopBootResult {
@@ -263,6 +271,10 @@ export async function bootDesktopAutosave(
         ) {
           persistSavedGroups(groups.groups);
         }
+        // The GC runs before the first write so its keep set is read from the
+        // documents this boot read. A pass that merely takes too long opens
+        // the gate exactly as a finished one does, and that is deliberately
+        // survivable rather than prevented here — see BOOT_CALL_TIMEOUT_MS.
         runtime.enableWrites(withTimeout(bridge.gc()).catch(() => undefined));
       },
     };

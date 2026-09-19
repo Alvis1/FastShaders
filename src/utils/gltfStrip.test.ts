@@ -38,7 +38,10 @@ import { TRIANGLE_POSITIONS, makeGlb, makeRealPng, webpHeaderBytes } from '../te
 type Doc = Record<string, unknown>;
 type Kind = 'glb' | 'gltf';
 
-const pad4 = (n: number) => (n + 3) & ~3;
+// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
+// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
+// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
+const pad4 = (n: number) => Math.ceil(n / 4) * 4;
 const PNG_A = makeRealPng(2, 2, [250, 10, 10, 255]);
 const PNG_B = makeRealPng(2, 2, [10, 10, 250, 255]);
 const PNG_C = makeRealPng(3, 1, [10, 250, 10, 255]);

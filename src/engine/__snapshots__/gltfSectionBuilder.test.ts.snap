@@ -57,20 +57,25 @@ export default shader;
 `;
 
 exports[`what the restore paths and the parse make of it > AI: snapshot of the emitted code and the graph structure 2`] = `
-"imageNode#0 {"imageB64":"<196631 chars>","width":1024,"height":576,"fileName":"model-image-0.jpg","colorSpace":"color","repeat":0,"filter":"nearest","orientation":"gltf"}
-imageNode#1 {"imageB64":"<35 chars>","width":4,"height":2,"fileName":"model-image-1.png","colorSpace":"data","orientation":"gltf","uvSet":1}
-float#2 {"value":0.5}
-mul#3 {}
-imageNode#4 {"imageB64":"<31 chars>","width":2,"height":2,"fileName":"model-image-2.png","colorSpace":"data","orientation":"gltf"}
-output#5 {}
-  materials=[{"gltfMaterialIndex":0,"exposedPorts":["color","roughness","metalness","normal","position"]}]
+"output#0 {}
+  emitOrder=0 gltfMaterialIndex=undefined
+  exposedPorts=undefined materialSettings=undefined
+  modelSignature=undefined modelMeshes=undefined
+imageNode#1 {"imageB64":"<196631 chars>","width":1024,"height":576,"fileName":"model-image-0.jpg","colorSpace":"color","repeat":0,"filter":"nearest","orientation":"gltf"}
+imageNode#2 {"imageB64":"<35 chars>","width":4,"height":2,"fileName":"model-image-1.png","colorSpace":"data","orientation":"gltf","uvSet":1}
+float#3 {"value":0.5}
+mul#4 {}
+imageNode#5 {"imageB64":"<31 chars>","width":2,"height":2,"fileName":"model-image-2.png","colorSpace":"data","orientation":"gltf"}
+output#6 {}
+  emitOrder=1 gltfMaterialIndex=0
+  exposedPorts=["color","roughness","metalness","normal","position"] materialSettings=undefined
   modelSignature={"materials":["","unused"]} modelMeshes=[{"name":"mesh_0","material":0}]
-imageNode#0.out -> output#5.m1:color (vec3)
-imageNode#1.g -> output#5.m1:roughness (float)
-imageNode#1.b -> mul#3.a (float)
-float#2.out -> mul#3.b (float)
-mul#3.out -> output#5.m1:metalness (any)
-imageNode#4.out -> output#5.m1:normal (vec3)"
+imageNode#1.out -> output#6.color (vec3)
+imageNode#2.g -> output#6.roughness (float)
+imageNode#2.b -> mul#4.a (float)
+float#3.out -> mul#4.b (float)
+mul#4.out -> output#6.metalness (any)
+imageNode#5.out -> output#6.normal (vec3)"
 `;
 
 exports[`what the restore paths and the parse make of it > BLENDER: snapshot of the emitted code and the graph structure 1`] = `
@@ -138,45 +143,58 @@ export default shader;
 `;
 
 exports[`what the restore paths and the parse make of it > BLENDER: snapshot of the emitted code and the graph structure 2`] = `
-"imageNode#0 {"imageB64":"<31 chars>","width":4,"height":4,"fileName":"BaseColor.png","colorSpace":"color","orientation":"gltf","xfOffsetX":0.25,"xfScaleX":2,"xfScaleY":2}
-imageNode#1 {"imageB64":"<35 chars>","width":4,"height":2,"fileName":"ORM.png","colorSpace":"data","orientation":"gltf"}
-float#2 {"value":0.8}
-mul#3 {}
-imageNode#4 {"imageB64":"<31 chars>","width":2,"height":2,"fileName":"Normal.png","colorSpace":"data","orientation":"gltf","normalGreen":"flip"}
-vertexColor#5 {"index":0}
-color#6 {"hex":"#bcbcbc"}
-mul#7 {}
-split#8 {}
-float#9 {"value":0.5}
-mul#10 {}
-float#11 {"value":0}
-mul#12 {}
-color#13 {"hex":"#ffbc89"}
-float#14 {"value":2}
-mul#15 {}
-output#16 {}
-  materials=[{"gltfMaterialIndex":0,"exposedPorts":["color","roughness","metalness","normal","position"],"materialSettings":{"side":"double"}},{"gltfMaterialIndex":1,"exposedPorts":["color","emissive","roughness","metalness","opacity","position"],"materialSettings":{"transparent":true,"depthWrite":false}},{"gltfMaterialIndex":2,"exposedPorts":["color","roughness","metalness","position"],"values":{"color":"#7ccb59","roughness":0.4,"metalness":0.25},"materialSettings":{"alphaTest":0.99}}]
+"output#0 {}
+  emitOrder=0 gltfMaterialIndex=undefined
+  exposedPorts=undefined materialSettings=undefined
+  modelSignature=undefined modelMeshes=undefined
+imageNode#1 {"imageB64":"<31 chars>","width":4,"height":4,"fileName":"BaseColor.png","colorSpace":"color","orientation":"gltf","xfOffsetX":0.25,"xfScaleX":2,"xfScaleY":2}
+imageNode#2 {"imageB64":"<35 chars>","width":4,"height":2,"fileName":"ORM.png","colorSpace":"data","orientation":"gltf"}
+float#3 {"value":0.8}
+mul#4 {}
+imageNode#5 {"imageB64":"<31 chars>","width":2,"height":2,"fileName":"Normal.png","colorSpace":"data","orientation":"gltf","normalGreen":"flip"}
+output#6 {}
+  emitOrder=1 gltfMaterialIndex=0
+  exposedPorts=["color","roughness","metalness","normal","position"] materialSettings={"side":"double"}
   modelSignature={"materials":["Material.001","Material.002","Ķermenis"]} modelMeshes=[{"name":"Cube_1","material":0},{"name":"Cube_2","material":1},{"name":"Plate","material":2}]
-imageNode#0.out -> output#16.m1:color (vec3)
-imageNode#1.g -> mul#3.a (float)
-float#2.out -> mul#3.b (float)
-mul#3.out -> output#16.m1:roughness (any)
-imageNode#1.b -> output#16.m1:metalness (float)
-imageNode#4.out -> output#16.m1:normal (vec3)
-vertexColor#5.out -> mul#7.a (vec4)
-color#6.out -> mul#7.b (color)
-mul#7.out -> output#16.m2:color (any)
-vertexColor#5.out -> split#8.v (vec4)
-split#8.w -> mul#10.a (float)
-float#9.out -> mul#10.b (float)
-mul#10.out -> output#16.m2:opacity (any)
-imageNode#1.g -> output#16.m2:roughness (float)
-imageNode#1.b -> mul#12.a (float)
+vertexColor#7 {"index":0}
+color#8 {"hex":"#bcbcbc"}
+mul#9 {}
+split#10 {}
+float#11 {"value":0.5}
+mul#12 {}
+float#13 {"value":0}
+mul#14 {}
+color#15 {"hex":"#ffbc89"}
+float#16 {"value":2}
+mul#17 {}
+output#18 {}
+  emitOrder=2 gltfMaterialIndex=1
+  exposedPorts=["color","emissive","roughness","metalness","opacity","position"] materialSettings={"transparent":true,"depthWrite":false}
+  modelSignature={"materials":["Material.001","Material.002","Ķermenis"]} modelMeshes=undefined
+output#19 {}
+  emitOrder=3 gltfMaterialIndex=2
+  exposedPorts=["color","roughness","metalness","position"] materialSettings={"alphaTest":0.99}
+  modelSignature={"materials":["Material.001","Material.002","Ķermenis"]} modelMeshes=undefined
+imageNode#1.out -> output#6.color (vec3)
+imageNode#2.g -> mul#4.a (float)
+float#3.out -> mul#4.b (float)
+mul#4.out -> output#6.roughness (any)
+imageNode#2.b -> output#6.metalness (float)
+imageNode#5.out -> output#6.normal (vec3)
+vertexColor#7.out -> mul#9.a (vec4)
+color#8.out -> mul#9.b (color)
+mul#9.out -> output#18.color (any)
+vertexColor#7.out -> split#10.v (vec4)
+split#10.w -> mul#12.a (float)
 float#11.out -> mul#12.b (float)
-mul#12.out -> output#16.m2:metalness (any)
-color#13.out -> mul#15.a (color)
-float#14.out -> mul#15.b (float)
-mul#15.out -> output#16.m2:emissive (any)"
+mul#12.out -> output#18.opacity (any)
+imageNode#2.g -> output#18.roughness (float)
+imageNode#2.b -> mul#14.a (float)
+float#13.out -> mul#14.b (float)
+mul#14.out -> output#18.metalness (any)
+color#15.out -> mul#17.a (color)
+float#16.out -> mul#17.b (float)
+mul#17.out -> output#18.emissive (any)"
 `;
 
 exports[`what the restore paths and the parse make of it > SCAN: snapshot of the emitted code and the graph structure 1`] = `
@@ -234,18 +252,31 @@ export default shader;
 `;
 
 exports[`what the restore paths and the parse make of it > SCAN: snapshot of the emitted code and the graph structure 2`] = `
-"imageNode#0 {"imageB64":"<196631 chars>","width":1024,"height":576,"fileName":"Body_diffuse.jpg","colorSpace":"color","orientation":"gltf"}
-imageNode#1 {"imageB64":"<35 chars>","width":4,"height":2,"fileName":"Body_orm.png","colorSpace":"data","orientation":"gltf"}
-imageNode#2 {"imageB64":"<31 chars>","width":2,"height":2,"fileName":"Body_normal.png","colorSpace":"data","orientation":"gltf"}
-imageNode#3 {"imageB64":"<196631 chars>","width":1024,"height":576,"fileName":"Base_diffuse.jpg","colorSpace":"color","orientation":"gltf"}
-imageNode#4 {"imageB64":"<196631 chars>","width":1024,"height":576,"fileName":"Trim_diffuse.jpg","colorSpace":"color","orientation":"gltf"}
-output#5 {}
-  materials=[{"gltfMaterialIndex":0,"exposedPorts":["color","roughness","metalness","normal","position"]},{"gltfMaterialIndex":1,"exposedPorts":["color","roughness","metalness","position"],"values":{"metalness":1}},{"gltfMaterialIndex":2,"exposedPorts":["color","roughness","metalness","position"],"values":{"roughness":0.5,"metalness":1}}]
+"output#0 {}
+  emitOrder=0 gltfMaterialIndex=undefined
+  exposedPorts=undefined materialSettings=undefined
+  modelSignature=undefined modelMeshes=undefined
+imageNode#1 {"imageB64":"<196631 chars>","width":1024,"height":576,"fileName":"Body_diffuse.jpg","colorSpace":"color","orientation":"gltf"}
+imageNode#2 {"imageB64":"<35 chars>","width":4,"height":2,"fileName":"Body_orm.png","colorSpace":"data","orientation":"gltf"}
+imageNode#3 {"imageB64":"<31 chars>","width":2,"height":2,"fileName":"Body_normal.png","colorSpace":"data","orientation":"gltf"}
+output#4 {}
+  emitOrder=1 gltfMaterialIndex=0
+  exposedPorts=["color","roughness","metalness","normal","position"] materialSettings=undefined
   modelSignature={"materials":["Body","Base","Trim"]} modelMeshes=[{"name":"Body","material":0},{"name":"Base","material":1},{"name":"Trim","material":2}]
-imageNode#0.out -> output#5.m1:color (vec3)
-imageNode#1.g -> output#5.m1:roughness (float)
-imageNode#1.b -> output#5.m1:metalness (float)
-imageNode#2.out -> output#5.m1:normal (vec3)
-imageNode#3.out -> output#5.m2:color (vec3)
-imageNode#4.out -> output#5.m3:color (vec3)"
+imageNode#5 {"imageB64":"<196631 chars>","width":1024,"height":576,"fileName":"Base_diffuse.jpg","colorSpace":"color","orientation":"gltf"}
+output#6 {}
+  emitOrder=2 gltfMaterialIndex=1
+  exposedPorts=["color","roughness","metalness","position"] materialSettings=undefined
+  modelSignature={"materials":["Body","Base","Trim"]} modelMeshes=undefined
+imageNode#7 {"imageB64":"<196631 chars>","width":1024,"height":576,"fileName":"Trim_diffuse.jpg","colorSpace":"color","orientation":"gltf"}
+output#8 {}
+  emitOrder=3 gltfMaterialIndex=2
+  exposedPorts=["color","roughness","metalness","position"] materialSettings=undefined
+  modelSignature={"materials":["Body","Base","Trim"]} modelMeshes=undefined
+imageNode#1.out -> output#4.color (vec3)
+imageNode#2.g -> output#4.roughness (float)
+imageNode#2.b -> output#4.metalness (float)
+imageNode#3.out -> output#4.normal (vec3)
+imageNode#5.out -> output#6.color (vec3)
+imageNode#7.out -> output#8.color (vec3)"
 `;

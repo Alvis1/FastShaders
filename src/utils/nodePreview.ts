@@ -1,6 +1,6 @@
 import type { AppNode, AppEdge, OutputNodeData, PortDefinition, ShaderNodeData } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
-import { findDefaultOutput } from '@/utils/outputMaterials';
+import { findDefaultOutput, isOutputNode } from '@/utils/outputMaterials';
 import { isSinkNode, hasActiveFlag, ACTIVE_OUTPUT_KEY } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { generateEdgeId } from '@/utils/idGenerator';
@@ -95,13 +95,28 @@ export function resolveNodePreview(
  *      "disable all other inputs to the Output". Edges are unwrapped first
  *      (`unwrapCollapsedGroupEdges`), so a wire that reaches the Output
  *      through a collapsed group's boundary socket is dropped too.
- *   2. The target Output — `findDefaultOutput`, i.e. the flagged plain Output
- *      else the first — is replaced by a CLEAN one at the same id: no stored
- *      channel values (an exposure-gated `roughness: float(0.3)` would
- *      otherwise survive the wire removal), no added materials, its ACTIVE
- *      flag set so a flagged Raymarch Output cannot outrank it, and only its
- *      `materialSettings` kept — side, wireframe and the like are settings of
- *      the material, not inputs to it. Every other sink loses its flag, so
+ *   2. The derived graph is left with EXACTLY ONE plain Output. The anchor is
+ *      `findDefaultOutput` — the flagged Output else the first, whether or not
+ *      it names a mesh — because that is the node the canvas route line points
+ *      at (`PreviewRoute`), so the wire on screen and the node the 3D view
+ *      renders can never be two different nodes. It is replaced by a CLEAN one
+ *      at the same id: no stored channel values (an exposure-gated
+ *      `roughness: float(0.3)` would otherwise survive the wire removal), no
+ *      binding of its own, its ACTIVE flag set so a flagged Raymarch Output
+ *      cannot outrank it, and only its `materialSettings` kept — side,
+ *      wireframe and the like are settings of the material, not inputs to it.
+ *      **Every OTHER plain Output is REMOVED from the derived graph**, and that
+ *      is what makes the mode mean what it says. One Output per material is the
+ *      ordinary shape of any GLB-imported document, and each TARGETED one goes
+ *      on emitting its own `parts` / `materialParts` entry however thoroughly
+ *      this one is cleaned — so merely cleaning the anchor landed the previewed
+ *      socket on whatever meshes that single node happened to shade while every
+ *      other material carried on painting the model, with nothing on screen to
+ *      say so. Removing them leaves ONE untargeted, flagged Output, so
+ *      `defaultOutput`, `contributingOutputs` and `activeSink` can only name
+ *      the clean node, the module carries no `parts` table at all, and the
+ *      previewed socket covers the whole model whatever the document's material
+ *      structure. A Raymarch Output is KEPT and only loses its flag, so
  *      `drivingMarchOutput` (unwired AND unflagged now) yields nothing and the
  *      plain Output emits. With no plain Output at all, one is synthesized
  *      under `PREVIEW_OUTPUT_ID`.
@@ -135,19 +150,33 @@ export function previewGraph(
     },
   } as AppNode;
 
-  const previewNodes: AppNode[] = nodes.map((n) => {
-    if (n.id === outId) return clean;
-    if (isSinkNode(n) && hasActiveFlag(n)) {
+  /** The other plain Outputs, dropped outright (rule 2). */
+  const dropped = new Set<string>();
+  const previewNodes: AppNode[] = [];
+  for (const n of nodes) {
+    if (n.id === outId) {
+      previewNodes.push(clean);
+    } else if (isOutputNode(n)) {
+      dropped.add(n.id);
+    } else if (isSinkNode(n) && hasActiveFlag(n)) {
       const d = { ...(n.data as Record<string, unknown>) };
       delete d[ACTIVE_OUTPUT_KEY];
-      return { ...n, data: d } as AppNode;
+      previewNodes.push({ ...n, data: d } as AppNode);
+    } else {
+      previewNodes.push(n);
     }
-    return n;
-  });
+  }
   if (!target) previewNodes.push(clean);
 
   const sinkIds = new Set(nodes.filter(isSinkNode).map((n) => n.id));
-  const kept = unwrapCollapsedGroupEdges(nodes, edges).filter((e) => !sinkIds.has(e.target));
+  // Edges INTO a sink go (rule 1), and so does anything hanging off a node
+  // rule 2 removed — an Output declares no output port, so such an edge only
+  // reaches here from a hand-edited file, but a wire to a node the derived
+  // graph no longer holds is exactly the dangling reference codegen must never
+  // be handed.
+  const kept = unwrapCollapsedGroupEdges(nodes, edges).filter(
+    (e) => !sinkIds.has(e.target) && !dropped.has(e.source),
+  );
   const route: AppEdge = {
     id: generateEdgeId(src.id, preview.handleId, outId, PREVIEW_CHANNEL),
     source: src.id,

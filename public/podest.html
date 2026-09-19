@@ -2346,6 +2346,10 @@
   var FS_ASSET_BYTES_MAX = 16 * 1024 * 1024;
   var FS_ASSETS_TOTAL_MAX = 64 * 1024 * 1024;
   var FS_ASSET_KEY_RE = /^[A-Za-z0-9_-]{1,80}$/;
+  // The drop's cap on a `data:` buffer it decodes to zero a payload range in
+  // (the editor's GLB_READ_MAX_BYTES). Podest keeps the WEB number inside the
+  // desktop app too, as it does for its zip caps.
+  var FS_BUFFER_MAX_BYTES = 96 * 1024 * 1024;
   var FS_FNV1A_RE = /^[0-9a-f]{8}$/;
   var FS_GLB_JSON_MAX_BYTES = 16 * 1024 * 1024;
   var FS_GLB_MAX_CHUNKS = 16;
@@ -2383,6 +2387,35 @@
     var binary = "";
     for (var i = 0; i < u8.length; i += 0x8000) binary += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
     return btoa(binary);
+  }
+  // glbContainer's decodeDataUri(uri, "buffer", max), for the drop alone: the
+  // header must be exactly `data:<mediatype>;base64` with a buffer media type,
+  // and the payload CANONICAL base64 — no whitespace, no URL-safe alphabet, no
+  // non-zero discarded bits, so every byte string has one accepted spelling.
+  // null on anything else, and the drop then leaves that buffer alone.
+  var FS_DATA_URI_HEADER_MAX = 128;
+  var FS_BUFFER_MIMES = ["", "application/octet-stream", "application/gltf-buffer"];
+  var FS_B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var FS_B64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+  function fsDecodeDataUri(uri, max) {
+    if (typeof uri !== "string" || !/^data:/i.test(uri)) return null;
+    var comma = uri.indexOf(",");
+    if (comma < 0 || comma > FS_DATA_URI_HEADER_MAX) return null;
+    var head = /^(.*);base64$/i.exec(uri.slice(5, comma));
+    if (!head || head[1].indexOf(";") >= 0) return null;
+    var mime = head[1].toLowerCase();
+    if (FS_BUFFER_MIMES.indexOf(mime) < 0) return null;
+    var s = uri.slice(comma + 1);
+    if (s.length % 4 !== 0 || !FS_B64_RE.test(s)) return null;
+    var pad = s.slice(-2) === "==" ? 2 : s.slice(-1) === "=" ? 1 : 0;
+    if ((s.length / 4) * 3 - pad > max) return null;   // the size BEFORE a byte is decoded
+    if (pad === 2 && FS_B64_ALPHABET.indexOf(s.charAt(s.length - 3)) % 16 !== 0) return null;
+    if (pad === 1 && FS_B64_ALPHABET.indexOf(s.charAt(s.length - 2)) % 4 !== 0) return null;
+    var binary;
+    try { binary = atob(s); } catch (e) { return null; }
+    var out = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+    return { mime: mime, bytes: out };
   }
   // glbContainer's parseGlbContainer: version exactly 2, chunk bounds, JSON first,
   // BIN only second, at most 16 chunks, the JSON length checked before a decode.
@@ -2620,10 +2653,34 @@
       return { state: "refused", reason: "damaged" };
     }
   }
+  // The ranges that live in an EMBEDDED data: buffer, zeroed by rewriting that
+  // buffer's URI — same media type, so the base64 keeps its width and the JSON
+  // chunk keeps its length. A GLB's buffers[0] IS the BIN and carries no uri,
+  // so it is skipped here and zeroed in the chunk instead; an external buffer
+  // holds no bytes of this file. Without this a module on buffers[1] was
+  // identified and then left verbatim in every copy podest keeps.
+  function fsZeroBuffers(doc, ranges) {
+    var buffers = Array.isArray(doc.buffers) ? doc.buffers : [];
+    var byBuffer = new Map();
+    ranges.forEach(function (r) {
+      var list = byBuffer.get(r.buffer);
+      if (list) list.push(r); else byBuffer.set(r.buffer, [r]);
+    });
+    byBuffer.forEach(function (rs, b) {
+      var def = buffers[b];
+      if (!fsIsObj(def) || typeof def.uri !== "string") return;
+      var d = fsDecodeDataUri(def.uri, FS_BUFFER_MAX_BYTES);
+      if (!d) return;
+      var copy = new Uint8Array(d.bytes);
+      rs.forEach(function (r) { copy.fill(0, Math.min(r.start, copy.length), Math.min(r.end, copy.length)); });
+      def.uri = "data:" + d.mime + ";base64," + fsB64(copy);
+    });
+  }
   // The payload drop: extras.fastshaders goes from the root and every scene,
-  // and the module/project bytes no model site reads are ZEROED in place
-  // (offsets and sizes unchanged). The SAME object back when there is nothing
-  // to drop; null when a payload is sniffed in a container that will not parse.
+  // and the module/project bytes no model site reads are ZEROED in place —
+  // in the BIN chunk or in an embedded data: buffer (offsets and sizes
+  // unchanged). The SAME object back when there is nothing to drop; null when
+  // a payload is sniffed in a container that will not parse.
   function fsDropPayload(u8) {
     try {
       if (!fsSniff(u8)) return u8;
@@ -2646,10 +2703,12 @@
       });
       var bin = c.bin;
       if (bin && ranges.length > 0) {
+        // Buffer 0 IS the BIN chunk here; every other buffer is a uri.
         var copy = new Uint8Array(bin);
         ranges.forEach(function (r) { if (r.buffer === 0) copy.fill(0, Math.min(r.start, copy.length), Math.min(r.end, copy.length)); });
         bin = copy;
       }
+      fsZeroBuffers(doc, ranges);
       var strip = function (o) { if (fsIsObj(o.extras) && Object.prototype.hasOwnProperty.call(o.extras, "fastshaders")) delete o.extras.fastshaders; };
       strip(doc);
       (Array.isArray(doc.scenes) ? doc.scenes : []).forEach(function (s) { if (fsIsObj(s)) strip(s); });

@@ -153,7 +153,7 @@ export function glbTooLargeCopy(
 } {
   let message = fillTemplate(t(K.tooLargeMessage, lang), {
     size: formatMiB(tl.sizeBytes, lang),
-    limit: formatMiB(tl.limitBytes, lang),
+    limit: formatMiB(tl.limitBytes, lang, 'nearest'),
   });
   if (tl.hasFallbacks) {
     message += ' ' + fillTemplate(t(K.textureCopies, lang), { textures: formatMiB(tl.textureBytes, lang) });

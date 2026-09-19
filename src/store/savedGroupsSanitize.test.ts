@@ -146,22 +146,30 @@ describe('loadSavedGroups sanitizes fs:savedGroups as adversarial input', () => 
 
     const groups = loadSavedGroups();
     expect(groups).toHaveLength(1);
-    const [a, b] = groups[0].nodes;
-    // A non-array `materials` is dropped outright.
-    expect((a.data as { materials?: unknown }).materials).toBeUndefined();
-    // The ride-along is stripped to `{ meshTargets }`. Nothing is DELETED: an
-    // entry whose names are all unusable is kept EMPTY (it shades nothing,
-    // which is a legal state and the one a mesh swap passes through), and a
-    // duplicate claim is kept too — emission resolves that, first claim
+    const outs = groups[0].nodes;
+    // No node carries `materials` after a load: `unfoldOutputMaterials` runs on
+    // this path too, so what the sanitizer kept becomes one node per material.
+    for (const n of outs) expect((n.data as { materials?: unknown }).materials, n.id).toBeUndefined();
+    // The ride-along is stripped to the node's own target list. Nothing is
+    // DELETED: a section whose names are all unusable is kept EMPTY (it shades
+    // nothing, which is a legal state and the one a mesh swap passes through),
+    // and a duplicate claim is kept too — emission resolves that, first claim
     // winning. Dropping either here would delete a section the user can see,
     // with its wiring, on the next reload.
-    expect((b.data as { materials?: unknown }).materials).toEqual([
+    expect(outs.map((n) => {
+      const d = n.data as { meshTargets?: unknown; values?: unknown };
+      return d.values === undefined ? { meshTargets: d.meshTargets } : { meshTargets: d.meshTargets, values: d.values };
+    })).toEqual([
+      // `a`: a non-array `materials` is dropped outright, leaving a bare Output.
+      { meshTargets: undefined },
+      // `b` and its three siblings, in the order the sections were stacked.
+      { meshTargets: undefined },
       { meshTargets: ['Glass'] },
       { meshTargets: ['Glass'] },
       { meshTargets: [], values: { color: '#ff0000' } },
       { meshTargets: [] },
     ]);
-    // Neither node is DELETED — each carries the user's wiring.
-    expect(groups[0].nodes).toHaveLength(2);
+    // Nothing is DELETED — every section keeps the user's wiring, on its own node.
+    expect(outs).toHaveLength(2 + 4);
   });
 });

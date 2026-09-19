@@ -1,7 +1,6 @@
 import dagre from '@dagrejs/dagre';
 import type { AppNode, AppEdge } from '@/types';
 import { getCostScale } from '@/utils/colorUtils';
-import { outputMaterials, materialExposedPorts } from '@/utils/outputMaterials';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { NODE_REGISTRY, growsOperands, getFlowNodeType } from '@/registry/nodeRegistry';
 import { nodeBox, hasNodeGlyph, usesOperatorLayout, nodeScale } from '@/components/NodeEditor/nodes/glyphs/NodeGlyph';
@@ -84,29 +83,31 @@ export function estimateNodeSize(node: AppNode, inDegree = 0): NodeSize {
     case 'color': // borderless square swatch, no header, never cost-scaled
       return { width: COLOR_NODE_SIZE, height: COLOR_NODE_SIZE };
     case 'output': {
-      // min-width 140 + header + one row per visible channel (colour + exposed)
-      // — for EVERY material. Per-mesh materials stack inside this one node, so
-      // an estimate built from material 0 alone under-measures it by a whole
-      // section per mesh (measured in Chromium: 137px with one material, 386px
-      // with three), and auto-layout would then place the node below straight
-      // through it. Each added material also costs its mesh-picker row and the
-      // divider that opens it, plus the bottom "+ Add mesh" row.
-      const materials = outputMaterials(node);
-      let rows = 0;
-      for (let i = 0; i < materials.length; i++) {
-        const exposed = i === 0
-          ? ((node.data as { exposedPorts?: string[] }).exposedPorts?.length
-            ?? OUTPUT_DEFAULT_EXPOSED.length)
-          : materialExposedPorts(materials[i], OUTPUT_DEFAULT_EXPOSED).length;
-        rows += Math.max(exposed, 1);
-        // The mesh picker. Material 0 has one too, but ONLY while a model is
-        // loaded — which this pure estimate cannot see; several materials imply
-        // it, so that case is exact and the single-material one is 18px short.
-        if (i > 0 || materials.length > 1) rows += 1;
-      }
-      rows = Math.max(rows, inDegree, 1);
-      const chrome = 34 + (materials.length - 1) * 8 + (materials.length > 1 ? 20 : 0);
-      return { width: 150, height: chrome + rows * 18 };
+      // min-width 140 + header + one row per visible channel (colour + exposed),
+      // plus ONE row for the mesh picker.
+      //
+      // ONE NODE IS ONE MATERIAL since the per-material split, so this reads
+      // the node's own `exposedPorts` and nothing else. The stacking term this
+      // replaces (a section per mesh, its divider, and the "+ Add output" row)
+      // had already collapsed to zero by construction — `outputMaterials` of a
+      // split node is one entry — so deleting it moves no number; it is gone
+      // because dead arithmetic describing a layout that no longer exists is
+      // what a future reader would try to keep working.
+      //
+      // The picker row is UNCONDITIONAL. It renders whenever a model is loaded
+      // (or the node names a mesh, is index-bound, or is parked), and a pure
+      // estimate cannot see the session's model — so the choice is between
+      // over-measuring a model-less document by 18px and under-measuring every
+      // model document by the same, and dagre overlaps on the short side while
+      // it only spaces a little wide on the long one.
+      //
+      // It is added ON TOP of the `inDegree` floor rather than inside it: that
+      // floor stands in for CHANNEL rows (one wire, one row), and the picker is
+      // not a channel.
+      const exposed = (node.data as { exposedPorts?: string[] }).exposedPorts?.length
+        ?? OUTPUT_DEFAULT_EXPOSED.length;
+      const rows = Math.max(exposed, inDegree, 1) + 1;
+      return { width: 150, height: 34 + rows * 18 };
     }
     case 'raymarchOutput': {
       // RaymarchOutputNode: min-width 150 + header, four labelled sections

@@ -86,16 +86,21 @@ import { resolveOverlapCascade, type CascadeBox, type CascadeShift } from './ove
 import { connectNodes, exposeConnectedTarget, spliceNodeIntoEdge, type DroppedPin } from './edgeInsert';
 import {
   costFocusId, focusNodes, focusNode, glideFitAll, zoomStepTarget, VIEW_GLIDE_MS,
+  outputCycleOrder, nextOutputFocus,
   type ZoomGlide,
 } from './outputFocus';
+import { pickLivePreviewWire } from '@/components/Layout/previewLinkHit';
 import { selectAllChanges } from './selectAll';
 import {
   readStoredViewport, writeStoredViewport, VIEWPORT_MIN_ZOOM, VIEWPORT_MAX_ZOOM,
   type StoredViewport,
 } from '@/utils/viewportMemory';
-import { anyOutputDormant, findDefaultOutput } from '@/utils/outputMaterials';
+import { outputEdgeIsDormant, findDefaultOutput } from '@/utils/outputMaterials';
+import { edgeIdFromError008 } from './flowErrors';
 import { CostBar } from '@/components/Layout/CostBar';
 import { PreviewLink } from '@/components/Layout/PreviewLink';
+import { PreviewRail } from '@/components/Layout/PreviewRail';
+import { RAIL_ADD_OUTPUT_EVENT, RAIL_FOCUS_EVENT, focusRequestId } from '@/components/Layout/previewRailEvents';
 import { getCostScale, canvasInkColor } from '@/utils/colorUtils';
 import { nodeCostPoints, imageNodeCost, getCost } from '@/utils/nodeCost';
 import { generateId, generateEdgeId } from '@/utils/idGenerator';
@@ -956,11 +961,6 @@ export function NodeEditor() {
     setPeekNodeId((cur) => togglePeek(cur, node.id));
   }, []);
 
-  const onPaneClick = useCallback(() => {
-    closeContextMenu();
-    setPeekNodeId(null);
-  }, [closeContextMenu]);
-
   const nodeEditorBgColor = useAppStore((s) => s.nodeEditorBgColor);
   const setNodeEditorBgColor = useAppStore((s) => s.setNodeEditorBgColor);
   // Canvas-background picker. `ColorPickerPopover` rather than the trigger-
@@ -1096,24 +1096,128 @@ export function NodeEditor() {
     };
   }, []);
   /**
+   * A click on the empty canvas. Closes the context menu and the socket-label
+   * peek — and, since the per-material Output split, glides to an Output when
+   * the press landed on that node's decorative preview WIRE.
+   *
+   * React Flow's own `onPaneClick` rather than a listener of our own, because
+   * it is the only signal that already knows all three things a hand-rolled one
+   * would have to re-derive: a marquee did NOT just end (`selectionInProgress`
+   * suppresses the click), no connection is in progress, and the press landed
+   * on the PANE rather than on a node card — so a wire running underneath a
+   * card is correctly not clickable there. Nothing is eaten either: both of the
+   * original calls still run first, and React Flow clears the selection after
+   * this returns whatever we do.
+   *
+   * The button test is belt-and-braces — `click` does not fire for the middle
+   * button (that is `auxclick`), so a middle-drag pan cannot reach this — and
+   * it keeps a future non-primary path from gliding by accident.
+   */
+  const onPaneClick = useCallback((event: { clientX: number; clientY: number; button?: number }) => {
+    closeContextMenu();
+    setPeekNodeId(null);
+    if ((event.button ?? 0) !== 0) return;
+    // The wires' live endpoints, published per frame by PreviewLink — the same
+    // numbers its hover test uses, so what lit up is what answers the click.
+    const hit = pickLivePreviewWire(event.clientX, event.clientY);
+    if (!hit) return;
+    focusNode(fitView, useAppStore.getState().nodes, hit.wire.id);
+  }, [closeContextMenu, fitView]);
+
+  /**
    * The cost pill's total doubles as "take me to the Output" — the number is
    * this shader's price and the Output node is where it is spent (the DRIVING
    * Raymarch Output when one drives — `costFocusId`), so the same
    * "take me to it" glide the Output's palette tile and Add-node row already
    * perform (outputFocus.ts, same framing so all three land identically).
    *
-   * The node is looked up at CLICK time rather than captured, so the callback
-   * stays stable across every drag frame and cannot hold a deleted id.
+   * With SEVERAL sinks it CYCLES (owner decision D4): the first press lands
+   * where the points are spent, and every press after that walks the stable
+   * order. With ONE it keeps the plain glide — a second press that re-glides to
+   * where the view already is reads as a dead control, which is the very rule
+   * this pill follows when it renders as an inert `<span>` with nothing to
+   * focus.
+   *
+   * The order is rebuilt at CLICK time from `getState()`, never from the render's
+   * `nodes`: the callback then stays stable across every drag frame, cannot hold
+   * a deleted id, and cannot be reordered by `liftChildrenAfterParents` splicing
+   * a node into a new array slot (`outputCycleOrder` sorts by position, not by
+   * array order, for the same reason).
+   *
+   * The cursor is a `useRef`, not `useState`: state would give the handler a new
+   * identity per press and re-render the memo'd CostBar for a value it does not
+   * display. It holds the last-focused ID rather than an index — the order is
+   * rebuilt each press, so an index into a list that has since changed length
+   * names an arbitrary node.
    */
+  const outputCycleRef = useRef<string | null>(null);
+  /**
+   * The rails' two requests (either pane's).
+   *
+   * The 3D preview is a sibling React tree with no `fitView` of its own and no
+   * business calling `addNode`, so it asks; the canvas rail asks the same way
+   * so there is one path rather than two that can drift.
+   *
+   * The ADD reuses the Add-node menu's own Output shape verbatim — a fresh
+   * INACTIVE node, `addNode` for the single history entry and the reviewed
+   * `evalLog('node-add')` chokepoint — and places it at the canvas centre,
+   * where Shift+A puts one. It is the graph's FIRST Output, so it becomes the
+   * active sink by the historical rule with no flag written.
+   */
+  useEffect(() => {
+    const onFocus = (e: Event) => {
+      const id = focusRequestId(e);
+      if (id) focusNode(fitView, useAppStore.getState().nodes, id);
+    };
+    const onAdd = () => {
+      const { nodes: nodesNow, addNode } = useAppStore.getState();
+      // Never a SECOND one: the hollow socket is the empty state, and a race
+      // (two clicks, or a node added between the event and this handler) must
+      // not mint an Output the rail was not offering.
+      if (nodesNow.some((n) => n.data.registryType === 'output')) return;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const id = generateId();
+      addNode({
+        id,
+        type: 'output',
+        position: screenToFlowPosition({
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        }),
+        data: { registryType: 'output', label: 'Output', cost: 0 },
+      } as AppNode);
+      requestAnimationFrame(() => {
+        focusNode(fitView, useAppStore.getState().nodes, id);
+      });
+    };
+    window.addEventListener(RAIL_FOCUS_EVENT, onFocus);
+    window.addEventListener(RAIL_ADD_OUTPUT_EVENT, onAdd);
+    return () => {
+      window.removeEventListener(RAIL_FOCUS_EVENT, onFocus);
+      window.removeEventListener(RAIL_ADD_OUTPUT_EVENT, onAdd);
+    };
+  }, [fitView, screenToFlowPosition]);
+
   const focusOutput = useCallback(() => {
     const { nodes: nodesNow, edges: edgesNow } = useAppStore.getState();
-    const id = costFocusId(nodesNow, edgesNow);
+    const order = outputCycleOrder(nodesNow);
+    const id = order.length < 2
+      ? costFocusId(nodesNow, edgesNow)
+      : outputCycleRef.current === null
+        ? (costFocusId(nodesNow, edgesNow) ?? nextOutputFocus(order, null))
+        : nextOutputFocus(order, outputCycleRef.current);
+    outputCycleRef.current = id;
     if (id) focusNode(fitView, nodesNow, id);
   }, [fitView]);
   /** …but only offered while there IS one. The user can delete the Output, and
    *  a visible control that silently does nothing reads as the app being
    *  broken — the lesson the Output tile's own redirect is built around. */
   const hasOutput = useMemo(() => costFocusId(nodes, edges) != null, [nodes, edges]);
+  /** Does a press CYCLE, or just glide? The pill's own title says which, so the
+   *  control describes what it will do rather than leaving a second press to
+   *  be discovered. Derived from the render's nodes, like `hasOutput`. */
+  const outputCycles = useMemo(() => outputCycleOrder(nodes).length > 1, [nodes]);
   const viewportSaveRef = useRef(0);
   /**
    * Record the viewport, trailing-debounced.
@@ -2144,10 +2248,14 @@ export function NodeEditor() {
       // Connection dropped on empty space — open add-node menu with source pin info
       const clientX = 'clientX' in event ? event.clientX : event.changedTouches[0].clientX;
       const clientY = 'clientY' in event ? event.clientY : event.changedTouches[0].clientY;
-      openContextMenu(
-        clientX, clientY, 'canvas', undefined, undefined,
-        pending?.nodeId, pending?.handleId, undefined, pending?.handleType,
-      );
+      openContextMenu(clientX, clientY, 'canvas', undefined, undefined, {
+        // NAMED, never positional: `sourceHandleType` decides which WAY the
+        // menu's connect runs, and an edge authored out of an input renders as
+        // nothing while the store keeps it and codegen still emits it.
+        sourceNodeId: pending?.nodeId,
+        sourceHandleId: pending?.handleId,
+        sourceHandleType: pending?.handleType,
+      });
     },
     [openContextMenu],
   );
@@ -2182,15 +2290,19 @@ export function NodeEditor() {
   // unmounted handles are the visibility rule's steady state. Unscoped, a
   // sleeping section floods the dev console at frame rate on every pan (the
   // edge position selector re-runs per internal store write) and buries the
-  // real 008s. The swallow is scoped to handles that parse to a CURRENTLY
-  // dormant material — blanket 008 suppression would hide the real bug class.
+  // real 008s; blanket 008 suppression would hide the real bug class.
+  //
+  // The scope is the EDGE, not the handle. `edgeIdFromError008` reads the id
+  // React Flow names (and refuses a message about the SOURCE side), and
+  // `outputEdgeIsDormant` resolves it to the node the wire lands on and asks
+  // whether THAT node's binding is asleep. Keying on the handle could only ask
+  // "is this material index dormant on ANY Output", which excused a genuine
+  // 008 about an awake section whenever some other Output's section with the
+  // same number happened to be sleeping.
   const onFlowError = useCallback((code: string, message: string) => {
     if (code === '008') {
-      const m = /handle id: "m(\d+):/.exec(message);
-      // Across EVERY Output (several may coexist): the message carries only
-      // the handle id, not the node, so a dormant section on an inactive
-      // Output has to be recognised too.
-      if (m && anyOutputDormant(useAppStore.getState(), Number(m[1]))) {
+      const edgeId = edgeIdFromError008(message);
+      if (edgeId !== null && outputEdgeIsDormant(useAppStore.getState(), edgeId)) {
         return;
       }
     }
@@ -2210,18 +2322,10 @@ export function NodeEditor() {
           : node.type === 'note'
             ? 'note'
             : NODE_MENU_TYPES[node.data.registryType] ?? 'node';
-      // Which Output MATERIAL SECTION was under the cursor: each block carries
-      // `data-material-index`, so the settings menu opens already scoped to
-      // that section (its channels, its material settings). The touch
-      // long-press path re-dispatches contextmenu on the pointerdown target,
-      // so `event.target` resolves identically there.
-      const section = (event.target as HTMLElement | null)?.closest?.('[data-material-index]');
-      const raw = section ? Number(section.getAttribute('data-material-index')) : NaN;
-      const materialIndex = Number.isInteger(raw) && raw >= 0 ? raw : undefined;
-      openContextMenu(
-        event.clientX, event.clientY, menuType, node.id,
-        undefined, undefined, undefined, materialIndex,
-      );
+      // The NODE is the whole scope now: one Output node is one material, so
+      // the `data-material-index` walk that used to pick a SECTION out of a
+      // stack has nothing left to choose between (see ShaderSettingsMenu).
+      openContextMenu(event.clientX, event.clientY, menuType, node.id);
     },
     [openContextMenu]
   );
@@ -3642,11 +3746,19 @@ export function NodeEditor() {
           clearEdgeHighlight();
         }}
       >
+        {/* The wires' far end, made visible: one socket per contributing
+            Output on the canvas's RIGHT edge. Outside <ReactFlow> deliberately
+            — the wires are clipped by `.node-editor__canvas`, so an element
+            that must sit ON that clip belongs beside the canvas chrome, not
+            inside the transformed viewport. */}
+        <PreviewRail />
         <div className="node-editor__cost-overlay">
           {/* The study's cost-feedback condition can hide the bar entirely
               (`?costbar=off` on the /eval launch URL). Outside eval mode the
               task defaults to visible, so this is inert for normal users. */}
-          {evalTask().costBarVisible && <CostBar onFocusOutput={hasOutput ? focusOutput : undefined} />}
+          {evalTask().costBarVisible && (
+            <CostBar onFocusOutput={hasOutput ? focusOutput : undefined} cyclesOutputs={outputCycles} />
+          )}
         </div>
         {/* Top-RIGHT chrome, immediately left of the cost pill: start a fresh
             shader. Kept well away from the bottom-left working bar — it throws

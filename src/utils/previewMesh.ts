@@ -73,6 +73,7 @@ export {
   GLB_READ_MAX_BYTES,
   MESH_MAX_BYTES,
   MESH_TOO_LARGE_KEY,
+  MESH_TOO_LARGE_LIMIT_KEY,
   inspectGltfCompression,
   inspectParsedGltf,
   modelTooLargeRefusal,
@@ -169,14 +170,29 @@ export const MESH_COMPRESSED_KEY =
  * dropper chose, so it is inserted verbatim (no `$&` expansion) and is never
  * scanned for placeholders. `{ext}` occurs twice in the compressed sentence;
  * the pass fills both.
- * The size is MiB rounded UP, so one byte over the cap never reads
- * "64 MB — max 64 MB".
+ *
+ * The two numbers round differently, and the difference is the point. The
+ * measured SIZE rounds UP, so one byte over never reads "64 MB — max 64 MB";
+ * the declared CAP rounds to NEAREST, because rounding a cap up would claim
+ * more room than is actually enforced. Every cap today is a whole number of
+ * MiB, so the two agree — it matters the first time one is not.
+ *
+ * `{limit}` is filled HERE as well as in `meshRefusalMessage`, which pre-fills
+ * it before calling this (that second pass then finds no placeholder and is a
+ * no-op). Only one builder produces a `{limit}` key today and its every refusal
+ * reaches a user through `meshRefusalMessage` — but `validateMeshBytes` and
+ * `createPreviewMesh().error` render English through this function DIRECTLY,
+ * so without the fallback a future refusal that carries `limitBytes` down one
+ * of those paths would ship a literal `{limit}` to the user. An absent
+ * `limitBytes` is the 64 MiB model gate, which is what `modelTooLargeRefusal`
+ * means by omitting it.
  */
 export function fillMeshRefusal(r: MeshRefusal, template: string, lang: Language): string {
   return fillTemplate(template, {
     name: r.name ?? '',
     ext: r.ext ?? '',
     size: formatMiB(r.sizeBytes ?? 0, lang, 'up'),
+    limit: formatMiB(r.limitBytes ?? MESH_MAX_BYTES, lang, 'nearest'),
   });
 }
 

@@ -1,7 +1,7 @@
 import { useAppStore } from '@/store/useAppStore';
 import { drivingMarchOutput } from '@/utils/sdfPartition';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
-import { findDefaultOutput, materialPartsMirrorPlan } from '@/utils/outputMaterials';
+import { contributingOutputs, materialPartsMirrorPlanAcross, moduleSettingsOutput } from '@/utils/outputMaterials';
 import { tslToShaderModule, type PropertyInfo, type ShaderModuleOptions } from './tslToShaderModule';
 import { embedProjectState, type FastShadersProject } from './fastShadersProject';
 import { inlineImageAssetsFromNodes, imageAssetFor } from './imageAssets';
@@ -154,11 +154,16 @@ export interface BuildExportModuleOptions {
  */
 export function buildExportModule(opts: BuildExportModuleOptions): string {
   const state = useAppStore.getState();
-  const outputNode = findDefaultOutput(state.nodes);
+  // TWO different questions off one node list. The module's top-level
+  // material settings belong to `moduleSettingsOutput` (D1: the untargeted
+  // Output, else the first of any kind — a targeted Output must not lend its
+  // settings to the whole module while an untargeted one exists); the MIRROR
+  // plan below belongs to the Output SET that contributes to the module, which
+  // `contributingOutputs` answers in one place for every emission-side surface.
   const materialSettings = marchMaterialSettings(
     state.nodes,
     state.edges,
-    (outputNode?.data as OutputNodeData | undefined)?.materialSettings,
+    (moduleSettingsOutput(state.nodes)?.data as OutputNodeData | undefined)?.materialSettings,
   );
   const moduleOpts: ShaderModuleOptions = opts.glbFile !== undefined ? { glbFile: opts.glbFile } : {};
   try {
@@ -172,7 +177,7 @@ export function buildExportModule(opts: BuildExportModuleOptions): string {
       // The loader-0.6 mirrors of an import-built Output's index sections —
       // module-only (materialPartsContract R7), and the SAME plan the preview
       // passes, so the download is what the author previewed.
-      materialPartsMirrorPlan(outputNode),
+      materialPartsMirrorPlanAcross(contributingOutputs(state.nodes)),
       moduleOpts,
     );
   } catch (e) {

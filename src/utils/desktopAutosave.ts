@@ -334,6 +334,16 @@ export function createDesktopAutosave(
   /** payload → digest, for payloads that were validated and are on disk. */
   const known = new Map<string, string>();
   const lastPayloads = new Map<DesktopSlot, Set<string>>();
+  /** Slot → the payloads its RUNNING write listed. `writeOnce` records them
+   *  before it awaits the first put and drops them once the write has settled,
+   *  because the two slots' savers run concurrently and `prune()` can only see
+   *  what has already reached `lastPayloads`: on the FIRST desktop boot both
+   *  slots read `absent`, so `seeded` is empty and the guard below covers
+   *  nothing — the graph's write then forgot the library's first image while
+   *  the library was still awaiting its second put, and that image went into
+   *  saved-groups.json INLINE (up to 6M characters of base64) with its
+   *  `images/<sha256>.txt` left referenced by nothing. */
+  const running = new Map<DesktopSlot, Set<string>>();
   /** What the boot read. Kept in `known` until BOTH slots have written once,
    *  or the first graph write would forget the library's images. */
   const seeded = new Set<string>();
@@ -364,6 +374,9 @@ export function createDesktopAutosave(
   const prune = () => {
     const keep = new Set<string>();
     for (const set of lastPayloads.values()) for (const p of set) keep.add(p);
+    // A write still in flight has not reached `lastPayloads` yet, and its
+    // `desktopRefsForStorage` reads `known` AFTER this runs (see `running`).
+    for (const set of running.values()) for (const p of set) keep.add(p);
     if (lastPayloads.size < DESKTOP_SLOTS.length) for (const p of seeded) keep.add(p);
     else seeded.clear();
     for (const p of [...known.keys()]) if (!keep.has(p)) known.delete(p);
@@ -380,12 +393,19 @@ export function createDesktopAutosave(
       listed.add(p);
       payloads.push(p);
     }
-    for (const p of payloads) if (!known.has(p)) await putImage(p);
-    const refHolders = new WeakSet<object>();
-    const value = doc.build((nodes) => desktopRefsForStorage(nodes, (p) => known.get(p), refHolders).nodes);
-    await bridge.write(slot, new TextEncoder().encode(stringifyDesktopDocument(value, refHolders)));
-    lastPayloads.set(slot, listed);
-    prune();
+    // Before the first await: the OTHER slot's write can settle inside any of
+    // them and prune `known` down to what it itself listed.
+    running.set(slot, listed);
+    try {
+      for (const p of payloads) if (!known.has(p)) await putImage(p);
+      const refHolders = new WeakSet<object>();
+      const value = doc.build((nodes) => desktopRefsForStorage(nodes, (p) => known.get(p), refHolders).nodes);
+      await bridge.write(slot, new TextEncoder().encode(stringifyDesktopDocument(value, refHolders)));
+      lastPayloads.set(slot, listed);
+      prune();
+    } finally {
+      running.delete(slot);
+    }
     failing = false;
     hooks.onWriteOk(slot);
   };

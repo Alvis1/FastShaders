@@ -152,13 +152,13 @@ export const GLB_IMPORT_KEYS = Object.freeze({
   budgetNothingFits:
     "Even at {res} px this model's textures would take about {est} of the {remaining} still free. Import the model only, or reduce its textures in your 3D software first.",
   gateBlocked:
-    "This model has {n} materials. Imports are limited to {limit} — each becomes an Output section with its own textures and draw calls. Turn on “Allow more than {limit} materials” in the toolbar's right-click list to import them all.",
-  gateConfirm: 'Import all {n} materials? Each adds an Output section, textures and draw calls.',
+    "This model has {n} materials. Imports are limited to {limit} — each becomes an Output node with its own textures and draw calls. Turn on “Allow more than {limit} materials” in the toolbar's right-click list to import them all.",
+  gateConfirm: 'Import all {n} materials? Each adds an Output node, textures and draw calls.',
   keptAuthored:
     'The editor holds at most {max} material sections; the remaining {rest} keep the materials authored in the model.',
   allowMany: 'Allow more than {limit} materials',
   allowManyHint:
-    'Lets a dropped model with more than {limit} materials build one Output section per material. Each adds textures and draw calls, and every such import still asks first.',
+    'Lets a dropped model with more than {limit} materials build one Output node per material. Each adds textures and draw calls, and every such import still asks first.',
   progress: 'Optimizing textures: {i} of {n}',
   busy: 'Finish or cancel the open model import first.',
   buildFailed: 'Could not build a shader from {name}: {reason}. Nothing was changed.',

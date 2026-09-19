@@ -15,7 +15,7 @@
  *
  * One of each, so the per-part rules cannot drift from the default's: alphaTest
  * capped below 1, depthWrite:false only under transparency, a tampered side
- * emits `side: 0`.
+ * emits `side: 0`, and only a literal `true` turns flat shading on.
  *
  * A LEAF on purpose — type imports only. tslCodeProcessor is in the main bundle
  * while scriptToTSL is loaded lazily (projectImport's `import('./scriptToTSL')`),
@@ -47,12 +47,20 @@ export const SIDE_NAMES: ReadonlyMap<string, 'front' | 'back' | 'double'> = new 
 ]);
 
 /**
- * The MaterialSettings keys a `parts` entry carries: the four the loader's
- * `buildMaterial` applies to every part it builds — 0.6 and 0.8 alike (the
- * frozen a-frame-shaderloader/js/a-frame-shaderloader-0.6.js and the current
- * 0.8, `spec.transparent` … `spec.depthWrite`). NOT `mergeVertices` — a module-level
- * geometry directive the loader reads off the return object — and NOT
- * `displacementMode`, an editor emission choice with no loader key at all.
+ * The MaterialSettings keys a `parts` entry carries: the ones the loader's
+ * `buildMaterial` applies to every part it builds. Four of them are in the
+ * frozen a-frame-shaderloader/js/a-frame-shaderloader-0.6.js too
+ * (`spec.transparent` … `spec.depthWrite`); `flatShading` is 0.8-only and was
+ * added there additively, so a shader carrying it renders SMOOTH on 0.6 rather
+ * than failing — that loader reads its known keys by name and ignores the rest.
+ *
+ * NOT `mergeVertices` — a module-level geometry directive the loader reads off
+ * the return object — and NOT `displacementMode`, an editor emission choice
+ * with no loader key at all.
+ *
+ * `flatShading` IS per-material and belongs here: it is a THREE.Material
+ * property, so two materials on one model can differ, exactly as they can in
+ * transparency or side.
  *
  * A Set of literals, so `__proto__` / `constructor` can never match.
  */
@@ -61,6 +69,7 @@ export const PART_SETTING_KEYS: ReadonlySet<string> = new Set([
   'side',
   'alphaTest',
   'depthWrite',
+  'flatShading',
 ]);
 
 /**
@@ -99,6 +108,11 @@ export function materialSettingProps(s: MaterialSettings | undefined): string[] 
   // now clears the flag when Transparent is switched off — this also disarms
   // the flag on graphs that already stored it.
   if (s?.depthWrite === false && s?.transparent) out.push('depthWrite: false');
+  // LAST, so every key that existed before keeps its position and a document
+  // that does not set this emits byte-identically. Only `true` is written —
+  // smooth is three's default, and an explicit `flatShading: false` would say
+  // nothing while changing the bytes of every export.
+  if (s?.flatShading) out.push('flatShading: true');
   return out;
 }
 
@@ -193,5 +207,8 @@ export function materialSettingsFromSource(
   // "NOT recoverable from the module text" note in projectImport no longer
   // applies to it.
   if (settingValueText(raw.mergeVertices) === 'false') out.mergeVertices = false;
+  // Only an explicit `true`: absent is smooth, which is what a module that
+  // never carried the key means.
+  if (settingValueText(raw.flatShading) === 'true') out.flatShading = true;
   return Object.keys(out).length > 0 ? out : undefined;
 }

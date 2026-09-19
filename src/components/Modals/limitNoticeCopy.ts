@@ -196,19 +196,26 @@ export function limitNoticeCopy(n: LimitNotice, language: Language): NoticeCopy 
         toggle: ignoreToggle,
       };
     case 'output-sections-trimmed':
-      // Decision 9: a restore that dropped or emptied Output sections, or mesh
-      // assignments, past the caps or invalid says so. A refusal with no
+      // Decision 9: a restore that dropped an Output material, or a mesh
+      // assignment, past the caps or invalid says so. A refusal with no
       // checkbox: nothing the user can tick brings the dropped entries back.
       // One whole-sentence key per slot, the N8 shape (Latvian puts the
       // location in the locative and the count at the end).
+      //
+      // It says NODES, not "sections": one material is one Output node since
+      // the per-material split, so a dropped entry in a file still carrying
+      // the old stacked shape is one fewer card on the canvas, and a dropped
+      // mesh assignment leaves a node untargeted. The kind's id keeps its
+      // historical spelling — it is persisted in `LimitNotice` and named by
+      // `desktopAppNoteRules`' exhaustive table.
       return {
-        title: t('Some Output sections were not loaded', language),
+        title: t('Some Output nodes were not loaded', language),
         message: fillTemplate(
           n.slot === 'savedGroups'
-            ? t('{n} Output section(s) or mesh assignment(s) in your saved groups were invalid or over the limits of the editor, and were removed or left without a target.', language)
+            ? t('{n} Output node(s) or mesh assignment(s) in your saved groups were invalid or over the limits of the editor, and were removed or left without a target.', language)
             : n.slot === 'graph'
-              ? t('{n} Output section(s) or mesh assignment(s) in your saved graph were invalid or over the limits of the editor, and were removed or left without a target.', language)
-              : t('{n} Output section(s) or mesh assignment(s) in the opened file were invalid or over the limits of the editor, and were removed or left without a target.', language),
+              ? t('{n} Output node(s) or mesh assignment(s) in your saved graph were invalid or over the limits of the editor, and were removed or left without a target.', language)
+              : t('{n} Output node(s) or mesh assignment(s) in the opened file were invalid or over the limits of the editor, and were removed or left without a target.', language),
           { n: n.detail ?? t('One or more', language) },
         ),
         suggestions: [],

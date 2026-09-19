@@ -150,6 +150,43 @@ describe('estimateNodeSize', () => {
   });
 });
 
+describe('estimateNodeSize — the Output node', () => {
+  const output = (data: Record<string, unknown> = {}) => {
+    const n = makeNode('o', 'output');
+    (n.data as Record<string, unknown>) = { ...n.data, ...data };
+    return n;
+  };
+  const ROW = 18;
+
+  it('counts one row per exposed channel plus ONE for the mesh picker', () => {
+    const three = estimateNodeSize(output({ exposedPorts: ['color', 'emissive', 'normal'] })).height;
+    const four = estimateNodeSize(output({ exposedPorts: ['color', 'emissive', 'normal', 'opacity'] })).height;
+    expect(four - three).toBe(ROW);
+    // The picker row is the +1: three channels measure FOUR rows of chrome.
+    expect(three).toBe(34 + 4 * ROW);
+  });
+
+  it('reserves the mesh row even with no model and no target — dagre overlaps on the short side', () => {
+    // A pure estimate cannot see the session's loaded model, and the picker
+    // renders for every plain Output once one is. Over-measuring a model-less
+    // document by 18px is the safe direction.
+    const bare = estimateNodeSize(output({ exposedPorts: ['color'] })).height;
+    expect(bare).toBe(34 + 2 * ROW);
+  });
+
+  it('is unaffected by a legacy stacked `materials` array — one node is one material', () => {
+    const stacked = { exposedPorts: ['color'], materials: [{ meshTargets: ['A'] }, { meshTargets: ['B'] }] };
+    expect(estimateNodeSize(output(stacked)).height).toBe(estimateNodeSize(output({ exposedPorts: ['color'] })).height);
+  });
+
+  it('floors the channel rows at the incoming-edge count, and the picker sits ON TOP of that floor', () => {
+    const one = estimateNodeSize(output({ exposedPorts: ['color'] }), 1).height;
+    const five = estimateNodeSize(output({ exposedPorts: ['color'] }), 5).height;
+    expect(five - one).toBe(4 * ROW);
+    expect(five).toBe(34 + 6 * ROW);
+  });
+});
+
 describe('estimateNodeSize — the Image node', () => {
   // Restates layoutEngine's private constants on purpose: HEADER_H 20, ROW_H
   // 16, the thumbnail's 126 and the empty slot's 54 (ShaderNode.css caps).

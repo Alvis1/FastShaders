@@ -26,7 +26,33 @@ import { checkLegacyGuard, MAX_MIRROR_ENTRIES, MAX_INDEX_MATERIALS } from './mat
 import { makeNode, makeEdge } from '@/test-utils';
 import { safeJsonReviver } from '@/utils/safeJson';
 import type { AppNode, AppEdge } from '@/types';
-import { materialPartsMirrorPlan, outputMaterials, type MaterialPartsMirrorEntry } from '@/utils/outputMaterials';
+import {
+  contributingOutputs,
+  gltfIndexOf,
+  isIndexSection,
+  materialPartsMirrorPlan,
+  materialTargetNames,
+  outputMaterials,
+  outputsInEmitOrder,
+  type MaterialPartsMirrorEntry,
+} from '@/utils/outputMaterials';
+
+/**
+ * A parse's ADDED sections, in emit order, each as its glTF index or its mesh
+ * names — the old `outputMaterials(out).slice(1)` on the single Output node.
+ * `codeToGraph` mints one Output NODE per material since the split, so the list
+ * lives across the siblings.
+ */
+const sectionsOf = (nodes: readonly AppNode[]) =>
+  outputsInEmitOrder(nodes.filter((n) => n.data.registryType === 'output'))
+    .slice(1)
+    .map((n) => outputMaterials(n)[0])
+    .map((m) => (isIndexSection(m) ? gltfIndexOf(m) : materialTargetNames(m)));
+
+/** The node emission reads the signature from: the lowest-ranked contributing
+ *  Output carrying an index section. */
+const sigNodeOf = (nodes: readonly AppNode[]) =>
+  contributingOutputs(nodes).find((n) => outputMaterials(n).some(isIndexSection));
 import { evalLoader, loaderAvailable, loaderText, type FastShadersApi } from '@/shaderloaderHarness';
 import { GLTF_NODE_GLOBALS, gltfText, materials, parseWith, type GltfSpec } from '@/gltfTestFixtures';
 
@@ -247,8 +273,8 @@ describe('buildShaderModule — materialParts', () => {
     // The module evaluates to the same names, and reads back to them too.
     expect(moduleDefault(mod)().modelSignature.materials).toEqual(names);
     const back = codeToGraph(scriptToTSL(mod));
-    const restored = back.nodes.find((n) => n.data.registryType === 'output')!;
-    expect((restored.data as Record<string, unknown>).modelSignature).toEqual({ materials: names });
+    expect((sigNodeOf(back.nodes)!.data as Record<string, unknown>).modelSignature)
+      .toEqual({ materials: names });
   });
 
   it('the signature is re-emitted through the ONE encoder', () => {
@@ -299,9 +325,7 @@ describe('scriptToTSL strips the mirrors (R6)', () => {
     expect(back).toContain('materialParts: {');
     expect(back).toContain('modelSignature: { materials: ["Body", "Glass", "Trim"] }');
     const parsed = codeToGraph(back);
-    const out = parsed.nodes.find((n) => n.data.registryType === 'output')!;
-    const mats = outputMaterials(out).slice(1);
-    expect(mats.map((m) => m.gltfMaterialIndex ?? m.meshTargets)).toEqual([0, 1, ['Named']]);
+    expect(sectionsOf(parsed.nodes)).toEqual([0, 1, ['Named']]);
   });
 
   it('whitespace inside a signature name survives the return collapse (only CODE whitespace collapses)', () => {
@@ -317,8 +341,8 @@ describe('scriptToTSL strips the mirrors (R6)', () => {
     const mod = tslToShaderModule(graphToCode(nodes, edges).code).replace(/, modelSignature:/, ',\n    modelSignature:');
     expect(mod).toMatch(/,\n {4}modelSignature:/);
     const back = scriptToTSL(mod);
-    const restored = codeToGraph(back).nodes.find((n) => n.data.registryType === 'output')!;
-    expect((restored.data as Record<string, unknown>).modelSignature).toEqual({ materials: names });
+    expect((sigNodeOf(codeToGraph(back).nodes)!.data as Record<string, unknown>).modelSignature)
+      .toEqual({ materials: names });
   });
 });
 

@@ -1,18 +1,32 @@
 /**
- * The GLB import's section builder (Phase 5 Step 8): a model's materials
- * become ONE Output with an index section per built material, fed by shared
- * Texture nodes, constants and multiplies. Structure pins over the three
- * fixture shapes, a graphToCode snapshot per shape, the sanitizer's
- * idempotence, and the apply∘apply round trip (the graph must not grow).
+ * The GLB import's section builder (Phase 5 Step 8): a model's materials become
+ * ONE OUTPUT NODE PER BUILT MATERIAL — the untargeted default plus an index
+ * node each, on the BARE channel handles — fed by shared Texture nodes,
+ * constants and multiplies. Structure pins over the three fixture shapes, a
+ * graphToCode snapshot per shape, the sanitizer's idempotence, and the
+ * apply∘apply round trip (the graph must not grow).
+ *
+ * `sec(k)` is what the old `m<k>:` handle prefix named: the k-th section, which
+ * is now a NODE rather than a slot in one node's `materials` array. Every case
+ * below pins exactly what it pinned — which channel each material wires, from
+ * which feeder, with which stored values and settings — read off that node.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { buildGltfSectionGraph, gltfTextureNodeKey, SECTION_PORT_ORDER } from './gltfSectionBuilder';
 import { graphToCode } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
 import { encodeRequests } from '@/utils/gltfImportPlan';
 import { encodeGltfImages, type GltfEncodedImage } from '@/utils/gltfTextureEncode';
 import { getNodeValues, type AppEdge, type AppNode } from '@/types';
-import { outputMaterials, parseChannelHandle, sanitizeOutputMaterials, sanitizeOutputMaterialsReport } from '@/utils/outputMaterials';
+import {
+  outputMaterials,
+  outputsInEmitOrder,
+  sanitizeOutputMaterials,
+  sanitizeOutputMaterialsReport,
+} from '@/utils/outputMaterials';
+import type { OutputMaterial } from '@/types';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import { aiGlb, allSlotsGlb, blenderGlb, fakeEncoder, fakeStash, readOk, scanGlb } from './gltfImportFixtures';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
@@ -37,12 +51,21 @@ async function build(bytes: Uint8Array, materials?: number[]) {
   const mats = materials ?? m.materials.filter((x) => x.usage.primitives > 0).map((x) => x.index);
   const encoded = await encodeAll(m, mats);
   const built = buildGltfSectionGraph(m, { materials: mats, encoded });
-  const out = built.nodes.find((n) => n.data.registryType === 'output')!;
-  return { m, built, out, encoded };
+  const outs = outsOf(built.nodes);
+  /** Section `k` (1-based) — the node the old `m<k>:` handles addressed;
+   *  `sec(0)` is the untargeted default. */
+  const sec = (k: number) => outs[k];
+  /** The material section `k` carries — the old `outputMaterials(out)[k]`. */
+  const mat = (k: number): OutputMaterial => outputMaterials(outs[k])[0];
+  return { m, built, out: outs[0], outs, sec, mat, encoded };
 }
 
 const dataOf = (n: AppNode) => n.data as Record<string, unknown>;
 const byType = (nodes: AppNode[], t: string) => nodes.filter((n) => n.data.registryType === t);
+/** Every Output NODE in emit order: the default first, then one per section. */
+const outsOf = (nodes: AppNode[]) => outputsInEmitOrder(byType(nodes, 'output'));
+/** id → section number (0 = the default), for reading a wire's section back. */
+const rankOf = (nodes: AppNode[]) => new Map(outsOf(nodes).map((n, i) => [n.id, i]));
 const edgesInto = (edges: AppEdge[], target: string, handle: string) =>
   edges.filter((e) => e.target === target && e.targetHandle === handle);
 
@@ -62,7 +85,8 @@ function summary(nodes: AppNode[], edges: AppEdge[]): string {
     lines.push(`${idOf.get(n.id)} ${JSON.stringify(v)}`);
     if (n.data.registryType === 'output') {
       const d = dataOf(n);
-      lines.push(`  materials=${JSON.stringify(d.materials)}`);
+      lines.push(`  emitOrder=${JSON.stringify(d.emitOrder)} gltfMaterialIndex=${JSON.stringify(d.gltfMaterialIndex)}`);
+      lines.push(`  exposedPorts=${JSON.stringify(d.exposedPorts)} materialSettings=${JSON.stringify(d.materialSettings)}`);
       lines.push(`  modelSignature=${JSON.stringify(d.modelSignature)} modelMeshes=${JSON.stringify(d.modelMeshes)}`);
     }
   }
@@ -71,43 +95,56 @@ function summary(nodes: AppNode[], edges: AppEdge[]): string {
 }
 
 describe('BLENDER: sections, sharing, factors, settings', () => {
-  it('one Output; material 0 untargeted and empty; one index section per built material, ascending', async () => {
-    const { built, out } = await build(blenderGlb());
-    expect(byType(built.nodes, 'output')).toHaveLength(1);
+  it('the default plus one Output NODE per built material, ascending; the default untargeted and empty', async () => {
+    const { built, out, outs } = await build(blenderGlb());
+    // One node per material since the Output split: the untargeted default,
+    // then three index nodes. `data.materials` is gone from every one of them —
+    // the post-unfold invariant every restore path now maintains.
+    expect(outs).toHaveLength(4);
     const d = dataOf(out);
     expect(d.values).toBeUndefined();
     expect(d.exposedPorts).toBeUndefined();
-    const mats = outputMaterials(out);
-    expect(mats.slice(1).map((m) => m.gltfMaterialIndex)).toEqual([0, 1, 2]);
-    expect(mats.slice(1).every((m) => !('meshTargets' in m))).toBe(true);
-    expect(d.modelSignature).toEqual({ materials: ['Material.001', 'Material.002', 'Ķermenis'] });
+    expect(d.gltfMaterialIndex).toBeUndefined();
+    expect(d.modelSignature).toBeUndefined();
+    for (const n of outs) expect(dataOf(n).materials).toBeUndefined();
+    expect(outs.slice(1).map((n) => dataOf(n).gltfMaterialIndex)).toEqual([0, 1, 2]);
+    expect(outs.slice(1).every((n) => dataOf(n).meshTargets === undefined)).toBe(true);
+    // The signature is REPLICATED onto every index node (dormancy is per node),
+    // and its ids are deterministic so the snapshots can rest on them.
+    for (const n of outs.slice(1)) {
+      expect(dataOf(n).modelSignature).toEqual({ materials: ['Material.001', 'Material.002', 'Ķermenis'] });
+    }
+    expect(outs.map((n) => n.id)).toEqual(['gi_output', 'gi_output_m0', 'gi_output_m1', 'gi_output_m2']);
     expect(built.report).toMatchObject({ sections: 3, textureNodes: 3, sharedTextureNodes: 1 });
   });
 
   it('the ORM image is ONE Texture node feeding both sections (g → roughness, b → metalness)', async () => {
-    const { built, out } = await build(blenderGlb());
+    const { built, sec } = await build(blenderGlb());
     const images = byType(built.nodes, 'imageNode');
     expect(images).toHaveLength(3);
     const orm = images.find((n) => getNodeValues(n).fileName === 'ORM.png')!;
     expect(getNodeValues(orm).colorSpace).toBe('data');
-    const targets = built.edges.filter((e) => e.source === orm.id).map((e) => `${e.sourceHandle}->${e.targetHandle}`).sort();
+    // The section is the TARGET NODE now, so a wire reads `<out>-><section>:<channel>`.
+    const rank = rankOf(built.nodes);
+    const targets = built.edges
+      .filter((e) => e.source === orm.id)
+      .map((e) => `${e.sourceHandle}->m${rank.get(e.target)}:${e.targetHandle}`)
+      .sort();
     // Material 0: roughness 0.8 → g × Float; metalness 1 → b direct.
     // Material 1: roughness 1 → g direct; metalness 0 → b × Float(0).
     expect(targets).toContain('b->m1:metalness');
     expect(targets).toContain('g->m2:roughness');
-    const sections = new Set(
-      built.edges.filter((e) => e.source === orm.id).map((e) => parseChannelHandle(e.targetHandle!).index),
-    );
+    const sections = new Set(built.edges.filter((e) => e.source === orm.id).map((e) => rank.get(e.target)));
     expect(sections.size).toBeGreaterThanOrEqual(1);
-    const mul = feederOf(built.nodes, built.edges, out.id, 'm1:roughness')!;
+    const mul = feederOf(built.nodes, built.edges, sec(1).id, 'roughness')!;
     expect(mul.data.registryType).toBe('mul');
     const floats = byType(built.nodes, 'float').map((n) => getNodeValues(n).value);
     expect(floats).toContain(0.8);
   });
 
   it('base colour: texture × nothing when the factor is white; the texture carries the KHR_texture_transform', async () => {
-    const { built, out } = await build(blenderGlb());
-    const feeder = feederOf(built.nodes, built.edges, out.id, 'm1:color')!;
+    const { built, sec } = await build(blenderGlb());
+    const feeder = feederOf(built.nodes, built.edges, sec(1).id, 'color')!;
     expect(feeder.data.registryType).toBe('imageNode');
     const v = getNodeValues(feeder);
     expect(v.orientation).toBe('gltf');
@@ -117,13 +154,13 @@ describe('BLENDER: sections, sharing, factors, settings', () => {
   });
 
   it('BLEND: transparent + depthWrite false; opacity WIRED as COLOR_0.w × Float(0.5) (no base texture, a painted primitive); the grey factor is WIRED (× vertex colour) and the ORM texture wires metalness', async () => {
-    const { built, out } = await build(blenderGlb());
-    const m2 = outputMaterials(out)[2];
+    const { built, sec, mat } = await build(blenderGlb());
+    const m2 = mat(2);
     expect(m2.values).toBeUndefined();
     expect(m2.materialSettings).toEqual({ transparent: true, depthWrite: false });
     // COLOR_0's alpha multiplies the base alpha (glTF 3.9.2): the ONE Vertex
     // Color node feeds a Split whose `w` is multiplied by the factor's alpha.
-    const feeder = feederOf(built.nodes, built.edges, out.id, 'm2:opacity')!;
+    const feeder = feederOf(built.nodes, built.edges, sec(2).id, 'opacity')!;
     expect(feeder.data.registryType).toBe('mul');
     const ins = built.edges.filter((e) => e.target === feeder.id);
     const wEdge = ins.find((e) => e.sourceHandle === 'w')!;
@@ -140,10 +177,10 @@ describe('BLENDER: sections, sharing, factors, settings', () => {
   });
 
   it('vertex colours multiply into the base colour of the painted primitive\'s material', async () => {
-    const { built, out } = await build(blenderGlb());
+    const { built, sec } = await build(blenderGlb());
     // Material 1's colour chain: the grey factor... it has no texture, so the
-    // Vertex Color × Color(grey) multiply feeds m2:color.
-    const feeder = feederOf(built.nodes, built.edges, out.id, 'm2:color');
+    // Vertex Color × Color(grey) multiply feeds section 2's colour.
+    const feeder = feederOf(built.nodes, built.edges, sec(2).id, 'color');
     expect(feeder?.data.registryType).toBe('mul');
     const vc = byType(built.nodes, 'vertexColor');
     expect(vc).toHaveLength(1);
@@ -151,8 +188,8 @@ describe('BLENDER: sections, sharing, factors, settings', () => {
   });
 
   it('emissive: Color(factor) × Float(strength) when there is no texture and the strength is not 1', async () => {
-    const { built, out } = await build(blenderGlb());
-    const feeder = feederOf(built.nodes, built.edges, out.id, 'm2:emissive')!;
+    const { built, sec } = await build(blenderGlb());
+    const feeder = feederOf(built.nodes, built.edges, sec(2).id, 'emissive')!;
     expect(feeder.data.registryType).toBe('mul');
     const ins = built.edges.filter((e) => e.target === feeder.id).map((e) => built.nodes.find((n) => n.id === e.source)!);
     expect(ins.map((n) => n.data.registryType).sort()).toEqual(['color', 'float']);
@@ -161,26 +198,29 @@ describe('BLENDER: sections, sharing, factors, settings', () => {
   });
 
   it('MASK with cutoff 1.2 clamps alphaTest to 0.99 and reports alphaCutoff; the Latvian material is factor-only', async () => {
-    const { built, out } = await build(blenderGlb());
-    const m3 = outputMaterials(out)[3];
+    const { built, mat } = await build(blenderGlb());
+    const m3 = mat(3);
     expect(m3.materialSettings).toEqual({ alphaTest: 0.99 });
     expect(m3.values).toEqual({ color: '#7ccb59', roughness: 0.4, metalness: 0.25 });
     expect(built.report.notImported).toEqual(['occlusion', 'normalScale', 'alphaCutoff']);
   });
 
   it('a tangent-less model\'s normal node carries the green flip; doubleSided is side double', async () => {
-    const { built, out } = await build(blenderGlb());
-    const n = feederOf(built.nodes, built.edges, out.id, 'm1:normal')!;
+    const { built, sec, mat } = await build(blenderGlb());
+    const n = feederOf(built.nodes, built.edges, sec(1).id, 'normal')!;
     expect(n.data.registryType).toBe('imageNode');
     expect(getNodeValues(n)).toMatchObject({ normalGreen: 'flip', colorSpace: 'data' });
-    expect(outputMaterials(out)[1].materialSettings).toEqual({ side: 'double' });
+    expect(mat(1).materialSettings).toEqual({ side: 'double' });
   });
 
   it('mirror names: the certain single-material meshes of built materials, first appearance order', async () => {
-    const { out } = await build(blenderGlb());
+    const { out, sec } = await build(blenderGlb());
     // `Cube` is a two-primitive mesh → a Group named Cube with children
     // Cube_1 (material 0) and Cube_2 (material 1); Plate carries material 2.
-    expect(dataOf(out).modelMeshes).toEqual([
+    // The list stays WHOLE on the LOWEST-ranked index node — never split per
+    // material and never on the default, which carries no signature at all.
+    expect(dataOf(out).modelMeshes).toBeUndefined();
+    expect(dataOf(sec(1)).modelMeshes).toEqual([
       { name: 'Cube_1', material: 0 },
       { name: 'Cube_2', material: 1 },
       { name: 'Plate', material: 2 },
@@ -188,37 +228,37 @@ describe('BLENDER: sections, sharing, factors, settings', () => {
   });
 
   it('a limit of one material builds one section, and mirrors only its meshes', async () => {
-    const { built, out } = await build(blenderGlb(), [1]);
+    const { built, outs, sec } = await build(blenderGlb(), [1]);
     expect(built.report.sections).toBe(1);
-    expect(outputMaterials(out).slice(1).map((m) => m.gltfMaterialIndex)).toEqual([1]);
-    expect(dataOf(out).modelMeshes).toEqual([{ name: 'Cube_2', material: 1 }]);
+    expect(outs.slice(1).map((n) => dataOf(n).gltfMaterialIndex)).toEqual([1]);
+    expect(dataOf(sec(1)).modelMeshes).toEqual([{ name: 'Cube_2', material: 1 }]);
   });
 });
 
 describe('AI: texCoord, dead emissive, clearcoat, the sampler', () => {
   it('texCoord 1 → uvSet 1; emissive factor 0 → no emissive edge and emissiveUnused; clearcoat reported', async () => {
-    const { built, out } = await build(aiGlb());
-    const mr = feederOf(built.nodes, built.edges, out.id, 'm1:metalness')!;
+    const { built, sec } = await build(aiGlb());
+    const mr = feederOf(built.nodes, built.edges, sec(1).id, 'metalness')!;
     // metallicFactor 0.5 → MR.b × Float(0.5)
     expect(mr.data.registryType).toBe('mul');
     const image = built.nodes.find((n) => n.data.registryType === 'imageNode' && getNodeValues(n).uvSet === 1);
     expect(image).toBeDefined();
-    expect(edgesInto(built.edges, out.id, 'm1:emissive')).toHaveLength(0);
+    expect(edgesInto(built.edges, sec(1).id, 'emissive')).toHaveLength(0);
     expect(built.report.notImported).toEqual(['clearcoat', 'emissiveUnused']);
     expect(built.report.textureNodes).toBe(3);
   });
 
   it('a clamp/nearest sampler lands on the base colour node as repeat 0 + nearest; tangents mean no flip', async () => {
-    const { built, out } = await build(aiGlb());
-    const base = feederOf(built.nodes, built.edges, out.id, 'm1:color')!;
+    const { built, sec } = await build(aiGlb());
+    const base = feederOf(built.nodes, built.edges, sec(1).id, 'color')!;
     expect(getNodeValues(base)).toMatchObject({ repeat: 0, filter: 'nearest' });
-    const normal = feederOf(built.nodes, built.edges, out.id, 'm1:normal')!;
+    const normal = feederOf(built.nodes, built.edges, sec(1).id, 'normal')!;
     expect(getNodeValues(normal).normalGreen).toBeUndefined();
   });
 
   it('an unnamed mesh on an unnamed node mirrors under the loader\'s name', async () => {
-    const { out } = await build(aiGlb());
-    expect(dataOf(out).modelMeshes).toEqual([{ name: 'mesh_0', material: 0 }]);
+    const { sec } = await build(aiGlb());
+    expect(dataOf(sec(1)).modelMeshes).toEqual([{ name: 'mesh_0', material: 0 }]);
   });
 });
 
@@ -242,17 +282,22 @@ describe('the feeders stack in the order of the sockets they land on', () => {
    * crosses whatever the order — the one inherent crossing, documented in
    * `feederOrder`.
    */
-  function feedOrder(nodes: AppNode[], edges: AppEdge[], outId: string): [number, number][] {
+  function feedOrder(nodes: AppNode[], edges: AppEdge[]): [number, number][] {
+    // The SECTION is the target node's rank now, never the handle: with bare
+    // handles the old `parseChannelHandle(...).index` is 0 for every wire, so a
+    // key built from it collapses to the channel and reports every material's
+    // feeders interleaved as if they were in order.
+    const rank = rankOf(nodes);
     const count = new Map<string, number>();
     for (const e of edges) {
-      if (e.target === outId) count.set(e.source, (count.get(e.source) ?? 0) + 1);
+      if (rank.has(e.target)) count.set(e.source, (count.get(e.source) ?? 0) + 1);
     }
     return edges
-      .filter((e) => e.target === outId && count.get(e.source) === 1)
-      .map((e) => {
-        const { index, channel } = parseChannelHandle(String(e.targetHandle));
-        return { y: nodes.find((n) => n.id === e.source)!.position.y, k: [index, RANK.get(channel)!] as [number, number] };
-      })
+      .filter((e) => rank.has(e.target) && count.get(e.source) === 1)
+      .map((e) => ({
+        y: nodes.find((n) => n.id === e.source)!.position.y,
+        k: [rank.get(e.target)!, RANK.get(String(e.targetHandle))!] as [number, number],
+      }))
       .sort((a, b) => a.y - b.y)
       .map((r) => r.k);
   }
@@ -261,8 +306,8 @@ describe('the feeders stack in the order of the sockets they land on', () => {
     order.every((k, i) => i === 0 || k[0] > order[i - 1][0] || (k[0] === order[i - 1][0] && k[1] > order[i - 1][1]));
 
   it('ALL SLOTS: Color, Emissive, Roughness, Metalness, Normal — exactly the rows', async () => {
-    const { built, out } = await build(allSlotsGlb());
-    expect(feedOrder(built.nodes, built.edges, out.id)).toEqual([
+    const { built } = await build(allSlotsGlb());
+    expect(feedOrder(built.nodes, built.edges)).toEqual([
       [1, RANK.get('color')!],
       [1, RANK.get('emissive')!],
       [1, RANK.get('roughness')!],
@@ -271,12 +316,41 @@ describe('the feeders stack in the order of the sockets they land on', () => {
     ]);
   });
 
+  /**
+   * The CONTIGUITY pin, which is the half a bare "ascending" check would let
+   * rot silently. `feederOrder` keys on the target NODE's `emitOrder` now;
+   * since the split every wire wears a BARE channel handle, so the old
+   * `parseChannelHandle(...).index * 100` term is 0 for every one of them and
+   * the key collapses to the channel alone. Nothing fails then — the layout
+   * simply INTERLEAVES the materials, stacking every section's Color, then
+   * every section's Emissive, which is the exact tangle `feederOrder` was
+   * written to fix (owner, 2026-09-18).
+   */
+  it('each material\'s feeders are CONTIGUOUS, never interleaved by channel', async () => {
+    for (const bytes of [blenderGlb(), scanGlb()]) {
+      const { built } = await build(bytes);
+      const sections = feedOrder(built.nodes, built.edges).map((k) => k[0]);
+      // Vacuity: several sections really contribute an exclusive feeder.
+      expect(new Set(sections).size).toBeGreaterThan(1);
+      // Contiguous = each section appears in exactly ONE run.
+      const runs = sections.filter((v, i) => i === 0 || v !== sections[i - 1]);
+      expect(runs.length, JSON.stringify(sections)).toBe(new Set(sections).size);
+    }
+  });
+
   for (const [name, bytes] of [['BLENDER', blenderGlb()], ['SCAN', scanGlb()], ['AI', aiGlb()]] as const) {
     it(`${name}: sections in order, rows in order inside each`, async () => {
-      const { built, out } = await build(bytes);
-      const order = feedOrder(built.nodes, built.edges, out.id);
+      const { built } = await build(bytes);
+      const order = feedOrder(built.nodes, built.edges);
       expect(order.length).toBeGreaterThan(1);
       expect(ascending(order), JSON.stringify(order)).toBe(true);
+      // …and where the fixture really has several sections, the order visits
+      // more than one of them — the assertion that stops holding the moment
+      // `feederOrder` is blind to the section and interleaves them by channel.
+      // AI has ONE material, so only its row order is under test here.
+      if (built.report.sections > 1) {
+        expect(new Set(order.map((k) => k[0])).size, JSON.stringify(order)).toBeGreaterThan(1);
+      }
     });
   }
 });
@@ -299,21 +373,24 @@ describe('resilience', () => {
   it('an image missing from `encoded` leaves its slot factor-only, and nothing throws', async () => {
     const m = readOk(scanGlb());
     const built = buildGltfSectionGraph(m, { materials: [0, 1, 2], encoded: new Map() });
-    const out = built.nodes.find((n) => n.data.registryType === 'output')!;
+    const outs = outsOf(built.nodes);
     expect(byType(built.nodes, 'imageNode')).toHaveLength(0);
     expect(built.report).toMatchObject({ sections: 3, textureNodes: 0, sharedTextureNodes: 0 });
     // Trim: roughness 0.5 stored; every material: metalness 1 stored (glTF's default).
-    expect(outputMaterials(out)[3].values).toEqual({ roughness: 0.5, metalness: 1 });
-    expect(outputMaterials(out)[1].values).toEqual({ metalness: 1 });
+    expect(outputMaterials(outs[3])[0].values).toEqual({ roughness: 0.5, metalness: 1 });
+    expect(outputMaterials(outs[1])[0].values).toEqual({ metalness: 1 });
   });
 
   it('junk in the material list is ignored; nothing built means no signature and no meshes', async () => {
     const m = readOk(scanGlb());
     const built = buildGltfSectionGraph(m, { materials: [7, -1, 1.5, 'x' as unknown as number], encoded: new Map() });
-    const out = built.nodes.find((n) => n.data.registryType === 'output')!;
-    expect(dataOf(out).materials).toBeUndefined();
-    expect(dataOf(out).modelSignature).toBeUndefined();
-    expect(dataOf(out).modelMeshes).toBeUndefined();
+    const outs = outsOf(built.nodes);
+    // Nothing built means the untargeted default ALONE — no section node, so
+    // nowhere for a signature or a mirror list to live.
+    expect(outs).toHaveLength(1);
+    expect(dataOf(outs[0]).materials).toBeUndefined();
+    expect(dataOf(outs[0]).modelSignature).toBeUndefined();
+    expect(dataOf(outs[0]).modelMeshes).toBeUndefined();
     expect(built.signatureTooLarge).toBe(false);
   });
 });
@@ -366,4 +443,32 @@ describe('what the restore paths and the parse make of it', () => {
       expect(summary(built.nodes, built.edges)).toMatchSnapshot();
     });
   }
+});
+
+/* ── source pins: one name per node inside the section loop ───────────────── */
+
+describe('the section loop names its own node', () => {
+  const SRC = readFileSync(resolve(__dirname, 'gltfSectionBuilder.ts'), 'utf8');
+
+  it('never shadows the DEFAULT output id, and keeps no identity wrapper', () => {
+    // `const outputId = sectionId` re-bound the name for the whole loop body,
+    // so eight `wire(…, outputId, …)` calls read as if they targeted
+    // `gi_output` while the outer binding is still read after the loop. Not a
+    // live bug — no site in there wants the default — but the two are ~170
+    // lines apart, and moving one `wire` out of the loop would have retargeted
+    // it silently: a material quietly painting the whole model, with no error.
+    expect(SRC).not.toContain('const outputId = sectionId;');
+    expect(SRC.match(/const outputId\b/g) ?? []).toHaveLength(1);
+
+    // `h` was `(ch) => channelHandle(section, ch)` before the split and became
+    // the identity. Neither the call nor its import may come back — the loop
+    // wires BARE handles now. (The word survives in a comment above the loop,
+    // hence the call form rather than a bare substring.)
+    expect(SRC).not.toContain('const h = (ch: string) => ch;');
+    expect(SRC).not.toMatch(/channelHandle\(/);
+    expect(SRC).not.toMatch(/^\s*channelHandle,$/m);
+
+    expect(SRC).toContain("wire(chain, sectionId, 'color');");
+    expect(SRC).toContain("wire(normal('out'), sectionId, 'normal');");
+  });
 });

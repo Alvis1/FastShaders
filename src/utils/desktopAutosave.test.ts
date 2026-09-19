@@ -54,6 +54,7 @@ import { readStoredViewport, VIEWPORT_KEY } from './viewportMemory';
 
 const P = 'data:image/png;base64,AAAA';
 const Q = 'data:image/png;base64,BBBB';
+const R = 'data:image/png;base64,CCCC';
 const BAD = 'data:image/svg+xml;base64,PHN2Zz4=';
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -318,6 +319,50 @@ describe('the writer', () => {
     expect(b.puts).toEqual([P]);
     expect(b.calls.filter((c) => c.startsWith('write:')).sort()).toEqual(['write:graph', 'write:savedGroups']);
     expect(valuesOf(lastWrite(b, 'savedGroups')[0].nodes, 'gi').imageRef).toBe(desktopImageRef(sha(P)));
+  });
+
+  it('a slot whose write is STILL RUNNING keeps its images in `known`: the first boot does not inline the library', async () => {
+    // The first desktop boot migrates a graph and a library at once, so
+    // `seeded` is EMPTY and prune()'s "until BOTH slots have written once"
+    // guard covers nothing. The graph's run finishes while the library is
+    // still awaiting its SECOND put: without the in-flight set, prune()
+    // computes keep = {the graph's payloads} and forgets the library's FIRST
+    // image, which desktopRefsForStorage then writes INLINE — up to 6M
+    // characters of base64 in saved-groups.json, with its
+    // images/<sha256>.txt referenced by nothing and collected at the next boot.
+    const b = fakeBridge();
+    const put = b.imagePut;
+    const write = b.write;
+    // A put costs many more microtasks than a write, so the graph's whole run
+    // (one put, then one write, then prune) lands between the library's two puts.
+    b.imagePut = async (p) => {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      return put(p);
+    };
+    b.write = async (slot, body) => {
+      await Promise.resolve();
+      return write(slot, body);
+    };
+    const rt = createDesktopAutosave(b, { onWriteFailed: () => {}, onWriteOk: () => {} });
+    installDesktopAutosave(rt);
+    edit([imageNode('a', P)]);
+    persistSavedGroups([
+      { id: 'g1', name: 'G', color: '#6366f1', nodes: [imageNode('b', Q), imageNode('c', R)], edges: [] },
+    ]);
+    rt.enableWrites();
+    await rt.flush();
+    const lib = lastWrite(b, 'savedGroups');
+    expect(valuesOf(lib[0].nodes, 'b').imageRef).toBe(desktopImageRef(sha(Q)));
+    expect(valuesOf(lib[0].nodes, 'c').imageRef).toBe(desktopImageRef(sha(R)));
+    expect(JSON.stringify(lib)).not.toContain('base64');
+    // Non-vacuity: the interleaving really happened — the graph's whole run
+    // settled strictly between the library's FIRST put (which reached `known`)
+    // and its second, which is the window the bug lived in.
+    const putAt = b.calls.flatMap((c, i) => (c === 'imagePut' ? [i] : []));
+    expect(b.puts).toEqual([P, Q, R]);
+    expect(putAt).toHaveLength(3);
+    expect(b.calls.indexOf('write:graph')).toBeGreaterThan(putAt[1]);
+    expect(b.calls.indexOf('write:graph')).toBeLessThan(putAt[2]);
   });
 
   it('writes an imageRef key only where it stored a ref, so a stray one cannot refuse every save', async () => {
@@ -703,6 +748,27 @@ describe('bootDesktopAutosave', () => {
     expect(b.calls.indexOf('gc')).toBeLessThan(b.calls.indexOf('write:graph'));
     // The previous file is still the backup.
     expect(new TextDecoder().decode(b.docs.get('graph:previous')!)).toContain('"real"');
+  });
+
+  it('a GC that never answers still opens the write gate: autosave is never paused for the session', async () => {
+    // The bound is not what keeps the images safe — autosave.rs claims every
+    // digest this process stores and checks the claim in the same critical
+    // section as its delete, so a write racing a still-running GC cannot lose
+    // one. It is here only so a wedged IPC cannot pause this session's writes.
+    const b = fakeBridge();
+    b.gc = () => {
+      b.calls.push('gc');
+      return new Promise<number>(() => {});
+    };
+    const res = (await bootDesktopAutosave(b))!;
+    useAppStore.getState().setNodes([makeNode('n', 'sin')], 'graph');
+    res.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(b.calls).toContain('gc');
+    expect(b.calls.some((c) => c.startsWith('write:'))).toBe(false);
+    await vi.advanceTimersByTimeAsync(BOOT_CALL_TIMEOUT_MS);
+    await flush();
+    expect(b.calls).toContain('write:graph');
   });
 
   it('one notice per failure streak; a success resets it', async () => {

@@ -25,7 +25,10 @@ import { TRIANGLE_POSITIONS, makeGlb, makeRealPng } from '../test-utils';
 const NBSP = String.fromCharCode(0xa0);
 const IDEOGRAPHIC_SPACE = String.fromCharCode(0x3000);
 const PNG = makeRealPng(2, 2, [200, 40, 40, 255]);
-const pad4 = (n: number) => (n + 3) & ~3;
+// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
+// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
+// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
+const pad4 = (n: number) => Math.ceil(n / 4) * 4;
 
 interface Prim {
   material?: number;

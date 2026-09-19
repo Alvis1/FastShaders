@@ -23,10 +23,15 @@ import {
 import { GLTF_IMAGE_MAX_BYTES, type GltfReadRefusalReason } from './gltfReader';
 import {
   modelTooLargeRefusal,
+  preReadModelGate,
+  GLB_READ_MAX_BYTES,
+  MESH_MAX_BYTES,
   MESH_TOO_LARGE_KEY,
   MESH_COMPRESSED_KEY,
   MESH_EMPTY_KEY,
 } from './previewMesh';
+// previewMesh.ts re-exports the gltfCompression leaf, but not this key (yet).
+import { MESH_TOO_LARGE_LIMIT_KEY } from './gltfCompression';
 
 const UI = lv.ui as Record<string, string>;
 const MiB = 1048576;
@@ -58,11 +63,29 @@ describe('meshRefusalMessage', () => {
   it('translates a key-only refusal', () => {
     expect(meshRefusalMessage({ reason: 'empty', key: MESH_EMPTY_KEY }, 'lv')).toBe('Modeļa fails ir tukšs.');
   });
+
+  it('names the cap that was APPLIED, not always the 64 MiB model gate', () => {
+    // The build-from-materials path reads a `.glb` up to GLB_READ_MAX_BYTES
+    // (96 MiB on the web — vitest's profile — and 256 in the desktop room).
+    // Reporting that through the model-gate sentence named a ceiling 1.5x, on
+    // desktop 4x, BELOW the one actually enforced.
+    const overRead = preReadModelGate('glb', GLB_READ_MAX_BYTES + 1, true)!;
+    expect(meshRefusalMessage(overRead, 'en')).toContain('(96.1 MB — max 96 MB)');
+    expect(meshRefusalMessage(overRead, 'lv')).toContain('(96,1 MB — maks. 96 MB)');
+    expect(overRead.limitBytes).toBe(GLB_READ_MAX_BYTES);
+    // Every other drop is still the 64 MiB gate, word for word.
+    for (const r of [preReadModelGate('obj', MESH_MAX_BYTES + 1, true)!, preReadModelGate('glb', MESH_MAX_BYTES + 1, false)!]) {
+      expect(r.limitBytes).toBeUndefined();
+      expect(meshRefusalMessage(r, 'en')).toContain('(64.1 MB — max 64 MB)');
+    }
+  });
+
 });
 
 describe('model notice keys in lv.json', () => {
   it.each([
     MESH_TOO_LARGE_KEY,
+    MESH_TOO_LARGE_LIMIT_KEY,
     MESH_COMPRESSED_KEY,
     MESH_KTX2_FALLBACK_KEY,
     MESH_CACHE_FULL_KEY,

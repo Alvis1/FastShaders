@@ -2,6 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { makeNode, makeEdge } from '@/test-utils';
 import { graphToCode } from '@/engine/graphToCode';
+import { buildShaderModule } from '@/engine/tslCodeProcessor';
+import { contributingOutputs, materialPartsMirrorPlanAcross } from '@/utils/outputMaterials';
+import { buildGltfSectionGraph } from '@/engine/gltfSectionBuilder';
+import { encodeRequests } from '@/utils/gltfImportPlan';
+import { encodeGltfImages } from '@/utils/gltfTextureEncode';
+import { blenderGlb, fakeEncoder, fakeStash, readOk } from '@/engine/gltfImportFixtures';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import type { AppNode, AppEdge } from '@/types';
 import {
@@ -119,17 +125,24 @@ describe('previewGraph', () => {
     expect(nodes).toHaveLength(2);
   });
 
-  it('targets the FLAGGED Output among several and clears every other sink’s flag', () => {
+  it('targets the FLAGGED Output among several, DROPS every other plain Output, and clears a Raymarch flag', () => {
     const out1 = makeNode('out1', 'output');
     const out2 = makeNode('out2', 'output');
     data(out2).activeOutput = true;
+    const rm = { ...makeNode('rm', 'raymarchOutput'), type: 'raymarchOutput' } as AppNode;
+    data(rm).activeOutput = true;
     const c = makeNode('c', 'uv');
     const edges = [makeEdge('c', 'out', 'out1', 'color')];
-    const pg = previewGraph([out1, out2, c], edges, { nodeId: 'c', handleId: 'out' });
+    const pg = previewGraph([out1, out2, rm, c], edges, { nodeId: 'c', handleId: 'out' });
     expect(pg.edges).toHaveLength(1);
     expect(pg.edges[0].target).toBe('out2');
     expect(data(pg.nodes.find((n) => n.id === 'out2')!).activeOutput).toBe(true);
-    expect(data(pg.nodes.find((n) => n.id === 'out1')!).activeOutput).toBeUndefined();
+    // The other plain Output is GONE, not merely emptied: left standing it
+    // would go on emitting its own `parts` entry beside the previewed socket.
+    expect(pg.nodes.some((n) => n.id === 'out1')).toBe(false);
+    // A Raymarch Output stays and only loses its flag — unwired AND unflagged,
+    // it cannot drive, and removing it would be a bigger rewrite than needed.
+    expect(data(pg.nodes.find((n) => n.id === 'rm')!).activeOutput).toBeUndefined();
   });
 
   it('silences a DRIVING Raymarch Output: its wires drop and the plain Output emits', () => {
@@ -145,6 +158,94 @@ describe('previewGraph', () => {
     expect(pg.edges.map((e) => e.target)).toEqual(['out']);
     const res = gen(pg.nodes, pg.edges);
     expect(res.code).not.toMatch(/Loop\(/);
+    expect(returnBlock(res.code)).toMatch(colorOnly(res.varNames.get('c')!));
+  });
+
+  /**
+   * THE multi-Output case, and the reason rule 2 removes rather than cleans.
+   *
+   * One Output node per material is the ORDINARY shape of any GLB-imported
+   * document, and a targeted Output emits its own `materialParts` / `parts`
+   * entry no matter how thoroughly the anchor is cleaned. Cleaning one node
+   * therefore landed the previewed socket on whatever meshes that node shaded
+   * while every other material carried on painting the model — the previewed
+   * socket invisible on most of it, with nothing on screen to explain why.
+   *
+   * The document is built by the REAL importer (`buildGltfSectionGraph` over a
+   * real fixture GLB), never hand-assembled to what I believe the split shape
+   * is: a fixture written to my own idea of it can pass while production emits
+   * something else.
+   */
+  it('a multi-material GLB document previews on the WHOLE model: one Output, no parts table', async () => {
+    const m = readOk(blenderGlb());
+    const materials = m.materials.filter((x) => x.usage.primitives > 0).map((x) => x.index);
+    const { requests } = encodeRequests(m, materials);
+    const { encoded } = await encodeGltfImages(m, requests, {
+      modelName: 'model.glb',
+      maxDim: null,
+      deviceMaxDim: 2048,
+      ignoreLimits: false,
+      budgetChars: Infinity,
+      encode: fakeEncoder([]),
+      stash: fakeStash(),
+    });
+    const built = buildGltfSectionGraph(m, { materials, encoded });
+    const probe = makeNode('probe', 'uv');
+    const nodes = [...built.nodes, probe];
+
+    // The document really is multi-Output and really does emit a table — the
+    // vacuity guard, so the assertions below cannot pass over an empty case.
+    const outs = (ns: AppNode[]) => ns.filter((n) => n.data.registryType === 'output');
+    expect(outs(nodes).length).toBeGreaterThan(1);
+    const before = gen(nodes, built.edges).code;
+    expect(before).toMatch(/materialParts: \{/);
+    expect(before).toContain('modelSignature: { materials: [');
+
+    const pg = previewGraph(nodes, built.edges, { nodeId: 'probe', handleId: 'out' });
+    expect(outs(pg.nodes)).toHaveLength(1);
+    const res = gen(pg.nodes, pg.edges);
+    expect(returnBlock(res.code)).toMatch(colorOnly(res.varNames.get('probe')!));
+    // Nothing else paints: no per-material table of either kind, and no
+    // signature, so every mesh takes the previewed socket.
+    expect(res.code).not.toMatch(/materialParts: \{/);
+    expect(res.code).not.toMatch(/\bparts: \{/);
+    expect(res.code).not.toContain('modelSignature');
+
+    // …and in the MODULE the preview actually runs. ShaderPreview builds it
+    // from `previewCode` but hands it a mirror plan derived from the REAL
+    // store nodes, so the loader-0.6 mirrors are the one way per-mesh `parts`
+    // could come back behind the derived graph's back. They cannot: a mirror
+    // is emitted only for an index that emitted a BODY (tslCodeProcessor's
+    // `indexBodies` gate), and the preview code declares no index at all.
+    const mirror = materialPartsMirrorPlanAcross(contributingOutputs(nodes));
+    expect(mirror.length).toBeGreaterThan(0); // the plan is real, so this is not vacuous
+    const module = buildShaderModule(res.code, { materialPartsMirror: mirror });
+    expect(module).not.toMatch(/\bparts: \{/);
+    expect(module).not.toContain('materialPartsMirror');
+
+    // The store's arrays are untouched, as for every other rewrite here.
+    expect(outs(nodes).length).toBeGreaterThan(1);
+  });
+
+  it('name-targeted Outputs drop too, so a `parts` document previews on the whole model', () => {
+    const def = makeNode('def', 'output');
+    const body = makeNode('body', 'output');
+    data(body).meshTargets = ['Body'];
+    data(body).emitOrder = 1;
+    const glass = makeNode('glass', 'output');
+    data(glass).meshTargets = ['Glass'];
+    data(glass).emitOrder = 2;
+    const red = makeNode('red', 'color', { hex: '#ff0000' });
+    const c = makeNode('c', 'uv');
+    const nodes = [def, body, glass, red, c];
+    const edges = [makeEdge('red', 'out', 'body', 'color'), makeEdge('red', 'out', 'glass', 'color')];
+
+    expect(gen(nodes, edges).code).toMatch(/\bparts: \{/);
+
+    const pg = previewGraph(nodes, edges, { nodeId: 'c', handleId: 'out' });
+    expect(pg.nodes.filter((n) => n.data.registryType === 'output')).toHaveLength(1);
+    const res = gen(pg.nodes, pg.edges);
+    expect(res.code).not.toMatch(/\bparts: \{/);
     expect(returnBlock(res.code)).toMatch(colorOnly(res.varNames.get('c')!));
   });
 

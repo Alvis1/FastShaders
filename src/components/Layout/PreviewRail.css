@@ -1,0 +1,85 @@
+/*
+ * The preview rail — the sockets either side of the column seam.
+ *
+ * The disc matches the Output node's own decorative socket exactly (the same
+ * `--handle-size` tokens, the same white rim, the same hard contact shadow), so
+ * the wire leaves one kind of socket and arrives at another that reads as the
+ * same object. It is NOT the node's class: that one is styled by the canvas's
+ * `--node-cost-text` and carries the active/parked fill, neither of which means
+ * anything here.
+ */
+
+.preview-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: calc(var(--handle-size) * 2);
+  z-index: var(--z-controls);
+  /* The container passes EVERYTHING through; only the discs opt back in. A
+     full-height box down the canvas edge would otherwise eat presses aimed at
+     the graph, and the column seam's own hit zone already reaches ~4px in. */
+  pointer-events: none;
+}
+
+/* Half the disc hangs past the pane's right edge, where `.node-editor__canvas`
+   clips it — so the socket reads as meeting the seam rather than sitting beside
+   it, the same way a node's own handle straddles its border. */
+.preview-rail {
+  right: calc(var(--handle-size) * -1);
+}
+
+.preview-rail__socket {
+  position: absolute;
+  left: 0;
+  width: calc(var(--handle-size) * 2);
+  height: calc(var(--handle-size) * 2);
+  padding: 0;
+  /* `top` is set inline as a PERCENTAGE of the pane (previewRailGeometry), so
+     the two rails line up at every split ratio; this centres the disc on it. */
+  transform: translateY(-50%);
+  border: var(--handle-border) solid white;
+  border-radius: 50%;
+  background: var(--node-cost-text, #000);
+  /* The same 1px ring the node's socket carries, not a contact shadow: the two
+     are the same object at each end of one wire, and the ring adds ~1px of
+     apparent radius all round — without it this disc read a size smaller than
+     the socket it connects to, which is exactly what it must not do. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+  pointer-events: auto;
+  cursor: pointer;
+  transition: box-shadow var(--transition-fast), scale var(--transition-fast);
+}
+
+.preview-rail__socket:hover,
+.preview-rail__socket:focus-visible {
+  /* The node-lift vocabulary, at the control scale the Sound node's arm light
+     uses — this sits on chrome, not on a card that is already raised. The ring
+     rides along, so hovering deepens the shadow without changing the size the
+     disc reads at. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15), var(--shadow-node-control-hover);
+  scale: var(--fs-node-grow);
+}
+
+/* Nothing feeds the preview yet. Hollow, and the one socket that ADDS: the
+   ring is an inset shadow rather than a border so the outer rim and the disc's
+   size stay identical to a connected one — only the fill changes, the
+   Output node's own inactive-socket rule. */
+.preview-rail__socket--empty {
+  background: var(--node-bg);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15), inset 0 0 0 2px var(--node-cost-text, #000);
+}
+
+.preview-rail__socket--empty:hover,
+.preview-rail__socket--empty:focus-visible {
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.15),
+    var(--shadow-node-control-hover),
+    inset 0 0 0 4px var(--node-cost-text, #000);
+}
+
+/* A canvas gesture or a seam drag must not be interrupted by a socket under
+   the pointer — the same boundary `fs-canvas-busy` closes for the iframe. */
+:root.fs-dragging .preview-rail__socket,
+:root.fs-canvas-busy .preview-rail__socket {
+  pointer-events: none;
+}

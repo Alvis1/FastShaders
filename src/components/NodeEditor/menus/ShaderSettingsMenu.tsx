@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
 import { useAppStore, resolveDeviceBudget } from '@/store/useAppStore';
 import { t, portLabel } from '@/i18n';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { OUTPUT_DEFAULT_EXPOSED } from '../nodes/OutputNode';
 import type { MaterialSettings, OutputNodeData, AppNode, AppEdge } from '@/types';
+import { outputNodeValues } from '@/types';
 import { removeEdgesForPort, unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { toggleExposedPort } from '@/utils/exposedPorts';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
@@ -11,7 +11,8 @@ import { useHistoryBracket } from '@/hooks/useHistoryBracket';
 import {
   findDefaultOutput,
   outputMaterials,
-  materialExposedPorts,
+  outputNodes,
+  moduleSettingsOutput,
   channelHandle,
   sectionLabel,
   readModelSignature,
@@ -74,70 +75,38 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
     ?? findDefaultOutput(s.nodes));
   const outputData = outputNode?.data as OutputNodeData | undefined;
 
-  // WHICH MATERIAL this menu edits. Per-mesh materials are sections of the one
-  // Output node, and each carries its own channels and its own material
-  // settings — SCOPED by the section the user right-clicked; the menu shows a
-  // static scope line and deliberately carries no selector of its own (see the
-  // scope row below). Material 0 is the default (the whole-model material);
-  // the rest are named by their mesh.
+  // ONE Output node is ONE material, so this menu has nothing to scope: the
+  // node the user right-clicked IS the material, and its channels, its stored
+  // values and its material settings are the node's own fields. The section
+  // selector, its `contextMenu.materialIndex` seed and the count-change reset
+  // all went with the stack they navigated.
   //
-  // The MESH each material shades is deliberately NOT editable here: that
-  // picker lives on the node itself, where the sections are, and two controls
-  // for one binding is how they end up disagreeing.
+  // The MESH this material shades is deliberately NOT editable here: that
+  // picker lives on the node itself, and two controls for one binding is how
+  // they end up disagreeing.
   const materials = outputNode ? outputMaterials(outputNode) : [];
-  // Seeded from the SECTION the user right-clicked (`data-material-index` on
-  // the node's material blocks → contextMenu.materialIndex), so each section
-  // opens its own scoped menu and channels can be exposed per material without
-  // hunting through the selector. The effect matters for the second click: a
-  // right-click on ANOTHER section while this menu is open moves the menu
-  // rather than remounting it, so the initializer alone would keep the old
-  // section — and it keys on the contextMenu OBJECT (a fresh identity per
-  // openContextMenu call), never the index VALUE: re-right-clicking the SAME
-  // section after manually switching the selector writes the same number, and
-  // a value-keyed effect would never fire, leaving the menu scoped to the
-  // manual choice on exactly the gesture that re-asserts the section.
-  const menuState = useAppStore((s) => s.contextMenu);
-  const seededIndex = menuState.materialIndex;
-  const [materialIndex, setMaterialIndex] = useState(seededIndex ?? 0);
-  useEffect(() => {
-    if (typeof seededIndex === 'number') setMaterialIndex(seededIndex);
-  }, [menuState, seededIndex]);
-  // Materials are ANONYMOUS (indices, no ids), so adding or removing one on
-  // the node while this menu is open shifts every later index under the
-  // selection — the menu would silently edit the NEIGHBOUR of the section it
-  // was opened on. A visible reset to the default material is the honest
-  // option; the next right-click re-scopes.
-  const materialCount = materials.length;
-  const countRef = useRef(materialCount);
-  useEffect(() => {
-    if (countRef.current !== materialCount) {
-      countRef.current = materialCount;
-      setMaterialIndex(0);
-    }
-  }, [materialCount]);
-  const activeIndex = materialIndex < materials.length ? materialIndex : 0;
-  const activeMaterial: OutputMaterial | undefined = materials[activeIndex];
+  /** How many Output nodes exist — "which one am I editing" is a real question
+   *  only when there is more than one (and this menu can also be opened from
+   *  the canvas, with no node under the cursor at all). A number selector, so
+   *  it re-renders on a count change and on nothing else. */
+  const outputCount = useAppStore((s) => outputNodes(s.nodes).length);
+  /** Does THIS node own the module's two geometry directives? `mergeVertices`
+   *  and `displacementMode` are written at module level from
+   *  `moduleSettingsOutput`, never per part, so on any other node their
+   *  checkboxes wrote a field nothing read. A boolean selector, so a graph
+   *  notify that does not move the election re-renders nothing. */
+  const ownsModuleSettings = useAppStore(
+    (s) => !!outputNode && moduleSettingsOutput(s.nodes)?.id === outputNode.id,
+  );
 
-  const settings: MaterialSettings = (activeIndex === 0
-    ? outputData?.materialSettings
-    : activeMaterial?.materialSettings) ?? {};
-  const exposedPorts = activeIndex === 0
-    ? (outputData?.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED)
-    : materialExposedPorts(activeMaterial, OUTPUT_DEFAULT_EXPOSED);
+  const settings: MaterialSettings = outputData?.materialSettings ?? {};
+  const exposedPorts = outputData?.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
   const exposedSet = new Set(exposedPorts);
 
-  /** Patch the ACTIVE material — the node's own fields for material 0, its
-   *  `materials` entry otherwise. One writer, so the two shapes cannot drift. */
+  /** Patch this node's material — its own fields, the only material it has. */
   const patchMaterial = (patch: Partial<OutputMaterial>) => {
     if (!outputNode) return;
-    if (activeIndex === 0) {
-      updateNodeData(outputNode.id, patch as Partial<OutputNodeData>);
-      return;
-    }
-    const added = materials.slice(1).map((m, i) =>
-      i === activeIndex - 1 ? { ...m, ...patch } : m,
-    );
-    updateNodeData(outputNode.id, { materials: added } as Partial<OutputNodeData>);
+    updateNodeData(outputNode.id, patch as Partial<OutputNodeData>);
   };
 
   const outputDef = NODE_REGISTRY.get('output');
@@ -158,8 +127,13 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
    *  values: emission is exposure-gated, so a kept value would either emit
    *  invisibly or silently vanish from the code, depending on the gate. */
   const valuesWithout = (portId: string): Record<string, string | number> | undefined => {
-    const values = activeIndex === 0 ? outputData?.values : activeMaterial?.values;
-    if (!values || !(portId in values)) return undefined;
+    // Through `outputNodeValues`, never the raw field: `outputData` is a cast of
+    // node data, NO restore path coerces an Output's node-level `values` (the
+    // sanitizer cleans MATERIALS entries only), and `'opacity' in 5` THROWS —
+    // in a React event handler, so a tampered `.fastshader` made this checkbox
+    // silently do nothing. See that accessor's doc.
+    const values = outputNodeValues(outputData);
+    if (values[portId] === undefined) return undefined;
     const { [portId]: _dropped, ...rest } = values;
     return rest;
   };
@@ -173,9 +147,9 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
       current.add('opacity');
     } else {
       current.delete('opacity');
-      // The handle this material's opacity is wired through — bare for the
-      // default, namespaced for an added material.
-      removeEdgesForPort(outputNode.id, channelHandle(activeIndex, 'opacity'));
+      // One node, one material: every channel is wired through its BARE handle
+      // (`channelHandle(0, …)`), which is what every saved edge already spells.
+      removeEdgesForPort(outputNode.id, channelHandle(0, 'opacity'));
       const rest = valuesWithout('opacity');
       if (rest) patch.values = rest;
     }
@@ -227,7 +201,7 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
         outputNode.id,
         exposedPorts,
         portId,
-        channelHandle(activeIndex, portId),
+        channelHandle(0, portId),
       );
       const patch: Partial<OutputMaterial> = { exposedPorts: next };
       if (!next.includes(portId)) {
@@ -267,7 +241,16 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
 
   return (
     <div className="context-menu__list">
-      <div className="context-menu__category">{t('Shader Settings', language)}</div>
+      {/* This menu is scoped to ONE Output NODE, which since the per-material
+          split IS one material — its channels, its stored values, its exposed
+          ports and its four emitted material settings are all that node's own
+          fields. The three figures below are the exception and say so under
+          their own heading: they are whole-DOCUMENT (the cost walk seeds every
+          contributing Output, and the budget is a device setting), so filing
+          them under "Material" would have been a lie about five rows. */}
+      <div className="context-menu__category">{t('Material Settings', language)}</div>
+      <div className="context-menu__divider" />
+      <div className="context-menu__category">{t('Shader (whole document)', language)}</div>
       <div
         style={{
           padding: 'var(--space-2) var(--space-3)',
@@ -324,8 +307,16 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
         </>
       )}
 
-      {/* Displacement mode — only relevant when position port is exposed */}
-      {exposedSet.has('position') && (
+      {/* Displacement mode — only relevant when position port is exposed, and
+          only on the Output that OWNS these two keys. Neither is a per-material
+          setting: `mergeVertices` is a module-level geometry directive the
+          loader reads off the return object, and `displacementMode` has no
+          loader key at all — `buildShaderModule` takes both from
+          `moduleSettingsOutput`, so on any OTHER node these checkboxes wrote a
+          field nothing read and the geometry went on following the default's.
+          A pre-existing gap CLAUDE.md admits; showing them where they apply is
+          what makes the "Material Settings" title above honest. */}
+      {exposedSet.has('position') && ownsModuleSettings && (
         <>
           <div className="context-menu__divider" />
           <div className="context-menu__category">{t('Displacement', language)}</div>
@@ -356,25 +347,30 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
       )}
 
       <div className="context-menu__divider" />
-      <div className="context-menu__category">{t('Material', language)}</div>
+      {/* "Rendering", not a third "Material": the title is Material Settings and
+          the scope LINE below already names which one, so a heading repeating
+          the word stacked three of them inside ~100px. These four keys are the
+          material's RENDER state (blending, facing, cutout, depth). */}
+      <div className="context-menu__category">{t('Rendering', language)}</div>
 
       {/* WHICH material these settings belong to — a static scope LINE, not a
-          selector: right-clicking a SECTION on the node is the ONE scoping
-          control (data-material-index → contextMenu.materialIndex), and a
-          dropdown here was a second control for the same scope — the exact
-          argument that keeps the MESH picker off this menu. Named by MESH
-          (the first one plus an ellipsis, the node picker's own rule), since
-          that is how the user thinks of them — "the glass one" — and the
-          node's sections are labelled the same way. Shown only when there is
-          more than one, when "which one am I editing" is a real question. ONE
-          label derivation for the menu and the node: `sectionLabel` decides
-          what the label is, `formatSectionLabel` words it, so an empty added
-          section reads "No mesh" here exactly as it does on the node. */}
-      {materials.length > 1 && (
+          selector: the NODE is the scope now (one node, one material), and a
+          dropdown here would be a second control for a binding the node's own
+          picker already owns — the exact argument that keeps the MESH picker
+          off this menu. Named by MESH (the first one plus an ellipsis, the
+          node picker's own rule), since that is how the user thinks of them —
+          "the glass one". Shown only while SEVERAL Output nodes exist, when
+          "which one am I editing" is a real question — this menu also opens
+          from the canvas with no node under the cursor, and then the line is
+          the only thing that says which Output answered. ONE label derivation
+          for the menu and the node: `sectionLabel` decides what the label is,
+          `formatSectionLabel` words it, so an untargeted Output reads
+          "All meshes (default)" here exactly as it does on the node. */}
+      {outputCount > 1 && (
         <div style={{ ...labelStyle, cursor: 'default' }}>
           <span>{t('Material', language)}</span>
           <span style={{ fontWeight: 700 }}>
-            {formatSectionLabel(sectionLabel(materials, activeIndex, readModelSignature(outputData)), language)}
+            {formatSectionLabel(sectionLabel(materials, 0, readModelSignature(outputData)), language)}
           </span>
         </div>
       )}
@@ -432,6 +428,25 @@ export function ShaderSettingsMenu({ nodeId }: { nodeId?: string }) {
           <option value="front">{t('Front', language)}</option>
           <option value="back">{t('Back', language)}</option>
           <option value="double">{t('Double', language)}</option>
+        </select>
+      </div>
+
+      {/* Blender's Shade Smooth / Shade Flat. A SELECT and not a checkbox
+          because both states have names the user is looking for — "Flat
+          Shading" unticked does not say "smooth" — and because it sits beside
+          Side, which is the same shape. `flatShading` is a THREE.Material
+          property three's node materials honour, so it is per-material like
+          the rows around it: `undefined` is smooth, and only the flat case is
+          stored, which is what keeps every existing graph byte-identical. */}
+      <div style={{ ...labelStyle, cursor: 'default' }}>
+        <span>{t('Shading', language)}</span>
+        <select
+          value={settings.flatShading ? 'flat' : 'smooth'}
+          onChange={(e) => updateSettings({ flatShading: e.target.value === 'flat' ? true : undefined })}
+          style={selectStyle}
+        >
+          <option value="smooth">{t('Smooth', language)}</option>
+          <option value="flat">{t('Flat', language)}</option>
         </select>
       </div>
 

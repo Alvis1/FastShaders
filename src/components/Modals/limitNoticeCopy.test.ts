@@ -389,12 +389,14 @@ describe('image-pick-cap (the texture picker)', () => {
   });
 });
 
-describe('output-sections-trimmed (decision 9: a restore that trims Output sections says so)', () => {
+describe('output-sections-trimmed (decision 9: a restore that trims Output materials says so)', () => {
   const ui = (lv as { ui: Record<string, string> }).ui;
+  // The kind's id keeps its historical spelling; the WORDS say nodes, because
+  // one material is one Output node since the per-material split.
   const KEY = {
-    graph: '{n} Output section(s) or mesh assignment(s) in your saved graph were invalid or over the limits of the editor, and were removed or left without a target.',
-    savedGroups: '{n} Output section(s) or mesh assignment(s) in your saved groups were invalid or over the limits of the editor, and were removed or left without a target.',
-    file: '{n} Output section(s) or mesh assignment(s) in the opened file were invalid or over the limits of the editor, and were removed or left without a target.',
+    graph: '{n} Output node(s) or mesh assignment(s) in your saved graph were invalid or over the limits of the editor, and were removed or left without a target.',
+    savedGroups: '{n} Output node(s) or mesh assignment(s) in your saved groups were invalid or over the limits of the editor, and were removed or left without a target.',
+    file: '{n} Output node(s) or mesh assignment(s) in the opened file were invalid or over the limits of the editor, and were removed or left without a target.',
   } as const;
   const copy = (slot: LimitNotice['slot'], lang: Language, detail?: string) =>
     limitNoticeCopy({ id: 'o', kind: 'output-sections-trimmed', ...(slot ? { slot } : {}), ...(detail !== undefined ? { detail } : {}) }, lang);
@@ -408,11 +410,11 @@ describe('output-sections-trimmed (decision 9: a restore that trims Output secti
     expect(copy(undefined, 'lv', '3').message).toBe(ui[KEY.file].replace('{n}', '3'));
   });
 
-  it('is a toggle-less refusal with the "Some Output sections" title, in both languages', () => {
+  it('is a toggle-less refusal with the "Some Output nodes" title, in both languages', () => {
     for (const lang of ['en', 'lv'] as Language[]) {
       for (const slot of ['graph', 'savedGroups', undefined] as const) {
         const c = copy(slot, lang, '2');
-        expect(c.title).toBe(lang === 'en' ? 'Some Output sections were not loaded' : ui['Some Output sections were not loaded']);
+        expect(c.title).toBe(lang === 'en' ? 'Some Output nodes were not loaded' : ui['Some Output nodes were not loaded']);
         expect(c.toggle).toBeNull();
         expect(c.canProceed).toBe(false);
         expect(c.suggestions).toEqual([]);
@@ -422,12 +424,12 @@ describe('output-sections-trimmed (decision 9: a restore that trims Output secti
   });
 
   it('fills the count in one pass, and falls back to "One or more"', () => {
-    expect(copy('graph', 'en', '$&').message).toMatch(/^\$& Output section\(s\)/);
-    expect(copy('graph', 'en').message).toMatch(/^One or more Output section\(s\)/);
+    expect(copy('graph', 'en', '$&').message).toMatch(/^\$& Output node\(s\)/);
+    expect(copy('graph', 'en').message).toMatch(/^One or more Output node\(s\)/);
   });
 
   it('lv.json carries every sentence, each a translation rather than the English key', () => {
-    for (const k of [...Object.values(KEY), 'Some Output sections were not loaded']) {
+    for (const k of [...Object.values(KEY), 'Some Output nodes were not loaded']) {
       expect(ui[k], k).toBeTruthy();
       expect(ui[k]).not.toBe(k);
     }

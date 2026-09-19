@@ -70,6 +70,74 @@ export const SIGNATURE_TOTAL_CHARS_MAX = 65536;
 export const MATERIAL_PART_KEY_RE = /^(0|[1-9][0-9]{0,3})$/;
 
 /**
+ * The highest glTF material index a section may be bound to — the range of
+ * `MATERIAL_PART_KEY_RE` above, stated as a number so the two can be pinned
+ * against each other.
+ *
+ * Held HERE, beside the key regex it must agree with, rather than in
+ * utils/outputMaterials.ts (which re-exports it): `isUntargetedOutput` in
+ * utils/sdfPartition.ts asks the same question when it decides whether an
+ * Output may be ELECTED, and sdfPartition is a LEAF that nothing in the store
+ * cycle may drag `outputMaterials` into (the costTable TDZ rule) — so the one
+ * definition has to sit in a leaf both can import.
+ */
+export const GLTF_MATERIAL_INDEX_MAX = 9999;
+
+/** A real, in-range glTF material index — never coerced (`'1'` from a
+ *  tampered file is not an index, and `Number(true)` is 1). */
+export function isGltfMaterialIndex(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= GLTF_MATERIAL_INDEX_MAX;
+}
+
+/**
+ * The node shape `emitRank` reads, stated STRUCTURALLY so this file keeps the
+ * zero imports its header claims — not even a type one. An `AppNode` satisfies
+ * it, which is what every caller passes.
+ *
+ * `data: object` rather than `{ emitOrder?: unknown }`: a type whose every
+ * property is OPTIONAL is a WEAK TYPE, and TypeScript refuses an argument with
+ * no property in common with it — so the honest-looking shape rejected every
+ * `AppNode` whose data is a `ShaderNodeData`. `object` is required, excludes
+ * `null` and the primitives (so the read below cannot throw), and every node
+ * data interface satisfies it.
+ */
+export interface EmitOrdered {
+  readonly data: object;
+}
+
+/**
+ * THE strict accessor for an Output node's emitted position — the order its
+ * `parts` / `materialParts` entry takes in the module, and nothing else.
+ *
+ * It exists because the nodes ARRAY is not a usable order and never can be:
+ * `liftChildrenAfterParents` splices a node into a new slot on an ordinary
+ * drag-into-a-group, and `useSyncEngine` reorders on every Apply. Deriving
+ * emitted order from it would rewrite the module on a layout gesture —
+ * `previewCode` advances, the 3D preview recompiles, the autosave dirties,
+ * `__partPixel<n>` renumbers, and first-claim-wins flips on a duplicate mesh
+ * name — all with `errors: []` and nothing on screen to explain it.
+ *
+ * Non-integer is 0, so a `.fastshader` claiming `"3"`, `3.5`, `NaN` or an
+ * object cannot reorder anything; ties are broken by node id AT THE SORT, so
+ * two nodes seeded 0 (two folded Outputs unfolded in one document) still have
+ * one stable total order.
+ *
+ * Held HERE rather than in utils/outputMaterials.ts (which re-exports it), for
+ * exactly the reason `GLTF_MATERIAL_INDEX_MAX` above is: `activeSink` in
+ * utils/sdfPartition.ts must elect the LOWEST-RANKED untargeted Output — the
+ * same node `defaultOutput` picks, or the two name different nodes on a split
+ * document whose empty section was reordered ahead of node 0 — and
+ * sdfPartition is a LEAF that nothing in the store cycle may drag
+ * `outputMaterials` into (the costTable TDZ rule). A SECOND copy of the
+ * accessor is what the rule forbids, so the one definition sits in the leaf
+ * both can import.
+ */
+export function emitRank(node: EmitOrdered): number {
+  const v: unknown = (node.data as { emitOrder?: unknown }).emitOrder;
+  return Number.isInteger(v) ? (v as number) : 0;
+}
+
+/**
  * The EDITOR's ceiling on import-built INDEX sections (owner default 16, until a
  * browser recompile measurement exists: each section is a whole generated
  * material, measured ~55-62 ms apiece per 200 ms-debounced edit). N11's `{max}`.

@@ -200,8 +200,10 @@ describe.skipIf(!loaderAvailable(V))('shaderloader 0.8 — apply()', () => {
   it('applies every per-material setting, on the default AND on a part', () => {
     // The behavioural twin of perMeshMaterials' PART_SETTING_KEYS source pin.
     const { FS } = fresh();
-    const dflt = { transparent: true, side: 2, alphaTest: 0.5, depthWrite: false };
-    const part = { transparent: true, side: 1, alphaTest: 0.25, depthWrite: false };
+    // Every value differs from three's default AND from the other material's,
+    // so a key applied to the wrong one, or not at all, moves an assertion.
+    const dflt = { transparent: true, side: 2, alphaTest: 0.5, depthWrite: false, flatShading: true };
+    const part = { transparent: true, side: 1, alphaTest: 0.25, depthWrite: false, flatShading: false };
     expect([...PART_SETTING_KEYS].sort()).toEqual(Object.keys(dflt).sort());
     const body = named('Body');
     const other = named('Other');

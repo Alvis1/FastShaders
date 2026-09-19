@@ -93,7 +93,7 @@ export function ExportPreflightModal({ request, onResolve }: Props) {
           {request.overSize
             ? fillTemplate(
                 t('The export would unpack to {size} MB. FastShaders opens files up to {limit} MB, so neither the editor nor Podest could load it back. The shader inside would still run on an A-Frame page.', language),
-                { size: formatMiB(request.sizeBytes, language), limit: formatMiB(request.limitBytes, language) },
+                { size: formatMiB(request.sizeBytes, language), limit: formatMiB(request.limitBytes, language, 'nearest') },
               )
             : fillTemplate(
                 t('The export would hold {count} files. FastShaders opens at most {max} files from one archive, so neither the editor nor Podest could load it back. The shader inside would still run on an A-Frame page.', language),

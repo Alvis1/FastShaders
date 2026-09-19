@@ -131,7 +131,7 @@ function prefsHeight(rows: number): number {
  * fillTemplate; the same words the dialog's blocked text quotes.
  */
 const ALLOW_MANY_MATERIALS_HINT =
-  'Lets a dropped model with more than {limit} materials build one Output section per material. Each adds textures and draw calls, and every such import still asks first.';
+  'Lets a dropped model with more than {limit} materials build one Output node per material. Each adds textures and draw calls, and every such import still asks first.';
 
 /**
  * The right-click list's LIBRARY rows — the palette's optional categories

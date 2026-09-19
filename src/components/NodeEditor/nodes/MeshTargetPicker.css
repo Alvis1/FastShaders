@@ -110,6 +110,16 @@
   opacity: 0.55;
 }
 
+/* An UNTARGETED Output that is not the module's default (`parked`): another
+   untargeted Output carries the active flag, and among untargeted Outputs
+   exactly one contributes. Dimmed like `--unused`, and for the same reason —
+   legal, inert right now, one click from being the whole-model material again
+   — never coloured like an error and never disabled. Newly reachable with the
+   per-material split; before it, an untargeted material 0 WAS the default. */
+.mesh-picker--parked {
+  opacity: 0.55;
+}
+
 /* An import-built INDEX section's label (IndexSectionChip): the picker's box —
    so its 104px width cap holds for an attacker-supplied glTF material name —
    drawn DASHED and unfilled, because a binding to a material is read here, not

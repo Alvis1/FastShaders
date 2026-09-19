@@ -290,7 +290,13 @@ describe('export pre-flight: strings', () => {
     // first capture the placeholder filled after it.
     expect(modal).toMatch(/fillTemplate\(\s*t\('The export would unpack to \{size\} MB/);
     expect(modal).toMatch(/size:\s*formatMiB\(request\.sizeBytes, language\)/);
-    expect(modal).toMatch(/limit:\s*formatMiB\(request\.limitBytes, language\)/);
+    // The two round in OPPOSITE directions, and they share one sentence, so the
+    // pair would contradict itself at the boundary if they matched: a measured
+    // SIZE rounds up (the default), so one byte over never prints equal to the
+    // cap; a declared CAP rounds to 'nearest', since rounding it up would claim
+    // more room than is enforced. Every cap today is a whole number of MiB, so
+    // no string moves — utils/formatSize.ts states the rule.
+    expect(modal).toMatch(/limit:\s*formatMiB\(request\.limitBytes, language, 'nearest'\)/);
     // The lone {model} placeholder cannot capture anything; a replacer still
     // keeps a `$&` from expanding.
     expect(modal).toMatch(/\.replace\(\s*'\{model\}',\s*\(\) =>\s*formatMiB\(/);

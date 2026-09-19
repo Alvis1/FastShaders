@@ -291,6 +291,24 @@ describe('buildGlbContainer', () => {
     expect(r.chunks.json.trimEnd()).toBe(json);
     expect([...r.chunks.bin!]).toEqual([...TRIANGLE_POSITIONS]);
   });
+
+  /*
+   * The u32 guard COULD NOT FIRE at the one size it exists for. The 4-alignment
+   * was `(n + 3) & ~3`, and a bitwise operator coerces through ToInt32: measured,
+   * that returns 0 at 2^32 and -2147483648 at 3·2^31, so `total` came out either
+   * tiny or NEGATIVE and the `> GLB_MAX_TOTAL` test was dead exactly where it
+   * mattered. Only a DECLARED length is read before the guard, so a stub reaches
+   * it without allocating 4 GiB. Reachability is low today — the model reader
+   * stops at 96/256 MiB and the module's assets at 64 MiB — but the guard rests
+   * on caps that live elsewhere and could move.
+   */
+  it.each([
+    ['2^32, where `& ~3` wrapped to 0', 2 ** 32],
+    ['3·2^31, where it went negative', 3 * 2 ** 31],
+  ])('refuses a BIN that would not fit the u32 length field: %s', (_why, length) => {
+    const bin = { length } as unknown as Uint8Array;
+    expect(() => buildGlbContainer('{"a":1}', bin)).toThrow(/length field is a u32/);
+  });
 });
 
 /* ── base64 ──────────────────────────────────────────────────────────────── */

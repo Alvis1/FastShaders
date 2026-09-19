@@ -36,6 +36,58 @@
   animation: preview-link-flow 0.9s linear infinite;
 }
 
+/* The wire under the pointer. It cannot be a `:hover` rule — the layer is
+   `pointer-events: none` and unreachable by the pointer by construction (see
+   PreviewLink.tsx) — so the class is written imperatively from the canvas's
+   own pointermove, against the pure distance test the path is drawn from.
+   Weight and opacity only, the TypedEdge hover rule's vocabulary: a wire is a
+   line, so weight is the property it actually has to spend, and an offset copy
+   of a line just reads as a second line beside it. */
+.preview-link__path--hot {
+  stroke-width: 6;
+  opacity: 1;
+}
+
+/* The wire's hover label — its own element because a `title` on an SVG
+   `<path>` never opens a tooltip (TooltipLayer's findHost requires an
+   HTMLElement). A sibling of the SVG inside `.react-flow`, so it shares the
+   pane's coordinate origin; lifted to the app's floating-chrome level because
+   the SVG's own `z-index: -1` would bury the label behind every node card.
+   `pointer-events: none` is load-bearing: this element follows the pointer, so
+   anything else would put it under the cursor and swallow the very click the
+   label is inviting. */
+.preview-link__label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* Above React Flow's own layers — the renderer that holds the node cards (4)
+     and the panel layer (5) — so the label is readable wherever the wire runs,
+     but BELOW the app's floating chrome (`--z-controls`, 10: the cost pill, the
+     NEW button, the canvas bar, the import note). `.react-flow` sets no
+     z-index of its own, so this competes with those directly, and a transient
+     label that follows the pointer must never cover a permanent control. */
+  z-index: 6;
+  max-width: 220px;
+  padding: 2px 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  line-height: 1.3;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* The UA `[hidden]` rule is easy to lose to a later `display` declaration on
+   this class; stating it keeps a stale label from being left painted. */
+.preview-link__label[hidden] {
+  display: none;
+}
+
 @keyframes preview-link-flow {
   to {
     /* One dash period is 6 + 3 = 9; shift two periods for a smooth loop. */

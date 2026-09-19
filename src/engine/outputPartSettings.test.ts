@@ -32,6 +32,7 @@ import {
 } from './materialSettingsCode';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode, AppEdge, MaterialSettings } from '@/types';
+import { materialTargetNames, outputMaterials, outputsInEmitOrder } from '@/utils/outputMaterials';
 
 type Graph = { nodes: AppNode[]; edges: AppEdge[] };
 type ParsedMaterial = { meshTargets: string[]; materialSettings?: MaterialSettings };
@@ -65,10 +66,36 @@ function glassGraph(settings?: unknown, extra: Record<string, unknown> = {}): Gr
 
 const codeOf = (g: Graph): string => graphToCode(g.nodes, g.edges).code;
 
+/**
+ * The parse's ADDED materials, in emit order — what `data.materials` used to
+ * hold on the one Output node.
+ *
+ * `codeToGraph` mints one Output NODE per material since the split (the
+ * untargeted default first, then one node per `parts` / `materialParts` entry),
+ * so the same list is read off the siblings. Every case below still pins what
+ * it pinned: WHICH materials a module parses back to, naming WHICH meshes,
+ * carrying WHICH settings.
+ */
 const materialsOf = (nodes: AppNode[]): ParsedMaterial[] => {
-  const out = nodes.find((n) => n.data.registryType === 'output');
-  if (!out) throw new Error('no Output node');
-  return (out.data as { materials?: ParsedMaterial[] }).materials ?? [];
+  const outs = outputsInEmitOrder(nodes.filter((n) => n.data.registryType === 'output'));
+  if (outs.length === 0) throw new Error('no Output node');
+  return outs.slice(1).map((n) => {
+    const m = outputMaterials(n)[0];
+    const entry: ParsedMaterial = { meshTargets: materialTargetNames(m) };
+    if (m.materialSettings) entry.materialSettings = m.materialSettings;
+    return entry;
+  });
+};
+
+/** The Output NODE bound to `mesh` — the node a part's channels now land on. */
+const partNodeOf = (nodes: AppNode[], mesh: string): AppNode =>
+  outputsInEmitOrder(nodes.filter((n) => n.data.registryType === 'output'))
+    .find((n) => materialTargetNames(outputMaterials(n)[0]).includes(mesh))!;
+
+/** Every handle wired into the Output node bound to `mesh`. */
+const partHandlesOf = (g: { nodes: AppNode[]; edges: AppEdge[] }, mesh: string): (string | null | undefined)[] => {
+  const node = partNodeOf(g.nodes, mesh);
+  return g.edges.filter((e) => e.target === node.id).map((e) => e.targetHandle);
 };
 
 /** The inside of one `parts` entry's braces, e.g. `color: color2, transparent: true`. */
@@ -262,21 +289,21 @@ describe('the parse', () => {
 
   // RESOLVABLE references on purpose: `color2` is a node in this module, so
   // without the PART_SETTING_KEYS skip a member expression mints a Split node
-  // plus an `m1:side` edge and an identifier wires `m1:<key>` straight in. An
-  // unresolvable one (`THREE.DoubleSide`, an undeclared name) wires nothing with
-  // or without the skip, and so cannot catch its removal.
+  // plus a dead `side` edge on the part's node, and an identifier wires the key
+  // straight in. An unresolvable one (`THREE.DoubleSide`, an undeclared name)
+  // wires nothing with or without the skip, and so cannot catch its removal.
   it.each([
-    ['side: color2.x', 'm1:side'],
-    ['side: color2', 'm1:side'],
-    ['transparent: color2', 'm1:transparent'],
+    ['side: color2.x', 'side'],
+    ['side: color2', 'side'],
+    ['transparent: color2', 'transparent'],
   ])('never treats %s as a channel', (inner, handle) => {
     const parsed = codeToGraph(withGlassBody(inner));
     expect(materialsOf(parsed.nodes)[0].materialSettings).toBeUndefined();
     expect(parsed.nodes.filter((n) => n.data.registryType === 'split')).toHaveLength(0);
-    const handles = parsed.edges.map((e) => e.targetHandle);
+    const handles = partHandlesOf(parsed, 'Glass');
     expect(handles).not.toContain(handle);
     // The channel beside it still wires — the skip is per key, not per part.
-    expect(handles).toContain('m1:color');
+    expect(handles).toContain('color');
   });
 
   it('never treats a TOP-LEVEL settings key as a channel either', () => {
@@ -321,7 +348,7 @@ describe('the module and the parse read part settings alike', () => {
     const text = withGlassBody(inner);
     const parsed = codeToGraph(text);
     expect(materialsOf(parsed.nodes)[0].materialSettings).toEqual(settings);
-    expect(parsed.edges.map((e) => e.targetHandle)).toContain('m1:color');
+    expect(partHandlesOf(parsed, 'Glass')).toContain('color');
     expect(partBody(buildShaderModule(text, {}), 'Glass')).toBe(moduleBody);
   });
 
@@ -481,8 +508,14 @@ describe('materialSettingsCode', () => {
     for (const v of corpus) expect(norm(settingValueText(v)), v).toBe(norm(stripComments(v)));
   });
 
-  it('PART_SETTING_KEYS is exactly the four loader keys, and cannot match the prototype', () => {
-    expect([...PART_SETTING_KEYS].sort()).toEqual(['alphaTest', 'depthWrite', 'side', 'transparent']);
+  it('PART_SETTING_KEYS is exactly the loader keys, and cannot match the prototype', () => {
+    // Five: the four both loaders apply, plus `flatShading`, which 0.8 applies
+    // and the frozen 0.6 ignores (so an old loader renders such a shader
+    // smooth rather than failing — perMeshMaterials.test.ts pins that split).
+    expect([...PART_SETTING_KEYS].sort())
+      .toEqual(['alphaTest', 'depthWrite', 'flatShading', 'side', 'transparent']);
+    // The two that are NOT per-material: `mergeVertices` is a module-level
+    // geometry directive and `displacementMode` has no loader key at all.
     for (const k of ['__proto__', 'constructor', 'toString', 'mergeVertices', 'displacementMode', 'discard']) {
       expect(PART_SETTING_KEYS.has(k)).toBe(false);
     }
@@ -497,5 +530,66 @@ describe('materialSettingsCode', () => {
     const script = read('scriptToTSL.ts');
     expect(script).not.toMatch(/\bconst SIDE_NAMES\b/);
     expect(script).not.toMatch(/\bfunction sanitizeMaterialSettings\b/);
+  });
+});
+
+/* ── flat shading (Blender's Shade Smooth / Shade Flat) ───────────────────── */
+
+/**
+ * `material.flatShading`, which three's node materials honour:
+ * `NodeBuilder.isFlatShading()` swaps `normalViewGeometry` for `normalFlat`, a
+ * face normal taken from the DERIVATIVES of the view position — so it needs no
+ * vertex normals and works on a welded, displaced primitive too.
+ *
+ * Per-material, like the four beside it, and emitted ONLY when flat: smooth is
+ * three's default, so a document that never asks is byte-identical.
+ */
+describe('flat shading', () => {
+  it('emits nothing at all when smooth, or absent, or falsy', () => {
+    const absent = codeOf(glassGraph());
+    expect(codeOf(glassGraph({ flatShading: false }))).toBe(absent);
+    expect(codeOf(glassGraph({ flatShading: undefined }))).toBe(absent);
+    // The shape the menu leaves after switching Flat back to Smooth.
+    expect(codeOf(glassGraph({ transparent: false, flatShading: undefined }))).toBe(absent);
+  });
+
+  it('rides the part body, after the four, in the loader spelling', () => {
+    const code = codeOf(glassGraph({ ...FULL, flatShading: true }));
+    expect(code).toContain(`"Glass": { color: color2, ${FULL_TEXT}, flatShading: true }`);
+    // Still nothing at the top level — the default's settings ride
+    // buildShaderModule's options, not editor code.
+    expect(beforeParts(code)).not.toMatch(/\bflatShading\s*:/);
+  });
+
+  it('survives the module and a code-panel Apply', () => {
+    const code = codeOf(glassGraph({ flatShading: true }));
+    expect(buildShaderModule(code, {})).toContain('"Glass": { colorNode: color2, flatShading: true }');
+    expect(materialsOf(codeToGraph(code).nodes)).toEqual([
+      { meshTargets: ['Glass'], materialSettings: { flatShading: true } },
+    ]);
+  });
+
+  it('is never a channel, however it is spelled', () => {
+    // A settings key must not mint a node or a dead edge — the rule the four
+    // already follow.
+    const g = codeToGraph(codeOf(glassGraph({ flatShading: true })));
+    expect(partHandlesOf(g, 'Glass')).toEqual(['color']);
+  });
+
+  it('only a literal `true` turns it on — a tampered value is smooth', () => {
+    for (const junk of ['1', "'true'", 'THREE.FlatShading', 'null', '{}', 'false']) {
+      expect(materialSettingsFromSource({ flatShading: junk })).toBeUndefined();
+    }
+    expect(materialSettingsFromSource({ flatShading: 'true' })).toEqual({ flatShading: true });
+    // …and a commented value reads the same as a bare one, like every other key.
+    expect(materialSettingsFromSource({ flatShading: 'true /* faceted */' }))
+      .toEqual({ flatShading: true });
+  });
+
+  it('the emitter never interpolates the stored value', () => {
+    // Truthiness-tested, so a string out of a `.fastshader` becomes the literal
+    // `true` or nothing — never text spliced into the module.
+    const hostile = { flatShading: '"); evil(" ' } as unknown as MaterialSettings;
+    expect(materialSettingProps(hostile)).toEqual(['flatShading: true']);
   });
 });

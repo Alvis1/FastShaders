@@ -216,8 +216,11 @@ function refuse(reason: RepackRefusalReason, detail: string): never {
   throw new Refused({ reason, detail });
 }
 
+// ONE 4-alignment. There used to be a second, `(n + 3) & ~3`, written on the
+// next line — and a bitwise operator coerces through ToInt32, so it returned 0
+// at 2^32 and -2147483648 at 3·2^31, which is precisely where the u32 total
+// guard below exists to fire. See that guard.
 const ceil4 = (n: number) => Math.ceil(n / 4) * 4;
-const pad4 = (n: number) => (n + 3) & ~3;
 const isSafeNonNeg = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 
 function own(o: Obj, key: string): unknown {
@@ -1027,7 +1030,14 @@ function layoutGlbRepack(input: RepackInput): Layout {
   const json = JSON.stringify(doc);
   const jsonBytes = enc.encode(json).length;
   if (jsonBytes > GLB_JSON_MAX_BYTES) refuse('too-complex', 'json');
-  const totalBytes = 12 + 8 + pad4(jsonBytes) + 8 + pad4(end);
+  // A GLB's length field is a u32. `ceil4` and not `(n + 3) & ~3`: ToInt32 made
+  // the old spelling wrap at exactly the sizes this guard is for, so a 4 GiB
+  // file measured 3508 bytes and a 6 GiB one a NEGATIVE size — which
+  // `exportPreflight`'s `n()` reads as 0, so the N1 "too large to open again"
+  // dialog never opened and `repackGlb` threw `new Uint8Array(negative)`
+  // instead. Reaching it needs caps elsewhere to move (the base stops at
+  // 96/256 MiB, the module's assets at 64 MiB), but the guard is now real.
+  const totalBytes = 12 + 8 + ceil4(jsonBytes) + 8 + ceil4(end);
   if (totalBytes > 0xffffffff) refuse('too-complex', 'total');
 
   return {

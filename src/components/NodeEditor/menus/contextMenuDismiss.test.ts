@@ -45,6 +45,11 @@ describe('the context menu is dismissed by an outside press', () => {
 
   it('keeps the pane handler, which also clears the label peek', () => {
     // Closing twice is idempotent; the peek reset is NOT this closer's job.
-    expect(NODE_EDITOR).toMatch(/onPaneClick = useCallback\(\(\) => \{\s*closeContextMenu\(\);\s*setPeekNodeId\(null\);/);
+    //
+    // The handler TAKES the click event since step 8 (a press on an Output's
+    // preview wire glides to that node), so the parameter list is open — but
+    // these two calls must stay its FIRST two statements, above anything that
+    // can return early. A wire hit must never be able to leave the menu open.
+    expect(NODE_EDITOR).toMatch(/onPaneClick = useCallback\(\([^)]*\) => \{\s*closeContextMenu\(\);\s*setPeekNodeId\(null\);/);
   });
 });

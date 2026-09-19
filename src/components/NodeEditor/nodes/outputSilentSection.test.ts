@@ -21,7 +21,7 @@ import { makeNode } from '@/test-utils';
 import { graphToCode } from '@/engine/graphToCode';
 import { buildShaderModule } from '@/engine/tslCodeProcessor';
 import { addedMaterialContributes } from '@/utils/outputMaterials';
-import { SECTION_SILENT_KEY } from './sectionLabelText';
+import { SECTION_SILENT_KEY, PARKED_KEY } from './sectionLabelText';
 import lv from '@/i18n/lv.json';
 
 const NODE_SRC = readFileSync(resolve(__dirname, 'OutputNode.tsx'), 'utf8');
@@ -80,31 +80,60 @@ describe('addedMaterialContributes', () => {
 });
 
 describe('the node marks it', () => {
-  it('derives the mark from that one predicate, never material 0', () => {
-    expect(NODE_SRC).toContain('const sectionSilent = (index: number): boolean => {');
-    expect(NODE_SRC).toContain('if (index === 0) return false;');
-    expect(NODE_SRC).toContain('return !addedMaterialContributes(materials[index], wired);');
+  it('derives the mark from that one predicate, at NODE scale', () => {
+    // A material is a NODE since the per-material split, so "an ADDED section
+    // that sets nothing" became "a TARGETED node that sets nothing" — the same
+    // predicate over the node's own material and its own wires. Scoping it to
+    // `index !== 0`, as it had to be while a node held a stack, would have made
+    // the mark unreachable: every node's material IS material 0 now, so the
+    // defect this file is about (point an Output at a mesh, nothing happens)
+    // would have come back silently and un-marked.
+    expect(NODE_SRC).toContain('addedMaterialContributes(material, anyWired)');
+    expect(NODE_SRC).toContain('const silent = !isDefault && !parked && !selfContributes;');
+    expect(NODE_SRC).not.toContain('sectionSilent');
+  });
+
+  it('excludes the two states that have their OWN mark', () => {
+    // The DEFAULT contributing nothing emits the red sentinel (`emitsNothing`),
+    // and a PARKED node is not in the module at all — each says something
+    // different about why nothing is painted, so neither may borrow this one.
+    expect(NODE_SRC).toContain('const parked = isUntargetedOutput(selfNode) && !isDefault;');
+    expect(NODE_SRC).toContain('if (!isDefault) return false;');
   });
 
   it('passes it to the mesh picker', () => {
-    expect(NODE_SRC).toContain('const silent = sectionSilent(index);');
     expect(NODE_SRC).toContain('silent={silent}');
+    expect(NODE_SRC).toContain('parked={parked}');
   });
 
   it('shows the UNSET swatch instead of the channel default', () => {
+    // Both marks reach the swatch: a silent node's part is dropped and a parked
+    // node is not in the module, so in EITHER state an unwired channel paints
+    // nothing and the channel default would promise a white the preview never
+    // renders.
     expect(NODE_SRC).toContain(
-      "value={typeof stored === 'string' ? stored : (silent ? '' : channelDefault)}",
+      "value={typeof stored === 'string' ? stored : ((silent || parked) ? '' : channelDefault)}",
     );
-    expect(NODE_SRC).toContain('title={silent ? t(SECTION_SILENT_KEY, language) : undefined}');
+    expect(NODE_SRC).toContain('title={silent ? t(SECTION_SILENT_KEY, language) : parked ? t(PARKED_KEY, language) : undefined}');
   });
 
   it('the picker carries the class and the same sentence', () => {
     expect(PICKER_SRC).toContain("silent && !unassigned ? ' mesh-picker--silent' : ''");
     expect(PICKER_SRC).toContain('? t(SECTION_SILENT_KEY, language)');
     expect(PICKER_CSS).toContain('.mesh-picker--silent {');
+    // The PARKED mark is the picker's own word, ahead of `unused`: "All
+    // meshes" is exactly what a parked node is NOT doing.
+    expect(PICKER_SRC).toContain("parked ? ' mesh-picker--parked' : ''");
+    expect(PICKER_SRC).toContain("t(parked ? 'Not rendered' : unused ? 'Nothing left' : 'All meshes', language)");
+    expect(PICKER_SRC).toContain('? t(PARKED_KEY, language)');
+    expect(PICKER_CSS).toContain('.mesh-picker--parked {');
   });
 
   it('is translated', () => {
-    expect((lv as { ui: Record<string, string> }).ui[SECTION_SILENT_KEY]).toBeTruthy();
+    const ui = (lv as { ui: Record<string, string> }).ui;
+    for (const k of [SECTION_SILENT_KEY, PARKED_KEY, 'Not rendered']) {
+      expect(ui[k], k).toBeTruthy();
+      expect(ui[k], k).not.toBe(k);
+    }
   });
 });

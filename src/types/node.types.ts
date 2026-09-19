@@ -149,6 +149,20 @@ export interface MaterialSettings {
   mergeVertices?: boolean;
   /** Alpha clip threshold. 0 = disabled, >0 = discard fragments below this alpha value. */
   alphaTest?: number;
+  /**
+   * FLAT shading — Blender's "Shade Flat": every face gets one normal, so the
+   * surface reads as faceted instead of smoothly interpolated.
+   *
+   * `material.flatShading`, which three's node materials honour:
+   * `NodeBuilder.isFlatShading()` swaps `normalViewGeometry` for `normalFlat`,
+   * a face normal taken from the DERIVATIVES of the view position. So it needs
+   * no vertex normals and works on any geometry — including a welded, displaced
+   * primitive, where the interpolated normal is what welding exists to produce.
+   *
+   * Absent means SMOOTH, three's default, which is what keeps every graph and
+   * every export made before this byte-identical.
+   */
+  flatShading?: boolean;
 }
 
 /**
@@ -195,7 +209,8 @@ export interface OutputNodeData {
    *  `roughness`/`metalness`/`opacity`. Absent key = channel emits nothing
    *  (the historical behavior — keeps every pre-widget graph byte-identical).
    *  NB `getNodeValues()` deliberately still returns `{}` for output nodes;
-   *  readers access this field directly. */
+   *  readers go through `outputNodeValues` below, which applies the same shape
+   *  guard — this field is never coerced by any restore path. */
   values?: Record<string, string | number>;
   /**
    * ADDED materials — one per targeted sub-mesh (see utils/outputMaterials.ts).
@@ -244,9 +259,11 @@ export interface OutputNodeData {
   modelMeshes?: { name: string; material: number }[];
   /**
    * LEGACY: the mesh a whole Output node targeted, back when each targeted mesh
-   * had its own Output node. Never written any more — `foldExtraOutputs` folds
-   * such a graph into the single-node shape on load — but still READ there, so
-   * a session or file from that shape does not lose its wiring.
+   * had its own Output node. Never WRITTEN any more (`meshTargets`, the list, is
+   * what every writer produces) but still READ everywhere a target is read, so a
+   * session or file from that shape keeps what it shaded. The one-node-per-mesh
+   * shape it belongs to is the shape the Output split restores, so such a
+   * document now loads natively rather than being folded.
    */
   meshTarget?: { name: string };
   /**
@@ -259,6 +276,19 @@ export interface OutputNodeData {
    * Output carries the same key on its ShaderNodeData.
    */
   activeOutput?: true;
+  /**
+   * Where this Output's `parts` / `materialParts` entry sits in the emitted
+   * module — an explicit integer, read ONLY through `emitRank`
+   * (utils/outputMaterials.ts), never derived from the nodes array.
+   *
+   * The array is not an order: `liftChildrenAfterParents` splices a node into
+   * a new slot on an ordinary drag-into-a-group and `useSyncEngine` reorders
+   * on every Apply, so emitted key order would change on a layout gesture.
+   * Seeded from the material index when a folded Output is unfolded (node 0 →
+   * 0, `materials[k]` → k + 1); ties break by node id at the sort. ABSENT on
+   * every document written before the split, which `emitRank` reads as 0.
+   */
+  emitOrder?: number;
   [key: string]: unknown;
 }
 
@@ -398,17 +428,53 @@ export type AppEdge = Edge<TypedEdgeData>;
  * every call site at once. Identity is preserved for the normal case, so no
  * memo is invalidated.
  */
+function isValuesObject(v: unknown): v is Record<string, string | number> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
 function rawNodeValues(node: AppNode): Record<string, string | number> {
   const values = (node.data as ShaderNodeData).values;
-  return typeof values === 'object' && values !== null && !Array.isArray(values)
-    ? (values as Record<string, string | number>)
-    : {};
+  return isValuesObject(values) ? values : {};
 }
 
 /** Safely extract values from any AppNode's data. */
 export function getNodeValues(node: AppNode): Record<string, string | number> {
   if (node.type === 'output' || node.type === 'group' || node.type === 'note') return {};
   return rawNodeValues(node);
+}
+
+/**
+ * An OUTPUT node's stored per-channel values — the accessor `getNodeValues`
+ * cannot be.
+ *
+ * `getNodeValues` hard-returns `{}` for `output` / `group` / `note`, which is
+ * right for every caller that wants "this node's operand values" and useless
+ * for the one type that genuinely stores CHANNEL values (`OutputNodeData.values`
+ * — color, emissive, roughness, metalness, opacity, discard, normal, env,
+ * position). So every Output reader wrote its own
+ * `(data as OutputNodeData).values ?? {}` instead, i.e. exactly the nullish-only
+ * guard `rawNodeValues` above exists to replace.
+ *
+ * It is not belt-and-braces here. NO restore path coerces this field: the
+ * sanitizer (`sanitizeOutputMaterialsReport`) runs `cleanValues` on MATERIALS
+ * ENTRIES only, and `unfoldOutputMaterials`' material-0 branch is a shallow
+ * `{ ...out.data }`. So a `values: 5` out of a `.fastshader`, `fs:graph` or
+ * `fs:savedGroups` reaches ShaderSettingsMenu's `'opacity' in values` and the
+ * node's own `channel in current`, and `in` THROWS on a primitive — inside a
+ * React event handler, which renders as a checkbox and a clear-swatch that
+ * silently do nothing. Same class as `sanitizeDataRangeNodes`
+ * (utils/dataRangeFormula.ts) and `sanitizeOriginKeys` (utils/imageNode.ts),
+ * where the same `in` on the same kind of data returned null out of `loadGraph`
+ * and let the autosave overwrite the user's whole saved graph.
+ *
+ * Takes node DATA rather than a node, because all three callers hold data: a
+ * component's `NodeProps.data`, a raw `node.data` cast, and a `getState()`
+ * lookup's `node?.data`. Identity is preserved for the normal case, so no memo
+ * is invalidated — the same contract `rawNodeValues` holds.
+ */
+export function outputNodeValues(data: unknown): Record<string, string | number> {
+  const values = (data as { values?: unknown } | null | undefined)?.values;
+  return isValuesObject(values) ? values : {};
 }
 
 /**

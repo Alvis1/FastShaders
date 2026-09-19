@@ -23,7 +23,7 @@ export type {
   AppNode,
   AppEdge,
 } from './node.types';
-export { getNodeValues, setNodeValues, getNodeExposedPorts, channelTypeName } from './node.types';
+export { getNodeValues, outputNodeValues, setNodeValues, getNodeExposedPorts, channelTypeName } from './node.types';
 
 export type {
   ParseError,

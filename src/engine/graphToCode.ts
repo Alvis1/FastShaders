@@ -1,14 +1,14 @@
-import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData } from '@/types';
+import type { AppNode, AppEdge, NodeDefinition, GeneratedCode, ShaderNodeData, OutputMaterial } from '@/types';
 import { getNodeValues } from '@/types';
 import {
-  findDefaultOutput,
+  defaultOutput,
+  contributingOutputs,
   outputMaterials,
-  materialTargetNames,
   materialExposedPorts,
   channelHandle,
-  planNamedParts,
-  planIndexParts,
-  readModelSignature,
+  planNamedPartsAcross,
+  planIndexPartsAcross,
+  moduleSignatureOf,
 } from '@/utils/outputMaterials';
 import { moduleStringLiteral } from './partKeyLiteral';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
@@ -1931,13 +1931,48 @@ export function graphToCode(
   // `vec3(1, 0, 0)` fallback, turning a working shader red the instant a second
   // Output existed. Array order is creation order and is stable under wiring.
   //
-  // The ACTIVE plain Output (`findDefaultOutput`: the flagged one, else the
-  // first in array order) — and NONE while a Raymarch Output is the active
-  // sink: then the plain Output's wiring is ignored outright, and an active
-  // Raymarch Output with nothing wired falls through to the "nothing wired"
-  // sentinel below exactly as an empty plain Output does, rather than
-  // silently handing the picture to a node the user did not choose.
-  const outputNode = marchNode ? null : findDefaultOutput(nodes);
+  // The node supplying the module's TOP-LEVEL channels — `defaultOutput`: the
+  // flagged-and-untargeted Output, else the first untargeted one, else NULL —
+  // and NONE while a Raymarch Output is the active sink: then the plain
+  // Output's wiring is ignored outright, and an active Raymarch Output with
+  // nothing wired falls through to the "nothing wired" sentinel below exactly
+  // as an empty plain Output does, rather than silently handing the picture to
+  // a node the user did not choose.
+  //
+  // NULL IS A REAL ANSWER and needs no `material0Target` test beside it: a
+  // document whose every Output is targeted has no default material, so the
+  // module emits `parts` alone and loader 0.6/0.8 leaves every unclaimed mesh
+  // on its authored one. That used to be `findDefaultOutput` plus exactly that
+  // test, because ONE node supplied both the default channels and every part;
+  // the parts come from `outputs` below now, so the question here narrowed to
+  // "which node is the default material" — which is the only form that is
+  // ARRAY-ORDER INDEPENDENT. `findDefaultOutput` reads `outputs[0]`, so with a
+  // targeted Output ahead of an untargeted one in the array the module silently
+  // lost its top-level channels, and `liftChildrenAfterParents` can put it
+  // there with an ordinary drag-into-a-group.
+  const defaultNode = marchNode ? null : defaultOutput(nodes);
+  /**
+   * THE Output nodes whose `parts` / `materialParts` entries reach the module,
+   * in the module's own (emitRank, id) order — `contributingOutputs`, the ONE
+   * place that answer is made (the `costSeeds` shape): the default above plus
+   * every TARGETED Output, each supplying its own entry whatever the active
+   * flag says.
+   *
+   * The march check stays HERE rather than inside `contributingOutputs`,
+   * because `marchNode` was resolved over `sorted` — the topologically sorted
+   * list — and `activeSink`'s fallbacks are array-order dependent, so asking
+   * the same question over `nodes` could elect a different sink.
+   */
+  const outputs = marchNode ? [] : contributingOutputs(nodes);
+  const outputById = new Map(outputs.map((n) => [n.id, n] as const));
+  /** `outputMaterials` per node, memoised: it synthesizes material 0 into a
+   *  fresh array on every call, and the loops below ask per entry. */
+  const materialsByNode = new Map<string, OutputMaterial[]>();
+  const materialsFor = (node: AppNode): OutputMaterial[] => {
+    let m = materialsByNode.get(node.id);
+    if (!m) { m = outputMaterials(node); materialsByNode.set(node.id, m); }
+    return m;
+  };
   // `metalness` is appended (not slotted in visual order) so the emitted
   // return-object key order for existing graphs stays byte-identical; `env`
   // is deliberately NOT here — it needs the source's TEXTURE, not a sampled
@@ -2219,14 +2254,11 @@ export function graphToCode(
     return { channels, discardRef };
   };
 
-  // MATERIAL 0 is the default UNLESS it names a mesh of its own, in which case
-  // it is a `parts` entry like any other and the module carries NO default —
-  // loader 0.6 then leaves every unclaimed mesh on its authored material.
-  const material0Target = outputNode
-    ? materialTargetNames(outputMaterials(outputNode)[0]).length > 0
-    : false;
-  const defaultResolved = outputNode && !material0Target
-    ? resolveOutputChannels(outputNode, 0)
+  // The DEFAULT material's channels, or none — see `defaultNode` above. With
+  // no default the module carries `parts` alone, and loader 0.6/0.8 leaves
+  // every unclaimed mesh on its authored material.
+  const defaultResolved = defaultNode
+    ? resolveOutputChannels(defaultNode, 0)
     : { channels: {} as Record<string, string>, discardRef: null as string | null };
   const channels = defaultResolved.channels;
   const discardLine = defaultResolved.discardRef
@@ -2254,12 +2286,12 @@ export function graphToCode(
     /** The material's settings as loader-form entries (`side: 2`) — [] for none. */
     settings: string[];
   }[] = [];
-  if (outputNode) {
-    const materials = outputMaterials(outputNode);
+  {
     // Resolved ONCE per material, not once per mesh: the channels are the
     // material's, so N meshes emit N entries pointing at the same expressions.
     // A section that emits no entry is never resolved (its imports never land),
-    // and sections resolve in section order, so the import order is unchanged.
+    // and sections resolve in (node, section) order, so the import order is
+    // unchanged for the one-node case every existing document is.
     //
     // Its Transparent / Side / Alpha clip / Depth write ride the same body,
     // AFTER the channels and the discard key, in the LOADER's spelling
@@ -2271,19 +2303,26 @@ export function graphToCode(
     // `materialSettingProps` is the security gate: the restore paths only
     // check that `materialSettings` is an object. Settings that emit nothing
     // leave the body exactly as it was.
-    const bySection = new Map<number, {
+    //
+    // NESTED by node id, never a joined composite key: a node id comes out of a
+    // `.fastshader` and may spell any separator at all.
+    const bySection = new Map<string, Map<number, {
       channels: Record<string, string>;
       discardRef: string | null;
       settings: string[];
-    }>();
-    for (const { name, section } of planNamedParts(materials).entries) {
-      let resolved = bySection.get(section);
+    }>>();
+    for (const { name, nodeId, section } of planNamedPartsAcross(outputs).entries) {
+      const node = outputById.get(nodeId);
+      if (!node) continue;
+      let byNode = bySection.get(nodeId);
+      if (!byNode) { byNode = new Map(); bySection.set(nodeId, byNode); }
+      let resolved = byNode.get(section);
       if (!resolved) {
         resolved = {
-          ...resolveOutputChannels(outputNode, section),
-          settings: materialSettingProps(materials[section].materialSettings),
+          ...resolveOutputChannels(node, section),
+          settings: materialSettingProps(materialsFor(node)[section].materialSettings),
         };
-        bySection.set(section, resolved);
+        byNode.set(section, resolved);
       }
       parts.push({ name, ...resolved });
     }
@@ -2298,20 +2337,44 @@ export function graphToCode(
   // ascending index order, the canonical order the parse restores. Resolved
   // after the name sections, so a graph with no index section resolves, and
   // emits, exactly as before.
-  const signature = outputNode ? readModelSignature(outputNode.data) : null;
+  //
+  // ONE signature governs the whole table (`planIndexPartsAcross`): the
+  // sanitizer replicates `modelSignature` onto every index node and detaches
+  // any whose copy differs, so there is never a choice to make. It is read off
+  // the LOWEST-RANKED contributing Output that carries an index section —
+  // exactly the node `materialPartsMirrorPlanAcross` reads it from, so the
+  // table and its loader-0.6 mirrors can never describe two different models.
+  //
+  // NOT off `outputNode`: since `unfoldOutputMaterials` splits a node per
+  // material, an import-built document's index sections are SIBLINGS of the
+  // untargeted default, which carries no signature at all (the sanitizer keeps
+  // one only beside a surviving index section). Reading it there emitted the
+  // `vec3(1, 0, 0)` sentinel for every GLB-built shader — the whole
+  // `materialParts` table gone, with `errors: []`.
+  //
+  // The "signature but no index section anywhere" case is byte-neutral either
+  // way: `planIndexPartsAcross` then yields no entries, and the `indexParts
+  // .length > 0 && signature` guard below is what actually writes the key.
+  //
+  // `moduleSignatureOf` is that lookup, shared with the Output node — whose
+  // red-sentinel swatch asks "does this module emit any part at all", which is
+  // this same table's emptiness. Two spellings of "which signature governs the
+  // module" is exactly the drift the cross-node plans were extracted to stop.
+  const signature = moduleSignatureOf(outputs);
   const indexParts: {
     index: number;
     channels: Record<string, string>;
     discardRef: string | null;
     settings: string[];
   }[] = [];
-  if (outputNode && signature) {
-    const materials = outputMaterials(outputNode);
-    for (const { gltfIndex, section } of planIndexParts(materials, signature).entries) {
+  if (signature) {
+    for (const { gltfIndex, nodeId, section } of planIndexPartsAcross(outputs, signature).entries) {
+      const node = outputById.get(nodeId);
+      if (!node) continue;
       indexParts.push({
         index: gltfIndex,
-        ...resolveOutputChannels(outputNode, section),
-        settings: materialSettingProps(materials[section].materialSettings),
+        ...resolveOutputChannels(node, section),
+        settings: materialSettingProps(materialsFor(node)[section].materialSettings),
       });
     }
   }

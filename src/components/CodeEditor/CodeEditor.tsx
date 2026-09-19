@@ -1,5 +1,5 @@
 import './monacoSetup';
-import { findDefaultOutput, isIndexSection, materialPartsMirrorPlan, mirrorPlanKey, outputMaterials, readModelSignature } from '@/utils/outputMaterials';
+import { contributingOutputs, isIndexSection, materialPartsMirrorPlanAcross, mirrorPlanKey, moduleSettingsOutput, outputMaterials, readModelSignature } from '@/utils/outputMaterials';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { useAppStore } from '@/store/useAppStore';
@@ -126,9 +126,14 @@ export function CodeEditor() {
   // notify replaces the node OBJECT but keeps its `.data` — and therefore its
   // materialSettings — reference, so Object.is bails. (ShaderPreview.tsx:264-267
   // holds the identical dependency on that fact.)
+  //
+  // `moduleSettingsOutput` (D1): these four keys are written at MODULE level,
+  // so an untargeted Output owns them whenever one exists — the same read
+  // exportShader's `buildExportModule` makes, or the tab would show a module
+  // the download does not produce.
   const rawMaterialSettings = useAppStore(
     (s) =>
-      (findDefaultOutput(s.nodes)?.data as
+      (moduleSettingsOutput(s.nodes)?.data as
         | OutputNodeData
         | undefined)?.materialSettings,
   );
@@ -233,17 +238,24 @@ export function CodeEditor() {
   // sections' GLTFLoader mesh names ride node data, not the code, so the tab
   // needs them as a real dep. Two-step, like every per-notify read here: a
   // cheap string key, then the plan rebuilt from getState() when it moves.
-  const mirrorKey = useAppStore((s) => mirrorPlanKey(materialPartsMirrorPlan(findDefaultOutput(s.nodes))));
+  const mirrorKey = useAppStore((s) => mirrorPlanKey(materialPartsMirrorPlanAcross(contributingOutputs(s.nodes))));
   // Import-built INDEX sections target a glTF model's materials, while both
   // tabs hang the shader on a PRIMITIVE (the model page is Phase 7): the tab
   // label says so, since the page itself carries no comments. A boolean
   // selector, so an ordinary edit re-renders nothing.
-  const hasIndexSections = useAppStore((s) => {
-    const out = findDefaultOutput(s.nodes);
-    return !!out && readModelSignature(out.data) !== null && outputMaterials(out).some(isIndexSection);
-  });
+  //
+  // Asked of the CONTRIBUTING set, never of the DEFAULT Output: since the
+  // Output split the untargeted default carries neither a signature nor an
+  // index section (they live on the index NODES), so the old "first Output in
+  // array order" read answered false for every import-built shader and the
+  // label quietly stopped saying what the tab could not do.
+  const hasIndexSections = useAppStore((s) =>
+    contributingOutputs(s.nodes).some(
+      (n) => readModelSignature(n.data) !== null && outputMaterials(n).some(isIndexSection),
+    ),
+  );
   const materialPartsMirror = useMemo(
-    () => materialPartsMirrorPlan(findDefaultOutput(useAppStore.getState().nodes)),
+    () => materialPartsMirrorPlanAcross(contributingOutputs(useAppStore.getState().nodes)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mirrorKey],
   );

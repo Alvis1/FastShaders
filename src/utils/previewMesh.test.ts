@@ -23,6 +23,8 @@ import {
   MESH_UNSUPPORTED_KEY,
   type PreviewMesh,
 } from './previewMesh';
+// previewMesh.ts re-exports the gltfCompression leaf, but not this key (yet).
+import { MESH_TOO_LARGE_LIMIT_KEY } from './gltfCompression';
 import { safeJsonReviver } from './safeJson';
 import { readGlbFsExtras } from './glbShaderExtras';
 import { decodeDataUri } from './glbContainer';
@@ -219,6 +221,20 @@ describe('previewMesh: structured refusals', () => {
   it('pins the literal "64" in the too-large sentence to the real cap', () => {
     expect(MESH_MAX_BYTES).toBe(64 * 2 ** 20);
     expect(MESH_TOO_LARGE_KEY).toContain('max 64 MB');
+  });
+
+  it('only the LIMIT key carries {limit}, and nothing the English-only filler renders uses it', () => {
+    // `fillMeshRefusal` fills {name}/{ext}/{size} and NOT {limit} — it is what
+    // `validateMeshBytes` and `createPreviewMesh().error` go through, so a
+    // {limit} in a key they can build would print literally. Both apply
+    // MESH_MAX_BYTES, so both keep MESH_TOO_LARGE_KEY; `preReadModelGate` is the
+    // only builder of the {limit} key and every refusal it makes reaches a user
+    // through `meshRefusalMessage`, which fills it.
+    expect(MESH_TOO_LARGE_KEY).not.toContain('{limit}');
+    expect(MESH_TOO_LARGE_LIMIT_KEY).toContain('{limit}');
+    expect(modelTooLargeRefusal(1).key).toBe(MESH_TOO_LARGE_KEY);
+    expect(checkMeshBytes('obj', new Uint8Array(MESH_MAX_BYTES + 1))!.key).toBe(MESH_TOO_LARGE_KEY);
+    expect(validateMeshBytes('obj', new Uint8Array(MESH_MAX_BYTES + 1))).not.toContain('{');
   });
 
   it('checkMeshBytes carries the reason, key and size', () => {
@@ -456,10 +472,13 @@ describe('previewMesh: preReadModelGate (the pre-read size gate)', () => {
   it('with the build on, only a .glb gets the larger read cap', () => {
     expect(preReadModelGate('glb', OVER_MODEL, true)).toBeNull();
     expect(preReadModelGate('glb', GLB_READ_MAX_BYTES, true)).toBeNull();
+    // The sentence names the cap that was APPLIED — a refusal at the READ cap
+    // used to report through MESH_TOO_LARGE_KEY and say "max 64 MB".
     expect(preReadModelGate('glb', GLB_READ_MAX_BYTES + 1, true)).toEqual({
       reason: 'too-large',
-      key: MESH_TOO_LARGE_KEY,
+      key: MESH_TOO_LARGE_LIMIT_KEY,
       sizeBytes: GLB_READ_MAX_BYTES + 1,
+      limitBytes: GLB_READ_MAX_BYTES,
     });
     expect(preReadModelGate('gltf', OVER_MODEL, true)).toEqual(modelTooLargeRefusal(OVER_MODEL));
     expect(preReadModelGate('obj', OVER_MODEL, true)).toEqual(modelTooLargeRefusal(OVER_MODEL));

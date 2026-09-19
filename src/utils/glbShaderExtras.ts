@@ -443,12 +443,19 @@ function deleteFsExtras(o: Obj): void {
   if (isPlainObject(extras) && Object.prototype.hasOwnProperty.call(extras, FS_EXTRAS_KEY)) delete extras[FS_EXTRAS_KEY];
 }
 
+interface DropRange {
+  readonly view: number;
+  readonly buffer: number;
+  readonly start: number;
+  readonly end: number;
+}
+
 /** The payload views (module, project) no model site also reads, with their byte ranges. */
-function droppableRanges(doc: Obj): Array<{ view: number; buffer: number; start: number; end: number }> | 'damaged' {
+function droppableRanges(doc: Obj): DropRange[] | 'damaged' {
   const sites = modelSiteViews(doc);
   if (sites === 'damaged') return 'damaged';
   const views = Array.isArray(doc.bufferViews) ? doc.bufferViews : [];
-  const out: Array<{ view: number; buffer: number; start: number; end: number }> = [];
+  const out: DropRange[] = [];
   for (const v of fsPayloadViews(doc)) {
     if (sites.has(v)) continue;
     const view: unknown = views[v];
@@ -458,6 +465,45 @@ function droppableRanges(doc: Obj): Array<{ view: number; buffer: number; start:
     out.push({ view: v, buffer: view.buffer, start, end: start + view.byteLength });
   }
   return out;
+}
+
+/**
+ * Zero every range that lives in an EMBEDDED `data:` buffer, by rewriting that
+ * buffer's URI in place. Both drop paths run it, because `buffer` is a
+ * per-VIEW index and a payload view may sit on any buffer the file declares:
+ * a GLB's BIN is `buffers[0]` alone, so a module or project view on
+ * `buffers[1]` is reachable only here — before this it was IDENTIFIED and then
+ * skipped, and the bytes rode on into the IndexedDB mesh mirror, the XR
+ * popup's blob at the app's REAL origin and every zip `models/` entry. (The
+ * `extras` pointer went either way, so loader 0.8 could no longer locate it:
+ * residue, not execution.) An EXTERNAL buffer is not ours to rewrite and holds
+ * no bytes of this file; a GLB's `buffers[0]` carries no `uri` at all, so it
+ * is skipped here and zeroed in the BIN chunk instead — and a crafted GLB that
+ * gives `buffers[0]` a `uri` (which GLTFLoader would then prefer over the BIN)
+ * gets both, which is the safe direction.
+ *
+ * The media type is preserved on re-encode rather than forced to
+ * octet-stream: canonical base64 of the same byte count is the same length, so
+ * the URI — and therefore the GLB's JSON chunk — keeps its width and the
+ * padding below still yields an output of the input's length.
+ */
+function zeroEmbeddedBuffers(doc: Obj, ranges: readonly DropRange[]): void {
+  const buffers = Array.isArray(doc.buffers) ? doc.buffers : [];
+  const byBuffer = new Map<number, DropRange[]>();
+  for (const r of ranges) {
+    const list = byBuffer.get(r.buffer);
+    if (list) list.push(r);
+    else byBuffer.set(r.buffer, [r]);
+  }
+  for (const [b, rs] of byBuffer) {
+    const def: unknown = buffers[b];
+    if (!isPlainObject(def) || typeof def.uri !== 'string') continue;
+    const d = decodeDataUri(def.uri, 'buffer', GLB_READ_MAX_BYTES);
+    if (!d.ok) continue;
+    const copy = new Uint8Array(d.bytes);
+    for (const r of rs) copy.fill(0, Math.min(r.start, copy.length), Math.min(r.end, copy.length));
+    def.uri = encodeDataUri(d.mime, copy);
+  }
 }
 
 function dropFromGlb(bytes: Uint8Array<ArrayBuffer>): DropPayloadResult {
@@ -475,6 +521,7 @@ function dropFromGlb(bytes: Uint8Array<ArrayBuffer>): DropPayloadResult {
   if (ranges === 'damaged') return { ok: false };
   let bin = c.chunks.bin;
   if (bin && ranges.length > 0) {
+    // Buffer 0 IS the BIN chunk here; every other buffer is a `uri`.
     const copy = new Uint8Array(bin);
     for (const r of ranges) {
       if (r.buffer !== 0) continue;
@@ -482,6 +529,7 @@ function dropFromGlb(bytes: Uint8Array<ArrayBuffer>): DropPayloadResult {
     }
     bin = copy;
   }
+  zeroEmbeddedBuffers(doc, ranges);
   deleteFsExtras(doc);
   for (const s of Array.isArray(doc.scenes) ? doc.scenes : []) if (isPlainObject(s)) deleteFsExtras(s);
   // The JSON chunk keeps its length (padded with JSON whitespace), so offsets
@@ -501,20 +549,9 @@ function dropFromGltfText(bytes: Uint8Array<ArrayBuffer>): DropPayloadResult {
   if (!isPlainObject(doc) || !hasFsExtras(doc)) return { ok: true, bytes, dropped: false };
   const ranges = droppableRanges(doc);
   if (ranges === 'damaged') return { ok: false };
-  const buffers = Array.isArray(doc.buffers) ? doc.buffers : [];
-  const byBuffer = new Map<number, typeof ranges>();
-  for (const r of ranges) byBuffer.set(r.buffer, [...(byBuffer.get(r.buffer) ?? []), r]);
-  for (const [b, rs] of byBuffer) {
-    const def: unknown = buffers[b];
-    // Only an embedded `data:` buffer holds bytes this file owns; an external
-    // one is not ours to rewrite (and the reader refuses such a model anyway).
-    if (!isPlainObject(def) || typeof def.uri !== 'string') continue;
-    const d = decodeDataUri(def.uri, 'buffer', GLB_READ_MAX_BYTES);
-    if (!d.ok) continue;
-    const copy = new Uint8Array(d.bytes);
-    for (const r of rs) copy.fill(0, Math.min(r.start, copy.length), Math.min(r.end, copy.length));
-    def.uri = encodeDataUri('application/octet-stream', copy);
-  }
+  // Every buffer of a `.gltf` text is a `uri`, buffer 0 included — there is no
+  // BIN chunk, so the shared helper does the whole job here.
+  zeroEmbeddedBuffers(doc, ranges);
   deleteFsExtras(doc);
   for (const s of Array.isArray(doc.scenes) ? doc.scenes : []) if (isPlainObject(s)) deleteFsExtras(s);
   return { ok: true, bytes: new TextEncoder().encode(JSON.stringify(doc)) as Uint8Array<ArrayBuffer>, dropped: true };
@@ -523,8 +560,9 @@ function dropFromGltfText(bytes: Uint8Array<ArrayBuffer>): DropPayloadResult {
 /**
  * Remove a model's FastShaders payload IN PLACE: `extras.fastshaders` goes
  * from the root and every scene, and the module/project view bytes that no
- * model site also reads are ZEROED (offsets and sizes unchanged, so every
- * other index in the file still resolves). Returns the SAME reference when
+ * model site also reads are ZEROED wherever they live — the GLB's BIN chunk or
+ * an embedded `data:` buffer (offsets and sizes unchanged, so every other
+ * index in the file still resolves). Returns the SAME reference when
  * there is nothing to drop, and `{ ok: false }` — the caller's `bad-glb`
  * refusal — when a payload is sniffed but the container or JSON will not
  * parse (fail closed: a file that claims a module it cannot deliver is not a

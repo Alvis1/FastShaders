@@ -111,7 +111,7 @@ describe('the store checks the budget before it changes anything', () => {
   });
 
   it('instantiateSavedGroup refuses before it pushes history', () => {
-    const inst = slice(STORE, 'instantiateSavedGroup: (savedId, position, opts) => {', 'foldExtraOutputs(');
+    const inst = slice(STORE, 'instantiateSavedGroup: (savedId, position, opts) => {', 'unfoldOutputMaterials(');
     const check = inst.indexOf('exceedsImageBudget(state.nodes, saved.nodes, state.ignoreImageLimits)');
     expect(check).toBeGreaterThan(-1);
     expect(inst.indexOf('get().pushHistory()')).toBeGreaterThan(check);

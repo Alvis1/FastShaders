@@ -15,6 +15,24 @@ import { buildShaderModule } from './tslCodeProcessor';
 import { tslToPreviewHTML } from './tslToPreviewHTML';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode, AppEdge } from '@/types';
+import { materialTargetNames, outputMaterials, outputsInEmitOrder } from '@/utils/outputMaterials';
+
+/**
+ * Every Output NODE of a parse, in emit order — the DEFAULT first, then one
+ * node per material.
+ *
+ * `codeToGraph` mints one Output per material since the split, so what these
+ * cases used to read off `data.materials` on the single node is now the sibling
+ * list. The facts each of them pins (which materials, in which order, naming
+ * which meshes, wired how) are unchanged; only where they are read from moved.
+ */
+const outsOf = (nodes: readonly AppNode[]) =>
+  outputsInEmitOrder(nodes.filter((n) => n.data.registryType === 'output'));
+
+/** The ADDED sections' mesh lists, in emit order — the old
+ *  `materials.map((m) => m.meshTargets)`. */
+const sectionMeshesOf = (nodes: readonly AppNode[]): string[][] =>
+  outsOf(nodes).slice(1).map((n) => materialTargetNames(outputMaterials(n)[0]));
 
 const outputNode = (id: string, ...meshes: string[]): AppNode => {
   const n = makeNode(id, 'output');
@@ -140,13 +158,16 @@ describe('a parts-only module round-trips without inventing a default', () => {
     expect(code).not.toMatch(/return \{ color:/);
   });
 
-  it('parses back to ONE Output whose default material stays empty', () => {
+  it('parses back to an EMPTY default node beside the part, never a red one', () => {
     const parsed = codeToGraph(emitOnly());
-    const outs = parsed.nodes.filter((n) => n.data.registryType === 'output');
-    expect(outs).toHaveLength(1);
-    expect((outs[0].data as Record<string, unknown>).materials).toEqual([
-      { meshTargets: ['Glass'] },
-    ]);
+    const outs = outsOf(parsed.nodes);
+    // The default is minted even for a parts-only module — a module-level
+    // Discard is its cutout and `activeSink` has to elect something — but it is
+    // UNTARGETED and EMPTY, so it contributes nothing and the re-emission stays
+    // parts-only. That is the shape `unfoldOutputMaterials` produces from the
+    // single node this replaces (empty material 0 beside the part).
+    expect(outs).toHaveLength(2);
+    expect(outs.map((n) => materialTargetNames(outputMaterials(n)[0]))).toEqual([[], ['Glass']]);
     // Nothing wired to the default, so nothing STORED on it either — which is
     // what makes the re-emission parts-only again.
     expect(
@@ -173,8 +194,9 @@ describe('a parts-only module round-trips without inventing a default', () => {
   it('still mints an Output when a parts-only module has no usable part', () => {
     // Otherwise the graph has no Output at all and cannot be wired.
     const parsed = codeToGraph('return { parts: { "": { color: vec3(1.0) } } };');
-    const outs = parsed.nodes.filter((n) => n.data.registryType === 'output');
+    const outs = outsOf(parsed.nodes);
     expect(outs).toHaveLength(1);
+    expect(materialTargetNames(outputMaterials(outs[0])[0])).toEqual([]);
     expect((outs[0].data as Record<string, unknown>).materials).toBeUndefined();
   });
 
@@ -221,10 +243,7 @@ describe('a mesh name containing a colon still reaches the module', () => {
     const { nodes, edges } = graphWith('Char:Body');
     const code = graphToCode(nodes, edges).code;
     const parsed = codeToGraph(code);
-    const out = parsed.nodes.find((n) => n.data.registryType === 'output')!;
-    expect((out.data as Record<string, unknown>).materials).toEqual([
-      { meshTargets: ['Char:Body'] },
-    ]);
+    expect(sectionMeshesOf(parsed.nodes)).toEqual([['Char:Body']]);
   });
 });
 
@@ -272,10 +291,12 @@ describe('the parse reports what it drops, and agrees with the runtime', () => {
       + 'const b = vec3(0.0, 1.0, 0.0);\n'
       + 'return { color: vec3(0.2), parts: { "Glass": { color: a }, "Glass": { color: b } } };',
     );
-    const out = parsed.nodes.find((n) => n.data.registryType === 'output')!;
-    // The material's own handle — `m1:color`, never the default's `color`.
+    // The MATERIAL's own node — never the default's, which carries the
+    // top-level `color: vec3(0.2)` and nothing of Glass.
+    const glass = outsOf(parsed.nodes)[1];
+    expect(materialTargetNames(outputMaterials(glass)[0])).toEqual(['Glass']);
     const fed = parsed.edges.find(
-      (e) => e.target === out.id && e.targetHandle === 'm1:color',
+      (e) => e.target === glass.id && e.targetHandle === 'color',
     )!;
     const source = parsed.nodes.find((n) => n.id === fed.source)!;
     // `b` is the surviving key at runtime, so it must be the one wired here.
@@ -298,14 +319,14 @@ describe('the parse reports what it drops, and agrees with the runtime', () => {
   });
 });
 
-describe('the resync has ONE Output to pair, so materials ride with it', () => {
-  // While each targeted mesh had its own Output NODE, `mergeMatch`'s pass-1 key
-  // had to fold the mesh in: every parsed Output is labelled literally
-  // "Output", so they all landed in one bucket and paired by ARRAY ORDER —
-  // one Apply could move a material's stored values, exposed ports and
-  // settings onto a different mesh, with nothing erroring. Materials living
-  // inside the single node removes that class rather than guarding it, and
-  // this pins the property the removal depends on.
+describe('a material\'s own state stays on its own mesh across an Apply', () => {
+  // Every parsed Output is labelled literally "Output", so with one node per
+  // material `mergeMatch` would bucket them all together and pair by ARRAY
+  // ORDER — one Apply moving a material's stored values, exposed ports and
+  // settings onto a different mesh, with nothing erroring. That is what the
+  // BINDING TIER in `matchKey` exists to stop (see useSyncEngine, and the
+  // direct attack in outputSplitResync.test.ts); this pins the parse's own half
+  // of it: each part's state comes back on the node bound to ITS mesh.
   it('an Apply keeps each material\'s own values on its own mesh', () => {
     const out = outputNode('o1', 'Glass', 'Body');
     const mats = (out.data as unknown as { materials: Record<string, unknown>[] }).materials;
@@ -316,11 +337,10 @@ describe('the resync has ONE Output to pair, so materials ride with it', () => {
 
     const code = graphToCode([out], []).code;
     const parsed = codeToGraph(code);
-    const after = parsed.nodes.find((n) => n.data.registryType === 'output')!;
-    const got = (after.data as unknown as { materials: Record<string, unknown>[] }).materials;
-    expect(got[0].meshTargets).toEqual(['Glass']);
+    const got = outsOf(parsed.nodes).slice(1).map((n) => outputMaterials(n)[0]);
+    expect(materialTargetNames(got[0])).toEqual(['Glass']);
     expect((got[0].values as Record<string, number>).roughness).toBe(0.25);
-    expect(got[1].meshTargets).toEqual(['Body']);
+    expect(materialTargetNames(got[1])).toEqual(['Body']);
     expect((got[1].values as Record<string, number>).roughness).toBe(0.75);
   });
 });
@@ -393,11 +413,17 @@ describe('material 0 can name a mesh instead of being the default', () => {
     // byte-identically, and the shape is stable from then on.
     const first = graphToCode(...Object.values(graphWithDefaultTargeted('Body')) as [AppNode[], AppEdge[]]).code;
     const p1 = codeToGraph(first);
-    const out = p1.nodes.find((n) => n.data.registryType === 'output')!;
-    expect((out.data as { meshTarget?: unknown }).meshTarget).toBeUndefined();
-    expect((out.data as { materials?: unknown }).materials).toEqual([
-      { meshTargets: ['Body'] },
-    ]);
+    // Split, the normalization is visible as a NODE: an empty untargeted
+    // default beside the Body material, where before it was material 0 plus
+    // material 1 on one card. The consequence is the same one documented above
+    // — nothing is lost and the module is byte-identical — plus the node count
+    // grows by one on this FIRST Apply (and never again; see below).
+    const outs = outsOf(p1.nodes);
+    expect(outs.map((n) => materialTargetNames(outputMaterials(n)[0]))).toEqual([[], ['Body']]);
+    for (const o of outs) {
+      expect((o.data as { meshTarget?: unknown }).meshTarget).toBeUndefined();
+      expect((o.data as { materials?: unknown }).materials).toBeUndefined();
+    }
     // Nothing is LOST: same module, and stable across a second Apply.
     const second = graphToCode(p1.nodes, p1.edges).code;
     expect(second).toBe(first);
@@ -477,13 +503,12 @@ describe('a material may shade several meshes at once', () => {
     const first = graphToCode([color, out], [makeEdge('c1', 'out', 'o1', 'm1:color')]).code;
 
     const p1 = codeToGraph(first);
-    const mats = (p1.nodes.find((n) => n.data.registryType === 'output')!
-      .data as unknown as { materials: { meshTargets: string[] }[] }).materials;
-    expect(mats).toHaveLength(1);
-    expect(mats[0].meshTargets).toEqual(['Body', 'Glass']);
-    // …and the wiring landed once, on that one material's handles.
-    expect(p1.edges.filter((e) => e.targetHandle === 'm1:color')).toHaveLength(1);
-    expect(p1.edges.filter((e) => e.targetHandle === 'm2:color')).toHaveLength(0);
+    expect(sectionMeshesOf(p1.nodes)).toEqual([['Body', 'Glass']]);
+    // …and the wiring landed ONCE, on that one material's node — not once per
+    // mesh, which is what an un-merged parse would produce.
+    const merged = outsOf(p1.nodes)[1];
+    expect(p1.edges.filter((e) => e.target === merged.id && e.targetHandle === 'color')).toHaveLength(1);
+    expect(p1.edges.filter((e) => e.targetHandle === 'color')).toHaveLength(1);
 
     expect(graphToCode(p1.nodes, p1.edges).code).toBe(first);
     const p2 = codeToGraph(graphToCode(p1.nodes, p1.edges).code);
@@ -500,9 +525,7 @@ describe('a material may shade several meshes at once', () => {
       makeEdge('c1', 'out', 'o1', 'm1:color'),
       makeEdge('c2', 'out', 'o1', 'm2:color'),
     ]).code;
-    const mats = (codeToGraph(code).nodes.find((n) => n.data.registryType === 'output')!
-      .data as unknown as { materials: { meshTargets: string[] }[] }).materials;
-    expect(mats.map((m) => m.meshTargets)).toEqual([['Body'], ['Glass']]);
+    expect(sectionMeshesOf(codeToGraph(code).nodes)).toEqual([['Body'], ['Glass']]);
   });
 
   it('EMPTY bodies are never merged', () => {
@@ -510,9 +533,7 @@ describe('a material may shade several meshes at once', () => {
     // a body-text merge would collapse — and they are the pair most likely to
     // be about to get different wiring.
     const code = graphToCode([outputNode('o1', 'Body', 'Glass')], []).code;
-    const mats = (codeToGraph(code).nodes.find((n) => n.data.registryType === 'output')!
-      .data as unknown as { materials: { meshTargets: string[] }[] }).materials;
-    expect(mats.map((m) => m.meshTargets)).toEqual([['Body'], ['Glass']]);
+    expect(sectionMeshesOf(codeToGraph(code).nodes)).toEqual([['Body'], ['Glass']]);
   });
 
   it('a duplicate ACROSS materials is still first-claim, per mesh', () => {

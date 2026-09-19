@@ -8,7 +8,8 @@ import { autoLayout } from '@/engine/layoutEngine';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { computeReachableCost } from '@/utils/nodeCost';
 import { activeSink, isSinkNode, hasActiveFlag, normalizeActiveOutput } from '@/utils/sdfPartition';
-import { carryModelMeshes } from '@/utils/outputMaterials';
+import { carryModelMeshes, isOutputNode } from '@/utils/outputMaterials';
+import { carryMaterialSettings, pairResyncNodes, placeParsedOutputs } from '@/utils/resyncPairing';
 import { sinkCosts } from '@/utils/nodeCost';
 import { carryInactiveSinks } from '@/utils/sinkCarry';
 import { isDirectAssignmentCode } from '@/engine/evaluateTSLScript';
@@ -263,39 +264,25 @@ export function useSyncEngine() {
 
           // Build ID mapping: newId → oldId (preserves React Flow identity)
           const idMap = new Map<string, string>();
-          const usedOldIds = new Set<string>();
           const positioned: AppNode[] = [];
 
-          // Index old nodes by registryType+label and registryType for O(n) lookup.
+          // The ACTIVE sink, which is the one PARKED sinks are told apart from
+          // (utils/sdfPartition.ts `activeSink`; several output nodes may
+          // coexist with exactly one active). Everything else about pairing —
+          // the BINDING key an Output pairs on, and which old sinks may be
+          // paired at all — is `utils/resyncPairing.ts`, pure so the swap it
+          // prevents is an executable attack rather than a source pin.
           //
-          // Pass-1 identity. Per-mesh materials live INSIDE the one Output
-          // node, so there is only ever one to pair and its materials ride
-          // along with it — no per-material key is needed here. (While each
-          // targeted mesh had its own Output NODE this key had to fold the
-          // mesh in: every parsed Output is labelled literally "Output", so
-          // they all collapsed into one bucket and paired by array order,
-          // silently swapping one material's values and settings onto
-          // another. That whole class is gone with the extra nodes.)
-          const matchKey = (n: AppNode): string =>
-            `${n.data.registryType}\0${n.data.label}`;
-          const oldByExactKey = new Map<string, AppNode[]>();
-          const oldByType = new Map<string, AppNode[]>();
-          // Several output nodes may coexist with exactly ONE active
-          // (utils/sdfPartition.ts `activeSink`). Emission writes only the
-          // active one and the parse mints at most one sink, so the parsed
-          // sink may pair ONLY with the old active node: every parsed Output
-          // is labelled "Output", and bucketed by array order an INACTIVE old
-          // Output would absorb the active wiring while the real active node
-          // was dropped as unmatched. Inactive sinks are carried whole below.
-          const oldActive = activeSink(oldNodes, unwrapCollapsedGroupEdges(oldNodes, oldEdges));
-          for (const old of oldNodes) {
-            if (isSinkNode(old) && old.id !== oldActive?.id) continue;
-            const exactKey = matchKey(old);
-            if (!oldByExactKey.has(exactKey)) oldByExactKey.set(exactKey, []);
-            oldByExactKey.get(exactKey)!.push(old);
-            if (!oldByType.has(old.data.registryType)) oldByType.set(old.data.registryType, []);
-            oldByType.get(old.data.registryType)!.push(old);
-          }
+          // The `contributingOutputs(oldNodes)[0]` fallback that used to sit
+          // here is GONE: it was there so an all-targeted document's parsed
+          // Output had SOME partner and did not trip the
+          // `unpositioned.length === 0` gate below, and both halves of that are
+          // now done properly — every targeted Output is a pairing candidate on
+          // its own, and `placeParsedOutputs` places an unpaired one instead of
+          // relayouting the graph. The term could only ever name an arbitrary
+          // targeted node "the active sink", which is the array-order election
+          // the split retired.
+          const oldActive = activeSink(oldNodes, unwrapCollapsedGroupEdges(oldNodes, oldEdges)) ?? null;
 
           // Merge a matched old node with a new node: preserve position + UI-only data
           const mergeMatch = (newNode: AppNode, match: AppNode): AppNode => {
@@ -320,7 +307,7 @@ export function useSyncEngine() {
             // graph→code pass). ONLY the valued channels, never the parse's
             // whole seeded list: that list includes the implicit defaults,
             // and unioning those resurrected a default channel the user had
-            // explicitly hidden in Shader Settings.
+            // explicitly hidden in the Output node’s settings menu.
             // Carry the old OUTPUT node's stored channel values for channels
             // that are WIRED in the new parse. A wired channel's stored value
             // cannot appear in the code text (the edge ref wins at emission),
@@ -364,34 +351,30 @@ export function useSyncEngine() {
               }
               (merged.data as Record<string, unknown>).exposedPorts = next;
             }
-            // Preserve materialSettings on output nodes — MATERIAL 0's only.
-            // This cannot conflict with the parse: the parse writes settings
-            // only onto `materials[k]` (ADDED materials, read back from their
-            // `parts` entries) and never onto the node-level field, because the
-            // default's settings still never appear in editor code. An added
-            // material's four keys are code-authoritative, like its unwired
-            // values: present → kept, deleted from the code → cleared.
+            // Preserve materialSettings on output nodes, PER KEY
+            // (utils/resyncPairing.ts `carryMaterialSettings`): the four the
+            // loader applies per part are code-authoritative on a TARGETED node
+            // — they ARE its `parts` body — and carried on the untargeted
+            // default, whose settings never appear in editor code at all;
+            // `displacementMode` / `mergeVertices` are never in the code for
+            // either and are always carried. A whole-object overwrite was right
+            // only while ONE node held every material: split, it put back the
+            // Transparent the user had just deleted from a part's body.
             //
-            // One deliberate overlap: a TARGETED material 0 emits its settings
-            // inside its part, and the Apply normalizes it into "empty default
-            // + material 1" — so material 1 parses the settings AND this carry
-            // leaves them on the now-empty default, exactly as it leaves its
-            // exposedPorts, so the BUILT module is byte-identical across the
-            // Apply. That copy is inert ONLY while the default contributes no
-            // channel: buildShaderModule always writes it as the module's
-            // top-level keys, and loader 0.6 builds a default material only for
-            // a module with a top-level channel. The moment the default section
-            // gets one (a wire, or a stored value that emits), every mesh no part
-            // claims adopts these settings — though the user set them for the
-            // one mesh material 0 used to name — and unticking them on material
-            // 1 leaves this copy in place. It is visible, and editable, in the
-            // default section's settings menu. Known loss, unchanged: an added
-            // material's displacementMode / mergeVertices are not emitted, so
-            // an Apply drops them.
-            const oldMatSettings = (match.data as Record<string, unknown>).materialSettings;
-            if (oldMatSettings) {
-              (merged.data as Record<string, unknown>).materialSettings = oldMatSettings;
-            }
+            // One deliberate overlap survives: a TARGETED material 0 emits its
+            // settings inside its part, and the Apply normalizes it into "empty
+            // default + that material" — so the material parses them AND the
+            // default inherits them, exactly as it inherits its exposedPorts,
+            // so the BUILT module is byte-identical across the Apply. That copy
+            // is inert ONLY while the default contributes no channel:
+            // buildShaderModule always writes it as the module's top-level
+            // keys, and loader 0.6/0.8 builds a default material only for a
+            // module with a top-level channel. The moment the default gets one
+            // (a wire, or a stored value that emits), every mesh no part claims
+            // adopts these settings — though the user set them for the one mesh
+            // material 0 used to name. It is visible, and editable, in that
+            // node's settings menu.
+            carryMaterialSettings(merged, match);
             // The index sections' loader-0.6 mirror source (`modelMeshes`) is
             // MODULE-ONLY (materialPartsContract R7) and never in the code, so
             // the parse cannot re-create it. It is carried while the PARSED
@@ -401,32 +384,26 @@ export function useSyncEngine() {
             return merged;
           };
 
-          // Pass 1: exact match by registryType + label
-          for (const newNode of result.nodes) {
-            const exactKey = matchKey(newNode);
-            const candidates = oldByExactKey.get(exactKey);
-            const match = candidates?.find((old) => !usedOldIds.has(old.id));
-            if (match) {
-              usedOldIds.add(match.id);
-              idMap.set(newNode.id, match.id);
-              positioned.push(mergeMatch(newNode, match));
-            }
+          // Pass 1 (exact key, the BINDING for an Output) then pass 2
+          // (registryType alone) — `pairResyncNodes`, which returns them in
+          // that order so the merged list is built exactly as it always was.
+          const pairing = pairResyncNodes(oldNodes, result.nodes, oldActive?.id ?? null);
+          for (const { node, match } of pairing.paired) {
+            idMap.set(node.id, match.id);
+            positioned.push(mergeMatch(node, match));
           }
 
-          // Pass 2: match remaining by registryType only
-          const unpositioned: AppNode[] = [];
-          for (const newNode of result.nodes) {
-            if (idMap.has(newNode.id)) continue;
-            const candidates = oldByType.get(newNode.data.registryType);
-            const match = candidates?.find((old) => !usedOldIds.has(old.id));
-            if (match) {
-              usedOldIds.add(match.id);
-              idMap.set(newNode.id, match.id);
-              positioned.push(mergeMatch(newNode, match));
-            } else {
-              unpositioned.push(newNode);
-            }
-          }
+          // An unpaired plain OUTPUT is PLACED rather than laid out: one of
+          // them relayouts the whole graph AND takes every group frame with it
+          // (see the gate below), and after the Output split a single retyped
+          // mesh name can mint one. Everything else keeps today's path.
+          // `oldNodes` because `mergeMatch` above copies `id` and `position` and
+          // nothing else: a positioned Output's FRAME lives only in the old
+          // graph, and without it the placement compares — and writes —
+          // parent-relative numbers as if they were absolute.
+          const { placed, rest } = placeParsedOutputs(positioned, pairing.unpaired, oldNodes);
+          positioned.push(...placed);
+          const unpositioned: AppNode[] = rest;
 
           // Remap edges to use preserved node IDs, then drop any edge whose
           // endpoint doesn't resolve to an actual parsed node — defensive
@@ -499,7 +476,17 @@ export function useSyncEngine() {
             // Preserve INACTIVE OUTPUT NODES the same way — and their incoming
             // edges with them (utils/sinkCarry.ts, pure and tested). Uses the
             // UNWRAPPED old edges for the reason `realOldEdges` exists.
-            const inactiveSinks = carryInactiveSinks(oldNodes, realOldEdges, oldActive?.id ?? null, survivingIds);
+            //
+            // A TARGETED Output normally comes back from its own `parts` entry
+            // instead, so the carry must skip it — EXCEPT when the module holds
+            // no plain Output at all, which is exactly what a driving Raymarch
+            // Output emits (`outputs = marchNode ? [] : contributingOutputs`).
+            // The question is asked of the PARSE, not of the old graph: a
+            // module with no Output has nothing a carried node could duplicate,
+            // while "did a march drive" would also resurrect a material the
+            // user had just deleted from the code panel by hand.
+            const parseHasPlainOutput = result.nodes.some(isOutputNode);
+            const inactiveSinks = carryInactiveSinks(oldNodes, realOldEdges, oldActive?.id ?? null, survivingIds, parseHasPlainOutput);
             if (inactiveSinks.nodes.length > 0) {
               finalNodes = [...finalNodes, ...inactiveSinks.nodes];
               remappedEdges.push(...inactiveSinks.edges);
@@ -612,13 +599,14 @@ export function useSyncEngine() {
     // Same entry-point unwrap graphToCode and cpuEvaluator do: collapse state
     // must not change the compiled output, and it must not change the budget.
     const unwrapped = unwrapCollapsedGroupEdges(nodes, edges);
-    // Resolve the active sink HERE rather than letting computeReachableCost do
-    // it internally, so the same node can be handed to `sinkCosts` below as an
-    // already-priced entry — its loop would otherwise redo this exact
-    // reverse-BFS (plus, for a Raymarch Output, a second marchPartition) for a
-    // number the comment there says equals `total` by construction.
-    const active = activeSink(nodes, unwrapped);
-    const total = computeReachableCost(nodes, unwrapped, active);
+    // Seed omitted, i.e. `costSeeds` — the ONE answer to "which sinks does the
+    // total price", shared with the store's device selection so the two can
+    // never walk different sets. This used to resolve `activeSink` here and
+    // hand it to `sinkCosts` below as an already-priced entry, saving one
+    // reverse-BFS; that shortcut assumed the total IS one sink's subtree, and
+    // it stops being true as soon as several Outputs contribute — the union
+    // price would land on one node's badge.
+    const total = computeReachableCost(nodes, unwrapped);
 
     if (total === lastCostRef.current) return;
     lastCostRef.current = total;
@@ -626,12 +614,10 @@ export function useSyncEngine() {
     // Collapse the `setTotalCost` write and the output-node cost writes into a
     // single setState so we don't re-enter this effect twice for one change.
     //
-    // Every sink carries its OWN price (`sinkCosts`): the active node's badge
-    // is the whole-shader total, an inactive Output's badge is what the shader
-    // would cost with it active — so two candidate outputs can be compared
-    // before one is clicked. The active entry equals `total` by construction,
-    // so it is passed in rather than recomputed.
-    const perSink = sinkCosts(nodes, unwrapped, active ? new Map([[active.id, total]]) : undefined);
+    // Every sink carries its OWN price (`sinkCosts`): an Output's badge is
+    // what the shader would cost with it active — so two candidate outputs can
+    // be compared before one is clicked.
+    const perSink = sinkCosts(nodes, unwrapped);
     const needsOutputUpdate = nodes.some((n) => perSink.has(n.id) && n.data.cost !== perSink.get(n.id));
     useAppStore.setState((state) => ({
       totalCost: total,

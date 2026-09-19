@@ -24,8 +24,8 @@ import { sanitizePalettes } from '@/utils/palettes';
 import { sanitizeEdgeExtras } from '@/utils/edgeExtras';
 import {
   sanitizeOutputMaterialsReport,
-  foldExtraOutputs,
-  findDefaultOutput,
+  unfoldOutputMaterials,
+  moduleSettingsOutput,
   pruneOrphanMaterialEdges,
 } from '@/utils/outputMaterials';
 import { normalizeActiveOutput } from '@/utils/sdfPartition';
@@ -50,7 +50,7 @@ import {
 import { assetLiteralText, readGlbFsExtras } from '@/utils/glbShaderExtras';
 import { readGltfModel } from '@/utils/gltfReader';
 import { planTextureStrip, stripGltfTextures } from '@/utils/gltfStrip';
-import { gltfIndexOf, outputMaterials, sanitizeOutputMaterials } from '@/utils/outputMaterials';
+import { contributingOutputs, gltfIndexOf, outputMaterials, sanitizeOutputMaterials } from '@/utils/outputMaterials';
 import type { ImportNoteLine } from '@/utils/importNote';
 import { extractProjectState, type FastShadersProject } from './fastShadersProject';
 import { moduleImageLiterals, resolveProjectImageRefs, splitImageLosses } from './projectImageRefs';
@@ -171,9 +171,6 @@ function applyProjectToStore(project: FastShadersProject, moduleText = ''): void
   // `output-sections-trimmed` once the graph has landed.
   const secs = sanitizeOutputMaterialsReport(dataSanitized.nodes);
   dataSanitized.nodes = secs.nodes;
-  // Exactly one active sink (utils/sdfPartition.ts) — normalised BEFORE the
-  // fold so the fold keeps the flagged Output.
-  dataSanitized.nodes = normalizeActiveOutput(dataSanitized.nodes);
 
   // Board drawings are adversarial too — bound them before they enter the store.
   const drawings = sanitizeDrawings(project.drawings);
@@ -196,15 +193,25 @@ function applyProjectToStore(project: FastShadersProject, moduleText = ''): void
   // boundary to catch it.
   const edges = sanitizeEdgeExtras(project.graph.edges);
 
-  // A project written by the multi-Output design (or hand-edited to look like
-  // one) is folded into the single-node shape, keeping the edges that fed the
-  // extras — otherwise those Outputs sit on the canvas emitting nothing and
-  // whatever was wired into them is silently lost. Runs on the SANITIZED edges,
-  // since it re-points and re-ids some of them.
-  const folded = foldExtraOutputs(dataSanitized.nodes, edges);
-  // A section the sanitizer dropped must not leave its wires behind (never
-  // drawn, emitting nothing, an unscoped 008 every frame).
-  const prunedEdges = pruneOrphanMaterialEdges(folded.nodes, folded.edges).edges;
+  // ONE Output NODE per material: an Output carrying `data.materials` is split
+  // into siblings on the BARE channel handles, with the edges that fed its
+  // `m<k>:` handles re-pointed and re-ided. Runs on the SANITIZED nodes (so the
+  // materials are validated before they are split) and the SANITIZED edges
+  // (it re-points and re-ids some of them).
+  //
+  // This REPLACED `foldExtraOutputs`, which collapsed a one-Output-per-mesh
+  // graph into one node: that legacy shape IS the target shape now — each extra
+  // is a targeted Output on bare handles — so such a document loads natively
+  // instead of being migrated, and `contributingOutputs` emits its parts.
+  const split = unfoldOutputMaterials(dataSanitized.nodes, edges);
+  // Exactly one active sink (utils/sdfPartition.ts) — normalised AFTER the
+  // split, so the election runs over the node set that actually exists.
+  const nodes = normalizeActiveOutput(split.nodes);
+  // An `m<k>:` handle on a node that has no material k must not leave its wires
+  // behind (never drawn, emitting nothing, an unscoped 008 every frame). After
+  // the split a node has exactly one material, so this is every `m<k>:` handle
+  // a hand-edited or foreign file left on an Output the split did not touch.
+  const prunedEdges = pruneOrphanMaterialEdges(nodes, split.edges).edges;
   if (secs.trimmed > 0) {
     // No slot: the words say "in the opened file".
     store.enqueueLimitNotice({
@@ -217,7 +224,7 @@ function applyProjectToStore(project: FastShadersProject, moduleText = ''): void
   // Restore graph last — switching syncSource to 'graph' will trigger
   // graphToCode in useSyncEngine, regenerating the editor code to match.
   useAppStore.setState({
-    nodes: folded.nodes,
+    nodes,
     edges: prunedEdges,
     drawings,
     shaderPalettes: palettes,
@@ -415,13 +422,16 @@ function applyConvertedScript(
   // settings at all, so importing one likewise clears them: editor TSL cannot
   // express them, and "the file is silent" is read as "the file says none".
   useAppStore.setState((s) => ({
-    // The ACTIVE Output only: an inactive one keeps its own settings, exactly
-    // as it keeps its wiring across the resync (useSyncEngine's carry).
+    // ONE Output only: another keeps its own settings, exactly as it keeps its
+    // wiring across the resync (useSyncEngine's carry). Which one is
+    // `moduleSettingsOutput` — the same node the module READS these four keys
+    // off (D1), so the settings an import recovers land where the next export
+    // will look for them.
     nodes: ((active) => s.nodes.map((n) =>
       n.id === active
         ? { ...n, data: { ...n.data, materialSettings: converted.materialSettings } }
         : n,
-    ))(findDefaultOutput(s.nodes)?.id) as AppNode[],
+    ))(moduleSettingsOutput(s.nodes)?.id) as AppNode[],
     // A bare script carries no palettes, so the previous shader's must go —
     // the same rule the preview mesh and materialSettings already follow on
     // this branch, and the one `applyProjectToStore` applies to a project
@@ -622,18 +632,27 @@ export type GlbRestoreResult =
   | { ok: false; reason: 'mesh-refused'; refusal: MeshRefusal };
 
 /**
- * The glTF material indices the restored project's ACTIVE Output claims with
- * index sections, through the same sanitizers applyProjectToStore runs, so the
- * texture strip matches what the store will hold. Never throws.
+ * The glTF material indices the restored project CONTRIBUTES index sections
+ * for, through the same sanitize → unfold chain `applyProjectToStore` runs, so
+ * the texture strip matches what the store will hold. Never throws.
+ *
+ * The CONTRIBUTING SET, never `findDefaultOutput`. A stored project is the
+ * split shape when a current build wrote it and the folded one when an older
+ * build did, so the unfold runs first (with no edges: it only re-points them,
+ * and this reads node data alone) and then every Output that emits is asked.
+ * Reading the first Output instead answered [] for every split document —
+ * conservative, so no texture was wrongly dropped, but the preview copy then
+ * kept every texture the shader had already baked in.
  */
 function indexSectionMaterialsOf(nodes: AppNode[]): number[] {
   try {
-    const out = findDefaultOutput(sanitizeOutputMaterials(migrateLegacyNodeTypes([...nodes])));
-    if (!out) return [];
+    const clean = sanitizeOutputMaterials(migrateLegacyNodeTypes([...nodes]));
     const set = new Set<number>();
-    for (const m of outputMaterials(out)) {
-      const i = gltfIndexOf(m);
-      if (i !== null) set.add(i);
+    for (const out of contributingOutputs(unfoldOutputMaterials(clean, []).nodes)) {
+      for (const m of outputMaterials(out)) {
+        const i = gltfIndexOf(m);
+        if (i !== null) set.add(i);
+      }
     }
     return [...set].sort((a, b) => a - b);
   } catch {

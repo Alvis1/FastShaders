@@ -12,6 +12,8 @@ import {
   focusNode,
   focusTargets,
   outputFocusTarget,
+  outputCycleOrder,
+  nextOutputFocus,
   OUTPUT_FOCUS_FIT,
   VIEW_GLIDE_MS,
   ZOOM_STEP,
@@ -217,14 +219,18 @@ describe('several outputs, one active (source pins)', () => {
   });
 
   it('placeTilePayload ADDS an Output — no redirect, no silent return', () => {
-    expect(
-      nodeEditor.includes("registryType === 'output')) return"),
-      'placeTilePayload has regrown its silent-return Output guard',
-    ).toBe(false);
     const place = nodeEditor.slice(
       nodeEditor.indexOf('const placeTilePayload'),
       nodeEditor.indexOf('const placeCsvFile'),
     );
+    // Scoped to the FUNCTION this test names, not the whole file: "an Output
+    // already exists, so return" is the right guard elsewhere — the preview
+    // rail's empty hollow socket adds the FIRST Output and must never mint a
+    // second — and a file-wide grep called that a regression here.
+    expect(
+      place.includes("registryType === 'output')) return"),
+      'placeTilePayload has regrown its silent-return Output guard',
+    ).toBe(false);
     expect(place.includes('existingOutputId('), 'the singleton lookup is back').toBe(false);
     // There IS a glide in this function now — the Sound node is a singleton and
     // redirects here (singletonNodes.ts) — so the invariant can no longer be
@@ -312,6 +318,218 @@ describe('costFocusId — the node the cost pill glides to', () => {
     const pill = nodeEditor.slice(nodeEditor.indexOf('const focusOutput = useCallback('), nodeEditor.indexOf('const viewportSaveRef'));
     expect(pill).toContain('costFocusId(nodesNow, edgesNow)');
     expect(pill).toContain('costFocusId(nodes, edges) != null');
+  });
+});
+
+describe('the cost pill CYCLES through the Output nodes (owner request, D4)', () => {
+  const at = (id: string, registryType: string, x: number, y: number, parentId?: string): AppNode => {
+    const n = makeNode(id, registryType);
+    (n as { position: { x: number; y: number } }).position = { x, y };
+    if (parentId) (n as { parentId?: string }).parentId = parentId;
+    return n;
+  };
+
+  describe('outputCycleOrder — a STABLE TOTAL order', () => {
+    it('visits every SINK, plain Output and Raymarch Output alike', () => {
+      // The pill's own single-press target is `activeSink`, which returns a
+      // Raymarch Output whenever one drives — so a cycle over plain Outputs
+      // alone could not contain its own starting point, and the second press
+      // would jump out of the set the first press was in. `sinkCosts` says the
+      // same thing from the other side: every sink carries its own "what the
+      // shader would cost with this node active" badge, so every sink is a
+      // place the pill's number is spent.
+      const nodes = [at('o1', 'output', 0, 0), at('rm', 'raymarchOutput', 200, 0), at('mul', 'mul', 400, 0)];
+      expect(outputCycleOrder(nodes).map((n) => n.id)).toEqual(['o1', 'rm']);
+    });
+
+    it('is left-to-right within a 24px row band, then top-to-bottom', () => {
+      // keyboardNav's tabOrder idiom: nodes within a row read as a row even
+      // when their tops differ by a few px, so they are visited across rather
+      // than by a hairline y difference.
+      const nodes = [
+        at('c', 'output', 0, 400),
+        at('b', 'output', 300, 8),   // same band as `a` (8/24 rounds to 0)
+        at('a', 'output', 10, 0),
+      ];
+      expect(outputCycleOrder(nodes).map((n) => n.id)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('breaks a dead tie by ID, so the cycle is a TOTAL order', () => {
+      // Two Outputs at the exact same point is what a paste or a freshly built
+      // import can produce; without the id term the sort is unstable and the
+      // cycle can revisit one while skipping another.
+      const nodes = [at('zz', 'output', 5, 5), at('aa', 'output', 5, 5)];
+      expect(outputCycleOrder(nodes).map((n) => n.id)).toEqual(['aa', 'zz']);
+    });
+
+    it('is NOT the nodes array — a drag into a group reorders that', () => {
+      // `liftChildrenAfterParents` splices a node into a new array slot on an
+      // ordinary drag-into-a-group, and useSyncEngine reorders on every Apply.
+      const a = at('a', 'output', 0, 0);
+      const b = at('b', 'output', 0, 100);
+      const c = at('c', 'output', 0, 200);
+      const want = ['a', 'b', 'c'];
+      expect(outputCycleOrder([a, b, c]).map((n) => n.id)).toEqual(want);
+      expect(outputCycleOrder([c, a, b]).map((n) => n.id)).toEqual(want);
+      expect(outputCycleOrder([b, c, a]).map((n) => n.id)).toEqual(want);
+    });
+
+    it('sorts by ABSOLUTE position, so a grouped Output is where it looks', () => {
+      // A member's `position` is relative to its frame; sorting by the raw
+      // number puts a node deep inside a far-right group before one at the
+      // canvas origin.
+      const frame = group('g1', false);
+      (frame as { position: { x: number; y: number } }).position = { x: 1000, y: 0 };
+      const inside = at('inside', 'output', 5, 0, 'g1');
+      const outside = at('outside', 'output', 50, 0);
+      expect(outputCycleOrder([frame, inside, outside]).map((n) => n.id)).toEqual(['outside', 'inside']);
+    });
+
+    it('keeps a collapsed group\'s member — focusNode frames the pill for it', () => {
+      // Dropping it would make that Output unreachable from this control,
+      // which is worse than framing the pill standing in for it.
+      const member = at('hidden', 'output', 0, 0, 'g1');
+      expect(outputCycleOrder([group('g1', true), member]).map((n) => n.id)).toEqual(['hidden']);
+    });
+  });
+
+  describe('nextOutputFocus — repeated presses visit every Output exactly once', () => {
+    const order = [at('a', 'output', 0, 0), at('b', 'output', 0, 100), at('c', 'output', 0, 200)];
+
+    it('wraps, and N presses cover all N', () => {
+      const seen: string[] = [];
+      let cur: string | null = 'a';
+      for (let i = 0; i < 3; i++) {
+        seen.push(cur!);
+        cur = nextOutputFocus(order, cur);
+      }
+      expect(seen).toEqual(['a', 'b', 'c']);
+      expect(new Set(seen).size).toBe(3);
+      // …and the next press is back at the start.
+      expect(cur).toBe('a');
+    });
+
+    it('starts at the first with no previous, and after one that is gone', () => {
+      expect(nextOutputFocus(order, null)).toBe('a');
+      // The cursor holds an ID, not an index, precisely so a deleted node is a
+      // miss rather than a silently different node.
+      expect(nextOutputFocus(order, 'deleted')).toBe('a');
+    });
+
+    it('is null with nothing to visit', () => {
+      expect(nextOutputFocus([], null)).toBeNull();
+      expect(nextOutputFocus([], 'a')).toBeNull();
+    });
+
+    it('a single Output is its own next — which is why the pill does not cycle there', () => {
+      const one = [order[0]];
+      expect(nextOutputFocus(one, 'a')).toBe('a');
+    });
+  });
+
+  describe('the pill (source pins)', () => {
+    const nodeEditor = read('./NodeEditor.tsx');
+    const pill = nodeEditor.slice(
+      nodeEditor.indexOf('const outputCycleRef'),
+      nodeEditor.indexOf('const viewportSaveRef'),
+    );
+
+    it('cycles only with SEVERAL sinks; one keeps the plain glide', () => {
+      // A second press that re-glides to where the view already is reads as a
+      // dead control — the rule this pill already follows when it renders as
+      // an inert <span> with nothing to focus.
+      expect(pill).toContain('const order = outputCycleOrder(nodesNow);');
+      expect(pill).toContain('order.length < 2');
+      expect(pill).toContain('costFocusId(nodesNow, edgesNow)');
+      expect(pill).toContain('nextOutputFocus(order, outputCycleRef.current)');
+    });
+
+    it('holds the cursor in a useRef, not useState', () => {
+      // useState gives the handler a new identity per press and re-renders the
+      // memo'd CostBar for a value it does not display.
+      expect(pill).toContain('const outputCycleRef = useRef<string | null>(null);');
+      expect(nodeEditor).not.toMatch(/useState<string \| null>\(null\);\s*\n\s*const focusOutput/);
+    });
+
+    it('builds the order at CLICK time from getState(), never from the render\'s nodes', () => {
+      // The handler then stays stable across every drag frame, cannot hold a
+      // deleted id, and cannot be handed an array `liftChildrenAfterParents`
+      // has just reordered. (The TITLE's `outputCycles` is deliberately the
+      // other way round — a render-time derivation, like `hasOutput`.)
+      const handler = pill.slice(
+        pill.indexOf('const focusOutput = useCallback('),
+        pill.indexOf('const hasOutput'),
+      );
+      expect(handler).toContain('const { nodes: nodesNow, edges: edgesNow } = useAppStore.getState();');
+      expect(handler).toContain('outputCycleOrder(nodesNow)');
+      expect(handler).not.toContain('outputCycleOrder(nodes)');
+      expect(handler).not.toMatch(/costFocusId\(nodes,/);
+    });
+
+    it('the title says which it will do', () => {
+      const bar = readFileSync(path.resolve(__dirname, '../Layout/CostBar.tsx'), 'utf8');
+      expect(nodeEditor).toContain('cyclesOutputs={outputCycles}');
+      expect(nodeEditor).toContain('const outputCycles = useMemo(() => outputCycleOrder(nodes).length > 1, [nodes]);');
+      expect(bar).toContain("? 'Click to cycle through the Output nodes.'");
+      expect(bar).toContain(": 'Click to jump to the Output node.'");
+      // Both sentences must exist in Latvian, or the LV build shows the key.
+      const lv = JSON.parse(readFileSync(path.resolve(__dirname, '../../i18n/lv.json'), 'utf8'));
+      const ui = lv.ui ?? lv;
+      for (const key of ['Click to cycle through the Output nodes.', 'Click to jump to the Output node.']) {
+        expect(JSON.stringify(ui)).toContain(JSON.stringify(key));
+      }
+    });
+  });
+
+  describe('the 2x cost badge above an Output (source pins)', () => {
+    const css = readFileSync(path.resolve(__dirname, 'nodes/OutputNode.css'), 'utf8');
+    const rule = css.slice(css.indexOf('.react-flow .output-node .node-base__cost-badge'));
+
+    it('doubles the number, and moves `top` with it', () => {
+      // The base is 12px at top:-14px with line-height 1, so the badge's bottom
+      // sits 2px above the card. 24px keeps that 2px at -26px.
+      expect(rule).toMatch(/font-size:\s*24px/);
+      expect(rule).toMatch(/top:\s*-26px/);
+    });
+
+    it('still fits the group frame\'s badge band, in both group builders', () => {
+      // `BADGE_CLEARANCE` is easy to misread as the whole band: it is the EXTRA
+      // room ON TOP of the frame's own padding, with the header counted
+      // separately. A top-row member sits PADDING + BADGE_CLEARANCE below a
+      // user frame's header and PAD + BADGE_CLEARANCE below a built-in one's,
+      // against the 26px this badge reaches upward. Measured, not assumed —
+      // and this fails if either constant is ever lowered under it.
+      const REACH = 26;
+      const store = readFileSync(path.resolve(__dirname, '../../store/useAppStore.ts'), 'utf8');
+      const builder = readFileSync(path.resolve(__dirname, '../../registry/codeGroupBuilder.ts'), 'utf8');
+      const num = (src: string, name: string, after: string) => {
+        const at = src.indexOf(after);
+        const m = new RegExp(`const ${name} = (\\d+);`).exec(src.slice(at));
+        expect(m, `${name} after ${after}`).not.toBeNull();
+        return Number(m![1]);
+      };
+      const userBand = num(store, 'PADDING', 'const PADDING = 24;')
+        + num(store, 'BADGE_CLEARANCE', 'const PADDING = 24;');
+      const builtinBand = num(builder, 'PAD', 'const PAD = 20;')
+        + num(builder, 'BADGE_CLEARANCE', 'const PAD = 20;');
+      expect(userBand).toBeGreaterThanOrEqual(REACH);
+      expect(builtinBand).toBeGreaterThanOrEqual(REACH);
+      // And the reach really is what the stylesheet asks for (line-height: 1,
+      // so the badge spans `font-size` up from `-top`).
+      expect(Math.abs(Number(/top:\s*-(\d+)px/.exec(rule)![1]))).toBe(REACH);
+      expect(Number(/font-size:\s*(\d+)px/.exec(rule)![1])).toBeLessThanOrEqual(REACH);
+    });
+
+    it('is SCOPED `.react-flow` — the palette tile renders the same markup', () => {
+      // NodePreviewCard wraps `.node-base__cost-badge` in `.output-node` for
+      // the tile, which lives inside `.content-browser__items`' `overflow-y:
+      // hidden` — and that never measures an absolutely-positioned badge, so
+      // an unscoped rule would silently clip the tile's number.
+      expect(css).not.toMatch(/^\.output-node \.node-base__cost-badge\s*\{/m);
+      const card = readFileSync(path.resolve(__dirname, 'NodePreviewCard.tsx'), 'utf8');
+      expect(card).toContain('className="output-node node-preview-card__node"');
+      expect(card).toContain('className="node-base__cost-badge"');
+    });
   });
 });
 

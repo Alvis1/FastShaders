@@ -11,12 +11,12 @@
  * that against the real loader).
  */
 import { describe, it, expect } from 'vitest';
-import { makeNode, makeGlb, gltfPrimitiveDoc, TRIANGLE_POSITIONS } from '@/test-utils';
+import { makeNode, makeEdge, makeGlb, gltfPrimitiveDoc, TRIANGLE_POSITIONS } from '@/test-utils';
 import type { AppNode, OutputMaterial } from '@/types';
 import { createPreviewMesh, type PreviewMesh } from './previewMesh';
 import { meshToRecord, recordToMesh } from './previewMeshCache';
 import {
-  anyOutputDormant,
+  outputEdgeIsDormant,
   indexSectionCoverage,
   indexSectionsAwake,
   loadedModelOf,
@@ -158,10 +158,17 @@ describe('dormancy against the loaded model', () => {
     expect(outputDormancyFromState(reported).dormant).toEqual(new Set([4]));
   });
 
-  it('the 008 swallow asks across every Output, index sections included', () => {
-    const state = stateOf(carOutput([], ['Other', 'Model', 'Here']), CAR());
-    expect(anyOutputDormant(state, 2)).toBe(true);
-    expect(anyOutputDormant(stateOf(carOutput(), CAR()), 2)).toBe(false);
+  it('the 008 swallow resolves the edge to its Output, index sections included', () => {
+    // The wire React Flow could not place: into material 2's Color handle.
+    const wire = makeEdge('feeder', 'out', 'o1', 'm2:color');
+    const withWire = (out: AppNode, mesh: unknown) => ({ ...stateOf(out, mesh), edges: [wire] });
+    // A signature the loaded model does not match sleeps every index section,
+    // so the absent handle is the visibility rule's steady state.
+    expect(outputEdgeIsDormant(withWire(carOutput([], ['Other', 'Model', 'Here']), CAR()), wire.id)).toBe(true);
+    // The matching model keeps them awake: the same missing handle is a bug.
+    expect(outputEdgeIsDormant(withWire(carOutput(), CAR()), wire.id)).toBe(false);
+    // An id naming no edge in the store excuses nothing — the warning prints.
+    expect(outputEdgeIsDormant(withWire(carOutput([], ['Other']), CAR()), 'e-nope')).toBe(false);
   });
 });
 

@@ -26,9 +26,12 @@ import { meshToRecord, recordToMesh } from '@/utils/previewMeshCache';
 import { readGltfModel } from '@/utils/gltfReader';
 import { planTextureStrip } from '@/utils/gltfStrip';
 import {
+  contributingOutputs,
+  gltfIndexOf,
   indexSectionsAwake,
+  isIndexSection,
   loadedModelOf,
-  materialPartsMirrorPlan,
+  materialPartsMirrorPlanAcross,
   outputMaterials,
   readModelSignature,
   sanitizeOutputMaterialsReport,
@@ -58,21 +61,33 @@ async function buildOk(bytes: Uint8Array, name = 'Model File.glb', over: Partial
   return r;
 }
 
-const outOf = (nodes: AppNode[]) => nodes.find((n) => n.data.registryType === 'output')!;
+/**
+ * The built document's SECTIONS and its mirror-source node, read across the
+ * sibling Output nodes the builder mints (one per material since the split).
+ * `sectionIndicesOf` is the old `outputMaterials(out).slice(1).map(...)`, and
+ * `sigNodeOf` is the node emission reads the signature and `modelMeshes` from —
+ * the lowest-ranked contributing Output carrying an index section, which is
+ * exactly what `graphToCode` and `glbExportPlan` ask.
+ */
+const sectionIndicesOf = (nodes: AppNode[]) =>
+  contributingOutputs(nodes).slice(1).map((n) => gltfIndexOf(outputMaterials(n)[0]));
+const sigNodeOf = (nodes: AppNode[]) =>
+  contributingOutputs(nodes).find((n) => outputMaterials(n).some(isIndexSection));
+/** The cross-node mirror plan every module path passes. */
+const mirrorOf = (nodes: AppNode[]) => materialPartsMirrorPlanAcross(contributingOutputs(nodes));
 
 describe('the result', () => {
   it('BLENDER: a project named after the model, three index sections, a stripped custom mesh, one report', async () => {
     const r = await buildOk(blenderGlb());
     expect(r.project).toMatchObject({ version: 1, shaderName: 'Model-File', preview: { geometry: 'custom' }, ui: {} });
-    const out = outOf(r.project.graph.nodes);
-    expect(outputMaterials(out).slice(1).map((m) => m.gltfMaterialIndex)).toEqual([0, 1, 2]);
+    expect(sectionIndicesOf(r.project.graph.nodes)).toEqual([0, 1, 2]);
     expect(r.mesh.kind).toBe('glb');
     expect(r.mesh.name).toBe('Model-File.glb');
     // The mesh is the STRIPPED copy: smaller than the drop, same signature,
     // and the sections are awake on it.
     expect(r.mesh.bytes.length).toBeLessThan(blenderGlb().length);
     expect(r.mesh.gltf?.signature).toEqual(['Material.001', 'Material.002', 'Ķermenis']);
-    expect(indexSectionsAwake(readModelSignature(out.data), loadedModelOf(r.mesh))).toBe(true);
+    expect(indexSectionsAwake(readModelSignature(sigNodeOf(r.project.graph.nodes)!.data), loadedModelOf(r.mesh))).toBe(true);
     const original = readOk(blenderGlb());
     const stripped = readGltfModel(r.mesh.bytes, 'glb');
     expect(stripped.ok && stripped.model.images.every((img, i) => img.byteLength !== original.images[i].byteLength)).toBe(true);
@@ -103,7 +118,7 @@ describe('the result', () => {
 
   it('AI: the unused material is not built; the dead emissive and the clearcoat are reported', async () => {
     const r = await buildOk(aiGlb(), 'mesh.glb');
-    expect(outputMaterials(outOf(r.project.graph.nodes)).slice(1).map((m) => m.gltfMaterialIndex)).toEqual([0]);
+    expect(sectionIndicesOf(r.project.graph.nodes)).toEqual([0]);
     expect(r.report.materials).toBe(1);
     expect(r.report.notImported).toEqual(['clearcoat', 'emissiveUnused']);
   });
@@ -244,9 +259,8 @@ describe('emission and the module', () => {
     it(`${name}: the module carries parts mirrors, materialParts, modelSignature and materialPartsMirror; apply∘apply is stable`, async () => {
       const r = await buildOk(bytes, `${name.toLowerCase()}.glb`);
       const { nodes, edges } = r.project.graph;
-      const out = outOf(nodes);
       const code = graphToCode(nodes, edges).code;
-      const mirror = materialPartsMirrorPlan(out);
+      const mirror = mirrorOf(nodes);
       expect(mirror.length).toBeGreaterThan(0);
       const module = tslToShaderModule(inlineImageAssetsFromNodes(code, nodes), undefined, collectShaderProperties(nodes), mirror);
       expect(module).toContain('materialParts:');
@@ -316,9 +330,8 @@ describe('round trips', () => {
   it('export zip → importShaderZip: the sections come back, and they are AWAKE on the bundled mesh', async () => {
     const r = await buildOk(blenderGlb(), 'blend.glb');
     const { nodes, edges } = r.project.graph;
-    const out = outOf(nodes);
     const code = graphToCode(nodes, edges).code;
-    const script = tslToShaderModule(inlineImageAssetsFromNodes(code, nodes), undefined, collectShaderProperties(nodes), materialPartsMirrorPlan(out));
+    const script = tslToShaderModule(inlineImageAssetsFromNodes(code, nodes), undefined, collectShaderProperties(nodes), mirrorOf(nodes));
     const embedded = embedProjectState(script, r.project);
     const bundle = buildExportBundle('blend', embedded, collectImageFiles(nodes), r.mesh);
     expect(bundle.kind).toBe('zip');
@@ -326,13 +339,19 @@ describe('round trips', () => {
     const result = await importShaderZip(file);
     expect(result).toBe('project');
     const s = useAppStore.getState();
-    const restored = outOf(s.nodes);
-    expect(outputMaterials(restored).slice(1).map((m) => m.gltfMaterialIndex)).toEqual([0, 1, 2]);
-    expect(readModelSignature(restored.data)).toEqual(['Material.001', 'Material.002', 'Ķermenis']);
-    expect((restored.data as { modelMeshes?: unknown }).modelMeshes).toEqual((out.data as { modelMeshes?: unknown }).modelMeshes);
+    // The BUILDER already makes one node per material, and the restore leaves
+    // that shape untouched (`unfoldOutputMaterials` is a no-op on a document
+    // that carries no `materials` key) — so the zip round trip is the identity
+    // on the section list, not a re-split.
+    const restoredOuts = contributingOutputs(s.nodes);
+    expect(restoredOuts.map((n) => gltfIndexOf(outputMaterials(n)[0]))).toEqual([null, 0, 1, 2]);
+    const sigNode = sigNodeOf(s.nodes)!;
+    expect(readModelSignature(sigNode.data)).toEqual(['Material.001', 'Material.002', 'Ķermenis']);
+    expect((sigNode.data as { modelMeshes?: unknown }).modelMeshes)
+      .toEqual((sigNodeOf(nodes)!.data as { modelMeshes?: unknown }).modelMeshes);
     expect(s.previewMesh).not.toBeNull();
     expect(s.previewMesh!.name).toBe('blend.glb');
-    expect(indexSectionsAwake(readModelSignature(restored.data), loadedModelOf(s.previewMesh))).toBe(true);
+    expect(indexSectionsAwake(readModelSignature(sigNode.data), loadedModelOf(s.previewMesh))).toBe(true);
     expect(ls['fs:previewGeometry']).toBe('custom');
     expect(sanitizeOutputMaterialsReport(s.nodes).trimmed).toBe(0);
     // Every image node's payload survived the zip (one file per distinct image).
@@ -342,19 +361,19 @@ describe('round trips', () => {
 
   it('IndexedDB record → recordToMesh: the restored mesh recomputes its facts and the sections stay awake', async () => {
     const r = await buildOk(scanGlb(), 'scan.glb');
-    const out = outOf(r.project.graph.nodes);
+    const sig = readModelSignature(sigNodeOf(r.project.graph.nodes)!.data);
     const restored = recordToMesh(meshToRecord(r.mesh));
     expect(restored).not.toBeNull();
     expect(restored!.id).not.toBe(r.mesh.id);
     expect(restored!.gltf?.signature).toEqual(['Body', 'Base', 'Trim']);
-    expect(indexSectionsAwake(readModelSignature(out.data), loadedModelOf(restored))).toBe(true);
+    expect(indexSectionsAwake(sig, loadedModelOf(restored))).toBe(true);
   });
 
   it('the sections are DORMANT on a different model, and on an OBJ', async () => {
     const r = await buildOk(scanGlb(), 'scan.glb');
-    const out = outOf(r.project.graph.nodes);
+    const sig = readModelSignature(sigNodeOf(r.project.graph.nodes)!.data);
     const other = await buildOk(blenderGlb(), 'b.glb');
-    expect(indexSectionsAwake(readModelSignature(out.data), loadedModelOf(other.mesh))).toBe(false);
-    expect(indexSectionsAwake(readModelSignature(out.data), loadedModelOf({ kind: 'obj' }))).toBe(false);
+    expect(indexSectionsAwake(sig, loadedModelOf(other.mesh))).toBe(false);
+    expect(indexSectionsAwake(sig, loadedModelOf({ kind: 'obj' }))).toBe(false);
   });
 });

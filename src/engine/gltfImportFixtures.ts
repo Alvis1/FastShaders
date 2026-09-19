@@ -14,7 +14,10 @@ import { MAX_IMAGE_ENCODED_CHARS, MAX_SOURCE_PIXELS } from '@/utils/imageNode';
 
 type Doc = Record<string, unknown>;
 
-const pad4 = (n: number) => (n + 3) & ~3;
+// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
+// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
+// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
+const pad4 = (n: number) => Math.ceil(n / 4) * 4;
 
 /** bufferView 0 is the triangle, 1, 2, … the blobs (4-aligned). */
 export function withBlobs(extra: Doc, blobs: Uint8Array[]): { doc: Doc; bin: Uint8Array } {
@@ -264,6 +267,51 @@ export function allSlotsGlb(): Uint8Array<ArrayBuffer> {
       scene: 0,
     },
     [PNG_COLOR, PNG_ORM, PNG_NORMAL, PNG_EMISSIVE],
+  );
+}
+
+/**
+ * INTERLEAVED: two materials over three single-material meshes whose SCENE
+ * order alternates between them — `Alpha` (material 1), `Bravo` (material 0),
+ * `Charlie` (material 1).
+ *
+ * It exists for blocker B5 and for nothing else. `gltfSectionBuilder` fills
+ * `modelMeshes` from `meshNameIndex` in FIRST-SCENE-APPEARANCE order, and
+ * `materialPartsMirrorPlanAcross` walks that stored order straight into module
+ * TEXT (the `materialPartsMirror` list and the mirror `parts` keys). Every
+ * other fixture's scene happens to list its meshes grouped by material, so a
+ * per-material regroup of `modelMeshes` would emit exactly the same text on
+ * all of them; here it emits `Bravo, Alpha, Charlie` instead of
+ * `Alpha, Bravo, Charlie`, which is a silent reordering of the mirror keys of
+ * every already-distributed single-GLB export.
+ */
+export function interleavedGlb(): Uint8Array<ArrayBuffer> {
+  return glbOf(
+    {
+      images: [
+        { bufferView: 1, mimeType: 'image/png', name: 'Zero' },
+        { bufferView: 2, mimeType: 'image/png', name: 'One' },
+      ],
+      textures: [{ source: 0 }, { source: 1 }],
+      materials: [
+        { name: 'MatZero', pbrMetallicRoughness: { baseColorTexture: { index: 0 } } },
+        {
+          name: 'MatOne',
+          pbrMetallicRoughness: { baseColorTexture: { index: 1 }, roughnessFactor: 0.25 },
+        },
+      ],
+      // Mesh 0 wears material 1, mesh 1 wears material 0: the interleave is in
+      // the SCENE's node order, which is what the reader walks.
+      meshes: [
+        { name: 'Alpha', primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 0 }, material: 1 }] },
+        { name: 'Bravo', primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 0 }, material: 0 }] },
+        { name: 'Charlie', primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 0 }, material: 1 }] },
+      ],
+      nodes: [{ name: 'Alpha', mesh: 0 }, { name: 'Bravo', mesh: 1 }, { name: 'Charlie', mesh: 2 }],
+      scenes: [{ nodes: [0, 1, 2] }],
+      scene: 0,
+    },
+    [PNG_COLOR, PNG_ORM],
   );
 }
 

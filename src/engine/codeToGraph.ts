@@ -1,11 +1,11 @@
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import * as t from '@babel/types';
-import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType, OutputMaterial, MaterialSettings } from '@/types';
+import type { AppNode, AppEdge, NodeDefinition, ParseError, TSLDataType, MaterialSettings } from '@/types';
 import { setNodeValues } from '@/types';
 import { isUsableMeshName } from '@/utils/meshInventory';
-import { MAX_PARTS, MAX_INDEX_MATERIALS, findDefaultOutput, outputNodes, channelHandle } from '@/utils/outputMaterials';
-import { MATERIAL_PART_KEY_RE, sanitizeModelSignature } from './materialPartsContract';
+import { MAX_PARTS, MAX_PART_ENTRIES, MAX_INDEX_MATERIALS, defaultOutput, outputNodes } from '@/utils/outputMaterials';
+import { MATERIAL_PART_KEY_RE, emitRank, sanitizeModelSignature } from './materialPartsContract';
 import { NODE_REGISTRY, TSL_FUNCTION_TO_DEF, getFlowNodeType, chainPortId, growsOperands, MAX_CHAIN_OPERANDS } from '@/registry/nodeRegistry';
 import { MODULE_HELPER_NAMES, HELPER_ALIASES } from './moduleHelpers';
 import { PART_SETTING_KEYS, materialSettingsFromSource } from './materialSettingsCode';
@@ -235,23 +235,45 @@ export function codeToGraph(code: string): CodeToGraphResult {
    *  and expose those channels: graphToCode's emission is exposure-gated and
    *  the on-node widget is the only honest signal the value exists, so a
    *  valued channel must be visible. (Wired channels are exposed separately
-   *  by autoExposeConnectedParamPorts.) */
+   *  by autoExposeConnectedParamPorts.)
+   *
+   *  ONE material per NODE since the Output split, so every material writes
+   *  the node's own fields — where material 0's have always lived. */
   const applyStoredOutputValues = (
     outputId: string,
     values: Record<string, string | number>,
-    material?: OutputMaterial,
   ): void => {
     const keys = Object.keys(values);
     if (keys.length === 0) return;
-    // A MATERIAL owns its own values and exposed set; only material 0 writes
-    // the node's fields (where they have always lived).
-    const sink = material
-      ?? (nodeById(rawNodes, outputId)?.data as Record<string, unknown> | undefined);
+    const sink = nodeById(rawNodes, outputId)?.data as Record<string, unknown> | undefined;
     if (!sink) return;
-    (sink as Record<string, unknown>).values = values;
-    (sink as Record<string, unknown>).exposedPorts = Array.from(
-      new Set([...OUTPUT_DEFAULT_EXPOSED, ...keys]),
-    );
+    sink.values = values;
+    sink.exposedPorts = Array.from(new Set([...OUTPUT_DEFAULT_EXPOSED, ...keys]));
+  };
+
+  /**
+   * Mint one Output NODE and give it its `emitOrder` — the parse's own MINT
+   * ORDER, which is the module's own order: the default first (rank 0), then
+   * the `materialParts` entries ascending by glTF index, then the `parts` ones.
+   *
+   * The rank must be written, not left absent: `unfoldOutputMaterials` seeds
+   * every node it makes (node 0 included) the same way, so a parsed document
+   * and a restored one describe their order identically and an Apply cannot
+   * renumber one into the other's shape.
+   *
+   * It is also what namespaces each material's synthetic channel variables
+   * (`_part<rank>_color`) — DERIVED FROM THE MINT ORDER, never from a node id
+   * or an array position, or two Applies of one module would pick different
+   * synthetic names and a deferred `Discard` naming one would resolve onto the
+   * wrong node. The numbering is exactly what the single-node parse produced
+   * from `materials.length + 1`, so those names are unchanged.
+   */
+  let outputRank = 0;
+  const mintOutputNode = (def: NodeDefinition): AppNode => {
+    const node = createNode(generateId(), def, 'Output');
+    (node.data as Record<string, unknown>).emitOrder = outputRank++;
+    rawNodes.push(node);
+    return node;
   };
 
   /**
@@ -285,9 +307,14 @@ export function codeToGraph(code: string): CodeToGraphResult {
   };
 
   /**
-   * Wire one output node's channels from an object expression. Shared by the
-   * default output and every `parts` entry, so a per-mesh material parses
-   * exactly as well as the top-level one — including stored widget values.
+   * Wire one output NODE's channels from an object expression. Shared by the
+   * default output and every `parts` / `materialParts` entry, so a per-mesh
+   * material parses exactly as well as the top-level one — including stored
+   * widget values.
+   *
+   * Every channel lands on the BARE handle (`color`, `emissive`, …) because a
+   * material IS a node since the split: the `m<n>:` namespace existed only to
+   * keep several materials apart on one card.
    *
    * `tempPrefix` namespaces the synthetic variable a call-expression channel
    * needs. It MUST differ per output: two materials both wiring `color: mix(…)`
@@ -298,8 +325,6 @@ export function codeToGraph(code: string): CodeToGraphResult {
     outputId: string,
     obj: t.ObjectExpression,
     tempPrefix: string,
-    materialIndex = 0,
-    material?: OutputMaterial,
   ): void => {
     const storedValues: Record<string, string | number> = {};
   for (const rawProp of obj.properties) {
@@ -310,16 +335,17 @@ export function codeToGraph(code: string): CodeToGraphResult {
     // (engine/materialSettingsCode): a value that resolves to a graph node
     // would otherwise be wired as one — `side: color2.x` takes the
     // member-expression branch below and mints a Split node plus a dead
-    // `m1:side` edge, and `side: color2` wires one straight in. (An
+    // `side` edge, and `side: color2` wires one straight in. (An
     // UNRESOLVABLE value — `THREE.DoubleSide`, an undeclared name — wires
     // nothing either way, which is why the tests use resolvable ones.) Skipped
     // at the top level too, where the default's settings never appear in
-    // editor code; buildPartMaterials reads a part's.
+    // editor code; buildPartOutputs reads a part's.
     //
     // The glTF-index table and its companions are not channels either:
-    // `materialParts` is read by buildIndexMaterials, `modelSignature` rides
+    // `materialParts` is read by buildIndexOutputs, `modelSignature` rides
     // beside it, and `materialPartsMirror` (module-only, R7) is honoured by
-    // buildPartMaterials — wired as channels they would mint dead `m<k>:` edges.
+    // buildPartOutputs — wired as channels they would mint dead edges on a
+    // handle no port has.
     if (
       channel === null
       || channel === 'parts'
@@ -342,12 +368,12 @@ export function codeToGraph(code: string): CodeToGraphResult {
         const sourceId = varToNodeId.get(prop.value.name)
           ?? ensureBareInputNode(prop.value.name, rawNodes, varToNodeId);
         if (sourceId) {
-          addEdge(rawEdges, sourceId, varToHandle.get(prop.value.name) ?? 'out', outputId, channelHandle(materialIndex, channel));
+          addEdge(rawEdges, sourceId, varToHandle.get(prop.value.name) ?? 'out', outputId, channel);
         }
       } else if (t.isMemberExpression(prop.value)) {
         const ref = resolveMemberExpr(prop.value, rawNodes, rawEdges, varToNodeId, splitNodes);
         if (ref) {
-          addEdge(rawEdges, ref.nodeId, ref.handle, outputId, channelHandle(materialIndex, channel), 'float');
+          addEdge(rawEdges, ref.nodeId, ref.handle, outputId, channel, 'float');
         }
       } else if (t.isCallExpression(prop.value)) {
         // The synthetic name must not be one the MODULE already defines:
@@ -362,11 +388,11 @@ export function codeToGraph(code: string): CodeToGraphResult {
         processCall(prop.value, tempVar, rawNodes, rawEdges, varToNodeId, varToHandle, splitNodes, code, warnings);
         const sourceId = varToNodeId.get(tempVar);
         if (sourceId) {
-          addEdge(rawEdges, sourceId, 'out', outputId, channelHandle(materialIndex, channel));
+          addEdge(rawEdges, sourceId, 'out', outputId, channel);
         }
       }
     }
-    applyStoredOutputValues(outputId, storedValues, material);
+    applyStoredOutputValues(outputId, storedValues);
   };
 
   /** The LAST top-level property named `name` — what the runtime reads. */
@@ -379,11 +405,16 @@ export function codeToGraph(code: string): CodeToGraphResult {
   };
 
   /**
-   * Re-create the import-built INDEX sections from a `materialParts` table,
-   * appending them to `materials` (they come FIRST — the canonical order:
-   * index sections ascending, then named ones — so an Apply never reorders
-   * the node's sections). Returns the signature's names when at least one
-   * section was created, else null.
+   * Re-create the import-built INDEX sections from a `materialParts` table as
+   * one Output NODE each. They are minted FIRST — the canonical order (index
+   * sections ascending, then named ones) — so an Apply never reorders the
+   * document's Output nodes: each node's `emitOrder` is its mint position, and
+   * `outputsInEmitOrder` is what emission walks.
+   *
+   * Every node it makes carries the SIGNATURE, replicated exactly as
+   * `unfoldOutputMaterials` and `sanitizeOutputMaterialsReport` replicate it:
+   * dormancy (`indexSectionsAwake`) is decided per NODE, so a section without
+   * its own copy could never tell whether it applies to the loaded model.
    *
    * Every rejection WARNS: the graph→code sync writes the parse's result back
    * over the user's source, so an entry dropped in silence deletes itself from
@@ -395,18 +426,14 @@ export function codeToGraph(code: string): CodeToGraphResult {
    * the signature; the last occurrence of an index wins, as in the JS literal;
    * ascending; at most MAX_INDEX_MATERIALS, counted apart from the named cap.
    */
-  const buildIndexMaterials = (
-    outputId: string,
-    arg: t.ObjectExpression,
-    materials: OutputMaterial[],
-  ): string[] | null => {
+  const buildIndexOutputs = (outputDef: NodeDefinition, arg: t.ObjectExpression): void => {
     const tableProp = lastProp(arg, 'materialParts');
-    if (!tableProp) return null;
+    if (!tableProp) return;
     const warn = (message: string, node: t.Node) =>
       warnings.push({ message, line: node.loc?.start.line, severity: 'warning' });
     if (!t.isObjectExpression(tableProp.value)) {
       warn('materialParts is not an object — it was dropped.', tableProp);
-      return null;
+      return;
     }
     let signature: string[] | null = null;
     const sigProp = lastProp(arg, 'modelSignature');
@@ -423,7 +450,7 @@ export function codeToGraph(code: string): CodeToGraphResult {
         'materialParts has no valid modelSignature — its sections were dropped (they cannot apply to any model without one).',
         tableProp,
       );
-      return null;
+      return;
     }
     const byIndex = new Map<number, t.ObjectProperty>();
     for (const raw of tableProp.value.properties) {
@@ -450,27 +477,32 @@ export function codeToGraph(code: string): CodeToGraphResult {
         warn(`More than ${MAX_INDEX_MATERIALS} material parts — "${index}" and any after it were dropped.`, rawPart);
         break;
       }
-      const position = materials.length + 1;
-      const material: OutputMaterial = { gltfMaterialIndex: index };
+      const node = mintOutputNode(outputDef);
+      const data = node.data as Record<string, unknown>;
+      data.gltfMaterialIndex = index;
+      // A COPY per node, as `gltfSectionBuilder` writes it: these objects go
+      // into the store and are compared by VALUE (`modelSignatureMatches`), so
+      // nothing depends on sharing, while sharing one mutable array across
+      // every index node of a document is a hazard for nothing.
+      data.modelSignature = { materials: signature.slice() };
       const value = rawPart.value as t.ObjectExpression;
       const settings = partSettingsFromObject(value);
-      if (settings) material.materialSettings = settings;
-      materials.push(material);
+      if (settings) data.materialSettings = settings;
       created++;
-      wireOutputChannels(outputId, value, `_part${position}_`, position, material);
+      wireOutputChannels(node.id, value, `_part${emitRank(node)}_`);
     }
-    return created > 0 ? signature : null;
   };
 
   /**
-   * Re-create the NAME sections from a `parts` map, appending them to
-   * `materials` (after any index sections — see buildIndexMaterials).
+   * Re-create the NAME sections from a `parts` map as one Output NODE each,
+   * minted AFTER the index ones (see buildIndexOutputs) so the document's
+   * `emitOrder` sequence is the canonical order emission walks.
    *
    * Names are validated exactly as the emitter validates them: this parses
    * files other people wrote, and an unusable name is one the loader could
    * never match anyway, so dropping the entry loses nothing real.
    */
-  const buildPartMaterials = (outputId: string, arg: t.ObjectExpression, materials: OutputMaterial[]): void => {
+  const buildPartOutputs = (outputDef: NodeDefinition, arg: t.ObjectExpression): void => {
     const partsProp = arg.properties.find(
       (p): p is t.ObjectProperty => t.isObjectProperty(p) && propKeyName(p) === 'parts',
     );
@@ -520,26 +552,47 @@ export function codeToGraph(code: string): CodeToGraphResult {
       lastByName.set(name, rawPart);
     }
 
-    // Each DISTINCT part body becomes a MATERIAL on the one Output node, wired
-    // through that material's namespaced handles (`m1:color`). The node's own
-    // fields stay material 0 — the default — so a module whose `parts` are all
-    // dropped parses to exactly the Output it would have without them.
+    // Each DISTINCT part body becomes its own Output NODE on the BARE channel
+    // handles. The default node minted above keeps the top-level channels, so a
+    // module whose `parts` are all dropped parses to exactly the Output it
+    // would have without them.
     //
-    // Parts whose bodies are BYTE-IDENTICAL merge into ONE material naming
-    // several meshes, because that is what emission does in reverse: a material
-    // shading three meshes writes three entries carrying the same expressions.
-    // Without the merge the feature would not survive its own round trip — a
-    // three-mesh material would split into three on the first code-panel Apply.
+    // Parts whose bodies are BYTE-IDENTICAL merge into ONE node naming several
+    // meshes, because that is what emission does in reverse: a material shading
+    // three meshes writes three entries carrying the same expressions. Without
+    // the merge the feature would not survive its own round trip — a three-mesh
+    // material would split into three on the first code-panel Apply.
     // EMPTY bodies are deliberately NOT merged: they carry nothing to match on,
     // and two freshly-added mesh materials (the state right before you wire
     // them differently) are exactly the pair that would be collapsed.
-    /** part-body source -> the material it already produced. */
-    const byBody = new Map<string, OutputMaterial>();
-    // The NAMED cap counts named sections only; index sections above have
-    // their own (MAX_INDEX_MATERIALS), so an import-built Output never blocks
-    // a hand-added mesh section on an Apply.
-    let named = 0;
+    /** part-body source -> the NODE DATA it is currently FILLING. */
+    const byBody = new Map<string, Record<string, unknown>>();
+    // The module budget is ENTRIES, and it is EMISSION'S OWN.
+    //
+    // `planNamedPartsAcross` writes at most `MAX_PART_ENTRIES` name keys into
+    // `parts` — ONE claim set and ONE counter for the whole node set — so a
+    // parse admitting fewer cannot re-create what this app itself emitted: the
+    // surplus materials AND their wiring are destroyed on one Apply
+    // (`severity: 'warning'` lets the truncated graph COMMIT, and
+    // `carryInactiveSinks` deliberately does not carry a TARGETED Output), and
+    // the next graph→code pass writes the truncation back over the user's
+    // source. This read `MAX_PARTS`, which is a PER-NODE cap — the names on ONE
+    // material — and has never been a module budget: 9 against emission's 90,
+    // so an ordinary twelve-mesh GLB lost three of its materials on the first
+    // Apply. `buildIndexOutputs` above already gets this right, capping at
+    // `MAX_INDEX_MATERIALS`, the same cross-node cap `planIndexPartsAcross`
+    // uses; the two are counted APART, exactly as emission counts them apart.
+    let entries = 0;
     for (const [name, rawPart] of lastByName) {
+      if (entries >= MAX_PART_ENTRIES) {
+        warnings.push({
+          message:
+            `More than ${MAX_PART_ENTRIES} targeted meshes — "${name}" and any after it were dropped.`,
+          line: rawPart.loc?.start.line,
+          severity: 'warning',
+        });
+        break;
+      }
       const value = rawPart.value as t.ObjectExpression;
       // A body carrying ONLY settings keys counts as EMPTY: two freshly added,
       // still-unwired materials that both have Transparent ticked emit
@@ -552,29 +605,33 @@ export function codeToGraph(code: string): CodeToGraphResult {
         ? code.slice(value.start, value.end)
         : null;
       const merged = body === null ? undefined : byBody.get(body);
-      if (merged) {
+      // A material names at most `MAX_PARTS` meshes — `materialTargetNames`
+      // caps ON READ — so a tenth name pushed here would be STORED, counted by
+      // the picker, then silently absent from emission, and the next restore
+      // path would trim it and raise `output-sections-trimmed` for a document
+      // the parse itself had just written. A FULL node therefore starts a
+      // SIBLING carrying the same body, which is exactly the shape emission
+      // produces for two identically wired materials: the document is a fixed
+      // point from the first Apply rather than losing a mesh to a cap the code
+      // panel never mentioned.
+      if (merged && (merged.meshTargets as string[]).length < MAX_PARTS) {
         (merged.meshTargets as string[]).push(name);
+        entries++;
         continue;
       }
-      if (named >= MAX_PARTS) {
-        warnings.push({
-          message:
-            `More than ${MAX_PARTS} targeted meshes — "${name}" and any after it were dropped.`,
-          line: rawPart.loc?.start.line,
-          severity: 'warning',
-        });
-        break;
-      }
-      const index = materials.length + 1;
-      named++;
-      const material: OutputMaterial = { meshTargets: [name] };
+      entries++;
+      const node = mintOutputNode(outputDef);
+      const data = node.data as Record<string, unknown>;
+      data.meshTargets = [name];
       // Its settings, read back through the sanitizer buildShaderModule uses.
       // A merged part has a byte-identical body, so it cannot differ in them.
       const settings = partSettingsFromObject(value);
-      if (settings) material.materialSettings = settings;
-      materials.push(material);
-      if (body !== null) byBody.set(body, material);
-      wireOutputChannels(outputId, value, `_part${index}_`, index, material);
+      if (settings) data.materialSettings = settings;
+      // The FULL node is REPLACED as this body's target, so the next identical
+      // part fills the sibling rather than re-testing a node that can never
+      // take another name.
+      if (body !== null) byBody.set(body, data);
+      wireOutputChannels(node.id, value, `_part${emitRank(node)}_`);
     }
   };
 
@@ -593,32 +650,32 @@ export function codeToGraph(code: string): CodeToGraphResult {
     const outputDef = NODE_REGISTRY.get('output');
     if (!outputDef) return;
 
-    // Multi-channel: { color: x, position: y, ... } — and/or `parts`.
+    // Multi-channel: { color: x, position: y, ... } — and/or `parts` /
+    // `materialParts`. ONE Output NODE PER MATERIAL, minted TOP-LEVEL FIRST so
+    // the default is rank 0, then the index sections ascending, then the named
+    // ones: the canonical order `outputsInEmitOrder` walks and the sanitizer
+    // never reorders.
     //
-    // ONE Output node either way. A parts-only return leaves material 0 with
-    // nothing wired, which is exactly what it means — the module shades the
-    // meshes it names and leaves the rest on their authored materials — and it
-    // re-emits parts-only, because an empty default emits no channels.
+    // The DEFAULT node is minted even for a PARTS-ONLY return, and that is not
+    // an invented material. It is untargeted and empty — "the module shades the
+    // meshes it names and leaves the rest on their authored ones" — so it
+    // contributes nothing and the module re-emits parts-only byte for byte
+    // (`defaultOutput` finds it, `outputDefaultContributes` says no). It has to
+    // exist: a module-level `Discard()` is the DEFAULT material's cutout and
+    // has nowhere else to land, `activeSink` would otherwise elect nothing on
+    // an all-targeted document, and it is exactly the shape
+    // `unfoldOutputMaterials` produces from the single node this replaces (an
+    // empty material 0 beside the parts).
     if (t.isObjectExpression(arg)) {
       hasOutput = true;
-      const outputId = generateId();
-      rawNodes.push(createNode(outputId, outputDef, 'Output'));
-      wireOutputChannels(outputId, arg, '_return_');
-      // Index sections FIRST, then named ones: the canonical order the builder
-      // writes and the sanitizer never reorders (handles are positional).
-      const materials: OutputMaterial[] = [];
-      const signature = buildIndexMaterials(outputId, arg, materials);
-      buildPartMaterials(outputId, arg, materials);
-      const outputNode = nodeById(rawNodes, outputId);
-      if (outputNode) {
-        if (materials.length > 0) (outputNode.data as Record<string, unknown>).materials = materials;
-        if (signature) (outputNode.data as Record<string, unknown>).modelSignature = { materials: signature };
-      }
+      const defaultNode = mintOutputNode(outputDef);
+      wireOutputChannels(defaultNode.id, arg, '_return_');
+      buildIndexOutputs(outputDef, arg);
+      buildPartOutputs(outputDef, arg);
       return;
     }
 
-    const outputId = generateId();
-    rawNodes.push(createNode(outputId, outputDef, 'Output'));
+    const outputId = mintOutputNode(outputDef).id;
     hasOutput = true;
     // Single-value: an inline `color(0x…)` is the color widget's stored value
     // (graphToCode's color-only bare-return form); anything else wires to
@@ -895,19 +952,22 @@ export function codeToGraph(code: string): CodeToGraphResult {
   // is THE output" question, so `outputNodes` rather than a `find`.)
   if (outputNodes(rawNodes).length === 0 && !sdfOutputId) {
     const outputDef = NODE_REGISTRY.get('output');
-    if (outputDef) {
-      rawNodes.push(createNode(generateId(), outputDef, 'Output'));
-    }
+    if (outputDef) mintOutputNode(outputDef);
   }
 
   // Wire any deferred Discard(cond) into the output node's discard port.
   if (pendingDiscardArg) {
-    // A module-level `Discard()` belongs to the MODULE, so it is the default
-    // material's cutout — never one mesh's. It therefore lands on material 0's
-    // bare `discard` handle, and never on a `m<n>:discard` one. (A per-mesh
-    // cutout is a `discard` KEY inside that part, which `wireOutputChannels`
-    // has already handled.)
-    const outputNode = findDefaultOutput(rawNodes);
+    // A module-level `Discard()` belongs to the MODULE, so it is the DEFAULT
+    // material's cutout — never one mesh's. It lands on the untargeted Output's
+    // `discard` handle. (A per-mesh cutout is a `discard` KEY inside that part,
+    // which `wireOutputChannels` has already handled on that part's own node.)
+    //
+    // `defaultOutput`, the same predicate emission asks — not
+    // `findDefaultOutput`, which is `outputs[0]` and, once each material is its
+    // own node, would hand the module's cutout to whichever targeted node
+    // happened to be first. The parse always mints the default node, so this is
+    // null only when the parse produced no Output at all.
+    const outputNode = defaultOutput(rawNodes);
     if (outputNode) {
       // `Discard(float(<lit>))` is the discard widget's stored value (the
       // emitted form of a non-zero dial) — collapse it back into data.values

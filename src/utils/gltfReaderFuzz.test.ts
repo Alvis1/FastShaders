@@ -47,7 +47,10 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-const pad4 = (n: number) => (n + 3) & ~3;
+// Arithmetic, never `(n + 3) & ~3`: a bitwise operator coerces through ToInt32,
+// so that spelling returns a NEGATIVE length from 2**31 up. Harmless at fixture
+// sizes, but it is the shape that made the repacker u32 overflow guard dead code.
+const pad4 = (n: number) => Math.ceil(n / 4) * 4;
 
 /** bufferView 0 is the triangle, 1, 2, … the blobs. */
 function withBlobs(extra: Record<string, unknown>, blobs: Uint8Array[]) {

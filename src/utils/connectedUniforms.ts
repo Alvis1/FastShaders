@@ -1,5 +1,6 @@
 import type { AppNode, AppEdge } from '@/types';
-import { activeSink } from '@/utils/sdfPartition';
+import { activeSink, isMarchOutput } from '@/utils/sdfPartition';
+import { contributingOutputs } from '@/utils/outputMaterials';
 import { getNodeValues } from '@/types';
 import { sanitizeIdentifier } from '@/utils/nameUtils';
 import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
@@ -57,15 +58,21 @@ export function connectedUniformNamesKey(
   // property inside it unreachable and blank the overlay on collapse.
   const real = unwrapCollapsedGroupEdges(nodes, edges);
 
-  // The ACTIVE sink — every material's chain hangs off the one Output, so one
-  // walk back from it reaches a slider driving the default AND one driving a
-  // per-mesh material. Missing the latter would leave that slider out of the
-  // Uniforms overlay, which is the "scrubbing does nothing" failure this
-  // module exists to prevent, one mesh away. An INACTIVE output emits nothing,
-  // so a slider feeding only it must NOT be listed: scrubbing it would change
-  // no pixel — the same failure from the other side.
+  // EVERY Output that reaches the module, walked as one set — so a slider
+  // driving the default AND one driving a per-mesh material are both listed.
+  // Missing the latter is the "scrubbing does nothing" failure this module
+  // exists to prevent, one mesh away; and a PARKED Output emits nothing, so a
+  // slider feeding only it must NOT be listed, which is the same failure from
+  // the other side.
+  //
+  // `contributingOutputs`, not the active sink: every material used to hang off
+  // the one Output, so one walk covered them all. Since the Output split each
+  // targeted material is its own NODE, and a single-sink walk would list only
+  // the default's sliders — silently, on exactly the multimesh documents this
+  // matters most for. A driving Raymarch Output still emits alone, and the
+  // march check stays here for the reason `contributingOutputs` documents.
   const sink = activeSink(nodes, real);
-  const emitting = sink ? [sink] : [];
+  const emitting = sink && isMarchOutput(sink) ? [sink] : contributingOutputs(nodes);
   /** Nodes that feed an emitting Output, walking edges BACKWARDS from each. */
   const live = new Set<string>();
   if (emitting.length > 0) {

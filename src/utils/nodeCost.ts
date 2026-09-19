@@ -3,6 +3,11 @@ import { getNodeValues } from '@/types';
 import { NODE_REGISTRY, effectiveInputs } from '@/registry/nodeRegistry';
 import { getCost } from '@/utils/costTable';
 import { activeSink, isSinkNode, isMarchOutput, marchPartition } from '@/utils/sdfPartition';
+// `nodeCost` already sits inside the store's import cycle (nodeCost →
+// outputMaterials → exposedPorts → edgeUtils → useAppStore), so this adds no
+// new edge — and nothing here is EVALUATED at module scope, which is the rule
+// the costTable TDZ lesson leaves behind.
+import { contributingOutputs } from '@/utils/outputMaterials';
 
 /**
  * GPU cost READERS that need the node graph — the per-instance price and the
@@ -131,20 +136,60 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
 }
 
 /**
- * Sum the GPU cost of every node reachable (backward) from an Output node —
- * the number the CostBar shows. Reverse-BFS over an incoming-edge adjacency map
- * (O(V+E)). Callers MUST hand in edges already run through
+ * THE nodes the cost total is walked back from — the ONE answer both the
+ * CostBar's per-graph pass (useSyncEngine) and the store's device selection
+ * read, so a headset change can never price a different set from the one the
+ * meter was showing a moment earlier.
+ *
+ * A driving Raymarch Output seeds ALONE — it suppresses every plain Output, so
+ * pricing one beside it would charge for a chain that emits nothing. Otherwise
+ * the seeds are `contributingOutputs`: the node supplying the module's
+ * top-level channels plus EVERY targeted Output, since each of those emits its
+ * own `parts` / `materialParts` entry whatever the active flag says. Seeding
+ * one sink only was right while one node held every material; with per-material
+ * Output nodes it would have priced one mesh's chain and left the rest free.
+ *
+ * `computeReachableCost` unions the list in ONE walk, so a feeder shared by two
+ * seeds is counted once — and its omitted-seed default is this function, which
+ * is what makes the store's device selection follow without an edit.
+ *
+ * It also replaces `activeSink`'s retired last-resort term: a document whose
+ * every Output is targeted has no sink at all, and used to price at 0 with an
+ * inert cost pill while graphToCode emitted its parts perfectly. It prices
+ * correctly here BECAUSE those Outputs contribute.
+ */
+export function costSeeds(nodes: AppNode[], edges: AppEdge[]): AppNode[] {
+  const sink = activeSink(nodes, edges);
+  if (sink && isMarchOutput(sink)) return [sink];
+  return contributingOutputs(nodes);
+}
+
+/**
+ * Sum the GPU cost of every node reachable (backward) from the seed Output
+ * nodes — the number the CostBar shows. Reverse-BFS over an incoming-edge
+ * adjacency map (O(V+E)). Callers MUST hand in edges already run through
  * `unwrapCollapsedGroupEdges` — collapsing a group must never change the
  * budget, so the walk reaches the real members either way. The group container
  * itself has no `registryType`, so `nodeCostPoints` prices it at 0 and only the
  * members are counted. Returns 0 when there's no Output node.
  *
- * The ACTIVE sink seeds the walk (`activeSink` — the flagged Output or
- * Raymarch Output, else the historical fallback): the total is the price of
- * what the shader actually RENDERS, and an inactive output's chain emits
- * nothing, so pricing it would put points on the meter that no headset ever
- * pays. `sinkCosts` prices every sink on its own for the badges, so two
- * alternative outputs can be compared before one is activated.
+ * `costSeeds` seeds the walk when no seed is passed — a DRIVING Raymarch Output
+ * alone, else `contributingOutputs`: the node supplying the module's top-level
+ * channels plus EVERY targeted Output, since each of those emits its own
+ * `parts` / `materialParts` entry however the active flag falls. The total is
+ * the price of what the shader actually RENDERS, so what stays OUT is a PARKED
+ * Output (untargeted but not the default, hence silenced by another node's
+ * flag) and every plain Output while a march drives — chains that emit nothing,
+ * whose points no headset ever pays. `sinkCosts` prices every sink on its own
+ * for the badges, so two alternative outputs can be compared before one is
+ * activated.
+ *
+ * SEVERAL seeds are ONE walk, not a sum of walks, and that is the whole reason
+ * the parameter is a list: a feeder shared by two seeds has to be counted
+ * ONCE, and summing per-seed totals would charge it twice. It is why
+ * useSyncEngine can no longer hand `sinkCosts` a pre-priced entry for the
+ * active node — that shortcut is valid only while the total IS one sink's
+ * subtree.
  *
  * A node feeding two materials is counted ONCE (the `visited` set), and every
  * section's chain is summed into the one total. In POINTS PER PIXEL that is an
@@ -166,23 +211,49 @@ export function nodeCostPoints(node: AppNode, edges: AppEdge[]): number {
 export function computeReachableCost(
   nodes: AppNode[],
   edges: AppEdge[],
-  seed?: AppNode | null,
+  /** The sinks to walk back from. Omitted = `costSeeds`; `null` = none (0);
+   *  one node or a list, unioned into a single walk. */
+  seed?: AppNode | readonly AppNode[] | null,
   /** Prebuilt incoming-edge adjacency, when the caller prices several sinks
    *  over the same edge list (`sinkCosts`) and would otherwise rebuild it per
    *  sink. Omit and it is built here. */
   incoming?: ReadonlyMap<string, string[]>,
+  /** Prebuilt sink-id set, for exactly the reason `incoming` exists: `sinkCosts`
+   *  prices every sink over ONE node list, so without this it pays an identical
+   *  `nodes.filter(isSinkNode).map()` pass and an identical Set allocation per
+   *  sink — 17 of each on a 16-material import.
+   *
+   *  NOT the retired `known` parameter in another shape. That one handed in an
+   *  ANSWER for one seed, which stopped being true the moment the total became
+   *  a UNION of several and would have written the union price onto one node's
+   *  badge (see `sinkCosts` below). This hands in a value that is the same for
+   *  every seed BY CONSTRUCTION — a function of `nodes` alone, which every call
+   *  in that loop shares. Omit and it is built here. */
+  sinks?: ReadonlySet<string>,
 ): number {
-  const sink = seed === undefined ? activeSink(nodes, edges) : seed;
-  if (!sink) return 0;
-  const sinkIds = new Set(nodes.filter(isSinkNode).map((n) => n.id));
-  let total = sumReachable(nodes, edges, [sink.id], sinkIds, incoming);
+  const seeds: readonly AppNode[] = seed === undefined
+    ? costSeeds(nodes, edges)
+    : seed === null
+      ? []
+      // Not `Array.isArray`'s narrowing: it widens a `readonly AppNode[]` arm
+      // to `any[]`, which loses the element type on the branch that needs it.
+      : (Array.isArray(seed) ? (seed as readonly AppNode[]) : [seed as AppNode]);
+  if (seeds.length === 0) return 0;
+  const sinkIds = sinks ?? new Set(nodes.filter(isSinkNode).map((n) => n.id));
+  let total = sumReachable(nodes, edges, seeds.map((s) => s.id), sinkIds, incoming);
   // The Raymarch Output evaluates its per-step bodies once per ray STEP (the
   // Field also four more times for the gradient normal) and pays its own fixed
   // march overhead. Each body was counted once above; add the remaining
   // evaluations, using the SAME partition the emitter uses
   // (utils/sdfPartition.ts). The hit-shaded and direction scopes run once.
-  if (isMarchOutput(sink)) {
-    const march = sink;
+  //
+  // PER MARCH SEED, never over the union: a per-step multiplier belongs to one
+  // node's own loop, and `marchPartition` is defined against one sink id. Only
+  // one march output can drive today, so the loop runs at most once; two would
+  // charge a body shared between them twice, which is the honest direction (it
+  // really is evaluated in both loops) but is not a case anything can produce.
+  for (const march of seeds) {
+    if (!isMarchOutput(march)) continue;
     const raw = Number(getNodeValues(march).steps);
     const dflt = Number(NODE_REGISTRY.get(march.data.registryType)?.defaultValues?.steps ?? 64);
     const steps = Number.isFinite(raw) ? raw : dflt;
@@ -209,28 +280,32 @@ export function computeReachableCost(
 
 /**
  * Every sink's OWN price — what the shader would cost with THAT node active.
- * The active sink's entry equals `computeReachableCost(nodes, edges)`; the
- * badges on inactive outputs show theirs muted, so two candidate outputs can
- * be compared before clicking one. Keyed by node id.
+ * The badges on inactive outputs show theirs muted, so two candidate outputs
+ * can be compared before clicking one. Keyed by node id.
  *
- * `known` lets a caller that has ALREADY priced a sink hand the answer in
- * instead of paying for it twice: useSyncEngine computes the ACTIVE sink's
- * total first (it is the CostBar's number and gates the whole write), and that
- * entry is this map's active row by construction.
+ * There used to be a `known` parameter here, so useSyncEngine could hand in
+ * the total it had just computed instead of paying for the active sink's walk
+ * twice. It is gone: that shortcut rested on "the total IS one sink's
+ * subtree", which stops being true the moment `computeReachableCost` is given
+ * several seeds — the union price would have been written onto one node's
+ * badge. One extra reverse-BFS per graph change is the price of a figure that
+ * cannot silently mean something else.
  */
-export function sinkCosts(
-  nodes: AppNode[],
-  edges: AppEdge[],
-  known?: ReadonlyMap<string, number>,
-): Map<string, number> {
+export function sinkCosts(nodes: AppNode[], edges: AppEdge[]): Map<string, number> {
   const out = new Map<string, number>();
-  // One adjacency build for the whole set — a document may hold several sinks
-  // now that outputs coexist, and each walk would otherwise rebuild it.
+  // ONE adjacency build and ONE sink-set build for the whole set — a document
+  // may hold several sinks now that outputs coexist, and each walk would
+  // otherwise rebuild both. `sinkIds` is a function of `nodes` alone, so every
+  // call in this loop wants the identical Set.
   const incoming = buildIncoming(edges);
+  const sinks = new Set(nodes.filter(isSinkNode).map((n) => n.id));
   for (const n of nodes) {
+    // `isSinkNode(n)`, not `sinks.has(n.id)`: the two diverge on duplicate ids,
+    // which this codebase admits can arrive (`outputsInEmitOrder` drops them
+    // explicitly), and the `has` form would price a NON-sink under a sink's id
+    // and overwrite that badge with a different number.
     if (!isSinkNode(n)) continue;
-    const pre = known?.get(n.id);
-    out.set(n.id, pre !== undefined ? pre : computeReachableCost(nodes, edges, n, incoming));
+    out.set(n.id, computeReachableCost(nodes, edges, n, incoming, sinks));
   }
   return out;
 }
@@ -251,7 +326,7 @@ function sumReachable(
   nodes: AppNode[],
   edges: AppEdge[],
   seeds: string[],
-  outputIds: Set<string>,
+  outputIds: ReadonlySet<string>,
   prebuiltIncoming?: ReadonlyMap<string, string[]>,
 ): number {
   const incoming = prebuiltIncoming ?? buildIncoming(edges);

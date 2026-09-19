@@ -20,6 +20,9 @@
 //! - an image read re-verifies its hash;
 //! - GC keeps every image any `.json` in the directory names, so a backup, the
 //!   current file or a quarantined file never loses its pixels;
+//! - GC also keeps every image THIS PROCESS has stored, so a put that commits
+//!   while a pass is running — before any document names it — is never
+//!   collected (see `StoredImages`);
 //! - every write stages under its own name, so two concurrent writers of one
 //!   image never touch each other's staging file.
 //!
@@ -32,6 +35,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
@@ -70,6 +74,61 @@ const DIGEST_LEN: usize = 64;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Numbers every staging file this process creates (see `staging_path`).
 static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// The image digests THIS PROCESS has stored — what keeps a GC pass from
+/// collecting an image a concurrent put has just committed.
+///
+/// `gc_dir` reads the documents in one loop and deletes in a SECOND, and the
+/// two commands run on separate async workers with nothing else between them,
+/// so a put that commits between the loops names an image no document mentions
+/// YET: the webview is still building the write that will reference it. GC
+/// deleted the file, `autosave_write`'s `E_MISSING_IMAGE` check had already
+/// passed, and the document committed a ref whose pixels were gone — a
+/// dangling ref at the next boot (the N8 notice) and nothing else said so. The
+/// webview's own gate cannot close this: `store/desktopAutosaveBoot.ts` bounds
+/// its `gc()` call, and a pass that merely takes too long opens the gate
+/// exactly as a finished one does.
+///
+/// `store_image` CLAIMS its digest before it touches a file and `gc_dir`
+/// consults the set INSIDE the same critical section as its `remove_file`, so
+/// the two serialize: either the claim is visible to the check (the file is
+/// kept), or the delete finished before the claim returned, and the
+/// already-on-disk shortcut then sees no file and writes it again.
+///
+/// Bounded by the images one session stores (64 bytes each, a few hundred at
+/// most), and a session runs GC once, before its first write.
+#[derive(Default)]
+struct StoredImages(Mutex<HashSet<String>>);
+
+impl StoredImages {
+    /// Nothing can panic while this is held (a set insert, one lookup and one
+    /// `remove_file`), so a poisoned guard is recovered rather than
+    /// propagated: one unrelated panic must not leave the store unusable.
+    fn lock(&self) -> MutexGuard<'_, HashSet<String>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Claim `digest` BEFORE the file can be observed — see the type's note.
+    fn claim(&self, digest: &str) {
+        self.lock().insert(digest.to_string());
+    }
+
+    /// Delete `path` unless this process has claimed `digest`. The check and
+    /// the delete are ONE critical section on purpose: split, a claim landing
+    /// between them is exactly the race this closes.
+    fn delete_unclaimed(&self, digest: &str, path: &Path) -> bool {
+        let set = self.lock();
+        !set.contains(digest) && fs::remove_file(path).is_ok()
+    }
+}
+
+/// The process-wide set the two commands share. `store_image` and `gc_dir`
+/// take it as a parameter instead of reaching for it, so the tests drive
+/// isolated instances (and so nothing has to be `manage`d in main.rs).
+fn stored_images() -> &'static StoredImages {
+    static STORED: OnceLock<StoredImages> = OnceLock::new();
+    STORED.get_or_init(StoredImages::default)
+}
 
 #[derive(Default)]
 pub struct CloseState {
@@ -243,8 +302,13 @@ fn holds_digest(path: &Path, digest: &str) -> bool {
 /// digest. Content-addressed, so a file at the destination that hashes to the
 /// digest already holds these bytes: that is success, and it is never removed
 /// (another call may have just committed it and reported Ok).
-fn store_image(dir: &Path, bytes: &[u8]) -> Result<String, String> {
+fn store_image(dir: &Path, bytes: &[u8], stored: &StoredImages) -> Result<String, String> {
     let digest = sha256_hex(bytes);
+    // Claim before any file operation: from here a concurrent `gc_dir` keeps
+    // this digest whatever the documents on disk say — and if it had already
+    // decided to delete it, that delete has finished, so the shortcut below
+    // reads the truth rather than a file about to vanish. See `StoredImages`.
+    stored.claim(&digest);
     let dest = image_path(dir, &digest);
     if holds_digest(&dest, &digest) {
         return Ok(digest);
@@ -260,12 +324,26 @@ fn store_image(dir: &Path, bytes: &[u8]) -> Result<String, String> {
     Ok(digest)
 }
 
-/// Delete every image no `.json` in `dir` names, plus staging leftovers in both
-/// directories (it runs before a session's first write, so none is live).
-/// Returns how many images it removed. A `.json` it cannot read aborts the
-/// whole pass before anything is deleted: an unread document may name any of
-/// them.
-fn gc_dir(dir: &Path) -> Result<u32, String> {
+/// Delete every image no `.json` in `dir` names AND this process has not
+/// stored (`StoredImages` — the keep set below is read in a first pass and
+/// acted on in a second, so a concurrent put is invisible to it), plus staging
+/// leftovers in both directories. Returns how many images it removed. A
+/// `.json` it cannot read aborts the whole pass before anything is deleted: an
+/// unread document may name any of them.
+///
+/// The staging sweep is NOT claim-guarded, and the reason it once gave — that
+/// this runs before a session's first write, so no staging file is live — is
+/// false: the webview's gate bounds its `gc()` call and opens on the timeout
+/// too, which is the whole reason `StoredImages` exists (and
+/// `a_put_inside_a_running_gc_survives_it` pins that a put really can land
+/// mid-pass). So a live `<digest>.txt.<pid>-<seq>` or `graph.json.<pid>-<seq>`
+/// can be swept between its `stage` and its `rename`. That is deliberate and
+/// bounded: the rename then fails ENOENT, the command returns `E_IO`, and the
+/// webview reports `autosave-file-failed` and rewrites on the next edit — a
+/// LOUD, recoverable failure, where collecting a committed image was a silent
+/// permanent one. Guarding the staging names too would need the claim to cover
+/// a name that does not exist yet.
+fn gc_dir(dir: &Path, stored: &StoredImages) -> Result<u32, String> {
     let mut keep = HashSet::new();
     // Entry errors propagate here (no `.flatten()`): a document the listing
     // could not report is as unread as one that could not be opened.
@@ -299,7 +377,7 @@ fn gc_dir(dir: &Path) -> Result<u32, String> {
         let Some(stem) = name.strip_suffix(suffix.as_str()) else {
             continue;
         };
-        if is_digest(stem) && !keep.contains(stem) && fs::remove_file(e.path()).is_ok() {
+        if is_digest(stem) && !keep.contains(stem) && stored.delete_unclaimed(stem, &e.path()) {
             removed += 1;
         }
     }
@@ -384,7 +462,7 @@ pub async fn autosave_image_put(
     if !is_image_payload(bytes) {
         return Err("E_BAD_IMAGE".into());
     }
-    store_image(&root(&app)?, bytes)
+    store_image(&root(&app)?, bytes, stored_images())
 }
 
 /// An image payload by digest, re-verified against its name.
@@ -410,7 +488,7 @@ pub async fn autosave_image_get(
 
 #[tauri::command]
 pub async fn autosave_gc(app: tauri::AppHandle) -> Result<u32, String> {
-    gc_dir(&root(&app)?)
+    gc_dir(&root(&app)?, stored_images())
 }
 
 /// Move a slot's current document aside as `<stem>.corrupt-<ms>.json`, so boot
@@ -706,14 +784,15 @@ mod tests {
     #[test]
     fn store_image_stores_once_and_takes_a_matching_file_as_done() {
         let s = Scratch::new("store");
+        let stored = StoredImages::default();
         let payload = b"data:image/png;base64,AAAA";
-        let d = store_image(&s.0, payload).unwrap();
+        let d = store_image(&s.0, payload, &stored).unwrap();
         assert_eq!(d, sha256_hex(payload));
         assert_eq!(fs::read(image_path(&s.0, &d)).unwrap(), payload);
-        assert_eq!(store_image(&s.0, payload).unwrap(), d);
+        assert_eq!(store_image(&s.0, payload, &stored).unwrap(), d);
         // A damaged file under the digest is replaced.
         fs::write(image_path(&s.0, &d), b"damaged").unwrap();
-        assert_eq!(store_image(&s.0, payload).unwrap(), d);
+        assert_eq!(store_image(&s.0, payload, &stored).unwrap(), d);
         assert_eq!(fs::read(image_path(&s.0, &d)).unwrap(), payload);
         assert!(staged_in(&s.0.join(IMAGES_DIR)).is_empty());
     }
@@ -731,12 +810,14 @@ mod tests {
         for round in 0..12 {
             let s = Scratch::new(&format!("race{round}"));
             let barrier = Arc::new(Barrier::new(2));
+            let stored = Arc::new(StoredImages::default());
             let workers: Vec<_> = (0..2)
                 .map(|_| {
                     let (dir, p, b) = (s.0.clone(), Arc::clone(&payload), Arc::clone(&barrier));
+                    let st = Arc::clone(&stored);
                     std::thread::spawn(move || {
                         b.wait();
-                        store_image(&dir, &p)
+                        store_image(&dir, &p, &st)
                     })
                 })
                 .collect();
@@ -784,7 +865,10 @@ mod tests {
         let staged_doc = s.0.join(format!("graph.json.1-2{TMP_SUFFIX}"));
         fs::write(&staged_doc, format!(r#"["fsimg-{d4}"]"#)).unwrap();
 
-        assert_eq!(gc_dir(&s.0).unwrap(), 1);
+        // A fresh claim set: this pass stands in for a session's first GC, run
+        // before it has put anything.
+        let stored = StoredImages::default();
+        assert_eq!(gc_dir(&s.0, &stored).unwrap(), 1);
         for d in [&d1, &d2, &d3] {
             assert!(images.join(format!("{d}.{IMAGE_EXT}")).exists(), "{d} kept");
         }
@@ -793,7 +877,69 @@ mod tests {
         assert!(!staged_doc.exists());
         assert!(images.join("notes.txt").exists());
         // A second pass has nothing left to do.
-        assert_eq!(gc_dir(&s.0).unwrap(), 0);
+        assert_eq!(gc_dir(&s.0, &stored).unwrap(), 0);
+    }
+
+    /// The race the claim set closes: `autosave_image_put` commits an image
+    /// that no document names YET — the write that will reference it is still
+    /// being built — and a GC pass whose keep set was read before it collects
+    /// the file. `autosave_write`'s `E_MISSING_IMAGE` check may already have
+    /// passed, so the document commits a ref whose pixels are gone: a dangling
+    /// ref at the next boot and the N8 notice, nothing else.
+    #[test]
+    fn gc_dir_keeps_an_image_this_process_stored() {
+        let s = Scratch::new("gcstore");
+        let stored = StoredImages::default();
+        let payload = b"data:image/png;base64,AAAA";
+        let digest = store_image(&s.0, payload, &stored).unwrap();
+        // No document names it: exactly the window between the put returning
+        // and the write that references it.
+        assert_eq!(gc_dir(&s.0, &stored).unwrap(), 0);
+        assert!(image_path(&s.0, &digest).is_file());
+        // A pass that knows nothing of it — the NEXT session's, after a write
+        // that dropped the ref — still collects it.
+        assert_eq!(gc_dir(&s.0, &StoredImages::default()).unwrap(), 1);
+    }
+
+    /// The same race under real concurrency, with the interleaving FORCED: a
+    /// FIFO stands in for a slow document read, so the put provably lands
+    /// INSIDE the keep pass — after the image would be listed by the delete
+    /// loop's `read_dir`, before that loop runs.
+    #[cfg(unix)]
+    #[test]
+    fn a_put_inside_a_running_gc_survives_it() {
+        let s = Scratch::new("gcrace");
+        // `fs::read` blocks at open() on a FIFO until a writer arrives, so the
+        // GC thread cannot leave its keep pass until this test lets it.
+        let fifo = s.0.join("blocker.json");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(made.is_ok_and(|st| st.success()), "mkfifo");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stored = std::sync::Arc::new(StoredImages::default());
+        let (dir, st) = (s.0.clone(), std::sync::Arc::clone(&stored));
+        let gc = std::thread::spawn(move || {
+            let r = gc_dir(&dir, &st);
+            let _ = tx.send(());
+            r
+        });
+        let payload = b"data:image/png;base64,AAAA";
+        let digest = store_image(&s.0, payload, &stored).unwrap();
+        // Non-vacuity: the pass is still inside its keep loop, blocked on the
+        // FIFO, so the put really landed in the window this test is about.
+        assert!(rx.try_recv().is_err(), "the GC finished before the put");
+        // Open for write (never with O_TRUNC — undefined on a FIFO) and close:
+        // the keep pass reads `[]` and goes on to the delete loop. From its own
+        // thread, because open() on a FIFO blocks until a reader arrives: a GC
+        // that somehow never got there must fail this test, not hang the suite.
+        std::thread::spawn(move || {
+            if let Ok(mut f) = fs::OpenOptions::new().write(true).open(&fifo) {
+                let _ = f.write_all(b"[]");
+            }
+        });
+        rx.recv_timeout(Duration::from_secs(30))
+            .expect("the GC never finished");
+        assert_eq!(gc.join().unwrap(), Ok(0));
+        assert!(image_path(&s.0, &digest).is_file());
     }
 
     #[test]
@@ -804,7 +950,9 @@ mod tests {
         fs::write(&img, b"data:image/png;base64,AAAA").unwrap();
         // A directory named like a document: reading it fails on every OS.
         fs::create_dir(s.0.join("graph.json")).unwrap();
-        assert!(gc_dir(&s.0).unwrap_err().starts_with("E_IO"));
+        assert!(gc_dir(&s.0, &StoredImages::default())
+            .unwrap_err()
+            .starts_with("E_IO"));
         assert!(img.exists());
     }
 }

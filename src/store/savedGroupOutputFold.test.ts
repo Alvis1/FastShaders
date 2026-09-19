@@ -4,15 +4,19 @@ import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
 import type { OutputMaterial } from '@/utils/outputMaterials';
 import { activeSink } from '@/utils/sdfPartition';
+import { contributingOutputs } from '@/utils/outputMaterials';
 
 /**
  * A saved group may legitimately contain an Output (groupSelection filters
- * only groups and notes). Instantiating one folds a LEGACY-targeted copy into
- * the live Output as materials with its feeder edges re-pointed
- * (`foldExtraOutputs`), while an UNTARGETED copy arrives as an ordinary
- * INACTIVE Output — several may coexist, exactly one active
- * (utils/sdfPartition.ts `activeSink`) — and the live graph's Output keeps
- * driving because it precedes the arriving members in the combined array.
+ * only groups and notes).
+ *
+ * RE-AIMED with the Output-node split: instantiating one used to FOLD a
+ * targeted copy into the live Output as a material, with its feeder edges
+ * re-pointed (`foldExtraOutputs`), because the Output was a singleton. It is
+ * not: a TARGETED copy arrives as its own node and contributes its own `parts`
+ * entry, an UNTARGETED one as an ordinary PARKED Output (as it already did),
+ * and the live graph's Output keeps driving because it precedes the arriving
+ * members in the combined array (utils/sdfPartition.ts `activeSink`).
  */
 
 afterAll(() => {
@@ -63,22 +67,25 @@ beforeEach(() => {
 });
 
 describe('instantiateSavedGroup and the Output it may carry', () => {
-  it('folds a TARGETED saved Output into the live one as a material, re-pointing its feeder edge', () => {
+  it('keeps a TARGETED saved Output as its own node, wiring untouched, and it CONTRIBUTES', () => {
     seed(['Body']);
     useAppStore.getState().instantiateSavedGroup('sg1', { x: 500, y: 500 });
 
     const outs = outputs();
-    expect(outs).toHaveLength(1);
+    expect(outs).toHaveLength(2);
     expect(outs[0].id).toBe('liveOut');
-    const materials = (outs[0].data as { materials?: OutputMaterial[] }).materials ?? [];
-    expect(materials.map((m) => m.meshTargets)).toEqual([['Body']]);
-
-    // The feeder edge survived, re-pointed onto the surviving node's new
-    // material handle (m1:color) — fold's whole point: the wiring is kept.
-    const rePointed = useAppStore
-      .getState()
-      .edges.filter((e) => e.target === 'liveOut' && e.targetHandle === 'm1:color');
-    expect(rePointed).toHaveLength(1);
+    // No material is minted anywhere: each node IS one material now.
+    for (const n of outs) expect((n.data as { materials?: OutputMaterial[] }).materials, n.id).toBeUndefined();
+    const arrived = outs[1];
+    expect((arrived.data as { meshTargets?: string[] }).meshTargets).toEqual(['Body']);
+    // Its feeder edge is untouched — on the BARE handle it already used, which
+    // is what made the fold's re-pointing unnecessary.
+    expect(useAppStore.getState().edges.filter((e) => e.target === arrived.id && e.targetHandle === 'color'))
+      .toHaveLength(1);
+    // What the fold really preserved — that the arriving shading still reaches
+    // the module — is now preserved by contributing directly.
+    expect(contributingOutputs(useAppStore.getState().nodes).map((n) => n.id))
+      .toEqual(['liveOut', arrived.id]);
   });
 
   it('keeps an UNTARGETED saved Output as an INACTIVE second Output, wiring intact; the live one still drives', () => {

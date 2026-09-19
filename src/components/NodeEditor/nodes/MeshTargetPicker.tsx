@@ -6,7 +6,7 @@ import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
 import { MAX_PARTS } from '@/utils/outputMaterials';
-import { SECTION_SILENT_KEY } from './sectionLabelText';
+import { SECTION_SILENT_KEY, PARKED_KEY } from './sectionLabelText';
 import './MeshTargetPicker.css';
 
 /**
@@ -30,34 +30,52 @@ import './MeshTargetPicker.css';
 export interface MeshTargetPickerProps {
   /** Every mesh the loaded model reported, in inventory order. */
   meshNames: readonly string[];
-  /** The meshes this material shades. Empty = the default (material 0 only). */
+  /** The meshes this node's material shades. EMPTY = no binding of its own,
+   *  which on the contributing untargeted node means the DEFAULT material and
+   *  on any other untargeted one means PARKED (see `parked`). */
   selected: readonly string[];
   /**
-   * Whether "All meshes (default)" is offered — material 0 only. It IS the
-   * node's own channel state, so there is exactly one slot for "everything
-   * else"; offering it on an added material would author a second default,
-   * which silently loses at emission.
+   * Whether "All meshes (default)" is offered — TRUE on every plain Output
+   * since the per-material split: unticking everything is the only way back
+   * from a targeted node to a whole-model one, and it is the node's own
+   * binding that is being edited. (It was material-0-only while several
+   * materials shared a node, where a second empty list would have authored a
+   * second default that silently loses at emission; among NODES the same
+   * ambiguity is resolved by the active flag instead — see `parked`.)
    */
   allowDefault: boolean;
   /** A material above already shades this mesh, so emission shadows this one. */
   shadowed?: boolean;
   /**
-   * Material 0 only: the sections BELOW cover every mesh of the model on
-   * screen, so "everything else" is nothing (`defaultSectionUnused`). The
-   * label says so instead of promising "All meshes", which is what made an
-   * import-built node's first block read as a second, dead Output. Never a
-   * refusal — the section is still the fallback for a mesh whose material has
-   * no section, and for the next model loaded.
+   * THE DEFAULT node only: the other contributing Outputs between them cover
+   * every mesh of the model on screen, so "everything else" is nothing
+   * (`defaultSectionUnusedAcross`). The label says so instead of promising
+   * "All meshes", which is what made an import-built document's untargeted
+   * Output read as a second, dead one. Never a refusal — it is still the
+   * fallback for a mesh whose material has no Output, and for the next model
+   * loaded.
    */
   unused?: boolean;
   /**
-   * Added materials only: this section sets NO channel, so its part is dropped
-   * and the meshes it names keep exactly what they had (`sectionSilent` in
-   * OutputNode). Marked, never refused — it is where every "+ Add output"
-   * starts, and it is what made "add a section, pick the mesh" read as an
+   * A TARGETED node only (`!isDefault && !parked && !selfContributes` in
+   * OutputNode): it sets NO channel, so its `parts` / `materialParts` entry is
+   * dropped at emission and the meshes it names keep exactly what they had.
+   * Marked, never refused — it is where every freshly added Output starts, and
+   * it is what made "point an Output at a mesh and nothing happens" read as an
    * assignment that silently failed.
    */
   silent?: boolean;
+  /**
+   * UNTARGETED but not the module's default: among untargeted Outputs exactly
+   * one contributes (the one carrying the active flag), so this node is a
+   * whole-model variant sitting PARKED beside the one in use. Newly reachable
+   * with the per-material split — before it, an untargeted material 0 was the
+   * default by construction — and unmarked it would read as "All meshes",
+   * which is the one thing it is not doing. Never a refusal: ticking a mesh
+   * here turns it into a contributing material, and clicking the node's socket
+   * makes it the whole-model one.
+   */
+  parked?: boolean;
   /**
    * Most meshes ONE section may name (`MAX_PARTS`). `materialTargetNames` caps
    * on read, so a tick past it used to vanish silently; an unticked row past
@@ -83,6 +101,7 @@ export function MeshTargetPicker({
   shadowed = false,
   unused = false,
   silent = false,
+  parked = false,
   maxNames = MAX_PARTS,
   indexClaimed,
   onChange,
@@ -173,10 +192,14 @@ export function MeshTargetPicker({
   // The DEFAULT with nothing left to shade says so rather than promising "All
   // meshes": the sections below cover the whole model, and a label that claims
   // otherwise is what made this block read as a second Output.
+  // A PARKED node is untargeted, so "All meshes" is exactly what it would do
+  // if it were the one in use — and exactly what it is NOT doing. Its own word,
+  // ahead of `unused`: parked wins because it is the stronger fact (the node is
+  // out of the module entirely, not merely left with nothing to shade).
   const label = first !== undefined
     ? first
     : allowDefault
-      ? t(unused ? 'Nothing left' : 'All meshes', language)
+      ? t(parked ? 'Not rendered' : unused ? 'Nothing left' : 'All meshes', language)
       : t('No mesh', language);
   const isMissing = first !== undefined && meshNames.length > 0 && !meshNames.includes(first);
   // A section that names a mesh but sets no channel emits nothing either, so
@@ -184,6 +207,8 @@ export function MeshTargetPicker({
   // (the cause differs: no mesh vs nothing to paint with).
   const title = unassigned
     ? t('This material shades nothing — tick a mesh, or remove it', language)
+    : parked
+    ? t(PARKED_KEY, language)
     : silent
     ? t(SECTION_SILENT_KEY, language)
     : first === undefined
@@ -206,7 +231,7 @@ export function MeshTargetPicker({
       <button
         ref={btnRef}
         type="button"
-        className={`mesh-picker nodrag${isMissing ? ' mesh-picker--missing' : ''}${shadowed ? ' mesh-picker--shadowed' : ''}${unassigned ? ' mesh-picker--unassigned' : ''}${unused ? ' mesh-picker--unused' : ''}${silent && !unassigned ? ' mesh-picker--silent' : ''}`}
+        className={`mesh-picker nodrag${isMissing ? ' mesh-picker--missing' : ''}${shadowed ? ' mesh-picker--shadowed' : ''}${unassigned ? ' mesh-picker--unassigned' : ''}${unused ? ' mesh-picker--unused' : ''}${parked ? ' mesh-picker--parked' : ''}${silent && !unassigned ? ' mesh-picker--silent' : ''}`}
         title={title}
         aria-haspopup="listbox"
         aria-expanded={open}

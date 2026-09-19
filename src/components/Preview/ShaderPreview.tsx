@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { findDefaultOutput, materialPartsMirrorPlan, mirrorPlanKey } from '@/utils/outputMaterials';
+import { contributingOutputs, defaultOutput, materialPartsMirrorPlanAcross, mirrorPlanKey, moduleSettingsOutput } from '@/utils/outputMaterials';
 import { useAppStore } from '@/store/useAppStore';
 import { t } from '@/i18n';
 import { fillTemplate } from '@/utils/fillTemplate';
@@ -487,8 +487,13 @@ export function ShaderPreview() {
   // (and thus materialSettings) reference — Object.is bails, so the whole
   // ~1000-line panel no longer re-renders on every drag pointermove the way
   // the old whole-array nodes/edges subscriptions made it.
+  //
+  // `moduleSettingsOutput`, not `findDefaultOutput`: these four keys are
+  // written at MODULE level, so they belong to the untargeted Output when one
+  // exists (D1) — a targeted Output's Transparent/Side must not be applied to
+  // every mesh the module touches.
   const rawMaterialSettings = useAppStore((s) =>
-    (findDefaultOutput(s.nodes)?.data as
+    (moduleSettingsOutput(s.nodes)?.data as
       { materialSettings?: PreviewOptions['materialSettings'] } | undefined)?.materialSettings,
   );
   // A Raymarch Output with its Field OR Density wired REPLACES the Output in
@@ -558,8 +563,10 @@ export function ShaderPreview() {
   // whole preview — the SoundNode/edgeValueLabel subscription pattern.
   const envMapName = useAppStore((s) => {
     // The DEFAULT output. An env map wired to a TARGETED one lights only that
-    // mesh, so naming the Light dropdown after it would misdescribe the scene.
-    const out = findDefaultOutput(s.nodes);
+    // mesh, so naming the Light dropdown after it would misdescribe the scene
+    // — which is exactly what `defaultOutput` answers (null when every Output
+    // names a mesh, so the entry simply does not appear).
+    const out = defaultOutput(s.nodes);
     // getTargetEdges, NOT raw s.edges: a feeder inside a COLLAPSED group is
     // reached through a rewritten boundary edge whose source is the group id,
     // so a raw scan finds an edge whose `source` node has no registry def and
@@ -1941,12 +1948,12 @@ export function ShaderPreview() {
   // names ride node data, not the code (materialPartsContract R7), so they are
   // a real dep of the module. Two-step: a cheap string key per notify, the plan
   // rebuilt from getState() only when the key moves.
-  const mirrorKey = useAppStore((s) => mirrorPlanKey(materialPartsMirrorPlan(findDefaultOutput(s.nodes))));
+  const mirrorKey = useAppStore((s) => mirrorPlanKey(materialPartsMirrorPlanAcross(contributingOutputs(s.nodes))));
   const previewModule = useMemo(
     () => buildPreviewShaderModule(
       debouncedPreviewCode,
       materialSettings,
-      materialPartsMirrorPlan(findDefaultOutput(useAppStore.getState().nodes)),
+      materialPartsMirrorPlanAcross(contributingOutputs(useAppStore.getState().nodes)),
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [debouncedPreviewCode, debouncedMaterialSettingsKey, mirrorKey],
@@ -2432,7 +2439,7 @@ export function ShaderPreview() {
       title: shaderName,
       // The popup renders what the pane renders, mirrors included (R7): read
       // at the gesture, like the code it is built from.
-      materialPartsMirror: materialPartsMirrorPlan(findDefaultOutput(useAppStore.getState().nodes)),
+      materialPartsMirror: materialPartsMirrorPlanAcross(contributingOutputs(useAppStore.getState().nodes)),
     });
     w.document.write(html);
     w.document.close();

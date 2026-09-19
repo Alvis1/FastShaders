@@ -67,6 +67,26 @@ export type CompressionName = 'Draco' | 'meshopt' | 'KTX2';
 export const MESH_TOO_LARGE_KEY =
   'Model too large ({size} MB — max 64 MB). Reduce its polygon count or texture sizes and export it again from your 3D software.';
 
+/**
+ * The same sentence for a cap that is NOT the 64 MiB model gate. The build path
+ * reads a `.glb` up to GLB_READ_MAX_BYTES (96 MiB on the web, 256 in the desktop
+ * room) and reported through the key above, naming a ceiling 1.5x — on desktop
+ * 4x — BELOW the one it had just enforced.
+ *
+ * A SECOND key rather than `{limit}` on the first, so the sentence above keeps
+ * its "64" LITERAL — which previewMesh.test.ts pins against MESH_MAX_BYTES, the
+ * drift guard that catches a cap moved without its copy — and so every existing
+ * caller and its lv.json entry stay byte-identical.
+ *
+ * It is NOT because the fillers disagree any more: `fillMeshRefusal`
+ * (previewMesh.ts) fills `{limit}` too, from `limitBytes ?? MESH_MAX_BYTES`, so
+ * neither this key nor any later one can ship a raw placeholder down the
+ * English-only paths (`validateMeshBytes`, `createPreviewMesh().error`). That
+ * was the original reason for the split and it no longer holds.
+ */
+export const MESH_TOO_LARGE_LIMIT_KEY =
+  'Model too large ({size} MB — max {limit} MB). Reduce its polygon count or texture sizes and export it again from your 3D software.';
+
 /** Why a model was refused — what a caller that must BRANCH on it reads. */
 export type MeshRejectReason = 'unsupported' | 'empty' | 'too-large' | 'bad-glb' | 'compressed';
 
@@ -76,7 +96,10 @@ export type MeshRejectReason = 'unsupported' | 'empty' | 'too-large' | 'bad-glb'
  *   - `key` is the English template and the lv.json key;
  *   - `name` is the SANITIZED file name (never the raw one — it is shown);
  *   - `ext` is a display name for `{ext}`;
- *   - `sizeBytes` is formatted at display time, in the reader's language.
+ *   - `sizeBytes` is formatted at display time, in the reader's language;
+ *   - `limitBytes` is the cap that was APPLIED, present only when it is not
+ *     MESH_MAX_BYTES — it fills `{limit}`, which only MESH_TOO_LARGE_LIMIT_KEY
+ *     carries and only `meshRefusalMessage` fills.
  */
 export interface MeshRefusal {
   reason: MeshRejectReason;
@@ -84,11 +107,20 @@ export interface MeshRefusal {
   name?: string;
   ext?: CompressionName;
   sizeBytes?: number;
+  limitBytes?: number;
 }
 
-/** The over-cap refusal — also what the pre-read size gate returns. */
-export function modelTooLargeRefusal(sizeBytes: number): MeshRefusal {
-  return { reason: 'too-large', key: MESH_TOO_LARGE_KEY, sizeBytes };
+/**
+ * The over-cap refusal — also what the pre-read size gate returns. `limitBytes`
+ * is the cap the CALLER applied: naming it is the difference between a truthful
+ * refusal and one that tells the user to get under 64 MB when 96 (or 256) was
+ * allowed. Omitted, it is the 64 MiB model gate and the sentence is unchanged,
+ * so every existing caller and its Latvian entry stay exactly as they were.
+ */
+export function modelTooLargeRefusal(sizeBytes: number, limitBytes: number = MESH_MAX_BYTES): MeshRefusal {
+  return limitBytes === MESH_MAX_BYTES
+    ? { reason: 'too-large', key: MESH_TOO_LARGE_KEY, sizeBytes }
+    : { reason: 'too-large', key: MESH_TOO_LARGE_LIMIT_KEY, sizeBytes, limitBytes };
 }
 
 /**
@@ -117,8 +149,11 @@ export function preReadModelGate(
   buildEnabled: boolean,
 ): MeshRefusal | null {
   const cap = buildEnabled === true && kind === 'glb' ? GLB_READ_MAX_BYTES : MESH_MAX_BYTES;
-  if (typeof sizeBytes !== 'number' || !(sizeBytes >= 0)) return modelTooLargeRefusal(0);
-  return sizeBytes > cap ? modelTooLargeRefusal(sizeBytes) : null;
+  // The refusal carries the cap it APPLIED: reporting a 120 MiB `.glb` on the
+  // build path through the model-gate sentence told the user to get under 64 MB
+  // when 96 — in the desktop room 256 — was allowed.
+  if (typeof sizeBytes !== 'number' || !(sizeBytes >= 0)) return modelTooLargeRefusal(0, cap);
+  return sizeBytes > cap ? modelTooLargeRefusal(sizeBytes, cap) : null;
 }
 
 /*

@@ -69,7 +69,11 @@ export interface GlbChunks {
   bin: Uint8Array | null;
 }
 
-const pad4 = (n: number) => (n + 3) & ~3;
+/** 4-alignment, by arithmetic and NOT `(n + 3) & ~3`: a bitwise operator
+ *  coerces through ToInt32, so the old spelling returned 0 at 2^32 and
+ *  -2147483648 at 3·2^31 — exactly where `buildGlbContainer`'s u32 guard below
+ *  exists to fire, which left it dead at the one size it is for. */
+const pad4 = (n: number) => Math.ceil(n / 4) * 4;
 
 function dataView(b: Uint8Array): DataView {
   return new DataView(b.buffer, b.byteOffset, b.byteLength);
@@ -146,7 +150,10 @@ export function parseGlbContainer(
  * a multiple of 4) and, only when `bin` is not null, the BIN chunk (padded with
  * 0x00). An empty `bin` still writes a BIN chunk of length 0, so a container
  * this module parsed rebuilds byte-identically. Throws only when the total
- * would not fit the u32 length field, which the reader's caps make unreachable.
+ * would not fit the u32 length field — which the reader's caps make unreachable
+ * today (a model stops at 96/256 MiB, a module's assets at 64 MiB), but the
+ * throw must still be REAL: it was dead until 2026-09-18, because `pad4` wrapped
+ * through ToInt32 at exactly the sizes that reach it.
  */
 export function buildGlbContainer(json: string, bin: Uint8Array | null): Uint8Array<ArrayBuffer> {
   const text = new TextEncoder().encode(json);

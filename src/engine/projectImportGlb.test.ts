@@ -20,7 +20,7 @@ import { buildZip } from '@/utils/zipWriter';
 import { readGlbFsExtras } from '@/utils/glbShaderExtras';
 import { readGltfModel } from '@/utils/gltfReader';
 import { imageRefFor } from '@/utils/imagePayloadRefs';
-import { indexSectionsAwake, loadedModelOf, readModelSignature } from '@/utils/outputMaterials';
+import { contributingOutputs, indexSectionsAwake, isIndexSection, loadedModelOf, outputMaterials, readModelSignature } from '@/utils/outputMaterials';
 import { encodeDataUri } from '@/utils/glbContainer';
 import { FS_FIXTURE_MODULE_MARKER, makeFastShadersGlb, makeNode, makeRealPng, type FsGlbFixture } from '@/test-utils';
 import type { AppNode } from '@/types';
@@ -205,8 +205,46 @@ describe('importShaderGlb — the project branch', () => {
     expect(model.model.materials[0].slots).toEqual([]);
     expect(indexOfBytes(mesh.bytes, PNG)).toBe(-1);
     expect(indexOfBytes(glb(project(), { textureFromAsset: KEY }), PNG)).toBeGreaterThan(-1);
-    const restored = s.nodes.find((n) => n.id === 'o1')!;
-    expect(indexSectionsAwake(readModelSignature(restored.data), loadedModelOf(mesh))).toBe(true);
+    // The restore SPLITS the Output, so the signature lives on the index
+    // SIBLING — `o1` itself is the untargeted default and carries none.
+    const sigNode = contributingOutputs(s.nodes).find((n) => outputMaterials(n).some(isIndexSection))!;
+    expect(sigNode.id).not.toBe('o1');
+    expect(indexSectionsAwake(readModelSignature(sigNode.data), loadedModelOf(mesh))).toBe(true);
+  });
+
+  /**
+   * The same file written by a CURRENT build: its project block already carries
+   * the SPLIT shape — an untargeted default beside an index NODE — so nothing
+   * for the unfold to do. The strip must find the section anyway.
+   *
+   * It did not. `indexSectionMaterialsOf` read the claims off the FIRST Output,
+   * which after the split is the default and carries no index section at all,
+   * so it answered [] and the preview copy kept every texture the shader had
+   * already baked in — no error, no missing picture, just a model twice the
+   * size it should be, riding the IndexedDB mirror and every later zip export.
+   */
+  it('a project block already in the SPLIT shape strips its sections too', async () => {
+    const def = makeNode('o0', 'output');
+    (def.data as Record<string, unknown>).emitOrder = 0;
+    const section = makeNode('o1', 'output');
+    Object.assign(section.data as Record<string, unknown>, {
+      emitOrder: 1,
+      gltfMaterialIndex: 0,
+      modelSignature: { materials: ['Body', 'Glass'] },
+    });
+    const r = await importShaderGlb(
+      'm.glb',
+      glb(project({ graph: { nodes: [def, section], edges: [] } }), { textureFromAsset: KEY }),
+    );
+    expect(r.ok).toBe(true);
+    const mesh = useAppStore.getState().previewMesh!;
+    const model = readGltfModel(mesh.bytes, 'glb');
+    expect(model.ok).toBe(true);
+    if (!model.ok) return;
+    expect(model.model.materials[0].slots).toEqual([]);
+    expect(indexOfBytes(mesh.bytes, PNG)).toBe(-1);
+    // …and the graph came back as the two nodes it was written as.
+    expect(useAppStore.getState().nodes.map((n) => n.id).sort()).toEqual(['o0', 'o1']);
   });
 });
 

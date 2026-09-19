@@ -164,7 +164,7 @@ describe('glbDialogCopy', () => {
     const texts = c.lines.map((l) => l.text);
     expect(texts[0]).toBe(`Materials: ${MAX_INDEX_MATERIALS + 3}, textures: 1.`);
     expect(texts[1]).toMatch(/^Estimated texture memory on the headset: .* MB \(1 texture\)\.$/);
-    expect(texts[2]).toBe(`Import all ${MAX_INDEX_MATERIALS + 3} materials? Each adds an Output section, textures and draw calls.`);
+    expect(texts[2]).toBe(`Import all ${MAX_INDEX_MATERIALS + 3} materials? Each adds an Output node, textures and draw calls.`);
     expect(texts[3]).toBe(`The editor holds at most ${MAX_INDEX_MATERIALS} material sections; the remaining 3 keep the materials authored in the model.`);
     expect(texts[4]).toBe('Building replaces the current shader. Undo (Ctrl+Z / ⌘Z) brings it back while this tab stays open.');
     expect(texts[5]).toBe('The current 3D model is replaced either way, and undo does not bring it back.');
@@ -175,7 +175,7 @@ describe('glbDialogCopy', () => {
     const c = glbDialogCopy(SHAPES.blocked.plan, SHAPES.blocked.facts, ASK, 'en');
     expect(c.lines.map((l) => l.text)).toEqual([
       'Materials: 12, textures: 1.',
-      "This model has 12 materials. Imports are limited to 10 — each becomes an Output section with its own textures and draw calls. Turn on “Allow more than 10 materials” in the toolbar's right-click list to import them all.",
+      "This model has 12 materials. Imports are limited to 10 — each becomes an Output node with its own textures and draw calls. Turn on “Allow more than 10 materials” in the toolbar's right-click list to import them all.",
       'Building replaces the current shader. Undo (Ctrl+Z / ⌘Z) brings it back while this tab stays open.',
     ]);
     expect(c.primaryLabel).toBeNull();

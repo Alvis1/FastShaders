@@ -11,9 +11,16 @@
 import type { Language } from '@/i18n';
 
 /** Bytes → the number printed before "MB" in a notice. MB means MiB (bytes / 2^20).
- *  At most one decimal. 'up' (the default) rounds up to the next tenth, so a size
- *  just over a limit never prints equal to it (64 MiB + 1 B → 64.1, not 64).
- *  Latvian gets a decimal comma. Never grouped. */
+ *  At most one decimal. Latvian gets a decimal comma. Never grouped.
+ *
+ *  WHICH rounding follows from what the number IS, and the two are opposites:
+ *  a MEASURED size takes 'up' (the default), so one byte over a cap never
+ *  prints equal to it (64 MiB + 1 B → 64.1, not 64); a declared CAP takes
+ *  'nearest', because rounding a cap up claims more room than is enforced.
+ *  Both appear in one sentence ("{size} MB — max {limit} MB"), so getting them
+ *  the same way round would make the pair contradict itself at the boundary.
+ *  Every cap shipped today is a whole number of MiB, so the two agree and no
+ *  string moves — it matters the first time one is not. */
 export function formatMiB(bytes: number, lang: Language, rounding: 'up' | 'nearest' = 'up'): string {
   const b = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
   const tenths = (b * 10) / 1048576;

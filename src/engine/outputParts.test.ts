@@ -22,6 +22,7 @@ import { graphToCode } from './graphToCode';
 import { codeToGraph } from './codeToGraph';
 import { makeNode, makeEdge } from '@/test-utils';
 import type { AppNode } from '@/types';
+import { materialTargetNames, outputMaterials, outputsInEmitOrder } from '@/utils/outputMaterials';
 
 /** The ONE Output node, carrying the given added materials. */
 function outputWith(id: string, ...meshes: string[]): AppNode {
@@ -171,15 +172,17 @@ describe('adversarial mesh names', () => {
 });
 
 describe('round trip', () => {
-  it('parses parts back into MATERIALS on the one Output node', () => {
+  it('parses each part back into its OWN Output node, the default first', () => {
     const { nodes, edges } = twoMaterialGraph();
     const { code } = graphToCode(nodes, edges);
     const parsed = codeToGraph(code);
-    const outputs = parsed.nodes.filter((n) => n.data.registryType === 'output');
-    expect(outputs).toHaveLength(1);
-    expect((outputs[0].data as Record<string, unknown>).materials).toEqual([
-      { meshTargets: ['Glass'] },
-    ]);
+    // One node per material since the Output split: the untargeted default,
+    // then the part. What used to be `data.materials` is the sibling list, so
+    // `materials` is gone from every parsed node (the post-unfold invariant).
+    const outputs = outputsInEmitOrder(parsed.nodes.filter((n) => n.data.registryType === 'output'));
+    expect(outputs).toHaveLength(2);
+    expect(outputs.map((n) => materialTargetNames(outputMaterials(n)[0]))).toEqual([[], ['Glass']]);
+    for (const o of outputs) expect((o.data as Record<string, unknown>).materials).toBeUndefined();
     expect(parsed.errors.filter((e) => e.severity !== 'warning')).toEqual([]);
   });
 
@@ -201,17 +204,20 @@ describe('round trip', () => {
     expect(two.edges).toHaveLength(one.edges.length);
   });
 
-  it('wires a part edge to its own MATERIAL handle, not the default\'s', () => {
-    // The whole point of the namespace: material 0 keeps the bare `color`
-    // every saved graph already uses, and a material's channel is `m1:color`.
-    // Collapse the two and one material silently feeds the other.
+  it('wires a part edge to its own NODE, never to the default\'s socket', () => {
+    // What the `m<n>:` namespace used to buy, bought by the split instead:
+    // every material wears the BARE `color` every saved graph already spells,
+    // and the two cannot feed each other because they are two nodes. Collapse
+    // them — wire both to one node — and one material silently feeds the other.
     const { nodes, edges } = twoMaterialGraph();
     const parsed = codeToGraph(graphToCode(nodes, edges).code);
-    const out = parsed.nodes.find((n) => n.data.registryType === 'output')!;
-    const handles = parsed.edges
-      .filter((e) => e.target === out.id)
-      .map((e) => e.targetHandle)
-      .sort();
-    expect(handles).toEqual(['color', 'm1:color']);
+    const outs = outputsInEmitOrder(parsed.nodes.filter((n) => n.data.registryType === 'output'));
+    const wires = outs.map((o) =>
+      parsed.edges.filter((e) => e.target === o.id).map((e) => e.targetHandle).sort(),
+    );
+    expect(wires).toEqual([['color'], ['color']]);
+    // …and the second of them really is the Glass material, not a second
+    // default the parse invented.
+    expect(materialTargetNames(outputMaterials(outs[1])[0])).toEqual(['Glass']);
   });
 });

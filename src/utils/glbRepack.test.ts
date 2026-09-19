@@ -656,6 +656,32 @@ describe('caps', () => {
     const r = refusal(input(b, { indexMaterials: [0], slots: [slot(0, 'baseColor', SRC.A)], moduleAssets: [{ key: KEY.A, src: SRC.A }] }));
     expect(r).toEqual({ reason: 'too-complex', detail: 'json' });
   });
+
+  /*
+   * The u32 total guard, which COULD NOT FIRE at the one size it is for: the
+   * padding was `(n + 3) & ~3` and a bitwise operator coerces through ToInt32,
+   * so it returned 0 at 2^32 and -2147483648 at 3·2^31 — `ceil4`, two lines
+   * above it in the source, had been doing the same job correctly all along.
+   * `end` cannot reach 4 GiB today (the base is capped at 96/256 MiB and the
+   * module's assets at 64 MiB), so this drives the layout with a base BIN that
+   * only DECLARES its length: nothing reads its bytes before the guard, and
+   * `measureGlbRepack` never writes the file. Measured unfixed: the first case
+   * reported totalBytes 3508 for a 4 GiB file, the second -2147480140 — and
+   * `exportPreflight`'s `n()` reads a negative size as 0, so the N1 "too large
+   * to open again" dialog never opens and `repackGlb` throws a RangeError
+   * ("Invalid typed array length") out of `new Uint8Array(l.end)` instead.
+   */
+  it.each([
+    ['2^32, where `& ~3` wrapped to 0', 2 ** 32],
+    ['3·2^31, where it went negative', 3 * 2 ** 31],
+  ])('refuses a file that would not fit the u32 length field: %s', (_why, length) => {
+    const bin = { length } as unknown as Uint8Array;
+    const huge: GltfModelReport = {
+      ...base,
+      source: { ...base.source, bin, buffers: [bin, ...base.source.buffers.slice(1)] },
+    };
+    expect(measureGlbRepack(input(huge))).toEqual({ ok: false, refusal: { reason: 'too-complex', detail: 'total' } });
+  });
 });
 
 describe('bad input', () => {

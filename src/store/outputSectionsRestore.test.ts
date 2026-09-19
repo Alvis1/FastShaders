@@ -26,7 +26,7 @@ import {
   reportOutputSectionsTrimmed,
 } from './useAppStore';
 import { makeNode, makeEdge } from '@/test-utils';
-import { outputMaterials, outputNodes, MAX_PARTS } from '@/utils/outputMaterials';
+import { emitRank, outputMaterials, outputNodes, MAX_PARTS } from '@/utils/outputMaterials';
 import { embedProjectState, type FastShadersProject } from '@/engine/fastShadersProject';
 import { importShaderText } from '@/engine/projectImport';
 import type { AppNode, AppEdge } from '@/types';
@@ -65,6 +65,23 @@ function cleanGraph(): { nodes: AppNode[]; edges: AppEdge[] } {
 
 const handlesInto = (edges: readonly AppEdge[], target: string) =>
   edges.filter((e) => e.target === target).map((e) => e.targetHandle).sort();
+
+/**
+ * Every wire into an Output NODE, as `<emitRank>:<handle>`.
+ *
+ * Every restore path now runs `unfoldOutputMaterials`, so a section's wires no
+ * longer land on one node's `m<k>:` handles — they land on the k-th SIBLING's
+ * bare handle. Keying on the rank rather than the id says the same thing the
+ * old `m<k>:` assertions said, and keeps saying it for a group whose Output was
+ * cloned under a fresh id.
+ */
+const sectionWires = (nodes: readonly AppNode[], edges: readonly AppEdge[]) => {
+  const rank = new Map(outputNodes(nodes as AppNode[]).map((n) => [n.id, emitRank(n)]));
+  return edges
+    .filter((e) => rank.has(e.target))
+    .map((e) => `${rank.get(e.target)}:${e.targetHandle}`)
+    .sort();
+};
 const trimmedNotices = () =>
   useAppStore.getState().pendingLimitNotices.filter((n) => n.kind === 'output-sections-trimmed');
 
@@ -110,10 +127,14 @@ describe('loadGraph counts and prunes (App reports it, slot graph)', () => {
     ls['fs:graph'] = JSON.stringify(overCapGraph());
     const g = loadGraph()!;
     expect(g.outputSectionsTrimmed).toBe(6);
+    // The nine surviving sections become nine siblings beside material 0.
+    expect(outputNodes(g.nodes)).toHaveLength(1 + MAX_PARTS);
     const out = g.nodes.find((n) => n.id === 'o1')!;
-    expect(outputMaterials(out)).toHaveLength(1 + MAX_PARTS);
+    expect(outputMaterials(out)).toHaveLength(1);
     expect((out.data as { meshTargets?: string[] }).meshTargets).toHaveLength(MAX_PARTS);
-    expect(handlesInto(g.edges, 'o1')).toEqual(['color', 'm2:color']);
+    // The wires of the DROPPED sections (m10, m12) are gone; the kept ones
+    // moved onto their sibling's bare handle.
+    expect(sectionWires(g.nodes, g.edges)).toEqual(['0:color', '2:color']);
     // The load reports; it never enqueues (App's mount effect does).
     expect(trimmedNotices()).toHaveLength(0);
   });
@@ -122,7 +143,7 @@ describe('loadGraph counts and prunes (App reports it, slot graph)', () => {
     ls['fs:graph'] = JSON.stringify(cleanGraph());
     const g = loadGraph()!;
     expect(g.outputSectionsTrimmed).toBe(0);
-    expect(handlesInto(g.edges, 'o1')).toEqual(['color', 'm1:color']);
+    expect(sectionWires(g.nodes, g.edges)).toEqual(['0:color', '1:color']);
   });
 });
 
@@ -137,8 +158,8 @@ describe('loadSavedGroupsReport counts per surviving group and prunes (slot save
     const report = loadSavedGroupsReport();
     expect(report.outputSectionsTrimmed).toBe(6);
     expect(report.groups.map((g) => g.id)).toEqual(['g1', 'g2']);
-    expect(handlesInto(report.groups[0].edges, 'o1')).toEqual(['color', 'm2:color']);
-    expect(handlesInto(report.groups[1].edges, 'o1')).toEqual(['color', 'm1:color']);
+    expect(sectionWires(report.groups[0].nodes, report.groups[0].edges)).toEqual(['0:color', '2:color']);
+    expect(sectionWires(report.groups[1].nodes, report.groups[1].edges)).toEqual(['0:color', '1:color']);
   });
 });
 
@@ -166,13 +187,15 @@ describe('applyProjectToStore (every file import) announces it directly, with no
     expect(notices).toHaveLength(1);
     expect(notices[0].detail).toBe('6');
     expect('slot' in notices[0]).toBe(false);
-    expect(handlesInto(useAppStore.getState().edges, 'o1')).toEqual(['color', 'm2:color']);
+    const s = useAppStore.getState();
+    expect(sectionWires(s.nodes, s.edges)).toEqual(['0:color', '2:color']);
   });
 
   it('a clean project raises no such notice', () => {
     expect(importShaderText(embedProjectState(MODULE, project(cleanGraph())))).toBe('project');
     expect(trimmedNotices()).toHaveLength(0);
-    expect(handlesInto(useAppStore.getState().edges, 'o1')).toEqual(['color', 'm1:color']);
+    const s = useAppStore.getState();
+    expect(sectionWires(s.nodes, s.edges)).toEqual(['0:color', '1:color']);
   });
 });
 
@@ -207,9 +230,13 @@ describe('instantiateSavedGroup prunes the combined graph', () => {
     });
     useAppStore.getState().instantiateSavedGroup('sg1', { x: 500, y: 500 });
     const state = useAppStore.getState();
-    const arriving = outputNodes(state.nodes).find((n) => n.id !== 'liveOut')!;
-    expect(arriving).toBeDefined();
-    expect(handlesInto(state.edges, arriving.id)).toEqual(['m1:color']);
+    const arriving = outputNodes(state.nodes).filter((n) => n.id !== 'liveOut');
+    // The group's Output splits into its default plus its one named section.
+    expect(arriving).toHaveLength(2);
+    // `m1:color` lands on the sibling's bare handle; `m5:color` names a section
+    // the node never had, so it is pruned rather than left undrawable.
+    expect(handlesInto(state.edges, arriving[1].id)).toEqual(['color']);
+    expect(handlesInto(state.edges, arriving[0].id)).toEqual([]);
   });
 });
 
@@ -227,13 +254,13 @@ describe('source pins: every restore path counts and prunes', () => {
     expect(lib).toContain('sanitizeOutputMaterialsReport(');
     expect(lib).toContain('pruneOrphanMaterialEdges(');
     expect(imp).toContain('sanitizeOutputMaterialsReport(dataSanitized.nodes)');
-    expect(imp).toContain('pruneOrphanMaterialEdges(folded.nodes, folded.edges)');
+    expect(imp).toContain('pruneOrphanMaterialEdges(nodes, split.edges)');
     expect(imp).toContain("kind: 'output-sections-trimmed'");
   });
 
-  it('instantiateSavedGroup prunes after the fold', () => {
+  it('instantiateSavedGroup prunes after the split', () => {
     const inst = slice(store, 'instantiateSavedGroup: (savedId, position, opts) => {', 'applyLangAttribute(');
-    expect(inst).toContain('pruneOrphanMaterialEdges(folded.nodes, folded.edges)');
+    expect(inst).toContain('pruneOrphanMaterialEdges(nodes, split.edges)');
   });
 
   it('App reports both slots ABOVE the remembered-viewport early return', () => {

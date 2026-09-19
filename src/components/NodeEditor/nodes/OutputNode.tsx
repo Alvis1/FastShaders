@@ -1,39 +1,38 @@
 import { memo, useCallback, useEffect, useMemo } from 'react';
 import { Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import {
-  assignMeshTargets,
+  assignMeshTargetsAcross,
   outputMaterials,
   dormantIndicesForPreview,
   storedValueEmits,
-  parseChannelHandle,
   materialTargetNames,
-  materialExposedPorts,
   channelHandle,
-  shiftMaterialHandles,
-  planNamedParts,
-  planIndexParts,
-  countSections,
   isIndexSection,
   readModelSignature,
   sectionLabel,
   loadedModelOf,
   shownPreviewMesh,
   indexSectionsAwake,
-  indexSectionCoverage,
-  defaultSectionUnused,
+  defaultSectionUnusedAcross,
   addedMaterialContributes,
-  pickFreeMesh,
-  MAX_ADDED_MATERIALS,
+  type IndexCoverage,
   MAX_PARTS,
-  type OutputMaterial,
 } from '@/utils/outputMaterials';
+import {
+  defaultContributesOf,
+  indexClaimLabels,
+  meshNamesOf,
+  outputBindingsKey,
+  outputPlansFor,
+} from './outputNodePlans';
+import { isUntargetedOutput } from '@/utils/sdfPartition';
 import { fillTemplate } from '@/utils/fillTemplate';
-import { removeEdgesForPort } from '@/utils/edgeUtils';
 import { asOneHistoryEntry } from '@/utils/historyGesture';
 import { t, portLabel, formatNodeLabel } from '@/i18n';
 import type { AppNode } from '@/types';
 import { OUTPUT_DEFAULT_EXPOSED } from '@/utils/exposedPorts';
 import type { OutputFlowNode, OutputNodeData } from '@/types';
+import { outputNodeValues } from '@/types';
 import { NODE_REGISTRY } from '@/registry/nodeRegistry';
 import { useAppStore } from '@/store/useAppStore';
 import { isActiveSinkSelector } from './activeSinkSelector';
@@ -47,7 +46,7 @@ import { DragNumberInput } from '../inputs/DragNumberInput';
 import { PaletteColorPicker } from '@/components/inputs/PaletteColorPicker';
 import { MeshTargetPicker } from './MeshTargetPicker';
 import { IndexSectionChip } from './IndexSectionChip';
-import { SECTION_SILENT_KEY, formatSectionLabel, joinCapped } from './sectionLabelText';
+import { SECTION_SILENT_KEY, PARKED_KEY, formatSectionLabel, joinCapped } from './sectionLabelText';
 import './OutputNode.css';
 import { NODE_BORDER_WIDTH } from './nodeFrame';
 
@@ -108,10 +107,34 @@ export const OUTPUT_EMPTY_COLOR = '#ff0000';
 // below and outputDefaultContributes (the 0.6 single-mesh-fallback mirror)
 // must share ONE notion of "this value emits".
 
+/** What a TARGETED node's INERT preview socket says (owner decision D2). */
+export const FIXED_SOCKET_KEY =
+  'This material always contributes — it shades the meshes it names, whichever output drives the whole model';
+
 /** Displacement may go negative / beyond 1; everything else is a 0-1 dial. */
 const CLAMP01_PORTS = new Set(['roughness', 'metalness', 'opacity', 'discard']);
 
+/** The cross-node plans omit a node with nothing to report, so every lookup
+ *  below falls back to one of these. Module scope, not a fresh literal per
+ *  render: they are `useMemo` results and a new identity would re-run every
+ *  memo that reads them on every notify. */
+const EMPTY_SECTIONS: ReadonlySet<number> = new Set<number>();
+const EMPTY_COVERAGE: ReadonlyMap<number, IndexCoverage> = new Map<number, IndexCoverage>();
+
+/** This node's own material index. One Output node is ONE material since the
+ *  per-material split, and every channel is wired through its BARE handle —
+ *  which is the id every saved edge already spells. The constant is here so
+ *  the two `channelHandle(…)` reads below say WHY they pass a zero rather than
+ *  looking like a leftover. */
+const SELF = 0;
+
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+
+// The cross-node plans, the bindings key they are gated on, and the two
+// per-notify selector helpers all live in `outputNodePlans.ts` — a zero-React
+// module, so "computed ONCE for N cards" is an executable test rather than a
+// source pin. Computed per instance they were O(N²): ~17 cards each running
+// the same six plans over the same 17 nodes, ≈0.8 ms per binding change.
 
 export const OutputNode = memo(function OutputNode({
   id,
@@ -125,25 +148,30 @@ export const OutputNode = memo(function OutputNode({
   const activeSel = useMemo(() => isActiveSinkSelector(id), [id]);
   const isActive = useAppStore(activeSel);
   const setActiveOutput = useAppStore((s) => s.setActiveOutput);
-  // Every material on this node, material 0 (the default) first. Read from
-  // `data` rather than the store so a section re-renders with its node.
-  const materials = useMemo(
-    () => outputMaterials({ id, data } as unknown as AppNode),
-    [id, data],
-  );
+  // THIS node as an AppNode, for the shared predicates that take one. Read
+  // from the props rather than the store so the card re-renders with its node.
+  const selfNode = useMemo(() => ({ id, data } as unknown as AppNode), [id, data]);
+  // The node's ONE material. `outputMaterials` still returns a list — a saved
+  // `.fastshader` carries the folded shape and always will, so the unfold on
+  // every restore path is what guarantees the length is 1 here — and material
+  // 0 is this node's own `values` / `exposedPorts` / `materialSettings` plus
+  // its binding.
+  const materials = useMemo(() => outputMaterials(selfNode), [selfNode]);
+  const material = materials[SELF];
   // The mesh list, as a cheap STRING: the inventory object would re-render
   // every Output on any preview report, and this needs only the names. The
   // picker is shown at all only for a MODEL — a primitive is one unnamed mesh,
   // so there is nothing to choose between and an empty dropdown would raise a
   // question the shader cannot answer.
-  const meshNamesKey = useAppStore(
-    // NUL-joined, not space-joined: an OBJ mesh name may legally contain
-    // spaces (they skip three's sanitizer), while `isUsableMeshName` refuses
-    // control characters — so this separator cannot occur inside a name.
-    (s) => (s.previewMeshInventory?.meshes ?? []).map((m) => m.name).join('\u0000'),
-  );
+  // ONE array for the whole canvas (`meshNamesOf`): this was mapped and joined
+  // inside EVERY card's selector, i.e. 4 352 string allocations per notify on a
+  // 256-mesh model, for a value that cannot differ between them. The key is the
+  // cheap render signal; the array behind it keeps one identity, so every memo
+  // that takes it stays put.
+  const meshNamesKey = useAppStore((s) => meshNamesOf(s.previewMeshInventory).key);
   const meshNames = useMemo(
-    () => (meshNamesKey ? meshNamesKey.split('\u0000') : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    () => meshNamesOf(useAppStore.getState().previewMeshInventory).names,
     [meshNamesKey],
   );
   const hasMeshes = meshNames.length > 0;
@@ -166,7 +194,6 @@ export const OutputNode = memo(function OutputNode({
   // (getCostColor). `codeEditorTheme` is the app-wide dark switch; the store
   // field keeps its historical name.
   const darkTheme = useAppStore((s) => s.codeEditorTheme === 'vs-dark');
-  const updateNodeData = useAppStore((s) => s.updateNodeData);
   const cost = data.cost ?? 0;
   const costColor = getCostColor(cost, costColorLow, costColorHigh, darkTheme);
   const costTextColor = getCostTextColor(cost, costColorLow, costColorHigh);
@@ -174,364 +201,252 @@ export const OutputNode = memo(function OutputNode({
 
   const exposedPorts = data.exposedPorts ?? OUTPUT_DEFAULT_EXPOSED;
   const exposedSet = new Set(exposedPorts);
-  const values = (data as OutputNodeData).values ?? {};
+  const values = outputNodeValues(data);
 
-  /** Write the ADDED materials back (material 0 lives in the node's fields). */
-  const setAddedMaterials = useCallback(
-    (next: OutputMaterial[]) => {
-      updateNodeData(id, {
-        materials: next.length > 0 ? next : undefined,
-      } as Partial<OutputNodeData>);
-    },
-    [id, updateNodeData],
+  /**
+   * THE Output nodes the cross-node plans run over.
+   *
+   * `contributingOutputs`, not this node alone: a mesh can now be claimed by a
+   * sibling NODE rather than a sibling section, so "is my claim shadowed",
+   * "what does my index section still shade" and "does the module emit any part
+   * at all" are all questions about the whole set — and the answers must be the
+   * ones EMISSION reaches, which is exactly the set graphToCode walks. A
+   * PARKED Output (untargeted, not the default) is deliberately outside it: it
+   * contributes nothing, so it claims nothing and shadows nobody.
+   */
+  const outputsKey = useAppStore((s) => outputBindingsKey(s.nodes));
+  /** The plans, computed ONCE for the canvas and shared by every card — the
+   *  key is the change signal, the nodes are read imperatively behind it. */
+  const plans = useMemo(
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    () => outputPlansFor(useAppStore.getState().nodes, loaded),
+    [outputsKey, loaded],
   );
+  // Destructured under the names the plans have always had, so every reader
+  // below — and every source pin on them — speaks the same shape it always did.
+  const { contributing, named: namedPlanAcross, index: indexPlanAcross, coverage: coverageAcross } = plans;
+  /** Does this node own the module's TOP-LEVEL channels? Only the default can
+   *  show the red sentinel, and only its block can read as "nothing left". */
+  const isDefault = plans.defaultId === id;
+  /** Untargeted but NOT the default: a whole-model variant that is parked
+   *  behind another Output's active flag. It contributes nothing at all — so
+   *  the red sentinel would be a lie (the module is not empty, this node is
+   *  simply not in it) and "All meshes" would be a lie too. Its own mark. */
+  const parked = isUntargetedOutput(selfNode) && !isDefault;
+  const targets = useMemo(() => materialTargetNames(material), [material]);
+  const indexSection = isIndexSection(material);
 
-  /** Read the CURRENT added materials imperatively — `data` in a callback
-   *  closure is a snapshot, and two rapid edits would drop the first. */
-  const readAdded = useCallback((): OutputMaterial[] => {
-    const node = useAppStore.getState().nodes.find((n) => n.id === id);
-    const raw = (node?.data as { materials?: unknown } | undefined)?.materials;
-    return Array.isArray(raw) ? [...(raw as OutputMaterial[])] : [];
-  }, [id]);
-
-  /** THE first-claim plan emission uses, so the node's shadowed mark and the
-   *  emitted `parts` can never disagree about which section a mesh is in. */
-  const namedPlan = useMemo(() => planNamedParts(materials), [materials]);
-  /** The model signature an import wrote (null without index sections), and
-   *  THE index plan emission uses — its duplicates are the shadowed chips. */
+  /** This node's own shadowed sections. A node with none is ABSENT from the
+   *  plan's map, so the empty set is the answer, not a missing one. */
+  const shadowedSections = useMemo(
+    () => namedPlanAcross.shadowed.get(id) ?? EMPTY_SECTIONS,
+    [namedPlanAcross, id],
+  );
+  /** The model signature THIS node carries — what its own index binding is
+   *  named against, and what its dormancy is judged on (both per node). */
   const signature = useMemo(() => readModelSignature(data), [data]);
-  const indexPlan = useMemo(() => planIndexParts(materials, signature), [materials, signature]);
+  const indexDuplicates = useMemo(
+    () => indexPlanAcross.duplicates.get(id) ?? EMPTY_SECTIONS,
+    [indexPlanAcross, id],
+  );
   /** Are this node's index sections awake on the loaded model (the exact
    *  signature rule; an unreadable glTF hides nothing)? */
   const indexAwake = indexSectionsAwake(signature, loaded);
-  /** What each index section does on the loaded model — covered, overridden
-   *  by a mesh section (the name claim wins), unused, a duplicate. */
-  const coverage = useMemo(
-    () => indexSectionCoverage(materials, signature, loaded, namedPlan),
-    [materials, signature, loaded, namedPlan],
+  /** This node's slice of the cross-node coverage, section → coverage (the
+   *  shape the chip reads): covered, overridden by a mesh section (the name
+   *  claim wins), unused, or a duplicate. */
+  const coverage = useMemo<ReadonlyMap<number, IndexCoverage>>(
+    () => coverageAcross.get(id) ?? EMPTY_COVERAGE,
+    [coverageAcross, id],
   );
-  /** Does material 0 shade nothing of the model on screen — every mesh taken
-   *  by a section below? Marks the block instead of leaving it looking like a
-   *  second Output whose sockets do nothing (see `defaultSectionUnused`). */
+  /** Does the DEFAULT shade nothing of the model on screen — every mesh taken
+   *  by another Output? Marks its block instead of leaving it looking like a
+   *  second Output whose sockets do nothing (see `defaultSectionUnused`).
+   *
+   *  Gated on `isDefault` INSIDE the memo — which is the whole condition it is
+   *  read under — so on a 16-material import sixteen of the seventeen cards
+   *  skip a walk whose answer only one of them can ever display. */
   const defaultUnused = useMemo(
-    () => defaultSectionUnused(meshNames, materials, namedPlan, coverage),
-    [meshNames, materials, namedPlan, coverage],
+    () => isDefault && defaultSectionUnusedAcross(meshNames, contributing, namedPlanAcross, coverageAcross),
+    [isDefault, meshNames, contributing, namedPlanAcross, coverageAcross],
   );
   /** The double claim on the NAME side: mesh → the label of the material
-   *  section that also covers it, for the pickers' row titles. */
-  const indexHints = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const [i, c] of coverage) {
-      if (c.state !== 'covered' && c.state !== 'overridden') continue;
-      const lbl = formatSectionLabel(sectionLabel(materials, i, signature), language);
-      for (const n of c.meshes) if (!m.has(n)) m.set(n, lbl);
-    }
-    return m;
-  }, [coverage, materials, signature, language]);
+   *  section that also covers it, for the picker's row titles. Built across
+   *  EVERY contributing node, so a mesh an import-built sibling shades is
+   *  named here even though this node holds no index section of its own. */
+  const indexHints = indexClaimLabels(plans, language);
 
   /**
-   * Add a material for a mesh no section has claimed yet (`pickFreeMesh`):
-   * preferably one no index section covers either; failing that, an
-   * index-covered one, which the new NAME section then OVERRIDES — the
-   * intended way to restyle one mesh of an imported material.
+   * Set which meshes THIS node shades — taking each of them away from every
+   * other Output NODE, because a mesh belongs to exactly one material.
    *
-   * Seeded with a real target rather than an empty one: a material with no mesh
-   * means nothing (material 0 is already the default), and it cannot emit — so
-   * offering one would be offering a section that does nothing.
+   * A MULTI-NODE write, which is the whole difference from the stacked shape:
+   * `updateNodeData` patches one node, so the move would have to be two writes
+   * and Cmd+Z would step through a half-assigned state where two Outputs both
+   * claim the mesh. One `setNodes` inside one `asOneHistoryEntry` instead.
    *
-   * The button still only ever mints an UNCLAIMED name, even though the pickers
-   * below accept a duplicate: a duplicate is a deliberate intermediate step in
-   * a swap, never a sensible thing to create out of nothing (emission shadows
-   * it, so the new section would arrive inert).
+   * The no-op guard sits OUTSIDE the bracket: `beginInteraction` snapshots AND
+   * clears `future` up front, so wrapping a write that changes nothing would
+   * cost an undo entry and destroy the redo stack.
    */
-  // NAMED sections only: an import-built Output's index sections have their
-  // own cap (MAX_INDEX_MATERIALS) and must not block adding a mesh section.
-  const atSectionCap = countSections(materials).named >= MAX_ADDED_MATERIALS;
-  const canAddMaterial = !atSectionCap && pickFreeMesh(meshNames, materials, coverage) !== null;
-  /** Why "+ Add output" is dimmed. The button never vanishes at a cap — a
-   *  control that disappears is a cap that does not announce itself. */
-  const addBlockedReason = atSectionCap
-    ? fillTemplate(t('An Output holds at most {max} mesh sections', language), { max: MAX_ADDED_MATERIALS })
-    : t('Every mesh already has its own section', language);
-
-  const addMaterial = useCallback(() => {
-    const added = readAdded();
-    const state = useAppStore.getState();
-    const node = state.nodes.find((n) => n.id === id);
-    const all = node ? outputMaterials(node) : [{}, ...added];
-    if (countSections(all).named >= MAX_ADDED_MATERIALS) return;
-    // Re-derived from the CURRENT store, not the render closure: a press can
-    // land after an edit the closure has not seen.
-    const sig = node ? readModelSignature(node.data) : null;
-    const free = pickFreeMesh(
-      meshNames,
-      all,
-      indexSectionCoverage(all, sig, loadedModelOf(shownPreviewMesh(state)), planNamedParts(all)),
-    );
-    if (!free) return;
-    setAddedMaterials([...added, { meshTargets: [free] }]);
-  }, [id, readAdded, meshNames, setAddedMaterials]);
-
-  /**
-   * Set which meshes a material shades — taking each of them away from every
-   * other material, because a mesh belongs to exactly one.
-   *
-   * ONE `updateNodeData`, so the move is one undo entry: material 0's targets
-   * are a NODE field while the rest ride `materials`, and writing them
-   * separately would make Cmd+Z step through a half-assigned state where two
-   * materials briefly claim the same mesh.
-   *
-   * Material 0's targets stay on the node rather than getting a slot in the
-   * array: material 0 IS the node's own channel state, and an array slot would
-   * make every single-material document carry a `materials` key it never needed
-   * — the one thing keeping saved graphs and exported shaders byte-identical.
-   */
-  const setMaterialTargets = useCallback(
-    (index: number, names: string[]) => {
-      const node = useAppStore.getState().nodes.find((n) => n.id === id);
-      if (!node) return;
-      const next = assignMeshTargets(outputMaterials(node), index, names);
-      const [first, ...added] = next;
-      const firstNames = first.meshTargets ?? [];
-      updateNodeData(id, {
-        meshTargets: firstNames.length > 0 ? firstNames : undefined,
-        meshTarget: undefined,
-        materials: added.length > 0 ? added : undefined,
-      } as Partial<OutputNodeData>);
+  const setMeshTargets = useCallback(
+    (names: string[]) => {
+      const state = useAppStore.getState();
+      const next = assignMeshTargetsAcross(state.nodes, id, names);
+      if (next === state.nodes) return;
+      asOneHistoryEntry(() => { useAppStore.getState().setNodes(next); });
     },
-    [id, updateNodeData],
-  );
-
-  /**
-   * Remove a material, its edges with it.
-   *
-   * The edges must go in the SAME history entry: dropping the material alone
-   * would leave wires pointing at handles that no longer mount, which React
-   * Flow keeps in the store and still emits code for — an invisible edge
-   * feeding a material the node no longer shows.
-   *
-   * Materials after it shift down, so their handles are renamed too — otherwise
-   * removing the first of three would strand material 3's wiring on a `m3:`
-   * handle that now belongs to nothing.
-   */
-  const removeMaterial = useCallback(
-    (index: number) => {
-      asOneHistoryEntry(() => {
-        const added = readAdded();
-        const k = index - 1;
-        if (!added[k]) return;
-        for (const port of def.inputs) {
-          removeEdgesForPort(id, channelHandle(index, port.id));
-        }
-        // Materials after this one renumber, so their handles move with them.
-        const state = useAppStore.getState();
-        const renamed = shiftMaterialHandles(state.edges, id, index);
-        if (renamed !== state.edges) state.setEdges(renamed);
-        added.splice(k, 1);
-        // Removing the LAST index section drops the node's signature AND its
-        // mirror source in the SAME updateNodeData (one undo entry): both
-        // exist only to serve index sections, and a signature with nothing to
-        // key must not ride on in the graph, the autosave and the export.
-        const d = (useAppStore.getState().nodes.find((n) => n.id === id)?.data ?? {}) as Record<string, unknown>;
-        const dropSignature = !added.some(isIndexSection)
-          && (d.modelSignature !== undefined || d.modelMeshes !== undefined);
-        updateNodeData(id, {
-          materials: added.length > 0 ? added : undefined,
-          ...(dropSignature ? { modelSignature: undefined, modelMeshes: undefined } : {}),
-        } as Partial<OutputNodeData>);
-      });
-    },
-    [id, def.inputs, readAdded, updateNodeData],
+    [id],
   );
 
   // The Output node opts out of ALL drag-proximity behavior: no hidden-channel
   // reveal (channels are exposed only via the shader settings menu, or
   // auto-exposed when an edge arrives through sync/import) and no forced
-  // name-tooltips (its rows already carry permanent labels). Hover tooltips
-  // still work.
+  // name-tooltips (its rows already carry permanent labels).
 
-  // What is arriving on each wired channel, keyed by the channel HANDLE — so
-  // material N's rows read `m<n>:<channel>` and material 0's the bare ids.
-  // The two-step cheap-string subscription (and the unwrapped-edge rule that
-  // keeps a collapsed feeder from degrading a row to a grey ellipsis) lives in
-  // the hook.
+  // What is arriving on each wired channel, keyed by the channel HANDLE — all
+  // of them BARE now, one node being one material. The two-step cheap-string
+  // subscription (and the unwrapped-edge rule that keeps a collapsed feeder
+  // from degrading a row to a grey ellipsis) lives in the hook.
   const wiredLabels = useWiredLabels(id);
+  const anyWired = wiredLabels.size > 0;
 
-  /** True when this Output node contributes no channel at all, i.e. exactly
-   *  graphToCode's red-fallback branch. Only then does the unwired Color row
-   *  show RED — see OUTPUT_EMPTY_COLOR. Emission is exposure-gated, so a
-   *  stored value on a hidden channel does not count. */
+  /** Does this node's own material set anything at all? */
+  const selfContributes = useMemo(
+    () => addedMaterialContributes(material, anyWired),
+    [material, anyWired],
+  );
+
+  /**
+   * True when the MODULE contributes no channel at all, i.e. exactly
+   * graphToCode's red-fallback branch (`return vec3(1, 0, 0);`). Only then does
+   * the unwired Color row show RED — see OUTPUT_EMPTY_COLOR.
+   *
+   * Scoped to the DEFAULT node, and asked across every contributing Output.
+   * Both halves matter after the split: a targeted sibling's `parts` entry
+   * takes the object return, so the default's Color is then three's white and
+   * not the sentinel; and a PARKED or TARGETED node never emits the sentinel at
+   * all, whatever its own channels do.
+   */
   const emitsNothing = useMemo(() => {
-    if (wiredLabels.size > 0) return false;
-    // A section that EMITS (a claimed mesh name, or an index section inside
-    // the signature) takes graphToCode's object return, never the red
-    // sentinel — even when every one of its channels is a stored value or
-    // nothing at all. The same two plans emission reads.
-    if (namedPlan.entries.length > 0 || indexPlan.entries.length > 0) return false;
+    if (!isDefault) return false;
+    if (anyWired) return false;
+    if (namedPlanAcross.entries.length > 0 || indexPlanAcross.entries.length > 0) return false;
     return !Object.keys(values).some(
       (k) => exposedSet.has(k) && storedValueEmits(k, values[k]),
     );
-  }, [wiredLabels, values, exposedSet, namedPlan, indexPlan]);
+    // exposedSet/values are derived from `data` each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDefault, anyWired, namedPlanAcross, indexPlanAcross, data]);
 
-  // Sections whose EVERY named mesh is absent from the loaded model are
-  // DORMANT — hidden behind the chip below, never deleted: drop a different
-  // model and the multimesh setup clears itself from the node; load the
-  // matching model again and it is back, wiring intact, because nothing but
-  // visibility ever changed. Two context rules ride along (see
-  // dormantIndicesForPreview): an unreported model hides nothing, and on a
-  // ONE-mesh model with a non-contributing material 0 the FIRST named
-  // material stays visible — the 0.6 loader's single-mesh fallback is
-  // actively painting the screen with it, and hiding what is being rendered
-  // would make the chip a lie. Material 0's contribution is derived from the
-  // SAME wiredLabels/values the red-fallback swatch uses, scoped to the bare
-  // (index-0) handles.
-  const defaultContributes = useMemo(() => {
-    for (const h of wiredLabels.keys()) {
-      if (parseChannelHandle(h).index === 0) return true;
-    }
-    return Object.keys(values).some(
-      (k) => exposedSet.has(k) && storedValueEmits(k, values[k]),
-    );
-  }, [wiredLabels, values, exposedSet]);
+  // A node whose EVERY named mesh is absent from the loaded model is DORMANT —
+  // rendered COMPACT (header plus the chip below) rather than deleted: drop a
+  // different model and the multimesh setup clears itself from the canvas; load
+  // the matching model again and the node is back, wiring intact, because
+  // nothing but visibility ever changed. Two context rules ride along (see
+  // dormantIndicesForPreview): an unreported model hides nothing, and the 0.6
+  // loader's single-mesh fallback exempts the module's FIRST named part, which
+  // is actively painting the screen — `firstNamedHere` is what keeps that rule
+  // about the module rather than letting every targeted node exempt itself.
+  const defaultContributes = useAppStore((s) => defaultContributesOf(s.nodes, s.edges));
+  const firstNamedHere = plans.firstNamedId === id;
   const dormant = useMemo(
     () => dormantIndicesForPreview(materials, {
       meshNames,
       inventoryKnown,
       defaultContributes,
       indexSectionsAwake: indexAwake,
+      firstNamedHere,
     }),
-    [materials, meshNames, inventoryKnown, defaultContributes, indexAwake],
+    [materials, meshNames, inventoryKnown, defaultContributes, indexAwake, firstNamedHere],
   );
+  const nodeDormant = dormant.has(SELF);
 
-  /**
-   * Write one material's stored channel values.
-   *
-   * Material 0 writes the node's own `values` — where they have always lived,
-   * so a single-material document is untouched by any of this; an added
-   * material writes its own entry in `materials`. Both read the CURRENT node
-   * imperatively rather than from the render closure, so two quick edits (a
-   * scrub landing while a picker is open) cannot drop the first.
-   */
-  const writeMaterialValues = useCallback(
-    (index: number, next: Record<string, string | number>) => {
-      if (index === 0) {
-        updateNodeData(id, { values: next } as Partial<OutputNodeData>);
-        return;
-      }
-      const added = readAdded();
-      const k = index - 1;
-      if (!added[k]) return;
-      added[k] = { ...added[k], values: next };
-      setAddedMaterials(added);
-    },
-    [id, updateNodeData, readAdded, setAddedMaterials],
-  );
-
-  const readMaterialValues = useCallback(
-    (index: number): Record<string, string | number> => {
-      const node = useAppStore.getState().nodes.find((n) => n.id === id);
-      if (!node) return {};
-      if (index === 0) return ((node.data as OutputNodeData).values ?? {});
-      const raw = (node.data as { materials?: OutputMaterial[] }).materials;
-      return (Array.isArray(raw) ? raw[index - 1]?.values : undefined) ?? {};
-    },
-    [id],
-  );
+  /** Write this node's stored channel values. Read the CURRENT node
+   *  imperatively rather than from the render closure, so two quick edits (a
+   *  scrub landing while a picker is open) cannot drop the first. */
+  const updateNodeData = useAppStore((s) => s.updateNodeData);
+  const readValues = useCallback((): Record<string, string | number> => {
+    const node = useAppStore.getState().nodes.find((n) => n.id === id);
+    // `outputNodeValues`, not `?? {}`: nothing coerces an Output's node-level
+    // `values`, and `clearChannelValue` below asks `channel in current`, which
+    // THROWS on a primitive out of a `.fastshader`.
+    return outputNodeValues(node?.data);
+  }, [id]);
 
   /** Clear a channel's stored value — back to "default / none": the widget
    *  shows the channel default again and the channel stops emitting. */
   const clearChannelValue = useCallback(
-    (index: number, channel: string) => {
-      const current = readMaterialValues(index);
+    (channel: string) => {
+      const current = readValues();
       if (!(channel in current)) return;
       const { [channel]: _dropped, ...rest } = current;
-      writeMaterialValues(index, rest);
+      updateNodeData(id, { values: rest } as Partial<OutputNodeData>);
     },
-    [readMaterialValues, writeMaterialValues],
+    [id, readValues, updateNodeData],
   );
 
   const setChannelValue = useCallback(
-    (index: number, channel: string, value: string | number) => {
-      writeMaterialValues(index, { ...readMaterialValues(index), [channel]: value });
+    (channel: string, value: string | number) => {
+      updateNodeData(id, { values: { ...readValues(), [channel]: value } } as Partial<OutputNodeData>);
     },
-    [readMaterialValues, writeMaterialValues],
+    [id, readValues, updateNodeData],
   );
 
   // Tell React Flow to re-measure handles whenever the RENDERED port set
-  // changes (settings toggle). Without this, dynamically mounted handles
-  // (e.g. `emissive` after the user toggles it on) aren't in React Flow's
-  // bounds map, so any edge connected to them silently fails to render until
-  // the page is reloaded.
+  // changes (a settings toggle, or the node falling asleep). Without this,
+  // dynamically mounted handles (e.g. `emissive` after the user toggles it on)
+  // aren't in React Flow's bounds map, so any edge connected to them silently
+  // fails to render until the page is reloaded.
   //
-  // The key folds EVERY material's exposed set, not just material 0's: adding
-  // or removing a material mounts or unmounts a whole block of handles, and
-  // React Flow never refreshes its bounds map on its own — an edge to a fresh
-  // `m2:color` would stay in the store and still emit correct code while simply
-  // never DRAWING, which a page reload then "fixes" (every handle is measured
-  // on first mount) and so reads as a rendering glitch rather than a missing
-  // effect.
+  // A DORMANT node renders nothing but its header and chip, so its WHOLE
+  // handle block is unmounted — the key must change when it sleeps or WAKES,
+  // or the remounted handles are never re-measured and every wire restored with
+  // the node stays undrawn until a reload. '~' cannot collide with a joined
+  // port list (port ids are word characters).
   const updateNodeInternals = useUpdateNodeInternals();
-  const exposedKey = materials
-    .map((m, i) =>
-      // A DORMANT section renders nothing, so its whole handle block is
-      // unmounted — the key must change when a section sleeps or WAKES, or
-      // the remounted handles are never re-measured and every wire restored
-      // with the section stays undrawn until a reload. '~' cannot collide
-      // with a joined port list (port ids are word characters).
-      dormant.has(i)
-        ? '~'
-        : (i === 0 ? exposedPorts : materialExposedPorts(m, OUTPUT_DEFAULT_EXPOSED)).join('|'),
-    )
-    .join('\u0001');
+  const exposedKey = nodeDormant ? '~' : exposedPorts.join('|');
   useEffect(() => {
     updateNodeInternals(id);
   }, [id, exposedKey, updateNodeInternals]);
 
   // Only permanently exposed channels render (as rows) — no drag reveal here.
-  const sectionPorts = (ids: string[], exposed: Set<string>) =>
-    def.inputs.filter((p) => ids.includes(p.id) && exposed.has(p.id));
+  const sectionPorts = (ids: string[]) =>
+    def.inputs.filter((p) => ids.includes(p.id) && exposedSet.has(p.id));
+  const pixel = sectionPorts(PIXEL_PORTS);
+  const vertex = sectionPorts(VERTEX_PORTS);
 
   /**
-   * An ADDED material that sets nothing: no wire on any of its handles and no
+   * A TARGETED node that sets nothing: no wire on any of its handles and no
    * emitting stored value on an exposed channel, so `buildShaderModule` drops
    * its part and the meshes it names keep exactly what they had.
    *
-   * Every "+ Add output" starts here, which is why the section is MARKED and
-   * never disabled or hidden: the mark is what stops "add a section, pick the
-   * mesh" from reading as an assignment that failed (owner, 2026-09-18). It
-   * clears itself the moment anything in the section emits. Material 0 is
-   * never in this state — an Output with no channels at all emits the red
-   * sentinel, which `emitsNothing` marks instead.
+   * MARKED rather than prevented: it is the state a freshly targeted Output
+   * starts in, and the mark is what stops "point an Output at a mesh" from
+   * reading as an assignment that failed (owner, 2026-09-18). It clears itself
+   * the moment anything on the node emits. The DEFAULT is never in this state —
+   * an Output contributing nothing emits the red sentinel, which `emitsNothing`
+   * marks instead — and neither is a PARKED node, which has its own mark.
    */
-  const sectionSilent = (index: number): boolean => {
-    if (index === 0) return false;
-    let wired = false;
-    for (const h of wiredLabels.keys()) {
-      if (parseChannelHandle(h).index === index) { wired = true; break; }
-    }
-    return !addedMaterialContributes(materials[index], wired);
-  };
+  const silent = !isDefault && !parked && !selfContributes;
 
   /** The right-hand cell of a row: the incoming value when wired (read-only,
    *  plain text, blue when live — a fill means "editable", plain text means
    *  "derived"); otherwise the channel's stored-value widget, when it has
    *  one. Same editable-vs-derived contract as every ShaderNode row. */
-  const rowWidget = (index: number, portId: string) => {
-    const handle = channelHandle(index, portId);
-    const wired = wiredLabels.get(handle);
+  const rowWidget = (portId: string) => {
+    const wired = wiredLabels.get(channelHandle(SELF, portId));
     if (wired) {
       return (
         <LiveEdgeValue className="shader-node__edge-val output-node__val" {...wired} />
       );
     }
-    const matValues = materials[index]?.values ?? {};
-    const silent = sectionSilent(index);
     if (portId in OUTPUT_COLOR_VALUE_PORTS) {
-      const stored = matValues[portId];
+      const stored = values[portId];
       // On a material that emits nothing, the shader's real Color is the red
       // fallback — show that instead of a white the preview contradicts.
       const channelDefault =
-        portId === 'color' && index === 0 && emitsNothing
+        portId === 'color' && emitsNothing
           ? OUTPUT_EMPTY_COLOR
           : OUTPUT_COLOR_VALUE_PORTS[portId];
       return (
@@ -540,22 +455,23 @@ export const OutputNode = memo(function OutputNode({
           // A stored channel colour IS the graph — it emits `color(0x…)` — so
           // this site is undoable and takes the bracket.
           history="bracket"
-          // A SILENT added section emits no part at all, so its unwired
-          // channels paint nothing — the UNSET swatch (hollow, slashed) says
-          // that, where the channel default promised a white the preview never
-          // paints. The moment anything in the section emits, every row goes
-          // back to showing what the part really renders for an unset channel.
-          value={typeof stored === 'string' ? stored : (silent ? '' : channelDefault)}
-          title={silent ? t(SECTION_SILENT_KEY, language) : undefined}
+          // A SILENT targeted node emits no part at all, and a PARKED one is
+          // not in the module — so their unwired channels paint nothing. The
+          // UNSET swatch (hollow, slashed) says that, where the channel default
+          // promised a white the preview never paints. The moment the node
+          // emits, every row goes back to showing what it really renders for an
+          // unset channel.
+          value={typeof stored === 'string' ? stored : ((silent || parked) ? '' : channelDefault)}
+          title={silent ? t(SECTION_SILENT_KEY, language) : parked ? t(PARKED_KEY, language) : undefined}
           clearColor={channelDefault}
-          onClear={() => clearChannelValue(index, portId)}
-          onPick={(hex) => setChannelValue(index, portId, hex)}
+          onClear={() => clearChannelValue(portId)}
+          onPick={(hex) => setChannelValue(portId, hex)}
         />
       );
     }
     if (portId in OUTPUT_FLOAT_VALUE_PORTS) {
-      const stored = Number(matValues[portId]);
-      const shown = Number.isFinite(stored) && matValues[portId] !== undefined && matValues[portId] !== null
+      const stored = Number(values[portId]);
+      const shown = Number.isFinite(stored) && values[portId] !== undefined && values[portId] !== null
         ? stored
         : OUTPUT_FLOAT_VALUE_PORTS[portId];
       return (
@@ -565,7 +481,7 @@ export const OutputNode = memo(function OutputNode({
           value={shown}
           step={0.05}
           onChange={(v) =>
-            setChannelValue(index, portId, CLAMP01_PORTS.has(portId) ? clamp01(v) : v)
+            setChannelValue(portId, CLAMP01_PORTS.has(portId) ? clamp01(v) : v)
           }
         />
       );
@@ -575,8 +491,8 @@ export const OutputNode = memo(function OutputNode({
 
   // Widget FIRST, label after — the ShaderNode row anatomy (socket, then the
   // value box beside it); the label trails like an out-label would.
-  const renderRow = (index: number) => (port: (typeof def.inputs)[number]) => {
-    const handle = channelHandle(index, port.id);
+  const renderRow = (port: (typeof def.inputs)[number]) => {
+    const handle = channelHandle(SELF, port.id);
     return (
       <div key={handle} className="output-node__row">
         <TypedHandle
@@ -586,173 +502,61 @@ export const OutputNode = memo(function OutputNode({
           dataType={port.dataType}
           label={port.label}
         />
-        {rowWidget(index, port.id)}
+        {rowWidget(port.id)}
         <span className="output-node__port-label">{portLabel(port.label, language)}</span>
       </div>
     );
   };
 
-  /**
-   * One material: the mesh it shades, then its Pixel and Vertex sections.
-   *
-   * EVERY material carries the picker, material 0 included -- its row sits
-   * directly under the node's header, each added material's directly under the
-   * divider that opens it, so "which mesh does this block shade" is always the
-   * first line of the block. Material 0's picker additionally offers "All
-   * meshes (default)", which is what it does when it names nothing.
-   */
-  const renderMaterial = (index: number) => {
-    const material = materials[index];
-    const exposed = new Set(
-      index === 0
-        ? exposedPorts
-        : materialExposedPorts(material, OUTPUT_DEFAULT_EXPOSED),
-    );
-    const pixel = sectionPorts(PIXEL_PORTS, exposed);
-    const vertex = sectionPorts(VERTEX_PORTS, exposed);
-    const targets = materialTargetNames(material);
-    // An EARLIER material already names every one of these meshes, so the
-    // first-claim rule shadows this one entirely. A duplicate only ever ARRIVES
-    // (from a hand-edited or foreign file; the picker moves a mesh), so the
-    // state is legal -- but a section that looks live and contributes nothing is
-    // precisely what nobody would think to report, hence the mark. Read from
-    // `planNamedParts`, the SAME plan emission uses.
-    // An INDEX section (import-built, bound to a glTF material) is shadowed by
-    // the same first-claim rule, over glTF indices: `planIndexParts`.
-    const indexSection = index > 0 && isIndexSection(material);
-    const shadowed = indexSection ? indexPlan.duplicates.has(index) : namedPlan.shadowed.has(index);
+  // An EARLIER-ranked Output already names every one of these meshes, so the
+  // first-claim rule shadows this one entirely. A duplicate only ever ARRIVES
+  // (from a hand-edited or foreign file; the picker MOVES a mesh), so the state
+  // is legal — but a node that looks live and contributes nothing is precisely
+  // what nobody would think to report, hence the mark. Read from the SAME plans
+  // emission uses: `planNamedPartsAcross` over names, `planIndexPartsAcross`
+  // over glTF indices.
+  const shadowed = indexSection ? indexDuplicates.has(SELF) : shadowedSections.has(SELF);
+  // The picker appears once there is something to choose between, and stays
+  // visible if this node already names a mesh: reopening a graph without its
+  // model must not strand a target the node no longer shows (it still emits).
+  //
+  // A PARKED node shows it whatever the model situation — the picker IS where
+  // that mark and its explanation live, and parking is reachable with no model
+  // at all (two plain Outputs on a primitive, one active). Without this the
+  // node would dim its rows and say nothing about why. The ordinary
+  // single-Output document is untouched, since one Output alone is never parked.
+  //
+  // `shownMesh` is why a MODEL alone is enough, and it is the whole fix for a
+  // GLB import: `hasMeshes` reads the SANDBOX inventory, which
+  // `commitGlbImport → setPreviewMesh` has just NULLED, and which can only come
+  // back from the rebuilt preview iframe once it has parsed the model and
+  // posted its mesh report — the 200 ms code debounce plus an A-Frame boot
+  // plus a multi-mesh glTF parse, easily seconds on a large file. So the
+  // default Output rendered with NO mesh row at all for that whole window, and
+  // permanently when the report never comes (no usable mesh name, or the Model
+  // menu switched to a primitive). The row is now present the moment a model is
+  // ON SCREEN, and fills with names when the report lands.
+  //
+  // It gates VISIBILITY only. The option list is still the inventory's alone —
+  // `meshInventory` is the one source of mesh TARGETS, and the glTF reader's
+  // PREDICTED names are display-only by construction (they may be uncertain),
+  // so offering them here would make a guess emittable.
+  const showMeshRow = hasMeshes || !!shownMesh || targets.length > 0 || indexSection || parked;
 
-    // An ADDED material always shows its picker -- it always names a mesh, and
-    // hiding the row would hide the fact plus the control to drop it. Material
-    // 0's appears once there is something to choose between, and stays visible
-    // if it already names one: reopening a graph without its model must not
-    // strand a target the node no longer shows (it still emits).
-    const showMeshRow = index > 0 || hasMeshes || targets.length > 0;
-    // The default with nothing left to shade: marked, never hidden — see
-    // `defaultSectionUnused`. Only material 0 can be in this state.
-    const unused = index === 0 && defaultUnused;
-    // An ADDED section that sets nothing: its part is dropped, so the meshes it
-    // names keep what they had. Marked on the picker (and on every unset colour
-    // swatch below) — see `sectionSilent`. An INDEX section is built from the
-    // model's own material and is never in this state before the user empties
-    // it, but the rule is the same one, so it is not special-cased.
-    const silent = sectionSilent(index);
-
-    return (
-      // data-material-index is the right-click hit test: NodeEditor's
-      // onNodeContextMenu walks `closest('[data-material-index]')` so the
-      // settings menu opens ALREADY SCOPED to the section under the cursor.
-      <div
-        key={index}
-        className={`output-node__material${unused ? ' output-node__material--unused' : ''}`}
-        data-material-index={index}
-      >
-        {index > 0 && <div className="output-node__divider" />}
-
-        {/* This SECTION's output socket — one per material, centred on its
-            own block, so a multimesh Output visibly feeds the preview once
-            per section (each gets its own PreviewLink wire, DOM order =
-            material order) — and the ACTIVATION control: several output
-            nodes may coexist, exactly one drives (utils/sdfPartition.ts
-            `activeSink`), and clicking any section's socket makes this NODE
-            the active one. Solid while active, hollow otherwise. A
-            `<button>` with `nodrag` (React Flow's drag filter) whose
-            pointerdown is stopped, so a press never drags the node or pans
-            the canvas; the click is stopped too, so activating does not
-            also select. NOT a React Flow Handle: the Output has no outputs
-            and a real handle would invite a wire that can never land. */}
-        <button
-          type="button"
-          className={`output-node__preview-socket nodrag${isActive ? '' : ' output-node__preview-socket--inactive'}`}
-          aria-pressed={isActive}
-          aria-label={t(isActive ? 'Rendering this output' : 'Render this output', language)}
-          title={t(isActive ? 'This output drives the preview' : 'Click to render this output instead', language)}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => { e.stopPropagation(); setActiveOutput(id); }}
-        />
-
-        {showMeshRow && (
-          <div className="output-node__mesh-row">
-            {/* An index section has no mesh list to edit — the MODEL decides
-                which meshes wear its material — so it shows a read-only chip
-                (inside the picker's width cap; the name is attacker-supplied). */}
-            {indexSection ? (
-              <IndexSectionChip
-                label={formatSectionLabel(sectionLabel(materials, index, signature), language)}
-                duplicate={shadowed}
-                coverage={coverage.get(index)}
-              />
-            ) : (
-              <MeshTargetPicker
-                meshNames={meshNames}
-                selected={targets}
-                allowDefault={index === 0}
-                shadowed={shadowed}
-                unused={unused}
-                silent={silent}
-                maxNames={MAX_PARTS}
-                indexClaimed={indexHints}
-                onChange={(next) => setMaterialTargets(index, next)}
-              />
-            )}
-            {index > 0 && (
-              <button
-                type="button"
-                className="output-node__mesh-remove nodrag"
-                title={indexSection ? t('Remove this material section', language) : t('Remove this mesh material', language)}
-                aria-label={indexSection ? t('Remove this material section', language) : t('Remove this mesh material', language)}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => removeMaterial(index)}
-              >
-                {'\u00D7'}
-              </button>
-            )}
-          </div>
-        )}
-
-        <div className="output-node__section">
-          <div className="output-node__section-label">{t('Pixel Shader', language)}</div>
-          <div className="output-node__ports">{pixel.map(renderRow(index))}</div>
-        </div>
-
-        {vertex.length > 0 && (
-          <>
-            <div className="output-node__subdivider" />
-            <div className="output-node__section">
-              <div className="output-node__section-label">{t('Vertex Shader', language)}</div>
-              <div className="output-node__ports">{vertex.map(renderRow(index))}</div>
-            </div>
-          </>
-        )}
-      </div>
-    );
-  };
-
-  // The dormant chip speaks about the two kinds separately: a NAME section
-  // sleeps because the loaded model lacks its meshes, an INDEX section because
+  // The dormant chip speaks about the two bindings separately: a NAME binding
+  // sleeps because the loaded model lacks its meshes, an INDEX binding because
   // the loaded model is not the glTF it was built from (or none is loaded).
-  const dormantIdx = [...dormant].filter((i) => isIndexSection(materials[i]));
-  const dormantNamed = [...dormant].filter((i) => !isIndexSection(materials[i]));
-  const dormantTitle = [
-    dormantNamed.length > 0
-      ? `${t('Mesh materials for another model — the loaded model has none of their meshes. They still emit, and their sections return (wiring intact) when a matching model is loaded', language)}: ${dormantNamed
-        .flatMap((i) => materialTargetNames(materials[i]))
-        .join(', ')}`
-      : null,
-    dormantIdx.length > 0
-      ? `${loaded.kind === 'gltf'
-        ? t('Material sections for a model with other materials — the materials of the loaded model differ. They still emit, and return (wiring intact) when that model is loaded', language)
-        : gltfNotShown
-          ? t('Material sections for a glTF model — the preview is showing a different shape. They still emit, and return (wiring intact) when that model is shown', language)
-          : t('Material sections for a glTF model — none is loaded. They still emit, and return (wiring intact) when that model is loaded', language)}: ${joinCapped(
-        dormantIdx.map((i) => formatSectionLabel(sectionLabel(materials, i, signature), language)),
-      )}`
-      : null,
-  ].filter((line): line is string => line !== null).join('\n');
+  const dormantTitle = !nodeDormant ? '' : indexSection
+    ? `${loaded.kind === 'gltf'
+      ? t('Material sections for a model with other materials — the materials of the loaded model differ. They still emit, and return (wiring intact) when that model is loaded', language)
+      : gltfNotShown
+        ? t('Material sections for a glTF model — the preview is showing a different shape. They still emit, and return (wiring intact) when that model is shown', language)
+        : t('Material sections for a glTF model — none is loaded. They still emit, and return (wiring intact) when that model is loaded', language)}: ${formatSectionLabel(sectionLabel(materials, SELF, signature), language)}`
+    : `${t('Mesh materials for another model — the loaded model has none of their meshes. They still emit, and their sections return (wiring intact) when a matching model is loaded', language)}: ${joinCapped(targets)}`;
 
   return (
     <div
-      className={`output-node ${selected ? 'output-node--selected' : ''}${isActive ? '' : ' output-node--inactive'}`}
+      className={`output-node ${selected ? 'output-node--selected' : ''}${isActive ? '' : ' output-node--inactive'}${nodeDormant ? ' output-node--dormant' : ''}`}
       style={{ background: 'var(--node-bg)', border: `${NODE_BORDER_WIDTH} solid var(--cat-output)` }}
     >
       {/* Bare number, matching every ShaderNode badge — the unit is spelled out
@@ -763,65 +567,123 @@ export const OutputNode = memo(function OutputNode({
         </span>
       )}
 
-      {/* Main header — the node's name and nothing else. Which mesh each
-          material shades is a per-material fact, so it belongs to the material
-          block: material 0's picker is the first row UNDER this header, each
-          added material's the first row under its divider — and so does the
-          preview SOCKET, one per section (see renderMaterial). */}
+      {/* Main header — the node's name and nothing else. Which mesh this node
+          shades is stated by the picker, the first row UNDER this header.
+          The `_01` suffix appears only on a document with SEVERAL Outputs, in
+          emit order: one node is one material, and this header is the registry
+          LABEL (not a ShaderNode's generated var name), so without it a GLB
+          import is a column of cards all headed "Output". Display only — see
+          `outputOrdinals`. */}
       <div className="output-node__header" style={{ background: costColor }}>
-        <span className="output-node__title" style={{ color: headerTextColor }}>{formatNodeLabel(def.label, 'output', language, false)}</span>
+        <span className="output-node__title" style={{ color: headerTextColor }}>
+          {formatNodeLabel(def.label, 'output', language, false)}{plans.ordinals.get(id) ?? ''}
+        </span>
       </div>
 
-      {materials.map((_, index) => (dormant.has(index) ? null : renderMaterial(index)))}
-
-      {/* The "nothing silently vanished" signal: counts the dormant sections,
-          its title names their meshes, and the sections return — wiring
-          intact — the moment a model carrying those names is loaded. */}
-      {dormant.size > 0 && (
+      {/* A DORMANT node renders COMPACT: header plus the "nothing silently
+          vanished" chip, its channel rows and every one of their handles
+          UNMOUNTED — so its wires stay invisible exactly as a dormant section's
+          did, and the node is still visibly THERE with its title naming the
+          meshes it waits for. Never hidden: the wiring behind it must not read
+          as having been deleted. */}
+      {nodeDormant ? (
+        // The count is always ONE — a node is one material — so both keys are
+        // used in the singular they already had. Kept as the counted sentence
+        // rather than reworded: it is exactly what a node with one sleeping
+        // section said before the split, in both languages.
         <div className="output-node__dormant" title={dormantTitle}>
-          {dormantIdx.length === 0 ? (
-            <>
-              {dormant.size}{' '}
-              {t(
-                dormant.size === 1
-                  ? 'mesh material for another model'
-                  : 'mesh materials for another model',
-                language,
-              )}
-            </>
-          ) : (
-            fillTemplate(
-              t(
-                dormant.size === 1
-                  ? '{n} material section for another model'
-                  : '{n} material sections for another model',
-                language,
-              ),
-              { n: dormant.size },
-            )
-          )}
+          {indexSection
+            ? fillTemplate(t('{n} material section for another model', language), { n: 1 })
+            : <>1 {t('mesh material for another model', language)}</>}
         </div>
-      )}
+      ) : (
+        <div
+          className={`output-node__material${defaultUnused ? ' output-node__material--unused' : ''}${parked ? ' output-node__material--parked' : ''}`}
+        >
+          {/* The node's output socket — the decorative anchor its PreviewLink
+              wire leaves from, and (on an UNTARGETED node) the ACTIVATION
+              control: several output nodes may coexist, exactly one drives
+              (utils/sdfPartition.ts `activeSink`), and clicking the socket
+              makes THIS node the active one.
 
-      {/* Add another mesh material — for every MODEL, and it never vanishes
-          at a cap (decision 9: a control that disappears is a cap that does
-          not announce itself). At MAX_ADDED_MATERIALS sections, or with every
-          mesh already claimed, it stays drawn and `aria-disabled` (never
-          `disabled`, which drops the title in WebKit) with the reason in its
-          title, and a press does nothing. It never MINTS a duplicate claim:
-          one would arrive inert, since emission shadows it. */}
-      {hasMeshes && (
-        <div className="output-node__add-row">
-          <button
-            type="button"
-            className={`output-node__add nodrag${canAddMaterial ? '' : ' output-node__add--disabled'}`}
-            aria-disabled={!canAddMaterial || undefined}
-            title={canAddMaterial ? t('Shade another mesh with its own material', language) : addBlockedReason}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={canAddMaterial ? addMaterial : undefined}
-          >
-            {'\u002B'} {t('Add output', language)}
-          </button>
+              D2 — on a TARGETED node it is INERT: a solid anchor, not a
+              `<button>`, with no `aria-pressed`. Activation only means
+              something among UNTARGETED Outputs (a targeted one contributes
+              whatever the flag says), so a click here would write a flag
+              `normalizeActiveOutput` then strips — and, worse, would silently
+              stop the whole-model material emitting. Solid because the node
+              always contributes; hollow only ever means "parked". It keeps
+              `nodrag` and stops its pointerdown so a press does nothing at all
+              rather than dragging the node from what looks like a port, and it
+              keeps real pointer-events so its `title` can open (a `title` on a
+              `pointer-events: none` element never fires).
+
+              NOT a React Flow Handle either way: the Output has no outputs and
+              a real handle would invite a wire that can never land. */}
+          {isUntargetedOutput(selfNode) ? (
+            <button
+              type="button"
+              className={`output-node__preview-socket nodrag${isActive ? '' : ' output-node__preview-socket--inactive'}`}
+              aria-pressed={isActive}
+              aria-label={t(isActive ? 'Rendering this output' : 'Render this output', language)}
+              title={t(isActive ? 'This output drives the preview' : 'Click to render this output instead', language)}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); setActiveOutput(id); }}
+            />
+          ) : (
+            <span
+              className="output-node__preview-socket output-node__preview-socket--fixed nodrag"
+              title={t(FIXED_SOCKET_KEY, language)}
+              onPointerDown={(e) => e.stopPropagation()}
+            />
+          )}
+
+          {showMeshRow && (
+            <div className="output-node__mesh-row">
+              {/* An index-bound node has no mesh list to edit — the MODEL
+                  decides which meshes wear its material — so it shows a
+                  read-only chip (inside the picker's width cap; the name is
+                  attacker-supplied). */}
+              {indexSection ? (
+                <IndexSectionChip
+                  label={formatSectionLabel(sectionLabel(materials, SELF, signature), language)}
+                  duplicate={shadowed}
+                  coverage={coverage.get(SELF)}
+                />
+              ) : (
+                <MeshTargetPicker
+                  meshNames={meshNames}
+                  selected={targets}
+                  // EVERY plain Output offers "All meshes (default)": unticking
+                  // everything is the only way back from a targeted node to a
+                  // whole-model one.
+                  allowDefault
+                  shadowed={shadowed}
+                  unused={defaultUnused}
+                  silent={silent}
+                  parked={parked}
+                  maxNames={MAX_PARTS}
+                  indexClaimed={indexHints}
+                  onChange={setMeshTargets}
+                />
+              )}
+            </div>
+          )}
+
+          <div className="output-node__section">
+            <div className="output-node__section-label">{t('Pixel Shader', language)}</div>
+            <div className="output-node__ports">{pixel.map(renderRow)}</div>
+          </div>
+
+          {vertex.length > 0 && (
+            <>
+              <div className="output-node__subdivider" />
+              <div className="output-node__section">
+                <div className="output-node__section-label">{t('Vertex Shader', language)}</div>
+                <div className="output-node__ports">{vertex.map(renderRow)}</div>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

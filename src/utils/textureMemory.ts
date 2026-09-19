@@ -73,8 +73,8 @@
  */
 import type { AppNode, AppEdge } from '@/types';
 import { getNodeValues } from '@/types';
-import { activeSink } from './sdfPartition';
-import { parseChannelHandle, outputMaterials, materialTargetNames } from './outputMaterials';
+import { activeSink, isMarchOutput } from './sdfPartition';
+import { contributingOutputs, parseChannelHandle, outputMaterials, materialTargetNames } from './outputMaterials';
 import { validImageDataUrl } from './imageNode';
 import { isImageChannelHandle } from './imageChannels';
 import { readImageTextureSpec, imageTextureSpecKey } from './imageTextureSpec';
@@ -230,10 +230,18 @@ export function textureMemory(inputs: readonly TextureMemoryInput[]): TextureMem
  * the emission sharing key. Pass UNWRAPPED edges (`unwrapCollapsedGroupEdges`).
  */
 export function graphTextureMemory(nodes: readonly AppNode[], unwrappedEdges: readonly AppEdge[]): TextureMemory {
+  // EVERY Output that reaches the module, walked as ONE set — the `costSeeds`
+  // rule, restated here for the same reason the BFS below is: a driving
+  // Raymarch Output suppresses every plain Output and seeds alone, otherwise
+  // each targeted Output samples its own textures. A single-sink walk counted
+  // only the default material's, which since the Output split is one NODE of
+  // several. A texture shared by two Outputs is still counted ONCE — that is
+  // what makes it one walk rather than a sum of walks.
   const sink = activeSink(nodes, unwrappedEdges);
-  if (!sink) return NO_TEXTURE_MEMORY;
+  const seeds = sink && isMarchOutput(sink) ? [sink] : contributingOutputs(nodes);
+  if (seeds.length === 0) return NO_TEXTURE_MEMORY;
 
-  // Reverse BFS from the sink -- the same walk as nodeCost's `sumReachable`,
+  // Reverse BFS from the seeds -- the same walk as nodeCost's `sumReachable`,
   // restated here (ten lines) because nodeCost may not be imported (header).
   const incoming = new Map<string, string[]>();
   for (const e of unwrappedEdges) {
@@ -242,7 +250,7 @@ export function graphTextureMemory(nodes: readonly AppNode[], unwrappedEdges: re
     else incoming.set(e.target, [e.source]);
   }
   const visited = new Set<string>();
-  const queue = [sink.id];
+  const queue = seeds.map((n) => n.id);
   for (let head = 0; head < queue.length; head++) {
     const id = queue[head];
     if (visited.has(id)) continue;
@@ -256,10 +264,11 @@ export function graphTextureMemory(nodes: readonly AppNode[], unwrappedEdges: re
   // past the node's materials -- no envNode, so no PMREM. Only from the Color
   // socket: an Alpha/R/G/B edge is a scalar ambient (graphToCode's env gate).
   const envSources = new Set<string>();
-  if (sink.data.registryType === 'output') {
-    const mats = outputMaterials(sink);
+  for (const seed of seeds) {
+    if (seed.data.registryType !== 'output') continue;
+    const mats = outputMaterials(seed);
     for (const e of unwrappedEdges) {
-      if (e.target !== sink.id) continue;
+      if (e.target !== seed.id) continue;
       const { index, channel } = parseChannelHandle(e.targetHandle ?? '');
       if (channel === 'env' && !isImageChannelHandle(e.sourceHandle) && index < mats.length && (index === 0 || materialTargetNames(mats[index]).length > 0)) {
         envSources.add(e.source);
@@ -298,7 +307,7 @@ export const TEXTURE_MEMORY_MANY_KEY = 'Texture memory: ~{mb} MB ({n} textures)'
 export const TEXTURE_MEMORY_HINT_KEY =
   "Estimated GPU memory for the textures this shader samples: width × height × 4 bytes for each distinct texture, a third more for a colour image's mipmaps (data maps have none), and for an image wired into Environment the prefiltered copy the lighting builds from it. Images with the same data and the same texture settings count once. Not counted: the preview model's own textures and the data nodes' small lookup textures. No headset memory limit has been measured yet, so this is a figure, not a warning.";
 
-/** The Shader Settings line. `t()` has no plural rules, so the count picks
+/** The Material Settings menu’s whole-document line. `t()` has no plural rules, so the count picks
  *  one of two keys (EN "(1 textures)" otherwise); MB means MiB, rounded UP so
  *  a non-empty set never prints 0, with a decimal comma in Latvian. */
 export function textureMemoryLine(bytes: number, count: number, lang: Language): string {

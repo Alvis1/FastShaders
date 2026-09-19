@@ -33,10 +33,9 @@ import { unwrapCollapsedGroupEdges } from '@/utils/edgeUtils';
 import { drivingMarchOutput } from '@/utils/sdfPartition';
 import {
   channelHandle,
-  findDefaultOutput,
-  outputMaterials,
-  planIndexParts,
-  readModelSignature,
+  contributingOutputs,
+  moduleSignatureOf,
+  planIndexPartsAcross,
 } from '@/utils/outputMaterials';
 import { modelSignatureMatches, type ModelSignature } from './materialPartsContract';
 import { gltfUvMatrix, readImageUvMapping } from '@/utils/imageUvMapping';
@@ -248,9 +247,34 @@ export function planGlbExport(
   };
 
   // A march drives: the module is the march's, so no material slot maps.
-  const out = drivingMarchOutput(nodes, E) ? null : findDefaultOutput(nodes);
-  const signature = out ? readModelSignature(out.data) : null;
-  const sections = out ? planIndexParts(outputMaterials(out), signature).entries : [];
+  //
+  // The CROSS-NODE plan over `contributingOutputs`, so this reads exactly the
+  // `materialParts` table graphToCode emits — same claim set, same cap counter,
+  // same order. Each entry names the NODE its section lives on, which is what
+  // `edgeInto` below needs now that the materials no longer share one node. The
+  // march check stays here (see `contributingOutputs`: `activeSink`'s fallbacks
+  // are array-order dependent, so it must be asked over the caller's own list).
+  const marchDrives = drivingMarchOutput(nodes, E) !== null;
+  const outputs = marchDrives ? [] : contributingOutputs(nodes);
+  // The signature comes off the LOWEST-RANKED contributing Output carrying an
+  // index section — graphToCode's own read, so the plan and the module can
+  // never describe two different models.
+  //
+  // NOT `findDefaultOutput(nodes)`. That is `outputs[0]` in ARRAY order, and
+  // since the split the untargeted DEFAULT carries no signature at all (the
+  // sanitizer keeps one only beside a surviving index section, and the unfold
+  // replicates it onto the index nodes) — so it read null and the export wrote
+  // a model with NO texture slot maps at all, silently, for every import-built
+  // shader that had been through a restore path.
+  // Through `moduleSignatureOf` — the ONE accessor graphToCode and the Output
+  // node also ask. This was that function's body re-spelled inline, i.e. a
+  // second copy of "which signature governs", which is exactly the drift the
+  // cross-node plans were extracted to stop: a change to how the module picks
+  // its signature would have moved emission and this plan apart with
+  // `errors: []`, the export writing texture slots for a different model than
+  // the module describes.
+  const signature = moduleSignatureOf(outputs);
+  const sections = planIndexPartsAcross(outputs, signature).entries;
   if (sections.length > 0 && !modelSignatureMatches({ materials: signature as string[] }, baseSignature)) {
     return { ok: false, reason: 'model-mismatch' };
   }
@@ -273,7 +297,7 @@ export function planGlbExport(
   const problems: GlbSlotProblem[] = [];
   const slotNodes = new Map<string, AppNode>();
 
-  for (const { gltfIndex, section } of sections) {
+  for (const { gltfIndex, nodeId, section } of sections) {
     const perSlot = new Map<GltfWritableSlot, { candidates: Set<string>; wired: boolean; foreign: boolean }>();
     for (const [channel, [slot, socket]] of GLB_CHANNEL_SLOTS) {
       let acc = perSlot.get(slot);
@@ -281,7 +305,10 @@ export function planGlbExport(
         acc = { candidates: new Set(), wired: false, foreign: false };
         perSlot.set(slot, acc);
       }
-      const first = out ? edgeInto(out.id, channelHandle(section, channel)) : undefined;
+      // The section's OWN node, from the plan entry — not `out`. They are the
+      // same node for as long as one Output holds every material, and the plan
+      // is what stops that assumption outliving the split.
+      const first = edgeInto(nodeId, channelHandle(section, channel));
       if (!first) continue;
       acc.wired = true;
       const stack: AppEdge[] = [first];

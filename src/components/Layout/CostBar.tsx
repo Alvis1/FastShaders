@@ -52,11 +52,18 @@ export interface CostBarProps {
    * control that would do nothing — the same rule the Output tile follows.
    */
   onFocusOutput?: () => void;
+  /**
+   * Does a press CYCLE through several Output nodes, or glide to the one?
+   * The title has to say which: a second press that lands somewhere new is
+   * not discoverable, and with one Output a promise of cycling would be a
+   * control describing something it will not do (owner decision D4).
+   */
+  cyclesOutputs?: boolean;
 }
 
 // memo(): rendered by NodeEditor, which re-renders every drag frame; this
 // panel reads everything it shows from its own store selectors.
-export const CostBar = memo(function CostBar({ onFocusOutput }: CostBarProps) {
+export const CostBar = memo(function CostBar({ onFocusOutput, cyclesOutputs = false }: CostBarProps) {
   const totalCost = useAppStore((s) => s.totalCost);
   const language = useAppStore((s) => s.language);
   const selectedHeadsetId = useAppStore((s) => s.selectedHeadsetId);
@@ -643,7 +650,9 @@ export const CostBar = memo(function CostBar({ onFocusOutput }: CostBarProps) {
               type="button"
               className={`${cls} cost-bar__value--link`}
               onClick={onFocusOutput}
-              title={`${explain}\n${t('Click to jump to the Output node.', language)}`}
+              title={`${explain}\n${t(cyclesOutputs
+                ? 'Click to cycle through the Output nodes.'
+                : 'Click to jump to the Output node.', language)}`}
             >
               {label}
             </button>
